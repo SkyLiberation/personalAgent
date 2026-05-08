@@ -1,10 +1,10 @@
 # 后端接口
 
-主要接口定义位于 [api.py](../src/personal_agent/api.py)。
+主要接口定义位于 [api.py](../src/personal_agent/web/api.py)。
 
 ## `GET /api/health`
 
-返回服务状态与图谱配置状态。
+返回服务状态、Graphiti 配置状态，以及问答历史存储是否可用。
 
 示例响应：
 
@@ -18,21 +18,99 @@
     "model": "deepseek-v4-flash",
     "embedding_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "embedding_model": "text-embedding-v4"
+  },
+  "ask_history": {
+    "configured": true
   }
 }
 ```
 
+## `GET /api/notes`
+
+返回指定用户的本地笔记列表。
+
+查询参数：
+
+- `user_id`
+
+## `GET /api/digest`
+
+返回最近笔记和到期复习任务摘要。
+
+查询参数：
+
+- `user_id`
+
+## `GET /api/ask-history`
+
+返回指定用户的问答历史。
+
+查询参数：
+
+- `user_id`
+- `limit`
+- `session_id`
+
+说明：
+
+- 传入 `session_id` 时，只返回该会话下的历史
+- 不传 `session_id` 时，返回该用户最近的全量历史
+
+示例响应：
+
+```json
+{
+  "items": [
+    {
+      "id": "0f0b8fe7-3e4d-4b95-8bb5-2ab4e6f0c99a",
+      "user_id": "default",
+      "session_id": "11dd2242-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "question": "支付系统重构项目第一阶段方案包括什么？",
+      "answer": "第一阶段方案主要围绕拆分核心链路、隔离高风险模块以及补齐监控展开。",
+      "citations": [],
+      "graph_enabled": true,
+      "created_at": "2026-05-08T15:10:00.000000Z"
+    }
+  ]
+}
+```
+
 ## `POST /api/capture`
+
+用于文本或网页链接采集。
 
 请求体：
 
 ```json
 {
   "text": "Bob 在搜索系统升级项目里决定先上 BM25 + 向量召回",
-  "source_type": "note",
+  "source_type": "text",
   "user_id": "default"
 }
 ```
+
+或：
+
+```json
+{
+  "text": "https://example.com/article",
+  "source_type": "link",
+  "user_id": "default"
+}
+```
+
+说明：
+
+- `source_type=text` 时，直接采集文本
+- `source_type=link` 时，会先抓取网页正文，再进入 capture 流程
+
+## `GET /api/uploads/conflict`
+
+检查上传文件名是否已存在。
+
+查询参数：
+
+- `filename`
 
 ## `POST /api/capture/upload`
 
@@ -42,9 +120,13 @@
 
 - `file`
 - `user_id`
+- `overwrite`
 
 说明：
 
+- 文本类文件会优先提取正文后进入 capture
+- PDF 会优先提取文本后进入 capture
+- 图片、音频等文件当前先保存为元信息笔记
 - 上传接口会先返回本地 capture 结果
 - 如果 Graphiti 已配置，图谱同步会在后台继续执行
 - 返回的 `note.graph_sync_status` 初始通常为 `pending`
@@ -73,19 +155,24 @@
 
 ## `POST /api/ask`
 
+用于普通问答。
+
 请求体：
 
 ```json
 {
   "question": "搜索系统升级项目里，Bob 先决定采用什么方案？",
-  "user_id": "default"
+  "user_id": "default",
+  "session_id": "11dd2242-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 }
 ```
 
 说明：
 
-- 普通问答完成后会自动写入服务端 `ask history`
-- 如果已配置 `Postgres`，历史会持久化保存
+- 后端优先尝试图谱问答，失败时回退到本地问答链
+- 同一 `session_id` 下会自动携带最近对话上下文，支持多轮问答
+- 如果配置了 `Postgres`，历史会持久化到 `ask_history`
+- 即使没有 `Postgres`，本地仍会写入 `data/conversations.json`
 
 ## `GET /api/ask/stream`
 
@@ -95,6 +182,7 @@
 
 - `question`
 - `user_id`
+- `session_id`
 
 事件类型：
 
@@ -103,37 +191,42 @@
 - `answer_delta`
 - `done`
 
-## `GET /api/ask-history`
+说明：
 
-返回指定用户最近的问答历史。
+- 当前 SSE 仍然是服务端按段推送已有回答
+- 不是直接透传上游模型 token 流
 
-查询参数：
+## `POST /api/debug/reset-user-data`
 
-- `user_id`
-- `limit`
+用于快速清空当前用户调试数据。
+
+请求体：
+
+```json
+{
+  "user_id": "default"
+}
+```
+
+会清理：
+
+- `data/notes.json` 中该用户笔记
+- `data/reviews.json` 中关联复习任务
+- `data/conversations.json` 中该用户会话
+- `data/uploads/` 中该用户笔记引用到的上传源文件
+- `Postgres.ask_history` 中该用户历史
+- Graphiti / Neo4j 中该用户对应的图谱分组数据
 
 示例响应：
 
 ```json
 {
-  "items": [
-    {
-      "id": "0f0b8fe7-3e4d-4b95-8bb5-2ab4e6f0c99a",
-      "user_id": "default",
-      "question": "支付系统重构项目第一阶段方案包括什么？",
-      "answer": "图谱里最相关的实体：支付系统重构项目、第一阶段方案...",
-      "citations": [],
-      "graph_enabled": true,
-      "created_at": "2026-05-08T15:10:00.000000Z"
-    }
-  ]
+  "user_id": "default",
+  "deleted_notes": 12,
+  "deleted_reviews": 12,
+  "deleted_conversations": 8,
+  "deleted_upload_files": 4,
+  "deleted_ask_history": 8,
+  "deleted_graph_episodes": 12
 }
 ```
-
-## `GET /api/digest`
-
-返回最近笔记与到期复习任务。
-
-## `GET /api/notes`
-
-返回当前用户的全部本地笔记。

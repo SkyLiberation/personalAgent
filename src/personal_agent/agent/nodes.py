@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from .memory_store import LocalMemoryStore
-from .models import AgentState, Citation, KnowledgeNote, ReviewCard
+from ..core.models import AgentState, Citation, KnowledgeNote, ReviewCard
+from ..storage.memory_store import LocalMemoryStore
 
 
 def capture_node(state: AgentState, store: LocalMemoryStore) -> AgentState:

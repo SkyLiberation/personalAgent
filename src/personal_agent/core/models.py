@@ -52,6 +52,7 @@ class ReviewCard(BaseModel):
 class AskHistoryRecord(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     user_id: str = "default"
+    session_id: str = "default"
     question: str
     answer: str
     citations: list[Citation] = Field(default_factory=list)

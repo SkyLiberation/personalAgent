@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from .memory_store import LocalMemoryStore
-from .models import AgentState
+from ..core.models import AgentState
+from ..storage.memory_store import LocalMemoryStore
 from .nodes import answer_node, capture_node, enrich_node, link_node, schedule_review_node
 
 

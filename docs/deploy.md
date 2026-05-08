@@ -63,7 +63,7 @@ docker compose up -d postgres
 ## 6. 启动后端
 
 ```bash
-uv run uvicorn personal_agent.api:app --reload
+uv run uvicorn personal_agent.web.api:app --reload
 ```
 
 默认地址：
@@ -91,6 +91,27 @@ npm run build
 
 构建完成后，FastAPI 会自动托管 `frontend/dist`。
 
+## 日志位置
+
+当前运行日志默认写入项目根目录：
+
+- `log/run.log`
+
+如果你看到历史遗留的 `src/log/run.log`，那通常是旧版本路径计算错误留下的旧文件，新运行已经不会继续写入那里。
+
+## 调试重置
+
+在前端 `采集` 页面底部提供了“一键清空调试数据”入口，便于快速回到干净状态。
+
+它会清理当前用户的：
+
+- 本地笔记
+- 复习任务
+- 本地会话
+- 上传源文件
+- `Postgres.ask_history`
+- 当前用户对应的图谱分组数据
+
 ## Docker Compose
 
 当前 `docker-compose.yml` 包含：
@@ -106,4 +127,4 @@ npm run build
 docker compose up --build
 ```
 
-`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、是否命中图谱以及时间戳。
+`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、是否命中图谱、`session_id` 以及时间戳。

@@ -9,6 +9,7 @@ Requires-Dist: graphiti-core>=0.29.0
 Requires-Dist: langgraph>=0.2.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: psycopg[binary]>=3.2.12
+Requires-Dist: pypdf>=5.9.0
 Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: typer>=0.12.3
@@ -57,8 +58,10 @@ Requires-Dist: uvicorn>=0.38.0
 当前上传策略：
 
 - 纯文本类文件：直接读取内容并进入 capture
-- 图片、音频、PDF 等文件：先保存文件并记录为“文件元信息笔记”
-- 更深的 OCR / PDF 解析 / ASR 还没有接入
+- `http/https` 网页链接：抓取正文文本后进入 capture
+- PDF：优先提取文本内容进入 capture
+- 图片、音频等文件：先保存文件并记录为“文件元信息笔记”
+- 更深的 OCR / 语音 ASR 还没有接入
 - 上传文件默认先快速入库，再在后台执行 Graphiti 同步
 
 ### 2. Knowledge Connection
@@ -77,6 +80,7 @@ Requires-Dist: uvicorn>=0.38.0
 - 支持把图谱命中的 episode 反查成本地笔记引用
 - 支持 `SSE` 实时展示回答
 - 支持把问答历史持久化到 `Postgres`
+- 前端支持查看服务端问答历史
 
 ### 4. Digest
 
@@ -86,7 +90,17 @@ Requires-Dist: uvicorn>=0.38.0
 ### 5. Web UI
 
 - 提供基于 `FastAPI + React` 的前后端分离架构
-- 前端支持调用 `capture / ask / digest / notes`
+- 前端采用左侧导航多 Tab 工作台
+- 当前视图包括：
+  - `Capture`
+  - `Ask`
+  - `Entity Graph`
+  - `Relation Graph`
+  - `Digest`
+  - `Timeline`
+  - `Memory`
+- 前端支持调用 `capture / capture/upload / ask / ask-history / digest / notes`
+- `Ask` 页面支持 SSE 实时回答和历史问题回看
 - 构建后 `frontend/dist` 可由 FastAPI 自动托管
 
 ## 已接入的图谱能力
@@ -126,67 +140,21 @@ Requires-Dist: uvicorn>=0.38.0
 - 字典式摘要转换为 `summaries: [{name, summary}]`
 - DashScope embedding 单批限制自动分片
 
-## 当前验证状态
-
-这条链路已经做过真实联调：
-
-- `Neo4j` 已成功启动并可连接
-- `capture()` 已成功写入 Graphiti episode
-- `POST /api/capture` 已成功返回：
-  - `graph_episode_uuid`
-  - `entity_names`
-  - `relation_facts`
-- `POST /api/ask` 已成功走图谱检索
-
-例如，下面这类输入已经能抽出图谱关系：
-
-```text
-Bob 在搜索系统升级项目里决定先上 BM25 + 向量召回，再逐步引入 reranker。
-团队认为索引热更新可以降低发布风险。
-```
-
-可抽出的关系示例：
-
-- `Bob DECIDES_TO_USE BM25`
-- `Bob DECIDES_TO_USE 向量召回`
-- `Bob PLANS_TO_USE reranker`
-
-## 已知限制
-
-当前版本已经可用，但还不是最终产品态，主要限制有：
-
-1. `ask` 的相关性排序还比较粗，跨主题笔记可能会串题
-2. `citation` 和图谱 `relation_fact` 的绑定还不够精细
-3. 目前 `capture` 主要面向纯文本，还没扩展到网页、PDF、OCR、ASR
-4. 图谱结果已经可写入和检索，但前端还没有图谱可视化
-
 ## 项目结构
 
 ```text
-personalAgent/
-├─ README.md
-├─ .env.example
-├─ docker-compose.yml
-├─ pyproject.toml
-├─ data/
-├─ frontend/
-│  ├─ package.json
-│  └─ src/
+personalAgent/                  # 项目根目录
+├─ data/                        # 本地知识数据、复习卡片、上传文件
+├─ frontend/                    # React + Vite 前端工程
+├─ log/                         # 运行日志目录
 └─ src/
-   └─ personal_agent/
-      ├─ __init__.py
-      ├─ api.py
-      ├─ config.py
-      ├─ dashscope_compatible_embedder.py
-      ├─ deepseek_compatible_client.py
-      ├─ graph.py
-      ├─ graphiti_ontology.py
-      ├─ graphiti_store.py
-      ├─ main.py
-      ├─ memory_store.py
-      ├─ models.py
-      ├─ nodes.py
-      └─ service.py
+   └─ personal_agent/           # Python 应用主包
+      ├─ agent/                 # Agent 主流程编排层
+      ├─ cli/                   # 命令行入口层
+      ├─ core/                  # 配置、日志、核心数据模型
+      ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding 接入
+      ├─ storage/               # 本地 JSON 和 Postgres 存储层
+      └─ web/                   # FastAPI Web 接口层
 ```
 
 ## 本地目录与数据流
@@ -207,6 +175,8 @@ personalAgent/
   - `data/reviews.json`
 - 上传文件原件：
   - `data/uploads/`
+- 服务端问答历史：
+  - `Postgres.ask_history`
 - 运行日志：
   - `log/run.log`
 
@@ -255,6 +225,26 @@ personalAgent/
 - 原始文件在 `data/uploads/`
 - 结构化笔记在 `data/notes.json`
 
+### Ask 数据流
+
+当前问答流程分两条：
+
+#### 1. 普通问答
+
+- 前端调用 `POST /api/ask`
+- 后端优先走图谱问答，失败时回退到本地问答链
+- 问答完成后把历史写入 `Postgres.ask_history`
+
+#### 2. SSE 实时问答
+
+- 前端调用 `GET /api/ask/stream`
+- 后端返回：
+  - `status`
+  - `metadata`
+  - `answer_delta`
+  - `done`
+- 前端一边展示实时回答，一边在问答完成后从服务端刷新历史列表
+
 ## 核心数据模型
 
 ### `KnowledgeNote`
@@ -275,146 +265,28 @@ personalAgent/
 - `interval_days`
 - `due_at`
 
+### `AskHistoryRecord`
+
+表示一条服务端保存的问答历史，当前包含：
+
+- `user_id`
+- `question`
+- `answer`
+- `citations`
+- `graph_enabled`
+- `created_at`
+
 ## 后端接口
 
-详见 [docs/api.md](docs/api.md)。
+提供 health、capture、ask（含 SSE 流式）、ask-history、digest、notes 等 REST 接口，详见 [docs/api.md](docs/api.md)。
 
 ## 环境变量
 
-参考 [.env.example](.env.example)。
+涵盖基础配置、LLM、Embedding 及 Graphiti 启用条件，详见 [docs/env.md](docs/env.md)。
 
-### 基础配置
+## 本地开发与部署
 
-```env
-PERSONAL_AGENT_DATA_DIR=./data
-PERSONAL_AGENT_LOG_LEVEL=INFO
-PERSONAL_AGENT_DEFAULT_USER=default
-PERSONAL_AGENT_GRAPHITI_ENABLED=false
-PERSONAL_AGENT_GRAPHITI_URI=bolt://localhost:7687
-PERSONAL_AGENT_GRAPHITI_USER=neo4j
-PERSONAL_AGENT_GRAPHITI_PASSWORD=password
-PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX=personal-agent
-PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/personal_agent
-```
-
-### LLM 配置
-
-```env
-OPENAI_BASE_URL=https://api.deepseek.com
-OPENAI_API_KEY=your_llm_key
-OPENAI_MODEL=deepseek-v4-flash
-OPENAI_SMALL_MODEL=deepseek-v4-flash
-```
-
-### Embedding 配置
-
-```env
-EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-EMBEDDING_API_KEY=your_embedding_key
-OPENAI_EMBEDDING_MODEL=text-embedding-v4
-```
-
-只有同时满足下面条件，Graphiti 才会真正启用：
-
-1. `PERSONAL_AGENT_GRAPHITI_ENABLED=true`
-2. Neo4j 可连接
-3. `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 已配置
-4. `EMBEDDING_API_KEY` 或 `OPENAI_API_KEY` 可用
-5. `EMBEDDING_BASE_URL` 或 `OPENAI_BASE_URL` 可用
-
-## 本地开发
-
-### 1. 安装 Python 依赖
-
-```bash
-uv sync
-```
-
-### 2. 安装前端依赖
-
-```bash
-cd frontend
-npm install
-```
-
-### 3. 配置环境变量
-
-```bash
-cp .env.example .env
-```
-
-然后填写你的：
-
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `OPENAI_MODEL`
-- `EMBEDDING_API_KEY`
-- `EMBEDDING_BASE_URL`
-- `OPENAI_EMBEDDING_MODEL`
-
-### 4. 启动 Neo4j
-
-```bash
-docker compose up -d neo4j
-```
-
-默认地址：
-
-- Neo4j Browser: `http://127.0.0.1:7474`
-- Bolt: `bolt://127.0.0.1:7687`
-
-默认账号密码：
-
-- username: `neo4j`
-- password: `password`
-
-### 5. 启动后端
-
-```bash
-uv run uvicorn personal_agent.api:app --reload
-```
-
-默认地址：
-
-- API: `http://127.0.0.1:8000`
-- Docs: `http://127.0.0.1:8000/docs`
-
-### 6. 启动前端
-
-```bash
-cd frontend
-npm run dev
-```
-
-默认地址：
-
-- Frontend: `http://127.0.0.1:5173`
-
-### 7. 构建前端
-
-```bash
-cd frontend
-npm run build
-```
-
-构建完成后，FastAPI 会自动托管 `frontend/dist`。
-
-## Docker Compose
-
-当前 `docker-compose.yml` 包含：
-
-- `backend`
-- `frontend`
-- `neo4j`
-- `postgres`
-
-直接启动：
-
-```bash
-docker compose up --build
-```
-
-`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、是否命中图谱以及时间戳。
+涵盖依赖安装、环境变量配置、基础设施启动与前后端运行，详见 [docs/deploy.md](docs/deploy.md)。
 
 ## CLI 用法
 
@@ -442,12 +314,24 @@ uv run python -m personal_agent.main digest
 - `vite 8.0.11`
 - `typescript 6.0.3`
 
+## 已知限制
+
+当前工程已经具备可运行的主链路，但仍有一些遗留问题需要继续收敛：
+
+1. `ask` 的检索排序仍然偏启发式，复杂问题下仍可能出现跨主题串题
+2. `citation` 与图谱 `relation_fact` 的绑定已经有所增强，但还没有做到严格可追踪的精确锚定
+3. `capture` 目前已支持文本、网页链接和 PDF 文本提取，但 OCR、语音 ASR 等非结构化输入仍未接入
+4. 当前回答生成仍以关系事实组织为主，还没有完全升级为基于图谱上下文的真实生成式答案
+5. SSE 现在是服务端分段推送已有答案，还不是直接透传上游模型 token 流
+6. `ask history` 虽然已支持服务端持久化，但搜索、删除、会话维度和更完整的多用户隔离还不完善
+
 ## 后续建议
 
 最值得继续推进的方向是：
 
 1. 优化 `ask` 的检索排序，减少跨主题串题
-2. 让 `citation` 与 `relation_fact` 精确绑定
-3. 在前端增加实体图谱、关系图谱和时间线视图
-4. 扩展 `capture` 到网页、PDF、语音和 OCR
+2. 继续增强 `citation` 与 `relation_fact` 的精确绑定
+3. 继续增强 `Entity Graph / Relation Graph / Timeline` 的交互联动
+4. 继续扩展 `capture` 到语音和 OCR
 5. 用真实生成式答案替代当前“关系事实拼接式”回答
+6. 给 `ask history` 增加搜索、删除和会话维度

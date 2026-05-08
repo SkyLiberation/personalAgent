@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-Process -Name \"node\",\"python\",\"uv\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Name,Id,CommandLine)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(netstat -ano)",
+      "Bash(Select-String -Pattern \":\\(5173|8000|3000\\)\\\\s\")"
+    ]
+  }
+}

@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from psycopg import connect
 from psycopg.rows import dict_row
 
-from .models import AskHistoryRecord, Citation
+from ..core.models import AskHistoryRecord, Citation
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class AskHistoryStore:
                     CREATE TABLE IF NOT EXISTS ask_history (
                         id TEXT PRIMARY KEY,
                         user_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL DEFAULT 'default',
                         question TEXT NOT NULL,
                         answer TEXT NOT NULL,
                         citations JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -50,27 +51,45 @@ class AskHistoryStore:
                     ON ask_history (user_id, created_at DESC)
                     """
                 )
+                cur.execute(
+                    """
+                    ALTER TABLE ask_history
+                    ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT 'default'
+                    """
+                )
             conn.commit()
         self._initialized = True
         logger.info("Ask history schema is ready in Postgres")
 
-    def list_history(self, user_id: str, limit: int = 20) -> list[AskHistoryRecord]:
+    def list_history(self, user_id: str, limit: int = 20, session_id: str | None = None) -> list[AskHistoryRecord]:
         if not self.configured():
             return []
 
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, user_id, question, answer, citations, graph_enabled, created_at
-                    FROM ask_history
-                    WHERE user_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (user_id, max(1, min(limit, 100))),
-                )
+                if session_id:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        FROM ask_history
+                        WHERE user_id = %s AND session_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (user_id, session_id, max(1, min(limit, 100))),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        FROM ask_history
+                        WHERE user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (user_id, max(1, min(limit, 100))),
+                    )
                 rows = cur.fetchall()
         return [self._row_to_record(row) for row in rows]
 
@@ -83,12 +102,13 @@ class AskHistoryStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO ask_history (id, user_id, question, answer, citations, graph_enabled, created_at)
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s)
+                    INSERT INTO ask_history (id, user_id, session_id, question, answer, citations, graph_enabled, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)
                     """,
                     (
                         record.id,
                         record.user_id,
+                        record.session_id,
                         record.question,
                         record.answer,
                         self._citations_json(record.citations),
@@ -99,11 +119,24 @@ class AskHistoryStore:
             conn.commit()
         return record
 
+    def delete_history(self, user_id: str) -> int:
+        if not self.configured():
+            return 0
+
+        self.ensure_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ask_history WHERE user_id = %s", (user_id,))
+                deleted_rows = cur.rowcount or 0
+            conn.commit()
+        return int(deleted_rows)
+
     def _row_to_record(self, row: dict[str, Any]) -> AskHistoryRecord:
         citations = [Citation.model_validate(item) for item in (row.get("citations") or [])]
         return AskHistoryRecord(
             id=row["id"],
             user_id=row["user_id"],
+            session_id=row.get("session_id", "default"),
             question=row["question"],
             answer=row["answer"],
             citations=citations,

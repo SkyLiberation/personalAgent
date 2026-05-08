@@ -16,6 +16,15 @@ PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX=personal-agent
 PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
 ```
 
+说明：
+
+- `PERSONAL_AGENT_DATA_DIR` 下当前默认会生成：
+  - `notes.json`
+  - `reviews.json`
+  - `conversations.json`
+  - `uploads/`
+- 如果配置了 `PERSONAL_AGENT_POSTGRES_URL`，问答历史会额外持久化到 `Postgres.ask_history`
+
 ## LLM 配置
 
 ```env
@@ -42,3 +51,8 @@ OPENAI_EMBEDDING_MODEL=text-embedding-v4
 3. `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 已配置
 4. `EMBEDDING_API_KEY` 或 `OPENAI_API_KEY` 可用
 5. `EMBEDDING_BASE_URL` 或 `OPENAI_BASE_URL` 可用
+
+补充说明：
+
+- 当前 `OPENAI_*` 这组变量既用于 Graphiti 抽取与检索时的 LLM，也用于 `ask` 阶段的生成式回答
+- 如果这组变量未配置，`ask` 仍可工作，但会回退到较弱的本地回答或检索式回答

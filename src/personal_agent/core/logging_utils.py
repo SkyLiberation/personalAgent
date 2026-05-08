@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def setup_logging(log_level: str = "INFO") -> Path:
-    project_root = Path(__file__).resolve().parents[2]
+    project_root = Path(__file__).resolve().parents[3]
     log_dir = project_root / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "run.log"
