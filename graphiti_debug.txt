@@ -1,0 +1,56 @@
+Traceback (most recent call last):
+  File "<stdin>", line 21, in main
+  File "D:\mySoft\workspace\personalAgent\src\personal_agent\graphiti_store.py", line 86, in _ingest_note
+    add_result = await graphiti.add_episode(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\mySoft\workspace\personalAgent\.venv\Lib\site-packages\graphiti_core\graphiti.py", line 1181, in add_episode
+    raise e
+  File "D:\mySoft\workspace\personalAgent\.venv\Lib\site-packages\graphiti_core\graphiti.py", line 1075, in add_episode
+    extracted_nodes, node_episode_index_map = await extract_nodes(
+                                              ^^^^^^^^^^^^^^^^^^^^
+  File "D:\mySoft\workspace\personalAgent\.venv\Lib\site-packages\graphiti_core\utils\maintenance\node_operations.py", line 131, in extract_nodes
+    extracted_entities = await _extract_nodes_single(llm_client, primary_episode, context)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\mySoft\workspace\personalAgent\.venv\Lib\site-packages\graphiti_core\utils\maintenance\node_operations.py", line 250, in _extract_nodes_single
+    response_object = ExtractedEntities(**llm_response)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\mySoft\workspace\personalAgent\.venv\Lib\site-packages\pydantic\main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.ValidationError: 12 validation errors for ExtractedEntities
+extracted_entities.0.name
+  Field required [type=missing, input_value={'entity_name': '支付... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.1.name
+  Field required [type=missing, input_value={'entity_name': 'Alice', ... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.2.name
+  Field required [type=missing, input_value={'entity_name': '订单... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.3.name
+  Field required [type=missing, input_value={'entity_name': '库存... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.4.name
+  Field required [type=missing, input_value={'entity_name': '服务... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.5.name
+  Field required [type=missing, input_value={'entity_name': '核心... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.6.name
+  Field required [type=missing, input_value={'entity_name': '推荐... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.7.name
+  Field required [type=missing, input_value={'entity_name': '支付... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.8.name
+  Field required [type=missing, input_value={'entity_name': 'Redis ... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.9.name
+  Field required [type=missing, input_value={'entity_name': '熔断... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.10.name
+  Field required [type=missing, input_value={'entity_name': '异步... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
+extracted_entities.11.name
+  Field required [type=missing, input_value={'entity_name': '第一... 'episode_indices': [0]}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/missing
