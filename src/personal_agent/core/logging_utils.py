@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import logging.config
+from contextlib import contextmanager
 from pathlib import Path
+from time import perf_counter
+from uuid import uuid4
 
 
 def setup_logging(log_level: str = "INFO") -> Path:
@@ -54,3 +58,46 @@ def setup_logging(log_level: str = "INFO") -> Path:
         }
     )
     return log_file
+
+
+def log_event(logger: logging.Logger, level: int, event: str, **fields: object) -> None:
+    logger.log(level, "%s | %s", event, _serialize_fields(fields))
+
+
+@contextmanager
+def trace_span(logger: logging.Logger, span_name: str, trace_id: str | None = None, **fields: object):
+    trace = trace_id or uuid4().hex[:12]
+    start = perf_counter()
+    log_event(logger, logging.INFO, "trace.start", trace_id=trace, span=span_name, **fields)
+    try:
+        yield {"trace_id": trace, "span": span_name}
+    except Exception as exc:
+        duration_ms = round((perf_counter() - start) * 1000, 2)
+        log_event(
+            logger,
+            logging.ERROR,
+            "trace.error",
+            trace_id=trace,
+            span=span_name,
+            duration_ms=duration_ms,
+            error_type=exc.__class__.__name__,
+            error=str(exc)[:500],
+            **fields,
+        )
+        raise
+    else:
+        duration_ms = round((perf_counter() - start) * 1000, 2)
+        log_event(
+            logger,
+            logging.INFO,
+            "trace.end",
+            trace_id=trace,
+            span=span_name,
+            duration_ms=duration_ms,
+            **fields,
+        )
+
+
+def _serialize_fields(fields: dict[str, object]) -> str:
+    compact = {key: value for key, value in fields.items() if value is not None}
+    return json.dumps(compact, ensure_ascii=False, sort_keys=True, default=str)

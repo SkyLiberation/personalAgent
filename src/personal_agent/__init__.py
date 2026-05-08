@@ -1,5 +1,6 @@
 __all__ = [
     "api",
+    "capture",
     "config",
     "graph",
     "graphiti_ontology",

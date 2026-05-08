@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+import time
+from uuid import uuid4
 
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from ..core.config import Settings
+from ..core.logging_utils import log_event, trace_span
 from ..core.models import AgentState, AskHistoryRecord, Citation, KnowledgeNote, RawIngestItem, ReviewCard
 from ..graphiti.store import GraphAskResult, GraphCaptureResult, GraphCitationHit, GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
@@ -113,7 +115,7 @@ class AgentService:
             result.note = updated_note
         elif self.graph_store.configured():
             result.note.graph_sync_status = "failed"
-            result.note.graph_sync_error = "Graphiti ingest returned disabled result."
+            result.note.graph_sync_error = graph_result.error or "Graphiti ingest returned disabled result."
             result.note.updated_at = datetime.utcnow()
             self.store.update_note(result.note)
 
@@ -137,8 +139,9 @@ class AgentService:
         normalized_session = session_id or "default"
         logger.info("Starting ask user=%s question=%s", normalized_user, question[:120])
         conversation_context = self._conversation_context(normalized_user, normalized_session)
+        trace_id = uuid4().hex[:12]
 
-        graph_result = self.graph_store.ask(question, normalized_user)
+        graph_result = self.graph_store.ask(question, normalized_user, trace_id=trace_id)
         if graph_result.enabled:
             matches, citations = self._graph_matches_and_citations(normalized_user, question, graph_result)
             answer = self._compose_graph_answer(question, graph_result, matches, citations, conversation_context)
@@ -262,44 +265,134 @@ class AgentService:
             self.store.update_note(note)
             return False
 
-        logger.info("Starting background graph sync note_id=%s", note_id)
+        trace_id = uuid4().hex[:12]
+        max_attempts = max(1, self.settings.graph_sync_max_attempts)
+        logger.info("Starting background graph sync note_id=%s trace_id=%s", note_id, trace_id)
         note.graph_sync_status = "pending"
         note.graph_sync_error = None
         note.updated_at = datetime.utcnow()
         self.store.update_note(note)
 
-        try:
-            graph_result = self.graph_store.ingest_note(note)
-            if not graph_result.enabled:
-                note.graph_sync_status = "failed"
-                note.graph_sync_error = "Graphiti ingest returned disabled result."
+        last_error: str | None = None
+        with trace_span(
+            logger,
+            "agent.sync_note_to_graph",
+            trace_id=trace_id,
+            note_id=note_id,
+            user_id=note.user_id,
+            max_attempts=max_attempts,
+        ):
+            for attempt in range(1, max_attempts + 1):
+                note = self.store.get_note(note_id) or note
+                note.graph_sync_status = "pending"
                 note.updated_at = datetime.utcnow()
                 self.store.update_note(note)
-                logger.warning("Background graph sync failed note_id=%s", note_id)
-                return False
 
-            updated_note = self._merge_graph_capture(note, graph_result)
-            related_notes = self.store.find_notes_by_graph_episode_uuids(
-                note.user_id, graph_result.related_episode_uuids
-            )
-            updated_note.related_note_ids = [item.id for item in related_notes if item.id != updated_note.id]
-            updated_note.updated_at = datetime.utcnow()
-            self.store.update_note(updated_note)
-            logger.info(
-                "Background graph sync succeeded note_id=%s episode_uuid=%s entities=%s relations=%s",
-                note_id,
-                updated_note.graph_episode_uuid,
-                len(updated_note.entity_names),
-                len(updated_note.relation_facts),
-            )
-            return True
-        except Exception as exc:
-            note.graph_sync_status = "failed"
-            note.graph_sync_error = str(exc)[:500]
-            note.updated_at = datetime.utcnow()
-            self.store.update_note(note)
-            logger.exception("Background graph sync raised exception note_id=%s", note_id)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "graph_sync.attempt.started",
+                    trace_id=trace_id,
+                    note_id=note_id,
+                    user_id=note.user_id,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
+
+                graph_result = self.graph_store.ingest_note(note, trace_id=trace_id, attempt=attempt)
+                if graph_result.enabled:
+                    updated_note = self._merge_graph_capture(note, graph_result)
+                    related_notes = self.store.find_notes_by_graph_episode_uuids(
+                        note.user_id, graph_result.related_episode_uuids
+                    )
+                    updated_note.related_note_ids = [item.id for item in related_notes if item.id != updated_note.id]
+                    updated_note.updated_at = datetime.utcnow()
+                    self.store.update_note(updated_note)
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "graph_sync.completed",
+                        trace_id=trace_id,
+                        note_id=note_id,
+                        user_id=note.user_id,
+                        attempt=attempt,
+                        episode_uuid=updated_note.graph_episode_uuid,
+                        entity_count=len(updated_note.entity_names),
+                        relation_count=len(updated_note.relation_facts),
+                    )
+                    logger.info(
+                        "Background graph sync succeeded note_id=%s episode_uuid=%s entities=%s relations=%s",
+                        note_id,
+                        updated_note.graph_episode_uuid,
+                        len(updated_note.entity_names),
+                        len(updated_note.relation_facts),
+                    )
+                    return True
+
+                last_error = graph_result.error or "Graphiti ingest returned disabled result."
+                retryable = self._is_retryable_graph_error(last_error)
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "graph_sync.attempt.failed",
+                    trace_id=trace_id,
+                    note_id=note_id,
+                    user_id=note.user_id,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    retryable=retryable,
+                    error=last_error,
+                )
+                if retryable and attempt < max_attempts:
+                    backoff_seconds = self._graph_retry_backoff_seconds(attempt)
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "graph_sync.retry.scheduled",
+                        trace_id=trace_id,
+                        note_id=note_id,
+                        user_id=note.user_id,
+                        attempt=attempt,
+                        next_attempt=attempt + 1,
+                        sleep_seconds=backoff_seconds,
+                    )
+                    time.sleep(backoff_seconds)
+                    continue
+                break
+
+        note = self.store.get_note(note_id) or note
+        note.graph_sync_status = "failed"
+        note.graph_sync_error = last_error or "Graph sync failed."
+        note.updated_at = datetime.utcnow()
+        self.store.update_note(note)
+        logger.warning("Background graph sync failed note_id=%s error=%s", note_id, note.graph_sync_error)
+        return False
+
+    def _is_retryable_graph_error(self, error: str | None) -> bool:
+        if not error:
             return False
+        normalized = error.lower()
+        retryable_signals = (
+            "timed out",
+            "timeout",
+            "503",
+            "service unavailable",
+            "service is too busy",
+            "rate limit",
+            "temporarily unavailable",
+            "connection reset",
+            "connection aborted",
+            "readtimeout",
+            "apitimeouterror",
+        )
+        return any(signal in normalized for signal in retryable_signals)
+
+    def _graph_retry_backoff_seconds(self, attempt: int) -> float:
+        initial = max(0.0, self.settings.graph_sync_initial_backoff_seconds)
+        multiplier = max(1.0, self.settings.graph_sync_backoff_multiplier)
+        maximum = max(initial, self.settings.graph_sync_max_backoff_seconds)
+        delay = initial * (multiplier ** max(0, attempt - 1))
+        return min(delay, maximum)
 
     def _graph_citations(
         self, matches: list[KnowledgeNote], graph_result: GraphAskResult

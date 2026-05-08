@@ -12,6 +12,7 @@ from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
 
 from ..core.config import Settings
+from ..core.logging_utils import log_event, trace_span
 from ..core.models import Citation, KnowledgeNote
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from .deepseek_compatible_client import DeepSeekCompatibleClient
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class GraphCaptureResult(BaseModel):
     enabled: bool = False
+    error: str | None = None
     episode_uuid: str | None = None
     entity_names: list[str] = Field(default_factory=list)
     relation_facts: list[str] = Field(default_factory=list)
@@ -30,6 +32,7 @@ class GraphCaptureResult(BaseModel):
 
 class GraphAskResult(BaseModel):
     enabled: bool = False
+    error: str | None = None
     answer: str | None = None
     entity_names: list[str] = Field(default_factory=list)
     relation_facts: list[str] = Field(default_factory=list)
@@ -50,6 +53,7 @@ class GraphCitationHit(BaseModel):
 class GraphitiStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._indices_ready = False
 
     def configured(self) -> bool:
         return bool(
@@ -77,23 +81,25 @@ class GraphitiStore:
             "embedding_model": self.settings.openai_embedding_model,
         }
 
-    def ingest_note(self, note: KnowledgeNote) -> GraphCaptureResult:
+    def ingest_note(
+        self, note: KnowledgeNote, trace_id: str | None = None, attempt: int | None = None
+    ) -> GraphCaptureResult:
         if not self.configured():
-            return GraphCaptureResult(enabled=False)
+            return GraphCaptureResult(enabled=False, error="Graphiti is not configured.")
         try:
-            return asyncio.run(self._ingest_note(note))
-        except Exception:
+            return asyncio.run(self._ingest_note(note, trace_id=trace_id, attempt=attempt))
+        except Exception as exc:
             logger.exception("Graphiti ingest failed for note %s", note.id)
-            return GraphCaptureResult(enabled=False)
+            return GraphCaptureResult(enabled=False, error=str(exc)[:500] or exc.__class__.__name__)
 
-    def ask(self, question: str, user_id: str) -> GraphAskResult:
+    def ask(self, question: str, user_id: str, trace_id: str | None = None) -> GraphAskResult:
         if not self.configured():
-            return GraphAskResult(enabled=False)
+            return GraphAskResult(enabled=False, error="Graphiti is not configured.")
         try:
-            return asyncio.run(self._ask(question, user_id))
-        except Exception:
+            return asyncio.run(self._ask(question, user_id, trace_id=trace_id))
+        except Exception as exc:
             logger.exception("Graphiti ask failed for user %s", user_id)
-            return GraphAskResult(enabled=False)
+            return GraphAskResult(enabled=False, error=str(exc)[:500] or exc.__class__.__name__)
 
     def clear_user_group(self, user_id: str) -> int:
         if not self.configured():
@@ -104,71 +110,135 @@ class GraphitiStore:
             logger.exception("Graphiti group reset failed for user %s", user_id)
             return 0
 
-    async def _ingest_note(self, note: KnowledgeNote) -> GraphCaptureResult:
-        graphiti = await self._build_client()
-        try:
-            add_result = await graphiti.add_episode(
-                name=note.title,
-                episode_body=note.content,
-                source_description=f"Personal note {note.id}",
-                reference_time=note.created_at,
-                source=EpisodeType.text,
-                group_id=self._group_id(note.user_id),
-                entity_types=ENTITY_TYPES,
-                custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
-            )
+    async def _ingest_note(
+        self, note: KnowledgeNote, trace_id: str | None = None, attempt: int | None = None
+    ) -> GraphCaptureResult:
+        with trace_span(
+            logger,
+            "graphiti.ingest_note",
+            trace_id=trace_id,
+            note_id=note.id,
+            user_id=note.user_id,
+            attempt=attempt,
+            model=self.settings.openai_model,
+            embedding_model=self.settings.openai_embedding_model,
+        ) as span:
+            graphiti = await self._build_client(trace_id=span["trace_id"])
+            trace_id = span["trace_id"]
+            try:
+                with trace_span(logger, "graphiti.add_episode", trace_id=trace_id, note_id=note.id, attempt=attempt):
+                    add_result = await asyncio.wait_for(
+                        graphiti.add_episode(
+                            name=note.title,
+                            episode_body=note.content,
+                            source_description=f"Personal note {note.id}",
+                            reference_time=note.created_at,
+                            source=EpisodeType.text,
+                            group_id=self._group_id(note.user_id),
+                            entity_types=ENTITY_TYPES,
+                            custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                        ),
+                        timeout=180,
+                    )
 
-            search_result = await graphiti.search_(
-                query=note.summary,
-                config=COMBINED_HYBRID_SEARCH_RRF,
-                group_ids=[self._group_id(note.user_id)],
-            )
-            related_episode_uuids = _related_episode_ids_from_edges(
-                [edge.episodes for edge in search_result.edges],
-                exclude={add_result.episode.uuid},
-            )
+                with trace_span(
+                    logger,
+                    "graphiti.search_after_ingest",
+                    trace_id=trace_id,
+                    note_id=note.id,
+                    attempt=attempt,
+                ):
+                    search_result = await asyncio.wait_for(
+                        graphiti.search_(
+                            query=note.summary,
+                            config=COMBINED_HYBRID_SEARCH_RRF,
+                            group_ids=[self._group_id(note.user_id)],
+                        ),
+                        timeout=45,
+                    )
+                related_episode_uuids = _related_episode_ids_from_edges(
+                    [edge.episodes for edge in search_result.edges],
+                    exclude={add_result.episode.uuid},
+                )
 
-            return GraphCaptureResult(
-                enabled=True,
-                episode_uuid=add_result.episode.uuid,
-                entity_names=_dedupe([node.name for node in add_result.nodes]),
-                relation_facts=_dedupe([edge.fact for edge in add_result.edges]),
-                related_episode_uuids=related_episode_uuids,
-            )
-        finally:
-            await graphiti.close()
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "graphiti.ingest_note.completed",
+                    trace_id=trace_id,
+                    note_id=note.id,
+                    attempt=attempt,
+                    episode_uuid=add_result.episode.uuid,
+                    entity_count=len(add_result.nodes),
+                    relation_count=len(add_result.edges),
+                    related_episode_count=len(related_episode_uuids),
+                )
+                return GraphCaptureResult(
+                    enabled=True,
+                    episode_uuid=add_result.episode.uuid,
+                    entity_names=_dedupe([node.name for node in add_result.nodes]),
+                    relation_facts=_dedupe([edge.fact for edge in add_result.edges]),
+                    related_episode_uuids=related_episode_uuids,
+                )
+            finally:
+                await graphiti.close()
 
-    async def _ask(self, question: str, user_id: str) -> GraphAskResult:
-        graphiti = await self._build_client()
-        try:
-            search_result = await graphiti.search_(
-                query=question,
-                config=COMBINED_HYBRID_SEARCH_RRF,
-                group_ids=[self._group_id(user_id)],
-            )
+    async def _ask(self, question: str, user_id: str, trace_id: str | None = None) -> GraphAskResult:
+        with trace_span(
+            logger,
+            "graphiti.ask",
+            trace_id=trace_id,
+            user_id=user_id,
+            model=self.settings.openai_model,
+            embedding_model=self.settings.openai_embedding_model,
+        ) as span:
+            graphiti = await self._build_client(trace_id=span["trace_id"])
+            trace_id = span["trace_id"]
+            try:
+                with trace_span(logger, "graphiti.search_for_ask", trace_id=trace_id, user_id=user_id):
+                    search_result = await asyncio.wait_for(
+                        graphiti.search_(
+                            query=question,
+                            config=COMBINED_HYBRID_SEARCH_RRF,
+                            group_ids=[self._group_id(user_id)],
+                        ),
+                        timeout=45,
+                    )
 
-            node_names_by_uuid = {node.uuid: node.name for node in search_result.nodes}
-            ranked_hits = _select_focus_hits(question, _rank_graph_hits(question, search_result.edges, node_names_by_uuid))
-            entity_names = _dedupe([node.name for node in search_result.nodes])
-            relation_facts = _dedupe([hit.relation_fact for hit in ranked_hits])
-            related_episode_uuids = _dedupe([hit.episode_uuid for hit in ranked_hits])
+                node_names_by_uuid = {node.uuid: node.name for node in search_result.nodes}
+                ranked_hits = _select_focus_hits(
+                    question, _rank_graph_hits(question, search_result.edges, node_names_by_uuid)
+                )
+                entity_names = _dedupe([node.name for node in search_result.nodes])
+                relation_facts = _dedupe([hit.relation_fact for hit in ranked_hits])
+                related_episode_uuids = _dedupe([hit.episode_uuid for hit in ranked_hits])
 
-            answer = None
-            if relation_facts:
-                top_entities = "、".join(entity_names[:5]) if entity_names else "暂无实体摘要"
-                fact_lines = "\n".join(f"- {fact}" for fact in relation_facts[:5])
-                answer = f"图谱里最相关的实体：{top_entities}\n关联事实：\n{fact_lines}"
+                answer = None
+                if relation_facts:
+                    top_entities = "、".join(entity_names[:5]) if entity_names else "暂无实体摘要"
+                    fact_lines = "\n".join(f"- {fact}" for fact in relation_facts[:5])
+                    answer = f"图谱里最相关的实体：{top_entities}\n关联事实：\n{fact_lines}"
 
-            return GraphAskResult(
-                enabled=True,
-                answer=answer,
-                entity_names=entity_names,
-                relation_facts=relation_facts,
-                related_episode_uuids=related_episode_uuids,
-                citation_hits=ranked_hits[:12],
-            )
-        finally:
-            await graphiti.close()
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "graphiti.ask.completed",
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    entity_count=len(entity_names),
+                    relation_count=len(relation_facts),
+                    related_episode_count=len(related_episode_uuids),
+                )
+                return GraphAskResult(
+                    enabled=True,
+                    answer=answer,
+                    entity_names=entity_names,
+                    relation_facts=relation_facts,
+                    related_episode_uuids=related_episode_uuids,
+                    citation_hits=ranked_hits[:12],
+                )
+            finally:
+                await graphiti.close()
 
     async def _clear_user_group(self, user_id: str) -> int:
         graphiti = await self._build_client()
@@ -187,7 +257,7 @@ class GraphitiStore:
         finally:
             await graphiti.close()
 
-    async def _build_client(self) -> Graphiti:
+    async def _build_client(self, trace_id: str | None = None) -> Graphiti:
         llm_client = DeepSeekCompatibleClient(
             config=LLMConfig(
                 api_key=self.settings.openai_api_key,
@@ -210,7 +280,22 @@ class GraphitiStore:
             llm_client=llm_client,
             embedder=embedder,
         )
-        await graphiti.build_indices_and_constraints()
+        if not self._indices_ready:
+            with trace_span(
+                logger,
+                "graphiti.build_indices",
+                trace_id=trace_id,
+                graphiti_uri=self.settings.graphiti_uri,
+            ):
+                await asyncio.wait_for(graphiti.build_indices_and_constraints(), timeout=45)
+            self._indices_ready = True
+            log_event(
+                logger,
+                logging.INFO,
+                "graphiti.indices.ready",
+                trace_id=trace_id,
+                graphiti_uri=self.settings.graphiti_uri,
+            )
         return graphiti
 
     def _group_id(self, user_id: str) -> str:

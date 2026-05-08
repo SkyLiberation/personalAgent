@@ -33,7 +33,7 @@ input {
   position: relative;
   min-height: 100vh;
   overflow: hidden;
-  padding: 32px 20px 48px;
+  padding: 32px 28px 48px;
 }
 
 .ambient {
@@ -65,7 +65,7 @@ input {
 }
 
 .hero {
-  max-width: 1280px;
+  max-width: 1520px;
   margin: 0 auto 20px;
   padding: 18px 12px;
 }
@@ -89,7 +89,7 @@ input {
 }
 
 .hero-copy {
-  max-width: 52rem;
+  max-width: 58rem;
   margin: 18px 0 0;
   color: rgba(247, 241, 232, 0.78);
   font-size: 1.02rem;
@@ -97,9 +97,9 @@ input {
 
 .workspace-shell {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 20px;
-  max-width: 1280px;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 24px;
+  max-width: 1520px;
   margin: 0 auto;
   align-items: start;
 }
@@ -223,6 +223,13 @@ input {
   font-weight: 700;
 }
 
+.sub-panel-copy {
+  margin: -4px 0 0;
+  color: rgba(247, 241, 232, 0.68);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
 .sub-panel-header {
   display: grid;
   gap: 6px;
@@ -236,7 +243,7 @@ input {
 }
 
 .capture-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
 .ask-layout {
@@ -819,6 +826,28 @@ button:disabled {
   font-size: 0.82rem;
   line-height: 1.45;
   word-break: break-word;
+}
+
+.sync-hint {
+  margin-top: 10px !important;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.sync-hint-pending {
+  color: rgba(255, 220, 180, 0.82);
+}
+
+.sync-hint-synced {
+  color: rgba(184, 244, 216, 0.84);
+}
+
+.sync-hint-failed {
+  color: rgba(255, 185, 185, 0.84);
+}
+
+.sync-hint-idle {
+  color: rgba(247, 241, 232, 0.62);
 }
 
 .tag-row {

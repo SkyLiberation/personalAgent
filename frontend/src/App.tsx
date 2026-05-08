@@ -78,6 +78,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
   const [activeTab, setActiveTab] = useState<TabId>("ask");
   const [captureText, setCaptureText] = useState("");
+  const [captureUrl, setCaptureUrl] = useState("");
   const [captureFile, setCaptureFile] = useState<File | null>(null);
   const [question, setQuestion] = useState("");
   const [notes, setNotes] = useState<Note[]>([]);
@@ -89,6 +90,7 @@ export default function App() {
   const [allAskHistory, setAllAskHistory] = useState<AskHistoryView[]>([]);
   const [selectedAskId, setSelectedAskId] = useState<string | null>(null);
   const [isCapturingText, setIsCapturingText] = useState(false);
+  const [isCapturingLink, setIsCapturingLink] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isResettingData, setIsResettingData] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -142,18 +144,38 @@ export default function App() {
     }
 
     setIsCapturingText(true);
-    const sourceType = inferCaptureSourceType(captureText.trim());
-    setStatus(sourceType === "link" ? "正在抓取网页并写入记忆..." : "正在采集并连接这条笔记...");
+    setStatus("正在采集并连接这条笔记...");
     try {
-      await captureNote(captureText.trim(), USER_ID, sourceType);
+      await captureNote(captureText.trim(), USER_ID, "text");
       setCaptureText("");
       await refreshAll();
-      setStatus(sourceType === "link" ? "网页已写入记忆。" : "新笔记已采集并建立关联。");
+      setStatus("新笔记已采集并建立关联。");
     } catch (error) {
       console.error(error);
       setStatus("采集失败，请检查后端日志。");
     } finally {
       setIsCapturingText(false);
+    }
+  }
+
+  async function onCaptureLink(event: FormEvent) {
+    event.preventDefault();
+    if (!captureUrl.trim()) {
+      return;
+    }
+
+    setIsCapturingLink(true);
+    setStatus("正在抓取网页并写入记忆...");
+    try {
+      await captureNote(captureUrl.trim(), USER_ID, "link");
+      setCaptureUrl("");
+      await refreshAll();
+      setStatus("网页已写入记忆。");
+    } catch (error) {
+      console.error(error);
+      setStatus("网站抓取失败，请检查 URL 和后端日志。");
+    } finally {
+      setIsCapturingLink(false);
     }
   }
 
@@ -413,6 +435,7 @@ export default function App() {
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       setCaptureText("");
+      setCaptureUrl("");
       setCaptureFile(null);
       setQuestion("");
       setAskHistory([]);
@@ -493,6 +516,9 @@ export default function App() {
               <div className="capture-grid">
                 <form onSubmit={onCapture} className="panel sub-panel stack">
                   <p className="sub-panel-title">快速文本采集</p>
+                  <p className="sub-panel-copy">
+                    适合记录想法、会议纪要、草稿片段，直接写成一条普通记忆。
+                  </p>
                   <textarea
                     value={captureText}
                     onChange={(event) => setCaptureText(event.target.value)}
@@ -504,8 +530,27 @@ export default function App() {
                   </button>
                 </form>
 
+                <form onSubmit={onCaptureLink} className="panel sub-panel stack">
+                  <p className="sub-panel-title">网站抓取采集</p>
+                  <p className="sub-panel-copy">
+                    粘贴一个网页 URL，系统会优先抓取正文并转成可索引内容。
+                  </p>
+                  <textarea
+                    value={captureUrl}
+                    onChange={(event) => setCaptureUrl(event.target.value)}
+                    placeholder="https://example.com/article"
+                    rows={10}
+                  />
+                  <button type="submit" disabled={isCapturingLink}>
+                    {isCapturingLink ? "抓取中..." : "抓取网页"}
+                  </button>
+                </form>
+
                 <form onSubmit={onUpload} className="panel sub-panel stack">
                   <p className="sub-panel-title">文件上传采集</p>
+                  <p className="sub-panel-copy">
+                    支持先把文件保存到本地知识库，文本和 PDF 会尽量抽取正文，其它类型先保存元信息。
+                  </p>
                   <div className="upload-zone">
                     <div className="upload-label">
                       {!isUploading ? (
@@ -888,6 +933,11 @@ export default function App() {
                           ) : null}
                         </div>
                       ) : null}
+                      {note.source_ref ? (
+                        <p className={`sync-hint sync-hint-${note.graph_sync_status ?? "idle"}`}>
+                          {describeGraphStatus(note)}
+                        </p>
+                      ) : null}
                       <div className="tag-row">
                         {note.tags.map((tag) => (
                           <span key={tag}>{tag}</span>
@@ -1043,10 +1093,6 @@ function parseSsePayload<T>(event: MessageEvent<string>): T {
   return JSON.parse(event.data) as T;
 }
 
-function inferCaptureSourceType(text: string): "text" | "link" {
-  return /^https?:\/\/\S+$/i.test(text) ? "link" : "text";
-}
-
 function translateAskStatus(status: AskHistoryView["status"]): string {
   if (status === "streaming") {
     return "生成中";
@@ -1068,6 +1114,22 @@ function translateGraphStatus(status: NonNullable<Note["graph_sync_status"]>): s
     return "失败";
   }
   return "未开始";
+}
+
+function describeGraphStatus(note: Note): string {
+  const status = note.graph_sync_status ?? "idle";
+  if (status === "pending") {
+    return "正在抽取实体和关系，通常需要 1 到 2 分钟；内容较长时会更久。";
+  }
+  if (status === "synced") {
+    const entityCount = note.entity_names?.length ?? 0;
+    const relationCount = note.relation_facts?.length ?? 0;
+    return `图谱已完成同步，提取到 ${entityCount} 个实体和 ${relationCount} 条关系。`;
+  }
+  if (status === "failed") {
+    return "图谱同步失败，可以查看错误提示后重新发起同步。";
+  }
+  return "这条笔记还没有进入图谱同步流程。";
 }
 
 function getOrCreateSessionId(): string {

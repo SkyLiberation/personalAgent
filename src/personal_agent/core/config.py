@@ -24,7 +24,14 @@ class Settings(BaseModel):
     openai_embedding_model: str = "text-embedding-3-small"
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
+    firecrawl_api_key: str | None = None
+    firecrawl_base_url: str = "https://api.firecrawl.dev"
+    firecrawl_timeout_ms: int = 60000
     postgres_url: str | None = None
+    graph_sync_max_attempts: int = 3
+    graph_sync_initial_backoff_seconds: float = 2.0
+    graph_sync_backoff_multiplier: float = 2.0
+    graph_sync_max_backoff_seconds: float = 20.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -49,7 +56,20 @@ class Settings(BaseModel):
             openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
+            firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY"),
+            firecrawl_base_url=os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"),
+            firecrawl_timeout_ms=int(os.getenv("FIRECRAWL_TIMEOUT_MS", "60000")),
             postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
+            graph_sync_max_attempts=int(os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")),
+            graph_sync_initial_backoff_seconds=float(
+                os.getenv("PERSONAL_AGENT_GRAPH_SYNC_INITIAL_BACKOFF_SECONDS", "2.0")
+            ),
+            graph_sync_backoff_multiplier=float(
+                os.getenv("PERSONAL_AGENT_GRAPH_SYNC_BACKOFF_MULTIPLIER", "2.0")
+            ),
+            graph_sync_max_backoff_seconds=float(
+                os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_BACKOFF_SECONDS", "20.0")
+            ),
         )
 
 

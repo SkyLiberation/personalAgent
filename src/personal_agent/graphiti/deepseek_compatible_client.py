@@ -47,7 +47,12 @@ class DeepSeekCompatibleClient(BaseOpenAIClient):
         super().__init__(config, cache, max_tokens, reasoning, verbosity)
         if config is None:
             config = LLMConfig()
-        self.client = client or AsyncOpenAI(api_key=config.api_key, base_url=config.base_url)
+        self.client = client or AsyncOpenAI(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            max_retries=1,
+            timeout=60.0,
+        )
 
     async def _create_structured_completion(
         self,
