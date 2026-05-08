@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 class Settings(BaseModel):
     data_dir: Path = Path("./data")
+    log_level: str = "INFO"
     embedding_provider: str = "local"
     llm_provider: str = "stub"
     default_user: str = "default"
@@ -23,6 +24,7 @@ class Settings(BaseModel):
     openai_embedding_model: str = "text-embedding-3-small"
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
+    postgres_url: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -31,6 +33,7 @@ class Settings(BaseModel):
         load_dotenv()
         return cls(
             data_dir=Path(os.getenv("PERSONAL_AGENT_DATA_DIR", "./data")),
+            log_level=os.getenv("PERSONAL_AGENT_LOG_LEVEL", "INFO"),
             embedding_provider=os.getenv("PERSONAL_AGENT_EMBEDDING_PROVIDER", "local"),
             llm_provider=os.getenv("PERSONAL_AGENT_LLM_PROVIDER", "stub"),
             default_user=os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
@@ -46,6 +49,7 @@ class Settings(BaseModel):
             openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
+            postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
         )
 
 

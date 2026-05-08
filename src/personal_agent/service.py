@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from pydantic import BaseModel, Field
 
+from .ask_history_store import AskHistoryStore
 from .config import Settings
 from .graph import build_ask_graph, build_capture_graph
 from .graphiti_store import GraphAskResult, GraphCaptureResult, GraphCitationHit, GraphitiStore
 from .memory_store import LocalMemoryStore
-from .models import AgentState, Citation, KnowledgeNote, RawIngestItem, ReviewCard
+from .models import AgentState, AskHistoryRecord, Citation, KnowledgeNote, RawIngestItem, ReviewCard
 from .nodes import digest_node
+
+logger = logging.getLogger(__name__)
 
 
 class CaptureResult(BaseModel):
@@ -37,18 +41,49 @@ class AgentService:
         self.settings = settings or Settings.from_env()
         self.store = LocalMemoryStore(self.settings.data_dir)
         self.graph_store = GraphitiStore(self.settings)
+        self.ask_history_store = AskHistoryStore(self.settings.postgres_url)
 
-    def capture(self, text: str, source_type: str = "text", user_id: str | None = None) -> CaptureResult:
+    def capture(
+        self,
+        text: str,
+        source_type: str = "text",
+        user_id: str | None = None,
+        source_ref: str | None = None,
+        attempt_graph: bool = True,
+    ) -> CaptureResult:
         normalized_user = user_id or self.settings.default_user
+        logger.info("Starting capture user=%s source_type=%s", normalized_user, source_type)
         graph = build_capture_graph(self.store)
         state = AgentState(
             mode="capture",
             user_id=normalized_user,
-            raw_item=RawIngestItem(content=text, source_type=source_type, user_id=normalized_user),
+            raw_item=RawIngestItem(
+                content=text,
+                source_type=source_type,
+                source_ref=source_ref,
+                user_id=normalized_user,
+            ),
         )
         result = AgentState.model_validate(graph.invoke(state))
         if result.note is None:
             raise ValueError("Capture flow did not produce a note.")
+
+        if not attempt_graph:
+            result.note.graph_sync_status = "pending" if self.graph_store.configured() else "idle"
+            result.note.graph_sync_error = None
+            self.store.update_note(result.note)
+            logger.info(
+                "Capture stored without immediate graph sync user=%s note_id=%s graph_sync_status=%s",
+                normalized_user,
+                result.note.id,
+                result.note.graph_sync_status,
+            )
+            return CaptureResult(
+                note=result.note,
+                related_notes=result.matches,
+                review_card=result.review_card,
+                graph_enabled=False,
+            )
 
         graph_result = self.graph_store.ingest_note(result.note)
         related_notes = result.matches
@@ -64,6 +99,19 @@ class AgentService:
             updated_note.updated_at = datetime.utcnow()
             self.store.update_note(updated_note)
             result.note = updated_note
+        elif self.graph_store.configured():
+            result.note.graph_sync_status = "failed"
+            result.note.graph_sync_error = "Graphiti ingest returned disabled result."
+            result.note.updated_at = datetime.utcnow()
+            self.store.update_note(result.note)
+
+        logger.info(
+            "Capture finished user=%s note_id=%s graph_enabled=%s related_notes=%s",
+            normalized_user,
+            result.note.id,
+            graph_result.enabled,
+            len(related_notes),
+        )
 
         return CaptureResult(
             note=result.note,
@@ -74,30 +122,48 @@ class AgentService:
 
     def ask(self, question: str, user_id: str | None = None) -> AskResult:
         normalized_user = user_id or self.settings.default_user
+        logger.info("Starting ask user=%s question=%s", normalized_user, question[:120])
 
         graph_result = self.graph_store.ask(question, normalized_user)
         if graph_result.enabled and graph_result.answer:
             matches, citations = self._graph_matches_and_citations(normalized_user, graph_result)
             answer = self._compose_graph_answer(question, graph_result, matches)
-            return AskResult(
+            ask_result = AskResult(
                 answer=answer,
                 citations=citations,
                 matches=matches,
                 graph_enabled=True,
             )
+            self._record_ask_history(normalized_user, question, ask_result)
+            logger.info(
+                "Ask resolved from graph user=%s matches=%s citations=%s",
+                normalized_user,
+                len(matches),
+                len(citations),
+            )
+            return ask_result
 
         graph = build_ask_graph(self.store)
         state = AgentState(mode="ask", question=question, user_id=normalized_user)
         result = AgentState.model_validate(graph.invoke(state))
-        return AskResult(
+        ask_result = AskResult(
             answer=result.answer or "暂时没有生成答案。",
             citations=result.citations,
             matches=result.matches,
             graph_enabled=False,
         )
+        self._record_ask_history(normalized_user, question, ask_result)
+        logger.info(
+            "Ask resolved locally user=%s matches=%s citations=%s",
+            normalized_user,
+            len(result.matches),
+            len(result.citations),
+        )
+        return ask_result
 
     def digest(self, user_id: str | None = None) -> DigestResult:
         normalized_user = user_id or self.settings.default_user
+        logger.info("Generating digest user=%s", normalized_user)
         return DigestResult(
             message=digest_node(self.store, normalized_user),
             recent_notes=self.store.list_notes(normalized_user)[-5:],
@@ -106,6 +172,7 @@ class AgentService:
 
     def list_notes(self, user_id: str | None = None) -> list[KnowledgeNote]:
         normalized_user = user_id or self.settings.default_user
+        logger.info("Loading notes user=%s", normalized_user)
         return list(reversed(self.store.list_notes(normalized_user)))
 
     def health(self) -> dict[str, object]:
@@ -113,7 +180,15 @@ class AgentService:
         return {
             "status": "ok",
             "graphiti": graph_status,
+            "ask_history": {
+                "configured": self.ask_history_store.configured(),
+            },
         }
+
+    def list_ask_history(self, user_id: str | None = None, limit: int = 20) -> list[AskHistoryRecord]:
+        normalized_user = user_id or self.settings.default_user
+        logger.info("Loading ask history user=%s limit=%s", normalized_user, limit)
+        return self.ask_history_store.list_history(normalized_user, limit)
 
     def _merge_graph_capture(
         self, note: KnowledgeNote, graph_result: GraphCaptureResult
@@ -121,8 +196,62 @@ class AgentService:
         note.graph_episode_uuid = graph_result.episode_uuid
         note.entity_names = graph_result.entity_names
         note.relation_facts = graph_result.relation_facts[:8]
+        note.graph_sync_status = "synced"
+        note.graph_sync_error = None
         note.updated_at = datetime.utcnow()
         return note
+
+    def sync_note_to_graph(self, note_id: str) -> bool:
+        note = self.store.get_note(note_id)
+        if note is None:
+            logger.warning("Graph sync skipped because note_id=%s was not found", note_id)
+            return False
+        if not self.graph_store.configured():
+            logger.info("Graph sync skipped because graph is not configured note_id=%s", note_id)
+            note.graph_sync_status = "idle"
+            note.graph_sync_error = None
+            note.updated_at = datetime.utcnow()
+            self.store.update_note(note)
+            return False
+
+        logger.info("Starting background graph sync note_id=%s", note_id)
+        note.graph_sync_status = "pending"
+        note.graph_sync_error = None
+        note.updated_at = datetime.utcnow()
+        self.store.update_note(note)
+
+        try:
+            graph_result = self.graph_store.ingest_note(note)
+            if not graph_result.enabled:
+                note.graph_sync_status = "failed"
+                note.graph_sync_error = "Graphiti ingest returned disabled result."
+                note.updated_at = datetime.utcnow()
+                self.store.update_note(note)
+                logger.warning("Background graph sync failed note_id=%s", note_id)
+                return False
+
+            updated_note = self._merge_graph_capture(note, graph_result)
+            related_notes = self.store.find_notes_by_graph_episode_uuids(
+                note.user_id, graph_result.related_episode_uuids
+            )
+            updated_note.related_note_ids = [item.id for item in related_notes if item.id != updated_note.id]
+            updated_note.updated_at = datetime.utcnow()
+            self.store.update_note(updated_note)
+            logger.info(
+                "Background graph sync succeeded note_id=%s episode_uuid=%s entities=%s relations=%s",
+                note_id,
+                updated_note.graph_episode_uuid,
+                len(updated_note.entity_names),
+                len(updated_note.relation_facts),
+            )
+            return True
+        except Exception as exc:
+            note.graph_sync_status = "failed"
+            note.graph_sync_error = str(exc)[:500]
+            note.updated_at = datetime.utcnow()
+            self.store.update_note(note)
+            logger.exception("Background graph sync raised exception note_id=%s", note_id)
+            return False
 
     def _graph_citations(
         self, matches: list[KnowledgeNote], graph_result: GraphAskResult
@@ -208,6 +337,23 @@ class AgentService:
         top_entities = "、".join(graph_result.entity_names[:5]) if graph_result.entity_names else "暂无实体摘要"
         fact_lines = "\n".join(f"- {fact}" for fact in merged_facts[:5])
         return f"图谱里最相关的实体：{top_entities}\n关联事实：\n{fact_lines}"
+
+    def _record_ask_history(self, user_id: str, question: str, result: AskResult) -> None:
+        if not self.ask_history_store.configured():
+            return
+
+        try:
+            self.ask_history_store.append(
+                AskHistoryRecord(
+                    user_id=user_id,
+                    question=question,
+                    answer=result.answer,
+                    citations=result.citations,
+                    graph_enabled=result.graph_enabled,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to persist ask history user=%s", user_id)
 
 
 def _merge_notes(primary: list[KnowledgeNote], secondary: list[KnowledgeNote]) -> list[KnowledgeNote]:

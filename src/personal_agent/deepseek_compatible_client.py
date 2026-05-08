@@ -26,6 +26,7 @@ ENTITY_TYPE_IDS = {
 }
 
 logger = logging.getLogger(__name__)
+STRUCTURED_COLLECTION_KEYS = {"extracted_entities", "edges", "summaries", "entity_resolutions"}
 
 
 class DeepSeekCompatibleClient(BaseOpenAIClient):
@@ -167,6 +168,8 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
             item = dict(entity)
             if "entity" in item and "name" not in item:
                 item["name"] = item.pop("entity")
+            if "entity_name" in item and "name" not in item:
+                item["name"] = item.pop("entity_name")
             entity_type = str(item.pop("type", item.pop("entity_type", "Entity"))).strip()
             item["entity_type_id"] = ENTITY_TYPE_IDS.get(entity_type, ENTITY_TYPE_IDS["Entity"])
             item.setdefault("episode_indices", [0])
@@ -219,6 +222,9 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
                 normalized_summaries.append(summary_item)
         payload["summaries"] = normalized_summaries
 
+    if isinstance(payload, dict):
+        payload = {key: _sanitize_payload_value(value, preserve_structure=key in STRUCTURED_COLLECTION_KEYS) for key, value in payload.items()}
+
     if logger.isEnabledFor(logging.DEBUG) and payload != original_payload:
         logger.debug(
             "Normalized structured response for %s from %s to %s",
@@ -228,3 +234,38 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
         )
 
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _sanitize_payload_value(value: Any, preserve_structure: bool = False) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, list):
+        if preserve_structure:
+            sanitized_items = []
+            for item in value:
+                if isinstance(item, dict):
+                    sanitized_items.append(
+                        {key: _sanitize_payload_value(child, preserve_structure=False) for key, child in item.items()}
+                    )
+                else:
+                    sanitized_items.append(_sanitize_payload_value(item, preserve_structure=False))
+            return sanitized_items
+        return [_sanitize_scalar_list_item(item) for item in value]
+
+    if isinstance(value, dict):
+        if preserve_structure:
+            return {key: _sanitize_payload_value(child, preserve_structure=False) for key, child in value.items()}
+        return json.dumps(value, ensure_ascii=False)
+
+    return str(value)
+
+
+def _sanitize_scalar_list_item(value: Any) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)

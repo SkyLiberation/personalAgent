@@ -2,12 +2,14 @@ README.md
 pyproject.toml
 src/personal_agent/__init__.py
 src/personal_agent/api.py
+src/personal_agent/ask_history_store.py
 src/personal_agent/config.py
 src/personal_agent/dashscope_compatible_embedder.py
 src/personal_agent/deepseek_compatible_client.py
 src/personal_agent/graph.py
 src/personal_agent/graphiti_ontology.py
 src/personal_agent/graphiti_store.py
+src/personal_agent/logging_utils.py
 src/personal_agent/main.py
 src/personal_agent/memory_store.py
 src/personal_agent/models.py

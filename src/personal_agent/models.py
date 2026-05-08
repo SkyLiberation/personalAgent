@@ -26,6 +26,8 @@ class KnowledgeNote(BaseModel):
     user_id: str = "default"
     source_type: str = "text"
     source_ref: str | None = None
+    graph_sync_status: Literal["idle", "pending", "synced", "failed"] = "idle"
+    graph_sync_error: str | None = None
     title: str
     content: str
     summary: str
@@ -45,6 +47,16 @@ class ReviewCard(BaseModel):
     answer_hint: str
     interval_days: int = 1
     due_at: datetime = Field(default_factory=lambda: datetime.utcnow() + timedelta(days=1))
+
+
+class AskHistoryRecord(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    user_id: str = "default"
+    question: str
+    answer: str
+    citations: list[Citation] = Field(default_factory=list)
+    graph_enabled: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AgentState(BaseModel):

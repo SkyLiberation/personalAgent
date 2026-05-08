@@ -8,6 +8,7 @@ Requires-Dist: fastapi>=0.121.0
 Requires-Dist: graphiti-core>=0.29.0
 Requires-Dist: langgraph>=0.2.0
 Requires-Dist: pydantic>=2.8.0
+Requires-Dist: psycopg[binary]>=3.2.12
 Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: typer>=0.12.3
@@ -35,6 +36,7 @@ Requires-Dist: uvicorn>=0.38.0
 - `LangGraph`
 - `Graphiti`
 - `Neo4j`
+- `Postgres`
 - `React 19`
 - `Vite 8`
 - `TypeScript 6`
@@ -46,10 +48,18 @@ Requires-Dist: uvicorn>=0.38.0
 ### 1. Capture
 
 - 接收文本输入
+- 支持前端文件上传
 - 自动生成标题、摘要、标签
 - 保存为本地 `KnowledgeNote`
 - 自动生成复习卡片 `ReviewCard`
 - 可选写入 Graphiti 图谱
+
+当前上传策略：
+
+- 纯文本类文件：直接读取内容并进入 capture
+- 图片、音频、PDF 等文件：先保存文件并记录为“文件元信息笔记”
+- 更深的 OCR / PDF 解析 / ASR 还没有接入
+- 上传文件默认先快速入库，再在后台执行 Graphiti 同步
 
 ### 2. Knowledge Connection
 
@@ -65,6 +75,8 @@ Requires-Dist: uvicorn>=0.38.0
 - 图谱关闭时：走本地问答链路
 - 图谱开启时：优先基于实体和关系事实返回结果
 - 支持把图谱命中的 episode 反查成本地笔记引用
+- 支持 `SSE` 实时展示回答
+- 支持把问答历史持久化到 `Postgres`
 
 ### 4. Digest
 
@@ -88,7 +100,7 @@ Requires-Dist: uvicorn>=0.38.0
 
 ### 自定义本体
 
-本体定义位于 [graphiti_ontology.py](/d:/mySoft/workspace/personalAgent/src/personal_agent/graphiti_ontology.py)：
+本体定义位于 [graphiti_ontology.py](src/personal_agent/graphiti_ontology.py)：
 
 - `Person`
 - `Project`
@@ -100,9 +112,9 @@ Requires-Dist: uvicorn>=0.38.0
 
 由于 `DeepSeek` 和 `Graphiti` 的结构化输出约定并不完全一致，项目里增加了兼容层：
 
-- [deepseek_compatible_client.py](/d:/mySoft/workspace/personalAgent/src/personal_agent/deepseek_compatible_client.py)
-- [dashscope_compatible_embedder.py](/d:/mySoft/workspace/personalAgent/src/personal_agent/dashscope_compatible_embedder.py)
-- [graphiti_store.py](/d:/mySoft/workspace/personalAgent/src/personal_agent/graphiti_store.py)
+- [deepseek_compatible_client.py](src/personal_agent/deepseek_compatible_client.py)
+- [dashscope_compatible_embedder.py](src/personal_agent/dashscope_compatible_embedder.py)
+- [graphiti_store.py](src/personal_agent/graphiti_store.py)
 
 当前已经兼容这些常见差异：
 
@@ -177,6 +189,72 @@ personalAgent/
       └─ service.py
 ```
 
+## 本地目录与数据流
+
+当前工程的本地工作区目录是：
+
+`D:\mySoft\workspace\personalAgent`
+
+这也是项目根目录。当前数据在本地的主要落点如下：
+
+- 代码与配置：
+  - `src/personal_agent/`
+  - `frontend/`
+  - `.env`
+  - `docker-compose.yml`
+- 本地知识数据：
+  - `data/notes.json`
+  - `data/reviews.json`
+- 上传文件原件：
+  - `data/uploads/`
+- 运行日志：
+  - `log/run.log`
+
+### Capture 数据流
+
+#### 1. 文本输入
+
+前端或 API 提交文本后，会经过：
+
+- `capture -> enrich -> link -> schedule_review`
+
+然后落盘为：
+
+- 笔记：`data/notes.json`
+- 复习任务：`data/reviews.json`
+
+如果开启了 Graphiti，还会额外写入：
+
+- `Neo4j`
+
+也就是说，图谱数据不保存在本地 JSON 文件中，而是存进图数据库。
+
+#### 2. 文件上传
+
+前端上传文件后，当前流程是：
+
+1. 文件原件先保存到 `data/uploads/`
+2. 后端根据文件类型生成 capture 输入
+3. 再像普通文本一样进入 `notes.json / reviews.json`
+4. 如果 Graphiti 可用，再尝试写入图谱
+
+当前支持策略：
+
+- 文本类文件：直接读取正文内容后 capture
+- 图片、音频、PDF 等非文本文件：先记录文件元信息为笔记
+
+上传笔记会记录图谱同步状态：
+
+- `idle`
+- `pending`
+- `synced`
+- `failed`
+
+因此，上传后的数据会同时存在两处：
+
+- 原始文件在 `data/uploads/`
+- 结构化笔记在 `data/notes.json`
+
 ## 核心数据模型
 
 ### `KnowledgeNote`
@@ -199,73 +277,24 @@ personalAgent/
 
 ## 后端接口
 
-主要接口定义位于 [api.py](/d:/mySoft/workspace/personalAgent/src/personal_agent/api.py)。
-
-### `GET /api/health`
-
-返回服务状态与图谱配置状态。
-
-示例响应：
-
-```json
-{
-  "status": "ok",
-  "graphiti": {
-    "enabled": true,
-    "configured": true,
-    "base_url": "https://api.deepseek.com",
-    "model": "deepseek-v4-flash",
-    "embedding_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "embedding_model": "text-embedding-v4"
-  }
-}
-```
-
-### `POST /api/capture`
-
-请求体：
-
-```json
-{
-  "text": "Bob 在搜索系统升级项目里决定先上 BM25 + 向量召回",
-  "source_type": "note",
-  "user_id": "default"
-}
-```
-
-### `POST /api/ask`
-
-请求体：
-
-```json
-{
-  "question": "搜索系统升级项目里，Bob 先决定采用什么方案？",
-  "user_id": "default"
-}
-```
-
-### `GET /api/digest`
-
-返回最近笔记与到期复习任务。
-
-### `GET /api/notes`
-
-返回当前用户的全部本地笔记。
+详见 [docs/api.md](docs/api.md)。
 
 ## 环境变量
 
-参考 [.env.example](/d:/mySoft/workspace/personalAgent/.env.example)。
+参考 [.env.example](.env.example)。
 
 ### 基础配置
 
 ```env
 PERSONAL_AGENT_DATA_DIR=./data
+PERSONAL_AGENT_LOG_LEVEL=INFO
 PERSONAL_AGENT_DEFAULT_USER=default
 PERSONAL_AGENT_GRAPHITI_ENABLED=false
 PERSONAL_AGENT_GRAPHITI_URI=bolt://localhost:7687
 PERSONAL_AGENT_GRAPHITI_USER=neo4j
 PERSONAL_AGENT_GRAPHITI_PASSWORD=password
 PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX=personal-agent
+PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/personal_agent
 ```
 
 ### LLM 配置
@@ -377,12 +406,15 @@ npm run build
 - `backend`
 - `frontend`
 - `neo4j`
+- `postgres`
 
 直接启动：
 
 ```bash
 docker compose up --build
 ```
+
+`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、是否命中图谱以及时间戳。
 
 ## CLI 用法
 
@@ -398,8 +430,8 @@ uv run python -m personal_agent.main digest
 
 当前仓库里的主要版本：
 
-- 后端依赖定义见 [pyproject.toml](/d:/mySoft/workspace/personalAgent/pyproject.toml)
-- 前端依赖定义见 [frontend/package.json](/d:/mySoft/workspace/personalAgent/frontend/package.json)
+- 后端依赖定义见 [pyproject.toml](pyproject.toml)
+- 前端依赖定义见 [frontend/package.json](frontend/package.json)
 
 关键版本包括：
 
