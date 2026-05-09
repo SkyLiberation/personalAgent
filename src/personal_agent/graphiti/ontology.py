@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import json
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class PersonEntity(BaseModel):
@@ -19,6 +22,12 @@ class ConceptEntity(BaseModel):
 
 class OrganizationEntity(BaseModel):
     industry: str | None = Field(default=None, description="The organization's industry or area of work.")
+
+    @field_validator("industry", mode="before")
+    @classmethod
+    def _normalize_industry(cls, value: Any) -> str | None:
+        normalized = _coerce_to_text(value)
+        return normalized or None
 
 
 class SourceEntity(BaseModel):
@@ -47,3 +56,32 @@ When possible:
 - preserve directional relationships such as "depends on", "causes", "applies to", "belongs to"
 - avoid vague entities like "this", "that", or generic pronouns
 """.strip()
+
+
+def _coerce_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        if stripped[0] in {"[", "{"}:
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return stripped
+            return _coerce_to_text(parsed)
+        return stripped
+    if isinstance(value, list):
+        parts = [_coerce_to_text(item) for item in value]
+        joined = "；".join(part for part in parts if part)
+        return joined
+    if isinstance(value, dict):
+        preferred_keys = ("industry", "name", "summary", "description", "entity_type")
+        for key in preferred_keys:
+            candidate = _coerce_to_text(value.get(key))
+            if candidate:
+                return candidate
+        compact = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return compact
+    return str(value).strip()

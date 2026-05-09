@@ -217,9 +217,12 @@ class FeishuService:
 
         chat_id = str(message.chat_id or "")
         open_id = str(sender_id.open_id or "") if sender_id is not None else ""
-        user_id = open_id or (str(sender_id.user_id or "") if sender_id is not None else "") or self.settings.default_user
+        sender_user_id = str(sender_id.user_id or "") if sender_id is not None else ""
+        user_id = self._resolve_user_id(open_id, sender_user_id)
         metadata["chat_id"] = chat_id
         metadata["open_id"] = open_id
+        if sender_user_id:
+            metadata["feishu_user_id"] = sender_user_id
 
         return FeishuIncomingMessage(
             event_id=str(header.event_id or "") if header is not None else "",
@@ -293,10 +296,13 @@ class FeishuService:
 
         chat_id = str(message.get("chat_id") or "")
         open_id = str(sender_id.get("open_id") or "")
+        sender_user_id = str(sender_id.get("user_id") or "")
         session_id = chat_id or open_id or "default"
-        user_id = open_id or str(sender_id.get("user_id") or self.settings.default_user)
+        user_id = self._resolve_user_id(open_id, sender_user_id)
         metadata["chat_id"] = chat_id
         metadata["open_id"] = open_id
+        if sender_user_id:
+            metadata["feishu_user_id"] = sender_user_id
 
         return FeishuIncomingMessage(
             event_id=str(header.get("event_id") or ""),
@@ -408,6 +414,11 @@ class FeishuService:
         }
         logger.error("Feishu SDK %s failed detail=%s", action, detail)
         raise RuntimeError(f"Feishu SDK {action} failed: {detail}")
+
+    def _resolve_user_id(self, open_id: str, sender_user_id: str) -> str:
+        if self.settings.feishu_use_default_user:
+            return self.settings.default_user
+        return open_id or sender_user_id or self.settings.default_user
 
 
 def _as_dict(value: object) -> dict[str, object]:

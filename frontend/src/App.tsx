@@ -102,14 +102,21 @@ export default function App() {
   useEffect(() => {
     void refreshAll();
 
+    const intervalId = window.setInterval(() => {
+      void refreshAll({ silent: true });
+    }, 8000);
+
     return () => {
+      window.clearInterval(intervalId);
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     };
   }, [sessionId]);
 
-  async function refreshAll() {
-    setStatus("正在刷新记忆视图...");
+  async function refreshAll(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      setStatus("正在刷新记忆视图...");
+    }
     try {
       const [noteItems, digestResult, askHistoryResult, allAskHistoryResult] = await Promise.all([
         fetchNotes(USER_ID),
@@ -130,10 +137,14 @@ export default function App() {
       setAskHistory(historyItems);
       setAllAskHistory(allHistoryItems);
       setSelectedAskId((current) => current ?? historyItems[0]?.id ?? null);
-      setStatus("知识库已就绪。");
+      if (!options?.silent) {
+        setStatus("知识库已就绪。");
+      }
     } catch (error) {
       console.error(error);
-      setStatus("暂时无法连接后端，请启动 FastAPI 后刷新页面。");
+      if (!options?.silent) {
+        setStatus("暂时无法连接后端，请启动 FastAPI 后刷新页面。");
+      }
     }
   }
 
