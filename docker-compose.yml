@@ -19,9 +19,9 @@ services:
     volumes:
       - ./:/app
     ports:
-      - "5173:5173"
+      - "3000:3000"
     command: >
-      sh -lc "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+      sh -lc "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
   neo4j:
     image: neo4j:5.26-community
     environment:

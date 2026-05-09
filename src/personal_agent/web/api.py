@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +17,7 @@ from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
 from ..core.models import AskHistoryRecord, Citation, KnowledgeNote, ReviewCard
+from ..feishu import FeishuService
 logger = logging.getLogger(__name__)
 
 
@@ -83,8 +84,9 @@ class ResetUserDataResponse(BaseModel):
 def create_app() -> FastAPI:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
-    service = AgentService(settings)
     capture_service = CaptureService(settings, logger)
+    service = AgentService(settings, capture_service=capture_service)
+    feishu_service = FeishuService(settings, service)
     logger.info("Logging initialized at %s", log_file)
     app = FastAPI(
         title="Personal Agent API",
@@ -99,6 +101,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.on_event("startup")
+    async def startup_feishu_listener() -> None:
+        feishu_service.start_event_listener()
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
@@ -291,6 +297,46 @@ def create_app() -> FastAPI:
         logger.warning("Debug reset requested for user=%s", request.user_id)
         result = service.reset_user_data(request.user_id)
         return ResetUserDataResponse(**result.model_dump())
+
+    @app.post("/api/integrations/feishu/webhook")
+    async def feishu_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
+        logger.info(
+            "Feishu webhook request received client=%s user_agent=%s content_type=%s",
+            request.client.host if request.client else "unknown",
+            request.headers.get("user-agent", ""),
+            request.headers.get("content-type", ""),
+        )
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            logger.warning("Feishu webhook request contains invalid JSON")
+            raise HTTPException(status_code=400, detail="Invalid JSON payload.") from exc
+
+        try:
+            result = feishu_service.parse_webhook(payload, dict(request.headers))
+        except PermissionError as exc:
+            logger.warning("Feishu webhook rejected: %s", exc)
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            logger.exception("Feishu webhook failed before enqueue")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        if result.incoming_message is not None:
+            incoming_message = result.incoming_message
+
+            def _process_feishu_message() -> None:
+                try:
+                    feishu_service.process_incoming_message(incoming_message)
+                except Exception:
+                    logger.exception(
+                        "Feishu background processing failed event_id=%s message_id=%s",
+                        incoming_message.event_id,
+                        incoming_message.message_id,
+                    )
+
+            background_tasks.add_task(_process_feishu_message)
+
+        return result.body
 
     frontend_dist = _frontend_dist_dir()
     assets_dir = frontend_dist / "assets"

@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from ..core.models import AgentState, EntryInput, EntryIntent
+
+if TYPE_CHECKING:
+    from ..capture import CaptureService
+    from .service import AskResult, CaptureResult
+
+
+@dataclass(slots=True)
+class EntryNodeDeps:
+    classify_intent: Callable[[EntryInput], tuple[EntryIntent, str]]
+    capture: Callable[..., "CaptureResult"]
+    ask: Callable[..., "AskResult"]
+    capture_service: "CaptureService | None" = None
+
+
+def route_entry_intent_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
+    if state.entry_input is None:
+        state.intent = "unknown"
+        state.intent_reason = "缺少入口输入。"
+        return state
+    intent, reason = deps.classify_intent(state.entry_input)
+    state.intent = intent
+    state.intent_reason = reason
+    return state
+
+
+def capture_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
+    entry_input = state.entry_input
+    if entry_input is None:
+        state.answer = "未收到可采集内容。"
+        return state
+    if state.intent == "capture_file":
+        state.answer = "飞书文件消息已识别，但当前版本还没有把文件下载与正文提取接起来。"
+        return state
+
+    capture_text = entry_input.text
+    source_type = "text"
+    source_ref = entry_input.source_ref
+    if state.intent == "capture_link":
+        source_type = "link"
+        url = entry_input.metadata.get("url") or first_url(entry_input.text)
+        if not url:
+            state.answer = "识别成了链接采集，但消息里没有找到可用链接。"
+            return state
+        source_ref = url
+        if deps.capture_service is None:
+            state.answer = "当前没有可用的采集服务，暂时无法抓取链接正文。"
+            return state
+        capture_text = deps.capture_service.capture_text_from_url(url)
+
+    result = deps.capture(
+        text=capture_text,
+        source_type=source_type,
+        user_id=entry_input.user_id,
+        source_ref=source_ref,
+    )
+    state.note = result.note
+    state.matches = result.related_notes
+    state.review_card = result.review_card
+    state.answer = f"已收进知识库：{result.note.title}"
+    return state
+
+
+def ask_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
+    entry_input = state.entry_input
+    if entry_input is None or not entry_input.text.strip():
+        state.answer = "未收到可提问内容。"
+        return state
+    result = deps.ask(entry_input.text, entry_input.user_id, entry_input.session_id)
+    state.question = entry_input.text
+    state.answer = result.answer
+    state.matches = result.matches
+    state.citations = result.citations
+    return state
+
+
+def summarize_entry_branch_node(state: AgentState) -> AgentState:
+    state.answer = "已识别为群聊总结诉求，但当前版本还没有接入飞书会话消息回溯能力。"
+    return state
+
+
+def unknown_entry_branch_node(state: AgentState) -> AgentState:
+    state.answer = "我暂时没判断出你的意图。你可以直接发要记录的内容、要收录的链接，或明确提一个问题。"
+    return state
+
+
+def heuristic_entry_intent(text: str) -> tuple[EntryIntent, str]:
+    stripped = text.strip()
+    if not stripped:
+        return "unknown", "消息内容为空。"
+
+    url = first_url(stripped)
+    summarize_keywords = ("总结", "汇总", "整理")
+    thread_keywords = ("群聊", "会话", "线程", "讨论", "聊天记录")
+    ask_keywords = ("什么", "为什么", "如何", "怎么", "吗", "？", "?", "请问", "帮我看看", "解释")
+    capture_keywords = ("记一下", "记录", "收进", "保存", "沉淀", "备忘")
+
+    if any(keyword in stripped for keyword in summarize_keywords) and any(
+        keyword in stripped for keyword in thread_keywords
+    ):
+        return "summarize_thread", "文本里同时出现了总结和会话类关键词。"
+    if url:
+        if any(keyword in stripped for keyword in ask_keywords):
+            return "ask", "消息里有链接，但整体更像围绕链接发起提问。"
+        return "capture_link", "消息中包含链接，优先按链接采集处理。"
+    if any(keyword in stripped for keyword in ask_keywords):
+        return "ask", "文本里包含明显的问题表达。"
+    if any(keyword in stripped for keyword in capture_keywords):
+        return "capture_text", "文本里包含记录或沉淀类表达。"
+    return "capture_text", "默认按文本采集处理。"
+
+
+def first_url(text: str) -> str | None:
+    match = re.search(r"https?://\S+", text)
+    if match is None:
+        return None
+    return match.group(0).rstrip(".,);]}>\"'")

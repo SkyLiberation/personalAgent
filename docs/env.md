@@ -14,6 +14,11 @@ PERSONAL_AGENT_GRAPHITI_USER=neo4j
 PERSONAL_AGENT_GRAPHITI_PASSWORD=password
 PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX=personal-agent
 PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
+PERSONAL_AGENT_FEISHU_ENABLED=false
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+FEISHU_VERIFICATION_TOKEN=xxx
+FEISHU_BASE_URL=https://open.feishu.cn
 ```
 
 说明：
@@ -24,6 +29,25 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
   - `conversations.json`
   - `uploads/`
 - 如果配置了 `PERSONAL_AGENT_POSTGRES_URL`，问答历史会额外持久化到 `Postgres.ask_history`
+
+## 飞书配置
+
+- `PERSONAL_AGENT_FEISHU_ENABLED=true` 后才会启用飞书集成
+- `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 用于：
+  - 建立飞书长连接事件监听
+  - 把 Agent 的处理结果回发到飞书会话
+- `FEISHU_VERIFICATION_TOKEN` 仅在使用 HTTP webhook 模式时用于校验事件订阅请求
+- `FEISHU_BASE_URL` 默认使用 `https://open.feishu.cn`
+
+当前项目默认推荐使用“长连接接收事件”模式，因此通常只要配置：
+
+```env
+PERSONAL_AGENT_FEISHU_ENABLED=true
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+```
+
+即可完成本地开发接入。
 
 ## LLM 配置
 
@@ -56,3 +80,4 @@ OPENAI_EMBEDDING_MODEL=text-embedding-v4
 
 - 当前 `OPENAI_*` 这组变量既用于 Graphiti 抽取与检索时的 LLM，也用于 `ask` 阶段的生成式回答
 - 如果这组变量未配置，`ask` 仍可工作，但会回退到较弱的本地回答或检索式回答
+- 如果 `PERSONAL_AGENT_GRAPHITI_ENABLED=true` 但 Neo4j 未启动，系统会自动降级，不会阻塞飞书和 Web 基础问答，但日志中会提示 `Neo4j is not reachable`

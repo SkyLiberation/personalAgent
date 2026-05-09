@@ -6,7 +6,9 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: fastapi>=0.121.0
 Requires-Dist: graphiti-core>=0.29.0
+Requires-Dist: lark-oapi>=1.6.2
 Requires-Dist: langgraph>=0.2.0
+Requires-Dist: openai>=1.0.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: psycopg[binary]>=3.2.12
 Requires-Dist: pypdf>=5.9.0
@@ -49,20 +51,14 @@ Requires-Dist: uvicorn>=0.38.0
 ### 1. Capture
 
 - 接收文本输入
+- 前端单独暴露文本采集、网站抓取、文件上传 3 个入口
 - 支持前端文件上传
+- 支持网页链接正文抓取与 PDF 文本提取
+- 网页抓取优先走 `Firecrawl`，不可用时回退到内置 HTML 正文提取
 - 自动生成标题、摘要、标签
 - 保存为本地 `KnowledgeNote`
 - 自动生成复习卡片 `ReviewCard`
 - 可选写入 Graphiti 图谱
-
-当前上传策略：
-
-- 纯文本类文件：直接读取内容并进入 capture
-- `http/https` 网页链接：抓取正文文本后进入 capture
-- PDF：优先提取文本内容进入 capture
-- 图片、音频等文件：先保存文件并记录为“文件元信息笔记”
-- 更深的 OCR / 语音 ASR 还没有接入
-- 上传文件默认先快速入库，再在后台执行 Graphiti 同步
 
 ### 2. Knowledge Connection
 
@@ -76,8 +72,9 @@ Requires-Dist: uvicorn>=0.38.0
 ### 3. Ask
 
 - 图谱关闭时：走本地问答链路
-- 图谱开启时：优先基于实体和关系事实返回结果
+- 图谱开启时：优先利用图谱事实、引用片段和相关笔记生成回答
 - 支持把图谱命中的 episode 反查成本地笔记引用
+- 支持多轮对话与 `session_id` 会话上下文管理
 - 支持 `SSE` 实时展示回答
 - 支持把问答历史持久化到 `Postgres`
 - 前端支持查看服务端问答历史
@@ -91,16 +88,10 @@ Requires-Dist: uvicorn>=0.38.0
 
 - 提供基于 `FastAPI + React` 的前后端分离架构
 - 前端采用左侧导航多 Tab 工作台
-- 当前视图包括：
-  - `Capture`
-  - `Ask`
-  - `Entity Graph`
-  - `Relation Graph`
-  - `Digest`
-  - `Timeline`
-  - `Memory`
+- 当前视图包括 `Capture / Ask / Entity Graph / Relation Graph / Digest / Timeline / Memory`
 - 前端支持调用 `capture / capture/upload / ask / ask-history / digest / notes`
-- `Ask` 页面支持 SSE 实时回答和历史问题回看
+- `Ask` 页面支持聊天式多轮对话、会话切换和 SSE 实时回答
+- `Capture` 页面提供一键清空调试数据入口，可同时清理本地数据、问答历史、上传源文件和当前用户图谱分组
 - 构建后 `frontend/dist` 可由 FastAPI 自动托管
 
 ## 已接入的图谱能力
@@ -111,10 +102,11 @@ Requires-Dist: uvicorn>=0.38.0
 - `DashScope text-embedding-v4` 作为 embedding 模型
 - `Graphiti` 作为知识图谱抽取与检索层
 - `Neo4j` 作为图数据库
+- `Firecrawl` 作为网站正文抓取能力
 
 ### 自定义本体
 
-本体定义位于 [graphiti_ontology.py](src/personal_agent/graphiti_ontology.py)：
+本体定义位于 [ontology.py](src/personal_agent/graphiti/ontology.py)：
 
 - `Person`
 - `Project`
@@ -126,9 +118,9 @@ Requires-Dist: uvicorn>=0.38.0
 
 由于 `DeepSeek` 和 `Graphiti` 的结构化输出约定并不完全一致，项目里增加了兼容层：
 
-- [deepseek_compatible_client.py](src/personal_agent/deepseek_compatible_client.py)
-- [dashscope_compatible_embedder.py](src/personal_agent/dashscope_compatible_embedder.py)
-- [graphiti_store.py](src/personal_agent/graphiti_store.py)
+- [deepseek_compatible_client.py](src/personal_agent/graphiti/deepseek_compatible_client.py)
+- [dashscope_compatible_embedder.py](src/personal_agent/graphiti/dashscope_compatible_embedder.py)
+- [store.py](src/personal_agent/graphiti/store.py)
 
 当前已经兼容这些常见差异：
 
@@ -150,6 +142,7 @@ personalAgent/                  # 项目根目录
 └─ src/
    └─ personal_agent/           # Python 应用主包
       ├─ agent/                 # Agent 主流程编排层
+      ├─ capture/               # 采集编排、provider 和抽取工具层
       ├─ cli/                   # 命令行入口层
       ├─ core/                  # 配置、日志、核心数据模型
       ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding 接入
@@ -157,136 +150,141 @@ personalAgent/                  # 项目根目录
       └─ web/                   # FastAPI Web 接口层
 ```
 
-## 本地目录与数据流
+## 关键落点
 
-当前工程的本地工作区目录是：
+- 本地知识数据：`data/notes.json`、`data/reviews.json`、`data/conversations.json`
+- 上传源文件：`data/uploads/`
+- 服务端问答历史：`Postgres.ask_history`
+- 运行日志：`log/run.log`
 
-`D:\mySoft\workspace\personalAgent`
+更完整的数据流、接口和部署细节请直接查看：
 
-这也是项目根目录。当前数据在本地的主要落点如下：
+- [docs/api.md](docs/api.md)
+- [docs/env.md](docs/env.md)
+- [docs/deploy.md](docs/deploy.md)
 
-- 代码与配置：
-  - `src/personal_agent/`
-  - `frontend/`
-  - `.env`
-  - `docker-compose.yml`
-- 本地知识数据：
-  - `data/notes.json`
-  - `data/reviews.json`
-- 上传文件原件：
-  - `data/uploads/`
-- 服务端问答历史：
-  - `Postgres.ask_history`
-- 运行日志：
-  - `log/run.log`
+## 文档导航
 
-### Capture 数据流
+- 接口说明：[docs/api.md](docs/api.md)
+- 环境变量：[docs/env.md](docs/env.md)
+- 本地开发与部署：[docs/deploy.md](docs/deploy.md)
 
-#### 1. 文本输入
+## 当前采集架构
 
-前端或 API 提交文本后，会经过：
+当前采集链路已经从单一 `api.py` 逻辑拆成了独立的 `capture` 模块，目的是让后续接入更多外部来源时，不需要不断膨胀 Web 层。
 
-- `capture -> enrich -> link -> schedule_review`
+### 分层方式
 
-然后落盘为：
+- [web/api.py](src/personal_agent/web/api.py)：只负责 HTTP 路由、参数接收和返回响应
+- [capture/service.py](src/personal_agent/capture/service.py)：负责采集流程编排和 provider 注册
+- [capture/providers/](src/personal_agent/capture/providers)：负责具体来源实现
+  - `upload.py`：上传文件采集
+  - `url.py`：网站抓取采集
+- [capture/utils.py](src/personal_agent/capture/utils.py)：文件名、URL 校验、HTML/PDF 文本抽取等公共工具
 
-- 笔记：`data/notes.json`
-- 复习任务：`data/reviews.json`
+### 当前 provider 形态
 
-如果开启了 Graphiti，还会额外写入：
+- `DefaultUploadCaptureProvider`
+- `FirecrawlUrlCaptureProvider`
+- `BuiltinUrlCaptureProvider`
 
-- `Neo4j`
+这意味着后续要继续加入新的采集来源时，优先应该扩展 `capture/providers` 或在 `CaptureService` 中注册新 provider，而不是继续把外部平台集成代码塞回 `web/api.py`。
 
-也就是说，图谱数据不保存在本地 JSON 文件中，而是存进图数据库。
+## 飞书接入设计
 
-#### 2. 文件上传
+后续如果接入飞书，不建议把它简单理解成“再加一个 API”。飞书会把系统从“明确入口采集”推进到“多意图输入分流”，因此需要在采集链路前面增加一个用户意图识别节点。
 
-前端上传文件后，当前流程是：
+### 为什么要增加一个 LLM 路由节点
 
-1. 文件原件先保存到 `data/uploads/`
-2. 后端根据文件类型生成 capture 输入
-3. 再像普通文本一样进入 `notes.json / reviews.json`
-4. 如果 Graphiti 可用，再尝试写入图谱
+当前系统里，前端入口是明确的：
 
-当前支持策略：
+- 文本采集
+- 网站抓取
+- 文件上传
+- Ask 问答
 
-- 文本类文件：直接读取正文内容后 capture
-- 图片、音频、PDF 等非文本文件：先记录文件元信息为笔记
+但飞书场景会弱化这种显式入口。用户在飞书里更可能直接发一句自然语言，例如：
 
-上传笔记会记录图谱同步状态：
+- “帮我记一下今天和张三讨论的结论”
+- “把这篇链接收进知识库”
+- “总结一下我最近关于 Graphiti 的记录”
+- “把这段群聊沉淀成一条项目笔记”
 
-- `idle`
-- `pending`
-- `synced`
-- `failed`
+这类输入在进入系统时，首先要判断它属于哪一类行为，而不是立即进入 `capture` 或 `ask`。这就是需要一个 LLM 路由节点的原因。
 
-因此，上传后的数据会同时存在两处：
+### 建议的行为分类
 
-- 原始文件在 `data/uploads/`
-- 结构化笔记在 `data/notes.json`
+建议先把飞书输入路由到这几类基础意图：
 
-### Ask 数据流
+1. `capture_text`
+2. `capture_link`
+3. `capture_file`
+4. `ask`
+5. `summarize_thread`
+6. `unknown`
 
-当前问答流程分两条：
+其中前 4 类可以直接落到当前已有能力，`summarize_thread` 和 `unknown` 可以作为后续扩展点。
 
-#### 1. 普通问答
+### 建议接入位置
 
-- 前端调用 `POST /api/ask`
-- 后端优先走图谱问答，失败时回退到本地问答链
-- 问答完成后把历史写入 `Postgres.ask_history`
+这层路由更适合放在 `LangGraph` 前面或作为一个新的前置 graph，而不是堆进 `web/api.py`。
 
-#### 2. SSE 实时问答
+推荐演进成下面这样的结构：
 
-- 前端调用 `GET /api/ask/stream`
-- 后端返回：
-  - `status`
-  - `metadata`
-  - `answer_delta`
-  - `done`
-- 前端一边展示实时回答，一边在问答完成后从服务端刷新历史列表
+```text
+Feishu webhook / bot message
+  -> input normalizer
+  -> intent router (LLM node)
+  -> action graph
+     -> capture branch
+     -> ask branch
+     -> summarize branch
+```
 
-## 核心数据模型
+对应到当前工程，比较自然的落点是：
 
-### `KnowledgeNote`
+- 在 `agent/` 下增加一个新的路由 graph，例如 `build_entry_graph()`
+- 增加一个 `router node`，负责把飞书输入归类为 `capture` / `ask` / `summarize`
+- `capture` 分支继续复用现在的 `CaptureService` 和 `AgentService.capture(...)`
+- `ask` 分支继续复用现在的 `AgentService.ask(...)`
 
-表示一条沉淀后的知识笔记，当前包含：
+这样做的好处是：
 
-- 基础信息：`id`、`user_id`、`title`、`content`、`summary`
-- 分类信息：`tags`
-- 关联信息：`related_note_ids`
-- 图谱信息：`graph_episode_uuid`、`entity_names`、`relation_facts`
+- Web 前端、CLI、飞书入口可以共享同一套底层能力
+- 采集来源和行为路由分离，后续新增来源不会破坏现有接口
+- 后面如果接入 MCP、Notion、Confluence、GitHub 等，也可以复用同样的入口判别逻辑
 
-### `ReviewCard`
+### 飞书接入不建议直接做的事
 
-表示一条待复习任务，当前包含：
+当前不建议一开始就做这些重耦合方案：
 
-- `prompt`
-- `answer_hint`
-- `interval_days`
-- `due_at`
+- 在 `web/api.py` 里直接塞大量飞书 webhook 分支逻辑
+- 把“飞书消息解析”和“知识采集逻辑”混在一个函数里
+- 让飞书入口绕过 `CaptureService` 和 `AgentService` 直接操作存储层
 
-### `AskHistoryRecord`
+这样短期看起来快，后面会很难继续接更多平台。
 
-表示一条服务端保存的问答历史，当前包含：
+### 推荐的接入顺序
 
-- `user_id`
-- `question`
-- `answer`
-- `citations`
-- `graph_enabled`
-- `created_at`
+1. 先把 README 中这套入口路由思路定下来
+2. 再补一个通用的 `entry` 或 `router` state/model
+3. 用 `LangGraph` 实现最小可用的意图分类节点
+4. 最后再接飞书 webhook、消息解析和鉴权
 
-## 后端接口
+这样飞书接入就会是“在既有架构上增加一个入口”，而不是“再长出一套平行系统”。
 
-提供 health、capture、ask（含 SSE 流式）、ask-history、digest、notes 等 REST 接口，详见 [docs/api.md](docs/api.md)。
+当前仓库已经补上这条最小闭环：
 
-## 环境变量
+- `agent.build_entry_graph()`：统一入口意图路由 graph
+- `AgentService.entry(...)`：把入口输入分流到 `capture / ask / summarize / unknown`
+- `webhook -> feishu normalizer -> entry graph`：飞书文本消息可直接复用现有知识采集与问答链路
+- `POST /api/integrations/feishu/webhook`：飞书事件订阅入口
 
-涵盖基础配置、LLM、Embedding 及 Graphiti 启用条件，详见 [docs/env.md](docs/env.md)。
+当前版本的边界：
 
-## 本地开发与部署
-
-涵盖依赖安装、环境变量配置、基础设施启动与前后端运行，详见 [docs/deploy.md](docs/deploy.md)。
+- 已支持飞书 `url_verification`
+- 已支持飞书文本消息的 `capture_text / capture_link / ask` 路由
+- 已识别 `capture_file / summarize_thread`，但还没有继续接文件下载和群聊回溯
 
 ## CLI 用法
 
@@ -298,22 +296,6 @@ uv run python -m personal_agent.main ask --question "什么是服务降级？"
 uv run python -m personal_agent.main digest
 ```
 
-## 前端与后端版本
-
-当前仓库里的主要版本：
-
-- 后端依赖定义见 [pyproject.toml](pyproject.toml)
-- 前端依赖定义见 [frontend/package.json](frontend/package.json)
-
-关键版本包括：
-
-- `fastapi >= 0.121.0`
-- `graphiti-core >= 0.29.0`
-- `langgraph >= 0.2.0`
-- `react 19.2.6`
-- `vite 8.0.11`
-- `typescript 6.0.3`
-
 ## 已知限制
 
 当前工程已经具备可运行的主链路，但仍有一些遗留问题需要继续收敛：
@@ -321,9 +303,12 @@ uv run python -m personal_agent.main digest
 1. `ask` 的检索排序仍然偏启发式，复杂问题下仍可能出现跨主题串题
 2. `citation` 与图谱 `relation_fact` 的绑定已经有所增强，但还没有做到严格可追踪的精确锚定
 3. `capture` 目前已支持文本、网页链接和 PDF 文本提取，但 OCR、语音 ASR 等非结构化输入仍未接入
-4. 当前回答生成仍以关系事实组织为主，还没有完全升级为基于图谱上下文的真实生成式答案
+4. 当前回答已经接入基于上下文的生成式总结，但证据组织和答案质量仍有继续打磨空间
 5. SSE 现在是服务端分段推送已有答案，还不是直接透传上游模型 token 流
-6. `ask history` 虽然已支持服务端持久化，但搜索、删除、会话维度和更完整的多用户隔离还不完善
+6. `ask history` 已支持会话维度和服务端持久化，但搜索、删除和更完整的多用户隔离还不完善
+7. 调试重置已支持清理当前用户本地数据、问答历史、上传源文件和图谱分组，但还没有做更细粒度的选择式清理
+8. 飞书等外部协作平台尚未接入，跨入口的统一意图路由仍需补齐
+9. Windows 下 Vite 默认端口 5173 可能被系统保留（Hyper-V/WSL 动态端口范围），导致 `EACCES` 权限错误，需改用其他端口（如 3000）
 
 ## 后续建议
 
@@ -333,5 +318,6 @@ uv run python -m personal_agent.main digest
 2. 继续增强 `citation` 与 `relation_fact` 的精确绑定
 3. 继续增强 `Entity Graph / Relation Graph / Timeline` 的交互联动
 4. 继续扩展 `capture` 到语音和 OCR
-5. 用真实生成式答案替代当前“关系事实拼接式”回答
-6. 给 `ask history` 增加搜索、删除和会话维度
+5. 继续提升生成式答案的证据组织、可读性和稳定性
+6. 给 `ask history` 增加搜索、删除和更完整的会话管理能力
+7. 为飞书等外部入口补齐基于 `LangGraph` 的意图路由层

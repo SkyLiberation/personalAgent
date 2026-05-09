@@ -6,6 +6,11 @@
 
 返回服务状态、Graphiti 配置状态，以及问答历史存储是否可用。
 
+说明：
+
+- `graphiti.configured=true` 只表示配置项齐全
+- Neo4j 是否真正可连，需要结合运行日志或实际问答表现判断
+
 示例响应：
 
 ```json
@@ -169,7 +174,7 @@
 
 说明：
 
-- 后端优先尝试图谱问答，失败时回退到本地问答链
+- 后端优先尝试图谱问答；当 Neo4j 不可达或 Graphiti 不可用时，会快速回退到本地问答链
 - 同一 `session_id` 下会自动携带最近对话上下文，支持多轮问答
 - 如果配置了 `Postgres`，历史会持久化到 `ask_history`
 - 即使没有 `Postgres`，本地仍会写入 `data/conversations.json`
@@ -230,3 +235,46 @@
   "deleted_graph_episodes": 12
 }
 ```
+
+## `POST /api/integrations/feishu/webhook`
+
+用于接收飞书 HTTP 事件订阅回调。
+
+说明：
+
+- 当前项目默认推荐使用“长连接接收事件”，因此这个接口主要作为 webhook 模式兼容入口保留
+- `url_verification` 会直接原样返回 `challenge`
+- 文本消息会先进入统一入口路由 graph，再分流到 `capture` 或 `ask`
+- 当前已支持：
+  - 文本记录路由到 `capture_text`
+  - 含链接消息路由到 `capture_link`
+  - 普通问题路由到 `ask`
+- `file` 消息会先识别成 `capture_file`，但文件下载与正文提取还没有接上
+- 群聊总结意图会先识别成 `summarize_thread`，但消息回溯还未实现
+
+部署时需要配合环境变量：
+
+- `PERSONAL_AGENT_FEISHU_ENABLED`
+- `FEISHU_VERIFICATION_TOKEN`
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+
+## 飞书长连接
+
+当前默认飞书接入方式不是 HTTP webhook，而是飞书官方 SDK 长连接。
+
+行为说明：
+
+- FastAPI 启动时会自动调用飞书长连接监听器
+- 已订阅 `im.message.receive_v1`
+- 收到事件后，会把消息转成内部 `FeishuIncomingMessage`
+- 再复用统一入口 `AgentService.entry(...)`
+- 最终优先使用 `message_id` 回复原消息
+
+日志关键字：
+
+- `Feishu long connection startup requested`
+- `Feishu long connection thread started`
+- `connected to wss://...`
+- `Feishu long connection event accepted`
+- `Feishu reply sent`

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import socket
+from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +23,12 @@ from .deepseek_compatible_client import DeepSeekCompatibleClient
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
+MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+MARKDOWN_TABLE_RULE_RE = re.compile(r"^\s*\|?[\s:\-]+(?:\|[\s:\-]+)+\|?\s*$")
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+MARKDOWN_EMPHASIS_RE = re.compile(r"(\*\*|__|\*|_|`)")
+MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*")
+BLOCKQUOTE_RE = re.compile(r"^\s*>\s?")
 
 
 class GraphCaptureResult(BaseModel):
@@ -86,6 +96,8 @@ class GraphitiStore:
     ) -> GraphCaptureResult:
         if not self.configured():
             return GraphCaptureResult(enabled=False, error="Graphiti is not configured.")
+        if not self._neo4j_reachable():
+            return GraphCaptureResult(enabled=False, error="Neo4j is not reachable.")
         try:
             return asyncio.run(self._ingest_note(note, trace_id=trace_id, attempt=attempt))
         except Exception as exc:
@@ -95,6 +107,8 @@ class GraphitiStore:
     def ask(self, question: str, user_id: str, trace_id: str | None = None) -> GraphAskResult:
         if not self.configured():
             return GraphAskResult(enabled=False, error="Graphiti is not configured.")
+        if not self._neo4j_reachable():
+            return GraphAskResult(enabled=False, error="Neo4j is not reachable.")
         try:
             return asyncio.run(self._ask(question, user_id, trace_id=trace_id))
         except Exception as exc:
@@ -104,11 +118,31 @@ class GraphitiStore:
     def clear_user_group(self, user_id: str) -> int:
         if not self.configured():
             return 0
+        if not self._neo4j_reachable():
+            return 0
         try:
             return asyncio.run(self._clear_user_group(user_id))
         except Exception:
             logger.exception("Graphiti group reset failed for user %s", user_id)
             return 0
+
+    def _neo4j_reachable(self, timeout_seconds: float = 0.5) -> bool:
+        uri = self.settings.graphiti_uri
+        if not uri:
+            return False
+
+        parsed = urlparse(uri)
+        host = parsed.hostname
+        port = parsed.port
+        if not host or not port:
+            return False
+
+        try:
+            with socket.create_connection((host, port), timeout=timeout_seconds):
+                return True
+        except OSError:
+            logger.warning("Neo4j is unreachable host=%s port=%s", host, port)
+            return False
 
     async def _ingest_note(
         self, note: KnowledgeNote, trace_id: str | None = None, attempt: int | None = None
@@ -130,7 +164,7 @@ class GraphitiStore:
                     add_result = await asyncio.wait_for(
                         graphiti.add_episode(
                             name=note.title,
-                            episode_body=note.content,
+                            episode_body=_graphiti_episode_body(note),
                             source_description=f"Personal note {note.id}",
                             reference_time=note.created_at,
                             source=EpisodeType.text,
@@ -138,7 +172,7 @@ class GraphitiStore:
                             entity_types=ENTITY_TYPES,
                             custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                         ),
-                        timeout=180,
+                        timeout=480,
                     )
 
                 with trace_span(
@@ -307,6 +341,74 @@ class GraphitiStore:
             else:
                 normalized.append("_")
         return "".join(normalized)
+
+
+def _graphiti_episode_body(note: KnowledgeNote) -> str:
+    content = note.content.strip()
+    if not content:
+        return content
+
+    lines = content.replace("\r", "").split("\n")
+    if lines and lines[0].startswith("Uploaded file: "):
+        lines = lines[2:] if len(lines) > 1 and not lines[1].strip() else lines[1:]
+
+    is_markdown = note.source_type == "note" and Path(note.source_ref).suffix.lower() in {".md", ".markdown"}
+    if not is_markdown:
+        return content[:8000]
+
+    cleaned_lines: list[str] = []
+    pending_table: list[list[str]] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if pending_table:
+                cleaned_lines.extend(_flatten_markdown_table(pending_table))
+                pending_table = []
+            continue
+        if MARKDOWN_TABLE_RULE_RE.match(line):
+            continue
+        if MARKDOWN_TABLE_ROW_RE.match(line):
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if any(cells):
+                pending_table.append(cells)
+            continue
+        if pending_table:
+            cleaned_lines.extend(_flatten_markdown_table(pending_table))
+            pending_table = []
+
+        line = MARKDOWN_HEADING_RE.sub("", line)
+        line = BLOCKQUOTE_RE.sub("", line)
+        line = MARKDOWN_LINK_RE.sub(r"\1", line)
+        line = MARKDOWN_EMPHASIS_RE.sub("", line)
+        line = line.replace("→", "->")
+        if line.startswith(("- ", "* ")):
+            line = line[2:].strip()
+        cleaned_lines.append(line)
+
+    if pending_table:
+        cleaned_lines.extend(_flatten_markdown_table(pending_table))
+
+    compact = "\n".join(line for line in cleaned_lines if line).strip()
+    return compact[:8000]
+
+
+def _flatten_markdown_table(rows: list[list[str]]) -> list[str]:
+    if not rows:
+        return []
+    header = rows[0]
+    if len(rows) == 1:
+        return [" | ".join(cell for cell in header if cell)]
+
+    flattened: list[str] = []
+    for row in rows[1:]:
+        pairs = []
+        for index, cell in enumerate(row):
+            label = header[index] if index < len(header) else f"col{index + 1}"
+            if cell:
+                pairs.append(f"{label}: {cell}")
+        if pairs:
+            flattened.append("; ".join(pairs))
+    return flattened
 
 
 def _dedupe(values: list[str]) -> list[str]:

@@ -1,3 +1,3 @@
-from .service import AgentService
+from .service import AgentService, EntryResult
 
-__all__ = ["AgentService"]
+__all__ = ["AgentService", "EntryResult"]

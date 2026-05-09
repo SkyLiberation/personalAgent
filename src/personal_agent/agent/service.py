@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import logging
 import time
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
-from ..core.models import AgentState, AskHistoryRecord, Citation, KnowledgeNote, RawIngestItem, ReviewCard
+from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, EntryIntent, KnowledgeNote, RawIngestItem, ReviewCard
 from ..graphiti.store import GraphAskResult, GraphCaptureResult, GraphCitationHit, GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
 from ..storage.memory_store import LocalMemoryStore
-from .graph import build_ask_graph, build_capture_graph
+from .entry_nodes import (
+    EntryNodeDeps,
+    ask_entry_branch_node,
+    capture_entry_branch_node,
+    heuristic_entry_intent,
+    route_entry_intent_node,
+    summarize_entry_branch_node,
+    unknown_entry_branch_node,
+)
+from .graph import build_ask_graph, build_capture_graph, build_entry_graph
 from .nodes import digest_node
+
+if TYPE_CHECKING:
+    from ..capture import CaptureService
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +55,14 @@ class DigestResult(BaseModel):
     due_reviews: list[ReviewCard] = Field(default_factory=list)
 
 
+class EntryResult(BaseModel):
+    intent: EntryIntent
+    reason: str
+    reply_text: str
+    capture_result: CaptureResult | None = None
+    ask_result: AskResult | None = None
+
+
 class ResetResult(BaseModel):
     user_id: str
     deleted_notes: int = 0
@@ -51,11 +74,12 @@ class ResetResult(BaseModel):
 
 
 class AgentService:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, capture_service: "CaptureService" | None = None) -> None:
         self.settings = settings or Settings.from_env()
         self.store = LocalMemoryStore(self.settings.data_dir)
         self.graph_store = GraphitiStore(self.settings)
         self.ask_history_store = AskHistoryStore(self.settings.postgres_url)
+        self.capture_service = capture_service
 
     def capture(
         self,
@@ -188,6 +212,56 @@ class AgentService:
             message=digest_node(self.store, normalized_user),
             recent_notes=self.store.list_notes(normalized_user)[-5:],
             due_reviews=self.store.due_reviews(normalized_user),
+        )
+
+    def entry(self, entry_input: EntryInput) -> EntryResult:
+        normalized_user = entry_input.user_id or self.settings.default_user
+        normalized_session = entry_input.session_id or "default"
+        entry_node_deps = EntryNodeDeps(
+            classify_intent=self._classify_entry_intent,
+            capture=self.capture,
+            ask=self.ask,
+            capture_service=self.capture_service,
+        )
+        graph = build_entry_graph(
+            lambda state: route_entry_intent_node(state, entry_node_deps),
+            lambda state: capture_entry_branch_node(state, entry_node_deps),
+            lambda state: ask_entry_branch_node(state, entry_node_deps),
+            summarize_entry_branch_node,
+            unknown_entry_branch_node,
+        )
+        state = AgentState(
+            mode="entry",
+            user_id=normalized_user,
+            entry_input=entry_input.model_copy(update={"user_id": normalized_user, "session_id": normalized_session}),
+        )
+        result = AgentState.model_validate(graph.invoke(state))
+        reply_text = result.answer or "暂时没有可执行的结果。"
+
+        capture_result = None
+        ask_result = None
+        if result.note is not None:
+            capture_result = CaptureResult(
+                note=result.note,
+                related_notes=result.matches,
+                review_card=result.review_card,
+                graph_enabled=result.note.graph_sync_status == "synced",
+            )
+        elif result.question:
+            ask_result = AskResult(
+                answer=reply_text,
+                citations=result.citations,
+                matches=result.matches,
+                graph_enabled=bool(result.citations or result.matches),
+                session_id=normalized_session,
+            )
+
+        return EntryResult(
+            intent=result.intent,
+            reason=result.intent_reason or "未提供路由说明。",
+            reply_text=reply_text,
+            capture_result=capture_result,
+            ask_result=ask_result,
         )
 
     def list_notes(self, user_id: str | None = None) -> list[KnowledgeNote]:
@@ -597,6 +671,50 @@ class AgentService:
                 f"证据片段：\n{excerpt}"
             )
         return blocks
+
+    def _classify_entry_intent(self, entry_input: EntryInput) -> tuple[EntryIntent, str]:
+        if entry_input.source_type == "file":
+            return "capture_file", "来源消息类型是文件。"
+
+        llm_result = self._classify_entry_intent_with_llm(entry_input.text)
+        if llm_result is not None:
+            return llm_result
+        return heuristic_entry_intent(entry_input.text)
+
+    def _classify_entry_intent_with_llm(self, text: str) -> tuple[EntryIntent, str] | None:
+        if not text.strip():
+            return "unknown", "消息内容为空。"
+        if not (self.settings.openai_api_key and self.settings.openai_base_url and self.settings.openai_small_model):
+            return None
+        prompt = (
+            "你是一个入口路由分类器。"
+            "请把用户输入分类到以下意图之一：capture_text, capture_link, capture_file, ask, summarize_thread, unknown。"
+            "只返回 JSON，对象字段固定为 intent 和 reason。"
+            "intent 必须是上述枚举之一，reason 用一句简短中文说明依据。\n\n"
+            f"用户输入：{text}"
+        )
+        try:
+            client = OpenAI(api_key=self.settings.openai_api_key, base_url=self.settings.openai_base_url)
+            response = client.chat.completions.create(
+                model=self.settings.openai_small_model,
+                messages=[
+                    {"role": "system", "content": "你是一个严谨的意图分类器，只输出 JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+                max_tokens=120,
+                response_format={"type": "json_object"},
+            )
+            content = (response.choices[0].message.content or "").strip()
+            payload = json.loads(content)
+            intent = payload.get("intent", "unknown")
+            if intent not in {"capture_text", "capture_link", "capture_file", "ask", "summarize_thread", "unknown"}:
+                return None
+            reason = str(payload.get("reason") or "由模型完成意图分类。")
+            return intent, reason
+        except Exception:
+            logger.exception("Failed to classify entry intent with LLM")
+            return None
 
 
 def _merge_notes(primary: list[KnowledgeNote], secondary: list[KnowledgeNote]) -> list[KnowledgeNote]:

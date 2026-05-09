@@ -28,6 +28,11 @@ class Settings(BaseModel):
     firecrawl_base_url: str = "https://api.firecrawl.dev"
     firecrawl_timeout_ms: int = 60000
     postgres_url: str | None = None
+    feishu_enabled: bool = False
+    feishu_app_id: str | None = None
+    feishu_app_secret: str | None = None
+    feishu_verification_token: str | None = None
+    feishu_base_url: str = "https://open.feishu.cn"
     graph_sync_max_attempts: int = 3
     graph_sync_initial_backoff_seconds: float = 2.0
     graph_sync_backoff_multiplier: float = 2.0
@@ -60,6 +65,11 @@ class Settings(BaseModel):
             firecrawl_base_url=os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"),
             firecrawl_timeout_ms=int(os.getenv("FIRECRAWL_TIMEOUT_MS", "60000")),
             postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
+            feishu_enabled=_as_bool(os.getenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")),
+            feishu_app_id=os.getenv("FEISHU_APP_ID"),
+            feishu_app_secret=os.getenv("FEISHU_APP_SECRET"),
+            feishu_verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN"),
+            feishu_base_url=os.getenv("FEISHU_BASE_URL", "https://open.feishu.cn"),
             graph_sync_max_attempts=int(os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")),
             graph_sync_initial_backoff_seconds=float(
                 os.getenv("PERSONAL_AGENT_GRAPH_SYNC_INITIAL_BACKOFF_SECONDS", "2.0")

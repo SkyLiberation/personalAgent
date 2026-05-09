@@ -9,9 +9,22 @@ from pydantic import BaseModel, Field
 
 class RawIngestItem(BaseModel):
     content: str
-    source_type: Literal["text", "link", "pdf", "audio", "image", "note"] = "text"
+    source_type: Literal["text", "link", "pdf", "audio", "image", "note", "file"] = "text"
     source_ref: str | None = None
     user_id: str = "default"
+
+
+EntryIntent = Literal["capture_text", "capture_link", "capture_file", "ask", "summarize_thread", "unknown"]
+
+
+class EntryInput(BaseModel):
+    text: str = ""
+    user_id: str = "default"
+    session_id: str = "default"
+    source_platform: str = "web"
+    source_type: str = "text"
+    source_ref: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class Citation(BaseModel):
@@ -61,10 +74,13 @@ class AskHistoryRecord(BaseModel):
 
 
 class AgentState(BaseModel):
-    mode: Literal["capture", "ask", "digest"] = "capture"
+    mode: Literal["capture", "ask", "digest", "entry"] = "capture"
     user_id: str = "default"
     raw_item: RawIngestItem | None = None
     question: str | None = None
+    entry_input: EntryInput | None = None
+    intent: EntryIntent = "unknown"
+    intent_reason: str | None = None
     note: KnowledgeNote | None = None
     matches: list[KnowledgeNote] = Field(default_factory=list)
     review_card: ReviewCard | None = None
