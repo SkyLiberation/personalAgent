@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from personal_agent.core.config import Settings
 from personal_agent.core.models import Citation, KnowledgeNote
+
+
+@pytest.fixture
+def temp_dir() -> Path:
+    """Temp directory fixture that works with pytest-asyncio strict mode on Windows."""
+    path = Path(tempfile.mkdtemp(prefix="pytest-"))
+    yield path
+    try:
+        shutil.rmtree(path)
+    except Exception:
+        pass
 
 
 @pytest.fixture

@@ -3,9 +3,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..core.models import EntryIntent
 from .base import BaseTool, ToolResult, ToolSpec
 
 logger = logging.getLogger(__name__)
+
+_INTENT_TOOL_MAP: dict[EntryIntent, str] = {
+    "capture_link": "capture_url",
+    "capture_file": "capture_upload",
+    "ask": "graph_search",
+}
 
 
 class ToolRegistry:
@@ -32,6 +39,56 @@ class ToolRegistry:
             return tool.execute(**kwargs)
         except Exception as exc:
             logger.exception("Tool %s execution raised an unhandled exception", name)
+            return ToolResult(ok=False, error=str(exc)[:500])
+
+    def match_tool(self, intent: EntryIntent, description: str = "") -> BaseTool | None:
+        """Select the best tool for a given intent.
+
+        Uses an explicit intent→tool mapping first, then falls back to
+        keyword matching against tool names and descriptions.
+        """
+        tool_name = _INTENT_TOOL_MAP.get(intent)
+        if tool_name and tool_name in self._tools:
+            return self._tools[tool_name]
+
+        # Keyword-based fallback
+        desc_lower = description.lower()
+        for name, tool in self._tools.items():
+            if name in desc_lower:
+                return tool
+        return None
+
+    def execute_with_fallback(self, intent: EntryIntent, description: str = "", **kwargs: Any) -> ToolResult:
+        """Execute the best-matching tool, falling back to alternatives on failure.
+
+        Tries the primary tool matched by intent, then tries any other
+        registered tool as fallback. Returns the first successful result.
+        """
+        primary = self.match_tool(intent, description)
+        if primary is not None:
+            result = self._safe_execute(primary, **kwargs)
+            if result.ok:
+                return result
+            logger.warning("Primary tool %s failed for intent=%s: %s", primary.spec.name, intent, result.error)
+        else:
+            logger.warning("No primary tool matched for intent=%s", intent)
+
+        # Fallback: try any other tool
+        for name, tool in self._tools.items():
+            if primary is not None and name == primary.spec.name:
+                continue
+            result = self._safe_execute(tool, **kwargs)
+            if result.ok:
+                logger.info("Fallback tool %s succeeded for intent=%s", name, intent)
+                return result
+
+        return ToolResult(ok=False, error=f"所有工具均未成功处理意图 {intent}")
+
+    def _safe_execute(self, tool: BaseTool, **kwargs: Any) -> ToolResult:
+        try:
+            return tool.execute(**kwargs)
+        except Exception as exc:
+            logger.exception("Tool %s execution raised an unhandled exception", tool.spec.name)
             return ToolResult(ok=False, error=str(exc)[:500])
 
     def __len__(self) -> int:

@@ -6,8 +6,10 @@ import {
   fetchAskHistory,
   fetchDigest,
   fetchNotes,
+  getApiKey,
   resetUserData,
   retryGraphSync,
+  setApiKey,
   uploadCapture,
   type AskHistoryItem,
   type AskResponse,
@@ -16,7 +18,21 @@ import {
   type Note,
 } from "./api";
 
-const USER_ID = "default";
+function loadUserId(): string {
+  try {
+    return localStorage.getItem("personal-agent-user-id") || "default";
+  } catch {
+    return "default";
+  }
+}
+
+function saveUserId(id: string): void {
+  try {
+    localStorage.setItem("personal-agent-user-id", id);
+  } catch {
+    // localStorage unavailable
+  }
+}
 
 type TabId =
   | "capture"
@@ -96,6 +112,9 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isRetryingGraphSync, setIsRetryingGraphSync] = useState(false);
   const [uploadConflict, setUploadConflict] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey() || "");
+  const [userId, setUserId] = useState(() => loadUserId());
+  const [showSettings, setShowSettings] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -119,10 +138,10 @@ export default function App() {
     }
     try {
       const [noteItems, digestResult, askHistoryResult, allAskHistoryResult] = await Promise.all([
-        fetchNotes(USER_ID),
-        fetchDigest(USER_ID),
-        fetchAskHistory(USER_ID, 20, sessionId),
-        fetchAskHistory(USER_ID, 100),
+        fetchNotes(userId),
+        fetchDigest(userId),
+        fetchAskHistory(userId, 20, sessionId),
+        fetchAskHistory(userId, 100),
       ]);
       setNotes(noteItems);
       setDigest(digestResult);
@@ -157,7 +176,7 @@ export default function App() {
     setIsCapturingText(true);
     setStatus("正在采集并连接这条笔记...");
     try {
-      await captureNote(captureText.trim(), USER_ID, "text");
+      await captureNote(captureText.trim(), userId, "text");
       setCaptureText("");
       await refreshAll();
       setStatus("新笔记已采集并建立关联。");
@@ -178,7 +197,7 @@ export default function App() {
     setIsCapturingLink(true);
     setStatus("正在抓取网页并写入记忆...");
     try {
-      await captureNote(captureUrl.trim(), USER_ID, "link");
+      await captureNote(captureUrl.trim(), userId, "link");
       setCaptureUrl("");
       await refreshAll();
       setStatus("网页已写入记忆。");
@@ -200,7 +219,7 @@ export default function App() {
     const prompt = question.trim();
     const historyItem: AskHistoryView = {
       id: crypto.randomUUID(),
-      user_id: USER_ID,
+      user_id: userId,
       session_id: sessionId,
       question: prompt,
       answer: "",
@@ -216,7 +235,7 @@ export default function App() {
     setAskHistory((current) => [historyItem, ...current].slice(0, 20));
     setStatus("正在检索你的个人记忆...");
 
-    const source = new EventSource(buildAskStreamUrl(prompt, USER_ID, sessionId));
+    const source = new EventSource(buildAskStreamUrl(prompt, userId, sessionId));
     eventSourceRef.current = source;
 
     source.addEventListener("status", (streamEvent) => {
@@ -299,7 +318,7 @@ export default function App() {
 
   async function refreshAskHistorySelection(fallbackItem?: AskHistoryView) {
     try {
-      const response = await fetchAskHistory(USER_ID, 20, sessionId);
+      const response = await fetchAskHistory(userId, 20, sessionId);
       const serverItems = response.items.map((item) => ({
         ...item,
         status: "done" as const,
@@ -317,7 +336,7 @@ export default function App() {
         });
         return merged;
       });
-      const allHistoryResponse = await fetchAskHistory(USER_ID, 100);
+      const allHistoryResponse = await fetchAskHistory(userId, 100);
       setAllAskHistory(
         allHistoryResponse.items.map((item) => ({
           ...item,
@@ -373,7 +392,7 @@ export default function App() {
     setUploadProgress(0);
     setStatus(`正在上传 ${captureFile.name} 并写入记忆...`);
     try {
-      await uploadCapture(captureFile, USER_ID, overwrite, (progress) => {
+      await uploadCapture(captureFile, userId, overwrite, (progress) => {
         setUploadProgress(progress);
       });
       setUploadProgress(100);
@@ -442,7 +461,7 @@ export default function App() {
     setIsResettingData(true);
     setStatus("正在清空调试数据...");
     try {
-      const result = await resetUserData(USER_ID);
+      const result = await resetUserData(userId);
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       setCaptureText("");
@@ -514,6 +533,43 @@ export default function App() {
           <div className="sidebar-status">
             <span className="status-dot" />
             <span>{status}</span>
+          </div>
+          <div className="sidebar-settings">
+            <button
+              type="button"
+              className={`settings-toggle ${showSettings ? "settings-toggle-active" : ""}`}
+              onClick={() => setShowSettings((current) => !current)}
+            >
+              {showSettings ? "收起设置" : "设置"}
+            </button>
+            {showSettings ? (
+              <div className="settings-panel">
+                <label className="settings-field">
+                  <span>API Key</span>
+                  <input
+                    type="password"
+                    value={apiKeyInput}
+                    onChange={(event) => {
+                      setApiKeyInput(event.target.value);
+                      setApiKey(event.target.value);
+                    }}
+                    placeholder="输入 API Key..."
+                  />
+                </label>
+                <label className="settings-field">
+                  <span>用户 ID</span>
+                  <input
+                    type="text"
+                    value={userId}
+                    onChange={(event) => {
+                      setUserId(event.target.value);
+                      saveUserId(event.target.value);
+                    }}
+                    placeholder="default"
+                  />
+                </label>
+              </div>
+            ) : null}
           </div>
         </aside>
 

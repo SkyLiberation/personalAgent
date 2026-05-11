@@ -89,10 +89,46 @@ export type ResetUserDataResponse = {
   deleted_graph_episodes: number;
 };
 
+const API_KEY_STORAGE_KEY = "personal-agent-api-key";
+
+let _cachedApiKey: string | null = null;
+
+export function getApiKey(): string | null {
+  if (_cachedApiKey !== null) {
+    return _cachedApiKey || null;
+  }
+  try {
+    _cachedApiKey = localStorage.getItem(API_KEY_STORAGE_KEY) || "";
+  } catch {
+    _cachedApiKey = "";
+  }
+  return _cachedApiKey || null;
+}
+
+export function setApiKey(key: string): void {
+  _cachedApiKey = key;
+  try {
+    if (key) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, key);
+    } else {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const key = getApiKey();
+  if (!key) return {};
+  return { "X-API-Key": key };
+}
+
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -106,7 +142,13 @@ async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T
 }
 
 async function requestFormData<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init);
+  const response = await fetch(input, {
+    headers: {
+      ...authHeaders(),
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
@@ -122,6 +164,11 @@ function requestFormDataWithProgress<T>(
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
     xhr.responseType = "json";
+
+    const key = getApiKey();
+    if (key) {
+      xhr.setRequestHeader("X-API-Key", key);
+    }
 
     xhr.upload.onprogress = (event) => {
       if (!onProgress || !event.lengthComputable) {
@@ -214,6 +261,10 @@ export function buildAskStreamUrl(question: string, userId = "default", sessionI
     user_id: userId,
     session_id: sessionId,
   });
+  const key = getApiKey();
+  if (key) {
+    params.set("api_key", key);
+  }
   return `/api/ask/stream?${params.toString()}`;
 }
 

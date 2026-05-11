@@ -13,7 +13,9 @@ src/personal_agent/agent/__init__.py
 src/personal_agent/agent/entry_nodes.py
 src/personal_agent/agent/graph.py
 src/personal_agent/agent/nodes.py
+src/personal_agent/agent/planner.py
 src/personal_agent/agent/router.py
+src/personal_agent/agent/runtime.py
 src/personal_agent/agent/service.py
 src/personal_agent/agent/verifier.py
 src/personal_agent/capture/__init__.py
@@ -52,7 +54,12 @@ src/personal_agent/tools/graph_search.py
 src/personal_agent/tools/registry.py
 src/personal_agent/web/__init__.py
 src/personal_agent/web/api.py
+src/personal_agent/web/auth.py
+tests/test_agent_flows.py
+tests/test_api.py
+tests/test_cli.py
 tests/test_memory.py
 tests/test_router.py
+tests/test_storage.py
 tests/test_tools.py
 tests/test_verifier.py

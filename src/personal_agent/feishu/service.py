@@ -10,6 +10,8 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
+    GetMessageResourceRequest,
+    ListMessageRequest,
     P2ImMessageReceiveV1,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
@@ -85,6 +87,39 @@ class FeishuService:
             incoming_message.message_id,
             incoming_message.session_id,
         )
+        metadata = dict(incoming_message.metadata)
+
+        if incoming_message.message_type == "file":
+            file_key = metadata.get("file_key", "")
+            if file_key and incoming_message.message_id:
+                downloaded = self.download_file(incoming_message.message_id, file_key)
+                if downloaded:
+                    file_bytes, filename = downloaded
+                    upload_dir = self.settings.data_dir / "uploads"
+                    upload_dir.mkdir(parents=True, exist_ok=True)
+                    file_path = upload_dir / f"feishu_{incoming_message.message_id}_{filename}"
+                    file_path.write_bytes(file_bytes)
+                    metadata["file_path"] = str(file_path)
+                    metadata["original_filename"] = filename
+                    logger.info(
+                        "Feishu file downloaded event_id=%s file_key=%s path=%s",
+                        incoming_message.event_id, file_key, file_path,
+                    )
+
+        if incoming_message.text:
+            from ..agent.entry_nodes import heuristic_entry_intent
+            intent, _ = heuristic_entry_intent(incoming_message.text)
+            if intent == "summarize_thread":
+                chat_id = metadata.get("chat_id", "")
+                if chat_id:
+                    thread_messages = self.fetch_recent_messages(chat_id, limit=20)
+                    if thread_messages:
+                        metadata["thread_messages"] = json.dumps(thread_messages, ensure_ascii=False)
+                        logger.info(
+                            "Feishu thread messages pre-fetched event_id=%s chat_id=%s count=%s",
+                            incoming_message.event_id, chat_id, len(thread_messages),
+                        )
+
         entry_result = self.agent_service.entry(
             EntryInput(
                 text=incoming_message.text,
@@ -93,7 +128,7 @@ class FeishuService:
                 source_platform="feishu",
                 source_type=incoming_message.message_type,
                 source_ref=incoming_message.message_id,
-                metadata=incoming_message.metadata,
+                metadata=metadata,
             )
         )
         reply_text = entry_result.reply_text
@@ -414,6 +449,65 @@ class FeishuService:
         }
         logger.error("Feishu SDK %s failed detail=%s", action, detail)
         raise RuntimeError(f"Feishu SDK {action} failed: {detail}")
+
+    def download_file(self, message_id: str, file_key: str) -> tuple[bytes, str] | None:
+        """Download file binary from Feishu. Returns (file_bytes, filename) or None."""
+        if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):
+            logger.warning("Skip Feishu file download because app credentials are not configured")
+            return None
+        try:
+            request = GetMessageResourceRequest.builder() \
+                .message_id(message_id) \
+                .file_key(file_key) \
+                .type("file") \
+                .build()
+            response = self._client_value().im.v1.message_resource.get(request)
+            if not response.success():
+                logger.error(
+                    "Feishu file download failed code=%s msg=%s message_id=%s file_key=%s",
+                    response.code, response.msg, message_id, file_key,
+                )
+                return None
+            filename = response.file_name or file_key
+            return response.file, filename
+        except Exception:
+            logger.exception(
+                "Feishu file download exception message_id=%s file_key=%s", message_id, file_key
+            )
+            return None
+
+    def fetch_recent_messages(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
+        """Fetch recent messages from a Feishu chat. Returns list of {role, content} dicts."""
+        if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):
+            logger.warning("Skip Feishu message fetch because app credentials are not configured")
+            return []
+        try:
+            request = ListMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .receive_id(chat_id) \
+                .page_size(min(limit, 50)) \
+                .sort_type("ByCreateTimeDesc") \
+                .build()
+            response = self._client_value().im.v1.message.list(request)
+            if not response.success():
+                logger.error(
+                    "Feishu message list failed code=%s msg=%s chat_id=%s",
+                    response.code, response.msg, chat_id,
+                )
+                return []
+            messages: list[dict[str, str]] = []
+            items = response.data.items if response.data else []
+            for item in reversed(items):
+                if item.msg_type == "text":
+                    content = _safe_json_loads(item.body.content if item.body else "{}")
+                    text = str(content.get("text") or "").strip()
+                    if text:
+                        role = "user" if item.sender.id != "bot" else "assistant"
+                        messages.append({"role": role, "content": text})
+            return messages
+        except Exception:
+            logger.exception("Feishu message fetch exception chat_id=%s", chat_id)
+            return []
 
     def _resolve_user_id(self, open_id: str, sender_user_id: str) -> str:
         if self.settings.feishu_use_default_user:

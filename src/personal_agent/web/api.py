@@ -18,7 +18,13 @@ from ..core.config import Settings
 from ..core.logging_utils import setup_logging
 from ..core.models import AskHistoryRecord, Citation, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
+from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
+
+
+def _get_user_id(request: Request, settings: Settings) -> str:
+    """Resolve authenticated user_id from middleware state, fall back to default."""
+    return getattr(request.state, "user_id", settings.default_user)
 
 
 class CaptureRequest(BaseModel):
@@ -109,9 +115,21 @@ def create_app() -> FastAPI:
         description="FastAPI backend for the personal knowledge management agent.",
     )
 
+    # Auth + rate limiting (applied before CORS)
+    api_keys = settings.api_keys
+    if api_keys:
+        rate_limiter = RateLimiter(
+            max_requests=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+        app.add_middleware(AuthMiddleware, api_keys=api_keys, rate_limiter=rate_limiter)
+        logger.info("Auth enabled with %d API keys and rate limiting", len(api_keys))
+    else:
+        logger.info("Auth disabled — no API keys configured")
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -137,34 +155,38 @@ def create_app() -> FastAPI:
         return {"ok": result.ok, "data": result.data, "error": result.error}
 
     @app.get("/api/notes", response_model=list[KnowledgeNote])
-    def list_notes(user_id: str = "default") -> list[KnowledgeNote]:
-        logger.info("Listing notes for user=%s", user_id)
-        return service.list_notes(user_id)
+    def list_notes(request: Request, user_id: str | None = None) -> list[KnowledgeNote]:
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Listing notes for user=%s", resolved_user)
+        return service.list_notes(resolved_user)
 
     @app.get("/api/digest", response_model=DigestResponse)
-    def get_digest(user_id: str = "default") -> DigestResponse:
-        logger.info("Digest requested for user=%s", user_id)
-        result = service.digest(user_id)
+    def get_digest(request: Request, user_id: str | None = None) -> DigestResponse:
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Digest requested for user=%s", resolved_user)
+        result = service.digest(resolved_user)
         return DigestResponse(**result.model_dump())
 
     @app.get("/api/ask-history", response_model=AskHistoryResponse)
     def get_ask_history(
-        user_id: str = "default", limit: int = 20, session_id: str | None = None
+        request: Request, user_id: str | None = None, limit: int = 20, session_id: str | None = None
     ) -> AskHistoryResponse:
-        logger.info("Ask history requested for user=%s session=%s limit=%s", user_id, session_id, limit)
-        return AskHistoryResponse(items=service.list_ask_history(user_id, limit, session_id))
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Ask history requested for user=%s session=%s limit=%s", resolved_user, session_id, limit)
+        return AskHistoryResponse(items=service.list_ask_history(resolved_user, limit, session_id))
 
     @app.post("/api/capture", response_model=CaptureResponse)
-    def capture(request: CaptureRequest) -> CaptureResponse:
-        logger.info("Text capture requested for user=%s source_type=%s", request.user_id, request.source_type)
-        capture_text = request.text
-        if request.source_type == "link":
-            capture_text = capture_service.capture_text_from_url(request.text)
+    def capture(http_request: Request, body: CaptureRequest) -> CaptureResponse:
+        resolved_user = body.user_id or _get_user_id(http_request, settings)
+        logger.info("Text capture requested for user=%s source_type=%s", resolved_user, body.source_type)
+        capture_text = body.text
+        if body.source_type == "link":
+            capture_text = capture_service.capture_text_from_url(body.text)
         result = service.capture(
             text=capture_text,
-            source_type=request.source_type,
-            user_id=request.user_id,
-            source_ref=request.text if request.source_type == "link" else None,
+            source_type=body.source_type,
+            user_id=resolved_user,
+            source_ref=body.text if body.source_type == "link" else None,
         )
         return CaptureResponse(**result.model_dump())
 
@@ -181,6 +203,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/capture/upload", response_model=CaptureResponse)
     def capture_upload(
+        request: Request,
         background_tasks: BackgroundTasks,
         file: UploadFile = File(...),
         user_id: str = Form("default"),
@@ -188,6 +211,8 @@ def create_app() -> FastAPI:
     ) -> CaptureResponse:
         if not file.filename:
             raise HTTPException(status_code=400, detail="Missing file name.")
+
+        resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
 
         uploads_dir = settings.data_dir / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +231,7 @@ def create_app() -> FastAPI:
         source_type = capture_service.source_type_from_upload(original_name, file.content_type)
         logger.info(
             "File upload received user=%s filename=%s source_type=%s size_bytes=%s stored_path=%s",
-            user_id,
+            resolved_user,
             original_name,
             source_type,
             len(file_bytes),
@@ -219,7 +244,7 @@ def create_app() -> FastAPI:
         result = service.capture(
             text=capture_text,
             source_type=source_type,
-            user_id=user_id,
+            user_id=resolved_user,
             source_ref=str(stored_path),
             attempt_graph=False,
         )
@@ -230,17 +255,21 @@ def create_app() -> FastAPI:
         return CaptureResponse(**result.model_dump())
 
     @app.post("/api/ask", response_model=AskResponse)
-    def ask(request: AskRequest) -> AskResponse:
-        logger.info("Ask requested for user=%s session=%s", request.user_id, request.session_id)
-        result = service.ask(request.question, request.user_id, request.session_id)
+    def ask(http_request: Request, body: AskRequest) -> AskResponse:
+        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
+        logger.info("Ask requested for user=%s session=%s", resolved_user, body.session_id)
+        result = service.ask(body.question, resolved_user, body.session_id)
         return AskResponse(**result.model_dump())
 
     @app.get("/api/ask/stream")
-    async def ask_stream(question: str, user_id: str = "default", session_id: str = "default") -> StreamingResponse:
+    async def ask_stream(
+        request: Request, question: str, user_id: str = "default", session_id: str = "default"
+    ) -> StreamingResponse:
         if not question.strip():
             raise HTTPException(status_code=400, detail="Question is required.")
 
-        logger.info("Ask stream requested for user=%s session=%s", user_id, session_id)
+        resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
+        logger.info("Ask stream requested for user=%s session=%s", resolved_user, session_id)
 
         async def event_generator():
             yield _sse_event(
@@ -249,7 +278,7 @@ def create_app() -> FastAPI:
                     "message": "Searching your knowledge graph and local memory...",
                 },
             )
-            result = await asyncio.to_thread(service.ask, question, user_id, session_id)
+            result = await asyncio.to_thread(service.ask, question, resolved_user, session_id)
             yield _sse_event(
                 "metadata",
                 {
@@ -318,9 +347,10 @@ def create_app() -> FastAPI:
         return GraphSyncResponse(note=updated_note, queued=False)
 
     @app.post("/api/debug/reset-user-data", response_model=ResetUserDataResponse)
-    def reset_user_data(request: ResetUserDataRequest) -> ResetUserDataResponse:
-        logger.warning("Debug reset requested for user=%s", request.user_id)
-        result = service.reset_user_data(request.user_id)
+    def reset_user_data(http_request: Request, body: ResetUserDataRequest) -> ResetUserDataResponse:
+        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
+        logger.warning("Debug reset requested for user=%s", resolved_user)
+        result = service.reset_user_data(resolved_user)
         return ResetUserDataResponse(**result.model_dump())
 
     @app.post("/api/integrations/feishu/webhook")

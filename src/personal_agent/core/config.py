@@ -38,6 +38,11 @@ class Settings(BaseModel):
     graph_sync_initial_backoff_seconds: float = 2.0
     graph_sync_backoff_multiplier: float = 2.0
     graph_sync_max_backoff_seconds: float = 20.0
+    max_verify_retries: int = 1
+    api_keys: dict[str, str] = {}
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: int = 60
+    cors_origins: list[str] = ["http://localhost:3000"]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -82,8 +87,34 @@ class Settings(BaseModel):
             graph_sync_max_backoff_seconds=float(
                 os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_BACKOFF_SECONDS", "20.0")
             ),
+            max_verify_retries=int(os.getenv("AGENT_MAX_VERIFY_RETRIES", "1")),
+            api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),
+            rate_limit_requests=int(os.getenv("PERSONAL_AGENT_RATE_LIMIT_REQUESTS", "60")),
+            rate_limit_window_seconds=int(os.getenv("PERSONAL_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")),
+            cors_origins=_parse_cors_origins(os.getenv("PERSONAL_AGENT_CORS_ORIGINS", "http://localhost:3000")),
         )
 
 
 def _as_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_api_keys(raw: str) -> dict[str, str]:
+    """Parse 'key1:user1,key2:user2' into {key1: user1, key2: user2}."""
+    result: dict[str, str] = {}
+    if not raw.strip():
+        return result
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        key, user = pair.split(":", 1)
+        result[key.strip()] = user.strip()
+    return result
+
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    """Parse comma-separated origins into a list."""
+    if not raw.strip():
+        return []
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]

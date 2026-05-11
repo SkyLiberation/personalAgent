@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ class EntryNodeDeps:
     capture: Callable[..., "CaptureResult"]
     ask: Callable[..., "AskResult"]
     capture_service: "CaptureService | None" = None
+    summarize_thread: Callable[[str, str], str] | None = None
 
 
 def route_entry_intent_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
@@ -37,7 +39,31 @@ def capture_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentSt
         state.answer = "未收到可采集内容。"
         return state
     if state.intent == "capture_file":
-        state.answer = "飞书文件消息已识别，但当前版本还没有把文件下载与正文提取接起来。"
+        file_path = entry_input.metadata.get("file_path", "")
+        if file_path:
+            from pathlib import Path
+            path = Path(file_path)
+            if path.exists() and deps.capture_service is not None:
+                original_filename = entry_input.metadata.get("original_filename", path.name)
+                file_bytes = path.read_bytes()
+                capture_text = deps.capture_service.capture_text_from_upload(
+                    filename=original_filename,
+                    content_type=None,
+                    file_bytes=file_bytes,
+                    source_type="file",
+                )
+                result = deps.capture(
+                    text=capture_text,
+                    source_type="file",
+                    user_id=entry_input.user_id,
+                    source_ref=entry_input.source_ref or file_path,
+                )
+                state.note = result.note
+                state.matches = result.related_notes
+                state.review_card = result.review_card
+                state.answer = f"已收进知识库：{result.note.title}"
+                return state
+        state.answer = "文件消息已识别，但文件内容暂未获取到。请通过 Web 端上传文件，或稍后重试。"
         return state
 
     capture_text = entry_input.text
@@ -81,8 +107,37 @@ def ask_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
     return state
 
 
-def summarize_entry_branch_node(state: AgentState) -> AgentState:
-    state.answer = "已识别为群聊总结诉求，但当前版本还没有接入飞书会话消息回溯能力。"
+def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = None) -> AgentState:
+    entry_input = state.entry_input
+    if entry_input is None:
+        state.answer = "未收到可总结的内容。"
+        return state
+
+    thread_messages_raw = entry_input.metadata.get("thread_messages", "")
+    if thread_messages_raw and deps is not None and deps.summarize_thread is not None:
+        try:
+            messages = json.loads(thread_messages_raw)
+            if isinstance(messages, list) and messages:
+                messages_text = "\n".join(
+                    f"[{m.get('role', 'unknown')}]: {m.get('content', '')}" for m in messages
+                )
+                summary = deps.summarize_thread(messages_text, entry_input.user_id or "default")
+                state.answer = summary
+                return state
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    chat_id = entry_input.metadata.get("chat_id", "")
+    if chat_id:
+        state.answer = (
+            "已识别为群聊总结诉求。当前暂时无法获取会话消息，请稍后重试，"
+            "或直接粘贴需要总结的聊天内容。"
+        )
+    else:
+        state.answer = (
+            "已识别为总结诉求。请直接发送需要总结的文本内容，"
+            "或在群聊中使用此功能。"
+        )
     return state
 
 

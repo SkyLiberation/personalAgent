@@ -36,7 +36,7 @@ def build_entry_graph(
     route_node: Callable[[AgentState], AgentState],
     capture_branch_node: Callable[[AgentState], AgentState],
     ask_branch_node: Callable[[AgentState], AgentState],
-    summarize_branch_node: Callable[[AgentState], AgentState],
+    summarize_branch_node: Callable[..., AgentState],
     unknown_branch_node: Callable[[AgentState], AgentState],
 ):
     graph = StateGraph(AgentState)

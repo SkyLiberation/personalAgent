@@ -63,7 +63,7 @@ class DefaultIntentRouter:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=120,
                 response_format={"type": "json_object"},
             )
             content = (response.choices[0].message.content or "").strip()
