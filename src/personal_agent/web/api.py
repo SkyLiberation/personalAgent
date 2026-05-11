@@ -77,6 +77,21 @@ class ResetUserDataResponse(BaseModel):
     deleted_reviews: int = 0
     deleted_conversations: int = 0
     deleted_upload_files: int = 0
+
+
+class ToolSpecResponse(BaseModel):
+    name: str
+    description: str
+
+
+class ToolExecuteRequest(BaseModel):
+    kwargs: dict[str, object] = Field(default_factory=dict)
+
+
+class ToolExecuteResponse(BaseModel):
+    ok: bool
+    data: object = None
+    error: str | None = None
     deleted_ask_history: int = 0
     deleted_graph_episodes: int = 0
 
@@ -110,6 +125,16 @@ def create_app() -> FastAPI:
     def health() -> dict[str, object]:
         logger.debug("Health check requested")
         return service.health()
+
+    @app.get("/api/tools", response_model=list[ToolSpecResponse])
+    def list_tools() -> list[dict[str, object]]:
+        specs = service.list_tools()
+        return [{"name": s.name, "description": s.description} for s in specs]
+
+    @app.post("/api/tools/{name}/execute", response_model=ToolExecuteResponse)
+    def execute_tool(name: str, body: ToolExecuteRequest) -> dict[str, object]:
+        result = service.execute_tool(name, **body.kwargs)
+        return {"ok": result.ok, "data": result.data, "error": result.error}
 
     @app.get("/api/notes", response_model=list[KnowledgeNote])
     def list_notes(user_id: str = "default") -> list[KnowledgeNote]:

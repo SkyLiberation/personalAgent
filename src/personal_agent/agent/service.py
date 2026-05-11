@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-import json
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -15,18 +14,21 @@ from ..core.logging_utils import log_event, trace_span
 from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, EntryIntent, KnowledgeNote, RawIngestItem, ReviewCard
 from ..graphiti.store import GraphAskResult, GraphCaptureResult, GraphCitationHit, GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
+from ..memory import MemoryFacade
 from ..storage.memory_store import LocalMemoryStore
+from ..tools import CaptureUploadTool, CaptureUrlTool, GraphSearchTool, ToolRegistry, ToolResult, ToolSpec
 from .entry_nodes import (
     EntryNodeDeps,
     ask_entry_branch_node,
     capture_entry_branch_node,
-    heuristic_entry_intent,
     route_entry_intent_node,
     summarize_entry_branch_node,
     unknown_entry_branch_node,
 )
 from .graph import build_ask_graph, build_capture_graph, build_entry_graph
 from .nodes import digest_node
+from .router import DefaultIntentRouter
+from .verifier import AnswerVerifier, VerificationResult
 
 if TYPE_CHECKING:
     from ..capture import CaptureService
@@ -80,6 +82,26 @@ class AgentService:
         self.graph_store = GraphitiStore(self.settings)
         self.ask_history_store = AskHistoryStore(self.settings.postgres_url)
         self.capture_service = capture_service
+        self._intent_router = DefaultIntentRouter(self.settings)
+        self._tool_registry = ToolRegistry()
+        self._register_tools()
+        self.memory = MemoryFacade(self.store, self.ask_history_store)
+        self._verifier = AnswerVerifier()
+
+    def _register_tools(self) -> None:
+        if self.capture_service is not None:
+            self._tool_registry.register(CaptureUrlTool(self.capture_service))
+            self._tool_registry.register(
+                CaptureUploadTool(self.capture_service, self.settings.data_dir / "uploads")
+            )
+        self._tool_registry.register(GraphSearchTool(self.graph_store))
+
+    def list_tools(self) -> list[ToolSpec]:
+        return self._tool_registry.list_tools()
+
+    def execute_tool(self, name: str, **kwargs: object) -> ToolResult:
+        return self._tool_registry.execute(name, **kwargs)
+
 
     def capture(
         self,
@@ -162,13 +184,19 @@ class AgentService:
         normalized_user = user_id or self.settings.default_user
         normalized_session = session_id or "default"
         logger.info("Starting ask user=%s question=%s", normalized_user, question[:120])
-        conversation_context = self._conversation_context(normalized_user, normalized_session)
+        self.memory.bind_session(normalized_user, normalized_session)
+        self.memory.refresh_conversation_summary(normalized_user, normalized_session)
+        working_context = self.memory.working.context_snapshot()
         trace_id = uuid4().hex[:12]
 
         graph_result = self.graph_store.ask(question, normalized_user, trace_id=trace_id)
         if graph_result.enabled:
             matches, citations = self._graph_matches_and_citations(normalized_user, question, graph_result)
-            answer = self._compose_graph_answer(question, graph_result, matches, citations, conversation_context)
+            answer = self._compose_graph_answer(question, graph_result, matches, citations, working_context)
+            verification = self._verifier.verify(question, answer, citations, matches, graph_enabled=True)
+            if not verification.ok or not verification.sufficient:
+                answer = self._annotate_answer(answer, verification)
+            self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
             ask_result = AskResult(
                 answer=answer,
                 citations=citations,
@@ -176,32 +204,41 @@ class AgentService:
                 graph_enabled=True,
                 session_id=normalized_session,
             )
-            self._record_ask_history(normalized_user, normalized_session, question, ask_result)
+            self.memory.record_turn(normalized_user, normalized_session, question, answer)
+            self._persist_ask_history(normalized_user, normalized_session, question, ask_result)
             logger.info(
-                "Ask resolved from graph user=%s matches=%s citations=%s",
+                "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
                 normalized_user,
                 len(matches),
                 len(citations),
+                verification.evidence_score,
             )
             return ask_result
 
         graph = build_ask_graph(self.store)
         state = AgentState(mode="ask", question=question, user_id=normalized_user)
         result = AgentState.model_validate(graph.invoke(state))
-        answer = self._compose_local_answer(question, result.matches, result.citations, conversation_context)
+        answer = self._compose_local_answer(question, result.matches, result.citations, working_context)
+        final_answer = answer or result.answer or "暂时没有生成答案。"
+        verification = self._verifier.verify(question, final_answer, result.citations, result.matches, graph_enabled=False)
+        if not verification.ok or not verification.sufficient:
+            final_answer = self._annotate_answer(final_answer, verification)
+        self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
         ask_result = AskResult(
-            answer=answer or result.answer or "暂时没有生成答案。",
+            answer=final_answer,
             citations=result.citations,
             matches=result.matches,
             graph_enabled=False,
             session_id=normalized_session,
         )
-        self._record_ask_history(normalized_user, normalized_session, question, ask_result)
+        self.memory.record_turn(normalized_user, normalized_session, question, final_answer)
+        self._persist_ask_history(normalized_user, normalized_session, question, ask_result)
         logger.info(
-            "Ask resolved locally user=%s matches=%s citations=%s",
+            "Ask resolved locally user=%s matches=%s citations=%s verify=%.2f",
             normalized_user,
             len(result.matches),
             len(result.citations),
+            verification.evidence_score,
         )
         return ask_result
 
@@ -217,6 +254,7 @@ class AgentService:
     def entry(self, entry_input: EntryInput) -> EntryResult:
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
+        self.memory.bind_session(normalized_user, normalized_session)
         entry_node_deps = EntryNodeDeps(
             classify_intent=self._classify_entry_intent,
             capture=self.capture,
@@ -536,15 +574,14 @@ class AgentService:
         graph_result: GraphAskResult,
         matches: list[KnowledgeNote],
         citations: list[Citation],
-        conversation_context: list[AskHistoryRecord],
+        working_context: str,
     ) -> str:
         focus_entities = "、".join(graph_result.entity_names[:6]) if graph_result.entity_names else "暂无"
         relation_facts = graph_result.relation_facts[:8]
-        context_lines = [f"Q: {item.question}\nA: {item.answer}" for item in conversation_context[-4:]]
         evidence_blocks = self._build_note_evidence_blocks(matches, citations)
         citation_lines = [f"- {citation.title}: {citation.relation_fact or citation.snippet}" for citation in citations[:5]]
         fact_lines = [f"- {fact}" for fact in relation_facts]
-        context_block = "\n".join(context_lines) if context_lines else "无"
+        context_block = working_context if working_context else "无"
         notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
         citations_block = "\n".join(citation_lines) if citation_lines else "无"
         facts_block = "\n".join(fact_lines) if fact_lines else "无"
@@ -558,7 +595,7 @@ class AgentService:
             "如果证据不足，要明确指出不确定点。"
             "回答尽量先给出一句直接结论，再补充展开说明。\n\n"
             f"当前问题：{question}\n\n"
-            f"最近对话：\n{context_block}\n\n"
+            f"最近对话与任务上下文：\n{context_block}\n\n"
             f"图谱实体：{focus_entities}\n\n"
             f"图谱事实：\n{facts_block}\n\n"
             f"相关内容证据：\n{notes_block}\n\n"
@@ -576,11 +613,10 @@ class AgentService:
         question: str,
         matches: list[KnowledgeNote],
         citations: list[Citation],
-        conversation_context: list[AskHistoryRecord],
+        working_context: str,
     ) -> str:
-        context_lines = [f"Q: {item.question}\nA: {item.answer}" for item in conversation_context[-4:]]
         evidence_blocks = self._build_note_evidence_blocks(matches, citations)
-        context_block = "\n".join(context_lines) if context_lines else "无"
+        context_block = working_context if working_context else "无"
         notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
         prompt = (
             "你是个人知识库助手。请基于最近几轮对话和当前匹配到的笔记内容证据，"
@@ -588,7 +624,7 @@ class AgentService:
             "不要把答案写成检索结果罗列，也不要简单重复原始片段。"
             "回答尽量先给出一句直接结论，再补充必要解释。\n\n"
             f"当前问题：{question}\n\n"
-            f"最近对话：\n{context_block}\n\n"
+            f"最近对话与任务上下文：\n{context_block}\n\n"
             f"相关内容证据：\n{notes_block}"
         )
         generated = self._generate_answer(prompt)
@@ -598,7 +634,21 @@ class AgentService:
             return f"结合你前面的提问和当前笔记内容，我更倾向于认为：{matches[0].summary}"
         return "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
 
-    def _record_ask_history(self, user_id: str, session_id: str, question: str, result: AskResult) -> None:
+    @staticmethod
+    def _annotate_answer(answer: str, verification: "VerificationResult") -> str:
+        if verification.ok and verification.sufficient:
+            return answer
+        notes: list[str] = []
+        if verification.issues:
+            notes.append("(校验提示: " + "; ".join(verification.issues) + ")")
+        if verification.warnings:
+            notes.append("(注意: " + "; ".join(verification.warnings[:2]) + ")")
+        if not notes:
+            return answer
+        suffix = "\n\n---\n" + "\n".join(notes)
+        return answer + suffix
+
+    def _persist_ask_history(self, user_id: str, session_id: str, question: str, result: AskResult) -> None:
         record = AskHistoryRecord(
             user_id=user_id,
             session_id=session_id,
@@ -607,7 +657,6 @@ class AgentService:
             citations=result.citations,
             graph_enabled=result.graph_enabled,
         )
-        self.store.append_conversation_turn(record.model_dump(mode="json"))
         try:
             if self.ask_history_store.configured():
                 self.ask_history_store.append(record)

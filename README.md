@@ -28,113 +28,86 @@
 
 这个项目目前已经具备一个可运行 Agent 的主干，但还没有完全走到“通用自主 Agent”那一步。更准确地说，它现在是一个以 `个人知识沉淀 / 问答 / 图谱增强` 为中心的 `knowledge agent`。
 
-## 当前工程是否具备这些组件
+## 当前工程的 Agent 结构判断
 
-| 组件 | 当前状态 | 代码落点 | 说明 |
+| 组件 | 当前状态 | 代码落点 | 当前判断 |
 | --- | --- | --- | --- |
-| `入口层` | `已具备` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 已支持 Web API、前端、飞书、CLI 多入口 |
-| `意图识别 / 路由层` | `部分具备` | [agent/entry_nodes.py](src/personal_agent/agent/entry_nodes.py), [agent/service.py](src/personal_agent/agent/service.py) | 已有 `capture / ask / summarize / unknown` 路由，但当前主要是启发式规则，不是 LLM Router / Planner |
-| `编排层` | `已具备` | [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | 已用 `LangGraph` 把 `capture / ask / entry` 做成状态流 |
-| `工具层` | `部分具备` | [capture/service.py](src/personal_agent/capture/service.py), [capture/providers](src/personal_agent/capture/providers), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 已有网页抓取、文件解析、图谱检索等能力，但还是“固定接线”，尚未抽象成通用 tool registry |
-| `记忆层` | `已具备` | [storage/memory_store.py](src/personal_agent/storage/memory_store.py), [storage/ask_history_store.py](src/personal_agent/storage/ask_history_store.py), [core/models.py](src/personal_agent/core/models.py) | 已有本地笔记、复习卡、会话记录、问答历史、图谱 episode 映射 |
-| `检索与推理层` | `部分具备` | [agent/nodes.py](src/personal_agent/agent/nodes.py), [graphiti/store.py](src/personal_agent/graphiti/store.py), [agent/service.py](src/personal_agent/agent/service.py) | 已支持本地匹配和图谱问答，但复杂推理、计划分解、证据校验还偏轻 |
-| `执行与反馈层` | `已具备` | [web/api.py](src/personal_agent/web/api.py), [agent/service.py](src/personal_agent/agent/service.py) | 已支持同步调用、SSE、异步图谱同步、失败降级 |
-| `观测与治理层` | `部分具备` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/api.py](src/personal_agent/web/api.py), [agent/service.py](src/personal_agent/agent/service.py) | 已有日志、trace、health、retry、reset；但认证、授权、配额、评测体系还没有 |
+| `入口层` | `可用` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 具备 Web API、前端、飞书、CLI 多入口，但不同入口的能力闭环还不完全一致 |
+| `意图识别 / 路由层` | `可用` | [agent/router.py](src/personal_agent/agent/router.py), [agent/entry_nodes.py](src/personal_agent/agent/entry_nodes.py), [agent/service.py](src/personal_agent/agent/service.py) | 能区分 `capture / ask / summarize / unknown` 一类单轮意图，但仍以路由分发为主，不具备多步规划 |
+| `编排层` | `可用` | [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | 已有 `LangGraph` 状态流，但主要覆盖 `capture / ask / entry` 这类固定流程 |
+| `工具层` | `可用` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [capture/providers](src/personal_agent/capture/providers), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 已有统一 Tool 抽象和注册中心，但工具编排、回退和选择策略仍较轻 |
+| `记忆层` | `基础可用` | [memory/](src/personal_agent/memory), [storage/memory_store.py](src/personal_agent/storage/memory_store.py), [storage/ask_history_store.py](src/personal_agent/storage/ask_history_store.py), [core/models.py](src/personal_agent/core/models.py) | 有工作记忆、会话摘要和长期存储，但统一读写和跨会话一致性仍有继续收敛空间 |
+| `检索与推理层` | `基础可用` | [agent/nodes.py](src/personal_agent/agent/nodes.py), [graphiti/store.py](src/personal_agent/graphiti/store.py), [agent/service.py](src/personal_agent/agent/service.py), [agent/verifier.py](src/personal_agent/agent/verifier.py) | 已有本地检索、图谱增强和回答后校验，但复杂推理、计划分解和证据组织仍偏轻 |
+| `执行与反馈层` | `可用` | [web/api.py](src/personal_agent/web/api.py), [agent/service.py](src/personal_agent/agent/service.py) | 具备同步调用、SSE、异步图谱同步和失败降级，但不是完整的 agent runtime |
+| `观测与治理层` | `部分具备` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/api.py](src/personal_agent/web/api.py), [agent/service.py](src/personal_agent/agent/service.py) | 已有日志、trace、health、reset 和基础测试，但权限、配额、多用户治理和回归评测仍不足 |
 
 ## 一句话判断
 
-如果问题是“当前工程是不是一个 Agent”，答案是：`是，而且已经具备最小可运行闭环`。
+当前工程已经具备 `场景化 Agent` 的基础骨架，可以支撑个人知识沉淀、问答和图谱增强这条主链路。
 
-如果问题是“它是不是一个组件完备、可持续扩展的 Agent 平台”，答案是：`还没有，现在更像一个面向个人知识管理场景的垂直 Agent 原型`。
+它目前更适合被定义为 `knowledge agent 原型`，而不是通用自主 Agent 或生产级 Agent 平台。
 
-## 当前已经具备的 Agent 主干
+## 当前框架已有能力
 
-从代码看，这个工程已经有了比较清晰的 Agent 骨架：
+从代码结构看，当前框架已经具备以下能力：
 
-- `输入标准化`：`EntryInput / RawIngestItem / AgentState`
-- `状态编排`：`LangGraph StateGraph`
-- `记忆沉淀`：`KnowledgeNote / ReviewCard / AskHistoryRecord`
-- `外部工具接入`：网页抓取、文件上传、Graphiti、Neo4j、Firecrawl、Feishu
-- `问答闭环`：本地检索问答 + 图谱增强问答 + citation 返回
-- `可靠性设计`：图谱不可用自动降级、后台重试同步、SSE 输出、日志追踪
+- `统一输入模型`：通过 `EntryInput / RawIngestItem / AgentState` 规范入口数据与状态传递
+- `基础状态编排`：基于 `LangGraph StateGraph` 组织 `capture / ask / entry` 固定流程
+- `工具抽象`：通过 `BaseTool / ToolSpec / ToolResult / ToolRegistry` 统一工具注册与执行
+- `采集链路`：支持文本采集、链接抓取、文件上传解析，并沉淀为 `KnowledgeNote`
+- `知识存储`：本地维护笔记、复习卡片、会话记录，并保留图谱字段映射
+- `问答链路`：支持本地检索问答，以及图谱可用时的图谱增强问答
+- `工作记忆`：支持会话级摘要、最近推理步骤、工具缓存等短期上下文
+- `回答校验`：支持回答后做引用有效性和证据充分度检查
+- `多入口接入`：支持 Web API、前端界面、CLI、飞书消息入口
+- `基础可靠性`：图谱不可用时降级、本地重试同步、SSE 输出、健康检查与日志
+- `基础测试`：已有 router、tools、memory、verifier 的单元测试，以及 ask 质量 eval
 
-这说明项目的基础方向是对的，后续更关键的不是“重写”，而是“把现在这些能力抽象得更稳、更通用”。
+## 当前需要改进的地方
 
-## 当前还缺什么
+### 1. Agent 抽象仍未完全收口
 
-和更完整的 Agent 架构相比，这个工程目前主要缺 6 类能力：
+- `AgentService` 仍承担较多协调职责，尚未抽象成独立的 `AgentRuntime`
+- 路由逻辑在 `router.py` 与 `service.py` 中存在重复实现，运行时入口尚未完全统一
+- 当前更像“单轮路由 + 固定分支”，还不是完整的 `plan-and-act` 执行器
 
-### 1. 缺少真正的 `Planner / Router`
+### 2. 多步规划能力不足
 
-当前 `entry` 路由主要依赖 [entry_nodes.py](src/personal_agent/agent/entry_nodes.py) 里的启发式判断：
+- 还没有真正的 `Planner`
+- 还不能根据问题自动规划“检索 -> 工具调用 -> 整理证据 -> 回答”
+- 也还没有更成熟的 `Tool Selection` 与 fallback 策略
 
-- 能区分 `capture_text / capture_link / ask / summarize_thread / unknown`
-- 但还不能做 `多步任务规划`
-- 也不能根据问题自动决定“先检索、再抓外部资料、再总结、再落库”
+### 3. 部分入口能力只做到识别，未形成闭环
 
-这意味着当前更像 `single-turn routed workflow`，还不是 `plan-and-act agent`。
+- `capture_file` 已识别，但在 `entry` 链路里仍未完整接通
+- `summarize_thread` 已识别，但尚未接入消息回溯与群聊总结执行
+- 飞书入口当前主要覆盖文本消息，文件消息和线程回溯仍待补齐
 
-### 2. 缺少通用 `Tool Registry / Tool Executor`
+### 4. 记忆层仍需继续收敛
 
-现在的工具接入已经有雏形，但还是按场景手写调用链：
+- `WorkingMemory` 已存在，但更偏进程内会话缓存
+- `MemoryFacade` 虽已建立，但对本地存储、问答历史和会话摘要的统一读写仍可继续加强
+- 多实例、跨进程、跨入口的一致性设计还不完整
 
-- `CaptureService` 管网页抓取和文件解析
-- `GraphitiStore` 管图谱读写
-- `AgentService` 手动决定什么时候调用哪个模块
+### 5. 检索与回答质量仍有优化空间
 
-这在功能少的时候很清楚，但工具一多就会开始膨胀。当前还没有：
+- 本地检索排序仍偏启发式，复杂问题下可能串题
+- 图谱事实与 `citation` 的精确锚定还不够严格
+- 回答虽然有校验与上下文注入，但证据组织、可读性和稳定性还有提升空间
+- 当前 verifier 主要做“事后校验”，还没有形成更完整的自修正闭环
 
-- 统一的 `ToolSpec`
-- 统一的入参 / 出参协议
-- 工具可发现、可选择、可审计的执行器
+### 6. 治理与生产化能力不足
 
-### 3. 缺少独立的 `Working Memory`
+- 缺少用户认证与 API 鉴权
+- 缺少系统性的多用户隔离边界
+- 缺少外部工具权限控制、限流和配额
+- 缺少生产运行所需的审计、操作边界和安全治理
 
-当前已有：
+### 7. 测试与评测覆盖面还不够
 
-- 长期知识：`notes.json + Neo4j/Graphiti`
-- 问答历史：`conversations.json / Postgres ask_history`
-
-但还缺一个更明确的 `工作记忆层`，例如：
-
-- 当前任务目标
-- 当前会话摘要
-- 最近几轮推理中间结果
-- 任务级变量和工具调用结果缓存
-
-没有这层，后续一旦进入多步任务，就很容易把所有状态都混进历史记录或 `AgentState`。
-
-### 4. 缺少 `Observation / Verification / Self-Correction`
-
-当前有重试和降级，但还没有完整的结果校验链路，例如：
-
-- 回答生成后做证据一致性检查
-- 工具调用失败后尝试 alternative tool
-- 图谱命中不足时回退到 Web Search 或别的知识源
-- 输出前给答案打一个“证据充分度”分数
-
-这类能力会决定 Agent 是“能跑”还是“可靠”。
-
-### 5. 缺少 `Security / Tenant Boundary / Permission Model`
-
-当前更偏本地开发与单用户原型，生产化还缺：
-
-- 用户认证
-- API 鉴权
-- 多用户隔离边界的系统性设计
-- 外部工具调用权限控制
-- 配额和限流
-
-### 6. 缺少 `Test / Eval / Benchmark`
-
-目前仓库里还没有成体系的测试与评测目录，意味着很多能力虽然能跑，但不容易持续验证：
-
-- capture 是否回归
-- ask 的排序是否变差
-- graph citation 是否更准
-- 飞书入口是否被改坏
-
-这部分对 Agent 项目尤其重要，因为很多退化并不是语法错误，而是“回答变差了”。
+- 现有测试更集中在 `router / tools / memory / verifier`
+- `AgentService.entry()`、采集主链路、SSE、飞书入口的集成测试仍需补齐
+- 图谱检索质量、citation 精度和回归评测体系仍不完整
 
 ## 如果继续演进，建议怎么设计
 
@@ -144,10 +117,10 @@
 
 优先做这 4 件事：
 
-1. 抽象 `Tool` 协议
-2. 抽象 `IntentRouter`
-3. 抽象 `MemoryFacade`
-4. 抽象 `AgentRuntime`
+1. 统一 `AgentRuntime` 执行入口
+2. 收口 `IntentRouter` 的运行时接入
+3. 继续收敛 `MemoryFacade` 的读写职责
+4. 拆分 `AgentService` 里的协调逻辑
 
 建议的目录形态可以是：
 
@@ -155,20 +128,22 @@
 src/personal_agent/
 ├─ agent/
 │  ├─ runtime.py          # AgentRuntime：统一执行入口
-│  ├─ router.py           # IntentRouter：规则版 / LLM 版
+│  ├─ router.py           # IntentRouter：规则版 / LLM 版 ✅
 │  ├─ planner.py          # 任务规划器，先留接口
 │  ├─ executor.py         # Tool 执行器
+│  ├─ verifier.py         # AnswerVerifier：回答证据校验 ✅
 │  ├─ graph.py            # LangGraph 编排
 │  └─ nodes.py
-├─ tools/
-│  ├─ base.py             # ToolSpec / ToolResult
+├─ tools/                 ✅
+│  ├─ base.py             # ToolSpec / ToolResult / BaseTool
 │  ├─ capture_url.py
 │  ├─ capture_upload.py
 │  ├─ graph_search.py
+│  ├─ registry.py         # ToolRegistry
 │  └─ note_store.py
-├─ memory/
-│  ├─ facade.py           # 工作记忆 + 长期记忆统一读写
-│  ├─ working_memory.py
+├─ memory/                ✅
+│  ├─ facade.py           # MemoryFacade：工作记忆 + 长期记忆统一读写
+│  ├─ working_memory.py   # WorkingMemory：会话级推理状态
 │  ├─ long_term_memory.py
 │  └─ conversation_memory.py
 ```
@@ -181,8 +156,8 @@ src/personal_agent/
 
 1. 增加 `Planner`
 2. 增加 `Tool Selection`
-3. 增加 `Working Memory Summary`
-4. 增加 `Verifier`
+3. 增强 `Working Memory Summary`
+4. 增加回答失败后的自修正与重试策略
 
 推荐执行链路：
 
@@ -200,9 +175,8 @@ Entry
 其中最值得优先落地的是：
 
 - `Planner` 先只支持 3 类任务：`capture / ask / summarize`
-- `Verifier` 先只做 2 件事：`证据是否为空`、`回答是否引用到了命中的 note / fact`
-
-这样能快速把“会工作”提升成“工作得更稳”。
+- `Tool Selection` 先覆盖本地检索、图谱查询和采集工具三类能力
+- `Verifier` 从“只打标”逐步演进到“触发重试或降级”
 
 ### 第三层：补齐生产化治理
 
@@ -216,13 +190,13 @@ Entry
 
 ## 推荐的下一步实现顺序
 
-如果只选最值得做的 5 项，我建议按这个顺序：
+如果只选最值得继续推进的 5 项，建议按这个顺序：
 
-1. 把 `entry intent` 从纯规则判断升级成 `规则优先 + LLM 兜底`
-2. 把网页抓取、上传解析、图谱查询抽成统一 `Tool` 接口
-3. 为 `AgentService` 增加 `working memory` 和会话摘要
-4. 为 `ask` 增加 `answer verifier`，至少校验引用证据是否存在
-5. 建一个最小 `tests/` 和 `evals/`，先覆盖 `capture / ask / entry`
+1. 收口 `AgentService.entry(...)` 的路由实现，统一到 `IntentRouter`
+2. 补齐 `capture_file` 和 `summarize_thread` 的执行闭环
+3. 抽象 `AgentRuntime / Planner / Tool Selection`
+4. 补强 `entry / capture / SSE / Feishu` 的集成测试与回归评测
+5. 增加鉴权、多用户隔离、限流等生产化治理能力
 
 ## 当前技术栈
 
@@ -282,67 +256,50 @@ docker compose up -d neo4j
 docker compose up -d postgres
 ```
 
-## 当前能力
+## 当前业务能力范围
 
 ### 1. Capture
 
-- 接收文本输入
-- 前端单独暴露文本采集、网站抓取、文件上传 3 个入口
-- 支持前端文件上传
-- 支持网页链接正文抓取与 PDF 文本提取
-- 网页抓取优先走 `Firecrawl`，不可用时回退到内置 HTML 正文提取
-- 自动生成标题、摘要、标签
-- 保存为本地 `KnowledgeNote`
-- 自动生成复习卡片 `ReviewCard`
-- 可选写入 Graphiti 图谱
+- 可以接收文本、链接和上传文件三类采集输入
+- 采集结果会被整理成 `KnowledgeNote`
+- 当前采集链路包含网页正文抓取、PDF 文本提取、标题/摘要/标签生成、复习卡生成等处理步骤
+- 图谱可用时，采集结果会继续尝试写入 Graphiti
 
 ### 2. Knowledge Connection
 
 - 默认使用本地 JSON 存储与简单匹配
-- 启用 Graphiti 后，升级为实体抽取 + 关系抽取 + 图谱写入
-- 每条笔记会记录：
-  - `graph_episode_uuid`
-  - `entity_names`
-  - `relation_facts`
+- 图谱开启后，会为笔记补充实体、关系和图谱 episode 映射信息
+- 当前数据模型中已经为图谱字段预留了 `graph_episode_uuid / entity_names / relation_facts`
 
 ### 3. Ask
 
-- 图谱关闭时：走本地问答链路
-- 图谱开启且 Neo4j 可连接时：优先利用图谱事实、引用片段和相关笔记生成回答
-- 图谱开启但 Neo4j 不可连接时：自动降级为本地问答链路，不阻塞飞书或 Web 入口
-- 支持把图谱命中的 episode 反查成本地笔记引用
-- 支持多轮对话与 `session_id` 会话上下文管理
-- 支持 `SSE` 实时展示回答
-- 支持把问答历史持久化到 `Postgres`
-- 前端支持查看服务端问答历史
+- 提供本地检索问答链路
+- 图谱可用时，问答流程会尝试结合图谱事实、相关笔记和引用片段生成回答
+- 图谱不可用时，问答会回退到本地链路
+- 问答支持 `session_id` 会话上下文和服务端问答历史持久化
+- Web 侧提供同步问答和 `SSE` 返回方式
 
 ### 4. Digest
 
-- 查看最近新增笔记
-- 查看到期复习卡片
+- 提供最近笔记与到期复习卡片的聚合视图
 
 ### 5. Web UI
 
-- 提供基于 `FastAPI + React` 的前后端分离架构
-- 前端采用左侧导航多 Tab 工作台
-- 当前视图包括 `Capture / Ask / Entity Graph / Relation Graph / Digest / Timeline / Memory`
-- 前端支持调用 `capture / capture/upload / ask / ask-history / digest / notes`
-- `Ask` 页面支持聊天式多轮对话、会话切换和 SSE 实时回答
-- `Capture` 页面提供一键清空调试数据入口，可同时清理本地数据、问答历史、上传源文件和当前用户图谱分组
-- 构建后 `frontend/dist` 可由 FastAPI 自动托管
+- 提供基于 `FastAPI + React` 的前后端分离结构
+- 前端工作台覆盖 `Capture / Ask / Entity Graph / Relation Graph / Digest / Timeline / Memory` 等视图
+- 前端主要围绕采集、问答、历史查看和调试数据管理几个场景展开
+- 构建后的 `frontend/dist` 可以由 FastAPI 托管
 
 ### 6. Feishu
 
-- 已支持飞书应用机器人接入
-- 当前默认接入方式为：`官方 Python SDK + 长连接接收事件`
-- 已支持飞书文本消息路由到 `capture_text / capture_link / ask`
-- 已支持使用 `message_id` 直接回复原消息
-- 当图谱不可用时，飞书问答会自动降级到本地问答链路
-- 仍保留 `POST /api/integrations/feishu/webhook` 作为 HTTP 回调兼容入口，但当前推荐优先使用长连接模式
+- 已预留飞书机器人接入链路
+- 当前实现以 `官方 Python SDK + 长连接接收事件` 为主
+- 飞书文本消息可以进入 `entry` 路由并分发到采集或问答分支
+- 仍保留 `POST /api/integrations/feishu/webhook` 作为兼容入口
 
-## 已接入的图谱能力
+## 当前图谱相关接入点
 
-当前已经接入并验证过以下链路：
+当前代码中包含以下图谱相关接入点：
 
 - `DeepSeek` 作为聊天/抽取模型
 - `DashScope text-embedding-v4` 作为 embedding 模型
@@ -387,13 +344,17 @@ personalAgent/                  # 项目根目录
 ├─ log/                         # 运行日志目录
 └─ src/
    └─ personal_agent/           # Python 应用主包
-      ├─ agent/                 # Agent 主流程编排层
+      ├─ agent/                 # Agent 主流程编排层（含 router / graph / nodes / verifier）
       ├─ capture/               # 采集编排、provider 和抽取工具层
       ├─ cli/                   # 命令行入口层
       ├─ core/                  # 配置、日志、核心数据模型
       ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding 接入
+      ├─ memory/                # 工作记忆与会话摘要（MemoryFacade / WorkingMemory）
       ├─ storage/               # 本地 JSON 和 Postgres 存储层
+      ├─ tools/                 # 统一 Tool 抽象与注册中心
       └─ web/                   # FastAPI Web 接口层
+  ├─ tests/                     # 单元测试（router / tools / verifier / memory）
+  └─ evals/                     # ask 质量评测用例
 ```
 
 ## 关键落点

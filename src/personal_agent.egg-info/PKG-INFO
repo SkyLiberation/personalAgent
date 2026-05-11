@@ -16,6 +16,9 @@ Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: typer>=0.12.3
 Requires-Dist: uvicorn>=0.38.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
 
 # “数字第二大脑” Agent
 
@@ -32,6 +35,211 @@ Requires-Dist: uvicorn>=0.38.0
 3. 让问答优先利用图谱关系，而不只是相似度检索
 4. 给后续的复习、总结、可视化留出稳定扩展点
 
+## 从 Agent 视角看，这个工程的关键组件
+
+如果把一个 Agent 拆开看，通常至少有下面 8 类关键组件：
+
+1. `入口层`：用户从哪里把任务和信息送进来
+2. `意图识别 / 路由层`：系统先判断“这是要记录、提问、总结，还是调用某个能力”
+3. `编排层`：把一个请求拆成若干节点并串成稳定流程
+4. `工具层`：抓网页、解析文件、查图谱、写存储、调用模型
+5. `记忆层`：短期上下文、长期知识、问答历史、图谱记忆
+6. `检索与推理层`：围绕问题找到证据，再组织成回答
+7. `执行与反馈层`：把结果回给用户，并支持流式、异步、失败降级
+8. `观测与治理层`：日志、健康检查、重试、权限、多用户隔离、评测
+
+这个项目目前已经具备一个可运行 Agent 的主干，但还没有完全走到“通用自主 Agent”那一步。更准确地说，它现在是一个以 `个人知识沉淀 / 问答 / 图谱增强` 为中心的 `knowledge agent`。
+
+## 当前工程是否具备这些组件
+
+| 组件 | 当前状态 | 代码落点 | 说明 |
+| --- | --- | --- | --- |
+| `入口层` | `已具备` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 已支持 Web API、前端、飞书、CLI 多入口 |
+| `意图识别 / 路由层` | `已具备` | [agent/router.py](src/personal_agent/agent/router.py), [agent/entry_nodes.py](src/personal_agent/agent/entry_nodes.py), [agent/service.py](src/personal_agent/agent/service.py) | 已有 `DefaultIntentRouter`（LLM 优先 + 启发式兜底），支持 `capture / ask / summarize / unknown` 路由，暂未接入多步 Planner |
+| `编排层` | `已具备` | [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | 已用 `LangGraph` 把 `capture / ask / entry` 做成状态流 |
+| `工具层` | `已具备` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [capture/providers](src/personal_agent/capture/providers), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 已有统一 `BaseTool` / `ToolSpec` / `ToolResult` 协议和 `ToolRegistry`，已注册 `capture_url / capture_upload / graph_search` 三个工具 |
+| `记忆层` | `已具备` | [memory/](src/personal_agent/memory), [storage/memory_store.py](src/personal_agent/storage/memory_store.py), [storage/ask_history_store.py](src/personal_agent/storage/ask_history_store.py), [core/models.py](src/personal_agent/core/models.py) | 已有 `MemoryFacade` 统一读写 + `WorkingMemory` 会话工作记忆（任务目标 / 会话摘要 / 推理步骤 / 工具缓存），底层对接本地笔记、复习卡、会话记录、问答历史、图谱 episode 映射 |
+| `检索与推理层` | `已具备` | [agent/nodes.py](src/personal_agent/agent/nodes.py), [graphiti/store.py](src/personal_agent/graphiti/store.py), [agent/service.py](src/personal_agent/agent/service.py), [agent/verifier.py](src/personal_agent/agent/verifier.py) | 已支持本地匹配、图谱问答、证据校验（`AnswerVerifier` 校验引用有效性 + 证据充分度评分），但复杂多步推理和计划分解仍偏轻 |
+| `执行与反馈层` | `已具备` | [web/api.py](src/personal_agent/web/api.py), [agent/service.py](src/personal_agent/agent/service.py) | 已支持同步调用、SSE、异步图谱同步、失败降级 |
+| `观测与治理层` | `部分具备` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/api.py](src/personal_agent/web/api.py), [agent/service.py](src/personal_agent/agent/service.py) | 已有日志、trace、health、retry、reset；但认证、授权、配额、评测体系还没有 |
+
+## 一句话判断
+
+如果问题是“当前工程是不是一个 Agent”，答案是：`是，而且已经具备最小可运行闭环`。
+
+如果问题是“它是不是一个组件完备、可持续扩展的 Agent 平台”，答案是：`还没有，现在更像一个面向个人知识管理场景的垂直 Agent 原型`。
+
+## 当前已经具备的 Agent 主干
+
+从代码看，这个工程已经有了比较清晰的 Agent 骨架：
+
+- `输入标准化`：`EntryInput / RawIngestItem / AgentState`
+- `状态编排`：`LangGraph StateGraph`
+- `记忆沉淀`：`KnowledgeNote / ReviewCard / AskHistoryRecord`
+- `外部工具接入`：网页抓取、文件上传、Graphiti、Neo4j、Firecrawl、Feishu
+- `问答闭环`：本地检索问答 + 图谱增强问答 + citation 返回
+- `可靠性设计`：图谱不可用自动降级、后台重试同步、SSE 输出、日志追踪
+
+这说明项目的基础方向是对的，后续更关键的不是“重写”，而是“把现在这些能力抽象得更稳、更通用”。
+
+## 当前还缺什么
+
+和更完整的 Agent 架构相比，这个工程目前主要缺 6 类能力：
+
+### 1. 缺少真正的 `Planner`
+
+当前 `entry` 路由已通过 [router.py](src/personal_agent/agent/router.py) 的 `DefaultIntentRouter` 实现 LLM 优先 + 启发式兜底：
+
+- 能区分 `capture_text / capture_link / ask / summarize_thread / unknown`
+- 但还不能做 `多步任务规划`
+- 也不能根据问题自动决定”先检索、再抓外部资料、再总结、再落库”
+
+这意味着当前更像 `single-turn routed workflow`，还不是 `plan-and-act agent`。
+
+### 2. ~~缺少通用 `Tool Registry / Tool Executor`~~ ✅
+
+现已实现统一 Tool 协议和注册中心，见 [tools/](src/personal_agent/tools)：
+
+- 统一的 `ToolSpec`（名称、描述、入参 schema）
+- 统一的 `ToolResult`（ok / data / error）
+- `BaseTool` 抽象基类，所有工具实现 `spec` + `execute(**kwargs)`
+- `ToolRegistry` 支持注册、发现、按名执行
+- 已注册工具：`capture_url` / `capture_upload` / `graph_search`
+- Web API 暴露 `GET /api/tools` 和 `POST /api/tools/{name}/execute`
+
+### 3. ~~缺少独立的 `Working Memory`~~ ✅
+
+现已实现完整的工作记忆层，见 [memory/](src/personal_agent/memory)：
+
+- `WorkingMemory`：会话级内存存储，跟踪任务目标、会话摘要、推理步骤、工具结果缓存
+- `MemoryFacade`：统一读写门面，封装 `WorkingMemory` + `LocalMemoryStore` + `AskHistoryStore`
+- `ask()` 和 `entry()` 流程中自动绑定会话、刷新摘要、记录对话轮次
+- 会话摘要和推理步骤自动注入到 LLM prompt 的"最近对话与任务上下文"区块
+
+### 4. ~~缺少 `Observation / Verification / Self-Correction`~~ ✅（基础校验已具备）
+
+已实现回答后校验，见 [agent/verifier.py](src/personal_agent/agent/verifier.py)：
+
+- `AnswerVerifier` 在每次 `ask()` 生成回答后自动运行
+- 校验引用是否指向真实存在的笔记（orphan citation 检测）
+- 基于匹配数、引用数、图谱状态计算证据充分度评分 (0.0–1.0)
+- 检测兜底措辞、空回答、证据不足等退化信号
+- 低置信度回答自动附加校验标注
+- 校验结果写入 `WorkingMemory` 推理步骤
+
+尚缺：工具调用失败后的 alternative tool 回退、图谱命中不足时的外部知识源切换。
+
+### 5. 缺少 `Security / Tenant Boundary / Permission Model`
+
+当前更偏本地开发与单用户原型，生产化还缺：
+
+- 用户认证
+- API 鉴权
+- 多用户隔离边界的系统性设计
+- 外部工具调用权限控制
+- 配额和限流
+
+### 6. 缺少 `Test / Eval / Benchmark`
+
+目前仓库里还没有成体系的测试与评测目录，意味着很多能力虽然能跑，但不容易持续验证：
+
+- capture 是否回归
+- ask 的排序是否变差
+- graph citation 是否更准
+- 飞书入口是否被改坏
+
+这部分对 Agent 项目尤其重要，因为很多退化并不是语法错误，而是“回答变差了”。
+
+## 如果继续演进，建议怎么设计
+
+建议按 `不推翻现有结构` 的思路演进，分三层推进。
+
+### 第一层：先把现有主干抽象稳
+
+优先做这 4 件事：
+
+1. ~~抽象 `Tool` 协议~~ ✅
+2. ~~抽象 `IntentRouter`~~ ✅
+3. ~~抽象 `MemoryFacade`~~ ✅
+4. 抽象 `AgentRuntime`
+
+建议的目录形态可以是：
+
+```text
+src/personal_agent/
+├─ agent/
+│  ├─ runtime.py          # AgentRuntime：统一执行入口
+│  ├─ router.py           # IntentRouter：规则版 / LLM 版 ✅
+│  ├─ planner.py          # 任务规划器，先留接口
+│  ├─ executor.py         # Tool 执行器
+│  ├─ verifier.py         # AnswerVerifier：回答证据校验 ✅
+│  ├─ graph.py            # LangGraph 编排
+│  └─ nodes.py
+├─ tools/                 ✅
+│  ├─ base.py             # ToolSpec / ToolResult / BaseTool
+│  ├─ capture_url.py
+│  ├─ capture_upload.py
+│  ├─ graph_search.py
+│  ├─ registry.py         # ToolRegistry
+│  └─ note_store.py
+├─ memory/                ✅
+│  ├─ facade.py           # MemoryFacade：工作记忆 + 长期记忆统一读写
+│  ├─ working_memory.py   # WorkingMemory：会话级推理状态
+│  ├─ long_term_memory.py
+│  └─ conversation_memory.py
+```
+
+这样改完之后，`AgentService` 就能从“超大协调类”逐步收敛成“面向接口的 runtime facade”。
+
+### 第二层：补齐多步 Agent 能力
+
+当第一层稳定后，再补这几件事情：
+
+1. 增加 `Planner`
+2. 增加 `Tool Selection`
+3. 增加 `Working Memory Summary`
+4. ~~增加 `Verifier`~~ ✅
+
+推荐执行链路：
+
+```text
+Entry
+  -> Intent Router
+  -> Planner
+  -> Tool Selection
+  -> Tool Execution
+  -> Memory Update
+  -> Verifier
+  -> Final Response
+```
+
+其中最值得优先落地的是：
+
+- `Planner` 先只支持 3 类任务：`capture / ask / summarize`
+- `Verifier` 先只做 2 件事：`证据是否为空`、`回答是否引用到了命中的 note / fact`
+
+这样能快速把“会工作”提升成“工作得更稳”。
+
+### 第三层：补齐生产化治理
+
+如果目标是长期跑在团队或个人生产环境里，建议继续补：
+
+1. API Key / Session 鉴权
+2. 多用户存储边界审计
+3. 限流和配额
+4. 回放测试数据集
+5. ask / capture / graph 三条链路的回归评测
+
+## 推荐的下一步实现顺序
+
+如果只选最值得做的 5 项，我建议按这个顺序：
+
+1. ~~把 `entry intent` 从纯规则判断升级成 `规则优先 + LLM 兜底`~~ ✅ 已完成，见 [agent/router.py](src/personal_agent/agent/router.py)
+2. ~~把网页抓取、上传解析、图谱查询抽成统一 `Tool` 接口~~ ✅ 已完成，见 [tools/](src/personal_agent/tools)
+3. ~~为 `AgentService` 增加 `working memory` 和会话摘要~~ ✅ 已完成，见 [memory/](src/personal_agent/memory)
+4. ~~为 `ask` 增加 `answer verifier`，至少校验引用证据是否存在~~ ✅ 已完成，见 [agent/verifier.py](src/personal_agent/agent/verifier.py)
+5. 建一个最小 `tests/` 和 `evals/`，先覆盖 `capture / ask / entry`
+
 ## 当前技术栈
 
 - `Python 3.11+`
@@ -45,6 +253,50 @@ Requires-Dist: uvicorn>=0.38.0
 - `TypeScript 6`
 - `Docker Compose`
 - `uv`
+
+## 快速开始
+
+如果你希望先把项目跑起来，再逐步打开图谱和飞书能力，推荐按下面顺序：
+
+1. 安装依赖
+
+```bash
+uv sync
+cd frontend
+npm install
+cd ..
+```
+
+2. 复制环境变量
+
+```bash
+cp .env.example .env
+```
+
+3. 启动后端
+
+```bash
+uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+4. 启动前端
+
+```bash
+cd frontend
+npm run dev
+```
+
+如果你要启用图谱问答，再额外启动 Neo4j：
+
+```bash
+docker compose up -d neo4j
+```
+
+如果你要启用问答历史持久化，再额外启动 Postgres：
+
+```bash
+docker compose up -d postgres
+```
 
 ## 当前能力
 
@@ -72,7 +324,8 @@ Requires-Dist: uvicorn>=0.38.0
 ### 3. Ask
 
 - 图谱关闭时：走本地问答链路
-- 图谱开启时：优先利用图谱事实、引用片段和相关笔记生成回答
+- 图谱开启且 Neo4j 可连接时：优先利用图谱事实、引用片段和相关笔记生成回答
+- 图谱开启但 Neo4j 不可连接时：自动降级为本地问答链路，不阻塞飞书或 Web 入口
 - 支持把图谱命中的 episode 反查成本地笔记引用
 - 支持多轮对话与 `session_id` 会话上下文管理
 - 支持 `SSE` 实时展示回答
@@ -93,6 +346,15 @@ Requires-Dist: uvicorn>=0.38.0
 - `Ask` 页面支持聊天式多轮对话、会话切换和 SSE 实时回答
 - `Capture` 页面提供一键清空调试数据入口，可同时清理本地数据、问答历史、上传源文件和当前用户图谱分组
 - 构建后 `frontend/dist` 可由 FastAPI 自动托管
+
+### 6. Feishu
+
+- 已支持飞书应用机器人接入
+- 当前默认接入方式为：`官方 Python SDK + 长连接接收事件`
+- 已支持飞书文本消息路由到 `capture_text / capture_link / ask`
+- 已支持使用 `message_id` 直接回复原消息
+- 当图谱不可用时，飞书问答会自动降级到本地问答链路
+- 仍保留 `POST /api/integrations/feishu/webhook` 作为 HTTP 回调兼容入口，但当前推荐优先使用长连接模式
 
 ## 已接入的图谱能力
 
@@ -141,12 +403,14 @@ personalAgent/                  # 项目根目录
 ├─ log/                         # 运行日志目录
 └─ src/
    └─ personal_agent/           # Python 应用主包
-      ├─ agent/                 # Agent 主流程编排层
+      ├─ agent/                 # Agent 主流程编排层（含 router / graph / nodes / verifier）
       ├─ capture/               # 采集编排、provider 和抽取工具层
       ├─ cli/                   # 命令行入口层
       ├─ core/                  # 配置、日志、核心数据模型
       ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding 接入
+      ├─ memory/                # 工作记忆与会话摘要（MemoryFacade / WorkingMemory）
       ├─ storage/               # 本地 JSON 和 Postgres 存储层
+      ├─ tools/                 # 统一 Tool 抽象与注册中心
       └─ web/                   # FastAPI Web 接口层
 ```
 
@@ -190,101 +454,50 @@ personalAgent/                  # 项目根目录
 
 这意味着后续要继续加入新的采集来源时，优先应该扩展 `capture/providers` 或在 `CaptureService` 中注册新 provider，而不是继续把外部平台集成代码塞回 `web/api.py`。
 
-## 飞书接入设计
+## 飞书接入
 
-后续如果接入飞书，不建议把它简单理解成“再加一个 API”。飞书会把系统从“明确入口采集”推进到“多意图输入分流”，因此需要在采集链路前面增加一个用户意图识别节点。
+当前工程已经完成飞书最小可用闭环，但接入方式和约束与早期设计稿相比有一些变化，后续开发请以本节为准。
 
-### 为什么要增加一个 LLM 路由节点
+### 当前实现
 
-当前系统里，前端入口是明确的：
-
-- 文本采集
-- 网站抓取
-- 文件上传
-- Ask 问答
-
-但飞书场景会弱化这种显式入口。用户在飞书里更可能直接发一句自然语言，例如：
-
-- “帮我记一下今天和张三讨论的结论”
-- “把这篇链接收进知识库”
-- “总结一下我最近关于 Graphiti 的记录”
-- “把这段群聊沉淀成一条项目笔记”
-
-这类输入在进入系统时，首先要判断它属于哪一类行为，而不是立即进入 `capture` 或 `ask`。这就是需要一个 LLM 路由节点的原因。
-
-### 建议的行为分类
-
-建议先把飞书输入路由到这几类基础意图：
-
-1. `capture_text`
-2. `capture_link`
-3. `capture_file`
-4. `ask`
-5. `summarize_thread`
-6. `unknown`
-
-其中前 4 类可以直接落到当前已有能力，`summarize_thread` 和 `unknown` 可以作为后续扩展点。
-
-### 建议接入位置
-
-这层路由更适合放在 `LangGraph` 前面或作为一个新的前置 graph，而不是堆进 `web/api.py`。
-
-推荐演进成下面这样的结构：
+- 飞书后台推荐配置为：`使用长连接接收事件`
+- 后端启动时会自动拉起飞书 SDK `ws.Client(...)`
+- 已订阅事件：`im.message.receive_v1`
+- 已启用权限：
+  - `im:message.p2p_msg:readonly`
+  - `im:message:send_as_bot`
+- 消息处理链路为：
 
 ```text
-Feishu webhook / bot message
-  -> input normalizer
-  -> intent router (LLM node)
-  -> action graph
-     -> capture branch
-     -> ask branch
-     -> summarize branch
+Feishu long connection event
+  -> SDK event handler
+  -> FeishuIncomingMessage normalizer
+  -> AgentService.entry(...)
+  -> capture / ask / summarize / unknown
+  -> reply message by message_id
 ```
 
-对应到当前工程，比较自然的落点是：
+### 当前支持范围
 
-- 在 `agent/` 下增加一个新的路由 graph，例如 `build_entry_graph()`
-- 增加一个 `router node`，负责把飞书输入归类为 `capture` / `ask` / `summarize`
-- `capture` 分支继续复用现在的 `CaptureService` 和 `AgentService.capture(...)`
-- `ask` 分支继续复用现在的 `AgentService.ask(...)`
+- 已支持：文本消息的 `capture_text / capture_link / ask`
+- 已支持：原消息回复
+- 已识别但未完整接通：
+  - `capture_file`
+  - `summarize_thread`
 
-这样做的好处是：
+### 开发注意事项
 
-- Web 前端、CLI、飞书入口可以共享同一套底层能力
-- 采集来源和行为路由分离，后续新增来源不会破坏现有接口
-- 后面如果接入 MCP、Notion、Confluence、GitHub 等，也可以复用同样的入口判别逻辑
+- 如果飞书后台配置为“长连接接收事件”，就不要再把问题排查重点放在公网 webhook 地址上
+- 如果改回“将事件发送至开发者服务器”，才需要配置 `POST /api/integrations/feishu/webhook`
+- 飞书长连接模式下，事件需要在 3 秒内快速确认，因此当前实现采用“事件线程快速接收 + 后台处理”模式
+- 同一事件可能被飞书重推，当前代码已做基于 `event_id` 的短时去重
 
-### 飞书接入不建议直接做的事
+### 后续建议
 
-当前不建议一开始就做这些重耦合方案：
-
-- 在 `web/api.py` 里直接塞大量飞书 webhook 分支逻辑
-- 把“飞书消息解析”和“知识采集逻辑”混在一个函数里
-- 让飞书入口绕过 `CaptureService` 和 `AgentService` 直接操作存储层
-
-这样短期看起来快，后面会很难继续接更多平台。
-
-### 推荐的接入顺序
-
-1. 先把 README 中这套入口路由思路定下来
-2. 再补一个通用的 `entry` 或 `router` state/model
-3. 用 `LangGraph` 实现最小可用的意图分类节点
-4. 最后再接飞书 webhook、消息解析和鉴权
-
-这样飞书接入就会是“在既有架构上增加一个入口”，而不是“再长出一套平行系统”。
-
-当前仓库已经补上这条最小闭环：
-
-- `agent.build_entry_graph()`：统一入口意图路由 graph
-- `AgentService.entry(...)`：把入口输入分流到 `capture / ask / summarize / unknown`
-- `webhook -> feishu normalizer -> entry graph`：飞书文本消息可直接复用现有知识采集与问答链路
-- `POST /api/integrations/feishu/webhook`：飞书事件订阅入口
-
-当前版本的边界：
-
-- 已支持飞书 `url_verification`
-- 已支持飞书文本消息的 `capture_text / capture_link / ask` 路由
-- 已识别 `capture_file / summarize_thread`，但还没有继续接文件下载和群聊回溯
+1. 继续把 `capture_file` 接到飞书文件下载与正文抽取
+2. 为 `summarize_thread` 接入会话消息回溯
+3. 继续增强 `AgentService.entry(...)` 的意图判别稳定性
+4. 如果未来同时保留长连接和 webhook 两种模式，需要在 README 和部署文档里明确说明当前选用哪一种
 
 ## CLI 用法
 
@@ -307,7 +520,7 @@ uv run python -m personal_agent.main digest
 5. SSE 现在是服务端分段推送已有答案，还不是直接透传上游模型 token 流
 6. `ask history` 已支持会话维度和服务端持久化，但搜索、删除和更完整的多用户隔离还不完善
 7. 调试重置已支持清理当前用户本地数据、问答历史、上传源文件和图谱分组，但还没有做更细粒度的选择式清理
-8. 飞书等外部协作平台尚未接入，跨入口的统一意图路由仍需补齐
+8. 飞书文本消息已接入，但文件消息、群聊回溯和更完整的多入口路由仍需补齐
 9. Windows 下 Vite 默认端口 5173 可能被系统保留（Hyper-V/WSL 动态端口范围），导致 `EACCES` 权限错误，需改用其他端口（如 3000）
 
 ## 后续建议

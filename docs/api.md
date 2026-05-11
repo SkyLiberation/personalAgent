@@ -236,6 +236,54 @@
 }
 ```
 
+## `GET /api/tools`
+
+返回当前所有已注册的工具及其描述。
+
+示例响应：
+
+```json
+[
+  {"name": "capture_url", "description": "抓取指定网页的正文内容，返回提取后的纯文本。"},
+  {"name": "capture_upload", "description": "解析上传的文件（支持 PDF、文本文件），返回提取后的正文内容。"},
+  {"name": "graph_search", "description": "在个人知识图谱中搜索与问题相关的实体、关系和笔记..."}
+]
+```
+
+---
+
+## `POST /api/tools/{name}/execute`
+
+执行指定名称的工具。
+
+请求体：
+
+```json
+{
+  "kwargs": {
+    "url": "https://example.com/article"
+  }
+}
+```
+
+示例响应：
+
+```json
+{
+  "ok": true,
+  "data": {"url": "https://example.com/article", "text": "..."},
+  "error": null
+}
+```
+
+可用工具：
+
+- `capture_url` — 入参：`url` (string)
+- `capture_upload` — 入参：`file_path` (string), `filename` (string), `content_type` (string, 可选)
+- `graph_search` — 入参：`question` (string), `user_id` (string, 可选, 默认 "default")
+
+---
+
 ## `POST /api/integrations/feishu/webhook`
 
 用于接收飞书 HTTP 事件订阅回调。
