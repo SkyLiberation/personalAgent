@@ -31,7 +31,6 @@ class Settings(BaseModel):
     feishu_enabled: bool = False
     feishu_app_id: str | None = None
     feishu_app_secret: str | None = None
-    feishu_verification_token: str | None = None
     feishu_base_url: str = "https://open.feishu.cn"
     feishu_use_default_user: bool = True
     graph_sync_max_attempts: int = 3
@@ -74,7 +73,6 @@ class Settings(BaseModel):
             feishu_enabled=_as_bool(os.getenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")),
             feishu_app_id=os.getenv("FEISHU_APP_ID"),
             feishu_app_secret=os.getenv("FEISHU_APP_SECRET"),
-            feishu_verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN"),
             feishu_base_url=os.getenv("FEISHU_BASE_URL", "https://open.feishu.cn"),
             feishu_use_default_user=_as_bool(os.getenv("PERSONAL_AGENT_FEISHU_USE_DEFAULT_USER", "true")),
             graph_sync_max_attempts=int(os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")),

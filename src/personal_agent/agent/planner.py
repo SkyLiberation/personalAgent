@@ -61,6 +61,10 @@ class DefaultTaskPlanner:
             return llm_result
         return self._plan_heuristic(intent)
 
+    def fallback_plan(self, intent: EntryIntent) -> list[PlanStep]:
+        """Generate a safe heuristic plan when validation blocks the primary plan."""
+        return self._plan_heuristic(intent)
+
     def _plan_with_llm(self, intent: EntryIntent, context: str) -> list[PlanStep] | None:
         if not self._llm_configured:
             return None
@@ -139,11 +143,16 @@ class DefaultTaskPlanner:
 
     def _plan_heuristic(self, intent: EntryIntent) -> list[PlanStep]:
         if intent in ("capture_text", "capture_link", "capture_file"):
+            _tool_for_capture = {
+                "capture_text": "capture_text",
+                "capture_link": "capture_url",
+                "capture_file": "capture_upload",
+            }
             return [
                 PlanStep(
                     step_id="cap-1", action_type="tool_call",
                     description="采集内容并写入知识库",
-                    tool_name="capture_url" if intent == "capture_link" else f"capture_{intent.rsplit('_', 1)[1]}",
+                    tool_name=_tool_for_capture.get(intent, "capture_text"),
                     expected_output="生成一条 KnowledgeNote",
                     success_criteria="笔记已持久化存储",
                 ),
@@ -255,6 +264,15 @@ class DefaultTaskPlanner:
                     tool_name="capture_text",
                     expected_output="已持久化的 KnowledgeNote",
                     depends_on=["sol-3"],
+                ),
+            ]
+        if intent == "direct_answer":
+            return [
+                PlanStep(
+                    step_id="da-1", action_type="compose",
+                    description="直接生成简短回复",
+                    expected_output="一段自然的直接回答",
+                    risk_level="low",
                 ),
             ]
         return [

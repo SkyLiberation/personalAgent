@@ -16,7 +16,7 @@ from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, ReviewCard
+from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, PendingAction, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -118,6 +118,34 @@ class ToolExecuteResponse(BaseModel):
     error: str | None = None
     deleted_ask_history: int = 0
     deleted_graph_episodes: int = 0
+
+
+class PendingActionResponse(BaseModel):
+    id: str
+    user_id: str
+    action_type: str
+    target_id: str
+    title: str
+    description: str
+    status: str
+    created_at: str
+    expires_at: str
+    resolved_at: str | None = None
+    audit_log: list[dict[str, object]] = Field(default_factory=list)
+
+
+class PendingActionListResponse(BaseModel):
+    items: list[PendingActionResponse] = Field(default_factory=list)
+
+
+class ConfirmPendingActionRequest(BaseModel):
+    token: str = Field(min_length=1)
+    user_id: str = "default"
+
+
+class RejectPendingActionRequest(BaseModel):
+    user_id: str = "default"
+    reason: str = ""
 
 
 def create_app() -> FastAPI:
@@ -544,45 +572,75 @@ def create_app() -> FastAPI:
         result = service.reset_user_data(resolved_user)
         return ResetUserDataResponse(**result.model_dump())
 
-    @app.post("/api/integrations/feishu/webhook")
-    async def feishu_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
-        logger.info(
-            "Feishu webhook request received client=%s user_agent=%s content_type=%s",
-            request.client.host if request.client else "unknown",
-            request.headers.get("user-agent", ""),
-            request.headers.get("content-type", ""),
+    @app.get("/api/pending-actions", response_model=PendingActionListResponse)
+    def list_pending_actions(
+        request: Request, user_id: str | None = None, status: str | None = None
+    ) -> PendingActionListResponse:
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Pending actions list requested for user=%s status=%s", resolved_user, status)
+        actions = service.list_pending_actions(resolved_user, status)
+        return PendingActionListResponse(items=[
+            PendingActionResponse(
+                id=a.id,
+                user_id=a.user_id,
+                action_type=a.action_type,
+                target_id=a.target_id,
+                title=a.title,
+                description=a.description,
+                status=a.status,
+                created_at=a.created_at.isoformat(),
+                expires_at=a.expires_at.isoformat(),
+                resolved_at=a.resolved_at.isoformat() if a.resolved_at else None,
+                audit_log=[e.model_dump(mode="json") for e in a.audit_log],
+            )
+            for a in actions
+        ])
+
+    @app.post("/api/pending-actions/{action_id}/confirm", response_model=PendingActionResponse)
+    def confirm_pending_action(
+        action_id: str, body: ConfirmPendingActionRequest, http_request: Request
+    ) -> PendingActionResponse:
+        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
+        logger.info("Confirm pending action id=%s user=%s", action_id, resolved_user)
+        action = service.confirm_pending_action(action_id, body.token, resolved_user)
+        if action is None:
+            raise HTTPException(status_code=404, detail="Pending action not found, invalid token, expired, or already processed.")
+        return PendingActionResponse(
+            id=action.id,
+            user_id=action.user_id,
+            action_type=action.action_type,
+            target_id=action.target_id,
+            title=action.title,
+            description=action.description,
+            status=action.status,
+            created_at=action.created_at.isoformat(),
+            expires_at=action.expires_at.isoformat(),
+            resolved_at=action.resolved_at.isoformat() if action.resolved_at else None,
+            audit_log=[e.model_dump(mode="json") for e in action.audit_log],
         )
-        try:
-            payload = await request.json()
-        except Exception as exc:
-            logger.warning("Feishu webhook request contains invalid JSON")
-            raise HTTPException(status_code=400, detail="Invalid JSON payload.") from exc
 
-        try:
-            result = feishu_service.parse_webhook(payload, dict(request.headers))
-        except PermissionError as exc:
-            logger.warning("Feishu webhook rejected: %s", exc)
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            logger.exception("Feishu webhook failed before enqueue")
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-        if result.incoming_message is not None:
-            incoming_message = result.incoming_message
-
-            def _process_feishu_message() -> None:
-                try:
-                    feishu_service.process_incoming_message(incoming_message)
-                except Exception:
-                    logger.exception(
-                        "Feishu background processing failed event_id=%s message_id=%s",
-                        incoming_message.event_id,
-                        incoming_message.message_id,
-                    )
-
-            background_tasks.add_task(_process_feishu_message)
-
-        return result.body
+    @app.post("/api/pending-actions/{action_id}/reject", response_model=PendingActionResponse)
+    def reject_pending_action(
+        action_id: str, body: RejectPendingActionRequest, http_request: Request
+    ) -> PendingActionResponse:
+        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
+        logger.info("Reject pending action id=%s user=%s reason=%s", action_id, resolved_user, body.reason)
+        action = service.reject_pending_action(action_id, resolved_user, body.reason)
+        if action is None:
+            raise HTTPException(status_code=404, detail="Pending action not found, already processed, or expired.")
+        return PendingActionResponse(
+            id=action.id,
+            user_id=action.user_id,
+            action_type=action.action_type,
+            target_id=action.target_id,
+            title=action.title,
+            description=action.description,
+            status=action.status,
+            created_at=action.created_at.isoformat(),
+            expires_at=action.expires_at.isoformat(),
+            resolved_at=action.resolved_at.isoformat() if action.resolved_at else None,
+            audit_log=[e.model_dump(mode="json") for e in action.audit_log],
+        )
 
     frontend_dist = _frontend_dist_dir()
     assets_dir = frontend_dist / "assets"

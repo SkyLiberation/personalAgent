@@ -11,16 +11,18 @@ from pydantic import BaseModel, Field
 
 from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
-from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, EntryIntent, KnowledgeNote, RawIngestItem, ReviewCard
+from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, EntryIntent, KnowledgeNote, PendingAction, RawIngestItem, ReviewCard
 from ..graphiti.store import GraphAskResult, GraphCaptureResult, GraphCitationHit, GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
 from ..memory import MemoryFacade
 from ..storage.memory_store import LocalMemoryStore
-from ..tools import CaptureUploadTool, CaptureUrlTool, GraphSearchTool, ToolRegistry
+from ..storage.pending_action_store import PendingActionStore
+from ..tools import CaptureTextTool, CaptureUploadTool, CaptureUrlTool, DeleteNoteTool, GraphSearchTool, ToolRegistry
 from .entry_nodes import (
     EntryNodeDeps,
     ask_entry_branch_node,
     capture_entry_branch_node,
+    direct_answer_entry_branch_node,
     route_entry_intent_node,
     summarize_entry_branch_node,
     unknown_entry_branch_node,
@@ -31,7 +33,7 @@ from .plan_executor import PlanExecutor, ProgressCallback
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
 from .replanner import Replanner
-from .router import DefaultIntentRouter
+from .router import DefaultIntentRouter, RouterDecision
 from .verifier import AnswerVerifier, VerificationResult
 
 if TYPE_CHECKING:
@@ -94,11 +96,13 @@ class AgentRuntime:
         graph_store: GraphitiStore,
         ask_history_store: AskHistoryStore,
         capture_service: "CaptureService | None" = None,
+        pending_action_store: PendingActionStore | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.graph_store = graph_store
         self.ask_history_store = ask_history_store
+        self.pending_action_store = pending_action_store or PendingActionStore(settings.data_dir)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._planner = DefaultTaskPlanner(settings)
@@ -116,6 +120,8 @@ class AgentRuntime:
                 CaptureUploadTool(self.capture_service, self.settings.data_dir / "uploads")
             )
         self._tool_registry.register(GraphSearchTool(self.graph_store))
+        self._tool_registry.register(CaptureTextTool(self))
+        self._tool_registry.register(DeleteNoteTool(self.store, self.graph_store, self.pending_action_store))
 
     def list_tools(self) -> list:
         return self._tool_registry.list_tools()
@@ -280,9 +286,34 @@ class AgentRuntime:
         self.memory.working.set_goal(f"入口任务[{decision.route}]: {entry_input.text[:60]}")
         steps = self._planner.plan(decision.route, entry_input.text)
         validation = self._plan_validator.validate(steps, decision)
-        if not validation.valid:
-            logger.warning("Plan validation found %d issues: %s", len(validation.issues), validation.issues)
-        validated_steps = validation.corrected_steps or steps
+        if validation.blocking:
+            logger.warning(
+                "Plan validation blocked: %d issues, %d warnings. Issues: %s",
+                len(validation.issues), len(validation.warnings), validation.issues,
+            )
+            if validation.corrected_steps:
+                validated_steps = validation.corrected_steps
+            else:
+                # Fall back to heuristic planner for a known-safe plan
+                logger.info("Replanning with heuristic due to validation blocking issues")
+                validated_steps = self._planner.fallback_plan(decision.route)
+                revalidation = self._plan_validator.validate(validated_steps, decision)
+                if revalidation.blocking:
+                    logger.error("Heuristic plan also blocked: %s. Falling back to direct_answer.", revalidation.issues)
+                    decision = RouterDecision(
+                        route="unknown",
+                        confidence=0.1,
+                        risk_level="low",
+                        user_visible_message=f"计划校验失败: {'; '.join(revalidation.issues[:3])}",
+                    )
+                    validated_steps = self._planner.fallback_plan("unknown")
+        else:
+            validated_steps = validation.corrected_steps or steps
+            if not validation.ok:
+                logger.warning(
+                    "Plan validation found %d non-blocking issues: %s",
+                    len(validation.issues), validation.issues,
+                )
         self.memory.working.plan_steps = [
             {
                 "step_id": s.step_id, "action_type": s.action_type,
@@ -339,13 +370,19 @@ class AgentRuntime:
                 plan_steps=self.memory.working.plan_steps,
             )
 
-        # Existing graph path for capture/ask/summarize/unknown
+        # Existing graph path for capture/ask/summarize/direct_answer/unknown
         entry_node_deps = EntryNodeDeps(
             classify_intent=self._intent_router.classify,
             capture=self.execute_capture,
             ask=self.execute_ask,
             capture_service=self.capture_service,
             summarize_thread=self._summarize_thread,
+            llm_configured=bool(
+                self.settings.openai_api_key
+                and self.settings.openai_base_url
+                and self.settings.openai_small_model
+            ),
+            settings=self.settings,
         )
         graph = build_entry_graph(
             lambda state: route_entry_intent_node(state, entry_node_deps),
@@ -353,6 +390,7 @@ class AgentRuntime:
             lambda state: ask_entry_branch_node(state, entry_node_deps),
             lambda state: summarize_entry_branch_node(state, entry_node_deps),
             unknown_entry_branch_node,
+            direct_answer_branch_node=lambda state: direct_answer_entry_branch_node(state, entry_node_deps),
         )
         state = AgentState(
             mode="entry",
@@ -709,6 +747,32 @@ class AgentRuntime:
             return self.ask_history_store.list_history(normalized_user, limit, normalized_session)
         local_records = self.store.list_conversation_turns(normalized_user, normalized_session or "default", limit)
         return [AskHistoryRecord.model_validate(item) for item in reversed(local_records)]
+
+    def list_pending_actions(
+        self, user_id: str | None = None, status: str | None = None
+    ) -> list[PendingAction]:
+        return self.pending_action_store.list_by_user(user_id or self.settings.default_user, status)
+
+    def confirm_pending_action(self, action_id: str, token: str, user_id: str | None = None) -> PendingAction | None:
+        normalized_user = user_id or self.settings.default_user
+        action = self.pending_action_store.confirm(action_id, token, normalized_user)
+        if action is None:
+            return None
+        if action.action_type == "delete_note":
+            graph_episode_uuid = action.payload.get("graph_episode_uuid")
+            self.store.delete_note(action.target_id, normalized_user)
+            if self.graph_store.configured() and graph_episode_uuid:
+                try:
+                    self.graph_store.delete_episode(str(graph_episode_uuid))
+                except Exception:
+                    logger.exception("Graph episode deletion failed for pending action %s", action_id)
+            action = self.pending_action_store.mark_executed(action_id, normalized_user) or action
+        return action
+
+    def reject_pending_action(
+        self, action_id: str, user_id: str | None = None, reason: str = ""
+    ) -> PendingAction | None:
+        return self.pending_action_store.reject(action_id, user_id or self.settings.default_user, reason)
 
     def health(self) -> dict[str, object]:
         graph_status = self.graph_store.status()

@@ -9,9 +9,12 @@ from .base import BaseTool, ToolResult, ToolSpec
 logger = logging.getLogger(__name__)
 
 _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
+    "capture_text": "capture_text",
     "capture_link": "capture_url",
     "capture_file": "capture_upload",
     "ask": "graph_search",
+    "delete_knowledge": "delete_note",
+    "solidify_conversation": "capture_text",
 }
 
 

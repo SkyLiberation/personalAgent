@@ -1,4 +1,4 @@
-from .models import FeishuIncomingMessage, FeishuWebhookResult
+from .models import FeishuIncomingMessage
 from .service import FeishuService
 
-__all__ = ["FeishuIncomingMessage", "FeishuService", "FeishuWebhookResult"]
+__all__ = ["FeishuIncomingMessage", "FeishuService"]

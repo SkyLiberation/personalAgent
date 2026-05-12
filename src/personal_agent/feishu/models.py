@@ -14,9 +14,3 @@ class FeishuIncomingMessage(BaseModel):
     message_type: str = "text"
     text: str = ""
     metadata: dict[str, str] = Field(default_factory=dict)
-
-
-class FeishuWebhookResult(BaseModel):
-    body: dict[str, object] = Field(default_factory=lambda: {"code": 0, "msg": "ok"})
-    incoming_message: FeishuIncomingMessage | None = None
-    reply_text: str | None = None

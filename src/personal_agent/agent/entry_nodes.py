@@ -11,6 +11,7 @@ from ..core.models import AgentState, EntryInput, EntryIntent
 
 if TYPE_CHECKING:
     from ..capture import CaptureService
+    from ..core.config import Settings
     from .router import RouterDecision
     from .service import AskResult, CaptureResult
 
@@ -24,6 +25,8 @@ class EntryNodeDeps:
     ask: Callable[..., "AskResult"]
     capture_service: "CaptureService | None" = None
     summarize_thread: Callable[[str, str], str] | None = None
+    llm_configured: bool = False
+    settings: "Settings | None" = None
 
 
 def route_entry_intent_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
@@ -153,6 +156,43 @@ def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = 
     return state
 
 
+def direct_answer_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = None) -> AgentState:
+    """Handle direct_answer intent — low-risk, no retrieval, no tools.
+
+    For simple questions, greetings, clarifications that don't need the knowledge
+    base. Uses the LLM directly without RAG/graph flow.
+    """
+    entry_input = state.entry_input
+    if entry_input is None or not entry_input.text.strip():
+        state.answer = "你好，有什么可以帮你的？"
+        return state
+    logger.debug("Executing direct_answer branch user=%s", state.user_id)
+    if deps is not None and deps.llm_configured and deps.settings is not None:
+        from openai import OpenAI
+        try:
+            client = OpenAI(
+                api_key=deps.settings.openai_api_key,
+                base_url=deps.settings.openai_base_url,
+            )
+            response = client.chat.completions.create(
+                model=deps.settings.openai_small_model,
+                messages=[
+                    {"role": "system", "content": "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"},
+                    {"role": "user", "content": entry_input.text},
+                ],
+                temperature=0.5,
+                max_tokens=300,
+            )
+            generated = (response.choices[0].message.content or "").strip()
+            if generated:
+                state.answer = generated
+                return state
+        except Exception:
+            logger.exception("Direct answer LLM call failed")
+    state.answer = _simple_direct_answer(entry_input.text)
+    return state
+
+
 def unknown_entry_branch_node(state: AgentState) -> AgentState:
     logger.info("Unknown intent branch user=%s intent=%s", state.user_id, state.intent)
     state.answer = "我暂时没判断出你的意图。你可以直接发要记录的内容、要收录的链接，或明确提一个问题。"
@@ -172,6 +212,10 @@ def heuristic_entry_intent(text: str) -> tuple[EntryIntent, str]:
     delete_keywords = ("删除", "删掉", "移除", "去掉", "清除", "别再保留", "不要保留")
     knowledge_context = ("笔记", "知识", "记录", "那条", "这条", "那个", "结论", "卡片", "内容")
     solidify_keywords = ("记下来", "记录下来", "沉淀成", "固化成", "收录结论", "收进知识", "沉淀下来", "固化下来")
+    direct_answer_keywords = ("你好", "谢谢", "再见", "嗨", "hello", "hi", "hey", "哈哈", "好的", "嗯", "哦")
+
+    if any(keyword in stripped for keyword in direct_answer_keywords) and len(stripped) < 20:
+        return "direct_answer", "简短问候或社交表达，直接回复即可。"
 
     if any(keyword in stripped for keyword in summarize_keywords) and any(
         keyword in stripped for keyword in thread_keywords
@@ -202,3 +246,18 @@ def first_url(text: str) -> str | None:
     if match is None:
         return None
     return match.group(0).rstrip(".,);]}>\"'")
+
+
+def _simple_direct_answer(text: str) -> str:
+    """Generate a simple reply without LLM, for when LLM is unavailable."""
+    lower = text.strip().lower()
+    greetings = {"你好", "hello", "hi", "嗨", "hey", "晚上好", "早上好", "下午好"}
+    thanks = {"谢谢", "感谢", "thanks", "thank"}
+    goodbye = {"再见", "bye", "拜拜", "晚安"}
+    if any(g in lower for g in greetings):
+        return "你好！有什么可以帮你的？"
+    if any(g in lower for g in thanks):
+        return "不客气，还有其他需要吗？"
+    if any(g in lower for g in goodbye):
+        return "再见，祝你好运！"
+    return "收到，还有其他需要吗？"

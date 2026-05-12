@@ -34,7 +34,7 @@ cp .env.example .env
 PERSONAL_AGENT_GRAPHITI_ENABLED=false
 ```
 
-这样飞书和 Web 问答都会自动走非图谱降级链路，不会因为 `localhost:7687` 不可用而长时间重试。
+这样 Web 问答会自动走非图谱降级链路，不会因为 `localhost:7687` 不可用而长时间重试。
 
 ## 4. 启动 Neo4j
 
@@ -81,7 +81,7 @@ uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
 
 ## 6.1 飞书接入注意事项
 
-当前项目默认推荐使用飞书官方 Python SDK 的“长连接接收事件”模式。
+当前项目使用飞书官方 Python SDK 的”长连接接收事件”模式。
 
 ### 推荐配置
 
@@ -106,7 +106,7 @@ uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
 
 ### 长连接模式的特点
 
-- 本地开发不需要配置公网 webhook 地址
+- 本地开发不需要配置公网地址
 - 不需要 `ngrok / frp / Cloudflare Tunnel`
 - 正常情况下，`log/run.log` 中会出现：
   - `Feishu long connection startup requested`
@@ -114,17 +114,6 @@ uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
   - `connected to wss://...`
   - `Feishu long connection event accepted`
   - `Feishu reply sent`
-
-### 什么时候还会用到 webhook
-
-当前仓库仍保留：
-
-```text
-POST /api/integrations/feishu/webhook
-```
-
-它只在你把飞书后台改成“将事件发送至开发者服务器”时才需要使用。  
-如果后续切换回 webhook 模式，才需要公网 `https` 地址。
 
 ## 7. 启动前端
 

@@ -281,35 +281,80 @@
 - `capture_url` — 入参：`url` (string)
 - `capture_upload` — 入参：`file_path` (string), `filename` (string), `content_type` (string, 可选)
 - `graph_search` — 入参：`question` (string), `user_id` (string, 可选, 默认 "default")
+- `capture_text` — 入参：`text` (string), `user_id` (string, 可选, 默认 "default")
+- `delete_note` — 入参：`note_id` (string), `user_id` (string, 可选), `confirmed` (bool), `action_id` (string, 确认时提供), `token` (string, 确认时提供)
 
 ---
 
-## `POST /api/integrations/feishu/webhook`
+## `GET /api/pending-actions`
 
-用于接收飞书 HTTP 事件订阅回调。
+返回指定用户的待处理操作列表（HITL 确认队列）。
+
+查询参数：
+
+- `user_id`
+- `status`（可选：`pending` / `confirmed` / `rejected` / `expired` / `executed`）
+
+示例响应：
+
+```json
+{
+  "items": [
+    {
+      "id": "f3a2b1c4-...",
+      "user_id": "default",
+      "action_type": "delete_note",
+      "target_id": "76ac8451-...",
+      "title": "删除笔记「过时的会议记录」",
+      "description": "将删除笔记「过时的会议记录」及其关联的复习卡片。",
+      "status": "pending",
+      "created_at": "2026-05-12T10:30:00",
+      "expires_at": "2026-05-12T11:30:00",
+      "resolved_at": null,
+      "audit_log": [
+        {"timestamp": "...", "event": "created", "actor": "system", "detail": "..."}
+      ]
+    }
+  ]
+}
+```
+
+## `POST /api/pending-actions/{action_id}/confirm`
+
+确认执行某个待处理操作。
+
+请求体：
+
+```json
+{
+  "token": "a1b2c3d4",
+  "user_id": "default"
+}
+```
 
 说明：
 
-- 当前项目默认推荐使用“长连接接收事件”，因此这个接口主要作为 webhook 模式兼容入口保留
-- `url_verification` 会直接原样返回 `challenge`
-- 文本消息会先进入统一入口路由 graph，再分流到 `capture` 或 `ask`
-- 当前已支持：
-  - 文本记录路由到 `capture_text`
-  - 含链接消息路由到 `capture_link`
-  - 普通问题路由到 `ask`
-- `file` 消息会先识别成 `capture_file`，但文件下载与正文提取还没有接上
-- 群聊总结意图会先识别成 `summarize_thread`，但消息回溯还未实现
+- 需要提供正确的 `token`（由创建 pending action 时返回）
+- 过期或已处理的 action 会返回 404
 
-部署时需要配合环境变量：
+## `POST /api/pending-actions/{action_id}/reject`
 
-- `PERSONAL_AGENT_FEISHU_ENABLED`
-- `FEISHU_VERIFICATION_TOKEN`
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
+拒绝某个待处理操作。
+
+请求体：
+
+```json
+{
+  "user_id": "default",
+  "reason": "这不是我要删除的笔记"
+}
+```
+
+---
 
 ## 飞书长连接
 
-当前默认飞书接入方式不是 HTTP webhook，而是飞书官方 SDK 长连接。
+当前飞书接入方式使用飞书官方 SDK 长连接（非 HTTP webhook）。
 
 行为说明：
 

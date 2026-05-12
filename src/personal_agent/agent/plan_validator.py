@@ -18,9 +18,8 @@ KNOWN_TOOLS = {
     "graph_search",
     "capture_url",
     "capture_text",
-    "capture_file",
+    "capture_upload",
     "delete_note",
-    "ask_knowledge",
 }
 
 
@@ -35,6 +34,11 @@ class PlanValidationResult:
     @property
     def ok(self) -> bool:
         return len(self.issues) == 0
+
+    @property
+    def blocking(self) -> bool:
+        """True if there are blocking (critical) issues that prevent safe execution."""
+        return not self.ok or self.replanned
 
 
 def _clone_step(s: PlanStep) -> PlanStep:

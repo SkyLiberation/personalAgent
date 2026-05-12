@@ -20,7 +20,7 @@ from lark_oapi.api.im.v1 import (
 from ..agent.service import AgentService
 from ..core.config import Settings
 from ..core.models import EntryInput
-from .models import FeishuIncomingMessage, FeishuWebhookResult
+from .models import FeishuIncomingMessage
 
 logger = logging.getLogger(__name__)
 
@@ -36,49 +36,6 @@ class FeishuService:
         self._ws_lock = threading.Lock()
         self._processed_event_ids: dict[str, float] = {}
         self._processed_lock = threading.Lock()
-
-    def handle_webhook(self, payload: dict[str, object], headers: dict[str, str] | None = None) -> FeishuWebhookResult:
-        headers = headers or {}
-        self._verify_request(payload, headers)
-
-        event_type = str(payload.get("type") or "")
-        if event_type == "url_verification":
-            challenge = str(payload.get("challenge") or "")
-            logger.info("Feishu url verification received")
-            return FeishuWebhookResult(body={"challenge": challenge})
-
-        incoming_message = self._normalize_message(payload)
-        if incoming_message is None:
-            logger.info("Feishu webhook ignored because message payload is empty")
-            return FeishuWebhookResult()
-
-        self.process_incoming_message(incoming_message)
-        return FeishuWebhookResult(incoming_message=incoming_message)
-
-    def parse_webhook(self, payload: dict[str, object], headers: dict[str, str] | None = None) -> FeishuWebhookResult:
-        headers = headers or {}
-        self._verify_request(payload, headers)
-
-        event_type = str(payload.get("type") or "")
-        if event_type == "url_verification":
-            challenge = str(payload.get("challenge") or "")
-            logger.info("Feishu url verification received")
-            return FeishuWebhookResult(body={"challenge": challenge})
-
-        incoming_message = self._normalize_message(payload)
-        if incoming_message is None:
-            logger.info("Feishu webhook ignored because message payload is empty")
-            return FeishuWebhookResult()
-
-        logger.info(
-            "Feishu webhook accepted event_id=%s event_type=%s message_id=%s message_type=%s chat_id=%s",
-            incoming_message.event_id,
-            incoming_message.event_type,
-            incoming_message.message_id,
-            incoming_message.message_type,
-            incoming_message.chat_id,
-        )
-        return FeishuWebhookResult(incoming_message=incoming_message)
 
     def process_incoming_message(self, incoming_message: FeishuIncomingMessage) -> str:
         logger.info(
@@ -287,70 +244,6 @@ class FeishuService:
 
             self._processed_event_ids[event_id] = now
             return False
-
-    def _verify_request(self, payload: dict[str, object], headers: dict[str, str]) -> None:
-        if not self.settings.feishu_enabled:
-            raise PermissionError("Feishu integration is not enabled.")
-        expected_token = self.settings.feishu_verification_token
-        if not expected_token:
-            return
-
-        actual_token = str(
-            payload.get("token")
-            or _as_dict(payload.get("header")).get("token")
-            or headers.get("X-Lark-Token")
-            or headers.get("x-lark-token")
-            or ""
-        )
-        if actual_token != expected_token:
-            raise PermissionError("Invalid Feishu verification token.")
-
-    def _normalize_message(self, payload: dict[str, object]) -> FeishuIncomingMessage | None:
-        header = _as_dict(payload.get("header"))
-        event = _as_dict(payload.get("event"))
-        sender = _as_dict(event.get("sender"))
-        sender_id = _as_dict(sender.get("sender_id"))
-        message = _as_dict(event.get("message"))
-        if not message:
-            return None
-
-        message_type = str(message.get("message_type") or "text")
-        content = _safe_json_loads(str(message.get("content") or "{}"))
-        metadata: dict[str, str] = {}
-        text = ""
-
-        if message_type == "text":
-            text = str(content.get("text") or "").strip()
-        elif message_type == "file":
-            metadata["file_key"] = str(content.get("file_key") or "")
-            text = str(content.get("file_name") or "飞书文件").strip()
-        elif message_type == "post":
-            text = _extract_post_text(content)
-        else:
-            text = str(content.get("text") or message_type).strip()
-
-        chat_id = str(message.get("chat_id") or "")
-        open_id = str(sender_id.get("open_id") or "")
-        sender_user_id = str(sender_id.get("user_id") or "")
-        session_id = chat_id or open_id or "default"
-        user_id = self._resolve_user_id(open_id, sender_user_id)
-        metadata["chat_id"] = chat_id
-        metadata["open_id"] = open_id
-        if sender_user_id:
-            metadata["feishu_user_id"] = sender_user_id
-
-        return FeishuIncomingMessage(
-            event_id=str(header.get("event_id") or ""),
-            event_type=str(header.get("event_type") or ""),
-            chat_id=chat_id or None,
-            open_id=open_id or None,
-            user_id=user_id,
-            session_id=session_id,
-            message_id=str(message.get("message_id") or ""),
-            message_type=message_type,
-            text=text,
-            metadata=metadata,
-        )
 
     def _reply_to_message(self, incoming_message: FeishuIncomingMessage, reply_text: str) -> None:
         if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):

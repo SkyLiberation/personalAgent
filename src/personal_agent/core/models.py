@@ -18,6 +18,7 @@ EntryIntent = Literal[
     "capture_text", "capture_link", "capture_file",
     "ask", "summarize_thread",
     "delete_knowledge", "solidify_conversation",
+    "direct_answer",
     "unknown",
 ]
 
@@ -91,3 +92,30 @@ class AgentState(BaseModel):
     review_card: ReviewCard | None = None
     answer: str | None = None
     citations: list[Citation] = Field(default_factory=list)
+
+
+class AuditEvent(BaseModel):
+    """A single audit trail entry for HITL operations."""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    event: str  # created, confirmed, rejected, expired, retried
+    actor: str = "system"
+    detail: str = ""
+
+
+class PendingAction(BaseModel):
+    """Human-in-the-loop pending action with confirmation token and expiry."""
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    user_id: str = "default"
+    action_type: str  # delete_note, solidify, etc.
+    target_id: str  # note_id or similar
+    title: str  # user-visible label
+    description: str  # what will happen
+    payload: dict[str, object] = Field(default_factory=dict)  # data needed to execute
+    token: str = Field(default_factory=lambda: uuid4().hex[:8])  # short confirmation token
+    status: Literal["pending", "confirmed", "rejected", "expired", "executed"] = "pending"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime = Field(
+        default_factory=lambda: datetime.utcnow() + timedelta(hours=1)
+    )
+    resolved_at: datetime | None = None
+    audit_log: list[AuditEvent] = Field(default_factory=list)

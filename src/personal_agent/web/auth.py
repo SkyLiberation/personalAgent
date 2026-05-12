@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-_PUBLIC_PATHS = {"/api/health", "/api/integrations/feishu/webhook"}
+_PUBLIC_PATHS = {"/api/health"}
 
 
 class RateLimiter:
@@ -44,7 +44,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     Reads Authorization: Bearer <key> or X-API-Key: <key>.
     Sets request.state.user_id on success.
-    Public paths (/api/health, feishu webhook) are exempt.
+    Public paths (/api/health) are exempt.
     """
 
     def __init__(

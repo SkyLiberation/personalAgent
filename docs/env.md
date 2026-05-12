@@ -17,7 +17,6 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 PERSONAL_AGENT_FEISHU_ENABLED=false
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
-FEISHU_VERIFICATION_TOKEN=xxx
 FEISHU_BASE_URL=https://open.feishu.cn
 ```
 
@@ -36,7 +35,6 @@ FEISHU_BASE_URL=https://open.feishu.cn
 - `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 用于：
   - 建立飞书长连接事件监听
   - 把 Agent 的处理结果回发到飞书会话
-- `FEISHU_VERIFICATION_TOKEN` 仅在使用 HTTP webhook 模式时用于校验事件订阅请求
 - `FEISHU_BASE_URL` 默认使用 `https://open.feishu.cn`
 
 当前项目默认推荐使用“长连接接收事件”模式，因此通常只要配置：

@@ -126,6 +126,18 @@ class GraphitiStore:
             logger.exception("Graphiti group reset failed for user %s", user_id)
             return 0
 
+    def delete_episode(self, episode_uuid: str) -> bool:
+        """Delete a single episode from the graph by its UUID."""
+        if not self.configured():
+            return False
+        if not self._neo4j_reachable():
+            return False
+        try:
+            return asyncio.run(self._delete_episode(episode_uuid))
+        except Exception:
+            logger.exception("Graphiti episode deletion failed for episode %s", episode_uuid)
+            return False
+
     def _neo4j_reachable(self, timeout_seconds: float = 0.5) -> bool:
         uri = self.settings.graphiti_uri
         if not uri:
@@ -288,6 +300,15 @@ class GraphitiStore:
                     deleted_count += 1
             logger.info("Cleared graph group data user=%s group_id=%s deleted_episodes=%s", user_id, group_id, deleted_count)
             return deleted_count
+        finally:
+            await graphiti.close()
+
+    async def _delete_episode(self, episode_uuid: str) -> bool:
+        graphiti = await self._build_client()
+        try:
+            await graphiti.remove_episode(episode_uuid)
+            logger.info("Deleted graph episode episode_uuid=%s", episode_uuid)
+            return True
         finally:
             await graphiti.close()
 

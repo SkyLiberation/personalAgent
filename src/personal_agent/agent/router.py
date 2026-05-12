@@ -84,11 +84,49 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
             risk_level="low",
             user_visible_message=reason or "将对话结论沉淀为知识。",
         )
+    if intent == "direct_answer":
+        return RouterDecision(
+            route=intent,
+            confidence=0.85,
+            risk_level="low",
+            user_visible_message=reason or "直接回复，无需检索或工具。",
+        )
     return RouterDecision(
         route="unknown",
         confidence=0.3,
         risk_level="low",
         user_visible_message="无法确定意图，请重新描述。",
+    )
+
+
+_RECOGNIZED_INTENTS = {
+    "capture_text", "capture_link", "capture_file",
+    "ask", "summarize_thread",
+    "delete_knowledge", "solidify_conversation",
+    "direct_answer",
+    "unknown",
+}
+
+
+def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
+    """Merge LLM classification result with default decision to fill control fields.
+
+    The LLM returns intent/reason/risk_level/requires_confirmation/missing_information,
+    but does not populate requires_tools/requires_retrieval/requires_planning/candidate_tools.
+    This function merges LLM result with the defaults for the matched intent.
+    """
+    defaults = _default_router_decision(llm_result.route, llm_result.user_visible_message)
+    return RouterDecision(
+        route=llm_result.route,
+        confidence=llm_result.confidence,
+        requires_tools=defaults.requires_tools,
+        requires_retrieval=defaults.requires_retrieval,
+        requires_planning=defaults.requires_planning,
+        risk_level=llm_result.risk_level,
+        requires_confirmation=llm_result.requires_confirmation,
+        missing_information=llm_result.missing_information,
+        candidate_tools=defaults.candidate_tools,
+        user_visible_message=llm_result.user_visible_message,
     )
 
 
@@ -98,6 +136,10 @@ class DefaultIntentRouter:
     Uses the small model for fast, low-cost classification.
     Falls back to heuristic rules when the LLM is unavailable or returns
     an unrecognised intent.
+
+    LLM results are merged with _default_router_decision() to ensure
+    control fields (requires_tools, requires_retrieval, requires_planning,
+    candidate_tools) are always populated.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -109,7 +151,7 @@ class DefaultIntentRouter:
 
         llm_result = self._classify_with_llm(entry_input.text)
         if llm_result is not None:
-            return llm_result
+            return _merge_with_defaults(llm_result)
 
         intent, reason = heuristic_entry_intent(entry_input.text)
         return _default_router_decision(intent, reason)
@@ -122,8 +164,11 @@ class DefaultIntentRouter:
 
         prompt = (
             "你是一个入口路由分类器。"
-            "请把用户输入分类到以下意图之一：capture_text, capture_link, capture_file, ask, summarize_thread, delete_knowledge, solidify_conversation, unknown。"
-            "delete_knowledge 用于用户想删除过时或错误的知识笔记；solidify_conversation 用于用户想把对话结论沉淀为知识。"
+            "请把用户输入分类到以下意图之一：capture_text, capture_link, capture_file, ask, summarize_thread, delete_knowledge, solidify_conversation, direct_answer, unknown。"
+            "capture_text: 用户想记录文字内容。capture_link: 用户发来链接想收录。ask: 需要检索知识库才能回答的问题。"
+            "summarize_thread: 需要总结群聊/会话。delete_knowledge: 删除过时或错误的知识笔记。"
+            "solidify_conversation: 把对话结论沉淀为知识。"
+            "direct_answer: 闲聊、问候、感谢、澄清性问题、无需检索的简单说明或常识性问题。"
             "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), missing_information(字符串数组, 可选)。"
             "risk_level: 删除类操作应为 high，一般操作为 low。"
             "requires_confirmation: 删除操作应为 true。\n\n"
@@ -147,13 +192,7 @@ class DefaultIntentRouter:
             content = (response.choices[0].message.content or "").strip()
             payload = json.loads(content)
             intent = payload.get("intent", "unknown")
-            valid_intents = {
-                "capture_text", "capture_link", "capture_file",
-                "ask", "summarize_thread",
-                "delete_knowledge", "solidify_conversation",
-                "unknown",
-            }
-            if intent not in valid_intents:
+            if intent not in _RECOGNIZED_INTENTS:
                 logger.warning("LLM returned unrecognised intent=%s, falling back to heuristic", intent)
                 return None
             reason = str(payload.get("reason") or "由模型完成意图分类。")

@@ -71,6 +71,39 @@ class LocalMemoryStore:
             updated.append(note)
         self._save_notes(updated)
 
+    def delete_note(self, note_id: str, user_id: str) -> KnowledgeNote | None:
+        """Delete a note by ID and user_id. Also removes associated reviews.
+        Returns the deleted note, or None if not found."""
+        notes = self._load_notes()
+        target: KnowledgeNote | None = None
+        kept_notes: list[KnowledgeNote] = []
+        for note in notes:
+            if note.id == note_id and note.user_id == user_id:
+                target = note
+            else:
+                kept_notes.append(note)
+        if target is None:
+            return None
+        self._save_notes(kept_notes)
+
+        # Remove associated reviews
+        reviews = self._load_reviews()
+        kept_reviews = [r for r in reviews if r.note_id != note_id]
+        self._save_reviews(kept_reviews)
+
+        # Remove uploaded file if it belongs to this note
+        uploads_dir = (self.data_dir / "uploads").resolve()
+        source_ref = target.source_ref
+        if source_ref:
+            try:
+                source_path = Path(source_ref).resolve()
+                if _is_relative_to(source_path, uploads_dir) and source_path.exists() and source_path.is_file():
+                    source_path.unlink()
+            except OSError:
+                pass
+
+        return target
+
     def add_review(self, review: ReviewCard) -> None:
         reviews = self._load_reviews()
         reviews.append(review)

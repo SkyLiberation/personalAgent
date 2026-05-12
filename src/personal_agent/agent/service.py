@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..core.config import Settings
-from ..core.models import AskHistoryRecord, EntryInput, KnowledgeNote
+from ..core.models import AskHistoryRecord, EntryInput, KnowledgeNote, PendingAction
 from ..graphiti.store import GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
 from ..storage.memory_store import LocalMemoryStore
@@ -102,3 +102,18 @@ class AgentService:
 
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self._runtime.sync_note_to_graph(note_id)
+
+    def list_pending_actions(
+        self, user_id: str | None = None, status: str | None = None
+    ) -> list[PendingAction]:
+        return self._runtime.list_pending_actions(user_id, status)
+
+    def confirm_pending_action(
+        self, action_id: str, token: str, user_id: str | None = None
+    ) -> PendingAction | None:
+        return self._runtime.confirm_pending_action(action_id, token, user_id)
+
+    def reject_pending_action(
+        self, action_id: str, user_id: str | None = None, reason: str = ""
+    ) -> PendingAction | None:
+        return self._runtime.reject_pending_action(action_id, user_id, reason)

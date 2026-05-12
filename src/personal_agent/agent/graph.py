@@ -38,6 +38,7 @@ def build_entry_graph(
     ask_branch_node: Callable[[AgentState], AgentState],
     summarize_branch_node: Callable[..., AgentState],
     unknown_branch_node: Callable[[AgentState], AgentState],
+    direct_answer_branch_node: Callable[..., AgentState] | None = None,
 ):
     graph = StateGraph(AgentState)
     graph.add_node("route", route_node)
@@ -45,8 +46,11 @@ def build_entry_graph(
     graph.add_node("ask_branch", ask_branch_node)
     graph.add_node("summarize_branch", summarize_branch_node)
     graph.add_node("unknown_branch", unknown_branch_node)
+    if direct_answer_branch_node is not None:
+        graph.add_node("direct_answer_branch", direct_answer_branch_node)
 
     graph.add_edge(START, "route")
+    direct_answer_target = "direct_answer_branch" if direct_answer_branch_node is not None else "unknown_branch"
     graph.add_conditional_edges(
         "route",
         lambda state: state.intent,
@@ -58,6 +62,7 @@ def build_entry_graph(
             "summarize_thread": "summarize_branch",
             "delete_knowledge": "unknown_branch",
             "solidify_conversation": "unknown_branch",
+            "direct_answer": direct_answer_target,
             "unknown": "unknown_branch",
         },
     )
@@ -65,4 +70,6 @@ def build_entry_graph(
     graph.add_edge("ask_branch", END)
     graph.add_edge("summarize_branch", END)
     graph.add_edge("unknown_branch", END)
+    if direct_answer_branch_node is not None:
+        graph.add_edge("direct_answer_branch", END)
     return graph.compile()
