@@ -681,6 +681,128 @@ button:disabled {
   gap: 4px;
 }
 
+.plan-panel {
+  margin-top: 10px;
+}
+
+.plan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid rgba(117, 231, 179, 0.25);
+  border-radius: 10px;
+  background: rgba(117, 231, 179, 0.08);
+  color: #b7f0d0;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.plan-toggle:hover {
+  background: rgba(117, 231, 179, 0.15);
+}
+
+.plan-toggle-icon {
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+
+.plan-steps-list {
+  margin: 8px 0 0;
+  padding: 0 0 0 20px;
+  list-style: decimal;
+  color: rgba(247, 241, 232, 0.74);
+  font-size: 0.84rem;
+  display: grid;
+  gap: 4px;
+}
+
+.plan-step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.plan-step-type {
+  color: #d7e4ff;
+  font-weight: 600;
+}
+
+.plan-step-tool {
+  color: rgba(247, 186, 118, 0.85);
+  font-size: 0.8rem;
+}
+
+.plan-step-desc {
+  flex: 1;
+  color: rgba(247, 241, 232, 0.8);
+}
+
+.plan-step-risk {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 107, 107, 0.15);
+  color: #ff8a8a;
+  font-size: 0.72rem;
+}
+
+.plan-step-confirm {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 173, 96, 0.15);
+  color: #ffb866;
+  font-size: 0.72rem;
+}
+
+.plan-step-warning {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 235, 59, 0.15);
+  color: #ffe259;
+  font-size: 0.72rem;
+  cursor: help;
+}
+
+.plan-step-status {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(247, 241, 232, 0.5);
+  font-size: 0.74rem;
+}
+
+.plan-step-status.status-running {
+  background: rgba(96, 165, 250, 0.15);
+  color: #93c5fd;
+}
+
+.plan-step-status.status-completed {
+  background: rgba(134, 239, 172, 0.12);
+  color: #86efac;
+}
+
+.plan-step-status.status-failed {
+  background: rgba(255, 107, 107, 0.15);
+  color: #ff8a8a;
+}
+
+.plan-step-status.status-skipped {
+  background: rgba(255, 173, 96, 0.1);
+  color: #ffb866;
+}
+
+.plan-step-retry {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.15);
+  color: rgba(251, 191, 36, 1);
+  margin-left: 4px;
+}
+
 .entity-pill {
   display: grid;
   gap: 4px;

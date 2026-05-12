@@ -56,6 +56,8 @@ def build_entry_graph(
             "capture_file": "capture_branch",
             "ask": "ask_branch",
             "summarize_thread": "summarize_branch",
+            "delete_knowledge": "unknown_branch",
+            "solidify_conversation": "unknown_branch",
             "unknown": "unknown_branch",
         },
     )

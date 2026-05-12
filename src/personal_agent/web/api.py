@@ -88,6 +88,7 @@ class EntryResponse(BaseModel):
     reply_text: str
     capture_result: dict | None = None
     ask_result: dict | None = None
+    plan_steps: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ResetUserDataRequest(BaseModel):
@@ -383,11 +384,31 @@ def create_app() -> FastAPI:
                 session_id=session_id,
                 source_platform="web",
             )
-            result = await asyncio.to_thread(service.entry, entry_input)
+
+            # Queue for plan execution progress events (sync -> async bridge)
+            progress_queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
+
+            def _on_progress(event: str, payload: dict[str, object]) -> None:
+                try:
+                    progress_queue.put_nowait((event, payload))
+                except asyncio.QueueFull:
+                    pass
+
+            result = await asyncio.to_thread(service.entry, entry_input, on_progress=_on_progress)
             yield _sse_event("intent", {
                 "intent": result.intent,
                 "reason": result.reason,
             })
+
+            if result.plan_steps:
+                yield _sse_event("plan_created", {
+                    "plan_steps": result.plan_steps,
+                })
+
+            # Drain any progress events emitted during plan execution
+            while not progress_queue.empty():
+                evt, payload = progress_queue.get_nowait()
+                yield _sse_event(evt, payload)
 
             if result.intent in ("capture_text", "capture_link", "capture_file"):
                 capture_data = result.capture_result.model_dump(mode="json") if result.capture_result else None
@@ -489,6 +510,7 @@ def create_app() -> FastAPI:
             "reply_text": result.reply_text,
             "capture_result": result.capture_result.model_dump(mode="json") if result.capture_result else None,
             "ask_result": result.ask_result.model_dump(mode="json") if result.ask_result else None,
+            "plan_steps": result.plan_steps,
         }
 
     @app.post("/api/entry", response_model=EntryResponse)
@@ -512,6 +534,7 @@ def create_app() -> FastAPI:
             reply_text=result.reply_text,
             capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
             ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
+            plan_steps=result.plan_steps,
         )
 
     @app.post("/api/debug/reset-user-data", response_model=ResetUserDataResponse)

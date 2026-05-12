@@ -81,8 +81,8 @@ class AgentService:
     def digest(self, user_id: str | None = None) -> DigestResult:
         return self._runtime.execute_digest(user_id=user_id)
 
-    def entry(self, entry_input: EntryInput) -> EntryResult:
-        return self._runtime.execute_entry(entry_input)
+    def entry(self, entry_input: EntryInput, on_progress = None) -> EntryResult:
+        return self._runtime.execute_entry(entry_input, on_progress=on_progress)
 
     def list_notes(self, user_id: str | None = None) -> list[KnowledgeNote]:
         return self._runtime.list_notes(user_id=user_id)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.agent.entry_nodes import heuristic_entry_intent
-from personal_agent.agent.router import DefaultIntentRouter
+from personal_agent.agent.router import DefaultIntentRouter, RouterDecision
 from personal_agent.core.models import EntryInput
 
 
@@ -61,18 +61,20 @@ class TestDefaultIntentRouter:
 
     def test_file_source_type_bypasses_llm(self, router):
         entry = EntryInput(source_type="file", text="any.pdf")
-        intent, _ = router.classify(entry)
-        assert intent == "capture_file"
+        decision = router.classify(entry)
+        assert decision.route == "capture_file"
+        assert decision.confidence == 0.9
+        assert decision.risk_level == "low"
 
     def test_empty_text_returns_unknown_without_llm(self, router):
         entry = EntryInput(source_type="text", text="")
-        intent, _ = router.classify(entry)
-        assert intent == "unknown"
+        decision = router.classify(entry)
+        assert decision.route == "unknown"
 
     def test_whitespace_only_text_returns_unknown(self, router):
         entry = EntryInput(source_type="text", text="   ")
-        intent, _ = router.classify(entry)
-        assert intent == "unknown"
+        decision = router.classify(entry)
+        assert decision.route == "unknown"
 
     def test_llm_not_configured_falls_back_to_heuristic(self):
         from personal_agent.core.config import Settings
@@ -81,5 +83,40 @@ class TestDefaultIntentRouter:
             Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
         )
         entry = EntryInput(source_type="text", text="什么是服务降级？")
-        intent, _ = router_no_llm.classify(entry)
-        assert intent == "ask"
+        decision = router_no_llm.classify(entry)
+        assert decision.route == "ask"
+        assert decision.requires_retrieval is True
+        assert decision.risk_level == "low"
+
+    def test_router_returns_structured_decision(self):
+        from personal_agent.core.config import Settings
+
+        router_no_llm = DefaultIntentRouter(
+            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+        )
+        entry = EntryInput(source_type="text", text="删除那条旧笔记")
+        decision = router_no_llm.classify(entry)
+        assert isinstance(decision, RouterDecision)
+        assert decision.route == "delete_knowledge"
+        assert decision.risk_level == "high"
+        assert decision.requires_confirmation is True
+        assert decision.requires_planning is True
+
+    def test_router_decision_has_all_fields(self):
+        from personal_agent.core.config import Settings
+
+        router_no_llm = DefaultIntentRouter(
+            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+        )
+        entry = EntryInput(source_type="text", text="记一下今天学习了LangGraph")
+        decision = router_no_llm.classify(entry)
+        assert hasattr(decision, "route")
+        assert hasattr(decision, "confidence")
+        assert hasattr(decision, "requires_tools")
+        assert hasattr(decision, "requires_retrieval")
+        assert hasattr(decision, "requires_planning")
+        assert hasattr(decision, "risk_level")
+        assert hasattr(decision, "requires_confirmation")
+        assert hasattr(decision, "missing_information")
+        assert hasattr(decision, "candidate_tools")
+        assert hasattr(decision, "user_visible_message")

@@ -255,10 +255,28 @@ export function askQuestion(question: string, userId = "default", sessionId = "d
   });
 }
 
+export type PlanStep = {
+  step_id: string;
+  action_type: string;
+  description: string;
+  tool_name?: string | null;
+  tool_input?: Record<string, unknown>;
+  depends_on?: string[];
+  expected_output?: string;
+  success_criteria?: string;
+  risk_level?: string;
+  requires_confirmation?: boolean;
+  on_failure?: string;
+  status: string;
+  retry_count?: number;
+  validation_warnings?: string[];
+};
+
 export type EntryResponse = {
   intent: string;
   reason: string;
   reply_text: string;
+  plan_steps?: PlanStep[];
   capture_result: {
     note: Note;
     related_notes: Note[];

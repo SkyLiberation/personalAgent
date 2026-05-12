@@ -27,7 +27,10 @@ from .entry_nodes import (
 )
 from .graph import build_ask_graph, build_capture_graph, build_entry_graph
 from .nodes import digest_node
+from .plan_executor import PlanExecutor, ProgressCallback
 from .planner import DefaultTaskPlanner
+from .plan_validator import PlanValidator
+from .replanner import Replanner
 from .router import DefaultIntentRouter
 from .verifier import AnswerVerifier, VerificationResult
 
@@ -64,6 +67,7 @@ class EntryResult(BaseModel):
     reply_text: str
     capture_result: CaptureResult | None = None
     ask_result: AskResult | None = None
+    plan_steps: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ResetResult(BaseModel):
@@ -102,6 +106,8 @@ class AgentRuntime:
         self._register_tools()
         self.memory = MemoryFacade(store, ask_history_store)
         self._verifier = AnswerVerifier()
+        self._plan_validator = PlanValidator()
+        self._replanner = Replanner(settings)
 
     def _register_tools(self) -> None:
         if self.capture_service is not None:
@@ -265,17 +271,75 @@ class AgentRuntime:
             due_reviews=self.store.due_reviews(normalized_user),
         )
 
-    def execute_entry(self, entry_input: EntryInput) -> EntryResult:
+    def execute_entry(self, entry_input: EntryInput, on_progress: ProgressCallback = None) -> EntryResult:
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
         self.memory.bind_session(normalized_user, normalized_session)
         self.memory.refresh_conversation_summary(normalized_user, normalized_session)
-        pre_intent, _pre_reason = self._intent_router.classify(entry_input)
-        self.memory.working.set_goal(f"入口任务[{pre_intent}]: {entry_input.text[:60]}")
+        decision = self._intent_router.classify(entry_input)
+        self.memory.working.set_goal(f"入口任务[{decision.route}]: {entry_input.text[:60]}")
+        steps = self._planner.plan(decision.route, entry_input.text)
+        validation = self._plan_validator.validate(steps, decision)
+        if not validation.valid:
+            logger.warning("Plan validation found %d issues: %s", len(validation.issues), validation.issues)
+        validated_steps = validation.corrected_steps or steps
         self.memory.working.plan_steps = [
-            {"step": s.step, "tool": s.tool, "params": s.params}
-            for s in self._planner.plan(pre_intent, entry_input.text)
+            {
+                "step_id": s.step_id, "action_type": s.action_type,
+                "description": s.description, "tool_name": s.tool_name,
+                "tool_input": s.tool_input, "depends_on": s.depends_on,
+                "expected_output": s.expected_output,
+                "success_criteria": s.success_criteria,
+                "risk_level": s.risk_level,
+                "requires_confirmation": s.requires_confirmation,
+                "on_failure": s.on_failure, "status": s.status,
+                "retry_count": s.retry_count,
+            }
+            for s in validated_steps
         ]
+        log_event(logger, logging.INFO, "entry.planned",
+            user_id=normalized_user, session_id=normalized_session,
+            route=decision.route, confidence=decision.confidence,
+            risk_level=decision.risk_level,
+            requires_confirmation=decision.requires_confirmation,
+            plan_step_count=len(self.memory.working.plan_steps),
+            plan_steps=self.memory.working.plan_steps,
+        )
+
+        if decision.requires_planning and validated_steps:
+            # Plan-driven execution: delete_knowledge, solidify_conversation
+            logger.info("Using PlanExecutor for intent=%s steps=%d", decision.route, len(validated_steps))
+            executor = PlanExecutor(self, self.memory, replanner=self._replanner)
+            state = AgentState(
+                mode="entry",
+                user_id=normalized_user,
+                entry_input=entry_input.model_copy(update={"user_id": normalized_user, "session_id": normalized_session}),
+            )
+            result = executor.execute(validated_steps, state, on_progress=on_progress)
+            reply_text = result.answer or "计划执行完成。"
+            # Update plan_steps with execution status
+            self.memory.working.plan_steps = [
+                {
+                    "step_id": s.step_id, "action_type": s.action_type,
+                    "description": s.description, "tool_name": s.tool_name,
+                    "tool_input": s.tool_input, "depends_on": s.depends_on,
+                    "expected_output": s.expected_output,
+                    "success_criteria": s.success_criteria,
+                    "risk_level": s.risk_level,
+                    "requires_confirmation": s.requires_confirmation,
+                    "on_failure": s.on_failure, "status": s.status,
+                    "retry_count": s.retry_count,
+                }
+                for s in validated_steps
+            ]
+            return EntryResult(
+                intent=decision.route,
+                reason=decision.user_visible_message,
+                reply_text=reply_text,
+                plan_steps=self.memory.working.plan_steps,
+            )
+
+        # Existing graph path for capture/ask/summarize/unknown
         entry_node_deps = EntryNodeDeps(
             classify_intent=self._intent_router.classify,
             capture=self.execute_capture,
@@ -322,6 +386,7 @@ class AgentRuntime:
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
+            plan_steps=self.memory.working.plan_steps,
         )
 
     def sync_note_to_graph(self, note_id: str) -> bool:

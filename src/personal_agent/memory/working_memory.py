@@ -70,6 +70,14 @@ class WorkingMemory:
                 parts.append(f"当前任务目标：{self.task_goal}")
             if self.conversation_summary:
                 parts.append(f"会话摘要：{self.conversation_summary}")
+            if self.plan_steps:
+                step_lines: list[str] = []
+                for i, s in enumerate(self.plan_steps, 1):
+                    tool = s.get("tool_name") or s.get("tool", "无")
+                    action = s.get("action_type") or s.get("step", "?")
+                    desc = s.get("description", "")
+                    step_lines.append(f"  {i}. [{action}] {desc}" + (f" tool={tool}" if tool else ""))
+                parts.append("当前任务计划：\n" + "\n".join(step_lines))
             steps = [item.content for item in list(self._steps)[-6:]]
             if steps:
                 parts.append("最近推理步骤：\n" + "\n".join(f"- {s}" for s in steps))

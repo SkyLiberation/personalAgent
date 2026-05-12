@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,12 +11,15 @@ from ..core.models import AgentState, EntryInput, EntryIntent
 
 if TYPE_CHECKING:
     from ..capture import CaptureService
+    from .router import RouterDecision
     from .service import AskResult, CaptureResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
 class EntryNodeDeps:
-    classify_intent: Callable[[EntryInput], tuple[EntryIntent, str]]
+    classify_intent: Callable[[EntryInput], "RouterDecision"]
     capture: Callable[..., "CaptureResult"]
     ask: Callable[..., "AskResult"]
     capture_service: "CaptureService | None" = None
@@ -27,9 +31,14 @@ def route_entry_intent_node(state: AgentState, deps: EntryNodeDeps) -> AgentStat
         state.intent = "unknown"
         state.intent_reason = "缺少入口输入。"
         return state
-    intent, reason = deps.classify_intent(state.entry_input)
-    state.intent = intent
-    state.intent_reason = reason
+    decision = deps.classify_intent(state.entry_input)
+    state.intent = decision.route
+    state.intent_reason = decision.user_visible_message
+    logger.debug(
+        "Entry routed intent=%s confidence=%.2f risk=%s confirm=%s user=%s",
+        decision.route, decision.confidence, decision.risk_level,
+        decision.requires_confirmation, state.user_id,
+    )
     return state
 
 
@@ -38,6 +47,7 @@ def capture_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentSt
     if entry_input is None:
         state.answer = "未收到可采集内容。"
         return state
+    logger.debug("Executing capture branch intent=%s user=%s", state.intent, state.user_id)
     if state.intent == "capture_file":
         file_path = entry_input.metadata.get("file_path", "")
         if file_path:
@@ -99,6 +109,7 @@ def ask_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
     if entry_input is None or not entry_input.text.strip():
         state.answer = "未收到可提问内容。"
         return state
+    logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
     result = deps.ask(entry_input.text, entry_input.user_id, entry_input.session_id)
     state.question = entry_input.text
     state.answer = result.answer
@@ -112,6 +123,7 @@ def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = 
     if entry_input is None:
         state.answer = "未收到可总结的内容。"
         return state
+    logger.debug("Executing summarize branch user=%s", state.user_id)
 
     thread_messages_raw = entry_input.metadata.get("thread_messages", "")
     if thread_messages_raw and deps is not None and deps.summarize_thread is not None:
@@ -142,6 +154,7 @@ def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = 
 
 
 def unknown_entry_branch_node(state: AgentState) -> AgentState:
+    logger.info("Unknown intent branch user=%s intent=%s", state.user_id, state.intent)
     state.answer = "我暂时没判断出你的意图。你可以直接发要记录的内容、要收录的链接，或明确提一个问题。"
     return state
 
@@ -156,11 +169,23 @@ def heuristic_entry_intent(text: str) -> tuple[EntryIntent, str]:
     thread_keywords = ("群聊", "会话", "线程", "讨论", "聊天记录")
     ask_keywords = ("什么", "为什么", "如何", "怎么", "吗", "？", "?", "请问", "帮我看看", "解释")
     capture_keywords = ("记一下", "记录", "收进", "保存", "沉淀", "备忘")
+    delete_keywords = ("删除", "删掉", "移除", "去掉", "清除", "别再保留", "不要保留")
+    knowledge_context = ("笔记", "知识", "记录", "那条", "这条", "那个", "结论", "卡片", "内容")
+    solidify_keywords = ("记下来", "记录下来", "沉淀成", "固化成", "收录结论", "收进知识", "沉淀下来", "固化下来")
 
     if any(keyword in stripped for keyword in summarize_keywords) and any(
         keyword in stripped for keyword in thread_keywords
     ):
         return "summarize_thread", "文本里同时出现了总结和会话类关键词。"
+
+    if any(keyword in stripped for keyword in delete_keywords) and any(
+        keyword in stripped for keyword in knowledge_context
+    ):
+        return "delete_knowledge", "文本里包含删除意图和相关知识上下文。"
+
+    if any(keyword in stripped for keyword in solidify_keywords):
+        return "solidify_conversation", "文本里包含沉淀或固化对话结论的表达。"
+
     if url:
         if any(keyword in stripped for keyword in ask_keywords):
             return "ask", "消息里有链接，但整体更像围绕链接发起提问。"

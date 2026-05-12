@@ -14,7 +14,12 @@ class RawIngestItem(BaseModel):
     user_id: str = "default"
 
 
-EntryIntent = Literal["capture_text", "capture_link", "capture_file", "ask", "summarize_thread", "unknown"]
+EntryIntent = Literal[
+    "capture_text", "capture_link", "capture_file",
+    "ask", "summarize_thread",
+    "delete_knowledge", "solidify_conversation",
+    "unknown",
+]
 
 
 class EntryInput(BaseModel):

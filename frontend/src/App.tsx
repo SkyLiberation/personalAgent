@@ -13,6 +13,7 @@ import {
   type Citation,
   type DigestResponse,
   type Note,
+  type PlanStep,
 } from "./api";
 
 function loadUserId(): string {
@@ -66,6 +67,7 @@ type TimelineEvent = {
 type AskHistoryView = AskHistoryItem & {
   status: "streaming" | "done" | "error";
   error?: string;
+  plan_steps?: PlanStep[];
 };
 
 type SessionSummary = {
@@ -104,6 +106,7 @@ export default function App() {
   const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey() || "");
   const [userId, setUserId] = useState(() => loadUserId());
   const [showSettings, setShowSettings] = useState(false);
+  const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -204,6 +207,55 @@ export default function App() {
       const payload = parseSsePayload<{ intent?: string; reason?: string }>(streamEvent);
       entryIntent = payload.intent ?? "";
       setStatus(payload.reason ?? "正在处理...");
+    });
+
+    source.addEventListener("plan_created", (streamEvent) => {
+      const payload = parseSsePayload<{ plan_steps?: PlanStep[] }>(streamEvent);
+      if (payload.plan_steps?.length) {
+        setAskHistory((current) =>
+          current.map((item) =>
+            item.id === historyItem.id
+              ? { ...item, plan_steps: payload.plan_steps }
+              : item
+          )
+        );
+      }
+    });
+
+    // Plan execution progress events
+    const updatePlanStepStatus = (stepId: string, newStatus: string) => {
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id && item.plan_steps
+            ? {
+                ...item,
+                plan_steps: item.plan_steps.map((ps) =>
+                  ps.step_id === stepId ? { ...ps, status: newStatus } : ps
+                ),
+              }
+            : item
+        )
+      );
+    };
+
+    source.addEventListener("plan_step_started", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
+      if (payload.step_id) updatePlanStepStatus(payload.step_id, "running");
+    });
+
+    source.addEventListener("plan_step_completed", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
+      if (payload.step_id) updatePlanStepStatus(payload.step_id, "completed");
+    });
+
+    source.addEventListener("plan_step_failed", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
+      if (payload.step_id) updatePlanStepStatus(payload.step_id, "failed");
+    });
+
+    source.addEventListener("plan_step_skipped", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
+      if (payload.step_id) updatePlanStepStatus(payload.step_id, "skipped");
     });
 
     source.addEventListener("capture_result", (streamEvent) => {
@@ -621,6 +673,50 @@ export default function App() {
                             {item.answer || "正在思考..."}
                           </p>
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
+                          {item.plan_steps?.length ? (
+                            <div className="plan-panel">
+                              <button
+                                type="button"
+                                className="plan-toggle"
+                                onClick={() =>
+                                  setExpandedPlans((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.id)) next.delete(item.id);
+                                    else next.add(item.id);
+                                    return next;
+                                  })
+                                }
+                              >
+                                Agent 计划执行 {item.plan_steps.length} 步
+                                <span className="plan-toggle-icon">
+                                  {expandedPlans.has(item.id) ? " ▾" : " ▸"}
+                                </span>
+                              </button>
+                              {expandedPlans.has(item.id) ? (
+                                <ol className="plan-steps-list">
+                                  {item.plan_steps.map((ps, idx) => {
+                                    const actionType = ps.action_type || (ps as Record<string, unknown>).step as string || "?";
+                                    const toolName = ps.tool_name ?? (ps as Record<string, unknown>).tool as string;
+                                    const riskLabel = translateRiskLevel(ps.risk_level ?? "low");
+                                    return (
+                                      <li key={ps.step_id || idx} className="plan-step-item">
+                                        <span className="plan-step-type">[{translatePlanStep(actionType)}]</span>
+                                        <span className="plan-step-desc">{ps.description || actionType}</span>
+                                        {toolName ? <span className="plan-step-tool">{toolName}</span> : null}
+                                        {riskLabel ? <span className="plan-step-risk">{riskLabel}</span> : null}
+                                        {ps.requires_confirmation ? <span className="plan-step-confirm">待确认</span> : null}
+                                        {ps.validation_warnings?.map((w, wi) => (
+                                          <span key={wi} className="plan-step-warning" title={w}>警告</span>
+                                        ))}
+                                        <span className={`plan-step-status status-${ps.status}`}>{ps.status}</span>
+                                        {ps.retry_count && ps.retry_count > 0 ? <span className="plan-step-retry" title={`重试了 ${ps.retry_count} 次`}>重试{ps.retry_count}</span> : null}
+                                      </li>
+                                    );
+                                  })}
+                                </ol>
+                              ) : null}
+                            </div>
+                          ) : null}
                           {item.citations?.length ? (
                             <div className="citation-list">
                               {item.citations.map((citation, index) => (
@@ -1078,6 +1174,24 @@ function formatDateTime(value: string): string {
 
 function parseSsePayload<T>(event: MessageEvent<string>): T {
   return JSON.parse(event.data) as T;
+}
+
+function translatePlanStep(actionType: string): string {
+  switch (actionType) {
+    case "retrieve": return "检索";
+    case "tool_call": return "调用工具";
+    case "compose": return "生成回答";
+    case "verify": return "校验";
+    default: return actionType;
+  }
+}
+
+function translateRiskLevel(risk: string): string {
+  switch (risk) {
+    case "high": return "高风险";
+    case "medium": return "中风险";
+    default: return "";
+  }
 }
 
 function translateAskStatus(status: AskHistoryView["status"]): string {
