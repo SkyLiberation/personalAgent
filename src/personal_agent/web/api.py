@@ -16,7 +16,7 @@ from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AskHistoryRecord, Citation, KnowledgeNote, ReviewCard
+from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -71,6 +71,23 @@ class UploadConflictResponse(BaseModel):
     filename: str
     exists: bool
     path: str
+
+
+class EntryRequest(BaseModel):
+    text: str = Field(min_length=1)
+    user_id: str = "default"
+    session_id: str = "default"
+    source_type: str = "text"
+    source_ref: str = ""
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class EntryResponse(BaseModel):
+    intent: str
+    reason: str
+    reply_text: str
+    capture_result: dict | None = None
+    ask_result: dict | None = None
 
 
 class ResetUserDataRequest(BaseModel):
@@ -345,6 +362,157 @@ def create_app() -> FastAPI:
             updated_note.graph_sync_status,
         )
         return GraphSyncResponse(note=updated_note, queued=False)
+
+    @app.get("/api/entry/stream")
+    async def entry_stream(
+        request: Request,
+        text: str = "",
+        user_id: str = "default",
+        session_id: str = "default",
+    ) -> StreamingResponse:
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Text is required.")
+
+        resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
+        logger.info("Entry stream requested for user=%s session=%s text=%s", resolved_user, session_id, text[:120])
+
+        async def event_generator():
+            entry_input = EntryInput(
+                text=text.strip(),
+                user_id=resolved_user,
+                session_id=session_id,
+                source_platform="web",
+            )
+            result = await asyncio.to_thread(service.entry, entry_input)
+            yield _sse_event("intent", {
+                "intent": result.intent,
+                "reason": result.reason,
+            })
+
+            if result.intent in ("capture_text", "capture_link", "capture_file"):
+                capture_data = result.capture_result.model_dump(mode="json") if result.capture_result else None
+                yield _sse_event("capture_result", {
+                    "note": capture_data.get("note") if capture_data else None,
+                    "reply": result.reply_text,
+                })
+                yield _sse_event("done", {"reply": result.reply_text})
+
+            elif result.intent == "ask":
+                ask_data = result.ask_result.model_dump(mode="json") if result.ask_result else {}
+                yield _sse_event("status", {"message": "正在检索你的个人记忆..."})
+                yield _sse_event("metadata", {
+                    "citations": ask_data.get("citations", []),
+                    "matches": ask_data.get("matches", []),
+                    "graph_enabled": ask_data.get("graph_enabled", False),
+                    "session_id": session_id,
+                })
+                answer_text = result.reply_text
+                built_answer = ""
+                for chunk in _chunk_answer(answer_text):
+                    built_answer += chunk
+                    yield _sse_event("answer_delta", {
+                        "delta": chunk,
+                        "answer": built_answer,
+                    })
+                    await asyncio.sleep(0.02)
+                yield _sse_event("done", {
+                    "answer": answer_text,
+                    "citations": ask_data.get("citations", []),
+                    "matches": ask_data.get("matches", []),
+                    "graph_enabled": ask_data.get("graph_enabled", False),
+                    "session_id": session_id,
+                })
+
+            else:
+                yield _sse_event("status", {"message": result.reason})
+                yield _sse_event("done", {"reply": result.reply_text})
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/entry/upload")
+    async def entry_upload(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        user_id: str = Form("default"),
+        session_id: str = Form("default"),
+        text: str = Form(""),
+    ) -> dict[str, object]:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Missing file name.")
+
+        resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
+        uploads_dir = settings.data_dir / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+
+        original_name = capture_service.normalize_upload_filename(file.filename)
+        stored_path = uploads_dir / original_name
+        file_bytes = file.file.read()
+        stored_path.write_bytes(file_bytes)
+
+        logger.info(
+            "Entry upload user=%s filename=%s size_bytes=%s",
+            resolved_user, original_name, len(file_bytes),
+        )
+
+        metadata: dict[str, str] = {
+            "file_path": str(stored_path),
+            "original_filename": original_name,
+        }
+        entry_text = text.strip() or original_name
+
+        entry_input = EntryInput(
+            text=entry_text,
+            user_id=resolved_user,
+            session_id=session_id,
+            source_platform="web",
+            source_type="file",
+            source_ref=str(stored_path),
+            metadata=metadata,
+        )
+        result = service.entry(entry_input)
+
+        if result.capture_result and result.capture_result.note and service.graph_store.configured():
+            background_tasks.add_task(service.sync_note_to_graph, result.capture_result.note.id)
+
+        return {
+            "intent": result.intent,
+            "reason": result.reason,
+            "reply_text": result.reply_text,
+            "capture_result": result.capture_result.model_dump(mode="json") if result.capture_result else None,
+            "ask_result": result.ask_result.model_dump(mode="json") if result.ask_result else None,
+        }
+
+    @app.post("/api/entry", response_model=EntryResponse)
+    def entry_sync(http_request: Request, body: EntryRequest) -> EntryResponse:
+        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
+        logger.info("Entry sync requested for user=%s session=%s", resolved_user, body.session_id)
+
+        entry_input = EntryInput(
+            text=body.text.strip(),
+            user_id=resolved_user,
+            session_id=body.session_id,
+            source_platform="web",
+            source_type=body.source_type,
+            source_ref=body.source_ref or None,
+            metadata=body.metadata,
+        )
+        result = service.entry(entry_input)
+        return EntryResponse(
+            intent=result.intent,
+            reason=result.reason,
+            reply_text=result.reply_text,
+            capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
+            ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
+        )
 
     @app.post("/api/debug/reset-user-data", response_model=ResetUserDataResponse)
     def reset_user_data(http_request: Request, body: ResetUserDataRequest) -> ResetUserDataResponse:

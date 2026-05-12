@@ -1,8 +1,6 @@
 import { FormEvent, type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
 import {
-  buildAskStreamUrl,
-  captureNote,
-  checkUploadConflict,
+  buildEntryStreamUrl,
   fetchAskHistory,
   fetchDigest,
   fetchNotes,
@@ -10,9 +8,8 @@ import {
   resetUserData,
   retryGraphSync,
   setApiKey,
-  uploadCapture,
+  uploadEntryFile,
   type AskHistoryItem,
-  type AskResponse,
   type Citation,
   type DigestResponse,
   type Note,
@@ -35,7 +32,6 @@ function saveUserId(id: string): void {
 }
 
 type TabId =
-  | "capture"
   | "ask"
   | "entity"
   | "relation"
@@ -81,7 +77,6 @@ type SessionSummary = {
 };
 
 const TABS: Array<{ id: TabId; label: string; kicker: string }> = [
-  { id: "capture", label: "采集", kicker: "录入" },
   { id: "ask", label: "对话", kicker: "问答" },
   { id: "entity", label: "Entity Graph", kicker: "图谱" },
   { id: "relation", label: "Relation Graph", kicker: "关系" },
@@ -93,9 +88,6 @@ const TABS: Array<{ id: TabId; label: string; kicker: string }> = [
 export default function App() {
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
   const [activeTab, setActiveTab] = useState<TabId>("ask");
-  const [captureText, setCaptureText] = useState("");
-  const [captureUrl, setCaptureUrl] = useState("");
-  const [captureFile, setCaptureFile] = useState<File | null>(null);
   const [question, setQuestion] = useState("");
   const [notes, setNotes] = useState<Note[]>([]);
   const [digest, setDigest] = useState<DigestResponse | null>(null);
@@ -105,13 +97,10 @@ export default function App() {
   const [askHistory, setAskHistory] = useState<AskHistoryView[]>([]);
   const [allAskHistory, setAllAskHistory] = useState<AskHistoryView[]>([]);
   const [selectedAskId, setSelectedAskId] = useState<string | null>(null);
-  const [isCapturingText, setIsCapturingText] = useState(false);
-  const [isCapturingLink, setIsCapturingLink] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isResettingData, setIsResettingData] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [isRetryingGraphSync, setIsRetryingGraphSync] = useState(false);
-  const [uploadConflict, setUploadConflict] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey() || "");
   const [userId, setUserId] = useState(() => loadUserId());
   const [showSettings, setShowSettings] = useState(false);
@@ -153,8 +142,14 @@ export default function App() {
         ...item,
         status: "done" as const,
       }));
-      setAskHistory(historyItems);
-      setAllAskHistory(allHistoryItems);
+      setAskHistory((current) => mergeAskHistory(historyItems, current));
+      setAllAskHistory((current) => {
+        const merged = new Map<string, AskHistoryView>();
+        for (const item of [...allHistoryItems, ...current]) {
+          merged.set(item.id, item);
+        }
+        return [...merged.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      });
       setSelectedAskId((current) => current ?? historyItems[0]?.id ?? null);
       if (!options?.silent) {
         setStatus("知识库已就绪。");
@@ -167,56 +162,21 @@ export default function App() {
     }
   }
 
-  async function onCapture(event: FormEvent) {
+  function onEntry(event: FormEvent) {
     event.preventDefault();
-    if (!captureText.trim()) {
+    const text = question.trim();
+
+    if (pendingFile) {
+      void submitFileWithText(pendingFile, text || undefined);
       return;
     }
 
-    setIsCapturingText(true);
-    setStatus("正在采集并连接这条笔记...");
-    try {
-      await captureNote(captureText.trim(), userId, "text");
-      setCaptureText("");
-      await refreshAll();
-      setStatus("新笔记已采集并建立关联。");
-    } catch (error) {
-      console.error(error);
-      setStatus("采集失败，请检查后端日志。");
-    } finally {
-      setIsCapturingText(false);
-    }
-  }
-
-  async function onCaptureLink(event: FormEvent) {
-    event.preventDefault();
-    if (!captureUrl.trim()) {
-      return;
-    }
-
-    setIsCapturingLink(true);
-    setStatus("正在抓取网页并写入记忆...");
-    try {
-      await captureNote(captureUrl.trim(), userId, "link");
-      setCaptureUrl("");
-      await refreshAll();
-      setStatus("网页已写入记忆。");
-    } catch (error) {
-      console.error(error);
-      setStatus("网站抓取失败，请检查 URL 和后端日志。");
-    } finally {
-      setIsCapturingLink(false);
-    }
-  }
-
-  function onAsk(event: FormEvent) {
-    event.preventDefault();
-    if (!question.trim()) {
+    if (!text) {
       return;
     }
 
     eventSourceRef.current?.close();
-    const prompt = question.trim();
+    const prompt = text;
     const historyItem: AskHistoryView = {
       id: crypto.randomUUID(),
       user_id: userId,
@@ -233,10 +193,31 @@ export default function App() {
     setQuestion("");
     setSelectedAskId(historyItem.id);
     setAskHistory((current) => [historyItem, ...current].slice(0, 20));
-    setStatus("正在检索你的个人记忆...");
+    setStatus("正在理解你的意图...");
 
-    const source = new EventSource(buildAskStreamUrl(prompt, userId, sessionId));
+    const source = new EventSource(buildEntryStreamUrl(prompt, userId, sessionId));
     eventSourceRef.current = source;
+
+    let entryIntent = "";
+
+    source.addEventListener("intent", (streamEvent) => {
+      const payload = parseSsePayload<{ intent?: string; reason?: string }>(streamEvent);
+      entryIntent = payload.intent ?? "";
+      setStatus(payload.reason ?? "正在处理...");
+    });
+
+    source.addEventListener("capture_result", (streamEvent) => {
+      const payload = parseSsePayload<{ note?: Note; reply?: string }>(streamEvent);
+      const reply = payload.reply ?? "已采集完成。";
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id
+            ? { ...item, answer: reply, status: "done" as const }
+            : item
+        )
+      );
+      setStatus(reply);
+    });
 
     source.addEventListener("status", (streamEvent) => {
       const payload = parseSsePayload<{ message?: string }>(streamEvent);
@@ -276,10 +257,11 @@ export default function App() {
     });
 
     source.addEventListener("done", (streamEvent) => {
-      const payload = parseSsePayload<AskResponse>(streamEvent);
+      const payload = parseSsePayload<{ answer?: string; reply?: string; citations?: Citation[]; graph_enabled?: boolean }>(streamEvent);
+      const finalAnswer = payload.answer ?? payload.reply ?? historyItem.answer;
       const completedItem: AskHistoryView = {
         ...historyItem,
-        answer: payload.answer ?? historyItem.answer,
+        answer: finalAnswer,
         citations: payload.citations ?? historyItem.citations,
         graph_enabled: payload.graph_enabled ?? historyItem.graph_enabled,
         status: "done",
@@ -292,10 +274,15 @@ export default function App() {
         )
       );
       setSelectedAskId(historyItem.id);
-      setStatus("已根据你的笔记生成回答。");
+      if (entryIntent.startsWith("capture_") || entryIntent === "summarize_thread") {
+        setStatus(finalAnswer);
+        void refreshAll();
+      } else {
+        setStatus("已根据你的笔记生成回答。");
+        void refreshAskHistorySelection(completedItem);
+      }
       source.close();
       eventSourceRef.current = null;
-      void refreshAskHistorySelection(completedItem);
     });
 
     source.onerror = () => {
@@ -310,7 +297,7 @@ export default function App() {
             : item
         )
       );
-      setStatus("提问失败，请检查后端日志。");
+      setStatus("处理失败，请检查后端日志。");
       source.close();
       eventSourceRef.current = null;
     };
@@ -370,64 +357,66 @@ export default function App() {
     setActiveTab("ask");
   }
 
-  async function onUpload(event: FormEvent) {
-    event.preventDefault();
-    if (!captureFile) {
+  function onFileSelect() {
+    const fileInput = fileInputRef.current;
+    if (!fileInput?.files?.length) {
       return;
     }
-
-    let overwrite = false;
-    if (uploadConflict) {
-      const confirmed = window.confirm(
-        `data/uploads 中已经存在同名文件“${captureFile.name}”。是否覆盖原文件？`
-      );
-      if (!confirmed) {
-        setStatus("已取消上传，保留原文件。");
-        return;
-      }
-      overwrite = true;
+    const file = fileInput.files[0];
+    setPendingFile(file);
+    if (fileInput) {
+      fileInput.value = "";
     }
+    setActiveTab("ask");
+  }
 
+  function dismissPendingFile() {
+    setPendingFile(null);
+  }
+
+  async function submitFileWithText(file: File, text?: string) {
     setIsUploading(true);
-    setUploadProgress(0);
-    setStatus(`正在上传 ${captureFile.name} 并写入记忆...`);
+    setPendingFile(null);
+    setQuestion("");
+    const historyItem: AskHistoryView = {
+      id: crypto.randomUUID(),
+      user_id: userId,
+      session_id: sessionId,
+      question: text || `采集文件：${file.name}`,
+      answer: "",
+      citations: [],
+      graph_enabled: false,
+      created_at: new Date().toISOString(),
+      status: "streaming",
+    };
+    setAskHistory((current) => [historyItem, ...current].slice(0, 20));
+    setSelectedAskId(historyItem.id);
+    setStatus(`正在上传 ${file.name} 并写入记忆...`);
     try {
-      await uploadCapture(captureFile, userId, overwrite, (progress) => {
-        setUploadProgress(progress);
-      });
-      setUploadProgress(100);
-      setCaptureFile(null);
-      setUploadConflict(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+      const entryResult = await uploadEntryFile(file, userId, sessionId, text);
+      const reply = entryResult.reply_text || "文件已采集完成。";
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id
+            ? { ...item, answer: reply, status: "done" as const }
+            : item
+        )
+      );
+      setStatus(reply);
       await refreshAll();
-      setStatus("文件已采集完成，图谱同步将在后台继续。");
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : "上传失败，请检查后端日志。";
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id
+            ? { ...item, status: "error" as const, error: message }
+            : item
+        )
+      );
       setStatus(message);
     } finally {
       setIsUploading(false);
-      setTimeout(() => setUploadProgress(0), 300);
-    }
-  }
-
-  async function onSelectUploadFile(file: File | null) {
-    setCaptureFile(file);
-    setUploadConflict(false);
-    if (!file) {
-      return;
-    }
-
-    try {
-      const conflict = await checkUploadConflict(file.name);
-      setUploadConflict(conflict.exists);
-      if (conflict.exists) {
-        setStatus(`已存在同名文件 ${file.name}，上传时需要确认是否覆盖。`);
-      }
-    } catch (error) {
-      console.error(error);
     }
   }
 
@@ -464,9 +453,6 @@ export default function App() {
       const result = await resetUserData(userId);
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
-      setCaptureText("");
-      setCaptureUrl("");
-      setCaptureFile(null);
       setQuestion("");
       setAskHistory([]);
       setAllAskHistory([]);
@@ -574,122 +560,6 @@ export default function App() {
         </aside>
 
         <section className="content-stage">
-          {activeTab === "capture" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <p className="panel-kicker">采集</p>
-                <h2>尽可能低成本地写下一条新笔记</h2>
-              </div>
-              <div className="capture-grid">
-                <form onSubmit={onCapture} className="panel sub-panel stack">
-                  <p className="sub-panel-title">快速文本采集</p>
-                  <p className="sub-panel-copy">
-                    适合记录想法、会议纪要、草稿片段，直接写成一条普通记忆。
-                  </p>
-                  <textarea
-                    value={captureText}
-                    onChange={(event) => setCaptureText(event.target.value)}
-                    placeholder="粘贴一个想法、一段草稿，或者一场会议的总结..."
-                    rows={10}
-                  />
-                  <button type="submit" disabled={isCapturingText}>
-                    {isCapturingText ? "保存中..." : "写入记忆"}
-                  </button>
-                </form>
-
-                <form onSubmit={onCaptureLink} className="panel sub-panel stack">
-                  <p className="sub-panel-title">网站抓取采集</p>
-                  <p className="sub-panel-copy">
-                    粘贴一个网页 URL，系统会优先抓取正文并转成可索引内容。
-                  </p>
-                  <textarea
-                    value={captureUrl}
-                    onChange={(event) => setCaptureUrl(event.target.value)}
-                    placeholder="https://example.com/article"
-                    rows={10}
-                  />
-                  <button type="submit" disabled={isCapturingLink}>
-                    {isCapturingLink ? "抓取中..." : "抓取网页"}
-                  </button>
-                </form>
-
-                <form onSubmit={onUpload} className="panel sub-panel stack">
-                  <p className="sub-panel-title">文件上传采集</p>
-                  <p className="sub-panel-copy">
-                    支持先把文件保存到本地知识库，文本和 PDF 会尽量抽取正文，其它类型先保存元信息。
-                  </p>
-                  <div className="upload-zone">
-                    <div className="upload-label">
-                      {!isUploading ? (
-                        <>
-                          <strong>{captureFile ? captureFile.name : "选择一个要采集的文件"}</strong>
-                          <span>
-                            文本类文件会直接采集内容，其他文件类型目前先保存为元信息笔记。
-                          </span>
-                          {uploadConflict ? (
-                            <span className="upload-warning">
-                              已存在同名文件，稍后会询问你是否覆盖。
-                            </span>
-                          ) : null}
-                        </>
-                      ) : (
-                        <div className="upload-progress-block">
-                          <div className="upload-progress-copy">
-                            <strong>正在上传文件...</strong>
-                            <span>已完成 {uploadProgress}%</span>
-                          </div>
-                          <div className="upload-progress-track" aria-hidden="true">
-                            <div
-                              className="upload-progress-bar"
-                              style={{ width: `${uploadProgress}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="upload-actions">
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
-                      >
-                        {captureFile ? "重新选择文件" : "选择文件"}
-                      </button>
-                    </div>
-                    <input
-                      id="capture-file"
-                      type="file"
-                      ref={fileInputRef}
-                      className="file-input-hidden"
-                      onChange={(event) => void onSelectUploadFile(event.target.files?.[0] ?? null)}
-                    />
-                  </div>
-                  <button type="submit" disabled={isUploading || !captureFile}>
-                    {isUploading ? "上传中..." : "上传文件"}
-                  </button>
-                </form>
-              </div>
-              <div className="danger-zone">
-                <div>
-                  <p className="sub-panel-title">调试重置</p>
-                  <p className="danger-copy">
-                    一键清空当前用户的本地笔记、复习任务、对话历史、上传源文件，以及服务端问答历史，便于快速回到干净状态。
-                    如果图谱已启用，也会一并清理当前用户对应的图谱分组数据。
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="danger-button"
-                  disabled={isResettingData}
-                  onClick={() => void onResetUserData()}
-                >
-                  {isResettingData ? "清空中..." : "一键清空调试数据"}
-                </button>
-              </div>
-            </section>
-          ) : null}
-
           {activeTab === "ask" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
@@ -729,7 +599,8 @@ export default function App() {
                   </div>
                 </aside>
 
-                <div className="ask-chat-thread">
+                <div className="ask-chat-main">
+                  <div className="ask-chat-thread">
                   {orderedAskHistory.length ? (
                     orderedAskHistory.map((item) => (
                       <div key={item.id} className="chat-turn">
@@ -774,18 +645,49 @@ export default function App() {
                   )}
                 </div>
 
-                <form onSubmit={onAsk} className="ask-composer">
+                {pendingFile ? (
+                  <div className="pending-file-bar">
+                    <span className="pending-file-icon">📄</span>
+                    <span className="pending-file-name">{pendingFile.name}</span>
+                    <button
+                      type="button"
+                      className="pending-file-dismiss"
+                      onClick={dismissPendingFile}
+                      disabled={isUploading}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : null}
+                <div className="ask-composer-file-row">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="file-input-hidden"
+                    onChange={onFileSelect}
+                  />
+                </div>
+                <form onSubmit={onEntry} className="ask-composer">
                   <textarea
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="例如：支付系统重构项目第一阶段方案包括什么？"
+                    placeholder="提问、记录想法、粘贴链接，或直接上传文件..."
                     rows={3}
                   />
                   <div className="ask-composer-actions">
-                    <span className="composer-hint">Agent 会把当前会话作为上下文来理解你的追问。</span>
+                    <span className="composer-hint">输入问题会检索知识库回答，记录/链接/文件会自动采集。</span>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={isUploading}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      {isUploading ? "上传中..." : "上传文件"}
+                    </button>
                     <button type="submit">发送</button>
                   </div>
                 </form>
+                </div>
               </div>
             </section>
           ) : null}
@@ -1036,6 +938,24 @@ export default function App() {
               </div>
             </section>
           ) : null}
+
+          <div className="danger-zone">
+            <div>
+              <p className="sub-panel-title">调试重置</p>
+              <p className="danger-copy">
+                一键清空当前用户的本地笔记、复习任务、对话历史、上传源文件，以及服务端问答历史，便于快速回到干净状态。
+                如果图谱已启用，也会一并清理当前用户对应的图谱分组数据。
+              </p>
+            </div>
+            <button
+              type="button"
+              className="danger-button"
+              disabled={isResettingData}
+              onClick={() => void onResetUserData()}
+            >
+              {isResettingData ? "清空中..." : "一键清空调试数据"}
+            </button>
+          </div>
         </section>
       </main>
     </div>

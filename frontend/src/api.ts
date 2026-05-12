@@ -255,6 +255,57 @@ export function askQuestion(question: string, userId = "default", sessionId = "d
   });
 }
 
+export type EntryResponse = {
+  intent: string;
+  reason: string;
+  reply_text: string;
+  capture_result: {
+    note: Note;
+    related_notes: Note[];
+    review_card: ReviewCard | null;
+    graph_enabled: boolean;
+  } | null;
+  ask_result: {
+    answer: string;
+    citations: Citation[];
+    matches: Note[];
+    graph_enabled: boolean;
+    session_id: string;
+  } | null;
+};
+
+export function buildEntryStreamUrl(text: string, userId = "default", sessionId = "default"): string {
+  const params = new URLSearchParams({
+    text,
+    user_id: userId,
+    session_id: sessionId,
+  });
+  const key = getApiKey();
+  if (key) {
+    params.set("api_key", key);
+  }
+  return `/api/entry/stream?${params.toString()}`;
+}
+
+export function uploadEntryFile(
+  file: File,
+  userId = "default",
+  sessionId = "default",
+  text?: string
+): Promise<EntryResponse> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("user_id", userId);
+  body.append("session_id", sessionId);
+  if (text) {
+    body.append("text", text);
+  }
+  return requestFormData<EntryResponse>("/api/entry/upload", {
+    method: "POST",
+    body,
+  });
+}
+
 export function buildAskStreamUrl(question: string, userId = "default", sessionId = "default"): string {
   const params = new URLSearchParams({
     question,
