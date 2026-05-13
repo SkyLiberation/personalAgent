@@ -304,11 +304,8 @@ class TestPlanExecutorRetryReplan:
         assert call_count[0] == 2
 
     def test_retry_exhausted_falls_back_to_skip(self, runtime, memory, state):
-        """Max retries exhausted without replanner, step stays failed, dependents skip."""
-        from personal_agent.agent.replanner import Replanner
-
-        replanner = Replanner(runtime.settings)
-        executor = PlanExecutor(runtime, memory, replanner=replanner)
+        """Max retries exhausted without replanner: step stays failed, dependents skip."""
+        executor = PlanExecutor(runtime, memory, replanner=None)  # no replanner
 
         def _always_fail(step, st):
             raise RuntimeError("persistent error")
@@ -325,6 +322,8 @@ class TestPlanExecutorRetryReplan:
         assert steps[0].status == "failed"
         assert steps[0].retry_count == 3  # MAX_RETRIES
         assert steps[1].status == "skipped"
+        # Verify dependents were properly skipped
+        assert result is state
 
     def test_retry_count_incremented(self, runtime, memory, state):
         """PlanStep.retry_count increments correctly on each failure."""

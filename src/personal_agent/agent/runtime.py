@@ -14,6 +14,7 @@ from ..core.logging_utils import log_event, trace_span
 from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, EntryIntent, KnowledgeNote, PendingAction, RawIngestItem, ReviewCard
 from ..graphiti.store import GraphAskResult, GraphCaptureResult, GraphCitationHit, GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
+from ..storage.cross_session_store import CrossSessionStore
 from ..memory import MemoryFacade
 from ..storage.memory_store import LocalMemoryStore
 from ..storage.pending_action_store import PendingActionStore
@@ -105,12 +106,13 @@ class AgentRuntime:
         self.pending_action_store = pending_action_store or PendingActionStore(settings.data_dir)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
-        self._planner = DefaultTaskPlanner(settings)
         self._tool_registry = ToolRegistry()
         self._register_tools()
-        self.memory = MemoryFacade(store, ask_history_store)
+        self._planner = DefaultTaskPlanner(settings, tool_registry=self._tool_registry)
+        self._cross_session = CrossSessionStore(settings.data_dir)
+        self.memory = MemoryFacade(store, ask_history_store, cross_session_store=self._cross_session)
         self._verifier = AnswerVerifier()
-        self._plan_validator = PlanValidator()
+        self._plan_validator = PlanValidator(tool_registry=self._tool_registry)
         self._replanner = Replanner(settings)
 
     def _register_tools(self) -> None:
@@ -344,6 +346,7 @@ class AgentRuntime:
             state = AgentState(
                 mode="entry",
                 user_id=normalized_user,
+                intent=decision.route,
                 entry_input=entry_input.model_copy(update={"user_id": normalized_user, "session_id": normalized_session}),
             )
             result = executor.execute(validated_steps, state, on_progress=on_progress)
@@ -539,6 +542,42 @@ class AgentRuntime:
             logger.exception("Failed to generate answer from LLM")
             return None
 
+    def _generate_answer_stream(self, prompt: str):
+        """Stream tokens from the LLM in real time via SSE-compatible chunks.
+
+        Yields (event_type, payload) tuples suitable for SSE streaming.
+        Completes with ('answer_complete', {'answer': full_text}).
+        On failure, yields ('answer_error', {'error': message}) and stops.
+        """
+        if not (self.settings.openai_api_key and self.settings.openai_base_url and self.settings.openai_model):
+            yield ("answer_error", {"error": "LLM not configured"})
+            return
+        try:
+            client = OpenAI(api_key=self.settings.openai_api_key, base_url=self.settings.openai_base_url)
+            stream = client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=[
+                    {"role": "system", "content": "你是一个严谨、善于归纳总结的个人知识库问答助手。你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=600,
+                stream=True,
+            )
+            full_text = ""
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else ""
+                if delta:
+                    full_text += delta
+                    yield ("answer_delta", {"delta": delta, "answer": full_text})
+            if full_text.strip():
+                yield ("answer_complete", {"answer": full_text.strip()})
+            else:
+                yield ("answer_error", {"error": "LLM returned empty response"})
+        except Exception:
+            logger.exception("Failed to stream answer from LLM")
+            yield ("answer_error", {"error": "LLM streaming failed"})
+
     def _merge_graph_capture(self, note: KnowledgeNote, graph_result: GraphCaptureResult) -> KnowledgeNote:
         note.graph_episode_uuid = graph_result.episode_uuid
         note.entity_names = graph_result.entity_names
@@ -614,21 +653,29 @@ class AgentRuntime:
                 seen_note_ids.add(note.id)
         return matched_notes, citations
 
-    def _compose_graph_answer(
+    def _build_graph_answer_prompt(
         self, question: str, graph_result: GraphAskResult,
         matches: list[KnowledgeNote], citations: list[Citation], working_context: str,
     ) -> str:
+        """Build the LLM prompt for composing a graph-backed answer.
+
+        Separated from generation so streaming callers can reuse the prompt.
+        """
         focus_entities = "、".join(graph_result.entity_names[:6]) if graph_result.entity_names else "暂无"
-        relation_facts = graph_result.relation_facts[:8]
         evidence_blocks = self._build_note_evidence_blocks(matches, citations)
-        citation_lines = [f"- {c.title}: {c.relation_fact or c.snippet}" for c in citations[:5]]
-        fact_lines = [f"- {f}" for f in relation_facts]
+        anchored_lines: list[str] = []
+        for c in citations[:5]:
+            label = f"{c.title}"
+            if c.relation_fact:
+                label += f"  [事实: {c.relation_fact}]"
+            if c.snippet:
+                label += f"  [证据: {c.snippet[:100]}]"
+            anchored_lines.append(f"- {label}")
         context_block = working_context or "无"
         notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
-        citations_block = "\n".join(citation_lines) if citation_lines else "无"
-        facts_block = "\n".join(fact_lines) if fact_lines else "无"
+        anchored_block = "\n".join(anchored_lines) if anchored_lines else "无"
 
-        prompt = (
+        return (
             "你是个人知识库助手。请基于给定的对话上下文、图谱事实和笔记内容证据，"
             "先总结结论，再解释原因，生成一段自然、直接、连续的中文回答。"
             "如果上下文里存在代词或省略，请结合最近几轮对话补全指代。"
@@ -639,15 +686,24 @@ class AgentRuntime:
             f"当前问题：{question}\n\n"
             f"最近对话与任务上下文：\n{context_block}\n\n"
             f"图谱实体：{focus_entities}\n\n"
-            f"图谱事实：\n{facts_block}\n\n"
-            f"相关内容证据：\n{notes_block}\n\n"
-            f"引用锚点：\n{citations_block}"
+            f"事实与证据锚点（每条包含关系事实和对应原文片段）：\n{anchored_block}\n\n"
+            f"笔记全文证据：\n{notes_block}"
+        )
+
+    def _compose_graph_answer(
+        self, question: str, graph_result: GraphAskResult,
+        matches: list[KnowledgeNote], citations: list[Citation], working_context: str,
+    ) -> str:
+        prompt = self._build_graph_answer_prompt(
+            question, graph_result, matches, citations, working_context,
         )
         generated = self._generate_answer(prompt)
         if generated:
             return generated
-        if relation_facts:
-            return "结合你已有的笔记和图谱信息，" + "；".join(relation_facts[:4]) + "。"
+        if citations:
+            facts = [c.relation_fact for c in citations if c.relation_fact]
+            if facts:
+                return "结合你已有的笔记和图谱信息，" + "；".join(facts[:4]) + "。"
         return graph_result.answer or "暂时没有生成答案。"
 
     def _compose_local_answer(
@@ -748,6 +804,34 @@ class AgentRuntime:
         local_records = self.store.list_conversation_turns(normalized_user, normalized_session or "default", limit)
         return [AskHistoryRecord.model_validate(item) for item in reversed(local_records)]
 
+    def search_ask_history(
+        self, user_id: str | None = None, query: str = "", limit: int = 20, session_id: str | None = None
+    ) -> list[AskHistoryRecord]:
+        normalized_user = user_id or self.settings.default_user
+        if self.ask_history_store.configured():
+            return self.ask_history_store.search_history(normalized_user, query, limit, session_id)
+        local_records = self.store.list_conversation_turns(normalized_user, session_id or "default", limit)
+        if not query.strip():
+            return [AskHistoryRecord.model_validate(item) for item in reversed(local_records)]
+        query_lower = query.strip().lower()
+        filtered = [
+            r for r in local_records
+            if query_lower in r.get("question", "").lower() or query_lower in r.get("answer", "").lower()
+        ]
+        return [AskHistoryRecord.model_validate(item) for item in reversed(filtered)]
+
+    def delete_ask_record(self, user_id: str | None, record_id: str) -> bool:
+        normalized_user = user_id or self.settings.default_user
+        if self.ask_history_store.configured():
+            return self.ask_history_store.delete_record(normalized_user, record_id)
+        return self.store.delete_conversation_turn(normalized_user, record_id)
+
+    def delete_ask_session(self, user_id: str | None, session_id: str) -> int:
+        normalized_user = user_id or self.settings.default_user
+        if self.ask_history_store.configured():
+            return self.ask_history_store.delete_session(normalized_user, session_id)
+        return self.store.delete_session_turns(normalized_user, session_id)
+
     def list_pending_actions(
         self, user_id: str | None = None, status: str | None = None
     ) -> list[PendingAction]:
@@ -789,6 +873,7 @@ class AgentRuntime:
         if self.graph_store.configured():
             deleted_graph_episodes = self.graph_store.clear_user_group(normalized_user)
         local_result = self.store.clear_user_data(normalized_user, remove_uploaded_files=True)
+        self._cross_session.clear_user(normalized_user)
         deleted_ask_history = 0
         if self.ask_history_store.configured():
             try:
@@ -831,25 +916,63 @@ def _merge_notes(primary: list[KnowledgeNote], secondary: list[KnowledgeNote]) -
 
 
 def _best_snippet(note: KnowledgeNote, hit: GraphCitationHit, question: str) -> str:
+    """Select the sentence from note content that best anchors the graph relation_fact.
+
+    Uses word-overlap scoring between the relation_fact and each sentence,
+    weighted by entity name matches and question keyword relevance.
+    Falls back to note summary when no sentence reaches the minimum score.
+    """
     best_part = ""
     best_score = -1
     question_keywords = _extract_question_keywords(question)
+    fact_tokens = _tokenize_for_overlap(hit.relation_fact)
+    entity_names = [n for n in (hit.endpoint_names or note.entity_names or []) if len(n) >= 2]
+
     for part in _split_sentences(note.content):
+        if len(part) < 10:
+            continue
         score = 0
-        if hit.relation_fact in part:
+        # Word overlap between relation_fact and this sentence (primary anchor)
+        if fact_tokens:
+            part_tokens = _tokenize_for_overlap(part)
+            if part_tokens:
+                overlap = len(fact_tokens & part_tokens)
+                score += min(overlap * 5, 30)  # cap at 30 points for overlap
+        # Legacy exact match bonus
+        if hit.relation_fact and hit.relation_fact in part:
             score += 10
-        for entity_name in hit.endpoint_names or note.entity_names:
-            if len(entity_name) >= 2 and entity_name in part:
-                score += 4
+        # Entity name matches (strong signal)
+        for entity_name in entity_names:
+            if entity_name in part:
+                score += 5
+        # Question keyword relevance
         for keyword in question_keywords:
             if keyword in part:
                 score += 2
         if score > best_score:
             best_part = part
             best_score = score
+
+    if best_part and best_score >= 3:
+        return best_part[:160]
+    # Weak anchoring: return summary with a marker
     if best_part:
         return best_part[:160]
     return note.summary[:160]
+
+
+def _tokenize_for_overlap(text: str) -> set[str]:
+    """Tokenize text into lowercased meaningful words for overlap scoring."""
+    if not text:
+        return set()
+    # Simple tokenization: split on non-alphanumeric, filter short tokens
+    tokens: set[str] = set()
+    for token in text.lower().split():
+        # Strip punctuation from each token
+        cleaned = "".join(c for c in token if c.isalnum())
+        if len(cleaned) >= 2:
+            tokens.add(cleaned)
+    return tokens
 
 
 def _split_sentences(text: str) -> list[str]:

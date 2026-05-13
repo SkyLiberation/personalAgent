@@ -10,6 +10,7 @@ from .working_memory import WorkingMemory
 if TYPE_CHECKING:
     from ..core.models import Citation
     from ..storage.ask_history_store import AskHistoryStore
+    from ..storage.cross_session_store import CrossSessionStore
     from ..storage.memory_store import LocalMemoryStore
 
 logger = logging.getLogger(__name__)
@@ -30,9 +31,11 @@ class MemoryFacade:
         self,
         local_store: "LocalMemoryStore",
         ask_history_store: "AskHistoryStore",
+        cross_session_store: "CrossSessionStore | None" = None,
     ) -> None:
         self.local = local_store
         self.ask_history = ask_history_store
+        self.cross_session = cross_session_store
         self.working: WorkingMemory = WorkingMemory()
         self._session_key: str | None = None
 
@@ -111,6 +114,63 @@ class MemoryFacade:
         # Update the summary after each turn so it stays current
         self.refresh_conversation_summary(user_id, session_id)
         self.working.add_step(f"Q: {question[:120]} -> A: {answer[:120]}")
+
+        # Persist citations to cross-session store for delete targeting
+        if citations and self.cross_session is not None:
+            try:
+                self.cross_session.add_citations(user_id, citations, question=question)
+            except Exception:
+                logger.exception("Failed to record citations to cross_session store")
+
+    # -- cross-session state ------------------------------------------------
+
+    def record_citations(
+        self, user_id: str, citations: "list[Citation]", question: str = "",
+    ) -> None:
+        """Record citations from an ask response for future delete targeting."""
+        if self.cross_session is not None:
+            try:
+                self.cross_session.add_citations(user_id, citations, question=question)
+            except Exception:
+                logger.exception("Failed to record citations to cross_session store")
+
+    def recent_citations(self, user_id: str, limit: int = 10) -> list[dict]:
+        """Return recently cited notes for delete targeting resolution."""
+        if self.cross_session is not None:
+            return self.cross_session.recent_citations(user_id, limit)
+        return []
+
+    def save_draft(self, user_id: str, text: str, source_context: str = "") -> str:
+        """Save a solidify draft. Returns the draft ID."""
+        if self.cross_session is not None:
+            return self.cross_session.save_draft(user_id, text, source_context)
+        return ""
+
+    def get_draft(self, user_id: str, draft_id: str) -> dict | None:
+        """Get a specific draft by ID."""
+        if self.cross_session is not None:
+            return self.cross_session.get_draft(user_id, draft_id)
+        return None
+
+    def list_drafts(self, user_id: str, status: str | None = None) -> list[dict]:
+        """List drafts for a user, optionally filtered by status."""
+        if self.cross_session is not None:
+            return self.cross_session.list_drafts(user_id, status)
+        return []
+
+    def add_conclusion(self, user_id: str, text: str, session_id: str = "") -> str:
+        """Record a candidate conclusion from a conversation. Returns conclusion ID."""
+        if self.cross_session is not None:
+            return self.cross_session.add_conclusion(user_id, text, session_id)
+        return ""
+
+    def list_conclusions(
+        self, user_id: str, solidified: bool | None = None,
+    ) -> list[dict]:
+        """List candidate conclusions, optionally filtered by solidified status."""
+        if self.cross_session is not None:
+            return self.cross_session.list_conclusions(user_id, solidified)
+        return []
 
     # -- helpers ------------------------------------------------------------
 

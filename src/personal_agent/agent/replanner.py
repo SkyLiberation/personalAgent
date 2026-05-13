@@ -50,7 +50,7 @@ class Replanner:
         llm_result = self._replan_with_llm(original_steps, failed_step, error, observations, intent)
         if llm_result is not None:
             return llm_result
-        return self._replan_heuristic(original_steps, failed_step, error)
+        return self._replan_heuristic(original_steps, failed_step, error, intent)
 
     def _replan_with_llm(
         self,
@@ -148,17 +148,61 @@ class Replanner:
         original_steps: list[PlanStep],
         failed_step: PlanStep,
         error: str,
+        intent: str = "",
     ) -> list[PlanStep] | None:
-        """Heuristic fallback: skip the failed step, keep remaining planned steps."""
+        """Intent-aware heuristic fallback for replanning.
+
+        Produces appropriate recovery steps based on the original intent
+        rather than a generic salvage compose.
+        """
         remaining = [s for s in original_steps if s.status == "planned"]
 
-        # If the failed step was a retrieve or tool_call, add a salvage compose
-        # to produce a partial answer from available intermediate results.
+        # Intent-specific recovery strategies
+        if intent == "delete_knowledge":
+            filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
+            salvage = PlanStep(
+                step_id=f"re-{uuid4().hex[:6]}",
+                action_type="compose",
+                description="删除未完成：汇总已检索到的候选笔记和失败原因",
+                expected_output="说明哪些笔记可以删除，以及为何删除未能完成",
+                on_failure="skip",
+            )
+            return filtered + [salvage]
+
+        if intent == "solidify_conversation":
+            filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
+            has_tool = any(s.action_type == "tool_call" for s in filtered)
+            if not has_tool:
+                salvage_compose = PlanStep(
+                    step_id=f"re-{uuid4().hex[:6]}",
+                    action_type="compose",
+                    description="固化未完成：基于已提取的候选结论生成部分摘要",
+                    expected_output="总结本次固化尝试中已提取的内容",
+                    on_failure="skip",
+                )
+                return filtered + [salvage_compose]
+            return filtered or None
+
+        if intent == "ask":
+            filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
+            if not any(s.action_type == "compose" for s in filtered):
+                salvage = PlanStep(
+                    step_id=f"re-{uuid4().hex[:6]}",
+                    action_type="compose",
+                    description="重新规划：基于可用检索结果生成部分回答",
+                    expected_output="基于可用信息的部分回答",
+                    on_failure="skip",
+                )
+                return filtered + [salvage]
+            return filtered or None
+
+        # Generic fallback for capture, summarize, and unknown intents
+        filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
         needs_salvage = (
             failed_step.action_type in ("retrieve", "tool_call")
-            and all(s.action_type != "compose" for s in remaining)
+            and all(s.action_type != "compose" for s in filtered)
         )
-        if needs_salvage:
+        if needs_salvage and (filtered or failed_step.action_type == "retrieve"):
             salvage = PlanStep(
                 step_id=f"re-{uuid4().hex[:6]}",
                 action_type="compose",
@@ -166,12 +210,10 @@ class Replanner:
                 expected_output="基于可用信息的部分回答",
                 on_failure="skip",
             )
-            filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
             return filtered + [salvage]
 
-        # Otherwise, just keep steps that don't depend on the failed step
-        if remaining:
-            return [s for s in remaining if failed_step.step_id not in s.depends_on] or None
+        if filtered:
+            return filtered
         return None
 
     @property

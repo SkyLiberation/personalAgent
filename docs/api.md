@@ -198,8 +198,8 @@
 
 说明：
 
-- 当前 SSE 仍然是服务端按段推送已有回答
-- 不是直接透传上游模型 token 流
+- 当前 SSE 会在完成检索和图谱增强后透传上游模型 token 流
+- `answer_delta` 为增量 token / 文本片段，直到收到 `done`
 
 ## `POST /api/debug/reset-user-data`
 

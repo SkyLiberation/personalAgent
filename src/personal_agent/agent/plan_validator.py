@@ -3,24 +3,19 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .planner import PlanStep
 from .router import RiskLevel, RouterDecision
 
+if TYPE_CHECKING:
+    from ..tools import ToolRegistry
+
 logger = logging.getLogger(__name__)
 
-VALID_ACTION_TYPES = {"retrieve", "tool_call", "compose", "verify"}
+VALID_ACTION_TYPES = {"retrieve", "tool_call", "compose", "verify", "resolve"}
 VALID_RISK_LEVELS: set[RiskLevel | str] = {"low", "medium", "high"}
 VALID_ON_FAILURE = {"skip", "retry", "abort"}
-# Tools known to the system; Phase 3 uses a hardcoded allowlist.
-# Phase 4 (PlanExecutor) will query ToolRegistry instead.
-KNOWN_TOOLS = {
-    "graph_search",
-    "capture_url",
-    "capture_text",
-    "capture_upload",
-    "delete_note",
-}
 
 
 @dataclass(slots=True)
@@ -63,9 +58,17 @@ class PlanValidator:
     """Pre-execution plan validation.
 
     Validates plan structure, dependency graph integrity, and cross-checks
-    against the RouterDecision.  Phase 3 is read-only: it logs findings but
-    does not block execution.
+    against the RouterDecision.  Dynamically resolves known tool names from
+    ToolRegistry so the allowlist never drifts from registered tools.
     """
+
+    def __init__(self, tool_registry: "ToolRegistry | None" = None) -> None:
+        self._tool_registry = tool_registry
+
+    def _get_known_tools(self) -> set[str]:
+        if self._tool_registry is not None:
+            return {s.name for s in self._tool_registry.list_tools()}
+        return set()
 
     def validate(
         self,
@@ -75,6 +78,7 @@ class PlanValidator:
         issues: list[str] = []
         warnings: list[str] = []
         bad_status_indices: list[int] = []
+        known_tools = self._get_known_tools()
 
         # --- A. Structural checks ---
         seen_ids: set[str] = set()
@@ -102,8 +106,16 @@ class PlanValidator:
 
             if s.action_type == "tool_call" and not s.tool_name:
                 issues.append(f"{prefix} action_type=tool_call 但 tool_name 为空。")
-            if s.action_type == "tool_call" and s.tool_name and s.tool_name not in KNOWN_TOOLS:
-                warnings.append(f"{prefix} tool_name={s.tool_name!r} 不在已知工具列表中。")
+            if s.action_type == "tool_call" and s.tool_name and s.tool_name not in known_tools:
+                if known_tools:
+                    issues.append(
+                        f"{prefix} tool_name={s.tool_name!r} 未在 ToolRegistry 中注册。"
+                        f"可用工具：{sorted(known_tools)}"
+                    )
+                else:
+                    warnings.append(
+                        f"{prefix} tool_name={s.tool_name!r} 无法校验（ToolRegistry 未注入）。"
+                    )
 
             if s.risk_level not in VALID_RISK_LEVELS:
                 issues.append(

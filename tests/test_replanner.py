@@ -63,7 +63,7 @@ class TestReplannerHeuristic:
         assert "d" in step_ids
 
     def test_returns_none_when_no_alternative(self, replanner):
-        """When no independent remaining steps exist, returns None."""
+        """When all steps depend on the failed step and no salvage is possible, returns None."""
         steps = [
             PlanStep(step_id="x", action_type="tool_call", description="X", status="failed",
                      tool_name="capture_text"),
@@ -72,8 +72,7 @@ class TestReplannerHeuristic:
         ]
         failed = steps[0]
         result = replanner.replan(steps, failed, "fatal error", {}, "capture_text")
-        # y depends on x, and y is a compose step so no salvage compose is added.
-        # All remaining steps depend on the failed step, so nothing can proceed.
+        # y depends on x and is filtered out, no independent steps remain → None
         assert result is None
 
     def test_heuristic_preserves_completed_steps(self, replanner):

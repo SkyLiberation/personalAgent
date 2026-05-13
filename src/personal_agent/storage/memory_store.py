@@ -181,6 +181,21 @@ class LocalMemoryStore:
         records.sort(key=lambda item: item.get("created_at", ""))
         return records[-max(1, min(limit, 100)) :]
 
+    def delete_conversation_turn(self, user_id: str, record_id: str) -> bool:
+        records = self._load_conversations()
+        kept = [r for r in records if not (r.get("user_id") == user_id and r.get("id") == record_id)]
+        if len(kept) == len(records):
+            return False
+        self._save_conversations(kept)
+        return True
+
+    def delete_session_turns(self, user_id: str, session_id: str) -> int:
+        records = self._load_conversations()
+        kept = [r for r in records if not (r.get("user_id") == user_id and r.get("session_id") == session_id)]
+        removed = len(records) - len(kept)
+        self._save_conversations(kept)
+        return removed
+
     def clear_user_data(self, user_id: str, remove_uploaded_files: bool = True) -> dict[str, int]:
         notes = self._load_notes()
         note_ids_to_remove = {note.id for note in notes if note.user_id == user_id}

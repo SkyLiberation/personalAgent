@@ -97,6 +97,19 @@ class AgentService:
             user_id=user_id, limit=limit, session_id=session_id
         )
 
+    def search_ask_history(
+        self, user_id: str | None = None, query: str = "", limit: int = 20, session_id: str | None = None
+    ) -> list[AskHistoryRecord]:
+        return self._runtime.search_ask_history(
+            user_id=user_id, query=query, limit=limit, session_id=session_id
+        )
+
+    def delete_ask_record(self, user_id: str | None, record_id: str) -> bool:
+        return self._runtime.delete_ask_record(user_id, record_id)
+
+    def delete_ask_session(self, user_id: str | None, session_id: str) -> int:
+        return self._runtime.delete_ask_session(user_id, session_id)
+
     def reset_user_data(self, user_id: str | None = None) -> ResetResult:
         return self._runtime.reset_user_data(user_id=user_id)
 

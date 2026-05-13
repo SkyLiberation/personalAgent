@@ -1,18 +1,24 @@
 import { FormEvent, type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
 import {
   buildEntryStreamUrl,
+  confirmPendingAction,
+  deleteAskHistoryRecord,
   fetchAskHistory,
   fetchDigest,
   fetchNotes,
+  fetchPendingActions,
   getApiKey,
+  rejectPendingAction,
   resetUserData,
   retryGraphSync,
+  searchAskHistory,
   setApiKey,
   uploadEntryFile,
   type AskHistoryItem,
   type Citation,
   type DigestResponse,
   type Note,
+  type PendingActionItem,
   type PlanStep,
 } from "./api";
 
@@ -107,14 +113,34 @@ export default function App() {
   const [userId, setUserId] = useState(() => loadUserId());
   const [showSettings, setShowSettings] = useState(false);
   const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
+  const [pendingActions, setPendingActions] = useState<PendingActionItem[]>([]);
+  const [isConfirmingAction, setIsConfirmingAction] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const [isSearchingHistory, setIsSearchingHistory] = useState(false);
+  const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    if (activeCitationKey) {
+      // Scroll to highlighted citation text after a short delay for render
+      const timer = window.setTimeout(() => {
+        const el = document.querySelector("[data-cite-highlight]");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 100);
+      return () => window.clearTimeout(timer);
+    }
+  }, [activeCitationKey]);
+
+  useEffect(() => {
     void refreshAll();
+    void refreshPendingActions();
 
     const intervalId = window.setInterval(() => {
       void refreshAll({ silent: true });
+      void refreshPendingActions();
     }, 8000);
 
     return () => {
@@ -162,6 +188,66 @@ export default function App() {
       if (!options?.silent) {
         setStatus("暂时无法连接后端，请启动 FastAPI 后刷新页面。");
       }
+    }
+  }
+
+  async function refreshPendingActions() {
+    try {
+      const response = await fetchPendingActions(userId, "pending");
+      setPendingActions(response.items);
+    } catch {
+      // Silently ignore — pending actions are non-critical
+    }
+  }
+
+  async function handleConfirmPending(action: PendingActionItem) {
+    if (!action.token) return;
+    setIsConfirmingAction(true);
+    try {
+      await confirmPendingAction(action.id, action.token, userId);
+      setPendingActions((current) => current.filter((a) => a.id !== action.id));
+      void refreshAll();
+    } catch (error) {
+      console.error("Failed to confirm pending action:", error);
+    } finally {
+      setIsConfirmingAction(false);
+    }
+  }
+
+  async function handleRejectPending(action: PendingActionItem, reason = "") {
+    try {
+      await rejectPendingAction(action.id, userId, reason);
+      setPendingActions((current) => current.filter((a) => a.id !== action.id));
+    } catch (error) {
+      console.error("Failed to reject pending action:", error);
+    }
+  }
+
+  async function handleSearchHistory(query: string) {
+    setHistorySearchQuery(query);
+    if (!query.trim()) {
+      void refreshAll();
+      return;
+    }
+    setIsSearchingHistory(true);
+    try {
+      const result = await searchAskHistory(query.trim(), userId, 50);
+      const items = result.items.map((item) => ({ ...item, status: "done" as const }));
+      setAskHistory(items);
+    } catch (error) {
+      console.error("Failed to search ask history:", error);
+    } finally {
+      setIsSearchingHistory(false);
+    }
+  }
+
+  async function handleDeleteHistoryRecord(recordId: string) {
+    try {
+      await deleteAskHistoryRecord(recordId, userId);
+      setAskHistory((current) => current.filter((item) => item.id !== recordId));
+      setAllAskHistory((current) => current.filter((item) => item.id !== recordId));
+    } catch (error) {
+      console.error("Failed to delete ask history record:", error);
     }
   }
 
@@ -256,6 +342,68 @@ export default function App() {
     source.addEventListener("plan_step_skipped", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
       if (payload.step_id) updatePlanStepStatus(payload.step_id, "skipped");
+    });
+
+    source.addEventListener("pending_action_created", (streamEvent) => {
+      const payload = parseSsePayload<{
+        action_id?: string;
+        token?: string;
+        action_type?: string;
+        note_id?: string;
+        title?: string;
+        summary?: string;
+        expires_at?: string;
+        message?: string;
+      }>(streamEvent);
+      if (payload.action_id && payload.token) {
+        const newAction: PendingActionItem = {
+          id: payload.action_id,
+          user_id: userId,
+          action_type: payload.action_type ?? "delete_note",
+          target_id: payload.note_id ?? "",
+          title: payload.title ?? "待确认操作",
+          description: payload.message ?? payload.summary ?? "",
+          status: "pending",
+          token: payload.token,
+          created_at: new Date().toISOString(),
+          expires_at: payload.expires_at ?? new Date(Date.now() + 3600000).toISOString(),
+          resolved_at: null,
+        };
+        setPendingActions((current) => {
+          if (current.some((a) => a.id === newAction.id)) return current;
+          return [newAction, ...current];
+        });
+        setStatus(payload.message ?? "有操作需要你的确认。");
+      }
+      void refreshPendingActions();
+    });
+
+    source.addEventListener("draft_ready", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string; draft_text?: string }>(streamEvent);
+      if (payload.draft_text) {
+        setStatus("知识草稿已生成，正在写入知识库...");
+      }
+    });
+
+    source.addEventListener("plan_replan_attempt", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string; reason?: string }>(streamEvent);
+      if (payload.step_id) {
+        setStatus(`步骤 ${payload.step_id} 失败，正在尝试重新规划...`);
+      }
+    });
+
+    source.addEventListener("plan_replanned", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string; revised_step_count?: number }>(streamEvent);
+      if (payload.step_id) {
+        setStatus(`已重新规划，生成 ${payload.revised_step_count ?? 0} 个新步骤。`);
+      }
+    });
+
+    source.addEventListener("plan_replan_failed", (streamEvent) => {
+      const payload = parseSsePayload<{ step_id?: string; reason?: string }>(streamEvent);
+      if (payload.step_id) {
+        setStatus(`重新规划失败：${payload.reason ?? "无法恢复"}`);
+      }
     });
 
     source.addEventListener("capture_result", (streamEvent) => {
@@ -620,6 +768,32 @@ export default function App() {
               </div>
               <div className="filter-toolbar">
                 <span>当前对话：{sessionId.slice(0, 8)}</span>
+                <input
+                  type="text"
+                  className="history-search-input"
+                  placeholder="搜索问答历史..."
+                  value={historySearchQuery}
+                  onChange={(e) => {
+                    const query = e.target.value;
+                    setHistorySearchQuery(query);
+                    if (!query.trim()) {
+                      void refreshAll();
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      void handleSearchHistory(historySearchQuery);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={isSearchingHistory}
+                  onClick={() => void handleSearchHistory(historySearchQuery)}
+                >
+                  {isSearchingHistory ? "搜索中..." : "搜索"}
+                </button>
                 <button type="button" className="secondary-button" onClick={startNewDialog}>
                   新建对话
                 </button>
@@ -660,6 +834,14 @@ export default function App() {
                           <div className="chat-meta">
                             <span>你</span>
                             <time>{formatDateTime(item.created_at)}</time>
+                            <button
+                              type="button"
+                              className="history-delete-button"
+                              title="删除此轮对话"
+                              onClick={() => void handleDeleteHistoryRecord(item.id)}
+                            >
+                              ✕
+                            </button>
                           </div>
                           <p>{item.question}</p>
                         </article>
@@ -669,9 +851,13 @@ export default function App() {
                             <span>Agent</span>
                             <em className={`history-state history-state-${item.status}`}>{translateAskStatus(item.status)}</em>
                           </div>
-                          <p className={item.status === "streaming" ? "streaming-text" : ""}>
-                            {item.answer || "正在思考..."}
-                          </p>
+                          <div className={item.status === "streaming" ? "streaming-text" : ""}>
+                            {renderHighlightedAnswer(
+                              item.answer || "正在思考...",
+                              activeCitationKey,
+                              item.citations,
+                            )}
+                          </div>
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
                           {item.plan_steps?.length ? (
                             <div className="plan-panel">
@@ -719,16 +905,25 @@ export default function App() {
                           ) : null}
                           {item.citations?.length ? (
                             <div className="citation-list">
-                              {item.citations.map((citation, index) => (
-                                <article
-                                  key={`${item.id}-${citation.note_id}-${citation.relation_fact ?? index}`}
-                                  className="citation-item"
-                                >
-                                  <strong>{citation.title}</strong>
-                                  {citation.relation_fact ? <em>{citation.relation_fact}</em> : null}
-                                  <span>{citation.snippet}</span>
-                                </article>
-                              ))}
+                              {item.citations.map((citation, index) => {
+                                const citeKey = `${item.id}-${citation.note_id}-${citation.relation_fact ?? index}`;
+                                const isActive = activeCitationKey === citeKey;
+                                return (
+                                  <article
+                                    key={citeKey}
+                                    className={`citation-item ${isActive ? "citation-item-active" : ""}`}
+                                    onClick={() =>
+                                      setActiveCitationKey((current) =>
+                                        current === citeKey ? null : citeKey
+                                      )
+                                    }
+                                  >
+                                    <strong>{citation.title}</strong>
+                                    {citation.relation_fact ? <em>{citation.relation_fact}</em> : null}
+                                    <span>{citation.snippet}</span>
+                                  </article>
+                                );
+                              })}
                             </div>
                           ) : null}
                         </article>
@@ -1031,6 +1226,49 @@ export default function App() {
                     {notes.length ? "没有笔记符合当前筛选条件。" : "还没有任何笔记，先记录下你的第一个想法吧。"}
                   </p>
                 )}
+              </div>
+            </section>
+          ) : null}
+
+          {pendingActions.length > 0 ? (
+            <section className="panel stage-panel pending-actions-panel">
+              <div className="panel-header">
+                <p className="panel-kicker">待处理</p>
+                <h2>需要你确认的操作 ({pendingActions.length})</h2>
+              </div>
+              <div className="pending-actions-list">
+                {pendingActions.map((action) => (
+                  <article key={action.id} className="pending-action-card">
+                    <div className="pending-action-info">
+                      <h3>{action.title}</h3>
+                      <p>{action.description}</p>
+                      <div className="pending-action-meta">
+                        <span className="pending-action-type">{action.action_type}</span>
+                        <span className="pending-action-expires">
+                          过期时间: {new Date(action.expires_at).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="pending-action-actions">
+                      <button
+                        type="button"
+                        className="confirm-button"
+                        disabled={isConfirmingAction}
+                        onClick={() => void handleConfirmPending(action)}
+                      >
+                        确认
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={isConfirmingAction}
+                        onClick={() => void handleRejectPending(action, "用户拒绝")}
+                      >
+                        拒绝
+                      </button>
+                    </div>
+                  </article>
+                ))}
               </div>
             </section>
           ) : null}
@@ -1367,4 +1605,87 @@ function mergeAskHistory(
   return merged
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .slice(0, 20);
+}
+
+function renderHighlightedAnswer(
+  answer: string,
+  activeCiteKey: string | null,
+  citations?: Citation[],
+) {
+  if (!activeCiteKey || !citations?.length) {
+    return <p>{answer}</p>;
+  }
+
+  // Find the active citation
+  const activeCitation = citations.find((c, i) => {
+    const key = `${c.note_id}-${c.relation_fact ?? i}`;
+    return activeCiteKey.includes(key);
+  });
+
+  if (!activeCitation) {
+    return <p>{answer}</p>;
+  }
+
+  // Find text to highlight: prefer snippet, fall back to relation_fact
+  const highlightText = activeCitation.snippet || activeCitation.relation_fact;
+  if (!highlightText || highlightText.length < 3) {
+    return <p>{answer}</p>;
+  }
+
+  // Find the best matching substring in the answer
+  const matchIndex = answer.indexOf(highlightText.slice(0, 30));
+  if (matchIndex < 0) {
+    // Try matching relation_fact keywords
+    const factWords = (activeCitation.relation_fact || "")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3);
+    if (!factWords.length) {
+      return <p>{answer}</p>;
+    }
+
+    const parts: React.ReactNode[] = [];
+    let remaining = answer;
+    let keyIndex = 0;
+
+    for (const word of factWords) {
+      const idx = remaining.indexOf(word);
+      if (idx >= 0) {
+        if (idx > 0) {
+          parts.push(<span key={`t-${keyIndex++}`}>{remaining.slice(0, idx)}</span>);
+        }
+        parts.push(
+          <mark key={`m-${keyIndex++}`} className="citation-highlight" data-cite-highlight="true">
+            {remaining.slice(idx, idx + word.length)}
+          </mark>
+        );
+        remaining = remaining.slice(idx + word.length);
+      }
+    }
+
+    if (remaining) {
+      parts.push(<span key={`t-${keyIndex++}`}>{remaining}</span>);
+    }
+
+    return (
+      <p>
+        {parts.length ? parts : answer}
+      </p>
+    );
+  }
+
+  // Exact match of first 30 chars of snippet
+  const before = answer.slice(0, matchIndex);
+  const highlightLen = Math.min(highlightText.length, 160);
+  const match = answer.slice(matchIndex, matchIndex + highlightLen);
+  const after = answer.slice(matchIndex + highlightLen);
+
+  return (
+    <p>
+      {before}
+      <mark className="citation-highlight" data-cite-highlight="true">
+        {match}
+      </mark>
+      {after}
+    </p>
+  );
 }

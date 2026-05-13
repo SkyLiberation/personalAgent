@@ -102,7 +102,8 @@ class TestPlanValidatorStructural:
                      tool_name="nonexistent_tool"),
         ]
         result = validator.validate(steps, default_decision)
-        assert any("已知工具" in w for w in result.warnings)
+        # When no ToolRegistry is injected, unknown tool is a warning (not blocking)
+        assert any("ToolRegistry" in w or "tool_name" in w for w in result.warnings)
 
     def test_invalid_risk_level_rejected(self, validator, default_decision):
         steps = [

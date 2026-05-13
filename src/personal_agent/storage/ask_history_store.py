@@ -119,6 +119,73 @@ class AskHistoryStore:
             conn.commit()
         return record
 
+    def search_history(
+        self, user_id: str, query: str, limit: int = 20, session_id: str | None = None,
+    ) -> list[AskHistoryRecord]:
+        if not self.configured() or not query.strip():
+            return []
+
+        self.ensure_schema()
+        search_term = f"%{query.strip()}%"
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                if session_id:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        FROM ask_history
+                        WHERE user_id = %s AND session_id = %s
+                          AND (question ILIKE %s OR answer ILIKE %s)
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (user_id, session_id, search_term, search_term, max(1, min(limit, 100))),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        FROM ask_history
+                        WHERE user_id = %s
+                          AND (question ILIKE %s OR answer ILIKE %s)
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (user_id, search_term, search_term, max(1, min(limit, 100))),
+                    )
+                rows = cur.fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    def delete_record(self, user_id: str, record_id: str) -> bool:
+        if not self.configured():
+            return False
+
+        self.ensure_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ask_history WHERE id = %s AND user_id = %s",
+                    (record_id, user_id),
+                )
+                deleted = cur.rowcount or 0
+            conn.commit()
+        return deleted > 0
+
+    def delete_session(self, user_id: str, session_id: str) -> int:
+        if not self.configured():
+            return 0
+
+        self.ensure_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ask_history WHERE user_id = %s AND session_id = %s",
+                    (user_id, session_id),
+                )
+                deleted_rows = cur.rowcount or 0
+            conn.commit()
+        return int(deleted_rows)
+
     def delete_history(self, user_id: str) -> int:
         if not self.configured():
             return 0

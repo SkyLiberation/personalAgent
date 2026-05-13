@@ -15,17 +15,17 @@
 
 ## 当前工程的 Agent 结构判断
 
-| 组件 | 当前状态 | 代码落点 | 当前判断 |
-| --- | --- | --- | --- |
-| `入口层` | `合格` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 |
-| `意图识别 / 路由层` | `合格` | [agent/router.py](src/personal_agent/agent/router.py), [agent/entry_nodes.py](src/personal_agent/agent/entry_nodes.py) | 通过 `DefaultIntentRouter` 统一处理入口意图，支持 LLM 优先和启发式兜底 |
-| `规划层` | `合格` | [agent/planner.py](src/personal_agent/agent/planner.py), [agent/plan_validator.py](src/personal_agent/agent/plan_validator.py), [agent/plan_executor.py](src/personal_agent/agent/plan_executor.py), [agent/replanner.py](src/personal_agent/agent/replanner.py) | 已具备结构化规划、计划校验、阻断式安全门禁、计划执行、失败重试/重规划和前端计划面板 |
-| `运行时 / 编排层` | `合格` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 统一执行入口，`LangGraph` 承担固定流程编排，`AgentService` 保持为薄 facade |
-| `工具层` | `合格` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / delete_note` |
-| `记忆层` | `合格` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有工作记忆、会话摘要、本地长期记忆、Postgres 问答历史、pending action 和图谱字段映射 |
-| `检索与推理层` | `基础合格` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持本地检索、图谱增强、回答校验和低置信度自修正；复杂推理和精确证据锚定仍可增强 |
-| `执行与反馈层` | `合格` | [web/api.py](src/personal_agent/web/api.py), [agent/runtime.py](src/personal_agent/agent/runtime.py) | 支持同步 API、SSE、图谱失败降级、异步图谱同步和问答历史记录 |
-| `观测与治理层` | `基础合格` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests) | 具备日志、health、reset、API Key 鉴权、限流、用户隔离、pending action 审计和基础测试；外部工具权限仍可补充 |
+| 组件 | 当前状态 | 代码落点 | 能力总结 | 文档 |
+| --- | --- | --- | --- | --- |
+| `入口层` | `合格` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
+| `意图识别 / 路由层` | `合格` | [agent/router.py](src/personal_agent/agent/router.py), [agent/entry_nodes.py](src/personal_agent/agent/entry_nodes.py) | 通过 `DefaultIntentRouter` 统一处理入口意图，支持 LLM 优先和启发式兜底 | [docs/topics/routing.md](docs/topics/routing.md) |
+| `规划层` | `合格` | [agent/planner.py](src/personal_agent/agent/planner.py), [agent/plan_validator.py](src/personal_agent/agent/plan_validator.py), [agent/plan_executor.py](src/personal_agent/agent/plan_executor.py), [agent/replanner.py](src/personal_agent/agent/replanner.py) | 已具备结构化规划、动态工具校验、阻断式安全门禁、计划执行、目标解析、失败重试/重规划和前端计划面板 | [docs/topics/planning.md](docs/topics/planning.md) |
+| `运行时 / 编排层` | `合格` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 统一执行入口，`LangGraph` 承担固定流程编排，`AgentService` 保持为薄 facade | [docs/topics/runtime.md](docs/topics/runtime.md) |
+| `工具层` | `合格` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / delete_note` | [docs/topics/tools.md](docs/topics/tools.md) |
+| `记忆层` | `合格` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有工作记忆、会话摘要、本地长期记忆、Postgres 问答历史、pending action、cross-session 状态和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md) |
+| `检索与推理层` | `基础合格` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持本地检索、图谱增强、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；复杂推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
+| `执行与反馈层` | `合格` | [web/api.py](src/personal_agent/web/api.py), [agent/runtime.py](src/personal_agent/agent/runtime.py) | 支持同步 API、SSE、图谱失败降级、异步图谱同步、问答历史记录和 pending action 前端确认 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md) |
+| `观测与治理层` | `基础合格` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests) | 具备日志、health、reset、API Key 鉴权、限流、用户隔离、pending action 审计和基础测试；外部工具权限仍可补充 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
 ## 当前框架摘要
 
@@ -53,41 +53,25 @@ Entry
   -> Final Response
 ```
 
-## Router / Planner 当前状态
-
-当前 entry 入口已经不是单纯的 intent 分类。`DefaultIntentRouter` 会返回 `RouterDecision`，其中包含 `route / confidence / requires_tools / requires_retrieval / requires_planning / risk_level / requires_confirmation / missing_information / candidate_tools / user_visible_message`。`DefaultTaskPlanner` 会生成结构化 `PlanStep`，再由 `PlanValidator` 做结构、依赖、风险和路由决策交叉校验。
-
-当前执行分为两条路径：
-
-- `capture / ask / summarize / direct_answer / unknown` 继续走稳定的 LangGraph 固定分支。
-- `delete_knowledge / solidify_conversation` 这类 `requires_planning=True` 的任务进入 `PlanExecutor`，按 `retrieve / tool_call / compose / verify` 步骤执行，并通过 SSE 回传步骤状态。
-
-`direct_answer` 已作为低风险、无需检索、无需工具的独立分支接入，用于闲聊、问候、感谢、澄清性问题和简单说明。LLM 路由结果也会与 `_default_router_decision()` 合并，确保 `requires_tools / requires_retrieval / requires_planning / candidate_tools` 等控制字段不会缺失。
-
-计划结果已经可观测：`WorkingMemory.plan_steps` 会进入 `context_snapshot()`，`EntryResult.plan_steps` 会随 API / SSE 返回，前端以可折叠计划面板展示步骤、工具、风险和执行状态。
-
 ## 知识生命周期设计
 
 当前框架已经能识别、规划并部分执行两类知识生命周期动作。
 
-- `delete_knowledge`：用于删除过时、错误或重复知识。router 会标记 `risk_level=high` 和 `requires_confirmation=true`，planner 会生成 `retrieve -> verify -> tool_call -> compose` 计划；`delete_note` 工具采用两阶段 HITL，先创建 pending action，再由确认接口执行真实删除，并同步清理本地笔记、复习卡和可用的图谱 episode。
-- `solidify_conversation`：用于把多轮对话结论沉淀进知识库。router/planner/executor 框架已具备，`capture_text` 工具已能复用 capture 链路写入 `KnowledgeNote`；后续重点是更准确地从会话历史和 citations 中抽取候选结论。
+- `delete_knowledge`：用于删除过时、错误或重复知识。router 会标记 `risk_level=high` 和 `requires_confirmation=true`，planner 会生成 `retrieve -> resolve -> verify -> tool_call -> compose` 计划；`resolve` 会先用图谱 episode 映射定位本地笔记，再回退到本地相似检索、关键词匹配和最近 citations；`delete_note` 工具采用两阶段 HITL，先创建 pending action，再由确认接口执行真实删除，并同步清理本地笔记、复习卡和可用的图谱 episode。
+- `solidify_conversation`：用于把多轮对话结论沉淀进知识库。router/planner/executor 框架已具备，`compose` 步骤会产出可观测的 `draft_ready` 事件，并把草稿注入后续 `capture_text` 工具以复用 capture 链路写入 `KnowledgeNote`；固化草稿会写入 cross-session store，后续重点是提升候选结论抽取质量和确认体验。
 
-删除类操作当前采用应用层两阶段 HITL：第一轮创建持久化 pending action，包含确认 token、过期时间、状态和审计日志；第二轮通过确认接口执行真实删除。暂未引入 LangGraph checkpoint，等审批类动作增多后再评估图中断恢复是否值得。
-
-## 记忆模块现状
-
-`MemoryFacade` 已在 `ask` 链路中参与会话摘要、上下文拼接和问答历史写入；`execute_entry()` 会绑定 session、刷新摘要、写入 task goal 和 plan steps；`PlanExecutor` 也会把执行过程写入 `WorkingMemory.recent_steps`。跨请求确认状态已从 `WorkingMemory` 中分离，由 `PendingActionStore` 持久化到 `data/pending_actions.json`。
-
-当前不足是固化预览、最近 citations、会话内候选结论等状态还没有统一持久化。后续应继续保持 `WorkingMemory` 作为进程内 scratchpad，把需要跨请求恢复的状态沉淀到明确的持久化模型中。
+删除类操作当前采用应用层两阶段 HITL：第一轮创建持久化 pending action，包含确认 token、过期时间、状态和审计日志；SSE 会发出 `pending_action_created`，前端会展示“需要你确认的操作”面板；第二轮可在前端确认/拒绝后调用 API 执行真实删除。暂未引入 LangGraph checkpoint，等审批类动作增多后再评估图中断恢复是否值得。
 
 ## 下一步优先级
 
-1. 增强 `delete_knowledge` 的目标解析能力，支持从最近 citations、标题相似候选和用户自然语言中稳定定位待删笔记。
-2. 增强 `solidify_conversation`，从会话历史、最近回答和 citations 中生成可预览、可确认的知识草稿。
-3. 将 pending action 的 Web/前端确认体验做完整，减少用户手动处理 action_id/token 的成本。
-4. 让 `PlanValidator` 的工具白名单与 `ToolRegistry` 动态联动，避免硬编码工具列表漂移。
-5. 扩大 `Replanner` 失败场景覆盖，并建立 `entry -> router -> planner -> validator -> executor -> replanner -> fallback` 的回归评测样本。
+以下优先级来自 [docs/topics/](docs/topics/) 下各专题文档的“已知限制 / 演进方向”。完成任一改进后，需要同步修改对应 topic 文档，例如工具改动更新 [docs/topics/tools.md](docs/topics/tools.md)，规划改动更新 [docs/topics/planning.md](docs/topics/planning.md)，记忆改动更新 [docs/topics/memory.md](docs/topics/memory.md)，避免 README 路线图和专题文档漂移。
+
+1. 补齐 `web_search` 工具和规划触发链路：当个人图谱/本地记忆无法覆盖，且不适合直接回答时，引入外部搜索兜底，并接入 router、planner、verifier 和 citation/evidence 结构。
+2. 收敛流式事件与 runtime API 边界：`entry_stream` 的 ask 路径已升级为模型 token 流，后续重点是统一 `ask_stream / entry_stream` 事件模型，并减少 Web 层直接访问 runtime 私有方法。
+3. 强化工具与计划校验：将 `ToolSpec.input_schema` 接入 `PlanValidator` 或 `ToolRegistry.execute()`，补齐工具权限、风险等级、外部访问和写入长期知识的统一治理策略。
+4. 建立跨层回归评测：覆盖 `entry -> router -> planner -> validator -> executor -> replanner -> fallback`，并为 `citation / relation_fact / snippet`、`resolve`、`draft_ready`、`pending_action_created` 补自动化样本。
+5. 完善固化与中间态闭环：增强 `solidify_conversation` 的候选结论抽取，补齐草稿入库后的状态回写，并为 `CrossSessionStore` 的草稿/结论续接补交互测试。
+6. 评估更深层状态治理：根据多会话窗口、长任务和多段审批的实际需求，决定是否引入 `session_key -> WorkingMemory` 缓存、SQLite/队列式 ask history 回补，以及 LangGraph checkpoint。
 
 ## 当前技术栈
 
@@ -139,7 +123,9 @@ README 只保留最短路径：
 - 图谱可用时，问答流程会尝试结合图谱事实、相关笔记和引用片段生成回答
 - 图谱不可用时，问答会回退到本地链路
 - 问答支持 `session_id` 会话上下文和服务端问答历史持久化
-- Web 侧提供同步问答和 `SSE` 返回方式
+- Web 侧提供同步问答和 `SSE` 返回方式；`ask_stream` 已升级为模型 token 流，边生成边推送
+- 图谱问答会构造 `relation_fact + snippet` 证据锚点，前端支持点击 citation 自动定位并高亮回答中的对应证据片段
+- 问答历史支持关键词搜索、单条删除和按会话删除
 
 ### 4. Direct Answer
 
@@ -150,8 +136,9 @@ README 只保留最短路径：
 ### 5. Knowledge Lifecycle
 
 - `delete_knowledge` 支持高风险规划和两阶段 HITL 删除确认
-- `delete_note` 工具会创建 pending action，并在确认后删除笔记、复习卡和可用的图谱 episode
-- `solidify_conversation` 已具备规划与 `capture_text` 入库工具基础，候选结论抽取仍需增强
+- 删除计划包含 `resolve` 步骤，可通过图谱 episode、本地相似检索、关键词匹配和最近 citations 解析待删笔记
+- `delete_note` 工具会创建 pending action，前端确认后删除笔记、复习卡和可用的图谱 episode
+- `solidify_conversation` 已具备草稿生成、`draft_ready` 事件、cross-session 草稿持久化和 `capture_text` 入库工具基础，候选结论抽取仍需增强
 
 ### 6. Digest
 
@@ -232,7 +219,7 @@ personalAgent/                  # 项目根目录
       ├─ feishu/                # 飞书接入（长连接、文件下载、消息回溯）
       ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding 接入
       ├─ memory/                # 工作记忆与会话摘要（MemoryFacade / WorkingMemory）
-      ├─ storage/               # 本地 JSON 和 Postgres 存储层
+      ├─ storage/               # 本地 JSON、cross-session 和 Postgres 存储层
       ├─ tools/                 # 统一 Tool 抽象与注册中心
       ├─ web/                   # FastAPI Web 接口层
       │  ├─ api.py              # API 路由（capture / ask / digest / notes / tools / pending-actions）
@@ -245,6 +232,7 @@ personalAgent/                  # 项目根目录
 
 - 本地知识数据：`data/notes.json`、`data/reviews.json`、`data/conversations.json`
 - 待确认操作：`data/pending_actions.json`
+- 跨请求上下文：`data/cross_session.json`
 - 上传源文件：`data/uploads/`
 - 服务端问答历史：`Postgres.ask_history`
 - 运行日志：`log/run.log`
@@ -327,9 +315,9 @@ uv run python -m personal_agent.main digest
 当前工程已经具备可运行的主链路，但仍有一些问题需要继续收敛：
 
 1. `ask` 的检索排序仍偏启发式，后续需要更稳定的 rerank、证据组织和回归评测。
-2. `citation` 与图谱 `relation_fact` 还没有严格绑定到可追踪证据锚点。
+2. `citation` 与图谱 `relation_fact` 已形成”事实 + 原文片段”的回答锚点，并通过 `_best_snippet()` 做句子级匹配；前端已支持点击 citation 自动定位高亮；后续仍需补评测样本。
 3. `capture` 已覆盖文本、网页链接和 PDF，后续可扩展 OCR、语音 ASR 等非结构化输入。
-4. SSE 现在是服务端分段推送已有答案，还不是直接透传上游模型 token 流。
-5. `ask history` 可以持久化到 Postgres，但搜索、删除等会话管理能力还不完善。
-6. 调试重置可以清理当前用户本地数据、问答历史、上传源文件和图谱分组，但还没有做更细粒度的选择式清理。
+4. `ask_stream` 和 `entry_stream` 的 ask 路径均已升级为模型 token 流，完成检索和图谱增强后直接消费上游 token 并推送 `answer_delta`，前端按 token 增量渲染；后续重点是统一两条流式入口的事件模型和 runtime API 边界。SSE 已保留 `plan_created`、`step_started`、`step_completed`、`citation`、`done`、`error` 等结构化事件。
+5. `ask history` 已支持关键词搜索（ILIKE）和按记录/按会话删除，前端已提供搜索栏和删除按钮；批量导出和按时间范围清理仍可补充。
+6. 已支持按笔记删除（`DELETE /api/notes/{note_id}`）和按会话清理问答历史；按标签/实体/时间的条件批量清理仍可补充。
 7. Windows 下 Vite 默认端口 5173 可能被系统保留（Hyper-V/WSL 动态端口范围），导致 `EACCES` 权限错误，需改用其他端口（如 3000）。

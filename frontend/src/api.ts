@@ -337,6 +337,38 @@ export function buildAskStreamUrl(question: string, userId = "default", sessionI
   return `/api/ask/stream?${params.toString()}`;
 }
 
+export function searchAskHistory(
+  query: string,
+  userId = "default",
+  limit = 20,
+  sessionId?: string
+): Promise<AskHistoryResponse> {
+  const sessionQuery = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : "";
+  return requestJson<AskHistoryResponse>(
+    `/api/ask-history/search?q=${encodeURIComponent(query)}&user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(String(limit))}${sessionQuery}`
+  );
+}
+
+export function deleteAskHistoryRecord(
+  recordId: string,
+  userId = "default"
+): Promise<{ ok: boolean; deleted_id: string }> {
+  return requestJson<{ ok: boolean; deleted_id: string }>(
+    `/api/ask-history/${encodeURIComponent(recordId)}?user_id=${encodeURIComponent(userId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export function deleteAskHistorySession(
+  sessionId: string,
+  userId = "default"
+): Promise<{ ok: boolean; deleted_count: number }> {
+  return requestJson<{ ok: boolean; deleted_count: number }>(
+    `/api/ask-history/session/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`,
+    { method: "DELETE" }
+  );
+}
+
 export function retryGraphSync(noteId: string): Promise<GraphSyncResponse> {
   return requestJson<GraphSyncResponse>(`/api/notes/${encodeURIComponent(noteId)}/graph-sync`, {
     method: "POST",
@@ -350,4 +382,64 @@ export function resetUserData(userId = "default"): Promise<ResetUserDataResponse
       user_id: userId,
     }),
   });
+}
+
+// ---- Pending Actions (HITL) ----
+
+export type PendingActionItem = {
+  id: string;
+  user_id: string;
+  action_type: string;
+  target_id: string;
+  title: string;
+  description: string;
+  status: "pending" | "confirmed" | "rejected" | "expired" | "executed";
+  payload?: Record<string, unknown>;
+  token?: string;
+  created_at: string;
+  expires_at: string;
+  resolved_at: string | null;
+  audit_log?: Array<{ timestamp: string; event: string; actor: string; detail: string }>;
+};
+
+export type PendingActionsResponse = {
+  items: PendingActionItem[];
+};
+
+export function fetchPendingActions(
+  userId = "default",
+  status?: string
+): Promise<PendingActionsResponse> {
+  const statusQuery = status ? `&status=${encodeURIComponent(status)}` : "";
+  return requestJson<PendingActionsResponse>(
+    `/api/pending-actions?user_id=${encodeURIComponent(userId)}${statusQuery}`
+  );
+}
+
+export function confirmPendingAction(
+  actionId: string,
+  token: string,
+  userId = "default"
+): Promise<{ ok: boolean; detail?: string }> {
+  return requestJson<{ ok: boolean; detail?: string }>(
+    `/api/pending-actions/${encodeURIComponent(actionId)}/confirm`,
+    {
+      method: "POST",
+      body: JSON.stringify({ token, user_id: userId }),
+    }
+  );
+}
+
+export function rejectPendingAction(
+  actionId: string,
+  userId = "default",
+  reason = ""
+): Promise<{ ok: boolean; detail?: string }> {
+  return requestJson<{ ok: boolean; detail?: string }>(
+    `/api/pending-actions/${encodeURIComponent(actionId)}/reject`,
+    {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, reason }),
+    }
+  );
 }

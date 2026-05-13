@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,11 +13,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ..agent.graph import build_ask_graph
 from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, PendingAction, ReviewCard
+from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, KnowledgeNote, PendingAction, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -318,45 +320,101 @@ def create_app() -> FastAPI:
         logger.info("Ask stream requested for user=%s session=%s", resolved_user, session_id)
 
         async def event_generator():
-            yield _sse_event(
-                "status",
-                {
-                    "message": "Searching your knowledge graph and local memory...",
-                },
-            )
-            result = await asyncio.to_thread(service.ask, question, resolved_user, session_id)
-            yield _sse_event(
-                "metadata",
-                {
-                    "citations": [citation.model_dump(mode="json") for citation in result.citations],
-                    "matches": [note.model_dump(mode="json") for note in result.matches],
-                    "graph_enabled": result.graph_enabled,
-                    "session_id": result.session_id,
-                },
+            yield _sse_event("status", {
+                "message": "Searching your knowledge graph and local memory...",
+            })
+
+            # Run the search synchronously (fast — no LLM call here)
+            runtime = service._runtime
+            runtime.memory.bind_session(resolved_user, session_id)
+            runtime.memory.working.set_goal(f"回答用户问题: {question[:80]}")
+            runtime.memory.refresh_conversation_summary(resolved_user, session_id)
+            working_context = runtime.memory.working.context_snapshot()
+            trace_id = uuid4().hex[:12]
+
+            graph_result = await asyncio.to_thread(
+                runtime.graph_store.ask, question, resolved_user, trace_id=trace_id
             )
 
-            built_answer = ""
-            for chunk in _chunk_answer(result.answer):
-                built_answer += chunk
-                yield _sse_event(
-                    "answer_delta",
-                    {
-                        "delta": chunk,
-                        "answer": built_answer,
-                    },
+            if graph_result.enabled:
+                matches, citations = runtime._graph_matches_and_citations(resolved_user, question, graph_result)
+                yield _sse_event("metadata", {
+                    "citations": [c.model_dump(mode="json") for c in citations],
+                    "matches": [n.model_dump(mode="json") for n in matches],
+                    "graph_enabled": True,
+                    "session_id": session_id,
+                })
+
+                prompt = runtime._build_graph_answer_prompt(
+                    question, graph_result, matches, citations, working_context,
                 )
-                await asyncio.sleep(0.02)
+                full_answer = ""
+                for event_type, payload in runtime._generate_answer_stream(prompt):
+                    if event_type == "answer_delta":
+                        full_answer = str(payload.get("answer", ""))
+                    yield _sse_event(event_type, payload)
+                    await asyncio.sleep(0)
 
-            yield _sse_event(
-                "done",
-                {
-                    "answer": result.answer,
-                    "citations": [citation.model_dump(mode="json") for citation in result.citations],
-                    "matches": [note.model_dump(mode="json") for note in result.matches],
-                    "graph_enabled": result.graph_enabled,
-                    "session_id": result.session_id,
-                },
+                if full_answer:
+                    runtime.memory.record_turn(
+                        resolved_user, session_id, question, full_answer,
+                        citations=citations, graph_enabled=True,
+                    )
+                    yield _sse_event("done", {
+                        "answer": full_answer,
+                        "citations": [c.model_dump(mode="json") for c in citations],
+                        "matches": [n.model_dump(mode="json") for n in matches],
+                        "graph_enabled": True,
+                        "session_id": session_id,
+                    })
+                return
+
+            # Local fallback
+            graph = build_ask_graph(runtime.store)
+            state = AgentState(mode="ask", question=question, user_id=resolved_user)
+            result = await asyncio.to_thread(lambda: AgentState.model_validate(graph.invoke(state)))
+            matches = result.matches
+            citations = result.citations
+
+            yield _sse_event("metadata", {
+                "citations": [c.model_dump(mode="json") for c in citations],
+                "matches": [n.model_dump(mode="json") for n in matches],
+                "graph_enabled": False,
+                "session_id": session_id,
+            })
+
+            evidence_blocks = runtime._build_note_evidence_blocks(matches, citations)
+            context_block = working_context or "无"
+            notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
+            prompt = (
+                "你是个人知识库助手。请基于最近几轮对话和当前匹配到的笔记内容证据，"
+                "用自然中文总结并回答用户问题。优先回答用户真正想问的内容，必要时承认信息不足。"
+                "不要把答案写成检索结果罗列，也不要简单重复原始片段。"
+                "回答尽量先给出一句直接结论，再补充必要解释。\n\n"
+                f"当前问题：{question}\n\n"
+                f"最近对话与任务上下文：\n{context_block}\n\n"
+                f"相关内容证据：\n{notes_block}"
             )
+
+            full_answer = ""
+            for event_type, payload in runtime._generate_answer_stream(prompt):
+                if event_type == "answer_delta":
+                    full_answer = str(payload.get("answer", ""))
+                yield _sse_event(event_type, payload)
+                await asyncio.sleep(0)
+
+            final_answer = full_answer or "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
+            runtime.memory.record_turn(
+                resolved_user, session_id, question, final_answer,
+                citations=citations, graph_enabled=False,
+            )
+            yield _sse_event("done", {
+                "answer": final_answer,
+                "citations": [c.model_dump(mode="json") for c in citations],
+                "matches": [n.model_dump(mode="json") for n in matches],
+                "graph_enabled": False,
+                "session_id": session_id,
+            })
 
         return StreamingResponse(
             event_generator(),
@@ -367,6 +425,24 @@ def create_app() -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.delete("/api/notes/{note_id}")
+    def delete_note(
+        note_id: str, request: Request, user_id: str | None = None
+    ) -> dict[str, object]:
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Delete note id=%s user=%s", note_id, resolved_user)
+        note = service.store.get_note(note_id)
+        if note is None or note.user_id != resolved_user:
+            raise HTTPException(status_code=404, detail="Note not found or not owned by user.")
+        graph_episode_uuid = note.graph_episode_uuid
+        service.store.delete_note(note_id, resolved_user)
+        if service.graph_store.configured() and graph_episode_uuid:
+            try:
+                service.graph_store.delete_episode(str(graph_episode_uuid))
+            except Exception:
+                logger.exception("Graph episode deletion failed for note %s", note_id)
+        return {"ok": True, "deleted_note_id": note_id}
 
     @app.post("/api/notes/{note_id}/graph-sync", response_model=GraphSyncResponse)
     def retry_graph_sync(note_id: str) -> GraphSyncResponse:
@@ -564,6 +640,40 @@ def create_app() -> FastAPI:
             ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
             plan_steps=result.plan_steps,
         )
+
+    @app.get("/api/ask-history/search", response_model=AskHistoryResponse)
+    def search_ask_history(
+        request: Request,
+        q: str = "",
+        user_id: str | None = None,
+        limit: int = 20,
+        session_id: str | None = None,
+    ) -> AskHistoryResponse:
+        resolved_user = user_id or _get_user_id(request, settings)
+        if not q.strip():
+            return AskHistoryResponse(items=[])
+        logger.info("Ask history search for user=%s query=%s", resolved_user, q[:80])
+        return AskHistoryResponse(items=service.search_ask_history(resolved_user, q, limit, session_id))
+
+    @app.delete("/api/ask-history/{record_id}")
+    def delete_ask_history_record(
+        record_id: str, request: Request, user_id: str | None = None
+    ) -> dict[str, object]:
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Delete ask history record id=%s user=%s", record_id, resolved_user)
+        deleted = service.delete_ask_record(resolved_user, record_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Record not found or not owned by user.")
+        return {"ok": True, "deleted_id": record_id}
+
+    @app.delete("/api/ask-history/session/{session_id}")
+    def delete_ask_history_session(
+        session_id: str, request: Request, user_id: str | None = None
+    ) -> dict[str, object]:
+        resolved_user = user_id or _get_user_id(request, settings)
+        logger.info("Delete ask history session=%s user=%s", session_id, resolved_user)
+        deleted_count = service.delete_ask_session(resolved_user, session_id)
+        return {"ok": True, "deleted_count": deleted_count}
 
     @app.post("/api/debug/reset-user-data", response_model=ResetUserDataResponse)
     def reset_user_data(http_request: Request, body: ResetUserDataRequest) -> ResetUserDataResponse:

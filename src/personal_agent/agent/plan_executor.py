@@ -133,8 +133,9 @@ class PlanExecutor:
                             "step_id": step.step_id,
                             "reason": "重试耗尽，尝试重新规划",
                         })
+                        replanned = False
                         try:
-                            intent = state.entry_input.source_type if state.entry_input else "text"
+                            intent = state.intent if state.intent else "unknown"
                             revised = self._replanner.replan(
                                 sorted_steps, step, err_msg, results, intent,
                             )
@@ -146,6 +147,9 @@ class PlanExecutor:
                                 self._memory.working.add_step(
                                     f"重新规划: 生成 {len(revised)} 个新步骤替代失败步骤 {step.step_id}"
                                 )
+                                replanned = True
+                                # Skip dependents of the failed step before replacing
+                                self._skip_dependents(step, sorted_steps, on_progress, progress)
                                 # Mark failed step as skipped (replaced by revised)
                                 step.status = "skipped"
                                 progress.skipped += 1
@@ -154,8 +158,17 @@ class PlanExecutor:
                                 sorted_steps = _topological_sort(sorted_steps)
                                 progress.total = len(sorted_steps)
                                 continue
+                            else:
+                                self._emit(on_progress, "plan_replan_failed", {
+                                    "step_id": step.step_id,
+                                    "reason": "Replanner 无法生成替代步骤",
+                                })
                         except Exception as replan_exc:
                             logger.exception("Replanner failed for step %s: %s", step.step_id, replan_exc)
+                            self._emit(on_progress, "plan_replan_failed", {
+                                "step_id": step.step_id,
+                                "reason": f"Replanner 异常: {replan_exc}",
+                            })
 
                 if step.status == "failed":
                     self._emit(on_progress, "plan_step_failed", {
@@ -170,6 +183,16 @@ class PlanExecutor:
 
             if step.status == "completed":
                 progress.completed += 1
+                # After resolve step, inject resolved note_id into dependent tool_call steps
+                if step.action_type == "resolve" and step.step_id in results:
+                    resolved_data = results[step.step_id]
+                    if isinstance(resolved_data, dict) and resolved_data.get("note_id"):
+                        self._inject_note_id(step.step_id, resolved_data["note_id"], sorted_steps)
+                # After compose step, inject draft text into dependent capture_text steps
+                if step.action_type == "compose" and step.step_id in results:
+                    draft = results[step.step_id]
+                    if isinstance(draft, dict) and draft.get("answer"):
+                        self._inject_draft_text(step.step_id, str(draft["answer"]), sorted_steps)
             elif step.status == "failed":
                 progress.failed += 1
                 if step.on_failure in ("skip", "retry"):
@@ -214,6 +237,27 @@ class PlanExecutor:
             result_data = self._execute_tool_call(step)
             results[step.step_id] = result_data
             step.status = "completed"
+            # Emit pending_action_created if tool result contains HITL confirmation data
+            if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
+                self._emit(on_progress, "pending_action_created", {
+                    "step_id": step.step_id,
+                    "action_id": result_data.get("action_id"),
+                    "token": result_data.get("token"),
+                    "action_type": "delete_note",
+                    "note_id": result_data.get("note_id"),
+                    "title": result_data.get("title"),
+                    "summary": result_data.get("summary"),
+                    "expires_at": result_data.get("expires_at"),
+                    "message": result_data.get("message"),
+                })
+            self._emit(on_progress, "plan_step_completed", {
+                "step_id": step.step_id,
+                "result_summary": _summarize(result_data),
+            })
+        elif step.action_type == "resolve":
+            result_data = self._execute_resolve(step, state, results)
+            results[step.step_id] = result_data
+            step.status = "completed"
             self._emit(on_progress, "plan_step_completed", {
                 "step_id": step.step_id,
                 "result_summary": _summarize(result_data),
@@ -221,11 +265,18 @@ class PlanExecutor:
         elif step.action_type == "compose":
             answer = self._execute_compose(step, state, results)
             state.answer = answer
+            results[step.step_id] = {"answer": answer, "draft": True}
             step.status = "completed"
             self._emit(on_progress, "plan_step_completed", {
                 "step_id": step.step_id,
                 "result_summary": answer[:120] if answer else "",
             })
+            # Emit draft_ready event if this is a solidify draft compose step
+            if answer:
+                self._emit(on_progress, "draft_ready", {
+                    "step_id": step.step_id,
+                    "draft_text": answer,
+                })
         elif step.action_type == "verify":
             self._execute_verify(step, state)
             step.status = "completed"
@@ -261,6 +312,150 @@ class PlanExecutor:
             logger.exception("Graph search failed in retrieve step %s", step.step_id)
             raise
 
+    def _execute_resolve(
+        self,
+        step: PlanStep,
+        state: AgentState,
+        results: dict[str, object],
+    ) -> object:
+        """Resolve a fuzzy delete target to concrete note_id(s).
+
+        Uses graph episode UUIDs from retrieve results to find matching local notes,
+        then falls back to local similarity search against the user's original query.
+        """
+        user_id = state.user_id
+        original_query = ""
+        if state.entry_input:
+            original_query = state.entry_input.text or ""
+
+        candidates: list[dict[str, object]] = []
+
+        # 1. Try to map graph episode UUIDs to local notes
+        for sid, data in results.items():
+            if not isinstance(data, dict):
+                continue
+            episode_uuids = data.get("related_episode_uuids")
+            if isinstance(episode_uuids, list) and episode_uuids:
+                str_uuids = [str(u) for u in episode_uuids if u]
+                if str_uuids:
+                    try:
+                        matched = self._runtime.store.find_notes_by_graph_episode_uuids(
+                            user_id, str_uuids
+                        )
+                        for note in matched:
+                            candidates.append({
+                                "note_id": note.id,
+                                "title": note.title,
+                                "summary": note.summary,
+                                "source": "graph_episode",
+                            })
+                    except Exception:
+                        logger.exception("Episode UUID lookup failed in resolve step")
+
+        # 2. Fall back to local similarity search via the original query
+        if not candidates and original_query:
+            try:
+                similar = self._runtime.store.find_similar_notes(
+                    user_id, original_query, limit=5
+                )
+                for note in similar:
+                    candidates.append({
+                        "note_id": note.id,
+                        "title": note.title,
+                        "summary": note.summary,
+                        "source": "text_similarity",
+                    })
+            except Exception:
+                logger.exception("Similarity search failed in resolve step")
+
+        # 3. Last resort: list recent notes and match by keyword
+        if not candidates:
+            try:
+                all_notes = self._runtime.store.list_notes(user_id)
+                query_lower = original_query.lower()
+                keyword_matches = []
+                for note in all_notes:
+                    title_lower = note.title.lower()
+                    content_lower = note.content.lower() if note.content else ""
+                    if query_lower and (query_lower in title_lower or query_lower in content_lower):
+                        keyword_matches.append(note)
+                for note in keyword_matches[:5]:
+                    candidates.append({
+                        "note_id": note.id,
+                        "title": note.title,
+                        "summary": note.summary,
+                        "source": "keyword_match",
+                    })
+            except Exception:
+                logger.exception("Keyword fallback failed in resolve step")
+
+        # 4. Cross-session citations: recently cited notes from ask responses
+        if not candidates:
+            try:
+                recent_cited = self._memory.recent_citations(user_id, limit=10)
+                for cited in recent_cited:
+                    candidates.append({
+                        "note_id": cited["note_id"],
+                        "title": cited["title"],
+                        "summary": cited.get("snippet", ""),
+                        "source": "recent_citation",
+                    })
+                if candidates:
+                    self._memory.working.add_step(
+                        f"通过最近引用记录找到 {len(candidates)} 个候选笔记"
+                    )
+            except Exception:
+                logger.exception("Cross-session citation lookup failed in resolve step")
+
+        if not candidates:
+            return {"note_id": None, "candidates": [], "error": "未找到匹配的笔记。请提供更具体的笔记标题或内容描述。"}
+
+        # Best candidate is the first one; all candidates are returned for UI display
+        best = candidates[0]
+        self._memory.working.add_step(
+            f"解析删除目标: {best.get('title')} ({best.get('note_id')}) "
+            f"来源={best.get('source')}，共 {len(candidates)} 个候选项"
+        )
+        return {
+            "note_id": best["note_id"],
+            "title": best["title"],
+            "summary": best.get("summary"),
+            "source": best["source"],
+            "candidates": candidates,
+        }
+
+    def _inject_note_id(
+        self,
+        resolve_step_id: str,
+        note_id: object,
+        sorted_steps: list[PlanStep],
+    ) -> None:
+        """Inject a resolved note_id into dependent delete_note tool_call steps."""
+        for s in sorted_steps:
+            if s.status != "planned":
+                continue
+            if resolve_step_id in s.depends_on and s.action_type == "tool_call" and s.tool_name == "delete_note":
+                if not s.tool_input:
+                    s.tool_input = {}
+                s.tool_input["note_id"] = str(note_id)
+                logger.info("Injected note_id=%s into step %s via resolve step %s", note_id, s.step_id, resolve_step_id)
+
+    def _inject_draft_text(
+        self,
+        compose_step_id: str,
+        text: str,
+        sorted_steps: list[PlanStep],
+    ) -> None:
+        """Inject composed draft text into dependent capture_text tool_call steps."""
+        for s in sorted_steps:
+            if s.status != "planned":
+                continue
+            if compose_step_id in s.depends_on and s.action_type == "tool_call" and s.tool_name == "capture_text":
+                if not s.tool_input:
+                    s.tool_input = {}
+                s.tool_input["text"] = text
+                logger.info("Injected draft text (%d chars) into step %s via compose step %s", len(text), s.step_id, compose_step_id)
+
     def _execute_tool_call(self, step: PlanStep) -> object:
         if not step.tool_name:
             raise ValueError("tool_call step missing tool_name")
@@ -278,7 +473,7 @@ class PlanExecutor:
         results: dict[str, object],
     ) -> str:
         """Generate a natural-language answer from collected results."""
-        intent = state.entry_input.source_type if state.entry_input else "text"
+        intent = state.intent or (state.entry_input.source_type if state.entry_input else "text")
 
         # Collect retrieved results for context
         context_parts: list[str] = []
@@ -302,10 +497,26 @@ class PlanExecutor:
 
         try:
             ask_result = self._runtime.execute_ask(question, state.user_id)
-            return ask_result.answer
+            answer = ask_result.answer
         except Exception:
             logger.exception("Compose step %s failed, generating simple answer", step.step_id)
-            return f"根据已有信息：{context[:500]}"
+            answer = f"根据已有信息：{context[:500]}"
+
+        # Save solidify_conversation drafts to cross-session store
+        if intent == "solidify_conversation" and answer:
+            try:
+                draft_context = context[:500]
+                draft_id = self._memory.save_draft(
+                    state.user_id, answer, source_context=draft_context,
+                )
+                if draft_id:
+                    self._memory.working.add_step(
+                        f"固化草稿已保存: {draft_id} ({len(answer)} 字符)"
+                    )
+            except Exception:
+                logger.exception("Failed to save solidify draft to cross_session store")
+
+        return answer
 
     def _execute_verify(self, step: PlanStep, state: AgentState) -> None:
         if not state.answer:

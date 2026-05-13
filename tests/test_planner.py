@@ -93,13 +93,13 @@ class TestPlannerEnrichedSteps:
 
     def test_plan_delete_knowledge_heuristic(self, planner):
         steps = planner.plan("delete_knowledge", "删除那条旧笔记")
-        assert len(steps) == 4
+        assert len(steps) == 5
         action_types = [s.action_type for s in steps]
-        assert action_types == ["retrieve", "verify", "tool_call", "compose"]
+        assert action_types == ["retrieve", "resolve", "verify", "tool_call", "compose"]
         # Delete steps should be high risk
-        assert steps[1].risk_level == "high"
-        assert steps[1].requires_confirmation is True
         assert steps[2].risk_level == "high"
+        assert steps[2].requires_confirmation is True
+        assert steps[3].risk_level == "high"
         # All steps have step_id
         for s in steps:
             assert s.step_id
