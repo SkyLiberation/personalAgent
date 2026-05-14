@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
-from ..core.models import AgentState, Citation, KnowledgeNote
+from ..core.models import AgentState, KnowledgeNote
 from ..memory import MemoryFacade
 from .planner import PlanStep
 from .react_runner import ReActStepRunner
@@ -141,7 +141,6 @@ class PlanExecutor:
                             "step_id": step.step_id,
                             "reason": "重试耗尽，尝试重新规划",
                         })
-                        replanned = False
                         try:
                             intent = state.intent if state.intent else "unknown"
                             revised = self._replanner.replan(
@@ -155,7 +154,6 @@ class PlanExecutor:
                                 self._memory.working.add_step(
                                     f"重新规划: 生成 {len(revised)} 个新步骤替代失败步骤 {step.step_id}"
                                 )
-                                replanned = True
                                 # Skip dependents of the failed step before replacing
                                 self._skip_dependents(step, sorted_steps, on_progress, progress)
                                 # Mark failed step as skipped (replaced by revised)

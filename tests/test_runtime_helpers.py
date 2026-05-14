@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from personal_agent.agent.runtime import (
     _best_snippet,
     _extract_question_keywords,

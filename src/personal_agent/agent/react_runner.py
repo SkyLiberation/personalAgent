@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from openai import OpenAI
@@ -94,7 +94,7 @@ class ReActStepRunner:
                     thought="", action_tool="", action_input={},
                     observation="LLM 输出无法解析为 JSON，跳过此轮。",
                 ))
-                user_prompt += f"\n\n观察：LLM 输出无法解析，请重新输出 JSON。"
+                user_prompt += "\n\n观察：LLM 输出无法解析，请重新输出 JSON。"
                 self._emit_iteration(on_progress, step.step_id, i, iterations[-1])
                 continue
 
