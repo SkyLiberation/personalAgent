@@ -3,6 +3,7 @@ from .providers import (
     BuiltinUrlCaptureProvider,
     DefaultUploadCaptureProvider,
     FirecrawlUrlCaptureProvider,
+    FirecrawlWebSearchProvider,
     UploadCaptureProvider,
     UrlCaptureProvider,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "CaptureService",
     "DefaultUploadCaptureProvider",
     "FirecrawlUrlCaptureProvider",
+    "FirecrawlWebSearchProvider",
     "UploadCaptureRequest",
     "UploadCaptureProvider",
     "UrlCaptureProvider",

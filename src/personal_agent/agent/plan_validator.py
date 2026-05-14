@@ -5,17 +5,21 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..tools.base import validate_tool_input
 from .planner import PlanStep
 from .router import RiskLevel, RouterDecision
 
 if TYPE_CHECKING:
     from ..tools import ToolRegistry
+    from ..tools.base import ToolSpec
 
 logger = logging.getLogger(__name__)
 
 VALID_ACTION_TYPES = {"retrieve", "tool_call", "compose", "verify", "resolve"}
 VALID_RISK_LEVELS: set[RiskLevel | str] = {"low", "medium", "high"}
 VALID_ON_FAILURE = {"skip", "retry", "abort"}
+VALID_EXECUTION_MODES = {"deterministic", "react"}
+MAX_REACT_ITERATIONS = 5
 
 
 @dataclass(slots=True)
@@ -51,6 +55,9 @@ def _clone_step(s: PlanStep) -> PlanStep:
         on_failure=s.on_failure,
         status=s.status,
         retry_count=s.retry_count,
+        execution_mode=getattr(s, "execution_mode", "deterministic"),
+        allowed_tools=list(getattr(s, "allowed_tools", [])),
+        max_iterations=getattr(s, "max_iterations", 3),
     )
 
 
@@ -69,6 +76,13 @@ class PlanValidator:
         if self._tool_registry is not None:
             return {s.name for s in self._tool_registry.list_tools()}
         return set()
+
+    def _get_tool_spec(self, name: str) -> "ToolSpec | None":
+        if self._tool_registry is not None:
+            tool = self._tool_registry.get(name)
+            if tool is not None:
+                return tool.spec
+        return None
 
     def validate(
         self,
@@ -117,6 +131,42 @@ class PlanValidator:
                         f"{prefix} tool_name={s.tool_name!r} 无法校验（ToolRegistry 未注入）。"
                     )
 
+            # Deep parameter validation against ToolSpec.input_schema
+            if s.action_type == "tool_call" and s.tool_name and s.tool_name in known_tools:
+                tool_spec = self._get_tool_spec(s.tool_name)
+                if tool_spec is not None and tool_spec.input_schema:
+                    schema_errors = validate_tool_input(tool_spec.input_schema, s.tool_input)
+                    for err in schema_errors:
+                        issues.append(f"{prefix} tool_input 参数校验失败: {err}")
+
+                # --- Governance cross-checks ---
+                if tool_spec is not None:
+                    # Tool requires confirmation but step doesn't
+                    if tool_spec.requires_confirmation and not s.requires_confirmation:
+                        warnings.append(
+                            f"{prefix} 工具 {s.tool_name!r} 要求确认（requires_confirmation=True），"
+                            f"但步骤未设置 requires_confirmation。"
+                        )
+                    # Tool writes longterm but step has no confirmation
+                    if tool_spec.writes_longterm and not s.requires_confirmation and s.risk_level != "high":
+                        warnings.append(
+                            f"{prefix} 工具 {s.tool_name!r} 会写入长期知识（writes_longterm=True），"
+                            f"建议步骤增加确认或提升风险等级。"
+                        )
+                    # Tool accesses external network
+                    if tool_spec.accesses_external:
+                        warnings.append(
+                            f"{prefix} 工具 {s.tool_name!r} 会访问外部网络（accesses_external=True），"
+                            f"请注意外部副作用。"
+                        )
+                    # Tool risk is higher than step risk
+                    risk_order = {"low": 0, "medium": 1, "high": 2}
+                    if risk_order.get(tool_spec.risk_level, 0) > risk_order.get(s.risk_level, 0):
+                        warnings.append(
+                            f"{prefix} 工具 {s.tool_name!r} 的固有风险等级为 "
+                            f"{tool_spec.risk_level!r}，高于步骤声明的 {s.risk_level!r}。"
+                        )
+
             if s.risk_level not in VALID_RISK_LEVELS:
                 issues.append(
                     f"{prefix} risk_level={s.risk_level!r} 无效，"
@@ -140,6 +190,37 @@ class PlanValidator:
                     f"{prefix} requires_confirmation=True 但 risk_level='low'，"
                     f"建议将 risk_level 至少设为 'medium'。"
                 )
+
+            # ReAct execution mode checks
+            exec_mode = getattr(s, "execution_mode", "deterministic")
+            if exec_mode not in VALID_EXECUTION_MODES:
+                issues.append(
+                    f"{prefix} execution_mode={exec_mode!r} 无效，"
+                    f"有效值：{sorted(VALID_EXECUTION_MODES)}。"
+                )
+            if exec_mode == "react":
+                if s.risk_level == "high":
+                    issues.append(
+                        f"{prefix} execution_mode='react' 不允许 risk_level='high'。"
+                    )
+                if s.requires_confirmation:
+                    issues.append(
+                        f"{prefix} execution_mode='react' 不允许 requires_confirmation=True。"
+                    )
+                allowed = getattr(s, "allowed_tools", [])
+                if isinstance(allowed, (list, tuple)):
+                    for tool_name in allowed:
+                        if tool_name not in known_tools and known_tools:
+                            issues.append(
+                                f"{prefix} allowed_tools 中的 {tool_name!r} 未在 ToolRegistry 中注册。"
+                            )
+                max_iter = getattr(s, "max_iterations", 3)
+                if not isinstance(max_iter, int) or max_iter < 1:
+                    issues.append(f"{prefix} max_iterations 必须为正整数。")
+                elif max_iter > MAX_REACT_ITERATIONS:
+                    warnings.append(
+                        f"{prefix} max_iterations={max_iter} 超过上限 {MAX_REACT_ITERATIONS}，已自动限制。"
+                    )
 
         # --- B. Dependency graph checks ---
         for i, s in enumerate(steps):

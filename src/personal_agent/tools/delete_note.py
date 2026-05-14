@@ -46,6 +46,9 @@ class DeleteNoteTool(BaseTool):
                 },
                 "required": ["note_id"],
             },
+            risk_level="high",
+            requires_confirmation=True,
+            writes_longterm=True,
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:
@@ -71,18 +74,39 @@ class DeleteNoteTool(BaseTool):
                 return ToolResult(ok=False, error="确认失败：action_id 或 token 无效、已过期或已处理。")
 
             try:
-                deleted_note = self._store.delete_note(note_id, user_id)
+                # Snapshot chunk list before deletion for graph cleanup
+                chunks_before = self._store.get_chunks_for_parent(note_id)
+                has_chunks = bool(chunks_before)
+                deleted_note = self._store.delete_note(note_id, user_id, cascade_chunks=has_chunks)
                 if deleted_note is None:
                     return ToolResult(ok=False, error=f"删除失败：笔记 {note_id} 不存在。")
 
                 graph_result = ""
-                if self._graph_store.configured() and deleted_note.graph_episode_uuid:
-                    try:
-                        if self._graph_store.delete_episode(deleted_note.graph_episode_uuid):
-                            graph_result = f"，已清理图谱 episode {deleted_note.graph_episode_uuid}"
-                    except Exception:
-                        logger.exception("Failed to delete graph episode for note %s", note_id)
-                        graph_result = "，图谱清理失败(已记录日志)"
+                graph_cleaned = 0
+                graph_failed = 0
+                if self._graph_store.configured():
+                    # Clean up parent graph episode
+                    if deleted_note.graph_episode_uuid:
+                        try:
+                            if self._graph_store.delete_episode(deleted_note.graph_episode_uuid):
+                                graph_cleaned += 1
+                        except Exception:
+                            logger.exception("Failed to delete graph episode for note %s", note_id)
+                            graph_failed += 1
+                    # Clean up chunk graph episodes
+                    for chunk in chunks_before:
+                        if chunk.graph_episode_uuid:
+                            try:
+                                if self._graph_store.delete_episode(chunk.graph_episode_uuid):
+                                    graph_cleaned += 1
+                            except Exception:
+                                logger.exception("Failed to delete graph episode for chunk %s", chunk.id)
+                                graph_failed += 1
+
+                if graph_cleaned:
+                    graph_result = f"，已清理 {graph_cleaned} 个图谱 episode"
+                if graph_failed:
+                    graph_result += f"，{graph_failed} 个图谱 episode 清理失败(已记录日志)"
 
                 self._pending_store.mark_executed(action_id, user_id)
                 return ToolResult(
@@ -98,13 +122,17 @@ class DeleteNoteTool(BaseTool):
                 return ToolResult(ok=False, error=str(exc)[:500])
 
         # Phase 1: create pending action for confirmation
+        chunk_count = len(self._store.get_chunks_for_parent(note_id))
+        cascade_note = "及其所有子章节笔记" if chunk_count else ""
         pending = PendingAction(
             user_id=user_id,
             action_type="delete_note",
             target_id=note_id,
-            title=f"删除笔记「{note.title}」",
+            title=f"删除笔记「{note.title}」{cascade_note}",
             description=(
-                f"将删除笔记「{note.title}」及其关联的复习卡片"
+                f"将删除笔记「{note.title}」{cascade_note}"
+                + (f"（共 {chunk_count + 1} 条笔记）" if chunk_count else "")
+                + "及其关联的复习卡片"
                 + ("和图谱映射。" if note.graph_episode_uuid else "。")
             ),
             payload={

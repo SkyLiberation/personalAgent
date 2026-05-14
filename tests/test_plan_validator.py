@@ -5,6 +5,8 @@ import pytest
 from personal_agent.agent.plan_validator import PlanValidationResult, PlanValidator
 from personal_agent.agent.planner import PlanStep
 from personal_agent.agent.router import RouterDecision
+from personal_agent.tools import ToolRegistry
+from personal_agent.tools.base import BaseTool, ToolResult, ToolSpec
 
 
 class TestPlanValidationResult:
@@ -324,3 +326,246 @@ class TestPlanValidatorPlanLevel:
         ]
         result = validator.validate(steps, decision)
         assert result.valid
+
+
+class _GovernanceHighRiskTool(BaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="dangerous_op",
+            description="高风险操作",
+            input_schema={
+                "type": "object",
+                "properties": {"target": {"type": "string"}},
+                "required": ["target"],
+            },
+            risk_level="high",
+            requires_confirmation=True,
+        )
+
+    def execute(self, **kwargs):
+        return ToolResult(ok=True, data="done")
+
+
+class _GovernanceWriteTool(BaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="write_op",
+            description="写入操作",
+            input_schema={
+                "type": "object",
+                "properties": {"content": {"type": "string"}},
+                "required": ["content"],
+            },
+            writes_longterm=True,
+        )
+
+    def execute(self, **kwargs):
+        return ToolResult(ok=True, data="saved")
+
+
+class _GovernanceExternalTool(BaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="external_op",
+            description="外部操作",
+            input_schema={
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+            accesses_external=True,
+        )
+
+    def execute(self, **kwargs):
+        return ToolResult(ok=True, data="fetched")
+
+
+class _ReadOnlyGraphSearchTool(BaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="graph_search",
+            description="只读图谱检索",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            },
+            risk_level="low",
+        )
+
+    def execute(self, **kwargs):
+        return ToolResult(ok=True, data={"results": []})
+
+
+class TestPlanValidatorGovernance:
+    @pytest.fixture
+    def registry(self):
+        reg = ToolRegistry()
+        reg.register(_GovernanceHighRiskTool())
+        reg.register(_GovernanceWriteTool())
+        reg.register(_GovernanceExternalTool())
+        return reg
+
+    @pytest.fixture
+    def validator(self, registry):
+        return PlanValidator(tool_registry=registry)
+
+    @pytest.fixture
+    def default_decision(self):
+        return RouterDecision(route="ask")
+
+    def test_tool_requires_confirmation_but_step_does_not_warns(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+                     tool_name="dangerous_op", risk_level="high"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("要求确认" in w for w in result.warnings)
+
+    def test_tool_requires_confirmation_and_step_has_it_passes(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+                     tool_name="dangerous_op", risk_level="high",
+                     requires_confirmation=True),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert not any("要求确认" in w for w in result.warnings)
+
+    def test_tool_writes_longterm_without_confirmation_warns(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="写入操作",
+                     tool_name="write_op", risk_level="low"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("写入长期知识" in w for w in result.warnings)
+
+    def test_tool_writes_longterm_with_high_risk_no_warning(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="写入操作",
+                     tool_name="write_op", risk_level="high"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert not any("写入长期知识" in w for w in result.warnings)
+
+    def test_tool_accesses_external_warns(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="外部操作",
+                     tool_name="external_op", risk_level="low"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("访问外部网络" in w for w in result.warnings)
+
+    def test_tool_risk_higher_than_step_warns(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+                     tool_name="dangerous_op", risk_level="low"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("固有风险等级" in w for w in result.warnings)
+
+    def test_deep_param_validation_missing_required(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+                     tool_name="dangerous_op", tool_input={}, risk_level="high"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("tool_input 参数校验失败" in i for i in result.issues)
+
+    def test_deep_param_validation_passes_with_valid_input(self, validator, default_decision):
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+                     tool_name="dangerous_op",
+                     tool_input={"target": "note-123"}, risk_level="high"),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert not any("tool_input 参数校验失败" in i for i in result.issues)
+
+
+class TestReActValidation:
+    """Validate ReAct-specific checks in PlanValidator."""
+
+    @pytest.fixture
+    def registry(self):
+        reg = ToolRegistry()
+        reg.register(_ReadOnlyGraphSearchTool())
+        return reg
+
+    @pytest.fixture
+    def validator(self, registry):
+        return PlanValidator(tool_registry=registry)
+
+    @pytest.fixture
+    def default_decision(self):
+        return RouterDecision(route="ask")
+
+    def test_react_blocks_high_risk(self, validator, default_decision):
+        steps = [
+            PlanStep(
+                step_id="s1", action_type="retrieve", description="test",
+                execution_mode="react", risk_level="high",
+                allowed_tools=["graph_search"], max_iterations=3,
+            ),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("execution_mode='react' 不允许 risk_level='high'" in i for i in result.issues)
+
+    def test_react_blocks_requires_confirmation(self, validator, default_decision):
+        steps = [
+            PlanStep(
+                step_id="s1", action_type="retrieve", description="test",
+                execution_mode="react", requires_confirmation=True,
+                allowed_tools=["graph_search"], max_iterations=3,
+            ),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("execution_mode='react' 不允许 requires_confirmation=True" in i for i in result.issues)
+
+    def test_react_validates_allowed_tools_registered(self, validator, default_decision):
+        steps = [
+            PlanStep(
+                step_id="s1", action_type="retrieve", description="test",
+                execution_mode="react",
+                allowed_tools=["graph_search", "nonexistent_tool"],
+                max_iterations=3,
+            ),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("nonexistent_tool" in i and "未在 ToolRegistry 中注册" in i for i in result.issues)
+
+    def test_react_warns_max_iterations_over_cap(self, validator, default_decision):
+        steps = [
+            PlanStep(
+                step_id="s1", action_type="retrieve", description="test",
+                execution_mode="react",
+                allowed_tools=["graph_search"],
+                max_iterations=10,
+            ),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("max_iterations" in w and "超过上限" in w for w in result.warnings)
+
+    def test_react_invalid_execution_mode(self, validator, default_decision):
+        steps = [
+            PlanStep(
+                step_id="s1", action_type="retrieve", description="test",
+                execution_mode="invalid",
+                allowed_tools=[], max_iterations=3,
+            ),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert any("execution_mode" in i and "无效" in i for i in result.issues)
+
+    def test_react_valid_step_passes(self, validator, default_decision):
+        steps = [
+            PlanStep(
+                step_id="s1", action_type="retrieve", description="检索",
+                execution_mode="react",
+                allowed_tools=["graph_search"],
+                max_iterations=3,
+            ),
+        ]
+        result = validator.validate(steps, default_decision)
+        assert result.ok

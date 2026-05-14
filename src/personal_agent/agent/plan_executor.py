@@ -9,6 +9,7 @@ from typing import Callable
 from ..core.models import AgentState, Citation, KnowledgeNote
 from ..memory import MemoryFacade
 from .planner import PlanStep
+from .react_runner import ReActStepRunner
 from .replanner import MAX_RETRIES, RETRY_DELAY_SECONDS, Replanner
 
 logger = logging.getLogger(__name__)
@@ -63,10 +64,17 @@ class PlanExecutor:
     Emits progress events through an optional callback for SSE streaming.
     """
 
-    def __init__(self, runtime, memory: MemoryFacade, replanner: Replanner | None = None) -> None:
+    def __init__(
+        self,
+        runtime,
+        memory: MemoryFacade,
+        replanner: Replanner | None = None,
+        react_runner: ReActStepRunner | None = None,
+    ) -> None:
         self._runtime = runtime
         self._memory = memory
         self._replanner = replanner
+        self._react_runner = react_runner
 
     def execute(
         self,
@@ -225,6 +233,23 @@ class PlanExecutor:
         on_progress: ProgressCallback,
     ) -> None:
         """Execute a single step by action_type. Raises on failure."""
+        # ReAct branch: step requests dynamic Thought/Action/Observation loop
+        if getattr(step, "execution_mode", "deterministic") == "react":
+            if self._react_runner is not None:
+                result_data = self._react_runner.run(step, state, results, on_progress)
+                results[step.step_id] = result_data
+                step.status = "completed"
+                self._emit(on_progress, "plan_step_completed", {
+                    "step_id": step.step_id,
+                    "result_summary": _summarize(result_data),
+                    "execution_mode": "react",
+                })
+                return
+            logger.warning(
+                "Step %s requests ReAct but no runner configured, falling back to deterministic",
+                step.step_id,
+            )
+
         if step.action_type == "retrieve":
             result_data = self._execute_retrieve(step, state)
             results[step.step_id] = result_data
@@ -343,12 +368,7 @@ class PlanExecutor:
                             user_id, str_uuids
                         )
                         for note in matched:
-                            candidates.append({
-                                "note_id": note.id,
-                                "title": note.title,
-                                "summary": note.summary,
-                                "source": "graph_episode",
-                            })
+                            candidates.append(self._build_candidate(note, "graph_episode"))
                     except Exception:
                         logger.exception("Episode UUID lookup failed in resolve step")
 
@@ -359,12 +379,7 @@ class PlanExecutor:
                     user_id, original_query, limit=5
                 )
                 for note in similar:
-                    candidates.append({
-                        "note_id": note.id,
-                        "title": note.title,
-                        "summary": note.summary,
-                        "source": "text_similarity",
-                    })
+                    candidates.append(self._build_candidate(note, "text_similarity"))
             except Exception:
                 logger.exception("Similarity search failed in resolve step")
 
@@ -380,12 +395,7 @@ class PlanExecutor:
                     if query_lower and (query_lower in title_lower or query_lower in content_lower):
                         keyword_matches.append(note)
                 for note in keyword_matches[:5]:
-                    candidates.append({
-                        "note_id": note.id,
-                        "title": note.title,
-                        "summary": note.summary,
-                        "source": "keyword_match",
-                    })
+                    candidates.append(self._build_candidate(note, "keyword_match"))
             except Exception:
                 logger.exception("Keyword fallback failed in resolve step")
 
@@ -394,12 +404,19 @@ class PlanExecutor:
             try:
                 recent_cited = self._memory.recent_citations(user_id, limit=10)
                 for cited in recent_cited:
-                    candidates.append({
-                        "note_id": cited["note_id"],
-                        "title": cited["title"],
-                        "summary": cited.get("snippet", ""),
-                        "source": "recent_citation",
-                    })
+                    cited_note_id = str(cited["note_id"])
+                    note = self._runtime.store.get_note(cited_note_id)
+                    if note is not None:
+                        candidates.append(self._build_candidate(note, "recent_citation"))
+                    else:
+                        candidates.append({
+                            "note_id": cited_note_id,
+                            "title": cited["title"],
+                            "summary": cited.get("snippet", ""),
+                            "source": "recent_citation",
+                            "parent_note_id": None,
+                            "parent_title": None,
+                        })
                 if candidates:
                     self._memory.working.add_step(
                         f"通过最近引用记录找到 {len(candidates)} 个候选笔记"
@@ -422,6 +439,17 @@ class PlanExecutor:
             "summary": best.get("summary"),
             "source": best["source"],
             "candidates": candidates,
+        }
+
+    def _build_candidate(self, note: KnowledgeNote, source: str) -> dict[str, object]:
+        parent = self._runtime.store.get_parent_note(note.id) if hasattr(self._runtime.store, "get_parent_note") else None
+        return {
+            "note_id": note.id,
+            "title": note.title,
+            "summary": note.summary,
+            "source": source,
+            "parent_note_id": note.parent_note_id or (parent.id if parent else None),
+            "parent_title": parent.title if parent else None,
         }
 
     def _inject_note_id(

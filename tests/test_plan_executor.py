@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import MagicMock
 
 from personal_agent.agent.plan_executor import (
     ExecutionProgress,
@@ -447,3 +448,349 @@ class TestPlanExecutorRetryReplan:
         executor.execute(steps, state, on_progress=_on_progress)
         assert "plan_step_retry" in events
         assert "plan_step_completed" in events
+
+
+class TestPlanExecutorResolve:
+    """4-tier resolve fallback: graph episode → similarity → keyword → citations."""
+
+    @pytest.fixture
+    def runtime(self):
+        from unittest.mock import MagicMock
+
+        from personal_agent.core.config import Settings
+
+        rt = MagicMock()
+        rt.settings = Settings(
+            openai_api_key="sk-test", openai_base_url="https://api.test/v1",
+            openai_model="gpt-test", openai_small_model="gpt-test-small",
+        )
+        rt.store = MagicMock()
+        rt.store.find_notes_by_graph_episode_uuids = MagicMock(return_value=[])
+        rt.store.find_similar_notes = MagicMock(return_value=[])
+        rt.store.list_notes = MagicMock(return_value=[])
+        rt.graph_store = MagicMock()
+        rt.execute_ask = MagicMock()
+        return rt
+
+    @pytest.fixture
+    def memory(self):
+        from unittest.mock import MagicMock
+
+        mem = MagicMock()
+        mem.working = MagicMock()
+        mem.working.add_step = MagicMock()
+        mem.recent_citations = MagicMock(return_value=[])
+        return mem
+
+    @pytest.fixture
+    def state(self):
+        from personal_agent.core.models import EntryInput
+
+        return AgentState(
+            mode="entry", user_id="test-user",
+            entry_input=EntryInput(text="删除那条关于旧部署流程的笔记"),
+        )
+
+    @pytest.fixture
+    def executor(self, runtime, memory):
+        return PlanExecutor(runtime, memory)
+
+    @pytest.fixture
+    def resolve_step(self):
+        return PlanStep(step_id="r1", action_type="resolve", description="确认删除目标")
+
+    def test_resolve_via_graph_episode(self, executor, runtime, memory, state, resolve_step):
+        """Tier 1: resolve candidates via graph episode UUIDs from prior retrieve."""
+        from personal_agent.core.models import KnowledgeNote
+
+        runtime.store.find_notes_by_graph_episode_uuids.return_value = [
+            KnowledgeNote(id="n1", title="旧部署流程", content="旧部署流程的正文。", summary="旧部署摘要"),
+        ]
+        results = {
+            "s1": {
+                "answer": "found",
+                "entity_names": ["部署"],
+                "related_episode_uuids": ["uuid-ep-1"],
+            },
+        }
+        result = executor._execute_resolve(resolve_step, state, results)
+        assert result["note_id"] == "n1"
+        assert result["source"] == "graph_episode"
+
+    def test_resolve_fallback_to_similarity(self, executor, runtime, memory, state, resolve_step):
+        """Tier 2: no graph episodes → fall back to text similarity search."""
+        from personal_agent.core.models import KnowledgeNote
+
+        runtime.store.find_similar_notes.return_value = [
+            KnowledgeNote(id="n2", title="部署流程笔记", content="详细描述部署流程。", summary="部署流程"),
+        ]
+        # results have no related_episode_uuids → tier 1 skipped
+        results: dict[str, object] = {}
+        result = executor._execute_resolve(resolve_step, state, results)
+        assert result["note_id"] == "n2"
+        assert result["source"] == "text_similarity"
+
+    def test_resolve_fallback_to_keyword(self, executor, runtime, memory, state, resolve_step):
+        """Tier 3: no similarity hits → fall back to keyword match on title/content."""
+        from personal_agent.core.models import KnowledgeNote
+
+        # Both tier 1 and 2 return empty
+        runtime.store.find_similar_notes.return_value = []
+        runtime.store.list_notes.return_value = [
+            KnowledgeNote(id="n3", title="旧部署流程文档", content="关于旧部署流程的记录。", summary="旧部署"),
+            KnowledgeNote(id="n4", title="其他笔记", content="无关内容。", summary="其他"),
+        ]
+        # Keyword match uses full query substring-in-title/check — use a short query
+        state.entry_input.text = "旧部署"
+        results: dict[str, object] = {}
+        result = executor._execute_resolve(resolve_step, state, results)
+        assert result["note_id"] == "n3"
+        assert result["source"] == "keyword_match"
+
+    def test_resolve_fallback_to_citations(self, executor, runtime, memory, state, resolve_step):
+        """Tier 4: all local searches fail → fall back to cross-session recent citations."""
+        runtime.store.list_notes.return_value = []
+        runtime.store.get_note.return_value = None  # note not found locally, use citation dict directly
+        memory.recent_citations.return_value = [
+            {"note_id": "n5", "title": "旧部署流程", "snippet": "之前引用过的笔记"},
+        ]
+        results: dict[str, object] = {}
+        result = executor._execute_resolve(resolve_step, state, results)
+        assert result["note_id"] == "n5"
+        assert result["source"] == "recent_citation"
+
+    def test_resolve_no_candidates_returns_error(self, executor, runtime, memory, state, resolve_step):
+        """All 4 tiers fail → returns error dict with None note_id."""
+        memory.recent_citations.return_value = []
+        results: dict[str, object] = {}
+        result = executor._execute_resolve(resolve_step, state, results)
+        assert result["note_id"] is None
+        assert "error" in result
+
+
+class TestPlanExecutorEvents:
+    """draft_ready, pending_action_created, and inject helpers."""
+
+    @pytest.fixture
+    def runtime(self):
+        from unittest.mock import MagicMock
+
+        from personal_agent.core.config import Settings
+
+        rt = MagicMock()
+        rt.settings = Settings(
+            openai_api_key="sk-test", openai_base_url="https://api.test/v1",
+            openai_model="gpt-test", openai_small_model="gpt-test-small",
+        )
+        rt.store = MagicMock()
+        rt.graph_store = MagicMock()
+        rt.execute_ask = MagicMock(return_value=MagicMock(answer="composed answer"))
+        rt.execute_capture = MagicMock()
+        return rt
+
+    @pytest.fixture
+    def memory(self):
+        from unittest.mock import MagicMock
+
+        mem = MagicMock()
+        mem.working = MagicMock()
+        mem.working.add_step = MagicMock()
+        mem.recent_citations = MagicMock(return_value=[])
+        mem.save_draft = MagicMock(return_value=None)
+        return mem
+
+    @pytest.fixture
+    def state(self):
+        from personal_agent.core.models import EntryInput
+
+        return AgentState(
+            mode="entry", user_id="test-user",
+            entry_input=EntryInput(text="把讨论结论固化下来"),
+            intent="solidify_conversation",
+        )
+
+    def test_draft_ready_event_emitted(self, runtime, memory, state):
+        """Compose step with non-empty answer emits draft_ready event."""
+        executor = PlanExecutor(runtime, memory)
+        events: list[tuple[str, dict]] = []
+
+        def _on_progress(event: str, payload: dict) -> None:
+            events.append((event, payload))
+
+        steps = [
+            PlanStep(step_id="s1", action_type="compose", description="生成草稿",
+                     tool_input={"question": "总结讨论"}),
+        ]
+        executor.execute(steps, state, on_progress=_on_progress)
+
+        draft_events = [(e, p) for e, p in events if e == "draft_ready"]
+        assert len(draft_events) == 1
+        assert draft_events[0][1]["draft_text"] == "composed answer"
+
+    def test_pending_action_created_event_emitted(self, runtime, memory, state):
+        """tool_call returning pending_confirmation emits pending_action_created event."""
+        executor = PlanExecutor(runtime, memory)
+
+        def _fake_tool_call(step):
+            return {
+                "pending_confirmation": True,
+                "action_id": "act-1",
+                "token": "tok-abc",
+                "note_id": "n10",
+                "title": "待删除笔记",
+                "message": "确认删除？",
+            }
+
+        executor._execute_tool_call = _fake_tool_call  # type: ignore[assignment]
+
+        events: list[tuple[str, dict]] = []
+
+        def _on_progress(event: str, payload: dict) -> None:
+            events.append((event, payload))
+
+        steps = [
+            PlanStep(step_id="s1", action_type="tool_call", description="删除笔记",
+                     tool_name="delete_note"),
+        ]
+        executor.execute(steps, state, on_progress=_on_progress)
+
+        pending_events = [(e, p) for e, p in events if e == "pending_action_created"]
+        assert len(pending_events) == 1
+        assert pending_events[0][1]["action_id"] == "act-1"
+        assert pending_events[0][1]["note_id"] == "n10"
+
+    def test_no_draft_ready_when_compose_empty(self, runtime, memory, state):
+        """Empty compose answer does NOT emit draft_ready."""
+        from unittest.mock import MagicMock
+
+        runtime.execute_ask.return_value = MagicMock(answer="")
+        executor = PlanExecutor(runtime, memory)
+        events: list[str] = []
+
+        def _on_progress(event: str, _payload: dict) -> None:
+            events.append(event)
+
+        steps = [
+            PlanStep(step_id="s1", action_type="compose", description="生成草稿"),
+        ]
+        executor.execute(steps, state, on_progress=_on_progress)
+        assert "draft_ready" not in events
+
+    def test_inject_note_id_populates_dependent_tool_input(self, runtime, memory, state):
+        """After resolve, note_id is injected into dependent delete_note tool_call step."""
+        executor = PlanExecutor(runtime, memory)
+
+        # Mock resolve to return a note_id and skip actual LLM compose
+        def _fake_resolve(step, st, results):
+            return {"note_id": "n99", "title": "目标笔记", "source": "keyword_match"}
+
+        executor._execute_resolve = _fake_resolve  # type: ignore[assignment]
+        executor._execute_tool_call = lambda step: {"ok": True}  # type: ignore[assignment]
+        executor._execute_compose = lambda step, st, results: "done"  # type: ignore[assignment]
+
+        steps = [
+            PlanStep(step_id="r1", action_type="resolve", description="确认删除目标"),
+            PlanStep(step_id="t1", action_type="tool_call", description="执行删除",
+                     tool_name="delete_note", depends_on=["r1"]),
+        ]
+        executor.execute(steps, state)
+
+        # The tool_call step should have had note_id injected
+        tool_step = next(s for s in steps if s.step_id == "t1")
+        assert tool_step.tool_input.get("note_id") == "n99"
+
+
+class TestReActStepDispatch:
+    """Test that execution_mode='react' steps are dispatched to ReActStepRunner."""
+
+    @pytest.fixture
+    def executor_with_react(self, settings):
+        from personal_agent.agent.react_runner import ReActStepRunner
+        from personal_agent.core.config import Settings
+
+        rt = MagicMock()
+        rt.settings = Settings(
+            openai_api_key="sk-test", openai_base_url="https://api.test/v1",
+            openai_model="gpt-test", openai_small_model="gpt-test-small",
+        )
+        rt.graph_store = MagicMock()
+        rt.execute_ask = MagicMock(return_value=MagicMock(answer="test answer"))
+
+        mem = MagicMock()
+        mem.working = MagicMock()
+        mem.working.add_step = MagicMock()
+
+        react_runner = MagicMock(spec=ReActStepRunner)
+        react_runner.run.return_value = {"answer": "react result", "entity_names": ["test"]}
+        return PlanExecutor(rt, mem, react_runner=react_runner), react_runner, mem
+
+    def test_react_step_dispatched_to_runner(self, executor_with_react):
+        executor, react_runner, _ = executor_with_react
+
+        state = AgentState(mode="entry", user_id="test-user")
+        steps = [
+            PlanStep(
+                step_id="r1", action_type="retrieve",
+                description="查找笔记",
+                execution_mode="react",
+                allowed_tools=["graph_search"],
+                max_iterations=3,
+            ),
+        ]
+        executor.execute(steps, state)
+
+        assert steps[0].status == "completed"
+        react_runner.run.assert_called_once()
+        assert state.answer is not None
+
+    def test_react_step_emits_execution_mode(self, executor_with_react):
+        executor, react_runner, _ = executor_with_react
+
+        events: list[tuple[str, dict]] = []
+        def on_progress(event: str, payload: dict) -> None:
+            events.append((event, payload))
+
+        state = AgentState(mode="entry", user_id="test-user")
+        steps = [
+            PlanStep(
+                step_id="r1", action_type="retrieve",
+                description="查找",
+                execution_mode="react",
+                allowed_tools=["graph_search"],
+                max_iterations=2,
+            ),
+        ]
+        executor.execute(steps, state, on_progress=on_progress)
+
+        completed_events = [(e, p) for e, p in events if e == "plan_step_completed"]
+        assert len(completed_events) == 1
+        assert completed_events[0][1].get("execution_mode") == "react"
+
+    def test_react_falls_back_without_runner(self, settings):
+        """When no runner configured, react step falls back to deterministic handler."""
+        rt = MagicMock()
+        rt.graph_store.ask.return_value = type("R", (), {
+            "enabled": True, "answer": "graph answer",
+            "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
+        })()
+
+        mem = MagicMock()
+        mem.working = MagicMock()
+        mem.working.add_step = MagicMock()
+
+        executor = PlanExecutor(rt, mem)
+        state = AgentState(mode="entry", user_id="test-user")
+
+        steps = [
+            PlanStep(
+                step_id="r1", action_type="retrieve",
+                description="检索",
+                execution_mode="react",
+                allowed_tools=["graph_search"],
+                max_iterations=3,
+                tool_input={"question": "test"},
+            ),
+        ]
+        executor.execute(steps, state)
+        # Should have fallen back to deterministic retrieve and completed
+        assert steps[0].status == "completed"

@@ -76,10 +76,10 @@
 
 作用：
 
-- 保存 `notes.json` 中的长期知识 note
+- 保存 `notes.json` 中的长期知识 note（支持 parent note + chunk notes 模型，通过 `parent_note_id / chunk_index / source_span` 建立文档级关联）
 - 保存 `reviews.json` 中的复习卡
 - 保存 `conversations.json` 中的本地问答历史降级数据
-- 提供本地相似检索、图谱 episode 到 note 的映射
+- 提供本地相似检索（含按 parent 去重）、图谱 episode 到 note 的映射、chunk 查询（`get_chunks_for_parent` / `get_parent_note`）和级联删除
 
 这里的 `notes/reviews` 是长期知识层；`conversations.json` 主要用于 ask history 的本地兜底。
 
@@ -234,4 +234,3 @@ A: ...
 - 为 ask history 降级层增加更可靠的缓冲与回补机制
 - 为 `solidify_conversation` 补齐草稿状态闭环
 - 当多段审批或更复杂恢复流增多后，再评估是否引入 LangGraph checkpoint
-

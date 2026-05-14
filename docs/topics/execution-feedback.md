@@ -66,6 +66,8 @@
 
 - 已支持同步 API 返回结构化结果
 - 已支持 `ask_stream` 和 `entry_stream` ask 路径的模型 token 流式输出
+- 已统一 `ask_stream` 和 `entry_stream` ask 路径的底层公开 API：`AgentRuntime.execute_ask_stream()`
+- 已支持 `execution_trace` 事件，用于展示非计划驱动路径的执行轨迹
 - 已支持 entry SSE 事件
 - 已支持计划创建和步骤状态回传
 - 已支持 pending action 创建、确认和拒绝
@@ -73,12 +75,13 @@
 - 已支持 citation 元数据返回
 - 已支持图谱同步手动重试
 - 已支持问答历史搜索、单条删除和按会话删除
+- 已补事件回归样本：`test_plan_executor.py` 覆盖 `draft_ready`、`pending_action_created`、计划步骤状态和 ReAct dispatch 事件
 
 ## 已知限制
 
-### 1. `ask_stream` 与 `entry_stream` 事件模型仍需收敛
+### 1. 事件 schema 仍未形式化
 
-`ask_stream` 和 `entry_stream` 的 ask 路径已经都是模型 token 流。后续需要继续收敛两者的事件模型、metadata/citation 表达和执行路径边界。
+当前 SSE 已覆盖 `status / metadata / answer_delta / citation / plan_* / execution_trace / pending_action_created / draft_ready / done / error` 等事件，但还没有统一的 `AgentEvent` 类型模型。不同入口和前端仍依赖事件名与 payload 约定协作。
 
 ### 2. 计划执行事件主要服务 Web
 
@@ -94,9 +97,7 @@
 
 ## 演进方向
 
-- 统一 `ask_stream` 和 `entry_stream` 的事件模型与执行路径边界
-- 建立统一 Agent event schema
+- 将 SSE / execution trace / plan progress 抽象为统一 `AgentEvent` schema
 - 将计划事件扩展到飞书和 CLI
 - 为 pending action 增加更完整的状态机视图
 - 为错误反馈增加结构化错误码和恢复建议
-

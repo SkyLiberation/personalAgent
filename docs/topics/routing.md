@@ -84,6 +84,7 @@
 - 已具备删除类确认要求
 - 已具备候选工具字段
 - 已能驱动 planner 是否进入 `requires_planning`
+- `ask` 默认候选工具已包含 `graph_search / web_search`
 
 ## 已知限制
 
@@ -93,7 +94,7 @@
 
 ### 2. `candidate_tools` 还不是完整工具选择策略
 
-当前 `candidate_tools` 主要是提示性字段，不等同于严格的工具选择和排序策略。比如未来加入 `web_search` 后，需要更明确地表达工具优先级：
+当前 `candidate_tools` 主要是提示性字段，不等同于严格的工具选择和排序策略。虽然 `ask` 已包含 `graph_search / web_search`，但工具优先级仍主要写在 runtime 的检索回退链路中：
 
 ```text
 graph_search -> local memory -> web_search
@@ -110,7 +111,6 @@ graph_search -> local memory -> web_search
 ## 演进方向
 
 - 为路由层新增更细粒度的工具优先级字段
-- 将 `web_search` 接入 ask 低置信度兜底路由
 - 补齐 `missing_information` 驱动的澄清流程
 - 为路由结果建立评测集和误判回归样本
 - 将 intent 默认控制字段从硬编码逐步迁移为可配置策略

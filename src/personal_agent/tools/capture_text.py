@@ -31,6 +31,8 @@ class CaptureTextTool(BaseTool):
                 },
                 "required": ["text"],
             },
+            risk_level="low",
+            writes_longterm=True,
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:

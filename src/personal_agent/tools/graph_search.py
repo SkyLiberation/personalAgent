@@ -26,6 +26,7 @@ class GraphSearchTool(BaseTool):
                 },
                 "required": ["question"],
             },
+            risk_level="low",
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:
@@ -48,6 +49,9 @@ class GraphSearchTool(BaseTool):
                     "entity_names": result.entity_names,
                     "relation_facts": result.relation_facts,
                     "related_episode_uuids": result.related_episode_uuids,
+                    "node_refs": [r.model_dump(mode="json") for r in result.node_refs],
+                    "edge_refs": [r.model_dump(mode="json") for r in result.edge_refs],
+                    "fact_refs": [r.model_dump(mode="json") for r in result.fact_refs],
                 },
             )
         except Exception as exc:

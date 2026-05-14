@@ -5,6 +5,7 @@ from .capture_url import CaptureUrlTool
 from .delete_note import DeleteNoteTool
 from .graph_search import GraphSearchTool
 from .registry import ToolRegistry
+from .web_search import WebSearchTool
 
 __all__ = [
     "BaseTool",
@@ -16,4 +17,5 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "ToolSpec",
+    "WebSearchTool",
 ]

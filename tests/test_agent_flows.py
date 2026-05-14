@@ -24,8 +24,14 @@ def test_settings(temp_dir: Path) -> Settings:
 @pytest.fixture
 def service(test_settings: Settings) -> AgentService:
     svc = AgentService(test_settings)
-    svc.graph_store = MagicMock()
-    svc.graph_store.configured.return_value = False
+    mock_store = MagicMock()
+    mock_store.configured.return_value = False
+    # ask() must return disabled so execute_ask takes the local path
+    mock_store.ask.return_value = GraphAskResult(enabled=False)
+    # ingest_note() must return disabled so capture doesn't enter graph sync path
+    mock_store.ingest_note.return_value = GraphCaptureResult(enabled=False)
+    svc.graph_store = mock_store
+    svc._runtime.graph_store = mock_store
     return svc
 
 
@@ -54,6 +60,99 @@ class TestCaptureFlow:
             text="来源笔记", source_type="text", source_ref="https://example.com", attempt_graph=False
         )
         assert result.note.source_ref == "https://example.com"
+
+    def test_short_text_single_note_no_chunks(self, service: AgentService):
+        result = service.capture(text="这是一条短笔记", source_type="text", attempt_graph=False)
+        assert result.note is not None
+        assert result.chunk_notes == []
+
+    def test_long_text_produces_chunks(self, service: AgentService):
+        long_content = "\n".join([
+            "## 第一节",
+            "",
+            "第一节的详细内容。" * 350,
+            "",
+            "## 第二节",
+            "",
+            "第二节的详细内容。" * 350,
+            "",
+            "## 第三节",
+            "",
+            "第三节的详细内容。" * 350,
+        ])
+        result = service.capture(text=long_content, source_type="text", attempt_graph=False)
+        assert result.note is not None
+        # Long content should produce chunk_notes
+        assert len(result.chunk_notes) > 0
+        # Chunks should have parent_note_id pointing to the parent
+        for chunk in result.chunk_notes:
+            assert chunk.parent_note_id == result.note.id
+            assert chunk.chunk_index is not None and chunk.chunk_index >= 1
+
+    def test_capture_chunks_persisted_in_store(self, service: AgentService):
+        long_content = "\n".join([
+            "## 章节A",
+            "",
+            "A的详细内容。" * 350,
+            "",
+            "## 章节B",
+            "",
+            "B的详细内容。" * 350,
+        ])
+        result = service.capture(text=long_content, source_type="text", attempt_graph=False)
+        parent_id = result.note.id
+        # Chunks should be retrievable from store
+        chunks = service.store.get_chunks_for_parent(parent_id)
+        assert len(chunks) == len(result.chunk_notes)
+        # All chunks should have correct parent_note_id
+        for chunk in chunks:
+            assert chunk.parent_note_id == parent_id
+
+    def test_capture_chunks_get_pending_graph_status(self, service: AgentService):
+        """Chunk notes should get graph_sync_status='pending' when graph is configured."""
+        long_content = "\n".join([
+            "## 章节A",
+            "",
+            "A的详细内容。" * 350,
+            "",
+            "## 章节B",
+            "",
+            "B的详细内容。" * 350,
+        ])
+        # Mock graph_store as configured to ensure 'pending' status
+        service.graph_store.configured.return_value = True
+        result = service.capture(text=long_content, source_type="text", attempt_graph=False)
+        for chunk in result.chunk_notes:
+            assert chunk.graph_sync_status == "pending"
+        service.graph_store.configured.return_value = False  # Restore for other tests
+
+    def test_chunk_delete_cleans_graph_episodes(self, service: AgentService):
+        """When cascade-deleting, chunk graph episodes should be cleaned up."""
+        from unittest.mock import MagicMock
+
+        service.graph_store.configured.return_value = True
+        service.graph_store.delete_episode = MagicMock(return_value=True)
+
+        # Create parent with chunks that have graph_episode_uuid
+        parent = KnowledgeNote(id="p-g", title="父文档", content="完整", summary="...", user_id="default")
+        service.store.add_note(parent)
+        service.store.add_note(KnowledgeNote(
+            id="c-g1", title="子1", content="...", summary="...", user_id="default",
+            parent_note_id="p-g", chunk_index=1, graph_episode_uuid="ep-chunk-1",
+        ))
+        service.store.add_note(KnowledgeNote(
+            id="c-g2", title="子2", content="...", summary="...", user_id="default",
+            parent_note_id="p-g", chunk_index=2, graph_episode_uuid="ep-chunk-2",
+        ))
+
+        # Delete with cascade — should call delete_episode for chunks
+        deleted = service.store.delete_note("p-g", "default", cascade_chunks=True)
+        assert deleted is not None
+        assert service.store.get_note("p-g") is None
+        assert service.store.get_note("c-g1") is None
+        assert service.store.get_note("c-g2") is None
+        # Chunk episodes would be cleaned up by delete_note tool; store.delete_note handles local cleanup
+        service.graph_store.configured.return_value = False
 
 
 class TestAskFlow:

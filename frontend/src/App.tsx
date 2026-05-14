@@ -74,6 +74,7 @@ type AskHistoryView = AskHistoryItem & {
   status: "streaming" | "done" | "error";
   error?: string;
   plan_steps?: PlanStep[];
+  execution_trace?: string[];
 };
 
 type SessionSummary = {
@@ -302,6 +303,19 @@ export default function App() {
           current.map((item) =>
             item.id === historyItem.id
               ? { ...item, plan_steps: payload.plan_steps }
+              : item
+          )
+        );
+      }
+    });
+
+    source.addEventListener("execution_trace", (streamEvent) => {
+      const payload = parseSsePayload<{ execution_trace?: string[] }>(streamEvent);
+      if (payload.execution_trace?.length) {
+        setAskHistory((current) =>
+          current.map((item) =>
+            item.id === historyItem.id
+              ? { ...item, execution_trace: payload.execution_trace }
               : item
           )
         );
@@ -873,7 +887,7 @@ export default function App() {
                                   })
                                 }
                               >
-                                Agent 计划执行 {item.plan_steps.length} 步
+                                Agent 执行计划 {item.plan_steps.length} 步
                                 <span className="plan-toggle-icon">
                                   {expandedPlans.has(item.id) ? " ▾" : " ▸"}
                                 </span>
@@ -899,6 +913,35 @@ export default function App() {
                                       </li>
                                     );
                                   })}
+                                </ol>
+                              ) : null}
+                            </div>
+                          ) : item.execution_trace?.length ? (
+                            <div className="plan-panel">
+                              <button
+                                type="button"
+                                className="plan-toggle"
+                                onClick={() =>
+                                  setExpandedPlans((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.id)) next.delete(item.id);
+                                    else next.add(item.id);
+                                    return next;
+                                  })
+                                }
+                              >
+                                Agent 执行路径
+                                <span className="plan-toggle-icon">
+                                  {expandedPlans.has(item.id) ? " ▾" : " ▸"}
+                                </span>
+                              </button>
+                              {expandedPlans.has(item.id) ? (
+                                <ol className="plan-steps-list">
+                                  {item.execution_trace.map((trace, idx) => (
+                                    <li key={idx} className="plan-step-item plan-step-trace">
+                                      <span className="plan-step-desc">{trace}</span>
+                                    </li>
+                                  ))}
                                 </ol>
                               ) : null}
                             </div>

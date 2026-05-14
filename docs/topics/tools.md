@@ -33,6 +33,7 @@
 - 描述工具名 `name`
 - 描述工具用途 `description`
 - 描述输入结构 `input_schema`
+- 描述治理属性 `risk_level / requires_confirmation / writes_longterm / accesses_external`
 
 `ToolSpec` 会被 `ToolRegistry.list_tools()` 暴露给 planner、API 和前端。
 
@@ -86,6 +87,8 @@ solidify_conversation -> capture_text
 
 主要用于文本采集，也被 `solidify_conversation` 复用为草稿入库工具。
 
+当前 `capture_text` 复用的是 runtime 的基础 capture pipeline。短文本和固化草稿生成单条 `KnowledgeNote`；长文章（>2000 字符）自动按标题/段落拆分为 parent + N chunk notes。
+
 ### 2. `capture_url`
 
 代码位置：[capture_url.py](../../src/personal_agent/tools/capture_url.py)
@@ -111,6 +114,23 @@ solidify_conversation -> capture_text
 - 通过上传 provider 提取文本
 - 服务 PDF、文档等文件采集入口
 
+### 采集 provider 分层
+
+采集链路已经从 Web 层拆到独立的 `capture` 模块：
+
+- [web/api.py](../../src/personal_agent/web/api.py)：负责 HTTP 路由、参数接收和返回响应
+- [capture/service.py](../../src/personal_agent/capture/service.py)：负责采集流程编排和 provider 注册
+- [capture/providers/](../../src/personal_agent/capture/providers)：负责具体来源实现，例如上传文件和 URL 抓取
+- [capture/utils.py](../../src/personal_agent/capture/utils.py)：负责文件名、URL 校验、HTML/PDF 文本抽取等公共工具
+
+当前 provider 包括：
+
+- `DefaultUploadCaptureProvider`
+- `FirecrawlUrlCaptureProvider`
+- `BuiltinUrlCaptureProvider`
+
+后续接入新的采集来源时，应优先扩展 `capture/providers` 或在 `CaptureService` 中注册新 provider，避免把外部平台集成逻辑继续塞回 `web/api.py`。
+
 ### 4. `graph_search`
 
 代码位置：[graph_search.py](../../src/personal_agent/tools/graph_search.py)
@@ -124,9 +144,50 @@ solidify_conversation -> capture_text
 注意：
 
 - `graph_search` 搜的是个人知识图谱，不是公网互联网
-- 图谱不可用或无结果时，需要依赖本地检索、resolve fallback 或后续可能新增的 web search
+- 图谱不可用或无结果时，会回退到本地检索，再回退到 web search
 
-### 5. `delete_note`
+### 5. `web_search`
+
+代码位置：[web_search.py](../../src/personal_agent/tools/web_search.py)
+
+作用：
+
+- 在公网互联网上搜索与问题相关的最新信息
+- 作为 ask 第三层回退（图谱 → 本地 → 网络搜索）
+- 仅在个人知识库和图谱无法覆盖时启用
+- 依赖 Firecrawl `/v1/search` API，需要配置 `FIRECRAWL_API_KEY`
+
+输入：
+
+```json
+{
+  "query": "string",
+  "limit": 5,
+  "scrape": false
+}
+```
+
+输出：
+
+```json
+{
+  "results": [
+    {
+      "title": "...",
+      "url": "...",
+      "snippet": "...",
+      "source": "firecrawl",
+      "published_at": null
+    }
+  ]
+}
+```
+
+若 `scrape=true`，会复用 `CaptureService.capture_text_from_url()` 抓取前 2 条结果正文，追加到 snippet。
+
+治理属性：`risk_level="low"`, `accesses_external=True`（会触发 PlanValidator 外部副作用 warning）。
+
+### 6. `delete_note`
 
 代码位置：[delete_note.py](../../src/personal_agent/tools/delete_note.py)
 
@@ -152,6 +213,7 @@ solidify_conversation -> capture_text
 - 始终注册 `graph_search`
 - 始终注册 `capture_text`
 - 始终注册 `delete_note`
+- 当 `FIRECRAWL_API_KEY` 配置时注册 `web_search`
 
 代码位置：[runtime.py](../../src/personal_agent/agent/runtime.py)
 
@@ -181,29 +243,18 @@ ToolRegistry.execute(tool_name, **tool_input)
 - 已具备 planner 可见的工具说明
 - 已具备 validator 动态工具校验
 - 已具备计划执行器中的工具调用
-- 已具备采集文本、采集 URL、采集上传文件、图谱检索和删除笔记工具
+- 已具备采集文本、采集 URL、采集上传文件、图谱检索、网络搜索和删除笔记工具
 - 已具备删除类高风险工具的两阶段 HITL 确认
+- 已具备 ask 三层检索回退（图谱 → 本地 → 网络搜索）
 - 已预留工具级 `execute_with_fallback()` 能力
+- 已具备工具级治理字段：`risk_level`、`requires_confirmation`、`writes_longterm`、`accesses_external`
+- 已具备 `ToolRegistry.execute()` 输入 schema 前置校验，参数错误在工具执行前即暴露
+- 已具备 `validate_tool_input()` 公共校验函数，PlanValidator 可复用做计划阶段参数校验
+- 已具备受控 ReAct 工具调用：`ReActStepRunner` 复用 `ToolRegistry.execute()`，并受 `allowed_tools / max_iterations / risk_level / requires_confirmation` 约束
 
 ## 已知限制
 
-### 1. 缺少公网网络搜索工具
-
-当前项目没有 `web_search(query)` 这类工具。已有的搜索能力分别是：
-
-- `graph_search`：搜索个人知识图谱
-- ask history search：搜索历史问答
-- `capture_url`：抓取已知 URL 的正文
-
-Firecrawl 当前接入的是网页正文抓取能力，不是 query 搜索能力。因此它可以作为未来 `web_search` 的 provider，但当前还没有被封装成网络搜索工具。
-
-合理的触发点是：
-
-- 图谱和本地记忆无法匹配
-- LLM 判断不应直接回答
-- 问题确实需要外部事实或最新资料
-
-### 2. 工具级 fallback 没有接入主执行链
+### 1. 工具级 fallback 没有接入主执行链
 
 `ToolRegistry` 已经有 `execute_with_fallback()`，但当前 `PlanExecutor` 使用的是明确工具名的 `execute()`。
 
@@ -214,68 +265,67 @@ Firecrawl 当前接入的是网页正文抓取能力，不是 query 搜索能力
 - executor 的 retry / skip / abort / replan
 - delete resolve 的图谱、本地相似检索、关键词和 recent citations 回退
 
-### 3. 工具输入 schema 目前只做描述，没有强校验
+### 2. ReAct 工具调用策略仍是首版
 
-`ToolSpec.input_schema` 已经存在，但工具参数校验主要散落在各工具的 `execute()` 内部。后续可以考虑把 schema 校验前移到 `ToolRegistry.execute()` 或 `PlanValidator`，让错误更早暴露。
+当前工具调用有两条路径：
 
-### 4. 工具权限和风险分级还不完整
+- 确定性 `tool_call` 步骤：由 planner 生成明确工具名，再由 `PlanExecutor` 调用 `ToolRegistry.execute()`
+- ReAct 步骤：由 `ReActStepRunner` 在单个 step 内根据 observation 选择只读工具，并继续通过 `ToolRegistry.execute()` 执行
 
-当前高风险删除通过 `PendingActionStore` 做了 HITL，但工具层本身还没有统一的权限模型，例如：
+当前 ReAct 约束包括：
 
-- 工具是否允许外部入口直接调用
-- 工具是否需要用户确认
-- 工具是否允许写入长期知识
-- 工具是否可以访问公网
+- 每个 ReAct step 可以声明 `allowed_tools`
+- 每个 ReAct step 必须受 `max_iterations` 上限约束
+- 高风险、写长期知识或需要确认的工具不能被 ReAct 调用
+- 每次 action / observation 会进入 `react_iteration` 事件
+- 首批主要开放 `web_search / graph_search` 等只读检索工具
+
+后续需要继续扩展工具适配与审计字段，让 ReAct action / observation 能进入统一 evidence/citation 或 `AgentEvent` schema。
+
+### 3. 工具输入 schema 校验仍可增强
+
+`ToolSpec.input_schema` 已通过 `validate_tool_input()` 接入：
+- `ToolRegistry.execute()` 默认启用 schema 校验（`validate_schema=True`），参数错误在工具执行前即返回失败
+- `PlanValidator` 在计划校验阶段对 `tool_call` 步骤做深度参数校验，缺失必填字段会生成阻断性 issue
+
+当前校验覆盖 required 字段检查和基础类型匹配（string/boolean/integer/number）。复杂嵌套结构校验仍需补充。
+
+### 4. 工具权限和风险分级仍偏基础
+
+已为 `ToolSpec` 增加统一治理字段：
+
+- `risk_level`（low/medium/high）：工具固有风险等级
+- `requires_confirmation`：工具是否本身要求用户确认
+- `writes_longterm`：工具是否会写入长期知识
+- `accesses_external`：工具是否会访问外部网络
+
+`PlanValidator` 已接入治理交叉校验：
+- 工具 `requires_confirmation=True` 但步骤未设确认 → warning
+- 工具 `writes_longterm=True` 但步骤无确认且非 high 风险 → warning
+- 工具 `accesses_external=True` → warning（提示外部副作用）
+- 工具固有风险等级高于步骤声明 → warning
+
+更复杂的组织/角色/租户权限模型仍未建立。
 
 ### 5. 工具结果还没有统一证据模型
 
 `graph_search` 会返回 relation facts 和 episode UUID，`capture_url` 返回正文文本，`delete_note` 返回 pending action 信息。不同工具的 `data` 结构还没有统一成可追踪 citation/evidence 模型。
 
-## Web Search 建议设计
+### 6. 长文采集的 chunk / document 模型已接入
 
-建议新增 `web_search`，而不是把搜索逻辑塞进 `capture_url`。
+已在 `KnowledgeNote` 上增加 `parent_note_id / chunk_index / source_span` 三个可选字段（默认 None，完全向后兼容）。capture 阶段通过 `core/chunking.py` 的纯函数 `chunk_content()` 按 markdown 标题（`##`/`###`）拆分长文，无标题时回退到双换行段落拆分；短内容（<2000 字符）保持单条笔记不动。
 
-原因：
+当前 chunk 模型的已实现特性：
 
-- `capture_url` 的职责是抓取已知 URL
-- `web_search` 的职责是根据 query 找候选网页
-- `graph_search` 的职责是搜索个人知识图谱
-
-建议输入：
-
-```json
-{
-  "query": "string",
-  "limit": 5,
-  "scrape": false
-}
-```
-
-建议输出：
-
-```json
-{
-  "results": [
-    {
-      "title": "...",
-      "url": "...",
-      "snippet": "...",
-      "source": "firecrawl",
-      "published_at": null
-    }
-  ]
-}
-```
-
-若 `scrape=true`，可以复用现有 `CaptureService.capture_text_from_url()` 抓取前几个结果正文。
+- **Capture**：长文自动产出 1 条 parent note（`chunk_index=0`，保留完整 content）+ N 条 chunk notes（`chunk_index=1..N`，各有独立 title/content/source_span）
+- **Store**：`get_chunks_for_parent()` / `get_parent_note()` / 级联删除 / `list_notes(include_chunks=False)` / `find_similar_notes` 按 parent 去重
+- **Delete**：`delete_note` 和 `confirm_pending_action` 自动检测子 chunk 并级联删除
+- **Ask/Evidence**：parent note 用 summary 作为证据上下文（避免整篇塞入 prompt），chunk 和独立笔记用 content[:500]
+- **Resolve**：候选笔记包含 `parent_note_id` / `parent_title`，前端可展示 chunk 所属文档
+- **API**：`GET /api/notes/{note_id}/chunks`、`GET /api/notes?flat=true`、`DELETE /api/notes/{note_id}?cascade=true`
+- **Graph Sync**：chunk note 会以 `graph_sync_status="pending"` 进入后台图谱同步，级联删除时也会清理 chunk 持有的 graph episode
 
 ## 演进方向
 
-- 新增 `web_search` 工具，并明确它只在个人知识无法覆盖时启用
-- 将 Firecrawl search 能力作为 `web_search` provider，而保留现有 scrape 能力给 `capture_url`
-- 在 router/planner 中加入外部搜索触发语义，例如 `allow_external_search` 或 `candidate_tools=["graph_search", "web_search"]`
-- 将 `ToolSpec.input_schema` 接入统一参数校验
-- 为工具增加统一风险等级、权限和确认策略
 - 将工具结果逐步规范为可追踪 evidence/citation 结构
 - 根据需要把 `execute_with_fallback()` 接入计划执行链，或明确只作为低层备用接口保留
-

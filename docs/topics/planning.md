@@ -106,6 +106,26 @@ verify
 - `compose`：生成回答、删除摘要或固化草稿
 - `verify`：校验回答或执行结果
 
+`PlanStep` 已支持可选执行策略字段：
+
+```text
+execution_mode = "deterministic" | "react"
+allowed_tools = [...]
+max_iterations = 3
+```
+
+`execution_mode="react"` 的步骤会交给 `ReActStepRunner` 进入小范围 Thought / Action / Observation 循环；其他步骤继续走确定性 handler。`PlanExecutor` 仍负责全局依赖、状态推进、失败处理和审计，ReAct 只作为单步内部策略。
+
+当前实现约束：
+
+- `allowed_tools` 为空时默认只允许只读检索工具（`graph_search / web_search`）
+- 高风险、写长期知识和确认类工具不会被 ReAct 调用
+- `max_iterations` 有上限，validator 会对过大值给出 warning
+- 每轮 action / observation 会发出 `react_iteration` 事件
+- `ask` 和 `delete_knowledge` 的 retrieve 步已经启用 ReAct
+
+当前 `ReActStepRunner` 是工程内自定义受控 runner，直接复用 `ToolRegistry.execute()`，没有把整个 `PlanExecutor` 替换成不透明 agent。这样可以获得动态观察能力，同时保留规划层已有的可校验和可回放边界。
+
 ### 5. `Replanner`
 
 代码位置：[replanner.py](../../src/personal_agent/agent/replanner.py)
@@ -129,15 +149,15 @@ MAX_RETRIES = 3
 
 1. `AgentRuntime.execute_entry()` 接收入口请求
 2. `DefaultIntentRouter` 产出 `RouterDecision`
-3. `DefaultTaskPlanner` 生成 `PlanStep` 列表
-4. `PlanValidator` 校验计划
+3. 若 `requires_planning=True`，`DefaultTaskPlanner` 生成 `PlanStep` 列表
+4. `PlanValidator` 校验真实执行计划
 5. 校验结果写入 `WorkingMemory.plan_steps`
-6. 计划通过 API / SSE 返回给前端展示
+6. 若 `requires_planning=False`，不生成正式计划，后续由 runtime 记录轻量 `execution_trace`
 
 注意：
 
-- 当前所有 entry 都会生成可观测计划
-- 但不是所有 entry 都由 `PlanExecutor` 驱动执行
+- 当前只有需要计划驱动的 entry 才会生成可执行 `plan_steps`
+- 普通 `ask / capture / direct_answer` 使用 `execution_trace` 表达执行路径
 - `PlanValidator` 已注入 `ToolRegistry`，工具校验不再依赖硬编码白名单
 
 ### 计划驱动执行
@@ -149,7 +169,7 @@ MAX_RETRIES = 3
 - `delete_knowledge`
 - `solidify_conversation`
 
-其他意图仍走稳定的 LangGraph 固定分支：
+其他意图仍走稳定的 LangGraph 固定分支，并通过 `execution_trace` 可观测：
 
 - `capture`
 - `ask`
@@ -157,16 +177,23 @@ MAX_RETRIES = 3
 - `direct_answer`
 - `unknown`
 
-### 计划可观测
+### 计划与执行路径可观测
 
-计划会进入：
+真实计划会进入：
 
 - `WorkingMemory.plan_steps`
 - `EntryResult.plan_steps`
 - SSE `plan_created / plan_step_started / plan_step_completed / plan_step_failed / plan_execution_complete`
 - 前端可折叠计划面板
 
-这意味着计划既参与 prompt 上下文，也会作为用户可见的执行结构返回给 Web 前端。
+非计划驱动路径会进入：
+
+- `WorkingMemory.execution_trace`
+- `EntryResult.execution_trace`
+- SSE `execution_trace`
+- 前端“Agent 执行路径”面板
+
+这避免把不会被 `PlanExecutor` 执行的步骤展示成正式计划。
 
 ## 典型计划
 
@@ -192,6 +219,8 @@ retrieve -> resolve -> verify -> tool_call(delete_note) -> compose
 - 本地相似检索
 - 关键词匹配
 - 最近 citations
+
+resolve 返回的候选笔记现已包含 `parent_note_id` / `parent_title`，前端可展示 chunk 所属的父文档。
 
 ### `solidify_conversation`
 
@@ -219,37 +248,18 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 - 已具备工具名动态校验，避免硬编码白名单漂移
 - 已具备依赖图校验和循环依赖检测
 - 已具备风险等级和确认要求校验
+- 已具备工具治理交叉校验（工具固有 vs 步骤声明的 risk_level、requires_confirmation、writes_longterm、accesses_external）
+- 已具备计划阶段 `tool_input` 深度参数校验（基于 `ToolSpec.input_schema`）
 - 已具备计划执行器和步骤状态机
 - 已具备 SSE 进度事件和前端计划面板
+- 已具备 `plan_steps` 与 `execution_trace` 语义拆分
 - 已具备失败重试、依赖跳过、abort 和重规划
 - 已具备删除目标解析链路
 - 已具备固化草稿生成和注入 `capture_text` 的基础链路
 
 ## 已知限制
 
-### 1. 计划不是所有任务的真实执行引擎
-
-当前 `capture / ask / summarize / direct_answer / unknown` 仍主要走 LangGraph 固定分支。它们会生成计划并展示，但真正执行不完全由 `PlanExecutor` 驱动。
-
-这让系统更稳，但也意味着计划和真实执行链路之间仍存在双轨。
-
-### 2. `ask` 的外部搜索规划还缺失
-
-当前 `ask` 计划默认是：
-
-```text
-retrieve -> compose -> verify
-```
-
-检索主要面向个人知识图谱和本地记忆。若图谱和本地记忆无法匹配，且 LLM 判断不应直接回答，规划层还没有 `web_search` 步骤可选。
-
-后续需要结合工具层新增 `web_search`，并让 planner 能生成类似：
-
-```text
-graph_search/local_retrieve -> web_search -> compose -> verify
-```
-
-### 3. LLM 规划输出仍依赖文本约束
+### 1. LLM 规划输出仍依赖文本约束
 
 虽然 planner 要求 LLM 输出 JSON，并且 validator 会做二次校验，但当前字段语义仍主要由 prompt 约束。复杂任务下可能出现：
 
@@ -258,31 +268,41 @@ graph_search/local_retrieve -> web_search -> compose -> verify
 - 工具输入不完整
 - 风险等级低估
 
-### 4. `PlanValidator` 还没有深度参数校验
+### 2. `PlanValidator` 深度参数校验仍可增强
 
-当前 validator 能校验工具是否存在，但没有基于 `ToolSpec.input_schema` 对 `tool_input` 做完整 schema 校验。
+`PlanValidator` 已基于 `ToolSpec.input_schema` 对 `tool_call` 步骤的 `tool_input` 做前置校验，缺失必填字段或类型不匹配会生成阻断性 issue。`ToolRegistry.execute()` 也默认启用 schema 校验，工具执行前即暴露参数错误。
 
-因此一些参数错误会延迟到工具执行阶段才暴露。
+当前校验覆盖 required 字段检查和基础类型匹配（string/boolean/integer/number），复杂嵌套结构校验仍需补充。
 
-### 5. 审批和恢复还不是 checkpoint 级别
+### 3. 审批和恢复还不是 checkpoint 级别
 
 删除类操作使用 `PendingActionStore` 做应用层两阶段确认，但当前没有引入 LangGraph checkpoint。多段审批或长时间中断恢复能力仍有限。
 
-### 6. 重规划仍偏补救式
+### 4. 重规划仍偏补救式
 
 `Replanner` 能在失败后生成替代步骤，但当前更偏“失败后 salvage”，还不是完整的全局动态规划。比如：
 
 - 未统一重新校验 revised steps
 - 对已执行副作用的建模有限
-- 对工具级权限和风险继承还不完整
+- 对工具级权限和风险继承已有基础支持（`ToolSpec` governance 字段），但 revised steps 重新校验仍未统一
+
+### 5. ReAct 单步策略已接入，仍需扩展
+
+`PlanExecutor` 已能按 `execution_mode` 在确定性 handler 和 `ReActStepRunner` 之间分发。ReAct runner 当前定位为单步内部的受控检索/观察循环，而不是替代整个计划执行器。
+
+已落地能力：
+
+- `PlanStep.execution_mode / allowed_tools / max_iterations`
+- `PlanValidator` 对 ReAct 的风险、确认、工具白名单和迭代上限校验
+- `PlanExecutor._dispatch_step()` 的 ReAct 分支
+- `ReActStepRunner` 的 Thought / Action / Observation 循环和 `react_iteration` 事件
+- `tests/test_react_runner.py` 与 `tests/test_plan_executor.py::TestReActStepDispatch`
+
+剩余改进主要是扩大适用步骤、沉淀更稳定的 ReAct prompt/事件 schema，并评估是否需要用 LangGraph `StateGraph` 重写 runner 内部状态机。
 
 ## 演进方向
 
 - 为规划层新增独立文档化的 plan schema，并让 LLM 输出更稳定
-- 将 `ToolSpec.input_schema` 接入 `PlanValidator`
-- 引入 `web_search` 作为 ask 低置信度兜底步骤
 - 明确哪些 intent 必须由 `PlanExecutor` 驱动，逐步减少双轨执行
 - 为 revised steps 增加重新校验流程
 - 为多段审批和长任务恢复评估 LangGraph checkpoint
-- 补充 `entry -> router -> planner -> validator -> executor -> replanner -> fallback` 的回归评测样本
-

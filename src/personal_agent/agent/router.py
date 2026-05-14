@@ -53,7 +53,7 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
             confidence=0.85,
             requires_retrieval=True,
             risk_level="low",
-            candidate_tools=["graph_search"],
+            candidate_tools=["graph_search", "web_search"],
             user_visible_message=reason or "检索知识库并生成回答。",
         )
     if intent == "summarize_thread":

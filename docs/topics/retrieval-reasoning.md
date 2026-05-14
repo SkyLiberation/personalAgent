@@ -8,7 +8,8 @@
 
 - 优先使用 Graphiti/Neo4j 图谱检索
 - 图谱不可用时回退本地笔记检索
-- 将图谱事实和笔记片段组织成证据
+- 本地检索证据不足时回退到 Firecrawl 网络搜索
+- 将图谱事实、笔记片段和网络搜索结果组织成证据
 - 生成回答后进行 verifier 校验
 - 低置信度时尝试自修正或标注不确定性
 
@@ -25,6 +26,111 @@
 - 通过 Graphiti search 查询相关节点和关系
 - 生成 relation facts、entity names、episode UUIDs
 - 支持删除 episode
+
+#### 自定义本体与兼容层
+
+自定义本体定义位于 [ontology.py](../../src/personal_agent/graphiti/ontology.py)，当前包含：
+
+- `Person`
+- `Project`
+- `Concept`
+- `Organization`
+- `Source`
+
+由于 DeepSeek 与 Graphiti 的结构化输出约定并不完全一致，项目增加了兼容层：
+
+- [deepseek_compatible_client.py](../../src/personal_agent/graphiti/deepseek_compatible_client.py)
+- [dashscope_compatible_embedder.py](../../src/personal_agent/graphiti/dashscope_compatible_embedder.py)
+- [store.py](../../src/personal_agent/graphiti/store.py)
+
+当前已兼容的常见差异包括：
+
+- 列表根对象自动包装为 Graphiti 期望的对象结构
+- `entity -> name`
+- `type / entity_type -> entity_type_id`
+- `facts -> edges`
+- `source_entity / target_entity -> source_entity_name / target_entity_name`
+- 字典式摘要转换为 `summaries: [{name, summary}]`
+- DashScope embedding 单批限制自动分片
+
+#### Graphiti 返回内容
+
+Graphiti 原始接口主要在两类场景返回图结构结果：
+
+1. 写入 note 时调用 `add_episode`
+2. 问答检索时调用 `search_`
+
+当前项目不会把 Graphiti 原始对象直接暴露给上层，而是转换成内部模型。
+
+写入 note 后，Graphiti 的 `add_episode` 结果会包含：
+
+- `episode.uuid`：本次写入生成的 graph episode 标识
+- `nodes`：抽取出的实体节点
+- `edges`：抽取出的关系边，每条边有 `fact`
+
+项目将其包装为 `GraphCaptureResult`：
+
+```text
+enabled
+error
+episode_uuid
+entity_names
+relation_facts
+related_episode_uuids
+```
+
+其中 `episode_uuid` 会回写到本地 `KnowledgeNote.graph_episode_uuid`，`entity_names / relation_facts` 会回写到 note 的图谱字段，`related_episode_uuids` 用于记录本次内容和既有图谱 episode 的关联。
+
+当前 `_ingest_note()` 在 `add_episode` 成功后还会执行一次 `search_`：
+
+```text
+add_episode
+  -> 写入当前 note
+  -> 返回当前 episode_uuid / nodes / edges
+
+search_after_ingest
+  -> 用 note.summary 搜索用户图谱
+  -> 从命中 edge.episodes 中收集历史 episode UUID
+  -> 排除当前 add_episode 生成的 episode_uuid
+  -> 填充 related_episode_uuids
+```
+
+这次 `search_` 不会修改 `episode_uuid / entity_names / relation_facts`，只用于补充 `related_episode_uuids`。Runtime 随后会用这些 UUID 反查本地 `KnowledgeNote.graph_episode_uuid`，并更新当前 note 的 `related_note_ids`。因此它的作用是“写入后关联笔记发现”，不是 Graphiti 入库的必要步骤。
+
+问答检索时，Graphiti 的 `search_` 结果会包含：
+
+- `nodes`：命中的实体节点
+- `edges`：命中的关系边
+- `edge.fact`：关系事实文本
+- `edge.episodes`：支撑该关系边的 episode UUID 列表
+
+项目将其排序、去重并包装为 `GraphAskResult`：
+
+```text
+enabled
+error
+answer
+entity_names
+relation_facts
+related_episode_uuids
+citations
+citation_hits
+```
+
+其中 `answer` 不是最终自然语言回答，而是 Graphiti 检索摘要，主要包含最相关实体和关联事实；最终回答仍由 `AgentRuntime` 基于图谱事实、笔记证据和 working memory 重新生成。
+
+`citation_hits` 是项目在 Graphiti `edges` 基础上加工出来的证据命中结构：
+
+```text
+episode_uuid
+relation_fact
+endpoint_names
+matched_terms
+entity_overlap_count
+score
+```
+
+它的作用是把图谱关系事实映射回本地 note，并进一步生成 `relation_fact + snippet` 证据锚点。
 
 ### 2. 本地检索
 
@@ -68,6 +174,13 @@
 - 已支持回答后 verifier 校验
 - 已支持低置信度自修正和不确定性标注
 - 已支持删除目标解析时利用图谱 episode、本地相似检索、关键词和 recent citations
+- 已支持 ask 三层检索回退（图谱 → 本地 → 网络搜索）
+- 已支持 Graphiti 写入后通过 `search_after_ingest` 发现 related notes（非关键步骤，失败不影响核心图谱同步）
+- 已支持长文 parent + chunk 检索单元：`parent_note_id / chunk_index / source_span`
+- 已支持 chunk note 独立后台图谱同步（capture 设 `graph_sync_status="pending"`，API 层 background_tasks 调用 `sync_note_to_graph()`）
+- 已支持级联删除时清理 chunk 的 graph episode
+- 已支持相似检索按 parent 去重，并在回答证据中区分 parent summary 与 chunk content
+- 已补基础回归样本：`test_verifier.py` 覆盖 web citation 计分与孤儿 citation，`test_plan_executor.py` 覆盖 resolve 多级回退和 `relation_fact + snippet` 相关执行路径
 
 ## 已知限制
 
@@ -75,23 +188,42 @@
 
 当前图谱结果和本地结果已经可用，但复杂问题下的 rerank、证据合并和多跳推理仍有提升空间。
 
-### 2. 缺少公网网络搜索兜底
-
-当个人知识图谱和本地记忆无法覆盖问题，且 LLM 不应直接回答时，当前还没有 `web_search` 工具参与检索链路。
-
-### 3. verifier 是轻量规则校验
+### 2. verifier 是轻量规则校验
 
 `AnswerVerifier` 主要基于 citation 有效性、匹配数量、图谱加分和兜底措辞计算 evidence score。它不是完整事实校验器，也不会深入判断关系事实是否逻辑一致。
 
-### 4. 复杂推理能力仍有限
+### 3. 复杂推理能力仍有限
 
 当前更擅长基于已有 note 和 graph facts 组织答案。跨多个实体、多个时间点、多条关系的推理仍需要更强的检索规划和证据组合。
+
+### 4. chunk 级 Graphiti episode 已支持后台同步
+
+chunk note 现已支持独立图谱同步：capture 阶段对每个 chunk 设 `graph_sync_status="pending"`，API 层 background_tasks 对每个 chunk 独立调用 `sync_note_to_graph()`（含重试/退避）。chunk note 可获得独立的 `episode_uuid / entity_names / relation_facts`，图谱搜索命中后 episode 反查可达章节级。
+
+级联删除时也会清理 chunk 独立持有的 graph episode。
+
+后续可进一步将 parent episode 与 chunk `source_span` 的映射策略显式化，让 `relation_fact` 能精确定位到 chunk 内段落。
+
+### 5. `search_after_ingest` 已降级为非关键步骤
+
+`search_after_ingest` 已用 try/except 包裹：成功时正常生成 `related_episode_uuids`，失败时记录 warning 日志并将 `related_episode_uuids` 设为空列表，不影响 `add_episode` 的结果返回。`related_note_ids` 在搜索失败时保持为空或已有值。
+
+### 6. Graphiti nodes / edges 已进入本地知识模型
+
+`KnowledgeNote` 已新增 `graph_node_refs / graph_edge_refs / graph_fact_refs` 结构化字段，保留 Graphiti 的节点 UUID、类型标签、摘要、边的方向和 episode 归属。原有的 `entity_names / relation_facts` 字符串字段保留用于向后兼容。
+
+`GraphCaptureResult` 和 `GraphAskResult` 同步携带 `node_refs / edge_refs / fact_refs`，`_merge_graph_capture` 会将结构化引用写入本地笔记。`_build_graph_answer_prompt` 已升级为在实体名称旁附带节点摘要。
+
+### 7. verifier 重试链路存在结果重复计算
+
+`execute_ask()` 当前会先 `verify` 初版回答，再调用 `_retry_if_needed()`，最后再次 `verify` 终版回答。这个流程语义上是合理的：初版校验用于生成 correction prompt，终版校验用于决定是否标注不确定性、记录分数和触发 web fallback。
+
+但 `_retry_if_needed()` 内部 retry 后已经会重新 `verify`，却只返回 answer，不返回最后一次 `VerificationResult`。因此外层必须再算一次。后续可以将 `_retry_if_needed()` 改为返回 `RetryResult(answer, verification, attempts)`，减少重复校验，并补齐 `web_enabled=True` 等上下文参数传递。
 
 ## 演进方向
 
 - 引入稳定 rerank 和评测样本
-- 新增 `web_search` 作为个人知识不足时的外部检索兜底
 - 将 evidence/citation 数据结构进一步统一
-- 为 relation fact 和 snippet 建立更细粒度评测
+- 让 `_retry_if_needed()` 返回最终 `VerificationResult`，避免终版 verifier 重复计算
+- 基础 citation / relation fact / snippet 回归样本已补，继续扩展更细粒度的质量评测
 - 增强多跳推理和证据链可视化
-

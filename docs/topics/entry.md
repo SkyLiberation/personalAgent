@@ -160,7 +160,9 @@ CLI 还没有统一走 `entry()`。
 - 已具备 FastAPI Web API
 - 已具备前端静态资源托管
 - 已具备同步问答、同步 entry 和 SSE entry
-- 已具备 `ask_stream` 和 `entry_stream` 的 ask 路径模型 token 流式输出
+- 已具备 `ask_stream` 和 `entry_stream` ask 路径的模型 token 流式输出
+- `ask_stream` 已收敛为 `AgentRuntime.execute_ask_stream()` 公开 API，Web 层不再直接访问 runtime 私有方法
+- `entry_stream` ask 路径已从伪分块升级为 `execute_ask_stream()` 真实 token 流，与 `ask_stream` 使用相同底层 API
 - 已具备文件上传入口
 - 已具备 tools、notes、digest、ask history、pending actions 等管理接口
 - 已具备 API Key 鉴权和 token bucket 限流
@@ -179,17 +181,12 @@ CLI 还没有统一走 `entry()`。
 
 - `/api/capture`
 - `/api/ask`
-- `/api/ask/stream`
 - `/api/digest`
 - CLI `capture / ask / digest`
 
-这让兼容性更好，但也意味着有些能力会绕过 `execute_entry()` 中的 router、planner 和 plan panel。
+这让兼容性更好，但也意味着有些能力会绕过 `execute_entry()` 中的 router、planner、plan panel 或 execution trace。
 
-### 2. `ask_stream` 与 `entry_stream` 事件模型仍需收敛
-
-`ask_stream` 和 `entry_stream` 的 ask 路径都已经升级为模型 token 流，完成检索后直接推送 `answer_delta`。后续重点不再是流式能力本身，而是收敛两条入口的事件模型、metadata/citation 表达和运行时公开 API。
-
-### 3. CLI 能力仍偏基础
+### 2. CLI 能力仍偏基础
 
 CLI 当前只覆盖：
 
@@ -205,25 +202,22 @@ CLI 当前只覆盖：
 - ask history 查询和删除
 - graph sync
 
-### 4. 飞书入口是后台线程处理，缺少更完整的任务状态反馈
+### 3. 飞书入口是后台线程处理，缺少更完整的任务状态反馈
 
 飞书长连接需要快速接收事件，因此当前实现采用事件线程快速接收、后台线程处理。它可以完成回复，但还没有 Web 侧类似的结构化进度事件或计划面板反馈。
 
-### 5. 用户身份模型仍较轻量
+### 4. 用户身份模型仍较轻量
 
 Web 侧通过 API Key 映射用户，SSE 也支持 query 参数传 key；飞书侧可配置是否使用默认用户。当前适合个人或轻量多用户场景，更复杂的组织级权限、租户隔离和审计策略还需要继续增强。
 
-### 6. 入口层和业务层边界还可以继续收敛
+### 5. 入口层和业务层边界还可以继续收敛
 
-Web 层已经比早期更薄，但 `ask_stream` 中仍直接访问 runtime 的部分内部方法，以实现 token 流式输出。后续可以把这些能力收敛到 `AgentService` 或 `AgentRuntime` 的正式公开接口里。
+`ask_stream`、`entry_stream` ask 路径已收敛为 `AgentRuntime.execute_ask_stream()` 公开 API。该公开 API 封装了图谱/本地/网络检索、prompt 构建、token 流和 turn 记录，Web 层已不再直接访问 runtime 私有方法。后续可将更多专项能力（capture、digest 等）以类似方式收敛，并抽象统一的 `AgentEvent` 模型。
 
 ## 演进方向
 
 - 将更多专项入口逐步收敛到 `entry()`，减少双轨执行
-- 收敛 `ask_stream` 和 `entry_stream` 的事件模型与 runtime API 边界
+- 将流式问答、metadata、citation、plan events 和 execution trace 抽象成统一 `AgentEvent` schema
 - 为 CLI 增加 `entry`、pending action、history 和 upload 能力
-- 将流式问答、metadata、citation、plan events 抽象成统一事件模型
 - 为飞书入口补更清晰的处理中/失败反馈
 - 强化用户身份、权限、租户隔离和审计能力
-- 将 Web 层对 runtime 内部方法的直接访问收敛为正式 service API
-

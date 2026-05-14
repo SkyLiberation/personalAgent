@@ -28,6 +28,7 @@ class WorkingMemory:
         self._steps: deque[_Step] = deque(maxlen=max_steps)
         self._tool_cache: dict[str, object] = {}
         self.plan_steps: list[dict[str, object]] = []
+        self.execution_trace: list[str] = []
         self._lock = threading.Lock()
 
     def set_goal(self, goal: str) -> None:
@@ -78,6 +79,8 @@ class WorkingMemory:
                     desc = s.get("description", "")
                     step_lines.append(f"  {i}. [{action}] {desc}" + (f" tool={tool}" if tool else ""))
                 parts.append("当前任务计划：\n" + "\n".join(step_lines))
+            elif self.execution_trace:
+                parts.append("执行路径：\n" + "\n".join(f"- {t}" for t in self.execution_trace))
             steps = [item.content for item in list(self._steps)[-6:]]
             if steps:
                 parts.append("最近推理步骤：\n" + "\n".join(f"- {s}" for s in steps))
@@ -90,3 +93,4 @@ class WorkingMemory:
             self._steps.clear()
             self._tool_cache.clear()
             self.plan_steps.clear()
+            self.execution_trace.clear()

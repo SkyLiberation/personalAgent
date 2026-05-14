@@ -71,46 +71,72 @@ class LocalMemoryStore:
             updated.append(note)
         self._save_notes(updated)
 
-    def delete_note(self, note_id: str, user_id: str) -> KnowledgeNote | None:
+    def delete_note(self, note_id: str, user_id: str, cascade_chunks: bool = False) -> KnowledgeNote | None:
         """Delete a note by ID and user_id. Also removes associated reviews.
+        When cascade_chunks is True, also deletes all child chunk notes.
         Returns the deleted note, or None if not found."""
         notes = self._load_notes()
-        target: KnowledgeNote | None = None
+
+        # Collect IDs to delete
+        ids_to_delete = {note_id}
+        if cascade_chunks:
+            ids_to_delete.update(n.id for n in notes if n.parent_note_id == note_id)
+
+        targets: list[KnowledgeNote] = []
         kept_notes: list[KnowledgeNote] = []
         for note in notes:
-            if note.id == note_id and note.user_id == user_id:
-                target = note
+            if note.id in ids_to_delete and note.user_id == user_id:
+                targets.append(note)
             else:
                 kept_notes.append(note)
-        if target is None:
+        if not targets:
             return None
         self._save_notes(kept_notes)
 
-        # Remove associated reviews
+        # Remove associated reviews for all deleted notes
         reviews = self._load_reviews()
-        kept_reviews = [r for r in reviews if r.note_id != note_id]
+        kept_reviews = [r for r in reviews if r.note_id not in ids_to_delete]
         self._save_reviews(kept_reviews)
 
-        # Remove uploaded file if it belongs to this note
+        # Remove uploaded files for notes that reference them
+        primary_target = next((t for t in targets if t.id == note_id), targets[0])
         uploads_dir = (self.data_dir / "uploads").resolve()
-        source_ref = target.source_ref
-        if source_ref:
-            try:
-                source_path = Path(source_ref).resolve()
-                if _is_relative_to(source_path, uploads_dir) and source_path.exists() and source_path.is_file():
-                    source_path.unlink()
-            except OSError:
-                pass
+        for target in targets:
+            source_ref = target.source_ref
+            if source_ref:
+                try:
+                    source_path = Path(source_ref).resolve()
+                    if _is_relative_to(source_path, uploads_dir) and source_path.exists() and source_path.is_file():
+                        source_path.unlink()
+                except OSError:
+                    pass
 
-        return target
+        return primary_target
 
     def add_review(self, review: ReviewCard) -> None:
         reviews = self._load_reviews()
         reviews.append(review)
         self._save_reviews(reviews)
 
-    def list_notes(self, user_id: str) -> list[KnowledgeNote]:
-        return [note for note in self._load_notes() if note.user_id == user_id]
+    def list_notes(self, user_id: str, *, include_chunks: bool = True) -> list[KnowledgeNote]:
+        notes = [note for note in self._load_notes() if note.user_id == user_id]
+        if not include_chunks:
+            notes = [n for n in notes if n.parent_note_id is None]
+        return notes
+
+    def get_chunks_for_parent(self, parent_note_id: str) -> list[KnowledgeNote]:
+        chunks = [
+            n for n in self._load_notes()
+            if n.parent_note_id == parent_note_id
+        ]
+        chunks.sort(key=lambda n: n.chunk_index or 0)
+        return chunks
+
+    def get_parent_note(self, note_id: str) -> KnowledgeNote | None:
+        note = self.get_note(note_id)
+        if note is None or note.parent_note_id is None:
+            return None
+        return self.get_note(note.parent_note_id)
 
     def get_note(self, note_id: str) -> KnowledgeNote | None:
         for note in self._load_notes():
@@ -148,7 +174,25 @@ class LocalMemoryStore:
             if score > 0:
                 scored.append((score, note))
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [note for _, note in scored[:limit]]
+
+        # Deduplicate: keep only best chunk per parent; include parent note for context
+        seen_parents: set[str] = set()
+        results: list[KnowledgeNote] = []
+        for _, note in scored:
+            if len(results) >= limit * 2:  # allow extra for parent notes
+                break
+            pid = note.parent_note_id
+            if pid is not None:
+                if pid in seen_parents:
+                    continue
+                seen_parents.add(pid)
+                results.append(note)
+                parent = self.get_note(pid)
+                if parent is not None and parent not in results:
+                    results.append(parent)
+            else:
+                results.append(note)
+        return results[:limit]
 
     def due_reviews(self, user_id: str) -> list[ReviewCard]:
         now = datetime.utcnow()

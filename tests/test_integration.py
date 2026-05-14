@@ -61,15 +61,14 @@ class TestEntryPipeline:
         assert result.intent in ("direct_answer", "capture_text")
         assert result.reply_text
 
-    def test_entry_has_plan_steps(self, service: AgentService):
+    def test_entry_has_execution_trace(self, service: AgentService):
         entry = EntryInput(text="请帮我总结一下这段时间的笔记", user_id="default")
         result = service.entry(entry)
-        # Every entry path should produce plan steps
-        assert isinstance(result.plan_steps, list)
-        for step in result.plan_steps:
-            assert "step_id" in step
-            assert "action_type" in step
-            assert "description" in step
+        # Non-planning intents produce execution_trace instead of plan_steps
+        assert isinstance(result.execution_trace, list)
+        assert len(result.execution_trace) > 0
+        for trace in result.execution_trace:
+            assert isinstance(trace, str)
 
     def test_entry_unknown_intent(self, service: AgentService):
         entry = EntryInput(text="", user_id="default")

@@ -99,3 +99,45 @@ class TestAnswerVerifier:
         assert result.citation_valid is False
         # Score should be low since both citations are orphan and only 1 match
         assert result.evidence_score < 0.4
+
+
+class TestAnswerVerifierWebCitations:
+    """Web citation scoring (source_type="web") regression coverage."""
+
+    def _web_citation(self, title: str = "网络结果") -> Citation:
+        return Citation(
+            note_id="", title=title, snippet="来自网络的结果片段",
+            source_type="web", url="https://example.com/article",
+        )
+
+    def test_web_citations_contribute_evidence_score(self):
+        verifier = AnswerVerifier()
+        notes: list[KnowledgeNote] = []
+        citations = [
+            self._web_citation("结果A"),
+            self._web_citation("结果B"),
+            self._web_citation("结果C"),
+        ]
+        result = verifier.verify("问题", "答案", citations, notes, web_enabled=True)
+        assert result.evidence_score > 0.2
+
+    def test_web_enabled_adds_bonus(self):
+        verifier = AnswerVerifier()
+        notes: list[KnowledgeNote] = []
+        citations = [self._web_citation("结果A")]
+        result_without = verifier.verify("问题", "答案", citations, notes, web_enabled=False)
+        result_with = verifier.verify("问题", "答案", citations, notes, web_enabled=True)
+        assert result_with.evidence_score >= result_without.evidence_score
+
+    def test_web_citations_skip_orphan_check(self):
+        verifier = AnswerVerifier()
+        notes: list[KnowledgeNote] = [_note("n1")]
+        citations = [
+            self._web_citation("网络结果"),
+            _citation("n99"),  # orphan note citation
+        ]
+        result = verifier.verify("问题", "答案", citations, notes, web_enabled=True)
+        # Web citation (note_id="") should NOT count as orphan
+        # Only the note citation (n99) should be flagged — exactly 1 orphan
+        assert len(result.issues) == 1
+        assert "引用指向不存在的笔记" in result.issues[0]

@@ -24,7 +24,7 @@ class PlanStep:
     """
 
     step_id: str = field(default_factory=lambda: uuid4().hex[:8])
-    action_type: str = ""  # retrieve / tool_call / compose / verify
+    action_type: str = ""  # retrieve / resolve / tool_call / compose / verify
     description: str = ""  # user-visible label
     tool_name: str | None = None
     tool_input: dict[str, object] = field(default_factory=dict)
@@ -36,6 +36,9 @@ class PlanStep:
     on_failure: str = "skip"  # skip / retry / abort
     status: str = "planned"  # planned / running / completed / failed / skipped
     retry_count: int = 0
+    execution_mode: str = "deterministic"  # "deterministic" | "react"
+    allowed_tools: list[str] = field(default_factory=list)  # empty = read-only defaults
+    max_iterations: int = 3  # max ReAct iterations
 
 
 class TaskPlanner(Protocol):
@@ -177,6 +180,9 @@ class DefaultTaskPlanner:
                     tool_name="graph_search",
                     expected_output="匹配的笔记和引用片段列表",
                     success_criteria="命中至少 1 条相关笔记或图谱事实",
+                    execution_mode="react",
+                    allowed_tools=["graph_search", "web_search"],
+                    max_iterations=3,
                 ),
                 PlanStep(
                     step_id="ask-2", action_type="compose",
@@ -189,6 +195,16 @@ class DefaultTaskPlanner:
                     description="校验回答的事实依据和引用完整性",
                     expected_output="通过校验或标注不确定点",
                     depends_on=["ask-2"],
+                ),
+                PlanStep(
+                    step_id="ask-4", action_type="tool_call",
+                    description="如果知识库证据不足，通过网络搜索补充外部信息",
+                    tool_name="web_search",
+                    tool_input={"query": "{question}"},
+                    expected_output="网络搜索结果列表（仅在知识库不足时使用）",
+                    risk_level="low",
+                    on_failure="skip",
+                    depends_on=["ask-3"],
                 ),
             ]
         if intent == "summarize_thread":
@@ -212,6 +228,9 @@ class DefaultTaskPlanner:
                     description="检索待删除的候选笔记（图谱 + 本地语义匹配）",
                     tool_name="graph_search",
                     tool_input={"resolve_candidates": True},
+                    execution_mode="react",
+                    allowed_tools=["graph_search"],
+                    max_iterations=2,
                     expected_output="匹配的候选笔记列表（含 note_id / title / summary）",
                     success_criteria="命中至少 1 条候选笔记",
                 ),

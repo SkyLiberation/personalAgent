@@ -15,17 +15,52 @@ def capture_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
     summary = content[:120]
     tags = _extract_tags(content)
 
-    note = KnowledgeNote(
-        user_id=state.raw_item.user_id,
-        source_type=state.raw_item.source_type,
-        source_ref=state.raw_item.source_ref,
-        title=title or "Untitled note",
-        content=content,
-        summary=summary,
-        tags=tags,
-        updated_at=datetime.utcnow(),
-    )
-    state.note = note
+    from ..core.chunking import chunk_content
+
+    chunks = chunk_content(content, state.raw_item.source_type)
+
+    if len(chunks) <= 1:
+        note = KnowledgeNote(
+            user_id=state.raw_item.user_id,
+            source_type=state.raw_item.source_type,
+            source_ref=state.raw_item.source_ref,
+            title=title or "Untitled note",
+            content=content,
+            summary=summary,
+            tags=tags,
+            updated_at=datetime.utcnow(),
+        )
+        state.note = note
+        state.chunk_notes = []
+    else:
+        parent = KnowledgeNote(
+            user_id=state.raw_item.user_id,
+            source_type=state.raw_item.source_type,
+            source_ref=state.raw_item.source_ref,
+            title=title or "Untitled document",
+            content=content,
+            summary=summary,
+            tags=tags,
+            chunk_index=0,
+            updated_at=datetime.utcnow(),
+        )
+        chunk_notes: list[KnowledgeNote] = []
+        for i, ch in enumerate(chunks, 1):
+            chunk_notes.append(KnowledgeNote(
+                user_id=state.raw_item.user_id,
+                source_type=state.raw_item.source_type,
+                source_ref=state.raw_item.source_ref,
+                title=ch["title"],
+                content=ch["content"],
+                summary=ch["content"][:120].replace("\n", " "),
+                tags=_extract_tags(ch["content"]),
+                parent_note_id=parent.id,
+                chunk_index=i,
+                source_span=ch["source_span"],
+                updated_at=datetime.utcnow(),
+            ))
+        state.note = parent
+        state.chunk_notes = chunk_notes
     return state
 
 
@@ -47,6 +82,8 @@ def link_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
     state.matches = matches
     state.note.related_note_ids = [match.id for match in matches]
     store.add_note(state.note)
+    for chunk in state.chunk_notes:
+        store.add_note(chunk)
     return state
 
 

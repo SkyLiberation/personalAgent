@@ -34,10 +34,46 @@ class EntryInput(BaseModel):
 
 
 class Citation(BaseModel):
-    note_id: str
+    note_id: str = ""
     title: str
     snippet: str
     relation_fact: str | None = None
+    url: str | None = None
+    source_type: str = "note"  # "note" or "web"
+
+
+class WebSearchResult(BaseModel):
+    """A single web search hit from an external provider (Firecrawl, etc.)."""
+    title: str
+    url: str
+    snippet: str
+    source: str = "firecrawl"
+    published_at: str | None = None
+
+
+class GraphNodeRef(BaseModel):
+    uuid: str
+    name: str
+    labels: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class GraphEdgeRef(BaseModel):
+    uuid: str
+    fact: str
+    source_node_uuid: str = ""
+    target_node_uuid: str = ""
+    source_node_name: str = ""
+    target_node_name: str = ""
+    episodes: list[str] = Field(default_factory=list)
+
+
+class GraphFactRef(BaseModel):
+    fact: str
+    edge_uuid: str = ""
+    source_node_name: str = ""
+    target_node_name: str = ""
+    episode_uuids: list[str] = Field(default_factory=list)
 
 
 class KnowledgeNote(BaseModel):
@@ -55,6 +91,12 @@ class KnowledgeNote(BaseModel):
     graph_episode_uuid: str | None = None
     entity_names: list[str] = Field(default_factory=list)
     relation_facts: list[str] = Field(default_factory=list)
+    graph_node_refs: list[GraphNodeRef] = Field(default_factory=list)
+    graph_edge_refs: list[GraphEdgeRef] = Field(default_factory=list)
+    graph_fact_refs: list[GraphFactRef] = Field(default_factory=list)
+    parent_note_id: str | None = None
+    chunk_index: int | None = None
+    source_span: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -88,6 +130,7 @@ class AgentState(BaseModel):
     intent: EntryIntent = "unknown"
     intent_reason: str | None = None
     note: KnowledgeNote | None = None
+    chunk_notes: list[KnowledgeNote] = Field(default_factory=list)
     matches: list[KnowledgeNote] = Field(default_factory=list)
     review_card: ReviewCard | None = None
     answer: str | None = None

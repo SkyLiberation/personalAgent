@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue as std_queue
+import threading
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,12 +14,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..agent.graph import build_ask_graph
 from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AgentState, AskHistoryRecord, Citation, EntryInput, KnowledgeNote, PendingAction, ReviewCard
+from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, PendingAction, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class CaptureRequest(BaseModel):
 
 class CaptureResponse(BaseModel):
     note: KnowledgeNote
+    chunk_notes: list[KnowledgeNote] = Field(default_factory=list)
     related_notes: list[KnowledgeNote] = Field(default_factory=list)
     review_card: ReviewCard | None = None
 
@@ -91,6 +92,7 @@ class EntryResponse(BaseModel):
     capture_result: dict | None = None
     ask_result: dict | None = None
     plan_steps: list[dict[str, object]] = Field(default_factory=list)
+    execution_trace: list[str] = Field(default_factory=list)
 
 
 class ResetUserDataRequest(BaseModel):
@@ -203,10 +205,14 @@ def create_app() -> FastAPI:
         return {"ok": result.ok, "data": result.data, "error": result.error}
 
     @app.get("/api/notes", response_model=list[KnowledgeNote])
-    def list_notes(request: Request, user_id: str | None = None) -> list[KnowledgeNote]:
+    def list_notes(
+        request: Request,
+        user_id: str | None = None,
+        flat: bool = False,
+    ) -> list[KnowledgeNote]:
         resolved_user = user_id or _get_user_id(request, settings)
-        logger.info("Listing notes for user=%s", resolved_user)
-        return service.list_notes(resolved_user)
+        logger.info("Listing notes for user=%s flat=%s", resolved_user, flat)
+        return service.store.list_notes(resolved_user, include_chunks=not flat)
 
     @app.get("/api/digest", response_model=DigestResponse)
     def get_digest(request: Request, user_id: str | None = None) -> DigestResponse:
@@ -299,6 +305,9 @@ def create_app() -> FastAPI:
         if service.graph_store.configured():
             background_tasks.add_task(service.sync_note_to_graph, result.note.id)
             logger.info("Queued background graph sync note_id=%s", result.note.id)
+            for chunk in result.chunk_notes:
+                background_tasks.add_task(service.sync_note_to_graph, chunk.id)
+                logger.info("Queued background graph sync chunk_id=%s", chunk.id)
         logger.info("File upload captured note_id=%s source_ref=%s", result.note.id, result.note.source_ref)
         return CaptureResponse(**result.model_dump())
 
@@ -320,101 +329,10 @@ def create_app() -> FastAPI:
         logger.info("Ask stream requested for user=%s session=%s", resolved_user, session_id)
 
         async def event_generator():
-            yield _sse_event("status", {
-                "message": "Searching your knowledge graph and local memory...",
-            })
-
-            # Run the search synchronously (fast — no LLM call here)
-            runtime = service._runtime
-            runtime.memory.bind_session(resolved_user, session_id)
-            runtime.memory.working.set_goal(f"回答用户问题: {question[:80]}")
-            runtime.memory.refresh_conversation_summary(resolved_user, session_id)
-            working_context = runtime.memory.working.context_snapshot()
-            trace_id = uuid4().hex[:12]
-
-            graph_result = await asyncio.to_thread(
-                runtime.graph_store.ask, question, resolved_user, trace_id=trace_id
-            )
-
-            if graph_result.enabled:
-                matches, citations = runtime._graph_matches_and_citations(resolved_user, question, graph_result)
-                yield _sse_event("metadata", {
-                    "citations": [c.model_dump(mode="json") for c in citations],
-                    "matches": [n.model_dump(mode="json") for n in matches],
-                    "graph_enabled": True,
-                    "session_id": session_id,
-                })
-
-                prompt = runtime._build_graph_answer_prompt(
-                    question, graph_result, matches, citations, working_context,
-                )
-                full_answer = ""
-                for event_type, payload in runtime._generate_answer_stream(prompt):
-                    if event_type == "answer_delta":
-                        full_answer = str(payload.get("answer", ""))
-                    yield _sse_event(event_type, payload)
-                    await asyncio.sleep(0)
-
-                if full_answer:
-                    runtime.memory.record_turn(
-                        resolved_user, session_id, question, full_answer,
-                        citations=citations, graph_enabled=True,
-                    )
-                    yield _sse_event("done", {
-                        "answer": full_answer,
-                        "citations": [c.model_dump(mode="json") for c in citations],
-                        "matches": [n.model_dump(mode="json") for n in matches],
-                        "graph_enabled": True,
-                        "session_id": session_id,
-                    })
-                return
-
-            # Local fallback
-            graph = build_ask_graph(runtime.store)
-            state = AgentState(mode="ask", question=question, user_id=resolved_user)
-            result = await asyncio.to_thread(lambda: AgentState.model_validate(graph.invoke(state)))
-            matches = result.matches
-            citations = result.citations
-
-            yield _sse_event("metadata", {
-                "citations": [c.model_dump(mode="json") for c in citations],
-                "matches": [n.model_dump(mode="json") for n in matches],
-                "graph_enabled": False,
-                "session_id": session_id,
-            })
-
-            evidence_blocks = runtime._build_note_evidence_blocks(matches, citations)
-            context_block = working_context or "无"
-            notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
-            prompt = (
-                "你是个人知识库助手。请基于最近几轮对话和当前匹配到的笔记内容证据，"
-                "用自然中文总结并回答用户问题。优先回答用户真正想问的内容，必要时承认信息不足。"
-                "不要把答案写成检索结果罗列，也不要简单重复原始片段。"
-                "回答尽量先给出一句直接结论，再补充必要解释。\n\n"
-                f"当前问题：{question}\n\n"
-                f"最近对话与任务上下文：\n{context_block}\n\n"
-                f"相关内容证据：\n{notes_block}"
-            )
-
-            full_answer = ""
-            for event_type, payload in runtime._generate_answer_stream(prompt):
-                if event_type == "answer_delta":
-                    full_answer = str(payload.get("answer", ""))
+            for event_type, payload in _stream_events(
+                service._runtime.execute_ask_stream(question.strip(), resolved_user, session_id)
+            ):
                 yield _sse_event(event_type, payload)
-                await asyncio.sleep(0)
-
-            final_answer = full_answer or "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
-            runtime.memory.record_turn(
-                resolved_user, session_id, question, final_answer,
-                citations=citations, graph_enabled=False,
-            )
-            yield _sse_event("done", {
-                "answer": final_answer,
-                "citations": [c.model_dump(mode="json") for c in citations],
-                "matches": [n.model_dump(mode="json") for n in matches],
-                "graph_enabled": False,
-                "session_id": session_id,
-            })
 
         return StreamingResponse(
             event_generator(),
@@ -428,21 +346,36 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/notes/{note_id}")
     def delete_note(
-        note_id: str, request: Request, user_id: str | None = None
+        note_id: str,
+        request: Request,
+        user_id: str | None = None,
+        cascade: bool = False,
     ) -> dict[str, object]:
         resolved_user = user_id or _get_user_id(request, settings)
-        logger.info("Delete note id=%s user=%s", note_id, resolved_user)
+        logger.info("Delete note id=%s user=%s cascade=%s", note_id, resolved_user, cascade)
         note = service.store.get_note(note_id)
         if note is None or note.user_id != resolved_user:
             raise HTTPException(status_code=404, detail="Note not found or not owned by user.")
         graph_episode_uuid = note.graph_episode_uuid
-        service.store.delete_note(note_id, resolved_user)
+
+        has_chunks = bool(service.store.get_chunks_for_parent(note_id))
+        cascade_chunks = cascade or has_chunks
+        service.store.delete_note(note_id, resolved_user, cascade_chunks=cascade_chunks)
+
         if service.graph_store.configured() and graph_episode_uuid:
             try:
                 service.graph_store.delete_episode(str(graph_episode_uuid))
             except Exception:
                 logger.exception("Graph episode deletion failed for note %s", note_id)
         return {"ok": True, "deleted_note_id": note_id}
+
+    @app.get("/api/notes/{note_id}/chunks", response_model=list[KnowledgeNote])
+    def get_note_chunks(note_id: str, request: Request) -> list[KnowledgeNote]:
+        resolved_user = _get_user_id(request, settings)
+        note = service.store.get_note(note_id)
+        if note is None or note.user_id != resolved_user:
+            raise HTTPException(status_code=404, detail="Note not found.")
+        return service.store.get_chunks_for_parent(note_id)
 
     @app.post("/api/notes/{note_id}/graph-sync", response_model=GraphSyncResponse)
     def retry_graph_sync(note_id: str) -> GraphSyncResponse:
@@ -489,7 +422,32 @@ def create_app() -> FastAPI:
                 source_platform="web",
             )
 
-            # Queue for plan execution progress events (sync -> async bridge)
+            runtime = service._runtime
+
+            # Quick classification first (no heavy work)
+            decision = runtime.classify_intent(entry_input)
+            yield _sse_event("intent", {
+                "intent": decision.route,
+                "reason": decision.user_visible_message,
+            })
+
+            # For ask intent: stream tokens directly, emit execution trace after
+            if decision.route == "ask":
+                for event_type, payload in _stream_events(
+                    runtime.execute_ask_stream(text.strip(), resolved_user, session_id)
+                ):
+                    yield _sse_event(event_type, payload)
+                yield _sse_event("execution_trace", {
+                    "execution_trace": [
+                        "在知识库和图谱中检索相关内容",
+                        "整合检索到的证据，生成自然语言回答",
+                        "校验回答的事实依据和引用完整性",
+                        "若证据不足，通过网络搜索补充外部信息",
+                    ],
+                })
+                return
+
+            # For all other intents: use the full execute_entry pipeline
             progress_queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
 
             def _on_progress(event: str, payload: dict[str, object]) -> None:
@@ -499,14 +457,15 @@ def create_app() -> FastAPI:
                     pass
 
             result = await asyncio.to_thread(service.entry, entry_input, on_progress=_on_progress)
-            yield _sse_event("intent", {
-                "intent": result.intent,
-                "reason": result.reason,
-            })
 
             if result.plan_steps:
                 yield _sse_event("plan_created", {
                     "plan_steps": result.plan_steps,
+                })
+
+            if result.execution_trace:
+                yield _sse_event("execution_trace", {
+                    "execution_trace": result.execution_trace,
                 })
 
             # Drain any progress events emitted during plan execution
@@ -523,6 +482,7 @@ def create_app() -> FastAPI:
                 yield _sse_event("done", {"reply": result.reply_text})
 
             elif result.intent == "ask":
+                # Fallback: ask that was routed through execute_entry for any reason
                 ask_data = result.ask_result.model_dump(mode="json") if result.ask_result else {}
                 yield _sse_event("status", {"message": "正在检索你的个人记忆..."})
                 yield _sse_event("metadata", {
@@ -607,6 +567,8 @@ def create_app() -> FastAPI:
 
         if result.capture_result and result.capture_result.note and service.graph_store.configured():
             background_tasks.add_task(service.sync_note_to_graph, result.capture_result.note.id)
+            for chunk in (result.capture_result.chunk_notes or []):
+                background_tasks.add_task(service.sync_note_to_graph, chunk.id)
 
         return {
             "intent": result.intent,
@@ -615,6 +577,7 @@ def create_app() -> FastAPI:
             "capture_result": result.capture_result.model_dump(mode="json") if result.capture_result else None,
             "ask_result": result.ask_result.model_dump(mode="json") if result.ask_result else None,
             "plan_steps": result.plan_steps,
+            "execution_trace": result.execution_trace,
         }
 
     @app.post("/api/entry", response_model=EntryResponse)
@@ -639,6 +602,7 @@ def create_app() -> FastAPI:
             capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
             ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
             plan_steps=result.plan_steps,
+            execution_trace=result.execution_trace,
         )
 
     @app.get("/api/ask-history/search", response_model=AskHistoryResponse)
@@ -779,21 +743,40 @@ def _sse_event(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _chunk_answer(answer: str, chunk_size: int = 20) -> list[str]:
-    compact = answer.strip()
-    if not compact:
-        return ["暂时没有生成答案。"]
+async def _stream_events(generator):
+    """Bridge a synchronous ``(event_type, payload)`` generator into async SSE.
 
-    chunks: list[str] = []
-    current = ""
-    for char in compact:
-        current += char
-        if len(current) >= chunk_size or char in {"\n", "。", "！", "？", ".", "!", "?"}:
-            chunks.append(current)
-            current = ""
-    if current:
-        chunks.append(current)
-    return chunks
+    Runs the generator in a daemon thread so the event loop stays responsive
+    during blocking graph searches and token streaming.
+    """
+    q: std_queue.Queue = std_queue.Queue()
+    done_sentinel = object()
+
+    def _run() -> None:
+        try:
+            for item in generator:
+                q.put(item)
+        except Exception as exc:
+            q.put(("error", {"error": str(exc)}))
+        finally:
+            q.put(done_sentinel)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    while True:
+        try:
+            item = q.get(timeout=0.5)
+        except std_queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+        if item is done_sentinel:
+            break
+        event_type, payload = item
+        yield (event_type, payload)
+        await asyncio.sleep(0)
+
+    thread.join(timeout=5)
 
 
 app = create_app()

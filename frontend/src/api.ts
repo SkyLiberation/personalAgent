@@ -1,3 +1,28 @@
+export type GraphNodeRef = {
+  uuid: string;
+  name: string;
+  labels?: string[];
+  summary?: string;
+};
+
+export type GraphEdgeRef = {
+  uuid: string;
+  fact: string;
+  source_node_uuid?: string;
+  target_node_uuid?: string;
+  source_node_name?: string;
+  target_node_name?: string;
+  episodes?: string[];
+};
+
+export type GraphFactRef = {
+  fact: string;
+  edge_uuid?: string;
+  source_node_name?: string;
+  target_node_name?: string;
+  episode_uuids?: string[];
+};
+
 export type Note = {
   id: string;
   user_id: string;
@@ -13,6 +38,12 @@ export type Note = {
   graph_episode_uuid?: string | null;
   entity_names?: string[];
   relation_facts?: string[];
+  graph_node_refs?: GraphNodeRef[];
+  graph_edge_refs?: GraphEdgeRef[];
+  graph_fact_refs?: GraphFactRef[];
+  parent_note_id?: string | null;
+  chunk_index?: number | null;
+  source_span?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -41,6 +72,7 @@ export type DigestResponse = {
 
 export type CaptureResponse = {
   note: Note;
+  chunk_notes?: Note[];
   related_notes: Note[];
   review_card: ReviewCard | null;
 };
@@ -277,6 +309,7 @@ export type EntryResponse = {
   reason: string;
   reply_text: string;
   plan_steps?: PlanStep[];
+  execution_trace?: string[];
   capture_result: {
     note: Note;
     related_notes: Note[];

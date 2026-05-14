@@ -39,6 +39,8 @@ class AnswerVerifier:
         "无法从你的个人知识库中找到足够依据",
         "我暂时无法",
         "暂无相关信息",
+        "网络搜索未返回足够信息",
+        "无法从网络搜索中找到",
     )
 
     def verify(
@@ -48,14 +50,19 @@ class AnswerVerifier:
         citations: list[Citation],
         matches: list[KnowledgeNote],
         graph_enabled: bool = False,
+        web_enabled: bool = False,
     ) -> VerificationResult:
         issues: list[str] = []
         warnings: list[str] = []
         match_ids = {note.id for note in matches}
 
-        # 1. Citation validity
+        # Separate note-based and web-based citations
+        note_citations = [c for c in citations if c.source_type != "web"]
+        web_citations = [c for c in citations if c.source_type == "web"]
+
+        # 1. Citation validity — only check note citations for orphans
         orphan_citations = 0
-        for citation in citations:
+        for citation in note_citations:
             if citation.note_id not in match_ids:
                 orphan_citations += 1
         citation_valid = orphan_citations == 0
@@ -65,25 +72,36 @@ class AnswerVerifier:
         # 2. Evidence sufficiency score
         score = 0.0
 
-        # 2a. Match count
+        # 2a. Match count (note-based only)
         match_count = len(matches)
         if match_count >= 3:
             score += 0.3
         elif match_count >= 1:
             score += 0.15
 
-        # 2b. Valid citation count
-        valid_citations = len(citations) - orphan_citations
-        if valid_citations >= 3:
+        # 2b. Valid note citation count
+        valid_note_citations = len(note_citations) - orphan_citations
+        if valid_note_citations >= 3:
             score += 0.3
-        elif valid_citations >= 1:
+        elif valid_note_citations >= 1:
             score += 0.15
 
         # 2c. Graph bonus
         if graph_enabled:
             score += 0.1
 
-        # 2d. Answer content checks
+        # 2d. Web citation count (slightly lower weight than note-based)
+        valid_web_count = len(web_citations)
+        if valid_web_count >= 3:
+            score += 0.25
+        elif valid_web_count >= 1:
+            score += 0.1
+
+        # 2e. Web bonus
+        if web_enabled and valid_web_count > 0:
+            score += 0.05
+
+        # 2f. Answer content checks
         answer_empty = not answer or not answer.strip()
         if answer_empty:
             issues.append("生成的回答为空。")
@@ -97,12 +115,12 @@ class AnswerVerifier:
                     break
 
             # Answer length sanity — very short answers with evidence are suspicious
-            if len(answer) < 20 and match_count > 0:
-                warnings.append("回答过短但存在匹配笔记，可能未充分使用证据。")
+            if len(answer) < 20 and (match_count > 0 or valid_web_count > 0):
+                warnings.append("回答过短但存在匹配笔记或网络结果，可能未充分使用证据。")
 
         # 3. Question-keyword coverage (lightweight sanity)
-        if match_count == 0:
-            warnings.append("未命中任何知识库笔记，回答可能缺乏依据。")
+        if match_count == 0 and valid_web_count == 0:
+            warnings.append("未命中任何知识库笔记或网络结果，回答可能缺乏依据。")
             score = min(score, 0.15)
 
         score = max(0.0, min(1.0, round(score, 2)))

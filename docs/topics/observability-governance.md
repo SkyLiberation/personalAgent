@@ -81,6 +81,10 @@
 - storage
 - API
 - CLI
+- chunking
+- runtime helpers
+- ReAct runner
+- cross-layer regression
 
 ## 已知限制
 
@@ -96,9 +100,16 @@
 
 适合个人或轻量多用户场景。更复杂的组织、角色、权限、租户隔离和 key 生命周期管理仍需增强。
 
-### 4. 外部工具权限治理还不完整
+### 4. 外部工具权限治理已有基础模型
 
-工具层还没有统一权限模型，例如公网访问、写入长期知识、高风险操作和外部副作用的统一策略。
+工具层已建立统一治理字段（`ToolSpec.risk_level / requires_confirmation / writes_longterm / accesses_external`），`PlanValidator` 会做交叉校验：
+- 高风险工具未设步骤确认 → warning
+- 写入长期知识的工具未设确认 → warning
+- 外部访问工具 → 提示外部副作用 warning
+
+各工具已标注治理属性：`delete_note`（high/requires_confirmation/writes_longterm）、`capture_text`（low/writes_longterm）、`capture_url`（low/accesses_external）等。
+
+更复杂的组织/角色/租户权限模型仍未建立。
 
 ### 5. Debug reset 风险较高
 
@@ -110,7 +121,6 @@
 - 接入 metrics 和 tracing backend
 - 增加结构化错误码与告警
 - 完善 API Key 生命周期管理
-- 为工具调用建立统一权限和审计模型
+- 在工具基础治理模型之上补充组织/角色/租户级权限策略
 - 为 debug / destructive 操作增加更强确认和权限控制
-- 扩大端到端回归评测样本
-
+- 继续扩大端到端回归评测样本，尤其是更多真实用户问题和多入口流式场景

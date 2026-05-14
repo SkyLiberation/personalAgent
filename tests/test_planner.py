@@ -115,10 +115,12 @@ class TestPlannerEnrichedSteps:
 
     def test_plan_ask_heuristic(self, planner):
         steps = planner.plan("ask", "什么是服务降级？")
-        assert len(steps) == 3
+        assert len(steps) == 4  # retrieve, compose, verify, web_search fallback
         assert steps[0].action_type == "retrieve"
         assert steps[0].tool_name == "graph_search"
         assert steps[1].depends_on == ["ask-1"]
+        assert steps[3].tool_name == "web_search"
+        assert steps[3].on_failure == "skip"
 
     def test_plan_unknown_intent_fallback(self, planner):
         steps = planner.plan("unknown", "随便说点什么")
@@ -152,7 +154,7 @@ class TestPlannerEnrichedSteps:
             Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
         )
         steps = planner.plan("ask", "什么是服务降级？")
-        assert len(steps) == 3
+        assert len(steps) == 4
         for s in steps:
             assert isinstance(s, PlanStep)
             assert s.action_type in {"retrieve", "tool_call", "compose", "verify"}
@@ -245,6 +247,48 @@ class TestEntryResultPlanSteps:
             reply_text="请重新输入",
         )
         assert result.plan_steps == []
+
+
+class TestExecutionTrace:
+    def test_entry_result_includes_execution_trace(self):
+        result = EntryResult(
+            intent="ask",
+            reason="用户提问",
+            reply_text="回答内容",
+            execution_trace=[
+                "在知识库和图谱中检索相关内容",
+                "整合检索到的证据，生成自然语言回答",
+                "校验回答的事实依据和引用完整性",
+            ],
+        )
+        assert len(result.execution_trace) == 3
+        assert "检索" in result.execution_trace[0]
+        assert result.plan_steps == []
+
+    def test_context_snapshot_includes_execution_trace(self):
+        wm = WorkingMemory(max_steps=10, max_tool_cache=5)
+        wm.set_goal("测试任务")
+        wm.execution_trace = [
+            "在知识库中检索",
+            "生成回答",
+            "校验结果",
+        ]
+        snapshot = wm.context_snapshot()
+        assert "执行路径" in snapshot
+        assert "在知识库中检索" in snapshot
+        assert "生成回答" in snapshot
+        assert "校验结果" in snapshot
+
+    def test_context_snapshot_prefers_plan_steps_over_trace(self):
+        wm = WorkingMemory(max_steps=10, max_tool_cache=5)
+        wm.set_goal("测试任务")
+        wm.plan_steps = [
+            {"step_id": "del-1", "action_type": "retrieve", "description": "检索候选笔记", "tool_name": "graph_search"},
+        ]
+        wm.execution_trace = ["步骤1", "步骤2"]
+        snapshot = wm.context_snapshot()
+        assert "当前任务计划" in snapshot
+        assert "执行路径" not in snapshot
 
 
 class TestPlannerValidatorRoundtrip:

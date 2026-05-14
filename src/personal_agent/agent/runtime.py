@@ -18,7 +18,7 @@ from ..storage.cross_session_store import CrossSessionStore
 from ..memory import MemoryFacade
 from ..storage.memory_store import LocalMemoryStore
 from ..storage.pending_action_store import PendingActionStore
-from ..tools import CaptureTextTool, CaptureUploadTool, CaptureUrlTool, DeleteNoteTool, GraphSearchTool, ToolRegistry
+from ..tools import CaptureTextTool, CaptureUploadTool, CaptureUrlTool, DeleteNoteTool, GraphSearchTool, ToolRegistry, WebSearchTool
 from .entry_nodes import (
     EntryNodeDeps,
     ask_entry_branch_node,
@@ -31,8 +31,9 @@ from .entry_nodes import (
 from .graph import build_ask_graph, build_capture_graph, build_entry_graph
 from .nodes import digest_node
 from .plan_executor import PlanExecutor, ProgressCallback
-from .planner import DefaultTaskPlanner
+from .planner import DefaultTaskPlanner, PlanStep
 from .plan_validator import PlanValidator
+from .react_runner import ReActStepRunner
 from .replanner import Replanner
 from .router import DefaultIntentRouter, RouterDecision
 from .verifier import AnswerVerifier, VerificationResult
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 class CaptureResult(BaseModel):
     note: KnowledgeNote
+    chunk_notes: list[KnowledgeNote] = Field(default_factory=list)
     related_notes: list[KnowledgeNote] = Field(default_factory=list)
     review_card: ReviewCard | None = None
     graph_enabled: bool = False
@@ -71,6 +73,7 @@ class EntryResult(BaseModel):
     capture_result: CaptureResult | None = None
     ask_result: AskResult | None = None
     plan_steps: list[dict[str, object]] = Field(default_factory=list)
+    execution_trace: list[str] = Field(default_factory=list)
 
 
 class ResetResult(BaseModel):
@@ -114,6 +117,11 @@ class AgentRuntime:
         self._verifier = AnswerVerifier()
         self._plan_validator = PlanValidator(tool_registry=self._tool_registry)
         self._replanner = Replanner(settings)
+        self._react_runner = ReActStepRunner(
+            tool_registry=self._tool_registry,
+            memory=self.memory,
+            settings=settings,
+        )
 
     def _register_tools(self) -> None:
         if self.capture_service is not None:
@@ -124,6 +132,14 @@ class AgentRuntime:
         self._tool_registry.register(GraphSearchTool(self.graph_store))
         self._tool_registry.register(CaptureTextTool(self))
         self._tool_registry.register(DeleteNoteTool(self.store, self.graph_store, self.pending_action_store))
+        if self.settings.firecrawl_api_key:
+            from ..capture.providers.web_search import FirecrawlWebSearchProvider
+            web_provider = FirecrawlWebSearchProvider(self.settings)
+            self._tool_registry.register(WebSearchTool(self.settings, web_provider, self.capture_service))
+
+    @property
+    def _web_search_available(self) -> bool:
+        return bool(self.settings.firecrawl_api_key)
 
     def list_tools(self) -> list:
         return self._tool_registry.list_tools()
@@ -158,15 +174,22 @@ class AgentRuntime:
             raise ValueError("Capture flow did not produce a note.")
 
         if not attempt_graph:
-            result.note.graph_sync_status = "pending" if self.graph_store.configured() else "idle"
+            graph_configured = self.graph_store.configured()
+            result.note.graph_sync_status = "pending" if graph_configured else "idle"
             result.note.graph_sync_error = None
             self.store.update_note(result.note)
+            # Set pending status on chunk notes for background sync
+            for chunk in result.chunk_notes:
+                chunk.graph_sync_status = "pending" if graph_configured else "idle"
+                chunk.graph_sync_error = None
+                self.store.update_note(chunk)
             logger.info(
-                "Capture stored without immediate graph sync user=%s note_id=%s graph_sync_status=%s",
-                normalized_user, result.note.id, result.note.graph_sync_status,
+                "Capture stored without immediate graph sync user=%s note_id=%s graph_sync_status=%s chunks=%d",
+                normalized_user, result.note.id, result.note.graph_sync_status, len(result.chunk_notes),
             )
             return CaptureResult(
                 note=result.note,
+                chunk_notes=result.chunk_notes,
                 related_notes=result.matches,
                 review_card=result.review_card,
                 graph_enabled=False,
@@ -192,12 +215,20 @@ class AgentRuntime:
             result.note.updated_at = datetime.utcnow()
             self.store.update_note(result.note)
 
+        # Set pending status on chunk notes for background graph sync
+        if self.graph_store.configured():
+            for chunk in result.chunk_notes:
+                chunk.graph_sync_status = "pending"
+                chunk.graph_sync_error = None
+                self.store.update_note(chunk)
+
         logger.info(
-            "Capture finished user=%s note_id=%s graph_enabled=%s related_notes=%s",
-            normalized_user, result.note.id, graph_result.enabled, len(related_notes),
+            "Capture finished user=%s note_id=%s graph_enabled=%s related_notes=%s chunks=%d",
+            normalized_user, result.note.id, graph_result.enabled, len(related_notes), len(result.chunk_notes),
         )
         return CaptureResult(
             note=result.note,
+            chunk_notes=result.chunk_notes,
             related_notes=related_notes,
             review_card=result.review_card,
             graph_enabled=graph_result.enabled,
@@ -253,6 +284,43 @@ class AgentRuntime:
         if not verification.ok or not verification.sufficient:
             final_answer = _annotate_answer(final_answer, verification)
         self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
+
+        # Third tier: web search fallback when local evidence is insufficient
+        if not verification.sufficient and self._web_search_available:
+            web_results, web_citations = self._execute_web_search(question)
+            if web_citations:
+                self.memory.working.add_step(f"知识库证据不足，尝试网络搜索: {len(web_citations)} 条结果")
+                web_answer = self._compose_web_answer(question, web_results, web_citations, working_context)
+                web_verification = self._verifier.verify(
+                    question, web_answer, web_citations, [], graph_enabled=False, web_enabled=True,
+                )
+                web_answer = self._retry_if_needed(
+                    question, web_answer, web_citations, [], web_verification, graph_enabled=False,
+                )
+                web_verification = self._verifier.verify(
+                    question, web_answer, web_citations, [], graph_enabled=False, web_enabled=True,
+                )
+                if not web_verification.ok or not web_verification.sufficient:
+                    web_answer = _annotate_answer(web_answer, web_verification)
+                self.memory.working.add_step(
+                    f"网络搜索完成: score={web_verification.evidence_score:.2f} ok={web_verification.ok}"
+                )
+                self.memory.record_turn(
+                    normalized_user, normalized_session, question, web_answer,
+                    citations=web_citations, graph_enabled=False,
+                )
+                logger.info(
+                    "Ask resolved from web user=%s citations=%s verify=%.2f",
+                    normalized_user, len(web_citations), web_verification.evidence_score,
+                )
+                return AskResult(
+                    answer=web_answer,
+                    citations=web_citations,
+                    matches=[],
+                    graph_enabled=False,
+                    session_id=normalized_session,
+                )
+
         ask_result = AskResult(
             answer=final_answer,
             citations=result.citations,
@@ -270,6 +338,78 @@ class AgentRuntime:
         )
         return ask_result
 
+    def _execute_web_search(self, question: str) -> tuple[list[dict], list[Citation]]:
+        """Run web search and convert results to Citation list.
+
+        Returns (raw_results, citations). Both empty if unavailable or failed.
+        """
+        if not self._web_search_available:
+            return [], []
+        try:
+            tool = self._tool_registry.get("web_search")
+            if tool is None:
+                return [], []
+            result = tool.execute(query=question, limit=5)
+            if not result.ok or not result.data:
+                return [], []
+            raw_results = result.data.get("results", [])
+            if not isinstance(raw_results, list):
+                return [], []
+            citations: list[Citation] = []
+            for r in raw_results[:5]:
+                if not isinstance(r, dict):
+                    continue
+                citations.append(Citation(
+                    note_id="",
+                    title=str(r.get("title", "")),
+                    snippet=str(r.get("snippet", "")),
+                    url=str(r.get("url", "")),
+                    source_type="web",
+                ))
+            return raw_results, citations
+        except Exception:
+            logger.exception("Web search failed for question=%s", question[:80])
+            return [], []
+
+    def _build_web_answer_prompt(
+        self, question: str, web_results: list[dict], web_citations: list[Citation],
+        working_context: str,
+    ) -> str:
+        context_block = working_context or "无"
+        web_blocks: list[str] = []
+        for i, citation in enumerate(web_citations[:5], 1):
+            web_blocks.append(
+                f"[来源{i}] {citation.title}\n"
+                f"URL: {citation.url}\n"
+                f"摘要: {citation.snippet[:200]}"
+            )
+        web_block = "\n\n".join(web_blocks) if web_blocks else "无"
+        return (
+            "你是个人知识库助手。你的个人知识库中未能找到足够依据来回答这个问题，"
+            "因此进行了一次网络搜索。请基于以下网络搜索结果，用自然中文回答问题。\n"
+            "重要：你必须明确指出信息来源于网络搜索，并标注每个要点的来源编号（如 [来源1]）。"
+            "如果搜索结果之间存在矛盾，请如实指出。"
+            "如果搜索结果仍不足以完整回答问题，请说明现有信息的局限。\n\n"
+            f"当前问题：{question}\n\n"
+            f"最近对话与任务上下文：\n{context_block}\n\n"
+            f"网络搜索结果：\n{web_block}"
+        )
+
+    def _compose_web_answer(
+        self, question: str, web_results: list[dict], web_citations: list[Citation],
+        working_context: str,
+    ) -> str:
+        prompt = self._build_web_answer_prompt(question, web_results, web_citations, working_context)
+        generated = self._generate_answer(prompt)
+        if generated:
+            return generated
+        if web_citations:
+            sources = "；".join(
+                f"[{c.title}]({c.url})" for c in web_citations[:3] if c.url
+            )
+            return f"根据网络搜索，相关来源包括：{sources}。"
+        return "网络搜索未返回足够信息来回答这个问题。"
+
     def execute_digest(self, user_id: str | None = None) -> DigestResult:
         normalized_user = user_id or self.settings.default_user
         logger.info("Generating digest user=%s", normalized_user)
@@ -279,13 +419,37 @@ class AgentRuntime:
             due_reviews=self.store.due_reviews(normalized_user),
         )
 
-    def execute_entry(self, entry_input: EntryInput, on_progress: ProgressCallback = None) -> EntryResult:
+    def classify_intent(self, entry_input: EntryInput) -> RouterDecision:
+        """Public wrapper for intent classification."""
+        return self._intent_router.classify(entry_input)
+
+    def plan_for_entry(self, entry_input: EntryInput) -> tuple[RouterDecision, list[PlanStep], list[dict[str, object]]]:
+        """Run session setup, intent routing, planning, and validation for an entry.
+
+        Populates working memory with plan_steps dicts and returns the raw
+        PlanStep objects for execution.  Returns ``(decision, validated_steps,
+        plan_steps_dicts)``.
+        """
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
         self.memory.bind_session(normalized_user, normalized_session)
         self.memory.refresh_conversation_summary(normalized_user, normalized_session)
         decision = self._intent_router.classify(entry_input)
         self.memory.working.set_goal(f"入口任务[{decision.route}]: {entry_input.text[:60]}")
+
+        if not decision.requires_planning:
+            self.memory.working.plan_steps = []
+            self.memory.working.execution_trace = []
+            log_event(logger, logging.INFO, "entry.planned",
+                user_id=normalized_user, session_id=normalized_session,
+                route=decision.route, confidence=decision.confidence,
+                risk_level=decision.risk_level,
+                requires_confirmation=decision.requires_confirmation,
+                plan_step_count=0,
+                plan_steps=[],
+            )
+            return decision, [], []
+
         steps = self._planner.plan(decision.route, entry_input.text)
         validation = self._plan_validator.validate(steps, decision)
         if validation.blocking:
@@ -296,7 +460,6 @@ class AgentRuntime:
             if validation.corrected_steps:
                 validated_steps = validation.corrected_steps
             else:
-                # Fall back to heuristic planner for a known-safe plan
                 logger.info("Replanning with heuristic due to validation blocking issues")
                 validated_steps = self._planner.fallback_plan(decision.route)
                 revalidation = self._plan_validator.validate(validated_steps, decision)
@@ -314,9 +477,9 @@ class AgentRuntime:
             if not validation.ok:
                 logger.warning(
                     "Plan validation found %d non-blocking issues: %s",
-                    len(validation.issues), validation.issues,
+                    len(validation.issues), validation.warnings,
                 )
-        self.memory.working.plan_steps = [
+        plan_steps = [
             {
                 "step_id": s.step_id, "action_type": s.action_type,
                 "description": s.description, "tool_name": s.tool_name,
@@ -330,19 +493,149 @@ class AgentRuntime:
             }
             for s in validated_steps
         ]
+        self.memory.working.plan_steps = plan_steps
         log_event(logger, logging.INFO, "entry.planned",
             user_id=normalized_user, session_id=normalized_session,
             route=decision.route, confidence=decision.confidence,
             risk_level=decision.risk_level,
             requires_confirmation=decision.requires_confirmation,
-            plan_step_count=len(self.memory.working.plan_steps),
-            plan_steps=self.memory.working.plan_steps,
+            plan_step_count=len(plan_steps),
+            plan_steps=plan_steps,
         )
+        return decision, validated_steps, plan_steps
+
+    def execute_ask_stream(self, question: str, user_id: str | None = None, session_id: str | None = None):
+        """Public streaming ask API — search, prompt, and stream tokens.
+
+        Yields SSE-compatible ``(event_type, payload)`` tuples:
+        ``status``, ``metadata``, ``answer_delta``, ``answer_complete``,
+        ``answer_error``, ``done``.
+
+        The caller should wrap each tuple into an SSE frame and send it
+        to the client.  This method handles session binding, graph/local
+        search, prompt building, token streaming, and recording the turn.
+        """
+        normalized_user = user_id or self.settings.default_user
+        normalized_session = session_id or "default"
+        self.memory.bind_session(normalized_user, normalized_session)
+        self.memory.working.set_goal(f"回答用户问题: {question[:80]}")
+        self.memory.refresh_conversation_summary(normalized_user, normalized_session)
+        working_context = self.memory.working.context_snapshot()
+        trace_id = uuid4().hex[:12]
+
+        yield ("status", {"message": "Searching your knowledge graph and local memory..."})
+
+        graph_result = self.graph_store.ask(question, normalized_user, trace_id=trace_id)
+        if graph_result.enabled:
+            matches, citations = self._graph_matches_and_citations(normalized_user, question, graph_result)
+            yield ("metadata", {
+                "citations": [c.model_dump(mode="json") for c in citations],
+                "matches": [n.model_dump(mode="json") for n in matches],
+                "graph_enabled": True,
+                "session_id": normalized_session,
+            })
+            prompt = self._build_graph_answer_prompt(
+                question, graph_result, matches, citations, working_context,
+            )
+            full_answer = ""
+            for event_type, payload in self._generate_answer_stream(prompt):
+                if event_type == "answer_delta":
+                    full_answer = str(payload.get("answer", ""))
+                yield (event_type, payload)
+            if full_answer:
+                self.memory.record_turn(
+                    normalized_user, normalized_session, question, full_answer,
+                    citations=citations, graph_enabled=True,
+                )
+                yield ("done", {
+                    "answer": full_answer,
+                    "citations": [c.model_dump(mode="json") for c in citations],
+                    "matches": [n.model_dump(mode="json") for n in matches],
+                    "graph_enabled": True,
+                    "session_id": normalized_session,
+                })
+            return
+
+        # Local fallback
+        graph = build_ask_graph(self.store)
+        state = AgentState(mode="ask", question=question, user_id=normalized_user)
+        result = AgentState.model_validate(graph.invoke(state))
+        matches = result.matches
+        citations = result.citations
+
+        yield ("metadata", {
+            "citations": [c.model_dump(mode="json") for c in citations],
+            "matches": [n.model_dump(mode="json") for n in matches],
+            "graph_enabled": False,
+            "session_id": normalized_session,
+        })
+
+        prompt = self._build_local_answer_prompt(question, matches, citations, working_context)
+        full_answer = ""
+        for event_type, payload in self._generate_answer_stream(prompt):
+            if event_type == "answer_delta":
+                full_answer = str(payload.get("answer", ""))
+            yield (event_type, payload)
+
+        final_answer = full_answer or "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
+
+        # Web search fallback when local evidence is insufficient
+        if (not full_answer or len(full_answer) < 20) and self._web_search_available:
+            yield ("status", {"message": "个人知识库未找到足够依据，正在搜索网络..."})
+            web_results, web_citations = self._execute_web_search(question)
+            if web_citations:
+                yield ("metadata", {
+                    "citations": [c.model_dump(mode="json") for c in web_citations],
+                    "web_enabled": True,
+                    "session_id": normalized_session,
+                })
+                web_prompt = self._build_web_answer_prompt(
+                    question, web_results, web_citations, working_context,
+                )
+                full_answer = ""
+                for event_type, payload in self._generate_answer_stream(web_prompt):
+                    if event_type == "answer_delta":
+                        full_answer = str(payload.get("answer", ""))
+                    yield (event_type, payload)
+                final_answer = full_answer or "网络搜索未返回足够信息来回答这个问题。"
+                self.memory.record_turn(
+                    normalized_user, normalized_session, question, final_answer,
+                    citations=web_citations, graph_enabled=False,
+                )
+                yield ("done", {
+                    "answer": final_answer,
+                    "citations": [c.model_dump(mode="json") for c in web_citations],
+                    "graph_enabled": False,
+                    "web_enabled": True,
+                    "session_id": normalized_session,
+                })
+                return
+
+        self.memory.record_turn(
+            normalized_user, normalized_session, question, final_answer,
+            citations=citations, graph_enabled=False,
+        )
+        yield ("done", {
+            "answer": final_answer,
+            "citations": [c.model_dump(mode="json") for c in citations],
+            "matches": [n.model_dump(mode="json") for n in matches],
+            "graph_enabled": False,
+            "session_id": normalized_session,
+        })
+
+    def execute_entry(self, entry_input: EntryInput, on_progress: ProgressCallback = None) -> EntryResult:
+        normalized_user = entry_input.user_id or self.settings.default_user
+        normalized_session = entry_input.session_id or "default"
+        decision, validated_steps, _plan_dicts = self.plan_for_entry(entry_input)
 
         if decision.requires_planning and validated_steps:
             # Plan-driven execution: delete_knowledge, solidify_conversation
             logger.info("Using PlanExecutor for intent=%s steps=%d", decision.route, len(validated_steps))
-            executor = PlanExecutor(self, self.memory, replanner=self._replanner)
+            executor = PlanExecutor(
+                self, self.memory,
+                replanner=self._replanner,
+                react_runner=self._react_runner,
+            )
             state = AgentState(
                 mode="entry",
                 user_id=normalized_user,
@@ -371,6 +664,7 @@ class AgentRuntime:
                 reason=decision.user_visible_message,
                 reply_text=reply_text,
                 plan_steps=self.memory.working.plan_steps,
+                execution_trace=[],
             )
 
         # Existing graph path for capture/ask/summarize/direct_answer/unknown
@@ -421,6 +715,40 @@ class AgentRuntime:
                 session_id=normalized_session,
             )
 
+        # Determine execution trace for non-planning intents
+        trace_map = {
+            "ask": [
+                "在知识库和图谱中检索相关内容",
+                "整合检索到的证据，生成自然语言回答",
+                "校验回答的事实依据和引用完整性",
+                "若证据不足，通过网络搜索补充外部信息",
+            ],
+            "capture_text": [
+                "采集内容并写入知识库",
+                "整理采集结果，生成标题和摘要",
+                "校验笔记完整性和格式",
+            ],
+            "capture_link": [
+                "抓取链接内容",
+                "采集内容并写入知识库",
+                "整理采集结果",
+            ],
+            "capture_file": [
+                "解析上传文件",
+                "采集内容并写入知识库",
+                "整理采集结果",
+            ],
+            "summarize_thread": [
+                "获取群聊消息记录",
+                "按主题分点总结讨论要点和结论",
+            ],
+            "direct_answer": [
+                "直接生成简短回复",
+            ],
+        }
+        execution_trace = trace_map.get(result.intent, ["生成通用回复"])
+        self.memory.working.execution_trace = execution_trace
+
         return EntryResult(
             intent=result.intent,
             reason=result.intent_reason or "未提供路由说明。",
@@ -428,6 +756,7 @@ class AgentRuntime:
             capture_result=capture_result,
             ask_result=ask_result,
             plan_steps=self.memory.working.plan_steps,
+            execution_trace=execution_trace,
         )
 
     def sync_note_to_graph(self, note_id: str) -> bool:
@@ -582,6 +911,9 @@ class AgentRuntime:
         note.graph_episode_uuid = graph_result.episode_uuid
         note.entity_names = graph_result.entity_names
         note.relation_facts = graph_result.relation_facts[:8]
+        note.graph_node_refs = graph_result.node_refs
+        note.graph_edge_refs = graph_result.edge_refs
+        note.graph_fact_refs = graph_result.fact_refs
         note.graph_sync_status = "synced"
         note.graph_sync_error = None
         note.updated_at = datetime.utcnow()
@@ -661,7 +993,16 @@ class AgentRuntime:
 
         Separated from generation so streaming callers can reuse the prompt.
         """
-        focus_entities = "、".join(graph_result.entity_names[:6]) if graph_result.entity_names else "暂无"
+        if graph_result.node_refs:
+            entity_lines = []
+            for ref in graph_result.node_refs[:6]:
+                line = ref.name
+                if ref.summary:
+                    line += f"（{ref.summary[:60]}）"
+                entity_lines.append(line)
+            focus_entities = "、".join(entity_lines) if entity_lines else "暂无"
+        else:
+            focus_entities = "、".join(graph_result.entity_names[:6]) if graph_result.entity_names else "暂无"
         evidence_blocks = self._build_note_evidence_blocks(matches, citations)
         anchored_lines: list[str] = []
         for c in citations[:5]:
@@ -706,14 +1047,15 @@ class AgentRuntime:
                 return "结合你已有的笔记和图谱信息，" + "；".join(facts[:4]) + "。"
         return graph_result.answer or "暂时没有生成答案。"
 
-    def _compose_local_answer(
+    def _build_local_answer_prompt(
         self, question: str, matches: list[KnowledgeNote],
         citations: list[Citation], working_context: str,
     ) -> str:
+        """Build the LLM prompt for composing a local-store answer."""
         evidence_blocks = self._build_note_evidence_blocks(matches, citations)
         context_block = working_context or "无"
         notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
-        prompt = (
+        return (
             "你是个人知识库助手。请基于最近几轮对话和当前匹配到的笔记内容证据，"
             "用自然中文总结并回答用户问题。优先回答用户真正想问的内容，必要时承认信息不足。"
             "不要把答案写成检索结果罗列，也不要简单重复原始片段。"
@@ -722,6 +1064,12 @@ class AgentRuntime:
             f"最近对话与任务上下文：\n{context_block}\n\n"
             f"相关内容证据：\n{notes_block}"
         )
+
+    def _compose_local_answer(
+        self, question: str, matches: list[KnowledgeNote],
+        citations: list[Citation], working_context: str,
+    ) -> str:
+        prompt = self._build_local_answer_prompt(question, matches, citations, working_context)
         generated = self._generate_answer(prompt)
         if generated:
             return generated
@@ -740,7 +1088,7 @@ class AgentRuntime:
         for note in matches[:limit]:
             candidate_snippets = [item.snippet for item in citation_map.get(note.id, []) if item.snippet]
             if not candidate_snippets:
-                candidate_snippets = _top_sentences(note.content, 3)
+                candidate_snippets = _top_sentences(_evidence_content(note), 3)
             excerpt = "\n".join(f"- {s}" for s in candidate_snippets[:3] if s.strip())
             if not excerpt:
                 excerpt = f"- {note.summary}"
@@ -844,12 +1192,21 @@ class AgentRuntime:
             return None
         if action.action_type == "delete_note":
             graph_episode_uuid = action.payload.get("graph_episode_uuid")
-            self.store.delete_note(action.target_id, normalized_user)
-            if self.graph_store.configured() and graph_episode_uuid:
-                try:
-                    self.graph_store.delete_episode(str(graph_episode_uuid))
-                except Exception:
-                    logger.exception("Graph episode deletion failed for pending action %s", action_id)
+            chunks_before = self.store.get_chunks_for_parent(action.target_id)
+            has_chunks = bool(chunks_before)
+            self.store.delete_note(action.target_id, normalized_user, cascade_chunks=has_chunks)
+            if self.graph_store.configured():
+                if graph_episode_uuid:
+                    try:
+                        self.graph_store.delete_episode(str(graph_episode_uuid))
+                    except Exception:
+                        logger.exception("Graph episode deletion failed for pending action %s", action_id)
+                for chunk in chunks_before:
+                    if chunk.graph_episode_uuid:
+                        try:
+                            self.graph_store.delete_episode(chunk.graph_episode_uuid)
+                        except Exception:
+                            logger.exception("Graph episode deletion failed for chunk %s", chunk.id)
             action = self.pending_action_store.mark_executed(action_id, normalized_user) or action
         return action
 
@@ -1010,6 +1367,23 @@ def _extract_question_keywords(question: str) -> list[str]:
         if len(normalized) >= 2 and not normalized.isascii() and normalized not in keywords:
             keywords.append(normalized)
     return keywords[:8]
+
+
+def _evidence_content(note: KnowledgeNote) -> str:
+    """Return the best content for evidence display.
+
+    Parent notes (with chunks) use only summary to avoid dumping entire
+    documents into prompts. Chunk notes and standalone short notes use
+    content directly.
+    """
+    if note.parent_note_id is not None:
+        # Chunk note — content is already focused
+        return note.content[:500]
+    if note.chunk_index == 0:
+        # Parent note — use summary to keep prompts compact
+        return note.summary
+    # Standalone note — use content
+    return note.content[:500]
 
 
 def _top_sentences(text: str, limit: int = 3) -> list[str]:

@@ -29,6 +29,8 @@ class CaptureUploadTool(BaseTool):
                 },
                 "required": ["file_path", "filename"],
             },
+            risk_level="low",
+            writes_longterm=True,
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:

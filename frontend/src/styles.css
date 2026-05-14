@@ -793,6 +793,11 @@ button:disabled {
   padding: 3px 0;
 }
 
+.plan-step-trace {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+}
+
 .plan-step-type {
   color: #d7e4ff;
   font-weight: 600;

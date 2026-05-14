@@ -25,6 +25,8 @@ class CaptureUrlTool(BaseTool):
                 },
                 "required": ["url"],
             },
+            risk_level="low",
+            accesses_external=True,
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:

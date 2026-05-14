@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from ..core.models import EntryIntent
-from .base import BaseTool, ToolResult, ToolSpec
+from .base import BaseTool, ToolResult, ToolSpec, validate_tool_input
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,14 @@ class ToolRegistry:
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
 
-    def execute(self, name: str, **kwargs: Any) -> ToolResult:
+    def execute(self, name: str, validate_schema: bool = True, **kwargs: Any) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(ok=False, error=f"未找到工具：{name}")
+        if validate_schema:
+            schema_errors = validate_tool_input(tool.spec.input_schema, kwargs)
+            if schema_errors:
+                return ToolResult(ok=False, error="参数校验失败: " + "; ".join(schema_errors))
         try:
             return tool.execute(**kwargs)
         except Exception as exc:

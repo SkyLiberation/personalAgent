@@ -17,7 +17,7 @@ from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RR
 
 from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
-from ..core.models import Citation, KnowledgeNote
+from ..core.models import Citation, KnowledgeNote, GraphNodeRef, GraphEdgeRef, GraphFactRef
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from .deepseek_compatible_client import DeepSeekCompatibleClient
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
@@ -38,6 +38,9 @@ class GraphCaptureResult(BaseModel):
     entity_names: list[str] = Field(default_factory=list)
     relation_facts: list[str] = Field(default_factory=list)
     related_episode_uuids: list[str] = Field(default_factory=list)
+    node_refs: list[GraphNodeRef] = Field(default_factory=list)
+    edge_refs: list[GraphEdgeRef] = Field(default_factory=list)
+    fact_refs: list[GraphFactRef] = Field(default_factory=list)
 
 
 class GraphAskResult(BaseModel):
@@ -49,6 +52,9 @@ class GraphAskResult(BaseModel):
     related_episode_uuids: list[str] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     citation_hits: list["GraphCitationHit"] = Field(default_factory=list)
+    node_refs: list[GraphNodeRef] = Field(default_factory=list)
+    edge_refs: list[GraphEdgeRef] = Field(default_factory=list)
+    fact_refs: list[GraphFactRef] = Field(default_factory=list)
 
 
 class GraphCitationHit(BaseModel):
@@ -187,25 +193,65 @@ class GraphitiStore:
                         timeout=480,
                     )
 
-                with trace_span(
-                    logger,
-                    "graphiti.search_after_ingest",
-                    trace_id=trace_id,
-                    note_id=note.id,
-                    attempt=attempt,
-                ):
-                    search_result = await asyncio.wait_for(
-                        graphiti.search_(
-                            query=note.summary,
-                            config=COMBINED_HYBRID_SEARCH_RRF,
-                            group_ids=[self._group_id(note.user_id)],
-                        ),
-                        timeout=45,
+                related_episode_uuids: list[str] = []
+                try:
+                    with trace_span(
+                        logger,
+                        "graphiti.search_after_ingest",
+                        trace_id=trace_id,
+                        note_id=note.id,
+                        attempt=attempt,
+                    ):
+                        search_result = await asyncio.wait_for(
+                            graphiti.search_(
+                                query=note.summary,
+                                config=COMBINED_HYBRID_SEARCH_RRF,
+                                group_ids=[self._group_id(note.user_id)],
+                            ),
+                            timeout=45,
+                        )
+                    related_episode_uuids = _related_episode_ids_from_edges(
+                        [edge.episodes for edge in search_result.edges],
+                        exclude={add_result.episode.uuid},
                     )
-                related_episode_uuids = _related_episode_ids_from_edges(
-                    [edge.episodes for edge in search_result.edges],
-                    exclude={add_result.episode.uuid},
-                )
+                except Exception:
+                    logger.warning(
+                        "search_after_ingest failed for note=%s, continuing without related episodes",
+                        note.id,
+                    )
+
+                node_names_by_uuid = {node.uuid: node.name for node in add_result.nodes}
+                node_refs = [
+                    GraphNodeRef(
+                        uuid=node.uuid,
+                        name=node.name,
+                        labels=list(node.labels),
+                        summary=getattr(node, "summary", "") or "",
+                    )
+                    for node in add_result.nodes
+                ]
+                edge_refs = [
+                    GraphEdgeRef(
+                        uuid=edge.uuid,
+                        fact=edge.fact,
+                        source_node_uuid=edge.source_node_uuid,
+                        target_node_uuid=edge.target_node_uuid,
+                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
+                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        episodes=list(edge.episodes),
+                    )
+                    for edge in add_result.edges
+                ]
+                fact_refs = [
+                    GraphFactRef(
+                        fact=edge.fact,
+                        edge_uuid=edge.uuid,
+                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
+                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        episode_uuids=list(edge.episodes),
+                    )
+                    for edge in add_result.edges
+                ]
 
                 log_event(
                     logger,
@@ -225,6 +271,9 @@ class GraphitiStore:
                     entity_names=_dedupe([node.name for node in add_result.nodes]),
                     relation_facts=_dedupe([edge.fact for edge in add_result.edges]),
                     related_episode_uuids=related_episode_uuids,
+                    node_refs=node_refs,
+                    edge_refs=edge_refs,
+                    fact_refs=fact_refs,
                 )
             finally:
                 await graphiti.close()
@@ -259,6 +308,38 @@ class GraphitiStore:
                 relation_facts = _dedupe([hit.relation_fact for hit in ranked_hits])
                 related_episode_uuids = _dedupe([hit.episode_uuid for hit in ranked_hits])
 
+                ask_node_refs = [
+                    GraphNodeRef(
+                        uuid=node.uuid,
+                        name=node.name,
+                        labels=list(node.labels),
+                        summary=getattr(node, "summary", "") or "",
+                    )
+                    for node in search_result.nodes
+                ]
+                ask_edge_refs = [
+                    GraphEdgeRef(
+                        uuid=edge.uuid,
+                        fact=edge.fact,
+                        source_node_uuid=edge.source_node_uuid,
+                        target_node_uuid=edge.target_node_uuid,
+                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
+                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        episodes=list(edge.episodes),
+                    )
+                    for edge in search_result.edges
+                ]
+                ask_fact_refs = [
+                    GraphFactRef(
+                        fact=edge.fact,
+                        edge_uuid=edge.uuid,
+                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
+                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        episode_uuids=list(edge.episodes),
+                    )
+                    for edge in search_result.edges
+                ]
+
                 answer = None
                 if relation_facts:
                     top_entities = "、".join(entity_names[:5]) if entity_names else "暂无实体摘要"
@@ -282,6 +363,9 @@ class GraphitiStore:
                     relation_facts=relation_facts,
                     related_episode_uuids=related_episode_uuids,
                     citation_hits=ranked_hits[:12],
+                    node_refs=ask_node_refs,
+                    edge_refs=ask_edge_refs,
+                    fact_refs=ask_fact_refs,
                 )
             finally:
                 await graphiti.close()
