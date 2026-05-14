@@ -76,6 +76,13 @@ class EntryResult(BaseModel):
     execution_trace: list[str] = Field(default_factory=list)
 
 
+class RetryResult(BaseModel):
+    """Result of a verification retry loop, carrying the final answer and verification."""
+    answer: str
+    verification: VerificationResult
+    attempts: int = 0
+
+
 class ResetResult(BaseModel):
     user_id: str
     deleted_notes: int = 0
@@ -245,44 +252,59 @@ class AgentRuntime:
         self.memory.refresh_conversation_summary(normalized_user, normalized_session)
         working_context = self.memory.working.context_snapshot()
         trace_id = uuid4().hex[:12]
+        graph_fallback_answer: str | None = None
+        graph_fallback_citations: list[Citation] = []
+        graph_fallback_matches: list[KnowledgeNote] = []
 
         graph_result = self.graph_store.ask(question, normalized_user, trace_id=trace_id)
         if graph_result.enabled:
             matches, citations = self._graph_matches_and_citations(normalized_user, question, graph_result)
             answer = self._compose_graph_answer(question, graph_result, matches, citations, working_context)
             verification = self._verifier.verify(question, answer, citations, matches, graph_enabled=True)
-            answer = self._retry_if_needed(question, answer, citations, matches, verification, graph_enabled=True)
-            verification = self._verifier.verify(question, answer, citations, matches, graph_enabled=True)
-            if not verification.ok or not verification.sufficient:
-                answer = _annotate_answer(answer, verification)
+            retry_result = self._retry_if_needed(question, answer, citations, matches, verification, graph_enabled=True)
+            answer = retry_result.answer
+            verification = retry_result.verification
             self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
-            ask_result = AskResult(
-                answer=answer,
-                citations=citations,
-                matches=matches,
-                graph_enabled=True,
-                session_id=normalized_session,
-            )
-            self.memory.record_turn(
-                normalized_user, normalized_session, question, answer,
-                citations=citations, graph_enabled=True,
-            )
-            logger.info(
-                "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
-                normalized_user, len(matches), len(citations), verification.evidence_score,
-            )
-            return ask_result
+            if verification.ok and verification.sufficient:
+                ask_result = AskResult(
+                    answer=answer,
+                    citations=citations,
+                    matches=matches,
+                    graph_enabled=True,
+                    session_id=normalized_session,
+                )
+                self.memory.record_turn(
+                    normalized_user, normalized_session, question, answer,
+                    citations=citations, graph_enabled=True,
+                )
+                logger.info(
+                    "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
+                    normalized_user, len(matches), len(citations), verification.evidence_score,
+                )
+                return ask_result
+            graph_fallback_answer = answer
+            graph_fallback_citations = citations
+            graph_fallback_matches = matches
+            self.memory.working.add_step("图谱语义结果证据不足，继续合并本地检索兜底")
 
         graph = build_ask_graph(self.store)
         state = AgentState(mode="ask", question=question, user_id=normalized_user)
         result = AgentState.model_validate(graph.invoke(state))
-        answer = self._compose_local_answer(question, result.matches, result.citations, working_context)
+        local_matches = _merge_notes(graph_fallback_matches, result.matches)
+        local_citations = _merge_citations(graph_fallback_citations, result.citations)
+        answer = self._compose_local_answer(question, local_matches, local_citations, working_context)
         final_answer = answer or result.answer or "暂时没有生成答案。"
-        verification = self._verifier.verify(question, final_answer, result.citations, result.matches, graph_enabled=False)
-        final_answer = self._retry_if_needed(question, final_answer, result.citations, result.matches, verification, graph_enabled=False)
-        verification = self._verifier.verify(question, final_answer, result.citations, result.matches, graph_enabled=False)
+        verification = self._verifier.verify(
+            question, final_answer, local_citations, local_matches, graph_enabled=graph_result.enabled
+        )
+        retry_result = self._retry_if_needed(
+            question, final_answer, local_citations, local_matches, verification,
+            graph_enabled=graph_result.enabled,
+        )
+        final_answer = retry_result.answer
+        verification = retry_result.verification
         if not verification.ok or not verification.sufficient:
-            final_answer = _annotate_answer(final_answer, verification)
+            final_answer = _annotate_answer(graph_fallback_answer or final_answer, verification)
         self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
 
         # Third tier: web search fallback when local evidence is insufficient
@@ -294,12 +316,11 @@ class AgentRuntime:
                 web_verification = self._verifier.verify(
                     question, web_answer, web_citations, [], graph_enabled=False, web_enabled=True,
                 )
-                web_answer = self._retry_if_needed(
-                    question, web_answer, web_citations, [], web_verification, graph_enabled=False,
+                retry_result = self._retry_if_needed(
+                    question, web_answer, web_citations, [], web_verification, graph_enabled=False, web_enabled=True,
                 )
-                web_verification = self._verifier.verify(
-                    question, web_answer, web_citations, [], graph_enabled=False, web_enabled=True,
-                )
+                web_answer = retry_result.answer
+                web_verification = retry_result.verification
                 if not web_verification.ok or not web_verification.sufficient:
                     web_answer = _annotate_answer(web_answer, web_verification)
                 self.memory.working.add_step(
@@ -317,24 +338,24 @@ class AgentRuntime:
                     answer=web_answer,
                     citations=web_citations,
                     matches=[],
-                    graph_enabled=False,
+                    graph_enabled=graph_result.enabled,
                     session_id=normalized_session,
                 )
 
         ask_result = AskResult(
             answer=final_answer,
-            citations=result.citations,
-            matches=result.matches,
-            graph_enabled=False,
+            citations=local_citations,
+            matches=local_matches,
+            graph_enabled=graph_result.enabled,
             session_id=normalized_session,
         )
         self.memory.record_turn(
             normalized_user, normalized_session, question, final_answer,
-            citations=result.citations, graph_enabled=False,
+            citations=local_citations, graph_enabled=graph_result.enabled,
         )
         logger.info(
             "Ask resolved locally user=%s matches=%s citations=%s verify=%.2f",
-            normalized_user, len(result.matches), len(result.citations), verification.evidence_score,
+            normalized_user, len(local_matches), len(local_citations), verification.evidence_score,
         )
         return ask_result
 
@@ -939,19 +960,28 @@ class AgentRuntime:
 
     def _graph_citations(self, matches: list[KnowledgeNote], graph_result: GraphAskResult) -> list[Citation]:
         citations: list[Citation] = []
-        facts = graph_result.relation_facts
+        facts_by_episode = _graph_facts_by_episode(graph_result)
+        fallback_facts = _graph_fact_lines(graph_result, limit=8)
         for index, note in enumerate(matches[:5]):
+            relation_fact = None
+            if note.graph_episode_uuid:
+                episode_facts = facts_by_episode.get(note.graph_episode_uuid, [])
+                if episode_facts:
+                    relation_fact = episode_facts[0]
+            if relation_fact is None and index < len(fallback_facts):
+                relation_fact = fallback_facts[index]
             citations.append(Citation(
                 note_id=note.id, title=note.title,
                 snippet=note.summary[:120],
-                relation_fact=facts[index] if index < len(facts) else None,
+                relation_fact=relation_fact,
             ))
         return citations
 
     def _graph_matches_and_citations(
         self, user_id: str, question: str, graph_result: GraphAskResult
     ) -> tuple[list[KnowledgeNote], list[Citation]]:
-        matches = self.store.find_notes_by_graph_episode_uuids(user_id, graph_result.related_episode_uuids)
+        episode_uuids = _graph_episode_uuids(graph_result)
+        matches = self.store.find_notes_by_graph_episode_uuids(user_id, episode_uuids)
         if not graph_result.citation_hits:
             return matches, self._graph_citations(matches, graph_result)
 
@@ -1003,6 +1033,7 @@ class AgentRuntime:
             focus_entities = "、".join(entity_lines) if entity_lines else "暂无"
         else:
             focus_entities = "、".join(graph_result.entity_names[:6]) if graph_result.entity_names else "暂无"
+        graph_fact_blocks = self._build_graph_fact_blocks(graph_result, citations)
         evidence_blocks = self._build_note_evidence_blocks(matches, citations)
         anchored_lines: list[str] = []
         for c in citations[:5]:
@@ -1013,23 +1044,91 @@ class AgentRuntime:
                 label += f"  [证据: {c.snippet[:100]}]"
             anchored_lines.append(f"- {label}")
         context_block = working_context or "无"
+        graph_fact_block = "\n".join(graph_fact_blocks) if graph_fact_blocks else "无"
         notes_block = "\n\n".join(evidence_blocks) if evidence_blocks else "无"
         anchored_block = "\n".join(anchored_lines) if anchored_lines else "无"
 
         return (
-            "你是个人知识库助手。请基于给定的对话上下文、图谱事实和笔记内容证据，"
+            "你是个人知识库助手。请基于给定的对话上下文、图谱事实网络和原文证据，"
             "先总结结论，再解释原因，生成一段自然、直接、连续的中文回答。"
             "如果上下文里存在代词或省略，请结合最近几轮对话补全指代。"
             "不要先输出「最相关实体」「关联事实」「根据检索结果」之类栏目标题，不要机械列点，不要把原始片段逐条照搬。"
-            "你的任务是整合证据、压缩冗余、形成更像人写的总结。"
+            "你的主要推理材料是图谱事实网络中的实体、关系边和事实；"
+            "笔记片段只用于核对出处、补充限定条件和引用定位。"
             "如果证据不足，要明确指出不确定点。"
             "回答尽量先给出一句直接结论，再补充展开说明。\n\n"
             f"当前问题：{question}\n\n"
             f"最近对话与任务上下文：\n{context_block}\n\n"
             f"图谱实体：{focus_entities}\n\n"
-            f"事实与证据锚点（每条包含关系事实和对应原文片段）：\n{anchored_block}\n\n"
-            f"笔记全文证据：\n{notes_block}"
+            f"图谱事实网络（优先基于这些实体关系和事实推理）：\n{graph_fact_block}\n\n"
+            f"原文证据锚点（用于校验和引用定位）：\n{anchored_block}\n\n"
+            f"原文证据片段：\n{notes_block}"
         )
+
+    def _build_graph_fact_blocks(
+        self, graph_result: GraphAskResult, citations: list[Citation], limit: int = 8
+    ) -> list[str]:
+        citation_snippets: dict[str, str] = {}
+        for citation in citations:
+            if citation.relation_fact and citation.snippet:
+                citation_snippets.setdefault(citation.relation_fact, citation.snippet)
+
+        blocks: list[str] = []
+        seen: set[str] = set()
+
+        for fact_ref in graph_result.fact_refs:
+            fact = fact_ref.fact.strip()
+            if not fact or fact in seen:
+                continue
+            relation = _format_graph_relation(
+                fact,
+                fact_ref.source_node_name,
+                fact_ref.target_node_name,
+                citation_snippets.get(fact),
+            )
+            blocks.append(relation)
+            seen.add(fact)
+            if len(blocks) >= limit:
+                return blocks
+
+        for edge_ref in graph_result.edge_refs:
+            fact = edge_ref.fact.strip()
+            if not fact or fact in seen:
+                continue
+            relation = _format_graph_relation(
+                fact,
+                edge_ref.source_node_name,
+                edge_ref.target_node_name,
+                citation_snippets.get(fact),
+            )
+            blocks.append(relation)
+            seen.add(fact)
+            if len(blocks) >= limit:
+                return blocks
+
+        for hit in graph_result.citation_hits:
+            fact = hit.relation_fact.strip()
+            if not fact or fact in seen:
+                continue
+            source = hit.endpoint_names[0] if hit.endpoint_names else ""
+            target = hit.endpoint_names[1] if len(hit.endpoint_names) > 1 else ""
+            relation = _format_graph_relation(fact, source, target, citation_snippets.get(fact))
+            if hit.score:
+                relation += f" [score={hit.score}]"
+            blocks.append(relation)
+            seen.add(fact)
+            if len(blocks) >= limit:
+                return blocks
+
+        for fact in graph_result.relation_facts:
+            normalized = fact.strip()
+            if not normalized or normalized in seen:
+                continue
+            blocks.append(f"- {normalized}")
+            seen.add(normalized)
+            if len(blocks) >= limit:
+                return blocks
+        return blocks
 
     def _compose_graph_answer(
         self, question: str, graph_result: GraphAskResult,
@@ -1103,23 +1202,30 @@ class AgentRuntime:
         matches: list[KnowledgeNote],
         verification: VerificationResult,
         graph_enabled: bool = False,
-    ) -> str:
+        web_enabled: bool = False,
+    ) -> RetryResult:
         max_retries = max(0, self.settings.max_verify_retries)
         current_answer = answer
+        current_verification = verification
+        attempts = 0
         for attempt in range(max_retries):
-            if verification.ok and verification.sufficient:
+            if current_verification.ok and current_verification.sufficient:
                 break
-            correction_prompt = self._build_correction_prompt(question, current_answer, verification)
+            correction_prompt = self._build_correction_prompt(question, current_answer, current_verification)
             regenerated = self._generate_answer(correction_prompt)
             if regenerated:
                 current_answer = regenerated
-                verification = self._verifier.verify(question, current_answer, citations, matches, graph_enabled=graph_enabled)
+                current_verification = self._verifier.verify(
+                    question, current_answer, citations, matches,
+                    graph_enabled=graph_enabled, web_enabled=web_enabled,
+                )
+                attempts = attempt + 1
                 self.memory.working.add_step(
-                    f"Retry {attempt + 1}: score={verification.evidence_score:.2f} ok={verification.ok}"
+                    f"Retry {attempt + 1}: score={current_verification.evidence_score:.2f} ok={current_verification.ok}"
                 )
             else:
                 break
-        return current_answer
+        return RetryResult(answer=current_answer, verification=current_verification, attempts=attempts)
 
     def _build_correction_prompt(
         self, question: str, answer: str, verification: VerificationResult
@@ -1270,6 +1376,91 @@ def _merge_notes(primary: list[KnowledgeNote], secondary: list[KnowledgeNote]) -
         seen.add(note.id)
         merged.append(note)
     return merged
+
+
+def _merge_citations(primary: list[Citation], secondary: list[Citation]) -> list[Citation]:
+    merged: list[Citation] = []
+    seen: set[tuple[str, str, str]] = set()
+    for citation in [*primary, *secondary]:
+        key = (citation.note_id, citation.relation_fact or "", citation.snippet)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(citation)
+    return merged
+
+
+def _graph_episode_uuids(graph_result: GraphAskResult) -> list[str]:
+    ordered: list[str] = []
+
+    def add(value: str | None) -> None:
+        if value and value not in ordered:
+            ordered.append(value)
+
+    for hit in graph_result.citation_hits:
+        add(hit.episode_uuid)
+    for fact_ref in graph_result.fact_refs:
+        for episode_uuid in fact_ref.episode_uuids:
+            add(episode_uuid)
+    for edge_ref in graph_result.edge_refs:
+        for episode_uuid in edge_ref.episodes:
+            add(episode_uuid)
+    for episode_uuid in graph_result.related_episode_uuids:
+        add(episode_uuid)
+    return ordered
+
+
+def _graph_facts_by_episode(graph_result: GraphAskResult) -> dict[str, list[str]]:
+    facts_by_episode: dict[str, list[str]] = {}
+
+    def add(episode_uuid: str, fact: str) -> None:
+        normalized = fact.strip()
+        if not episode_uuid or not normalized:
+            return
+        facts = facts_by_episode.setdefault(episode_uuid, [])
+        if normalized not in facts:
+            facts.append(normalized)
+
+    for hit in graph_result.citation_hits:
+        add(hit.episode_uuid, hit.relation_fact)
+    for fact_ref in graph_result.fact_refs:
+        for episode_uuid in fact_ref.episode_uuids:
+            add(episode_uuid, fact_ref.fact)
+    for edge_ref in graph_result.edge_refs:
+        for episode_uuid in edge_ref.episodes:
+            add(episode_uuid, edge_ref.fact)
+    return facts_by_episode
+
+
+def _graph_fact_lines(graph_result: GraphAskResult, limit: int = 8) -> list[str]:
+    facts: list[str] = []
+
+    def add(value: str | None) -> None:
+        normalized = (value or "").strip()
+        if normalized and normalized not in facts:
+            facts.append(normalized)
+
+    for fact_ref in graph_result.fact_refs:
+        add(fact_ref.fact)
+    for edge_ref in graph_result.edge_refs:
+        add(edge_ref.fact)
+    for hit in graph_result.citation_hits:
+        add(hit.relation_fact)
+    for fact in graph_result.relation_facts:
+        add(fact)
+    return facts[:limit]
+
+
+def _format_graph_relation(fact: str, source: str = "", target: str = "", snippet: str | None = None) -> str:
+    endpoints = ""
+    if source and target:
+        endpoints = f"{source} -> {target}: "
+    elif source:
+        endpoints = f"{source}: "
+    line = f"- {endpoints}{fact}"
+    if snippet:
+        line += f" [原文: {snippet[:100]}]"
+    return line
 
 
 def _best_snippet(note: KnowledgeNote, hit: GraphCitationHit, question: str) -> str:

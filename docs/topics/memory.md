@@ -76,7 +76,7 @@
 
 作用：
 
-- 保存 `notes.json` 中的长期知识 note（支持 parent note + chunk notes 模型，通过 `parent_note_id / chunk_index / source_span` 建立文档级关联）
+- 保存 `notes.json` 中的长期知识 note（支持 parent note + chunk notes 模型，通过 `parent_note_id / chunk_index / source_span` 建立文档级关联；chunk 主要作为原文证据和 citation 定位单元）
 - 保存 `reviews.json` 中的复习卡
 - 保存 `conversations.json` 中的本地问答历史降级数据
 - 提供本地相似检索（含按 parent 去重）、图谱 episode 到 note 的映射、chunk 查询（`get_chunks_for_parent` / `get_parent_note`）和级联删除
@@ -137,14 +137,12 @@
 
 1. `compose` 步骤生成草稿答案
 2. 草稿先写入 `CrossSessionStore.solidify_drafts`
-3. `draft_ready` 事件可供前端展示
-4. 后续 `capture_text` 工具把草稿正式写入 `KnowledgeNote`
+3. `compose` 同时从草稿中抽取候选结论（`candidate_conclusions`），存入 `CrossSessionStore`
+4. `draft_ready` 事件可供前端展示
+5. 后续 `capture_text` 工具把草稿正式写入 `KnowledgeNote`
+6. 草稿入库成功后，`PlanExecutor` 自动回写草稿状态为 `solidified`，并同步标记关联的候选结论为已固化
 
-注意：
-
-- `CrossSessionStore` 本身不是最终固化点
-- 它更像固化前后的中间持久层
-- 当前“草稿入库成功后回写为已固化状态”的闭环能力已预留接口，但还未完全接完
+状态闭环已接完：`draft → stored → solidified`，对应 candidate conclusions 也会同步切换 `solidified` 标记。
 
 ## 会话摘要
 
@@ -230,7 +228,7 @@ A: ...
 ## 演进方向
 
 - 继续保持 `WorkingMemory` 作为轻量 scratchpad
+- 明确长期知识的双层定位：Graphiti node / edge / fact 是语义检索与推理单元，LocalMemoryStore parent/chunk note 是原文证据与回溯单元
 - 需要跨请求恢复的审批/续接语义，继续显式放入持久化模型
 - 为 ask history 降级层增加更可靠的缓冲与回补机制
-- 为 `solidify_conversation` 补齐草稿状态闭环
 - 当多段审批或更复杂恢复流增多后，再评估是否引入 LangGraph checkpoint

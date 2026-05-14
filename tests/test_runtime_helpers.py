@@ -8,16 +8,19 @@ import pytest
 from personal_agent.agent.runtime import (
     _best_snippet,
     _extract_question_keywords,
+    _graph_episode_uuids,
     _split_sentences,
     _tokenize_for_overlap,
 )
 from personal_agent.core.models import (
+    Citation,
     KnowledgeNote,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
 )
 from personal_agent.graphiti.store import GraphCaptureResult
+from personal_agent.graphiti.store import GraphAskResult
 from personal_agent.storage.memory_store import LocalMemoryStore
 
 
@@ -182,6 +185,87 @@ class TestMergeGraphCaptureRefs:
         assert len(note.graph_fact_refs) == 1
         assert note.graph_fact_refs[0].edge_uuid == "e1"
         assert note.graph_sync_status == "synced"
+
+
+class TestGraphAskSemanticEvidence:
+    def test_episode_uuids_include_fact_and_edge_refs(self):
+        graph_result = GraphAskResult(
+            enabled=True,
+            related_episode_uuids=["ep-related"],
+            fact_refs=[
+                GraphFactRef(
+                    fact="订单服务依赖 Redis",
+                    edge_uuid="edge-1",
+                    episode_uuids=["ep-fact"],
+                )
+            ],
+            edge_refs=[
+                GraphEdgeRef(
+                    uuid="edge-2",
+                    fact="Redis 缓解数据库压力",
+                    episodes=["ep-edge"],
+                )
+            ],
+        )
+
+        assert _graph_episode_uuids(graph_result) == ["ep-fact", "ep-edge", "ep-related"]
+
+    def test_graph_prompt_prioritizes_fact_network(self):
+        from personal_agent.agent.runtime import AgentRuntime
+
+        graph_result = GraphAskResult(
+            enabled=True,
+            entity_names=["Redis", "订单服务"],
+            node_refs=[
+                GraphNodeRef(uuid="n1", name="Redis", summary="内存数据存储"),
+                GraphNodeRef(uuid="n2", name="订单服务"),
+            ],
+            fact_refs=[
+                GraphFactRef(
+                    fact="订单服务依赖 Redis 缓存热点数据",
+                    edge_uuid="e1",
+                    source_node_name="订单服务",
+                    target_node_name="Redis",
+                    episode_uuids=["ep1"],
+                )
+            ],
+            edge_refs=[
+                GraphEdgeRef(
+                    uuid="e2",
+                    fact="Redis 用于降低数据库压力",
+                    source_node_name="Redis",
+                    target_node_name="数据库压力",
+                    episodes=["ep1"],
+                )
+            ],
+        )
+        note = KnowledgeNote(
+            id="note1",
+            title="缓存方案",
+            content="订单服务依赖 Redis 缓存热点数据，从而降低数据库压力。",
+            summary="订单服务使用 Redis 缓存",
+            graph_episode_uuid="ep1",
+        )
+        citation = Citation(
+            note_id="note1",
+            title="缓存方案",
+            snippet="订单服务依赖 Redis 缓存热点数据",
+            relation_fact="订单服务依赖 Redis 缓存热点数据",
+        )
+
+        rt = object.__new__(AgentRuntime)
+        prompt = rt._build_graph_answer_prompt(
+            "订单服务为什么用 Redis？",
+            graph_result,
+            [note],
+            [citation],
+            "无",
+        )
+
+        assert "图谱事实网络" in prompt
+        assert "订单服务 -> Redis: 订单服务依赖 Redis 缓存热点数据" in prompt
+        assert "原文证据锚点" in prompt
+        assert "笔记片段只用于核对出处" in prompt
 
 
 class TestGraphRefsSerialization:

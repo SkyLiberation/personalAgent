@@ -172,6 +172,18 @@ class MemoryFacade:
             return self.cross_session.list_conclusions(user_id, solidified)
         return []
 
+    def mark_draft_solidified(self, user_id: str, draft_id: str) -> bool:
+        """Mark a solidify draft as solidified after capture_text stores the note."""
+        if self.cross_session is not None:
+            return self.cross_session.mark_draft_status(user_id, draft_id, "solidified")
+        return False
+
+    def mark_conclusion_solidified(self, user_id: str, conclusion_id: str) -> bool:
+        """Mark a candidate conclusion as solidified."""
+        if self.cross_session is not None:
+            return self.cross_session.mark_conclusion_solidified(user_id, conclusion_id)
+        return False
+
     # -- helpers ------------------------------------------------------------
 
     def _load_conversation_turns(

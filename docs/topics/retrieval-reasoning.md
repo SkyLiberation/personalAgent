@@ -9,7 +9,9 @@
 - 优先使用 Graphiti/Neo4j 图谱检索
 - 图谱不可用时回退本地笔记检索
 - 本地检索证据不足时回退到 Firecrawl 网络搜索
-- 将图谱事实、笔记片段和网络搜索结果组织成证据
+- 将 Graphiti 抽取出的 node / edge / fact 作为语义检索与推理主材料
+- 将 chunk / note 原文片段作为证据出处和 citation 定位材料
+- 将图谱事实、笔记片段和网络搜索结果组织成可追溯证据
 - 生成回答后进行 verifier 校验
 - 低置信度时尝试自修正或标注不确定性
 
@@ -132,6 +134,32 @@ score
 
 它的作用是把图谱关系事实映射回本地 note，并进一步生成 `relation_fact + snippet` 证据锚点。
 
+#### 语义层与证据层的职责边界
+
+当前检索与推理链路已经开始让 Graphiti 抽取出的 node / edge / fact 成为图谱问答的一等语义材料，而不是仅把 Graphiti 当成 episode 召回器。
+
+当前长文 chunk 仍然有价值，但它的主要职责应收敛为“原文证据单元”：
+
+```text
+Semantic Layer
+  -> Graphiti nodes / edges / facts
+  -> 负责实体、关系、事实链、多跳推理和答案组织
+
+Evidence Layer
+  -> parent note / chunk note / source_span / original snippet
+  -> 负责回查原文、citation、高亮定位和抽取结果校验
+```
+
+因此目标不是用 chunk 替代 Graphiti node，也不是彻底删除 chunk，而是把问答重心调整为：
+
+```text
+Graphiti node / edge / fact 主导召回、排序和推理
+  -> episode UUID 回查 note/chunk
+  -> 生成 relation_fact + snippet citation
+```
+
+这样可以利用 Graphiti 对文章进行语义切分后得到的知识单元，同时保留原文可追溯性，避免抽取事实丢失限定条件、代码块、表格、步骤和上下文语气后无法回查。
+
 ### 2. 本地检索
 
 代码位置：[memory_store.py](../../src/personal_agent/storage/memory_store.py)
@@ -169,6 +197,9 @@ score
 - 已支持 Graphiti + Neo4j 图谱检索
 - 已支持图谱不可用时本地链路回退
 - 已支持图谱 relation facts
+- 已支持保存 Graphiti node / edge / fact 结构化引用
+- 已支持图谱回答 prompt 优先注入 Graphiti fact network，并将 note/chunk snippet 作为原文证据锚点
+- 已支持 episode 映射综合 `citation_hits / fact_refs / edge_refs / related_episode_uuids`
 - 已支持 note snippet citation
 - 已支持 `relation_fact + snippet` 证据锚点
 - 已支持回答后 verifier 校验
@@ -184,46 +215,116 @@ score
 
 ## 已知限制
 
-### 1. ask 检索排序仍偏启发式
+### 1. Graphiti 语义结果仍需更深层推理规划
+
+当前问答 prompt 已经优先注入 `node_refs / edge_refs / fact_refs / citation_hits` 形成图谱事实网络，并用 note/chunk snippet 作为出处锚点。但事实网络的多跳路径选择、冲突事实处理、时间线排序和跨 episode 证据合并仍偏启发式。
+
+后续需要进一步把 node / edge / fact 的检索规划从 prompt 组织升级为更明确的 graph reasoning planner。
+
+### 2. ask 检索排序仍偏启发式
 
 当前图谱结果和本地结果已经可用，但复杂问题下的 rerank、证据合并和多跳推理仍有提升空间。
 
-### 2. verifier 是轻量规则校验
+### 3. verifier 是轻量规则校验
 
 `AnswerVerifier` 主要基于 citation 有效性、匹配数量、图谱加分和兜底措辞计算 evidence score。它不是完整事实校验器，也不会深入判断关系事实是否逻辑一致。
 
-### 3. 复杂推理能力仍有限
+### 4. 复杂推理能力仍有限
 
 当前更擅长基于已有 note 和 graph facts 组织答案。跨多个实体、多个时间点、多条关系的推理仍需要更强的检索规划和证据组合。
 
-### 4. chunk 级 Graphiti episode 已支持后台同步
+### 5. chunk 级 Graphiti episode 已支持后台同步
 
 chunk note 现已支持独立图谱同步：capture 阶段对每个 chunk 设 `graph_sync_status="pending"`，API 层 background_tasks 对每个 chunk 独立调用 `sync_note_to_graph()`（含重试/退避）。chunk note 可获得独立的 `episode_uuid / entity_names / relation_facts`，图谱搜索命中后 episode 反查可达章节级。
 
 级联删除时也会清理 chunk 独立持有的 graph episode。
 
-后续可进一步将 parent episode 与 chunk `source_span` 的映射策略显式化，让 `relation_fact` 能精确定位到 chunk 内段落。
+后续 chunk 的定位应更明确地作为 evidence/source 层能力存在：保留 parent note 全文与 chunk 的 `source_span`，让 `relation_fact` 能精确定位到 chunk 内段落，但不要让 chunk snippet 取代 Graphiti facts 成为主要推理材料。
 
-### 5. `search_after_ingest` 已降级为非关键步骤
+### 6. `search_after_ingest` 已降级为非关键步骤
 
 `search_after_ingest` 已用 try/except 包裹：成功时正常生成 `related_episode_uuids`，失败时记录 warning 日志并将 `related_episode_uuids` 设为空列表，不影响 `add_episode` 的结果返回。`related_note_ids` 在搜索失败时保持为空或已有值。
 
-### 6. Graphiti nodes / edges 已进入本地知识模型
+### 7. Graphiti nodes / edges 已进入本地知识模型
 
 `KnowledgeNote` 已新增 `graph_node_refs / graph_edge_refs / graph_fact_refs` 结构化字段，保留 Graphiti 的节点 UUID、类型标签、摘要、边的方向和 episode 归属。原有的 `entity_names / relation_facts` 字符串字段保留用于向后兼容。
 
 `GraphCaptureResult` 和 `GraphAskResult` 同步携带 `node_refs / edge_refs / fact_refs`，`_merge_graph_capture` 会将结构化引用写入本地笔记。`_build_graph_answer_prompt` 已升级为在实体名称旁附带节点摘要。
 
-### 7. verifier 重试链路存在结果重复计算
+### 8. verifier 重试链路存在结果重复计算
 
 `execute_ask()` 当前会先 `verify` 初版回答，再调用 `_retry_if_needed()`，最后再次 `verify` 终版回答。这个流程语义上是合理的：初版校验用于生成 correction prompt，终版校验用于决定是否标注不确定性、记录分数和触发 web fallback。
 
-但 `_retry_if_needed()` 内部 retry 后已经会重新 `verify`，却只返回 answer，不返回最后一次 `VerificationResult`。因此外层必须再算一次。后续可以将 `_retry_if_needed()` 改为返回 `RetryResult(answer, verification, attempts)`，减少重复校验，并补齐 `web_enabled=True` 等上下文参数传递。
+`_retry_if_needed()` 现已返回 `RetryResult(answer, verification, attempts)`，外层不再需要重复计算终版 `VerificationResult`。`web_enabled` 上下文参数已补齐，web citation 场景的校验上下文与 retry 内重校验一致传递。
 
 ## 演进方向
 
+- 在 `GraphAskResult` 层继续统一 graph facts、edge refs、citation hits 和 episode 映射，减少 `relation_facts` 字符串与结构化 refs 的双轨漂移
+- 增强图谱 rerank：综合 edge score、entity overlap、fact relevance、episode freshness 和 source confidence
 - 引入稳定 rerank 和评测样本
 - 将 evidence/citation 数据结构进一步统一
-- 让 `_retry_if_needed()` 返回最终 `VerificationResult`，避免终版 verifier 重复计算
 - 基础 citation / relation fact / snippet 回归样本已补，继续扩展更细粒度的质量评测
 - 增强多跳推理和证据链可视化
+
+## 下一步实现方案：统一 Evidence / Citation 模型
+
+目标：把 Graphiti facts、episode 映射、note/chunk snippet、web citation 和工具结果统一成一套可追踪证据结构，让回答生成、verifier、前端 citation、高亮定位和工具调用共享同一种 evidence 语义。
+
+### 1. 新增统一证据模型
+
+在 `core/models.py` 中新增 `EvidenceItem`，或在独立 `core/evidence.py` 中定义后由 models 引用。首批字段：
+
+```text
+evidence_id
+source_type        # graph_fact / note / chunk / web / tool
+source_id          # note_id / episode_uuid / edge_uuid / url / tool_call_id
+title
+snippet
+fact
+source_span
+url
+score
+metadata
+```
+
+保留现有 `Citation` 作为对前端兼容的轻量展示模型，但让它可以由 `EvidenceItem` 派生。
+
+### 2. Graphiti 结果转换为 Evidence
+
+在 `AgentRuntime` 或 `graphiti/store.py` 增加转换函数：
+
+```text
+GraphAskResult
+  -> node_refs / edge_refs / fact_refs / citation_hits
+  -> list[EvidenceItem]
+```
+
+映射规则：
+
+- `fact_refs / edge_refs` 生成 `source_type="graph_fact"`
+- episode UUID 反查到的 note/chunk 补充 `source_id / source_span / snippet`
+- `citation_hits.score / entity_overlap_count / matched_terms` 写入 `score / metadata`
+- 无法反查 note 的 graph fact 仍保留为可用 evidence，但标记 `metadata.orphan=true`
+
+### 3. 本地和 Web 结果转换为 Evidence
+
+- 本地 note/chunk 检索结果生成 `source_type="note"` 或 `source_type="chunk"`
+- Web search 结果生成 `source_type="web"`，保留 `url / title / snippet / published_at`
+- 工具结果中可追踪内容生成 `source_type="tool"`，保留工具名、输入摘要和结构化输出摘要
+
+### 4. Runtime 统一消费 Evidence
+
+调整以下方法，使其优先消费 `EvidenceItem`：
+
+- 图谱回答 prompt：从 evidence 中构造 fact network 和原文证据锚点
+- 本地回答 prompt：从 evidence 中构造 note/chunk 证据
+- verifier：基于 evidence 数量、来源类型、score、orphan 状态计算证据充分性
+- citation 输出：由 evidence 派生 `Citation`，保证前端兼容
+
+### 5. 测试落点
+
+- Graphiti `fact_refs / edge_refs / citation_hits` 到 `EvidenceItem` 的转换测试
+- note/chunk/web 到 `EvidenceItem` 的转换测试
+- orphan graph fact 不丢失但会被 verifier 降权的测试
+- `EvidenceItem -> Citation` 兼容测试
+- 图谱 ask prompt 使用统一 evidence 的回归测试

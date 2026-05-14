@@ -201,6 +201,9 @@ class PlanExecutor:
                     draft = results[step.step_id]
                     if isinstance(draft, dict) and draft.get("answer"):
                         self._inject_draft_text(step.step_id, str(draft["answer"]), sorted_steps)
+                # After capture_text tool_call, mark upstream compose drafts as solidified
+                if step.action_type == "tool_call" and step.tool_name == "capture_text":
+                    self._mark_upstream_drafts_solidified(step, results, state.user_id)
             elif step.status == "failed":
                 progress.failed += 1
                 if step.on_failure in ("skip", "retry"):
@@ -541,6 +544,22 @@ class PlanExecutor:
                     self._memory.working.add_step(
                         f"固化草稿已保存: {draft_id} ({len(answer)} 字符)"
                     )
+                    # Store draft_id in results so downstream capture_text can mark it solidified
+                    if step.step_id in results and isinstance(results[step.step_id], dict):
+                        results[step.step_id]["draft_id"] = draft_id
+                    # Extract candidate conclusions from the solidify draft
+                    conclusions = _extract_conclusions(answer)
+                    for conclusion_text in conclusions:
+                        conclusion_id = self._memory.add_conclusion(
+                            state.user_id, conclusion_text,
+                            session_id=state.entry_input.session_id if state.entry_input else "",
+                        )
+                        if conclusion_id:
+                            results[step.step_id].setdefault("conclusion_ids", []).append(conclusion_id)
+                    if conclusions:
+                        self._memory.working.add_step(
+                            f"从固化草稿提取 {len(conclusions)} 条候选结论"
+                        )
             except Exception:
                 logger.exception("Failed to save solidify draft to cross_session store")
 
@@ -591,6 +610,29 @@ class PlanExecutor:
                 # Recursively skip steps depending on this one
                 self._skip_dependents(s, all_steps, on_progress, progress)
 
+    def _mark_upstream_drafts_solidified(
+        self, step: PlanStep, results: dict[str, object], user_id: str,
+    ) -> None:
+        """Mark compose drafts as solidified after capture_text stores the note."""
+        for dep_id in step.depends_on:
+            dep_result = results.get(dep_id)
+            if isinstance(dep_result, dict):
+                draft_id = dep_result.get("draft_id")
+                if draft_id:
+                    try:
+                        self._memory.mark_draft_solidified(user_id, str(draft_id))
+                        self._memory.working.add_step(f"草稿已固化: {draft_id}")
+                    except Exception:
+                        logger.exception("Failed to mark draft as solidified: %s", draft_id)
+                # Also mark linked candidate conclusions as solidified
+                conclusion_ids = dep_result.get("conclusion_ids", [])
+                if isinstance(conclusion_ids, list):
+                    for cid in conclusion_ids:
+                        try:
+                            self._memory.mark_conclusion_solidified(user_id, str(cid))
+                        except Exception:
+                            logger.exception("Failed to mark conclusion as solidified: %s", cid)
+
     def _default_answer(self, steps: list[PlanStep]) -> str:
         completed = sum(1 for s in steps if s.status == "completed")
         failed = sum(1 for s in steps if s.status == "failed")
@@ -628,3 +670,39 @@ def _summarize(data: object) -> str:
     if isinstance(data, str):
         return data[:100]
     return str(data)[:100]
+
+
+def _extract_conclusions(answer: str) -> list[str]:
+    """Extract candidate conclusions from a composed solidify answer.
+
+    Splits the answer on sentence boundaries and identifies sentences
+    that look like factual conclusions (containing markers like
+    '是', '包括', '需要', '应该', etc.).
+    """
+    sentences = _split_answer_sentences(answer)
+    conclusions: list[str] = []
+    indicators = ("是", "包括", "需要", "应该", "已", "通过", "基于", "根据", "确认", "决定", "结论")
+    for sentence in sentences:
+        text = sentence.strip()
+        if len(text) < 15:
+            continue
+        if any(ind in text for ind in indicators):
+            conclusions.append(text[:300])
+    return conclusions[:5]
+
+
+def _split_answer_sentences(text: str) -> list[str]:
+    """Split text into sentence-level parts using common delimiters."""
+    normalized = text.replace("\r", "\n")
+    parts: list[str] = []
+    current = ""
+    for char in normalized:
+        current += char
+        if char in {"。", "！", "？", ".", "!", "?", "\n"}:
+            stripped = current.strip()
+            if stripped:
+                parts.append(stripped)
+            current = ""
+    if current.strip():
+        parts.append(current.strip())
+    return parts

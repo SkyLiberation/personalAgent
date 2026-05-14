@@ -138,7 +138,7 @@ solidify_conversation -> capture_text
 作用：
 
 - 查询个人知识图谱
-- 返回图谱回答、实体名、关系事实和相关 episode UUID
+- 返回图谱回答、实体名、关系事实、结构化 node / edge / fact refs 和相关 episode UUID
 - 为 ask、delete resolve、证据组织提供图谱侧结果
 
 注意：
@@ -320,12 +320,64 @@ ToolRegistry.execute(tool_name, **tool_input)
 - **Capture**：长文自动产出 1 条 parent note（`chunk_index=0`，保留完整 content）+ N 条 chunk notes（`chunk_index=1..N`，各有独立 title/content/source_span）
 - **Store**：`get_chunks_for_parent()` / `get_parent_note()` / 级联删除 / `list_notes(include_chunks=False)` / `find_similar_notes` 按 parent 去重
 - **Delete**：`delete_note` 和 `confirm_pending_action` 自动检测子 chunk 并级联删除
-- **Ask/Evidence**：parent note 用 summary 作为证据上下文（避免整篇塞入 prompt），chunk 和独立笔记用 content[:500]
+- **Ask/Evidence**：Graphiti node / edge / fact 已成为 ask 图谱路径的主推理材料；parent/chunk note 主要承担原文回查、snippet、高亮和抽取校验，避免整篇文档直接塞入 prompt
 - **Resolve**：候选笔记包含 `parent_note_id` / `parent_title`，前端可展示 chunk 所属文档
 - **API**：`GET /api/notes/{note_id}/chunks`、`GET /api/notes?flat=true`、`DELETE /api/notes/{note_id}?cascade=true`
 - **Graph Sync**：chunk note 会以 `graph_sync_status="pending"` 进入后台图谱同步，级联删除时也会清理 chunk 持有的 graph episode
 
 ## 演进方向
 
+- 继续将 `graph_search` 的结构化 node / edge / fact refs 纳入统一 evidence/citation 模型，减少只读字符串 relation facts 的场景
+- 继续收敛 ask 工具链职责：Graphiti refs 负责语义检索与事实网络，chunk/note 负责 source evidence
 - 将工具结果逐步规范为可追踪 evidence/citation 结构
 - 根据需要把 `execute_with_fallback()` 接入计划执行链，或明确只作为低层备用接口保留
+
+## 下一步实现方案：工具结果接入 Evidence / Citation
+
+目标：让工具层的可追踪输出能进入统一 `EvidenceItem`，不再让 `graph_search / web_search / capture_url / delete_note` 各自返回互不兼容的证据结构。
+
+### 1. 扩展 `ToolResult`
+
+在 `ToolResult` 中新增可选字段：
+
+```text
+evidence: list[EvidenceItem]
+events: list[AgentEvent]
+```
+
+保持 `data` 向后兼容，短期内工具仍返回原有 `data`，但新增工具应优先填充 `evidence`。
+
+### 2. 优先改造只读检索工具
+
+首批只改风险低、最适合做 evidence 的工具：
+
+- `graph_search`：把 `node_refs / edge_refs / fact_refs / related_episode_uuids` 转成 graph evidence
+- `web_search`：把网页搜索结果转成 web evidence
+- `capture_url`：把抓取正文的 URL、标题和摘要转成 source evidence
+
+`delete_note` 这类写操作先不进入 evidence 主链路，只保留 pending action payload。
+
+### 3. ToolRegistry 保持兼容
+
+`ToolRegistry.execute()` 返回 `ToolResult` 时不改变现有调用方行为。后续 `PlanExecutor` 和 ReAct runner 可按需读取 `result.evidence`：
+
+```text
+ToolResult.data      -> 原业务数据
+ToolResult.evidence  -> 可追踪证据
+ToolResult.events    -> 可展示执行反馈
+```
+
+### 4. ReAct observation 接入 evidence
+
+`ReActStepRunner` 的 observation 不再只保存文本摘要，也应保留 evidence 引用：
+
+- action 使用 `graph_search` / `web_search` 时，把 evidence 写入 step observation
+- 事件输出时只展示摘要，完整 evidence 留给后续 compose/verifier 使用
+- 高风险或写入工具仍保持阻断，不进入 ReAct evidence 采集
+
+### 5. 测试落点
+
+- `graph_search` 返回 `ToolResult.evidence` 的单元测试
+- `web_search` 返回 web evidence 的单元测试
+- `ToolRegistry.execute()` 对旧调用方保持 `data` 兼容的测试
+- ReAct observation 携带 evidence 但事件 payload 不过度膨胀的测试

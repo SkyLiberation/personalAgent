@@ -23,7 +23,7 @@
 | `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 统一执行入口，`LangGraph` 承担固定流程编排，`AgentService` 保持为薄 facade | [docs/topics/runtime.md](docs/topics/runtime.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / web_search / delete_note` | [docs/topics/tools.md](docs/topics/tools.md) |
 | `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有工作记忆、会话摘要、本地长期记忆、Postgres 问答历史、pending action、cross-session 状态和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md) |
-| `检索与推理层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持三层检索回退（图谱 → 本地 → 网络搜索）、图谱增强、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；复杂推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
+| `检索与推理层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持三层检索回退（图谱 → 本地 → 网络搜索）、Graphiti `node / edge / fact` 优先的语义推理、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；多跳推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
 | `执行与反馈层` | [web/api.py](src/personal_agent/web/api.py), [agent/runtime.py](src/personal_agent/agent/runtime.py) | 支持同步 API、SSE、图谱失败降级、异步图谱同步、问答历史记录和 pending action 前端确认 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md) |
 | `观测与治理层` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests) | 具备日志、health、reset、API Key 鉴权、限流、用户隔离、pending action 审计和基础测试；外部工具权限仍可补充 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
@@ -67,11 +67,11 @@ Entry
 
 ## 下一步优先级
 
-以下优先级来自 [docs/topics/](docs/topics/) 下各专题文档的“已知限制 / 演进方向”。实现任一改进前，必须先读取该项括号中标注的来源 topic 文档；完成改进后，需要同步修改这些对应 topic 文档，避免 README 路线图和专题文档漂移。
+以下优先级来自 [docs/topics/](docs/topics/) 下各专题文档的“已知限制 / 演进方向”。实现任一改进前，必须先读取该项括号中标注的来源 topic 文档，并着重关注其中的“下一步实现方案”章节，以该章节的拆解作为实现依据；完成改进后，需要同步修改这些对应 topic 文档，避免 README 路线图和专题文档漂移。
 
-1. 收敛 verifier 重试结果：让 `_retry_if_needed()` 返回最终 `VerificationResult`，避免终版重复校验，并补齐 web citation 场景的校验上下文传递。（来源：[docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md)）
-2. 完善固化与中间态闭环：增强 `solidify_conversation` 的候选结论抽取，补齐草稿入库后的状态回写，并为 `CrossSessionStore` 的草稿/结论续接补交互测试。（来源：[docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/planning.md](docs/topics/planning.md)、[docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)）
-3. 评估更深层状态治理：根据多会话窗口、长任务和多段审批的实际需求，决定是否引入 `session_key -> WorkingMemory` 缓存、SQLite/队列式 ask history 回补，以及 LangGraph checkpoint。（来源：[docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/runtime.md](docs/topics/runtime.md)、[docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)）
+1. 统一 Agent 事件模型：新增结构化 `AgentEvent` 类型，收敛 SSE、计划执行进度、execution trace、pending action、draft_ready 和错误反馈事件，并让 Web、CLI、飞书入口复用同一事件语义。（来源：[docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)）
+2. 统一 Evidence / Citation 模型：将 Graphiti `node / edge / fact`、episode 映射、note/chunk snippet、web citation 和工具结果收敛为统一证据结构，减少 graph facts、citations、tool result 多套数据形态之间的漂移。（来源：[docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md)、[docs/topics/tools.md](docs/topics/tools.md)）
+3. 收敛重规划校验链路：为 `Replanner` 产出的 revised steps 增加统一 `PlanValidator` 复校验、风险继承和失败回退策略，避免失败后补救步骤绕过原有计划安全门禁。（来源：[docs/topics/planning.md](docs/topics/planning.md)）
 
 ## 当前技术栈
 
@@ -116,15 +116,15 @@ README 只保留最短路径：
 
 - 默认使用本地 JSON 存储与简单匹配
 - 图谱开启后，会为笔记补充实体、关系和图谱 episode 映射信息
-- 当前数据模型中已经为图谱字段预留了 `graph_episode_uuid / entity_names / relation_facts`
+- 当前数据模型中已经为图谱字段预留了 `graph_episode_uuid / entity_names / relation_facts / graph_node_refs / graph_edge_refs / graph_fact_refs`
 - 相似笔记检索已支持按 parent 去重，避免同一文档的多个 chunk 重复出现
-- 问答证据呈现区分 parent note（用 summary）与 chunk/独立笔记（用 content[:500]），避免长文档全文塞入 prompt
+- 问答证据呈现区分语义层和证据层：Graphiti `node / edge / fact` 作为主推理材料，parent/chunk note 作为原文证据、snippet、高亮和抽取校验来源
 
 ### 3. Ask
 
 - 提供本地检索问答链路
-- 图谱可用时，问答流程会尝试结合图谱事实、相关笔记和引用片段生成回答
-- 图谱不可用时，问答会回退到本地链路；本地检索证据不足时，自动触发网络搜索作为第三层兜底
+- 图谱可用时，问答流程会优先使用 Graphiti 抽取的 `node / edge / fact` 构造图谱事实网络，再回查 note/chunk 生成可追溯引用
+- 图谱不可用或图谱证据不足时，问答会回退并合并本地链路；本地检索证据不足时，自动触发网络搜索作为第三层兜底
 - 问答支持 `session_id` 会话上下文和服务端问答历史持久化
 - Web 侧提供同步问答和 `SSE` 返回方式；`ask_stream` 已升级为模型 token 流，边生成边推送
 - 图谱问答会构造 `relation_fact + snippet` 证据锚点，前端支持点击 citation 自动定位并高亮回答中的对应证据片段

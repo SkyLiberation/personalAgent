@@ -233,11 +233,12 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 含义：
 
 - `retrieve`：加载最近对话，抽取候选事实和结论
-- `compose`：生成适合入库的知识文本草稿
+- `compose`：生成适合入库的知识文本草稿，同时从草稿中抽取候选结论（`candidate_conclusions`）并存入 `CrossSessionStore`
 - `verify`：检查草稿准确性和完整性
 - `tool_call`：复用 `capture_text` 写入长期知识库
+- `tool_call` 成功后自动回写：草稿标记为 `solidified`，关联候选结论同步切换已固化状态
 
-当前 `compose` 还会产出 `draft_ready` 事件，并把草稿保存到 `CrossSessionStore`。
+当前 `compose` 还会产出 `draft_ready` 事件，并把草稿和候选结论保存到 `CrossSessionStore`。`tool_call` 成功后 `PlanExecutor` 自动完成 `draft → stored → solidified` 状态回写。
 
 ## 当前能力
 
@@ -256,6 +257,8 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 - 已具备失败重试、依赖跳过、abort 和重规划
 - 已具备删除目标解析链路
 - 已具备固化草稿生成和注入 `capture_text` 的基础链路
+- 已具备固化草稿状态回写闭环（draft → stored → solidified）
+- 已具备候选结论抽取与固化同步标记
 
 ## 已知限制
 
@@ -306,3 +309,78 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 - 明确哪些 intent 必须由 `PlanExecutor` 驱动，逐步减少双轨执行
 - 为 revised steps 增加重新校验流程
 - 为多段审批和长任务恢复评估 LangGraph checkpoint
+
+## 下一步实现方案：重规划步骤复校验
+
+目标：让 `Replanner` 产出的 revised steps 与初始 planner 产出的步骤走同一套 `PlanValidator` 安全门禁，避免失败补救步骤绕过工具存在性、参数 schema、风险等级、确认要求和权限治理。
+
+### 1. 统一 revised plan 数据结构
+
+让 `Replanner` 返回结构化结果：
+
+```text
+ReplanResult
+  revised_steps
+  reason
+  preserved_step_ids
+  replaced_step_ids
+  risk_notes
+```
+
+`revised_steps` 必须继续使用 `PlanStep`，不要引入第二套 step schema。
+
+### 2. 在 PlanExecutor 中接入复校验
+
+在失败触发 replan 后，执行顺序改为：
+
+```text
+failed step
+  -> Replanner.replan()
+  -> PlanValidator.validate(revised_steps)
+  -> 通过：替换后续未执行步骤
+  -> warning：记录到 progress event / execution_trace
+  -> blocking issue：放弃 revised steps，进入原有失败策略
+```
+
+保留已完成步骤，不允许 replan 修改已经产生副作用的步骤。
+
+### 3. 风险和确认继承规则
+
+新增明确规则：
+
+- revised step 的 `risk_level` 不能低于被替换步骤和目标工具的固有风险
+- 写长期知识或删除类工具必须保留 `requires_confirmation`
+- `allowed_tools` 不能扩展到原计划未授权的高风险工具
+- 外部访问工具必须保留 `accesses_external` warning
+
+这些规则优先放在 `PlanValidator`，避免 executor 内散落安全逻辑。
+
+### 4. 事件与可观测性
+
+补充 replan 相关事件：
+
+```text
+plan_replan_attempt
+plan_replanned
+plan_replan_rejected
+```
+
+事件 payload 至少包含：
+
+```text
+failed_step_id
+replaced_step_ids
+new_step_ids
+validation_issues
+validation_warnings
+reason
+```
+
+### 5. 测试落点
+
+- revised steps 工具不存在时被阻断
+- revised steps 缺少必填 `tool_input` 时被阻断
+- revised steps 降低风险等级时被修正或阻断
+- revised steps 尝试绕过确认删除时被阻断
+- revised steps 通过校验后只替换未完成步骤
+- `plan_replan_rejected` 事件 payload 包含校验问题
