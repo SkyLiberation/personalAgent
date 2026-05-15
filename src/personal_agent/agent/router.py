@@ -8,6 +8,7 @@ from typing import Literal, Protocol
 from openai import OpenAI
 
 from ..core.config import Settings
+from ..core.logging_utils import log_event
 from ..core.models import EntryInput, EntryIntent
 from .entry_nodes import heuristic_entry_intent
 
@@ -33,8 +34,7 @@ class RouterDecision:
 
 
 class IntentRouter(Protocol):
-    def classify(self, entry_input: EntryInput) -> RouterDecision:
-        ...
+    def classify(self, entry_input: EntryInput) -> RouterDecision: ...
 
 
 def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDecision:
@@ -100,9 +100,13 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
 
 
 _RECOGNIZED_INTENTS = {
-    "capture_text", "capture_link", "capture_file",
-    "ask", "summarize_thread",
-    "delete_knowledge", "solidify_conversation",
+    "capture_text",
+    "capture_link",
+    "capture_file",
+    "ask",
+    "summarize_thread",
+    "delete_knowledge",
+    "solidify_conversation",
     "direct_answer",
     "unknown",
 }
@@ -115,7 +119,9 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
     but does not populate requires_tools/requires_retrieval/requires_planning/candidate_tools.
     This function merges LLM result with the defaults for the matched intent.
     """
-    defaults = _default_router_decision(llm_result.route, llm_result.user_visible_message)
+    defaults = _default_router_decision(
+        llm_result.route, llm_result.user_visible_message
+    )
     return RouterDecision(
         route=llm_result.route,
         confidence=llm_result.confidence,
@@ -147,14 +153,21 @@ class DefaultIntentRouter:
 
     def classify(self, entry_input: EntryInput) -> RouterDecision:
         if entry_input.source_type == "file":
-            return _default_router_decision("capture_file", "来源消息类型是文件。")
+            decision = _default_router_decision("capture_file", "来源消息类型是文件。")
+            self._log_decision(entry_input, decision, strategy="source_type")
+            return decision
 
         llm_result = self._classify_with_llm(entry_input.text)
         if llm_result is not None:
-            return _merge_with_defaults(llm_result)
+            decision = _merge_with_defaults(llm_result)
+            strategy = "empty" if not entry_input.text.strip() else "llm"
+            self._log_decision(entry_input, decision, strategy=strategy)
+            return decision
 
         intent, reason = heuristic_entry_intent(entry_input.text)
-        return _default_router_decision(intent, reason)
+        decision = _default_router_decision(intent, reason)
+        self._log_decision(entry_input, decision, strategy="heuristic")
+        return decision
 
     def _classify_with_llm(self, text: str) -> RouterDecision | None:
         if not text.strip():
@@ -182,7 +195,10 @@ class DefaultIntentRouter:
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,
                 messages=[
-                    {"role": "system", "content": "你是一个严谨的意图分类器，只输出 JSON。"},
+                    {
+                        "role": "system",
+                        "content": "你是一个严谨的意图分类器，只输出 JSON。",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0,
@@ -193,20 +209,31 @@ class DefaultIntentRouter:
             payload = json.loads(content)
             intent = payload.get("intent", "unknown")
             if intent not in _RECOGNIZED_INTENTS:
-                logger.warning("LLM returned unrecognised intent=%s, falling back to heuristic", intent)
+                logger.warning(
+                    "LLM returned unrecognised intent=%s, falling back to heuristic",
+                    intent,
+                )
                 return None
             reason = str(payload.get("reason") or "由模型完成意图分类。")
-            risk = payload.get("risk_level", "low") if isinstance(payload.get("risk_level"), str) else None
+            risk = (
+                payload.get("risk_level", "low")
+                if isinstance(payload.get("risk_level"), str)
+                else None
+            )
             return RouterDecision(
                 route=intent,
                 confidence=0.8,
                 risk_level=risk if risk in ("low", "medium", "high") else "low",
                 requires_confirmation=bool(payload.get("requires_confirmation", False)),
-                missing_information=payload.get("missing_information") if isinstance(payload.get("missing_information"), list) else [],
+                missing_information=payload.get("missing_information")
+                if isinstance(payload.get("missing_information"), list)
+                else [],
                 user_visible_message=reason,
             )
         except Exception:
-            logger.exception("Failed to classify entry intent with LLM, falling back to heuristic")
+            logger.exception(
+                "Failed to classify entry intent with LLM, falling back to heuristic"
+            )
             return None
 
     @property
@@ -215,4 +242,28 @@ class DefaultIntentRouter:
             self._settings.openai_api_key
             and self._settings.openai_base_url
             and self._settings.openai_small_model
+        )
+
+    def _log_decision(
+        self, entry_input: EntryInput, decision: RouterDecision, strategy: str
+    ) -> None:
+        log_event(
+            logger,
+            logging.INFO,
+            "router.decision",
+            strategy=strategy,
+            route=decision.route,
+            confidence=decision.confidence,
+            risk_level=decision.risk_level,
+            requires_tools=decision.requires_tools,
+            requires_retrieval=decision.requires_retrieval,
+            requires_planning=decision.requires_planning,
+            requires_confirmation=decision.requires_confirmation,
+            candidate_tools=decision.candidate_tools,
+            missing_information=decision.missing_information,
+            source_type=entry_input.source_type,
+            source_platform=entry_input.source_platform,
+            user_id=entry_input.user_id,
+            session_id=entry_input.session_id,
+            text_preview=entry_input.text[:120],
         )

@@ -282,6 +282,29 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
     if isinstance(payload, dict) and single_field is not None and single_field not in payload:
         payload = {single_field: [payload]}
 
+    # Handle dict-form extracted_entities (LLM returned entities keyed by name)
+    if "extracted_entities" in fields and isinstance(payload.get("extracted_entities"), dict):
+        dict_entities = payload["extracted_entities"]
+        list_entities: list[dict] = []
+        for name, value in dict_entities.items():
+            if not isinstance(name, str):
+                continue
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, dict):
+                        parsed.setdefault("name", name)
+                        list_entities.append(parsed)
+                        continue
+                except json.JSONDecodeError:
+                    pass
+            if isinstance(value, dict):
+                value.setdefault("name", name)
+                list_entities.append(value)
+            else:
+                list_entities.append({"name": name, "summary": str(value)})
+        payload["extracted_entities"] = list_entities
+
     if "extracted_entities" in fields and isinstance(payload.get("extracted_entities"), list):
         payload["extracted_entities"] = _expand_json_strings_in_items(
             payload["extracted_entities"], _ENTITY_ITEM_FIELDS
@@ -398,6 +421,8 @@ def _sanitize_payload_value(value: Any, preserve_structure: bool = False) -> Any
                 else:
                     sanitized_items.append(_sanitize_payload_value(item, preserve_structure=False))
             return sanitized_items
+        if all(isinstance(item, str) for item in value):
+            return "; ".join(value)
         return [_sanitize_scalar_list_item(item) for item in value]
 
     if isinstance(value, dict):

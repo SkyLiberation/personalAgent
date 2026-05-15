@@ -18,7 +18,6 @@ class AskEvalCase:
     question: str
     notes: list[KnowledgeNote]
     citations: list[Citation]
-    graph_enabled: bool = False
     # Minimum acceptable evidence score
     min_score: float = 0.4
     # Answer must not contain these phrases
@@ -90,8 +89,7 @@ WELL_SUPPORTED = [
             _citation("n1", "LangGraph StateGraph"),
             _citation("n2", "LangGraph节点"),
         ],
-        graph_enabled=True,
-        min_score=0.35,
+        min_score=0.3,
         expected_keywords=["StateGraph", "节点"],
         forbidden_phrases=["我暂时无法"],
     ),

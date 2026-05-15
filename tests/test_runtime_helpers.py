@@ -74,7 +74,7 @@ class TestBestSnippet:
             content="Redis 使用内存存储数据。缓存失效策略包括 TTL 和 LRU。",
             summary="关于 Redis 缓存的笔记",
         )
-        from personal_agent.graphiti.store import GraphCitationHit
+        from personal_agent.graphiti.reranker import GraphCitationHit
 
         hit = GraphCitationHit(
             episode_uuid="ep1",
@@ -93,7 +93,7 @@ class TestBestSnippet:
             content="一些无关的内容。",
             summary="这是关于缓存策略的摘要说明，包含重要信息。",
         )
-        from personal_agent.graphiti.store import GraphCitationHit
+        from personal_agent.graphiti.reranker import GraphCitationHit
 
         hit = GraphCitationHit(
             episode_uuid="ep2",

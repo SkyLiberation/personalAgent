@@ -72,14 +72,6 @@ class TestAnswerVerifier:
         result = verifier.verify("问题", "短答案", citations, notes)
         assert any("过短" in w for w in result.warnings)
 
-    def test_graph_enabled_adds_bonus(self):
-        verifier = AnswerVerifier()
-        notes = [_note("n1")]
-        citations = [_citation("n1")]
-        result_no_graph = verifier.verify("问题", "答案", citations, notes, graph_enabled=False)
-        result_graph = verifier.verify("问题", "答案", citations, notes, graph_enabled=True)
-        assert result_graph.evidence_score > result_no_graph.evidence_score
-
     def test_sufficient_threshold(self):
         verifier = AnswerVerifier()
         notes = [_note("n1"), _note("n2"), _note("n3"), _note("n4")]

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from openai import OpenAI
@@ -47,6 +47,7 @@ class ReActIteration:
     action_tool: str
     action_input: dict
     observation: str
+    evidence: list = field(default_factory=list)
 
 
 class ReActStepRunner:
@@ -111,6 +112,7 @@ class ReActStepRunner:
             tool_input = parsed.get("input", {})
             thought = str(parsed.get("thought", ""))
 
+            iteration_evidence: list = []
             if not tool_name:
                 observation = "错误：未指定工具名。请输出合法 JSON。"
             elif tool_name not in allowed:
@@ -123,11 +125,13 @@ class ReActStepRunner:
                     observation = self._summarize_tool_result(tool_result.data)
                 else:
                     observation = f"工具执行失败：{tool_result.error}"
+                iteration_evidence = tool_result.evidence if (tool_result.ok and tool_result.evidence) else []
 
             iterations.append(ReActIteration(
                 thought=thought, action_tool=tool_name,
                 action_input=tool_input if isinstance(tool_input, dict) else {},
                 observation=observation,
+                evidence=iteration_evidence,
             ))
             self._emit_iteration(on_progress, step.step_id, i, iterations[-1])
             self._memory.working.add_step(
@@ -139,9 +143,14 @@ class ReActStepRunner:
 
         # Exhausted iterations — return collected observations
         final_observations = [it.observation for it in iterations if it.observation]
+        all_evidence = []
+        for it in iterations:
+            for item in it.evidence:
+                all_evidence.append(item.model_dump(mode="json") if hasattr(item, "model_dump") else item)
         return {
             "answer": "\n".join(final_observations) if final_observations else "",
             "react_iterations": len(iterations),
+            "evidence": all_evidence,
         }
 
     # ---- internals ----

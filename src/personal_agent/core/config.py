@@ -12,11 +12,11 @@ class Settings(BaseModel):
     embedding_provider: str = "local"
     llm_provider: str = "stub"
     default_user: str = "default"
-    graphiti_enabled: bool = False
     graphiti_uri: str = "bolt://localhost:7687"
     graphiti_user: str = "neo4j"
     graphiti_password: str = "password"
     graphiti_group_prefix: str = "personal-agent"
+    graph_search_strategy: str = "hybrid_rrf"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_model: str = "gpt-4.1-mini"
@@ -54,11 +54,11 @@ class Settings(BaseModel):
             embedding_provider=os.getenv("PERSONAL_AGENT_EMBEDDING_PROVIDER", "local"),
             llm_provider=os.getenv("PERSONAL_AGENT_LLM_PROVIDER", "stub"),
             default_user=os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
-            graphiti_enabled=_as_bool(os.getenv("PERSONAL_AGENT_GRAPHITI_ENABLED", "false")),
             graphiti_uri=os.getenv("PERSONAL_AGENT_GRAPHITI_URI", "bolt://localhost:7687"),
             graphiti_user=os.getenv("PERSONAL_AGENT_GRAPHITI_USER", "neo4j"),
             graphiti_password=os.getenv("PERSONAL_AGENT_GRAPHITI_PASSWORD", "password"),
             graphiti_group_prefix=os.getenv("PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX", "personal-agent"),
+            graph_search_strategy=os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY", "hybrid_rrf"),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_base_url=os.getenv("OPENAI_BASE_URL"),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),

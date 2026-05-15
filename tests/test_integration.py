@@ -48,7 +48,7 @@ class TestEntryPipeline:
 
     def test_entry_ask_intent(self, service: AgentService):
         # Prime knowledge base
-        service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text", attempt_graph=False)
+        service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
         entry = EntryInput(text="什么是服务降级？", user_id="default")
         result = service.entry(entry)
         assert result.intent in ("ask", "direct_answer")
@@ -110,7 +110,7 @@ class TestPendingActionLifecycle:
 
     def test_create_pending_action_for_delete(self, service: AgentService):
         note = service.capture(
-            text="需要删除的测试笔记", source_type="text", user_id="alice", attempt_graph=False
+            text="需要删除的测试笔记", source_type="text", user_id="alice"
         ).note
         actions = service.list_pending_actions("alice")
         initial_count = len(actions)
@@ -131,7 +131,7 @@ class TestPendingActionLifecycle:
 
     def test_confirm_pending_action_executes_delete(self, service: AgentService):
         note = service.capture(
-            text="即将被删除的笔记", source_type="text", user_id="alice", attempt_graph=False
+            text="即将被删除的笔记", source_type="text", user_id="alice"
         ).note
         note_id = note.id
 
@@ -152,7 +152,7 @@ class TestPendingActionLifecycle:
 
     def test_reject_pending_action(self, service: AgentService):
         note = service.capture(
-            text="不会被删除的笔记", source_type="text", user_id="alice", attempt_graph=False
+            text="不会被删除的笔记", source_type="text", user_id="alice"
         ).note
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
@@ -170,7 +170,7 @@ class TestPendingActionLifecycle:
 
     def test_wrong_token_rejected(self, service: AgentService):
         note = service.capture(
-            text="带Token的笔记", source_type="text", user_id="alice", attempt_graph=False
+            text="带Token的笔记", source_type="text", user_id="alice"
         ).note
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
@@ -202,7 +202,7 @@ class TestPendingActionLifecycle:
 
     def test_cross_user_isolation(self, service: AgentService):
         note = service.capture(
-            text="Alice的笔记", source_type="text", user_id="alice", attempt_graph=False
+            text="Alice的笔记", source_type="text", user_id="alice"
         ).note
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
@@ -221,7 +221,7 @@ class TestPendingActionLifecycle:
 
     def test_delete_note_ownership_check(self, service: AgentService):
         note = service.capture(
-            text="Alice的私密笔记", source_type="text", user_id="alice", attempt_graph=False
+            text="Alice的私密笔记", source_type="text", user_id="alice"
         ).note
 
         # Bob tries to delete Alice's note
@@ -299,3 +299,4 @@ class TestPendingActionStore:
         expired = store.get("exp-1", "alice")
         assert expired is not None
         assert expired.status == "expired"
+

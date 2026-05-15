@@ -573,7 +573,6 @@ class PlanExecutor:
                 answer=state.answer,
                 citations=state.citations,
                 matches=state.matches,
-                graph_enabled=True,
             )
             self._memory.working.add_step(
                 f"校验: score={verification.evidence_score:.2f} ok={verification.ok}"

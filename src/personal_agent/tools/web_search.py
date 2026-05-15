@@ -5,6 +5,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..capture.providers.web_search import FirecrawlWebSearchProvider
 from ..core.config import Settings
+from ..core.evidence import EvidenceItem
 from .base import BaseTool, ToolResult, ToolSpec
 
 if TYPE_CHECKING:
@@ -78,9 +79,22 @@ class WebSearchTool(BaseTool):
                     except Exception:
                         logger.exception("WebSearchTool scrape failed for url=%s", url)
 
+            evidence = [
+                EvidenceItem(
+                    source_type="web",
+                    source_id=r.url,
+                    title=r.title,
+                    snippet=r.snippet,
+                    url=r.url,
+                    metadata={"source": r.source, "published_at": r.published_at},
+                )
+                for r in results
+                if r.url
+            ]
+
             return ToolResult(ok=True, data={
                 "results": [r.model_dump(mode="json") for r in results],
-            })
+            }, evidence=evidence)
         except Exception as exc:
             logger.exception("WebSearchTool failed for query=%s", query[:80])
             return ToolResult(ok=False, error=str(exc)[:500])

@@ -49,7 +49,7 @@ class CaptureTextTool(BaseTool):
                 "note_id": result.note.id,
                 "title": result.note.title,
                 "summary": result.note.summary,
-                "graph_enabled": result.graph_enabled,
+                "graph_sync_status": result.note.graph_sync_status,
             })
         except Exception as exc:
             logger.exception("CaptureTextTool failed")

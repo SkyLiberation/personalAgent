@@ -15,7 +15,6 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     # Ensure no real LLM/Graphiti calls happen
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "")
-    monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_ENABLED", "false")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "")
     return CliRunner()
 
@@ -63,3 +62,4 @@ class TestCLIDigest:
         result = cli_runner.invoke(app, ["digest"])
         assert result.exit_code == 0
         assert len(result.stdout.strip()) > 0
+

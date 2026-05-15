@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..core.evidence import EvidenceItem
 from ..graphiti.store import GraphitiStore
 from .base import BaseTool, ToolResult, ToolSpec
 
@@ -42,6 +43,53 @@ class GraphSearchTool(BaseTool):
             result = self._graph_store.ask(question, user_id)
             if not result.enabled:
                 return ToolResult(ok=False, error=result.error or "图谱检索不可用。")
+            # Build unified evidence from graph refs
+            evidence: list[EvidenceItem] = []
+            seen_facts: set[str] = set()
+            for fact_ref in result.fact_refs:
+                fact = fact_ref.fact.strip()
+                if not fact or fact in seen_facts:
+                    continue
+                seen_facts.add(fact)
+                evidence.append(EvidenceItem(
+                    source_type="graph_fact",
+                    source_id=fact_ref.edge_uuid,
+                    fact=fact,
+                    metadata={
+                        "source_node_name": fact_ref.source_node_name,
+                        "target_node_name": fact_ref.target_node_name,
+                        "episode_uuids": fact_ref.episode_uuids,
+                    },
+                ))
+            for edge_ref in result.edge_refs:
+                fact = edge_ref.fact.strip()
+                if not fact or fact in seen_facts:
+                    continue
+                seen_facts.add(fact)
+                evidence.append(EvidenceItem(
+                    source_type="graph_fact",
+                    source_id=edge_ref.uuid,
+                    fact=fact,
+                    metadata={
+                        "source_node_name": edge_ref.source_node_name,
+                        "target_node_name": edge_ref.target_node_name,
+                        "episodes": edge_ref.episodes,
+                    },
+                ))
+            for hit in result.citation_hits:
+                evidence.append(EvidenceItem(
+                    source_type="graph_fact",
+                    source_id=hit.episode_uuid,
+                    fact=hit.relation_fact,
+                    score=float(hit.score),
+                    metadata={
+                        "episode_uuid": hit.episode_uuid,
+                        "endpoint_names": hit.endpoint_names,
+                        "matched_terms": hit.matched_terms,
+                        "entity_overlap_count": hit.entity_overlap_count,
+                    },
+                ))
+
             return ToolResult(
                 ok=True,
                 data={
@@ -53,6 +101,7 @@ class GraphSearchTool(BaseTool):
                     "edge_refs": [r.model_dump(mode="json") for r in result.edge_refs],
                     "fact_refs": [r.model_dump(mode="json") for r in result.fact_refs],
                 },
+                evidence=evidence,
             )
         except Exception as exc:
             logger.exception("GraphSearchTool failed for question=%s", question[:80])

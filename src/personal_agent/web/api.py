@@ -300,11 +300,8 @@ def create_app() -> FastAPI:
             source_type=source_type,
             user_id=resolved_user,
             source_ref=str(stored_path),
-            attempt_graph=False,
         )
         if service.graph_store.configured():
-            background_tasks.add_task(service.sync_note_to_graph, result.note.id)
-            logger.info("Queued background graph sync note_id=%s", result.note.id)
             for chunk in result.chunk_notes:
                 background_tasks.add_task(service.sync_note_to_graph, chunk.id)
                 logger.info("Queued background graph sync chunk_id=%s", chunk.id)
@@ -488,7 +485,6 @@ def create_app() -> FastAPI:
                 yield _sse_event("metadata", {
                     "citations": ask_data.get("citations", []),
                     "matches": ask_data.get("matches", []),
-                    "graph_enabled": ask_data.get("graph_enabled", False),
                     "session_id": session_id,
                 })
                 answer_text = result.reply_text
@@ -504,7 +500,6 @@ def create_app() -> FastAPI:
                     "answer": answer_text,
                     "citations": ask_data.get("citations", []),
                     "matches": ask_data.get("matches", []),
-                    "graph_enabled": ask_data.get("graph_enabled", False),
                     "session_id": session_id,
                 })
 
@@ -565,8 +560,7 @@ def create_app() -> FastAPI:
         )
         result = service.entry(entry_input)
 
-        if result.capture_result and result.capture_result.note and service.graph_store.configured():
-            background_tasks.add_task(service.sync_note_to_graph, result.capture_result.note.id)
+        if result.capture_result and service.graph_store.configured():
             for chunk in (result.capture_result.chunk_notes or []):
                 background_tasks.add_task(service.sync_note_to_graph, chunk.id)
 

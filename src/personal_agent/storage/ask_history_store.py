@@ -40,7 +40,6 @@ class AskHistoryStore:
                         question TEXT NOT NULL,
                         answer TEXT NOT NULL,
                         citations JSONB NOT NULL DEFAULT '[]'::jsonb,
-                        graph_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
@@ -71,7 +70,7 @@ class AskHistoryStore:
                 if session_id:
                     cur.execute(
                         """
-                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        SELECT id, user_id, session_id, question, answer, citations, created_at
                         FROM ask_history
                         WHERE user_id = %s AND session_id = %s
                         ORDER BY created_at DESC
@@ -82,7 +81,7 @@ class AskHistoryStore:
                 else:
                     cur.execute(
                         """
-                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        SELECT id, user_id, session_id, question, answer, citations, created_at
                         FROM ask_history
                         WHERE user_id = %s
                         ORDER BY created_at DESC
@@ -102,8 +101,8 @@ class AskHistoryStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO ask_history (id, user_id, session_id, question, answer, citations, graph_enabled, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    INSERT INTO ask_history (id, user_id, session_id, question, answer, citations, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
                     """,
                     (
                         record.id,
@@ -112,7 +111,6 @@ class AskHistoryStore:
                         record.question,
                         record.answer,
                         self._citations_json(record.citations),
-                        record.graph_enabled,
                         record.created_at,
                     ),
                 )
@@ -132,7 +130,7 @@ class AskHistoryStore:
                 if session_id:
                     cur.execute(
                         """
-                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        SELECT id, user_id, session_id, question, answer, citations, created_at
                         FROM ask_history
                         WHERE user_id = %s AND session_id = %s
                           AND (question ILIKE %s OR answer ILIKE %s)
@@ -144,7 +142,7 @@ class AskHistoryStore:
                 else:
                     cur.execute(
                         """
-                        SELECT id, user_id, session_id, question, answer, citations, graph_enabled, created_at
+                        SELECT id, user_id, session_id, question, answer, citations, created_at
                         FROM ask_history
                         WHERE user_id = %s
                           AND (question ILIKE %s OR answer ILIKE %s)
@@ -207,7 +205,6 @@ class AskHistoryStore:
             question=row["question"],
             answer=row["answer"],
             citations=citations,
-            graph_enabled=bool(row["graph_enabled"]),
             created_at=row["created_at"],
         )
 

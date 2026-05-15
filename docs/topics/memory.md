@@ -64,7 +64,7 @@
 作用：
 
 - 作为问答历史主存储
-- 持久化 `question / answer / citations / session_id / graph_enabled / created_at`
+- 持久化 `question / answer / citations / session_id / created_at`
 - 支持按用户、按会话读取历史
 - 支持关键词搜索和删除
 

@@ -37,32 +37,32 @@ def service(test_settings: Settings) -> AgentService:
 
 class TestCaptureFlow:
     def test_capture_text_creates_note(self, service: AgentService):
-        result = service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text", attempt_graph=False)
+        result = service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
         assert result.note is not None
         assert result.note.title
         assert result.note.content
         assert result.note.summary
         assert result.note.source_type == "text"
-        assert not result.graph_enabled
+        assert result.note.graph_sync_status in {"idle", "failed", "synced"}
 
     def test_capture_produces_review_card(self, service: AgentService):
-        result = service.capture(text="需要记住的重要知识点：CAP理论的核心是分区容错性", source_type="text", attempt_graph=False)
+        result = service.capture(text="需要记住的重要知识点：CAP理论的核心是分区容错性", source_type="text")
         assert result.note is not None
         # Review card generation is deterministic from note content
         assert result.review_card is not None
 
     def test_capture_text_with_user_id(self, service: AgentService):
-        result = service.capture(text="用户特定笔记", source_type="text", user_id="alice", attempt_graph=False)
+        result = service.capture(text="用户特定笔记", source_type="text", user_id="alice")
         assert result.note.user_id == "alice"
 
     def test_capture_text_with_source_ref(self, service: AgentService):
         result = service.capture(
-            text="来源笔记", source_type="text", source_ref="https://example.com", attempt_graph=False
+            text="来源笔记", source_type="text", source_ref="https://example.com"
         )
         assert result.note.source_ref == "https://example.com"
 
     def test_short_text_single_note_no_chunks(self, service: AgentService):
-        result = service.capture(text="这是一条短笔记", source_type="text", attempt_graph=False)
+        result = service.capture(text="这是一条短笔记", source_type="text")
         assert result.note is not None
         assert result.chunk_notes == []
 
@@ -80,7 +80,7 @@ class TestCaptureFlow:
             "",
             "第三节的详细内容。" * 350,
         ])
-        result = service.capture(text=long_content, source_type="text", attempt_graph=False)
+        result = service.capture(text=long_content, source_type="text")
         assert result.note is not None
         # Long content should produce chunk_notes
         assert len(result.chunk_notes) > 0
@@ -99,7 +99,7 @@ class TestCaptureFlow:
             "",
             "B的详细内容。" * 350,
         ])
-        result = service.capture(text=long_content, source_type="text", attempt_graph=False)
+        result = service.capture(text=long_content, source_type="text")
         parent_id = result.note.id
         # Chunks should be retrievable from store
         chunks = service.store.get_chunks_for_parent(parent_id)
@@ -121,7 +121,7 @@ class TestCaptureFlow:
         ])
         # Mock graph_store as configured to ensure 'pending' status
         service.graph_store.configured.return_value = True
-        result = service.capture(text=long_content, source_type="text", attempt_graph=False)
+        result = service.capture(text=long_content, source_type="text")
         for chunk in result.chunk_notes:
             assert chunk.graph_sync_status == "pending"
         service.graph_store.configured.return_value = False  # Restore for other tests
@@ -158,7 +158,7 @@ class TestCaptureFlow:
 class TestAskFlow:
     def test_ask_returns_result(self, service: AgentService):
         # Add a note first so there's something to search
-        service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text", attempt_graph=False)
+        service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
         result = service.ask(question="什么是服务降级？")
         assert result.answer
         assert isinstance(result.answer, str)
@@ -170,12 +170,12 @@ class TestAskFlow:
         assert isinstance(result.session_id, str)
 
     def test_ask_with_session_id(self, service: AgentService):
-        service.capture(text="测试知识", source_type="text", attempt_graph=False)
+        service.capture(text="测试知识", source_type="text")
         result = service.ask(question="测试", session_id="test-session-42")
         assert result.session_id == "test-session-42"
 
     def test_ask_persists_history(self, service: AgentService):
-        service.capture(text="测试知识", source_type="text", attempt_graph=False)
+        service.capture(text="测试知识", source_type="text")
         service.ask(question="测试", session_id="s1")
         history = service.list_ask_history(session_id="s1")
         assert len(history) >= 1
@@ -190,14 +190,14 @@ class TestDigestFlow:
         assert isinstance(result.due_reviews, list)
 
     def test_digest_includes_recent_notes(self, service: AgentService):
-        service.capture(text="笔记1内容", source_type="text", attempt_graph=False)
-        service.capture(text="笔记2内容", source_type="text", attempt_graph=False)
+        service.capture(text="笔记1内容", source_type="text")
+        service.capture(text="笔记2内容", source_type="text")
         result = service.digest()
         assert len(result.recent_notes) >= 2
 
     def test_digest_respects_user(self, service: AgentService):
-        service.capture(text="Alice的笔记", source_type="text", user_id="alice", attempt_graph=False)
-        service.capture(text="Bob的笔记", source_type="text", user_id="bob", attempt_graph=False)
+        service.capture(text="Alice的笔记", source_type="text", user_id="alice")
+        service.capture(text="Bob的笔记", source_type="text", user_id="bob")
         result_alice = service.digest(user_id="alice")
         result_bob = service.digest(user_id="bob")
         alice_titles = {n.title for n in result_alice.recent_notes}
@@ -217,7 +217,7 @@ class TestEntryFlow:
             assert result.capture_result.note is not None
 
     def test_entry_ask(self, service: AgentService):
-        service.capture(text="服务降级是系统设计中的常见模式", source_type="text", attempt_graph=False)
+        service.capture(text="服务降级是系统设计中的常见模式", source_type="text")
         entry = EntryInput(text="什么是服务降级？", source_platform="test")
         result = service.entry(entry)
         assert result.intent == "ask"
@@ -239,3 +239,4 @@ class TestEntryFlow:
         result = service.entry(entry)
         assert result.intent in ("capture_link", "capture_text", "unknown")
         assert result.reply_text
+

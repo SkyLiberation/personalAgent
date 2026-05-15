@@ -117,7 +117,7 @@ class AskHistoryRecord(BaseModel):
     question: str
     answer: str
     citations: list[Citation] = Field(default_factory=list)
-    graph_enabled: bool = False
+    evidence: list = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -135,6 +135,7 @@ class AgentState(BaseModel):
     review_card: ReviewCard | None = None
     answer: str | None = None
     citations: list[Citation] = Field(default_factory=list)
+    evidence: list = Field(default_factory=list)
 
 
 class AuditEvent(BaseModel):

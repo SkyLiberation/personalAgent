@@ -17,12 +17,12 @@
 {
   "status": "ok",
   "graphiti": {
-    "enabled": true,
     "configured": true,
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
     "embedding_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "embedding_model": "text-embedding-v4"
+    "embedding_model": "text-embedding-v4",
+    "search_strategy": "hybrid_rrf"
   },
   "ask_history": {
     "configured": true
@@ -73,7 +73,6 @@
       "question": "支付系统重构项目第一阶段方案包括什么？",
       "answer": "第一阶段方案主要围绕拆分核心链路、隔离高风险模块以及补齐监控展开。",
       "citations": [],
-      "graph_enabled": true,
       "created_at": "2026-05-08T15:10:00.000000Z"
     }
   ]

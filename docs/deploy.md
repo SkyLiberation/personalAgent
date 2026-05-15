@@ -30,11 +30,7 @@ cp .env.example .env
 
 如果你暂时不想启动 Neo4j，建议先把：
 
-```env
-PERSONAL_AGENT_GRAPHITI_ENABLED=false
-```
-
-这样 Web 问答会自动走非图谱降级链路，不会因为 `localhost:7687` 不可用而长时间重试。
+当前工程以 Graphiti 为核心能力，不再提供关闭图谱的开关。本地开发请启动 Neo4j，并确保 `.env` 中的 Graphiti、LLM 和 Embedding 配置完整。
 
 ## 4. 启动 Neo4j
 
@@ -174,7 +170,7 @@ npm run build
 docker compose up --build
 ```
 
-`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、是否命中图谱、`session_id` 以及时间戳。
+`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、`session_id` 以及时间戳。
 
 ## 常见排障
 
@@ -190,18 +186,10 @@ docker compose up --build
 - 飞书接入本身已经成功
 - 是图谱层依赖的 Neo4j 没有启动
 
-解决方式二选一：
-
-1. 启动 Neo4j
+解决方式：
 
 ```bash
 docker compose up -d neo4j
-```
-
-2. 暂时关闭图谱
-
-```env
-PERSONAL_AGENT_GRAPHITI_ENABLED=false
 ```
 
 ### 2. 飞书后台配置为长连接，但日志没有 `connected to wss://...`
@@ -214,4 +202,4 @@ PERSONAL_AGENT_GRAPHITI_ENABLED=false
 
 ### 3. 收到同一条飞书消息两次
 
-飞书在超时场景下可能重推事件。当前代码已做短时去重，但如果处理链路仍然过慢，仍然建议优先关闭不必要的图谱依赖，保证消息在更短时间内完成处理。
+飞书在超时场景下可能重推事件。当前代码已做短时去重，但如果处理链路仍然过慢，建议优先检查 Neo4j、LLM 和 Embedding 服务是否稳定。

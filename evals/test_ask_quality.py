@@ -33,7 +33,6 @@ class TestAskQualityEval:
             answer=answer,
             citations=case.citations,
             matches=case.notes,
-            graph_enabled=case.graph_enabled,
         )
         assert result.evidence_score >= case.min_score, (
             f"{case.id}: score={result.evidence_score} < min={case.min_score}\n"
@@ -54,7 +53,6 @@ class TestAskQualityEval:
             answer=answer,
             citations=case.citations,
             matches=case.notes,
-            graph_enabled=case.graph_enabled,
         )
         assert result.evidence_score <= 0.4, (
             f"{case.id}: expected low score but got {result.evidence_score}"

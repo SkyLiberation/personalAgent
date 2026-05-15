@@ -73,7 +73,6 @@ class MemoryFacade:
         question: str,
         answer: str,
         citations: "list[Citation] | None" = None,
-        graph_enabled: bool = False,
     ) -> None:
         """Record a Q&A turn to Postgres (primary) and local store (fallback)."""
         record = {
@@ -83,7 +82,6 @@ class MemoryFacade:
             "question": question,
             "answer": answer,
             "citations": [c.model_dump(mode="json") for c in citations] if citations else [],
-            "graph_enabled": graph_enabled,
             "created_at": datetime.utcnow().isoformat(),
         }
 
@@ -100,7 +98,6 @@ class MemoryFacade:
                     question=question,
                     answer=answer,
                     citations=citations or [],
-                    graph_enabled=graph_enabled,
                 )
                 self.ask_history.append(pg_record)
                 pg_written = True

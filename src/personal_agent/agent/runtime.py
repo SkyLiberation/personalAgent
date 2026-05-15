@@ -102,14 +102,12 @@ class AgentRuntime(
         source_type: str = "text",
         user_id: str | None = None,
         source_ref: str | None = None,
-        attempt_graph: bool = True,
     ) -> CaptureResult:
         return self.execute_capture(
             text=text,
             source_type=source_type,
             user_id=user_id,
             source_ref=source_ref,
-            attempt_graph=attempt_graph,
         )
 
     def ask(

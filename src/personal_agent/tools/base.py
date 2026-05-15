@@ -31,6 +31,7 @@ class ToolResult:
     ok: bool
     data: Any = None
     error: str | None = None
+    evidence: list | None = None
 
 
 class BaseTool(ABC):

@@ -191,6 +191,19 @@ Graphiti node / edge / fact 主导召回、排序和推理
 - 计算 evidence score
 - 识别兜底措辞
 - 判断回答证据是否足够
+- 支持传入统一 `EvidenceItem` 列表进行更丰富的证据评分
+
+### 5. 统一 Evidence / Citation 模型
+
+代码位置：[evidence.py](../../src/personal_agent/core/evidence.py)
+
+作用：
+
+- 定义 `EvidenceItem` 统一证据模型（`evidence_id / source_type / source_id / title / snippet / fact / source_span / url / score / metadata`）
+- 提供 `graph_result_to_evidence()` — 将 `GraphAskResult` 转为 `EvidenceItem` 列表，含 episode→note 反查和 orphan 标记
+- 提供 `notes_to_evidence()` — 将本地 `KnowledgeNote` 列表转为 `EvidenceItem`
+- 提供 `web_results_to_evidence()` — 将 web search 结果转为 `EvidenceItem`
+- 提供 `evidence_to_citations()` — 从 `EvidenceItem` 派生前端兼容的 `Citation` 列表
 
 ## 当前能力
 
@@ -212,6 +225,11 @@ Graphiti node / edge / fact 主导召回、排序和推理
 - 已支持级联删除时清理 chunk 的 graph episode
 - 已支持相似检索按 parent 去重，并在回答证据中区分 parent summary 与 chunk content
 - 已补基础回归样本：`test_verifier.py` 覆盖 web citation 计分与孤儿 citation，`test_plan_executor.py` 覆盖 resolve 多级回退和 `relation_fact + snippet` 相关执行路径
+- 已实现统一证据模型 `EvidenceItem`（`core/evidence.py`），将 Graphiti `fact_refs / edge_refs / citation_hits`、本地 note/chunk、web 搜索结果和工具结果收敛为可追踪证据结构
+- `ToolResult` 已扩展 `evidence` 字段，`graph_search / web_search` 工具返回统一证据
+- `RuntimeAskMixin.execute_ask()` 已积累三层检索的 `EvidenceItem`，`AskResult.evidence` 随 API 响应返回
+- `AnswerVerifier.verify()` 已支持可选 `evidence` 参数，基于 evidence 类型和 orphan 状态增加证据充分性评分
+- `ReActStepRunner` 已支持在迭代间传递 `evidence`，每次 `ReActIteration` 保留工具返回的证据
 
 ## 已知限制
 
@@ -259,72 +277,8 @@ chunk note 现已支持独立图谱同步：capture 阶段对每个 chunk 设 `g
 
 ## 演进方向
 
-- 在 `GraphAskResult` 层继续统一 graph facts、edge refs、citation hits 和 episode 映射，减少 `relation_facts` 字符串与结构化 refs 的双轨漂移
 - 增强图谱 rerank：综合 edge score、entity overlap、fact relevance、episode freshness 和 source confidence
 - 引入稳定 rerank 和评测样本
-- 将 evidence/citation 数据结构进一步统一
 - 基础 citation / relation fact / snippet 回归样本已补，继续扩展更细粒度的质量评测
 - 增强多跳推理和证据链可视化
-
-## 下一步实现方案：统一 Evidence / Citation 模型
-
-目标：把 Graphiti facts、episode 映射、note/chunk snippet、web citation 和工具结果统一成一套可追踪证据结构，让回答生成、verifier、前端 citation、高亮定位和工具调用共享同一种 evidence 语义。
-
-### 1. 新增统一证据模型
-
-在 `core/models.py` 中新增 `EvidenceItem`，或在独立 `core/evidence.py` 中定义后由 models 引用。首批字段：
-
-```text
-evidence_id
-source_type        # graph_fact / note / chunk / web / tool
-source_id          # note_id / episode_uuid / edge_uuid / url / tool_call_id
-title
-snippet
-fact
-source_span
-url
-score
-metadata
-```
-
-保留现有 `Citation` 作为对前端兼容的轻量展示模型，但让它可以由 `EvidenceItem` 派生。
-
-### 2. Graphiti 结果转换为 Evidence
-
-在 `AgentRuntime` 或 `graphiti/store.py` 增加转换函数：
-
-```text
-GraphAskResult
-  -> node_refs / edge_refs / fact_refs / citation_hits
-  -> list[EvidenceItem]
-```
-
-映射规则：
-
-- `fact_refs / edge_refs` 生成 `source_type="graph_fact"`
-- episode UUID 反查到的 note/chunk 补充 `source_id / source_span / snippet`
-- `citation_hits.score / entity_overlap_count / matched_terms` 写入 `score / metadata`
-- 无法反查 note 的 graph fact 仍保留为可用 evidence，但标记 `metadata.orphan=true`
-
-### 3. 本地和 Web 结果转换为 Evidence
-
-- 本地 note/chunk 检索结果生成 `source_type="note"` 或 `source_type="chunk"`
-- Web search 结果生成 `source_type="web"`，保留 `url / title / snippet / published_at`
-- 工具结果中可追踪内容生成 `source_type="tool"`，保留工具名、输入摘要和结构化输出摘要
-
-### 4. Runtime 统一消费 Evidence
-
-调整以下方法，使其优先消费 `EvidenceItem`：
-
-- 图谱回答 prompt：从 evidence 中构造 fact network 和原文证据锚点
-- 本地回答 prompt：从 evidence 中构造 note/chunk 证据
-- verifier：基于 evidence 数量、来源类型、score、orphan 状态计算证据充分性
-- citation 输出：由 evidence 派生 `Citation`，保证前端兼容
-
-### 5. 测试落点
-
-- Graphiti `fact_refs / edge_refs / citation_hits` 到 `EvidenceItem` 的转换测试
-- note/chunk/web 到 `EvidenceItem` 的转换测试
-- orphan graph fact 不丢失但会被 verifier 降权的测试
-- `EvidenceItem -> Citation` 兼容测试
-- 图谱 ask prompt 使用统一 evidence 的回归测试
+- 将 evidence 从回答生成、verifier 扩展到前端 citation 面板和高亮定位

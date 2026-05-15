@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from ..core.models import Citation, KnowledgeNote
-from ..graphiti.store import GraphAskResult, GraphCitationHit
+from ..graphiti.reranker import GraphCitationHit
+from ..graphiti.store import GraphAskResult
 from .verifier import VerificationResult
 
 def _annotate_answer(answer: str, verification: VerificationResult) -> str:

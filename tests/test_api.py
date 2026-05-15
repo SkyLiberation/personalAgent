@@ -11,7 +11,6 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("PERSONAL_AGENT_DATA_DIR", str(temp_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "")
-    monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_ENABLED", "false")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
 
@@ -168,3 +167,4 @@ class TestToolsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
+

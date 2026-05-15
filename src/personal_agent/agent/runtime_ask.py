@@ -3,6 +3,12 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
+from ..core.evidence import (
+    EvidenceItem,
+    graph_result_to_evidence,
+    notes_to_evidence,
+    web_results_to_evidence,
+)
 from ..core.models import AgentState, Citation, KnowledgeNote
 from ..graphiti.store import GraphAskResult
 from .graph import build_ask_graph
@@ -39,14 +45,18 @@ class RuntimeAskMixin:
         graph_fallback_answer: str | None = None
         graph_fallback_citations: list[Citation] = []
         graph_fallback_matches: list[KnowledgeNote] = []
+        all_evidence: list[EvidenceItem] = []
 
         graph_result = self.graph_store.ask(question, normalized_user, trace_id=trace_id)
-        graph_enabled = graph_result.enabled is True
-        if graph_enabled:
+        if graph_result.enabled is True:
             matches, citations = self._graph_matches_and_citations(normalized_user, question, graph_result)
+            # Build graph evidence from result + episode-to-note mapping
+            notes_by_episode = {n.graph_episode_uuid: n for n in matches if n.graph_episode_uuid is not None}
+            graph_evidence = graph_result_to_evidence(graph_result, notes_by_episode, question)
+            all_evidence.extend(graph_evidence)
             answer = self._compose_graph_answer(question, graph_result, matches, citations, working_context)
-            verification = self._verifier.verify(question, answer, citations, matches, graph_enabled=True)
-            retry_result = self._retry_if_needed(question, answer, citations, matches, verification, graph_enabled=True)
+            verification = self._verifier.verify(question, answer, citations, matches, evidence=all_evidence)
+            retry_result = self._retry_if_needed(question, answer, citations, matches, verification)
             answer = retry_result.answer
             verification = retry_result.verification
             self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
@@ -55,12 +65,12 @@ class RuntimeAskMixin:
                     answer=answer,
                     citations=citations,
                     matches=matches,
-                    graph_enabled=True,
+                    evidence=all_evidence,
                     session_id=normalized_session,
                 )
                 self.memory.record_turn(
                     normalized_user, normalized_session, question, answer,
-                    citations=citations, graph_enabled=True,
+                    citations=citations,
                 )
                 logger.info(
                     "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
@@ -77,14 +87,15 @@ class RuntimeAskMixin:
         result = AgentState.model_validate(graph.invoke(state))
         local_matches = _merge_notes(graph_fallback_matches, result.matches)
         local_citations = _merge_citations(graph_fallback_citations, result.citations)
+        # Accumulate local evidence
+        all_evidence.extend(notes_to_evidence(local_matches))
         answer = self._compose_local_answer(question, local_matches, local_citations, working_context)
         final_answer = answer or result.answer or "暂时没有生成答案。"
         verification = self._verifier.verify(
-            question, final_answer, local_citations, local_matches, graph_enabled=graph_enabled
+            question, final_answer, local_citations, local_matches, evidence=all_evidence
         )
         retry_result = self._retry_if_needed(
             question, final_answer, local_citations, local_matches, verification,
-            graph_enabled=graph_enabled,
         )
         final_answer = retry_result.answer
         verification = retry_result.verification
@@ -96,13 +107,14 @@ class RuntimeAskMixin:
         if not verification.sufficient and self._web_search_available:
             web_results, web_citations = self._execute_web_search(question)
             if web_citations:
+                all_evidence.extend(web_results_to_evidence(web_results))
                 self.memory.working.add_step(f"知识库证据不足，尝试网络搜索: {len(web_citations)} 条结果")
                 web_answer = self._compose_web_answer(question, web_results, web_citations, working_context)
                 web_verification = self._verifier.verify(
-                    question, web_answer, web_citations, [], graph_enabled=False, web_enabled=True,
+                    question, web_answer, web_citations, [], web_enabled=True, evidence=all_evidence,
                 )
                 retry_result = self._retry_if_needed(
-                    question, web_answer, web_citations, [], web_verification, graph_enabled=False, web_enabled=True,
+                    question, web_answer, web_citations, [], web_verification, web_enabled=True,
                 )
                 web_answer = retry_result.answer
                 web_verification = retry_result.verification
@@ -113,7 +125,7 @@ class RuntimeAskMixin:
                 )
                 self.memory.record_turn(
                     normalized_user, normalized_session, question, web_answer,
-                    citations=web_citations, graph_enabled=False,
+                    citations=web_citations,
                 )
                 logger.info(
                     "Ask resolved from web user=%s citations=%s verify=%.2f",
@@ -123,7 +135,7 @@ class RuntimeAskMixin:
                     answer=web_answer,
                     citations=web_citations,
                     matches=[],
-                    graph_enabled=graph_enabled,
+                    evidence=all_evidence,
                     session_id=normalized_session,
                 )
 
@@ -131,12 +143,12 @@ class RuntimeAskMixin:
             answer=final_answer,
             citations=local_citations,
             matches=local_matches,
-            graph_enabled=graph_enabled,
+            evidence=all_evidence,
             session_id=normalized_session,
         )
         self.memory.record_turn(
             normalized_user, normalized_session, question, final_answer,
-            citations=local_citations, graph_enabled=graph_enabled,
+            citations=local_citations,
         )
         logger.info(
             "Ask resolved locally user=%s matches=%s citations=%s verify=%.2f",
@@ -242,7 +254,6 @@ class RuntimeAskMixin:
             yield ("metadata", {
                 "citations": [c.model_dump(mode="json") for c in citations],
                 "matches": [n.model_dump(mode="json") for n in matches],
-                "graph_enabled": True,
                 "session_id": normalized_session,
             })
             prompt = self._build_graph_answer_prompt(
@@ -256,13 +267,12 @@ class RuntimeAskMixin:
             if full_answer:
                 self.memory.record_turn(
                     normalized_user, normalized_session, question, full_answer,
-                    citations=citations, graph_enabled=True,
+                    citations=citations,
                 )
                 yield ("done", {
                     "answer": full_answer,
                     "citations": [c.model_dump(mode="json") for c in citations],
                     "matches": [n.model_dump(mode="json") for n in matches],
-                    "graph_enabled": True,
                     "session_id": normalized_session,
                 })
             return
@@ -277,7 +287,6 @@ class RuntimeAskMixin:
         yield ("metadata", {
             "citations": [c.model_dump(mode="json") for c in citations],
             "matches": [n.model_dump(mode="json") for n in matches],
-            "graph_enabled": False,
             "session_id": normalized_session,
         })
 
@@ -311,12 +320,11 @@ class RuntimeAskMixin:
                 final_answer = full_answer or "网络搜索未返回足够信息来回答这个问题。"
                 self.memory.record_turn(
                     normalized_user, normalized_session, question, final_answer,
-                    citations=web_citations, graph_enabled=False,
+                    citations=web_citations,
                 )
                 yield ("done", {
                     "answer": final_answer,
                     "citations": [c.model_dump(mode="json") for c in web_citations],
-                    "graph_enabled": False,
                     "web_enabled": True,
                     "session_id": normalized_session,
                 })
@@ -324,13 +332,12 @@ class RuntimeAskMixin:
 
         self.memory.record_turn(
             normalized_user, normalized_session, question, final_answer,
-            citations=citations, graph_enabled=False,
+            citations=citations,
         )
         yield ("done", {
             "answer": final_answer,
             "citations": [c.model_dump(mode="json") for c in citations],
             "matches": [n.model_dump(mode="json") for n in matches],
-            "graph_enabled": False,
             "session_id": normalized_session,
         })
 
@@ -577,7 +584,6 @@ class RuntimeAskMixin:
         citations: list[Citation],
         matches: list[KnowledgeNote],
         verification: VerificationResult,
-        graph_enabled: bool = False,
         web_enabled: bool = False,
     ) -> RetryResult:
         max_retries = max(0, self.settings.max_verify_retries)
@@ -593,7 +599,7 @@ class RuntimeAskMixin:
                 current_answer = regenerated
                 current_verification = self._verifier.verify(
                     question, current_answer, citations, matches,
-                    graph_enabled=graph_enabled, web_enabled=web_enabled,
+                    web_enabled=web_enabled,
                 )
                 attempts = attempt + 1
                 self.memory.working.add_step(
@@ -619,5 +625,4 @@ class RuntimeAskMixin:
             "2. 如果证据不足，明确指出\n"
             "3. 确保每个观点都有相应依据\n"
         )
-
 

@@ -49,8 +49,8 @@ class AnswerVerifier:
         answer: str,
         citations: list[Citation],
         matches: list[KnowledgeNote],
-        graph_enabled: bool = False,
         web_enabled: bool = False,
+        evidence: list | None = None,
     ) -> VerificationResult:
         issues: list[str] = []
         warnings: list[str] = []
@@ -86,20 +86,39 @@ class AnswerVerifier:
         elif valid_note_citations >= 1:
             score += 0.15
 
-        # 2c. Graph bonus
-        if graph_enabled:
-            score += 0.1
-
-        # 2d. Web citation count (slightly lower weight than note-based)
+        # 2c. Web citation count (slightly lower weight than note-based)
         valid_web_count = len(web_citations)
         if valid_web_count >= 3:
             score += 0.25
         elif valid_web_count >= 1:
             score += 0.1
 
-        # 2e. Web bonus
+        # 2d. Web bonus
         if web_enabled and valid_web_count > 0:
             score += 0.05
+
+        # 2e. Evidence-based bonus (when unified EvidenceItem is provided)
+        if evidence:
+            graph_facts = [e for e in evidence if getattr(e, "source_type", None) == "graph_fact"]
+            note_evidence = [e for e in evidence if getattr(e, "source_type", None) in ("note", "chunk")]
+            web_evidence = [e for e in evidence if getattr(e, "source_type", None) == "web"]
+
+            orphan_facts = [e for e in graph_facts if getattr(e, "metadata", {}).get("orphan") is True]
+            anchored_facts = len(graph_facts) - len(orphan_facts)
+
+            if anchored_facts >= 3:
+                score += 0.15
+            elif anchored_facts >= 1:
+                score += 0.08
+            # Orphan facts contribute less
+            if orphan_facts:
+                score += min(len(orphan_facts) * 0.03, 0.06)
+
+            if note_evidence and len(note_evidence) >= 2:
+                score += 0.05
+
+            if web_evidence and len(web_evidence) >= 2:
+                score += 0.05
 
         # 2f. Answer content checks
         answer_empty = not answer or not answer.strip()

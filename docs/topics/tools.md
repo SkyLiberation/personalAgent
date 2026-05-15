@@ -251,6 +251,8 @@ ToolRegistry.execute(tool_name, **tool_input)
 - 已具备 `ToolRegistry.execute()` 输入 schema 前置校验，参数错误在工具执行前即暴露
 - 已具备 `validate_tool_input()` 公共校验函数，PlanValidator 可复用做计划阶段参数校验
 - 已具备受控 ReAct 工具调用：`ReActStepRunner` 复用 `ToolRegistry.execute()`，并受 `allowed_tools / max_iterations / risk_level / requires_confirmation` 约束
+- 已扩展 `ToolResult.evidence` 字段，`graph_search / web_search` 在返回 `data` 的同时填充 `evidence: list[EvidenceItem]`
+- `ReActStepRunner` 已支持在 `ReActIteration` 和最终结果中传递工具 evidence
 
 ## 已知限制
 
@@ -307,9 +309,9 @@ ToolRegistry.execute(tool_name, **tool_input)
 
 更复杂的组织/角色/租户权限模型仍未建立。
 
-### 5. 工具结果还没有统一证据模型
+### 5. 工具结果已接入统一证据模型
 
-`graph_search` 会返回 relation facts 和 episode UUID，`capture_url` 返回正文文本，`delete_note` 返回 pending action 信息。不同工具的 `data` 结构还没有统一成可追踪 citation/evidence 模型。
+`ToolResult` 已扩展 `evidence` 字段（`list[EvidenceItem]`），`graph_search / web_search` 已填充统一证据。`delete_note` 等写操作工具保留 pending action payload，暂不进入 evidence 主链路。
 
 ### 6. 长文采集的 chunk / document 模型已接入
 
@@ -327,57 +329,6 @@ ToolRegistry.execute(tool_name, **tool_input)
 
 ## 演进方向
 
-- 继续将 `graph_search` 的结构化 node / edge / fact refs 纳入统一 evidence/citation 模型，减少只读字符串 relation facts 的场景
-- 继续收敛 ask 工具链职责：Graphiti refs 负责语义检索与事实网络，chunk/note 负责 source evidence
-- 将工具结果逐步规范为可追踪 evidence/citation 结构
 - 根据需要把 `execute_with_fallback()` 接入计划执行链，或明确只作为低层备用接口保留
-
-## 下一步实现方案：工具结果接入 Evidence / Citation
-
-目标：让工具层的可追踪输出能进入统一 `EvidenceItem`，不再让 `graph_search / web_search / capture_url / delete_note` 各自返回互不兼容的证据结构。
-
-### 1. 扩展 `ToolResult`
-
-在 `ToolResult` 中新增可选字段：
-
-```text
-evidence: list[EvidenceItem]
-events: list[AgentEvent]
-```
-
-保持 `data` 向后兼容，短期内工具仍返回原有 `data`，但新增工具应优先填充 `evidence`。
-
-### 2. 优先改造只读检索工具
-
-首批只改风险低、最适合做 evidence 的工具：
-
-- `graph_search`：把 `node_refs / edge_refs / fact_refs / related_episode_uuids` 转成 graph evidence
-- `web_search`：把网页搜索结果转成 web evidence
-- `capture_url`：把抓取正文的 URL、标题和摘要转成 source evidence
-
-`delete_note` 这类写操作先不进入 evidence 主链路，只保留 pending action payload。
-
-### 3. ToolRegistry 保持兼容
-
-`ToolRegistry.execute()` 返回 `ToolResult` 时不改变现有调用方行为。后续 `PlanExecutor` 和 ReAct runner 可按需读取 `result.evidence`：
-
-```text
-ToolResult.data      -> 原业务数据
-ToolResult.evidence  -> 可追踪证据
-ToolResult.events    -> 可展示执行反馈
-```
-
-### 4. ReAct observation 接入 evidence
-
-`ReActStepRunner` 的 observation 不再只保存文本摘要，也应保留 evidence 引用：
-
-- action 使用 `graph_search` / `web_search` 时，把 evidence 写入 step observation
-- 事件输出时只展示摘要，完整 evidence 留给后续 compose/verifier 使用
-- 高风险或写入工具仍保持阻断，不进入 ReAct evidence 采集
-
-### 5. 测试落点
-
-- `graph_search` 返回 `ToolResult.evidence` 的单元测试
-- `web_search` 返回 web evidence 的单元测试
-- `ToolRegistry.execute()` 对旧调用方保持 `data` 兼容的测试
-- ReAct observation 携带 evidence 但事件 payload 不过度膨胀的测试
+- 为 `capture_url` 等工具补充 evidence 输出（当前优先改造了 `graph_search` 和 `web_search`）
+- 后续可扩展 `ToolResult` 增加统一的 `events` 字段，与 `AgentEvent` 模型对齐

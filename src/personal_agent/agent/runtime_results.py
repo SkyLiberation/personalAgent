@@ -11,14 +11,13 @@ class CaptureResult(BaseModel):
     chunk_notes: list[KnowledgeNote] = Field(default_factory=list)
     related_notes: list[KnowledgeNote] = Field(default_factory=list)
     review_card: ReviewCard | None = None
-    graph_enabled: bool = False
 
 
 class AskResult(BaseModel):
     answer: str
     citations: list[Citation] = Field(default_factory=list)
     matches: list[KnowledgeNote] = Field(default_factory=list)
-    graph_enabled: bool = False
+    evidence: list = Field(default_factory=list)
     session_id: str = "default"
 
 

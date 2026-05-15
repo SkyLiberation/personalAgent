@@ -9,6 +9,7 @@ from .entry_nodes import (
     ask_entry_branch_node,
     capture_entry_branch_node,
     direct_answer_entry_branch_node,
+    entry_target_node_for_intent,
     route_entry_intent_node,
     summarize_entry_branch_node,
     unknown_entry_branch_node,
@@ -37,7 +38,9 @@ class RuntimeEntryMixin:
         """Public wrapper for intent classification."""
         return self._intent_router.classify(entry_input)
 
-    def plan_for_entry(self, entry_input: EntryInput) -> tuple[RouterDecision, list[PlanStep], list[dict[str, object]]]:
+    def plan_for_entry(
+        self, entry_input: EntryInput
+    ) -> tuple[RouterDecision, list[PlanStep], list[dict[str, object]]]:
         """Run session setup, intent routing, planning, and validation for an entry.
 
         Populates working memory with plan_steps dicts and returns the raw
@@ -49,14 +52,47 @@ class RuntimeEntryMixin:
         self.memory.bind_session(normalized_user, normalized_session)
         self.memory.refresh_conversation_summary(normalized_user, normalized_session)
         decision = self._intent_router.classify(entry_input)
-        self.memory.working.set_goal(f"入口任务[{decision.route}]: {entry_input.text[:60]}")
+        self.memory.working.set_goal(
+            f"入口任务[{decision.route}]: {entry_input.text[:60]}"
+        )
+        execution_path = (
+            "plan_executor" if decision.requires_planning else "entry_graph"
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "entry.route.decision",
+            user_id=normalized_user,
+            session_id=normalized_session,
+            route=decision.route,
+            confidence=decision.confidence,
+            risk_level=decision.risk_level,
+            requires_tools=decision.requires_tools,
+            requires_retrieval=decision.requires_retrieval,
+            requires_planning=decision.requires_planning,
+            requires_confirmation=decision.requires_confirmation,
+            candidate_tools=decision.candidate_tools,
+            missing_information=decision.missing_information,
+            execution_path=execution_path,
+            target_node=(
+                "PlanExecutor"
+                if decision.requires_planning
+                else entry_target_node_for_intent(decision.route)
+            ),
+            reason=decision.user_visible_message,
+        )
 
         if not decision.requires_planning:
             self.memory.working.plan_steps = []
             self.memory.working.execution_trace = []
-            log_event(logger, logging.INFO, "entry.planned",
-                user_id=normalized_user, session_id=normalized_session,
-                route=decision.route, confidence=decision.confidence,
+            log_event(
+                logger,
+                logging.INFO,
+                "entry.planned",
+                user_id=normalized_user,
+                session_id=normalized_session,
+                route=decision.route,
+                confidence=decision.confidence,
                 risk_level=decision.risk_level,
                 requires_confirmation=decision.requires_confirmation,
                 plan_step_count=0,
@@ -69,16 +105,23 @@ class RuntimeEntryMixin:
         if validation.blocking:
             logger.warning(
                 "Plan validation blocked: %d issues, %d warnings. Issues: %s",
-                len(validation.issues), len(validation.warnings), validation.issues,
+                len(validation.issues),
+                len(validation.warnings),
+                validation.issues,
             )
             if validation.corrected_steps:
                 validated_steps = validation.corrected_steps
             else:
-                logger.info("Replanning with heuristic due to validation blocking issues")
+                logger.info(
+                    "Replanning with heuristic due to validation blocking issues"
+                )
                 validated_steps = self._planner.fallback_plan(decision.route)
                 revalidation = self._plan_validator.validate(validated_steps, decision)
                 if revalidation.blocking:
-                    logger.error("Heuristic plan also blocked: %s. Falling back to direct_answer.", revalidation.issues)
+                    logger.error(
+                        "Heuristic plan also blocked: %s. Falling back to direct_answer.",
+                        revalidation.issues,
+                    )
                     decision = RouterDecision(
                         route="unknown",
                         confidence=0.1,
@@ -91,42 +134,60 @@ class RuntimeEntryMixin:
             if not validation.ok:
                 logger.warning(
                     "Plan validation found %d non-blocking issues: %s",
-                    len(validation.issues), validation.warnings,
+                    len(validation.issues),
+                    validation.warnings,
                 )
         plan_steps = [
             {
-                "step_id": s.step_id, "action_type": s.action_type,
-                "description": s.description, "tool_name": s.tool_name,
-                "tool_input": s.tool_input, "depends_on": s.depends_on,
+                "step_id": s.step_id,
+                "action_type": s.action_type,
+                "description": s.description,
+                "tool_name": s.tool_name,
+                "tool_input": s.tool_input,
+                "depends_on": s.depends_on,
                 "expected_output": s.expected_output,
                 "success_criteria": s.success_criteria,
                 "risk_level": s.risk_level,
                 "requires_confirmation": s.requires_confirmation,
-                "on_failure": s.on_failure, "status": s.status,
+                "on_failure": s.on_failure,
+                "status": s.status,
                 "retry_count": s.retry_count,
             }
             for s in validated_steps
         ]
         self.memory.working.plan_steps = plan_steps
-        log_event(logger, logging.INFO, "entry.planned",
-            user_id=normalized_user, session_id=normalized_session,
-            route=decision.route, confidence=decision.confidence,
+        log_event(
+            logger,
+            logging.INFO,
+            "entry.planned",
+            user_id=normalized_user,
+            session_id=normalized_session,
+            route=decision.route,
+            confidence=decision.confidence,
             risk_level=decision.risk_level,
             requires_confirmation=decision.requires_confirmation,
             plan_step_count=len(plan_steps),
             plan_steps=plan_steps,
         )
         return decision, validated_steps, plan_steps
-    def execute_entry(self, entry_input: EntryInput, on_progress: ProgressCallback = None) -> EntryResult:
+
+    def execute_entry(
+        self, entry_input: EntryInput, on_progress: ProgressCallback = None
+    ) -> EntryResult:
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
         decision, validated_steps, _plan_dicts = self.plan_for_entry(entry_input)
 
         if decision.requires_planning and validated_steps:
             # Plan-driven execution: delete_knowledge, solidify_conversation
-            logger.info("Using PlanExecutor for intent=%s steps=%d", decision.route, len(validated_steps))
+            logger.info(
+                "Using PlanExecutor for intent=%s steps=%d",
+                decision.route,
+                len(validated_steps),
+            )
             executor = PlanExecutor(
-                self, self.memory,
+                self,
+                self.memory,
                 replanner=self._replanner,
                 react_runner=self._react_runner,
             )
@@ -134,21 +195,30 @@ class RuntimeEntryMixin:
                 mode="entry",
                 user_id=normalized_user,
                 intent=decision.route,
-                entry_input=entry_input.model_copy(update={"user_id": normalized_user, "session_id": normalized_session}),
+                entry_input=entry_input.model_copy(
+                    update={
+                        "user_id": normalized_user,
+                        "session_id": normalized_session,
+                    }
+                ),
             )
             result = executor.execute(validated_steps, state, on_progress=on_progress)
             reply_text = result.answer or "计划执行完成。"
             # Update plan_steps with execution status
             self.memory.working.plan_steps = [
                 {
-                    "step_id": s.step_id, "action_type": s.action_type,
-                    "description": s.description, "tool_name": s.tool_name,
-                    "tool_input": s.tool_input, "depends_on": s.depends_on,
+                    "step_id": s.step_id,
+                    "action_type": s.action_type,
+                    "description": s.description,
+                    "tool_name": s.tool_name,
+                    "tool_input": s.tool_input,
+                    "depends_on": s.depends_on,
                     "expected_output": s.expected_output,
                     "success_criteria": s.success_criteria,
                     "risk_level": s.risk_level,
                     "requires_confirmation": s.requires_confirmation,
-                    "on_failure": s.on_failure, "status": s.status,
+                    "on_failure": s.on_failure,
+                    "status": s.status,
                     "retry_count": s.retry_count,
                 }
                 for s in validated_steps
@@ -181,12 +251,16 @@ class RuntimeEntryMixin:
             lambda state: ask_entry_branch_node(state, entry_node_deps),
             lambda state: summarize_entry_branch_node(state, entry_node_deps),
             unknown_entry_branch_node,
-            direct_answer_branch_node=lambda state: direct_answer_entry_branch_node(state, entry_node_deps),
+            direct_answer_branch_node=lambda state: direct_answer_entry_branch_node(
+                state, entry_node_deps
+            ),
         )
         state = AgentState(
             mode="entry",
             user_id=normalized_user,
-            entry_input=entry_input.model_copy(update={"user_id": normalized_user, "session_id": normalized_session}),
+            entry_input=entry_input.model_copy(
+                update={"user_id": normalized_user, "session_id": normalized_session}
+            ),
         )
         result = AgentState.model_validate(graph.invoke(state))
         reply_text = result.answer or "暂时没有可执行的结果。"
@@ -196,16 +270,15 @@ class RuntimeEntryMixin:
         if result.note is not None:
             capture_result = CaptureResult(
                 note=result.note,
+                chunk_notes=result.chunk_notes,
                 related_notes=result.matches,
                 review_card=result.review_card,
-                graph_enabled=result.note.graph_sync_status == "synced",
             )
         elif result.question:
             ask_result = AskResult(
                 answer=reply_text,
                 citations=result.citations,
                 matches=result.matches,
-                graph_enabled=bool(result.citations or result.matches),
                 session_id=normalized_session,
             )
 
@@ -266,5 +339,3 @@ class RuntimeEntryMixin:
         if generated:
             return generated
         return "暂时无法生成群聊总结，请稍后重试。"
-
-

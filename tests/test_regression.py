@@ -71,7 +71,7 @@ class TestCrossLayerRegression:
         # Prime knowledge base with a note to resolve
         svc.capture(
             text="旧部署流程：第一步构建镜像，第二步部署到K8s集群。",
-            source_type="text", user_id="alice", attempt_graph=False,
+            source_type="text", user_id="alice",
         )
         svc.graph_store.ask.return_value = type("R", (), {
             "enabled": False, "answer": "",
@@ -108,7 +108,7 @@ class TestCrossLayerRegression:
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         note = svc.capture(
-            text="旧部署流程记录", source_type="text", user_id="alice", attempt_graph=False,
+            text="旧部署流程记录", source_type="text", user_id="alice",
         ).note
 
         # Mock graph to return episode UUIDs so resolve tier-1 hits
@@ -155,7 +155,7 @@ class TestCrossLayerRegression:
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         svc.capture(
-            text="应删除的测试笔记", source_type="text", user_id="alice", attempt_graph=False,
+            text="应删除的测试笔记", source_type="text", user_id="alice",
         )
         svc.graph_store.ask.return_value = type("R", (), {
             "enabled": False, "answer": "",
@@ -171,3 +171,4 @@ class TestCrossLayerRegression:
             assert step.get("status") != "planned", (
                 f"Step {step.get('step_id')} still 'planned' — expected transition"
             )
+

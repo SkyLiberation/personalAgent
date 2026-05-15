@@ -22,7 +22,6 @@ class RuntimeCaptureMixin:
         source_type: str = "text",
         user_id: str | None = None,
         source_ref: str | None = None,
-        attempt_graph: bool = True,
     ) -> CaptureResult:
         normalized_user = user_id or self.settings.default_user
         logger.info("Starting capture user=%s source_type=%s", normalized_user, source_type)
@@ -42,32 +41,9 @@ class RuntimeCaptureMixin:
         if result.note is None:
             raise ValueError("Capture flow did not produce a note.")
 
-        if not attempt_graph:
-            graph_configured = self.graph_store.configured()
-            result.note.graph_sync_status = "pending" if graph_configured else "idle"
-            result.note.graph_sync_error = None
-            self.store.update_note(result.note)
-            # Set pending status on chunk notes for background sync
-            for chunk in result.chunk_notes:
-                chunk.graph_sync_status = "pending" if graph_configured else "idle"
-                chunk.graph_sync_error = None
-                self.store.update_note(chunk)
-            logger.info(
-                "Capture stored without immediate graph sync user=%s note_id=%s graph_sync_status=%s chunks=%d",
-                normalized_user, result.note.id, result.note.graph_sync_status, len(result.chunk_notes),
-            )
-            return CaptureResult(
-                note=result.note,
-                chunk_notes=result.chunk_notes,
-                related_notes=result.matches,
-                review_card=result.review_card,
-                graph_enabled=False,
-            )
-
         graph_result = self.graph_store.ingest_note(result.note)
         related_notes = result.matches
-        graph_enabled = graph_result.enabled is True
-        if graph_enabled:
+        if graph_result.enabled is True:
             updated_note = self._merge_graph_capture(result.note, graph_result)
             self.store.update_note(updated_note)
             result.note = updated_note
@@ -79,9 +55,13 @@ class RuntimeCaptureMixin:
             updated_note.updated_at = datetime.utcnow()
             self.store.update_note(updated_note)
             result.note = updated_note
-        elif self.graph_store.configured():
+        else:
             result.note.graph_sync_status = "failed"
-            result.note.graph_sync_error = graph_result.error or "Graphiti ingest returned disabled result."
+            result.note.graph_sync_error = (
+                graph_result.error
+                if isinstance(graph_result.error, str) and graph_result.error
+                else "Graphiti ingest returned disabled result."
+            )
             result.note.updated_at = datetime.utcnow()
             self.store.update_note(result.note)
 
@@ -93,15 +73,14 @@ class RuntimeCaptureMixin:
                 self.store.update_note(chunk)
 
         logger.info(
-            "Capture finished user=%s note_id=%s graph_enabled=%s related_notes=%s chunks=%d",
-            normalized_user, result.note.id, graph_enabled, len(related_notes), len(result.chunk_notes),
+            "Capture finished user=%s note_id=%s graph_sync_status=%s related_notes=%s chunks=%d",
+            normalized_user, result.note.id, result.note.graph_sync_status, len(related_notes), len(result.chunk_notes),
         )
         return CaptureResult(
             note=result.note,
             chunk_notes=result.chunk_notes,
             related_notes=related_notes,
             review_card=result.review_card,
-            graph_enabled=graph_enabled,
         )
     def sync_note_to_graph(self, note_id: str) -> bool:
         note = self.store.get_note(note_id)

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..core.logging_utils import log_event
 from ..core.models import AgentState, EntryInput, EntryIntent
 
 if TYPE_CHECKING:
@@ -16,6 +17,22 @@ if TYPE_CHECKING:
     from .service import AskResult, CaptureResult
 
 logger = logging.getLogger(__name__)
+
+_ENTRY_INTENT_TARGET_NODES: dict[EntryIntent, str] = {
+    "capture_text": "capture_branch",
+    "capture_link": "capture_branch",
+    "capture_file": "capture_branch",
+    "ask": "ask_branch",
+    "summarize_thread": "summarize_branch",
+    "delete_knowledge": "unknown_branch",
+    "solidify_conversation": "unknown_branch",
+    "direct_answer": "direct_answer_branch",
+    "unknown": "unknown_branch",
+}
+
+
+def entry_target_node_for_intent(intent: EntryIntent) -> str:
+    return _ENTRY_INTENT_TARGET_NODES.get(intent, "unknown_branch")
 
 
 @dataclass(slots=True)
@@ -33,14 +50,38 @@ def route_entry_intent_node(state: AgentState, deps: EntryNodeDeps) -> AgentStat
     if state.entry_input is None:
         state.intent = "unknown"
         state.intent_reason = "缺少入口输入。"
+        log_event(
+            logger,
+            logging.INFO,
+            "entry.route.selected",
+            route=state.intent,
+            target_node=entry_target_node_for_intent(state.intent),
+            user_id=state.user_id,
+            reason=state.intent_reason,
+        )
         return state
     decision = deps.classify_intent(state.entry_input)
     state.intent = decision.route
     state.intent_reason = decision.user_visible_message
-    logger.debug(
-        "Entry routed intent=%s confidence=%.2f risk=%s confirm=%s user=%s",
-        decision.route, decision.confidence, decision.risk_level,
-        decision.requires_confirmation, state.user_id,
+    target_node = entry_target_node_for_intent(decision.route)
+    log_event(
+        logger,
+        logging.INFO,
+        "entry.route.selected",
+        route=decision.route,
+        target_node=target_node,
+        confidence=decision.confidence,
+        risk_level=decision.risk_level,
+        requires_tools=decision.requires_tools,
+        requires_retrieval=decision.requires_retrieval,
+        requires_planning=decision.requires_planning,
+        requires_confirmation=decision.requires_confirmation,
+        candidate_tools=decision.candidate_tools,
+        missing_information=decision.missing_information,
+        user_id=state.user_id,
+        session_id=state.entry_input.session_id,
+        source_type=state.entry_input.source_type,
+        reason=decision.user_visible_message,
     )
     return state
 
@@ -50,14 +91,19 @@ def capture_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentSt
     if entry_input is None:
         state.answer = "未收到可采集内容。"
         return state
-    logger.debug("Executing capture branch intent=%s user=%s", state.intent, state.user_id)
+    logger.debug(
+        "Executing capture branch intent=%s user=%s", state.intent, state.user_id
+    )
     if state.intent == "capture_file":
         file_path = entry_input.metadata.get("file_path", "")
         if file_path:
             from pathlib import Path
+
             path = Path(file_path)
             if path.exists() and deps.capture_service is not None:
-                original_filename = entry_input.metadata.get("original_filename", path.name)
+                original_filename = entry_input.metadata.get(
+                    "original_filename", path.name
+                )
                 file_bytes = path.read_bytes()
                 capture_text = deps.capture_service.capture_text_from_upload(
                     filename=original_filename,
@@ -76,7 +122,9 @@ def capture_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentSt
                 state.review_card = result.review_card
                 state.answer = f"已收进知识库：{result.note.title}"
                 return state
-        state.answer = "文件消息已识别，但文件内容暂未获取到。请通过 Web 端上传文件，或稍后重试。"
+        state.answer = (
+            "文件消息已识别，但文件内容暂未获取到。请通过 Web 端上传文件，或稍后重试。"
+        )
         return state
 
     capture_text = entry_input.text
@@ -112,7 +160,9 @@ def ask_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
     if entry_input is None or not entry_input.text.strip():
         state.answer = "未收到可提问内容。"
         return state
-    logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
+    logger.debug(
+        "Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80]
+    )
     result = deps.ask(entry_input.text, entry_input.user_id, entry_input.session_id)
     state.question = entry_input.text
     state.answer = result.answer
@@ -121,7 +171,9 @@ def ask_entry_branch_node(state: AgentState, deps: EntryNodeDeps) -> AgentState:
     return state
 
 
-def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = None) -> AgentState:
+def summarize_entry_branch_node(
+    state: AgentState, deps: EntryNodeDeps | None = None
+) -> AgentState:
     entry_input = state.entry_input
     if entry_input is None:
         state.answer = "未收到可总结的内容。"
@@ -134,9 +186,12 @@ def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = 
             messages = json.loads(thread_messages_raw)
             if isinstance(messages, list) and messages:
                 messages_text = "\n".join(
-                    f"[{m.get('role', 'unknown')}]: {m.get('content', '')}" for m in messages
+                    f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
+                    for m in messages
                 )
-                summary = deps.summarize_thread(messages_text, entry_input.user_id or "default")
+                summary = deps.summarize_thread(
+                    messages_text, entry_input.user_id or "default"
+                )
                 state.answer = summary
                 return state
         except (json.JSONDecodeError, Exception):
@@ -150,13 +205,14 @@ def summarize_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = 
         )
     else:
         state.answer = (
-            "已识别为总结诉求。请直接发送需要总结的文本内容，"
-            "或在群聊中使用此功能。"
+            "已识别为总结诉求。请直接发送需要总结的文本内容，或在群聊中使用此功能。"
         )
     return state
 
 
-def direct_answer_entry_branch_node(state: AgentState, deps: EntryNodeDeps | None = None) -> AgentState:
+def direct_answer_entry_branch_node(
+    state: AgentState, deps: EntryNodeDeps | None = None
+) -> AgentState:
     """Handle direct_answer intent — low-risk, no retrieval, no tools.
 
     For simple questions, greetings, clarifications that don't need the knowledge
@@ -169,6 +225,7 @@ def direct_answer_entry_branch_node(state: AgentState, deps: EntryNodeDeps | Non
     logger.debug("Executing direct_answer branch user=%s", state.user_id)
     if deps is not None and deps.llm_configured and deps.settings is not None:
         from openai import OpenAI
+
         try:
             client = OpenAI(
                 api_key=deps.settings.openai_api_key,
@@ -177,7 +234,10 @@ def direct_answer_entry_branch_node(state: AgentState, deps: EntryNodeDeps | Non
             response = client.chat.completions.create(
                 model=deps.settings.openai_small_model,
                 messages=[
-                    {"role": "system", "content": "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"},
+                    {
+                        "role": "system",
+                        "content": "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。",
+                    },
                     {"role": "user", "content": entry_input.text},
                 ],
                 temperature=0.5,
@@ -207,14 +267,59 @@ def heuristic_entry_intent(text: str) -> tuple[EntryIntent, str]:
     url = first_url(stripped)
     summarize_keywords = ("总结", "汇总", "整理")
     thread_keywords = ("群聊", "会话", "线程", "讨论", "聊天记录")
-    ask_keywords = ("什么", "为什么", "如何", "怎么", "吗", "？", "?", "请问", "帮我看看", "解释")
+    ask_keywords = (
+        "什么",
+        "为什么",
+        "如何",
+        "怎么",
+        "吗",
+        "？",
+        "?",
+        "请问",
+        "帮我看看",
+        "解释",
+    )
     capture_keywords = ("记一下", "记录", "收进", "保存", "沉淀", "备忘")
     delete_keywords = ("删除", "删掉", "移除", "去掉", "清除", "别再保留", "不要保留")
-    knowledge_context = ("笔记", "知识", "记录", "那条", "这条", "那个", "结论", "卡片", "内容")
-    solidify_keywords = ("记下来", "记录下来", "沉淀成", "固化成", "收录结论", "收进知识", "沉淀下来", "固化下来")
-    direct_answer_keywords = ("你好", "谢谢", "再见", "嗨", "hello", "hi", "hey", "哈哈", "好的", "嗯", "哦")
+    knowledge_context = (
+        "笔记",
+        "知识",
+        "记录",
+        "那条",
+        "这条",
+        "那个",
+        "结论",
+        "卡片",
+        "内容",
+    )
+    solidify_keywords = (
+        "记下来",
+        "记录下来",
+        "沉淀成",
+        "固化成",
+        "收录结论",
+        "收进知识",
+        "沉淀下来",
+        "固化下来",
+    )
+    direct_answer_keywords = (
+        "你好",
+        "谢谢",
+        "再见",
+        "嗨",
+        "hello",
+        "hi",
+        "hey",
+        "哈哈",
+        "好的",
+        "嗯",
+        "哦",
+    )
 
-    if any(keyword in stripped for keyword in direct_answer_keywords) and len(stripped) < 20:
+    if (
+        any(keyword in stripped for keyword in direct_answer_keywords)
+        and len(stripped) < 20
+    ):
         return "direct_answer", "简短问候或社交表达，直接回复即可。"
 
     if any(keyword in stripped for keyword in summarize_keywords) and any(

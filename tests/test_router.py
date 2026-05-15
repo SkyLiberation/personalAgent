@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
-from personal_agent.agent.entry_nodes import heuristic_entry_intent
+from personal_agent.agent.entry_nodes import (
+    EntryNodeDeps,
+    heuristic_entry_intent,
+    route_entry_intent_node,
+)
 from personal_agent.agent.router import DefaultIntentRouter, RouterDecision
-from personal_agent.core.models import EntryInput
+from personal_agent.core.models import AgentState, EntryInput
 
 
 class TestHeuristicEntryIntent:
@@ -120,3 +126,48 @@ class TestDefaultIntentRouter:
         assert hasattr(decision, "missing_information")
         assert hasattr(decision, "candidate_tools")
         assert hasattr(decision, "user_visible_message")
+
+    def test_router_logs_structured_decision(self, caplog):
+        from personal_agent.core.config import Settings
+
+        router_no_llm = DefaultIntentRouter(
+            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+        )
+        caplog.set_level(logging.INFO)
+
+        decision = router_no_llm.classify(
+            EntryInput(source_type="text", text="什么是服务降级？", user_id="alice")
+        )
+
+        assert decision.route == "ask"
+        assert "router.decision" in caplog.text
+        assert '"strategy": "heuristic"' in caplog.text
+        assert '"route": "ask"' in caplog.text
+
+    def test_entry_route_node_logs_target_node(self, caplog):
+        deps = EntryNodeDeps(
+            classify_intent=lambda _entry: RouterDecision(
+                route="ask",
+                confidence=0.86,
+                requires_retrieval=True,
+                candidate_tools=["graph_search"],
+                user_visible_message="测试路由到问答分支。",
+            ),
+            capture=lambda **_kwargs: None,
+            ask=lambda *_args, **_kwargs: None,
+        )
+        state = AgentState(
+            mode="entry",
+            user_id="alice",
+            entry_input=EntryInput(
+                text="什么是服务降级？", user_id="alice", session_id="s1"
+            ),
+        )
+        caplog.set_level(logging.INFO)
+
+        result = route_entry_intent_node(state, deps)
+
+        assert result.intent == "ask"
+        assert "entry.route.selected" in caplog.text
+        assert '"route": "ask"' in caplog.text
+        assert '"target_node": "ask_branch"' in caplog.text
