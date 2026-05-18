@@ -29,7 +29,7 @@
 - 生成 relation facts、entity names、episode UUIDs
 - 支持删除 episode
 
-#### 自定义本体与兼容层
+#### 自定义本体与模型接入
 
 自定义本体定义位于 [ontology.py](../../src/personal_agent/graphiti/ontology.py)，当前包含：
 
@@ -39,20 +39,17 @@
 - `Organization`
 - `Source`
 
-由于 DeepSeek 与 Graphiti 的结构化输出约定并不完全一致，项目增加了兼容层：
+Graphiti 图提取当前使用支持 `json_schema` 的 OpenAI-compatible LLM 客户端，代码位于：
 
-- [deepseek_compatible_client.py](../../src/personal_agent/graphiti/deepseek_compatible_client.py)
+- [llm_strategies.py](../../src/personal_agent/graphiti/llm_strategies.py)
 - [dashscope_compatible_embedder.py](../../src/personal_agent/graphiti/dashscope_compatible_embedder.py)
 - [store.py](../../src/personal_agent/graphiti/store.py)
 
-当前已兼容的常见差异包括：
+当前保留的项目侧接入逻辑包括：
 
-- 列表根对象自动包装为 Graphiti 期望的对象结构
-- `entity -> name`
-- `type / entity_type -> entity_type_id`
-- `facts -> edges`
-- `source_entity / target_entity -> source_entity_name / target_entity_name`
-- 字典式摘要转换为 `summaries: [{name, summary}]`
+- 使用 Graphiti response model 生成 `json_schema` 输出约束
+- 对支持 thinking 参数的模型关闭 thinking，避免结构化输出混入推理文本
+- 对 LLM 调用做最小间隔控制，降低限流概率
 - DashScope embedding 单批限制自动分片
 
 #### Graphiti 返回内容

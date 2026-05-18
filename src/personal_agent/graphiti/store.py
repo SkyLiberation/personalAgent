@@ -18,7 +18,7 @@ from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
 from ..core.models import Citation, KnowledgeNote, GraphNodeRef, GraphEdgeRef, GraphFactRef
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
-from .llm_strategies import get_llm_strategy
+from .llm_strategies import build_graphiti_llm_client
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
 from .reranker import GraphCitationHit
 from .search_strategies import GraphSearchStrategy, get_graph_search_strategy
@@ -97,7 +97,6 @@ class GraphitiStore:
             or "",
             "embedding_model": self.settings.openai_embedding_model,
             "search_strategy": self.search_strategy.name,
-            "llm_strategy": self.settings.graphiti_llm_strategy,
         }
 
     def ingest_note(
@@ -422,8 +421,7 @@ class GraphitiStore:
             await graphiti.close()
 
     async def _build_client(self, trace_id: str | None = None) -> Graphiti:
-        strategy = get_llm_strategy(self.settings.graphiti_llm_strategy)
-        llm_client = strategy.build_client(self.settings)
+        llm_client = build_graphiti_llm_client(self.settings)
         embedder = DashScopeCompatibleEmbedder(
             config=OpenAIEmbedderConfig(
                 api_key=self.settings.embedding_api_key or self.settings.openai_api_key,

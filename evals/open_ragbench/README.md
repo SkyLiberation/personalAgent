@@ -4,6 +4,42 @@
 当前 loader 只保留 `source=text` 的问题，因为项目里的本地检索 baseline 主要处理文本
 note 和关系事实。
 
+## 数据集概况
+
+统计口径：`vectara/open_ragbench` 的 `pdf/arxiv` 子集，loader 只保留 `source=text`
+的 query。以下数据来自本地 HuggingFace cache snapshot
+`63f6b052ff83508b08e242db42263ee708815c26`。
+
+| 项目 | 数量 |
+| --- | ---: |
+| corpus 文档 | 1000 |
+| text-source queries | 1914 |
+| abstractive queries | 893 |
+| extractive queries | 1021 |
+| 被 query 标注为 relevant 的文档 | 387 |
+| corpus sections | 18840 |
+| 每篇文档 section 数 | min 0 / avg 18.84 / max 198 |
+| section 字符数 | min 17 / avg 4452.52 / max 113288 |
+
+当前 adapter 会把数据集转换成项目内部 `KnowledgeNote`：
+
+| `--graphiti-note-mode` | full corpus note 数 | 含义 |
+| --- | ---: | --- |
+| `parent_sections` | 19840 | 1000 个父文档 + 18840 个 section 子笔记 |
+| `parent_only` | 1000 | 只使用父文档 |
+| `section_only` | 18840 | 只使用 section 子笔记 |
+
+常用 `corpus_mode=relevant` 抽样规模（`seed=42`）：
+
+| query 数 | relevant docs | sections | `parent_sections` notes | `parent_only` notes |
+| ---: | ---: | ---: | ---: | ---: |
+| 3 | 3 | 81 | 84 | 3 |
+| 20 | 19 | 419 | 438 | 19 |
+| 50 | 47 | 1214 | 1261 | 47 |
+
+因此真实 Graphiti eval 在默认 `parent_sections` 模式下，即使 query 数很少，也可能展开成大量
+episode；如果只想做 smoke 或策略初筛，优先使用 `--graphiti-note-mode parent_only`。
+
 ## 模式
 
 - `corpus_mode=relevant`：只加载当前抽样 query 命中的文档。这个模式速度快，适合本地

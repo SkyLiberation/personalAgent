@@ -50,10 +50,10 @@ FEISHU_APP_SECRET=xxx
 ## LLM 配置
 
 ```env
-OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_BASE_URL=https://api.moonshot.cn/v1
 OPENAI_API_KEY=your_llm_key
-OPENAI_MODEL=deepseek-v4-flash
-OPENAI_SMALL_MODEL=deepseek-v4-flash
+OPENAI_MODEL=kimi-k2.5
+OPENAI_SMALL_MODEL=kimi-k2.5
 ```
 
 ## Embedding 配置

@@ -17,10 +17,6 @@ class Settings(BaseModel):
     graphiti_password: str = "password"
     graphiti_group_prefix: str = "personal-agent"
     graph_search_strategy: str = "hybrid_rrf"
-    graphiti_llm_strategy: str = "openai_generic"
-    anthropic_api_key: str | None = None
-    anthropic_base_url: str | None = None
-    anthropic_model: str = "MiniMax-M2.7"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_model: str = "gpt-4.1-mini"
@@ -67,10 +63,6 @@ class Settings(BaseModel):
             graphiti_password=os.getenv("PERSONAL_AGENT_GRAPHITI_PASSWORD", "password"),
             graphiti_group_prefix=os.getenv("PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX", "personal-agent"),
             graph_search_strategy=os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY", "hybrid_rrf"),
-            graphiti_llm_strategy=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_STRATEGY", "openai_generic"),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY"),
-            anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL"),
-            anthropic_model=os.getenv("ANTHROPIC_MODEL", "MiniMax-M2.7"),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_base_url=os.getenv("OPENAI_BASE_URL"),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),

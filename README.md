@@ -72,6 +72,7 @@ Entry
 1. 统一 Agent 事件模型：新增结构化 `AgentEvent` 类型，收敛 SSE、计划执行进度、execution trace、pending action、draft_ready 和错误反馈事件，并让 Web、CLI、飞书入口复用同一事件语义。（来源：[docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)）
 2. 统一 Evidence / Citation 模型：将 Graphiti `node / edge / fact`、episode 映射、note/chunk snippet、web citation 和工具结果收敛为统一证据结构，减少 graph facts、citations、tool result 多套数据形态之间的漂移。（来源：[docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md)、[docs/topics/tools.md](docs/topics/tools.md)）
 3. 收敛重规划校验链路：为 `Replanner` 产出的 revised steps 增加统一 `PlanValidator` 复校验、风险继承和失败回退策略，避免失败后补救步骤绕过原有计划安全门禁。（来源：[docs/topics/planning.md](docs/topics/planning.md)）
+4. 接入 LangGraph 总编排与 checkpoint：新增 entry 总图外壳，逐步把 router、planner、plan execution、ReAct、HITL 和 finalize 收敛到统一 LangGraph run，并为删除确认、长任务和 ReAct 轮次提供中断、恢复与追踪能力。（来源：[docs/topics/langgraph-checkpoint.md](docs/topics/langgraph-checkpoint.md)）
 
 ## 当前技术栈
 

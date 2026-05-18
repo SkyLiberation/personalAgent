@@ -18,8 +18,8 @@
   "status": "ok",
   "graphiti": {
     "configured": true,
-    "base_url": "https://api.deepseek.com",
-    "model": "deepseek-v4-flash",
+    "base_url": "https://api.moonshot.cn/v1",
+    "model": "kimi-k2.5",
     "embedding_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "embedding_model": "text-embedding-v4",
     "search_strategy": "hybrid_rrf"
