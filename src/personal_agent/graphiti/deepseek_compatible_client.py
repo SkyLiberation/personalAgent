@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +16,9 @@ from graphiti_core.llm_client.openai_base_client import (
     DEFAULT_VERBOSITY,
     BaseOpenAIClient,
 )
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL)
 
 ENTITY_TYPE_IDS = {
     "Entity": 0,
@@ -187,12 +191,71 @@ class DeepSeekCompatibleClient(BaseOpenAIClient):
         )
 
 
-def _normalize_json_content(content: str, response_model: type[BaseModel]) -> str:
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return content
+def _extract_json_text(content: str) -> str:
+    """Strip think blocks and extract JSON from raw LLM response text.
 
+    Handles several MiniMax M2.7 response patterns:
+    - ``<think>...</think>{"key": ...}``
+    - `````json\\n{...}\\n``````
+    - ``Explanation text...\\n\\n{"key": ...}``
+    - ``{"key": ...}`` (pure JSON, pass-through)
+    """
+    content = _THINK_BLOCK_RE.sub("", content).strip()
+
+    if not content:
+        return "{}"
+
+    # Try direct JSON parse first (most common case after think-block strip)
+    try:
+        json.loads(content)
+        return content
+    except json.JSONDecodeError:
+        pass
+
+    # Try markdown code-block extraction
+    match = _JSON_BLOCK_RE.search(content)
+    if match:
+        candidate = match.group(1).strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+
+    # Try bracket-boundary extraction: find the outermost { } or [ ] range
+    # that parses as valid JSON — handles "text ... {json} ... more text"
+    for open_ch, close_ch in (("{", "}"), ("[", "]")):
+        start = content.find(open_ch)
+        end = content.rfind(close_ch)
+        if start >= 0 and end > start:
+            candidate = content[start : end + 1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                # Try with closing bracket only (in case the JSON is at the end)
+                for close_pos in range(len(content) - 1, start, -1):
+                    if content[close_pos] == close_ch:
+                        candidate = content[start : close_pos + 1]
+                        try:
+                            json.loads(candidate)
+                            return candidate
+                        except json.JSONDecodeError:
+                            continue
+                continue
+
+    return content or "{}"
+
+
+def normalize_structured_payload(
+    payload: dict[str, Any], response_model: type[BaseModel]
+) -> dict[str, Any]:
+    """Normalize a structured LLM response dict for Graphiti compatibility.
+
+    Handles reasoning-model quirks: missing ``name`` fields, ``entity_id`` in
+    place of ``entity_type_id``, aliased collection keys, nested JSON strings,
+    and structural wrapping edge cases.
+    """
     fields = set(response_model.model_fields.keys())
     single_field = next(iter(fields)) if len(fields) == 1 else None
     original_payload = payload
@@ -278,6 +341,13 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
             payload = {"summaries": payload}
         elif "entity_resolutions" in fields:
             payload = {"entity_resolutions": payload}
+        elif len(payload) == 1 and isinstance(payload[0], dict):
+            # Unwrap single-element list of dicts (MiniMax quirk)
+            payload = payload[0]
+        elif fields:
+            # Wrap list under the first model field name as a fallback
+            first_field = next(iter(fields))
+            payload = {first_field: payload}
 
     if isinstance(payload, dict) and single_field is not None and single_field not in payload:
         payload = {single_field: [payload]}
@@ -310,17 +380,47 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
             payload["extracted_entities"], _ENTITY_ITEM_FIELDS
         )
         normalized_entities = []
-        for entity in payload["extracted_entities"]:
+        for i, entity in enumerate(payload["extracted_entities"]):
+            if isinstance(entity, str):
+                normalized_entities.append({
+                    "name": entity.strip(),
+                    "entity_type_id": ENTITY_TYPE_IDS["Entity"],
+                    "episode_indices": [0],
+                })
+                continue
             if not isinstance(entity, dict):
-                normalized_entities.append(entity)
+                logger.warning(
+                    "Skipping non-dict/non-str extracted_entities[%d] of type %s: %s",
+                    i, type(entity).__name__, str(entity)[:120],
+                )
                 continue
             item = dict(entity)
             if "entity" in item and "name" not in item:
                 item["name"] = item.pop("entity")
             if "entity_name" in item and "name" not in item:
                 item["name"] = item.pop("entity_name")
+            if "entity_text" in item and "name" not in item:
+                item["name"] = item.pop("entity_text")
             entity_type = str(item.pop("type", item.pop("entity_type", "Entity"))).strip()
-            item["entity_type_id"] = ENTITY_TYPE_IDS.get(entity_type, ENTITY_TYPE_IDS["Entity"])
+            # Case-insensitive lookup (Kimi K2.5 returns lowercase like "person")
+            type_id = ENTITY_TYPE_IDS.get(entity_type)
+            if type_id is None:
+                for known_name, known_id in ENTITY_TYPE_IDS.items():
+                    if known_name.lower() == entity_type.lower():
+                        type_id = known_id
+                        break
+            item["entity_type_id"] = type_id if type_id is not None else ENTITY_TYPE_IDS["Entity"]
+            # Some reasoning models (MiniMax M2.7) may use "entity_id" as a local
+            # numeric index without providing a name. Derive a label from summary or
+            # entity_type + id so downstream Graphiti validation passes.
+            if "name" not in item:
+                summary = item.get("summary", "")
+                if isinstance(summary, str) and summary.strip():
+                    first_sentence = summary.split(".")[0].strip()
+                    item["name"] = first_sentence[:80] if first_sentence else summary[:80]
+                else:
+                    entity_id = item.get("entity_id", item.get("id", "unknown"))
+                    item["name"] = f"{entity_type}_{entity_id}"
             item.setdefault("episode_indices", [0])
             normalized_entities.append(item)
         payload["extracted_entities"] = normalized_entities
@@ -374,6 +474,11 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
                     summary_item["name"] = summary_item.pop("entity_name")
                 if "description" in summary_item and "summary" not in summary_item:
                     summary_item["summary"] = summary_item.pop("description")
+                # Ensure required fields have at least a placeholder
+                if "name" not in summary_item:
+                    summary_item["name"] = "Entity_unknown"
+                if "summary" not in summary_item:
+                    summary_item["summary"] = summary_item.get("name", "Unknown entity")
                 normalized_summaries.append(summary_item)
         payload["summaries"] = normalized_summaries
 
@@ -393,6 +498,7 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
         payload["entity_resolutions"] = normalized_resolutions
 
     if isinstance(payload, dict):
+        payload = _coerce_field_types(payload, response_model)
         payload = {key: _sanitize_payload_value(value, preserve_structure=key in STRUCTURED_COLLECTION_KEYS) for key, value in payload.items()}
 
     if logger.isEnabledFor(logging.DEBUG) and payload != original_payload:
@@ -403,7 +509,117 @@ def _normalize_json_content(content: str, response_model: type[BaseModel]) -> st
             json.dumps(payload, ensure_ascii=False),
         )
 
-    return json.dumps(payload, ensure_ascii=False)
+    return payload
+
+
+def _coerce_field_types(payload: dict[str, Any], response_model: type[BaseModel]) -> dict[str, Any]:
+    """Coerce field values to match the expected types from the response model.
+
+    Reasoning models (MiniMax M2.7) sometimes return ``""`` for list fields
+    or ``"5"`` for int fields.  This helper fixes those mismatches using the
+    model's field annotations so downstream Pydantic validation passes.
+
+    Also performs fuzzy field-name correction for misspellings (e.g.
+    ``contrasted_facts`` → ``contradicted_facts``).
+    """
+    import typing
+
+    result = dict(payload)
+    model_field_names = set(response_model.model_fields.keys())
+
+    # Fuzzy field-name correction: remap misspelled keys to the closest model field
+    for key in list(result.keys()):
+        if key in model_field_names:
+            continue
+        # Find the model field with the smallest edit distance
+        best_match = None
+        best_dist = 999
+        for mf in model_field_names:
+            dist = _edit_distance(key, mf)
+            if dist < best_dist:
+                best_dist = dist
+                best_match = mf
+        # Remap if the edit distance is small relative to the key length
+        if best_match is not None and best_dist <= max(3, len(key) // 3):
+            result[best_match] = result.pop(key)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Remapped misspelled field '%s' → '%s'", key, best_match)
+
+    for field_name, field_info in response_model.model_fields.items():
+        if field_name not in result:
+            continue
+        value = result[field_name]
+        annotation = field_info.annotation
+
+        # Resolve Optional[...] / Union types to find the inner type
+        origin = typing.get_origin(annotation)
+        args = typing.get_args(annotation)
+
+        # Check if the expected type is a list
+        is_list_type = origin is list or (origin is not None and issubclass(origin, list))
+        if not is_list_type and args:
+            # Handle Optional[list[...]] — look for list in Union args
+            for arg in args:
+                arg_origin = typing.get_origin(arg)
+                if arg_origin is list or (arg_origin is not None and issubclass(arg_origin, list)):
+                    is_list_type = True
+                    break
+
+        if is_list_type:
+            if isinstance(value, str):
+                if not value.strip():
+                    result[field_name] = []
+                else:
+                    try:
+                        parsed = json.loads(value)
+                        if isinstance(parsed, list):
+                            result[field_name] = parsed
+                    except json.JSONDecodeError:
+                        result[field_name] = []
+
+        # Reverse coercion: string field received a list
+        is_str_type = origin is str or (args and any(a is str for a in args)) or annotation is str
+        if not is_list_type and not is_str_type:
+            # Handle Optional[str] — look for str in Union args
+            if args:
+                for arg in args:
+                    if arg is str or arg is None:
+                        is_str_type = True
+                        break
+
+        if is_str_type and isinstance(value, list):
+            if len(value) == 1 and isinstance(value[0], str):
+                result[field_name] = value[0]
+            else:
+                result[field_name] = json.dumps(value, ensure_ascii=False)
+
+        # Coerce string numbers for int/float fields
+        is_int_type = origin is int or (args and any(a is int for a in args))
+        is_float_type = origin is float or (args and any(a is float for a in args))
+
+        if is_int_type and isinstance(value, str):
+            try:
+                result[field_name] = int(value.strip())
+            except (ValueError, TypeError):
+                pass
+        elif is_float_type and isinstance(value, str):
+            try:
+                result[field_name] = float(value.strip())
+            except (ValueError, TypeError):
+                pass
+
+    return result
+
+
+def _normalize_json_content(content: str, response_model: type[BaseModel]) -> str:
+    """Normalize raw LLM response text into a JSON string (legacy API for DeepSeekCompatibleClient)."""
+    text = _extract_json_text(content)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return content
+    normalized = normalize_structured_payload(payload, response_model)
+    return json.dumps(normalized, ensure_ascii=False)
 
 
 def _sanitize_payload_value(value: Any, preserve_structure: bool = False) -> Any:
@@ -421,7 +637,7 @@ def _sanitize_payload_value(value: Any, preserve_structure: bool = False) -> Any
                 else:
                     sanitized_items.append(_sanitize_payload_value(item, preserve_structure=False))
             return sanitized_items
-        if all(isinstance(item, str) for item in value):
+        if value and all(isinstance(item, str) for item in value):
             return "; ".join(value)
         return [_sanitize_scalar_list_item(item) for item in value]
 
@@ -441,3 +657,22 @@ def _sanitize_scalar_list_item(value: Any) -> str | int | float | bool | None:
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance between two strings (case-insensitive)."""
+    a, b = a.lower(), b.lower()
+    if len(a) < len(b):
+        a, b = b, a
+    # a is the longer string
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            curr.append(min(
+                prev[j + 1] + 1,      # deletion
+                curr[j] + 1,           # insertion
+                prev[j] + (0 if ca == cb else 1),  # substitution
+            ))
+        prev = curr
+    return prev[-1]

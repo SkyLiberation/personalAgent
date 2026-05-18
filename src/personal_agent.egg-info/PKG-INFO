@@ -16,9 +16,11 @@ Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: typer>=0.12.3
 Requires-Dist: uvicorn>=0.38.0
+Requires-Dist: anthropic>=0.102.0
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
+Requires-Dist: huggingface_hub>=0.28.0; extra == "dev"
 
 # “数字第二大脑” Agent
 

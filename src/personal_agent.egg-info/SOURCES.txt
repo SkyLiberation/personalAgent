@@ -44,6 +44,7 @@ src/personal_agent/cli/main.py
 src/personal_agent/core/__init__.py
 src/personal_agent/core/chunking.py
 src/personal_agent/core/config.py
+src/personal_agent/core/evidence.py
 src/personal_agent/core/logging_utils.py
 src/personal_agent/core/models.py
 src/personal_agent/feishu/__init__.py
@@ -52,7 +53,10 @@ src/personal_agent/feishu/service.py
 src/personal_agent/graphiti/__init__.py
 src/personal_agent/graphiti/dashscope_compatible_embedder.py
 src/personal_agent/graphiti/deepseek_compatible_client.py
+src/personal_agent/graphiti/llm_strategies.py
 src/personal_agent/graphiti/ontology.py
+src/personal_agent/graphiti/reranker.py
+src/personal_agent/graphiti/search_strategies.py
 src/personal_agent/graphiti/store.py
 src/personal_agent/memory/__init__.py
 src/personal_agent/memory/facade.py
@@ -79,6 +83,10 @@ tests/test_api.py
 tests/test_chunking.py
 tests/test_cli.py
 tests/test_cross_session_store.py
+tests/test_evidence_conversions.py
+tests/test_evidence_model.py
+tests/test_graph_reranker.py
+tests/test_graph_search_strategies.py
 tests/test_integration.py
 tests/test_memory.py
 tests/test_plan_executor.py

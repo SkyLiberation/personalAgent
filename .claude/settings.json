@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(SEMAPHORE_LIMIT=3 python -c ' *)",
+      "Bash(python -c \"from personal_agent.graphiti.llm_strategies import NormalizedAnthropicClient, AnthropicStrategy; print\\('Import OK'\\)\")"
+    ]
+  }
+}

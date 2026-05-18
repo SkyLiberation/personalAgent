@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 
 from graphiti_core.embedder.openai import OpenAIEmbedderConfig
 from graphiti_core.graphiti import Graphiti
-from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
 
@@ -19,12 +18,22 @@ from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
 from ..core.models import Citation, KnowledgeNote, GraphNodeRef, GraphEdgeRef, GraphFactRef
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
-from .deepseek_compatible_client import DeepSeekCompatibleClient
+from .llm_strategies import get_llm_strategy
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
 from .reranker import GraphCitationHit
 from .search_strategies import GraphSearchStrategy, get_graph_search_strategy
 
 logger = logging.getLogger(__name__)
+CONTENT_FILTER_ERROR_MARKERS = (
+    "content filter",
+    "content_filter",
+    "filtered",
+    "high risk",
+    "高风险",
+    "risk content",
+    "sensitive",
+    "safety",
+)
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 MARKDOWN_TABLE_RULE_RE = re.compile(r"^\s*\|?[\s:\-]+(?:\|[\s:\-]+)+\|?\s*$")
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
@@ -88,6 +97,7 @@ class GraphitiStore:
             or "",
             "embedding_model": self.settings.openai_embedding_model,
             "search_strategy": self.search_strategy.name,
+            "llm_strategy": self.settings.graphiti_llm_strategy,
         }
 
     def ingest_note(
@@ -172,19 +182,40 @@ class GraphitiStore:
             trace_id = span["trace_id"]
             try:
                 with trace_span(logger, "graphiti.add_episode", trace_id=trace_id, note_id=note.id, attempt=attempt):
-                    add_result = await asyncio.wait_for(
-                        graphiti.add_episode(
-                            name=note.title,
-                            episode_body=_graphiti_episode_body(note),
-                            source_description=f"Personal note {note.id}",
-                            reference_time=note.created_at,
-                            source=EpisodeType.text,
-                            group_id=self._group_id(note.user_id),
-                            entity_types=ENTITY_TYPES,
-                            custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
-                        ),
-                        timeout=480,
-                    )
+                    try:
+                        add_result = await asyncio.wait_for(
+                            graphiti.add_episode(
+                                name=note.title,
+                                episode_body=_graphiti_episode_body(note, max_chars=self.settings.graphiti_episode_max_chars),
+                                source_description=f"Personal note {note.id}",
+                                reference_time=note.created_at,
+                                source=EpisodeType.text,
+                                group_id=self._group_id(note.user_id),
+                                entity_types=ENTITY_TYPES,
+                                custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                            ),
+                            timeout=self.settings.graphiti_add_episode_timeout_seconds,
+                        )
+                    except Exception as exc:
+                        if not self.settings.graphiti_content_filter_fallback or not _looks_like_content_filter_error(exc):
+                            raise
+                        logger.warning(
+                            "Graphiti add_episode hit content filter; retrying with safe fallback body note=%s",
+                            note.id,
+                        )
+                        add_result = await asyncio.wait_for(
+                            graphiti.add_episode(
+                                name=note.title,
+                                episode_body=_graphiti_safe_episode_body(note),
+                                source_description=f"Personal note {note.id} (content-filter fallback)",
+                                reference_time=note.created_at,
+                                source=EpisodeType.text,
+                                group_id=self._group_id(note.user_id),
+                                entity_types=ENTITY_TYPES,
+                                custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                            ),
+                            timeout=self.settings.graphiti_add_episode_timeout_seconds,
+                        )
 
                 related_episode_uuids: list[str] = []
                 try:
@@ -201,7 +232,7 @@ class GraphitiStore:
                                 config=COMBINED_HYBRID_SEARCH_RRF,
                                 group_ids=[self._group_id(note.user_id)],
                             ),
-                            timeout=45,
+                            timeout=self.settings.graphiti_search_timeout_seconds,
                         )
                     related_episode_uuids = _related_episode_ids_from_edges(
                         [edge.episodes for edge in search_result.edges],
@@ -290,7 +321,7 @@ class GraphitiStore:
                             config=self.search_strategy.search_config,
                             group_ids=[self._group_id(user_id)],
                         ),
-                        timeout=45,
+                        timeout=self.settings.graphiti_search_timeout_seconds,
                     )
 
                 node_names_by_uuid = {node.uuid: node.name for node in search_result.nodes}
@@ -391,14 +422,8 @@ class GraphitiStore:
             await graphiti.close()
 
     async def _build_client(self, trace_id: str | None = None) -> Graphiti:
-        llm_client = DeepSeekCompatibleClient(
-            config=LLMConfig(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                model=self.settings.openai_model,
-                small_model=self.settings.openai_small_model,
-            )
-        )
+        strategy = get_llm_strategy(self.settings.graphiti_llm_strategy)
+        llm_client = strategy.build_client(self.settings)
         embedder = DashScopeCompatibleEmbedder(
             config=OpenAIEmbedderConfig(
                 api_key=self.settings.embedding_api_key or self.settings.openai_api_key,
@@ -442,7 +467,7 @@ class GraphitiStore:
         return "".join(normalized)
 
 
-def _graphiti_episode_body(note: KnowledgeNote) -> str:
+def _graphiti_episode_body(note: KnowledgeNote, max_chars: int = 8000) -> str:
     content = note.content.strip()
     if not content:
         return content
@@ -453,7 +478,7 @@ def _graphiti_episode_body(note: KnowledgeNote) -> str:
 
     is_markdown = note.source_type == "note" and Path(note.source_ref).suffix.lower() in {".md", ".markdown"}
     if not is_markdown:
-        return content[:8000]
+        return content[:max_chars]
 
     cleaned_lines: list[str] = []
     pending_table: list[list[str]] = []
@@ -488,7 +513,32 @@ def _graphiti_episode_body(note: KnowledgeNote) -> str:
         cleaned_lines.extend(_flatten_markdown_table(pending_table))
 
     compact = "\n".join(line for line in cleaned_lines if line).strip()
-    return compact[:8000]
+    return compact[:max_chars]
+
+
+def _graphiti_safe_episode_body(note: KnowledgeNote) -> str:
+    parts = [
+        f"Title: {_clean_safe_text(note.title, 240)}",
+        f"Summary: {_clean_safe_text(note.summary, 800)}",
+    ]
+    excerpt = _clean_safe_text(note.content, 1200)
+    if excerpt:
+        parts.append(f"Excerpt: {excerpt}")
+    return "\n".join(part for part in parts if part.strip())
+
+
+def _clean_safe_text(value: str, max_chars: int) -> str:
+    text = value.replace("\r", " ").replace("\n", " ")
+    text = MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = MARKDOWN_EMPHASIS_RE.sub("", text)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
+def _looks_like_content_filter_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in CONTENT_FILTER_ERROR_MARKERS)
 
 
 def _flatten_markdown_table(rows: list[list[str]]) -> list[str]:
