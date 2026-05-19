@@ -177,7 +177,29 @@ class RuntimeEntryMixin:
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
         decision, validated_steps, _plan_dicts = self.plan_for_entry(entry_input)
+        return self._execute_entry_body(
+            entry_input=entry_input,
+            decision=decision,
+            validated_steps=validated_steps,
+            normalized_user=normalized_user,
+            normalized_session=normalized_session,
+            on_progress=on_progress,
+        )
 
+    def _execute_entry_body(
+        self,
+        entry_input: EntryInput,
+        decision: RouterDecision,
+        validated_steps: list[PlanStep],
+        normalized_user: str,
+        normalized_session: str,
+        on_progress: ProgressCallback = None,
+    ) -> EntryResult:
+        """Execute the post-planning body: PlanExecutor or entry graph branch.
+
+        Extracted so the orchestration graph can call it directly after its
+        own ``route_and_plan`` node, avoiding double session binding.
+        """
         if decision.requires_planning and validated_steps:
             # Plan-driven execution: delete_knowledge, solidify_conversation
             logger.info(

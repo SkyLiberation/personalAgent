@@ -304,12 +304,27 @@ export type PlanStep = {
   validation_warnings?: string[];
 };
 
+export type EntryPendingConfirmation = {
+  step_id?: string;
+  action_type?: string;
+  action_id?: string | null;
+  token?: string | null;
+  note_id?: string | null;
+  title?: string;
+  summary?: string;
+  message?: string;
+  [key: string]: unknown;
+};
+
 export type EntryResponse = {
   intent: string;
   reason: string;
   reply_text: string;
   plan_steps?: PlanStep[];
   execution_trace?: string[];
+  run_id?: string | null;
+  pending_confirmation?: EntryPendingConfirmation | null;
+  run_status?: "completed" | "waiting_confirmation" | string | null;
   capture_result: {
     note: Note;
     related_notes: Note[];
@@ -324,6 +339,17 @@ export type EntryResponse = {
     session_id: string;
   } | null;
 };
+
+export function resumeEntryRun(
+  runId: string,
+  decision: "confirm" | "reject",
+  userId = "default"
+): Promise<EntryResponse> {
+  return requestJson<EntryResponse>(`/api/entry/runs/${encodeURIComponent(runId)}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ decision, user_id: userId }),
+  });
+}
 
 export function buildEntryStreamUrl(text: string, userId = "default", sessionId = "default"): string {
   const params = new URLSearchParams({
@@ -429,6 +455,10 @@ export type PendingActionItem = {
   status: "pending" | "confirmed" | "rejected" | "expired" | "executed";
   payload?: Record<string, unknown>;
   token?: string;
+  source?: "pending_action" | "langgraph_run";
+  run_id?: string;
+  local_history_id?: string;
+  pending_confirmation?: EntryPendingConfirmation;
   created_at: string;
   expires_at: string;
   resolved_at: string | null;

@@ -222,6 +222,8 @@ retrieve -> resolve -> verify -> tool_call(delete_note) -> compose
 
 resolve 返回的候选笔记现已包含 `parent_note_id` / `parent_title`，前端可展示 chunk 所属的父文档。
 
+高风险删除步骤当前由 LangGraph entry 总编排承载 HITL：`execute_plan_step` 收到 `delete_note` 返回的 pending confirmation 后，会进入 `confirm_step`，通过 `interrupt()` 暂停 run；前端确认或拒绝后调用 `/api/entry/runs/{run_id}/resume`，后端用 checkpoint 中的 `thread_id` 恢复同一个 graph run。`delete_note` 工具仍保留 `action_id / token`，作为确认载荷和工具层审计边界。
+
 ### `solidify_conversation`
 
 当前启发式计划：
@@ -238,7 +240,7 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 - `tool_call`：复用 `capture_text` 写入长期知识库
 - `tool_call` 成功后自动回写：草稿标记为 `solidified`，关联候选结论同步切换已固化状态
 
-当前 `compose` 还会产出 `draft_ready` 事件，并把草稿和候选结论保存到 `CrossSessionStore`。`tool_call` 成功后 `PlanExecutor` 自动完成 `draft → stored → solidified` 状态回写。
+当前 `compose` 还会产出 `draft_ready` 事件，并把草稿和候选结论保存到 `CrossSessionStore`。后续 `tool_call(capture_text)` 成功后，计划执行节点会完成 `draft → stored → solidified` 状态回写。
 
 ## 当前能力
 
@@ -277,9 +279,9 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 
 当前校验覆盖 required 字段检查和基础类型匹配（string/boolean/integer/number），复杂嵌套结构校验仍需补充。
 
-### 3. 审批和恢复还不是 checkpoint 级别
+### 3. 审批和恢复已接入 checkpoint，持久化后端仍可增强
 
-删除类操作使用 `PendingActionStore` 做应用层两阶段确认，但当前没有引入 LangGraph checkpoint。多段审批或长时间中断恢复能力仍有限。
+删除类操作已通过 LangGraph `interrupt/resume` 接入 checkpoint，当前 `confirm_step` 可以暂停 run，并在用户确认或拒绝后从同一个 `thread_id` 恢复。底层 `PendingActionStore` 仍承担 token、过期时间和审计载荷；checkpoint backend 目前默认 `memory`，跨进程/长期恢复能力仍取决于后续持久化 backend 的完善。
 
 ### 4. 重规划仍偏补救式
 

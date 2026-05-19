@@ -42,6 +42,8 @@ class Settings(BaseModel):
     graphiti_episode_max_chars: int = 8000
     graphiti_content_filter_fallback: bool = True
     max_verify_retries: int = 1
+    langgraph_checkpoint_backend: str = "memory"
+    langgraph_checkpoint_path: str = "./data/langgraph_checkpoints.sqlite"
     api_keys: dict[str, str] = {}
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
@@ -100,6 +102,13 @@ class Settings(BaseModel):
                 os.getenv("PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK", "true")
             ),
             max_verify_retries=int(os.getenv("AGENT_MAX_VERIFY_RETRIES", "1")),
+            langgraph_checkpoint_backend=os.getenv(
+                "PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND", "memory"
+            ),
+            langgraph_checkpoint_path=os.getenv(
+                "PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH",
+                "./data/langgraph_checkpoints.sqlite",
+            ),
             api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),
             rate_limit_requests=int(os.getenv("PERSONAL_AGENT_RATE_LIMIT_REQUESTS", "60")),
             rate_limit_window_seconds=int(os.getenv("PERSONAL_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")),

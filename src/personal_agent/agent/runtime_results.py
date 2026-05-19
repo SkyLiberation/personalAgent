@@ -35,6 +35,13 @@ class EntryResult(BaseModel):
     ask_result: AskResult | None = None
     plan_steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
+    # Phase 3: HITL interrupt/resume
+    run_id: str | None = None
+    thread_id: str | None = None
+    pending_confirmation: dict[str, object] | None = None
+    run_status: str | None = None  # "completed" | "waiting_confirmation"
+    # Phase 5: structured events from the orchestration graph
+    events: list[object] = Field(default_factory=list)
 
 
 class RetryResult(BaseModel):

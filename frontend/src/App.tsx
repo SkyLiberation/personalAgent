@@ -10,6 +10,7 @@ import {
   getApiKey,
   rejectPendingAction,
   resetUserData,
+  resumeEntryRun,
   retryGraphSync,
   searchAskHistory,
   setApiKey,
@@ -17,6 +18,8 @@ import {
   type AskHistoryItem,
   type Citation,
   type DigestResponse,
+  type EntryPendingConfirmation,
+  type EntryResponse,
   type Note,
   type PendingActionItem,
   type PlanStep,
@@ -71,10 +74,12 @@ type TimelineEvent = {
 };
 
 type AskHistoryView = AskHistoryItem & {
-  status: "streaming" | "done" | "error";
+  status: "streaming" | "waiting_confirmation" | "done" | "error";
   error?: string;
   plan_steps?: PlanStep[];
   execution_trace?: string[];
+  run_id?: string | null;
+  pending_confirmation?: EntryPendingConfirmation | null;
 };
 
 type SessionSummary = {
@@ -202,6 +207,10 @@ export default function App() {
   }
 
   async function handleConfirmPending(action: PendingActionItem) {
+    if (action.source === "langgraph_run" && action.run_id) {
+      await handleResumeEntryRun(action, "confirm");
+      return;
+    }
     if (!action.token) return;
     setIsConfirmingAction(true);
     try {
@@ -216,12 +225,62 @@ export default function App() {
   }
 
   async function handleRejectPending(action: PendingActionItem, reason = "") {
+    if (action.source === "langgraph_run" && action.run_id) {
+      await handleResumeEntryRun(action, "reject");
+      return;
+    }
     try {
       await rejectPendingAction(action.id, userId, reason);
       setPendingActions((current) => current.filter((a) => a.id !== action.id));
     } catch (error) {
       console.error("Failed to reject pending action:", error);
     }
+  }
+
+  async function handleResumeEntryRun(action: PendingActionItem, decision: "confirm" | "reject") {
+    if (!action.run_id) return;
+    setIsConfirmingAction(true);
+    setStatus(decision === "confirm" ? "正在继续执行已确认的任务..." : "正在取消该任务...");
+    try {
+      const result = await resumeEntryRun(action.run_id, decision, userId);
+      applyEntryResponseToHistory(action.local_history_id ?? null, result);
+      setPendingActions((current) => current.filter((a) => a.id !== action.id));
+      setStatus(result.reply_text || (decision === "confirm" ? "操作已完成。" : "操作已取消。"));
+      void refreshAll();
+    } catch (error) {
+      console.error("Failed to resume entry run:", error);
+      setStatus("恢复 LangGraph 任务失败，请检查后端日志。");
+      if (action.local_history_id) {
+        setAskHistory((current) =>
+          current.map((item) =>
+            item.id === action.local_history_id
+              ? { ...item, status: "error" as const, error: "恢复任务失败，请重试。" }
+              : item
+          )
+        );
+      }
+    } finally {
+      setIsConfirmingAction(false);
+    }
+  }
+
+  function applyEntryResponseToHistory(localHistoryId: string | null, result: EntryResponse) {
+    if (!localHistoryId) return;
+    setAskHistory((current) =>
+      current.map((item) =>
+        item.id === localHistoryId
+          ? {
+              ...item,
+              answer: result.reply_text || item.answer,
+              plan_steps: result.plan_steps?.length ? result.plan_steps : item.plan_steps,
+              execution_trace: result.execution_trace?.length ? result.execution_trace : item.execution_trace,
+              run_id: result.run_id ?? item.run_id,
+              pending_confirmation: result.pending_confirmation ?? null,
+              status: result.run_status === "waiting_confirmation" ? "waiting_confirmation" as const : "done" as const,
+            }
+          : item
+      )
+    );
   }
 
   async function handleSearchHistory(query: string) {
@@ -392,6 +451,52 @@ export default function App() {
       void refreshPendingActions();
     });
 
+    source.addEventListener("confirmation_required", (streamEvent) => {
+      const payload = parseSsePayload<{
+        run_id?: string;
+        pending_confirmation?: EntryPendingConfirmation;
+      }>(streamEvent);
+      const confirmation = payload.pending_confirmation;
+      if (!payload.run_id || !confirmation) {
+        return;
+      }
+      const newAction: PendingActionItem = {
+        id: `run-${payload.run_id}-${confirmation.step_id ?? "confirm"}`,
+        user_id: userId,
+        action_type: String(confirmation.action_type ?? "langgraph_confirm"),
+        target_id: String(confirmation.note_id ?? confirmation.step_id ?? payload.run_id),
+        title: confirmation.title || "需要确认的任务",
+        description: confirmation.message || confirmation.summary || "该 LangGraph run 已暂停，等待你的确认。",
+        status: "pending",
+        token: typeof confirmation.token === "string" ? confirmation.token : undefined,
+        source: "langgraph_run",
+        run_id: payload.run_id,
+        local_history_id: historyItem.id,
+        pending_confirmation: confirmation,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+        resolved_at: null,
+      };
+      setPendingActions((current) => {
+        if (current.some((a) => a.id === newAction.id)) return current;
+        return [newAction, ...current];
+      });
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id
+            ? {
+                ...item,
+                answer: confirmation.message || "任务已暂停，等待你的确认。",
+                run_id: payload.run_id,
+                pending_confirmation: confirmation,
+                status: "waiting_confirmation" as const,
+              }
+            : item
+        )
+      );
+      setStatus(confirmation.message || "有 LangGraph 任务需要你的确认。");
+    });
+
     source.addEventListener("draft_ready", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; draft_text?: string }>(streamEvent);
       if (payload.draft_text) {
@@ -471,7 +576,33 @@ export default function App() {
     });
 
     source.addEventListener("done", (streamEvent) => {
-      const payload = parseSsePayload<{ answer?: string; reply?: string; citations?: Citation[]; graph_enabled?: boolean }>(streamEvent);
+      const payload = parseSsePayload<{
+        answer?: string;
+        reply?: string;
+        citations?: Citation[];
+        graph_enabled?: boolean;
+        waiting_confirmation?: boolean;
+        run_id?: string;
+      }>(streamEvent);
+      if (payload.waiting_confirmation) {
+        setAskHistory((current) =>
+          current.map((item) =>
+            item.id === historyItem.id
+              ? {
+                  ...item,
+                  answer: payload.reply ?? item.answer,
+                  run_id: payload.run_id ?? item.run_id,
+                  status: "waiting_confirmation" as const,
+                }
+              : item
+          )
+        );
+        setSelectedAskId(historyItem.id);
+        setStatus("等待你确认后继续执行。");
+        source.close();
+        eventSourceRef.current = null;
+        return;
+      }
       const finalAnswer = payload.answer ?? payload.reply ?? historyItem.answer;
       const completedItem: AskHistoryView = {
         ...historyItem,
@@ -608,6 +739,47 @@ export default function App() {
     setStatus(`正在上传 ${file.name} 并写入记忆...`);
     try {
       const entryResult = await uploadEntryFile(file, userId, sessionId, text);
+      if (entryResult.pending_confirmation && entryResult.run_id) {
+        const confirmation = entryResult.pending_confirmation;
+        const action: PendingActionItem = {
+          id: `run-${entryResult.run_id}-${confirmation.step_id ?? "confirm"}`,
+          user_id: userId,
+          action_type: String(confirmation.action_type ?? "langgraph_confirm"),
+          target_id: String(confirmation.note_id ?? confirmation.step_id ?? entryResult.run_id),
+          title: confirmation.title || "需要确认的任务",
+          description: confirmation.message || confirmation.summary || "该 LangGraph run 已暂停，等待你的确认。",
+          status: "pending",
+          token: typeof confirmation.token === "string" ? confirmation.token : undefined,
+          source: "langgraph_run",
+          run_id: entryResult.run_id,
+          local_history_id: historyItem.id,
+          pending_confirmation: confirmation,
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 3600000).toISOString(),
+          resolved_at: null,
+        };
+        setPendingActions((current) => {
+          if (current.some((a) => a.id === action.id)) return current;
+          return [action, ...current];
+        });
+        setAskHistory((current) =>
+          current.map((item) =>
+            item.id === historyItem.id
+              ? {
+                  ...item,
+                  answer: entryResult.reply_text || "任务已暂停，等待你的确认。",
+                  plan_steps: entryResult.plan_steps ?? item.plan_steps,
+                  execution_trace: entryResult.execution_trace ?? item.execution_trace,
+                  run_id: entryResult.run_id,
+                  pending_confirmation: confirmation,
+                  status: "waiting_confirmation" as const,
+                }
+              : item
+          )
+        );
+        setStatus(confirmation.message || "有 LangGraph 任务需要你的确认。");
+        return;
+      }
       const reply = entryResult.reply_text || "文件已采集完成。";
       setAskHistory((current) =>
         current.map((item) =>
@@ -872,6 +1044,12 @@ export default function App() {
                               item.citations,
                             )}
                           </div>
+                          {item.pending_confirmation ? (
+                            <div className="inline-confirmation">
+                              <span>{item.pending_confirmation.action_type ?? "confirm"}</span>
+                              <strong>{item.pending_confirmation.title || item.pending_confirmation.step_id || "等待确认"}</strong>
+                            </div>
+                          ) : null}
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
                           {item.plan_steps?.length ? (
                             <div className="plan-panel">
@@ -1287,6 +1465,9 @@ export default function App() {
                       <p>{action.description}</p>
                       <div className="pending-action-meta">
                         <span className="pending-action-type">{action.action_type}</span>
+                        {action.source === "langgraph_run" ? (
+                          <span className="pending-action-type pending-action-source">LangGraph</span>
+                        ) : null}
                         <span className="pending-action-expires">
                           过期时间: {new Date(action.expires_at).toLocaleString()}
                         </span>
@@ -1478,6 +1659,9 @@ function translateRiskLevel(risk: string): string {
 function translateAskStatus(status: AskHistoryView["status"]): string {
   if (status === "streaming") {
     return "生成中";
+  }
+  if (status === "waiting_confirmation") {
+    return "待确认";
   }
   if (status === "done") {
     return "已完成";

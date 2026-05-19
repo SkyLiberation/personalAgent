@@ -83,3 +83,16 @@ OPENAI_EMBEDDING_MODEL=text-embedding-v4
   - `edge_rrf`：只检索关系边，RRF 重排
   - `edge_node_distance`：只检索关系边，node distance 重排
 - 如果 Neo4j 或模型配置缺失，图谱写入/检索会失败，日志中会提示具体原因
+
+## LangGraph 总编排与 Checkpoint 配置
+
+```env
+PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=memory
+PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH=./data/langgraph_checkpoints.sqlite
+```
+
+说明：
+
+- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND`：当前仅支持 `memory`（MemorySaver）。`sqlite` 需要 langgraph 版本升级后可用，暂保留配置项
+- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH`：预留 sqlite 路径，当前未使用
+- entry 请求默认走统一的 `orchestration_graph`，并在图节点后写入 checkpoint

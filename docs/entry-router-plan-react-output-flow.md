@@ -2,6 +2,36 @@
 
 本文梳理当前请求从 `entry` 进入系统后，经过 router、plan、ReAct、执行分支，最后输出到 API/SSE/前端的完整链路，并重点说明中间涉及的 model。
 
+## 当前框架摘要
+
+当前后端以 `AgentRuntime` 为核心，`AgentService` 只保留兼容性的 facade 职责。入口请求进入 runtime 后，会经过意图路由、可选任务规划、LangGraph 节点编排、工具调用、记忆读写、答案生成、verifier 校验与必要的自修正，最后返回给 Web、CLI 或飞书入口。
+
+需要特别说明的是：`execute_entry()` 当前会先通过 `DefaultIntentRouter` 生成 `RouterDecision`。只有 `requires_planning=True` 的任务（当前主要是 `delete_knowledge`、`solidify_conversation`）才会调用 `DefaultTaskPlanner` 生成结构化步骤，并经过 `PlanValidator` 校验后进入计划执行；`capture / ask / summarize / direct_answer / unknown` 仍保持稳定的 LangGraph 固定分支链路，并记录轻量 `execution_trace`。
+
+计划与执行路径现在通过以下方式可观测：
+
+- `context_snapshot()` 会将 `plan_steps` 拼入 LLM prompt，让生成与校验阶段感知当前计划。
+- `EntryResult.plan_steps` 随 API 响应和 SSE `plan_created` 事件返回。
+- 前端在回答卡片中以可折叠面板形式展示“Agent 计划执行 N 步”，包括步骤类型、工具名和当前状态。
+- 非计划驱动路径通过 `execution_trace` 返回，并由前端展示为“Agent 执行路径”。
+
+`plan_steps` 与 `execution_trace` 已完成语义拆分：`requires_planning=True` 的意图（`delete_knowledge`、`solidify_conversation`）生成真实执行计划，步骤状态实时更新；其他意图改用轻量 `execution_trace` 记录执行路径，前端以不同面板展示，避免将不会被执行的步骤标记为计划。
+
+典型 entry 执行链路：
+
+```text
+Entry
+  -> Intent Router
+  -> requires_planning?
+     -> Planner / PlanValidator -> plan_steps -> plan execution
+     -> LangGraph branch -> execution_trace
+  -> EntryResult.plan_steps / execution_trace -> API / SSE / Frontend panels
+  -> Tool Execution
+  -> Memory Update
+  -> Verifier / Retry
+  -> Final Response
+```
+
 ## 1. 总览
 
 当前 Agent 的统一运行入口是 `AgentRuntime`，代码在 `src/personal_agent/agent/runtime.py`。`AgentRuntime` 初始化时组装了核心组件：

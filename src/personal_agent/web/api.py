@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ..agent.orchestration_models import AgentRunStatus
 from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
@@ -93,6 +94,10 @@ class EntryResponse(BaseModel):
     ask_result: dict | None = None
     plan_steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
+    # Phase 3: HITL interrupt/resume
+    run_id: str | None = None
+    pending_confirmation: dict[str, object] | None = None
+    run_status: str | None = None
 
 
 class ResetUserDataRequest(BaseModel):
@@ -150,6 +155,11 @@ class ConfirmPendingActionRequest(BaseModel):
 class RejectPendingActionRequest(BaseModel):
     user_id: str = "default"
     reason: str = ""
+
+
+class ResumeEntryRequest(BaseModel):
+    decision: str = Field(min_length=1)  # "confirm" | "reject"
+    user_id: str = "default"
 
 
 def create_app() -> FastAPI:
@@ -455,15 +465,53 @@ def create_app() -> FastAPI:
 
             result = await asyncio.to_thread(service.entry, entry_input, on_progress=_on_progress)
 
-            if result.plan_steps:
-                yield _sse_event("plan_created", {
-                    "plan_steps": result.plan_steps,
+            # Phase 3: if the graph was interrupted for confirmation,
+            # emit the confirmation payload and return early.
+            if result.pending_confirmation:
+                yield _sse_event("confirmation_required", {
+                    "run_id": result.run_id,
+                    "pending_confirmation": result.pending_confirmation,
                 })
+                yield _sse_event("done", {
+                    "reply": result.reply_text,
+                    "waiting_confirmation": True,
+                    "run_id": result.run_id,
+                })
+                return
 
-            if result.execution_trace:
-                yield _sse_event("execution_trace", {
-                    "execution_trace": result.execution_trace,
-                })
+            # Phase 5: when graph events are available, derive SSE from them
+            if result.events:
+                from ..agent.orchestration_models import (
+                    events_to_sse_tuples,
+                    execution_trace_from_events,
+                )
+                from ..agent.orchestration_models import AgentEvent
+
+                parsed_events = [AgentEvent.model_validate(e) for e in result.events]
+                for sse_type, payload in events_to_sse_tuples(parsed_events):
+                    yield _sse_event(sse_type, payload)
+
+                # Emit plan_steps and execution_trace derived from events
+                if result.plan_steps:
+                    yield _sse_event("plan_created", {
+                        "plan_steps": result.plan_steps,
+                    })
+                derived_trace = execution_trace_from_events(parsed_events)
+                if derived_trace:
+                    yield _sse_event("execution_trace", {
+                        "execution_trace": derived_trace,
+                    })
+            else:
+                # Legacy path: use result fields directly
+                if result.plan_steps:
+                    yield _sse_event("plan_created", {
+                        "plan_steps": result.plan_steps,
+                    })
+
+                if result.execution_trace:
+                    yield _sse_event("execution_trace", {
+                        "execution_trace": result.execution_trace,
+                    })
 
             # Drain any progress events emitted during plan execution
             while not progress_queue.empty():
@@ -597,6 +645,55 @@ def create_app() -> FastAPI:
             ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
             plan_steps=result.plan_steps,
             execution_trace=result.execution_trace,
+            run_id=result.run_id,
+            pending_confirmation=result.pending_confirmation,
+            run_status=result.run_status,
+        )
+
+    @app.post("/api/entry/runs/{run_id}/resume", response_model=EntryResponse)
+    def resume_entry(
+        run_id: str, body: ResumeEntryRequest, http_request: Request,
+    ) -> EntryResponse:
+        """Resume a graph run that was interrupted for HITL confirmation."""
+        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
+
+        snapshot = service.get_run_snapshot(run_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Run not found.")
+        if snapshot.status != AgentRunStatus.waiting_confirmation:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Run is not in a resumable state (current: {snapshot.status.value}).",
+            )
+
+        if body.decision not in ("confirm", "reject"):
+            raise HTTPException(
+                status_code=400,
+                detail="decision must be 'confirm' or 'reject'.",
+            )
+
+        thread_id = snapshot.thread_id
+        logger.info(
+            "Resuming entry run_id=%s thread_id=%s decision=%s user=%s",
+            run_id, thread_id, body.decision, resolved_user,
+        )
+        result = service._runtime.resume_entry(
+            run_id=run_id,
+            thread_id=thread_id,
+            decision=body.decision,
+            user_id=resolved_user,
+        )
+
+        return EntryResponse(
+            intent=result.intent,
+            reason=result.reason,
+            reply_text=result.reply_text,
+            capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
+            ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
+            plan_steps=result.plan_steps,
+            execution_trace=result.execution_trace,
+            run_id=result.run_id,
+            run_status=result.run_status,
         )
 
     @app.get("/api/ask-history/search", response_model=AskHistoryResponse)
@@ -709,6 +806,67 @@ def create_app() -> FastAPI:
             resolved_at=action.resolved_at.isoformat() if action.resolved_at else None,
             audit_log=[e.model_dump(mode="json") for e in action.audit_log],
         )
+
+    # ---- Run snapshot API (orchestration graph checkpoint queries) ----
+
+    class RunSnapshotResponse(BaseModel):
+        run_id: str
+        thread_id: str
+        user_id: str
+        session_id: str
+        status: str
+        intent: str
+        entry_text: str
+        plan_steps: list[dict[str, object]] = Field(default_factory=list)
+        execution_trace: list[str] = Field(default_factory=list)
+        answer: str | None = None
+        errors: list[str] = Field(default_factory=list)
+        created_at: str | None = None
+        updated_at: str | None = None
+        last_event: dict[str, object] | None = None
+
+    class RunSnapshotListResponse(BaseModel):
+        items: list[RunSnapshotResponse] = Field(default_factory=list)
+
+    def _run_snapshot_to_response(snapshot) -> RunSnapshotResponse:
+        last_evt = None
+        if snapshot.last_event:
+            last_evt = snapshot.last_event.model_dump(mode="json")
+        return RunSnapshotResponse(
+            run_id=snapshot.run_id,
+            thread_id=snapshot.thread_id,
+            user_id=snapshot.user_id,
+            session_id=snapshot.session_id,
+            status=snapshot.status.value,
+            intent=snapshot.intent,
+            entry_text=snapshot.entry_text,
+            plan_steps=snapshot.plan_steps,
+            execution_trace=snapshot.execution_trace,
+            answer=snapshot.answer,
+            errors=snapshot.errors,
+            created_at=snapshot.created_at.isoformat() if snapshot.created_at else None,
+            updated_at=snapshot.updated_at.isoformat() if snapshot.updated_at else None,
+            last_event=last_evt,
+        )
+
+    @app.get("/api/entry/runs", response_model=RunSnapshotListResponse)
+    def list_run_snapshots(
+        request: Request, user_id: str | None = None, limit: int = 50
+    ) -> RunSnapshotListResponse:
+        resolved_user = user_id or _get_user_id(request, settings)
+        snapshots = service.list_run_snapshots(resolved_user, limit)
+        return RunSnapshotListResponse(
+            items=[_run_snapshot_to_response(s) for s in snapshots]
+        )
+
+    @app.get("/api/entry/runs/{run_id}", response_model=RunSnapshotResponse | None)
+    def get_run_snapshot(
+        run_id: str, request: Request
+    ) -> RunSnapshotResponse | None:
+        snapshot = service.get_run_snapshot(run_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Run not found.")
+        return _run_snapshot_to_response(snapshot)
 
     frontend_dist = _frontend_dist_dir()
     assets_dir = frontend_dist / "assets"

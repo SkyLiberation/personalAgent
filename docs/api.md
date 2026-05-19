@@ -351,6 +351,142 @@
 
 ---
 
+## 入口执行（Entry）
+
+统一的入口接口，支持文本、链接、文件等多类型输入，由 Agent 自动路由到合适的处理链路。
+
+### `POST /api/entry`
+
+同步入口执行。
+
+请求体：
+
+```json
+{
+  "text": "什么是服务降级？",
+  "user_id": "default",
+  "session_id": "default",
+  "source_type": "text",
+  "source_ref": "",
+  "metadata": {}
+}
+```
+
+响应字段：
+
+- `intent`：最终入口意图。
+- `reason`：路由或执行说明。
+- `reply_text`：最终回复，或等待确认时的提示文案。
+- `plan_steps`：计划步骤列表。
+- `execution_trace`：非计划路径或图事件派生出的执行轨迹。
+- `run_id`：LangGraph run id。
+- `run_status`：`completed` 或 `waiting_confirmation`。
+- `pending_confirmation`：当 run 暂停等待人工确认时返回确认 payload。
+
+### `GET /api/entry/stream`
+
+SSE 流式入口执行，逐步返回 intent 分类、计划步骤、执行进度和最终结果。
+
+LangGraph HITL 场景下会返回：
+
+```text
+event: confirmation_required
+data: {
+  "run_id": "...",
+  "pending_confirmation": {
+    "step_id": "...",
+    "action_type": "delete_note",
+    "action_id": "...",
+    "token": "...",
+    "note_id": "...",
+    "title": "...",
+    "summary": "...",
+    "message": "..."
+  }
+}
+
+event: done
+data: {
+  "waiting_confirmation": true,
+  "run_id": "...",
+  "reply": "..."
+}
+```
+
+### `POST /api/entry/upload`
+
+上传文件并触发入口处理。表单字段：`file`、`user_id`、`session_id`、`text`（可选）。
+
+### `GET /api/entry/runs`
+
+查询最近的 LangGraph run 快照列表。
+
+查询参数：
+
+- `user_id`（可选）：过滤用户
+- `limit`（默认 50）
+
+响应：
+
+```json
+{
+  "items": [
+    {
+      "run_id": "run_xxx",
+      "thread_id": "user:session:run_xxx",
+      "user_id": "default",
+      "session_id": "default",
+      "status": "waiting_confirmation",
+      "intent": "delete_knowledge",
+      "entry_text": "删除过期笔记",
+      "plan_steps": [],
+      "execution_trace": [],
+      "answer": null,
+      "errors": [],
+      "created_at": "2026-05-19T00:00:00",
+      "updated_at": "2026-05-19T00:00:01",
+      "last_event": null
+    }
+  ]
+}
+```
+
+### `GET /api/entry/runs/{run_id}`
+
+查询指定 run 的快照详情。
+
+返回字段包括 `run_id`、`thread_id`、`user_id`、`session_id`、`status`、`intent`、`entry_text`、`plan_steps`、`execution_trace`、`answer`、`errors`、`last_event` 等。
+
+找不到 run 时返回 `404 Run not found.`。
+
+### `POST /api/entry/runs/{run_id}/resume`
+
+恢复处于 `waiting_confirmation` 状态的 LangGraph run。
+
+请求体：
+
+```json
+{
+  "decision": "confirm",
+  "user_id": "default"
+}
+```
+
+字段说明：
+
+- `decision`：必须是 `confirm` 或 `reject`。
+- `user_id`：当前用户，省略时使用默认用户解析逻辑。
+
+行为：
+
+- 后端会先通过 `run_id` 查询 run snapshot。
+- 如果 run 不存在，返回 `404 Run not found.`。
+- 如果 run 不是 `waiting_confirmation`，返回 `400`。
+- 校验通过后，后端使用 snapshot 中的 `thread_id` 恢复 LangGraph run。
+- 返回恢复后的 `EntryResponse`。
+
+---
+
 ## 飞书长连接
 
 当前飞书接入方式使用飞书官方 SDK 长连接（非 HTTP webhook）。

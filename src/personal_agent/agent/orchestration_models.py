@@ -1,0 +1,346 @@
+"""AgentGraphState, AgentEvent and related types for LangGraph orchestration.
+
+These models are serialisable and checkpoint-safe.  They carry the run-time
+state of an entry graph execution, distinct from the business-fact stores
+(LocalMemoryStore, AskHistoryStore, PendingActionStore, CrossSessionStore).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Annotated, Any, Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, Field
+
+from ..core.models import Citation, EntryInput, EntryIntent, KnowledgeNote
+
+
+def _new_run_id() -> str:
+    return uuid4().hex[:12]
+
+
+def _new_thread_id(user_id: str, session_id: str, run_id: str) -> str:
+    return f"{user_id}:{session_id}:{run_id}"
+
+
+# ---------------------------------------------------------------------------
+# Event model
+# ---------------------------------------------------------------------------
+
+AgentEventType = Literal[
+    "entry_started",
+    "intent_classified",
+    "plan_created",
+    "plan_validated",
+    "step_started",
+    "react_iteration",
+    "tool_called",
+    "tool_result",
+    "confirmation_required",
+    "confirmation_resumed",
+    "draft_ready",
+    "answer_delta",
+    "answer_completed",
+    "step_completed",
+    "step_failed",
+    "replan_attempted",
+    "replan_completed",
+    "run_completed",
+    "run_failed",
+]
+
+
+class AgentEvent(BaseModel):
+    """A structured, serialisable event emitted during a graph run."""
+
+    event_id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    run_id: str = ""
+    thread_id: str = ""
+    type: AgentEventType
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Run status / snapshot (query models, not checkpoint state)
+# ---------------------------------------------------------------------------
+
+class AgentRunStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    waiting_confirmation = "waiting_confirmation"
+    cancelled = "cancelled"
+
+
+class AgentRunSnapshot(BaseModel):
+    """A read-only summary of a graph run for API queries."""
+
+    run_id: str
+    thread_id: str
+    user_id: str
+    session_id: str
+    status: AgentRunStatus = AgentRunStatus.pending
+    intent: EntryIntent = "unknown"
+    entry_text: str = ""
+    plan_steps: list[dict[str, Any]] = Field(default_factory=list)
+    execution_trace: list[str] = Field(default_factory=list)
+    answer: str | None = None
+    last_event: AgentEvent | None = None
+    errors: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# AgentGraphState — the checkpoint-able state for the orchestration graph
+# ---------------------------------------------------------------------------
+
+class AgentGraphState(BaseModel):
+    """Checkpoint-safe, serialisable state for the entry orchestration graph.
+
+    Design principles
+    -----------------
+    - This holds *process state* — what the graph needs to resume.
+    - Business facts live in LocalMemoryStore / AskHistoryStore /
+      PendingActionStore / CrossSessionStore.
+    - Large payloads (note text, full search results) are stored by
+      reference, not by value.
+    """
+
+    # Identity
+    run_id: str = Field(default_factory=_new_run_id)
+    thread_id: str = ""
+    user_id: str = "default"
+    session_id: str = "default"
+
+    # Entry
+    entry_input: EntryInput | None = None
+    entry_text: str = ""
+
+    # Routing
+    intent: EntryIntent = "unknown"
+    intent_reason: str = ""
+    router_decision: dict[str, Any] = Field(default_factory=dict)
+    requires_planning: bool = False
+
+    # Plan
+    plan_steps: list[dict[str, Any]] = Field(default_factory=list)
+    current_step_index: int = 0
+    step_results: dict[str, Any] = Field(default_factory=dict)
+    plan_aborted: bool = False
+    plan_retry_counts: dict[str, int] = Field(default_factory=dict)  # step_id → retry_count
+
+    # ReAct tracking
+    react_iterations: list[dict[str, Any]] = Field(default_factory=list)
+    # ReAct subgraph runtime state (ephemeral within a step, checkpointed per iteration)
+    react_step_id: str = ""
+    react_iteration_index: int = 0
+    react_max_iterations: int = 3
+    react_allowed_tools: list[str] = Field(default_factory=list)
+    react_user_prompt: str = ""
+    react_done: bool = False
+    react_result: dict[str, Any] = Field(default_factory=dict)
+
+    # Tool results
+    tool_results: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Lightweight execution trace (for non-planning intents)
+    execution_trace: list[str] = Field(default_factory=list)
+
+    # Evidence & citations (summary form to avoid checkpoint bloat)
+    evidence_summary: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
+    matches: list[dict[str, Any]] = Field(default_factory=list)  # note refs, not full notes
+
+    # HITL
+    pending_confirmation: dict[str, Any] | None = None  # latest interrupt payload
+    confirmation_decision: str | None = None  # "confirmed" | "rejected" | None, routing marker for _after_confirm_step
+
+    # Draft
+    draft: str | None = None
+
+    # Final
+    answer: str | None = None
+    answer_completed: bool = False
+
+    # Events (accumulated during the run)
+    events: list[AgentEvent] = Field(default_factory=list)
+
+    # Errors
+    errors: list[str] = Field(default_factory=list)
+
+    # Replan history
+    replan_history: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def add_event(self, event_type: AgentEventType, payload: dict[str, Any] | None = None) -> AgentEvent:
+        event = AgentEvent(
+            run_id=self.run_id,
+            thread_id=self.thread_id,
+            type=event_type,
+            payload=payload or {},
+        )
+        self.events.append(event)
+        self.updated_at = event.timestamp
+        return event
+
+    def update_step_status(self, step_id: str, status: str) -> None:
+        for s in self.plan_steps:
+            if s.get("step_id") == step_id:
+                s["status"] = status
+                return
+
+    def to_run_snapshot(self, status: AgentRunStatus | None = None) -> AgentRunSnapshot:
+        resolved_status = status or _infer_status(self)
+        last = self.events[-1] if self.events else None
+        return AgentRunSnapshot(
+            run_id=self.run_id,
+            thread_id=self.thread_id,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            status=resolved_status,
+            intent=self.intent,
+            entry_text=self.entry_text,
+            plan_steps=self.plan_steps,
+            execution_trace=self.execution_trace,
+            answer=self.answer,
+            last_event=last,
+            errors=self.errors,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+
+def _infer_status(state: AgentGraphState) -> AgentRunStatus:
+    if state.errors:
+        return AgentRunStatus.failed
+    if state.answer_completed:
+        return AgentRunStatus.completed
+    if state.pending_confirmation is not None:
+        return AgentRunStatus.waiting_confirmation
+    if state.intent != "unknown":
+        return AgentRunStatus.running
+    return AgentRunStatus.pending
+
+
+# ---------------------------------------------------------------------------
+# Conversion helpers: EntryResult <-> AgentEvent / AgentGraphState
+# ---------------------------------------------------------------------------
+
+def plan_steps_to_plan_created_events(
+    plan_steps: list[dict[str, Any]], run_id: str, thread_id: str
+) -> list[AgentEvent]:
+    """Create a ``plan_created`` event from plan step dicts."""
+    return [
+        AgentEvent(
+            run_id=run_id,
+            thread_id=thread_id,
+            type="plan_created",
+            payload={"plan_steps": plan_steps},
+        )
+    ]
+
+
+def execution_trace_to_events(
+    traces: list[str], run_id: str, thread_id: str
+) -> list[AgentEvent]:
+    """Convert execution trace strings into step-started / step-completed events."""
+    events: list[AgentEvent] = []
+    for i, desc in enumerate(traces):
+        step_id = f"trace_{i}"
+        events.append(
+            AgentEvent(
+                run_id=run_id,
+                thread_id=thread_id,
+                type="step_started",
+                payload={"step_id": step_id, "description": desc},
+            )
+        )
+        events.append(
+            AgentEvent(
+                run_id=run_id,
+                thread_id=thread_id,
+                type="step_completed",
+                payload={"step_id": step_id, "description": desc},
+            )
+        )
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: event → consumer format converters
+# ---------------------------------------------------------------------------
+
+def execution_trace_from_events(events: list[AgentEvent]) -> list[str]:
+    """Derive ``execution_trace`` strings from structured ``AgentEvent`` objects.
+
+    Extracts descriptions from ``step_started`` and ``react_iteration`` events.
+    Returns a deduplicated, ordered list suitable for display in plan/trace panels.
+    """
+    trace: list[str] = []
+    seen: set[str] = set()
+    for evt in events:
+        if evt.type == "step_started":
+            desc = str(evt.payload.get("description", ""))
+            if desc and desc not in seen:
+                trace.append(desc)
+                seen.add(desc)
+        elif evt.type == "react_iteration":
+            thought = str(evt.payload.get("thought", ""))
+            label = f"ReAct 推理轮次 {evt.payload.get('iteration', '?')}"
+            if thought:
+                label = f"{label}: {thought[:80]}"
+            if label not in seen:
+                trace.append(label)
+                seen.add(label)
+    return trace
+
+
+_SSE_EVENT_TYPE_MAP: dict[str, str] = {
+    "entry_started": "status",
+    "intent_classified": "intent",
+    "plan_created": "plan_created",
+    "plan_validated": "status",
+    "step_started": "status",
+    "react_iteration": "react_iteration",
+    "tool_called": "tool_called",
+    "tool_result": "tool_result",
+    "confirmation_required": "confirmation_required",
+    "confirmation_resumed": "status",
+    "draft_ready": "draft_ready",
+    "answer_delta": "answer_delta",
+    "answer_completed": "done",
+    "step_completed": "status",
+    "step_failed": "status",
+    "replan_attempted": "status",
+    "replan_completed": "status",
+    "run_completed": "done",
+    "run_failed": "status",
+}
+
+
+def events_to_sse_tuples(
+    events: list[AgentEvent],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Convert a list of ``AgentEvent`` objects into SSE-compatible
+    ``(event_type, payload)`` tuples for streaming endpoints.
+    """
+    result: list[tuple[str, dict[str, Any]]] = []
+    for evt in events:
+        sse_type = _SSE_EVENT_TYPE_MAP.get(evt.type, "status")
+        payload: dict[str, Any] = dict(evt.payload)
+        payload.setdefault("_event_id", evt.event_id)
+        payload.setdefault("_event_type", evt.type)
+        result.append((sse_type, payload))
+    return result

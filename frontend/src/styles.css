@@ -867,6 +867,31 @@ button:disabled {
   color: #ffb866;
 }
 
+.history-state-waiting_confirmation {
+  color: #ffcc7a;
+}
+
+.inline-confirmation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 204, 122, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 204, 122, 0.08);
+  color: rgba(247, 241, 232, 0.86);
+  font-size: 0.84rem;
+}
+
+.inline-confirmation span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 204, 122, 0.14);
+  color: #ffcc7a;
+}
+
 .plan-step-retry {
   font-size: 0.7rem;
   padding: 2px 6px;
@@ -1221,6 +1246,11 @@ button:disabled {
   text-transform: uppercase;
   font-size: 10px;
   letter-spacing: 0.04em;
+}
+
+.pending-action-source {
+  background: rgba(117, 231, 179, 0.12);
+  color: #9ff0c7;
 }
 
 .pending-action-expires {

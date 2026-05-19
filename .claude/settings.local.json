@@ -51,7 +51,8 @@
       "Bash(powershell -Command \"\\(Get-Item 'd:/mySoft/workspace/personalAgent/evals/open_ragbench/results/graphiti_manifest.json'\\).LastWriteTime.ToString\\('HH:mm:ss'\\)\")",
       "Bash(powershell -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, CPU, WorkingSet64 | Format-Table -AutoSize\")",
       "Bash(cd /d/workspace/personalAgent && uv run python -m evals.open_ragbench.runner --num-queries 3 --corpus-mode relevant --strategies graphiti_edge_rrf --graphiti-note-mode parent_only --graphiti-continue-on-ingest-error --graphiti-user-id ragbench_smoke_gpt54_v10 --output evals/open_ragbench/results/gpt54-smoke.json 2>&1)",
-      "Read(//d/workspace/**)"
+      "Read(//d/workspace/**)",
+      "mcp__plugin_everything-claude-code_sequential-thinking__sequentialthinking"
     ]
   }
 }
