@@ -1,6 +1,6 @@
 # 运行时与编排层说明
 
-本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/graph.py](../../src/personal_agent/agent/graph.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
+本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes.py](../../src/personal_agent/agent/orchestration_nodes.py)、[src/personal_agent/agent/graph.py](../../src/personal_agent/agent/graph.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
 
 ## 设计目标
 
@@ -8,8 +8,7 @@
 
 - `AgentService` 保持薄 facade
 - `AgentRuntime` 拥有核心运行时依赖
-- LangGraph 承担稳定分支编排
-- `PlanExecutor` 承担复杂计划执行
+- LangGraph entry 总图承担路由、固定分支、计划步骤、ReAct、HITL 和 checkpoint 编排
 - 统一返回 Web、CLI、飞书可消费的结果对象
 
 ## 组件分层
@@ -35,24 +34,15 @@
 - 持有 verifier、planner、validator、replanner
 - 执行 capture、ask、digest、entry、graph sync、pending action 等核心流程
 
-### 3. LangGraph 固定流程
+### 3. LangGraph 编排
 
-代码位置：[graph.py](../../src/personal_agent/agent/graph.py)、[nodes.py](../../src/personal_agent/agent/nodes.py)
+代码位置：[orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[orchestration_nodes.py](../../src/personal_agent/agent/orchestration_nodes.py)、[graph.py](../../src/personal_agent/agent/graph.py)、[nodes.py](../../src/personal_agent/agent/nodes.py)
 
 作用：
 
+- `build_entry_orchestration_graph()`：entry 总编排，覆盖 route、普通分支、plan、step、ReAct、HITL、finalize
 - `build_capture_graph()`：采集、增强、关联、复习调度
 - `build_ask_graph()`：本地问答
-- `build_entry_graph()`：根据 intent 路由到固定分支
-
-### 4. Plan-driven 流程
-
-代码位置：[plan_executor.py](../../src/personal_agent/agent/plan_executor.py)
-
-作用：
-
-- 对 `requires_planning=True` 的任务执行结构化计划
-- 当前主要服务 `delete_knowledge` 和 `solidify_conversation`
 
 ## 当前执行路径
 
@@ -83,11 +73,13 @@ question
 
 ```text
 EntryInput
-  -> bind session / refresh memory
-  -> DefaultIntentRouter
-  -> requires_planning?
-     -> yes: DefaultTaskPlanner -> PlanValidator -> WorkingMemory.plan_steps -> PlanExecutor
-     -> no: LangGraph branch -> WorkingMemory.execution_trace
+  -> AgentRuntime.execute_entry()
+  -> build_entry_orchestration_graph()
+  -> normalize_entry
+  -> route_intent
+  -> capture / ask / summarize / direct_answer
+     或 plan_task -> validate_plan -> step loop / ReAct / HITL
+  -> finalize_entry_result
   -> EntryResult
 ```
 
@@ -96,8 +88,8 @@ EntryInput
 - 已以 `AgentRuntime` 作为核心运行时
 - 已将 `AgentService` 收敛为薄 facade
 - 已支持 capture、ask、digest、entry 等统一运行时方法
-- 已支持 LangGraph 固定流程
-- 已支持 PlanExecutor 计划驱动流程
+- 已支持 LangGraph entry 总编排
+- 已支持计划步骤在 orchestration graph 内执行
 - 已支持图谱失败时本地回退
 - 已支持 verifier 校验和低置信度重试
 - 已支持图谱异步/手动同步重试
@@ -123,13 +115,13 @@ EntryInput
 
 ## 已知限制
 
-### 1. 固定图和计划执行仍是双轨
+### 1. 普通分支事件粒度仍可增强
 
-普通 `capture / ask / summarize / direct_answer / unknown` 主要走 LangGraph 固定分支；`delete_knowledge / solidify_conversation` 走 `PlanExecutor`。当前已经通过 `execution_trace` 区分非计划路径，但固定图和计划执行仍是两套执行机制，行为一致性和事件模型仍需维护。
+普通 `capture / ask / summarize / direct_answer` 已进入 entry 总编排，但分支内部仍主要返回 answer、citations、matches 等结果字段。后续可继续补充更细粒度的 `AgentEvent`，让普通分支和计划步骤在前端反馈上更一致。
 
 ### 2. ReAct 单步策略仍处于受控首版
 
-当前 `PlanExecutor` 已接入 `ReActStepRunner`，可以在 `execution_mode="react"` 的步骤内执行有限轮 Thought / Action / Observation 循环。运行时仍由 `PlanExecutor` 统一维护 `WorkingMemory`、进度事件、失败处理、replan 和最终 `EntryResult`，ReAct 只负责单个步骤内部的观察式工具调用。
+当前 entry 总编排已在 `execution_mode="react"` 的步骤内执行有限轮 Thought / Action / Observation 循环。运行时由 orchestration nodes 维护 step 状态、进度事件、失败处理、replan 和最终 `EntryResult`，ReAct 只负责单个步骤内部的观察式工具调用。
 
 当前约束：
 
@@ -138,15 +130,9 @@ EntryInput
 - `max_iterations` 有固定上限
 - 每轮迭代发出 `react_iteration` 事件
 
-它仍是首版能力，后续需要继续收敛事件 schema、扩展适用步骤，并评估是否用 LangGraph `StateGraph` 表达 runner 内部状态。
-
-### 3. LangGraph checkpoint 尚未引入
-
-当前长任务、审批恢复和中断续接主要依赖应用层持久化模型。多段审批或长时间恢复场景增多后，需要重新评估 checkpoint。
+它仍是首版能力，后续需要继续收敛事件 schema 和扩展适用步骤。
 
 ## 演进方向
 
-- 明确哪些 intent 应逐步迁移到 PlanExecutor
-- 为固定图和计划执行建立统一 `AgentEvent` schema
-- 评估 LangGraph checkpoint 在多段审批中的价值
+- 为普通分支和计划步骤建立统一 `AgentEvent` schema
 - 为 runtime 增加更系统的集成测试和回归评测

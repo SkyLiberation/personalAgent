@@ -305,6 +305,7 @@ export type PlanStep = {
 };
 
 export type EntryPendingConfirmation = {
+  kind?: string;
   step_id?: string;
   action_type?: string;
   action_id?: string | null;
@@ -313,6 +314,8 @@ export type EntryPendingConfirmation = {
   title?: string;
   summary?: string;
   message?: string;
+  original_text?: string;
+  options?: Array<{ id: string; label: string; prompt?: string }>;
   [key: string]: unknown;
 };
 
@@ -342,12 +345,14 @@ export type EntryResponse = {
 
 export function resumeEntryRun(
   runId: string,
-  decision: "confirm" | "reject",
-  userId = "default"
+  decision: "confirm" | "reject" | "clarify",
+  userId = "default",
+  text = "",
+  optionId = ""
 ): Promise<EntryResponse> {
   return requestJson<EntryResponse>(`/api/entry/runs/${encodeURIComponent(runId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ decision, user_id: userId }),
+    body: JSON.stringify({ decision, user_id: userId, text, option_id: optionId }),
   });
 }
 

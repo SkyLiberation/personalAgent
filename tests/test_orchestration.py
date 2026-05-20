@@ -14,6 +14,7 @@ from personal_agent.agent.orchestration_models import (
     execution_trace_to_events,
     plan_steps_to_plan_created_events,
 )
+from personal_agent.agent.orchestration_nodes import OrchestrationDeps
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput
 
@@ -221,6 +222,30 @@ class TestOrchestrationGraphIntegration:
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
 
+    def test_clarify_before_routing_then_resume(self, runtime):
+        """Ambiguous entry pauses before routing and resumes with supplemental text."""
+        entry = EntryInput(
+            text="帮我",
+            user_id="test-user",
+            session_id="orch-test-clarify",
+        )
+        result = runtime.execute_entry(entry)
+        assert result.run_status == "waiting_confirmation"
+        assert result.pending_confirmation
+        assert result.pending_confirmation["kind"] == "clarification_required"
+
+        resumed = runtime.resume_entry(
+            run_id=result.run_id or "",
+            thread_id=result.thread_id or "",
+            decision="clarify",
+            user_id="test-user",
+            text="记一下：澄清节点应该先于路由执行。",
+            option_id="capture",
+        )
+        assert resumed.run_status == "completed"
+        assert resumed.intent == "capture_text"
+        assert resumed.reply_text
+
     def test_run_snapshots_list(self, runtime):
         """After executing entries, we should be able to list snapshots."""
         entry = EntryInput(text="你好", user_id="test-user", session_id="snap-test")
@@ -382,7 +407,7 @@ class TestPhase3ExecutePlanStep:
             _mock_dispatch,
         )
 
-        result = _node_execute_plan_step(state, runtime=runtime)
+        result = _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["plan_steps"][0]["status"] == "awaiting_confirmation"
         assert state.events[-1].type == "confirmation_required"
 
@@ -405,7 +430,7 @@ class TestPhase3ExecutePlanStep:
             entry_text="test",
         )
 
-        result = _node_execute_plan_step(state, runtime=runtime)
+        result = _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["plan_steps"][0]["status"] == "completed"
 
 
@@ -456,7 +481,10 @@ class TestPhase3InterruptResumeIntegration:
         )
         assert isinstance(result.intent, str)
         assert result.run_id is not None
-        assert result.run_status == "completed"
+        assert result.run_status in ("completed", "waiting_confirmation")
+        if result.run_status == "waiting_confirmation":
+            assert result.pending_confirmation
+            assert result.pending_confirmation["kind"] == "clarification_required"
 
     def test_confirmation_decision_field_roundtrip(self):
         """AgentGraphState.confirmation_decision should survive serialization."""
@@ -530,20 +558,20 @@ class TestPhase4ReActHelpers:
             allowed_tools=["graph_search", "nonexistent_tool"],
             execution_mode="react",
         )
-        resolved = _resolve_allowed_tools_for_step(step, runtime)
+        resolved = _resolve_allowed_tools_for_step(step, OrchestrationDeps.from_runtime(runtime))
         assert "graph_search" in resolved
         assert "nonexistent_tool" not in resolved
 
     def test_is_react_tool_blocked_high_risk(self, runtime):
         from personal_agent.agent.orchestration_graph import _is_react_tool_blocked
 
-        assert _is_react_tool_blocked("delete_note", runtime)
-        assert _is_react_tool_blocked("capture_text", runtime)
+        assert _is_react_tool_blocked("delete_note", OrchestrationDeps.from_runtime(runtime))
+        assert _is_react_tool_blocked("capture_text", OrchestrationDeps.from_runtime(runtime))
 
     def test_is_react_tool_blocked_allows_safe_tools(self, runtime):
         from personal_agent.agent.orchestration_graph import _is_react_tool_blocked
 
-        assert not _is_react_tool_blocked("graph_search", runtime)
+        assert not _is_react_tool_blocked("graph_search", OrchestrationDeps.from_runtime(runtime))
 
     def test_build_react_context(self):
         from personal_agent.agent.orchestration_graph import _build_react_context
@@ -560,7 +588,7 @@ class TestPhase4ReActHelpers:
     def test_format_react_tools(self, runtime):
         from personal_agent.agent.orchestration_graph import _format_react_tools
 
-        text = _format_react_tools({"graph_search"}, runtime)
+        text = _format_react_tools({"graph_search"}, OrchestrationDeps.from_runtime(runtime))
         assert "graph_search" in text
 
     def test_summarize_react_tool_result(self):
@@ -614,7 +642,7 @@ class TestPhase4ReActNodes:
             ],
             current_step_index=0,
         )
-        result = _node_react_init(state, runtime=runtime)
+        result = _node_react_init(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["react_step_id"] == "ask-1"
         assert result["react_max_iterations"] == 3
         assert result["react_allowed_tools"] == ["graph_search"]
@@ -713,7 +741,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, runtime=runtime)
+        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["react_done"] is True
         assert result["react_result"]["answer"] == "X是一种技术"
         assert len(result["react_iterations"]) >= 1
@@ -742,7 +770,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, runtime=runtime)
+        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         # Parse failure: index increments, not done yet
         assert result["react_iteration_index"] == 1
         assert result.get("react_done") is not True
@@ -770,7 +798,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, runtime=runtime)
+        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["react_done"] is True
 
     def test_react_iterate_blocked_tool(self, runtime, monkeypatch):
@@ -796,7 +824,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, runtime=runtime)
+        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         # Tool is blocked — observation should indicate error
         assert len(result["react_iterations"]) >= 1
         obs = result["react_iterations"][-1].get("observation", "")
@@ -823,7 +851,7 @@ class TestPhase4ReActIterateNode:
             lambda prompt, rt: None,
         )
 
-        result = _node_react_iterate(state, runtime=runtime)
+        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["react_done"] is True
         assert "react_iterations" in result.get("react_result", {})
 
@@ -857,7 +885,7 @@ class TestPhase4ReActSubgraphIntegration:
         from personal_agent.agent.orchestration_graph import _build_react_subgraph
         from langgraph.graph.state import CompiledStateGraph
 
-        subgraph = _build_react_subgraph(runtime)
+        subgraph = _build_react_subgraph(OrchestrationDeps.from_runtime(runtime))
         assert subgraph is not None
         assert isinstance(subgraph, CompiledStateGraph)
         assert subgraph.checkpointer is not None
@@ -874,7 +902,7 @@ class TestPhase4ReActSubgraphIntegration:
             _mock_llm,
         )
 
-        subgraph = _build_react_subgraph(runtime)
+        subgraph = _build_react_subgraph(OrchestrationDeps.from_runtime(runtime))
 
         state = AgentGraphState(
             run_id="r1",
@@ -927,7 +955,7 @@ class TestPhase4ReActSubgraphIntegration:
             runtime._tool_registry, "execute", _mock_tool_execute,
         )
 
-        subgraph = _build_react_subgraph(runtime)
+        subgraph = _build_react_subgraph(OrchestrationDeps.from_runtime(runtime))
 
         state = AgentGraphState(
             run_id="r1",
@@ -968,7 +996,7 @@ class TestPhase4ReActSubgraphIntegration:
         )
 
         checkpointer = _build_checkpointer(runtime.settings)
-        graph = build_entry_orchestration_graph(runtime, checkpointer=checkpointer)
+        graph = build_entry_orchestration_graph(OrchestrationDeps.from_runtime(runtime), checkpointer=checkpointer)
 
         state = AgentGraphState(
             run_id="r-ask",
@@ -1252,3 +1280,4 @@ class TestPhase5GraphToEntryResultEvents:
 
         assert result.run_status == "waiting_confirmation"
         assert len(result.events) == 2
+

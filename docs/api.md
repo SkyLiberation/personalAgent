@@ -381,13 +381,13 @@
 - `execution_trace`：非计划路径或图事件派生出的执行轨迹。
 - `run_id`：LangGraph run id。
 - `run_status`：`completed` 或 `waiting_confirmation`。
-- `pending_confirmation`：当 run 暂停等待人工确认时返回确认 payload。
+- `pending_confirmation`：当 run 暂停等待人工确认或补充信息时返回 interrupt payload；补充信息场景中 `kind="clarification_required"`。
 
 ### `GET /api/entry/stream`
 
 SSE 流式入口执行，逐步返回 intent 分类、计划步骤、执行进度和最终结果。
 
-LangGraph HITL 场景下会返回：
+LangGraph HITL 或补充信息场景下会返回：
 
 ```text
 event: confirmation_required
@@ -468,14 +468,18 @@ data: {
 ```json
 {
   "decision": "confirm",
-  "user_id": "default"
+  "user_id": "default",
+  "text": "",
+  "option_id": ""
 }
 ```
 
 字段说明：
 
-- `decision`：必须是 `confirm` 或 `reject`。
+- `decision`：必须是 `confirm`、`reject` 或 `clarify`。
 - `user_id`：当前用户，省略时使用默认用户解析逻辑。
+- `text`：`decision="clarify"` 时必填，表示用户补充的内容。
+- `option_id`：可选，表示补充类型，例如 `capture`、`ask`、`summarize`、`action`。
 
 行为：
 

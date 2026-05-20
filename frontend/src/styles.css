@@ -1230,6 +1230,37 @@ button:disabled {
   line-height: 1.5;
 }
 
+.clarification-box {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.clarification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clarification-options .secondary-button[data-active="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(117, 231, 179, 0.12);
+}
+
+.clarification-box textarea {
+  width: 100%;
+  min-width: min(480px, 100%);
+  resize: vertical;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.5;
+}
+
 .pending-action-meta {
   display: flex;
   gap: 12px;

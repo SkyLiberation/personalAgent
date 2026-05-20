@@ -15,6 +15,7 @@ from ..storage.memory_store import LocalMemoryStore
 from ..storage.pending_action_store import PendingActionStore
 from ..tools import ToolRegistry
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
+from .orchestration_nodes import OrchestrationDeps
 from .orchestration_models import AgentGraphState, AgentRunSnapshot
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
@@ -126,7 +127,8 @@ class AgentRuntime(
         """Lazily build and cache the entry orchestration graph."""
         if self._orch_graph is None:
             checkpointer = _build_checkpointer(self.settings)
-            self._orch_graph = build_entry_orchestration_graph(self, checkpointer=checkpointer)
+            deps = OrchestrationDeps.from_runtime(self)
+            self._orch_graph = build_entry_orchestration_graph(deps, checkpointer=checkpointer)
             logger.info(
                 "Entry orchestration graph built checkpoint_backend=%s",
                 self.settings.langgraph_checkpoint_backend,
@@ -164,26 +166,12 @@ class AgentRuntime(
         invoke_result = graph.invoke(initial_state, config)
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
-            state_snapshot = invoke_result if isinstance(invoke_result, dict) else {}
-
-            logger.info(
-                "Graph interrupted for confirmation run_id=%s thread_id=%s step=%s",
-                run_id, thread_id, interrupt_data.get("step_id", "?"),
-            )
-            return EntryResult(
-                intent=str(state_snapshot.get("intent") or "unknown"),
-                reason="操作需要用户确认",
-                reply_text=str(interrupt_data.get("message", "此操作需要您的确认。")),
-                plan_steps=list(state_snapshot.get("plan_steps") or []),
-                execution_trace=list(state_snapshot.get("execution_trace") or []),
+            return self._entry_result_from_interrupt(
+                invoke_result,
+                interrupt_data,
                 run_id=run_id,
                 thread_id=thread_id,
-                pending_confirmation=interrupt_data,
-                run_status="waiting_confirmation",
-                events=[
-                    e.model_dump(mode="json") if hasattr(e, "model_dump") else e
-                    for e in (state_snapshot.get("events") or initial_state.events)
-                ],
+                fallback_events=initial_state.events,
             )
 
         result_state = AgentGraphState.model_validate(invoke_result)
@@ -194,7 +182,7 @@ class AgentRuntime(
         capture_result = None
         ask_result = None
         if result_state.intent in ("capture_text", "capture_link", "capture_file"):
-            # Capture results come through entry graph internals
+            # Capture details are held inside orchestration branch state.
             pass
         elif result_state.intent == "ask":
             ask_result = AskResult(
@@ -218,32 +206,83 @@ class AgentRuntime(
             events=[e.model_dump(mode="json") for e in result_state.events],
         )
 
+    def _entry_result_from_interrupt(
+        self,
+        invoke_result: object,
+        interrupt_data: dict,
+        *,
+        run_id: str,
+        thread_id: str,
+        fallback_events: list | None = None,
+    ) -> EntryResult:
+        state_snapshot = invoke_result if isinstance(invoke_result, dict) else {}
+        kind = str(interrupt_data.get("kind") or "")
+        is_clarification = kind == "clarification_required"
+        reason = "需要补充信息" if is_clarification else "操作需要用户确认"
+        default_message = "请补充更多信息后继续。" if is_clarification else "此操作需要您的确认。"
+
+        logger.info(
+            "Graph interrupted run_id=%s thread_id=%s kind=%s step=%s",
+            run_id, thread_id, kind or "confirmation", interrupt_data.get("step_id", "?"),
+        )
+        return EntryResult(
+            intent=str(state_snapshot.get("intent") or "unknown"),
+            reason=reason,
+            reply_text=str(interrupt_data.get("message", default_message)),
+            plan_steps=list(state_snapshot.get("plan_steps") or []),
+            execution_trace=list(state_snapshot.get("execution_trace") or []),
+            run_id=run_id,
+            thread_id=thread_id,
+            pending_confirmation=interrupt_data,
+            run_status="waiting_confirmation",
+            events=[
+                e.model_dump(mode="json") if hasattr(e, "model_dump") else e
+                for e in (state_snapshot.get("events") or fallback_events or [])
+            ],
+        )
+
     def resume_entry(
         self, run_id: str, thread_id: str, decision: str, user_id: str,
+        text: str | None = None, option_id: str | None = None,
     ) -> EntryResult:
         """Resume a graph run that was interrupted for HITL confirmation.
 
         Args:
             run_id: The run to resume.
             thread_id: Thread ID from the original run config.
-            decision: ``"confirm"`` or ``"reject"``.
+            decision: ``"confirm"``, ``"reject"`` or ``"clarify"``.
             user_id: Authenticated user making the decision.
+            text: Supplemental text for clarification interrupts.
+            option_id: Optional clarification option selected by the user.
 
         Returns:
             Final EntryResult after graph completion.
         """
         graph = self._get_orch_graph()
         config = {"configurable": {"thread_id": thread_id}}
-        resume_value = {"decision": decision, "user_id": user_id}
+        resume_value = {
+            "decision": decision,
+            "user_id": user_id,
+            "text": text or "",
+            "option_id": option_id or "",
+        }
 
         logger.info(
             "Resuming graph run_id=%s thread_id=%s decision=%s",
             run_id, thread_id, decision,
         )
 
-        result_state = AgentGraphState.model_validate(
-            graph.invoke(Command(resume=resume_value), config)
-        )
+        invoke_result = graph.invoke(Command(resume=resume_value), config)
+        interrupt_data = _interrupt_payload_from_result(invoke_result)
+        if interrupt_data is not None:
+            return self._entry_result_from_interrupt(
+                invoke_result,
+                interrupt_data,
+                run_id=run_id,
+                thread_id=thread_id,
+            )
+
+        result_state = AgentGraphState.model_validate(invoke_result)
 
         reply_text = result_state.answer or "操作已完成。"
 

@@ -1,7 +1,7 @@
 """AgentGraphState, AgentEvent and related types for LangGraph orchestration.
 
 These models are serialisable and checkpoint-safe.  They carry the run-time
-state of an entry graph execution, distinct from the business-fact stores
+state of an entry orchestration execution, distinct from the business-fact stores
 (LocalMemoryStore, AskHistoryStore, PendingActionStore, CrossSessionStore).
 """
 
@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from ..core.models import Citation, EntryInput, EntryIntent, KnowledgeNote
+from ..core.models import Citation, EntryInput, EntryIntent
 
 
 def _new_run_id() -> str:
@@ -31,6 +31,8 @@ def _new_thread_id(user_id: str, session_id: str, run_id: str) -> str:
 
 AgentEventType = Literal[
     "entry_started",
+    "clarification_required",
+    "clarification_resumed",
     "intent_classified",
     "plan_created",
     "plan_validated",
@@ -309,6 +311,8 @@ def execution_trace_from_events(events: list[AgentEvent]) -> list[str]:
 
 _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "entry_started": "status",
+    "clarification_required": "confirmation_required",
+    "clarification_resumed": "status",
     "intent_classified": "intent",
     "plan_created": "plan_created",
     "plan_validated": "status",

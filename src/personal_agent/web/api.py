@@ -19,10 +19,15 @@ from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, PendingAction, ReviewCard
+from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
+
+
+def _chunk_answer(answer: str, chunk_size: int = 40):
+    for i in range(0, len(answer), chunk_size):
+        yield answer[i:i + chunk_size]
 
 
 def _get_user_id(request: Request, settings: Settings) -> str:
@@ -158,8 +163,10 @@ class RejectPendingActionRequest(BaseModel):
 
 
 class ResumeEntryRequest(BaseModel):
-    decision: str = Field(min_length=1)  # "confirm" | "reject"
+    decision: str = Field(min_length=1)  # "confirm" | "reject" | "clarify"
     user_id: str = "default"
+    text: str = ""
+    option_id: str = ""
 
 
 def create_app() -> FastAPI:
@@ -654,7 +661,7 @@ def create_app() -> FastAPI:
     def resume_entry(
         run_id: str, body: ResumeEntryRequest, http_request: Request,
     ) -> EntryResponse:
-        """Resume a graph run that was interrupted for HITL confirmation."""
+        """Resume a graph run that was interrupted for HITL or clarification."""
         resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
 
         snapshot = service.get_run_snapshot(run_id)
@@ -666,10 +673,15 @@ def create_app() -> FastAPI:
                 detail=f"Run is not in a resumable state (current: {snapshot.status.value}).",
             )
 
-        if body.decision not in ("confirm", "reject"):
+        if body.decision not in ("confirm", "reject", "clarify"):
             raise HTTPException(
                 status_code=400,
-                detail="decision must be 'confirm' or 'reject'.",
+                detail="decision must be 'confirm', 'reject' or 'clarify'.",
+            )
+        if body.decision == "clarify" and not body.text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="text is required when decision is 'clarify'.",
             )
 
         thread_id = snapshot.thread_id
@@ -682,6 +694,8 @@ def create_app() -> FastAPI:
             thread_id=thread_id,
             decision=body.decision,
             user_id=resolved_user,
+            text=body.text,
+            option_id=body.option_id,
         )
 
         return EntryResponse(
@@ -693,6 +707,7 @@ def create_app() -> FastAPI:
             plan_steps=result.plan_steps,
             execution_trace=result.execution_trace,
             run_id=result.run_id,
+            pending_confirmation=result.pending_confirmation,
             run_status=result.run_status,
         )
 

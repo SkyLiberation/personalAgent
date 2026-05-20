@@ -206,6 +206,7 @@ class DefaultIntentRouter:
                 response_format={"type": "json_object"},
             )
             content = (response.choices[0].message.content or "").strip()
+            logger.info("LLM intent classification raw response: %s", content)
             payload = json.loads(content)
             intent = payload.get("intent", "unknown")
             if intent not in _RECOGNIZED_INTENTS:

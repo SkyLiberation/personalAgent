@@ -6,7 +6,7 @@
 
 当前后端以 `AgentRuntime` 为核心，`AgentService` 只保留兼容性的 facade 职责。入口请求进入 runtime 后，会经过意图路由、可选任务规划、LangGraph 节点编排、工具调用、记忆读写、答案生成、verifier 校验与必要的自修正，最后返回给 Web、CLI 或飞书入口。
 
-需要特别说明的是：`execute_entry()` 当前会先通过 `DefaultIntentRouter` 生成 `RouterDecision`。只有 `requires_planning=True` 的任务（当前主要是 `delete_knowledge`、`solidify_conversation`）才会调用 `DefaultTaskPlanner` 生成结构化步骤，并经过 `PlanValidator` 校验后进入计划执行；`capture / ask / summarize / direct_answer / unknown` 仍保持稳定的 LangGraph 固定分支链路，并记录轻量 `execution_trace`。
+需要特别说明的是：`execute_entry()` 当前会进入 LangGraph entry 总编排。`clarify_entry` 会先拦截不足以开始流程的输入，让用户补充内容；补充完成后 `route_intent` 才通过 `DefaultIntentRouter` 生成 `RouterDecision`。只有 `requires_planning=True` 的任务（当前主要是 `delete_knowledge`、`solidify_conversation`）才会调用 `DefaultTaskPlanner` 生成结构化步骤，并经过 `PlanValidator` 校验后进入计划步骤执行；`capture / ask / summarize / direct_answer` 作为普通分支直接在 orchestration graph 内执行。无法识别的 `unknown` 不再有独立 branch，而是进入 `direct_answer_branch` 生成澄清提示。
 
 计划与执行路径现在通过以下方式可观测：
 
@@ -21,10 +21,12 @@
 
 ```text
 Entry
-  -> Intent Router
+  -> LangGraph orchestration graph
+  -> clarify_entry
+  -> route_intent
   -> requires_planning?
-     -> Planner / PlanValidator -> plan_steps -> plan execution
-     -> LangGraph branch -> execution_trace
+     -> Planner / PlanValidator -> plan_steps -> step loop / ReAct / HITL
+     -> capture / ask / summarize / direct_answer branch -> execution_trace
   -> EntryResult.plan_steps / execution_trace -> API / SSE / Frontend panels
   -> Tool Execution
   -> Memory Update
@@ -39,8 +41,7 @@ Entry
 - `DefaultIntentRouter`：入口意图路由器。
 - `DefaultTaskPlanner`：任务规划器。
 - `PlanValidator`：计划校验器。
-- `PlanExecutor`：计划执行器，在 `execute_entry()` 中按需创建。
-- `ReActStepRunner`：受控 ReAct 单步执行器。
+- `orchestration_graph`：entry 总编排图，负责 route、普通分支、plan、step、ReAct、HITL 和 finalize。
 - `Replanner`：步骤失败后的重新规划器。
 - `AnswerVerifier`：回答证据校验器。
 - `ToolRegistry`：工具注册与执行入口。
@@ -53,29 +54,23 @@ Entry
 Web / Feishu / CLI
   -> AgentService.entry()
   -> AgentRuntime.entry()
-  -> RuntimeEntryMixin.execute_entry()
-  -> plan_for_entry()
-     -> bind session / refresh memory
-     -> DefaultIntentRouter.classify()
-     -> requires_planning?
-        -> DefaultTaskPlanner.plan()
-        -> PlanValidator.validate()
-        -> PlanExecutor.execute()
-           -> deterministic step 或 ReActStepRunner
-           -> optional Replanner
-        -> EntryResult(plan_steps)
-        -> LangGraph entry graph
-           -> capture / ask / summarize / direct_answer / unknown branch
-        -> EntryResult(execution_trace)
+  -> AgentRuntime.execute_entry()
+  -> build_entry_orchestration_graph()
+     -> normalize_entry
+     -> clarify_entry
+     -> route_intent / DefaultIntentRouter.classify()
+     -> capture / ask / summarize / direct_answer branch
+        或 plan_task -> validate_plan -> step loop / ReAct / HITL
+     -> finalize_entry_result
   -> API response 或 SSE events
 ```
 
-需要注意：`execute_entry()` 当前会先调用 `plan_for_entry()` 做一次统一路由和可选规划。只有 `RouterDecision.requires_planning=True` 的意图进入 `PlanExecutor`。当前主要是：
+需要注意：只有 `RouterDecision.requires_planning=True` 的意图进入计划步骤执行。当前主要是：
 
 - `delete_knowledge`
 - `solidify_conversation`
 
-其他意图仍走固定的 LangGraph entry graph：
+其他意图走 orchestration graph 内置普通分支：
 
 - `capture_text`
 - `capture_link`
@@ -83,7 +78,8 @@ Web / Feishu / CLI
 - `ask`
 - `summarize_thread`
 - `direct_answer`
-- `unknown`
+
+`unknown` 不再对应独立执行分支。它是 classify 结果的一种状态，会进入 `direct_answer_branch` 生成“请补充信息”的澄清回复。
 
 ## 2. Entry 入口层
 
@@ -93,22 +89,24 @@ Web / Feishu / CLI
 - `GET /api/entry/stream`：SSE 入口，先快速分类并发送 `intent` 事件，再根据 intent 选择流式 ask 或完整 entry pipeline。
 - `POST /api/entry/upload`：文件入口，保存上传文件，构造 `source_type="file"` 的 `EntryInput`，再进入 `service.entry()`。
 
-`AgentService` 作为 facade，最终会调用 `AgentRuntime.entry()`，再进入 `RuntimeEntryMixin.execute_entry()`。
+`AgentService` 作为 facade，最终会调用 `AgentRuntime.entry()`，再进入 `AgentRuntime.execute_entry()`，由 LangGraph orchestration graph 接管后续流程。
 
-在 `execute_entry()` 内部，第一步是：
+在 `execute_entry()` 内部，第一步是构造 `AgentGraphState` 并调用：
 
 ```text
-decision, validated_steps, _plan_dicts = self.plan_for_entry(entry_input)
+graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
 ```
 
-也就是说，所有 entry 请求都会先走 `plan_for_entry()`。这个函数负责：
+所有 entry 请求都会先进入 `normalize_entry` 和 `clarify_entry`。`clarify_entry` 如果发现输入为空、过短或缺少操作对象，会通过 LangGraph interrupt 暂停，让用户选择补充“记录内容 / 提出问题 / 总结内容 / 执行操作”。补充文本写回 `entry_text` 后才进入 `route_intent`。
+
+`normalize_entry` 和 `route_intent` 负责：
 
 1. 规范化 `user_id` 和 `session_id`。
 2. `self.memory.bind_session()` 绑定会话。
 3. `self.memory.refresh_conversation_summary()` 刷新会话摘要。
 4. 调用 `self._intent_router.classify(entry_input)` 做意图识别。
 5. 将目标写入 working memory。
-6. 根据 `decision.requires_planning` 决定是否进入 planner。
+6. 根据 `decision.requires_planning` 和 `decision.route` 决定进入计划路径或普通分支。
 
 ## 3. Router 意图路由
 
@@ -177,14 +175,14 @@ OPENAI_SMALL_MODEL -> openai_small_model -> gpt-4.1-nano
 
 规划器在 `src/personal_agent/agent/planner.py`，核心类是 `DefaultTaskPlanner`。
 
-`plan_for_entry()` 只有在 `decision.requires_planning=True` 时才调用：
+`plan_task` 只有在 `decision.requires_planning=True` 时才调用：
 
 ```text
 steps = self._planner.plan(decision.route, entry_input.text)
 validation = self._plan_validator.validate(steps, decision)
 ```
 
-当前普通 `ask`、`capture`、`direct_answer` 虽然 planner 中有启发式计划模板，但在 entry 主流程里不会进入真实 `PlanExecutor`，而是走 LangGraph 固定分支，并只返回轻量 `execution_trace`。
+当前普通 `ask`、`capture`、`direct_answer` 虽然 planner 中有启发式计划模板，但在 entry 主流程里不会进入计划步骤执行，而是走 orchestration graph 内置普通分支，并只返回轻量 `execution_trace`。
 
 ### 4.1 Planner 输出
 
@@ -373,26 +371,29 @@ ReAct 使用 `settings.openai_small_model`，默认 `gpt-4.1-nano`。
 - `max_tokens=400`
 - `response_format={"type": "json_object"}`
 
-## 7. LangGraph 固定分支
+## 7. LangGraph 普通分支
 
-非计划驱动路径在 `src/personal_agent/agent/graph.py` 和 `src/personal_agent/agent/entry_nodes.py`。
+非计划驱动路径已经并入 `src/personal_agent/agent/orchestration_graph.py` 和 `src/personal_agent/agent/orchestration_nodes.py`，不再维护单独的 entry 子图。
 
-`build_entry_graph()` 构造的图是：
+当前普通分支结构是：
 
 ```text
 START
-  -> route
-  -> conditional_edges by state.intent
+  -> normalize_entry
+  -> clarify_entry
+  -> route_intent
+  -> conditional_edges by state.intent / requires_planning
      capture_text / capture_link / capture_file -> capture_branch
      ask                                    -> ask_branch
      summarize_thread                       -> summarize_branch
      direct_answer                          -> direct_answer_branch
-     unknown                                -> unknown_branch
-     delete_knowledge / solidify_conversation -> unknown_branch
+     unknown                                -> direct_answer_branch
+     delete_knowledge / solidify_conversation -> plan_task
+  -> finalize_entry_result
   -> END
 ```
 
-虽然 `delete_knowledge` 和 `solidify_conversation` 在图中会映射到 `unknown_branch`，但正常情况下它们已经在 `execute_entry()` 中被 `PlanExecutor` 截获执行，不会走到 LangGraph 的 unknown 分支。
+`clarify_entry` 处理“输入还不足以开始路由”的场景。`unknown` 则表示 router 已经运行但仍无法稳定识别，它不再是独立 branch，而是由 `direct_answer_branch` 根据 classify 结果生成澄清提示。
 
 ### 7.1 capture 分支
 
@@ -646,9 +647,9 @@ execution_trace
 | --- | --- | --- | --- | --- |
 | Router 意图识别 | `agent/router.py` | `openai_small_model` | `gpt-4.1-nano` | 将 entry 文本分类成 intent，并输出 risk/confirmation/missing info |
 | Planner 任务规划 | `agent/planner.py` | `openai_small_model` | `gpt-4.1-nano` | 为计划型任务生成结构化 `PlanStep` |
-| ReAct 单步循环 | `agent/react_runner.py` | `openai_small_model` | `gpt-4.1-nano` | 在受控工具集合内做 Thought/Action/Observation |
+| ReAct 单步循环 | `agent/orchestration_nodes.py` | `openai_small_model` | `gpt-4.1-nano` | 在受控工具集合内做 Thought/Action/Observation |
 | Replanner 失败重规划 | `agent/replanner.py` | `openai_small_model` | `gpt-4.1-nano` | 步骤失败且重试耗尽后生成替代步骤 |
-| Direct Answer | `agent/entry_nodes.py` | `openai_small_model` | `gpt-4.1-nano` | 简单问题、问候等无需检索的短回复 |
+| Direct Answer | `agent/orchestration_nodes.py` | `openai_small_model` | `gpt-4.1-nano` | 简单问题、问候、无法识别时的澄清等无需检索的短回复 |
 | 最终问答合成 | `agent/runtime_llm.py`, `agent/runtime_ask.py` | `openai_model` | `gpt-4.1-mini` | 基于图谱/本地/网络证据生成自然语言回答 |
 | 流式回答 | `agent/runtime_llm.py` | `openai_model` | `gpt-4.1-mini` | SSE token streaming |
 | 群聊总结 | `agent/runtime_entry.py` | `openai_model` | `gpt-4.1-mini` | 对 thread messages 生成总结 |
@@ -664,11 +665,8 @@ execution_trace
 POST /api/entry
   -> EntryInput(text="xxx 是什么？")
   -> AgentRuntime.execute_entry()
-  -> plan_for_entry()
-     -> Router: ask
-     -> requires_planning=False
-  -> build_entry_graph()
-     -> route
+  -> orchestration graph
+     -> route_intent: ask
      -> ask_branch
   -> execute_ask()
      -> graph_store.ask()
@@ -692,12 +690,11 @@ POST /api/entry
 POST /api/entry
   -> EntryInput(text="删除那条关于 xxx 的笔记")
   -> AgentRuntime.execute_entry()
-  -> plan_for_entry()
-     -> Router: delete_knowledge
-     -> requires_planning=True
-     -> Planner: 生成 del-1..del-5
-     -> PlanValidator
-  -> PlanExecutor
+  -> orchestration graph
+     -> route_intent: delete_knowledge
+     -> plan_task: 生成 del-1..del-5
+     -> validate_plan
+  -> step loop
      -> del-1 retrieve, execution_mode=react
         -> ReActStepRunner 使用 graph_search
      -> del-2 resolve
@@ -719,9 +716,9 @@ POST /api/entry
 ```text
 POST /api/entry
   -> EntryInput(text="把刚才结论沉淀成知识")
-  -> Router: solidify_conversation
-  -> Planner: sol-1..sol-4
-  -> PlanExecutor
+  -> route_intent: solidify_conversation
+  -> plan_task: sol-1..sol-4
+  -> step loop
      -> retrieve 最近对话/候选事实
      -> compose 草稿
         -> save_draft()
@@ -736,9 +733,9 @@ POST /api/entry
 ## 13. 当前设计上的几个关键点
 
 1. Router 是所有 entry 的共同入口，但 Planner 不是所有 entry 都会用。
-2. `requires_planning` 是决定进入 `PlanExecutor` 还是 LangGraph 固定分支的关键开关。
+2. `requires_planning` 是决定进入计划步骤执行还是普通分支的关键开关。
 3. ReAct 只存在于某个 plan step 内，不是全局主循环。
 4. 小模型负责“控制流决策”：路由、规划、ReAct、重规划、直接短答。
 5. 主模型负责“内容生成”：最终回答、总结、修正。
 6. Graphiti 同时依赖主模型和 embedding model：主模型用于实体/关系抽取，embedding model 用于语义检索。
-7. 输出层区分 `plan_steps` 和 `execution_trace`，避免把普通固定分支误展示成真实计划执行。
+7. 输出层区分 `plan_steps` 和 `execution_trace`，避免把普通分支误展示成真实计划执行。

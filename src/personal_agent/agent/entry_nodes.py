@@ -24,15 +24,15 @@ _ENTRY_INTENT_TARGET_NODES: dict[EntryIntent, str] = {
     "capture_file": "capture_branch",
     "ask": "ask_branch",
     "summarize_thread": "summarize_branch",
-    "delete_knowledge": "unknown_branch",
-    "solidify_conversation": "unknown_branch",
+    "delete_knowledge": "plan_task",
+    "solidify_conversation": "plan_task",
     "direct_answer": "direct_answer_branch",
-    "unknown": "unknown_branch",
+    "unknown": "direct_answer_branch",
 }
 
 
 def entry_target_node_for_intent(intent: EntryIntent) -> str:
-    return _ENTRY_INTENT_TARGET_NODES.get(intent, "unknown_branch")
+    return _ENTRY_INTENT_TARGET_NODES.get(intent, "direct_answer_branch")
 
 
 @dataclass(slots=True)
@@ -250,12 +250,6 @@ def direct_answer_entry_branch_node(
         except Exception:
             logger.exception("Direct answer LLM call failed")
     state.answer = _simple_direct_answer(entry_input.text)
-    return state
-
-
-def unknown_entry_branch_node(state: AgentState) -> AgentState:
-    logger.info("Unknown intent branch user=%s intent=%s", state.user_id, state.intent)
-    state.answer = "我暂时没判断出你的意图。你可以直接发要记录的内容、要收录的链接，或明确提一个问题。"
     return state
 
 

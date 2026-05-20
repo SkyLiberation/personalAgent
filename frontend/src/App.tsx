@@ -121,6 +121,7 @@ export default function App() {
   const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
   const [pendingActions, setPendingActions] = useState<PendingActionItem[]>([]);
   const [isConfirmingAction, setIsConfirmingAction] = useState(false);
+  const [clarificationInputs, setClarificationInputs] = useState<Record<string, { text: string; optionId: string }>>({});
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
@@ -208,6 +209,10 @@ export default function App() {
 
   async function handleConfirmPending(action: PendingActionItem) {
     if (action.source === "langgraph_run" && action.run_id) {
+      if (action.pending_confirmation?.kind === "clarification_required") {
+        await handleSubmitClarification(action);
+        return;
+      }
       await handleResumeEntryRun(action, "confirm");
       return;
     }
@@ -237,16 +242,38 @@ export default function App() {
     }
   }
 
-  async function handleResumeEntryRun(action: PendingActionItem, decision: "confirm" | "reject") {
+  async function handleResumeEntryRun(
+    action: PendingActionItem,
+    decision: "confirm" | "reject" | "clarify",
+    text = "",
+    optionId = "",
+  ) {
     if (!action.run_id) return;
     setIsConfirmingAction(true);
-    setStatus(decision === "confirm" ? "正在继续执行已确认的任务..." : "正在取消该任务...");
+    setStatus(
+      decision === "clarify"
+        ? "正在提交补充信息..."
+        : decision === "confirm"
+          ? "正在继续执行已确认的任务..."
+          : "正在取消该任务..."
+    );
     try {
-      const result = await resumeEntryRun(action.run_id, decision, userId);
+      const result = await resumeEntryRun(action.run_id, decision, userId, text, optionId);
       applyEntryResponseToHistory(action.local_history_id ?? null, result);
-      setPendingActions((current) => current.filter((a) => a.id !== action.id));
-      setStatus(result.reply_text || (decision === "confirm" ? "操作已完成。" : "操作已取消。"));
-      void refreshAll();
+      if (result.pending_confirmation && result.run_id) {
+        const nextAction = pendingActionFromConfirmation(result.run_id, result.pending_confirmation, action.local_history_id);
+        setPendingActions((current) => current.map((a) => (a.id === action.id ? nextAction : a)));
+        setStatus(result.reply_text || result.pending_confirmation.message || "还需要继续补充信息。");
+      } else {
+        setPendingActions((current) => current.filter((a) => a.id !== action.id));
+        setClarificationInputs((current) => {
+          const next = { ...current };
+          delete next[action.id];
+          return next;
+        });
+        setStatus(result.reply_text || (decision === "confirm" ? "操作已完成。" : "操作已取消。"));
+        void refreshAll();
+      }
     } catch (error) {
       console.error("Failed to resume entry run:", error);
       setStatus("恢复 LangGraph 任务失败，请检查后端日志。");
@@ -262,6 +289,40 @@ export default function App() {
     } finally {
       setIsConfirmingAction(false);
     }
+  }
+
+  async function handleSubmitClarification(action: PendingActionItem) {
+    const input = clarificationInputs[action.id] ?? { text: "", optionId: "" };
+    if (!input.text.trim()) {
+      setStatus("请先补充具体内容。");
+      return;
+    }
+    await handleResumeEntryRun(action, "clarify", input.text.trim(), input.optionId);
+  }
+
+  function pendingActionFromConfirmation(
+    runId: string,
+    confirmation: EntryPendingConfirmation,
+    localHistoryId?: string,
+  ): PendingActionItem {
+    const isClarification = confirmation.kind === "clarification_required";
+    return {
+      id: `run-${runId}-${confirmation.step_id ?? (isClarification ? "clarify" : "confirm")}`,
+      user_id: userId,
+      action_type: String(confirmation.action_type ?? (isClarification ? "clarify_entry" : "langgraph_confirm")),
+      target_id: String(confirmation.note_id ?? confirmation.step_id ?? runId),
+      title: confirmation.title || (isClarification ? "需要补充信息" : "需要确认的任务"),
+      description: confirmation.message || confirmation.summary || "该 LangGraph run 已暂停，等待你的处理。",
+      status: "pending",
+      token: typeof confirmation.token === "string" ? confirmation.token : undefined,
+      source: "langgraph_run",
+      run_id: runId,
+      local_history_id: localHistoryId,
+      pending_confirmation: confirmation,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 3600000).toISOString(),
+      resolved_at: null,
+    };
   }
 
   function applyEntryResponseToHistory(localHistoryId: string | null, result: EntryResponse) {
@@ -1458,41 +1519,79 @@ export default function App() {
                 <h2>需要你确认的操作 ({pendingActions.length})</h2>
               </div>
               <div className="pending-actions-list">
-                {pendingActions.map((action) => (
-                  <article key={action.id} className="pending-action-card">
-                    <div className="pending-action-info">
-                      <h3>{action.title}</h3>
-                      <p>{action.description}</p>
-                      <div className="pending-action-meta">
-                        <span className="pending-action-type">{action.action_type}</span>
-                        {action.source === "langgraph_run" ? (
-                          <span className="pending-action-type pending-action-source">LangGraph</span>
+                {pendingActions.map((action) => {
+                  const clarification = action.pending_confirmation?.kind === "clarification_required";
+                  const clarificationInput = clarificationInputs[action.id] ?? { text: "", optionId: "" };
+                  return (
+                    <article key={action.id} className="pending-action-card">
+                      <div className="pending-action-info">
+                        <h3>{action.title}</h3>
+                        <p>{action.description}</p>
+                        {clarification ? (
+                          <div className="clarification-box">
+                            <div className="clarification-options">
+                              {(action.pending_confirmation?.options ?? []).map((option) => (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  className="secondary-button"
+                                  data-active={clarificationInput.optionId === option.id}
+                                  onClick={() =>
+                                    setClarificationInputs((current) => ({
+                                      ...current,
+                                      [action.id]: { ...clarificationInput, optionId: option.id },
+                                    }))
+                                  }
+                                  title={option.prompt}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                            <textarea
+                              value={clarificationInput.text}
+                              onChange={(event) =>
+                                setClarificationInputs((current) => ({
+                                  ...current,
+                                  [action.id]: { ...clarificationInput, text: event.target.value },
+                                }))
+                              }
+                              placeholder="补充具体内容、问题、总结范围或操作对象..."
+                              rows={3}
+                            />
+                          </div>
                         ) : null}
-                        <span className="pending-action-expires">
-                          过期时间: {new Date(action.expires_at).toLocaleString()}
-                        </span>
+                        <div className="pending-action-meta">
+                          <span className="pending-action-type">{action.action_type}</span>
+                          {action.source === "langgraph_run" ? (
+                            <span className="pending-action-type pending-action-source">LangGraph</span>
+                          ) : null}
+                          <span className="pending-action-expires">
+                            过期时间: {new Date(action.expires_at).toLocaleString()}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="pending-action-actions">
-                      <button
-                        type="button"
-                        className="confirm-button"
-                        disabled={isConfirmingAction}
-                        onClick={() => void handleConfirmPending(action)}
-                      >
-                        确认
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={isConfirmingAction}
-                        onClick={() => void handleRejectPending(action, "用户拒绝")}
-                      >
-                        拒绝
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                      <div className="pending-action-actions">
+                        <button
+                          type="button"
+                          className="confirm-button"
+                          disabled={isConfirmingAction}
+                          onClick={() => void handleConfirmPending(action)}
+                        >
+                          {clarification ? "提交补充" : "确认"}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={isConfirmingAction}
+                          onClick={() => void handleRejectPending(action, "用户拒绝")}
+                        >
+                          {clarification ? "取消" : "拒绝"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </section>
           ) : null}

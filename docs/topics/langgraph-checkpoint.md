@@ -54,14 +54,14 @@ AgentRuntime.execute_entry()
   -> map AgentGraphState back to EntryResult
 ```
 
-entry 会先进入 orchestration graph。图内部复用现有 router、planner、validator、tool registry、memory 和 entry graph 能力；计划步骤执行逻辑已由 orchestration nodes 直接推进。
+entry 会先进入 orchestration graph。图内部复用现有 router、planner、validator、tool registry、memory、capture、ask 和 summarize 能力；普通分支与计划步骤执行逻辑均由 orchestration nodes 推进。
 
 ## Orchestration Graph
 
 图构建函数位于 [agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)：
 
 ```text
-build_entry_orchestration_graph(runtime, checkpointer=None)
+build_entry_orchestration_graph(deps, checkpointer=None)
 ```
 
 当前图结构：
@@ -69,13 +69,18 @@ build_entry_orchestration_graph(runtime, checkpointer=None)
 ```text
 START
   -> normalize_entry
+  -> clarify_entry
+     -> route_intent
+     -> finalize_entry_result
   -> route_intent
-     -> should_plan?
-        -> plan_task
+     -> capture_branch
+     -> ask_branch
+     -> summarize_branch
+     -> direct_answer_branch
+     -> plan_task
         -> validate_plan
            -> prepare_plan_execution
-           -> execute_current_runtime_path
-        -> execute_current_runtime_path
+           -> direct_answer_branch
   -> finalize_entry_result
 
 prepare_plan_execution
@@ -109,7 +114,19 @@ prepare_plan_execution
 thread_id = user_id + ":" + session_id + ":" + run_id
 ```
 
-### 2. `route_intent`
+### 2. `clarify_entry`
+
+节点函数：`_node_clarify_entry()`
+
+职责：
+
+- 在进入 router 前判断输入是否足以启动流程。
+- 对空输入、过短输入、只有“帮我看看 / 删除 / 总结”等缺少对象的片段，构造 `kind="clarification_required"` 的 interrupt payload。
+- 通过 `interrupt()` 暂停 run，并等待 `/api/entry/runs/{run_id}/resume` 传入补充文本。
+- 用户补充后，更新 `entry_text` 与 `entry_input.text`，再进入 `route_intent`。
+- 用户取消或补充为空时，直接进入 `finalize_entry_result` 结束。
+
+### 3. `route_intent`
 
 节点函数：`_node_route_intent()`
 
@@ -120,9 +137,9 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 - 将路由结果写入 `AgentGraphState`：`intent`、`intent_reason`、`requires_planning`、`router_decision`。
 - 写入 `intent_classified` 事件。
 
-条件边 `_should_plan()`：如果 `requires_planning=True` 则进入 `plan_task`，否则直接进入 `execute_current_runtime_path`。
+条件边 `_route_by_intent()`：如果 `requires_planning=True` 则进入 `plan_task`，否则根据 `intent` 进入 `capture_branch`、`ask_branch`、`summarize_branch` 或 `direct_answer_branch`。无法识别的 `unknown` 也进入 `direct_answer_branch`，由 classify 结果生成澄清提示。
 
-### 3. `plan_task`
+### 4. `plan_task`
 
 节点函数：`_node_plan_task()`
 
@@ -132,7 +149,7 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 - 将步骤转换为 dict 并写入 `state.plan_steps`。
 - 写入 `plan_created` 事件。
 
-### 4. `validate_plan`
+### 5. `validate_plan`
 
 节点函数：`_node_validate_plan()`
 
@@ -144,34 +161,22 @@ thread_id = user_id + ":" + session_id + ":" + run_id
   - 通过：保持 plan_steps 不变。
   - blocking 且有 `corrected_steps`：使用修正后的步骤。
   - blocking 且无 corrected steps：调用 `runtime._planner.fallback_plan()`。
-  - fallback 仍 blocking：降级为 `unknown` intent，回退到 legacy 路径。
+  - fallback 仍 blocking：降级为 `unknown` intent，进入澄清提示路径。
   - non-blocking warning：保留 warning，继续执行。
 - 写入 `plan_validated` 事件。
 
-条件边 `_after_validate_plan()`：如果计划有效且 `requires_planning=True` 则进入 `prepare_plan_execution`，否则进入 `execute_current_runtime_path`。
+条件边 `_after_validate_plan()`：如果计划有效且 `requires_planning=True` 则进入 `prepare_plan_execution`，否则进入 `direct_answer_branch` 生成澄清提示。
 
-### 5. `execute_current_runtime_path`
+### 6. 普通分支节点
 
-节点函数：`_node_execute_current_runtime_path()`
+普通非计划路径已经并入 entry 总图，不再维护单独的 entry 子图：
 
-职责：
+- `capture_branch`：处理 `capture_text / capture_link / capture_file`。
+- `ask_branch`：调用 `execute_ask()`。
+- `summarize_branch`：处理群聊/文本总结。
+- `direct_answer_branch`：处理低风险直接回复；当 `intent=unknown` 时，根据 classify 结果生成让用户补充信息的澄清提示。
 
-- 从 `AgentGraphState.router_decision` 重建 `RouterDecision`。
-- 从 `AgentGraphState.plan_steps` 重建 `PlanStep` 列表。
-- 调用 `runtime._execute_entry_body()`。
-- 将执行结果写回图状态：
-  - `answer`
-  - `answer_completed`
-  - `execution_trace`
-  - `plan_steps`
-  - `citations`
-  - `evidence_summary`
-  - `matches`
-- 写入 `answer_completed` 事件。
-
-`_execute_entry_body()` 位于 [agent/runtime_entry.py](../../src/personal_agent/agent/runtime_entry.py)，是从原 `execute_entry()` 中提取出来的执行主体。这样 orchestration graph 可以在已经完成 route/plan 后直接执行后半段，避免递归调用 `execute_entry()`。
-
-### 6. 计划执行节点
+### 7. 计划执行节点
 
 计划驱动路径由图节点直接执行，不再把整个计划交给旧的单个 `PlanExecutor` 黑盒。
 
@@ -185,7 +190,7 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 - `handle_step_failure`：处理失败、retry、replan 和依赖跳过。
 - `finalize_plan_execution`：汇总计划执行结果，生成最终回答和 execution trace。
 
-### 7. ReAct 子图
+### 8. ReAct 子图
 
 `react_step` 是一个 LangGraph 子图，用于 `execution_mode="react"` 的计划步骤。
 
@@ -223,7 +228,7 @@ START
 
 ### `AgentGraphState`
 
-`AgentGraphState` 是 checkpoint-safe 的 Pydantic 模型，保存 entry graph run 的流程状态。
+`AgentGraphState` 是 checkpoint-safe 的 Pydantic 模型，保存 entry orchestration run 的流程状态。
 
 核心字段：
 
@@ -359,7 +364,8 @@ run_failed
 ```text
 _get_orch_graph()
   -> _build_checkpointer(settings)
-  -> build_entry_orchestration_graph(self, checkpointer=checkpointer)
+  -> OrchestrationDeps.from_runtime(self)
+  -> build_entry_orchestration_graph(deps, checkpointer=checkpointer)
   -> cache in self._orch_graph
 ```
 
@@ -483,7 +489,6 @@ HITL 流程依赖 checkpoint 保存以下现场：
 - `DefaultIntentRouter`
 - `DefaultTaskPlanner`
 - `PlanValidator`
-- `build_entry_graph()`
 - `execute_capture()`
 - `execute_ask()`
 - `AnswerVerifier`

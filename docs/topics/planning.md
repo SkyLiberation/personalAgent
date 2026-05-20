@@ -169,7 +169,7 @@ MAX_RETRIES = 3
 - `delete_knowledge`
 - `solidify_conversation`
 
-其他意图仍走稳定的 LangGraph 固定分支，并通过 `execution_trace` 可观测：
+其他意图走 entry orchestration graph 内置普通分支，并通过 `execution_trace` 可观测：
 
 - `capture`
 - `ask`

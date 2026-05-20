@@ -1,8 +1,8 @@
 """Entry orchestration graph — unified LangGraph shell for the entry pipeline.
 
-This graph wraps the existing router / planner / PlanExecutor / entry graph
-branches inside a single LangGraph StateGraph so that every entry run
-benefits from checkpoint / interrupt / resume capabilities.
+This graph wraps routing, planning, fixed non-planning branches, and
+plan-step execution inside a single LangGraph StateGraph so that every entry
+run benefits from checkpoint / interrupt / resume capabilities.
 
 Phase 1
 -------
@@ -26,6 +26,8 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from dataclasses import dataclass
+from typing import Callable
 from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -42,7 +44,57 @@ from .orchestration_models import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from ..capture import CaptureService
+    from ..core.config import Settings
+    from ..graphiti.store import GraphitiStore
+    from ..memory import MemoryFacade
+    from ..storage.memory_store import LocalMemoryStore
+    from ..tools import ToolRegistry
+    from .plan_validator import PlanValidator
     from .planner import PlanStep
+    from .replanner import Replanner
+    from .router import DefaultIntentRouter
+    from .runtime_results import AskResult, CaptureResult
+    from .verifier import AnswerVerifier
+
+
+@dataclass(slots=True)
+class OrchestrationDeps:
+    """Explicit dependencies used by the entry orchestration graph."""
+
+    settings: "Settings"
+    memory: "MemoryFacade"
+    intent_router: "DefaultIntentRouter"
+    planner: object
+    plan_validator: "PlanValidator"
+    replanner: "Replanner | None"
+    verifier: "AnswerVerifier | None"
+    tool_registry: "ToolRegistry"
+    graph_store: "GraphitiStore"
+    store: "LocalMemoryStore"
+    execute_ask: Callable[..., "AskResult"]
+    execute_capture: Callable[..., "CaptureResult"] | None = None
+    capture_service: "CaptureService | None" = None
+    summarize_thread: Callable[[str, str], str] | None = None
+
+    @classmethod
+    def from_runtime(cls, runtime) -> "OrchestrationDeps":
+        return cls(
+            settings=runtime.settings,
+            memory=runtime.memory,
+            intent_router=runtime._intent_router,
+            planner=runtime._planner,
+            plan_validator=runtime._plan_validator,
+            replanner=getattr(runtime, "_replanner", None),
+            verifier=getattr(runtime, "_verifier", None),
+            tool_registry=runtime._tool_registry,
+            graph_store=runtime.graph_store,
+            store=runtime.store,
+            execute_ask=runtime.execute_ask,
+            execute_capture=runtime.execute_capture,
+            capture_service=runtime.capture_service,
+            summarize_thread=runtime._summarize_thread,
+        )
 
 # ---------------------------------------------------------------------------
 # Constants (mirrored from plan_executor for replay-safe retry)
@@ -192,15 +244,15 @@ def _default_plan_answer(steps: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_allowed_tools_for_step(step: "PlanStep", runtime) -> set[str]:
+def _resolve_allowed_tools_for_step(step: "PlanStep", deps: OrchestrationDeps) -> set[str]:
     allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
-    registered = {t.name for t in runtime._tool_registry.list_tools()}
+    registered = {t.name for t in deps.tool_registry.list_tools()}
     return allowed & registered
 
 
-def _is_react_tool_blocked(tool_name: str, runtime) -> bool:
+def _is_react_tool_blocked(tool_name: str, deps: OrchestrationDeps) -> bool:
     spec = None
-    for t in runtime._tool_registry.list_tools():
+    for t in deps.tool_registry.list_tools():
         if t.name == tool_name:
             spec = t
             break
@@ -226,9 +278,9 @@ def _build_react_context(step: "PlanStep", step_results: dict) -> str:
     return "\n".join(parts) if parts else "无"
 
 
-def _format_react_tools(allowed: set[str], runtime) -> str:
+def _format_react_tools(allowed: set[str], deps: OrchestrationDeps) -> str:
     lines: list[str] = []
-    for spec in runtime._tool_registry.list_tools():
+    for spec in deps.tool_registry.list_tools():
         if spec.name in allowed:
             lines.append(f"- {spec.name}: {spec.description}")
             if spec.input_schema:
@@ -254,10 +306,10 @@ def _summarize_react_tool_result(data: object) -> str:
     return str(data)[:300]
 
 
-def _react_llm_respond(user_prompt: str, runtime) -> str | None:
+def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
     from openai import OpenAI
 
-    settings = runtime.settings
+    settings = deps.settings
     if not (settings.openai_api_key and settings.openai_base_url):
         return None
     try:
@@ -290,6 +342,95 @@ def _react_parse_response(raw: str) -> dict | None:
         return None
 
 
+def _entry_clarification_issue(text: str) -> dict | None:
+    stripped = (text or "").strip()
+    lower = stripped.lower()
+    if not stripped:
+        return _clarification_payload_parts(
+            "我还没有收到具体内容。请补充你想记录、查询、总结或执行的事项。",
+            "入口内容为空，无法开始路由。",
+        )
+
+    direct_short = {
+        "你好", "hello", "hi", "嗨", "hey", "谢谢", "感谢", "thanks", "再见", "bye",
+        "好的", "嗯", "哦", "哈哈",
+    }
+    if lower in direct_short:
+        return None
+
+    ambiguous_exact = {
+        "帮我", "帮我看看", "看看", "处理一下", "帮我处理", "搞一下", "弄一下",
+        "继续", "这个", "那个", "这条", "那条", "一下",
+    }
+    action_only = {
+        "记录", "记一下", "保存", "收录", "总结", "汇总", "删除", "删掉",
+        "查询", "问一下", "解释一下",
+    }
+    if stripped in ambiguous_exact or stripped in action_only:
+        return _clarification_payload_parts(
+            "这句话还不足以判断下一步。请补充具体内容，或选择这是要记录、查询、总结还是执行操作。",
+            f"输入 `{stripped}` 缺少明确对象或目标。",
+        )
+
+    if len(stripped) <= 4 and not any(ch in stripped for ch in ("?", "？")):
+        return _clarification_payload_parts(
+            "当前内容太短，无法稳定判断意图。请补充完整目标或上下文。",
+            f"输入 `{stripped}` 过短。",
+        )
+
+    return None
+
+
+def _clarification_payload_parts(message: str, summary: str) -> dict:
+    return {
+        "message": message,
+        "summary": summary,
+        "options": [
+            {
+                "id": "capture",
+                "label": "记录内容",
+                "prompt": "请补充要写入知识库的具体内容。",
+            },
+            {
+                "id": "ask",
+                "label": "提出问题",
+                "prompt": "请补充你想查询或追问的问题。",
+            },
+            {
+                "id": "summarize",
+                "label": "总结内容",
+                "prompt": "请补充要总结的文本、会话或范围。",
+            },
+            {
+                "id": "action",
+                "label": "执行操作",
+                "prompt": "请补充要执行的操作和对象，例如要删除哪条笔记。",
+            },
+        ],
+    }
+
+
+def _resume_value_get(value: object, key: str, default: object = None) -> object:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return default
+
+
+def _merge_clarification_text(original: str, supplemental: str, option_id: str) -> str:
+    prefix_map = {
+        "capture": "记一下：",
+        "ask": "请问：",
+        "summarize": "总结：",
+        "action": "",
+    }
+    prefix = prefix_map.get(option_id, "")
+    if prefix and not supplemental.startswith(prefix):
+        return f"{prefix}{supplemental}"
+    if original.strip() and original.strip() not in {"帮我", "帮我看看", "看看", "处理一下", "继续"}:
+        return f"{original.strip()} {supplemental}".strip()
+    return supplemental
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 nodes
 # ---------------------------------------------------------------------------
@@ -317,13 +458,96 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     return {"user_id": user_id, "session_id": session_id, "thread_id": thread_id, "entry_text": text}
 
 
+def _node_clarify_entry(state: AgentGraphState) -> dict:
+    """Pause before routing when the entry lacks enough information to classify.
+
+    This node protects the downstream router from guessing when the user input
+    is only an action fragment such as "帮我处理" or "删除". On resume, the
+    user's supplemental text becomes the new entry text and routing starts.
+    """
+    issue = _entry_clarification_issue(state.entry_text)
+    if issue is None:
+        return {}
+
+    payload = {
+        "kind": "clarification_required",
+        "action_type": "clarify_entry",
+        "step_id": "clarify_entry",
+        "title": "需要补充信息",
+        "message": issue["message"],
+        "summary": issue["summary"],
+        "original_text": state.entry_text,
+        "options": issue["options"],
+    }
+    state.pending_confirmation = payload
+    state.add_event("clarification_required", payload)
+
+    resume_value = interrupt(payload)
+    decision = str(_resume_value_get(resume_value, "decision", "clarify")).lower()
+    if decision in ("reject", "cancel"):
+        state.pending_confirmation = None
+        state.answer = "已取消。你可以重新发送更完整的内容。"
+        state.answer_completed = True
+        state.execution_trace = ["用户取消补充信息，流程结束"]
+        state.add_event("clarification_resumed", {"decision": "cancelled"})
+        return {
+            "pending_confirmation": None,
+            "answer": state.answer,
+            "answer_completed": True,
+            "execution_trace": state.execution_trace,
+        }
+
+    supplemental = str(_resume_value_get(resume_value, "text", "")).strip()
+    option_id = str(_resume_value_get(resume_value, "option_id", "")).strip()
+    if not supplemental:
+        state.pending_confirmation = None
+        state.answer = "还需要补充具体内容后才能继续。请重新发起请求，并说明要记录、查询、总结或执行什么。"
+        state.answer_completed = True
+        state.execution_trace = ["补充信息为空，流程结束"]
+        state.add_event("clarification_resumed", {"decision": "empty"})
+        return {
+            "pending_confirmation": None,
+            "answer": state.answer,
+            "answer_completed": True,
+            "execution_trace": state.execution_trace,
+        }
+
+    clarified_text = _merge_clarification_text(state.entry_text, supplemental, option_id)
+    state.entry_text = clarified_text
+    if state.entry_input is not None:
+        state.entry_input = state.entry_input.model_copy(update={"text": clarified_text})
+    else:
+        state.entry_input = EntryInput(
+            text=clarified_text,
+            user_id=state.user_id,
+            session_id=state.session_id,
+        )
+    state.pending_confirmation = None
+    state.add_event("clarification_resumed", {
+        "decision": "clarified",
+        "option_id": option_id,
+        "text_preview": clarified_text[:120],
+    })
+    return {
+        "entry_text": clarified_text,
+        "entry_input": state.entry_input,
+        "pending_confirmation": None,
+    }
+
+
+def _after_clarify_entry(state: AgentGraphState) -> str:
+    if state.answer_completed:
+        return "finalize_entry_result"
+    return "route_intent"
+
+
 # ============================================================================
 # Phase 6: route_intent → should_plan → plan_task → validate_plan (split from
 # the former composite route_and_plan node)
 # ============================================================================
 
 
-def _node_route_intent(state: AgentGraphState, *, runtime) -> dict:
+def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Session binding + intent classification (no planning yet).
 
     Checkpoint boundary: after this node the intent is known and can be
@@ -338,10 +562,10 @@ def _node_route_intent(state: AgentGraphState, *, runtime) -> dict:
             session_id=state.session_id,
         )
 
-    runtime.memory.bind_session(state.user_id, state.session_id)
-    runtime.memory.refresh_conversation_summary(state.user_id, state.session_id)
-    decision = runtime._intent_router.classify(state.entry_input)
-    runtime.memory.working.set_goal(
+    deps.memory.bind_session(state.user_id, state.session_id)
+    deps.memory.refresh_conversation_summary(state.user_id, state.session_id)
+    decision = deps.intent_router.classify(state.entry_input)
+    deps.memory.working.set_goal(
         f"入口任务[{decision.route}]: {state.entry_input.text[:60]}"
     )
 
@@ -397,14 +621,7 @@ def _node_route_intent(state: AgentGraphState, *, runtime) -> dict:
     }
 
 
-def _should_plan(state: AgentGraphState) -> str:
-    """Conditional edge: decide whether to enter the planning branch."""
-    if state.requires_planning:
-        return "plan_task"
-    return "execute_current_runtime_path"
-
-
-def _node_plan_task(state: AgentGraphState, *, runtime) -> dict:
+def _node_plan_task(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Generate structured plan steps via the task planner.
 
     Checkpoint boundary: after this node the plan steps exist and can be
@@ -412,7 +629,7 @@ def _node_plan_task(state: AgentGraphState, *, runtime) -> dict:
     """
     route = str(state.router_decision.get("route", state.intent))
     entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
-    steps = runtime._planner.plan(route, entry_text)
+    steps = deps.planner.plan(route, entry_text)
     plan_dicts = [_plan_step_to_dict(s) for s in steps]
 
     state.plan_steps = plan_dicts
@@ -425,15 +642,15 @@ def _node_plan_task(state: AgentGraphState, *, runtime) -> dict:
     return {"plan_steps": plan_dicts}
 
 
-def _node_validate_plan(state: AgentGraphState, *, runtime) -> dict:
+def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Validate plan steps and handle blocking / fallback / reversion.
 
     Checkpoint boundary: after this node the plan is either confirmed valid
-    or the intent has been reverted to a non-planning fallback (unknown).
+    or the intent has been reverted to a clarification fallback (unknown).
 
     If validation completely fails (blocking after retry), the intent is
     reverted to ``unknown`` and ``requires_planning`` is set to ``False`` so
-    the routing layer sends the entry to the legacy graph path.
+    the routing layer sends the entry to the clarification/direct-answer path.
     """
     from .router import RouterDecision
 
@@ -452,7 +669,7 @@ def _node_validate_plan(state: AgentGraphState, *, runtime) -> dict:
     )
 
     steps = [_plan_step_from_dict(sd) for sd in (state.plan_steps or [])]
-    validation = runtime._plan_validator.validate(steps, decision)
+    validation = deps.plan_validator.validate(steps, decision)
 
     if validation.blocking:
         logger.warning(
@@ -462,8 +679,8 @@ def _node_validate_plan(state: AgentGraphState, *, runtime) -> dict:
         if validation.corrected_steps:
             validated_steps = validation.corrected_steps
         else:
-            validated_steps = runtime._planner.fallback_plan(decision.route)
-            revalidation = runtime._plan_validator.validate(validated_steps, decision)
+            validated_steps = deps.planner.fallback_plan(decision.route)
+            revalidation = deps.plan_validator.validate(validated_steps, decision)
             if revalidation.blocking:
                 logger.error(
                     "Heuristic plan also blocked: %s. Reverting to unknown.",
@@ -475,7 +692,7 @@ def _node_validate_plan(state: AgentGraphState, *, runtime) -> dict:
                     risk_level="low",
                     user_visible_message=f"计划校验失败: {'; '.join(revalidation.issues[:3])}",
                 )
-                validated_steps = runtime._planner.fallback_plan("unknown")
+                validated_steps = deps.planner.fallback_plan("unknown")
                 # Revert intent so the routing layer skips plan execution
                 state.intent = "unknown"
                 state.requires_planning = False
@@ -506,70 +723,317 @@ def _node_validate_plan(state: AgentGraphState, *, runtime) -> dict:
 
 
 def _after_validate_plan(state: AgentGraphState) -> str:
-    """After validation: enter plan execution or fall back to legacy branch."""
+    """After validation: enter plan execution or ask the user to clarify."""
     if state.requires_planning and state.plan_steps:
         return "prepare_plan_execution"
-    return "execute_current_runtime_path"
+    return "direct_answer_branch"
 
 
-def _node_execute_current_runtime_path(state: AgentGraphState, *, runtime) -> dict:
-    """Execute capture/ask/summarize/direct_answer — non-planning intents."""
-    from .router import RouterDecision
+def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Execute capture branch for capture_text / capture_link / capture_file intents.
 
-    if state.entry_input is None:
-        state.entry_input = EntryInput(
-            text=state.entry_text,
-            user_id=state.user_id,
-            session_id=state.session_id,
-        )
+    Uses the already-classified intent from ``state.intent`` — no duplicate routing.
+    """
+    entry_input = state.entry_input
+    if entry_input is None:
+        state.answer = "未收到可采集内容。"
+        state.execution_trace = _execution_trace_for_intent(state.intent)
+        return {"answer": state.answer, "execution_trace": state.execution_trace}
 
-    rd = state.router_decision
-    decision = RouterDecision(
-        route=rd.get("route", state.intent),
-        confidence=float(rd.get("confidence", 0.5)),
-        requires_tools=bool(rd.get("requires_tools", False)),
-        requires_retrieval=bool(rd.get("requires_retrieval", False)),
-        requires_planning=bool(rd.get("requires_planning", False)),
-        risk_level=rd.get("risk_level", "low"),
-        requires_confirmation=bool(rd.get("requires_confirmation", False)),
-        missing_information=list(rd.get("missing_information", [])),
-        candidate_tools=list(rd.get("candidate_tools", [])),
-        user_visible_message=str(rd.get("user_visible_message", "")),
+    intent = state.intent
+    logger.debug("Executing capture branch intent=%s user=%s", intent, state.user_id)
+
+    if intent == "capture_file":
+        file_path = entry_input.metadata.get("file_path", "")
+        if file_path:
+            from pathlib import Path
+
+            path = Path(file_path)
+            if path.exists() and deps.capture_service is not None:
+                original_filename = entry_input.metadata.get("original_filename", path.name)
+                file_bytes = path.read_bytes()
+                capture_text = deps.capture_service.capture_text_from_upload(
+                    filename=original_filename,
+                    content_type=None,
+                    file_bytes=file_bytes,
+                    source_type="file",
+                )
+                result = deps.execute_capture(
+                    text=capture_text,
+                    source_type="file",
+                    user_id=entry_input.user_id,
+                    source_ref=entry_input.source_ref or file_path,
+                )
+                state.answer = f"已收进知识库：{result.note.title}"
+                state.execution_trace = _execution_trace_for_intent(intent)
+                return {"answer": state.answer, "execution_trace": state.execution_trace}
+        state.answer = "文件消息已识别，但文件内容暂未获取到。请通过 Web 端上传文件，或稍后重试。"
+        state.execution_trace = _execution_trace_for_intent(intent)
+        return {"answer": state.answer, "execution_trace": state.execution_trace}
+
+    capture_text = entry_input.text
+    source_type = "text"
+    source_ref = entry_input.source_ref
+    if intent == "capture_link":
+        source_type = "link"
+        url = entry_input.metadata.get("url") or _first_url(entry_input.text)
+        if not url:
+            state.answer = "识别成了链接采集，但消息里没有找到可用链接。"
+            state.execution_trace = _execution_trace_for_intent(intent)
+            return {"answer": state.answer, "execution_trace": state.execution_trace}
+        source_ref = url
+        if deps.capture_service is None:
+            state.answer = "当前没有可用的采集服务，暂时无法抓取链接正文。"
+            state.execution_trace = _execution_trace_for_intent(intent)
+            return {"answer": state.answer, "execution_trace": state.execution_trace}
+        capture_text = deps.capture_service.capture_text_from_url(url)
+
+    result = deps.execute_capture(
+        text=capture_text,
+        source_type=source_type,
+        user_id=entry_input.user_id,
+        source_ref=source_ref,
     )
+    state.answer = f"已收进知识库：{result.note.title}"
+    state.execution_trace = _execution_trace_for_intent(intent)
+    return {"answer": state.answer, "execution_trace": state.execution_trace}
 
-    validated_steps = [_plan_step_from_dict(sd) for sd in state.plan_steps]
 
-    result = runtime._execute_entry_body(
-        entry_input=state.entry_input,
-        decision=decision,
-        validated_steps=validated_steps,
-        normalized_user=state.user_id,
-        normalized_session=state.session_id,
-    )
+def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Execute ask branch — already classified, no duplicate routing."""
+    entry_input = state.entry_input
+    if entry_input is None or not entry_input.text.strip():
+        state.answer = "未收到可提问内容。"
+        return {"answer": state.answer}
 
-    state.answer = result.reply_text
-    state.answer_completed = True
-    state.execution_trace = result.execution_trace or state.execution_trace
-    state.plan_steps = result.plan_steps or state.plan_steps
-
-    if result.ask_result:
-        state.citations = result.ask_result.citations or []
-        state.evidence_summary = result.ask_result.evidence or []
-        state.matches = [
-            {"id": m.id, "title": m.title, "summary": m.summary}
-            for m in (result.ask_result.matches or [])
-        ]
-
-    state.add_event("answer_completed", {"answer": state.answer})
-    logger.info(
-        "execute_current_runtime_path run_id=%s intent=%s answer_len=%d",
-        state.run_id, state.intent, len(state.answer or ""),
-    )
+    logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
+    result = deps.execute_ask(entry_input.text, entry_input.user_id, entry_input.session_id)
+    state.answer = result.answer
+    state.citations = result.citations
+    state.execution_trace = _execution_trace_for_intent(state.intent)
+    state.matches = [
+        {"id": m.id, "title": m.title, "summary": m.summary}
+        for m in (result.matches or [])
+    ]
     return {
         "answer": state.answer,
-        "answer_completed": True,
+        "citations": state.citations,
+        "matches": state.matches,
         "execution_trace": state.execution_trace,
     }
+
+
+def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Execute summarize_thread branch — already classified, no duplicate routing."""
+    entry_input = state.entry_input
+    if entry_input is None:
+        state.answer = "未收到可总结的内容。"
+        return {"answer": state.answer}
+
+    logger.debug("Executing summarize branch user=%s", state.user_id)
+
+    import json as _json
+
+    thread_messages_raw = entry_input.metadata.get("thread_messages", "")
+    if thread_messages_raw and deps.summarize_thread is not None:
+        try:
+            messages = _json.loads(thread_messages_raw)
+            if isinstance(messages, list) and messages:
+                messages_text = "\n".join(
+                    f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
+                    for m in messages
+                )
+                summary = deps.summarize_thread(messages_text, entry_input.user_id or "default")
+                state.answer = summary
+                state.execution_trace = _execution_trace_for_intent(state.intent)
+                return {"answer": state.answer, "execution_trace": state.execution_trace}
+        except (_json.JSONDecodeError, Exception):
+            pass
+
+    chat_id = entry_input.metadata.get("chat_id", "")
+    if chat_id:
+        state.answer = (
+            "已识别为群聊总结诉求。当前暂时无法获取会话消息，请稍后重试，"
+            "或直接粘贴需要总结的聊天内容。"
+        )
+    else:
+        state.answer = "已识别为总结诉求。请直接发送需要总结的文本内容，或在群聊中使用此功能。"
+    state.execution_trace = _execution_trace_for_intent(state.intent)
+    return {"answer": state.answer, "execution_trace": state.execution_trace}
+
+
+def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Execute direct answer or classification-driven clarification."""
+    entry_input = state.entry_input
+    if entry_input is None or not entry_input.text.strip():
+        state.answer = "你好，有什么可以帮你的？"
+        return {"answer": state.answer}
+
+    logger.debug("Executing direct_answer branch user=%s", state.user_id)
+
+    if state.intent == "unknown":
+        state.answer = _build_clarification_answer(state)
+        state.execution_trace = _execution_trace_for_intent(state.intent)
+        return {"answer": state.answer, "execution_trace": state.execution_trace}
+
+    if (
+        deps.settings.openai_api_key
+        and deps.settings.openai_base_url
+        and deps.settings.openai_small_model
+    ):
+        from openai import OpenAI
+
+        try:
+            client = OpenAI(
+                api_key=deps.settings.openai_api_key,
+                base_url=deps.settings.openai_base_url,
+            )
+            response = client.chat.completions.create(
+                model=deps.settings.openai_small_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。",
+                    },
+                    {"role": "user", "content": entry_input.text},
+                ],
+                temperature=0.5,
+                max_tokens=300,
+            )
+            generated = (response.choices[0].message.content or "").strip()
+            if generated:
+                state.answer = generated
+                state.execution_trace = _execution_trace_for_intent(state.intent)
+                return {"answer": state.answer, "execution_trace": state.execution_trace}
+        except Exception:
+            logger.exception("Direct answer LLM call failed")
+
+    state.answer = _simple_direct_answer(entry_input.text)
+    state.execution_trace = _execution_trace_for_intent(state.intent)
+    return {"answer": state.answer, "execution_trace": state.execution_trace}
+
+
+# ---------------------------------------------------------------------------
+# Helpers ported from entry_nodes.py
+# ---------------------------------------------------------------------------
+
+
+def _first_url(text: str) -> str | None:
+    import re
+
+    match = re.search(r"https?://\S+", text)
+    if match is None:
+        return None
+    return match.group(0).rstrip(".,);]}>\"'")
+
+
+def _simple_direct_answer(text: str) -> str:
+    """Generate a simple reply without LLM, for when LLM is unavailable."""
+    lower = text.strip().lower()
+    greetings = {"你好", "hello", "hi", "嗨", "hey", "晚上好", "早上好", "下午好"}
+    thanks = {"谢谢", "感谢", "thanks", "thank"}
+    goodbye = {"再见", "bye", "拜拜", "晚安"}
+    if any(g in lower for g in greetings):
+        return "你好！有什么可以帮你的？"
+    if any(g in lower for g in thanks):
+        return "不客气，还有其他需要吗？"
+    if any(g in lower for g in goodbye):
+        return "再见，祝你好运！"
+    return "收到，还有其他需要吗？"
+
+
+_EXECUTION_TRACE_MAP: dict[str, list[str]] = {
+    "ask": [
+        "在知识库和图谱中检索相关内容",
+        "整合检索到的证据，生成自然语言回答",
+        "校验回答的事实依据和引用完整性",
+        "若证据不足，通过网络搜索补充外部信息",
+    ],
+    "capture_text": [
+        "采集内容并写入知识库",
+        "整理采集结果，生成标题和摘要",
+        "校验笔记完整性和格式",
+    ],
+    "capture_link": [
+        "抓取链接内容",
+        "采集内容并写入知识库",
+        "整理采集结果",
+    ],
+    "capture_file": [
+        "解析上传文件",
+        "采集内容并写入知识库",
+        "整理采集结果",
+    ],
+    "summarize_thread": [
+        "获取群聊消息记录",
+        "按主题分点总结讨论要点和结论",
+    ],
+    "direct_answer": [
+        "直接生成简短回复",
+    ],
+}
+
+
+def _execution_trace_for_intent(intent: str) -> list[str]:
+    return _EXECUTION_TRACE_MAP.get(intent, ["生成通用回复"])
+
+
+def _build_clarification_answer(state: AgentGraphState) -> str:
+    """Build a clarification prompt from the classify result."""
+    rd = state.router_decision or {}
+    missing = [
+        str(item).strip()
+        for item in rd.get("missing_information", [])
+        if str(item).strip()
+    ]
+    reason = str(rd.get("user_visible_message") or state.intent_reason or "").strip()
+
+    if missing:
+        details = "、".join(missing[:3])
+        return f"我还需要你补充：{details}。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
+
+    if reason and "计划校验失败" in reason:
+        return f"{reason}。请补充更明确的目标或操作范围后我再继续。"
+
+    return "我暂时没判断出你的意图。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
+
+
+def _execution_trace_for_intent(intent: str) -> list[str]:
+    """Return a lightweight trace for non-planning branches."""
+    trace_map = {
+        "ask": [
+            "在知识库和图谱中检索相关内容",
+            "整合检索到的证据，生成自然语言回答",
+            "校验回答的事实依据和引用完整性",
+            "若证据不足，通过网络搜索补充外部信息",
+        ],
+        "capture_text": [
+            "采集内容并写入知识库",
+            "整理采集结果，生成标题和摘要",
+            "校验笔记完整性和格式",
+        ],
+        "capture_link": [
+            "抓取链接内容",
+            "采集内容并写入知识库",
+            "整理采集结果",
+        ],
+        "capture_file": [
+            "解析上传文件",
+            "采集内容并写入知识库",
+            "整理采集结果",
+        ],
+        "summarize_thread": [
+            "获取群聊消息记录",
+            "按主题分点总结讨论要点和结论",
+        ],
+        "direct_answer": [
+            "直接生成简短回复",
+        ],
+        "unknown": [
+            "根据意图识别结果请求用户补充信息",
+        ],
+    }
+    return trace_map.get(intent, ["生成通用回复"])
 
 
 def _node_finalize_entry_result(state: AgentGraphState) -> dict:
@@ -649,7 +1113,7 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
     return {}
 
 
-def _node_execute_plan_step(state: AgentGraphState, *, runtime) -> dict:
+def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Dispatch a single plan step.  Raises on failure; retry/replan handled
     by the handle_step_result node.
 
@@ -685,7 +1149,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, runtime) -> dict:
     if getattr(step, "execution_mode", "deterministic") == "react":
         state.react_step_id = step.step_id
         state.react_max_iterations = min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP)
-        state.react_allowed_tools = list(_resolve_allowed_tools_for_step(step, runtime))
+        state.react_allowed_tools = list(_resolve_allowed_tools_for_step(step, deps))
         state.react_iteration_index = 0
         state.react_done = False
         state.react_result = {}
@@ -709,7 +1173,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, runtime) -> dict:
         }
 
     try:
-        _dispatch_plan_step(step, sd, state, runtime)
+        _dispatch_plan_step(step, sd, state, deps)
     except Exception as exc:
         err_msg = f"{type(exc).__name__}: {exc}"
         logger.warning("Plan step %s failed: %s", step.step_id, err_msg)
@@ -776,7 +1240,7 @@ def _node_handle_step_success(state: AgentGraphState) -> dict:
     return {"plan_steps": state.plan_steps}
 
 
-def _node_handle_step_failure(state: AgentGraphState, *, runtime) -> dict:
+def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Handle a failed step: retry, replan, skip, or abort."""
     if state.current_step_index >= len(state.plan_steps):
         return {}
@@ -803,7 +1267,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, runtime) -> dict:
 
     # Retries exhausted — try replanning
     if on_failure == "retry" and retry_count >= _MAX_RETRIES:
-        replanner = getattr(runtime, "_replanner", None)
+        replanner = deps.replanner
         if replanner is not None:
             state.add_event("replan_attempted", {
                 "step_id": step.step_id,
@@ -819,7 +1283,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, runtime) -> dict:
                 )
                 if revised:
                     # Validate revised steps
-                    plan_validator = getattr(runtime, "_plan_validator", None)
+                    plan_validator = deps.plan_validator
                     if plan_validator is not None:
                         from .router import RouterDecision
                         rd = state.router_decision
@@ -898,7 +1362,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, runtime) -> dict:
     return {"plan_steps": state.plan_steps}
 
 
-def _node_confirm_step(state: AgentGraphState, *, runtime) -> dict:
+def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Pause the graph for human confirmation via ``interrupt()``.
 
     First invocation: ``interrupt()`` pauses the graph and returns an
@@ -943,7 +1407,7 @@ def _node_confirm_step(state: AgentGraphState, *, runtime) -> dict:
         tool_input["action_id"] = pending.get("action_id", "")
         tool_input["token"] = pending.get("token", "")
 
-        result = runtime._tool_registry.execute(step.tool_name, **tool_input)
+        result = deps.tool_registry.execute(step.tool_name, **tool_input)
         if result is not None and hasattr(result, "ok") and not result.ok:
             err_msg = result.error or f"确认后工具 {step.tool_name} 执行失败"
             sd["status"] = "failed"
@@ -1039,7 +1503,7 @@ def _dispatch_plan_step(
     step: "PlanStep",
     sd: dict,
     state: AgentGraphState,
-    runtime,
+    deps: OrchestrationDeps,
 ) -> None:
     """Execute a single step by action_type. Raises on failure.
 
@@ -1049,11 +1513,11 @@ def _dispatch_plan_step(
     step_results: dict = state.step_results
 
     if step.action_type == "retrieve":
-        result_data = _execute_retrieve_step(step, state, runtime)
+        result_data = _execute_retrieve_step(step, state, deps)
         step_results[step.step_id] = result_data
 
     elif step.action_type == "tool_call":
-        result_data = _execute_tool_call_step(step, runtime)
+        result_data = _execute_tool_call_step(step, deps)
         step_results[step.step_id] = result_data
         if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
             state.pending_confirmation = {
@@ -1067,11 +1531,11 @@ def _dispatch_plan_step(
             }
 
     elif step.action_type == "resolve":
-        result_data = _execute_resolve_step(step, state, runtime)
+        result_data = _execute_resolve_step(step, state, deps)
         step_results[step.step_id] = result_data
 
     elif step.action_type == "compose":
-        answer = _execute_compose_step(step, state, runtime)
+        answer = _execute_compose_step(step, state, deps)
         state.answer = answer
         step_results[step.step_id] = {"answer": answer, "draft": True}
         if answer:
@@ -1081,15 +1545,15 @@ def _dispatch_plan_step(
             })
 
     elif step.action_type == "verify":
-        _execute_verify_step(step, state, runtime)
+        _execute_verify_step(step, state, deps)
 
     else:
         raise ValueError(f"未知的 action_type: {step.action_type}")
 
 
-def _execute_retrieve_step(step, state: AgentGraphState, runtime) -> object:
+def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
     question = step.tool_input.get("question") if step.tool_input else step.description
-    result = runtime.graph_store.ask(str(question), state.user_id)
+    result = deps.graph_store.ask(str(question), state.user_id)
     if result.enabled and result.answer:
         return {
             "answer": result.answer,
@@ -1100,10 +1564,10 @@ def _execute_retrieve_step(step, state: AgentGraphState, runtime) -> object:
     return {"answer": "", "entity_names": [], "relation_facts": [], "hint": "graph disabled or empty"}
 
 
-def _execute_tool_call_step(step, runtime) -> object:
+def _execute_tool_call_step(step, deps: OrchestrationDeps) -> object:
     if not step.tool_name:
         raise ValueError("tool_call step missing tool_name")
-    result = runtime._tool_registry.execute(
+    result = deps.tool_registry.execute(
         step.tool_name, **(step.tool_input or {})
     )
     if result is not None and hasattr(result, "ok") and not result.ok:
@@ -1111,7 +1575,7 @@ def _execute_tool_call_step(step, runtime) -> object:
     return result.data if hasattr(result, "data") and result.data is not None else {"ok": True}
 
 
-def _execute_resolve_step(step, state: AgentGraphState, runtime) -> object:
+def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
     user_id = state.user_id
     original_query = state.entry_text or ""
 
@@ -1126,7 +1590,7 @@ def _execute_resolve_step(step, state: AgentGraphState, runtime) -> object:
             str_uuids = [str(u) for u in episode_uuids if u]
             if str_uuids:
                 try:
-                    matched = runtime.store.find_notes_by_graph_episode_uuids(user_id, str_uuids)
+                    matched = deps.store.find_notes_by_graph_episode_uuids(user_id, str_uuids)
                     for note in matched:
                         candidates.append({
                             "note_id": note.id, "title": note.title,
@@ -1138,7 +1602,7 @@ def _execute_resolve_step(step, state: AgentGraphState, runtime) -> object:
     # 2. Local similarity
     if not candidates and original_query:
         try:
-            similar = runtime.store.find_similar_notes(user_id, original_query, limit=5)
+            similar = deps.store.find_similar_notes(user_id, original_query, limit=5)
             for note in similar:
                 candidates.append({
                     "note_id": note.id, "title": note.title,
@@ -1150,7 +1614,7 @@ def _execute_resolve_step(step, state: AgentGraphState, runtime) -> object:
     # 3. Keyword match
     if not candidates:
         try:
-            all_notes = runtime.store.list_notes(user_id)
+            all_notes = deps.store.list_notes(user_id)
             ql = original_query.lower()
             for note in all_notes:
                 if ql and (ql in note.title.lower() or ql in (note.content or "").lower()):
@@ -1175,7 +1639,7 @@ def _execute_resolve_step(step, state: AgentGraphState, runtime) -> object:
     }
 
 
-def _execute_compose_step(step, state: AgentGraphState, runtime) -> str:
+def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> str:
     context_parts: list[str] = []
     for sid, data in state.step_results.items():
         if isinstance(data, dict):
@@ -1192,7 +1656,7 @@ def _execute_compose_step(step, state: AgentGraphState, runtime) -> str:
         question = step.description or "根据已有信息生成回答"
 
     try:
-        ask_result = runtime.execute_ask(question, state.user_id)
+        ask_result = deps.execute_ask(question, state.user_id)
         answer = ask_result.answer
     except Exception:
         logger.exception("Compose step %s failed", step.step_id)
@@ -1201,7 +1665,7 @@ def _execute_compose_step(step, state: AgentGraphState, runtime) -> str:
     # Save solidify drafts
     if state.intent == "solidify_conversation" and answer:
         try:
-            memory = getattr(runtime, "memory", None)
+            memory = deps.memory
             if memory:
                 draft_id = memory.save_draft(state.user_id, answer, source_context=context[:500])
                 if draft_id and step.step_id in state.step_results:
@@ -1212,11 +1676,11 @@ def _execute_compose_step(step, state: AgentGraphState, runtime) -> str:
     return answer
 
 
-def _execute_verify_step(step, state: AgentGraphState, runtime) -> None:
+def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> None:
     if not state.answer:
         return
     try:
-        verifier = getattr(runtime, "_verifier", None)
+        verifier = deps.verifier
         if verifier:
             verifier.verify(
                 question=state.entry_text or "",
@@ -1231,13 +1695,6 @@ def _execute_verify_step(step, state: AgentGraphState, runtime) -> None:
 # ---------------------------------------------------------------------------
 # Conditional edge functions
 # ---------------------------------------------------------------------------
-
-def _route_after_plan(state: AgentGraphState) -> str:
-    """After route_and_plan: choose plan execution loop or legacy branch."""
-    if state.requires_planning and state.plan_steps:
-        return "prepare_plan_execution"
-    return "execute_current_runtime_path"
-
 
 def _should_execute_step(state: AgentGraphState) -> str:
     """Check if there are more steps to execute."""
@@ -1299,7 +1756,7 @@ def _summarize_result(data: object) -> str:
 # ===================================================================
 
 
-def _node_react_init(state: AgentGraphState, *, runtime) -> dict:
+def _node_react_init(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Seed ReAct iteration state from the current plan step.
 
     Reads the step at ``current_step_index``, resolves allowed tools, and
@@ -1315,7 +1772,7 @@ def _node_react_init(state: AgentGraphState, *, runtime) -> dict:
 
     state.react_step_id = step.step_id
     state.react_max_iterations = min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP)
-    state.react_allowed_tools = list(_resolve_allowed_tools_for_step(step, runtime))
+    state.react_allowed_tools = list(_resolve_allowed_tools_for_step(step, deps))
     state.react_iteration_index = 0
     state.react_done = False
     state.react_result = {}
@@ -1344,7 +1801,7 @@ def _node_react_init(state: AgentGraphState, *, runtime) -> dict:
     }
 
 
-def _node_react_iterate(state: AgentGraphState, *, runtime) -> dict:
+def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Execute one ReAct iteration: LLM think → parse → tool act → observe.
 
     On first call the prompt is built from ``react_step_id`` / step context;
@@ -1364,7 +1821,7 @@ def _node_react_iterate(state: AgentGraphState, *, runtime) -> dict:
         sd = state.plan_steps[state.current_step_index] if state.current_step_index < len(state.plan_steps) else {}
         step = _plan_step_from_dict(sd)
         context_block = _build_react_context(step, state.step_results)
-        tools_block = _format_react_tools(allowed, runtime)
+        tools_block = _format_react_tools(allowed, deps)
         state.react_user_prompt = (
             f"## 步骤描述\n{step.description}\n\n"
             f"## 已有上下文\n{context_block}\n\n"
@@ -1373,7 +1830,7 @@ def _node_react_iterate(state: AgentGraphState, *, runtime) -> dict:
         )
 
     # ---- Call LLM ----
-    raw = _react_llm_respond(state.react_user_prompt, runtime)
+    raw = _react_llm_respond(state.react_user_prompt, deps)
     if raw is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
         state.react_done = True
@@ -1435,10 +1892,10 @@ def _node_react_iterate(state: AgentGraphState, *, runtime) -> dict:
         observation = "错误：未指定工具名。请输出合法 JSON。"
     elif tool_name not in allowed:
         observation = f"错误：工具 '{tool_name}' 不在允许列表 {list(allowed)} 中。"
-    elif _is_react_tool_blocked(tool_name, runtime):
+    elif _is_react_tool_blocked(tool_name, deps):
         observation = f"错误：工具 '{tool_name}' 是高风险/写操作工具，不允许在 ReAct 中调用。"
     else:
-        tool_result = runtime._tool_registry.execute(tool_name, **tool_input)
+        tool_result = deps.tool_registry.execute(tool_name, **tool_input)
         if tool_result is not None and hasattr(tool_result, "ok") and tool_result.ok:
             observation = _summarize_react_tool_result(tool_result.data if hasattr(tool_result, "data") else None)
         elif tool_result is not None and hasattr(tool_result, "error"):
@@ -1552,7 +2009,7 @@ def _json_dumps_safe(obj: object) -> str:
     return str(obj)
 
 
-def _build_react_subgraph(runtime):
+def _build_react_subgraph(deps: OrchestrationDeps):
     """Build and compile the ReAct inner-loop subgraph.
 
     The subgraph uses ``AgentGraphState`` and checkpoints at every
@@ -1562,11 +2019,11 @@ def _build_react_subgraph(runtime):
 
     builder.add_node(
         "react_init",
-        lambda state: _node_react_init(state, runtime=runtime),
+        lambda state: _node_react_init(state, deps=deps),
     )
     builder.add_node(
         "react_iterate",
-        lambda state: _node_react_iterate(state, runtime=runtime),
+        lambda state: _node_react_iterate(state, deps=deps),
     )
     builder.add_node("react_finalize", _node_react_finalize)
 
@@ -1586,4 +2043,5 @@ def _build_react_subgraph(runtime):
 
     # Use the same MemorySaver so checkpoints are in the same store
     return builder.compile(checkpointer=MemorySaver())
+
 
