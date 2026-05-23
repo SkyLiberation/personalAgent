@@ -4,6 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+DEFAULT_OUTPUT = ASSETS_DIR / "entry-orchestration.md"
+
 
 def _ensure_src_on_path() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -36,7 +39,8 @@ def main() -> int:
         "-o",
         "--output",
         type=Path,
-        help="Optional output path. When omitted, Mermaid is printed to stdout.",
+        default=DEFAULT_OUTPUT,
+        help=f"Output path. Defaults to {DEFAULT_OUTPUT}.",
     )
     parser.add_argument(
         "--checkpoint-backend",
@@ -49,16 +53,23 @@ def main() -> int:
         action="store_true",
         help="Wrap the Mermaid text in a Markdown ```mermaid code fence.",
     )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the Mermaid content instead of writing an asset file.",
+    )
     args = parser.parse_args()
 
     mermaid = _build_mermaid(args.checkpoint_backend)
-    content = f"```mermaid\n{mermaid}\n```\n" if args.markdown else mermaid + "\n"
+    as_markdown = args.markdown or args.output.suffix.lower() == ".md"
+    content = f"```mermaid\n{mermaid}\n```\n" if as_markdown else mermaid + "\n"
 
-    if args.output:
+    if args.stdout:
+        print(content, end="")
+    else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(content, encoding="utf-8")
-    else:
-        print(content, end="")
+        print(args.output)
     return 0
 
 

@@ -374,7 +374,13 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
 
     state.add_event("entry_started", {"text_preview": text[:120] if text else ""})
     logger.info("normalize_entry run_id=%s thread_id=%s", state.run_id, thread_id)
-    return {"user_id": user_id, "session_id": session_id, "thread_id": thread_id, "entry_text": text}
+    return {
+        "user_id": user_id,
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "entry_text": text,
+        "events": state.events,
+    }
 
 
 def _node_prepare_clarify(state: AgentGraphState) -> dict:
@@ -405,7 +411,7 @@ def _node_prepare_clarify(state: AgentGraphState) -> dict:
         "options": issue["options"],
     }
     state.add_event("clarification_required", payload)
-    return {"pending_confirmation": payload}
+    return {"pending_confirmation": payload, "events": state.events}
 
 
 def _node_interrupt_clarify(state: AgentGraphState) -> dict:
@@ -430,6 +436,7 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
             "answer": state.answer,
             "answer_completed": True,
             "execution_trace": state.execution_trace,
+            "events": state.events,
         }
 
     supplemental = str(_resume_value_get(resume_value, "text", "")).strip()
@@ -444,6 +451,7 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
             "answer": state.answer,
             "answer_completed": True,
             "execution_trace": state.execution_trace,
+            "events": state.events,
         }
 
     clarified_text = _merge_clarification_text(state.entry_text, supplemental, option_id)
@@ -467,6 +475,7 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
         "entry_input": state.entry_input,
         "pending_confirmation": None,
         "router_decision": None,
+        "events": state.events,
     }
 
 
@@ -546,6 +555,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         "router_decision": state.router_decision,
         "plan_steps": [],
         "execution_trace": [],
+        "events": state.events,
     }
 
 

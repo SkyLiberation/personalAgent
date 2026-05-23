@@ -523,16 +523,18 @@ SSE 事件包括：
 Graphiti LLM 配置：
 
 ```text
-model       = settings.openai_model
-small_model = settings.openai_small_model
-base_url    = settings.openai_base_url
-api_key     = settings.openai_api_key
+model       = settings.graphiti_llm_model       or settings.openai_model
+small_model = settings.graphiti_llm_small_model or settings.openai_small_model
+base_url    = settings.graphiti_llm_base_url    or settings.openai_base_url
+api_key     = settings.graphiti_llm_api_key     or settings.openai_api_key
 ```
 
-自定义的 `GraphitiOpenAIClient` 会强制使用：
+自定义的 `GraphitiOpenAIClient` 会使用：
 
 - OpenAI-compatible Chat Completions
-- `response_format={"type": "json_object"}`
+- 带 Graphiti `response_model` 的请求发送 `response_format={"type": "json_schema", ...}`
+- 不带响应模型的请求发送 `response_format={"type": "json_object"}`
+- Kimi 请求参数 `thinking.type=disabled`
 - `temperature=0.6`
 - `max_tokens=self.max_tokens`
 
@@ -656,7 +658,7 @@ execution_trace
 | 流式回答 | `agent/runtime_llm.py` | `openai_model` | `gpt-4.1-mini` | SSE token streaming |
 | 群聊总结 | `agent/runtime_entry.py` | `openai_model` | `gpt-4.1-mini` | 对 thread messages 生成总结 |
 | 回答修正重试 | `agent/runtime_ask.py` | `openai_model` | `gpt-4.1-mini` | verifier 不通过时重新生成回答 |
-| Graphiti 实体/关系抽取 | `graphiti/llm_strategies.py` | `openai_model` + `openai_small_model` | `gpt-4.1-mini` / `gpt-4.1-nano` | Graphiti 内部 LLM client，生成结构化实体和关系 |
+| Graphiti 实体/关系抽取 | `graphiti/llm_strategies.py` | `graphiti_llm_model` + `graphiti_llm_small_model`，回退 `openai_*` | 与 `openai_*` 一致 | Graphiti 内部 LLM client，生成结构化实体和关系 |
 | Graphiti embedding | `graphiti/store.py`, `graphiti/dashscope_compatible_embedder.py` | `openai_embedding_model` | `text-embedding-3-small` | 图谱检索和 episode embedding |
 
 ## 12. 一条典型请求如何流动

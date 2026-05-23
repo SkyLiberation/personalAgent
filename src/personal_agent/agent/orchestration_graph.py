@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from pathlib import Path
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -272,16 +274,14 @@ def _build_checkpointer(settings: Settings):
     if backend == "sqlite":
         try:
             from langgraph.checkpoint.sqlite import SqliteSaver
-            from pathlib import Path
 
             checkpoint_path = Path(settings.langgraph_checkpoint_path)
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             logger.info("Using SqliteSaver at %s", checkpoint_path)
-            return SqliteSaver.from_conn_string(str(checkpoint_path))
+            connection = sqlite3.connect(str(checkpoint_path), check_same_thread=False)
+            return SqliteSaver(connection)
         except ImportError:
-            logger.warning(
-                "SqliteSaver not available; falling back to MemorySaver"
-            )
+            logger.warning("SqliteSaver not available; falling back to MemorySaver")
             return MemorySaver()
 
     logger.warning(

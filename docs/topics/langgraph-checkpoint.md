@@ -28,19 +28,25 @@
 相关配置位于 [core/config.py](../../src/personal_agent/core/config.py)。
 
 ```env
-PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=memory
+PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=sqlite
 PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH=./data/langgraph_checkpoints.sqlite
 ```
 
 说明：
 
-- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND`：checkpoint backend。当前实际可用的是 `memory`。
-- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH`：sqlite backend 路径预留项。
+- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND`：checkpoint backend。开发环境推荐 `sqlite`，以便跨进程调试和恢复。
+- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH`：sqlite backend 的数据库文件路径。
 
 当前 `_build_checkpointer()` 支持：
 
 - `memory`：使用 `MemorySaver`。
-- `sqlite`：尝试导入 `langgraph.checkpoint.sqlite.SqliteSaver`；如果当前 LangGraph 版本不可用，则回退到 `MemorySaver`。
+- `sqlite`：使用 `langgraph.checkpoint.sqlite.SqliteSaver` 持久化 checkpoint。
+
+调试脚本：
+
+- `uv run python scripts/draw_entry_graph.py`：生成 `scripts/assets/entry-orchestration.md`。
+- `uv run python scripts/export_thread_checkpoints.py <thread_id>`：生成 `scripts/assets/checkpoints-<thread_id>.json`，包含该线程的全部完整 checkpoint tuple。
+- `MemorySaver` 中已经生成的历史 checkpoint 不存在于数据库中，切换到 SQLite 后仅新执行的 run 可由独立脚本导出。
 
 ## 总体执行路径
 
@@ -137,6 +143,7 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 - `prepare_clarify_entry` 读取 router 已判定缺失的信息，构造 `kind="clarification_required"` 的 payload，并将其写入 `pending_confirmation` 与事件列表。
 - payload 的写入发生在 `interrupt()` 之前，因此 checkpoint 可以保存前端需要展示的澄清内容和缺失项。
 - `interrupt_clarify_entry` 通过 `interrupt()` 暂停 run，并等待 `/api/entry/runs/{run_id}/resume` 传入补充文本。
+- runtime 构造等待态响应时读取该 checkpoint 的 state values，因此 `EntryResult.events` 能保留暂停前的 `intent_classified` 与 `clarification_required` 事件。
 - 用户补充后，更新 `entry_text` 与 `entry_input.text`、清空旧路由决策，再重新进入 `route_intent`。
 - 用户取消或补充为空时，直接进入 `finalize_entry_result` 结束。
 

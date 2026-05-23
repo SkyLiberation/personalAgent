@@ -413,6 +413,24 @@ data: {
 }
 ```
 
+当 router 判断输入缺少必要信息时，`pending_confirmation` 的澄清 payload 形态如下；前端可展示 `message`、`missing_information` 与 `options`，再使用 resume API 提交用户补充内容：
+
+```json
+{
+  "kind": "clarification_required",
+  "action_type": "clarify_entry",
+  "step_id": "clarify_entry",
+  "title": "需要补充信息",
+  "message": "请补充你希望我处理的具体内容。",
+  "summary": "输入缺少明确目标。",
+  "missing_information": ["具体目标或待处理内容"],
+  "options": [
+    {"id": "capture", "label": "记录内容", "prompt": "请补充要写入知识库的具体内容。"},
+    {"id": "ask", "label": "提出问题", "prompt": "请补充你想查询或追问的问题。"}
+  ]
+}
+```
+
 ### `POST /api/entry/upload`
 
 上传文件并触发入口处理。表单字段：`file`、`user_id`、`session_id`、`text`（可选）。

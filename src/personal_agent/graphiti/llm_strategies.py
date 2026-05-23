@@ -19,9 +19,7 @@ from .ontology import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 
-ENTITY_TYPE_IDS: dict[str, int] = {
-    name: idx for idx, name in enumerate(ENTITY_TYPES)
-}
+ENTITY_TYPE_IDS: dict[str, int] = {name: idx for idx, name in enumerate(ENTITY_TYPES)}
 ENTITY_TYPE_NAME_LOOKUP: dict[str, int] = {
     name.lower(): idx for name, idx in ENTITY_TYPE_IDS.items()
 }
@@ -54,11 +52,13 @@ def _normalize_entities(payload: dict[str, Any]) -> None:
     normalized: list[dict[str, Any]] = []
     for entity in raw_entities:
         if isinstance(entity, str):
-            normalized.append({
-                "name": entity.strip(),
-                "entity_type_id": ENTITY_TYPE_IDS.get("Entity", 0),
-                "episode_indices": [0],
-            })
+            normalized.append(
+                {
+                    "name": entity.strip(),
+                    "entity_type_id": ENTITY_TYPE_IDS.get("Entity", 0),
+                    "episode_indices": [0],
+                }
+            )
             continue
         if not isinstance(entity, dict):
             continue
@@ -75,14 +75,26 @@ def _normalize_entities(payload: dict[str, Any]) -> None:
                 item["entity_type_id"] = int(type_id)
             except (ValueError, TypeError):
                 type_str = str(type_id).strip()
-                mapped = ENTITY_TYPE_IDS.get(type_str) or ENTITY_TYPE_NAME_LOOKUP.get(type_str.lower())
-                item["entity_type_id"] = mapped if mapped is not None else ENTITY_TYPE_IDS.get("Entity", 0)
+                mapped = ENTITY_TYPE_IDS.get(type_str) or ENTITY_TYPE_NAME_LOOKUP.get(
+                    type_str.lower()
+                )
+                item["entity_type_id"] = (
+                    mapped if mapped is not None else ENTITY_TYPE_IDS.get("Entity", 0)
+                )
         else:
-            type_val = entity.get("entity_type") or entity.get("type") or entity.get("entity_type_name")
+            type_val = (
+                entity.get("entity_type")
+                or entity.get("type")
+                or entity.get("entity_type_name")
+            )
             if type_val is not None:
                 type_str = str(type_val).strip()
-                mapped = ENTITY_TYPE_IDS.get(type_str) or ENTITY_TYPE_NAME_LOOKUP.get(type_str.lower())
-                item["entity_type_id"] = mapped if mapped is not None else ENTITY_TYPE_IDS.get("Entity", 0)
+                mapped = ENTITY_TYPE_IDS.get(type_str) or ENTITY_TYPE_NAME_LOOKUP.get(
+                    type_str.lower()
+                )
+                item["entity_type_id"] = (
+                    mapped if mapped is not None else ENTITY_TYPE_IDS.get("Entity", 0)
+                )
             else:
                 item["entity_type_id"] = ENTITY_TYPE_IDS.get("Entity", 0)
 
@@ -107,15 +119,27 @@ def _normalize_edges(payload: dict[str, Any]) -> None:
 
         item: dict[str, Any] = {}
 
-        src = edge.get("source_entity_name") or edge.get("source_entity") or edge.get("source")
+        src = (
+            edge.get("source_entity_name")
+            or edge.get("source_entity")
+            or edge.get("source")
+        )
         if src:
             item["source_entity_name"] = str(src).strip()
 
-        tgt = edge.get("target_entity_name") or edge.get("target_entity") or edge.get("target")
+        tgt = (
+            edge.get("target_entity_name")
+            or edge.get("target_entity")
+            or edge.get("target")
+        )
         if tgt:
             item["target_entity_name"] = str(tgt).strip()
 
-        rel = edge.get("relation_type") or edge.get("relation") or edge.get("relationship")
+        rel = (
+            edge.get("relation_type")
+            or edge.get("relation")
+            or edge.get("relationship")
+        )
         if rel:
             item["relation_type"] = str(rel).strip()
 
@@ -127,8 +151,15 @@ def _normalize_edges(payload: dict[str, Any]) -> None:
             if optional_field in edge:
                 item[optional_field] = edge[optional_field]
 
-        if item.get("source_entity_name") and item.get("target_entity_name") and item.get("relation_type"):
-            item.setdefault("fact", f"{item['source_entity_name']} {item['relation_type']} {item['target_entity_name']}")
+        if (
+            item.get("source_entity_name")
+            and item.get("target_entity_name")
+            and item.get("relation_type")
+        ):
+            item.setdefault(
+                "fact",
+                f"{item['source_entity_name']} {item['relation_type']} {item['target_entity_name']}",
+            )
             item.setdefault("episode_indices", [0])
             normalized.append(item)
 
@@ -150,7 +181,10 @@ def _flatten_value_for_neo4j(value: Any) -> Any:
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, list):
         if any(isinstance(v, dict) for v in value):
-            return [json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v for v in value]
+            return [
+                json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v
+                for v in value
+            ]
         return value
     return value
 
@@ -169,9 +203,8 @@ def _ensure_json_keyword(messages: list[dict[str, str]]) -> None:
 class GraphitiOpenAIClient(OpenAIGenericClient):
     """OpenAI-compatible client with rate limiting and field normalization.
 
-    Always uses ``json_object`` mode to avoid ``json_schema`` compatibility
-    issues with proxies that don't support it (e.g., PackyAPI). Field-level
-    normalization handles model-specific naming quirks.
+    Uses structured output schemas for Graphiti response models and disables
+    Kimi thinking so extraction output remains machine-readable.
     """
 
     async def _generate_response(
@@ -185,10 +218,21 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
         for message in messages:
             message.content = self._clean_input(message.content)
             if message.role in {"user", "system"}:
-                openai_messages.append({"role": message.role, "content": message.content})
+                openai_messages.append(
+                    {"role": message.role, "content": message.content}
+                )
 
-        # PackyAPI requires the word "json" in the prompt to use json_object format
+        # Keep untyped Graphiti calls constrained to JSON as well.
         _ensure_json_keyword(openai_messages)
+        response_format: dict[str, Any] = {"type": "json_object"}
+        if response_model is not None:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": getattr(response_model, "__name__", "structured_response"),
+                    "schema": response_model.model_json_schema(),
+                },
+            }
 
         await self._respect_min_interval()
 
@@ -198,18 +242,23 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
                 messages=openai_messages,
                 temperature=0.6,
                 max_tokens=self.max_tokens,
-                response_format={"type": "json_object"},
+                response_format=response_format,
+                extra_body={"thinking": {"type": "disabled"}},
             )
         except openai.RateLimitError as exc:
             from graphiti_core.llm_client.errors import RateLimitError
 
-            raise RateLimitError("Rate limit exceeded. Please try again later.") from exc
+            raise RateLimitError(
+                "Rate limit exceeded. Please try again later."
+            ) from exc
 
         raw = response.choices[0].message.content or "{}"
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            logger.warning("LLM returned non-JSON content (len=%d): %s...", len(raw), raw[:200])
+            logger.warning(
+                "LLM returned non-JSON content (len=%d): %s...", len(raw), raw[:200]
+            )
             raise
         # Normalize entity/edge field names, then flatten nested maps for Neo4j
         normalized = _normalize_extraction(parsed)
@@ -226,9 +275,10 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
 def build_graphiti_llm_client(settings: Settings) -> GraphitiOpenAIClient:
     return GraphitiOpenAIClient(
         config=LLMConfig(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            model=settings.openai_model,
-            small_model=settings.openai_small_model,
+            api_key=settings.graphiti_llm_api_key or settings.openai_api_key,
+            base_url=settings.graphiti_llm_base_url or settings.openai_base_url,
+            model=settings.graphiti_llm_model or settings.openai_model,
+            small_model=settings.graphiti_llm_small_model
+            or settings.openai_small_model,
         )
     )

@@ -88,6 +88,17 @@ def _snapshot_intent(snapshot: dict) -> str:
     return str(getattr(rd, "route", "unknown"))
 
 
+def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) -> dict:
+    """Read persisted state for an interrupted run instead of the invoke envelope."""
+    try:
+        values = graph.get_state(config).values
+        if isinstance(values, dict):
+            return values
+    except Exception:
+        logger.debug("Could not read state after graph interrupt", exc_info=True)
+    return fallback if isinstance(fallback, dict) else {}
+
+
 class AgentRuntime(
     RuntimeToolsMixin,
     RuntimeCaptureMixin,
@@ -199,7 +210,7 @@ class AgentRuntime(
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
             return self._entry_result_from_interrupt(
-                invoke_result,
+                _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
                 run_id=run_id,
                 thread_id=thread_id,
@@ -311,7 +322,7 @@ class AgentRuntime(
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
             return self._entry_result_from_interrupt(
-                invoke_result,
+                _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
                 run_id=run_id,
                 thread_id=thread_id,

@@ -29,7 +29,7 @@
 
 ## Entry 编排图
 
-[docs/assets/entry-orchestration.md](docs/assets/entry-orchestration.md) 是当前 LangGraph entry 总编排的可视化图源，用来对齐 `normalize_entry -> route_intent -> (按需 clarify) / capture / ask / summarize / direct_answer / plan_task -> step / ReAct / HITL -> finalize_entry_result` 的真实节点结构和条件流转关系。它应随 `orchestration_graph.py` / `orchestration_nodes.py` 的节点调整同步刷新，作为排查入口流程、确认 checkpoint / interrupt 位置和审阅编排变更的参考图。
+[scripts/assets/entry-orchestration.md](scripts/assets/entry-orchestration.md) 是由 [scripts/draw_entry_graph.py](scripts/draw_entry_graph.py) 生成的当前 LangGraph entry 总编排可视化图源，用来对齐 `normalize_entry -> route_intent -> (按需 clarify) / capture / ask / summarize / direct_answer / plan_task -> step / ReAct / HITL -> finalize_entry_result` 的真实节点结构和条件流转关系。运行 `uv run python scripts/draw_entry_graph.py` 可刷新该图；`uv run python scripts/export_thread_checkpoints.py <thread_id>` 会把持久化 checkpoint 导出到 `scripts/assets/`。
 
 ## 当前技术栈
 

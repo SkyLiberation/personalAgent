@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import personal_agent.core.config as config_module
 from personal_agent.core.config import Settings
 from personal_agent.core.models import KnowledgeNote
 from personal_agent.graphiti.store import (
@@ -21,6 +22,23 @@ def test_settings_reads_graphiti_timeout_env(monkeypatch):
     assert settings.graphiti_search_timeout_seconds == 3
     assert settings.graphiti_episode_max_chars == 99
     assert settings.graphiti_content_filter_fallback is False
+
+
+def test_settings_reads_graphiti_llm_override_env(monkeypatch):
+    monkeypatch.setattr(config_module, "load_dotenv", lambda override: None)
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY", "graph-key")
+    monkeypatch.setenv(
+        "PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL", "https://graph.example/v1"
+    )
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_MODEL", "graph-model")
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL", "graph-small-model")
+
+    settings = Settings.from_env()
+
+    assert settings.graphiti_llm_api_key == "graph-key"
+    assert settings.graphiti_llm_base_url == "https://graph.example/v1"
+    assert settings.graphiti_llm_model == "graph-model"
+    assert settings.graphiti_llm_small_model == "graph-small-model"
 
 
 def test_graphiti_episode_body_honors_max_chars():

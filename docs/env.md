@@ -69,13 +69,22 @@ OPENAI_EMBEDDING_MODEL=text-embedding-v4
 当前工程默认以 Graphiti 为核心能力，不再提供图谱启停开关。需要同时满足下面条件，图谱链路才可正常工作：
 
 1. Neo4j 可连接
-2. `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 已配置
+2. `PERSONAL_AGENT_GRAPHITI_LLM_*` 或回退使用的 `OPENAI_*` 模型配置已齐全
 3. `EMBEDDING_API_KEY` 或 `OPENAI_API_KEY` 可用
 4. `EMBEDDING_BASE_URL` 或 `OPENAI_BASE_URL` 可用
 
 补充说明：
 
-- 当前 `OPENAI_*` 这组变量既用于 Graphiti 抽取与检索时的 LLM，也用于 `ask` 阶段的生成式回答
+- Graphiti 抽取模型可单独覆盖；未设置以下变量时才回退使用 `OPENAI_*`：
+
+```env
+PERSONAL_AGENT_GRAPHITI_LLM_API_KEY=your_graphiti_llm_key
+PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL=https://api.moonshot.cn/v1
+PERSONAL_AGENT_GRAPHITI_LLM_MODEL=kimi-k2.5
+PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=kimi-k2.5
+```
+
+- Kimi Graphiti 客户端会发送关闭 thinking 的参数，并在 Graphiti 提供响应模型时使用 `json_schema` 结构化输出
 - `PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY` 用于切换图谱检索策略，当前可选：
   - `hybrid_rrf`：默认策略，Graphiti combined hybrid search + RRF
   - `hybrid_mmr`：Graphiti combined hybrid search + MMR
@@ -87,12 +96,13 @@ OPENAI_EMBEDDING_MODEL=text-embedding-v4
 ## LangGraph 总编排与 Checkpoint 配置
 
 ```env
-PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=memory
+PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=sqlite
 PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH=./data/langgraph_checkpoints.sqlite
 ```
 
 说明：
 
-- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND`：当前仅支持 `memory`（MemorySaver）。`sqlite` 需要 langgraph 版本升级后可用，暂保留配置项
-- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH`：预留 sqlite 路径，当前未使用
+- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND`：推荐使用 `sqlite`，从而可以在独立脚本中读取运行 checkpoint；`memory` 仅在当前服务进程存活期间可读
+- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH`：SQLite checkpoint 数据库路径
 - entry 请求默认走统一的 `orchestration_graph`，并在图节点后写入 checkpoint
+- 运行 `uv run python scripts/export_thread_checkpoints.py <thread_id>` 会将该线程所有持久化 checkpoint 导出到 `scripts/assets/`

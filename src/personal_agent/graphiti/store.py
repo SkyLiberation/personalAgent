@@ -16,7 +16,13 @@ from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RR
 
 from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
-from ..core.models import Citation, KnowledgeNote, GraphNodeRef, GraphEdgeRef, GraphFactRef
+from ..core.models import (
+    Citation,
+    KnowledgeNote,
+    GraphNodeRef,
+    GraphEdgeRef,
+    GraphFactRef,
+)
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from .llm_strategies import build_graphiti_llm_client
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
@@ -72,16 +78,18 @@ class GraphitiStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._indices_ready = False
-        self.search_strategy: GraphSearchStrategy = get_graph_search_strategy(settings.graph_search_strategy)
+        self.search_strategy: GraphSearchStrategy = get_graph_search_strategy(
+            settings.graph_search_strategy
+        )
 
     def configured(self) -> bool:
         return bool(
             self.settings.graphiti_uri
             and self.settings.graphiti_user
             and self.settings.graphiti_password
-            and self.settings.openai_api_key
-            and self.settings.openai_base_url
-            and self.settings.openai_model
+            and (self.settings.graphiti_llm_api_key or self.settings.openai_api_key)
+            and (self.settings.graphiti_llm_base_url or self.settings.openai_base_url)
+            and (self.settings.graphiti_llm_model or self.settings.openai_model)
             and (self.settings.embedding_api_key or self.settings.openai_api_key)
             and (self.settings.embedding_base_url or self.settings.openai_base_url)
             and self.settings.openai_embedding_model
@@ -90,8 +98,10 @@ class GraphitiStore:
     def status(self) -> dict[str, str | bool]:
         return {
             "configured": self.configured(),
-            "base_url": self.settings.openai_base_url or "",
-            "model": self.settings.openai_model,
+            "base_url": self.settings.graphiti_llm_base_url
+            or self.settings.openai_base_url
+            or "",
+            "model": self.settings.graphiti_llm_model or self.settings.openai_model,
             "embedding_base_url": self.settings.embedding_base_url
             or self.settings.openai_base_url
             or "",
@@ -100,19 +110,30 @@ class GraphitiStore:
         }
 
     def ingest_note(
-        self, note: KnowledgeNote, trace_id: str | None = None, attempt: int | None = None
+        self,
+        note: KnowledgeNote,
+        trace_id: str | None = None,
+        attempt: int | None = None,
     ) -> GraphCaptureResult:
         if not self.configured():
-            return GraphCaptureResult(enabled=False, error="Graphiti is not configured.")
+            return GraphCaptureResult(
+                enabled=False, error="Graphiti is not configured."
+            )
         if not self._neo4j_reachable():
             return GraphCaptureResult(enabled=False, error="Neo4j is not reachable.")
         try:
-            return asyncio.run(self._ingest_note(note, trace_id=trace_id, attempt=attempt))
+            return asyncio.run(
+                self._ingest_note(note, trace_id=trace_id, attempt=attempt)
+            )
         except Exception as exc:
             logger.exception("Graphiti ingest failed for note %s", note.id)
-            return GraphCaptureResult(enabled=False, error=str(exc)[:500] or exc.__class__.__name__)
+            return GraphCaptureResult(
+                enabled=False, error=str(exc)[:500] or exc.__class__.__name__
+            )
 
-    def ask(self, question: str, user_id: str, trace_id: str | None = None) -> GraphAskResult:
+    def ask(
+        self, question: str, user_id: str, trace_id: str | None = None
+    ) -> GraphAskResult:
         if not self.configured():
             return GraphAskResult(enabled=False, error="Graphiti is not configured.")
         if not self._neo4j_reachable():
@@ -121,7 +142,9 @@ class GraphitiStore:
             return asyncio.run(self._ask(question, user_id, trace_id=trace_id))
         except Exception as exc:
             logger.exception("Graphiti ask failed for user %s", user_id)
-            return GraphAskResult(enabled=False, error=str(exc)[:500] or exc.__class__.__name__)
+            return GraphAskResult(
+                enabled=False, error=str(exc)[:500] or exc.__class__.__name__
+            )
 
     def clear_user_group(self, user_id: str) -> int:
         if not self.configured():
@@ -143,7 +166,9 @@ class GraphitiStore:
         try:
             return asyncio.run(self._delete_episode(episode_uuid))
         except Exception:
-            logger.exception("Graphiti episode deletion failed for episode %s", episode_uuid)
+            logger.exception(
+                "Graphiti episode deletion failed for episode %s", episode_uuid
+            )
             return False
 
     def _neo4j_reachable(self, timeout_seconds: float = 0.5) -> bool:
@@ -165,7 +190,10 @@ class GraphitiStore:
             return False
 
     async def _ingest_note(
-        self, note: KnowledgeNote, trace_id: str | None = None, attempt: int | None = None
+        self,
+        note: KnowledgeNote,
+        trace_id: str | None = None,
+        attempt: int | None = None,
     ) -> GraphCaptureResult:
         with trace_span(
             logger,
@@ -174,18 +202,27 @@ class GraphitiStore:
             note_id=note.id,
             user_id=note.user_id,
             attempt=attempt,
-            model=self.settings.openai_model,
+            model=self.settings.graphiti_llm_model or self.settings.openai_model,
             embedding_model=self.settings.openai_embedding_model,
         ) as span:
             graphiti = await self._build_client(trace_id=span["trace_id"])
             trace_id = span["trace_id"]
             try:
-                with trace_span(logger, "graphiti.add_episode", trace_id=trace_id, note_id=note.id, attempt=attempt):
+                with trace_span(
+                    logger,
+                    "graphiti.add_episode",
+                    trace_id=trace_id,
+                    note_id=note.id,
+                    attempt=attempt,
+                ):
                     try:
                         add_result = await asyncio.wait_for(
                             graphiti.add_episode(
                                 name=note.title,
-                                episode_body=_graphiti_episode_body(note, max_chars=self.settings.graphiti_episode_max_chars),
+                                episode_body=_graphiti_episode_body(
+                                    note,
+                                    max_chars=self.settings.graphiti_episode_max_chars,
+                                ),
                                 source_description=f"Personal note {note.id}",
                                 reference_time=note.created_at,
                                 source=EpisodeType.text,
@@ -196,7 +233,10 @@ class GraphitiStore:
                             timeout=self.settings.graphiti_add_episode_timeout_seconds,
                         )
                     except Exception as exc:
-                        if not self.settings.graphiti_content_filter_fallback or not _looks_like_content_filter_error(exc):
+                        if (
+                            not self.settings.graphiti_content_filter_fallback
+                            or not _looks_like_content_filter_error(exc)
+                        ):
                             raise
                         logger.warning(
                             "Graphiti add_episode hit content filter; retrying with safe fallback body note=%s",
@@ -259,8 +299,12 @@ class GraphitiStore:
                         fact=edge.fact,
                         source_node_uuid=edge.source_node_uuid,
                         target_node_uuid=edge.target_node_uuid,
-                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
-                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        source_node_name=node_names_by_uuid.get(
+                            edge.source_node_uuid, ""
+                        ),
+                        target_node_name=node_names_by_uuid.get(
+                            edge.target_node_uuid, ""
+                        ),
                         episodes=list(edge.episodes),
                     )
                     for edge in add_result.edges
@@ -269,8 +313,12 @@ class GraphitiStore:
                     GraphFactRef(
                         fact=edge.fact,
                         edge_uuid=edge.uuid,
-                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
-                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        source_node_name=node_names_by_uuid.get(
+                            edge.source_node_uuid, ""
+                        ),
+                        target_node_name=node_names_by_uuid.get(
+                            edge.target_node_uuid, ""
+                        ),
                         episode_uuids=list(edge.episodes),
                     )
                     for edge in add_result.edges
@@ -301,19 +349,26 @@ class GraphitiStore:
             finally:
                 await graphiti.close()
 
-    async def _ask(self, question: str, user_id: str, trace_id: str | None = None) -> GraphAskResult:
+    async def _ask(
+        self, question: str, user_id: str, trace_id: str | None = None
+    ) -> GraphAskResult:
         with trace_span(
             logger,
             "graphiti.ask",
             trace_id=trace_id,
             user_id=user_id,
-            model=self.settings.openai_model,
+            model=self.settings.graphiti_llm_model or self.settings.openai_model,
             embedding_model=self.settings.openai_embedding_model,
         ) as span:
             graphiti = await self._build_client(trace_id=span["trace_id"])
             trace_id = span["trace_id"]
             try:
-                with trace_span(logger, "graphiti.search_for_ask", trace_id=trace_id, user_id=user_id):
+                with trace_span(
+                    logger,
+                    "graphiti.search_for_ask",
+                    trace_id=trace_id,
+                    user_id=user_id,
+                ):
                     search_result = await asyncio.wait_for(
                         graphiti.search_(
                             query=question,
@@ -323,13 +378,17 @@ class GraphitiStore:
                         timeout=self.settings.graphiti_search_timeout_seconds,
                     )
 
-                node_names_by_uuid = {node.uuid: node.name for node in search_result.nodes}
+                node_names_by_uuid = {
+                    node.uuid: node.name for node in search_result.nodes
+                }
                 ranked_hits = self.search_strategy.citation_hits(
                     question, search_result.edges, node_names_by_uuid
                 )
                 entity_names = _dedupe([node.name for node in search_result.nodes])
                 relation_facts = _dedupe([hit.relation_fact for hit in ranked_hits])
-                related_episode_uuids = _dedupe([hit.episode_uuid for hit in ranked_hits])
+                related_episode_uuids = _dedupe(
+                    [hit.episode_uuid for hit in ranked_hits]
+                )
 
                 ask_node_refs = [
                     GraphNodeRef(
@@ -346,8 +405,12 @@ class GraphitiStore:
                         fact=edge.fact,
                         source_node_uuid=edge.source_node_uuid,
                         target_node_uuid=edge.target_node_uuid,
-                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
-                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        source_node_name=node_names_by_uuid.get(
+                            edge.source_node_uuid, ""
+                        ),
+                        target_node_name=node_names_by_uuid.get(
+                            edge.target_node_uuid, ""
+                        ),
                         episodes=list(edge.episodes),
                     )
                     for edge in search_result.edges
@@ -356,8 +419,12 @@ class GraphitiStore:
                     GraphFactRef(
                         fact=edge.fact,
                         edge_uuid=edge.uuid,
-                        source_node_name=node_names_by_uuid.get(edge.source_node_uuid, ""),
-                        target_node_name=node_names_by_uuid.get(edge.target_node_uuid, ""),
+                        source_node_name=node_names_by_uuid.get(
+                            edge.source_node_uuid, ""
+                        ),
+                        target_node_name=node_names_by_uuid.get(
+                            edge.target_node_uuid, ""
+                        ),
                         episode_uuids=list(edge.episodes),
                     )
                     for edge in search_result.edges
@@ -365,9 +432,13 @@ class GraphitiStore:
 
                 answer = None
                 if relation_facts:
-                    top_entities = "、".join(entity_names[:5]) if entity_names else "暂无实体摘要"
+                    top_entities = (
+                        "、".join(entity_names[:5]) if entity_names else "暂无实体摘要"
+                    )
                     fact_lines = "\n".join(f"- {fact}" for fact in relation_facts[:5])
-                    answer = f"图谱里最相关的实体：{top_entities}\n关联事实：\n{fact_lines}"
+                    answer = (
+                        f"图谱里最相关的实体：{top_entities}\n关联事实：\n{fact_lines}"
+                    )
 
                 log_event(
                     logger,
@@ -400,13 +471,20 @@ class GraphitiStore:
         try:
             group_id = self._group_id(user_id)
             while True:
-                episodes = await EpisodicNode.get_by_group_ids(graphiti.driver, [group_id], limit=100)
+                episodes = await EpisodicNode.get_by_group_ids(
+                    graphiti.driver, [group_id], limit=100
+                )
                 if not episodes:
                     break
                 for episode in episodes:
                     await graphiti.remove_episode(episode.uuid)
                     deleted_count += 1
-            logger.info("Cleared graph group data user=%s group_id=%s deleted_episodes=%s", user_id, group_id, deleted_count)
+            logger.info(
+                "Cleared graph group data user=%s group_id=%s deleted_episodes=%s",
+                user_id,
+                group_id,
+                deleted_count,
+            )
             return deleted_count
         finally:
             await graphiti.close()
@@ -425,7 +503,8 @@ class GraphitiStore:
         embedder = DashScopeCompatibleEmbedder(
             config=OpenAIEmbedderConfig(
                 api_key=self.settings.embedding_api_key or self.settings.openai_api_key,
-                base_url=self.settings.embedding_base_url or self.settings.openai_base_url,
+                base_url=self.settings.embedding_base_url
+                or self.settings.openai_base_url,
                 embedding_model=self.settings.openai_embedding_model,
             )
         )
@@ -443,7 +522,9 @@ class GraphitiStore:
                 trace_id=trace_id,
                 graphiti_uri=self.settings.graphiti_uri,
             ):
-                await asyncio.wait_for(graphiti.build_indices_and_constraints(), timeout=45)
+                await asyncio.wait_for(
+                    graphiti.build_indices_and_constraints(), timeout=45
+                )
             self._indices_ready = True
             log_event(
                 logger,
@@ -474,7 +555,9 @@ def _graphiti_episode_body(note: KnowledgeNote, max_chars: int = 8000) -> str:
     if lines and lines[0].startswith("Uploaded file: "):
         lines = lines[2:] if len(lines) > 1 and not lines[1].strip() else lines[1:]
 
-    is_markdown = note.source_type == "note" and Path(note.source_ref).suffix.lower() in {".md", ".markdown"}
+    is_markdown = note.source_type == "note" and Path(
+        note.source_ref
+    ).suffix.lower() in {".md", ".markdown"}
     if not is_markdown:
         return content[:max_chars]
 

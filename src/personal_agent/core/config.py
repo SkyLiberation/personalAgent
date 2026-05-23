@@ -17,6 +17,10 @@ class Settings(BaseModel):
     graphiti_password: str = "password"
     graphiti_group_prefix: str = "personal-agent"
     graph_search_strategy: str = "hybrid_rrf"
+    graphiti_llm_api_key: str | None = None
+    graphiti_llm_base_url: str | None = None
+    graphiti_llm_model: str | None = None
+    graphiti_llm_small_model: str | None = None
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_model: str = "gpt-4.1-mini"
@@ -60,28 +64,50 @@ class Settings(BaseModel):
             embedding_provider=os.getenv("PERSONAL_AGENT_EMBEDDING_PROVIDER", "local"),
             llm_provider=os.getenv("PERSONAL_AGENT_LLM_PROVIDER", "stub"),
             default_user=os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
-            graphiti_uri=os.getenv("PERSONAL_AGENT_GRAPHITI_URI", "bolt://localhost:7687"),
+            graphiti_uri=os.getenv(
+                "PERSONAL_AGENT_GRAPHITI_URI", "bolt://localhost:7687"
+            ),
             graphiti_user=os.getenv("PERSONAL_AGENT_GRAPHITI_USER", "neo4j"),
             graphiti_password=os.getenv("PERSONAL_AGENT_GRAPHITI_PASSWORD", "password"),
-            graphiti_group_prefix=os.getenv("PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX", "personal-agent"),
-            graph_search_strategy=os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY", "hybrid_rrf"),
+            graphiti_group_prefix=os.getenv(
+                "PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX", "personal-agent"
+            ),
+            graph_search_strategy=os.getenv(
+                "PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY", "hybrid_rrf"
+            ),
+            graphiti_llm_api_key=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY"),
+            graphiti_llm_base_url=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL"),
+            graphiti_llm_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_MODEL"),
+            graphiti_llm_small_model=os.getenv(
+                "PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL"
+            ),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_base_url=os.getenv("OPENAI_BASE_URL"),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
             openai_small_model=os.getenv("OPENAI_SMALL_MODEL", "gpt-4.1-nano"),
-            openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+            openai_embedding_model=os.getenv(
+                "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
+            ),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
             firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY"),
-            firecrawl_base_url=os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"),
+            firecrawl_base_url=os.getenv(
+                "FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"
+            ),
             firecrawl_timeout_ms=int(os.getenv("FIRECRAWL_TIMEOUT_MS", "60000")),
             postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
-            feishu_enabled=_as_bool(os.getenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")),
+            feishu_enabled=_as_bool(
+                os.getenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
+            ),
             feishu_app_id=os.getenv("FEISHU_APP_ID"),
             feishu_app_secret=os.getenv("FEISHU_APP_SECRET"),
             feishu_base_url=os.getenv("FEISHU_BASE_URL", "https://open.feishu.cn"),
-            feishu_use_default_user=_as_bool(os.getenv("PERSONAL_AGENT_FEISHU_USE_DEFAULT_USER", "true")),
-            graph_sync_max_attempts=int(os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")),
+            feishu_use_default_user=_as_bool(
+                os.getenv("PERSONAL_AGENT_FEISHU_USE_DEFAULT_USER", "true")
+            ),
+            graph_sync_max_attempts=int(
+                os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")
+            ),
             graph_sync_initial_backoff_seconds=float(
                 os.getenv("PERSONAL_AGENT_GRAPH_SYNC_INITIAL_BACKOFF_SECONDS", "2.0")
             ),
@@ -97,7 +123,9 @@ class Settings(BaseModel):
             graphiti_search_timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_GRAPHITI_SEARCH_TIMEOUT_SECONDS", "45")
             ),
-            graphiti_episode_max_chars=int(os.getenv("PERSONAL_AGENT_GRAPHITI_EPISODE_MAX_CHARS", "8000")),
+            graphiti_episode_max_chars=int(
+                os.getenv("PERSONAL_AGENT_GRAPHITI_EPISODE_MAX_CHARS", "8000")
+            ),
             graphiti_content_filter_fallback=_as_bool(
                 os.getenv("PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK", "true")
             ),
@@ -110,9 +138,15 @@ class Settings(BaseModel):
                 "./data/langgraph_checkpoints.sqlite",
             ),
             api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),
-            rate_limit_requests=int(os.getenv("PERSONAL_AGENT_RATE_LIMIT_REQUESTS", "60")),
-            rate_limit_window_seconds=int(os.getenv("PERSONAL_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")),
-            cors_origins=_parse_cors_origins(os.getenv("PERSONAL_AGENT_CORS_ORIGINS", "http://localhost:3000")),
+            rate_limit_requests=int(
+                os.getenv("PERSONAL_AGENT_RATE_LIMIT_REQUESTS", "60")
+            ),
+            rate_limit_window_seconds=int(
+                os.getenv("PERSONAL_AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")
+            ),
+            cors_origins=_parse_cors_origins(
+                os.getenv("PERSONAL_AGENT_CORS_ORIGINS", "http://localhost:3000")
+            ),
         )
 
 
