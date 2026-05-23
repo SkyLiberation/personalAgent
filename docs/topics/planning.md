@@ -305,11 +305,16 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 
 剩余改进主要是扩大适用步骤、沉淀更稳定的 ReAct prompt/事件 schema，并评估是否需要用 LangGraph `StateGraph` 重写 runner 内部状态机。
 
+### 6. ~~graph state 中的计划步骤仍使用 dict~~（已通过 PlanStepState 强类型化解决）
+
+`AgentGraphState.plan_steps` 已收敛为 `list[PlanStepState]`（Pydantic BaseModel），`_plan_step_to_dict()` / `_plan_step_from_dict()` 已移除。规划器产出 `PlanStep` 后通过 `PlanStepState.from_plan_step()` 写入 graph state，执行/校验/ReAct 节点通过 `sd.to_plan_step()` 获取业务对象，API 边界统一 `model_dump(mode="json")` 序列化。
+
 ## 演进方向
 
 - 为规划层新增独立文档化的 plan schema，并让 LLM 输出更稳定
 - 明确哪些 intent 必须由 `PlanExecutor` 驱动，逐步减少双轨执行
 - 为 revised steps 增加重新校验流程
+- ~~将 graph state 中的 `plan_steps: list[dict]` 收敛为强类型 `PlanStepState`~~（已完成）
 - 为多段审批和长任务恢复评估 LangGraph checkpoint
 
 ## 下一步实现方案：重规划步骤复校验
@@ -358,6 +363,73 @@ failed step
 这些规则优先放在 `PlanValidator`，避免 executor 内散落安全逻辑。
 
 ### 4. 事件与可观测性
+
+## 下一步实现方案：PlanStepState 强类型化
+
+目标：把 graph checkpoint 状态中的 `plan_steps: list[dict]` 收敛成明确、可序列化、可校验的 `PlanStepState`，让计划步骤在 planner、validator、orchestration nodes、API 和前端之间共享同一套 schema。
+
+### 1. 新增 checkpoint-safe 模型
+
+在 `orchestration_models.py` 或独立 `plan_state.py` 中新增：
+
+```text
+PlanStepState
+  step_id
+  action_type
+  description
+  tool_name
+  tool_input
+  depends_on
+  expected_output
+  success_criteria
+  risk_level
+  requires_confirmation
+  on_failure
+  status
+  retry_count
+  execution_mode
+  allowed_tools
+  max_iterations
+  validation_warnings
+```
+
+模型应使用 Pydantic `BaseModel`，保证 `model_dump(mode="json")` 可直接进入 checkpoint / API。
+
+### 2. 明确与 `PlanStep` 的关系
+
+短期保留 planner 输出 `PlanStep`：
+
+```text
+DefaultTaskPlanner -> list[PlanStep]
+PlanStepState.from_plan_step()
+AgentGraphState.plan_steps: list[PlanStepState]
+```
+
+业务执行需要 `PlanStep` 时，使用显式方法：
+
+```text
+PlanStepState.to_plan_step()
+```
+
+这样转换仍存在，但集中在模型方法中，不再散落 `_plan_step_to_dict()` / `_plan_step_from_dict()` helper。
+
+### 3. 修改 graph state 和节点
+
+- `AgentGraphState.plan_steps` 改为 `list[PlanStepState]`。
+- `_node_plan_task()` 写入 `PlanStepState`。
+- `_node_validate_plan()` 从 `PlanStepState` 转回 `PlanStep` 校验，再写回 `PlanStepState`。
+- `select_next_step / execute_plan_step / handle_step_*` 直接访问强类型字段。
+- API 返回时统一 `model_dump(mode="json")`。
+
+### 4. 直接切换状态结构
+
+不保留旧 `list[dict]` checkpoint 兼容。改造完成后，`AgentGraphState.plan_steps` 只接受 `list[PlanStepState]`，相关节点、API 映射和测试数据同步切换。
+
+测试覆盖：
+
+- 新 `PlanStepState` 可以 checkpoint roundtrip。
+- planner 新增字段时 API、SSE、前端计划面板不丢字段。
+- orchestration graph 中不再出现 `_plan_step_to_dict()` / `_plan_step_from_dict()`。
 
 补充 replan 相关事件：
 

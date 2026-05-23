@@ -15,6 +15,7 @@ from personal_agent.agent.orchestration_models import (
     plan_steps_to_plan_created_events,
 )
 from personal_agent.agent.orchestration_nodes import OrchestrationDeps
+from personal_agent.agent.router import RouterDecision
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput
 
@@ -34,7 +35,7 @@ class TestAgentGraphState:
             user_id="user-1",
             session_id="sess-1",
             entry_text="什么是服务降级？",
-            intent="ask",
+            router_decision=RouterDecision(route="ask"),
             answer="服务降级是在系统压力过大时...",
             plan_steps=[
                 {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
@@ -47,7 +48,7 @@ class TestAgentGraphState:
         assert restored.user_id == "user-1"
         assert restored.answer == state.answer
         assert len(restored.plan_steps) == 1
-        assert restored.plan_steps[0]["step_id"] == "s1"
+        assert restored.plan_steps[0].step_id == "s1"
 
     def test_add_event_appends_and_updates_timestamp(self):
         state = AgentGraphState(run_id="r1")
@@ -65,8 +66,8 @@ class TestAgentGraphState:
             ]
         )
         state.update_step_status("s1", "completed")
-        assert state.plan_steps[0]["status"] == "completed"
-        assert state.plan_steps[1]["status"] == "planned"
+        assert state.plan_steps[0].status == "completed"
+        assert state.plan_steps[1].status == "planned"
 
     def test_to_run_snapshot_pending(self):
         state = AgentGraphState()
@@ -75,7 +76,7 @@ class TestAgentGraphState:
         assert snap.run_id == state.run_id
 
     def test_to_run_snapshot_completed(self):
-        state = AgentGraphState(intent="ask", answer="42", answer_completed=True)
+        state = AgentGraphState(router_decision=RouterDecision(route="ask"), answer="42", answer_completed=True)
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.completed
         assert snap.answer == "42"
@@ -222,8 +223,8 @@ class TestOrchestrationGraphIntegration:
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
 
-    def test_clarify_before_routing_then_resume(self, runtime):
-        """Ambiguous entry pauses before routing and resumes with supplemental text."""
+    def test_router_requested_clarify_then_resume(self, runtime):
+        """Router requests clarification, then supplemental text is routed again."""
         entry = EntryInput(
             text="帮我",
             user_id="test-user",
@@ -233,18 +234,33 @@ class TestOrchestrationGraphIntegration:
         assert result.run_status == "waiting_confirmation"
         assert result.pending_confirmation
         assert result.pending_confirmation["kind"] == "clarification_required"
+        event_types = [event["type"] for event in result.events]
+        assert event_types.index("intent_classified") < event_types.index("clarification_required")
 
         resumed = runtime.resume_entry(
             run_id=result.run_id or "",
             thread_id=result.thread_id or "",
             decision="clarify",
             user_id="test-user",
-            text="记一下：澄清节点应该先于路由执行。",
+            text="记一下：澄清应由路由决策触发。",
             option_id="capture",
         )
         assert resumed.run_status == "completed"
         assert resumed.intent == "capture_text"
         assert resumed.reply_text
+
+    def test_short_question_does_not_trigger_clarify(self, runtime):
+        """Short but meaningful questions should route instead of pausing."""
+        entry = EntryInput(
+            text="你是谁",
+            user_id="test-user",
+            session_id="orch-test-short-question",
+        )
+        result = runtime.execute_entry(entry)
+        assert result.run_status == "completed"
+        assert result.pending_confirmation is None
+        assert result.intent == "direct_answer"
+        assert result.reply_text
 
     def test_run_snapshots_list(self, runtime):
         """After executing entries, we should be able to list snapshots."""
@@ -408,7 +424,7 @@ class TestPhase3ExecutePlanStep:
         )
 
         result = _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["plan_steps"][0]["status"] == "awaiting_confirmation"
+        assert result["plan_steps"][0].status == "awaiting_confirmation"
         assert state.events[-1].type == "confirmation_required"
 
     def test_node_completes_normally_when_no_pending_confirmation(self, runtime):
@@ -431,7 +447,7 @@ class TestPhase3ExecutePlanStep:
         )
 
         result = _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["plan_steps"][0]["status"] == "completed"
+        assert result["plan_steps"][0].status == "completed"
 
 
 class TestPhase3InterruptResumeIntegration:
@@ -499,7 +515,7 @@ class TestPhase3InterruptResumeIntegration:
     def test_to_run_snapshot_waiting_confirmation(self):
         """When pending_confirmation is set, _infer_status returns waiting_confirmation."""
         state = AgentGraphState(
-            intent="delete_knowledge",
+            router_decision=RouterDecision(route="delete_knowledge"),
             pending_confirmation={"step_id": "s1", "action_type": "delete_note"},
             answer_completed=False,
         )
@@ -687,7 +703,7 @@ class TestPhase4ReActNodes:
         )
         result = _node_react_finalize(state)
         assert state.step_results["ask-1"] == {"answer": "42", "react_iterations": 2}
-        assert state.plan_steps[0]["status"] == "completed"
+        assert state.plan_steps[0].status == "completed"
         assert result["react_step_id"] == ""
         assert result["react_done"] is False
         assert result["react_result"] == {}
@@ -928,7 +944,7 @@ class TestPhase4ReActSubgraphIntegration:
         result = AgentGraphState.model_validate(subgraph.invoke(state, config))
         # react_done is cleared by finalize; check step_results and plan_steps instead
         assert result.step_results.get("ask-1", {}).get("answer") == "X是..."
-        assert result.plan_steps[0]["status"] == "completed"
+        assert result.plan_steps[0].status == "completed"
         assert len(result.react_iterations) >= 1
 
     def test_react_subgraph_respects_max_iterations(self, runtime, monkeypatch):
@@ -980,7 +996,7 @@ class TestPhase4ReActSubgraphIntegration:
         config = {"configurable": {"thread_id": "test-react-max"}}
         result = AgentGraphState.model_validate(subgraph.invoke(state, config))
         # react_done is cleared by finalize; check step_results and plan_steps instead
-        assert result.plan_steps[0]["status"] == "completed"
+        assert result.plan_steps[0].status == "completed"
         assert call_count[0] <= 2
 
     def test_main_graph_routes_react_through_subgraph(self, runtime, monkeypatch):
@@ -1002,8 +1018,7 @@ class TestPhase4ReActSubgraphIntegration:
             run_id="r-ask",
             user_id="u1",
             entry_text="什么是服务降级？",
-            intent="ask",
-            requires_planning=True,
+            router_decision=RouterDecision(route="ask", requires_planning=True),
             plan_steps=[
                 {
                     "step_id": "ask-1",
@@ -1029,7 +1044,7 @@ class TestPhase4ReActSubgraphIntegration:
         config = {"configurable": {"thread_id": "test-main-react"}}
         result = AgentGraphState.model_validate(graph.invoke(state, config))
         # The graph should complete with answer set
-        assert result.answer or result.plan_steps[0]["status"] == "completed"
+        assert result.answer or result.plan_steps[0].status == "completed"
 
     def test_after_step_execution_routes_to_react_step(self):
         from personal_agent.agent.orchestration_graph import _after_step_execution
@@ -1232,8 +1247,7 @@ class TestPhase5GraphToEntryResultEvents:
         # Simulate what happens in execute_entry after graph.invoke()
         state = AgentGraphState(
             run_id="test-events",
-            intent="direct_answer",
-            intent_reason="用户打招呼",
+            router_decision=RouterDecision(route="direct_answer", user_visible_message="用户打招呼"),
             answer="你好！有什么可以帮助你的？",
             answer_completed=True,
             execution_trace=["生成直接回复"],
@@ -1244,8 +1258,8 @@ class TestPhase5GraphToEntryResultEvents:
         state.add_event("run_completed", {})
 
         result = EntryResult(
-            intent=state.intent,
-            reason=state.intent_reason or "",
+            intent=state.router_decision.route if state.router_decision else "unknown",
+            reason=state.router_decision.user_visible_message if state.router_decision else "",
             reply_text=state.answer or "",
             execution_trace=state.execution_trace,
             run_id=state.run_id,
@@ -1280,4 +1294,3 @@ class TestPhase5GraphToEntryResultEvents:
 
         assert result.run_status == "waiting_confirmation"
         assert len(result.events) == 2
-

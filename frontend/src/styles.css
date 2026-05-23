@@ -892,6 +892,31 @@ button:disabled {
   color: #ffcc7a;
 }
 
+.inline-clarification-box {
+  flex-basis: 100%;
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.inline-clarification-box textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(255, 204, 122, 0.24);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(18, 15, 12, 0.72);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.inline-clarification-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
 .plan-step-retry {
   font-size: 0.7rem;
   padding: 2px 6px;

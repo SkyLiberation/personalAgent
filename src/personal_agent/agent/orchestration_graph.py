@@ -23,8 +23,10 @@ from .orchestration_nodes import (
     _is_react_tool_blocked as _is_react_tool_blocked,
     _node_ask_branch as _node_ask_branch,
     _node_capture_branch as _node_capture_branch,
-    _after_clarify_entry as _after_clarify_entry,
-    _node_clarify_entry as _node_clarify_entry,
+    _after_interrupt_clarify as _after_interrupt_clarify,
+    _after_prepare_clarify as _after_prepare_clarify,
+    _node_interrupt_clarify as _node_interrupt_clarify,
+    _node_prepare_clarify as _node_prepare_clarify,
     _node_confirm_step as _node_confirm_step,
     _node_direct_answer_branch as _node_direct_answer_branch,
     _node_execute_plan_step as _node_execute_plan_step,
@@ -60,12 +62,14 @@ logger = logging.getLogger(__name__)
 def _route_by_intent(state: AgentGraphState) -> str:
     """Conditional edge: route by classified intent after ``route_intent`` node.
 
-    Planning intents go to ``plan_task``; non-planning intents go directly to
-    their branch node — no duplicate routing.
+    Clarification pauses before execution; planning intents go to
+    ``plan_task``; remaining intents go directly to their branch node.
     """
-    if state.requires_planning:
+    if state.router_decision and state.router_decision.requires_clarification:
+        return "prepare_clarify_entry"
+    if state.router_decision and state.router_decision.requires_planning:
         return "plan_task"
-    intent = state.intent
+    intent = state.router_decision.route if state.router_decision else "unknown"
     if intent in ("capture_text", "capture_link", "capture_file"):
         return "capture_branch"
     if intent == "ask":
@@ -88,7 +92,8 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
 
     # ---- Phase 1 nodes ----
     builder.add_node("normalize_entry", _node_normalize_entry)
-    builder.add_node("clarify_entry", _node_clarify_entry)
+    builder.add_node("prepare_clarify_entry", _node_prepare_clarify)
+    builder.add_node("interrupt_clarify_entry", _node_interrupt_clarify)
     builder.add_node(
         "route_intent",
         lambda state: _node_route_intent(state, deps=deps),
@@ -145,10 +150,10 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
 
     # ---- Edges ----
     builder.add_edge(START, "normalize_entry")
-    builder.add_edge("normalize_entry", "clarify_entry")
+    builder.add_edge("normalize_entry", "route_intent")
     builder.add_conditional_edges(
-        "clarify_entry",
-        _after_clarify_entry,
+        "interrupt_clarify_entry",
+        _after_interrupt_clarify,
         {
             "route_intent": "route_intent",
             "finalize_entry_result": "finalize_entry_result",
@@ -160,11 +165,20 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         "route_intent",
         _route_by_intent,
         {
+            "prepare_clarify_entry": "prepare_clarify_entry",
             "plan_task": "plan_task",
             "capture_branch": "capture_branch",
             "ask_branch": "ask_branch",
             "summarize_branch": "summarize_branch",
             "direct_answer_branch": "direct_answer_branch",
+        },
+    )
+    builder.add_conditional_edges(
+        "prepare_clarify_entry",
+        _after_prepare_clarify,
+        {
+            "route_intent": "route_intent",
+            "interrupt_clarify_entry": "interrupt_clarify_entry",
         },
     )
     builder.add_edge("plan_task", "validate_plan")

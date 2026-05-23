@@ -15,6 +15,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from ..core.models import Citation, EntryInput, EntryIntent
+from .router import RouterDecision
 
 
 def _new_run_id() -> str:
@@ -98,6 +99,81 @@ class AgentRunSnapshot(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# PlanStepState — checkpoint-safe plan step model
+# ---------------------------------------------------------------------------
+
+
+class PlanStepState(BaseModel):
+    """Checkpoint-safe, serialisable plan step state.
+
+    Mirrors the ``PlanStep`` dataclass fields so that the orchestration
+    graph can store and resume plan steps without dict conversion.
+    """
+
+    step_id: str = ""
+    action_type: str = ""
+    description: str = ""
+    tool_name: str | None = None
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+    expected_output: str = ""
+    success_criteria: str = ""
+    risk_level: str = "low"
+    requires_confirmation: bool = False
+    on_failure: str = "skip"
+    status: str = "planned"
+    retry_count: int = 0
+    execution_mode: str = "deterministic"
+    allowed_tools: list[str] = Field(default_factory=list)
+    max_iterations: int = 3
+
+    @classmethod
+    def from_plan_step(cls, s: "PlanStep") -> "PlanStepState":
+        """Create a PlanStepState from a planner-produced PlanStep."""
+        return cls(
+            step_id=s.step_id,
+            action_type=s.action_type,
+            description=s.description,
+            tool_name=s.tool_name,
+            tool_input=s.tool_input,
+            depends_on=s.depends_on,
+            expected_output=s.expected_output,
+            success_criteria=s.success_criteria,
+            risk_level=s.risk_level,
+            requires_confirmation=s.requires_confirmation,
+            on_failure=s.on_failure,
+            status=s.status,
+            retry_count=s.retry_count,
+            execution_mode=s.execution_mode,
+            allowed_tools=s.allowed_tools,
+            max_iterations=s.max_iterations,
+        )
+
+    def to_plan_step(self) -> "PlanStep":
+        """Convert back to a PlanStep for validator / executor consumption."""
+        from .planner import PlanStep
+
+        return PlanStep(
+            step_id=self.step_id,
+            action_type=self.action_type,
+            description=self.description,
+            tool_name=self.tool_name,
+            tool_input=self.tool_input,
+            depends_on=self.depends_on,
+            expected_output=self.expected_output,
+            success_criteria=self.success_criteria,
+            risk_level=self.risk_level,
+            requires_confirmation=self.requires_confirmation,
+            on_failure=self.on_failure,
+            status=self.status,
+            retry_count=self.retry_count,
+            execution_mode=self.execution_mode,
+            allowed_tools=self.allowed_tools,
+            max_iterations=self.max_iterations,
+        )
+
+
+# ---------------------------------------------------------------------------
 # AgentGraphState — the checkpoint-able state for the orchestration graph
 # ---------------------------------------------------------------------------
 
@@ -124,13 +200,10 @@ class AgentGraphState(BaseModel):
     entry_text: str = ""
 
     # Routing
-    intent: EntryIntent = "unknown"
-    intent_reason: str = ""
-    router_decision: dict[str, Any] = Field(default_factory=dict)
-    requires_planning: bool = False
+    router_decision: RouterDecision | None = None
 
     # Plan
-    plan_steps: list[dict[str, Any]] = Field(default_factory=list)
+    plan_steps: list[PlanStepState] = Field(default_factory=list)
     current_step_index: int = 0
     step_results: dict[str, Any] = Field(default_factory=dict)
     plan_aborted: bool = False
@@ -199,8 +272,8 @@ class AgentGraphState(BaseModel):
 
     def update_step_status(self, step_id: str, status: str) -> None:
         for s in self.plan_steps:
-            if s.get("step_id") == step_id:
-                s["status"] = status
+            if s.step_id == step_id:
+                s.status = status
                 return
 
     def to_run_snapshot(self, status: AgentRunStatus | None = None) -> AgentRunSnapshot:
@@ -212,9 +285,9 @@ class AgentGraphState(BaseModel):
             user_id=self.user_id,
             session_id=self.session_id,
             status=resolved_status,
-            intent=self.intent,
+            intent=self.router_decision.route if self.router_decision else "unknown",
             entry_text=self.entry_text,
-            plan_steps=self.plan_steps,
+            plan_steps=[s.model_dump(mode="json") for s in self.plan_steps],
             execution_trace=self.execution_trace,
             answer=self.answer,
             last_event=last,
@@ -231,7 +304,7 @@ def _infer_status(state: AgentGraphState) -> AgentRunStatus:
         return AgentRunStatus.completed
     if state.pending_confirmation is not None:
         return AgentRunStatus.waiting_confirmation
-    if state.intent != "unknown":
+    if state.router_decision is not None:
         return AgentRunStatus.running
     return AgentRunStatus.pending
 

@@ -69,10 +69,11 @@ build_entry_orchestration_graph(deps, checkpointer=None)
 ```text
 START
   -> normalize_entry
-  -> clarify_entry
-     -> route_intent
-     -> finalize_entry_result
   -> route_intent
+     -> prepare_clarify_entry
+        -> interrupt_clarify_entry
+           -> route_intent
+           -> finalize_entry_result
      -> capture_branch
      -> ask_branch
      -> summarize_branch
@@ -114,19 +115,7 @@ prepare_plan_execution
 thread_id = user_id + ":" + session_id + ":" + run_id
 ```
 
-### 2. `clarify_entry`
-
-节点函数：`_node_clarify_entry()`
-
-职责：
-
-- 在进入 router 前判断输入是否足以启动流程。
-- 对空输入、过短输入、只有“帮我看看 / 删除 / 总结”等缺少对象的片段，构造 `kind="clarification_required"` 的 interrupt payload。
-- 通过 `interrupt()` 暂停 run，并等待 `/api/entry/runs/{run_id}/resume` 传入补充文本。
-- 用户补充后，更新 `entry_text` 与 `entry_input.text`，再进入 `route_intent`。
-- 用户取消或补充为空时，直接进入 `finalize_entry_result` 结束。
-
-### 3. `route_intent`
+### 2. `route_intent`
 
 节点函数：`_node_route_intent()`
 
@@ -134,10 +123,22 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 
 - 执行 session bind 和 conversation summary refresh。
 - 调用 `runtime._intent_router.classify(entry_input)` 完成意图分类。
-- 将路由结果写入 `AgentGraphState`：`intent`、`intent_reason`、`requires_planning`、`router_decision`。
+- 将包含 `requires_clarification`、`missing_information`、`clarification_prompt` 的 `RouterDecision` 写入 state。
 - 写入 `intent_classified` 事件。
 
-条件边 `_route_by_intent()`：如果 `requires_planning=True` 则进入 `plan_task`，否则根据 `intent` 进入 `capture_branch`、`ask_branch`、`summarize_branch` 或 `direct_answer_branch`。无法识别的 `unknown` 也进入 `direct_answer_branch`，由 classify 结果生成澄清提示。
+条件边 `_route_by_intent()`：如果 `requires_clarification=True` 则进入 `prepare_clarify_entry`；否则如果 `requires_planning=True` 则进入 `plan_task`，其余根据 intent 进入普通分支。
+
+### 3. `prepare_clarify_entry` 与 `interrupt_clarify_entry`
+
+节点函数：`_node_prepare_clarify()`、`_node_interrupt_clarify()`
+
+职责：
+
+- `prepare_clarify_entry` 读取 router 已判定缺失的信息，构造 `kind="clarification_required"` 的 payload，并将其写入 `pending_confirmation` 与事件列表。
+- payload 的写入发生在 `interrupt()` 之前，因此 checkpoint 可以保存前端需要展示的澄清内容和缺失项。
+- `interrupt_clarify_entry` 通过 `interrupt()` 暂停 run，并等待 `/api/entry/runs/{run_id}/resume` 传入补充文本。
+- 用户补充后，更新 `entry_text` 与 `entry_input.text`、清空旧路由决策，再重新进入 `route_intent`。
+- 用户取消或补充为空时，直接进入 `finalize_entry_result` 结束。
 
 ### 4. `plan_task`
 

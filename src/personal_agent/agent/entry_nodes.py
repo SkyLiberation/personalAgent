@@ -262,6 +262,7 @@ def heuristic_entry_intent(text: str) -> tuple[EntryIntent, str]:
     summarize_keywords = ("总结", "汇总", "整理")
     thread_keywords = ("群聊", "会话", "线程", "讨论", "聊天记录")
     ask_keywords = (
+        "谁",
         "什么",
         "为什么",
         "如何",
@@ -308,6 +309,8 @@ def heuristic_entry_intent(text: str) -> tuple[EntryIntent, str]:
         "好的",
         "嗯",
         "哦",
+        "你是谁",
+        "你能做什么",
     )
 
     if (

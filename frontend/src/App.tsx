@@ -325,6 +325,11 @@ export default function App() {
     };
   }
 
+  function pendingActionFromHistoryItem(item: AskHistoryView): PendingActionItem | null {
+    if (!item.run_id || !item.pending_confirmation) return null;
+    return pendingActionFromConfirmation(item.run_id, item.pending_confirmation, item.id);
+  }
+
   function applyEntryResponseToHistory(localHistoryId: string | null, result: EntryResponse) {
     if (!localHistoryId) return;
     setAskHistory((current) =>
@@ -1075,7 +1080,13 @@ export default function App() {
                 <div className="ask-chat-main">
                   <div className="ask-chat-thread">
                   {orderedAskHistory.length ? (
-                    orderedAskHistory.map((item) => (
+                    orderedAskHistory.map((item) => {
+                      const inlineAction = pendingActionFromHistoryItem(item);
+                      const isInlineClarification = item.pending_confirmation?.kind === "clarification_required" && inlineAction;
+                      const inlineClarificationInput = inlineAction
+                        ? clarificationInputs[inlineAction.id] ?? { text: "", optionId: "" }
+                        : { text: "", optionId: "" };
+                      return (
                       <div key={item.id} className="chat-turn">
                         <article className="chat-bubble chat-bubble-user">
                           <div className="chat-meta">
@@ -1109,6 +1120,58 @@ export default function App() {
                             <div className="inline-confirmation">
                               <span>{item.pending_confirmation.action_type ?? "confirm"}</span>
                               <strong>{item.pending_confirmation.title || item.pending_confirmation.step_id || "等待确认"}</strong>
+                              {isInlineClarification && inlineAction ? (
+                                <div className="inline-clarification-box">
+                                  <div className="clarification-options">
+                                    {(item.pending_confirmation.options ?? []).map((option) => (
+                                      <button
+                                        key={option.id}
+                                        type="button"
+                                        className="secondary-button"
+                                        data-active={inlineClarificationInput.optionId === option.id}
+                                        onClick={() =>
+                                          setClarificationInputs((current) => ({
+                                            ...current,
+                                            [inlineAction.id]: { ...inlineClarificationInput, optionId: option.id },
+                                          }))
+                                        }
+                                        title={option.prompt}
+                                      >
+                                        {option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <textarea
+                                    value={inlineClarificationInput.text}
+                                    onChange={(event) =>
+                                      setClarificationInputs((current) => ({
+                                        ...current,
+                                        [inlineAction.id]: { ...inlineClarificationInput, text: event.target.value },
+                                      }))
+                                    }
+                                    placeholder="补充具体内容、问题、总结范围或操作对象..."
+                                    rows={3}
+                                  />
+                                  <div className="inline-clarification-actions">
+                                    <button
+                                      type="button"
+                                      className="confirm-button"
+                                      disabled={isConfirmingAction}
+                                      onClick={() => void handleSubmitClarification(inlineAction)}
+                                    >
+                                      提交补充
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="secondary-button"
+                                      disabled={isConfirmingAction}
+                                      onClick={() => void handleRejectPending(inlineAction, "用户取消补充")}
+                                    >
+                                      取消
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
@@ -1210,7 +1273,8 @@ export default function App() {
                           ) : null}
                         </article>
                       </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="ask-empty-state">
                       <p className="empty-copy">先开始一轮对话吧，后续追问会自动留在同一个会话里。</p>

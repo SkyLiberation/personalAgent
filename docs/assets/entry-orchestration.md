@@ -7,7 +7,8 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	normalize_entry(normalize_entry)
-	clarify_entry(clarify_entry)
+	prepare_clarify_entry(prepare_clarify_entry)
+	interrupt_clarify_entry(interrupt_clarify_entry)
 	route_intent(route_intent)
 	plan_task(plan_task)
 	validate_plan(validate_plan)
@@ -28,8 +29,10 @@ graph TD;
 	__start__ --> normalize_entry;
 	ask_branch --> finalize_entry_result;
 	capture_branch --> finalize_entry_result;
-	clarify_entry -.-> finalize_entry_result;
-	clarify_entry -.-> route_intent;
+	prepare_clarify_entry -.-> interrupt_clarify_entry;
+	prepare_clarify_entry -.-> route_intent;
+	interrupt_clarify_entry -.-> finalize_entry_result;
+	interrupt_clarify_entry -.-> route_intent;
 	confirm_step -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
 	confirm_step -. &nbsp;handle_success&nbsp; .-> handle_step_success;
 	direct_answer_branch --> finalize_entry_result;
@@ -41,7 +44,7 @@ graph TD;
 	handle_step_failure -. &nbsp;finalize_plan&nbsp; .-> finalize_plan_execution;
 	handle_step_failure -. &nbsp;continue_loop&nbsp; .-> select_next_step;
 	handle_step_success -. &nbsp;continue_loop&nbsp; .-> select_next_step;
-	normalize_entry --> clarify_entry;
+	normalize_entry --> route_intent;
 	plan_task --> validate_plan;
 	prepare_plan_execution --> select_next_step;
 	react_step --> handle_step_success;
@@ -49,6 +52,7 @@ graph TD;
 	route_intent -.-> capture_branch;
 	route_intent -.-> direct_answer_branch;
 	route_intent -.-> plan_task;
+	route_intent -.-> prepare_clarify_entry;
 	route_intent -.-> summarize_branch;
 	select_next_step -. &nbsp;execute_step&nbsp; .-> execute_plan_step;
 	select_next_step -. &nbsp;finalize_plan&nbsp; .-> finalize_plan_execution;

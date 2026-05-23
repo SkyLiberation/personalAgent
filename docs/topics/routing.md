@@ -32,7 +32,9 @@
 - `requires_planning`
 - `risk_level`
 - `requires_confirmation`
+- `requires_clarification`
 - `missing_information`
+- `clarification_prompt`
 - `candidate_tools`
 - `user_visible_message`
 
@@ -85,6 +87,7 @@
 - 已具备候选工具字段
 - 已能驱动 planner 是否进入 `requires_planning`
 - `ask` 默认候选工具已包含 `graph_search / web_search`
+- 已由 router 通过 `requires_clarification / missing_information / clarification_prompt` 驱动 LangGraph 澄清 interrupt；补充内容会重新进入分类
 
 ## 已知限制
 
@@ -100,18 +103,13 @@
 graph_search -> local memory -> web_search
 ```
 
-### 3. 缺少澄清问答机制
-
-`missing_information` 字段已存在，但当前流程还没有形成完整的“信息不足 -> 追问用户 -> 继续执行”的闭环。
-
-### 4. LLM 分类置信度较粗
+### 3. LLM 分类置信度较粗
 
 当前 LLM 分类默认 `confidence=0.8`，启发式规则也使用固定置信度。还没有基于输入复杂度、规则命中强度或历史误判做动态校准。
 
 ## 演进方向
 
 - 为路由层新增更细粒度的工具优先级字段
-- 补齐 `missing_information` 驱动的澄清流程
 - 为路由结果建立评测集和误判回归样本
 - 将 intent 默认控制字段从硬编码逐步迁移为可配置策略
 

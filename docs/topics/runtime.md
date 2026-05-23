@@ -115,11 +115,24 @@ EntryInput
 
 ## 已知限制
 
-### 1. 普通分支事件粒度仍可增强
+### 1. `AgentRuntime` 职责过重
+
+当前 `AgentRuntime` 仍同时承担依赖装配、public API facade、entry graph 调用、capture、ask、digest、tool registry、graph sync、pending action、LLM 调用和 admin 操作等职责。虽然 mixin 已经把文件拆小，但对象边界仍然偏“上帝类”：node 已经成为 LangGraph 编排单元，很多业务能力却仍要通过 runtime 方法或 runtime 私有字段间接触达。
+
+这会带来几个问题：
+
+- ~~orchestration nodes 仍依赖 `OrchestrationDeps.from_runtime()` 从 runtime 抽取大量私有字段。~~ **已修复**：`OrchestrationDeps.from_runtime()` 现在通过 `@property` 公开属性访问（`runtime.intent_router`、`runtime.planner` 等），不再直接访问私有字段。
+- ~~工具和节点对 `runtime.execute_capture()`、`runtime.execute_ask()` 等方法存在回调式依赖。~~ **已修复**：`CaptureTextTool` 改为接收 `capture_executor: Callable`，通过 lambda 注入 `execute_capture`。
+- Runtime 修改容易影响多个入口和测试面，局部能力难以单独替换或复用。
+- LangGraph 已经表达流程，但业务执行边界还没有完全下沉到 node/service 层。
+
+期望方向是：`AgentRuntime` 逐步收敛为应用级 facade 和依赖装配器，具体能力下沉到明确的 node dependency 或领域 service。
+
+### 2. 普通分支事件粒度仍可增强
 
 普通 `capture / ask / summarize / direct_answer` 已进入 entry 总编排，但分支内部仍主要返回 answer、citations、matches 等结果字段。后续可继续补充更细粒度的 `AgentEvent`，让普通分支和计划步骤在前端反馈上更一致。
 
-### 2. ReAct 单步策略仍处于受控首版
+### 3. ReAct 单步策略仍处于受控首版
 
 当前 entry 总编排已在 `execution_mode="react"` 的步骤内执行有限轮 Thought / Action / Observation 循环。运行时由 orchestration nodes 维护 step 状态、进度事件、失败处理、replan 和最终 `EntryResult`，ReAct 只负责单个步骤内部的观察式工具调用。
 
@@ -134,5 +147,41 @@ EntryInput
 
 ## 演进方向
 
+- 将 `AgentRuntime` 收敛为薄 facade / dependency provider，业务执行下沉到 node/service
 - 为普通分支和计划步骤建立统一 `AgentEvent` schema
 - 为 runtime 增加更系统的集成测试和回归评测
+
+## 下一步实现方案：Runtime 职责下沉
+
+### 目标边界
+
+保留在 `AgentRuntime` 的职责：
+
+- 入口级 public API：`entry()`、`capture()`、`ask()` 等兼容方法。
+- 依赖装配：settings、store、graph store、memory、tool registry、checkpointer。
+- LangGraph graph 构建与 run/snapshot/resume 管理。
+- Web/CLI/飞书需要的结果模型兼容转换。
+
+下沉出 `AgentRuntime` 的职责：
+
+- `capture` 执行细节：下沉为 `CaptureNodeDeps` 或 `CaptureServiceFacade`。
+- `ask` 检索、证据组装、回答生成、verifier retry：下沉为 `AskService` / `AskNodeDeps`。
+- direct answer / summarize 的 LLM 调用：下沉为独立 response service。
+- tool 执行依赖：工具不再持有 runtime，改持有明确 service 或 callable。
+- admin/reset/graph sync：保持 mixin 短期兼容，后续迁移为应用 service。
+
+### 分阶段迁移
+
+1. 定义 `EntryOrchestrationDeps` 的最终形态：只包含 node 需要的显式 service/callable，不再从 runtime 私有字段直接读。
+2. 抽出 `AskService`：先迁移 `execute_ask()` 的主体逻辑，runtime 只保留转发方法。
+3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture graph、store、Graphiti sync 的编排移出 runtime。
+4. ~~替换工具对 runtime 的依赖：例如 `CaptureTextTool(self)` 改为 `CaptureTextTool(capture_service=...)`。~~ **已完成**：`CaptureTextTool` 现在接收 `capture_executor: Callable`，不再持有 `AgentRuntime`。
+5. ~~清理 `RuntimeEntryMixin.plan_for_entry()` 等 LangGraph 改造后的兼容遗留方法。~~ **已完成**：`plan_for_entry()` 已删除（118 行死代码），`runtime_entry.py` 从 163 行精简到 40 行。
+6. 最后压缩 `AgentRuntime.__init__()`：只装配依赖容器和 graph，不再承载具体业务流程。
+
+### 验收标准
+
+- ~~orchestration nodes 不访问 runtime 私有字段。~~ **已完成**：`OrchestrationDeps.from_runtime()` 使用公开属性。
+- ~~工具不持有 `AgentRuntime` 实例。~~ **已完成**：`CaptureTextTool` 接收 callable。
+- runtime public 方法仍兼容现有 Web/CLI/飞书调用。
+- `tests/test_orchestration.py`、API 测试和核心 ask/capture 回归测试通过（475 passed, 1 flaky due to API connectivity）。

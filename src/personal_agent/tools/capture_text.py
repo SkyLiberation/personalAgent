@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable
 
 from .base import BaseTool, ToolResult, ToolSpec
-
-if TYPE_CHECKING:
-    from ..agent.runtime import AgentRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +11,8 @@ logger = logging.getLogger(__name__)
 class CaptureTextTool(BaseTool):
     """Capture plain text into a KnowledgeNote, reusing the capture pipeline."""
 
-    def __init__(self, runtime: "AgentRuntime") -> None:
-        self._runtime = runtime
+    def __init__(self, capture_executor: Callable) -> None:
+        self._capture_executor = capture_executor
 
     @property
     def spec(self) -> ToolSpec:
@@ -42,7 +39,7 @@ class CaptureTextTool(BaseTool):
         user_id = str(kwargs.get("user_id", "default"))
         source_type = str(kwargs.get("source_type", "text"))
         try:
-            result = self._runtime.execute_capture(
+            result = self._capture_executor(
                 text=text, source_type=source_type, user_id=user_id,
             )
             return ToolResult(ok=True, data={

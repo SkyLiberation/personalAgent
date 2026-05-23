@@ -29,15 +29,7 @@
 
 ## Entry 编排图
 
-[docs/assets/entry-orchestration.md](docs/assets/entry-orchestration.md) 是当前 LangGraph entry 总编排的可视化图源，用来对齐 `normalize_entry -> clarify_entry -> route_intent -> capture / ask / summarize / direct_answer / plan_task -> step / ReAct / HITL -> finalize_entry_result` 的真实节点结构和条件流转关系。它应随 `orchestration_graph.py` / `orchestration_nodes.py` 的节点调整同步刷新，作为排查入口流程、确认 checkpoint / interrupt 位置和审阅编排变更的参考图。
-
-## 下一步优先级
-
-以下优先级来自 [docs/topics/](docs/topics/) 下各专题文档的“已知限制 / 演进方向”。实现任一改进前，必须先读取该项括号中标注的来源 topic 文档，并着重关注其中的“下一步实现方案”章节，以该章节的拆解作为实现依据；完成改进后，需要同步修改这些对应 topic 文档，避免 README 路线图和专题文档漂移。
-
-1. 统一 Agent 事件模型：已新增结构化 `AgentEvent` 类型（18 种事件类型），SSE 端点通过 `events_to_sse_tuples()` 将图事件转换为流事件，`EntryResult.events` 透传结构化事件给 API 消费者，CLI `entry` 命令接入统一入口。普通分支（capture/ask/direct_answer）仍可继续补充更细粒度 `AgentEvent`。（来源：[docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)）
-2. 统一 Evidence / Citation 模型：将 Graphiti `node / edge / fact`、episode 映射、note/chunk snippet、web citation 和工具结果收敛为统一证据结构，减少 graph facts、citations、tool result 多套数据形态之间的漂移。（来源：[docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md)、[docs/topics/tools.md](docs/topics/tools.md)）
-3. 收敛重规划校验链路：为 `Replanner` 产出的 revised steps 增加统一 `PlanValidator` 复校验、风险继承和失败回退策略，避免失败后补救步骤绕过原有计划安全门禁。（来源：[docs/topics/planning.md](docs/topics/planning.md)）
+[docs/assets/entry-orchestration.md](docs/assets/entry-orchestration.md) 是当前 LangGraph entry 总编排的可视化图源，用来对齐 `normalize_entry -> route_intent -> (按需 clarify) / capture / ask / summarize / direct_answer / plan_task -> step / ReAct / HITL -> finalize_entry_result` 的真实节点结构和条件流转关系。它应随 `orchestration_graph.py` / `orchestration_nodes.py` 的节点调整同步刷新，作为排查入口流程、确认 checkpoint / interrupt 位置和审阅编排变更的参考图。
 
 ## 当前技术栈
 

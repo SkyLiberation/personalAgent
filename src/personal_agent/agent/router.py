@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 from typing import Literal, Protocol
 
 from openai import OpenAI
@@ -17,19 +17,20 @@ logger = logging.getLogger(__name__)
 RiskLevel = Literal["low", "medium", "high"]
 
 
-@dataclass(slots=True)
-class RouterDecision:
+class RouterDecision(BaseModel):
     """Structured routing decision with metadata for downstream planner / executor."""
 
-    route: EntryIntent
+    route: EntryIntent = "unknown"
     confidence: float = 0.5
     requires_tools: bool = False
     requires_retrieval: bool = False
     requires_planning: bool = False
     risk_level: RiskLevel = "low"
     requires_confirmation: bool = False
-    missing_information: list[str] = field(default_factory=list)
-    candidate_tools: list[str] = field(default_factory=list)
+    requires_clarification: bool = False
+    missing_information: list[str] = Field(default_factory=list)
+    clarification_prompt: str = ""
+    candidate_tools: list[str] = Field(default_factory=list)
     user_visible_message: str = ""
 
 
@@ -95,6 +96,9 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
         route="unknown",
         confidence=0.3,
         risk_level="low",
+        requires_clarification=True,
+        missing_information=["明确的目标、问题或操作对象"],
+        clarification_prompt="请补充你想记录、查询、总结或执行的具体内容。",
         user_visible_message="无法确定意图，请重新描述。",
     )
 
@@ -115,8 +119,8 @@ _RECOGNIZED_INTENTS = {
 def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
     """Merge LLM classification result with default decision to fill control fields.
 
-    The LLM returns intent/reason/risk_level/requires_confirmation/missing_information,
-    but does not populate requires_tools/requires_retrieval/requires_planning/candidate_tools.
+    The LLM returns intent, clarification metadata and risk metadata, but does
+    not populate requires_tools/requires_retrieval/requires_planning/candidate_tools.
     This function merges LLM result with the defaults for the matched intent.
     """
     defaults = _default_router_decision(
@@ -130,10 +134,58 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
         requires_planning=defaults.requires_planning,
         risk_level=llm_result.risk_level,
         requires_confirmation=llm_result.requires_confirmation,
+        requires_clarification=(
+            llm_result.requires_clarification or defaults.requires_clarification
+        ),
         missing_information=llm_result.missing_information,
+        clarification_prompt=(
+            llm_result.clarification_prompt or defaults.clarification_prompt
+        ),
         candidate_tools=defaults.candidate_tools,
         user_visible_message=llm_result.user_visible_message,
     )
+
+
+def _with_clarification(
+    decision: RouterDecision,
+    *,
+    prompt: str,
+    missing_information: list[str],
+) -> RouterDecision:
+    """Mark a fallback routing decision as requiring user clarification."""
+    return decision.model_copy(
+        update={
+            "requires_clarification": True,
+            "clarification_prompt": prompt,
+            "missing_information": missing_information,
+        }
+    )
+
+
+def _apply_heuristic_clarification(text: str, decision: RouterDecision) -> RouterDecision:
+    """Handle unmistakably incomplete fragments when no LLM is available."""
+    stripped = (text or "").strip()
+    ambiguous_fragments = {
+        "帮我", "帮我看看", "看看", "处理一下", "帮我处理", "搞一下", "弄一下",
+        "继续", "这个", "那个", "这条", "那条", "一下",
+    }
+    action_only = {
+        "记录", "记一下", "保存", "收录", "总结", "汇总", "删除", "删掉",
+        "查询", "问一下", "解释一下",
+    }
+    if stripped in ambiguous_fragments:
+        return _with_clarification(
+            _default_router_decision("unknown", f"输入 `{stripped}` 缺少明确目标。"),
+            prompt="请补充你希望我处理的具体内容，并说明要记录、查询、总结还是执行操作。",
+            missing_information=["具体目标或待处理内容"],
+        )
+    if stripped in action_only:
+        return _with_clarification(
+            decision,
+            prompt=f"请补充“{stripped}”所针对的具体内容或对象。",
+            missing_information=["操作对象或内容"],
+        )
+    return decision
 
 
 class DefaultIntentRouter:
@@ -165,7 +217,10 @@ class DefaultIntentRouter:
             return decision
 
         intent, reason = heuristic_entry_intent(entry_input.text)
-        decision = _default_router_decision(intent, reason)
+        decision = _apply_heuristic_clarification(
+            entry_input.text,
+            _default_router_decision(intent, reason),
+        )
         self._log_decision(entry_input, decision, strategy="heuristic")
         return decision
 
@@ -182,7 +237,10 @@ class DefaultIntentRouter:
             "summarize_thread: 需要总结群聊/会话。delete_knowledge: 删除过时或错误的知识笔记。"
             "solidify_conversation: 把对话结论沉淀为知识。"
             "direct_answer: 闲聊、问候、感谢、澄清性问题、无需检索的简单说明或常识性问题。"
-            "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), missing_information(字符串数组, 可选)。"
+            "当输入不足以安全确定或执行意图时设置 requires_clarification=true，并提供 missing_information 和 clarification_prompt；"
+            "例如“帮我”“删除”需要澄清，而“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
+            "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), "
+            "requires_clarification(bool, 可选), missing_information(字符串数组, 可选), clarification_prompt(字符串, 可选)。"
             "risk_level: 删除类操作应为 high，一般操作为 low。"
             "requires_confirmation: 删除操作应为 true。\n\n"
             f"用户输入：{text}"
@@ -226,9 +284,11 @@ class DefaultIntentRouter:
                 confidence=0.8,
                 risk_level=risk if risk in ("low", "medium", "high") else "low",
                 requires_confirmation=bool(payload.get("requires_confirmation", False)),
+                requires_clarification=bool(payload.get("requires_clarification", False)),
                 missing_information=payload.get("missing_information")
                 if isinstance(payload.get("missing_information"), list)
                 else [],
+                clarification_prompt=str(payload.get("clarification_prompt") or ""),
                 user_visible_message=reason,
             )
         except Exception:
@@ -260,6 +320,7 @@ class DefaultIntentRouter:
             requires_retrieval=decision.requires_retrieval,
             requires_planning=decision.requires_planning,
             requires_confirmation=decision.requires_confirmation,
+            requires_clarification=decision.requires_clarification,
             candidate_tools=decision.candidate_tools,
             missing_information=decision.missing_information,
             source_type=entry_input.source_type,

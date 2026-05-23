@@ -18,7 +18,11 @@ class RuntimeToolsMixin:
                 CaptureUploadTool(self.capture_service, self.settings.data_dir / "uploads")
             )
         self._tool_registry.register(GraphSearchTool(self.graph_store))
-        self._tool_registry.register(CaptureTextTool(self))
+        self._tool_registry.register(CaptureTextTool(
+            lambda text, source_type="text", user_id="default": self.execute_capture(
+                text=text, source_type=source_type, user_id=user_id,
+            )
+        ))
         self._tool_registry.register(DeleteNoteTool(self.store, self.graph_store, self.pending_action_store))
         if self.settings.firecrawl_api_key:
             from ..capture.providers.web_search import FirecrawlWebSearchProvider

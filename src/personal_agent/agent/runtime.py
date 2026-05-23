@@ -16,7 +16,7 @@ from ..storage.pending_action_store import PendingActionStore
 from ..tools import ToolRegistry
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
-from .orchestration_models import AgentGraphState, AgentRunSnapshot
+from .orchestration_models import AgentGraphState, AgentRunSnapshot, PlanStepState
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
 from .react_runner import ReActStepRunner
@@ -74,6 +74,20 @@ def _interrupt_payload_from_result(result: object) -> dict | None:
     return {"message": str(interrupt_value)}
 
 
+def _snapshot_intent(snapshot: dict) -> str:
+    """Extract intent string from a raw state snapshot dict.
+
+    Handles three forms of ``router_decision`` in the snapshot:
+    None (before routing), a dict (legacy checkpoints), or a RouterDecision instance.
+    """
+    rd = snapshot.get("router_decision")
+    if rd is None:
+        return "unknown"
+    if isinstance(rd, dict):
+        return str(rd.get("route", "unknown"))
+    return str(getattr(rd, "route", "unknown"))
+
+
 class AgentRuntime(
     RuntimeToolsMixin,
     RuntimeCaptureMixin,
@@ -120,6 +134,24 @@ class AgentRuntime(
         )
         # Orchestration graph — built lazily on first use
         self._orch_graph = None
+
+    # ---- public properties (delegate to private fields so test mocks are visible) ----
+
+    @property
+    def intent_router(self):
+        return self._intent_router
+
+    @property
+    def tool_registry(self):
+        return self._tool_registry
+
+    @property
+    def planner(self):
+        return self._planner
+
+    @property
+    def plan_validator(self):
+        return self._plan_validator
 
     # ---- orchestration graph ----
 
@@ -181,10 +213,10 @@ class AgentRuntime(
 
         capture_result = None
         ask_result = None
-        if result_state.intent in ("capture_text", "capture_link", "capture_file"):
+        if result_state.router_decision and result_state.router_decision.route in ("capture_text", "capture_link", "capture_file"):
             # Capture details are held inside orchestration branch state.
             pass
-        elif result_state.intent == "ask":
+        elif result_state.router_decision and result_state.router_decision.route == "ask":
             ask_result = AskResult(
                 answer=reply_text,
                 citations=result_state.citations,
@@ -193,12 +225,12 @@ class AgentRuntime(
             )
 
         return EntryResult(
-            intent=result_state.intent,
-            reason=result_state.intent_reason or "未提供路由说明。",
+            intent=result_state.router_decision.route if result_state.router_decision else "unknown",
+            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "未提供路由说明。",
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
-            plan_steps=result_state.plan_steps,
+            plan_steps=[s.model_dump(mode="json") for s in result_state.plan_steps],
             execution_trace=result_state.execution_trace,
             run_id=run_id,
             thread_id=thread_id,
@@ -226,10 +258,13 @@ class AgentRuntime(
             run_id, thread_id, kind or "confirmation", interrupt_data.get("step_id", "?"),
         )
         return EntryResult(
-            intent=str(state_snapshot.get("intent") or "unknown"),
+            intent=_snapshot_intent(state_snapshot),
             reason=reason,
             reply_text=str(interrupt_data.get("message", default_message)),
-            plan_steps=list(state_snapshot.get("plan_steps") or []),
+            plan_steps=[
+                s.model_dump(mode="json") if isinstance(s, PlanStepState) else s
+                for s in (state_snapshot.get("plan_steps") or [])
+            ],
             execution_trace=list(state_snapshot.get("execution_trace") or []),
             run_id=run_id,
             thread_id=thread_id,
@@ -287,10 +322,10 @@ class AgentRuntime(
         reply_text = result_state.answer or "操作已完成。"
 
         return EntryResult(
-            intent=result_state.intent,
-            reason=result_state.intent_reason or "",
+            intent=result_state.router_decision.route if result_state.router_decision else "unknown",
+            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
             reply_text=reply_text,
-            plan_steps=result_state.plan_steps,
+            plan_steps=[s.model_dump(mode="json") for s in result_state.plan_steps],
             execution_trace=result_state.execution_trace,
             run_id=run_id,
             thread_id=thread_id,
@@ -299,12 +334,11 @@ class AgentRuntime(
         )
 
     def get_run_snapshot(self, run_id: str) -> AgentRunSnapshot | None:
-        """Return a read-only snapshot for a previously executed run."""
+        """Return a read-only snapshot for the most recent checkpoint of a run."""
         if self._orch_graph is None:
             return None
         try:
             checkpointer = self._orch_graph.checkpointer
-            # Pass None to list all checkpoint threads
             for ct in checkpointer.list(None, limit=500):
                 tid: str = ct.config.get("configurable", {}).get("thread_id", "")
                 if not tid or not tid.endswith(f":{run_id}"):
@@ -320,32 +354,33 @@ class AgentRuntime(
     def list_run_snapshots(
         self, user_id: str | None = None, limit: int = 50,
     ) -> list[AgentRunSnapshot]:
-        """List recent run snapshots, optionally filtered by user."""
+        """List recent run snapshots, optionally filtered by user.
+
+        Returns the most recent checkpoint per thread_id.
+        """
         if self._orch_graph is None:
             return []
-        snapshots: list[AgentRunSnapshot] = []
         try:
             checkpointer = self._orch_graph.checkpointer
-            # Pass None to list all checkpoint threads
-            seen: set[str] = set()
-            for ct in checkpointer.list(None, limit=limit * 2):
+            newest_by_tid: dict[str, AgentRunSnapshot] = {}
+            for ct in checkpointer.list(None, limit=500):
                 tid: str = ct.config.get("configurable", {}).get("thread_id", "")
                 if not tid:
                     continue
                 if user_id and not tid.startswith(f"{user_id}:"):
                     continue
-                if tid in seen:
-                    continue
-                seen.add(tid)
+                if tid in newest_by_tid:
+                    continue  # already have the newest for this thread_id
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
                     state = AgentGraphState.model_validate(cv)
-                    snapshots.append(state.to_run_snapshot())
-                if len(snapshots) >= limit:
-                    break
+                    newest_by_tid[tid] = state.to_run_snapshot()
+            snapshots = list(newest_by_tid.values())
+            snapshots.sort(key=lambda s: s.updated_at, reverse=True)
+            return snapshots[:limit]
         except Exception:
             logger.debug("Could not list run snapshots", exc_info=True)
-        return snapshots
+        return []
 
     def capture(
         self,

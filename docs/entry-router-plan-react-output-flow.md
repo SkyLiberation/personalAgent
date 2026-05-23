@@ -6,7 +6,7 @@
 
 当前后端以 `AgentRuntime` 为核心，`AgentService` 只保留兼容性的 facade 职责。入口请求进入 runtime 后，会经过意图路由、可选任务规划、LangGraph 节点编排、工具调用、记忆读写、答案生成、verifier 校验与必要的自修正，最后返回给 Web、CLI 或飞书入口。
 
-需要特别说明的是：`execute_entry()` 当前会进入 LangGraph entry 总编排。`clarify_entry` 会先拦截不足以开始流程的输入，让用户补充内容；补充完成后 `route_intent` 才通过 `DefaultIntentRouter` 生成 `RouterDecision`。只有 `requires_planning=True` 的任务（当前主要是 `delete_knowledge`、`solidify_conversation`）才会调用 `DefaultTaskPlanner` 生成结构化步骤，并经过 `PlanValidator` 校验后进入计划步骤执行；`capture / ask / summarize / direct_answer` 作为普通分支直接在 orchestration graph 内执行。无法识别的 `unknown` 不再有独立 branch，而是进入 `direct_answer_branch` 生成澄清提示。
+需要特别说明的是：`execute_entry()` 当前会进入 LangGraph entry 总编排。`route_intent` 先通过 `DefaultIntentRouter` 生成 `RouterDecision`；当 router 判定输入仍缺少必要信息时，`requires_clarification=True` 会将流程导向 `prepare_clarify_entry -> interrupt_clarify_entry`，补充完成后重新路由。只有 `requires_planning=True` 的任务（当前主要是 `delete_knowledge`、`solidify_conversation`）才会调用 `DefaultTaskPlanner` 生成结构化步骤，并经过 `PlanValidator` 校验后进入计划步骤执行；`capture / ask / summarize / direct_answer` 作为普通分支直接在 orchestration graph 内执行。
 
 计划与执行路径现在通过以下方式可观测：
 
@@ -22,8 +22,8 @@
 ```text
 Entry
   -> LangGraph orchestration graph
-  -> clarify_entry
   -> route_intent
+  -> requires_clarification? -> checkpoint / interrupt -> supplemented input -> route_intent
   -> requires_planning?
      -> Planner / PlanValidator -> plan_steps -> step loop / ReAct / HITL
      -> capture / ask / summarize / direct_answer branch -> execution_trace
@@ -57,8 +57,8 @@ Web / Feishu / CLI
   -> AgentRuntime.execute_entry()
   -> build_entry_orchestration_graph()
      -> normalize_entry
-     -> clarify_entry
      -> route_intent / DefaultIntentRouter.classify()
+     -> requires_clarification? -> prepare_clarify_entry -> interrupt_clarify_entry -> route_intent
      -> capture / ask / summarize / direct_answer branch
         或 plan_task -> validate_plan -> step loop / ReAct / HITL
      -> finalize_entry_result
@@ -79,7 +79,7 @@ Web / Feishu / CLI
 - `summarize_thread`
 - `direct_answer`
 
-`unknown` 不再对应独立执行分支。它是 classify 结果的一种状态，会进入 `direct_answer_branch` 生成“请补充信息”的澄清回复。
+`unknown` 不再对应独立执行分支。当 router 同时标记 `requires_clarification=True` 时会进入可恢复的澄清流程；计划校验失败等未要求中断的兜底状态仍可进入 `direct_answer_branch` 生成提示。
 
 ## 2. Entry 入口层
 
@@ -97,7 +97,7 @@ Web / Feishu / CLI
 graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
 ```
 
-所有 entry 请求都会先进入 `normalize_entry` 和 `clarify_entry`。`clarify_entry` 如果发现输入为空、过短或缺少操作对象，会通过 LangGraph interrupt 暂停，让用户选择补充“记录内容 / 提出问题 / 总结内容 / 执行操作”。补充文本写回 `entry_text` 后才进入 `route_intent`。
+所有 entry 请求都会先进入 `normalize_entry` 和 `route_intent`。Router 使用 LLM 优先、规则兜底的方式判断意图与信息是否充分：当输出 `requires_clarification=True` 时，图先在 `prepare_clarify_entry` 保存待补充 payload，再由 `interrupt_clarify_entry` 暂停，让用户选择补充“记录内容 / 提出问题 / 总结内容 / 执行操作”。补充文本写回 `entry_text` 后重新进入 `route_intent`。
 
 `normalize_entry` 和 `route_intent` 负责：
 
@@ -135,7 +135,9 @@ graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
 - `requires_planning`：是否需要进入结构化计划执行。
 - `risk_level`：`low` / `medium` / `high`。
 - `requires_confirmation`：是否需要用户确认。
+- `requires_clarification`：是否需要先中断并让用户补充内容。
 - `missing_information`
+- `clarification_prompt`
 - `candidate_tools`
 - `user_visible_message`
 
@@ -144,8 +146,8 @@ graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
 路由策略是 LLM-first + heuristic fallback：
 
 1. 如果 `entry_input.source_type == "file"`，直接路由到 `capture_file`。
-2. 如果文本非空且 LLM 配置可用，调用小模型做 JSON 分类。
-3. 如果 LLM 不可用、调用失败、或返回未知 intent，则回退到 `heuristic_entry_intent()`。
+2. 如果文本非空且 LLM 配置可用，调用小模型同时判断 intent 与是否需要澄清。
+3. 如果 LLM 不可用或调用失败，则回退到 `heuristic_entry_intent()`；兜底层仅对“帮我”“删除”等明确不完整片段要求澄清，不再按文本长度拦截正常短问句。
 
 `_merge_with_defaults()` 会把 LLM 返回的意图与 `_default_router_decision()` 合并。这样即使 LLM 只返回 intent/reason/risk，也能补齐控制字段，例如：
 
@@ -380,9 +382,9 @@ ReAct 使用 `settings.openai_small_model`，默认 `gpt-4.1-nano`。
 ```text
 START
   -> normalize_entry
-  -> clarify_entry
   -> route_intent
-  -> conditional_edges by state.intent / requires_planning
+  -> conditional_edges by RouterDecision
+     requires_clarification                  -> prepare_clarify_entry -> interrupt_clarify_entry -> route_intent / finalize_entry_result
      capture_text / capture_link / capture_file -> capture_branch
      ask                                    -> ask_branch
      summarize_thread                       -> summarize_branch
@@ -393,7 +395,7 @@ START
   -> END
 ```
 
-`clarify_entry` 处理“输入还不足以开始路由”的场景。`unknown` 则表示 router 已经运行但仍无法稳定识别，它不再是独立 branch，而是由 `direct_answer_branch` 根据 classify 结果生成澄清提示。
+澄清节点处理“router 已判断仍缺少执行所需信息”的场景，其中 `prepare_clarify_entry` 使 payload 可被 checkpoint 观测，`interrupt_clarify_entry` 完成暂停和恢复。`unknown` 不再是独立 branch；未进入中断的兜底结果由 `direct_answer_branch` 生成提示。
 
 ### 7.1 capture 分支
 

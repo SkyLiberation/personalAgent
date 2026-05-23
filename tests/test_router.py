@@ -123,9 +123,24 @@ class TestDefaultIntentRouter:
         assert hasattr(decision, "requires_planning")
         assert hasattr(decision, "risk_level")
         assert hasattr(decision, "requires_confirmation")
+        assert hasattr(decision, "requires_clarification")
         assert hasattr(decision, "missing_information")
+        assert hasattr(decision, "clarification_prompt")
         assert hasattr(decision, "candidate_tools")
         assert hasattr(decision, "user_visible_message")
+
+    def test_incomplete_fragment_requires_clarification_without_llm(self):
+        from personal_agent.core.config import Settings
+
+        router_no_llm = DefaultIntentRouter(
+            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+        )
+        decision = router_no_llm.classify(EntryInput(source_type="text", text="帮我"))
+
+        assert decision.route == "unknown"
+        assert decision.requires_clarification is True
+        assert decision.missing_information
+        assert decision.clarification_prompt
 
     def test_router_logs_structured_decision(self, caplog):
         from personal_agent.core.config import Settings
