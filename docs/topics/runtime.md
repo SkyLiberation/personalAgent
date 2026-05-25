@@ -109,10 +109,6 @@ EntryInput
 
 运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续规划和校验，并填充 `WorkingMemory.plan_steps`；普通意图返回空计划，由执行阶段生成 `execution_trace`。
 
-### `execute_ask_stream(question, user_id, session_id)`
-
-流式问答的正式公开 API，封装了图谱/本地检索、prompt 构建、token 流式输出和 turn 记录。生成器产出 SSE 兼容的 `(event_type, payload)` 元组：`status`、`metadata`、`answer_delta`、`answer_complete`、`answer_error`、`done`。Web 层通过 `_stream_events()` 桥接为异步 SSE 帧即可。
-
 ## 已知限制
 
 ### 1. `AgentRuntime` 职责过重

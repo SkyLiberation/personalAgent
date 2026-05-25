@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import queue as std_queue
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +17,7 @@ from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AskHistoryRecord, Citation, EntryInput, KnowledgeNote, ReviewCard
+from ..core.models import AskHistoryRecord, EntryInput, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -33,32 +31,6 @@ def _chunk_answer(answer: str, chunk_size: int = 40):
 def _get_user_id(request: Request, settings: Settings) -> str:
     """Resolve authenticated user_id from middleware state, fall back to default."""
     return getattr(request.state, "user_id", settings.default_user)
-
-
-class CaptureRequest(BaseModel):
-    text: str = Field(min_length=1)
-    source_type: str = "text"
-    user_id: str = "default"
-
-
-class CaptureResponse(BaseModel):
-    note: KnowledgeNote
-    chunk_notes: list[KnowledgeNote] = Field(default_factory=list)
-    related_notes: list[KnowledgeNote] = Field(default_factory=list)
-    review_card: ReviewCard | None = None
-
-
-class AskRequest(BaseModel):
-    question: str = Field(min_length=1)
-    user_id: str = "default"
-    session_id: str = "default"
-
-
-class AskResponse(BaseModel):
-    answer: str
-    citations: list[Citation] = Field(default_factory=list)
-    matches: list[KnowledgeNote] = Field(default_factory=list)
-    session_id: str = "default"
 
 
 class DigestResponse(BaseModel):
@@ -75,20 +47,6 @@ class GraphSyncResponse(BaseModel):
 class AskHistoryResponse(BaseModel):
     items: list[AskHistoryRecord] = Field(default_factory=list)
 
-
-class UploadConflictResponse(BaseModel):
-    filename: str
-    exists: bool
-    path: str
-
-
-class EntryRequest(BaseModel):
-    text: str = Field(min_length=1)
-    user_id: str = "default"
-    session_id: str = "default"
-    source_type: str = "text"
-    source_ref: str = ""
-    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class EntryResponse(BaseModel):
@@ -183,6 +141,7 @@ def create_app() -> FastAPI:
         version="0.2.0",
         description="FastAPI backend for the personal knowledge management agent.",
     )
+    app.state.service = service
 
     # Auth + rate limiting (applied before CORS)
     api_keys = settings.api_keys
@@ -247,118 +206,6 @@ def create_app() -> FastAPI:
         resolved_user = user_id or _get_user_id(request, settings)
         logger.info("Ask history requested for user=%s session=%s limit=%s", resolved_user, session_id, limit)
         return AskHistoryResponse(items=service.list_ask_history(resolved_user, limit, session_id))
-
-    @app.post("/api/capture", response_model=CaptureResponse)
-    def capture(http_request: Request, body: CaptureRequest) -> CaptureResponse:
-        resolved_user = body.user_id or _get_user_id(http_request, settings)
-        logger.info("Text capture requested for user=%s source_type=%s", resolved_user, body.source_type)
-        capture_text = body.text
-        if body.source_type == "link":
-            capture_text = capture_service.capture_text_from_url(body.text)
-        result = service.capture(
-            text=capture_text,
-            source_type=body.source_type,
-            user_id=resolved_user,
-            source_ref=body.text if body.source_type == "link" else None,
-        )
-        return CaptureResponse(**result.model_dump())
-
-    @app.get("/api/uploads/conflict", response_model=UploadConflictResponse)
-    def check_upload_conflict(filename: str) -> UploadConflictResponse:
-        normalized_name = capture_service.normalize_upload_filename(filename)
-        uploads_dir = settings.data_dir / "uploads"
-        target_path = uploads_dir / normalized_name
-        return UploadConflictResponse(
-            filename=normalized_name,
-            exists=target_path.exists(),
-            path=str(target_path),
-        )
-
-    @app.post("/api/capture/upload", response_model=CaptureResponse)
-    def capture_upload(
-        request: Request,
-        background_tasks: BackgroundTasks,
-        file: UploadFile = File(...),
-        user_id: str = Form("default"),
-        overwrite: bool = Form(False),
-    ) -> CaptureResponse:
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="Missing file name.")
-
-        resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
-
-        uploads_dir = settings.data_dir / "uploads"
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-
-        original_name = capture_service.normalize_upload_filename(file.filename)
-        stored_path = uploads_dir / original_name
-        if stored_path.exists() and not overwrite:
-            raise HTTPException(
-                status_code=409,
-                detail=f"File '{original_name}' already exists. Confirm overwrite to replace it.",
-            )
-
-        file_bytes = file.file.read()
-        stored_path.write_bytes(file_bytes)
-
-        source_type = capture_service.source_type_from_upload(original_name, file.content_type)
-        logger.info(
-            "File upload received user=%s filename=%s source_type=%s size_bytes=%s stored_path=%s",
-            resolved_user,
-            original_name,
-            source_type,
-            len(file_bytes),
-            stored_path,
-        )
-        capture_text = capture_service.capture_text_from_upload(
-            original_name, file.content_type, file_bytes, source_type
-        )
-
-        result = service.capture(
-            text=capture_text,
-            source_type=source_type,
-            user_id=resolved_user,
-            source_ref=str(stored_path),
-        )
-        if service.graph_store.configured():
-            for chunk in result.chunk_notes:
-                background_tasks.add_task(service.sync_note_to_graph, chunk.id)
-                logger.info("Queued background graph sync chunk_id=%s", chunk.id)
-        logger.info("File upload captured note_id=%s source_ref=%s", result.note.id, result.note.source_ref)
-        return CaptureResponse(**result.model_dump())
-
-    @app.post("/api/ask", response_model=AskResponse)
-    def ask(http_request: Request, body: AskRequest) -> AskResponse:
-        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
-        logger.info("Ask requested for user=%s session=%s", resolved_user, body.session_id)
-        result = service.ask(body.question, resolved_user, body.session_id)
-        return AskResponse(**result.model_dump())
-
-    @app.get("/api/ask/stream")
-    async def ask_stream(
-        request: Request, question: str, user_id: str = "default", session_id: str = "default"
-    ) -> StreamingResponse:
-        if not question.strip():
-            raise HTTPException(status_code=400, detail="Question is required.")
-
-        resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
-        logger.info("Ask stream requested for user=%s session=%s", resolved_user, session_id)
-
-        async def event_generator():
-            for event_type, payload in _stream_events(
-                service._runtime.execute_ask_stream(question.strip(), resolved_user, session_id)
-            ):
-                yield _sse_event(event_type, payload)
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
 
     @app.delete("/api/notes/{note_id}")
     def delete_note(
@@ -628,34 +475,6 @@ def create_app() -> FastAPI:
             "execution_trace": result.execution_trace,
         }
 
-    @app.post("/api/entry", response_model=EntryResponse)
-    def entry_sync(http_request: Request, body: EntryRequest) -> EntryResponse:
-        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
-        logger.info("Entry sync requested for user=%s session=%s", resolved_user, body.session_id)
-
-        entry_input = EntryInput(
-            text=body.text.strip(),
-            user_id=resolved_user,
-            session_id=body.session_id,
-            source_platform="web",
-            source_type=body.source_type,
-            source_ref=body.source_ref or None,
-            metadata=body.metadata,
-        )
-        result = service.entry(entry_input)
-        return EntryResponse(
-            intent=result.intent,
-            reason=result.reason,
-            reply_text=result.reply_text,
-            capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
-            ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
-            plan_steps=result.plan_steps,
-            execution_trace=result.execution_trace,
-            run_id=result.run_id,
-            pending_confirmation=result.pending_confirmation,
-            run_status=result.run_status,
-        )
-
     @app.post("/api/entry/runs/{run_id}/resume", response_model=EntryResponse)
     def resume_entry(
         run_id: str, body: ResumeEntryRequest, http_request: Request,
@@ -734,15 +553,6 @@ def create_app() -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="Record not found or not owned by user.")
         return {"ok": True, "deleted_id": record_id}
-
-    @app.delete("/api/ask-history/session/{session_id}")
-    def delete_ask_history_session(
-        session_id: str, request: Request, user_id: str | None = None
-    ) -> dict[str, object]:
-        resolved_user = user_id or _get_user_id(request, settings)
-        logger.info("Delete ask history session=%s user=%s", session_id, resolved_user)
-        deleted_count = service.delete_ask_session(resolved_user, session_id)
-        return {"ok": True, "deleted_count": deleted_count}
 
     @app.post("/api/debug/reset-user-data", response_model=ResetUserDataResponse)
     def reset_user_data(http_request: Request, body: ResetUserDataRequest) -> ResetUserDataResponse:
@@ -873,15 +683,6 @@ def create_app() -> FastAPI:
             items=[_run_snapshot_to_response(s) for s in snapshots]
         )
 
-    @app.get("/api/entry/runs/{run_id}", response_model=RunSnapshotResponse | None)
-    def get_run_snapshot(
-        run_id: str, request: Request
-    ) -> RunSnapshotResponse | None:
-        snapshot = service.get_run_snapshot(run_id)
-        if snapshot is None:
-            raise HTTPException(status_code=404, detail="Run not found.")
-        return _run_snapshot_to_response(snapshot)
-
     frontend_dist = _frontend_dist_dir()
     assets_dir = frontend_dist / "assets"
     if frontend_dist.exists() and assets_dir.exists():
@@ -909,38 +710,6 @@ def _sse_event(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-async def _stream_events(generator):
-    """Bridge a synchronous ``(event_type, payload)`` generator into async SSE.
-
-    Runs the generator in a daemon thread so the event loop stays responsive
-    during blocking graph searches and token streaming.
-    """
-    q: std_queue.Queue = std_queue.Queue()
-    done_sentinel = object()
-
-    def _run() -> None:
-        try:
-            for item in generator:
-                q.put(item)
-        except Exception as exc:
-            q.put(("error", {"error": str(exc)}))
-        finally:
-            q.put(done_sentinel)
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-
-    while True:
-        try:
-            item = q.get(timeout=0.5)
-        except std_queue.Empty:
-            await asyncio.sleep(0.05)
-            continue
-        if item is done_sentinel:
-            break
-        event_type, payload = item
-        yield (event_type, payload)
-        await asyncio.sleep(0)
 
     thread.join(timeout=5)
 

@@ -85,7 +85,6 @@ Web / Feishu / CLI
 
 主要入口在 `src/personal_agent/web/api.py`：
 
-- `POST /api/entry`：同步入口，构造 `EntryInput` 后调用 `service.entry(entry_input)`。
 - `GET /api/entry/stream`：SSE 入口，统一进入完整 LangGraph entry pipeline，并根据图内实际路由事件输出 `intent`。
 - `POST /api/entry/upload`：文件入口，保存上传文件，构造 `source_type="file"` 的 `EntryInput`，再进入 `service.entry()`。
 
@@ -440,7 +439,7 @@ Web search fallback
 
 ### 7.4 summarize 分支
 
-`summarize_entry_branch_node()` 如果 `metadata.thread_messages` 中带有群聊消息，会调用 `RuntimeEntryMixin._summarize_thread()`。
+`summarize_entry_branch_node()` 在 router 已选择 `summarize_thread` 后获取总结材料：优先使用 `metadata.thread_messages` 中已有内容，否则调用入口平台注册的消息加载回调。飞书长连接仅注册该回调，不在进入 graph 前用启发式判断是否拉取群聊消息。
 
 `_summarize_thread()` 内部调用 `_generate_answer()`，因此使用主回答模型 `openai_model`。
 
@@ -479,7 +478,6 @@ OPENAI_MODEL -> openai_model -> gpt-4.1-mini
 
 它用于：
 
-- `/api/ask/stream`
 - `/api/entry/stream` 中由 LangGraph 完成路由与分支执行后的 SSE 输出
 
 SSE 事件包括：
@@ -583,9 +581,9 @@ execute_ask()
 
 ## 10. 输出层
 
-### 10.1 同步 entry 输出
+### 10.1 SSE entry 输出
 
-`POST /api/entry` 返回 `EntryResponse`：
+`GET /api/entry/stream` 返回 `EntryResponse`：
 
 - `intent`
 - `reason`
@@ -614,7 +612,7 @@ done
 execution_trace
 ```
 
-该路径优先保证 entry 的统一编排、事件与 checkpoint 一致性。需要原生模型 token 流时，独立的 `/api/ask/stream` 仍提供 `execute_ask_stream()` 路径。
+该路径优先保证 entry 的统一编排、事件与 checkpoint 一致性。
 
 #### 非 ask intent
 

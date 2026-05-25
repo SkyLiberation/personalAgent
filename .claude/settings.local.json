@@ -98,7 +98,8 @@
       "Bash(docker compose *)",
       "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort, State, OwningProcess\")",
       "Bash(powershell -Command ' *)",
-      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\")"
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\")",
+      "Bash(curl -s http://localhost:8000/health)"
     ]
   }
 }

@@ -45,50 +45,6 @@ class TestHealthEndpoint:
         assert _frontend_dist_dir() == project_root / "frontend" / "dist"
 
 
-class TestCaptureEndpoint:
-    def test_capture_text_returns_note(self, api_client: TestClient):
-        response = api_client.post(
-            "/api/capture",
-            json={"text": "API测试采集内容", "source_type": "text", "user_id": "test-user"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["note"]["title"]
-        assert data["note"]["content"]
-        assert data["note"]["user_id"] == "test-user"
-
-    def test_capture_empty_text_rejected(self, api_client: TestClient):
-        response = api_client.post(
-            "/api/capture",
-            json={"text": "", "source_type": "text"},
-        )
-        assert response.status_code == 422
-
-
-class TestAskEndpoint:
-    def test_ask_returns_answer(self, api_client: TestClient):
-        # Seed a note so there's something to search
-        api_client.post(
-            "/api/capture",
-            json={"text": "API测试知识点", "source_type": "text", "user_id": "test-user"},
-        )
-        response = api_client.post(
-            "/api/ask",
-            json={"question": "什么是API测试？", "user_id": "test-user", "session_id": "test-session"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "answer" in data
-        assert data["session_id"] == "test-session"
-
-    def test_ask_empty_question_rejected(self, api_client: TestClient):
-        response = api_client.post(
-            "/api/ask",
-            json={"question": "", "user_id": "test-user"},
-        )
-        assert response.status_code == 422
-
-
 class TestEntryStreamEndpoint:
     def test_ask_stream_entry_creates_langgraph_run_snapshot(self, api_client: TestClient):
         response = api_client.get(
@@ -152,10 +108,8 @@ class TestDigestEndpoint:
 
 class TestNotesEndpoint:
     def test_list_notes(self, api_client: TestClient):
-        api_client.post(
-            "/api/capture",
-            json={"text": "测试笔记1", "source_type": "text", "user_id": "test-user"},
-        )
+        service = api_client.app.state.service
+        service._runtime.execute_capture("测试笔记1", source_type="text", user_id="test-user")
         response = api_client.get("/api/notes", params={"user_id": "test-user"})
         assert response.status_code == 200
         data = response.json()
@@ -163,14 +117,9 @@ class TestNotesEndpoint:
         assert len(data) >= 1
 
     def test_list_notes_isolated_by_user(self, api_client: TestClient):
-        api_client.post(
-            "/api/capture",
-            json={"text": "Alice的笔记", "source_type": "text", "user_id": "alice"},
-        )
-        api_client.post(
-            "/api/capture",
-            json={"text": "Bob的笔记", "source_type": "text", "user_id": "bob"},
-        )
+        service = api_client.app.state.service
+        service._runtime.execute_capture("Alice的笔记", source_type="text", user_id="alice")
+        service._runtime.execute_capture("Bob的笔记", source_type="text", user_id="bob")
         alice_notes = api_client.get("/api/notes", params={"user_id": "alice"}).json()
         bob_notes = api_client.get("/api/notes", params={"user_id": "bob"}).json()
         alice_titles = {n["title"] for n in alice_notes}
@@ -181,14 +130,8 @@ class TestNotesEndpoint:
 
 class TestAskHistoryEndpoint:
     def test_list_ask_history(self, api_client: TestClient):
-        api_client.post(
-            "/api/capture",
-            json={"text": "历史测试", "source_type": "text", "user_id": "test-user"},
-        )
-        api_client.post(
-            "/api/ask",
-            json={"question": "历史测试问题", "user_id": "test-user", "session_id": "s1"},
-        )
+        service = api_client.app.state.service
+        service._runtime.execute_ask("历史测试问题", user_id="test-user", session_id="s1")
         response = api_client.get(
             "/api/ask-history", params={"user_id": "test-user", "session_id": "s1"}
         )
@@ -208,10 +151,8 @@ class TestAskHistoryEndpoint:
 
 class TestDebugEndpoints:
     def test_reset_user_data(self, api_client: TestClient):
-        api_client.post(
-            "/api/capture",
-            json={"text": "待删除笔记", "source_type": "text", "user_id": "reset-test"},
-        )
+        service = api_client.app.state.service
+        service._runtime.execute_capture("待删除笔记", source_type="text", user_id="reset-test")
         response = api_client.post(
             "/api/debug/reset-user-data",
             json={"user_id": "reset-test"},

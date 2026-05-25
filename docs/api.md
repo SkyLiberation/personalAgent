@@ -79,63 +79,6 @@
 }
 ```
 
-## `POST /api/capture`
-
-用于文本或网页链接采集。
-
-请求体：
-
-```json
-{
-  "text": "Bob 在搜索系统升级项目里决定先上 BM25 + 向量召回",
-  "source_type": "text",
-  "user_id": "default"
-}
-```
-
-或：
-
-```json
-{
-  "text": "https://example.com/article",
-  "source_type": "link",
-  "user_id": "default"
-}
-```
-
-说明：
-
-- `source_type=text` 时，直接采集文本
-- `source_type=link` 时，会先抓取网页正文，再进入 capture 流程
-
-## `GET /api/uploads/conflict`
-
-检查上传文件名是否已存在。
-
-查询参数：
-
-- `filename`
-
-## `POST /api/capture/upload`
-
-使用 `multipart/form-data` 上传文件。
-
-表单字段：
-
-- `file`
-- `user_id`
-- `overwrite`
-
-说明：
-
-- 文本类文件会优先提取正文后进入 capture
-- PDF 会优先提取文本后进入 capture
-- 图片、音频等文件当前先保存为元信息笔记
-- 上传接口会先返回本地 capture 结果
-- 如果 Graphiti 已配置，图谱同步会在后台继续执行
-- 返回的 `note.graph_sync_status` 初始通常为 `pending`
-- 后续可通过 `GET /api/notes` 观察是否变为 `synced` 或 `failed`
-
 ## `POST /api/notes/{note_id}/graph-sync`
 
 手动重试某条笔记的图谱同步。
@@ -156,49 +99,6 @@
   "queued": true
 }
 ```
-
-## `POST /api/ask`
-
-用于普通问答。
-
-请求体：
-
-```json
-{
-  "question": "搜索系统升级项目里，Bob 先决定采用什么方案？",
-  "user_id": "default",
-  "session_id": "11dd2242-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-}
-```
-
-说明：
-
-- 后端优先尝试图谱问答；当 Neo4j 不可达或 Graphiti 不可用时，会快速回退到本地问答链
-- 同一 `session_id` 下会自动携带最近对话上下文，支持多轮问答
-- 如果配置了 `Postgres`，历史会持久化到 `ask_history`
-- 即使没有 `Postgres`，本地仍会写入 `data/conversations.json`
-
-## `GET /api/ask/stream`
-
-基于 `SSE` 返回实时问答结果。
-
-查询参数：
-
-- `question`
-- `user_id`
-- `session_id`
-
-事件类型：
-
-- `status`
-- `metadata`
-- `answer_delta`
-- `done`
-
-说明：
-
-- 当前 SSE 会在完成检索和图谱增强后透传上游模型 token 流
-- `answer_delta` 为增量 token / 文本片段，直到收到 `done`
 
 ## `POST /api/debug/reset-user-data`
 
@@ -355,34 +255,6 @@
 
 统一的入口接口，支持文本、链接、文件等多类型输入，由 Agent 自动路由到合适的处理链路。
 
-### `POST /api/entry`
-
-同步入口执行。
-
-请求体：
-
-```json
-{
-  "text": "什么是服务降级？",
-  "user_id": "default",
-  "session_id": "default",
-  "source_type": "text",
-  "source_ref": "",
-  "metadata": {}
-}
-```
-
-响应字段：
-
-- `intent`：最终入口意图。
-- `reason`：路由或执行说明。
-- `reply_text`：最终回复，或等待确认时的提示文案。
-- `plan_steps`：计划步骤列表。
-- `execution_trace`：非计划路径或图事件派生出的执行轨迹。
-- `run_id`：LangGraph run id。
-- `run_status`：`completed` 或 `waiting_confirmation`。
-- `pending_confirmation`：当 run 暂停等待人工确认或补充信息时返回 interrupt payload；补充信息场景中 `kind="clarification_required"`。
-
 ### `GET /api/entry/stream`
 
 SSE 流式入口执行，逐步返回 intent 分类、计划步骤、执行进度和最终结果。
@@ -468,14 +340,6 @@ data: {
   ]
 }
 ```
-
-### `GET /api/entry/runs/{run_id}`
-
-查询指定 run 的快照详情。
-
-返回字段包括 `run_id`、`thread_id`、`user_id`、`session_id`、`status`、`intent`、`entry_text`、`plan_steps`、`execution_trace`、`answer`、`errors`、`last_event` 等。
-
-找不到 run 时返回 `404 Run not found.`。
 
 ### `POST /api/entry/runs/{run_id}/resume`
 

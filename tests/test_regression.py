@@ -69,7 +69,7 @@ class TestCrossLayerRegression:
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         # Prime knowledge base with a note to resolve
-        svc.capture(
+        svc.execute_capture(
             text="旧部署流程：第一步构建镜像，第二步部署到K8s集群。",
             source_type="text", user_id="alice",
         )
@@ -107,7 +107,7 @@ class TestCrossLayerRegression:
         """Complete delete flow: plan → resolve → tool_call creates pending action."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
-        note = svc.capture(
+        note = svc.execute_capture(
             text="旧部署流程记录", source_type="text", user_id="alice",
         ).note
 
@@ -154,7 +154,7 @@ class TestCrossLayerRegression:
         """Verify plan steps transition from 'planned' to final statuses."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
-        svc.capture(
+        svc.execute_capture(
             text="应删除的测试笔记", source_type="text", user_id="alice",
         )
         svc.graph_store.ask.return_value = type("R", (), {

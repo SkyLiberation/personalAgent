@@ -31,7 +31,6 @@
 
 当前 SSE 覆盖：
 
-- `GET /api/ask/stream`
 - `GET /api/entry/stream`
 
 事件包括：
@@ -65,8 +64,7 @@
 ## 当前能力
 
 - 已支持同步 API 返回结构化结果
-- 已支持 `ask_stream` 和 `entry_stream` ask 路径的模型 token 流式输出
-- 已统一 `ask_stream` 和 `entry_stream` ask 路径的底层公开 API：`AgentRuntime.execute_ask_stream()`
+- 已支持 `entry_stream` ask 路径的模型 token 流式输出
 - 已支持 `execution_trace` 事件，用于展示非计划驱动路径的执行轨迹
 - 已支持 entry SSE 事件
 - 已支持计划创建和步骤状态回传
@@ -149,7 +147,6 @@ done
 
 同步改造以下路径：
 
-- `execute_ask_stream()`：由 `(event_type, payload)` 元组升级为 `AgentEvent`，Web 层只负责序列化为 SSE
 - `execute_entry()` / `PlanExecutor` progress callback：计划创建、步骤开始/完成/失败都输出 `AgentEvent`
 - 非计划路径：把 `execution_trace` 从字符串数组逐步改为 `execution_trace` 事件
 - pending action 与 `draft_ready`：保留现有 payload，但包进统一事件 envelope
@@ -181,7 +178,6 @@ details
 ### 5. 测试落点
 
 - 为 `AgentEvent` 序列化和默认字段补单元测试
-- 为 `execute_ask_stream()` 补事件序列回归测试
 - 为 `PlanExecutor` progress callback 补 plan 事件测试
 - 为 Web SSE bridge 补 `AgentEvent -> SSE` 转换测试
 - 为 CLI/飞书事件降级展示补轻量回归测试

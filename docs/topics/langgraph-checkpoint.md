@@ -148,7 +148,7 @@ thread_id = user_id + ":" + session_id
 
 - `prepare_clarify_entry` 读取 router 已判定缺失的信息，构造 `kind="clarification_required"` 的 payload，并将其写入 `pending_confirmation` 与事件列表。
 - payload 的写入发生在 `interrupt()` 之前，因此 checkpoint 可以保存前端需要展示的澄清内容和缺失项。
-- `interrupt_clarify_entry` 通过 `interrupt()` 暂停 run，并等待 `/api/entry/runs/{run_id}/resume` 传入补充文本。
+- `interrupt_clarify_entry` 通过 `interrupt()` 暂停 run，并等待 resume API 传入补充文本。
 - runtime 构造等待态响应时读取该 checkpoint 的 state values，因此 `EntryResult.events` 能保留暂停前的 `intent_classified` 与 `clarification_required` 事件。
 - 用户补充后，更新 `entry_text` 与 `entry_input.text`、清空旧路由决策，再重新进入 `route_intent`。
 - 用户取消或补充为空时，直接进入 `finalize_entry_result` 结束。
@@ -522,7 +522,7 @@ HITL 流程依赖 checkpoint 保存以下现场：
 - checkpoint 粒度覆盖 orchestration graph 节点、计划步骤节点和 ReAct 子图节点。
 - 普通 `capture / ask / summarize / direct_answer` 分支仍调用既有 runtime 方法。
 - `GET /api/entry/stream` 的所有 intent（包含 `ask`）均进入 orchestration graph 并写入 checkpoint。
-- 独立 `GET /api/ask/stream` 仍直接调用 `execute_ask_stream()`，不属于 entry graph checkpoint 路径。
+- 所有 entry 路径均已统一进入 orchestration graph 并写入 checkpoint。
 - `EntryResult` 仍是 Web API 的兼容返回模型。
 
 这些是当前已实现行为的边界，不在本文中作为待办展开。

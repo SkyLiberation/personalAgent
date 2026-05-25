@@ -175,7 +175,7 @@ personalAgent/                  # 项目根目录
 当前仍保留 CLI 入口：
 
 ```bash
-uv run python -m personal_agent.main capture --text "服务降级是在系统压力过大时，主动关闭非核心能力"
-uv run python -m personal_agent.main ask --question "什么是服务降级？"
-uv run python -m personal_agent.main digest
+uv run python -m personal_agent.main entry "记一下：服务降级是在系统压力过大时，主动关闭非核心能力"
+uv run python -m personal_agent.main entry "什么是服务降级？"
+uv run python -m personal_agent.main entry "总结一下当前会话内容"
 ```

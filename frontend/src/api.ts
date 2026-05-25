@@ -70,21 +70,6 @@ export type DigestResponse = {
   due_reviews: ReviewCard[];
 };
 
-export type CaptureResponse = {
-  note: Note;
-  chunk_notes?: Note[];
-  related_notes: Note[];
-  review_card: ReviewCard | null;
-};
-
-export type AskResponse = {
-  answer: string;
-  citations: Citation[];
-  matches: Note[];
-  graph_enabled?: boolean;
-  session_id?: string;
-};
-
 export type GraphSyncResponse = {
   note: Note;
   queued: boolean;
@@ -103,12 +88,6 @@ export type AskHistoryItem = {
 
 export type AskHistoryResponse = {
   items: AskHistoryItem[];
-};
-
-export type UploadConflictResponse = {
-  filename: string;
-  exists: boolean;
-  path: string;
 };
 
 export type ResetUserDataResponse = {
@@ -187,46 +166,6 @@ async function requestFormData<T>(input: RequestInfo, init?: RequestInit): Promi
   return (await response.json()) as T;
 }
 
-function requestFormDataWithProgress<T>(
-  url: string,
-  body: FormData,
-  onProgress?: (progress: number) => void
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
-    xhr.responseType = "json";
-
-    const key = getApiKey();
-    if (key) {
-      xhr.setRequestHeader("X-API-Key", key);
-    }
-
-    xhr.upload.onprogress = (event) => {
-      if (!onProgress || !event.lengthComputable) {
-        return;
-      }
-      const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
-      onProgress(progress);
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(xhr.response as T);
-        return;
-      }
-      const detail =
-        xhr.response && typeof xhr.response === "object" && "detail" in xhr.response
-          ? String((xhr.response as { detail?: unknown }).detail ?? "")
-          : "";
-      reject(new Error(detail || `Request failed: ${xhr.status}`));
-    };
-
-    xhr.onerror = () => reject(new Error("Network error during upload."));
-    xhr.send(body);
-  });
-}
-
 export function fetchNotes(userId = "default"): Promise<Note[]> {
   return requestJson<Note[]>(`/api/notes?user_id=${encodeURIComponent(userId)}`);
 }
@@ -240,51 +179,6 @@ export function fetchAskHistory(userId = "default", limit = 20, sessionId?: stri
   return requestJson<AskHistoryResponse>(
     `/api/ask-history?user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(String(limit))}${sessionQuery}`
   );
-}
-
-export function checkUploadConflict(filename: string): Promise<UploadConflictResponse> {
-  return requestJson<UploadConflictResponse>(
-    `/api/uploads/conflict?filename=${encodeURIComponent(filename)}`
-  );
-}
-
-export function captureNote(
-  text: string,
-  userId = "default",
-  sourceType: "text" | "link" = "text"
-): Promise<CaptureResponse> {
-  return requestJson<CaptureResponse>("/api/capture", {
-    method: "POST",
-    body: JSON.stringify({
-      text,
-      source_type: sourceType,
-      user_id: userId,
-    }),
-  });
-}
-
-export function uploadCapture(
-  file: File,
-  userId = "default",
-  overwrite = false,
-  onProgress?: (progress: number) => void
-): Promise<CaptureResponse> {
-  const body = new FormData();
-  body.append("file", file);
-  body.append("user_id", userId);
-  body.append("overwrite", overwrite ? "true" : "false");
-  return requestFormDataWithProgress<CaptureResponse>("/api/capture/upload", body, onProgress);
-}
-
-export function askQuestion(question: string, userId = "default", sessionId = "default"): Promise<AskResponse> {
-  return requestJson<AskResponse>("/api/ask", {
-    method: "POST",
-    body: JSON.stringify({
-      question,
-      user_id: userId,
-      session_id: sessionId,
-    }),
-  });
 }
 
 export type PlanStep = {
@@ -416,19 +310,6 @@ export function uploadEntryFile(
   });
 }
 
-export function buildAskStreamUrl(question: string, userId = "default", sessionId = "default"): string {
-  const params = new URLSearchParams({
-    question,
-    user_id: userId,
-    session_id: sessionId,
-  });
-  const key = getApiKey();
-  if (key) {
-    params.set("api_key", key);
-  }
-  return `/api/ask/stream?${params.toString()}`;
-}
-
 export function searchAskHistory(
   query: string,
   userId = "default",
@@ -447,16 +328,6 @@ export function deleteAskHistoryRecord(
 ): Promise<{ ok: boolean; deleted_id: string }> {
   return requestJson<{ ok: boolean; deleted_id: string }>(
     `/api/ask-history/${encodeURIComponent(recordId)}?user_id=${encodeURIComponent(userId)}`,
-    { method: "DELETE" }
-  );
-}
-
-export function deleteAskHistorySession(
-  sessionId: string,
-  userId = "default"
-): Promise<{ ok: boolean; deleted_count: number }> {
-  return requestJson<{ ok: boolean; deleted_count: number }>(
-    `/api/ask-history/session/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`,
     { method: "DELETE" }
   );
 }

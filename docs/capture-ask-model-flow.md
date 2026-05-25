@@ -12,14 +12,7 @@
 
 ## 总体入口
 
-当前外部调用主要从 Web API 或运行时 facade 进入：
-
-```text
-/api/capture       -> AgentService.capture() -> execute_capture()
-/api/capture/upload -> CaptureService 解析文件 -> AgentService.capture()
-/api/ask           -> AgentService.ask() -> execute_ask()
-/api/ask/stream    -> execute_ask_stream()
-```
+当前外部调用主要通过统一入口 `AgentService.entry()` 进入运行时，由 `AgentRuntime.execute_entry()` 经 LangGraph orchestration graph 路由到 capture / ask / summarize / direct_answer 等分支。
 
 `AgentService` 本身很薄，负责装配 `Settings`、`LocalMemoryStore`、`GraphitiStore`、`AskHistoryStore` 和 `CaptureService`，随后把行为交给 `AgentRuntime`。`AgentRuntime` 再通过 mixin 分拆出 capture、ask、entry、tools、admin、LLM 等具体能力。
 
@@ -27,15 +20,15 @@
 
 ### 1. 输入归一化
 
-文本采集时，`/api/capture` 接收 `CaptureRequest`：
+文本采集时，entry 层接收 `EntryInput`：
 
 - `text`：用户提交的原始文本，或链接地址
 - `source_type`：来源类型，如 `text`、`link`
 - `user_id`：用户标识
 
-如果 `source_type == "link"`，API 层先调用 `CaptureService.capture_text_from_url()` 把 URL 抓取成正文，并把原 URL 作为 `source_ref` 传入运行时。
+如果 `source_type == "link"`，entry 层先调用 `CaptureService.capture_text_from_url()` 把 URL 抓取成正文，并把原 URL 作为 `source_ref` 传入运行时。
 
-文件采集时，`/api/capture/upload` 会先保存上传文件，然后通过 `CaptureService` 完成：
+文件采集时，`POST /api/entry/upload` 会先保存上传文件，然后通过 `CaptureService` 完成：
 
 - `normalize_upload_filename()`：规范化文件名
 - `source_type_from_upload()`：根据文件名和 content type 推断来源类型
@@ -183,13 +176,13 @@ capture 链路最终返回 `CaptureResult`：
 - `related_notes`：本地或图谱发现的相关笔记
 - `review_card`：本次生成的复习卡
 
-API 层再把它映射为 `CaptureResponse` 返回前端。
+API 层再把它映射为 `EntryResult` 返回前端。
 
 ## Ask 过程
 
 ### 1. 会话绑定与上下文刷新
 
-`execute_ask(question, user_id, session_id)` 先做会话级准备：
+`execute_ask(question, user_id, session_id)` 由 orchestration graph 的 ask 分支调用，先做会话级准备：
 
 ```text
 bind_session(user_id, session_id)
@@ -424,7 +417,8 @@ ask 最终返回 `AskResult`：
 ### Capture
 
 ```text
-CaptureRequest / upload form
+EntryInput(source_type="text"|"link"|"file")
+  -> orchestration graph capture_branch
   -> CaptureService 提取正文
   -> RawIngestItem
   -> AgentState.raw_item
@@ -433,13 +427,14 @@ CaptureRequest / upload form
   -> GraphCaptureResult
   -> KnowledgeNote 图谱字段回写
   -> CaptureResult
-  -> CaptureResponse
+  -> EntryResult
 ```
 
 ### Ask
 
 ```text
-AskRequest
+EntryInput(text=question)
+  -> orchestration graph ask_branch
   -> AgentState(question, user_id)
   -> GraphAskResult
   -> KnowledgeNote matches
@@ -449,15 +444,14 @@ AskRequest
   -> verifier / retry
   -> AskHistoryRecord
   -> AskResult
-  -> AskResponse
+  -> EntryResult
 ```
 
 ## 关键模型职责速查
 
 | 模型 | 主要出现位置 | 核心职责 |
 | --- | --- | --- |
-| `CaptureRequest` | Web API | 接收文本采集请求 |
-| `AskRequest` | Web API | 接收问答请求 |
+| `EntryInput` | Web API / orchestration graph | 统一入口输入，承载文本、链接、文件等多种来源 |
 | `RawIngestItem` | capture runtime | 承载待入库原始内容和来源 |
 | `AgentState` | LangGraph | 在节点之间传递 capture / ask 中间状态 |
 | `KnowledgeNote` | 存储、检索、回答 | 长期知识、chunk、图谱字段和原文证据的统一载体 |

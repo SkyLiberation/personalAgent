@@ -48,7 +48,7 @@ class TestEntryPipeline:
 
     def test_entry_ask_intent(self, service: AgentService):
         # Prime knowledge base
-        service.capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
+        service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
         entry = EntryInput(text="什么是服务降级？", user_id="default")
         result = service.entry(entry)
         assert result.intent in ("ask", "direct_answer")
@@ -109,7 +109,7 @@ class TestPendingActionLifecycle:
     """Test the full HITL pending action create -> confirm -> execute lifecycle."""
 
     def test_create_pending_action_for_delete(self, service: AgentService):
-        note = service.capture(
+        note = service.execute_capture(
             text="需要删除的测试笔记", source_type="text", user_id="alice"
         ).note
         actions = service.list_pending_actions("alice")
@@ -130,7 +130,7 @@ class TestPendingActionLifecycle:
         assert actions[0].status == "pending"
 
     def test_confirm_pending_action_executes_delete(self, service: AgentService):
-        note = service.capture(
+        note = service.execute_capture(
             text="即将被删除的笔记", source_type="text", user_id="alice"
         ).note
         note_id = note.id
@@ -151,7 +151,7 @@ class TestPendingActionLifecycle:
         assert deleted_note is None
 
     def test_reject_pending_action(self, service: AgentService):
-        note = service.capture(
+        note = service.execute_capture(
             text="不会被删除的笔记", source_type="text", user_id="alice"
         ).note
 
@@ -169,7 +169,7 @@ class TestPendingActionLifecycle:
         assert existing is not None
 
     def test_wrong_token_rejected(self, service: AgentService):
-        note = service.capture(
+        note = service.execute_capture(
             text="带Token的笔记", source_type="text", user_id="alice"
         ).note
 
@@ -201,7 +201,7 @@ class TestPendingActionLifecycle:
         assert expired_action.id not in pending_ids
 
     def test_cross_user_isolation(self, service: AgentService):
-        note = service.capture(
+        note = service.execute_capture(
             text="Alice的笔记", source_type="text", user_id="alice"
         ).note
 
@@ -220,7 +220,7 @@ class TestPendingActionLifecycle:
         assert confirmed_alice.status == "executed"
 
     def test_delete_note_ownership_check(self, service: AgentService):
-        note = service.capture(
+        note = service.execute_capture(
             text="Alice的私密笔记", source_type="text", user_id="alice"
         ).note
 

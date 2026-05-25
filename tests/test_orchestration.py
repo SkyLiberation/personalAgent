@@ -274,9 +274,55 @@ class TestOrchestrationGraphIntegration:
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
 
+    def test_summary_loads_platform_thread_context_only_after_routing(self, runtime, monkeypatch):
+        loaded: list[tuple[str, int]] = []
+
+        def load_messages(entry_input, limit):
+            loaded.append((entry_input.session_id, limit))
+            return [{"role": "user", "content": "项目今天完成发布。"}]
+
+        runtime.set_thread_message_loader(load_messages)
+        monkeypatch.setattr(
+            runtime,
+            "_summarize_thread",
+            lambda messages, _user_id: f"总结结果：{messages}",
+        )
+
+        result = runtime.execute_entry(
+            EntryInput(
+                text="帮我总结一下今天群聊讨论了什么",
+                user_id="test-user",
+                session_id="feishu-summary",
+                source_platform="feishu",
+                metadata={"chat_id": "chat-1"},
+            )
+        )
+
+        assert result.intent == "summarize_thread"
+        assert loaded == [("feishu-summary", 20)]
+        assert "项目今天完成发布" in result.reply_text
+
+    def test_non_summary_entry_does_not_load_platform_thread_context(self, runtime):
+        loaded: list[str] = []
+        runtime.set_thread_message_loader(
+            lambda entry_input, _limit: loaded.append(entry_input.session_id) or []
+        )
+
+        runtime.execute_entry(
+            EntryInput(
+                text="你好",
+                user_id="test-user",
+                session_id="feishu-greeting",
+                source_platform="feishu",
+                metadata={"chat_id": "chat-1"},
+            )
+        )
+
+        assert loaded == []
+
     def test_solidify_executes_plan_and_stores_composed_note(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, deps: (
                 '{"done":true,"result":{"title":"DNS","content":'
                 '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
@@ -305,7 +351,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_extracts_structured_note_body_before_capture(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, deps: (
                 '{"thought":"整理正文","result":{"标题":"DNS（域名系统）",'
                 '"正文":"DNS 用于将域名转换为 IP 地址。"}}'
@@ -341,7 +387,7 @@ class TestOrchestrationGraphIntegration:
             )
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             reply,
         )
         for text in ("今天西安天气怎么样", "什么是DNS", "什么是JSON Schema"):
@@ -369,7 +415,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_streams_plan_progress_during_graph_execution(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, deps: (
                 '{"done":true,"result":{"title":"DNS","content":'
                 '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
@@ -679,7 +725,7 @@ class TestPhase3ExecutePlanStep:
             }
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._dispatch_plan_step",
+            "personal_agent.agent.orchestration_nodes._steps._dispatch_plan_step",
             _mock_dispatch,
         )
 
@@ -1013,7 +1059,7 @@ class TestPhase4ReActIterateNode:
             return '{"thought": "已经找到答案","done": true,"result": {"answer": "X是一种技术"}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1042,7 +1088,7 @@ class TestPhase4ReActIterateNode:
             return "not valid json {{{"
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1070,7 +1116,7 @@ class TestPhase4ReActIterateNode:
             return "bad json"
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1096,7 +1142,7 @@ class TestPhase4ReActIterateNode:
             return '{"thought": "需要删除","tool": "delete_note","input": {"note_id": "n1"}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1123,7 +1169,7 @@ class TestPhase4ReActIterateNode:
         )
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, rt: None,
         )
 
@@ -1174,7 +1220,7 @@ class TestPhase4ReActSubgraphIntegration:
             return '{"thought": "已完成","done": true,"result": {"answer": "X是..."}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1218,7 +1264,7 @@ class TestPhase4ReActSubgraphIntegration:
             return f'{{"thought": "思考{call_count[0]}","tool": "graph_search","input": {{"query": "X"}}}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1267,7 +1313,7 @@ class TestPhase4ReActSubgraphIntegration:
             return '{"thought": "已检索","done": true,"result": {"answer": "服务降级是指在系统压力过大时主动关闭非核心能力"}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 

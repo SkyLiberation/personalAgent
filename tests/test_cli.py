@@ -16,50 +16,37 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "")
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_URI", "")
+    monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
+    monkeypatch.setenv("PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND", "memory")
+    from personal_agent.core import config as config_module
+
+    monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
     return CliRunner()
 
 
-class TestCLICapture:
-    def test_capture_text_exits_zero(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(app, ["capture", "测试采集内容"])
-        assert result.exit_code == 0, f"stderr: {result.stderr}"
-
-    def test_capture_text_outputs_json(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(app, ["capture", "测试采集JSON输出"])
+class TestCLIEntry:
+    def test_capture_instruction_flows_through_entry(self, cli_runner: CliRunner):
+        result = cli_runner.invoke(app, ["entry", "记一下：测试采集JSON输出"])
         assert result.exit_code == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
-        assert "note_id" in data
-        assert "summary" in data
-        assert "tags" in data
+        assert data["intent"] == "capture_text"
+        assert data["reply"]
+        assert data["run_id"]
 
-    def test_capture_with_source_type(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(
-            app, ["capture", "链接来源内容", "--source-type", "link"]
-        )
-        assert result.exit_code == 0, f"stderr: {result.stderr}"
-
-
-class TestCLIAsk:
-    def test_ask_exits_zero(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(app, ["ask", "什么是测试？"])
-        assert result.exit_code == 0, f"stderr: {result.stderr}"
-
-    def test_ask_outputs_json(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(app, ["ask", "测试问题"])
+    def test_question_flows_through_entry(self, cli_runner: CliRunner):
+        result = cli_runner.invoke(app, ["entry", "什么是测试？", "--session-id", "cli-question"])
         assert result.exit_code == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
-        assert "answer" in data
-        assert "session_id" in data
-        assert "citations" in data
+        assert data["intent"] == "ask"
+        assert data["reply"]
+        assert data["run_id"]
 
-
-class TestCLIDigest:
-    def test_digest_exits_zero(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(app, ["digest"])
+    def test_removed_specialized_commands_are_not_registered(self, cli_runner: CliRunner):
+        result = cli_runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-
-    def test_digest_produces_output(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(app, ["digest"])
-        assert result.exit_code == 0
-        assert len(result.stdout.strip()) > 0
+        assert "entry" in result.stdout
+        assert " capture " not in result.stdout
+        assert " ask " not in result.stdout
+        assert " digest " not in result.stdout
 

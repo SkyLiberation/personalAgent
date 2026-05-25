@@ -29,6 +29,7 @@ class FeishuService:
     def __init__(self, settings: Settings, agent_service: AgentService) -> None:
         self.settings = settings
         self.agent_service = agent_service
+        self.agent_service.set_thread_message_loader(self._load_thread_messages_for_entry)
         self._client: lark.Client | None = None
         self._ws_client: lark.ws.Client | None = None
         self._ws_thread: threading.Thread | None = None
@@ -63,20 +64,6 @@ class FeishuService:
                         incoming_message.event_id, file_key, file_path,
                     )
 
-        if incoming_message.text:
-            from ..agent.entry_nodes import heuristic_entry_intent
-            intent, _ = heuristic_entry_intent(incoming_message.text)
-            if intent == "summarize_thread":
-                chat_id = metadata.get("chat_id", "")
-                if chat_id:
-                    thread_messages = self.fetch_recent_messages(chat_id, limit=20)
-                    if thread_messages:
-                        metadata["thread_messages"] = json.dumps(thread_messages, ensure_ascii=False)
-                        logger.info(
-                            "Feishu thread messages pre-fetched event_id=%s chat_id=%s count=%s",
-                            incoming_message.event_id, chat_id, len(thread_messages),
-                        )
-
         entry_result = self.agent_service.entry(
             EntryInput(
                 text=incoming_message.text,
@@ -97,6 +84,25 @@ class FeishuService:
             len(reply_text),
         )
         return reply_text
+
+    def _load_thread_messages_for_entry(
+        self, entry_input: EntryInput, limit: int = 20
+    ) -> list[dict[str, str]]:
+        """Load Feishu chat context after the entry graph selects summarization."""
+        if entry_input.source_platform != "feishu":
+            return []
+        chat_id = entry_input.metadata.get("chat_id", "")
+        if not chat_id:
+            return []
+        messages = self.fetch_recent_messages(chat_id, limit=limit)
+        if messages:
+            logger.info(
+                "Feishu thread messages loaded for summarize session_id=%s chat_id=%s count=%s",
+                entry_input.session_id,
+                chat_id,
+                len(messages),
+            )
+        return messages
 
     def start_event_listener(self) -> None:
         if not self.settings.feishu_enabled:

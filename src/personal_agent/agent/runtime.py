@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 from langgraph.types import Command
 
@@ -143,6 +143,9 @@ class AgentRuntime(
             memory=self.memory,
             settings=settings,
         )
+        self._thread_message_loader: (
+            Callable[[EntryInput, int], list[dict[str, str]]] | None
+        ) = None
         # Orchestration graph — built lazily on first use
         self._orch_graph = None
 
@@ -163,6 +166,19 @@ class AgentRuntime(
     @property
     def plan_validator(self):
         return self._plan_validator
+
+    def set_thread_message_loader(
+        self, loader: Callable[[EntryInput, int], list[dict[str, str]]] | None
+    ) -> None:
+        """Register a platform adapter used only after the graph selects summary."""
+        self._thread_message_loader = loader
+
+    def load_thread_messages(
+        self, entry_input: EntryInput, limit: int = 20
+    ) -> list[dict[str, str]]:
+        if self._thread_message_loader is None:
+            return []
+        return self._thread_message_loader(entry_input, limit)
 
     # ---- orchestration graph ----
 
@@ -426,25 +442,6 @@ class AgentRuntime(
         except Exception:
             logger.debug("Could not list run snapshots", exc_info=True)
         return []
-
-    def capture(
-        self,
-        text: str,
-        source_type: str = "text",
-        user_id: str | None = None,
-        source_ref: str | None = None,
-    ) -> CaptureResult:
-        return self.execute_capture(
-            text=text,
-            source_type=source_type,
-            user_id=user_id,
-            source_ref=source_ref,
-        )
-
-    def ask(
-        self, question: str, user_id: str | None = None, session_id: str | None = None
-    ) -> AskResult:
-        return self.execute_ask(question=question, user_id=user_id, session_id=session_id)
 
     def digest(self, user_id: str | None = None) -> DigestResult:
         return self.execute_digest(user_id=user_id)
