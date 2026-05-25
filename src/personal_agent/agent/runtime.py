@@ -10,9 +10,9 @@ from ..core.models import EntryInput
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..storage.ask_history_store import AskHistoryStore
-from ..storage.cross_session_store import CrossSessionStore
-from ..storage.memory_store import LocalMemoryStore
-from ..storage.pending_action_store import PendingActionStore
+from ..storage.postgres_cross_session_store import PostgresCrossSessionStore
+from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..storage.postgres_pending_action_store import PostgresPendingActionStore
 from ..tools import ToolRegistry
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
@@ -117,23 +117,25 @@ class AgentRuntime(
     def __init__(
         self,
         settings: Settings,
-        store: LocalMemoryStore,
+        store: PostgresMemoryStore,
         graph_store: GraphitiStore,
         ask_history_store: AskHistoryStore,
         capture_service: "CaptureService | None" = None,
-        pending_action_store: PendingActionStore | None = None,
+        pending_action_store: PostgresPendingActionStore | None = None,
     ) -> None:
+        if not settings.postgres_url:
+            raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
         self.settings = settings
         self.store = store
         self.graph_store = graph_store
         self.ask_history_store = ask_history_store
-        self.pending_action_store = pending_action_store or PendingActionStore(settings.data_dir)
+        self.pending_action_store = pending_action_store or PostgresPendingActionStore(settings.postgres_url)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_registry = ToolRegistry()
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_registry=self._tool_registry)
-        self._cross_session = CrossSessionStore(settings.data_dir)
+        self._cross_session = PostgresCrossSessionStore(settings.postgres_url)
         self.memory = MemoryFacade(store, ask_history_store, cross_session_store=self._cross_session)
         self._verifier = AnswerVerifier()
         self._plan_validator = PlanValidator(tool_registry=self._tool_registry)
@@ -188,10 +190,7 @@ class AgentRuntime(
             checkpointer = _build_checkpointer(self.settings)
             deps = OrchestrationDeps.from_runtime(self)
             self._orch_graph = build_entry_orchestration_graph(deps, checkpointer=checkpointer)
-            logger.info(
-                "Entry orchestration graph built checkpoint_backend=%s",
-                self.settings.langgraph_checkpoint_backend,
-            )
+            logger.info("Entry orchestration graph built with Postgres checkpoints")
         return self._orch_graph
 
     def execute_entry(

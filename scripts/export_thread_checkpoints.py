@@ -4,7 +4,6 @@ import argparse
 import base64
 import json
 import re
-import sqlite3
 import sys
 from datetime import date, datetime, time
 from pathlib import Path
@@ -100,8 +99,9 @@ def collect_thread_checkpoints(
 def main() -> int:
     _ensure_src_on_path()
 
-    from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.checkpoint.postgres import PostgresSaver
     from personal_agent.core.config import Settings
+    from personal_agent.storage.postgres_common import normalize_postgres_url
 
     settings = Settings.from_env()
     parser = argparse.ArgumentParser(
@@ -109,12 +109,6 @@ def main() -> int:
     )
     parser.add_argument(
         "thread_id", help="Exact LangGraph configurable thread_id to export."
-    )
-    parser.add_argument(
-        "--checkpoint-path",
-        type=Path,
-        default=Path(settings.langgraph_checkpoint_path),
-        help="SQLite checkpoint database path. Defaults to the configured checkpoint path.",
     )
     parser.add_argument(
         "-o",
@@ -129,20 +123,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.checkpoint_path.exists():
-        parser.error(
-            f"checkpoint database does not exist: {args.checkpoint_path}. "
-            "Use PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=sqlite and execute an entry first."
-        )
-
     output_path = args.output or _asset_output_path(args.thread_id, raw=args.raw)
-    connection = sqlite3.connect(str(args.checkpoint_path), check_same_thread=False)
-    try:
+    with PostgresSaver.from_conn_string(
+        normalize_postgres_url(settings.postgres_url)
+    ) as checkpointer:
+        checkpointer.setup()
         payload = collect_thread_checkpoints(
-            SqliteSaver(connection), args.thread_id, raw=args.raw
+            checkpointer, args.thread_id, raw=args.raw
         )
-    finally:
-        connection.close()
 
     if not payload["checkpoints"]:
         parser.error(f"no checkpoints found for thread_id: {args.thread_id}")

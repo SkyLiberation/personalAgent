@@ -1,7 +1,8 @@
 from typing import TypedDict
 
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import START, StateGraph
 
 from personal_agent.agent.orchestration_graph import _build_checkpointer
@@ -10,6 +11,9 @@ from scripts.export_thread_checkpoints import (
     _asset_output_path,
     collect_thread_checkpoints,
 )
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 class SampleState(TypedDict):
@@ -78,15 +82,10 @@ def test_raw_output_uses_separate_asset_name():
     assert _asset_output_path("u:s:r", raw=True).name == "checkpoints-u_s_r-raw.json"
 
 
-def test_build_checkpointer_supports_sqlite_backend(temp_dir):
-    checkpointer = _build_checkpointer(
-        Settings(
-            langgraph_checkpoint_backend="sqlite",
-            langgraph_checkpoint_path=str(temp_dir / "checkpoints.sqlite"),
-        )
-    )
+def test_build_checkpointer_uses_postgres():
+    checkpointer = _build_checkpointer(Settings(postgres_url=POSTGRES_URL))
 
     try:
-        assert isinstance(checkpointer, SqliteSaver)
+        assert isinstance(checkpointer, PostgresSaver)
     finally:
         checkpointer.conn.close()

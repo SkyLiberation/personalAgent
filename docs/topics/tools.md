@@ -196,7 +196,7 @@ solidify_conversation -> capture_text
 - 删除指定 note
 - 同步删除关联复习卡
 - 尝试删除对应图谱 episode
-- 使用 `PendingActionStore` 做两阶段 HITL 确认
+- 使用 `PostgresPendingActionStore` 做两阶段 HITL 确认
 
 执行分两阶段：
 

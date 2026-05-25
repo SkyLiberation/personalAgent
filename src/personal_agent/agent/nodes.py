@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from ..core.models import AgentState, Citation, KnowledgeNote, ReviewCard
-from ..storage.memory_store import LocalMemoryStore
+from ..storage.postgres_memory_store import PostgresMemoryStore
 
 
-def capture_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
+def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if state.raw_item is None:
         return state
 
@@ -64,7 +64,7 @@ def capture_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
     return state
 
 
-def enrich_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
+def enrich_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if state.note is None:
         return state
 
@@ -74,7 +74,7 @@ def enrich_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
     return state
 
 
-def link_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
+def link_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if state.note is None:
         return state
 
@@ -87,7 +87,7 @@ def link_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
     return state
 
 
-def schedule_review_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
+def schedule_review_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if state.note is None:
         return state
 
@@ -103,7 +103,7 @@ def schedule_review_node(state: AgentState, store: LocalMemoryStore) -> AgentSta
     return state
 
 
-def answer_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
+def answer_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if not state.question:
         return state
 
@@ -122,7 +122,7 @@ def answer_node(state: AgentState, store: LocalMemoryStore) -> AgentState:
     return state
 
 
-def digest_node(store: LocalMemoryStore, user_id: str) -> str:
+def digest_node(store: PostgresMemoryStore, user_id: str) -> str:
     due = store.due_reviews(user_id)
     notes = store.list_notes(user_id)[-5:]
     lines = ["今日知识简报"]

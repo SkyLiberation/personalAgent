@@ -85,9 +85,9 @@
 
 飞书和 CLI 当前无法获得与 Web 前端同等粒度的计划执行反馈。
 
-### 3. Pending action 仍是应用层确认
+### 3. Pending action 与 checkpoint 共同承载确认
 
-当前没有 LangGraph checkpoint，复杂多段审批和中断恢复仍需要更明确的持久化流程。
+Pending action 保存确认 token 和审计载荷，Postgres checkpoint 保存可恢复的 graph 状态；复杂多段审批仍可在此基础上继续扩展。
 
 ### 4. 错误反馈还可以更结构化
 

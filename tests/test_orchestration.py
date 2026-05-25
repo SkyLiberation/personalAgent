@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from tests.conftest import POSTGRES_URL
 from langchain_core.messages import AIMessage, HumanMessage
 
 from personal_agent.agent.orchestration_models import (
@@ -217,22 +218,22 @@ class TestOrchestrationGraphIntegration:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_graph_builds_and_compiles(self, runtime):
@@ -516,20 +517,19 @@ class TestOrchestrationGraphIntegration:
         from personal_agent.agent.runtime import AgentRuntime
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 
         settings = Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="sqlite",
-            langgraph_checkpoint_path=str(temp_dir / "checkpoint.sqlite"),
+            postgres_url=POSTGRES_URL,
         )
 
         def create_runtime():
             return AgentRuntime(
                 settings=settings,
-                store=LocalMemoryStore(settings.data_dir),
+                store=PostgresMemoryStore(settings.data_dir, settings.postgres_url),
                 graph_store=GraphitiStore(settings),
-                ask_history_store=AskHistoryStore(postgres_url=None),
+                ask_history_store=AskHistoryStore(postgres_url=settings.postgres_url),
             )
 
         original = create_runtime()
@@ -675,22 +675,22 @@ class TestPhase3ExecutePlanStep:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_node_sets_awaiting_confirmation_when_pending_confirmation_present(self, runtime, monkeypatch):
@@ -763,22 +763,22 @@ class TestPhase3InterruptResumeIntegration:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_execute_entry_returns_run_id_and_status(self, runtime):
@@ -852,22 +852,22 @@ class TestPhase4ReActHelpers:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_resolve_allowed_tools_for_step(self, runtime):
@@ -928,22 +928,22 @@ class TestPhase4ReActNodes:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_react_init_seeds_state(self, runtime):
@@ -1022,22 +1022,22 @@ class TestPhase4ReActIterateNode:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_react_iterate_done_sets_flag(self, runtime, monkeypatch):
@@ -1185,29 +1185,32 @@ class TestPhase4ReActSubgraphIntegration:
     def stub_settings(self, temp_dir):
         return Settings(
             data_dir=temp_dir,
-            langgraph_checkpoint_backend="memory",
+            postgres_url=POSTGRES_URL,
         )
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.memory_store import LocalMemoryStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
         from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
-        store = LocalMemoryStore(stub_settings.data_dir)
+        store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=None),
+            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_react_subgraph_builds_and_compiles(self, runtime):
         from personal_agent.agent.orchestration_graph import _build_react_subgraph
         from langgraph.graph.state import CompiledStateGraph
 
-        subgraph = _build_react_subgraph(OrchestrationDeps.from_runtime(runtime))
+        subgraph = _build_react_subgraph(
+            OrchestrationDeps.from_runtime(runtime),
+            checkpointer=runtime._get_orch_graph().checkpointer,
+        )
         assert subgraph is not None
         assert isinstance(subgraph, CompiledStateGraph)
         assert subgraph.checkpointer is not None
@@ -1224,7 +1227,10 @@ class TestPhase4ReActSubgraphIntegration:
             _mock_llm,
         )
 
-        subgraph = _build_react_subgraph(OrchestrationDeps.from_runtime(runtime))
+        subgraph = _build_react_subgraph(
+            OrchestrationDeps.from_runtime(runtime),
+            checkpointer=runtime._get_orch_graph().checkpointer,
+        )
 
         state = AgentGraphState(
             run_id="r1",
@@ -1277,7 +1283,10 @@ class TestPhase4ReActSubgraphIntegration:
             runtime._tool_registry, "execute", _mock_tool_execute,
         )
 
-        subgraph = _build_react_subgraph(OrchestrationDeps.from_runtime(runtime))
+        subgraph = _build_react_subgraph(
+            OrchestrationDeps.from_runtime(runtime),
+            checkpointer=runtime._get_orch_graph().checkpointer,
+        )
 
         state = AgentGraphState(
             run_id="r1",
@@ -1641,3 +1650,6 @@ class TestPhase5GraphToEntryResultEvents:
 
         assert result.run_status == "waiting_confirmation"
         assert len(result.events) == 2
+
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")

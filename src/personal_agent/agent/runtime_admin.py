@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from ..core.models import AskHistoryRecord, KnowledgeNote, PendingAction
-from .orchestration_models import AgentGraphState
+from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from .runtime_results import ResetResult
 
 logger = logging.getLogger(__name__)
@@ -19,38 +19,21 @@ class RuntimeAdminMixin:
     ) -> list[AskHistoryRecord]:
         normalized_user = user_id or self.settings.default_user
         normalized_session = session_id or None
-        if self.ask_history_store.configured():
-            return self.ask_history_store.list_history(normalized_user, limit, normalized_session)
-        local_records = self.store.list_conversation_turns(normalized_user, normalized_session or "default", limit)
-        return [AskHistoryRecord.model_validate(item) for item in reversed(local_records)]
+        return self.ask_history_store.list_history(normalized_user, limit, normalized_session)
 
     def search_ask_history(
         self, user_id: str | None = None, query: str = "", limit: int = 20, session_id: str | None = None
     ) -> list[AskHistoryRecord]:
         normalized_user = user_id or self.settings.default_user
-        if self.ask_history_store.configured():
-            return self.ask_history_store.search_history(normalized_user, query, limit, session_id)
-        local_records = self.store.list_conversation_turns(normalized_user, session_id or "default", limit)
-        if not query.strip():
-            return [AskHistoryRecord.model_validate(item) for item in reversed(local_records)]
-        query_lower = query.strip().lower()
-        filtered = [
-            r for r in local_records
-            if query_lower in r.get("question", "").lower() or query_lower in r.get("answer", "").lower()
-        ]
-        return [AskHistoryRecord.model_validate(item) for item in reversed(filtered)]
+        return self.ask_history_store.search_history(normalized_user, query, limit, session_id)
 
     def delete_ask_record(self, user_id: str | None, record_id: str) -> bool:
         normalized_user = user_id or self.settings.default_user
-        if self.ask_history_store.configured():
-            return self.ask_history_store.delete_record(normalized_user, record_id)
-        return self.store.delete_conversation_turn(normalized_user, record_id)
+        return self.ask_history_store.delete_record(normalized_user, record_id)
 
     def delete_ask_session(self, user_id: str | None, session_id: str) -> int:
         normalized_user = user_id or self.settings.default_user
-        if self.ask_history_store.configured():
-            return self.ask_history_store.delete_session(normalized_user, session_id)
-        return self.store.delete_session_turns(normalized_user, session_id)
+        return self.ask_history_store.delete_session(normalized_user, session_id)
 
     def list_pending_actions(
         self, user_id: str | None = None, status: str | None = None
@@ -95,46 +78,30 @@ class RuntimeAdminMixin:
             "ask_history": {"configured": self.ask_history_store.configured()},
         }
 
-    def reset_user_data(self, user_id: str | None = None) -> ResetResult:
-        normalized_user = user_id or self.settings.default_user
-        logger.warning("Resetting user data for user=%s", normalized_user)
-        deleted_graph_episodes = 0
-        if self.graph_store.configured():
-            deleted_graph_episodes = self.graph_store.clear_user_group(normalized_user)
-        local_result = self.store.clear_user_data(normalized_user, remove_uploaded_files=True)
-        self._cross_session.clear_user(normalized_user)
-        deleted_ask_history = 0
-        if self.ask_history_store.configured():
-            try:
-                deleted_ask_history = self.ask_history_store.delete_history(normalized_user)
-            except Exception:
-                logger.exception("Failed to delete ask history for user=%s", normalized_user)
-        deleted_checkpoints = self._clear_user_checkpoints(normalized_user)
+    def reset_debug_data(self) -> ResetResult:
+        logger.warning("Resetting all development data stores")
+        deleted_graph_nodes = self.graph_store.clear_all_data()
+        self.store.ensure_schema()
+        self.ask_history_store.ensure_schema()
+        self.pending_action_store.ensure_schema()
+        self._cross_session.ensure_schema()
+        checkpointer = self._get_orch_graph().checkpointer
+        counts = PostgresDebugResetStore(self.settings.postgres_url).clear_all_data()
+        checkpointer.setup()
+        deleted_upload_files = clear_upload_files(self.settings.data_dir)
+        self.memory.working.reset()
         return ResetResult(
-            user_id=normalized_user,
-            deleted_notes=local_result["notes"],
-            deleted_reviews=local_result["reviews"],
-            deleted_conversations=local_result["conversations"],
-            deleted_upload_files=local_result["uploads"],
-            deleted_ask_history=deleted_ask_history,
-            deleted_graph_episodes=deleted_graph_episodes,
+            deleted_notes=counts["notes"],
+            deleted_reviews=counts["reviews"],
+            deleted_upload_files=deleted_upload_files,
+            deleted_ask_history=counts["ask_history"],
+            deleted_graph_nodes=deleted_graph_nodes,
+            deleted_pending_actions=counts["pending_actions"],
+            deleted_cross_session_artifacts=counts["cross_session_artifacts"],
+            deleted_checkpoints=counts["checkpoints"],
+            deleted_checkpoint_blobs=counts["checkpoint_blobs"],
+            deleted_checkpoint_writes=counts["checkpoint_writes"],
+            deleted_checkpoint_migrations=counts["checkpoint_migrations"],
+            truncated_postgres_tables=counts["postgres_tables"],
+            deleted_postgres_rows=counts["postgres_rows"],
         )
-
-    def _clear_user_checkpoints(self, user_id: str) -> int:
-        try:
-            checkpointer = self._get_orch_graph().checkpointer
-            thread_ids: set[str] = set()
-            for ct in checkpointer.list(None, limit=2000):
-                if ct.checkpoint and "channel_values" in ct.checkpoint:
-                    state = AgentGraphState.model_validate(ct.checkpoint["channel_values"])
-                    if state.user_id == user_id and ct.config.get("configurable", {}).get("thread_id"):
-                        thread_ids.add(ct.config["configurable"]["thread_id"])
-            for thread_id in thread_ids:
-                checkpointer.delete_thread(thread_id)
-            logger.info("Deleted %d checkpoint threads for user=%s", len(thread_ids), user_id)
-            return len(thread_ids)
-        except Exception:
-            logger.exception("Failed to clear checkpoints for user=%s", user_id)
-            return 0
-
-

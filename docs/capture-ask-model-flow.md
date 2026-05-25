@@ -14,7 +14,7 @@
 
 当前外部调用主要通过统一入口 `AgentService.entry()` 进入运行时，由 `AgentRuntime.execute_entry()` 经 LangGraph orchestration graph 路由到 capture / ask / summarize / direct_answer 等分支。
 
-`AgentService` 本身很薄，负责装配 `Settings`、`LocalMemoryStore`、`GraphitiStore`、`AskHistoryStore` 和 `CaptureService`，随后把行为交给 `AgentRuntime`。`AgentRuntime` 再通过 mixin 分拆出 capture、ask、entry、tools、admin、LLM 等具体能力。
+`AgentService` 本身很薄，负责装配 `Settings`、`PostgresMemoryStore`、`GraphitiStore`、`AskHistoryStore` 和 `CaptureService`，随后把行为交给 `AgentRuntime`。`AgentRuntime` 再通过 mixin 分拆出 capture、ask、entry、tools、admin、LLM 等具体能力。
 
 ## Capture 过程
 
@@ -86,7 +86,7 @@ capture -> enrich -> link -> schedule_review
 
 `link_node`：
 
-- 调用 `LocalMemoryStore.find_similar_notes()`
+- 调用 `PostgresMemoryStore.find_similar_notes()`
 - 把相似笔记写入 `state.matches`
 - 把相似笔记 id 写入 `state.note.related_note_ids`
 - 持久化 `state.note` 和 `state.chunk_notes`
@@ -344,7 +344,7 @@ AgentState(mode="ask", question=question, user_id=normalized_user)
 answer_node()
 ```
 
-`answer_node` 会调用 `LocalMemoryStore.find_similar_notes()`：
+`answer_node` 会调用 `PostgresMemoryStore.find_similar_notes()`：
 
 - 把匹配笔记写入 `state.matches`
 - 生成初始 `state.answer`
@@ -408,9 +408,8 @@ ask 最终返回 `AskResult`：
 返回前会调用 `MemoryFacade.record_turn()`：
 
 - 优先写入 `AskHistoryStore`，也就是 Postgres 问答历史
-- 如果 Postgres 未配置或失败，降级写入 `LocalMemoryStore.conversations.json`
 - 同步刷新 `WorkingMemory.conversation_summary`
-- 如果有 citations，会写入 `CrossSessionStore.recent_citations`，供后续删除知识等操作解析目标
+- 如果有 citations，会写入 `PostgresCrossSessionStore.recent_citations`，供后续删除知识等操作解析目标
 
 ## Capture 与 Ask 的模型流转对照
 

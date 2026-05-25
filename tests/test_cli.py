@@ -7,6 +7,9 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from personal_agent.cli.main import app
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 @pytest.fixture
@@ -15,10 +18,9 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     # Ensure no real LLM/Graphiti calls happen
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "")
-    monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "")
+    monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_URI", "")
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    monkeypatch.setenv("PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND", "memory")
     from personal_agent.core import config as config_module
 
     monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)

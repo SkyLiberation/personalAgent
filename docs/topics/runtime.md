@@ -51,7 +51,7 @@
 ```text
 text/source
   -> capture graph
-  -> LocalMemoryStore
+  -> PostgresMemoryStore
   -> optional Graphiti sync
   -> CaptureResult
 ```
@@ -94,7 +94,7 @@ EntryInput
 - 已支持 verifier 校验和低置信度重试
 - 已支持图谱异步/手动同步重试
 - 已支持 pending action 确认和拒绝
-- 已支持 health 和 reset 用户数据
+- 已支持 health 和开发环境全量数据 reset
 - 已支持 `plan_steps` 与 `execution_trace` 分离，避免非计划任务生成伪计划
 
 ## 新增公开方法（v0.2+）

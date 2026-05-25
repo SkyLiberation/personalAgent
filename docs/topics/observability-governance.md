@@ -65,7 +65,7 @@
 
 ### 6. 高风险操作审计
 
-`PendingActionStore` 会记录 pending action 的 audit log，覆盖创建、确认、拒绝、过期和执行等事件。
+`PostgresPendingActionStore` 会记录 pending action 的 audit log，覆盖创建、确认、拒绝、过期和执行等事件。
 
 ### 7. 测试
 
@@ -113,7 +113,7 @@
 
 ### 5. Debug reset 风险较高
 
-`/api/debug/reset-user-data` 能清理用户数据，当前适合开发调试。生产化时需要更严格的权限、审计和确认。
+`/api/debug/reset-database` 会清空配置的 Postgres 当前 schema 中全部普通表数据（随后重建 LangGraph 迁移版本记录）、全部上传文件及配置的 Neo4j 数据库全部图谱内容，只适合开发调试。生产化时必须禁用或增加严格权限、审计和强确认。
 
 ## 演进方向
 

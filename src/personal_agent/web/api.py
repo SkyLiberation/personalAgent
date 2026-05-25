@@ -63,18 +63,20 @@ class EntryResponse(BaseModel):
     run_status: str | None = None
 
 
-class ResetUserDataRequest(BaseModel):
-    user_id: str = "default"
-
-
-class ResetUserDataResponse(BaseModel):
-    user_id: str
+class ResetDebugDataResponse(BaseModel):
     deleted_notes: int = 0
     deleted_reviews: int = 0
-    deleted_conversations: int = 0
     deleted_upload_files: int = 0
     deleted_ask_history: int = 0
-    deleted_graph_episodes: int = 0
+    deleted_graph_nodes: int = 0
+    deleted_pending_actions: int = 0
+    deleted_cross_session_artifacts: int = 0
+    deleted_checkpoints: int = 0
+    deleted_checkpoint_blobs: int = 0
+    deleted_checkpoint_writes: int = 0
+    deleted_checkpoint_migrations: int = 0
+    truncated_postgres_tables: int = 0
+    deleted_postgres_rows: int = 0
 
 
 class ToolSpecResponse(BaseModel):
@@ -554,12 +556,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Record not found or not owned by user.")
         return {"ok": True, "deleted_id": record_id}
 
-    @app.post("/api/debug/reset-user-data", response_model=ResetUserDataResponse)
-    def reset_user_data(http_request: Request, body: ResetUserDataRequest) -> ResetUserDataResponse:
-        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
-        logger.warning("Debug reset requested for user=%s", resolved_user)
-        result = service.reset_user_data(resolved_user)
-        return ResetUserDataResponse(**result.model_dump())
+    @app.post("/api/debug/reset-database", response_model=ResetDebugDataResponse)
+    def reset_debug_data() -> ResetDebugDataResponse:
+        logger.warning("Full debug data reset requested")
+        result = service.reset_debug_data()
+        return ResetDebugDataResponse(**result.model_dump())
 
     @app.get("/api/pending-actions", response_model=PendingActionListResponse)
     def list_pending_actions(

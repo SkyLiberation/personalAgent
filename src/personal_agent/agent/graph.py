@@ -3,11 +3,11 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from ..core.models import AgentState
-from ..storage.memory_store import LocalMemoryStore
+from ..storage.postgres_memory_store import PostgresMemoryStore
 from .nodes import answer_node, capture_node, enrich_node, link_node, schedule_review_node
 
 
-def build_capture_graph(store: LocalMemoryStore):
+def build_capture_graph(store: PostgresMemoryStore):
     graph = StateGraph(AgentState)
     graph.add_node("capture", lambda state: capture_node(state, store))
     graph.add_node("enrich", lambda state: enrich_node(state, store))
@@ -22,7 +22,7 @@ def build_capture_graph(store: LocalMemoryStore):
     return graph.compile()
 
 
-def build_ask_graph(store: LocalMemoryStore):
+def build_ask_graph(store: PostgresMemoryStore):
     graph = StateGraph(AgentState)
     graph.add_node("answer", lambda state: answer_node(state, store))
     graph.add_edge(START, "answer")

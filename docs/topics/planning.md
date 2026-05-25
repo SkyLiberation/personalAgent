@@ -235,12 +235,12 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 含义：
 
 - `retrieve`：检索可供固化判断参考的知识上下文
-- `compose`：将近期候选会话以轮次标识提供给 LLM，由模型根据当前保存请求语义选择依据并生成入库草稿；无合格正文时不写入。同时从草稿中抽取候选结论（`candidate_conclusions`）并存入 `CrossSessionStore`
+- `compose`：将近期候选会话以轮次标识提供给 LLM，由模型根据当前保存请求语义选择依据并生成入库草稿；无合格正文时不写入。同时从草稿中抽取候选结论（`candidate_conclusions`）并存入 `PostgresCrossSessionStore`
 - `verify`：检查草稿准确性和完整性
 - `tool_call`：复用 `capture_text` 写入长期知识库
 - `tool_call` 成功后自动回写：草稿标记为 `solidified`，关联候选结论同步切换已固化状态
 
-当前 `compose` 还会产出 `draft_ready` 事件，并把草稿和候选结论保存到 `CrossSessionStore`。后续 `tool_call(capture_text)` 成功后，计划执行节点会完成 `draft → stored → solidified` 状态回写。
+当前 `compose` 还会产出 `draft_ready` 事件，并把草稿和候选结论保存到 `PostgresCrossSessionStore`。后续 `tool_call(capture_text)` 成功后，计划执行节点会完成 `draft → stored → solidified` 状态回写。
 
 ## 当前能力
 
@@ -279,9 +279,9 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 
 当前校验覆盖 required 字段检查和基础类型匹配（string/boolean/integer/number），复杂嵌套结构校验仍需补充。
 
-### 3. 审批和恢复已接入 checkpoint，持久化后端仍可增强
+### 3. 审批和恢复已使用持久化 checkpoint
 
-删除类操作已通过 LangGraph `interrupt/resume` 接入 checkpoint，当前 `confirm_step` 可以暂停 run，并在用户确认或拒绝后从同一个 `thread_id` 恢复。底层 `PendingActionStore` 仍承担 token、过期时间和审计载荷；checkpoint backend 目前默认 `memory`，跨进程/长期恢复能力仍取决于后续持久化 backend 的完善。
+删除类操作已通过 LangGraph `interrupt/resume` 接入 checkpoint，当前 `confirm_step` 可以暂停 run，并在用户确认或拒绝后从同一个 `thread_id` 恢复。底层 `PostgresPendingActionStore` 仍承担 token、过期时间和审计载荷；checkpoint 由 `PostgresSaver` 写入与业务数据相同的 Postgres 数据库，支持跨进程恢复。
 
 ### 4. 重规划仍偏补救式
 
@@ -315,7 +315,7 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 - 明确哪些 intent 必须由 `PlanExecutor` 驱动，逐步减少双轨执行
 - 为 revised steps 增加重新校验流程
 - ~~将 graph state 中的 `plan_steps: list[dict]` 收敛为强类型 `PlanStepState`~~（已完成）
-- 为多段审批和长任务恢复评估 LangGraph checkpoint
+- 基于 Postgres checkpoint 扩展多段审批和长任务恢复
 
 ## 下一步实现方案：重规划步骤复校验
 

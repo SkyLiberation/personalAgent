@@ -7,18 +7,18 @@
 当前记忆层不追求“把所有历史都塞进模型上下文”，而是把不同生命周期的信息拆开管理：
 
 - 当前活跃任务需要的短期上下文，放进 `WorkingMemory`
-- 会话问答历史，放进 `Postgres.ask_history` 或本地降级文件
-- 需要跨请求续接、但还不是正式知识的中间态，放进 `CrossSessionStore`
-- 需要用户确认的高风险动作，放进 `PendingActionStore`
-- 正式长期知识和复习卡，放进 `LocalMemoryStore`
+- 会话问答历史，放进 `Postgres.ask_history`
+- 需要跨请求续接、但还不是正式知识的中间态，放进 `PostgresCrossSessionStore`
+- 需要用户确认的高风险动作，放进 `PostgresPendingActionStore`
+- 正式长期知识和复习卡，生产运行中放进 `PostgresMemoryStore`
 
 ## 当前状态摘要
 
 `MemoryFacade` 已在 `ask` 链路中参与会话摘要、上下文拼接和问答历史写入。`execute_entry()` 会绑定 session、刷新摘要、写入 task goal 和 plan steps；`PlanExecutor` 也会把执行过程写入 `WorkingMemory.recent_steps`。
 
-跨请求确认状态已从 `WorkingMemory` 中分离，由 `PendingActionStore` 持久化到 `data/pending_actions.json`。最近 citations、固化草稿和候选结论已由 `CrossSessionStore` 持久化到 `data/cross_session.json`，用于删除目标解析和固化续接。
+跨请求确认状态已从 `WorkingMemory` 中分离。待确认操作持久化到 `pending_actions`，最近 citations、固化草稿和候选结论持久化到 `cross_session_artifacts`，用于删除目标解析和固化续接。
 
-当前仍未引入 LangGraph checkpoint。后续应继续保持 `WorkingMemory` 作为进程内 scratchpad，把更复杂的审批、恢复和续接语义放入明确的持久化模型。
+LangGraph checkpoint 已使用 Postgres 持久化，用于审批中断、恢复和 run snapshot 查询。`WorkingMemory` 仍只承担进程内 scratchpad，正式知识与可恢复流程状态分别落入明确的数据表。
 
 ## 组件分层
 
@@ -70,22 +70,21 @@
 
 当 `Postgres` 可用时，问答历史优先读写这里。
 
-### 4. `LocalMemoryStore`
+### 4. `PostgresMemoryStore`
 
-代码位置：[memory_store.py](../../src/personal_agent/storage/memory_store.py)
+代码位置：[postgres_memory_store.py](../../src/personal_agent/storage/postgres_memory_store.py)
 
 作用：
 
-- 保存 `notes.json` 中的长期知识 note（支持 parent note + chunk notes 模型，通过 `parent_note_id / chunk_index / source_span` 建立文档级关联；chunk 主要作为原文证据和 citation 定位单元）
-- 保存 `reviews.json` 中的复习卡
-- 保存 `conversations.json` 中的本地问答历史降级数据
+- 保存长期知识 note（支持 parent note + chunk notes 模型，通过 `parent_note_id / chunk_index / source_span` 建立文档级关联；chunk 主要作为原文证据和 citation 定位单元）
+- 保存复习卡
 - 提供本地相似检索（含按 parent 去重）、图谱 episode 到 note 的映射、chunk 查询（`get_chunks_for_parent` / `get_parent_note`）和级联删除
 
-这里的 `notes/reviews` 是长期知识层；`conversations.json` 主要用于 ask history 的本地兜底。
+运行时统一使用 `PostgresMemoryStore`。
 
-### 5. `CrossSessionStore`
+### 5. `PostgresCrossSessionStore`
 
-代码位置：[cross_session_store.py](../../src/personal_agent/storage/cross_session_store.py)
+代码位置：[postgres_cross_session_store.py](../../src/personal_agent/storage/postgres_cross_session_store.py)
 
 作用：
 
@@ -95,9 +94,9 @@
 
 它承载的是“跨请求保留，但还没进入正式知识库”的中间态信息。
 
-这些数据会落到 `data/cross_session.json`，并带有 TTL 和数量上限，不是长期权威真源。
+这些数据会落到 Postgres `cross_session_artifacts`，并带有 TTL 和数量上限，不是长期知识真源。
 
-### 6. `PendingActionStore`
+### 6. `PostgresPendingActionStore`
 
 代码位置：[pending_action_store.py](../../src/personal_agent/storage/pending_action_store.py)
 
@@ -118,7 +117,7 @@
 3. `WorkingMemory.context_snapshot()` 生成当前上下文
 4. runtime 基于上下文生成回答
 5. `record_turn()` 持久化本轮问答
-6. 如有 citations，同时写入 `CrossSessionStore.recent_citations`
+6. 如有 citations，同时写入 `PostgresCrossSessionStore.recent_citations`
 
 ### entry / planner 链路
 
@@ -131,13 +130,13 @@
 
 - `resolve` 步骤会优先参考图谱 episode 映射
 - 若不足，再回退到本地相似检索、关键词匹配和 `recent_citations`
-- 真正删除前会创建 `PendingActionStore` 中的待确认动作
+- 真正删除前会创建 `PostgresPendingActionStore` 中的待确认动作
 
 ### `solidify_conversation`
 
 1. `compose` 步骤生成草稿答案
-2. 草稿先写入 `CrossSessionStore.solidify_drafts`
-3. `compose` 同时从草稿中抽取候选结论（`candidate_conclusions`），存入 `CrossSessionStore`
+2. 草稿先写入 `PostgresCrossSessionStore.solidify_drafts`
+3. `compose` 同时从草稿中抽取候选结论（`candidate_conclusions`），存入 `PostgresCrossSessionStore`
 4. `draft_ready` 事件可供前端展示
 5. 后续 `capture_text` 工具把草稿正式写入 `KnowledgeNote`
 6. 草稿入库成功后，`PlanExecutor` 自动回写草稿状态为 `solidified`，并同步标记关联的候选结论为已固化
@@ -164,29 +163,9 @@ A: ...
 - 给模型使用的是压缩后的最近上下文
 - 目标是控制 token 成本并保留多轮承接能力
 
-## 问答历史降级策略
+## 问答历史
 
-当前问答历史采用 `Postgres` 主存储 + 本地文件降级缓冲：
-
-- 正常情况下优先读写 `Postgres.ask_history`
-- 若 `Postgres` 未配置或连接失败，则回退到 `data/conversations.json`
-
-这套设计的优点是：
-
-- 本地开发零依赖
-- 主库故障时 ask 链路仍可继续
-- 实现简单，便于排障
-
-当前局限也很明确：
-
-- `Postgres` 与本地 JSON 之间没有自动回补
-- 历史数据可能分散在两个来源
-- 本地 JSON 更偏单机兜底，不适合作为长期权威真源
-
-后续如果走多实例或更强一致性部署，更合理的方向是：
-
-- 用 `SQLite` 或本地队列替代 JSON 兜底
-- 为主库恢复后的回补提供明确机制
+问答历史统一读写 `Postgres.ask_history`。数据库配置缺失或写入失败属于启动/运行错误，不会转写到本地 JSON。
 
 ## 已知限制
 
@@ -212,23 +191,21 @@ A: ...
 - 能力接口已建好
 - 但还没有真正被 ask / planner / executor 使用
 
-### 3. `CrossSessionStore` 是中间态，不是正式知识库
+### 3. `PostgresCrossSessionStore` 是中间态，不是正式知识库
 
 `recent_citations / solidify_drafts / candidate_conclusions` 都带 TTL 和数量上限。它的目标是支撑删除解析、草稿续接和候选结论沉淀，而不是替代长期 note 存储。
 
 ## 当前数据落点
 
-- `data/notes.json`：长期知识 note
-- `data/reviews.json`：复习卡
-- `data/conversations.json`：本地问答历史降级文件
-- `data/cross_session.json`：跨请求中间态
-- `data/pending_actions.json`：待确认操作
-- `Postgres.ask_history`：服务端问答历史主存储
+- `Postgres.knowledge_notes`：长期知识 note
+- `Postgres.review_cards`：复习卡
+- `Postgres.ask_history`：问答历史
+- `Postgres.pending_actions`：待确认操作及审计载荷
+- `Postgres.cross_session_artifacts`：跨请求中间态
 
 ## 演进方向
 
 - 继续保持 `WorkingMemory` 作为轻量 scratchpad
-- 明确长期知识的双层定位：Graphiti node / edge / fact 是语义检索与推理单元，LocalMemoryStore parent/chunk note 是原文证据与回溯单元
+- 明确长期知识的双层定位：Graphiti node / edge / fact 是语义检索与推理单元，PostgresMemoryStore parent/chunk note 是原文证据与回溯单元
 - 需要跨请求恢复的审批/续接语义，继续显式放入持久化模型
-- 为 ask history 降级层增加更可靠的缓冲与回补机制
-- 当多段审批或更复杂恢复流增多后，再评估是否引入 LangGraph checkpoint
+- 基于已持久化的 LangGraph checkpoint 继续扩展多段审批或复杂恢复流

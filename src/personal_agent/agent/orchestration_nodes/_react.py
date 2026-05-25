@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from ..orchestration_models import AgentGraphState
@@ -280,7 +279,7 @@ def _json_dumps_safe(obj: object) -> str:
     return str(obj)
 
 
-def _build_react_subgraph(deps: OrchestrationDeps):
+def _build_react_subgraph(deps: OrchestrationDeps, *, checkpointer):
     """Build and compile the ReAct inner-loop subgraph.
 
     The subgraph uses ``AgentGraphState`` and checkpoints at every
@@ -312,7 +311,6 @@ def _build_react_subgraph(deps: OrchestrationDeps):
 
     builder.add_edge("react_finalize", END)
 
-    # Use the same MemorySaver so checkpoints are in the same store
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 

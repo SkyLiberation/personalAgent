@@ -10,28 +10,26 @@ from .working_memory import WorkingMemory
 if TYPE_CHECKING:
     from ..core.models import Citation
     from ..storage.ask_history_store import AskHistoryStore
-    from ..storage.cross_session_store import CrossSessionStore
-    from ..storage.memory_store import LocalMemoryStore
+    from ..storage.postgres_cross_session_store import PostgresCrossSessionStore
+    from ..storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryFacade:
-    """Unified read/write facade over working memory, local store, and ask history.
+    """Unified read/write facade over working memory and Postgres stores.
 
     AgentService uses this single entry-point instead of juggling three
     separate store objects.
 
-    Reads prefer Postgres (if configured), falling back to local store.
-    Writes go to Postgres as primary (if configured), with local store
-    as fallback.
+    Business persistence is database-only; no operation falls back to files.
     """
 
     def __init__(
         self,
-        local_store: "LocalMemoryStore",
+        local_store: "PostgresMemoryStore",
         ask_history_store: "AskHistoryStore",
-        cross_session_store: "CrossSessionStore | None" = None,
+        cross_session_store: "PostgresCrossSessionStore | None" = None,
     ) -> None:
         self.local = local_store
         self.ask_history = ask_history_store
@@ -52,7 +50,7 @@ class MemoryFacade:
     def refresh_conversation_summary(self, user_id: str, session_id: str) -> str:
         """Return the latest few Q&A turns as a plain-text summary block.
 
-        Reads from Postgres first (if configured), falls back to local store.
+        Reads from Postgres ask history.
         """
         records = self._load_conversation_turns(user_id, session_id, limit=6)
         if not records:
@@ -74,7 +72,7 @@ class MemoryFacade:
         answer: str,
         citations: "list[Citation] | None" = None,
     ) -> None:
-        """Record a Q&A turn to Postgres (primary) and local store (fallback)."""
+        """Record a Q&A turn to Postgres."""
         record = {
             "id": str(uuid4()),
             "user_id": user_id,
@@ -85,28 +83,18 @@ class MemoryFacade:
             "created_at": datetime.utcnow().isoformat(),
         }
 
-        # Primary: Postgres (if configured)
-        pg_written = False
-        if self.ask_history.configured():
-            try:
-                from ..core.models import AskHistoryRecord
+        from ..core.models import AskHistoryRecord
 
-                pg_record = AskHistoryRecord(
-                    id=record["id"],
-                    user_id=user_id,
-                    session_id=session_id,
-                    question=question,
-                    answer=answer,
-                    citations=citations or [],
-                )
-                self.ask_history.append(pg_record)
-                pg_written = True
-            except Exception:
-                logger.exception("Failed to persist turn to Postgres, falling back to local store")
-
-        # Fallback: local store (always written, or as fallback when Postgres fails)
-        if not pg_written:
-            self.local.append_conversation_turn(record)
+        self.ask_history.append(
+            AskHistoryRecord(
+                id=record["id"],
+                user_id=user_id,
+                session_id=session_id,
+                question=question,
+                answer=answer,
+                citations=citations or [],
+            )
+        )
 
         # Update the summary after each turn so it stays current
         self.refresh_conversation_summary(user_id, session_id)
@@ -186,21 +174,15 @@ class MemoryFacade:
     def _load_conversation_turns(
         self, user_id: str, session_id: str, limit: int = 6
     ) -> list[dict]:
-        """Load conversation turns, preferring Postgres over local store."""
-        if self.ask_history.configured():
-            try:
-                records = self.ask_history.list_history(user_id, limit, session_id)
-                if records:
-                    return [
-                        {
-                            "question": r.question,
-                            "answer": r.answer,
-                            "created_at": r.created_at.isoformat()
-                            if hasattr(r.created_at, "isoformat")
-                            else str(r.created_at),
-                        }
-                        for r in records
-                    ]
-            except Exception:
-                logger.exception("Failed to read conversation turns from Postgres")
-        return self.local.list_conversation_turns(user_id, session_id, limit)
+        """Load conversation turns from Postgres."""
+        records = self.ask_history.list_history(user_id, limit, session_id)
+        return [
+            {
+                "question": r.question,
+                "answer": r.answer,
+                "created_at": r.created_at.isoformat()
+                if hasattr(r.created_at, "isoformat")
+                else str(r.created_at),
+            }
+            for r in records
+        ]

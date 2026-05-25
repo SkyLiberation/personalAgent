@@ -13,6 +13,7 @@ from graphiti_core.embedder.openai import OpenAIEmbedderConfig
 from graphiti_core.graphiti import Graphiti
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
+from neo4j import AsyncGraphDatabase
 
 from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
@@ -155,6 +156,21 @@ class GraphitiStore:
             return asyncio.run(self._clear_user_group(user_id))
         except Exception:
             logger.exception("Graphiti group reset failed for user %s", user_id)
+            return 0
+
+    def clear_all_data(self) -> int:
+        if not (
+            self.settings.graphiti_uri
+            and self.settings.graphiti_user
+            and self.settings.graphiti_password
+        ):
+            return 0
+        if not self._neo4j_reachable():
+            return 0
+        try:
+            return asyncio.run(self._clear_all_data())
+        except Exception:
+            logger.exception("Graphiti database reset failed")
             return 0
 
     def delete_episode(self, episode_uuid: str) -> bool:
@@ -488,6 +504,23 @@ class GraphitiStore:
             return deleted_count
         finally:
             await graphiti.close()
+
+    async def _clear_all_data(self) -> int:
+        driver = AsyncGraphDatabase.driver(
+            self.settings.graphiti_uri,
+            auth=(self.settings.graphiti_user, self.settings.graphiti_password),
+        )
+        try:
+            async with driver.session() as session:
+                count_result = await session.run("MATCH (n) RETURN count(n) AS total")
+                record = await count_result.single()
+                deleted_count = int(record["total"]) if record else 0
+                result = await session.run("MATCH (n) DETACH DELETE n")
+                await result.consume()
+            logger.info("Cleared configured Neo4j database nodes=%s", deleted_count)
+            return deleted_count
+        finally:
+            await driver.close()
 
     async def _delete_episode(self, episode_uuid: str) -> bool:
         graphiti = await self._build_client()

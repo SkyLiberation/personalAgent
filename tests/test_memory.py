@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from personal_agent.memory.facade import MemoryFacade
 from personal_agent.memory.working_memory import WorkingMemory
-from personal_agent.storage.memory_store import LocalMemoryStore
+from personal_agent.storage.ask_history_store import AskHistoryStore
+from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 class TestWorkingMemory:
@@ -94,20 +97,12 @@ class TestWorkingMemory:
 
 class TestMemoryFacade:
     @pytest.fixture
-    def store(self):
-        tmp = tempfile.mkdtemp()
-        data_dir = Path(tmp) / "data"
-        s = LocalMemoryStore(data_dir)
-        yield s
-        import shutil
-
-        shutil.rmtree(tmp, ignore_errors=True)
+    def store(self, temp_dir: Path):
+        return PostgresMemoryStore(temp_dir, POSTGRES_URL)
 
     @pytest.fixture
     def ask_history(self):
-        from personal_agent.storage.ask_history_store import AskHistoryStore
-
-        return AskHistoryStore(postgres_url=None)
+        return AskHistoryStore(postgres_url=POSTGRES_URL)
 
     @pytest.fixture
     def facade(self, store, ask_history):
@@ -132,10 +127,10 @@ class TestMemoryFacade:
 
     def test_record_turn_appends_and_updates_summary(self, facade):
         facade.record_turn("user1", "sess1", "问题？", "答案。")
-        turns = facade.local.list_conversation_turns("user1", "sess1", limit=10)
+        turns = facade.ask_history.list_history("user1", limit=10, session_id="sess1")
         assert len(turns) == 1
-        assert turns[0]["question"] == "问题？"
-        assert turns[0]["answer"] == "答案。"
+        assert turns[0].question == "问题？"
+        assert turns[0].answer == "答案。"
 
     def test_record_turn_adds_working_memory_step(self, facade):
         facade.record_turn("user1", "sess1", "Q", "A")

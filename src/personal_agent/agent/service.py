@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from ..core.config import Settings
 from ..graphiti.store import GraphitiStore
 from ..storage.ask_history_store import AskHistoryStore
-from ..storage.memory_store import LocalMemoryStore
+from ..storage.postgres_memory_store import PostgresMemoryStore
 from .runtime import AgentRuntime
 
 if TYPE_CHECKING:
@@ -19,9 +19,12 @@ class AgentService(AgentRuntime):
         self, settings: Settings | None = None, capture_service: "CaptureService | None" = None
     ) -> None:
         resolved_settings = settings or Settings.from_env()
+        if not resolved_settings.postgres_url:
+            raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
+        store = PostgresMemoryStore(resolved_settings.data_dir, resolved_settings.postgres_url)
         super().__init__(
             settings=resolved_settings,
-            store=LocalMemoryStore(resolved_settings.data_dir),
+            store=store,
             graph_store=GraphitiStore(resolved_settings),
             ask_history_store=AskHistoryStore(resolved_settings.postgres_url),
             capture_service=capture_service,

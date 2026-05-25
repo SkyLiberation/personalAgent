@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
-from pathlib import Path
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
+from psycopg import connect
+from psycopg.rows import dict_row
 
 from ..core.config import Settings
+from ..storage.postgres_common import normalize_postgres_url
 from .orchestration_models import AgentGraphState
 from .orchestration_nodes import (
     OrchestrationDeps,
@@ -90,6 +91,9 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
     Phase 2: plan-driven paths go through step-level loop with checkpoint
     at each step transition.
     """
+    if checkpointer is None:
+        raise ValueError("A persistent Postgres checkpointer is required.")
+
     builder = StateGraph(AgentGraphState)
 
     # ---- Phase 1 nodes ----
@@ -149,7 +153,7 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
     # Phase 4: ReAct subgraph node
     builder.add_node(
         "react_step",
-        _build_react_subgraph(deps),
+        _build_react_subgraph(deps, checkpointer=checkpointer),
     )
     builder.add_node("finalize_plan_execution", _node_finalize_plan_execution)
 
@@ -258,8 +262,6 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
     builder.add_edge("finalize_plan_execution", "finalize_entry_result")
     builder.add_edge("finalize_entry_result", END)
 
-    # Compile
-    checkpointer = checkpointer or MemorySaver()
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -269,25 +271,17 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
 
 
 def _build_checkpointer(settings: Settings):
-    backend = settings.langgraph_checkpoint_backend
-
-    if backend == "memory":
-        return MemorySaver()
-
-    if backend == "sqlite":
-        try:
-            from langgraph.checkpoint.sqlite import SqliteSaver
-
-            checkpoint_path = Path(settings.langgraph_checkpoint_path)
-            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info("Using SqliteSaver at %s", checkpoint_path)
-            connection = sqlite3.connect(str(checkpoint_path), check_same_thread=False)
-            return SqliteSaver(connection)
-        except ImportError:
-            logger.warning("SqliteSaver not available; falling back to MemorySaver")
-            return MemorySaver()
-
-    logger.warning(
-        "Unknown checkpoint backend '%s'; falling back to MemorySaver", backend
+    connection = connect(
+        normalize_postgres_url(settings.postgres_url),
+        autocommit=True,
+        prepare_threshold=0,
+        row_factory=dict_row,
     )
-    return MemorySaver()
+    checkpointer = PostgresSaver(connection)
+    try:
+        checkpointer.setup()
+    except Exception:
+        connection.close()
+        raise
+    logger.info("Using PostgresSaver for LangGraph checkpoints")
+    return checkpointer

@@ -3,6 +3,13 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
+from psycopg import connect
+from unittest.mock import MagicMock
+
+from personal_agent.core.models import EntryInput, PendingAction
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 @pytest.fixture
@@ -10,14 +17,8 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("PERSONAL_AGENT_DATA_DIR", str(temp_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "")
-    monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "")
+    monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    monkeypatch.setenv("PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND", "memory")
-    monkeypatch.setenv(
-        "PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH",
-        str(temp_dir / "langgraph_checkpoints.sqlite"),
-    )
-
     from personal_agent.core import config as config_module
     monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
 
@@ -150,20 +151,70 @@ class TestAskHistoryEndpoint:
 
 
 class TestDebugEndpoints:
-    def test_reset_user_data(self, api_client: TestClient):
+    def test_reset_database_clears_all_persisted_debug_data(self, api_client: TestClient, temp_dir: Path):
         service = api_client.app.state.service
-        service._runtime.execute_capture("待删除笔记", source_type="text", user_id="reset-test")
-        response = api_client.post(
-            "/api/debug/reset-user-data",
-            json={"user_id": "reset-test"},
+        service.graph_store.clear_all_data = MagicMock(return_value=7)
+        service._runtime.execute_capture("用户A笔记", source_type="text", user_id="reset-a")
+        service._runtime.execute_capture("用户B笔记", source_type="text", user_id="reset-b")
+        service._runtime.execute_ask("问答数据", user_id="reset-a", session_id="s1")
+        service.pending_action_store.create(
+            PendingAction(
+                user_id="reset-b",
+                action_type="delete_note",
+                target_id="n1",
+                title="删除笔记",
+                description="测试",
+            )
         )
+        service._cross_session.save_draft("reset-a", "草稿")
+        service.execute_entry(EntryInput(text="你好", user_id="reset-a", session_id="checkpoint"))
+        uploads_dir = temp_dir / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        (uploads_dir / "orphan.txt").write_text("debug", encoding="utf-8")
+        with connect(POSTGRES_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS debug_extra_rows (id INTEGER)")
+                cur.execute("INSERT INTO debug_extra_rows (id) VALUES (1)")
+            conn.commit()
+
+        response = api_client.post(
+            "/api/debug/reset-database",
+        )
+
         assert response.status_code == 200
         data = response.json()
-        assert data["user_id"] == "reset-test"
-        assert data["deleted_notes"] >= 1
-        # Verify notes are gone
-        notes = api_client.get("/api/notes", params={"user_id": "reset-test"}).json()
-        assert len(notes) == 0
+        assert data["deleted_notes"] >= 2
+        assert data["deleted_ask_history"] >= 1
+        assert data["deleted_pending_actions"] >= 1
+        assert data["deleted_cross_session_artifacts"] >= 1
+        assert data["deleted_checkpoints"] >= 1
+        assert data["deleted_checkpoint_migrations"] >= 1
+        assert data["truncated_postgres_tables"] >= 10
+        assert data["deleted_postgres_rows"] >= data["deleted_notes"]
+        assert data["deleted_upload_files"] == 1
+        assert data["deleted_graph_nodes"] == 7
+        service.graph_store.clear_all_data.assert_called_once_with()
+        assert not (uploads_dir / "orphan.txt").exists()
+
+        with connect(POSTGRES_URL) as conn:
+            with conn.cursor() as cur:
+                for table in (
+                    "knowledge_notes",
+                    "review_cards",
+                    "ask_history",
+                    "pending_actions",
+                    "cross_session_artifacts",
+                    "checkpoints",
+                    "checkpoint_blobs",
+                    "checkpoint_writes",
+                    "debug_extra_rows",
+                ):
+                    cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    assert cur.fetchone()[0] == 0
+                cur.execute("SELECT COUNT(*) FROM checkpoint_migrations")
+                assert cur.fetchone()[0] >= 1
+                cur.execute("DROP TABLE debug_extra_rows")
+            conn.commit()
 
 
 class TestToolsEndpoint:
@@ -172,4 +223,3 @@ class TestToolsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
-

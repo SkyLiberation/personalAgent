@@ -22,12 +22,8 @@ FEISHU_BASE_URL=https://open.feishu.cn
 
 说明：
 
-- `PERSONAL_AGENT_DATA_DIR` 下当前默认会生成：
-  - `notes.json`
-  - `reviews.json`
-  - `conversations.json`
-  - `uploads/`
-- 如果配置了 `PERSONAL_AGENT_POSTGRES_URL`，问答历史会额外持久化到 `Postgres.ask_history`
+- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。知识、复习、问答历史、待确认操作、跨请求状态及 LangGraph checkpoint 都以 Postgres 为唯一持久化存储。
+- `uploads/` 仍用于保存原始上传文件；数据库保存其引用及提取后的知识内容。
 
 ## 飞书配置
 
@@ -96,13 +92,12 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=kimi-k2.5
 ## LangGraph 总编排与 Checkpoint 配置
 
 ```env
-PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND=sqlite
-PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH=./data/langgraph_checkpoints.sqlite
+PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
 ```
 
 说明：
 
-- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND`：推荐使用 `sqlite`，从而可以在独立脚本中读取运行 checkpoint；`memory` 仅在当前服务进程存活期间可读
-- `PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH`：SQLite checkpoint 数据库路径
+- checkpoint 固定使用 `langgraph-checkpoint-postgres`，与业务表共享 `PERSONAL_AGENT_POSTGRES_URL`
+- 不提供内存或 SQLite fallback，也不读取原有 SQLite checkpoint 文件
 - entry 请求默认走统一的 `orchestration_graph`，并在图节点后写入 checkpoint
 - 运行 `uv run python scripts/export_thread_checkpoints.py <thread_id>` 会将该线程所有持久化 checkpoint 导出到 `scripts/assets/`

@@ -22,7 +22,7 @@
 | `规划层` | [agent/planner.py](src/personal_agent/agent/planner.py), [agent/plan_validator.py](src/personal_agent/agent/plan_validator.py), [agent/replanner.py](src/personal_agent/agent/replanner.py), [agent/orchestration_nodes.py](src/personal_agent/agent/orchestration_nodes.py) | 已具备结构化规划、动态工具校验、阻断式安全门禁、计划节点执行、目标解析、失败重试/重规划和前端计划面板 | [docs/topics/planning.md](docs/topics/planning.md) |
 | `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_graph.py](src/personal_agent/agent/orchestration_graph.py), [agent/orchestration_nodes.py](src/personal_agent/agent/orchestration_nodes.py), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 默认进入 LangGraph entry 总编排，支持 route/plan/step/ReAct/HITL/checkpoint；`AgentService` 是兼容入口并继承 runtime | [docs/topics/runtime.md](docs/topics/runtime.md)、[docs/topics/langgraph-checkpoint.md](docs/topics/langgraph-checkpoint.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / web_search / delete_note` | [docs/topics/tools.md](docs/topics/tools.md) |
-| `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有工作记忆、会话摘要、本地长期记忆、Postgres 问答历史、pending action、cross-session 状态和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md) |
+| `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有工作记忆、会话摘要、Postgres 长期记忆/问答历史/pending action/cross-session 状态和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md) |
 | `检索与推理层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持三层检索回退（图谱 → 本地 → 网络搜索）、Graphiti `node / edge / fact` 优先的语义推理、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；多跳推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
 | `执行与反馈层` | [web/api.py](src/personal_agent/web/api.py), [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、图谱失败降级、异步图谱同步、问答历史记录和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测与治理层` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests) | 具备日志、health、reset、API Key 鉴权、限流、用户隔离、pending action 审计和基础测试；外部工具权限仍可补充 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
@@ -72,7 +72,7 @@ README 只保留最短路径：
 
 ### 2. Knowledge Connection
 
-- 默认使用本地 JSON 存储与简单匹配
+- 默认使用 Postgres 持久化知识数据，并提供简单匹配检索
 - 图谱开启后，会为笔记补充实体、关系和图谱 episode 映射信息
 - 当前数据模型中已经为图谱字段预留了 `graph_episode_uuid / entity_names / relation_facts / graph_node_refs / graph_edge_refs / graph_fact_refs`
 - 相似笔记检索已支持按 parent 去重，避免同一文档的多个 chunk 重复出现
@@ -123,7 +123,7 @@ README 只保留最短路径：
 
 ```text
 personalAgent/                  # 项目根目录
-├─ data/                        # 本地知识数据、复习卡片、上传文件
+├─ data/                        # 上传源文件（checkpoint 持久化于 Postgres）
 ├─ frontend/                    # React + Vite 前端工程
 ├─ log/                         # 运行日志目录
 └─ src/
@@ -146,7 +146,7 @@ personalAgent/                  # 项目根目录
       ├─ feishu/                # 飞书接入（长连接、文件下载、消息回溯）
       ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding 接入
       ├─ memory/                # 工作记忆与会话摘要（MemoryFacade / WorkingMemory）
-      ├─ storage/               # 本地 JSON、cross-session 和 Postgres 存储层
+      ├─ storage/               # Postgres 业务存储层
       ├─ tools/                 # 统一 Tool 抽象与注册中心
       ├─ web/                   # FastAPI Web 接口层
       │  ├─ api.py              # API 路由（capture / ask / digest / notes / tools / pending-actions）
@@ -157,11 +157,8 @@ personalAgent/                  # 项目根目录
 
 ## 关键落点
 
-- 本地知识数据：`data/notes.json`、`data/reviews.json`、`data/conversations.json`
-- 待确认操作：`data/pending_actions.json`
-- 跨请求上下文：`data/cross_session.json`
+- 业务持久化：`Postgres.knowledge_notes`、`review_cards`、`ask_history`、`pending_actions`、`cross_session_artifacts`
 - 上传源文件：`data/uploads/`
-- 服务端问答历史：`Postgres.ask_history`
 - 运行日志：`log/run.log`
 
 ## 文档导航

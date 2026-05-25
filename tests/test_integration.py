@@ -9,14 +9,18 @@ import pytest
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput, KnowledgeNote, PendingAction
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 @pytest.fixture
 def test_settings(temp_dir: Path) -> Settings:
     return Settings(
         data_dir=temp_dir,
-        openai_api_key="sk-test",
-        openai_base_url="https://api.test.com/v1",
+        postgres_url=POSTGRES_URL,
+        openai_api_key=None,
+        openai_base_url=None,
         openai_model="gpt-4.1-mini",
         openai_small_model="gpt-4.1-nano",
     )
@@ -234,8 +238,8 @@ class TestPendingActionLifecycle:
 
 class TestPendingActionStore:
     def test_create_and_retrieve(self, temp_dir: Path):
-        from personal_agent.storage.pending_action_store import PendingActionStore
-        store = PendingActionStore(temp_dir)
+        from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
+        store = PostgresPendingActionStore(POSTGRES_URL)
 
         action = PendingAction(
             user_id="alice",
@@ -253,8 +257,8 @@ class TestPendingActionStore:
         assert retrieved.status == "pending"
 
     def test_confirm_flow(self, temp_dir: Path):
-        from personal_agent.storage.pending_action_store import PendingActionStore
-        store = PendingActionStore(temp_dir)
+        from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
+        store = PostgresPendingActionStore(POSTGRES_URL)
 
         action = store.create(PendingAction(
             user_id="alice", action_type="delete_note", target_id="n1",
@@ -271,8 +275,8 @@ class TestPendingActionStore:
         assert len(executed.audit_log) == 3  # created + confirmed + executed
 
     def test_expiry_on_load(self, temp_dir: Path):
-        from personal_agent.storage.pending_action_store import PendingActionStore
-        store = PendingActionStore(temp_dir)
+        from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
+        store = PostgresPendingActionStore(POSTGRES_URL)
 
         now = datetime.utcnow()
         store.create(PendingAction(
@@ -299,4 +303,3 @@ class TestPendingActionStore:
         expired = store.get("exp-1", "alice")
         assert expired is not None
         assert expired.status == "expired"
-

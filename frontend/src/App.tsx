@@ -10,7 +10,7 @@ import {
   fetchPendingActions,
   getApiKey,
   rejectPendingAction,
-  resetUserData,
+  resetDebugData,
   resumeEntryRun,
   retryGraphSync,
   searchAskHistory,
@@ -920,9 +920,9 @@ export default function App() {
     }
   }
 
-  async function onResetUserData() {
+  async function onResetDebugData() {
     const confirmed = window.confirm(
-      "这会清空当前用户的本地笔记、复习任务、对话历史、上传源文件、服务端问答历史，以及图谱分组数据。确定继续吗？"
+      "这会清空 Postgres 中全部业务与 checkpoint 数据、data/uploads 下全部源文件，以及配置的 Neo4j 数据库中全部图谱节点和关系。此操作影响所有用户且不可撤销，确定继续吗？"
     );
     if (!confirmed) {
       return;
@@ -931,7 +931,7 @@ export default function App() {
     setIsResettingData(true);
     setStatus("正在清空调试数据...");
     try {
-      const result = await resetUserData(userId);
+      const result = await resetDebugData();
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       setQuestion("");
@@ -947,7 +947,7 @@ export default function App() {
       }
       await refreshAll();
       setStatus(
-        `调试数据已清空：删除 ${result.deleted_notes} 条笔记、${result.deleted_reviews} 条复习、${result.deleted_conversations} 条对话、${result.deleted_upload_files} 个源文件、${result.deleted_ask_history} 条问答历史，以及 ${result.deleted_graph_episodes} 条图谱 episode。`
+        `调试数据已清空：Postgres 清空 ${result.truncated_postgres_tables} 张表共 ${result.deleted_postgres_rows} 行（含 ${result.deleted_notes} 条笔记、${result.deleted_checkpoints} 条 checkpoint）；同时删除 ${result.deleted_upload_files} 个上传文件和 ${result.deleted_graph_nodes} 个 Neo4j 图谱节点。`
       );
     } catch (error) {
       console.error(error);
@@ -1693,15 +1693,15 @@ export default function App() {
             <div>
               <p className="sub-panel-title">调试重置</p>
               <p className="danger-copy">
-                一键清空当前用户的本地笔记、复习任务、对话历史、上传源文件，以及服务端问答历史，便于快速回到干净状态。
-                如果图谱已启用，也会一并清理当前用户对应的图谱分组数据。
+                一键清空 Postgres 中全部业务及 checkpoint 数据、所有上传源文件，以及配置的 Neo4j 数据库中的全部图谱数据。
+                此操作影响所有用户，仅适用于开发调试。
               </p>
             </div>
             <button
               type="button"
               className="danger-button"
               disabled={isResettingData}
-              onClick={() => void onResetUserData()}
+              onClick={() => void onResetDebugData()}
             >
               {isResettingData ? "清空中..." : "一键清空调试数据"}
             </button>

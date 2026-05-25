@@ -15,17 +15,13 @@ def _ensure_src_on_path() -> None:
         sys.path.insert(0, str(src_dir))
 
 
-def _build_mermaid(checkpoint_backend: str) -> str:
+def _build_mermaid() -> str:
     _ensure_src_on_path()
 
     from personal_agent.agent.service import AgentService
     from personal_agent.core.config import Settings
 
-    settings = Settings.from_env().model_copy(
-        update={
-            "langgraph_checkpoint_backend": checkpoint_backend,
-        }
-    )
+    settings = Settings.from_env()
     service = AgentService(settings=settings)
     graph = service._get_orch_graph()
     return graph.get_graph().draw_mermaid()
@@ -43,12 +39,6 @@ def main() -> int:
         help=f"Output path. Defaults to {DEFAULT_OUTPUT}.",
     )
     parser.add_argument(
-        "--checkpoint-backend",
-        default="memory",
-        choices=["memory", "sqlite"],
-        help="Checkpoint backend used while compiling the graph. Defaults to memory.",
-    )
-    parser.add_argument(
         "--markdown",
         action="store_true",
         help="Wrap the Mermaid text in a Markdown ```mermaid code fence.",
@@ -60,7 +50,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    mermaid = _build_mermaid(args.checkpoint_backend)
+    mermaid = _build_mermaid()
     as_markdown = args.markdown or args.output.suffix.lower() == ".md"
     content = f"```mermaid\n{mermaid}\n```\n" if as_markdown else mermaid + "\n"
 

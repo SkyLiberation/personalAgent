@@ -99,7 +99,10 @@
       "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort, State, OwningProcess\")",
       "Bash(powershell -Command ' *)",
       "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\")",
-      "Bash(curl -s http://localhost:8000/health)"
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(sleep 3 && cat /c/Users/KingTom/AppData/Local/Temp/claude/d--mySoft-workspace-personalAgent/c3cd7ee4-818e-4f37-8d95-3eac67b265df/tasks/bj7ba3lt8.output 2>/dev/null | tail -20)",
+      "Read(//c/Users/KingTom/AppData/Local/Temp/claude/d--mySoft-workspace-personalAgent/c3cd7ee4-818e-4f37-8d95-3eac67b265df/tasks/**)",
+      "Bash(git checkout *)"
     ]
   }
 }

@@ -5,9 +5,68 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg import connect
+from psycopg import sql
 
 from personal_agent.core.config import Settings
 from personal_agent.core.models import Citation, KnowledgeNote
+
+POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_test?sslmode=disable"
+ADMIN_POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+
+
+def _ensure_test_database() -> None:
+    with connect(ADMIN_POSTGRES_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", ("personal_agent_test",))
+            if cur.fetchone() is None:
+                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier("personal_agent_test")))
+
+
+@pytest.fixture
+def postgres_url() -> str:
+    return POSTGRES_URL
+
+
+@pytest.fixture
+def clean_postgres_business_tables():
+    _ensure_test_database()
+    with PostgresSaver.from_conn_string(POSTGRES_URL) as checkpointer:
+        checkpointer.setup()
+    with connect(POSTGRES_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_notes (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, parent_note_id TEXT,
+                    graph_episode_uuid TEXT, payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS review_cards (
+                    id TEXT PRIMARY KEY, note_id TEXT NOT NULL, payload JSONB NOT NULL,
+                    due_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ask_history (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT 'default',
+                    question TEXT NOT NULL, answer TEXT NOT NULL, citations JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS pending_actions (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, status TEXT NOT NULL,
+                    action_type TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+                    payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS cross_session_artifacts (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, artifact_type TEXT NOT NULL,
+                    payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
+                );
+                TRUNCATE knowledge_notes, review_cards, ask_history, pending_actions, cross_session_artifacts;
+                TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
+                """
+            )
+        conn.commit()
+    yield
 
 
 @pytest.fixture
@@ -25,6 +84,7 @@ def temp_dir() -> Path:
 def settings() -> Settings:
     return Settings(
         data_dir="./data",
+        postgres_url=POSTGRES_URL,
         openai_api_key="sk-test-key",
         openai_base_url="https://api.openai.com/v1",
         openai_model="gpt-4.1-mini",

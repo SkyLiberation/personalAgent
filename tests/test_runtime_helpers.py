@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from pathlib import Path
 
 from personal_agent.agent.runtime import (
@@ -19,7 +21,10 @@ from personal_agent.core.models import (
 )
 from personal_agent.graphiti.store import GraphCaptureResult
 from personal_agent.graphiti.store import GraphAskResult
-from personal_agent.storage.memory_store import LocalMemoryStore
+from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 class TestTokenizeForOverlap:
@@ -268,7 +273,7 @@ class TestGraphAskSemanticEvidence:
 
 class TestGraphRefsSerialization:
     def test_note_with_graph_refs_roundtrips(self, temp_dir: Path):
-        store = LocalMemoryStore(temp_dir)
+        store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
         note = KnowledgeNote(
             id="n1", title="Graph note", content="content", summary="summary",
             user_id="test",
@@ -289,7 +294,7 @@ class TestGraphRefsSerialization:
         assert len(loaded.graph_fact_refs) == 1
 
     def test_note_without_refs_loads_cleanly(self, temp_dir: Path):
-        store = LocalMemoryStore(temp_dir)
+        store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
         note = KnowledgeNote(
             id="n2", title="Old note", content="c", summary="s", user_id="test",
             entity_names=["Python"],
@@ -299,23 +304,6 @@ class TestGraphRefsSerialization:
         loaded = store.get_note("n2")
         assert loaded is not None
         assert loaded.entity_names == ["Python"]
-        assert loaded.graph_node_refs == []
-        assert loaded.graph_edge_refs == []
-        assert loaded.graph_fact_refs == []
-
-    def test_backward_compat_existing_json(self, temp_dir: Path):
-        notes_file = temp_dir / "notes.json"
-        notes_file.write_text(json.dumps([{
-            "id": "old1", "user_id": "test", "title": "Legacy",
-            "content": "c", "summary": "s",
-            "entity_names": ["A"], "relation_facts": ["A relates B"],
-            "graph_episode_uuid": "ep-old",
-            "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00",
-        }]), encoding="utf-8")
-        store = LocalMemoryStore(temp_dir)
-        loaded = store.get_note("old1")
-        assert loaded is not None
-        assert loaded.entity_names == ["A"]
         assert loaded.graph_node_refs == []
         assert loaded.graph_edge_refs == []
         assert loaded.graph_fact_refs == []

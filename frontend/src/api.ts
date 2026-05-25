@@ -90,14 +90,20 @@ export type AskHistoryResponse = {
   items: AskHistoryItem[];
 };
 
-export type ResetUserDataResponse = {
-  user_id: string;
+export type ResetDebugDataResponse = {
   deleted_notes: number;
   deleted_reviews: number;
-  deleted_conversations: number;
   deleted_upload_files: number;
   deleted_ask_history: number;
-  deleted_graph_episodes: number;
+  deleted_graph_nodes: number;
+  deleted_pending_actions: number;
+  deleted_cross_session_artifacts: number;
+  deleted_checkpoints: number;
+  deleted_checkpoint_blobs: number;
+  deleted_checkpoint_writes: number;
+  deleted_checkpoint_migrations: number;
+  truncated_postgres_tables: number;
+  deleted_postgres_rows: number;
 };
 
 const API_KEY_STORAGE_KEY = "personal-agent-api-key";
@@ -338,12 +344,9 @@ export function retryGraphSync(noteId: string): Promise<GraphSyncResponse> {
   });
 }
 
-export function resetUserData(userId = "default"): Promise<ResetUserDataResponse> {
-  return requestJson<ResetUserDataResponse>("/api/debug/reset-user-data", {
+export function resetDebugData(): Promise<ResetDebugDataResponse> {
+  return requestJson<ResetDebugDataResponse>("/api/debug/reset-database", {
     method: "POST",
-    body: JSON.stringify({
-      user_id: userId,
-    }),
   });
 }
 

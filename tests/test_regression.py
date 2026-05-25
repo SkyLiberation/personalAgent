@@ -10,14 +10,18 @@ from personal_agent.agent.router import RouterDecision
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 @pytest.fixture
 def test_settings(temp_dir: Path) -> Settings:
     return Settings(
         data_dir=temp_dir,
-        openai_api_key="sk-test",
-        openai_base_url="https://api.test.com/v1",
+        postgres_url=POSTGRES_URL,
+        openai_api_key=None,
+        openai_base_url=None,
         openai_model="gpt-4.1-mini",
         openai_small_model="gpt-4.1-nano",
     )
@@ -171,4 +175,3 @@ class TestCrossLayerRegression:
             assert step.get("status") != "planned", (
                 f"Step {step.get('step_id')} still 'planned' — expected transition"
             )
-

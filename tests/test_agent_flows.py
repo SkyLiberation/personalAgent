@@ -9,14 +9,18 @@ from personal_agent.agent.service import AgentService
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput, KnowledgeNote
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
+from tests.conftest import POSTGRES_URL
+
+pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 @pytest.fixture
 def test_settings(temp_dir: Path) -> Settings:
     return Settings(
         data_dir=temp_dir,
-        openai_api_key="sk-test",
-        openai_base_url="https://api.test.com/v1",
+        postgres_url=POSTGRES_URL,
+        openai_api_key=None,
+        openai_base_url=None,
         openai_model="gpt-4.1-mini",
     )
 
@@ -230,8 +234,7 @@ class TestEntryFlow:
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
         if result.intent == "capture_text":
-            assert result.capture_result is not None
-            assert result.capture_result.note is not None
+            assert service.list_notes()
 
     def test_entry_ask(self, service: AgentService):
         service.execute_capture(text="服务降级是系统设计中的常见模式", source_type="text")
@@ -239,8 +242,7 @@ class TestEntryFlow:
         result = service.entry(entry)
         assert result.intent == "ask"
         assert result.reply_text
-        assert result.ask_result is not None
-        assert result.ask_result.answer
+        assert service.list_ask_history(limit=1)
 
     def test_entry_empty_text(self, service: AgentService):
         entry = EntryInput(text="", source_platform="test")

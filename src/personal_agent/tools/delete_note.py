@@ -6,8 +6,8 @@ from typing import Any
 
 from ..core.models import PendingAction
 from ..graphiti.store import GraphitiStore
-from ..storage.memory_store import LocalMemoryStore
-from ..storage.pending_action_store import PendingActionStore
+from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..storage.postgres_pending_action_store import PostgresPendingActionStore
 from .base import BaseTool, ToolResult, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -22,9 +22,9 @@ class DeleteNoteTool(BaseTool):
 
     def __init__(
         self,
-        store: LocalMemoryStore,
+        store: PostgresMemoryStore,
         graph_store: GraphitiStore,
-        pending_store: PendingActionStore,
+        pending_store: PostgresPendingActionStore,
     ) -> None:
         self._store = store
         self._graph_store = graph_store

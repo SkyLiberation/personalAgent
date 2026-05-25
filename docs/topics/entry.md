@@ -94,7 +94,7 @@
 - `POST /api/entry/upload`
 - `GET /api/ask-history/search`
 - `DELETE /api/ask-history/{record_id}`
-- `POST /api/debug/reset-user-data`
+- `POST /api/debug/reset-database`
 - `GET /api/pending-actions`
 - `POST /api/pending-actions/{action_id}/confirm`
 - `POST /api/pending-actions/{action_id}/reject`

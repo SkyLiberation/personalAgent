@@ -5,7 +5,7 @@
 相关代码：
 
 - [src/personal_agent/agent/runtime_ask.py](../src/personal_agent/agent/runtime_ask.py)
-- [src/personal_agent/storage/memory_store.py](../src/personal_agent/storage/memory_store.py)
+- [src/personal_agent/storage/postgres_memory_store.py](../src/personal_agent/storage/postgres_memory_store.py)
 - [src/personal_agent/graphiti/store.py](../src/personal_agent/graphiti/store.py)
 - [src/personal_agent/graphiti/search_strategies.py](../src/personal_agent/graphiti/search_strategies.py)
 - [src/personal_agent/graphiti/reranker.py](../src/personal_agent/graphiti/reranker.py)
@@ -36,7 +36,7 @@
 
 实现入口：
 
-- [LocalMemoryStore.find_similar_notes()](../src/personal_agent/storage/memory_store.py)
+- [PostgresMemoryStore.find_similar_notes()](../src/personal_agent/storage/postgres_memory_store.py)
 
 使用位置：
 

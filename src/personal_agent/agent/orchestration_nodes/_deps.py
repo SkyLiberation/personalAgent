@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from ...core.models import EntryInput
     from ...graphiti.store import GraphitiStore
     from ...memory import MemoryFacade
-    from ...storage.memory_store import LocalMemoryStore
+    from ...storage.postgres_memory_store import PostgresMemoryStore
     from ...tools import ToolRegistry
     from ..plan_validator import PlanValidator
     from ..planner import PlanStep
@@ -39,7 +39,7 @@ class OrchestrationDeps:
     verifier: "AnswerVerifier | None"
     tool_registry: "ToolRegistry"
     graph_store: "GraphitiStore"
-    store: "LocalMemoryStore"
+    store: "PostgresMemoryStore"
     execute_ask: Callable[..., "AskResult"]
     execute_capture: Callable[..., "CaptureResult"] | None = None
     capture_service: "CaptureService | None" = None

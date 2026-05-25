@@ -32,7 +32,7 @@
 
 ## `GET /api/notes`
 
-返回指定用户的本地笔记列表。
+返回指定用户的知识笔记列表。
 
 查询参数：
 
@@ -100,38 +100,35 @@
 }
 ```
 
-## `POST /api/debug/reset-user-data`
+## `POST /api/debug/reset-database`
 
-用于快速清空当前用户调试数据。
-
-请求体：
-
-```json
-{
-  "user_id": "default"
-}
-```
+用于开发调试时清空所有持久化数据。该操作影响所有用户且不可撤销。
 
 会清理：
 
-- `data/notes.json` 中该用户笔记
-- `data/reviews.json` 中关联复习任务
-- `data/conversations.json` 中该用户会话
-- `data/uploads/` 中该用户笔记引用到的上传源文件
-- `Postgres.ask_history` 中该用户历史
-- Graphiti / Neo4j 中该用户对应的图谱分组数据
+- `PERSONAL_AGENT_POSTGRES_URL` 指向的当前 schema 中全部普通表数据，包括业务表与 LangGraph checkpoint 表
+- `data/uploads/` 中全部上传源文件
+- 配置的 Graphiti / Neo4j 数据库中的全部节点和关系
+
+`checkpoint_migrations` 同样会被清空；操作完成后服务会立即重新写入 LangGraph 所需的迁移版本记录。
 
 示例响应：
 
 ```json
 {
-  "user_id": "default",
   "deleted_notes": 12,
   "deleted_reviews": 12,
-  "deleted_conversations": 8,
   "deleted_upload_files": 4,
   "deleted_ask_history": 8,
-  "deleted_graph_episodes": 12
+  "deleted_graph_nodes": 12,
+  "deleted_pending_actions": 3,
+  "deleted_cross_session_artifacts": 6,
+  "deleted_checkpoints": 24,
+  "deleted_checkpoint_blobs": 35,
+  "deleted_checkpoint_writes": 90,
+  "deleted_checkpoint_migrations": 10,
+  "truncated_postgres_tables": 9,
+  "deleted_postgres_rows": 200
 }
 ```
 
