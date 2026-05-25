@@ -27,9 +27,11 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 from typing import TYPE_CHECKING
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -164,16 +166,36 @@ def _inject_note_id_into_steps(resolve_step_id: str, note_id: str, plan_steps: l
             s.tool_input["note_id"] = note_id
 
 
-def _inject_draft_text_into_steps(compose_step_id: str, text: str, plan_steps: list) -> None:
+def _inject_draft_text_into_steps(
+    compose_step_id: str, text: str, user_id: str, plan_steps: list,
+) -> None:
+    by_id = {s.step_id: s for s in plan_steps}
+
+    def depends_on_compose(step) -> bool:
+        pending = list(step.depends_on)
+        visited: set[str] = set()
+        while pending:
+            step_id = pending.pop()
+            if step_id == compose_step_id:
+                return True
+            if step_id in visited:
+                continue
+            visited.add(step_id)
+            parent = by_id.get(step_id)
+            if parent is not None:
+                pending.extend(parent.depends_on)
+        return False
+
     for s in plan_steps:
         if s.status != "planned":
             continue
-        if (compose_step_id in s.depends_on
+        if (depends_on_compose(s)
                 and s.action_type == "tool_call"
                 and s.tool_name == "capture_text"):
             if not s.tool_input:
                 s.tool_input = {}
             s.tool_input["text"] = text
+            s.tool_input["user_id"] = user_id
 
 
 def _skip_step_dependents(failed_step_id: str, plan_steps: list) -> None:
@@ -274,6 +296,8 @@ def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
         client = OpenAI(
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url,
+            timeout=settings.openai_timeout_seconds,
+            max_retries=settings.openai_max_retries,
         )
         response = client.chat.completions.create(
             model=settings.openai_small_model,
@@ -298,6 +322,28 @@ def _react_parse_response(raw: str) -> dict | None:
         return _json.loads(raw)
     except (_json.JSONDecodeError, TypeError):
         return None
+
+
+def _solidify_note_text(raw: str) -> str:
+    """Extract note content from a structured LLM solidification response."""
+    parsed = _react_parse_response(raw)
+    if not isinstance(parsed, dict):
+        return ""
+    result = parsed.get("result")
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    if isinstance(result, dict):
+        title = str(result.get("标题") or result.get("title") or "").strip()
+        body = str(
+            result.get("正文") or result.get("content") or result.get("text") or ""
+        ).strip()
+        if title and body:
+            return f"{title}\n\n{body}"
+        return body or title
+    answer = parsed.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        return answer.strip()
+    return ""
 
 
 def _clarification_payload_parts(message: str, summary: str) -> dict:
@@ -350,6 +396,50 @@ def _merge_clarification_text(original: str, supplemental: str, option_id: str) 
     return supplemental
 
 
+def _dialogue_history(messages: list[BaseMessage], *, exclude_latest: bool = False) -> list[BaseMessage]:
+    """Return recent user-visible dialogue messages for prompt context."""
+    history = messages[:-1] if exclude_latest and messages else messages
+    return [message for message in history[-12:] if message.type in {"human", "ai"}]
+
+
+def _dialogue_prompt_messages(messages: list[BaseMessage]) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "assistant" if message.type == "ai" else "user",
+            "content": str(message.content),
+        }
+        for message in _dialogue_history(messages)
+    ]
+
+
+def _format_dialogue_context(messages: list[BaseMessage], *, exclude_latest: bool = False) -> str:
+    lines: list[str] = []
+    for message in _dialogue_history(messages, exclude_latest=exclude_latest):
+        label = "用户" if message.type == "human" else "助手"
+        lines.append(f"{label}: {message.content}")
+    return "\n".join(lines)
+
+
+def _format_solidify_candidate_context(messages: list[BaseMessage]) -> str:
+    """Render candidate dialogue turns for model-driven solidification."""
+    history = _dialogue_history(messages, exclude_latest=True)
+    if not history:
+        return ""
+    turns: list[list[BaseMessage]] = []
+    for message in history:
+        if message.type == "human" or not turns:
+            turns.append([message])
+        else:
+            turns[-1].append(message)
+
+    lines: list[str] = []
+    for index, turn in enumerate(turns, start=1):
+        for message in turn:
+            label = "用户" if message.type == "human" else "助手"
+            lines.append(f"[turn-{index}] {label}: {message.content}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 nodes
 # ---------------------------------------------------------------------------
@@ -364,13 +454,41 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     session_id = entry.session_id if entry else state.session_id
     text = entry.text if entry else state.entry_text
 
-    thread_id = _new_thread_id(user_id, session_id, state.run_id)
+    thread_id = _new_thread_id(user_id, session_id)
 
     state.user_id = user_id
     state.session_id = session_id
     state.thread_id = thread_id
     state.entry_text = text
-    state.created_at = state.created_at or state.updated_at
+    state.router_decision = None
+    state.plan_steps = []
+    state.current_step_index = 0
+    state.step_results = {}
+    state.plan_aborted = False
+    state.plan_retry_counts = {}
+    state.react_iterations = []
+    state.react_step_id = ""
+    state.react_iteration_index = 0
+    state.react_max_iterations = 3
+    state.react_allowed_tools = []
+    state.react_user_prompt = ""
+    state.react_done = False
+    state.react_result = {}
+    state.tool_results = []
+    state.execution_trace = []
+    state.evidence_summary = []
+    state.citations = []
+    state.matches = []
+    state.pending_confirmation = None
+    state.confirmation_decision = None
+    state.draft = None
+    state.answer = None
+    state.answer_completed = False
+    state.events = []
+    state.errors = []
+    state.replan_history = []
+    state.created_at = datetime.utcnow()
+    state.updated_at = state.created_at
 
     state.add_event("entry_started", {"text_preview": text[:120] if text else ""})
     logger.info("normalize_entry run_id=%s thread_id=%s", state.run_id, thread_id)
@@ -379,7 +497,36 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "session_id": session_id,
         "thread_id": thread_id,
         "entry_text": text,
+        "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
+        "router_decision": None,
+        "plan_steps": [],
+        "current_step_index": 0,
+        "step_results": {},
+        "plan_aborted": False,
+        "plan_retry_counts": {},
+        "react_iterations": [],
+        "react_step_id": "",
+        "react_iteration_index": 0,
+        "react_max_iterations": 3,
+        "react_allowed_tools": [],
+        "react_user_prompt": "",
+        "react_done": False,
+        "react_result": {},
+        "tool_results": [],
+        "execution_trace": [],
+        "evidence_summary": [],
+        "citations": [],
+        "matches": [],
+        "pending_confirmation": None,
+        "confirmation_decision": None,
+        "draft": None,
+        "answer": None,
+        "answer_completed": False,
         "events": state.events,
+        "errors": [],
+        "replan_history": [],
+        "created_at": state.created_at,
+        "updated_at": state.updated_at,
     }
 
 
@@ -473,6 +620,7 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
     return {
         "entry_text": clarified_text,
         "entry_input": state.entry_input,
+        "messages": [HumanMessage(content=supplemental, id=f"{state.run_id}:clarification")],
         "pending_confirmation": None,
         "router_decision": None,
         "events": state.events,
@@ -516,7 +664,11 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
 
     deps.memory.bind_session(state.user_id, state.session_id)
     deps.memory.refresh_conversation_summary(state.user_id, state.session_id)
-    decision = deps.intent_router.classify(state.entry_input)
+    conversation_context = _format_dialogue_context(state.messages, exclude_latest=True)
+    decision = deps.intent_router.classify(
+        state.entry_input,
+        conversation_context=conversation_context,
+    )
     deps.memory.working.set_goal(
         f"入口任务[{decision.route}]: {state.entry_input.text[:60]}"
     )
@@ -577,7 +729,7 @@ def _node_plan_task(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
         "plan_task run_id=%s route=%s steps=%d",
         state.run_id, route, len(plan_states),
     )
-    return {"plan_steps": plan_states}
+    return {"plan_steps": plan_states, "events": state.events}
 
 
 def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
@@ -640,7 +792,11 @@ def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
         "validate_plan run_id=%s steps=%d blocked=%s requires_planning=%s",
         state.run_id, len(plan_states), validation.blocking, state.router_decision.requires_planning if state.router_decision else False,
     )
-    return {"plan_steps": plan_states}
+    return {
+        "plan_steps": plan_states,
+        "router_decision": state.router_decision,
+        "events": state.events,
+    }
 
 
 def _after_validate_plan(state: AgentGraphState) -> str:
@@ -728,7 +884,13 @@ def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
         return {"answer": state.answer}
 
     logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
-    result = deps.execute_ask(entry_input.text, entry_input.user_id, entry_input.session_id)
+    conversation_context = _format_dialogue_context(state.messages, exclude_latest=True)
+    result = deps.execute_ask(
+        entry_input.text,
+        entry_input.user_id,
+        entry_input.session_id,
+        conversation_context=conversation_context,
+    )
     state.answer = result.answer
     state.citations = result.citations
     state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
@@ -809,7 +971,12 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
             client = OpenAI(
                 api_key=deps.settings.openai_api_key,
                 base_url=deps.settings.openai_base_url,
+                timeout=deps.settings.openai_timeout_seconds,
+                max_retries=deps.settings.openai_max_retries,
             )
+            dialogue_messages = _dialogue_prompt_messages(state.messages)
+            if not dialogue_messages:
+                dialogue_messages = [{"role": "user", "content": entry_input.text}]
             response = client.chat.completions.create(
                 model=deps.settings.openai_small_model,
                 messages=[
@@ -817,9 +984,8 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
                         "role": "system",
                         "content": "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。",
                     },
-                    {"role": "user", "content": entry_input.text},
+                    *dialogue_messages,
                 ],
-                temperature=0.5,
                 max_tokens=300,
             )
             generated = (response.choices[0].message.content or "").strip()
@@ -863,7 +1029,7 @@ def _simple_direct_answer(text: str) -> str:
         return "不客气，还有其他需要吗？"
     if any(g in lower for g in goodbye):
         return "再见，祝你好运！"
-    return "收到，还有其他需要吗？"
+    return "我暂时无法生成这个问题的直接回答，请稍后重试。"
 
 
 _EXECUTION_TRACE_MAP: dict[str, list[str]] = {
@@ -966,6 +1132,9 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
     if state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:
+        state.answer_completed = True
+        if not any(event.type == "answer_completed" for event in state.events):
+            state.add_event("answer_completed", {"answer": state.answer})
         state.add_event("run_completed", {
             "answer": state.answer,
             "intent": state.router_decision.route if state.router_decision else "unknown",
@@ -974,7 +1143,16 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
         "finalize_entry_result run_id=%s intent=%s errors=%d",
         state.run_id, state.router_decision.route if state.router_decision else "unknown", len(state.errors),
     )
-    return {}
+    result = {
+        "answer_completed": state.answer_completed,
+        "events": state.events,
+        "updated_at": state.updated_at,
+    }
+    if not state.errors and state.answer:
+        result["messages"] = [
+            AIMessage(content=state.answer, id=f"{state.run_id}:assistant")
+        ]
+    return result
 
 
 # ===================================================================
@@ -1009,6 +1187,9 @@ def _node_prepare_plan_execution(state: AgentGraphState) -> dict:
         "plan_steps": sorted_steps,
         "current_step_index": 0,
         "plan_aborted": False,
+        "step_results": state.step_results,
+        "plan_retry_counts": state.plan_retry_counts,
+        "events": state.events,
     }
 
 
@@ -1032,7 +1213,11 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
                 "select_next_step run_id=%s step=%s index=%d",
                 state.run_id, sd.step_id, i,
             )
-            return {"current_step_index": i, "plan_steps": state.plan_steps}
+            return {
+                "current_step_index": i,
+                "plan_steps": state.plan_steps,
+                "events": state.events,
+            }
 
     # No more steps
     logger.info("select_next_step run_id=%s: no more steps", state.run_id)
@@ -1069,7 +1254,11 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
                 "step_id": step.step_id,
                 "result_summary": "跳过（已执行）",
             })
-            return {"plan_steps": state.plan_steps}
+            return {
+                "plan_steps": state.plan_steps,
+                "step_results": state.step_results,
+                "events": state.events,
+            }
 
     # ---- ReAct branch: seed state and let subgraph handle execution ----
     if getattr(step, "execution_mode", "deterministic") == "react":
@@ -1096,6 +1285,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
             "react_result": {},
             "react_user_prompt": "",
             "react_iterations": [],
+            "events": state.events,
         }
 
     try:
@@ -1115,8 +1305,10 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
         })
         return {
             "plan_steps": state.plan_steps,
+            "step_results": state.step_results,
             "errors": state.errors,
             "plan_retry_counts": state.plan_retry_counts,
+            "events": state.events,
         }
 
     # If the step triggered a confirmation request, don't mark completed yet
@@ -1124,7 +1316,13 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
         sd.status = "awaiting_confirmation"
         state.add_event("confirmation_required", state.pending_confirmation)
         logger.info("Step %s awaiting confirmation", step.step_id)
-        return {"plan_steps": state.plan_steps}
+        return {
+            "plan_steps": state.plan_steps,
+            "step_results": state.step_results,
+            "answer": state.answer,
+            "pending_confirmation": state.pending_confirmation,
+            "events": state.events,
+        }
 
     # Normal success — no confirmation needed
     sd.status = "completed"
@@ -1132,10 +1330,15 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
         "step_id": step.step_id,
         "result_summary": _summarize_result(state.step_results.get(step.step_id)),
     })
-    return {"plan_steps": state.plan_steps}
+    return {
+        "plan_steps": state.plan_steps,
+        "step_results": state.step_results,
+        "answer": state.answer,
+        "events": state.events,
+    }
 
 
-def _node_handle_step_success(state: AgentGraphState) -> dict:
+def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Post-success: inject dependencies, mark drafts solidified."""
     if state.current_step_index >= len(state.plan_steps):
         return {}
@@ -1156,14 +1359,17 @@ def _node_handle_step_success(state: AgentGraphState) -> dict:
         result_data = state.step_results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("answer"):
             _inject_draft_text_into_steps(
-                step.step_id, str(result_data["answer"]), state.plan_steps,
+                step.step_id, str(result_data["answer"]), state.user_id, state.plan_steps,
             )
+
+    if step.action_type == "tool_call" and step.tool_name == "capture_text":
+        _mark_upstream_drafts_solidified(step, state, deps)
 
     logger.info(
         "handle_step_success run_id=%s step=%s",
         state.run_id, step.step_id,
     )
-    return {"plan_steps": state.plan_steps}
+    return {"plan_steps": state.plan_steps, "events": state.events}
 
 
 def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
@@ -1414,6 +1620,8 @@ def _node_finalize_plan_execution(state: AgentGraphState) -> dict:
         "answer": state.answer,
         "answer_completed": True,
         "execution_trace": state.execution_trace,
+        "events": state.events,
+        "updated_at": state.updated_at,
     }
 
 
@@ -1460,6 +1668,15 @@ def _dispatch_plan_step(
         answer = _execute_compose_step(step, state, deps)
         state.answer = answer
         step_results[step.step_id] = {"answer": answer, "draft": True}
+        if state.router_decision and state.router_decision.route == "solidify_conversation" and answer:
+            try:
+                draft_id = deps.memory.save_draft(
+                    state.user_id, answer, source_context=state.entry_text[:500],
+                )
+                if draft_id:
+                    step_results[step.step_id]["draft_id"] = draft_id
+            except Exception:
+                logger.exception("Failed to save solidify draft")
         if answer:
             state.add_event("draft_ready", {
                 "step_id": step.step_id,
@@ -1577,25 +1794,55 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
     else:
         question = step.description or "根据已有信息生成回答"
 
+    if state.router_decision and state.router_decision.route == "solidify_conversation":
+        dialogue = _format_solidify_candidate_context(state.messages) or context
+        solidify_prompt = (
+            "你负责决定哪些会话事实属于用户本次指定的固化范围，并将它们整理为一条可独立入库的中文知识笔记。"
+            "候选会话可能同时包含多个无关主题，必须根据当前保存请求进行语义选择；"
+            "不要仅因为某段出现在上下文中就写入笔记，也不要写入操作指令本身。"
+            "如果候选会话中没有足以支撑本次请求的知识，请将正文留空。\n\n"
+            "请输出 JSON："
+            '{"thought":"范围判断理由","done":true,"result":{"selected_turn_ids":["turn-N"],'
+            '"title":"知识标题","content":"仅包含被选择知识的正文"}}。\n\n'
+            f"当前保存请求：{state.entry_text}\n\n候选会话：\n{dialogue}"
+        )
+        try:
+            raw_answer = _react_llm_respond(solidify_prompt, deps)
+            answer = _solidify_note_text(raw_answer) if raw_answer else None
+        except Exception:
+            logger.exception("Solidify compose step %s failed", step.step_id)
+            answer = None
+        if not answer:
+            raise RuntimeError("模型未生成符合本次固化范围的知识草稿，未写入知识库。")
+        return answer
+
     try:
         ask_result = deps.execute_ask(question, state.user_id)
-        answer = ask_result.answer
+        return ask_result.answer
     except Exception:
         logger.exception("Compose step %s failed", step.step_id)
-        answer = f"根据已有信息：{context[:500]}"
+        return f"根据已有信息：{context[:500]}"
 
-    # Save solidify drafts
-    if state.router_decision and state.router_decision.route == "solidify_conversation" and answer:
-        try:
-            memory = deps.memory
-            if memory:
-                draft_id = memory.save_draft(state.user_id, answer, source_context=context[:500])
-                if draft_id and step.step_id in state.step_results:
-                    state.step_results[step.step_id]["draft_id"] = draft_id
-        except Exception:
-            logger.exception("Failed to save solidify draft")
 
-    return answer
+def _mark_upstream_drafts_solidified(step, state: AgentGraphState, deps: OrchestrationDeps) -> None:
+    by_id = {candidate.step_id: candidate for candidate in state.plan_steps}
+    pending = list(step.depends_on)
+    visited: set[str] = set()
+    while pending:
+        step_id = pending.pop()
+        if step_id in visited:
+            continue
+        visited.add(step_id)
+        result = state.step_results.get(step_id)
+        if isinstance(result, dict):
+            draft_id = result.get("draft_id")
+            if draft_id:
+                deps.memory.mark_draft_solidified(state.user_id, str(draft_id))
+            for conclusion_id in result.get("conclusion_ids", []):
+                deps.memory.mark_conclusion_solidified(state.user_id, str(conclusion_id))
+        parent = by_id.get(step_id)
+        if parent is not None:
+            pending.extend(parent.depends_on)
 
 
 def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> None:
@@ -1622,6 +1869,11 @@ def _should_execute_step(state: AgentGraphState) -> str:
     """Check if there are more steps to execute."""
     if state.plan_aborted:
         return "finalize_plan"
+    if (
+        state.current_step_index < len(state.plan_steps)
+        and state.plan_steps[state.current_step_index].status == "running"
+    ):
+        return "execute_step"
     for sd in state.plan_steps:
         if sd.status in ("planned",):
             return "execute_step"

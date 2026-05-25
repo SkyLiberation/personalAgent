@@ -15,7 +15,7 @@
 - 前端在回答卡片中以可折叠面板形式展示“Agent 计划执行 N 步”，包括步骤类型、工具名和当前状态。
 - 非计划驱动路径通过 `execution_trace` 返回，并由前端展示为“Agent 执行路径”。
 
-`plan_steps` 与 `execution_trace` 已完成语义拆分：`requires_planning=True` 的意图（`delete_knowledge`、`solidify_conversation`）生成真实执行计划，步骤状态实时更新；其他意图改用轻量 `execution_trace` 记录执行路径，前端以不同面板展示，避免将不会被执行的步骤标记为计划。
+`plan_steps` 与 `execution_trace` 已完成语义拆分：`requires_planning=True` 的意图（`delete_knowledge`、`solidify_conversation`）生成真实执行计划，步骤状态实时更新；其他意图改用轻量 `execution_trace` 记录执行路径，前端以不同面板展示，避免将不会被执行的步骤标记为计划。同一 `thread_id` 内的用户与助手消息通过 LangGraph `messages` reducer 跨 run 保留，路由与回答生成可读取历史对话；`answer`、路由决策和执行事件仍属于单轮状态。
 
 典型 entry 执行链路：
 
@@ -86,7 +86,7 @@ Web / Feishu / CLI
 主要入口在 `src/personal_agent/web/api.py`：
 
 - `POST /api/entry`：同步入口，构造 `EntryInput` 后调用 `service.entry(entry_input)`。
-- `GET /api/entry/stream`：SSE 入口，先快速分类并发送 `intent` 事件，再根据 intent 选择流式 ask 或完整 entry pipeline。
+- `GET /api/entry/stream`：SSE 入口，统一进入完整 LangGraph entry pipeline，并根据图内实际路由事件输出 `intent`。
 - `POST /api/entry/upload`：文件入口，保存上传文件，构造 `source_type="file"` 的 `EntryInput`，再进入 `service.entry()`。
 
 `AgentService` 作为 facade，最终会调用 `AgentRuntime.entry()`，再进入 `AgentRuntime.execute_entry()`，由 LangGraph orchestration graph 接管后续流程。
@@ -229,11 +229,11 @@ del-4 tool_call 调用 delete_note，需要确认
 del-5 compose   生成删除结果摘要
 ```
 
-`solidify_conversation` 的启发式计划是：
+`solidify_conversation` 的固化计划模板是：
 
 ```text
-sol-1 retrieve  加载最近对话并抽取候选事实
-sol-2 compose   整理成适合入库的知识文本
+sol-1 retrieve  检索可供固化判断参考的知识上下文
+sol-2 compose   由 LLM 从候选对话中语义选择依据并整理成入库文本
 sol-3 verify    校验知识文本
 sol-4 tool_call 调用 capture_text 写入知识库
 ```
@@ -480,7 +480,7 @@ OPENAI_MODEL -> openai_model -> gpt-4.1-mini
 它用于：
 
 - `/api/ask/stream`
-- `/api/entry/stream` 中 ask intent 的快速流式路径
+- `/api/entry/stream` 中由 LangGraph 完成路由与分支执行后的 SSE 输出
 
 SSE 事件包括：
 
@@ -599,27 +599,26 @@ execute_ask()
 
 ### 10.2 SSE entry 输出
 
-`GET /api/entry/stream` 的行为分两类。
+`GET /api/entry/stream` 的所有意图统一进入 `service.entry()` 承载的 LangGraph orchestration graph，`intent` 事件来自图内实际路由结果。
 
 #### ask intent
 
-SSE 入口会先快速分类，然后如果是 `ask`，直接调用 `runtime.execute_ask_stream()`，让回答 token 流式输出：
+`ask` 会进入 graph 的 `ask_branch`，调用 `execute_ask()` 后将 answer、citations、events 与 checkpoint 一并保存在共享 thread 中。Web 层随后将完整答案分块输出：
 
 ```text
 intent
 status
 metadata
 answer_delta*
-answer_complete / answer_error
 done
 execution_trace
 ```
 
-这个路径不会等待完整 `execute_entry()`，因此 ask 的用户体验更像实时生成。
+该路径优先保证 entry 的统一编排、事件与 checkpoint 一致性。需要原生模型 token 流时，独立的 `/api/ask/stream` 仍提供 `execute_ask_stream()` 路径。
 
 #### 非 ask intent
 
-非 ask 会在线程中调用完整 `service.entry(entry_input, on_progress=...)`。
+非 ask 同样调用完整 `service.entry(entry_input, on_progress=...)`。
 
 可能输出：
 
@@ -723,10 +722,11 @@ POST /api/entry
   -> route_intent: solidify_conversation
   -> plan_task: sol-1..sol-4
   -> step loop
-     -> retrieve 最近对话/候选事实
-     -> compose 草稿
+     -> retrieve 可供固化判断参考的知识上下文
+     -> compose 将带轮次标识的候选对话交给 LLM 选择并生成草稿
         -> save_draft()
         -> emit draft_ready
+        -> 模型未给出合格正文时终止写入
      -> verify
      -> tool_call capture_text
         -> 复用 capture 链路写入 KnowledgeNote

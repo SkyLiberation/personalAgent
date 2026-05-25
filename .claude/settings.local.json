@@ -88,7 +88,17 @@
       "Bash(curl -s --max-time 60 -X POST \"http://127.0.0.1:8000/api/entry/runs/070e355d2d7e/resume\" -H \"Content-Type: application/json\" -d '{\"decision\":\"clarify\",\"user_id\":\"default\",\"text\":\"delete AI notes\",\"option_id\":\"action\"}')",
       "Bash(powershell -Command \"Get-Process python* | Stop-Process -Force\")",
       "Bash(curl -s --max-time 30 \"http://127.0.0.1:8000/api/entry/stream?text=%E5%88%A0%E9%99%A4&user_id=default&session_id=test4\")",
-      "Bash(curl -s --max-time 60 -X POST \"http://127.0.0.1:8000/api/entry/runs/3364bb1414ff/resume\" -H \"Content-Type: application/json\" -d '{\"decision\":\"clarify\",\"user_id\":\"default\",\"text\":\"delete AI notes\",\"option_id\":\"action\"}')"
+      "Bash(curl -s --max-time 60 -X POST \"http://127.0.0.1:8000/api/entry/runs/3364bb1414ff/resume\" -H \"Content-Type: application/json\" -d '{\"decision\":\"clarify\",\"user_id\":\"default\",\"text\":\"delete AI notes\",\"option_id\":\"action\"}')",
+      "Bash(bash -c \"lsof -i :8000 2>/dev/null || netstat -ano 2>/dev/null | grep ':8000 ' || echo 'port 8000: no listener found'\")",
+      "Bash(bash -c \"lsof -i :3000 2>/dev/null || netstat -ano 2>/dev/null | grep ':3000 ' || echo 'port 3000: no listener found'\")",
+      "Bash(taskkill /F /PID 2184)",
+      "Bash(taskkill /F /PID 16724)",
+      "Bash(powershell -Command \"Stop-Process -Id 2184 -Force\")",
+      "Bash(powershell -Command \"Stop-Process -Id 16724 -Force\")",
+      "Bash(docker compose *)",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort, State, OwningProcess\")",
+      "Bash(powershell -Command ' *)",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\")"
     ]
   }
 }

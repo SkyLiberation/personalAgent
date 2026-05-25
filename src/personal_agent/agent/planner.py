@@ -94,7 +94,12 @@ class DefaultTaskPlanner:
             f"可用工具:\n{tool_list or '无'}"
         )
         try:
-            client = OpenAI(api_key=self._settings.openai_api_key, base_url=self._settings.openai_base_url)
+            client = OpenAI(
+                api_key=self._settings.openai_api_key,
+                base_url=self._settings.openai_base_url,
+                timeout=self._settings.openai_timeout_seconds,
+                max_retries=self._settings.openai_max_retries,
+            )
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,
                 messages=[
@@ -269,7 +274,7 @@ class DefaultTaskPlanner:
             return [
                 PlanStep(
                     step_id="sol-1", action_type="retrieve",
-                    description="加载最近对话轮次，抽取候选事实和结论",
+                    description="检索可供固化判断参考的知识上下文",
                     expected_output="候选知识要点列表",
                     success_criteria="至少提取到 1 条可固化的结论",
                 ),

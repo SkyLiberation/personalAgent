@@ -134,7 +134,10 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         "execute_plan_step",
         lambda state: _node_execute_plan_step(state, deps=deps),
     )
-    builder.add_node("handle_step_success", _node_handle_step_success)
+    builder.add_node(
+        "handle_step_success",
+        lambda state: _node_handle_step_success(state, deps=deps),
+    )
     builder.add_node(
         "handle_step_failure",
         lambda state: _node_handle_step_failure(state, deps=deps),

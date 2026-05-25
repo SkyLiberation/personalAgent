@@ -365,6 +365,24 @@ class _GovernanceWriteTool(BaseTool):
         return ToolResult(ok=True, data="saved")
 
 
+class _DeferredCaptureTextTool(BaseTool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="capture_text",
+            description="保存生成后的草稿",
+            input_schema={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+            writes_longterm=True,
+        )
+
+    def execute(self, **kwargs):
+        return ToolResult(ok=True, data="saved")
+
+
 class _GovernanceExternalTool(BaseTool):
     @property
     def spec(self) -> ToolSpec:
@@ -407,6 +425,7 @@ class TestPlanValidatorGovernance:
         reg.register(_GovernanceHighRiskTool())
         reg.register(_GovernanceWriteTool())
         reg.register(_GovernanceExternalTool())
+        reg.register(_DeferredCaptureTextTool())
         return reg
 
     @pytest.fixture
@@ -482,6 +501,25 @@ class TestPlanValidatorGovernance:
         ]
         result = validator.validate(steps, default_decision)
         assert not any("tool_input 参数校验失败" in i for i in result.issues)
+
+    def test_capture_text_may_receive_text_from_upstream_compose(self, validator):
+        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        steps = [
+            PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            PlanStep(
+                step_id="sol-2", action_type="verify", description="校验草稿",
+                depends_on=["sol-1"],
+            ),
+            PlanStep(
+                step_id="sol-3", action_type="tool_call", description="保存草稿",
+                tool_name="capture_text", depends_on=["sol-2"],
+            ),
+        ]
+
+        result = validator.validate(steps, decision)
+
+        assert result.valid
+        assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
 
 
 class TestReActValidation:

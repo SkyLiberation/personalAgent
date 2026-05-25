@@ -94,6 +94,105 @@ class TestDefaultIntentRouter:
         assert decision.requires_retrieval is True
         assert decision.risk_level == "low"
 
+    def test_llm_current_weather_ask_decision_enables_retrieval(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        router = DefaultIntentRouter(Settings())
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(
+                route="ask",
+                user_visible_message="需要查询最新外部天气信息。",
+            ),
+        )
+
+        decision = router.classify(
+            EntryInput(source_type="text", text="今天西安天气怎么样")
+        )
+
+        assert decision.route == "ask"
+        assert decision.requires_retrieval is True
+        assert "web_search" in decision.candidate_tools
+
+    def test_llm_router_receives_thread_conversation_context(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        router = DefaultIntentRouter(Settings())
+        captured: dict[str, str] = {}
+
+        def classify(text: str, context: str = "") -> RouterDecision:
+            captured["text"] = text
+            captured["context"] = context
+            return RouterDecision(route="direct_answer")
+
+        monkeypatch.setattr(router, "_classify_with_llm", classify)
+        router.classify(
+            EntryInput(source_type="text", text="它有什么用？"),
+            conversation_context="用户: 什么是 DNS？\n助手: DNS 是域名系统。",
+        )
+
+        assert captured["text"] == "它有什么用？"
+        assert "DNS" in captured["context"]
+
+    def test_llm_decision_is_not_overridden_by_contextual_keyword_rules(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        router = DefaultIntentRouter(
+            Settings(
+                openai_api_key="key",
+                openai_base_url="https://example.invalid/v1",
+                openai_small_model="model",
+            )
+        )
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(route="capture_text"),
+        )
+
+        decision = router.classify(
+            EntryInput(text="将DNS相关知识存储至知识库"),
+            conversation_context="用户: 什么是DNS\n助手: DNS 是域名系统。",
+        )
+
+        assert decision.route == "capture_text"
+        assert decision.requires_planning is False
+
+    def test_configured_llm_failure_does_not_fall_back_to_write_route(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        router = DefaultIntentRouter(
+            Settings(
+                openai_api_key="key",
+                openai_base_url="https://example.invalid/v1",
+                openai_small_model="model",
+            )
+        )
+        monkeypatch.setattr(router, "_classify_with_llm", lambda _text, _context="": None)
+
+        decision = router.classify(EntryInput(text="将DNS相关知识存储至知识库"))
+
+        assert decision.route == "unknown"
+        assert decision.requires_clarification is True
+
+    def test_explicit_note_content_remains_plain_capture(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        router = DefaultIntentRouter(Settings())
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(route="capture_text"),
+        )
+
+        decision = router.classify(
+            EntryInput(text="记一下：DNS 是将域名转换为 IP 地址的系统。"),
+            conversation_context="用户: 什么是DNS\n助手: DNS 是域名系统。",
+        )
+
+        assert decision.route == "capture_text"
+
     def test_router_returns_structured_decision(self):
         from personal_agent.core.config import Settings
 

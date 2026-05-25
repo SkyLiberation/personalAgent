@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from ..core.models import AskHistoryRecord, KnowledgeNote, PendingAction
+from .orchestration_models import AgentGraphState
 from .runtime_results import ResetResult
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ class RuntimeAdminMixin:
                 deleted_ask_history = self.ask_history_store.delete_history(normalized_user)
             except Exception:
                 logger.exception("Failed to delete ask history for user=%s", normalized_user)
+        deleted_checkpoints = self._clear_user_checkpoints(normalized_user)
         return ResetResult(
             user_id=normalized_user,
             deleted_notes=local_result["notes"],
@@ -117,5 +119,22 @@ class RuntimeAdminMixin:
             deleted_ask_history=deleted_ask_history,
             deleted_graph_episodes=deleted_graph_episodes,
         )
+
+    def _clear_user_checkpoints(self, user_id: str) -> int:
+        try:
+            checkpointer = self._get_orch_graph().checkpointer
+            thread_ids: set[str] = set()
+            for ct in checkpointer.list(None, limit=2000):
+                if ct.checkpoint and "channel_values" in ct.checkpoint:
+                    state = AgentGraphState.model_validate(ct.checkpoint["channel_values"])
+                    if state.user_id == user_id and ct.config.get("configurable", {}).get("thread_id"):
+                        thread_ids.add(ct.config["configurable"]["thread_id"])
+            for thread_id in thread_ids:
+                checkpointer.delete_thread(thread_id)
+            logger.info("Deleted %d checkpoint threads for user=%s", len(thread_ids), user_id)
+            return len(thread_ids)
+        except Exception:
+            logger.exception("Failed to clear checkpoints for user=%s", user_id)
+            return 0
 
 

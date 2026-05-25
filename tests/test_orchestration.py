@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 from personal_agent.agent.orchestration_models import (
     AgentEvent,
@@ -41,6 +42,7 @@ class TestAgentGraphState:
                 {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
             ],
             execution_trace=["检索知识库", "生成回答"],
+            messages=[HumanMessage(content="你好"), AIMessage(content="你好，有什么可以帮你的？")],
         )
         data = state.model_dump(mode="json")
         restored = AgentGraphState.model_validate(data)
@@ -49,6 +51,10 @@ class TestAgentGraphState:
         assert restored.answer == state.answer
         assert len(restored.plan_steps) == 1
         assert restored.plan_steps[0].step_id == "s1"
+        assert [message.content for message in restored.messages] == [
+            "你好",
+            "你好，有什么可以帮你的？",
+        ]
 
     def test_add_event_appends_and_updates_timestamp(self):
         state = AgentGraphState(run_id="r1")
@@ -128,7 +134,52 @@ class TestRunIdHelpers:
 
     def test_new_thread_id_format(self):
         tid = _new_thread_id("user-1", "sess-1", "run-abc123")
-        assert tid == "user-1:sess-1:run-abc123"
+        assert tid == "user-1:sess-1"
+
+
+class TestNormalizeEntry:
+    def test_new_run_clears_previous_thread_progress(self):
+        from personal_agent.agent.orchestration_graph import _node_normalize_entry
+
+        state = AgentGraphState(
+            run_id="new-run",
+            entry_input=EntryInput(text="什么是DNS", user_id="u1", session_id="s1"),
+            router_decision=RouterDecision(route="ask"),
+            answer="上一轮天气回答",
+            answer_completed=True,
+            pending_confirmation={"kind": "clarification_required"},
+            execution_trace=["上一轮轨迹"],
+            citations=[{"note_id": "old", "title": "旧证据", "snippet": "旧"}],
+            errors=["上一轮错误"],
+            messages=[
+                HumanMessage(content="今天西安天气怎么样"),
+                AIMessage(content="上一轮天气回答"),
+            ],
+        )
+        state.add_event("run_completed", {"answer": state.answer})
+
+        result = _node_normalize_entry(state)
+
+        assert result["thread_id"] == "u1:s1"
+        assert result["router_decision"] is None
+        assert result["answer"] is None
+        assert result["answer_completed"] is False
+        assert result["pending_confirmation"] is None
+        assert result["execution_trace"] == []
+        assert result["citations"] == []
+        assert result["errors"] == []
+        assert result["messages"][0].content == "什么是DNS"
+        assert [message.content for message in state.messages] == [
+            "今天西安天气怎么样",
+            "上一轮天气回答",
+        ]
+        assert [event.type for event in result["events"]] == ["entry_started"]
+        assert result["events"][0].run_id == "new-run"
+
+    def test_direct_answer_fallback_does_not_acknowledge_a_question(self):
+        from personal_agent.agent.orchestration_nodes import _simple_direct_answer
+
+        assert _simple_direct_answer("什么是DNS") == "我暂时无法生成这个问题的直接回答，请稍后重试。"
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +274,128 @@ class TestOrchestrationGraphIntegration:
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
 
+    def test_solidify_executes_plan_and_stores_composed_note(self, runtime, monkeypatch):
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            lambda prompt, deps: (
+                '{"done":true,"result":{"title":"DNS","content":'
+                '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
+            ),
+        )
+        runtime.execute_entry(
+            EntryInput(text="什么是DNS", user_id="test-user", session_id="solidify-session")
+        )
+
+        result = runtime.execute_entry(
+            EntryInput(
+                text="把DNS相关讨论结论固化下来",
+                user_id="test-user",
+                session_id="solidify-session",
+            )
+        )
+
+        assert result.intent == "solidify_conversation"
+        assert "DNS 是域名系统" in result.reply_text
+        assert any("DNS 是域名系统" in note.content for note in runtime.store.list_notes("test-user"))
+        assert runtime.memory.list_drafts("test-user", status="solidified")
+        event_types = [event["type"] for event in result.events]
+        assert "plan_created" in event_types
+        assert "draft_ready" in event_types
+        assert event_types.count("step_completed") >= 4
+
+    def test_solidify_extracts_structured_note_body_before_capture(self, runtime, monkeypatch):
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            lambda prompt, deps: (
+                '{"thought":"整理正文","result":{"标题":"DNS（域名系统）",'
+                '"正文":"DNS 用于将域名转换为 IP 地址。"}}'
+            ),
+        )
+        runtime.execute_entry(
+            EntryInput(text="什么是DNS", user_id="test-user", session_id="structured-solidify")
+        )
+
+        result = runtime.execute_entry(
+            EntryInput(
+                text="把DNS相关知识固化下来",
+                user_id="test-user",
+                session_id="structured-solidify",
+            )
+        )
+        notes = runtime.store.list_notes("test-user")
+
+        assert result.intent == "solidify_conversation"
+        assert result.reply_text == "DNS（域名系统）\n\nDNS 用于将域名转换为 IP 地址。"
+        assert any(note.content == result.reply_text for note in notes)
+        assert not any(note.content == "把DNS相关知识固化下来" for note in notes)
+
+    def test_solidify_delegates_topic_selection_to_llm(self, runtime, monkeypatch):
+        prompts: list[str] = []
+
+        def reply(prompt, deps):
+            prompts.append(prompt)
+            return (
+                '{"thought":"只选择 DNS 轮次","done":true,"result":'
+                '{"selected_turn_ids":["turn-2"],"title":"DNS","content":'
+                '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
+            )
+
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            reply,
+        )
+        for text in ("今天西安天气怎么样", "什么是DNS", "什么是JSON Schema"):
+            runtime.execute_entry(
+                EntryInput(text=text, user_id="test-user", session_id="focused-solidify")
+            )
+
+        runtime.execute_entry(
+            EntryInput(
+                text="把DNS相关知识固化下来",
+                user_id="test-user",
+                session_id="focused-solidify",
+            )
+        )
+
+        solidify_prompt = prompts[-1]
+        assert "什么是DNS" in solidify_prompt
+        assert "西安" in solidify_prompt
+        assert "JSON Schema" in solidify_prompt
+        assert "必须根据当前保存请求进行语义选择" in solidify_prompt
+        notes = runtime.store.list_notes("test-user")
+        stored = next(note.content for note in notes if "DNS 是域名系统" in note.content)
+        assert "西安" not in stored
+        assert "JSON Schema" not in stored
+
+    def test_solidify_streams_plan_progress_during_graph_execution(self, runtime, monkeypatch):
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._react_llm_respond",
+            lambda prompt, deps: (
+                '{"done":true,"result":{"title":"DNS","content":'
+                '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
+            ),
+        )
+        runtime.execute_entry(
+            EntryInput(text="什么是DNS", user_id="test-user", session_id="stream-plan")
+        )
+        events: list[str] = []
+
+        result = runtime.execute_entry(
+            EntryInput(
+                text="把DNS相关知识固化下来",
+                user_id="test-user",
+                session_id="stream-plan",
+            ),
+            on_progress=lambda event, payload: events.append(event),
+        )
+
+        assert result.intent == "solidify_conversation"
+        assert "plan_created" in events
+        assert "plan_step_started" in events
+        assert "plan_step_completed" in events
+        assert events.index("plan_created") < events.index("plan_step_started")
+        assert "done" not in events
+
     def test_router_requested_clarify_then_resume(self, runtime):
         """Router requests clarification, then supplemental text is routed again."""
         entry = EntryInput(
@@ -261,6 +434,11 @@ class TestOrchestrationGraphIntegration:
         assert result.pending_confirmation is None
         assert result.intent == "direct_answer"
         assert result.reply_text
+        snapshot = runtime.get_run_snapshot(result.run_id or "")
+        assert snapshot is not None
+        assert snapshot.status == AgentRunStatus.completed
+        assert snapshot.last_event is not None
+        assert snapshot.last_event.type == "run_completed"
 
     def test_run_snapshots_list(self, runtime):
         """After executing entries, we should be able to list snapshots."""
@@ -287,6 +465,88 @@ class TestOrchestrationGraphIntegration:
         snapshot = runtime.get_run_snapshot(run_id)
         assert snapshot is not None
         assert snapshot.run_id == run_id
+
+    def test_persisted_snapshots_are_visible_before_new_execution(self, temp_dir):
+        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.storage.ask_history_store import AskHistoryStore
+        from personal_agent.storage.memory_store import LocalMemoryStore
+
+        settings = Settings(
+            data_dir=temp_dir,
+            langgraph_checkpoint_backend="sqlite",
+            langgraph_checkpoint_path=str(temp_dir / "checkpoint.sqlite"),
+        )
+
+        def create_runtime():
+            return AgentRuntime(
+                settings=settings,
+                store=LocalMemoryStore(settings.data_dir),
+                graph_store=GraphitiStore(settings),
+                ask_history_store=AskHistoryStore(postgres_url=None),
+            )
+
+        original = create_runtime()
+        result = original.execute_entry(
+            EntryInput(text="你好", user_id="test-user", session_id="persisted-run")
+        )
+        original._get_orch_graph().checkpointer.conn.close()
+
+        restarted = create_runtime()
+        try:
+            assert restarted._orch_graph is None
+            listed = restarted.list_run_snapshots(user_id="test-user", limit=10)
+            restored = restarted.get_run_snapshot(result.run_id or "")
+
+            assert any(item.run_id == result.run_id for item in listed)
+            assert restored is not None
+            assert restored.thread_id == "test-user:persisted-run"
+        finally:
+            restarted._get_orch_graph().checkpointer.conn.close()
+
+    def test_session_runs_share_thread_and_remain_queryable_by_run_id(self, runtime):
+        first = runtime.execute_entry(
+            EntryInput(text="你好", user_id="test-user", session_id="shared-thread")
+        )
+        second = runtime.execute_entry(
+            EntryInput(text="你是谁", user_id="test-user", session_id="shared-thread")
+        )
+
+        assert first.run_id != second.run_id
+        assert first.thread_id == second.thread_id == "test-user:shared-thread"
+        assert runtime.get_run_snapshot(first.run_id or "") is not None
+        assert runtime.get_run_snapshot(second.run_id or "") is not None
+        listed_ids = {
+            snapshot.run_id
+            for snapshot in runtime.list_run_snapshots(user_id="test-user", limit=20)
+        }
+        assert first.run_id in listed_ids
+        assert second.run_id in listed_ids
+        latest = runtime._get_orch_graph().get_state(
+            {"configurable": {"thread_id": "test-user:shared-thread"}}
+        ).values
+        contents = [message.content for message in latest["messages"]]
+        assert contents[0] == "你好"
+        assert contents[2] == "你是谁"
+        assert len(contents) == 4
+
+    def test_new_run_input_checkpoint_does_not_retain_previous_answer(self, runtime):
+        first = runtime.execute_entry(
+            EntryInput(text="你好", user_id="test-user", session_id="clean-input-checkpoint")
+        )
+        second = runtime.execute_entry(
+            EntryInput(text="谢谢", user_id="test-user", session_id="clean-input-checkpoint")
+        )
+
+        config = {"configurable": {"thread_id": second.thread_id}}
+        second_run_states = []
+        for checkpoint in runtime._get_orch_graph().checkpointer.list(config):
+            values = checkpoint.checkpoint.get("channel_values", {})
+            if values.get("run_id") == second.run_id:
+                second_run_states.append(AgentGraphState.model_validate(values))
+
+        assert second_run_states
+        assert all(state.answer != first.reply_text for state in second_run_states)
 
     def test_graph_state_after_execution(self, runtime):
         """After executing, the last state in the graph should have answer set."""
@@ -1138,7 +1398,7 @@ class TestPhase5EventHelpers:
         tuples = events_to_sse_tuples(events)
         assert len(tuples) == 3
         assert tuples[0][0] == "plan_created"
-        assert tuples[1][0] == "status"
+        assert tuples[1][0] == "plan_step_started"
         assert tuples[2][0] == "done"
         # Each payload gets _event_id and _event_type metadata
         for _, payload in tuples:
@@ -1217,6 +1477,7 @@ class TestPhase5ExecutionTraceDerivation:
         result = _node_finalize_plan_execution(state)
         assert result["execution_trace"] == ["检索相关笔记", "生成回答"]
         assert state.execution_trace == ["检索相关笔记", "生成回答"]
+        assert result["events"][-1].type == "answer_completed"
 
     def test_finalize_plan_no_events_produces_empty_trace(self):
         from personal_agent.agent.orchestration_graph import (
@@ -1234,6 +1495,46 @@ class TestPhase5ExecutionTraceDerivation:
 
         result = _node_finalize_plan_execution(state)
         assert result["execution_trace"] == []
+
+
+class TestPhase5FinalizeEntryState:
+    """Final result nodes must persist their status markers to checkpoints."""
+
+    def test_successful_finalize_persists_completion_events(self):
+        from personal_agent.agent.orchestration_graph import _node_finalize_entry_result
+
+        state = AgentGraphState(
+            run_id="test-finalize",
+            router_decision=RouterDecision(route="direct_answer"),
+            answer="你好",
+        )
+
+        result = _node_finalize_entry_result(state)
+
+        assert result["answer_completed"] is True
+        assert [event.type for event in result["events"]] == [
+            "answer_completed",
+            "run_completed",
+        ]
+        assert result["updated_at"] == state.updated_at
+        assert result["messages"][0].content == "你好"
+
+    def test_finalize_does_not_duplicate_existing_answer_completed_event(self):
+        from personal_agent.agent.orchestration_graph import _node_finalize_entry_result
+
+        state = AgentGraphState(
+            run_id="test-plan-finalize",
+            router_decision=RouterDecision(route="ask"),
+            answer="完成",
+            answer_completed=True,
+        )
+        state.add_event("answer_completed", {"answer": "完成"})
+
+        result = _node_finalize_entry_result(state)
+        event_types = [event.type for event in result["events"]]
+
+        assert event_types.count("answer_completed") == 1
+        assert event_types[-1] == "run_completed"
 
 
 class TestPhase5GraphToEntryResultEvents:

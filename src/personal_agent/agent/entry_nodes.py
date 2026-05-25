@@ -230,6 +230,8 @@ def direct_answer_entry_branch_node(
             client = OpenAI(
                 api_key=deps.settings.openai_api_key,
                 base_url=deps.settings.openai_base_url,
+                timeout=deps.settings.openai_timeout_seconds,
+                max_retries=deps.settings.openai_max_retries,
             )
             response = client.chat.completions.create(
                 model=deps.settings.openai_small_model,
@@ -362,4 +364,4 @@ def _simple_direct_answer(text: str) -> str:
         return "不客气，还有其他需要吗？"
     if any(g in lower for g in goodbye):
         return "再见，祝你好运！"
-    return "收到，还有其他需要吗？"
+    return "我暂时无法生成这个问题的直接回答，请稍后重试。"

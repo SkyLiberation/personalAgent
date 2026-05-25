@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -13,6 +12,14 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("OPENAI_BASE_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
+    monkeypatch.setenv("PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_BACKEND", "memory")
+    monkeypatch.setenv(
+        "PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH",
+        str(temp_dir / "langgraph_checkpoints.sqlite"),
+    )
+
+    from personal_agent.core import config as config_module
+    monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
 
     from personal_agent.web.api import create_app
     app = create_app()
@@ -30,6 +37,12 @@ class TestHealthEndpoint:
         response = api_client.get("/api/health")
         data = response.json()
         assert "graphiti" in data
+
+    def test_frontend_dist_is_resolved_from_project_root(self):
+        from personal_agent.web.api import _frontend_dist_dir
+
+        project_root = Path(__file__).resolve().parents[1]
+        assert _frontend_dist_dir() == project_root / "frontend" / "dist"
 
 
 class TestCaptureEndpoint:
@@ -74,6 +87,57 @@ class TestAskEndpoint:
             json={"question": "", "user_id": "test-user"},
         )
         assert response.status_code == 422
+
+
+class TestEntryStreamEndpoint:
+    def test_ask_stream_entry_creates_langgraph_run_snapshot(self, api_client: TestClient):
+        response = api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "什么是API测试？",
+                "user_id": "test-user",
+                "session_id": "entry-stream-ask",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "正在理解并执行请求" in response.text
+        assert "event: done" in response.text
+        assert response.text.count("event: done") == 1
+
+        runs = api_client.get(
+            "/api/entry/runs",
+            params={"user_id": "test-user"},
+        ).json()["items"]
+        matching = [run for run in runs if run["session_id"] == "entry-stream-ask"]
+
+        assert matching
+        assert matching[0]["thread_id"] == "test-user:entry-stream-ask"
+        assert matching[0]["intent"] == "ask"
+
+    def test_solidify_stream_emits_plan_only_once(self, api_client: TestClient):
+        api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "什么是DNS",
+                "user_id": "test-user",
+                "session_id": "entry-stream-plan",
+            },
+        )
+        response = api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "把DNS相关讨论结论固化下来",
+                "user_id": "test-user",
+                "session_id": "entry-stream-plan",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.text.count("event: plan_created") == 1
+        assert "event: plan_step_started" in response.text
+        assert "event: plan_step_completed" in response.text
+        assert response.text.index("event: plan_created") < response.text.index("event: done")
 
 
 class TestDigestEndpoint:

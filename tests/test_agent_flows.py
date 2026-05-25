@@ -169,6 +169,23 @@ class TestAskFlow:
         assert result.answer
         assert isinstance(result.session_id, str)
 
+    def test_ask_without_evidence_skips_answer_model_until_evidence_exists(self, service: AgentService):
+        service._runtime._generate_answer = MagicMock(return_value="不应生成")
+
+        result = service.ask(question="今天西安天气怎么样")
+
+        assert "个人知识库" in result.answer
+        service._runtime._generate_answer.assert_not_called()
+
+    def test_empty_graph_evidence_skips_answer_model(self, service: AgentService):
+        service.graph_store.ask.return_value = GraphAskResult(enabled=True)
+        service._runtime._generate_answer = MagicMock(return_value="不应生成")
+
+        result = service.ask(question="今天西安天气怎么样")
+
+        assert "个人知识库" in result.answer
+        service._runtime._generate_answer.assert_not_called()
+
     def test_ask_with_session_id(self, service: AgentService):
         service.capture(text="测试知识", source_type="text")
         result = service.ask(question="测试", session_id="test-session-42")

@@ -24,6 +24,17 @@ def test_settings_reads_graphiti_timeout_env(monkeypatch):
     assert settings.graphiti_content_filter_fallback is False
 
 
+def test_settings_reads_openai_request_limits(monkeypatch):
+    monkeypatch.setattr(config_module, "load_dotenv", lambda override: None)
+    monkeypatch.setenv("PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS", "9.5")
+    monkeypatch.setenv("PERSONAL_AGENT_OPENAI_MAX_RETRIES", "1")
+
+    settings = Settings.from_env()
+
+    assert settings.openai_timeout_seconds == 9.5
+    assert settings.openai_max_retries == 1
+
+
 def test_settings_reads_graphiti_llm_override_env(monkeypatch):
     monkeypatch.setattr(config_module, "load_dotenv", lambda override: None)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY", "graph-key")

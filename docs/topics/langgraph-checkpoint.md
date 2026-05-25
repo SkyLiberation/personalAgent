@@ -19,7 +19,8 @@
 
 - `entry` 默认进入 LangGraph orchestration graph。
 - 图状态使用 `AgentGraphState` 表达，支持序列化和 checkpoint。
-- 每次 entry 执行生成 `run_id` 和 `thread_id`。
+- 每次 entry 执行生成独立 `run_id`，同一用户会话复用稳定 `thread_id`。
+- 同一 thread 的用户/助手对话通过 `messages` 通道和 `add_messages` reducer 持续累积，供后续路由与回答生成读取。
 - checkpoint 使用 LangGraph checkpointer 保存图节点状态。
 - API 可查询已执行 run 的 snapshot。
 
@@ -45,7 +46,8 @@ PERSONAL_AGENT_LANGGRAPH_CHECKPOINT_PATH=./data/langgraph_checkpoints.sqlite
 调试脚本：
 
 - `uv run python scripts/draw_entry_graph.py`：生成 `scripts/assets/entry-orchestration.md`。
-- `uv run python scripts/export_thread_checkpoints.py <thread_id>`：生成 `scripts/assets/checkpoints-<thread_id>.json`，包含该线程的全部完整 checkpoint tuple。
+- `uv run python scripts/export_thread_checkpoints.py <thread_id>`：生成 `scripts/assets/checkpoints-<thread_id>.json`，包含该会话 thread 内多次 run 的完整应用 state 时间线，默认不输出 `channel_versions` 等 LangGraph 内部存储字段。
+- `uv run python scripts/export_thread_checkpoints.py <thread_id> --raw`：仅在底层调试时导出原始 checkpoint tuple 与内部版本/写入信息，默认另存为 `*-raw.json`。
 - `MemorySaver` 中已经生成的历史 checkpoint 不存在于数据库中，切换到 SQLite 后仅新执行的 run 可由独立脚本导出。
 
 ## 总体执行路径
@@ -114,12 +116,15 @@ prepare_plan_execution
 - 从 `entry_input` 中读取 `user_id`、`session_id`、`text`。
 - 生成 `thread_id`。
 - 写入 `entry_started` 事件。
+- 把当前用户输入追加到 reducer 管理的 `messages` 会话历史中；不会清空已有对话。
 
-`thread_id` 生成规则：
+`thread_id` 生成规则（同一 session 的多次 run 复用）：
 
 ```text
-thread_id = user_id + ":" + session_id + ":" + run_id
+thread_id = user_id + ":" + session_id
 ```
+
+`run_id` 仍保存在 `AgentGraphState` 中，用于区分和查询 thread 内的单次执行。
 
 ### 2. `route_intent`
 
@@ -129,6 +134,7 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 
 - 执行 session bind 和 conversation summary refresh。
 - 调用 `runtime._intent_router.classify(entry_input)` 完成意图分类。
+- 将当前消息之前的 `messages` 对话历史作为上下文传入 router。
 - 将包含 `requires_clarification`、`missing_information`、`clarification_prompt` 的 `RouterDecision` 写入 state。
 - 写入 `intent_classified` 事件。
 
@@ -183,6 +189,7 @@ thread_id = user_id + ":" + session_id + ":" + run_id
 - `ask_branch`：调用 `execute_ask()`。
 - `summarize_branch`：处理群聊/文本总结。
 - `direct_answer_branch`：处理低风险直接回复；当 `intent=unknown` 时，根据 classify 结果生成让用户补充信息的澄清提示。
+- `ask_branch` 与 `direct_answer_branch` 均读取 thread 内已累积的对话消息，避免后续追问脱离上下文。
 
 ### 7. 计划执行节点
 
@@ -246,6 +253,7 @@ START
 - `session_id`
 - `entry_input`
 - `entry_text`
+- `messages`（通过 `add_messages` reducer 在同一 thread 跨 run 累积）
 - `intent`
 - `intent_reason`
 - `router_decision`
@@ -268,6 +276,8 @@ START
 - `replan_history`
 - `created_at`
 - `updated_at`
+
+其中，`messages` 是会话级持久状态；`router_decision`、`plan_steps`、`answer`、`events`、`pending_confirmation` 等是单次 run 的执行状态，新一轮开始时会重置，防止上一轮产物冒充当前轮结果。
 
 辅助方法：
 
@@ -402,12 +412,12 @@ return EntryResult(...)
 匹配规则：
 
 ```text
-thread_id.endswith(":" + run_id)
+state.run_id == requested_run_id
 ```
 
 ### `list_run_snapshots()`
 
-从 checkpointer 中列出最近 checkpoint，并按 `user_id` 可选过滤，返回 `AgentRunSnapshot` 列表。
+从 checkpointer 中列出最近 checkpoint，并按 `run_id` 去重、按 `user_id` 可选过滤，返回 `AgentRunSnapshot` 列表。同一 `thread_id` 下的多个 run 会分别返回。
 
 ## HITL 中断与恢复流程
 
@@ -511,7 +521,8 @@ HITL 流程依赖 checkpoint 保存以下现场：
 
 - checkpoint 粒度覆盖 orchestration graph 节点、计划步骤节点和 ReAct 子图节点。
 - 普通 `capture / ask / summarize / direct_answer` 分支仍调用既有 runtime 方法。
-- `GET /api/entry/stream` 中 ask intent 的快速流式路径仍直接调用 `execute_ask_stream()`。
+- `GET /api/entry/stream` 的所有 intent（包含 `ask`）均进入 orchestration graph 并写入 checkpoint。
+- 独立 `GET /api/ask/stream` 仍直接调用 `execute_ask_stream()`，不属于 entry graph checkpoint 路径。
 - `EntryResult` 仍是 Web API 的兼容返回模型。
 
 这些是当前已实现行为的边界，不在本文中作为待办展开。

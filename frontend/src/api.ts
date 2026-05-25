@@ -343,6 +343,34 @@ export type EntryResponse = {
   } | null;
 };
 
+export type EntryRunSnapshot = {
+  run_id: string;
+  thread_id: string;
+  user_id: string;
+  session_id: string;
+  status: string;
+  intent: string;
+  entry_text: string;
+  plan_steps: PlanStep[];
+  execution_trace: string[];
+  answer?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type EntryRunSnapshotResponse = {
+  items: EntryRunSnapshot[];
+};
+
+export function fetchEntryRuns(
+  userId = "default",
+  limit = 100,
+): Promise<EntryRunSnapshotResponse> {
+  return requestJson<EntryRunSnapshotResponse>(
+    `/api/entry/runs?user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(String(limit))}`
+  );
+}
+
 export function resumeEntryRun(
   runId: string,
   decision: "confirm" | "reject" | "clarify",

@@ -35,7 +35,9 @@ class RouterDecision(BaseModel):
 
 
 class IntentRouter(Protocol):
-    def classify(self, entry_input: EntryInput) -> RouterDecision: ...
+    def classify(
+        self, entry_input: EntryInput, conversation_context: str = ""
+    ) -> RouterDecision: ...
 
 
 def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDecision:
@@ -192,8 +194,9 @@ class DefaultIntentRouter:
     """LLM-first intent classification with heuristic fallback.
 
     Uses the small model for fast, low-cost classification.
-    Falls back to heuristic rules when the LLM is unavailable or returns
-    an unrecognised intent.
+    Falls back to heuristic rules only when no LLM is configured. When a
+    configured model cannot classify reliably, returns clarification instead
+    of risking an unintended write through a guessed route.
 
     LLM results are merged with _default_router_decision() to ensure
     control fields (requires_tools, requires_retrieval, requires_planning,
@@ -203,17 +206,28 @@ class DefaultIntentRouter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def classify(self, entry_input: EntryInput) -> RouterDecision:
+    def classify(
+        self, entry_input: EntryInput, conversation_context: str = ""
+    ) -> RouterDecision:
         if entry_input.source_type == "file":
             decision = _default_router_decision("capture_file", "来源消息类型是文件。")
             self._log_decision(entry_input, decision, strategy="source_type")
             return decision
 
-        llm_result = self._classify_with_llm(entry_input.text)
+        llm_result = self._classify_with_llm(entry_input.text, conversation_context)
         if llm_result is not None:
             decision = _merge_with_defaults(llm_result)
             strategy = "empty" if not entry_input.text.strip() else "llm"
             self._log_decision(entry_input, decision, strategy=strategy)
+            return decision
+
+        if self._llm_configured:
+            decision = _with_clarification(
+                _default_router_decision("unknown", "路由模型未返回可靠判断。"),
+                prompt="当前无法可靠判断如何处理这条请求，请稍后重试。",
+                missing_information=["可靠的模型路由结果"],
+            )
+            self._log_decision(entry_input, decision, strategy="llm_unavailable")
             return decision
 
         intent, reason = heuristic_entry_intent(entry_input.text)
@@ -224,7 +238,9 @@ class DefaultIntentRouter:
         self._log_decision(entry_input, decision, strategy="heuristic")
         return decision
 
-    def _classify_with_llm(self, text: str) -> RouterDecision | None:
+    def _classify_with_llm(
+        self, text: str, conversation_context: str = ""
+    ) -> RouterDecision | None:
         if not text.strip():
             return _default_router_decision("unknown", "消息内容为空。")
         if not self._llm_configured:
@@ -233,22 +249,31 @@ class DefaultIntentRouter:
         prompt = (
             "你是一个入口路由分类器。"
             "请把用户输入分类到以下意图之一：capture_text, capture_link, capture_file, ask, summarize_thread, delete_knowledge, solidify_conversation, direct_answer, unknown。"
-            "capture_text: 用户想记录文字内容。capture_link: 用户发来链接想收录。ask: 需要检索知识库才能回答的问题。"
+            "capture_text: 用户想记录文字内容。capture_link: 用户发来链接想收录。"
+            "ask: 需要检索个人知识库、公共网络或最新外部事实才能可靠回答的问题。"
             "summarize_thread: 需要总结群聊/会话。delete_knowledge: 删除过时或错误的知识笔记。"
             "solidify_conversation: 把对话结论沉淀为知识。"
+            "例如已有对话在讨论 DNS，用户再说“将DNS相关知识存储至知识库”，是在要求整理已有会话知识，"
+            "必须归为 solidify_conversation，不能把这条操作指令本身按 capture_text 存储。"
+            "只有用户输入本身提供了需要原样记录的实质正文时，才归为 capture_text。"
             "direct_answer: 闲聊、问候、感谢、澄清性问题、无需检索的简单说明或常识性问题。"
+            "请重点判断信息是否具有时效性：当前天气、实时价格、最新新闻、航班状态等依赖最新外部事实的问题应归为 ask，"
+            "不得仅因问题简单而归为 direct_answer。"
             "当输入不足以安全确定或执行意图时设置 requires_clarification=true，并提供 missing_information 和 clarification_prompt；"
             "例如“帮我”“删除”需要澄清，而“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
             "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), "
             "requires_clarification(bool, 可选), missing_information(字符串数组, 可选), clarification_prompt(字符串, 可选)。"
             "risk_level: 删除类操作应为 high，一般操作为 low。"
             "requires_confirmation: 删除操作应为 true。\n\n"
-            f"用户输入：{text}"
+            f"会话前文（可能为空）：\n{conversation_context or '无'}\n\n"
+            f"当前用户输入：{text}"
         )
         try:
             client = OpenAI(
                 api_key=self._settings.openai_api_key,
                 base_url=self._settings.openai_base_url,
+                timeout=self._settings.openai_timeout_seconds,
+                max_retries=self._settings.openai_max_retries,
             )
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,

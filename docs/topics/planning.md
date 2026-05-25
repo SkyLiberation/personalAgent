@@ -199,7 +199,7 @@ MAX_RETRIES = 3
 
 ### `delete_knowledge`
 
-当前启发式计划：
+当前固化计划模板：
 
 ```text
 retrieve -> resolve -> verify -> tool_call(delete_note) -> compose
@@ -234,8 +234,8 @@ retrieve -> compose -> verify -> tool_call(capture_text)
 
 含义：
 
-- `retrieve`：加载最近对话，抽取候选事实和结论
-- `compose`：生成适合入库的知识文本草稿，同时从草稿中抽取候选结论（`candidate_conclusions`）并存入 `CrossSessionStore`
+- `retrieve`：检索可供固化判断参考的知识上下文
+- `compose`：将近期候选会话以轮次标识提供给 LLM，由模型根据当前保存请求语义选择依据并生成入库草稿；无合格正文时不写入。同时从草稿中抽取候选结论（`candidate_conclusions`）并存入 `CrossSessionStore`
 - `verify`：检查草稿准确性和完整性
 - `tool_call`：复用 `capture_text` 写入长期知识库
 - `tool_call` 成功后自动回写：草稿标记为 `solidified`，关联候选结论同步切换已固化状态

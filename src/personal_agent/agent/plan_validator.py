@@ -61,6 +61,27 @@ def _clone_step(s: PlanStep) -> PlanStep:
     )
 
 
+def _has_upstream_action_type(
+    steps: list[PlanStep], step: PlanStep, action_type: str,
+) -> bool:
+    """Return whether a step transitively depends on an action type."""
+    by_id = {candidate.step_id: candidate for candidate in steps}
+    pending = list(step.depends_on)
+    visited: set[str] = set()
+    while pending:
+        step_id = pending.pop()
+        if step_id in visited:
+            continue
+        visited.add(step_id)
+        candidate = by_id.get(step_id)
+        if candidate is None:
+            continue
+        if candidate.action_type == action_type:
+            return True
+        pending.extend(candidate.depends_on)
+    return False
+
+
 class PlanValidator:
     """Pre-execution plan validation.
 
@@ -137,6 +158,14 @@ class PlanValidator:
                 if tool_spec is not None and tool_spec.input_schema:
                     schema_errors = validate_tool_input(tool_spec.input_schema, s.tool_input)
                     for err in schema_errors:
+                        deferred_draft_text = (
+                            s.tool_name == "capture_text"
+                            and "text" not in s.tool_input
+                            and "text" in err
+                            and _has_upstream_action_type(steps, s, "compose")
+                        )
+                        if deferred_draft_text:
+                            continue
                         issues.append(f"{prefix} tool_input 参数校验失败: {err}")
 
                 # --- Governance cross-checks ---

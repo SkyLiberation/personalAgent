@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+_LLM_FAILURE_COOLDOWN_SECONDS = 30.0
 
 
 class RuntimeLlmMixin:
     def _generate_answer(self, prompt: str) -> str | None:
         if not (self.settings.openai_api_key and self.settings.openai_base_url and self.settings.openai_model):
             return None
+        if time.monotonic() < getattr(self, "_answer_llm_unavailable_until", 0.0):
+            logger.info("Skipping answer generation while LLM failure cooldown is active")
+            return None
         try:
-            client = OpenAI(api_key=self.settings.openai_api_key, base_url=self.settings.openai_base_url)
+            client = OpenAI(
+                api_key=self.settings.openai_api_key,
+                base_url=self.settings.openai_base_url,
+                timeout=self.settings.openai_timeout_seconds,
+                max_retries=self.settings.openai_max_retries,
+            )
             response = client.chat.completions.create(
                 model=self.settings.openai_model,
                 messages=[
@@ -22,8 +32,10 @@ class RuntimeLlmMixin:
                 temperature=0.3,
                 max_tokens=600,
             )
+            self._answer_llm_unavailable_until = 0.0
             return (response.choices[0].message.content or "").strip() or None
         except Exception:
+            self._answer_llm_unavailable_until = time.monotonic() + _LLM_FAILURE_COOLDOWN_SECONDS
             logger.exception("Failed to generate answer from LLM")
             return None
 
@@ -37,8 +49,16 @@ class RuntimeLlmMixin:
         if not (self.settings.openai_api_key and self.settings.openai_base_url and self.settings.openai_model):
             yield ("answer_error", {"error": "LLM not configured"})
             return
+        if time.monotonic() < getattr(self, "_answer_llm_unavailable_until", 0.0):
+            yield ("answer_error", {"error": "LLM temporarily unavailable"})
+            return
         try:
-            client = OpenAI(api_key=self.settings.openai_api_key, base_url=self.settings.openai_base_url)
+            client = OpenAI(
+                api_key=self.settings.openai_api_key,
+                base_url=self.settings.openai_base_url,
+                timeout=self.settings.openai_timeout_seconds,
+                max_retries=self.settings.openai_max_retries,
+            )
             stream = client.chat.completions.create(
                 model=self.settings.openai_model,
                 messages=[
@@ -56,10 +76,12 @@ class RuntimeLlmMixin:
                     full_text += delta
                     yield ("answer_delta", {"delta": delta, "answer": full_text})
             if full_text.strip():
+                self._answer_llm_unavailable_until = 0.0
                 yield ("answer_complete", {"answer": full_text.strip()})
             else:
                 yield ("answer_error", {"error": "LLM returned empty response"})
         except Exception:
+            self._answer_llm_unavailable_until = time.monotonic() + _LLM_FAILURE_COOLDOWN_SECONDS
             logger.exception("Failed to stream answer from LLM")
             yield ("answer_error", {"error": "LLM streaming failed"})
 

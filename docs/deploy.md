@@ -75,7 +75,58 @@ uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
 - API: `http://127.0.0.1:8000`
 - Docs: `http://127.0.0.1:8000/docs`
 
-## 6.1 飞书接入注意事项
+### 6.1 开发环境重启后端
+
+上面的 `--reload` 用于监听 Python 源码变化并自动重载 worker，不等于可靠的完整重启。以下场景应显式停止旧进程再启动：
+
+- 修改 `.env` 配置
+- 安装或更新 Python 依赖
+- 修改 LangGraph 编排、checkpoint backend 或其他会在进程内缓存的运行时对象
+- 页面行为与当前源码不一致，怀疑仍有旧 worker 占用 `8000` 端口
+
+推荐步骤：
+
+1. 在启动后端的终端中按 `Ctrl+C`，等待 Uvicorn reloader 与 worker 都退出。
+2. 在 PowerShell 中确认端口没有残留监听：
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+```
+
+3. 如果仍能看到监听进程，先查看对应命令；确认它属于本项目后，终止旧 Uvicorn reloader 及其 worker 进程树：
+
+```powershell
+$listenerPid = (Get-NetTCPConnection -LocalPort 8000 -State Listen).OwningProcess
+Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid" |
+  Select-Object ProcessId, ParentProcessId, CommandLine
+
+function Stop-ProcessTree([int] $ProcessId) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" |
+    ForEach-Object { Stop-ProcessTree $_.ProcessId }
+  Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+$reloader = Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.Name -eq "uvicorn.exe" -and
+    $_.CommandLine -match "personal_agent\.web\.api:app"
+  } |
+  Select-Object -First 1
+
+if ($reloader) {
+  Stop-ProcessTree $reloader.ProcessId
+}
+```
+
+4. 重新启动后端：
+
+```powershell
+uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+不要在旧实例仍占用端口时重复启动后端。对于 LangGraph 这类会缓存已编译 graph 的代码，完整重启后，新请求才会确定使用最新编排定义。
+
+### 6.2 飞书接入注意事项
 
 当前项目使用飞书官方 Python SDK 的”长连接接收事件”模式。
 

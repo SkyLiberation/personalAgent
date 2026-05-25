@@ -9,21 +9,31 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 from uuid import uuid4
 
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from ..core.models import Citation, EntryInput, EntryIntent
 from .router import RouterDecision
+
+if TYPE_CHECKING:
+    from .planner import PlanStep
 
 
 def _new_run_id() -> str:
     return uuid4().hex[:12]
 
 
-def _new_thread_id(user_id: str, session_id: str, run_id: str) -> str:
-    return f"{user_id}:{session_id}:{run_id}"
+def _new_thread_id(user_id: str, session_id: str, run_id: str | None = None) -> str:
+    """Return the stable LangGraph conversation thread identifier.
+
+    ``run_id`` remains accepted for callers migrating from the former
+    per-run thread format, but runs in one session share one thread.
+    """
+    return f"{user_id}:{session_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +192,9 @@ class AgentGraphState(BaseModel):
 
     Design principles
     -----------------
-    - This holds *process state* — what the graph needs to resume.
+    - This holds resumable process state and reducer-backed dialogue messages.
+    - Per-run results are reset on a new entry; ``messages`` persists within
+      the stable conversation thread.
     - Business facts live in LocalMemoryStore / AskHistoryStore /
       PendingActionStore / CrossSessionStore.
     - Large payloads (note text, full search results) are stored by
@@ -198,6 +210,9 @@ class AgentGraphState(BaseModel):
     # Entry
     entry_input: EntryInput | None = None
     entry_text: str = ""
+
+    # Durable conversation history accumulated across runs in one thread.
+    messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
 
     # Routing
     router_decision: RouterDecision | None = None
@@ -389,7 +404,7 @@ _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "intent_classified": "intent",
     "plan_created": "plan_created",
     "plan_validated": "status",
-    "step_started": "status",
+    "step_started": "plan_step_started",
     "react_iteration": "react_iteration",
     "tool_called": "tool_called",
     "tool_result": "tool_result",
@@ -398,10 +413,10 @@ _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "draft_ready": "draft_ready",
     "answer_delta": "answer_delta",
     "answer_completed": "done",
-    "step_completed": "status",
-    "step_failed": "status",
-    "replan_attempted": "status",
-    "replan_completed": "status",
+    "step_completed": "plan_step_completed",
+    "step_failed": "plan_step_failed",
+    "replan_attempted": "plan_replan_attempt",
+    "replan_completed": "plan_replanned",
     "run_completed": "done",
     "run_failed": "status",
 }

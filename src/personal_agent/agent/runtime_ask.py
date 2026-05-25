@@ -32,7 +32,11 @@ logger = logging.getLogger(__name__)
 
 class RuntimeAskMixin:
     def execute_ask(
-        self, question: str, user_id: str | None = None, session_id: str | None = None
+        self,
+        question: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_context: str | None = None,
     ) -> AskResult:
         normalized_user = user_id or self.settings.default_user
         normalized_session = session_id or "default"
@@ -41,6 +45,10 @@ class RuntimeAskMixin:
         self.memory.working.set_goal(f"回答用户问题: {question[:80]}")
         self.memory.refresh_conversation_summary(normalized_user, normalized_session)
         working_context = self.memory.working.context_snapshot()
+        if conversation_context:
+            working_context = (
+                f"{working_context}\n\n当前 LangGraph 会话中的前文：\n{conversation_context}"
+            ).strip()
         trace_id = uuid4().hex[:12]
         graph_fallback_answer: str | None = None
         graph_fallback_citations: list[Citation] = []
@@ -54,33 +62,36 @@ class RuntimeAskMixin:
             notes_by_episode = {n.graph_episode_uuid: n for n in matches if n.graph_episode_uuid is not None}
             graph_evidence = graph_result_to_evidence(graph_result, notes_by_episode, question)
             all_evidence.extend(graph_evidence)
-            answer = self._compose_graph_answer(question, graph_result, matches, citations, working_context)
-            verification = self._verifier.verify(question, answer, citations, matches, evidence=all_evidence)
-            retry_result = self._retry_if_needed(question, answer, citations, matches, verification)
-            answer = retry_result.answer
-            verification = retry_result.verification
-            self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
-            if verification.ok and verification.sufficient:
-                ask_result = AskResult(
-                    answer=answer,
-                    citations=citations,
-                    matches=matches,
-                    evidence=all_evidence,
-                    session_id=normalized_session,
-                )
-                self.memory.record_turn(
-                    normalized_user, normalized_session, question, answer,
-                    citations=citations,
-                )
-                logger.info(
-                    "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
-                    normalized_user, len(matches), len(citations), verification.evidence_score,
-                )
-                return ask_result
-            graph_fallback_answer = answer
-            graph_fallback_citations = citations
-            graph_fallback_matches = matches
-            self.memory.working.add_step("图谱语义结果证据不足，继续合并本地检索兜底")
+            if self._graph_has_evidence(graph_result, matches, citations):
+                answer = self._compose_graph_answer(question, graph_result, matches, citations, working_context)
+                verification = self._verifier.verify(question, answer, citations, matches, evidence=all_evidence)
+                retry_result = self._retry_if_needed(question, answer, citations, matches, verification)
+                answer = retry_result.answer
+                verification = retry_result.verification
+                self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
+                if verification.ok and verification.sufficient:
+                    ask_result = AskResult(
+                        answer=answer,
+                        citations=citations,
+                        matches=matches,
+                        evidence=all_evidence,
+                        session_id=normalized_session,
+                    )
+                    self.memory.record_turn(
+                        normalized_user, normalized_session, question, answer,
+                        citations=citations,
+                    )
+                    logger.info(
+                        "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
+                        normalized_user, len(matches), len(citations), verification.evidence_score,
+                    )
+                    return ask_result
+                graph_fallback_answer = answer
+                graph_fallback_citations = citations
+                graph_fallback_matches = matches
+                self.memory.working.add_step("图谱语义结果证据不足，继续合并本地检索兜底")
+            else:
+                self.memory.working.add_step("图谱未返回可回答证据，跳过图谱回答生成")
 
         graph = build_ask_graph(self.store)
         state = AgentState(mode="ask", question=question, user_id=normalized_user)
@@ -89,16 +100,21 @@ class RuntimeAskMixin:
         local_citations = _merge_citations(graph_fallback_citations, result.citations)
         # Accumulate local evidence
         all_evidence.extend(notes_to_evidence(local_matches))
-        answer = self._compose_local_answer(question, local_matches, local_citations, working_context)
-        final_answer = answer or result.answer or "暂时没有生成答案。"
+        if local_matches or local_citations:
+            answer = self._compose_local_answer(question, local_matches, local_citations, working_context)
+        else:
+            answer = None
+            self.memory.working.add_step("本地检索未返回可回答证据，跳过本地回答生成")
+        final_answer = answer or result.answer or "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
         verification = self._verifier.verify(
             question, final_answer, local_citations, local_matches, evidence=all_evidence
         )
-        retry_result = self._retry_if_needed(
-            question, final_answer, local_citations, local_matches, verification,
-        )
-        final_answer = retry_result.answer
-        verification = retry_result.verification
+        if local_matches or local_citations:
+            retry_result = self._retry_if_needed(
+                question, final_answer, local_citations, local_matches, verification,
+            )
+            final_answer = retry_result.answer
+            verification = retry_result.verification
         if not verification.ok or not verification.sufficient:
             final_answer = _annotate_answer(graph_fallback_answer or final_answer, verification)
         self.memory.working.add_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
@@ -155,6 +171,22 @@ class RuntimeAskMixin:
             normalized_user, len(local_matches), len(local_citations), verification.evidence_score,
         )
         return ask_result
+
+    @staticmethod
+    def _graph_has_evidence(
+        graph_result: GraphAskResult,
+        matches: list[KnowledgeNote],
+        citations: list[Citation],
+    ) -> bool:
+        return bool(
+            graph_result.answer
+            or graph_result.relation_facts
+            or graph_result.node_refs
+            or graph_result.edge_refs
+            or graph_result.fact_refs
+            or matches
+            or citations
+        )
 
     def _execute_web_search(self, question: str) -> tuple[list[dict], list[Citation]]:
         """Run web search and convert results to Citation list.
@@ -625,4 +657,3 @@ class RuntimeAskMixin:
             "2. 如果证据不足，明确指出\n"
             "3. 确保每个观点都有相应依据\n"
         )
-

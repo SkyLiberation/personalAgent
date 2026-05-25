@@ -205,6 +205,8 @@ class ReActStepRunner:
             client = OpenAI(
                 api_key=self._settings.openai_api_key,
                 base_url=self._settings.openai_base_url,
+                timeout=self._settings.openai_timeout_seconds,
+                max_retries=self._settings.openai_max_retries,
             )
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,

@@ -5,6 +5,7 @@ import {
   deleteAskHistoryRecord,
   fetchAskHistory,
   fetchDigest,
+  fetchEntryRuns,
   fetchNotes,
   fetchPendingActions,
   getApiKey,
@@ -20,6 +21,7 @@ import {
   type DigestResponse,
   type EntryPendingConfirmation,
   type EntryResponse,
+  type EntryRunSnapshot,
   type Note,
   type PendingActionItem,
   type PlanStep,
@@ -162,22 +164,23 @@ export default function App() {
       setStatus("正在刷新记忆视图...");
     }
     try {
-      const [noteItems, digestResult, askHistoryResult, allAskHistoryResult] = await Promise.all([
+      const [noteItems, digestResult, askHistoryResult, allAskHistoryResult, runResult] = await Promise.all([
         fetchNotes(userId),
         fetchDigest(userId),
         fetchAskHistory(userId, 20, sessionId),
         fetchAskHistory(userId, 100),
+        fetchEntryRuns(userId, 100),
       ]);
       setNotes(noteItems);
       setDigest(digestResult);
-      const historyItems = askHistoryResult.items.map((item) => ({
+      const historyItems = mergeRunBackedHistory(askHistoryResult.items.map((item) => ({
         ...item,
         status: "done" as const,
-      }));
-      const allHistoryItems = allAskHistoryResult.items.map((item) => ({
+      })), runResult.items, sessionId);
+      const allHistoryItems = mergeRunBackedHistory(allAskHistoryResult.items.map((item) => ({
         ...item,
         status: "done" as const,
-      }));
+      })), runResult.items);
       setAskHistory((current) => mergeAskHistory(historyItems, current));
       setAllAskHistory((current) => {
         const merged = new Map<string, AskHistoryView>();
@@ -357,8 +360,20 @@ export default function App() {
     }
     setIsSearchingHistory(true);
     try {
-      const result = await searchAskHistory(query.trim(), userId, 50);
-      const items = result.items.map((item) => ({ ...item, status: "done" as const }));
+      const [result, runResult] = await Promise.all([
+        searchAskHistory(query.trim(), userId, 50),
+        fetchEntryRuns(userId, 100),
+      ]);
+      const normalizedQuery = query.trim().toLowerCase();
+      const matchingRuns = runResult.items.filter(
+        (run) =>
+          run.entry_text.toLowerCase().includes(normalizedQuery) ||
+          (run.answer ?? "").toLowerCase().includes(normalizedQuery),
+      );
+      const items = mergeRunBackedHistory(
+        result.items.map((item) => ({ ...item, status: "done" as const })),
+        matchingRuns,
+      );
       setAskHistory(items);
     } catch (error) {
       console.error("Failed to search ask history:", error);
@@ -431,6 +446,12 @@ export default function App() {
               : item
           )
         );
+        setExpandedPlans((current) => {
+          const next = new Set(current);
+          next.add(historyItem.id);
+          return next;
+        });
+        setStatus(`已生成执行计划，共 ${payload.plan_steps.length} 步，正在执行...`);
       }
     });
 
@@ -464,13 +485,19 @@ export default function App() {
     };
 
     source.addEventListener("plan_step_started", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
-      if (payload.step_id) updatePlanStepStatus(payload.step_id, "running");
+      const payload = parseSsePayload<{ step_id?: string; description?: string }>(streamEvent);
+      if (payload.step_id) {
+        updatePlanStepStatus(payload.step_id, "running");
+        setStatus(payload.description ? `正在执行：${payload.description}` : "正在执行计划步骤...");
+      }
     });
 
     source.addEventListener("plan_step_completed", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
-      if (payload.step_id) updatePlanStepStatus(payload.step_id, "completed");
+      const payload = parseSsePayload<{ step_id?: string; description?: string }>(streamEvent);
+      if (payload.step_id) {
+        updatePlanStepStatus(payload.step_id, "completed");
+        setStatus(payload.description ? `已完成：${payload.description}` : "计划步骤已完成，正在继续...");
+      }
     });
 
     source.addEventListener("plan_step_failed", (streamEvent) => {
@@ -670,17 +697,16 @@ export default function App() {
         return;
       }
       const finalAnswer = payload.answer ?? payload.reply ?? historyItem.answer;
-      const completedItem: AskHistoryView = {
-        ...historyItem,
-        answer: finalAnswer,
-        citations: payload.citations ?? historyItem.citations,
-        graph_enabled: payload.graph_enabled ?? historyItem.graph_enabled,
-        status: "done",
-      };
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id
-            ? completedItem
+            ? {
+                ...item,
+                answer: finalAnswer,
+                citations: payload.citations ?? item.citations,
+                graph_enabled: payload.graph_enabled ?? item.graph_enabled,
+                status: "done",
+              }
             : item
         )
       );
@@ -690,7 +716,7 @@ export default function App() {
         void refreshAll();
       } else {
         setStatus("已根据你的笔记生成回答。");
-        void refreshAskHistorySelection(completedItem);
+        void refreshAskHistorySelection();
       }
       source.close();
       eventSourceRef.current = null;
@@ -716,11 +742,14 @@ export default function App() {
 
   async function refreshAskHistorySelection(fallbackItem?: AskHistoryView) {
     try {
-      const response = await fetchAskHistory(userId, 20, sessionId);
-      const serverItems = response.items.map((item) => ({
+      const [response, runResult] = await Promise.all([
+        fetchAskHistory(userId, 20, sessionId),
+        fetchEntryRuns(userId, 100),
+      ]);
+      const serverItems = mergeRunBackedHistory(response.items.map((item) => ({
         ...item,
         status: "done" as const,
-      }));
+      })), runResult.items, sessionId);
       setAskHistory((currentHistory) => {
         const merged = mergeAskHistory(serverItems, currentHistory, fallbackItem);
         setSelectedAskId((currentSelectedId) => {
@@ -736,10 +765,10 @@ export default function App() {
       });
       const allHistoryResponse = await fetchAskHistory(userId, 100);
       setAllAskHistory(
-        allHistoryResponse.items.map((item) => ({
+        mergeRunBackedHistory(allHistoryResponse.items.map((item) => ({
           ...item,
           status: "done" as const,
-        }))
+        })), runResult.items)
       );
     } catch (error) {
       console.error(error);
@@ -1962,6 +1991,66 @@ function summarizeSessionsFromHistory(history: AskHistoryView[]): SessionSummary
   });
 }
 
+function attachRunSnapshots(
+  items: AskHistoryView[],
+  runs: EntryRunSnapshot[],
+): AskHistoryView[] {
+  return items.map((item) => {
+    const run = runs.find(
+      (candidate) =>
+        candidate.session_id === item.session_id &&
+        candidate.entry_text === item.question &&
+        (candidate.plan_steps.length > 0 || candidate.execution_trace.length > 0),
+    );
+    if (!run) return item;
+    return {
+      ...item,
+      plan_steps: run.plan_steps.length ? run.plan_steps : item.plan_steps,
+      execution_trace: run.execution_trace.length ? run.execution_trace : item.execution_trace,
+      run_id: run.run_id,
+    };
+  });
+}
+
+function mergeRunBackedHistory(
+  items: AskHistoryView[],
+  runs: EntryRunSnapshot[],
+  sessionId?: string,
+): AskHistoryView[] {
+  const merged = attachRunSnapshots(items, runs);
+  const representedPrompts = new Set(
+    merged.map((item) => `${item.session_id}\u0000${item.question}`),
+  );
+  const latestRuns = [...runs].sort((left, right) =>
+    String(right.updated_at ?? right.created_at ?? "").localeCompare(
+      String(left.updated_at ?? left.created_at ?? ""),
+    )
+  );
+
+  for (const run of latestRuns) {
+    if (sessionId && run.session_id !== sessionId) continue;
+    if (!run.answer || (!run.plan_steps.length && !run.execution_trace.length)) continue;
+    const promptKey = `${run.session_id}\u0000${run.entry_text}`;
+    if (representedPrompts.has(promptKey)) continue;
+    merged.push({
+      id: `run-${run.run_id}`,
+      user_id: run.user_id,
+      session_id: run.session_id,
+      question: run.entry_text,
+      answer: run.answer,
+      citations: [],
+      graph_enabled: false,
+      created_at: run.created_at ?? run.updated_at ?? new Date().toISOString(),
+      status: run.status === "waiting_confirmation" ? "waiting_confirmation" : "done",
+      plan_steps: run.plan_steps,
+      execution_trace: run.execution_trace,
+      run_id: run.run_id,
+    });
+    representedPrompts.add(promptKey);
+  }
+  return merged;
+}
+
 function mergeAskHistory(
   serverItems: AskHistoryView[],
   currentItems: AskHistoryView[],
@@ -1971,7 +2060,22 @@ function mergeAskHistory(
   const seen = new Set<string>();
 
   for (const item of serverItems) {
-    merged.push(item);
+    const localItem = currentItems.find(
+      (candidate) =>
+        candidate.id === item.id ||
+        (candidate.question === item.question && candidate.answer === item.answer),
+    );
+    merged.push(
+      localItem
+        ? {
+            ...item,
+            plan_steps: item.plan_steps?.length ? item.plan_steps : localItem.plan_steps,
+            execution_trace: item.execution_trace?.length ? item.execution_trace : localItem.execution_trace,
+            run_id: item.run_id ?? localItem.run_id,
+            pending_confirmation: item.pending_confirmation ?? localItem.pending_confirmation,
+          }
+        : item,
+    );
     seen.add(item.id);
   }
 

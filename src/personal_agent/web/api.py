@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..agent.orchestration_models import AgentRunStatus
+from ..agent.orchestration_models import AgentRunStatus, _new_thread_id
 from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
@@ -115,6 +115,8 @@ class ResetUserDataResponse(BaseModel):
     deleted_reviews: int = 0
     deleted_conversations: int = 0
     deleted_upload_files: int = 0
+    deleted_ask_history: int = 0
+    deleted_graph_episodes: int = 0
 
 
 class ToolSpecResponse(BaseModel):
@@ -426,7 +428,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Text is required.")
 
         resolved_user = user_id if user_id != "default" else _get_user_id(request, settings)
-        logger.info("Entry stream requested for user=%s session=%s text=%s", resolved_user, session_id, text[:120])
+        thread_id = _new_thread_id(resolved_user, session_id)
+        logger.info(
+            "Entry stream requested for user=%s session=%s thread_id=%s text=%s",
+            resolved_user, session_id, thread_id, text[:120],
+        )
 
         async def event_generator():
             entry_input = EntryInput(
@@ -435,46 +441,36 @@ def create_app() -> FastAPI:
                 session_id=session_id,
                 source_platform="web",
             )
+            yield _sse_event("status", {"message": "正在理解并执行请求..."})
 
-            runtime = service._runtime
-
-            # Quick classification first (no heavy work)
-            decision = runtime.classify_intent(entry_input)
-            yield _sse_event("intent", {
-                "intent": decision.route,
-                "reason": decision.user_visible_message,
-            })
-
-            # For ask intent: stream tokens directly, emit execution trace after
-            if decision.route == "ask":
-                for event_type, payload in _stream_events(
-                    runtime.execute_ask_stream(text.strip(), resolved_user, session_id)
-                ):
-                    yield _sse_event(event_type, payload)
-                yield _sse_event("execution_trace", {
-                    "execution_trace": [
-                        "在知识库和图谱中检索相关内容",
-                        "整合检索到的证据，生成自然语言回答",
-                        "校验回答的事实依据和引用完整性",
-                        "若证据不足，通过网络搜索补充外部信息",
-                    ],
-                })
-                return
-
-            # For all other intents: use the full execute_entry pipeline
+            # All entry intents use the LangGraph orchestration pipeline so
+            # their state, events and thread checkpoints stay consistent.
             progress_queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            streamed_graph_events = False
 
             def _on_progress(event: str, payload: dict[str, object]) -> None:
-                try:
-                    progress_queue.put_nowait((event, payload))
-                except asyncio.QueueFull:
-                    pass
+                loop.call_soon_threadsafe(progress_queue.put_nowait, (event, payload))
 
-            result = await asyncio.to_thread(service.entry, entry_input, on_progress=_on_progress)
+            execution_task = asyncio.create_task(
+                asyncio.to_thread(service.entry, entry_input, on_progress=_on_progress)
+            )
+            while not execution_task.done() or not progress_queue.empty():
+                try:
+                    evt, payload = await asyncio.wait_for(progress_queue.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue
+                streamed_graph_events = True
+                yield _sse_event(evt, payload)
+            result = await execution_task
 
             # Phase 3: if the graph was interrupted for confirmation,
             # emit the confirmation payload and return early.
             if result.pending_confirmation:
+                yield _sse_event("intent", {
+                    "intent": result.intent,
+                    "reason": result.reason,
+                })
                 yield _sse_event("confirmation_required", {
                     "run_id": result.run_id,
                     "pending_confirmation": result.pending_confirmation,
@@ -487,7 +483,7 @@ def create_app() -> FastAPI:
                 return
 
             # Phase 5: when graph events are available, derive SSE from them
-            if result.events:
+            if result.events and not streamed_graph_events:
                 from ..agent.orchestration_models import (
                     events_to_sse_tuples,
                     execution_trace_from_events,
@@ -496,6 +492,10 @@ def create_app() -> FastAPI:
 
                 parsed_events = [AgentEvent.model_validate(e) for e in result.events]
                 for sse_type, payload in events_to_sse_tuples(parsed_events):
+                    # Each result branch emits one terminal event below with
+                    # its full payload (citations, matches, reply text).
+                    if sse_type == "done":
+                        continue
                     yield _sse_event(sse_type, payload)
 
                 # Emit plan_steps and execution_trace derived from events
@@ -508,7 +508,7 @@ def create_app() -> FastAPI:
                     yield _sse_event("execution_trace", {
                         "execution_trace": derived_trace,
                     })
-            else:
+            elif not result.events and not streamed_graph_events:
                 # Legacy path: use result fields directly
                 if result.plan_steps:
                     yield _sse_event("plan_created", {
@@ -520,10 +520,10 @@ def create_app() -> FastAPI:
                         "execution_trace": result.execution_trace,
                     })
 
-            # Drain any progress events emitted during plan execution
-            while not progress_queue.empty():
-                evt, payload = progress_queue.get_nowait()
-                yield _sse_event(evt, payload)
+            if streamed_graph_events and result.execution_trace:
+                yield _sse_event("execution_trace", {
+                    "execution_trace": result.execution_trace,
+                })
 
             if result.intent in ("capture_text", "capture_link", "capture_file"):
                 capture_data = result.capture_result.model_dump(mode="json") if result.capture_result else None
@@ -534,7 +534,6 @@ def create_app() -> FastAPI:
                 yield _sse_event("done", {"reply": result.reply_text})
 
             elif result.intent == "ask":
-                # Fallback: ask that was routed through execute_entry for any reason
                 ask_data = result.ask_result.model_dump(mode="json") if result.ask_result else {}
                 yield _sse_event("status", {"message": "正在检索你的个人记忆..."})
                 yield _sse_event("metadata", {
@@ -903,7 +902,7 @@ def create_app() -> FastAPI:
 
 
 def _frontend_dist_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    return Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
 
 def _sse_event(event: str, payload: dict[str, object]) -> str:

@@ -188,7 +188,7 @@ class AgentRuntime(
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
         run_id = _new_run_id()
-        thread_id = _new_thread_id(normalized_user, normalized_session, run_id)
+        thread_id = _new_thread_id(normalized_user, normalized_session)
 
         initial_state = AgentGraphState(
             run_id=run_id,
@@ -206,7 +206,19 @@ class AgentRuntime(
 
         config = {"configurable": {"thread_id": thread_id}}
 
-        invoke_result = graph.invoke(initial_state, config)
+        # Pass explicit null/default values as channel updates. When a Pydantic
+        # model is used directly, LangGraph omits nullable defaults while
+        # resuming an existing thread, leaving prior-run transient values in
+        # the input checkpoint until the first node resets them.
+        if on_progress is None:
+            invoke_result = graph.invoke(initial_state.model_dump(), config)
+        else:
+            invoke_result = self._stream_entry_graph(
+                graph,
+                initial_state.model_dump(),
+                config,
+                on_progress,
+            )
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
             return self._entry_result_from_interrupt(
@@ -248,6 +260,36 @@ class AgentRuntime(
             run_status="completed",
             events=[e.model_dump(mode="json") for e in result_state.events],
         )
+
+    def _stream_entry_graph(self, graph, initial_state: dict, config: dict, on_progress):
+        """Run graph nodes while forwarding newly persisted events to a caller."""
+        from .orchestration_models import AgentEvent, events_to_sse_tuples
+
+        emitted_event_ids: set[str] = set()
+        interrupt_result: dict | None = None
+        for update in graph.stream(initial_state, config, stream_mode="updates"):
+            if "__interrupt__" in update:
+                interrupt_result = update
+            for node_update in update.values():
+                if not isinstance(node_update, dict):
+                    continue
+                for raw_event in node_update.get("events", []):
+                    event = (
+                        raw_event
+                        if isinstance(raw_event, AgentEvent)
+                        else AgentEvent.model_validate(raw_event)
+                    )
+                    if event.event_id in emitted_event_ids:
+                        continue
+                    emitted_event_ids.add(event.event_id)
+                    for event_type, payload in events_to_sse_tuples([event]):
+                        # The HTTP layer emits one terminal result with complete
+                        # answer/citation metadata after graph completion.
+                        if event_type != "done":
+                            on_progress(event_type, payload)
+        if interrupt_result is not None:
+            return interrupt_result
+        return graph.get_state(config).values
 
     def _entry_result_from_interrupt(
         self,
@@ -346,18 +388,14 @@ class AgentRuntime(
 
     def get_run_snapshot(self, run_id: str) -> AgentRunSnapshot | None:
         """Return a read-only snapshot for the most recent checkpoint of a run."""
-        if self._orch_graph is None:
-            return None
         try:
-            checkpointer = self._orch_graph.checkpointer
+            checkpointer = self._get_orch_graph().checkpointer
             for ct in checkpointer.list(None, limit=500):
-                tid: str = ct.config.get("configurable", {}).get("thread_id", "")
-                if not tid or not tid.endswith(f":{run_id}"):
-                    continue
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
                     state = AgentGraphState.model_validate(cv)
-                    return state.to_run_snapshot()
+                    if state.run_id == run_id:
+                        return state.to_run_snapshot()
         except Exception:
             logger.debug("Could not retrieve run snapshot for run_id=%s", run_id, exc_info=True)
         return None
@@ -367,26 +405,22 @@ class AgentRuntime(
     ) -> list[AgentRunSnapshot]:
         """List recent run snapshots, optionally filtered by user.
 
-        Returns the most recent checkpoint per thread_id.
+        Returns the most recent checkpoint per run_id. Multiple runs may share
+        one LangGraph thread for a conversation session.
         """
-        if self._orch_graph is None:
-            return []
         try:
-            checkpointer = self._orch_graph.checkpointer
-            newest_by_tid: dict[str, AgentRunSnapshot] = {}
+            checkpointer = self._get_orch_graph().checkpointer
+            newest_by_run: dict[str, AgentRunSnapshot] = {}
             for ct in checkpointer.list(None, limit=500):
-                tid: str = ct.config.get("configurable", {}).get("thread_id", "")
-                if not tid:
-                    continue
-                if user_id and not tid.startswith(f"{user_id}:"):
-                    continue
-                if tid in newest_by_tid:
-                    continue  # already have the newest for this thread_id
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
                     state = AgentGraphState.model_validate(cv)
-                    newest_by_tid[tid] = state.to_run_snapshot()
-            snapshots = list(newest_by_tid.values())
+                    if user_id and state.user_id != user_id:
+                        continue
+                    if state.run_id in newest_by_run:
+                        continue
+                    newest_by_run[state.run_id] = state.to_run_snapshot()
+            snapshots = list(newest_by_run.values())
             snapshots.sort(key=lambda s: s.updated_at, reverse=True)
             return snapshots[:limit]
         except Exception:
