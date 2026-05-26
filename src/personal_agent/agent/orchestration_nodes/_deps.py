@@ -121,16 +121,36 @@ def _topological_sort_steps(steps: list) -> list:
     return result
 
 
-def _inject_note_id_into_steps(resolve_step_id: str, note_id: str, plan_steps: list) -> None:
+def _inject_note_id_into_steps(
+    resolve_step_id: str, note_id: str, user_id: str, plan_steps: list,
+) -> None:
+    by_id = {s.step_id: s for s in plan_steps}
+
+    def depends_on_resolve(step) -> bool:
+        pending = list(step.depends_on)
+        visited: set[str] = set()
+        while pending:
+            step_id = pending.pop()
+            if step_id == resolve_step_id:
+                return True
+            if step_id in visited:
+                continue
+            visited.add(step_id)
+            parent = by_id.get(step_id)
+            if parent is not None:
+                pending.extend(parent.depends_on)
+        return False
+
     for s in plan_steps:
         if s.status != "planned":
             continue
-        if (resolve_step_id in s.depends_on
+        if (depends_on_resolve(s)
                 and s.action_type == "tool_call"
                 and s.tool_name == "delete_note"):
             if not s.tool_input:
                 s.tool_input = {}
             s.tool_input["note_id"] = note_id
+            s.tool_input["user_id"] = user_id
 
 
 def _inject_draft_text_into_steps(

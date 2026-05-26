@@ -107,13 +107,20 @@ class TestCrossLayerRegression:
         action_types = {s.get("action_type") for s in result.plan_steps}
         assert "compose" in action_types
 
-    def test_delete_knowledge_full_flow_creates_pending_action(self, svc: AgentService):
+    def test_delete_knowledge_full_flow_creates_pending_action(self, svc: AgentService, monkeypatch):
         """Complete delete flow: plan → resolve → tool_call creates pending action."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         note = svc.execute_capture(
             text="旧部署流程记录", source_type="text", user_id="alice",
         ).note
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            lambda _prompt, _deps: (
+                '{"thought":"定位已有笔记","done":true,'
+                f'"result":{{"note_id":"{note.id}"}}}}'
+            ),
+        )
 
         # Mock graph to return episode UUIDs so resolve tier-1 hits
         svc.graph_store.ask.return_value = type("R", (), {
@@ -130,8 +137,8 @@ class TestCrossLayerRegression:
         # Plan steps should include tool_call with delete_note
         tool_steps = [s for s in result.plan_steps if s.get("action_type") == "tool_call"]
         assert len(tool_steps) > 0
-        # Tool call step should have captured a status
-        assert tool_steps[0].get("status") in ("completed", "failed", "planned")
+        assert tool_steps[0].get("status") == "awaiting_confirmation"
+        assert result.pending_confirmation
 
     def test_solidify_full_flow_compose_generates_answer(self, svc: AgentService):
         """Solidify full flow: retrieve → compose → verify generates draft text."""

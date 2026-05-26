@@ -262,7 +262,7 @@ ToolRegistry.execute(tool_name, **tool_input)
 
 因此实际主链路里的失败处理更多发生在：
 
-- router 的启发式兜底
+- router 重试耗尽后的显式模型不可用响应
 - planner 的 fallback plan
 - executor 的 retry / skip / abort / replan
 - delete resolve 的图谱、本地相似检索、关键词和 recent citations 回退

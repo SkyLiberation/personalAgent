@@ -9,7 +9,7 @@ import pytest
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput, KnowledgeNote, PendingAction
-from tests.conftest import POSTGRES_URL
+from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -31,6 +31,7 @@ def service(test_settings: Settings) -> AgentService:
     svc = AgentService(test_settings)
     svc.graph_store = MagicMock()
     svc.graph_store.configured.return_value = False
+    svc._intent_router._classify_with_llm = stub_router_decision
     return svc
 
 

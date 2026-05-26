@@ -7,7 +7,7 @@ from psycopg import connect
 from unittest.mock import MagicMock
 
 from personal_agent.core.models import EntryInput, PendingAction
-from tests.conftest import POSTGRES_URL
+from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -24,6 +24,7 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     from personal_agent.web.api import create_app
     app = create_app()
+    app.state.service._intent_router._classify_with_llm = stub_router_decision
     return TestClient(app)
 
 
@@ -95,6 +96,57 @@ class TestEntryStreamEndpoint:
         assert "event: plan_step_started" in response.text
         assert "event: plan_step_completed" in response.text
         assert response.text.index("event: plan_created") < response.text.index("event: done")
+
+    def test_capture_stream_shows_routing_and_captured_content_before_done(self, api_client: TestClient):
+        response = api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "记一下：DNS 将域名解析为 IP 地址。",
+                "user_id": "test-user",
+                "session_id": "entry-stream-capture",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: intent" in response.text
+        assert "event: tool_result" in response.text
+        assert "DNS" in response.text
+        assert response.text.index("event: intent") < response.text.index("event: done")
+        assert response.text.index("event: tool_result") < response.text.index("event: done")
+
+    def test_waiting_run_snapshot_exposes_confirmation_and_can_resume(self, api_client: TestClient):
+        response = api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "帮我",
+                "user_id": "test-user",
+                "session_id": "entry-stream-resume",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: confirmation_required" in response.text
+
+        runs = api_client.get(
+            "/api/entry/runs",
+            params={"user_id": "test-user"},
+        ).json()["items"]
+        run = next(item for item in runs if item["session_id"] == "entry-stream-resume")
+
+        assert run["status"] == "waiting_confirmation"
+        assert run["pending_confirmation"]["kind"] == "clarification_required"
+
+        resumed = api_client.post(
+            f"/api/entry/runs/{run['run_id']}/resume",
+            json={
+                "decision": "clarify",
+                "user_id": "test-user",
+                "text": "记一下：确认操作应在原对话中完成。",
+            },
+        )
+
+        assert resumed.status_code == 200
+        assert resumed.json()["run_status"] == "completed"
 
 
 class TestDigestEndpoint:

@@ -80,7 +80,8 @@ class DefaultTaskPlanner:
 
         prompt = (
             "你是一个任务规划器。请根据用户意图，将任务分解为一系列执行步骤。"
-            "可用 action_type: retrieve(检索), tool_call(调用工具), compose(生成回答), verify(校验)。"
+            "可用 action_type: retrieve(检索), resolve(从候选中解析具体目标), "
+            "tool_call(调用工具), compose(生成回答), verify(校验)。"
             "只返回 JSON 数组，每个元素包含以下字段：\n"
             "  step_id(短标识), action_type, description(对用户友好的中文说明),\n"
             "  tool_name(nullable), tool_input(对象, nullable),\n"
@@ -89,6 +90,10 @@ class DefaultTaskPlanner:
             "  risk_level(low/medium/high), requires_confirmation(bool),\n"
             "  on_failure(skip/retry/abort)。\n"
             "description 应该用自然语言向用户说明这一步要做什么，不要只写枚举值。\n"
+            "对于 delete_knowledge，必须在调用 delete_note 工具前安排 resolve 步骤；"
+            "delete_note 的 note_id 由 resolve 执行结果动态注入，不要凭空编造。\n"
+            "对于 solidify_conversation，写入 capture_text 前必须安排 compose 步骤生成真实知识草稿；"
+            "capture_text 的 text 由 compose 结果动态注入，不得写入 {{...}} 占位符或直接复用 retrieve 输出。\n"
             f"意图: {intent}\n"
             f"上下文: {context or '无'}\n"
             f"可用工具:\n{tool_list or '无'}"
@@ -116,7 +121,7 @@ class DefaultTaskPlanner:
             if not isinstance(steps_data, list):
                 return None
             steps: list[PlanStep] = []
-            valid_actions = {"retrieve", "tool_call", "compose", "verify"}
+            valid_actions = {"retrieve", "resolve", "tool_call", "compose", "verify"}
             for item in steps_data:
                 if not isinstance(item, dict):
                     continue

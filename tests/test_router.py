@@ -4,60 +4,8 @@ import logging
 
 import pytest
 
-from personal_agent.agent.entry_nodes import (
-    EntryNodeDeps,
-    heuristic_entry_intent,
-    route_entry_intent_node,
-)
 from personal_agent.agent.router import DefaultIntentRouter, RouterDecision
-from personal_agent.core.models import AgentState, EntryInput
-
-
-class TestHeuristicEntryIntent:
-    def test_empty_text_returns_unknown(self):
-        intent, reason = heuristic_entry_intent("")
-        assert intent == "unknown"
-        assert "空" in reason
-
-    def test_url_only_returns_capture_link(self):
-        intent, reason = heuristic_entry_intent("https://example.com/article")
-        assert intent == "capture_link"
-        assert "链接" in reason
-
-    def test_url_with_ask_keyword_returns_ask(self):
-        intent, reason = heuristic_entry_intent(
-            "https://example.com/article 这篇文章讲了什么？"
-        )
-        assert intent == "ask"
-        assert "提问" in reason
-
-    def test_question_marks_returns_ask(self):
-        intent, _ = heuristic_entry_intent("什么是服务降级？")
-        assert intent == "ask"
-
-    def test_ask_keyword_zenme_returns_ask(self):
-        intent, _ = heuristic_entry_intent("怎么配置Neo4j连接？")
-        assert intent == "ask"
-
-    def test_capture_keyword_returns_capture_text(self):
-        intent, _ = heuristic_entry_intent("记一下：今天学习了LangGraph")
-        assert intent == "capture_text"
-
-    def test_capture_keyword_baocun_returns_capture_text(self):
-        intent, _ = heuristic_entry_intent("保存这篇文章到知识库")
-        assert intent == "capture_text"
-
-    def test_summarize_thread_keywords_returns_summarize(self):
-        intent, _ = heuristic_entry_intent("帮我总结一下今天群聊讨论了什么")
-        assert intent == "summarize_thread"
-
-    def test_default_falls_back_to_capture_text(self):
-        intent, _ = heuristic_entry_intent("今天天气不错")
-        assert intent == "capture_text"
-
-    def test_url_in_text_is_detected(self):
-        intent, _ = heuristic_entry_intent("看看这个 https://docs.python.org/3/")
-        assert intent == "capture_link"
+from personal_agent.core.models import EntryInput
 
 
 class TestDefaultIntentRouter:
@@ -82,7 +30,7 @@ class TestDefaultIntentRouter:
         decision = router.classify(entry)
         assert decision.route == "unknown"
 
-    def test_llm_not_configured_falls_back_to_heuristic(self):
+    def test_llm_not_configured_reports_router_unavailable(self):
         from personal_agent.core.config import Settings
 
         router_no_llm = DefaultIntentRouter(
@@ -90,9 +38,11 @@ class TestDefaultIntentRouter:
         )
         entry = EntryInput(source_type="text", text="什么是服务降级？")
         decision = router_no_llm.classify(entry)
-        assert decision.route == "ask"
-        assert decision.requires_retrieval is True
+        assert decision.route == "unknown"
+        assert decision.requires_retrieval is False
+        assert decision.requires_clarification is False
         assert decision.risk_level == "low"
+        assert "路由模型当前不可用" in decision.user_visible_message
 
     def test_llm_current_weather_ask_decision_enables_retrieval(self, monkeypatch):
         from personal_agent.core.config import Settings
@@ -159,7 +109,7 @@ class TestDefaultIntentRouter:
         assert decision.route == "capture_text"
         assert decision.requires_planning is False
 
-    def test_configured_llm_failure_does_not_fall_back_to_write_route(self, monkeypatch):
+    def test_configured_llm_failure_reports_router_unavailable(self, monkeypatch):
         from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(
@@ -171,10 +121,11 @@ class TestDefaultIntentRouter:
         )
         monkeypatch.setattr(router, "_classify_with_llm", lambda _text, _context="": None)
 
-        decision = router.classify(EntryInput(text="将DNS相关知识存储至知识库"))
+        decision = router.classify(EntryInput(text="什么是DNS"))
 
         assert decision.route == "unknown"
-        assert decision.requires_clarification is True
+        assert decision.requires_clarification is False
+        assert "路由模型当前不可用" in decision.user_visible_message
 
     def test_explicit_note_content_remains_plain_capture(self, monkeypatch):
         from personal_agent.core.config import Settings
@@ -193,21 +144,43 @@ class TestDefaultIntentRouter:
 
         assert decision.route == "capture_text"
 
-    def test_router_returns_structured_decision(self):
+    def test_llm_delete_decision_applies_high_risk_defaults(self, monkeypatch):
         from personal_agent.core.config import Settings
 
-        router_no_llm = DefaultIntentRouter(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+        router = DefaultIntentRouter(Settings())
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(
+                route="delete_knowledge",
+                risk_level="high",
+                requires_confirmation=True,
+            ),
         )
         entry = EntryInput(source_type="text", text="删除那条旧笔记")
-        decision = router_no_llm.classify(entry)
+        decision = router.classify(entry)
         assert isinstance(decision, RouterDecision)
         assert decision.route == "delete_knowledge"
         assert decision.risk_level == "high"
         assert decision.requires_confirmation is True
         assert decision.requires_planning is True
 
-    def test_router_decision_has_all_fields(self):
+    def test_delete_defaults_remain_safe_when_llm_omits_risk_fields(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        router = DefaultIntentRouter(Settings())
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(route="delete_knowledge"),
+        )
+
+        decision = router.classify(EntryInput(text="删除关于DNS的知识"))
+
+        assert decision.risk_level == "high"
+        assert decision.requires_confirmation is True
+
+    def test_router_unavailable_decision_has_all_fields(self):
         from personal_agent.core.config import Settings
 
         router_no_llm = DefaultIntentRouter(
@@ -228,20 +201,28 @@ class TestDefaultIntentRouter:
         assert hasattr(decision, "candidate_tools")
         assert hasattr(decision, "user_visible_message")
 
-    def test_incomplete_fragment_requires_clarification_without_llm(self):
+    def test_llm_may_request_clarification_for_incomplete_fragment(self, monkeypatch):
         from personal_agent.core.config import Settings
 
-        router_no_llm = DefaultIntentRouter(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+        router = DefaultIntentRouter(Settings())
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(
+                route="unknown",
+                requires_clarification=True,
+                missing_information=["具体目标或待处理内容"],
+                clarification_prompt="请补充具体内容。",
+            ),
         )
-        decision = router_no_llm.classify(EntryInput(source_type="text", text="帮我"))
+        decision = router.classify(EntryInput(source_type="text", text="帮我"))
 
         assert decision.route == "unknown"
         assert decision.requires_clarification is True
         assert decision.missing_information
         assert decision.clarification_prompt
 
-    def test_router_logs_structured_decision(self, caplog):
+    def test_router_logs_unconfigured_model_decision(self, caplog):
         from personal_agent.core.config import Settings
 
         router_no_llm = DefaultIntentRouter(
@@ -253,35 +234,7 @@ class TestDefaultIntentRouter:
             EntryInput(source_type="text", text="什么是服务降级？", user_id="alice")
         )
 
-        assert decision.route == "ask"
+        assert decision.route == "unknown"
         assert "router.decision" in caplog.text
-        assert '"strategy": "heuristic"' in caplog.text
-        assert '"route": "ask"' in caplog.text
-
-    def test_entry_route_node_logs_target_node(self, caplog):
-        deps = EntryNodeDeps(
-            classify_intent=lambda _entry: RouterDecision(
-                route="ask",
-                confidence=0.86,
-                requires_retrieval=True,
-                candidate_tools=["graph_search"],
-                user_visible_message="测试路由到问答分支。",
-            ),
-            capture=lambda **_kwargs: None,
-            ask=lambda *_args, **_kwargs: None,
-        )
-        state = AgentState(
-            mode="entry",
-            user_id="alice",
-            entry_input=EntryInput(
-                text="什么是服务降级？", user_id="alice", session_id="s1"
-            ),
-        )
-        caplog.set_level(logging.INFO)
-
-        result = route_entry_intent_node(state, deps)
-
-        assert result.intent == "ask"
-        assert "entry.route.selected" in caplog.text
-        assert '"route": "ask"' in caplog.text
-        assert '"target_node": "ask_branch"' in caplog.text
+        assert '"strategy": "llm_unconfigured"' in caplog.text
+        assert '"route": "unknown"' in caplog.text

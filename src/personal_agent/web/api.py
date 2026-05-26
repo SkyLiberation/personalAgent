@@ -645,6 +645,8 @@ def create_app() -> FastAPI:
         plan_steps: list[dict[str, object]] = Field(default_factory=list)
         execution_trace: list[str] = Field(default_factory=list)
         answer: str | None = None
+        pending_confirmation: dict[str, object] | None = None
+        confirmation_decision: str | None = None
         errors: list[str] = Field(default_factory=list)
         created_at: str | None = None
         updated_at: str | None = None
@@ -668,6 +670,8 @@ def create_app() -> FastAPI:
             plan_steps=snapshot.plan_steps,
             execution_trace=snapshot.execution_trace,
             answer=snapshot.answer,
+            pending_confirmation=snapshot.pending_confirmation,
+            confirmation_decision=snapshot.confirmation_decision,
             errors=snapshot.errors,
             created_at=snapshot.created_at.isoformat() if snapshot.created_at else None,
             updated_at=snapshot.updated_at.isoformat() if snapshot.updated_at else None,

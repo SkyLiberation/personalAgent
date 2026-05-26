@@ -443,6 +443,45 @@ input {
   animation: blink 1s steps(1) infinite;
 }
 
+.route-progress,
+.step-output-card {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(84, 136, 255, 0.08);
+  border: 1px solid rgba(84, 136, 255, 0.2);
+}
+
+.route-progress span,
+.step-output-card span,
+.plan-step-output span {
+  color: rgba(247, 241, 232, 0.55);
+  font-size: 0.74rem;
+}
+
+.route-progress strong,
+.step-output-card strong,
+.plan-step-output strong {
+  color: #d7e4ff;
+  font-size: 0.88rem;
+}
+
+.route-progress p,
+.step-output-card p,
+.plan-step-output p {
+  margin: 0;
+  color: rgba(247, 241, 232, 0.8);
+  font-size: 0.84rem;
+  white-space: pre-wrap;
+}
+
+.step-output-card {
+  background: rgba(117, 231, 179, 0.07);
+  border-color: rgba(117, 231, 179, 0.2);
+}
+
 @keyframes blink {
   50% {
     opacity: 0;
@@ -788,9 +827,20 @@ button:disabled {
 
 .plan-step-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 3px 0;
+}
+
+.plan-step-output {
+  display: grid;
+  gap: 4px;
+  flex-basis: 100%;
+  margin: 4px 0 7px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .plan-step-trace {
@@ -915,6 +965,30 @@ button:disabled {
   display: flex;
   gap: 8px;
   justify-content: flex-start;
+}
+
+.inline-confirmation-actions {
+  display: flex;
+  flex-basis: 100%;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.inline-confirmation-resolution {
+  display: inline-flex;
+  margin-top: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: rgba(117, 231, 179, 0.12);
+  color: #9ff0c7;
+}
+
+.inline-confirmation-resolution.resolution-rejected {
+  background: rgba(255, 173, 96, 0.12);
+  color: #ffcc7a;
 }
 
 .plan-step-retry {

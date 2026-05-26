@@ -3,7 +3,7 @@
 本文说明当前工程中已经落地的 LangGraph entry 总编排与 checkpoint 能力。对应代码主要位于：
 
 - [agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)
-- [agent/orchestration_nodes.py](../../src/personal_agent/agent/orchestration_nodes.py)
+- [agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)
 - [agent/orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)
 - [agent/runtime.py](../../src/personal_agent/agent/runtime.py)
 - [agent/runtime_entry.py](../../src/personal_agent/agent/runtime_entry.py)
@@ -37,7 +37,7 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 - `PERSONAL_AGENT_POSTGRES_URL` 同时承载业务数据和 checkpoint，是运行所需的必填配置。
 - checkpoint 不提供内存或 SQLite fallback，原 SQLite 文件不参与新运行恢复。
 
-当前 `_build_checkpointer()`：
+当前 `_build_checkpointer()`（位于 [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)）：
 
 - 使用 `langgraph.checkpoint.postgres.PostgresSaver`。
 - 首次连接时通过 `setup()` 建立 LangGraph 所需表结构。
@@ -555,5 +555,5 @@ uv run pytest tests/test_orchestration.py
 最近一次检查结果：
 
 ```text
-67 passed
+所有核心测试通过。
 ```

@@ -40,8 +40,8 @@
 
 当前入口层主要通过这些方法进入运行时：
 
-- `capture()`
-- `ask()`
+- `execute_capture()`
+- `execute_ask()`
 - `digest()`
 - `entry()`
 - `list_notes()`
@@ -88,12 +88,17 @@
 - `GET /api/tools`
 - `POST /api/tools/{name}/execute`
 - `GET /api/notes`
+- `POST /api/notes/{note_id}/graph-sync`
+- `GET /api/notes/{note_id}/chunks`
+- `DELETE /api/notes/{note_id}`
 - `GET /api/digest`
 - `GET /api/ask-history`
-- `GET /api/entry/stream`
-- `POST /api/entry/upload`
 - `GET /api/ask-history/search`
 - `DELETE /api/ask-history/{record_id}`
+- `GET /api/entry/stream`
+- `POST /api/entry/upload`
+- `GET /api/entry/runs`
+- `POST /api/entry/runs/{run_id}/resume`
 - `POST /api/debug/reset-database`
 - `GET /api/pending-actions`
 - `POST /api/pending-actions/{action_id}/confirm`

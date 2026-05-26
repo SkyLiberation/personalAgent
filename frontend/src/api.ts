@@ -202,6 +202,9 @@ export type PlanStep = {
   status: string;
   retry_count?: number;
   validation_warnings?: string[];
+  output_label?: string;
+  output_title?: string;
+  output_preview?: string;
 };
 
 export type EntryPendingConfirmation = {
@@ -254,6 +257,8 @@ export type EntryRunSnapshot = {
   plan_steps: PlanStep[];
   execution_trace: string[];
   answer?: string | null;
+  pending_confirmation?: EntryPendingConfirmation | null;
+  confirmation_decision?: "confirmed" | "rejected" | string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };

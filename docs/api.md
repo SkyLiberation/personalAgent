@@ -37,6 +37,26 @@
 查询参数：
 
 - `user_id`
+- `flat`（bool，默认 false）：为 true 时同时返回 chunk notes
+
+## `DELETE /api/notes/{note_id}`
+
+删除指定笔记，可选级联删除子 chunk 和关联图谱 episode。
+
+查询参数：
+
+- `user_id`
+- `cascade`（bool，默认 false）：是否级联删除子 chunk
+
+响应：
+
+```json
+{"ok": true, "deleted_note_id": "76ac8451-..."}
+```
+
+## `GET /api/notes/{note_id}/chunks`
+
+返回指定 parent note 的所有子 chunk notes。
 
 ## `GET /api/digest`
 
@@ -53,13 +73,14 @@
 查询参数：
 
 - `user_id`
-- `limit`
+- `limit`（默认 20）
 - `session_id`
 
 说明：
 
 - 传入 `session_id` 时，只返回该会话下的历史
 - 不传 `session_id` 时，返回该用户最近的全量历史
+- `limit` 默认 20
 
 示例响应：
 
@@ -79,6 +100,33 @@
 }
 ```
 
+## `GET /api/ask-history/search`
+
+搜索问答历史记录。
+
+查询参数：
+
+- `q`（必填）：搜索关键词
+- `user_id`
+- `limit`（默认 20）
+- `session_id`
+
+响应格式同 `GET /api/ask-history`。
+
+## `DELETE /api/ask-history/{record_id}`
+
+删除单条问答历史记录。
+
+查询参数：
+
+- `user_id`
+
+响应：
+
+```json
+{"ok": true, "deleted_id": "0f0b8fe7-..."}
+```
+
 ## `POST /api/notes/{note_id}/graph-sync`
 
 手动重试某条笔记的图谱同步。
@@ -86,7 +134,7 @@
 行为：
 
 - 先把笔记状态置为 `pending`
-- 然后在后台执行图谱同步
+- 然后同步执行图谱同步（含重试/退避）
 
 示例响应：
 
@@ -177,6 +225,7 @@
 - `capture_url` — 入参：`url` (string)
 - `capture_upload` — 入参：`file_path` (string), `filename` (string), `content_type` (string, 可选)
 - `graph_search` — 入参：`question` (string), `user_id` (string, 可选, 默认 "default")
+- `web_search` — 入参：`question` (string), `user_id` (string, 可选)
 - `capture_text` — 入参：`text` (string), `user_id` (string, 可选, 默认 "default")
 - `delete_note` — 入参：`note_id` (string), `user_id` (string, 可选), `confirmed` (bool), `action_id` (string, 确认时提供), `token` (string, 确认时提供)
 
@@ -329,6 +378,8 @@ data: {
       "plan_steps": [],
       "execution_trace": [],
       "answer": null,
+      "pending_confirmation": null,
+      "confirmation_decision": null,
       "errors": [],
       "created_at": "2026-05-19T00:00:00",
       "updated_at": "2026-05-19T00:00:01",

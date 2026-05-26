@@ -252,8 +252,11 @@ class AgentRuntime(
         capture_result = None
         ask_result = None
         if result_state.router_decision and result_state.router_decision.route in ("capture_text", "capture_link", "capture_file"):
-            # Capture details are held inside orchestration branch state.
-            pass
+            for item in reversed(result_state.tool_results):
+                capture_payload = item.get("capture_result") if isinstance(item, dict) else None
+                if isinstance(capture_payload, dict):
+                    capture_result = CaptureResult.model_validate(capture_payload)
+                    break
         elif result_state.router_decision and result_state.router_decision.route == "ask":
             ask_result = AskResult(
                 answer=reply_text,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, Thread
+from time import sleep
 
 import pytest
 
@@ -149,3 +151,56 @@ class TestMemoryFacade:
         assert "Q1" in summary
         assert "A1" in summary
         assert "Q2" in summary
+
+
+class TestAskHistoryStore:
+    def test_schema_initialization_is_serialized(self, monkeypatch):
+        store = AskHistoryStore(postgres_url=POSTGRES_URL)
+        schema_started = Event()
+        release_schema = Event()
+        connections = 0
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, _query):
+                schema_started.set()
+                assert release_schema.wait(timeout=2)
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                return None
+
+        def connect():
+            nonlocal connections
+            connections += 1
+            return FakeConnection()
+
+        monkeypatch.setattr(store, "_connect", connect)
+        first = Thread(target=store.ensure_schema)
+        second = Thread(target=store.ensure_schema)
+        first.start()
+        assert schema_started.wait(timeout=2)
+        second.start()
+        sleep(0.05)
+
+        assert connections == 1
+        release_schema.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert connections == 1

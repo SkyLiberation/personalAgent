@@ -164,7 +164,13 @@ class PlanValidator:
                             and "text" in err
                             and _has_upstream_action_type(steps, s, "compose")
                         )
-                        if deferred_draft_text:
+                        deferred_delete_note_id = (
+                            s.tool_name == "delete_note"
+                            and "note_id" not in s.tool_input
+                            and "note_id" in err
+                            and _has_upstream_action_type(steps, s, "resolve")
+                        )
+                        if deferred_draft_text or deferred_delete_note_id:
                             continue
                         issues.append(f"{prefix} tool_input 参数校验失败: {err}")
 
@@ -218,6 +224,17 @@ class PlanValidator:
                 warnings.append(
                     f"{prefix} requires_confirmation=True 但 risk_level='low'，"
                     f"建议将 risk_level 至少设为 'medium'。"
+                )
+
+            if (
+                decision.route == "solidify_conversation"
+                and s.action_type == "tool_call"
+                and s.tool_name == "capture_text"
+                and not _has_upstream_action_type(steps, s, "compose")
+            ):
+                issues.append(
+                    f"{prefix} 固化写入必须依赖 compose 生成的真实知识草稿，"
+                    "不得直接写入检索结果或步骤占位符。"
                 )
 
             # ReAct execution mode checks

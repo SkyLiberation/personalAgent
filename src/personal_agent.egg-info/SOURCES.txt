@@ -10,7 +10,6 @@ src/personal_agent.egg-info/entry_points.txt
 src/personal_agent.egg-info/requires.txt
 src/personal_agent.egg-info/top_level.txt
 src/personal_agent/agent/__init__.py
-src/personal_agent/agent/entry_nodes.py
 src/personal_agent/agent/graph.py
 src/personal_agent/agent/nodes.py
 src/personal_agent/agent/orchestration_graph.py

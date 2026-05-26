@@ -9,7 +9,7 @@ from personal_agent.agent.service import AgentService
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput, KnowledgeNote
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
-from tests.conftest import POSTGRES_URL
+from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -36,6 +36,7 @@ def service(test_settings: Settings) -> AgentService:
     mock_store.ingest_note.return_value = GraphCaptureResult(enabled=False)
     svc.graph_store = mock_store
     svc._runtime.graph_store = mock_store
+    svc._intent_router._classify_with_llm = stub_router_decision
     return svc
 
 
@@ -201,6 +202,17 @@ class TestAskFlow:
         history = service.list_ask_history(session_id="s1")
         assert len(history) >= 1
         assert history[0].question == "测试"
+
+    def test_internal_ask_can_skip_visible_history(self, service: AgentService):
+        service.execute_capture(text="内部摘要所需知识", source_type="text")
+        result = service.execute_ask(
+            question="生成内部摘要",
+            session_id="current-session",
+            record_history=False,
+        )
+
+        assert result.session_id == "current-session"
+        assert service.list_ask_history(session_id="current-session") == []
 
 
 class TestDigestFlow:

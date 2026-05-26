@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from threading import Lock
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -16,6 +17,7 @@ class AskHistoryStore:
     def __init__(self, postgres_url: str | None) -> None:
         self.postgres_url = postgres_url
         self._initialized = False
+        self._schema_lock = Lock()
 
     def configured(self) -> bool:
         return bool(self.postgres_url)
@@ -29,35 +31,38 @@ class AskHistoryStore:
         if not self.configured() or self._initialized:
             return
 
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ask_history (
-                        id TEXT PRIMARY KEY,
-                        user_id TEXT NOT NULL,
-                        session_id TEXT NOT NULL DEFAULT 'default',
-                        question TEXT NOT NULL,
-                        answer TEXT NOT NULL,
-                        citations JSONB NOT NULL DEFAULT '[]'::jsonb,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        with self._schema_lock:
+            if self._initialized:
+                return
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ask_history (
+                            id TEXT PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            session_id TEXT NOT NULL DEFAULT 'default',
+                            question TEXT NOT NULL,
+                            answer TEXT NOT NULL,
+                            citations JSONB NOT NULL DEFAULT '[]'::jsonb,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
                     )
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS ask_history_user_created_at_idx
-                    ON ask_history (user_id, created_at DESC)
-                    """
-                )
-                cur.execute(
-                    """
-                    ALTER TABLE ask_history
-                    ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT 'default'
-                    """
-                )
-            conn.commit()
-        self._initialized = True
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS ask_history_user_created_at_idx
+                        ON ask_history (user_id, created_at DESC)
+                        """
+                    )
+                    cur.execute(
+                        """
+                        ALTER TABLE ask_history
+                        ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT 'default'
+                        """
+                    )
+                conn.commit()
+            self._initialized = True
         logger.info("Ask history schema is ready in Postgres")
 
     def list_history(self, user_id: str, limit: int = 20, session_id: str | None = None) -> list[AskHistoryRecord]:

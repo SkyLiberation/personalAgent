@@ -82,6 +82,11 @@ type AskHistoryView = AskHistoryItem & {
   execution_trace?: string[];
   run_id?: string | null;
   pending_confirmation?: EntryPendingConfirmation | null;
+  confirmation_decision?: "confirmed" | "rejected" | null;
+  intent?: string;
+  intent_reason?: string;
+  captured_title?: string;
+  captured_preview?: string;
 };
 
 type SessionSummary = {
@@ -121,7 +126,7 @@ export default function App() {
   const [userId, setUserId] = useState(() => loadUserId());
   const [showSettings, setShowSettings] = useState(false);
   const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
-  const [pendingActions, setPendingActions] = useState<PendingActionItem[]>([]);
+  const [, setPendingActions] = useState<PendingActionItem[]>([]);
   const [isConfirmingAction, setIsConfirmingAction] = useState(false);
   const [clarificationInputs, setClarificationInputs] = useState<Record<string, { text: string; optionId: string }>>({});
   const [historySearchQuery, setHistorySearchQuery] = useState("");
@@ -262,7 +267,11 @@ export default function App() {
     );
     try {
       const result = await resumeEntryRun(action.run_id, decision, userId, text, optionId);
-      applyEntryResponseToHistory(action.local_history_id ?? null, result);
+      applyEntryResponseToHistory(
+        action.local_history_id ?? null,
+        result,
+        decision === "confirm" ? "confirmed" : decision === "reject" ? "rejected" : null,
+      );
       if (result.pending_confirmation && result.run_id) {
         const nextAction = pendingActionFromConfirmation(result.run_id, result.pending_confirmation, action.local_history_id);
         setPendingActions((current) => current.map((a) => (a.id === action.id ? nextAction : a)));
@@ -333,7 +342,11 @@ export default function App() {
     return pendingActionFromConfirmation(item.run_id, item.pending_confirmation, item.id);
   }
 
-  function applyEntryResponseToHistory(localHistoryId: string | null, result: EntryResponse) {
+  function applyEntryResponseToHistory(
+    localHistoryId: string | null,
+    result: EntryResponse,
+    confirmationDecision: "confirmed" | "rejected" | null = null,
+  ) {
     if (!localHistoryId) return;
     setAskHistory((current) =>
       current.map((item) =>
@@ -345,6 +358,9 @@ export default function App() {
               execution_trace: result.execution_trace?.length ? result.execution_trace : item.execution_trace,
               run_id: result.run_id ?? item.run_id,
               pending_confirmation: result.pending_confirmation ?? null,
+              confirmation_decision: result.pending_confirmation
+                ? null
+                : confirmationDecision ?? item.confirmation_decision ?? null,
               status: result.run_status === "waiting_confirmation" ? "waiting_confirmation" as const : "done" as const,
             }
           : item
@@ -433,6 +449,17 @@ export default function App() {
     source.addEventListener("intent", (streamEvent) => {
       const payload = parseSsePayload<{ intent?: string; reason?: string }>(streamEvent);
       entryIntent = payload.intent ?? "";
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id
+            ? {
+                ...item,
+                intent: payload.intent ?? item.intent,
+                intent_reason: payload.reason ?? item.intent_reason,
+              }
+            : item
+        )
+      );
       setStatus(payload.reason ?? "正在处理...");
     });
 
@@ -469,14 +496,18 @@ export default function App() {
     });
 
     // Plan execution progress events
-    const updatePlanStepStatus = (stepId: string, newStatus: string) => {
+    const updatePlanStepStatus = (
+      stepId: string,
+      newStatus: string,
+      output?: Pick<PlanStep, "output_label" | "output_title" | "output_preview">
+    ) => {
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id && item.plan_steps
             ? {
                 ...item,
                 plan_steps: item.plan_steps.map((ps) =>
-                  ps.step_id === stepId ? { ...ps, status: newStatus } : ps
+                  ps.step_id === stepId ? { ...ps, status: newStatus, ...output } : ps
                 ),
               }
             : item
@@ -493,9 +524,19 @@ export default function App() {
     });
 
     source.addEventListener("plan_step_completed", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string; description?: string }>(streamEvent);
+      const payload = parseSsePayload<{
+        step_id?: string;
+        description?: string;
+        output_label?: string;
+        output_title?: string;
+        output_preview?: string;
+      }>(streamEvent);
       if (payload.step_id) {
-        updatePlanStepStatus(payload.step_id, "completed");
+        updatePlanStepStatus(payload.step_id, "completed", {
+          output_label: payload.output_label,
+          output_title: payload.output_title,
+          output_preview: payload.output_preview,
+        });
         setStatus(payload.description ? `已完成：${payload.description}` : "计划步骤已完成，正在继续...");
       }
     });
@@ -593,8 +634,34 @@ export default function App() {
     source.addEventListener("draft_ready", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; draft_text?: string }>(streamEvent);
       if (payload.draft_text) {
+        if (payload.step_id) {
+          updatePlanStepStatus(payload.step_id, "completed", {
+            output_label: "生成草稿",
+            output_preview: payload.draft_text,
+          });
+        }
         setStatus("知识草稿已生成，正在写入知识库...");
       }
+    });
+
+    source.addEventListener("tool_result", (streamEvent) => {
+      const payload = parseSsePayload<{
+        tool_name?: string;
+        title?: string;
+        content_preview?: string;
+      }>(streamEvent);
+      if (!payload.content_preview) return;
+      setAskHistory((current) =>
+        current.map((item) =>
+          item.id === historyItem.id
+            ? {
+                ...item,
+                captured_title: payload.title ?? item.captured_title,
+                captured_preview: payload.content_preview,
+              }
+            : item
+        )
+      );
     });
 
     source.addEventListener("plan_replan_attempt", (streamEvent) => {
@@ -711,7 +778,12 @@ export default function App() {
         )
       );
       setSelectedAskId(historyItem.id);
-      if (entryIntent.startsWith("capture_") || entryIntent === "summarize_thread") {
+      if (
+        entryIntent.startsWith("capture_") ||
+        entryIntent === "summarize_thread" ||
+        entryIntent === "unknown" ||
+        finalAnswer.includes("模型当前不可用")
+      ) {
         setStatus(finalAnswer);
         void refreshAll();
       } else {
@@ -1140,11 +1212,25 @@ export default function App() {
                           </div>
                           <div className={item.status === "streaming" ? "streaming-text" : ""}>
                             {renderHighlightedAnswer(
-                              item.answer || "正在思考...",
+                              item.answer || (item.intent_reason ? "正在生成最终结果..." : "正在思考..."),
                               activeCitationKey,
                               item.citations,
                             )}
                           </div>
+                          {item.intent_reason ? (
+                            <div className="route-progress">
+                              <span>路由判断</span>
+                              <strong>{translateIntent(item.intent ?? "unknown")}</strong>
+                              <p>{item.intent_reason}</p>
+                            </div>
+                          ) : null}
+                          {item.captured_preview ? (
+                            <div className="step-output-card">
+                              <span>已采集内容</span>
+                              {item.captured_title ? <strong>{item.captured_title}</strong> : null}
+                              <p>{item.captured_preview}</p>
+                            </div>
+                          ) : null}
                           {item.pending_confirmation ? (
                             <div className="inline-confirmation">
                               <span>{item.pending_confirmation.action_type ?? "confirm"}</span>
@@ -1200,7 +1286,30 @@ export default function App() {
                                     </button>
                                   </div>
                                 </div>
+                              ) : inlineAction ? (
+                                <div className="inline-confirmation-actions">
+                                  <button
+                                    type="button"
+                                    className="confirm-button"
+                                    disabled={isConfirmingAction}
+                                    onClick={() => void handleConfirmPending(inlineAction)}
+                                  >
+                                    确认
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="secondary-button"
+                                    disabled={isConfirmingAction}
+                                    onClick={() => void handleRejectPending(inlineAction, "用户拒绝")}
+                                  >
+                                    拒绝
+                                  </button>
+                                </div>
                               ) : null}
+                            </div>
+                          ) : item.confirmation_decision ? (
+                            <div className={`inline-confirmation-resolution resolution-${item.confirmation_decision}`}>
+                              {item.confirmation_decision === "confirmed" ? "用户已确认" : "用户已取消"}
                             </div>
                           ) : null}
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
@@ -1241,6 +1350,13 @@ export default function App() {
                                         ))}
                                         <span className={`plan-step-status status-${ps.status}`}>{ps.status}</span>
                                         {ps.retry_count && ps.retry_count > 0 ? <span className="plan-step-retry" title={`重试了 ${ps.retry_count} 次`}>重试{ps.retry_count}</span> : null}
+                                        {ps.output_preview ? (
+                                          <div className="plan-step-output">
+                                            <span>{ps.output_label ?? "步骤输出"}</span>
+                                            {ps.output_title ? <strong>{ps.output_title}</strong> : null}
+                                            <p>{ps.output_preview}</p>
+                                          </div>
+                                        ) : null}
                                       </li>
                                     );
                                   })}
@@ -1605,90 +1721,6 @@ export default function App() {
             </section>
           ) : null}
 
-          {pendingActions.length > 0 ? (
-            <section className="panel stage-panel pending-actions-panel">
-              <div className="panel-header">
-                <p className="panel-kicker">待处理</p>
-                <h2>需要你确认的操作 ({pendingActions.length})</h2>
-              </div>
-              <div className="pending-actions-list">
-                {pendingActions.map((action) => {
-                  const clarification = action.pending_confirmation?.kind === "clarification_required";
-                  const clarificationInput = clarificationInputs[action.id] ?? { text: "", optionId: "" };
-                  return (
-                    <article key={action.id} className="pending-action-card">
-                      <div className="pending-action-info">
-                        <h3>{action.title}</h3>
-                        <p>{action.description}</p>
-                        {clarification ? (
-                          <div className="clarification-box">
-                            <div className="clarification-options">
-                              {(action.pending_confirmation?.options ?? []).map((option) => (
-                                <button
-                                  key={option.id}
-                                  type="button"
-                                  className="secondary-button"
-                                  data-active={clarificationInput.optionId === option.id}
-                                  onClick={() =>
-                                    setClarificationInputs((current) => ({
-                                      ...current,
-                                      [action.id]: { ...clarificationInput, optionId: option.id },
-                                    }))
-                                  }
-                                  title={option.prompt}
-                                >
-                                  {option.label}
-                                </button>
-                              ))}
-                            </div>
-                            <textarea
-                              value={clarificationInput.text}
-                              onChange={(event) =>
-                                setClarificationInputs((current) => ({
-                                  ...current,
-                                  [action.id]: { ...clarificationInput, text: event.target.value },
-                                }))
-                              }
-                              placeholder="补充具体内容、问题、总结范围或操作对象..."
-                              rows={3}
-                            />
-                          </div>
-                        ) : null}
-                        <div className="pending-action-meta">
-                          <span className="pending-action-type">{action.action_type}</span>
-                          {action.source === "langgraph_run" ? (
-                            <span className="pending-action-type pending-action-source">LangGraph</span>
-                          ) : null}
-                          <span className="pending-action-expires">
-                            过期时间: {new Date(action.expires_at).toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="pending-action-actions">
-                        <button
-                          type="button"
-                          className="confirm-button"
-                          disabled={isConfirmingAction}
-                          onClick={() => void handleConfirmPending(action)}
-                        >
-                          {clarification ? "提交补充" : "确认"}
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={isConfirmingAction}
-                          onClick={() => void handleRejectPending(action, "用户拒绝")}
-                        >
-                          {clarification ? "取消" : "拒绝"}
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
-
           <div className="danger-zone">
             <div>
               <p className="sub-panel-title">调试重置</p>
@@ -1837,6 +1869,20 @@ function translatePlanStep(actionType: string): string {
     case "compose": return "生成回答";
     case "verify": return "校验";
     default: return actionType;
+  }
+}
+
+function translateIntent(intent: string): string {
+  switch (intent) {
+    case "capture_text": return "记录文字";
+    case "capture_link": return "采集链接";
+    case "capture_file": return "采集文件";
+    case "ask": return "检索问答";
+    case "summarize_thread": return "总结会话";
+    case "delete_knowledge": return "删除知识";
+    case "solidify_conversation": return "固化知识";
+    case "direct_answer": return "直接回答";
+    default: return "待确认";
   }
 }
 
@@ -2008,6 +2054,11 @@ function attachRunSnapshots(
       plan_steps: run.plan_steps.length ? run.plan_steps : item.plan_steps,
       execution_trace: run.execution_trace.length ? run.execution_trace : item.execution_trace,
       run_id: run.run_id,
+      pending_confirmation: run.pending_confirmation ?? item.pending_confirmation,
+      confirmation_decision: run.confirmation_decision === "confirmed" || run.confirmation_decision === "rejected"
+        ? run.confirmation_decision
+        : item.confirmation_decision,
+      status: run.status === "waiting_confirmation" ? "waiting_confirmation" : item.status,
     };
   });
 }
@@ -2029,7 +2080,10 @@ function mergeRunBackedHistory(
 
   for (const run of latestRuns) {
     if (sessionId && run.session_id !== sessionId) continue;
-    if (!run.answer || (!run.plan_steps.length && !run.execution_trace.length)) continue;
+    if (
+      (run.status !== "waiting_confirmation" && !run.answer) ||
+      (!run.plan_steps.length && !run.execution_trace.length)
+    ) continue;
     const promptKey = `${run.session_id}\u0000${run.entry_text}`;
     if (representedPrompts.has(promptKey)) continue;
     merged.push({
@@ -2037,7 +2091,7 @@ function mergeRunBackedHistory(
       user_id: run.user_id,
       session_id: run.session_id,
       question: run.entry_text,
-      answer: run.answer,
+      answer: run.answer || "任务已暂停，等待你的确认。",
       citations: [],
       graph_enabled: false,
       created_at: run.created_at ?? run.updated_at ?? new Date().toISOString(),
@@ -2045,6 +2099,10 @@ function mergeRunBackedHistory(
       plan_steps: run.plan_steps,
       execution_trace: run.execution_trace,
       run_id: run.run_id,
+      pending_confirmation: run.pending_confirmation ?? null,
+      confirmation_decision: run.confirmation_decision === "confirmed" || run.confirmation_decision === "rejected"
+        ? run.confirmation_decision
+        : null,
     });
     representedPrompts.add(promptKey);
   }
@@ -2072,7 +2130,10 @@ function mergeAskHistory(
             plan_steps: item.plan_steps?.length ? item.plan_steps : localItem.plan_steps,
             execution_trace: item.execution_trace?.length ? item.execution_trace : localItem.execution_trace,
             run_id: item.run_id ?? localItem.run_id,
-            pending_confirmation: item.pending_confirmation ?? localItem.pending_confirmation,
+            pending_confirmation: item.status === "waiting_confirmation"
+              ? item.pending_confirmation ?? localItem.pending_confirmation
+              : null,
+            confirmation_decision: item.confirmation_decision ?? localItem.confirmation_decision,
           }
         : item,
     );

@@ -28,8 +28,6 @@ cp .env.example .env
 - `EMBEDDING_BASE_URL`
 - `OPENAI_EMBEDDING_MODEL`
 
-如果你暂时不想启动 Neo4j，建议先把：
-
 当前工程以 Graphiti 为核心能力，不再提供关闭图谱的开关。本地开发请启动 Neo4j，并确保 `.env` 中的 Graphiti、LLM 和 Embedding 配置完整。
 
 ## 4. 启动 Neo4j

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
 import time
+
+from langgraph.types import interrupt
 
 from ..orchestration_models import AgentGraphState, PlanStepState, execution_trace_from_events
 from ._deps import (
@@ -198,16 +201,42 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
 
     # Normal success — no confirmation needed
     sd.status = "completed"
-    state.add_event("step_completed", {
+    display_output = _step_display_output(step, state.step_results.get(step.step_id))
+    sd.output_label = display_output.get("output_label", "")
+    sd.output_title = display_output.get("output_title", "")
+    sd.output_preview = display_output.get("output_preview", "")
+    completion_payload = {
         "step_id": step.step_id,
+        "description": step.description,
         "result_summary": _helpers._summarize_result(state.step_results.get(step.step_id)),
-    })
+    }
+    completion_payload.update(display_output)
+    state.add_event("step_completed", completion_payload)
     return {
         "plan_steps": state.plan_steps,
         "step_results": state.step_results,
         "answer": state.answer,
         "events": state.events,
     }
+
+
+def _step_display_output(step, result_data: object) -> dict[str, str]:
+    if not isinstance(result_data, dict):
+        return {}
+    if step.action_type == "compose" and result_data.get("answer"):
+        return {
+            "output_label": "生成草稿",
+            "output_preview": str(result_data["answer"])[:800],
+        }
+    if step.action_type == "tool_call" and step.tool_name == "capture_text":
+        preview = str(result_data.get("content_preview") or "").strip()
+        if preview:
+            return {
+                "output_label": "已写入知识",
+                "output_title": str(result_data.get("title") or ""),
+                "output_preview": preview,
+            }
+    return {}
 
 
 def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
@@ -223,7 +252,7 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps
         result_data = state.step_results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("note_id"):
             _inject_note_id_into_steps(
-                step.step_id, str(result_data["note_id"]), state.plan_steps,
+                step.step_id, str(result_data["note_id"]), state.user_id, state.plan_steps,
             )
 
     # Inject compose draft text into dependent capture_text steps
@@ -609,35 +638,15 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
                 except Exception:
                     logger.exception("Episode UUID lookup failed in resolve")
 
-    # 2. Local similarity
+    # 2. Let the LLM select a local candidate when graph mapping is unavailable.
     if not candidates and original_query:
-        try:
-            similar = deps.store.find_similar_notes(user_id, original_query, limit=5)
-            for note in similar:
-                candidates.append({
-                    "note_id": note.id, "title": note.title,
-                    "summary": note.summary, "source": "text_similarity",
-                })
-        except Exception:
-            logger.exception("Similarity search failed in resolve")
-
-    # 3. Keyword match
-    if not candidates:
-        try:
-            all_notes = deps.store.list_notes(user_id)
-            ql = original_query.lower()
-            for note in all_notes:
-                if ql and (ql in note.title.lower() or ql in (note.content or "").lower()):
-                    candidates.append({
-                        "note_id": note.id, "title": note.title,
-                        "summary": note.summary, "source": "keyword_match",
-                    })
-            candidates = candidates[:5]
-        except Exception:
-            logger.exception("Keyword fallback failed in resolve")
+        candidates = _select_local_delete_candidate_with_llm(
+            original_query, user_id, deps,
+        )
 
     if not candidates:
-        return {"note_id": None, "candidates": [], "error": "未找到匹配的笔记。"}
+        state.answer = "未找到可删除的知识笔记，请提供更具体的标题或内容描述。"
+        raise RuntimeError(state.answer)
 
     best = candidates[0]
     return {
@@ -647,6 +656,53 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
         "source": best.get("source"),
         "candidates": candidates,
     }
+
+
+def _select_local_delete_candidate_with_llm(
+    delete_request: str, user_id: str, deps: OrchestrationDeps,
+) -> list[dict]:
+    try:
+        notes = deps.store.list_notes(user_id, include_chunks=False)
+    except Exception:
+        logger.exception("Local note listing failed in resolve")
+        return []
+    if not notes:
+        return []
+
+    selectable_notes = list(reversed(notes))[:100]
+    candidate_by_id = {
+        note.id: {
+            "note_id": note.id,
+            "title": note.title,
+            "summary": note.summary,
+            "source": "llm_candidate_selection",
+        }
+        for note in selectable_notes
+    }
+    prompt_candidates = [
+        {
+            "note_id": note.id,
+            "title": note.title[:200],
+            "summary": (note.summary or "")[:300],
+        }
+        for note in selectable_notes
+    ]
+    prompt = (
+        "你负责从已有知识笔记候选中定位用户明确要求删除的目标。"
+        "只在目标与候选明显对应时选择一条；不确定或有多个可能目标时返回 null。"
+        "不要执行删除，也不要生成不存在的 ID。"
+        "输出 JSON："
+        '{"thought":"简短判断","done":true,"result":{"note_id":"候选ID或null"}}。\n\n'
+        f"用户删除请求：{delete_request}\n"
+        f"候选笔记：{json.dumps(prompt_candidates, ensure_ascii=False)}"
+    )
+    raw = _helpers._react_llm_respond(prompt, deps)
+    parsed = _helpers._react_parse_response(raw) if raw else None
+    result = parsed.get("result") if isinstance(parsed, dict) else None
+    note_id = result.get("note_id") if isinstance(result, dict) else None
+    if isinstance(note_id, str) and note_id in candidate_by_id:
+        return [candidate_by_id[note_id]]
+    return []
 
 
 def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> str:
@@ -671,6 +727,8 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
             "你负责决定哪些会话事实属于用户本次指定的固化范围，并将它们整理为一条可独立入库的中文知识笔记。"
             "候选会话可能同时包含多个无关主题，必须根据当前保存请求进行语义选择；"
             "不要仅因为某段出现在上下文中就写入笔记，也不要写入操作指令本身。"
+            "当当前保存请求使用“该知识”“这个内容”“上述回答”等指代且未另行指定主题时，"
+            "只提炼保存请求之前最近一轮助手回答所表达的知识，不要选择更早的其他主题。"
             "如果候选会话中没有足以支撑本次请求的知识，请将正文留空。\n\n"
             "请输出 JSON："
             '{"thought":"范围判断理由","done":true,"result":{"selected_turn_ids":["turn-N"],'
@@ -688,7 +746,12 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
         return answer
 
     try:
-        ask_result = deps.execute_ask(question, state.user_id)
+        ask_result = deps.execute_ask(
+            question,
+            state.user_id,
+            state.session_id,
+            record_history=False,
+        )
         return ask_result.answer
     except Exception:
         logger.exception("Compose step %s failed", step.step_id)

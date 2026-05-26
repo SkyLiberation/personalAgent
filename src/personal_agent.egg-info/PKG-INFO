@@ -43,7 +43,7 @@ Requires-Dist: huggingface_hub>=0.28.0; extra == "dev"
 | 组件 | 代码落点 | 能力总结 | 文档 |
 | --- | --- | --- | --- |
 | `入口层` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
-| `意图识别 / 路由层` | [agent/router.py](src/personal_agent/agent/router.py), [agent/entry_nodes.py](src/personal_agent/agent/entry_nodes.py) | 通过 `DefaultIntentRouter` 统一处理入口意图，支持 LLM 优先和启发式兜底 | [docs/topics/routing.md](docs/topics/routing.md) |
+| `意图识别 / 路由层` | [agent/router.py](src/personal_agent/agent/router.py) | 通过 `DefaultIntentRouter` 统一处理入口意图；模型调用重试后仍失败时明确返回不可用提示 | [docs/topics/routing.md](docs/topics/routing.md) |
 | `规划层` | [agent/planner.py](src/personal_agent/agent/planner.py), [agent/plan_validator.py](src/personal_agent/agent/plan_validator.py), [agent/replanner.py](src/personal_agent/agent/replanner.py), [agent/orchestration_nodes.py](src/personal_agent/agent/orchestration_nodes.py) | 已具备结构化规划、动态工具校验、阻断式安全门禁、计划节点执行、目标解析、失败重试/重规划和前端计划面板 | [docs/topics/planning.md](docs/topics/planning.md) |
 | `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_graph.py](src/personal_agent/agent/orchestration_graph.py), [agent/orchestration_nodes.py](src/personal_agent/agent/orchestration_nodes.py), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 默认进入 LangGraph entry 总编排，支持 route/plan/step/ReAct/HITL/checkpoint；`AgentService` 是兼容入口并继承 runtime | [docs/topics/runtime.md](docs/topics/runtime.md)、[docs/topics/langgraph-checkpoint.md](docs/topics/langgraph-checkpoint.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / web_search / delete_note` | [docs/topics/tools.md](docs/topics/tools.md) |
@@ -163,7 +163,6 @@ personalAgent/                  # 项目根目录
       │  ├─ orchestration_models.py  # AgentGraphState / AgentEvent / run snapshot
       │  ├─ graph.py            # capture / ask 等固定分支图
       │  ├─ nodes.py            # capture / ask 基础节点
-      │  ├─ entry_nodes.py      # entry 路由节点
       │  └─ verifier.py         # AnswerVerifier：回答证据校验
       ├─ capture/               # 采集编排、provider 和抽取工具层
       ├─ cli/                   # 命令行入口层

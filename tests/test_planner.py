@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.entry_nodes import heuristic_entry_intent
 from personal_agent.agent.planner import DefaultTaskPlanner, PlanStep
-from personal_agent.agent.router import DefaultIntentRouter
+from personal_agent.agent.router import DefaultIntentRouter, RouterDecision
 from personal_agent.agent.runtime import EntryResult
 from personal_agent.core.models import EntryInput
 from personal_agent.memory.working_memory import WorkingMemory
@@ -43,43 +42,6 @@ class TestWorkingMemoryPlanSteps:
         wm.plan_steps = []
         snapshot = wm.context_snapshot()
         assert "当前任务计划" not in snapshot
-
-
-class TestHeuristicIntentDeleteKnowledge:
-    def test_delete_note_with_context(self):
-        intent, reason = heuristic_entry_intent("把刚才那条关于旧部署流程的笔记删掉")
-        assert intent == "delete_knowledge"
-        assert "删除" in reason
-
-    def test_delete_outdated_conclusion(self):
-        intent, reason = heuristic_entry_intent("这个结论已经过时，不要再保留，删除这条记录")
-        assert intent == "delete_knowledge"
-
-    def test_remove_knowledge_card(self):
-        intent, _ = heuristic_entry_intent("删除那个关于供应商联系人信息的卡片")
-        assert intent == "delete_knowledge"
-
-    def test_delete_without_knowledge_context_falls_through(self):
-        intent, _ = heuristic_entry_intent("删除")
-        assert intent != "delete_knowledge"
-
-
-class TestHeuristicIntentSolidifyConversation:
-    def test_solidify_with_jixialai(self):
-        intent, _ = heuristic_entry_intent("把我们刚才讨论的结论记下来")
-        assert intent == "solidify_conversation"
-
-    def test_solidify_with_chendian(self):
-        intent, _ = heuristic_entry_intent("把这个方案沉淀成知识卡片")
-        assert intent == "solidify_conversation"
-
-    def test_solidify_with_guhua(self):
-        intent, _ = heuristic_entry_intent("把关于缓存一致性的结论固化下来")
-        assert intent == "solidify_conversation"
-
-    def test_solidify_with_shoujin(self):
-        intent, _ = heuristic_entry_intent("把这个结论收进知识库")
-        assert intent == "solidify_conversation"
 
 
 class TestPlannerEnrichedSteps:
@@ -166,24 +128,28 @@ class TestDefaultIntentRouterNewIntents:
     def router(self, settings):
         return DefaultIntentRouter(settings)
 
-    def test_router_falls_back_to_heuristic_when_llm_unavailable(self):
-        from personal_agent.core.config import Settings
-
-        router_no_llm = DefaultIntentRouter(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+    def test_router_applies_defaults_for_llm_solidify_decision(self, router, monkeypatch):
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(route="solidify_conversation"),
         )
         entry = EntryInput(text="把刚才讨论的结论记下来")
-        decision = router_no_llm.classify(entry)
+        decision = router.classify(entry)
         assert decision.route == "solidify_conversation"
 
-    def test_router_delete_knowledge_heuristic_fallback(self):
-        from personal_agent.core.config import Settings
-
-        router_no_llm = DefaultIntentRouter(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+    def test_router_applies_defaults_for_llm_delete_decision(self, router, monkeypatch):
+        monkeypatch.setattr(
+            router,
+            "_classify_with_llm",
+            lambda _text, _context="": RouterDecision(
+                route="delete_knowledge",
+                risk_level="high",
+                requires_confirmation=True,
+            ),
         )
         entry = EntryInput(text="删除那条关于旧部署流程的笔记")
-        decision = router_no_llm.classify(entry)
+        decision = router.classify(entry)
         assert decision.route == "delete_knowledge"
         assert decision.risk_level == "high"
         assert decision.requires_confirmation is True
@@ -324,3 +290,86 @@ class TestPlannerValidatorRoundtrip:
         result = validator.validate(steps, decision)
         # unknown intent produces a single compose step — should pass
         assert result.valid
+
+    def test_delete_note_id_may_be_supplied_by_transitive_resolve_step(self):
+        from personal_agent.agent.plan_validator import PlanValidator
+        from personal_agent.agent.router import _default_router_decision
+        from personal_agent.tools import ToolRegistry
+        from personal_agent.tools.base import ToolSpec
+
+        class DeleteTool:
+            spec = ToolSpec(
+                name="delete_note",
+                description="delete",
+                input_schema={
+                    "type": "object",
+                    "properties": {"note_id": {"type": "string"}},
+                    "required": ["note_id"],
+                },
+            )
+
+        registry = ToolRegistry()
+        registry.register(DeleteTool())
+        steps = [
+            PlanStep(step_id="del-0", action_type="retrieve", description="检索候选"),
+            PlanStep(step_id="del-1", action_type="resolve", description="定位目标", depends_on=["del-0"]),
+            PlanStep(
+                step_id="del-2",
+                action_type="verify",
+                description="安全检查",
+                risk_level="high",
+                requires_confirmation=True,
+                depends_on=["del-1"],
+            ),
+            PlanStep(
+                step_id="del-3",
+                action_type="tool_call",
+                description="删除目标",
+                tool_name="delete_note",
+                risk_level="high",
+                requires_confirmation=True,
+                depends_on=["del-2"],
+            ),
+            PlanStep(step_id="del-4", action_type="compose", description="生成结果", depends_on=["del-3"]),
+        ]
+
+        result = PlanValidator(tool_registry=registry).validate(
+            steps, _default_router_decision("delete_knowledge")
+        )
+
+        assert result.valid
+
+    def test_delete_note_without_upstream_resolve_still_requires_note_id(self):
+        from personal_agent.agent.plan_validator import PlanValidator
+        from personal_agent.agent.router import _default_router_decision
+        from personal_agent.tools import ToolRegistry
+        from personal_agent.tools.base import ToolSpec
+
+        class DeleteTool:
+            spec = ToolSpec(
+                name="delete_note",
+                description="delete",
+                input_schema={
+                    "type": "object",
+                    "properties": {"note_id": {"type": "string"}},
+                    "required": ["note_id"],
+                },
+            )
+
+        registry = ToolRegistry()
+        registry.register(DeleteTool())
+        steps = [
+            PlanStep(
+                step_id="del-1",
+                action_type="tool_call",
+                description="删除目标",
+                tool_name="delete_note",
+            ),
+        ]
+
+        result = PlanValidator(tool_registry=registry).validate(
+            steps, _default_router_decision("delete_knowledge")
+        )
+
+        assert not result.valid
+        assert any("note_id" in issue for issue in result.issues)

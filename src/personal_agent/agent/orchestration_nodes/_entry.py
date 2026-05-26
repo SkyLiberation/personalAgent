@@ -421,7 +421,17 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
                 )
                 state.answer = f"已收进知识库：{result.note.title}"
                 state.execution_trace = _execution_trace_for_intent(intent)
-                return {"answer": state.answer, "execution_trace": state.execution_trace}
+                state.add_event("tool_result", {
+                    "tool_name": "capture_file",
+                    "title": result.note.title,
+                    "content_preview": result.note.content[:800],
+                })
+                return {
+                    "answer": state.answer,
+                    "execution_trace": state.execution_trace,
+                    "tool_results": [{"capture_result": result.model_dump(mode="json")}],
+                    "events": state.events,
+                }
         state.answer = "文件消息已识别，但文件内容暂未获取到。请通过 Web 端上传文件，或稍后重试。"
         state.execution_trace = _execution_trace_for_intent(intent)
         return {"answer": state.answer, "execution_trace": state.execution_trace}
@@ -451,7 +461,17 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
     )
     state.answer = f"已收进知识库：{result.note.title}"
     state.execution_trace = _execution_trace_for_intent(intent)
-    return {"answer": state.answer, "execution_trace": state.execution_trace}
+    state.add_event("tool_result", {
+        "tool_name": "capture_text" if intent == "capture_text" else "capture_link",
+        "title": result.note.title,
+        "content_preview": result.note.content[:800],
+    })
+    return {
+        "answer": state.answer,
+        "execution_trace": state.execution_trace,
+        "tool_results": [{"capture_result": result.model_dump(mode="json")}],
+        "events": state.events,
+    }
 
 
 def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
@@ -588,12 +608,12 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
         except Exception:
             logger.exception("Direct answer LLM call failed")
 
-    state.answer = _simple_direct_answer(entry_input.text)
+    state.answer = "回答模型当前不可用，请检查 LLM 配置或稍后重试。"
     route = state.router_decision.route if state.router_decision else "unknown"
     state.execution_trace = _execution_trace_for_intent(route)
     return {"answer": state.answer, "execution_trace": state.execution_trace}
 # ---------------------------------------------------------------------------
-# Helpers ported from entry_nodes.py
+# Entry response helpers
 # ---------------------------------------------------------------------------
 
 def _build_clarification_answer(state: AgentGraphState) -> str:
@@ -607,27 +627,14 @@ def _build_clarification_answer(state: AgentGraphState) -> str:
         if str(item).strip()
     ]
     reason = (decision.user_visible_message or "").strip()
+    if reason.startswith("入口路由模型当前不可用"):
+        return reason
     if missing:
         details = "、".join(missing[:3])
         return f"我还需要你补充：{details}。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
     if reason and "计划校验失败" in reason:
         return f"{reason}。请补充更明确的目标或操作范围后我再继续。"
     return "我暂时没判断出你的意图。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
-
-
-def _simple_direct_answer(text: str) -> str:
-    """Generate a simple reply without LLM, for when LLM is unavailable."""
-    lower = text.strip().lower()
-    greetings = {"你好", "hello", "hi", "嗨", "hey", "晚上好", "早上好", "下午好"}
-    thanks = {"谢谢", "感谢", "thanks", "thank"}
-    goodbye = {"再见", "bye", "拜拜", "晚安"}
-    if any(g in lower for g in greetings):
-        return "你好！有什么可以帮你的？"
-    if any(g in lower for g in thanks):
-        return "不客气，还有其他需要吗？"
-    if any(g in lower for g in goodbye):
-        return "再见，祝你好运！"
-    return "我暂时无法生成这个问题的直接回答，请稍后重试。"
 
 
 _EXECUTION_TRACE_MAP: dict[str, list[str]] = {

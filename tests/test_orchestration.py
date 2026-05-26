@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.conftest import POSTGRES_URL
+from tests.conftest import POSTGRES_URL, stub_router_decision
 from langchain_core.messages import AIMessage, HumanMessage
 
 from personal_agent.agent.orchestration_models import (
@@ -11,6 +11,7 @@ from personal_agent.agent.orchestration_models import (
     AgentGraphState,
     AgentRunSnapshot,
     AgentRunStatus,
+    PlanStepState,
     _new_run_id,
     _new_thread_id,
     execution_trace_to_events,
@@ -177,12 +178,6 @@ class TestNormalizeEntry:
         assert [event.type for event in result["events"]] == ["entry_started"]
         assert result["events"][0].run_id == "new-run"
 
-    def test_direct_answer_fallback_does_not_acknowledge_a_question(self):
-        from personal_agent.agent.orchestration_nodes import _simple_direct_answer
-
-        assert _simple_direct_answer("什么是DNS") == "我暂时无法生成这个问题的直接回答，请稍后重试。"
-
-
 # ---------------------------------------------------------------------------
 # Event conversion helpers
 # ---------------------------------------------------------------------------
@@ -229,12 +224,14 @@ class TestOrchestrationGraphIntegration:
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
-        return AgentRuntime(
+        runtime = AgentRuntime(
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
             ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
+        runtime._intent_router._classify_with_llm = stub_router_decision
+        return runtime
 
     def test_graph_builds_and_compiles(self, runtime):
         graph = runtime._get_orch_graph()
@@ -274,6 +271,13 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
+        if result.intent == "capture_text":
+            tool_results = [
+                event for event in result.events
+                if event["type"] == "tool_result"
+            ]
+            assert tool_results
+            assert "服务降级" in tool_results[0]["payload"]["content_preview"]
 
     def test_summary_loads_platform_thread_context_only_after_routing(self, runtime, monkeypatch):
         loaded: list[tuple[str, int]] = []
@@ -345,6 +349,10 @@ class TestOrchestrationGraphIntegration:
         assert "DNS 是域名系统" in result.reply_text
         assert any("DNS 是域名系统" in note.content for note in runtime.store.list_notes("test-user"))
         assert runtime.memory.list_drafts("test-user", status="solidified")
+        capture_step = next(
+            step for step in result.plan_steps if step.get("tool_name") == "capture_text"
+        )
+        assert "DNS 是域名系统" in capture_step["output_preview"]
         event_types = [event["type"] for event in result.events]
         assert "plan_created" in event_types
         assert "draft_ready" in event_types
@@ -375,6 +383,48 @@ class TestOrchestrationGraphIntegration:
         assert result.reply_text == "DNS（域名系统）\n\nDNS 用于将域名转换为 IP 地址。"
         assert any(note.content == result.reply_text for note in notes)
         assert not any(note.content == "把DNS相关知识固化下来" for note in notes)
+
+    def test_solidify_rejects_placeholder_write_plan_and_uses_composed_draft(self, runtime, monkeypatch):
+        from personal_agent.agent.planner import PlanStep
+
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            lambda prompt, deps: (
+                '{"done":true,"result":{"title":"DNS","content":'
+                '"DNS 是将域名转换为 IP 地址的系统。"}}'
+            ),
+        )
+        runtime.execute_entry(
+            EntryInput(text="什么是DNS", user_id="test-user", session_id="placeholder-solidify")
+        )
+        monkeypatch.setattr(
+            runtime._planner,
+            "plan",
+            lambda _intent, _context: [
+                PlanStep(step_id="bad-1", action_type="retrieve", description="获取上下文"),
+                PlanStep(
+                    step_id="bad-2",
+                    action_type="tool_call",
+                    description="错误写入",
+                    tool_name="capture_text",
+                    tool_input={"text": "{{bad-1.expected_output}}"},
+                    depends_on=["bad-1"],
+                ),
+            ],
+        )
+
+        result = runtime.execute_entry(
+            EntryInput(
+                text="将该知识固化下来",
+                user_id="test-user",
+                session_id="placeholder-solidify",
+            )
+        )
+        notes = runtime.store.list_notes("test-user")
+
+        assert result.intent == "solidify_conversation"
+        assert any("DNS 是将域名转换为 IP 地址" in note.content for note in notes)
+        assert not any("{{" in note.content for note in notes)
 
     def test_solidify_delegates_topic_selection_to_llm(self, runtime, monkeypatch):
         prompts: list[str] = []
@@ -409,6 +459,7 @@ class TestOrchestrationGraphIntegration:
         assert "西安" in solidify_prompt
         assert "JSON Schema" in solidify_prompt
         assert "必须根据当前保存请求进行语义选择" in solidify_prompt
+        assert "最近一轮助手回答" in solidify_prompt
         notes = runtime.store.list_notes("test-user")
         stored = next(note.content for note in notes if "DNS 是域名系统" in note.content)
         assert "西安" not in stored
@@ -592,7 +643,8 @@ class TestOrchestrationGraphIntegration:
                 second_run_states.append(AgentGraphState.model_validate(values))
 
         assert second_run_states
-        assert all(state.answer != first.reply_text for state in second_run_states)
+        assert any(state.answer is None for state in second_run_states)
+        assert second.reply_text
 
     def test_graph_state_after_execution(self, runtime):
         """After executing, the last state in the graph should have answer set."""
@@ -666,6 +718,31 @@ class TestPhase3RoutingFunctions:
 
         state = AgentGraphState()
         assert _after_confirm_step(state) == "handle_failure"
+
+    def test_resolved_note_id_is_injected_through_verify_dependency(self):
+        from personal_agent.agent.orchestration_nodes._deps import _inject_note_id_into_steps
+
+        steps = [
+            PlanStepState(step_id="del-1", action_type="resolve", status="completed"),
+            PlanStepState(
+                step_id="del-2",
+                action_type="verify",
+                depends_on=["del-1"],
+                status="completed",
+            ),
+            PlanStepState(
+                step_id="del-3",
+                action_type="tool_call",
+                tool_name="delete_note",
+                depends_on=["del-2"],
+                status="planned",
+            ),
+        ]
+
+        _inject_note_id_into_steps("del-1", "note-dns", "alice", steps)
+
+        assert steps[2].tool_input["note_id"] == "note-dns"
+        assert steps[2].tool_input["user_id"] == "alice"
 
 
 class TestPhase3ExecutePlanStep:
@@ -755,6 +832,88 @@ class TestPhase3ExecutePlanStep:
         result = _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["plan_steps"][0].status == "completed"
 
+    def test_resolve_uses_llm_to_select_local_delete_candidate(self, runtime, monkeypatch):
+        from personal_agent.agent.orchestration_nodes._steps import _execute_resolve_step
+        from personal_agent.core.models import KnowledgeNote
+
+        runtime.store.add_note(
+            KnowledgeNote(
+                id="note-dns",
+                user_id="u1",
+                title="DNS 基础概念",
+                content="DNS 将域名解析为 IP 地址。",
+                summary="DNS 说明",
+            )
+        )
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            lambda _prompt, _deps: (
+                '{"thought":"匹配 DNS 主题","done":true,'
+                '"result":{"note_id":"note-dns"}}'
+            ),
+        )
+        state = AgentGraphState(user_id="u1", entry_text="删除关于DNS的知识")
+
+        result = _execute_resolve_step(
+            PlanStepState(step_id="resolve-1", action_type="resolve").to_plan_step(),
+            state,
+            OrchestrationDeps.from_runtime(runtime),
+        )
+
+        assert result["note_id"] == "note-dns"
+        assert result["source"] == "llm_candidate_selection"
+
+    def test_unresolved_delete_target_fails_before_tool_call(self, runtime, monkeypatch):
+        from personal_agent.agent.orchestration_graph import (
+            _node_execute_plan_step,
+            _node_handle_step_failure,
+        )
+        from personal_agent.core.models import KnowledgeNote
+
+        runtime.store.add_note(
+            KnowledgeNote(
+                id="note-other",
+                user_id="u1",
+                title="其他主题",
+                content="与请求无关。",
+                summary="其他知识",
+            )
+        )
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            lambda _prompt, _deps: (
+                '{"thought":"无明显匹配","done":true,'
+                '"result":{"note_id":null}}'
+            ),
+        )
+        state = AgentGraphState(
+            user_id="u1",
+            entry_text="删除关于DNS的知识",
+            plan_steps=[
+                PlanStepState(
+                    step_id="resolve-1",
+                    action_type="resolve",
+                    status="running",
+                    on_failure="skip",
+                ),
+                PlanStepState(
+                    step_id="delete-1",
+                    action_type="tool_call",
+                    tool_name="delete_note",
+                    depends_on=["resolve-1"],
+                ),
+            ],
+            current_step_index=0,
+        )
+        deps = OrchestrationDeps.from_runtime(runtime)
+
+        _node_execute_plan_step(state, deps=deps)
+        _node_handle_step_failure(state, deps=deps)
+
+        assert state.plan_steps[0].status == "failed"
+        assert state.plan_steps[1].status == "skipped"
+        assert "未找到可删除的知识笔记" in state.answer
+
 
 class TestPhase3InterruptResumeIntegration:
     """Integration tests for LangGraph interrupt result handling and resume."""
@@ -827,6 +986,19 @@ class TestPhase3InterruptResumeIntegration:
         )
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.waiting_confirmation
+
+    def test_to_run_snapshot_keeps_resolved_confirmation_decision(self):
+        state = AgentGraphState(
+            router_decision=RouterDecision(route="delete_knowledge"),
+            confirmation_decision="confirmed",
+            answer="已删除。",
+            answer_completed=True,
+        )
+
+        snap = state.to_run_snapshot()
+
+        assert snap.status == AgentRunStatus.completed
+        assert snap.confirmation_decision == "confirmed"
 
     def test_interrupt_payload_is_read_from_invoke_result(self):
         """LangGraph exposes interrupt payloads through the invoke result."""

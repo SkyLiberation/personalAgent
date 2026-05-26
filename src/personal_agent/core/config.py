@@ -27,7 +27,7 @@ class Settings(BaseModel):
     openai_small_model: str = "gpt-4.1-nano"
     openai_embedding_model: str = "text-embedding-3-small"
     openai_timeout_seconds: float = 30.0
-    openai_max_retries: int = 0
+    openai_max_retries: int = 2
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     firecrawl_api_key: str | None = None
@@ -92,7 +92,7 @@ class Settings(BaseModel):
                 os.getenv("PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS", "30")
             ),
             openai_max_retries=int(
-                os.getenv("PERSONAL_AGENT_OPENAI_MAX_RETRIES", "0")
+                os.getenv("PERSONAL_AGENT_OPENAI_MAX_RETRIES", "2")
             ),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),

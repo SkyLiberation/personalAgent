@@ -46,10 +46,24 @@ FEISHU_APP_SECRET=xxx
 ## LLM 配置
 
 ```env
-OPENAI_BASE_URL=https://api.moonshot.cn/v1
+OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=your_llm_key
-OPENAI_MODEL=kimi-k2.5
-OPENAI_SMALL_MODEL=kimi-k2.5
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_SMALL_MODEL=gpt-4.1-nano
+```
+
+`OPENAI_*` 用于入口路由、任务规划、重规划、直接回答和 ReAct 等业务 LLM 调用。Graphiti 抽取模型使用下方独立的 `PERSONAL_AGENT_GRAPHITI_LLM_*` 配置，不受这组配置影响。
+
+默认值（不设环境变量时）：
+- `OPENAI_MODEL`：`gpt-4.1-mini`
+- `OPENAI_SMALL_MODEL`：`gpt-4.1-nano`
+
+可选调参：
+
+```env
+PERSONAL_AGENT_LLM_PROVIDER=  # LLM provider，默认 "stub"（仅开发调试用，生产需设 openai）
+PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS=30
+PERSONAL_AGENT_OPENAI_MAX_RETRIES=2
 ```
 
 ## Embedding 配置
@@ -57,7 +71,15 @@ OPENAI_SMALL_MODEL=kimi-k2.5
 ```env
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_API_KEY=your_embedding_key
-OPENAI_EMBEDDING_MODEL=text-embedding-v4
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+默认值：`OPENAI_EMBEDDING_MODEL` 默认为 `text-embedding-3-small`。
+
+可选：
+
+```env
+PERSONAL_AGENT_EMBEDDING_PROVIDER=local  # embedding provider，默认 "local"
 ```
 
 ## Graphiti 配置条件
@@ -88,6 +110,55 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=kimi-k2.5
   - `edge_rrf`：只检索关系边，RRF 重排
   - `edge_node_distance`：只检索关系边，node distance 重排
 - 如果 Neo4j 或模型配置缺失，图谱写入/检索会失败，日志中会提示具体原因
+
+## Firecrawl 配置
+
+网页抓取工具使用的 Firecrawl API：
+
+```env
+FIRECRAWL_API_KEY=your_firecrawl_key
+FIRECRAWL_BASE_URL=https://api.firecrawl.dev
+FIRECRAWL_TIMEOUT_MS=60000
+```
+
+## 图谱同步调参
+
+```env
+PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS=3
+PERSONAL_AGENT_GRAPH_SYNC_INITIAL_BACKOFF_SECONDS=2.0
+PERSONAL_AGENT_GRAPH_SYNC_BACKOFF_MULTIPLIER=2.0
+PERSONAL_AGENT_GRAPH_SYNC_MAX_BACKOFF_SECONDS=20.0
+```
+
+## Graphiti 内部调参
+
+```env
+PERSONAL_AGENT_GRAPHITI_ADD_EPISODE_TIMEOUT_SECONDS=900
+PERSONAL_AGENT_GRAPHITI_SEARCH_TIMEOUT_SECONDS=45
+PERSONAL_AGENT_GRAPHITI_EPISODE_MAX_CHARS=8000
+PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK=true
+```
+
+## 飞书补充配置
+
+```env
+PERSONAL_AGENT_FEISHU_USE_DEFAULT_USER=true  # 飞书用户未映射时是否回退到默认用户
+```
+
+## 鉴权、限流与 CORS
+
+```env
+PERSONAL_AGENT_API_KEYS=key1:user1,key2:user2  # API Key → 用户映射，多个用逗号分隔
+PERSONAL_AGENT_RATE_LIMIT_REQUESTS=60
+PERSONAL_AGENT_RATE_LIMIT_WINDOW_SECONDS=60
+PERSONAL_AGENT_CORS_ORIGINS=http://localhost:3000  # 多个用逗号分隔
+```
+
+## 回答校验
+
+```env
+AGENT_MAX_VERIFY_RETRIES=1  # 答案校验失败后最大重试次数
+```
 
 ## LangGraph 总编排与 Checkpoint 配置
 

@@ -142,11 +142,11 @@ graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
 
 ### 3.3 路由策略
 
-路由策略是 LLM-first + heuristic fallback：
+文本路由策略是 LLM-only：
 
 1. 如果 `entry_input.source_type == "file"`，直接路由到 `capture_file`。
-2. 如果文本非空且 LLM 配置可用，调用小模型同时判断 intent 与是否需要澄清。
-3. 如果 LLM 不可用或调用失败，则回退到 `heuristic_entry_intent()`；兜底层仅对“帮我”“删除”等明确不完整片段要求澄清，不再按文本长度拦截正常短问句。
+2. 如果文本非空且 LLM 配置可用，调用小模型同时判断 intent 与是否需要澄清，并使用 `openai_max_retries` 控制失败重试。
+3. 如果 LLM 未配置、重试后仍失败或返回无效 intent，则输出“入口路由模型当前不可用”提示，不通过关键词猜测 intent。
 
 `_merge_with_defaults()` 会把 LLM 返回的意图与 `_default_router_decision()` 合并。这样即使 LLM 只返回 intent/reason/risk，也能补齐控制字段，例如：
 
@@ -170,7 +170,7 @@ OPENAI_SMALL_MODEL -> openai_small_model -> gpt-4.1-nano
 - `max_tokens=200`
 - `response_format={"type": "json_object"}`
 
-如果缺少 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 或 `OPENAI_SMALL_MODEL`，Router 不调用模型，直接使用启发式规则。
+如果缺少 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 或 `OPENAI_SMALL_MODEL`，或模型请求重试后仍失败，Router 返回明确的模型不可用提示，不再使用启发式规则猜测路由。
 
 ## 4. Plan 规划阶段
 
@@ -398,7 +398,7 @@ START
 
 ### 7.1 capture 分支
 
-`capture_entry_branch_node()` 会根据 intent 处理：
+`_node_capture_branch()` 会根据 intent 处理：
 
 - `capture_file`：读取上传文件路径，调用 `CaptureService.capture_text_from_upload()` 解析文本，再调用 `execute_capture()`。
 - `capture_link`：提取 URL，调用 `CaptureService.capture_text_from_url()` 抓取正文，再调用 `execute_capture()`。
@@ -414,7 +414,7 @@ capture -> enrich -> link -> schedule_review
 
 ### 7.2 ask 分支
 
-`ask_entry_branch_node()` 调用 `execute_ask()`。
+`_node_ask_branch()` 调用 `execute_ask()`。
 
 `execute_ask()` 的问答链路是三层：
 
@@ -433,13 +433,13 @@ Web search fallback
 
 ### 7.3 direct_answer 分支
 
-`direct_answer_entry_branch_node()` 用于问候、感谢、澄清、简单说明等低风险场景。
+`_node_direct_answer_branch()` 用于问候、感谢、澄清、简单说明等低风险场景。
 
-如果 LLM 配置可用，会直接调用小模型生成简短回复；否则使用 `_simple_direct_answer()` 规则回复。
+如果 LLM 配置可用，会直接调用小模型生成简短回复；否则返回明确的回答模型不可用提示。
 
 ### 7.4 summarize 分支
 
-`summarize_entry_branch_node()` 在 router 已选择 `summarize_thread` 后获取总结材料：优先使用 `metadata.thread_messages` 中已有内容，否则调用入口平台注册的消息加载回调。飞书长连接仅注册该回调，不在进入 graph 前用启发式判断是否拉取群聊消息。
+`_node_summarize_branch()` 在 router 已选择 `summarize_thread` 后获取总结材料：优先使用 `metadata.thread_messages` 中已有内容，否则调用入口平台注册的消息加载回调。飞书长连接仅注册该回调，不在进入 graph 前判断是否拉取群聊消息。
 
 `_summarize_thread()` 内部调用 `_generate_answer()`，因此使用主回答模型 `openai_model`。
 

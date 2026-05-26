@@ -521,6 +521,25 @@ class TestPlanValidatorGovernance:
         assert result.valid
         assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
 
+    def test_solidify_rejects_capture_without_composed_draft(self, validator):
+        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        steps = [
+            PlanStep(step_id="sol-1", action_type="retrieve", description="获取上下文"),
+            PlanStep(
+                step_id="sol-2",
+                action_type="tool_call",
+                description="保存占位符",
+                tool_name="capture_text",
+                tool_input={"text": "{{sol-1.expected_output}}"},
+                depends_on=["sol-1"],
+            ),
+        ]
+
+        result = validator.validate(steps, decision)
+
+        assert not result.valid
+        assert any("必须依赖 compose" in issue for issue in result.issues)
+
 
 class TestReActValidation:
     """Validate ReAct-specific checks in PlanValidator."""

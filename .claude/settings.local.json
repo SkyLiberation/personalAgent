@@ -102,7 +102,16 @@
       "Bash(curl -s http://localhost:8000/health)",
       "Bash(sleep 3 && cat /c/Users/KingTom/AppData/Local/Temp/claude/d--mySoft-workspace-personalAgent/c3cd7ee4-818e-4f37-8d95-3eac67b265df/tasks/bj7ba3lt8.output 2>/dev/null | tail -20)",
       "Read(//c/Users/KingTom/AppData/Local/Temp/claude/d--mySoft-workspace-personalAgent/c3cd7ee4-818e-4f37-8d95-3eac67b265df/tasks/**)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(docker-compose ps *)",
+      "Bash(taskkill /PID 12936 /F)",
+      "Bash(taskkill /PID 4508 /F)",
+      "Bash(powershell -Command \"Stop-Process -Id 12936 -Force; Stop-Process -Id 4508 -Force\")",
+      "Bash(powershell -Command \"Stop-Process -Id 12936 -Force\")",
+      "Bash(curl -s http://127.0.0.1:8000/docs -o /dev/null -w \"%{http_code}\")",
+      "Bash(curl -s http://127.0.0.1:3000 -o /dev/null -w \"%{http_code}\")",
+      "Bash(powershell -Command \"Stop-Process -Id 34908 -Force; Stop-Process -Id 20676 -Force\")",
+      "Bash(curl -s -o /dev/null -w \"backend:%{http_code} frontend:%{http_code}\" http://127.0.0.1:8000/docs http://127.0.0.1:3000)"
     ]
   }
 }

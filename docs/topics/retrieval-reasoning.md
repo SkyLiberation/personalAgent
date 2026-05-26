@@ -159,7 +159,7 @@ Graphiti node / edge / fact 主导召回、排序和推理
 
 ### 2. 本地检索
 
-代码位置：[memory_store.py](../../src/personal_agent/storage/memory_store.py)
+代码位置：[postgres_memory_store.py](../../src/personal_agent/storage/postgres_memory_store.py)
 
 作用：
 

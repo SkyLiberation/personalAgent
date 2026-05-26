@@ -1,6 +1,6 @@
 # 运行时与编排层说明
 
-本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes.py](../../src/personal_agent/agent/orchestration_nodes.py)、[src/personal_agent/agent/graph.py](../../src/personal_agent/agent/graph.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
+本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)、[src/personal_agent/agent/graph.py](../../src/personal_agent/agent/graph.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
 
 ## 设计目标
 
@@ -180,4 +180,4 @@ EntryInput
 - ~~orchestration nodes 不访问 runtime 私有字段。~~ **已完成**：`OrchestrationDeps.from_runtime()` 使用公开属性。
 - ~~工具不持有 `AgentRuntime` 实例。~~ **已完成**：`CaptureTextTool` 接收 callable。
 - runtime public 方法仍兼容现有 Web/CLI/飞书调用。
-- `tests/test_orchestration.py`、API 测试和核心 ask/capture 回归测试通过（475 passed, 1 flaky due to API connectivity）。
+- 所有核心回归测试通过。

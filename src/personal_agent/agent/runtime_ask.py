@@ -37,6 +37,7 @@ class RuntimeAskMixin:
         user_id: str | None = None,
         session_id: str | None = None,
         conversation_context: str | None = None,
+        record_history: bool = True,
     ) -> AskResult:
         normalized_user = user_id or self.settings.default_user
         normalized_session = session_id or "default"
@@ -77,10 +78,11 @@ class RuntimeAskMixin:
                         evidence=all_evidence,
                         session_id=normalized_session,
                     )
-                    self.memory.record_turn(
-                        normalized_user, normalized_session, question, answer,
-                        citations=citations,
-                    )
+                    if record_history:
+                        self.memory.record_turn(
+                            normalized_user, normalized_session, question, answer,
+                            citations=citations,
+                        )
                     logger.info(
                         "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
                         normalized_user, len(matches), len(citations), verification.evidence_score,
@@ -139,10 +141,11 @@ class RuntimeAskMixin:
                 self.memory.working.add_step(
                     f"网络搜索完成: score={web_verification.evidence_score:.2f} ok={web_verification.ok}"
                 )
-                self.memory.record_turn(
-                    normalized_user, normalized_session, question, web_answer,
-                    citations=web_citations,
-                )
+                if record_history:
+                    self.memory.record_turn(
+                        normalized_user, normalized_session, question, web_answer,
+                        citations=web_citations,
+                    )
                 logger.info(
                     "Ask resolved from web user=%s citations=%s verify=%.2f",
                     normalized_user, len(web_citations), web_verification.evidence_score,
@@ -162,10 +165,11 @@ class RuntimeAskMixin:
             evidence=all_evidence,
             session_id=normalized_session,
         )
-        self.memory.record_turn(
-            normalized_user, normalized_session, question, final_answer,
-            citations=local_citations,
-        )
+        if record_history:
+            self.memory.record_turn(
+                normalized_user, normalized_session, question, final_answer,
+                citations=local_citations,
+            )
         logger.info(
             "Ask resolved locally user=%s matches=%s citations=%s verify=%.2f",
             normalized_user, len(local_matches), len(local_citations), verification.evidence_score,

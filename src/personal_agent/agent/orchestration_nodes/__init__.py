@@ -37,7 +37,6 @@ from ._entry import _node_route_intent as _node_route_intent  # noqa: F401
 from ._steps import _node_select_next_step as _node_select_next_step  # noqa: F401
 from ._entry import _node_summarize_branch as _node_summarize_branch  # noqa: F401
 from ._entry import _node_validate_plan as _node_validate_plan  # noqa: F401
-from ._entry import _simple_direct_answer as _simple_direct_answer  # noqa: F401
 from ._helpers import _react_llm_respond as _react_llm_respond  # noqa: F401
 from ._deps import _resolve_allowed_tools_for_step as _resolve_allowed_tools_for_step  # noqa: F401
 from ._react import _should_continue_react as _should_continue_react  # noqa: F401

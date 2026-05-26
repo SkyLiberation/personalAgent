@@ -102,6 +102,8 @@ class AgentRunSnapshot(BaseModel):
     plan_steps: list[dict[str, Any]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     answer: str | None = None
+    pending_confirmation: dict[str, Any] | None = None
+    confirmation_decision: str | None = None
     last_event: AgentEvent | None = None
     errors: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -136,6 +138,9 @@ class PlanStepState(BaseModel):
     execution_mode: str = "deterministic"
     allowed_tools: list[str] = Field(default_factory=list)
     max_iterations: int = 3
+    output_label: str = ""
+    output_title: str = ""
+    output_preview: str = ""
 
     @classmethod
     def from_plan_step(cls, s: "PlanStep") -> "PlanStepState":
@@ -305,6 +310,8 @@ class AgentGraphState(BaseModel):
             plan_steps=[s.model_dump(mode="json") for s in self.plan_steps],
             execution_trace=self.execution_trace,
             answer=self.answer,
+            pending_confirmation=self.pending_confirmation,
+            confirmation_decision=self.confirmation_decision,
             last_event=last,
             errors=self.errors,
             created_at=self.created_at,

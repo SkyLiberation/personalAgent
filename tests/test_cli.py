@@ -6,8 +6,9 @@ import pytest
 from pathlib import Path
 from typer.testing import CliRunner
 
+from personal_agent.agent.router import DefaultIntentRouter
 from personal_agent.cli.main import app
-from tests.conftest import POSTGRES_URL
+from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -24,6 +25,11 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     from personal_agent.core import config as config_module
 
     monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
+    monkeypatch.setattr(
+        DefaultIntentRouter,
+        "_classify_with_llm",
+        lambda _self, text, context="": stub_router_decision(text, context),
+    )
     return CliRunner()
 
 

@@ -1,6 +1,6 @@
 # 意图识别与路由层说明
 
-本文汇总当前项目意图识别与路由层的职责划分、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/router.py](../../src/personal_agent/agent/router.py) 和 [src/personal_agent/agent/entry_nodes.py](../../src/personal_agent/agent/entry_nodes.py)。
+本文汇总当前项目意图识别与路由层的职责划分、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/router.py](../../src/personal_agent/agent/router.py)。
 
 ## 设计目标
 
@@ -44,21 +44,20 @@
 
 作用：
 
-- LLM 优先分类
-- LLM 不可用、异常或返回未知 intent 时，回退到启发式分类
+- 对文本入口使用 LLM 分类
+- LLM 未配置、重试后仍异常或返回未知 intent 时，明确返回模型不可用提示，不猜测用户意图
 - 将 LLM 结果与默认控制字段合并，确保 `requires_tools / requires_retrieval / requires_planning / candidate_tools` 不缺失
 
-### 3. `heuristic_entry_intent`
+### 3. 确定性文件入口
 
-代码位置：[entry_nodes.py](../../src/personal_agent/agent/entry_nodes.py)
+代码位置：[router.py](../../src/personal_agent/agent/router.py)
 
 作用：
 
-- 用规则兜底识别入口意图
-- 识别文件、链接、问答、总结、删除、固化和直接回答等场景
-- 保证无 LLM 环境下主流程仍可运行
+- 当 `source_type=file` 时直接进入 `capture_file`
+- 文件类型来自已知上传入口，不依赖自然语言意图推断
 
-## 当前支持的意图
+入口意图（`EntryIntent`）是 `Literal` 类型，定义在 [core/models.py](../../src/personal_agent/core/models.py)，使用字符串字面量而非 Enum 类。当前支持的意图值：
 
 - `capture_text`
 - `capture_link`
@@ -79,7 +78,8 @@
 ## 当前能力
 
 - 已具备结构化路由结果
-- 已具备 LLM 优先、启发式兜底的分类链路
+- 已具备仅由 LLM 判定文本意图的分类链路
+- 已具备 LLM 调用失败后的显式异常提示
 - 已具备文件类型优先路由
 - 已具备 direct answer 独立低风险分支
 - 已具备删除类高风险标记
@@ -105,7 +105,7 @@ graph_search -> local memory -> web_search
 
 ### 3. LLM 分类置信度较粗
 
-当前 LLM 分类默认 `confidence=0.8`，启发式规则也使用固定置信度。还没有基于输入复杂度、规则命中强度或历史误判做动态校准。
+当前 LLM 分类默认 `confidence=0.8`。还没有基于输入复杂度或历史误判做动态校准。
 
 ## 演进方向
 

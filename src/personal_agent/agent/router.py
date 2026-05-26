@@ -10,7 +10,6 @@ from openai import OpenAI
 from ..core.config import Settings
 from ..core.logging_utils import log_event
 from ..core.models import EntryInput, EntryIntent
-from .entry_nodes import heuristic_entry_intent
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +133,14 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
         requires_tools=defaults.requires_tools,
         requires_retrieval=defaults.requires_retrieval,
         requires_planning=defaults.requires_planning,
-        risk_level=llm_result.risk_level,
-        requires_confirmation=llm_result.requires_confirmation,
+        risk_level=(
+            defaults.risk_level
+            if defaults.risk_level == "high"
+            else llm_result.risk_level
+        ),
+        requires_confirmation=(
+            defaults.requires_confirmation or llm_result.requires_confirmation
+        ),
         requires_clarification=(
             llm_result.requires_clarification or defaults.requires_clarification
         ),
@@ -148,55 +153,22 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
     )
 
 
-def _with_clarification(
-    decision: RouterDecision,
-    *,
-    prompt: str,
-    missing_information: list[str],
-) -> RouterDecision:
-    """Mark a fallback routing decision as requiring user clarification."""
-    return decision.model_copy(
-        update={
-            "requires_clarification": True,
-            "clarification_prompt": prompt,
-            "missing_information": missing_information,
-        }
+def _router_unavailable_decision() -> RouterDecision:
+    """Return an explicit runtime error when LLM routing cannot be performed."""
+    return RouterDecision(
+        route="unknown",
+        confidence=0.0,
+        risk_level="low",
+        user_visible_message="入口路由模型当前不可用，请检查 LLM 配置或稍后重试。",
     )
 
 
-def _apply_heuristic_clarification(text: str, decision: RouterDecision) -> RouterDecision:
-    """Handle unmistakably incomplete fragments when no LLM is available."""
-    stripped = (text or "").strip()
-    ambiguous_fragments = {
-        "帮我", "帮我看看", "看看", "处理一下", "帮我处理", "搞一下", "弄一下",
-        "继续", "这个", "那个", "这条", "那条", "一下",
-    }
-    action_only = {
-        "记录", "记一下", "保存", "收录", "总结", "汇总", "删除", "删掉",
-        "查询", "问一下", "解释一下",
-    }
-    if stripped in ambiguous_fragments:
-        return _with_clarification(
-            _default_router_decision("unknown", f"输入 `{stripped}` 缺少明确目标。"),
-            prompt="请补充你希望我处理的具体内容，并说明要记录、查询、总结还是执行操作。",
-            missing_information=["具体目标或待处理内容"],
-        )
-    if stripped in action_only:
-        return _with_clarification(
-            decision,
-            prompt=f"请补充“{stripped}”所针对的具体内容或对象。",
-            missing_information=["操作对象或内容"],
-        )
-    return decision
-
-
 class DefaultIntentRouter:
-    """LLM-first intent classification with heuristic fallback.
+    """LLM-only intent classification for text entries.
 
-    Uses the small model for fast, low-cost classification.
-    Falls back to heuristic rules only when no LLM is configured. When a
-    configured model cannot classify reliably, returns clarification instead
-    of risking an unintended write through a guessed route.
+    Uses the small model for classification. If it is unconfigured or remains
+    unavailable after configured retries, returns an explicit model error
+    instead of guessing a route from text keywords.
 
     LLM results are merged with _default_router_decision() to ensure
     control fields (requires_tools, requires_retrieval, requires_planning,
@@ -221,21 +193,9 @@ class DefaultIntentRouter:
             self._log_decision(entry_input, decision, strategy=strategy)
             return decision
 
-        if self._llm_configured:
-            decision = _with_clarification(
-                _default_router_decision("unknown", "路由模型未返回可靠判断。"),
-                prompt="当前无法可靠判断如何处理这条请求，请稍后重试。",
-                missing_information=["可靠的模型路由结果"],
-            )
-            self._log_decision(entry_input, decision, strategy="llm_unavailable")
-            return decision
-
-        intent, reason = heuristic_entry_intent(entry_input.text)
-        decision = _apply_heuristic_clarification(
-            entry_input.text,
-            _default_router_decision(intent, reason),
-        )
-        self._log_decision(entry_input, decision, strategy="heuristic")
+        decision = _router_unavailable_decision()
+        strategy = "llm_unavailable" if self._llm_configured else "llm_unconfigured"
+        self._log_decision(entry_input, decision, strategy=strategy)
         return decision
 
     def _classify_with_llm(
@@ -260,7 +220,9 @@ class DefaultIntentRouter:
             "请重点判断信息是否具有时效性：当前天气、实时价格、最新新闻、航班状态等依赖最新外部事实的问题应归为 ask，"
             "不得仅因问题简单而归为 direct_answer。"
             "当输入不足以安全确定或执行意图时设置 requires_clarification=true，并提供 missing_information 和 clarification_prompt；"
-            "例如“帮我”“删除”需要澄清，而“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
+            "例如仅说“帮我”或“删除”需要澄清，而“删除关于 DNS 的知识”已提供检索范围，"
+            "应归为 delete_knowledge 且 requires_clarification=false，后续会检索候选并要求用户确认。"
+            "“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
             "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), "
             "requires_clarification(bool, 可选), missing_information(字符串数组, 可选), clarification_prompt(字符串, 可选)。"
             "risk_level: 删除类操作应为 high，一般操作为 low。"
@@ -294,7 +256,7 @@ class DefaultIntentRouter:
             intent = payload.get("intent", "unknown")
             if intent not in _RECOGNIZED_INTENTS:
                 logger.warning(
-                    "LLM returned unrecognised intent=%s, falling back to heuristic",
+                    "LLM returned unrecognised intent=%s",
                     intent,
                 )
                 return None
@@ -317,9 +279,7 @@ class DefaultIntentRouter:
                 user_visible_message=reason,
             )
         except Exception:
-            logger.exception(
-                "Failed to classify entry intent with LLM, falling back to heuristic"
-            )
+            logger.exception("Failed to classify entry intent with LLM")
             return None
 
     @property
