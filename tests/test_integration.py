@@ -121,9 +121,9 @@ class TestPendingActionLifecycle:
         initial_count = len(actions)
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        assert result.ok
-        assert result.data is not None
-        data = result.data if isinstance(result.data, dict) else {}
+        assert result["ok"]
+        assert result["data"] is not None
+        data = result["data"] if isinstance(result["data"], dict) else {}
         assert data.get("pending_confirmation") is True
         assert "action_id" in data
         assert "token" in data
@@ -142,7 +142,7 @@ class TestPendingActionLifecycle:
 
         # Phase 1: create pending action
         result = service.execute_tool("delete_note", note_id=note_id, user_id="alice")
-        data = result.data if isinstance(result.data, dict) else {}
+        data = result["data"] if isinstance(result["data"], dict) else {}
         action_id = str(data["action_id"])
         token = str(data["token"])
 
@@ -161,7 +161,7 @@ class TestPendingActionLifecycle:
         ).note
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        data = result.data if isinstance(result.data, dict) else {}
+        data = result["data"] if isinstance(result["data"], dict) else {}
         action_id = str(data["action_id"])
 
         rejected = service.reject_pending_action(action_id, "alice", "不需要删除")
@@ -179,7 +179,7 @@ class TestPendingActionLifecycle:
         ).note
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        data = result.data if isinstance(result.data, dict) else {}
+        data = result["data"] if isinstance(result["data"], dict) else {}
         action_id = str(data["action_id"])
 
         confirmed = service.confirm_pending_action(action_id, "wrong-token", "alice")
@@ -211,7 +211,7 @@ class TestPendingActionLifecycle:
         ).note
 
         result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        data = result.data if isinstance(result.data, dict) else {}
+        data = result["data"] if isinstance(result["data"], dict) else {}
         action_id = str(data["action_id"])
         token = str(data["token"])
 
@@ -231,8 +231,8 @@ class TestPendingActionLifecycle:
 
         # Bob tries to delete Alice's note
         result = service.execute_tool("delete_note", note_id=note.id, user_id="bob")
-        assert not result.ok
-        assert "不属于" in str(result.error)
+        assert not result["ok"]
+        assert "不属于" in str(result["error"])
 
 
 # ── PendingActionStore unit tests ───────────────────────────────────

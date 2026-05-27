@@ -40,7 +40,10 @@
 
 作用：
 
-- `build_entry_orchestration_graph()`：entry 总编排，覆盖 route、普通分支、plan、step、ReAct、HITL、finalize
+- `build_entry_orchestration_graph()`：entry 父图，组合 `EntryGraph`、普通分支与 `PlanExecutionGraph`
+- `build_entry_graph()`：归一化、意图路由与澄清 interrupt/resume
+- `build_plan_execution_graph()`：计划、确定性步骤、HITL、重试与最终汇总
+- `build_react_graph()`：受限 ReAct 轮次及其工具执行边界
 - `build_capture_graph()`：采集、增强、关联、复习调度
 - `build_ask_graph()`：本地问答
 
@@ -75,10 +78,10 @@ question
 EntryInput
   -> AgentRuntime.execute_entry()
   -> build_entry_orchestration_graph()
-  -> normalize_entry
-  -> route_intent
+  -> EntryGraph: normalize_entry -> route_intent / clarification
   -> capture / ask / summarize / direct_answer
-     或 plan_task -> validate_plan -> step loop / ReAct / HITL
+     或 PlanExecutionGraph: plan_task -> validate_plan -> step loop / HITL
+        -> ReactGraph（仅 react 步骤）
   -> finalize_entry_result
   -> EntryResult
 ```
@@ -118,7 +121,7 @@ EntryInput
 这会带来几个问题：
 
 - ~~orchestration nodes 仍依赖 `OrchestrationDeps.from_runtime()` 从 runtime 抽取大量私有字段。~~ **已修复**：`OrchestrationDeps.from_runtime()` 现在通过 `@property` 公开属性访问（`runtime.intent_router`、`runtime.planner` 等），不再直接访问私有字段。
-- ~~工具和节点对 `runtime.execute_capture()`、`runtime.execute_ask()` 等方法存在回调式依赖。~~ **已修复**：`CaptureTextTool` 改为接收 `capture_executor: Callable`，通过 lambda 注入 `execute_capture`。
+- 工具由 `build_capture_text_tool(capture_executor)` 创建，通过注入 callable 调用采集能力，并由 `ToolNode` 执行。
 - Runtime 修改容易影响多个入口和测试面，局部能力难以单独替换或复用。
 - LangGraph 已经表达流程，但业务执行边界还没有完全下沉到 node/service 层。
 
@@ -171,13 +174,13 @@ EntryInput
 1. 定义 `EntryOrchestrationDeps` 的最终形态：只包含 node 需要的显式 service/callable，不再从 runtime 私有字段直接读。
 2. 抽出 `AskService`：先迁移 `execute_ask()` 的主体逻辑，runtime 只保留转发方法。
 3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture graph、store、Graphiti sync 的编排移出 runtime。
-4. ~~替换工具对 runtime 的依赖：例如 `CaptureTextTool(self)` 改为 `CaptureTextTool(capture_service=...)`。~~ **已完成**：`CaptureTextTool` 现在接收 `capture_executor: Callable`，不再持有 `AgentRuntime`。
+4. 工具对 runtime 的依赖已通过 `build_capture_text_tool(capture_executor)` 的依赖注入消除。
 5. ~~清理 `RuntimeEntryMixin.plan_for_entry()` 等 LangGraph 改造后的兼容遗留方法。~~ **已完成**：`plan_for_entry()` 已删除（118 行死代码），`runtime_entry.py` 从 163 行精简到 40 行。
 6. 最后压缩 `AgentRuntime.__init__()`：只装配依赖容器和 graph，不再承载具体业务流程。
 
 ### 验收标准
 
 - ~~orchestration nodes 不访问 runtime 私有字段。~~ **已完成**：`OrchestrationDeps.from_runtime()` 使用公开属性。
-- ~~工具不持有 `AgentRuntime` 实例。~~ **已完成**：`CaptureTextTool` 接收 callable。
+- 工具不持有 `AgentRuntime` 实例；LangChain 工具工厂接收所需 callable。
 - runtime public 方法仍兼容现有 Web/CLI/飞书调用。
 - 所有核心回归测试通过。

@@ -488,12 +488,12 @@ class PlanExecutor:
     def _execute_tool_call(self, step: PlanStep) -> object:
         if not step.tool_name:
             raise ValueError("tool_call step missing tool_name")
-        result = self._runtime._tool_registry.execute(
+        result = self._runtime._tool_executor.invoke_direct(
             step.tool_name, **(step.tool_input or {})
         )
-        if result is not None and hasattr(result, "ok") and not result.ok:
-            raise RuntimeError(result.error or f"Tool {step.tool_name} returned failure")
-        return result.data if hasattr(result, "data") and result.data is not None else {"ok": True}
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or f"Tool {step.tool_name} returned failure")
+        return result.get("data") if result.get("data") is not None else {"ok": True}
 
     def _execute_compose(
         self,

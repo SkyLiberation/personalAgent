@@ -6,7 +6,7 @@ from datetime import datetime
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..core.models import AuditEvent, PendingAction
+from ..core.models import AuditEvent, PendingAction, local_now
 from .postgres_common import PostgresStoreBase
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class PostgresPendingActionStore(PostgresStoreBase):
         if action is None or action.status != "pending" or action.token != token:
             return None
         action.status = "confirmed"
-        action.resolved_at = datetime.utcnow()
+        action.resolved_at = local_now()
         action.audit_log.append(AuditEvent(event="confirmed", detail=f"Confirmed by {user_id}"))
         self._save(action)
         return action
@@ -80,7 +80,7 @@ class PostgresPendingActionStore(PostgresStoreBase):
         if action is None or action.status != "pending":
             return None
         action.status = "rejected"
-        action.resolved_at = datetime.utcnow()
+        action.resolved_at = local_now()
         action.audit_log.append(AuditEvent(event="rejected", detail=reason or f"Rejected by {user_id}"))
         self._save(action)
         return action
@@ -101,9 +101,9 @@ class PostgresPendingActionStore(PostgresStoreBase):
         return self._delete("WHERE user_id = %s", (user_id,))
 
     def _expire_if_needed(self, action: PendingAction) -> None:
-        if action.status == "pending" and datetime.utcnow() >= action.expires_at:
+        if action.status == "pending" and local_now() >= action.expires_at:
             action.status = "expired"
-            action.resolved_at = datetime.utcnow()
+            action.resolved_at = local_now()
             action.audit_log.append(AuditEvent(event="expired", detail="Auto-expired by expiry check"))
             self._save(action)
 

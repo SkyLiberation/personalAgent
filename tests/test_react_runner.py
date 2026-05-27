@@ -4,6 +4,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.tools import tool
 
 from personal_agent.agent.planner import PlanStep
 from personal_agent.agent.react_runner import (
@@ -12,22 +13,30 @@ from personal_agent.agent.react_runner import (
     DEFAULT_ALLOWED_TOOLS,
 )
 from personal_agent.core.models import AgentState
-from personal_agent.tools.base import ToolResult, ToolSpec
+from personal_agent.tools import ToolExecutor, tool_response, tool_success
 
 
-def _make_runner(tools: dict[str, ToolSpec] | None = None) -> ReActStepRunner:
-    registry = MagicMock()
+def _make_runner(tools: dict[str, dict] | None = None) -> ReActStepRunner:
+    executor = MagicMock(spec=ToolExecutor)
     if tools:
-        specs = [ToolSpec(name=n, **kwargs) for n, kwargs in tools.items()]
-        registry.list_tools.return_value = specs
-        tool_map = {}
-        for spec in specs:
-            mock_tool = MagicMock()
-            mock_tool.spec = spec
-            tool_map[spec.name] = mock_tool
-        registry.get.side_effect = lambda name: tool_map.get(name)
+        registered = []
+        for name, config in tools.items():
+            metadata = {key: value for key, value in config.items() if key != "description"}
+            description = config.get("description", name)
+
+            def run(query: str = "", _name=name):
+                return tool_response(tool_success({"answer": _name + query}))
+
+            registered.append(tool(
+                name,
+                description=description,
+                response_format="content_and_artifact",
+                extras=metadata,
+            )(run))
+        executor.list_tools.return_value = registered
+        executor.get.side_effect = lambda name: next((item for item in registered if item.name == name), None)
     else:
-        registry.list_tools.return_value = []
+        executor.list_tools.return_value = []
 
     memory = MagicMock()
     memory.working.add_step = MagicMock()
@@ -37,7 +46,7 @@ def _make_runner(tools: dict[str, ToolSpec] | None = None) -> ReActStepRunner:
     settings.openai_base_url = "http://test"
     settings.openai_small_model = "test-model"
 
-    return ReActStepRunner(tool_registry=registry, memory=memory, settings=settings)
+    return ReActStepRunner(tool_executor=executor, memory=memory, settings=settings)
 
 
 def _state() -> AgentState:
@@ -75,8 +84,8 @@ class TestReActMaxIterations:
         runner = _make_runner({
             "graph_search": {"description": "search graph"},
         })
-        registry = runner._registry
-        registry.execute.return_value = ToolResult(ok=True, data={"answer": "some data"})
+        executor = runner._executor
+        executor.invoke_direct.return_value = {"ok": True, "data": {"answer": "some data"}, "evidence": []}
 
         step = PlanStep(
             step_id="r1", action_type="retrieve",
@@ -130,8 +139,8 @@ class TestReActObservationInjected:
         runner = _make_runner({
             "graph_search": {"description": "search graph"},
         })
-        registry = runner._registry
-        registry.execute.return_value = ToolResult(ok=True, data={"answer": "Redis is fast"})
+        executor = runner._executor
+        executor.invoke_direct.return_value = {"ok": True, "data": {"answer": "Redis is fast"}, "evidence": []}
 
         step = PlanStep(
             step_id="r1", action_type="retrieve",
@@ -161,8 +170,8 @@ class TestReActProgressEvents:
         runner = _make_runner({
             "graph_search": {"description": "search graph"},
         })
-        registry = runner._registry
-        registry.execute.return_value = ToolResult(ok=True, data={"answer": "data"})
+        executor = runner._executor
+        executor.invoke_direct.return_value = {"ok": True, "data": {"answer": "data"}, "evidence": []}
 
         step = PlanStep(
             step_id="r1", action_type="retrieve",

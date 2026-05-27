@@ -192,7 +192,7 @@ edges
 
 实现入口：
 
-- [GraphSearchTool](../src/personal_agent/tools/graph_search.py)
+- [`build_graph_search_tool`](../src/personal_agent/tools/graph_search.py)
 
 该工具封装 `GraphitiStore.ask(question, user_id)`，面向工具调用场景返回结构化数据：
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from personal_agent.agent.planner import DefaultTaskPlanner, PlanStep
@@ -55,13 +57,12 @@ class TestPlannerEnrichedSteps:
 
     def test_plan_delete_knowledge_heuristic(self, planner):
         steps = planner.plan("delete_knowledge", "删除那条旧笔记")
-        assert len(steps) == 5
+        assert len(steps) == 4
         action_types = [s.action_type for s in steps]
-        assert action_types == ["retrieve", "resolve", "verify", "tool_call", "compose"]
-        # Delete steps should be high risk
+        assert action_types == ["retrieve", "resolve", "tool_call", "compose"]
         assert steps[2].risk_level == "high"
         assert steps[2].requires_confirmation is True
-        assert steps[3].risk_level == "high"
+        assert steps[2].tool_name == "delete_note"
         # All steps have step_id
         for s in steps:
             assert s.step_id
@@ -69,11 +70,12 @@ class TestPlannerEnrichedSteps:
 
     def test_plan_solidify_conversation_heuristic(self, planner):
         steps = planner.plan("solidify_conversation", "把讨论结论沉淀下来")
-        assert len(steps) == 4
+        assert len(steps) == 2
         action_types = [s.action_type for s in steps]
-        assert action_types == ["retrieve", "compose", "verify", "tool_call"]
-        # Solidify steps use depends_on for ordering
+        assert action_types == ["compose", "tool_call"]
         assert steps[1].depends_on == ["sol-1"]
+        assert steps[1].requires_confirmation is False
+        assert steps[1].risk_level == "low"
 
     def test_plan_ask_heuristic(self, planner):
         steps = planner.plan("ask", "什么是服务降级？")
@@ -132,11 +134,15 @@ class TestDefaultIntentRouterNewIntents:
         monkeypatch.setattr(
             router,
             "_classify_with_llm",
-            lambda _text, _context="": RouterDecision(route="solidify_conversation"),
+            lambda _text, _context="": RouterDecision(
+                route="solidify_conversation",
+                requires_confirmation=True,
+            ),
         )
         entry = EntryInput(text="把刚才讨论的结论记下来")
         decision = router.classify(entry)
         assert decision.route == "solidify_conversation"
+        assert decision.requires_confirmation is False
 
     def test_router_applies_defaults_for_llm_delete_decision(self, router, monkeypatch):
         monkeypatch.setattr(
@@ -294,46 +300,31 @@ class TestPlannerValidatorRoundtrip:
     def test_delete_note_id_may_be_supplied_by_transitive_resolve_step(self):
         from personal_agent.agent.plan_validator import PlanValidator
         from personal_agent.agent.router import _default_router_decision
-        from personal_agent.tools import ToolRegistry
-        from personal_agent.tools.base import ToolSpec
+        from langchain_core.tools import tool
+        from personal_agent.tools import ToolExecutor, tool_response, tool_success
 
-        class DeleteTool:
-            spec = ToolSpec(
-                name="delete_note",
-                description="delete",
-                input_schema={
-                    "type": "object",
-                    "properties": {"note_id": {"type": "string"}},
-                    "required": ["note_id"],
-                },
-            )
+        @tool("delete_note", description="delete", response_format="content_and_artifact")
+        def delete_note(note_id: str):
+            return tool_response(tool_success(note_id))
 
-        registry = ToolRegistry()
-        registry.register(DeleteTool())
+        executor = ToolExecutor()
+        executor.register(delete_note)
         steps = [
             PlanStep(step_id="del-0", action_type="retrieve", description="检索候选"),
             PlanStep(step_id="del-1", action_type="resolve", description="定位目标", depends_on=["del-0"]),
             PlanStep(
                 step_id="del-2",
-                action_type="verify",
-                description="安全检查",
-                risk_level="high",
-                requires_confirmation=True,
-                depends_on=["del-1"],
-            ),
-            PlanStep(
-                step_id="del-3",
                 action_type="tool_call",
                 description="删除目标",
                 tool_name="delete_note",
                 risk_level="high",
                 requires_confirmation=True,
-                depends_on=["del-2"],
+                depends_on=["del-1"],
             ),
-            PlanStep(step_id="del-4", action_type="compose", description="生成结果", depends_on=["del-3"]),
+            PlanStep(step_id="del-3", action_type="compose", description="生成结果", depends_on=["del-2"]),
         ]
 
-        result = PlanValidator(tool_registry=registry).validate(
+        result = PlanValidator(tool_executor=executor).validate(
             steps, _default_router_decision("delete_knowledge")
         )
 
@@ -342,22 +333,15 @@ class TestPlannerValidatorRoundtrip:
     def test_delete_note_without_upstream_resolve_still_requires_note_id(self):
         from personal_agent.agent.plan_validator import PlanValidator
         from personal_agent.agent.router import _default_router_decision
-        from personal_agent.tools import ToolRegistry
-        from personal_agent.tools.base import ToolSpec
+        from langchain_core.tools import tool
+        from personal_agent.tools import ToolExecutor, tool_response, tool_success
 
-        class DeleteTool:
-            spec = ToolSpec(
-                name="delete_note",
-                description="delete",
-                input_schema={
-                    "type": "object",
-                    "properties": {"note_id": {"type": "string"}},
-                    "required": ["note_id"],
-                },
-            )
+        @tool("delete_note", description="delete", response_format="content_and_artifact")
+        def delete_note(note_id: str):
+            return tool_response(tool_success(note_id))
 
-        registry = ToolRegistry()
-        registry.register(DeleteTool())
+        executor = ToolExecutor()
+        executor.register(delete_note)
         steps = [
             PlanStep(
                 step_id="del-1",
@@ -367,9 +351,78 @@ class TestPlannerValidatorRoundtrip:
             ),
         ]
 
-        result = PlanValidator(tool_registry=registry).validate(
+        result = PlanValidator(tool_executor=executor).validate(
             steps, _default_router_decision("delete_knowledge")
         )
 
         assert not result.valid
         assert any("note_id" in issue for issue in result.issues)
+
+
+class TestPlannerLlmContract:
+    def test_llm_plan_parses_object_contract_and_react_fields(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        request: dict[str, object] = {}
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create)
+                )
+
+            def _create(self, **kwargs):
+                request.update(kwargs)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=(
+                        '{"steps":['
+                        '{"step_id":"del-1","action_type":"retrieve","description":"检索候选",'
+                        '"tool_name":null,"tool_input":{},"depends_on":[],'
+                        '"risk_level":"low","requires_confirmation":false,"on_failure":"retry",'
+                        '"execution_mode":"react","allowed_tools":["graph_search"],"max_iterations":2},'
+                        '{"step_id":"del-2","action_type":"resolve","description":"定位目标",'
+                        '"tool_name":null,"tool_input":{},"depends_on":["del-1"],'
+                        '"risk_level":"low","requires_confirmation":false,"on_failure":"abort"},'
+                        '{"step_id":"del-3","action_type":"tool_call","description":"请求确认删除",'
+                        '"tool_name":"delete_note","tool_input":{},"depends_on":["del-2"],'
+                        '"risk_level":"high","requires_confirmation":true,"on_failure":"abort"},'
+                        '{"step_id":"del-4","action_type":"compose","description":"汇总结果",'
+                        '"tool_name":null,"tool_input":{},"depends_on":["del-3"],'
+                        '"risk_level":"low","requires_confirmation":false,"on_failure":"skip"}'
+                        ']}'
+                    )))]
+                )
+
+        monkeypatch.setattr("personal_agent.agent.planner.OpenAI", FakeOpenAI)
+        planner = DefaultTaskPlanner(
+            Settings(openai_api_key="k", openai_base_url="http://llm", openai_small_model="small")
+        )
+
+        steps = planner.plan("delete_knowledge", "删除 DNS 笔记")
+
+        assert request["response_format"] == {"type": "json_object"}
+        assert steps[0].execution_mode == "react"
+        assert steps[0].allowed_tools == ["graph_search"]
+        assert steps[0].max_iterations == 2
+
+    def test_llm_array_output_falls_back_to_safe_workflow(self, monkeypatch):
+        from personal_agent.core.config import Settings
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(
+                        create=lambda **_kwargs: SimpleNamespace(
+                            choices=[SimpleNamespace(message=SimpleNamespace(content="[]"))]
+                        )
+                    )
+                )
+
+        monkeypatch.setattr("personal_agent.agent.planner.OpenAI", FakeOpenAI)
+        planner = DefaultTaskPlanner(
+            Settings(openai_api_key="k", openai_base_url="http://llm", openai_small_model="small")
+        )
+
+        steps = planner.plan("solidify_conversation", "固化该结论")
+
+        assert [step.action_type for step in steps] == ["compose", "tool_call"]

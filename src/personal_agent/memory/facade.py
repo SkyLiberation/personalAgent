@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from ..core.models import local_now
+
 from .working_memory import WorkingMemory
 
 if TYPE_CHECKING:
@@ -80,7 +82,7 @@ class MemoryFacade:
             "question": question,
             "answer": answer,
             "citations": [c.model_dump(mode="json") for c in citations] if citations else [],
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": local_now().isoformat(),
         }
 
         from ..core.models import AskHistoryRecord

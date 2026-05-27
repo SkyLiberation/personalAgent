@@ -1,41 +1,30 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+
+from langchain_core.tools import BaseTool, tool
 
 from ..capture import CaptureService
-from .base import BaseTool, ToolResult, ToolSpec
+from .base import tool_failure, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 
 
-class CaptureUrlTool(BaseTool):
-    def __init__(self, capture_service: CaptureService) -> None:
-        self._capture_service = capture_service
-
-    @property
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="capture_url",
-            description="抓取指定网页的正文内容，返回提取后的纯文本。",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "要抓取的网页 URL"},
-                },
-                "required": ["url"],
-            },
-            risk_level="low",
-            accesses_external=True,
-        )
-
-    def execute(self, **kwargs: Any) -> ToolResult:
-        url = kwargs.get("url")
-        if not url or not isinstance(url, str):
-            return ToolResult(ok=False, error="缺少有效的 url 参数。")
+def build_capture_url_tool(capture_service: CaptureService) -> BaseTool:
+    @tool(
+        "capture_url",
+        description="抓取指定网页的正文内容，返回提取后的纯文本。",
+        response_format="content_and_artifact",
+        extras={"risk_level": "low", "accesses_external": True},
+    )
+    def capture_url(url: str):
         try:
-            text = self._capture_service.capture_text_from_url(url)
-            return ToolResult(ok=True, data={"url": url, "text": text})
+            return tool_response(tool_success({
+                "url": url,
+                "text": capture_service.capture_text_from_url(url),
+            }))
         except Exception as exc:
-            logger.exception("CaptureUrlTool failed for url=%s", url)
-            return ToolResult(ok=False, error=str(exc)[:500])
+            logger.exception("capture_url failed for url=%s", url)
+            return tool_response(tool_failure(str(exc)[:500]))
+
+    return capture_url

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..core.models import Citation
+from ..core.models import Citation, local_now
 from .postgres_common import PostgresStoreBase
 
 MAX_CITATIONS = 30
@@ -46,7 +46,7 @@ class PostgresCrossSessionStore(PostgresStoreBase):
         self._initialized = True
 
     def add_citations(self, user_id: str, citations: list[Citation], question: str = "") -> None:
-        now = datetime.now(timezone.utc)
+        now = local_now()
         for citation in citations:
             self._insert(
                 user_id,
@@ -69,7 +69,7 @@ class PostgresCrossSessionStore(PostgresStoreBase):
 
     def save_draft(self, user_id: str, text: str, source_context: str = "") -> str:
         item_id = str(uuid4())
-        now = datetime.now(timezone.utc)
+        now = local_now()
         self._insert(
             user_id,
             "draft",
@@ -97,7 +97,7 @@ class PostgresCrossSessionStore(PostgresStoreBase):
 
     def add_conclusion(self, user_id: str, text: str, source_session_id: str = "") -> str:
         item_id = str(uuid4())
-        now = datetime.now(timezone.utc)
+        now = local_now()
         self._insert(
             user_id,
             "conclusion",
@@ -158,7 +158,7 @@ class PostgresCrossSessionStore(PostgresStoreBase):
 
     def _recent(self, user_id: str, artifact_type: str, ttl_hours: int, limit: int) -> list[dict]:
         self.ensure_schema()
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
+        cutoff = local_now() - timedelta(hours=ttl_hours)
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -191,7 +191,7 @@ class PostgresCrossSessionStore(PostgresStoreBase):
 
     def _trim(self, user_id: str, artifact_type: str, ttl_hours: int, maximum: int) -> None:
         self.ensure_schema()
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
+        cutoff = local_now() - timedelta(hours=ttl_hours)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(

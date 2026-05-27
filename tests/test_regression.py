@@ -141,7 +141,7 @@ class TestCrossLayerRegression:
         assert result.pending_confirmation
 
     def test_solidify_full_flow_compose_generates_answer(self, svc: AgentService):
-        """Solidify full flow: retrieve → compose → verify generates draft text."""
+        """Solidify full flow: compose -> capture_text generates and stores draft text."""
         self._mock_router(svc, "solidify_conversation")
         svc.graph_store.ask.return_value = type("R", (), {
             "enabled": True, "answer": "graph results about caching",

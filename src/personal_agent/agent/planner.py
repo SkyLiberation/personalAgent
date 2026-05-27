@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
@@ -10,9 +12,20 @@ from openai import OpenAI
 
 from ..core.config import Settings
 from ..core.models import EntryIntent
-from ..tools import ToolRegistry
+from ..tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_import_capture():
+    try:
+        scripts_dir = str(Path(__file__).resolve().parents[3] / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from capture_planner_llm import write_plan_capture
+        return write_plan_capture
+    except Exception:
+        return None
 
 
 @dataclass(slots=True)
@@ -54,14 +67,15 @@ class DefaultTaskPlanner:
     and solidify_conversation task types.
     """
 
-    def __init__(self, settings: Settings, tool_registry: ToolRegistry | None = None) -> None:
+    def __init__(self, settings: Settings, tool_executor: ToolExecutor | None = None) -> None:
         self._settings = settings
-        self._tool_registry = tool_registry
+        self._tool_executor = tool_executor
 
     def plan(self, intent: EntryIntent, context: str = "") -> list[PlanStep]:
         llm_result = self._plan_with_llm(intent, context)
         if llm_result is not None:
             return llm_result
+        logger.warning("Planner LLM returned None for intent=%s, falling back to heuristic", intent)
         return self._plan_heuristic(intent)
 
     def fallback_plan(self, intent: EntryIntent) -> list[PlanStep]:
@@ -73,27 +87,48 @@ class DefaultTaskPlanner:
             return None
 
         tool_list = ""
-        if self._tool_registry is not None:
-            specs = self._tool_registry.list_tools()
+        if self._tool_executor is not None:
+            specs = self._tool_executor.list_tools()
             if specs:
                 tool_list = "\n".join(f"- {s.name}: {s.description}" for s in specs)
 
+        workflow_rule = {
+            "delete_knowledge": (
+                "本意图只允许以下四步拓扑，不要增加 verify 步骤：\n"
+                "1. retrieve：检索删除候选，execution_mode=\"react\"，"
+                "allowed_tools=[\"graph_search\"]，max_iterations=2。\n"
+                "2. resolve：依赖 retrieve，从候选中解析目标 note_id。\n"
+                "3. tool_call(delete_note)：直接依赖 resolve，tool_input={}；"
+                "note_id 会由执行器注入；risk_level=\"high\"，"
+                "requires_confirmation=true，on_failure=\"abort\"。\n"
+                "4. compose：依赖 delete_note，向用户汇总结果。\n"
+                "删除确认由 delete_note 工具和恢复流程执行，不要规划独立 verify 步骤。\n"
+            ),
+            "solidify_conversation": (
+                "本意图只允许以下两步拓扑，不要增加 retrieve 或 verify 步骤：\n"
+                "1. compose：从会话中选择用户指定范围的知识并生成入库草稿。\n"
+                "2. tool_call(capture_text)：直接依赖 compose，tool_input={}；"
+                "text 会由执行器注入；risk_level=\"low\"，"
+                "requires_confirmation=false，on_failure=\"abort\"。\n"
+                "用户已明确请求固化，因此写入无需二次确认；不得在计划中提供 text 值或占位符。\n"
+            ),
+        }.get(intent, "")
+
         prompt = (
-            "你是一个任务规划器。请根据用户意图，将任务分解为一系列执行步骤。"
+            "请根据用户意图生成可被现有执行器直接执行的任务计划。"
             "可用 action_type: retrieve(检索), resolve(从候选中解析具体目标), "
             "tool_call(调用工具), compose(生成回答), verify(校验)。"
-            "只返回 JSON 数组，每个元素包含以下字段：\n"
+            "只返回 JSON 对象，顶层仅包含 steps 数组。每个步骤包含以下字段：\n"
             "  step_id(短标识), action_type, description(对用户友好的中文说明),\n"
-            "  tool_name(nullable), tool_input(对象, nullable),\n"
+            "  tool_name(nullable), tool_input(对象),\n"
             "  depends_on(前置步骤 step_id 数组),\n"
-            "  expected_output(期望产出), success_criteria(成功标准),\n"
+            "  expected_output(可选的展示说明), success_criteria(可选的展示说明),\n"
             "  risk_level(low/medium/high), requires_confirmation(bool),\n"
-            "  on_failure(skip/retry/abort)。\n"
+            "  on_failure(skip/retry/abort), execution_mode(deterministic/react),\n"
+            "  allowed_tools(工具名数组), max_iterations(正整数)。\n"
             "description 应该用自然语言向用户说明这一步要做什么，不要只写枚举值。\n"
-            "对于 delete_knowledge，必须在调用 delete_note 工具前安排 resolve 步骤；"
-            "delete_note 的 note_id 由 resolve 执行结果动态注入，不要凭空编造。\n"
-            "对于 solidify_conversation，写入 capture_text 前必须安排 compose 步骤生成真实知识草稿；"
-            "capture_text 的 text 由 compose 结果动态注入，不得写入 {{...}} 占位符或直接复用 retrieve 输出。\n"
+            "expected_output 和 success_criteria 仅用于界面展示，不得声明执行器不能完成的校验动作。\n"
+            f"{workflow_rule}"
             f"意图: {intent}\n"
             f"上下文: {context or '无'}\n"
             f"可用工具:\n{tool_list or '无'}"
@@ -108,16 +143,25 @@ class DefaultTaskPlanner:
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,
                 messages=[
-                    {"role": "system", "content": "你是一个严谨的任务规划器，只输出 JSON 数组。"},
+                    {"role": "system", "content": "你是一个严谨的任务规划器，只输出含 steps 数组的 JSON 对象。"},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0,
-                max_tokens=500,
+                max_tokens=4096,
                 response_format={"type": "json_object"},
             )
             content = (response.choices[0].message.content or "").strip()
+            # TODO: 临时打点，用于收集 planner LLM 原始输出样本，后续移除
+            _capture = _maybe_import_capture()
+            if _capture is not None:
+                try:
+                    _capture(content, intent=intent, context=context, prompt=prompt)
+                except Exception:
+                    pass
             payload = json.loads(content)
-            steps_data = payload if isinstance(payload, list) else payload.get("steps", [])
+            if not isinstance(payload, dict):
+                return None
+            steps_data = payload.get("steps", [])
             if not isinstance(steps_data, list):
                 return None
             steps: list[PlanStep] = []
@@ -135,6 +179,15 @@ class DefaultTaskPlanner:
                 depends_on = item.get("depends_on", [])
                 if not isinstance(depends_on, list):
                     depends_on = []
+                execution_mode = str(item.get("execution_mode") or "deterministic")
+                if execution_mode not in ("deterministic", "react"):
+                    execution_mode = "deterministic"
+                allowed_tools = item.get("allowed_tools", [])
+                if not isinstance(allowed_tools, list):
+                    allowed_tools = []
+                max_iterations = item.get("max_iterations", 3)
+                if not isinstance(max_iterations, int) or isinstance(max_iterations, bool):
+                    max_iterations = 3
                 risk = str(item.get("risk_level", "low"))
                 steps.append(PlanStep(
                     step_id=str(item.get("step_id") or uuid4().hex[:8]),
@@ -148,6 +201,9 @@ class DefaultTaskPlanner:
                     risk_level=risk if risk in ("low", "medium", "high") else "low",
                     requires_confirmation=bool(item.get("requires_confirmation", False)),
                     on_failure=str(item.get("on_failure") or "skip"),
+                    execution_mode=execution_mode,
+                    allowed_tools=[str(name) for name in allowed_tools if name],
+                    max_iterations=max_iterations,
                 ))
             return steps if steps else None
         except Exception:
@@ -252,55 +308,37 @@ class DefaultTaskPlanner:
                     depends_on=["del-1"],
                 ),
                 PlanStep(
-                    step_id="del-3", action_type="verify",
-                    description="安全校验：确认删除目标、检查误删风险",
-                    expected_output="安全校验通过或返回待确认列表",
+                    step_id="del-3", action_type="tool_call",
+                    description="请求确认并在确认后删除目标笔记",
+                    tool_name="delete_note",
+                    expected_output="待确认的删除操作或已删除的笔记 ID",
                     risk_level="high",
                     requires_confirmation=True,
                     depends_on=["del-2"],
+                    on_failure="abort",
                 ),
                 PlanStep(
-                    step_id="del-4", action_type="tool_call",
-                    description="执行删除：移除笔记、复习卡和图谱映射",
-                    tool_name="delete_note",
-                    expected_output="已删除的笔记 ID 列表",
-                    risk_level="high",
-                    requires_confirmation=True,
-                    depends_on=["del-3"],
-                ),
-                PlanStep(
-                    step_id="del-5", action_type="compose",
+                    step_id="del-4", action_type="compose",
                     description="生成删除结果摘要",
                     expected_output="已删除 / 未找到 / 待确认 的结构化结果",
-                    depends_on=["del-4"],
+                    depends_on=["del-3"],
                 ),
             ]
         if intent == "solidify_conversation":
             return [
                 PlanStep(
-                    step_id="sol-1", action_type="retrieve",
-                    description="检索可供固化判断参考的知识上下文",
-                    expected_output="候选知识要点列表",
-                    success_criteria="至少提取到 1 条可固化的结论",
-                ),
-                PlanStep(
-                    step_id="sol-2", action_type="compose",
-                    description="将候选结论整理为适合入库的知识文本",
+                    step_id="sol-1", action_type="compose",
+                    description="从会话中选择指定内容并整理为适合入库的知识文本",
                     expected_output="格式化的知识笔记草稿",
-                    depends_on=["sol-1"],
                 ),
                 PlanStep(
-                    step_id="sol-3", action_type="verify",
-                    description="检查整理后的知识文本是否准确、完整",
-                    expected_output="通过校验或返回修改建议",
-                    depends_on=["sol-2"],
-                ),
-                PlanStep(
-                    step_id="sol-4", action_type="tool_call",
+                    step_id="sol-2", action_type="tool_call",
                     description="将知识文本写入知识库（复用 capture 链路）",
                     tool_name="capture_text",
                     expected_output="已持久化的 KnowledgeNote",
-                    depends_on=["sol-3"],
+                    depends_on=["sol-1"],
+                    risk_level="low",
+                    on_failure="abort",
                 ),
             ]
         if intent == "direct_answer":

@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langchain_core.tools import BaseTool
+
 from ..core.models import EntryIntent
-from .base import BaseTool, ToolResult, ToolSpec, validate_tool_input
+from .base import tool_failure
 
 logger = logging.getLogger(__name__)
 
@@ -18,85 +20,67 @@ _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
 }
 
 
-class ToolRegistry:
+class ToolExecutor:
+    """Registered LangChain tools and non-graph administrative invocation.
+
+    Agent executions are dispatched by the ``ToolNode`` embedded in the main
+    orchestration graph.  ``invoke_direct`` is retained for non-agent callers
+    such as the debug API and legacy synchronous helpers.
+    """
+
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool) -> None:
-        name = tool.spec.name
-        if name in self._tools:
-            logger.warning("Tool %s is already registered, overwriting.", name)
-        self._tools[name] = tool
+        if tool.name in self._tools:
+            logger.warning("Tool %s is already registered, overwriting.", tool.name)
+        self._tools[tool.name] = tool
 
-    def list_tools(self) -> list[ToolSpec]:
-        return [tool.spec for tool in self._tools.values()]
+    def list_tools(self) -> list[BaseTool]:
+        return list(self._tools.values())
 
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
 
-    def execute(self, name: str, validate_schema: bool = True, **kwargs: Any) -> ToolResult:
+    def invoke_direct(self, name: str, **kwargs: Any) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
-            return ToolResult(ok=False, error=f"未找到工具：{name}")
-        if validate_schema:
-            schema_errors = validate_tool_input(tool.spec.input_schema, kwargs)
-            if schema_errors:
-                return ToolResult(ok=False, error="参数校验失败: " + "; ".join(schema_errors))
+            return tool_failure(f"未找到工具：{name}")
         try:
-            return tool.execute(**kwargs)
+            message = tool.invoke({
+                "name": name,
+                "args": kwargs,
+                "id": f"direct-{name}",
+                "type": "tool_call",
+            })
+            artifact = getattr(message, "artifact", None)
+            if isinstance(artifact, dict) and "ok" in artifact:
+                return artifact
+            return tool_failure(str(getattr(message, "content", "工具执行失败。")))
         except Exception as exc:
-            logger.exception("Tool %s execution raised an unhandled exception", name)
-            return ToolResult(ok=False, error=str(exc)[:500])
+            logger.exception("Direct tool execution failed for %s", name)
+            return tool_failure(str(exc)[:500])
 
     def match_tool(self, intent: EntryIntent, description: str = "") -> BaseTool | None:
-        """Select the best tool for a given intent.
+        name = _INTENT_TOOL_MAP.get(intent)
+        if name and name in self._tools:
+            return self._tools[name]
+        lowered = description.lower()
+        return next((tool for name, tool in self._tools.items() if name in lowered), None)
 
-        Uses an explicit intent→tool mapping first, then falls back to
-        keyword matching against tool names and descriptions.
-        """
-        tool_name = _INTENT_TOOL_MAP.get(intent)
-        if tool_name and tool_name in self._tools:
-            return self._tools[tool_name]
-
-        # Keyword-based fallback
-        desc_lower = description.lower()
-        for name, tool in self._tools.items():
-            if name in desc_lower:
-                return tool
-        return None
-
-    def execute_with_fallback(self, intent: EntryIntent, description: str = "", **kwargs: Any) -> ToolResult:
-        """Execute the best-matching tool, falling back to alternatives on failure.
-
-        Tries the primary tool matched by intent, then tries any other
-        registered tool as fallback. Returns the first successful result.
-        """
+    def invoke_with_fallback(self, intent: EntryIntent, description: str = "", **kwargs: Any) -> dict[str, Any]:
         primary = self.match_tool(intent, description)
         if primary is not None:
-            result = self._safe_execute(primary, **kwargs)
-            if result.ok:
+            result = self.invoke_direct(primary.name, **kwargs)
+            if result["ok"]:
                 return result
-            logger.warning("Primary tool %s failed for intent=%s: %s", primary.spec.name, intent, result.error)
-        else:
-            logger.warning("No primary tool matched for intent=%s", intent)
-
-        # Fallback: try any other tool
         for name, tool in self._tools.items():
-            if primary is not None and name == primary.spec.name:
+            if primary is not None and tool.name == primary.name:
                 continue
-            result = self._safe_execute(tool, **kwargs)
-            if result.ok:
-                logger.info("Fallback tool %s succeeded for intent=%s", name, intent)
+            result = self.invoke_direct(name, **kwargs)
+            if result["ok"]:
                 return result
-
-        return ToolResult(ok=False, error=f"所有工具均未成功处理意图 {intent}")
-
-    def _safe_execute(self, tool: BaseTool, **kwargs: Any) -> ToolResult:
-        try:
-            return tool.execute(**kwargs)
-        except Exception as exc:
-            logger.exception("Tool %s execution raised an unhandled exception", tool.spec.name)
-            return ToolResult(ok=False, error=str(exc)[:500])
+        return tool_failure(f"所有工具均未成功处理意图 {intent}")
 
     def __len__(self) -> int:
         return len(self._tools)

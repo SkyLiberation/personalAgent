@@ -5,11 +5,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ..core.models import local_now
+
 
 @dataclass
 class _Step:
     content: str
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: local_now().isoformat())
 
 
 class WorkingMemory:

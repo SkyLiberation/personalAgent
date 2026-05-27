@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
+
+from ..core.models import local_now
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
@@ -72,7 +74,7 @@ class AgentEvent(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     type: AgentEventType
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=local_now)
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -106,8 +108,8 @@ class AgentRunSnapshot(BaseModel):
     confirmation_decision: str | None = None
     last_event: AgentEvent | None = None
     errors: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=local_now)
+    updated_at: datetime = Field(default_factory=local_now)
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +137,9 @@ class PlanStepState(BaseModel):
     on_failure: str = "skip"
     status: str = "planned"
     retry_count: int = 0
+    max_retries: int = 3
+    failure_reason: str = ""
+    recoverable: bool = True
     execution_mode: str = "deterministic"
     allowed_tools: list[str] = Field(default_factory=list)
     max_iterations: int = 3
@@ -219,6 +224,10 @@ class AgentGraphState(BaseModel):
     # Durable conversation history accumulated across runs in one thread.
     messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
 
+    # Ephemeral ToolNode exchange for the current action only; unlike
+    # ``messages`` it is overwritten instead of accumulated across the thread.
+    tool_messages: list[AnyMessage] = Field(default_factory=list)
+
     # Routing
     router_decision: RouterDecision | None = None
 
@@ -231,7 +240,7 @@ class AgentGraphState(BaseModel):
 
     # ReAct tracking
     react_iterations: list[dict[str, Any]] = Field(default_factory=list)
-    # ReAct subgraph runtime state (ephemeral within a step, checkpointed per iteration)
+    # ReAct main-graph runtime state (ephemeral within a step, checkpointed per iteration)
     react_step_id: str = ""
     react_iteration_index: int = 0
     react_max_iterations: int = 3
@@ -239,9 +248,18 @@ class AgentGraphState(BaseModel):
     react_user_prompt: str = ""
     react_done: bool = False
     react_result: dict[str, Any] = Field(default_factory=dict)
+    react_status: Literal["idle", "running", "waiting_tool", "completed", "failed", "exhausted"] = "idle"
+    react_stop_reason: str = ""
+    react_pending_thought: str = ""
+    react_pending_tool: str = ""
+    react_pending_input: dict[str, Any] = Field(default_factory=dict)
 
     # Tool results
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
+    active_tool_context: Literal["plan", "react"] | None = None
+    pending_tool_step_id: str = ""
+    pending_tool_call_id: str = ""
+    pending_react_iteration: int | None = None
 
     # Lightweight execution trace (for non-planning intents)
     execution_trace: list[str] = Field(default_factory=list)
@@ -272,8 +290,8 @@ class AgentGraphState(BaseModel):
     replan_history: list[dict[str, Any]] = Field(default_factory=list)
 
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=local_now)
+    updated_at: datetime = Field(default_factory=local_now)
 
     # ------------------------------------------------------------------
     # Helpers

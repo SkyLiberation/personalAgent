@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 import time
 from uuid import uuid4
 
 from ..core.logging_utils import log_event, trace_span
-from ..core.models import AgentState, KnowledgeNote, RawIngestItem
+from ..core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
 from ..graphiti.store import GraphCaptureResult
 from .graph import build_capture_graph
 from .runtime_helpers import _merge_notes
@@ -52,7 +51,7 @@ class RuntimeCaptureMixin:
             )
             related_notes = _merge_notes(graph_related_notes, related_notes)
             updated_note.related_note_ids = [n.id for n in related_notes if n.id != updated_note.id]
-            updated_note.updated_at = datetime.utcnow()
+            updated_note.updated_at = local_now()
             self.store.update_note(updated_note)
             result.note = updated_note
         else:
@@ -62,7 +61,7 @@ class RuntimeCaptureMixin:
                 if isinstance(graph_result.error, str) and graph_result.error
                 else "Graphiti ingest returned disabled result."
             )
-            result.note.updated_at = datetime.utcnow()
+            result.note.updated_at = local_now()
             self.store.update_note(result.note)
 
         # Set pending status on chunk notes for background graph sync
@@ -91,7 +90,7 @@ class RuntimeCaptureMixin:
             logger.info("Graph sync skipped because graph is not configured note_id=%s", note_id)
             note.graph_sync_status = "idle"
             note.graph_sync_error = None
-            note.updated_at = datetime.utcnow()
+            note.updated_at = local_now()
             self.store.update_note(note)
             return False
 
@@ -100,7 +99,7 @@ class RuntimeCaptureMixin:
         logger.info("Starting background graph sync note_id=%s trace_id=%s", note_id, trace_id)
         note.graph_sync_status = "pending"
         note.graph_sync_error = None
-        note.updated_at = datetime.utcnow()
+        note.updated_at = local_now()
         self.store.update_note(note)
 
         last_error: str | None = None
@@ -111,7 +110,7 @@ class RuntimeCaptureMixin:
             for attempt in range(1, max_attempts + 1):
                 note = self.store.get_note(note_id) or note
                 note.graph_sync_status = "pending"
-                note.updated_at = datetime.utcnow()
+                note.updated_at = local_now()
                 self.store.update_note(note)
 
                 log_event(logger, logging.INFO, "graph_sync.attempt.started",
@@ -125,7 +124,7 @@ class RuntimeCaptureMixin:
                         note.user_id, graph_result.related_episode_uuids
                     )
                     updated_note.related_note_ids = [item.id for item in related_notes if item.id != updated_note.id]
-                    updated_note.updated_at = datetime.utcnow()
+                    updated_note.updated_at = local_now()
                     self.store.update_note(updated_note)
                     log_event(logger, logging.INFO, "graph_sync.completed",
                         trace_id=trace_id, note_id=note_id, user_id=note.user_id, attempt=attempt,
@@ -156,7 +155,7 @@ class RuntimeCaptureMixin:
         note = self.store.get_note(note_id) or note
         note.graph_sync_status = "failed"
         note.graph_sync_error = last_error or "Graph sync failed."
-        note.updated_at = datetime.utcnow()
+        note.updated_at = local_now()
         self.store.update_note(note)
         logger.warning("Background graph sync failed note_id=%s error=%s", note_id, note.graph_sync_error)
         return False
@@ -169,7 +168,7 @@ class RuntimeCaptureMixin:
         note.graph_fact_refs = graph_result.fact_refs
         note.graph_sync_status = "synced"
         note.graph_sync_error = None
-        note.updated_at = datetime.utcnow()
+        note.updated_at = local_now()
         return note
 
     def _is_retryable_graph_error(self, error: str | None) -> bool:

@@ -1,6 +1,6 @@
 # LangGraph 总编排与 Checkpoint
 
-本文说明当前工程中已经落地的 LangGraph entry 总编排与 checkpoint 能力。对应代码主要位于：
+本文说明当前工程中已落地的 LangGraph entry 总编排与 checkpoint 能力。对应代码主要位于：
 
 - [agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)
 - [agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)
@@ -13,16 +13,13 @@
 
 ## 设计目标
 
-当前 LangGraph 改造的目标是为 `entry` 主流程提供统一的图编排外壳，并在图节点边界上获得 checkpoint 与 run snapshot 查询能力。
-
-已落地能力：
-
-- `entry` 默认进入 LangGraph orchestration graph。
-- 图状态使用 `AgentGraphState` 表达，支持序列化和 checkpoint。
-- 每次 entry 执行生成独立 `run_id`，同一用户会话复用稳定 `thread_id`。
-- 同一 thread 的用户/助手对话通过 `messages` 通道和 `add_messages` reducer 持续累积，供后续路由与回答生成读取。
-- checkpoint 使用 LangGraph checkpointer 保存图节点状态。
-- API 可查询已执行 run 的 snapshot。
+- `entry` 默认进入 LangGraph orchestration graph，统一编排外壳
+- 图状态使用 `AgentGraphState` 表达，支持序列化和 checkpoint
+- 每次 entry 执行生成独立 `run_id`，同一用户会话复用稳定 `thread_id`
+- 同一 thread 的对话通过 `messages` 通道（`add_messages` reducer）持续累积
+- `tool_messages` 通道为覆盖式，只保存当前工具交换内容，不混入跨轮历史
+- checkpoint 使用 LangGraph `PostgresSaver` 持久化图节点状态
+- API 可查询已执行 run 的 snapshot
 
 ## 配置
 
@@ -32,210 +29,146 @@
 PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
 ```
 
-说明：
+- `PERSONAL_AGENT_POSTGRES_URL` 同时承载业务数据和 checkpoint，是必填配置
+- checkpoint 不提供内存或 SQLite fallback
 
-- `PERSONAL_AGENT_POSTGRES_URL` 同时承载业务数据和 checkpoint，是运行所需的必填配置。
-- checkpoint 不提供内存或 SQLite fallback，原 SQLite 文件不参与新运行恢复。
-
-当前 `_build_checkpointer()`（位于 [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)）：
-
-- 使用 `langgraph.checkpoint.postgres.PostgresSaver`。
-- 首次连接时通过 `setup()` 建立 LangGraph 所需表结构。
-- entry 主图与 ReAct 子图共享同一个 Postgres saver。
+`_build_checkpointer()`（位于 [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)）使用 `langgraph.checkpoint.postgres.PostgresSaver`，首次连接通过 `setup()` 建立所需表结构。所有子图继承父图的同一个 Postgres saver。
 
 调试脚本：
 
-- `uv run python scripts/draw_entry_graph.py`：生成 `scripts/assets/entry-orchestration.md`。
-- `uv run python scripts/export_thread_checkpoints.py <thread_id>`：生成 `scripts/assets/checkpoints-<thread_id>.json`，包含该会话 thread 内多次 run 的完整应用 state 时间线，默认不输出 `channel_versions` 等 LangGraph 内部存储字段。
-- `uv run python scripts/export_thread_checkpoints.py <thread_id> --raw`：仅在底层调试时导出原始 checkpoint tuple 与内部版本/写入信息，默认另存为 `*-raw.json`。
-- 旧 SQLite checkpoint 不做迁移；切换后仅写入 Postgres 的新运行可由脚本查询和恢复。
+- `uv run python scripts/draw_entry_graph.py`：生成 `scripts/assets/entry-orchestration.md`（含父图、子图独立视图、xray 组合视图）
+- `uv run python scripts/export_thread_checkpoints.py <thread_id>`：导出该 thread 内多次 run 的完整 state 时间线
+- `uv run python scripts/export_thread_checkpoints.py <thread_id> --raw`：导出原始 checkpoint tuple（仅底层调试用）
 
-## 总体执行路径
+## 图结构总览
 
-`AgentRuntime.execute_entry()` 是统一入口。
+入口图由 `build_entry_orchestration_graph()` 构建，包含 **一个父图 + 四个子图**，全部使用 `AgentGraphState` 作为统一状态类型。
 
-```text
-AgentRuntime.execute_entry()
-  -> _get_orch_graph()
-  -> build AgentGraphState
-  -> graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
-  -> map AgentGraphState back to EntryResult
+### 父图：Entry Orchestration Graph
+
+```
+START → entry_graph → 路由分发 → 分支节点 → finalize_entry_result → END
 ```
 
-entry 会先进入 orchestration graph。图内部复用现有 router、planner、validator、tool registry、memory、capture、ask 和 summarize 能力；普通分支与计划步骤执行逻辑均由 orchestration nodes 推进。
+父图有 5 个分支节点（均为普通节点，非子图）：
 
-## Orchestration Graph
+| 节点 | 职责 |
+|---|---|
+| `capture_branch` | 处理 `capture_text / capture_link / capture_file` |
+| `ask_branch` | 调用 `execute_ask()` 执行知识问答 |
+| `summarize_branch` | 处理群聊/文本总结 |
+| `direct_answer_branch` | 低风险直接回复或澄清提示 |
+| `finalize_entry_result` | 汇总结果、生成 `execution_trace`、结束 run |
 
-图构建函数位于 [agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)：
+路由由 `_route_by_intent()` 根据 `entry_graph` 产出的 `RouterDecision` 决定：
 
-```text
-build_entry_orchestration_graph(deps, checkpointer=postgres_checkpointer)
+- `requires_clarification=True` 或 `answer_completed=True` → 直接进入 `finalize_entry_result`
+- `requires_planning=True` → `plan_execution_graph`
+- 其他按 intent 进入对应分支（capture / ask / summarize / direct_answer）
+
+`plan_execution_graph` 退出后，若计划被拒绝且无回答，回退到 `direct_answer_branch`；否则进入 `finalize_entry_result`。
+
+### 子图 1：EntryGraph
+
+```
+START → normalize_entry → route_intent → prepare_clarify_entry ⇄ interrupt_clarify_entry → END
 ```
 
-当前图结构：
+**节点职责：**
 
-```text
-START
-  -> normalize_entry
-  -> route_intent
-     -> prepare_clarify_entry
-        -> interrupt_clarify_entry
-           -> route_intent
-           -> finalize_entry_result
-     -> capture_branch
-     -> ask_branch
-     -> summarize_branch
-     -> direct_answer_branch
-     -> plan_task
-        -> validate_plan
-           -> prepare_plan_execution
-           -> direct_answer_branch
-  -> finalize_entry_result
+- **`normalize_entry`**：补齐 `run_id`/`thread_id`，读取 `user_id`/`session_id`/`text`，追加用户输入到 `messages` 历史，写入 `entry_started` 事件
+- **`route_intent`**：执行 session bind、conversation summary refresh，调用 `IntentRouter.classify()` 完成意图分类，写入 `RouterDecision` 到 state
+- **`prepare_clarify_entry`**：读取 router 判定的缺失信息，构造 `clarification_required` payload 写入 `pending_confirmation`
+- **`interrupt_clarify_entry`**：通过 `interrupt()` 暂停 run，等待 resume API 传入补充文本。用户补充后更新 `entry_text` 重新进入 `route_intent`；取消或补充为空则结束
 
-prepare_plan_execution
-     -> select_next_step
-        -> execute_plan_step
-           -> confirm_step
-           -> react_step
-           -> handle_step_success
-           -> handle_step_failure
-        -> finalize_plan_execution
-  -> finalize_entry_result
-  -> END
+`thread_id` 生成规则：`thread_id = user_id + ":" + session_id`，同一 session 多次 run 复用。
+
+### 子图 2：PlanExecutionGraph
+
+```
+START → plan_task → validate_plan → prepare_plan_execution
+       → select_next_step ⇄ execute_plan_step → [路由分发] → handle_step_success/handle_step_failure
+       → finalize_plan_execution → END
 ```
 
-`route_and_plan` 复合节点已拆分为 4 个独立节点，每个节点边界都有 checkpoint 保护。
+**Phase 1 — 计划生成与校验：**
 
-### 1. `normalize_entry`
+- **`plan_task`**：调用 Planner 生成 `plan_steps` 列表
+- **`validate_plan`**：PlanValidator 校验；blocking 时尝试修正或 fallback，仍不通过则退回 `direct_answer_branch`
+- **`prepare_plan_execution`**：拓扑排序步骤，初始化 `current_step_index`、`step_results`、`plan_retry_counts`
 
-节点函数：`_node_normalize_entry()`
+**Phase 2 — 步骤循环：**
 
-职责：
+- **`select_next_step`**：找第一个 `planned` 状态步骤，标记 `running`
+- **`execute_plan_step`**：按 `action_type` 分发执行：
 
-- 补齐 `run_id`。
-- 从 `entry_input` 中读取 `user_id`、`session_id`、`text`。
-- 生成 `thread_id`。
-- 写入 `entry_started` 事件。
-- 把当前用户输入追加到 reducer 管理的 `messages` 会话历史中；不会清空已有对话。
+| action_type | 行为 |
+|---|---|
+| `tool_call` | 生成 `AIMessage(tool_calls=[...])`，由 `plan_tool_node` 执行 |
+| `react` | 种子 ReAct 状态，路由到 `react_graph` 子图 |
+| `retrieve` | 调用 `graph_store.ask()` 检索知识图谱 |
+| `resolve` | 解析删除目标（图 episode 反查 → LLM 候选匹配） |
+| `compose` | 调用 `execute_ask()` 生成回答；solidify 场景做 LLM 范围判断后知识提取 |
+| `verify` | 调用 verifier 校验当前 `answer` |
 
-`thread_id` 生成规则（同一 session 的多次 run 复用）：
+`tool_call` 步骤具有幂等性保护：`step_results` 中已有结果的步骤自动跳过。
 
-```text
-thread_id = user_id + ":" + session_id
+**Phase 3 — 结果路由（`_after_step_execution`）：**
+
+| 步骤状态 | 路由目标 |
+|---|---|
+| `awaiting_confirmation` | `confirm_step`（HITL 中断） |
+| `failed` | `handle_step_failure` |
+| `react` + `running` | `react_graph` 子图 |
+| `tool_call` + `running` | `plan_tool_node` |
+| 其他 | `handle_step_success` |
+
+**`handle_step_success`**：注入依赖关系（`resolve` 产出的 `note_id` 注入下游 `tool_call`；`compose` 产出的草稿注入下游 `capture_text`），标记上游草稿固化，回到 `select_next_step`
+
+**`handle_step_failure`**：按 `on_failure` 策略处理：
+
+| 策略 | 行为 |
+|---|---|
+| `retry`（未耗尽） | 等待 1s → 状态重置为 `planned` → 回到循环 |
+| `retry`（已耗尽） | 调用 replanner 重新规划 → 验证新步骤 → 追加到步骤列表 |
+| `skip` | 跳过当前及依赖步骤 → 回到循环 |
+| `abort` | `plan_aborted=True` → `finalize_plan_execution` |
+
+**HITL 确认（`confirm_step`）：**
+
+1. 构建确认 payload（step_id、action_type、note_id 等）
+2. 调用 `interrupt()` 暂停图执行，payload 通过 `__interrupt__` 返回给调用方
+3. 用户通过 `Command(resume={"decision": "confirm"|"reject"})` 恢复：
+   - confirm → 带上 `confirmed=True` 重新进入 `plan_tool_node` 执行实际操作
+   - reject → 标记步骤 `skipped`，跳过依赖步骤
+
+**`finalize_plan_execution`**：生成默认回答（如尚无），从 events 导出 `execution_trace`，标记 `answer_completed=True`
+
+### 子图 3：ReactGraph
+
+`execution_mode="react"` 的计划步骤进入独立的受限 ReAct 循环。ReactGraph 是 PlanExecutionGraph 的嵌套子图。
+
+```
+START → react_init → react_iterate ⇄ react_tool_node → consume_react_tool_result
+                   → react_finalize → END
 ```
 
-`run_id` 仍保存在 `AgentGraphState` 中，用于区分和查询 thread 内的单次执行。
+**节点职责：**
 
-### 2. `route_intent`
+- **`react_init`**：读取当前 plan step，解析 allowed tools，构建初始 prompt（步骤描述 + 上下文 + 可用工具列表），初始化轮次状态
+- **`react_iterate`**：执行一轮 LLM thought → parse JSON → 三种结果：
+  - `done=true` → 进入 `react_finalize`
+  - 解析出 tool → 生成 `AIMessage` 由 `react_tool_node` 执行 → `consume_react_tool_result` 记录 observation → 回到 `react_iterate`
+  - 解析失败 → 记录错误，自循环重试（`iterate` → `react_iterate`）
+- **`react_finalize`**：将结果写入 `step_results`，清理循环工作数据；`completed` 状态路由到 `handle_step_success`，`failed/exhausted` 路由到 `handle_step_failure`
 
-节点函数：`_node_route_intent()`
+**安全限制：** 只允许只读检索工具（`graph_search`/`web_search`），高风险写操作被 `_is_react_tool_blocked()` 阻断。默认最多 `_REACT_MAX_ITERATIONS_CAP`（3）轮迭代，达到上限后状态为 `exhausted`。
 
-职责：
+### 子图 4：CaptureGraph（独立子图，不在 entry 编排内）
 
-- 执行 session bind 和 conversation summary refresh。
-- 调用 `runtime._intent_router.classify(entry_input)` 完成意图分类。
-- 将当前消息之前的 `messages` 对话历史作为上下文传入 router。
-- 将包含 `requires_clarification`、`missing_information`、`clarification_prompt` 的 `RouterDecision` 写入 state。
-- 写入 `intent_classified` 事件。
+`build_capture_graph()` 是独立的采集子图，用于 `execute_capture()` 流程，不在 entry orchestration 父图内。其结构为：文本/链接输入 → 增强 → 关联 → 复习调度。
 
-条件边 `_route_by_intent()`：如果 `requires_clarification=True` 则进入 `prepare_clarify_entry`；否则如果 `requires_planning=True` 则进入 `plan_task`，其余根据 intent 进入普通分支。
-
-### 3. `prepare_clarify_entry` 与 `interrupt_clarify_entry`
-
-节点函数：`_node_prepare_clarify()`、`_node_interrupt_clarify()`
-
-职责：
-
-- `prepare_clarify_entry` 读取 router 已判定缺失的信息，构造 `kind="clarification_required"` 的 payload，并将其写入 `pending_confirmation` 与事件列表。
-- payload 的写入发生在 `interrupt()` 之前，因此 checkpoint 可以保存前端需要展示的澄清内容和缺失项。
-- `interrupt_clarify_entry` 通过 `interrupt()` 暂停 run，并等待 resume API 传入补充文本。
-- runtime 构造等待态响应时读取该 checkpoint 的 state values，因此 `EntryResult.events` 能保留暂停前的 `intent_classified` 与 `clarification_required` 事件。
-- 用户补充后，更新 `entry_text` 与 `entry_input.text`、清空旧路由决策，再重新进入 `route_intent`。
-- 用户取消或补充为空时，直接进入 `finalize_entry_result` 结束。
-
-### 4. `plan_task`
-
-节点函数：`_node_plan_task()`
-
-职责：
-
-- 调用 `runtime._planner.plan(intent, entry_text)` 生成计划步骤。
-- 将步骤转换为 dict 并写入 `state.plan_steps`。
-- 写入 `plan_created` 事件。
-
-### 5. `validate_plan`
-
-节点函数：`_node_validate_plan()`
-
-职责：
-
-- 从 state 重建 `RouterDecision` 和 `PlanStep` 列表。
-- 调用 `runtime._plan_validator.validate(steps, decision)`。
-- 处理校验结果：
-  - 通过：保持 plan_steps 不变。
-  - blocking 且有 `corrected_steps`：使用修正后的步骤。
-  - blocking 且无 corrected steps：调用 `runtime._planner.fallback_plan()`。
-  - fallback 仍 blocking：降级为 `unknown` intent，进入澄清提示路径。
-  - non-blocking warning：保留 warning，继续执行。
-- 写入 `plan_validated` 事件。
-
-条件边 `_after_validate_plan()`：如果计划有效且 `requires_planning=True` 则进入 `prepare_plan_execution`，否则进入 `direct_answer_branch` 生成澄清提示。
-
-### 6. 普通分支节点
-
-普通非计划路径已经并入 entry 总图，不再维护单独的 entry 子图：
-
-- `capture_branch`：处理 `capture_text / capture_link / capture_file`。
-- `ask_branch`：调用 `execute_ask()`。
-- `summarize_branch`：处理群聊/文本总结。
-- `direct_answer_branch`：处理低风险直接回复；当 `intent=unknown` 时，根据 classify 结果生成让用户补充信息的澄清提示。
-- `ask_branch` 与 `direct_answer_branch` 均读取 thread 内已累积的对话消息，避免后续追问脱离上下文。
-
-### 7. 计划执行节点
-
-计划驱动路径由图节点直接执行，不再把整个计划交给旧的单个 `PlanExecutor` 黑盒。
-
-主要节点：
-
-- `prepare_plan_execution`：对计划步骤做拓扑排序，初始化 step 执行状态。
-- `select_next_step`：选择下一个 `planned` 步骤，并写入 `step_started` 事件。
-- `execute_plan_step`：执行当前步骤；普通步骤走确定性分发，`execution_mode="react"` 的步骤转入 ReAct 子图，高风险确认步骤转入 `confirm_step`。
-- `confirm_step`：处理 LangGraph interrupt/resume 后的确认或拒绝结果。
-- `handle_step_success`：处理成功步骤的结果注入、状态推进和事件记录。
-- `handle_step_failure`：处理失败、retry、replan 和依赖跳过。
-- `finalize_plan_execution`：汇总计划执行结果，生成最终回答和 execution trace。
-
-### 8. ReAct 子图
-
-`react_step` 是一个 LangGraph 子图，用于 `execution_mode="react"` 的计划步骤。
-
-当前子图结构：
-
-```text
-START
-  -> react_init
-  -> react_iterate
-     -> continue?
-        -> react_iterate
-        -> react_finalize
-  -> END
-```
-
-职责：
-
-- `react_init`：读取当前 plan step，解析 allowed tools，初始化 ReAct prompt 和轮次状态。
-- `react_iterate`：执行一轮 LLM thought / tool action / observation，并写入 `react_iteration` 事件。
-- `react_finalize`：把 ReAct 结果写入 `step_results`，标记当前 step completed。
-
-### 8. `finalize_entry_result`
-
-节点函数：`_node_finalize_entry_result()`
-
-职责：
-
-- 如果 `errors` 非空，写入 `run_failed` 事件。
-- 否则写入 `run_completed` 事件。
-- 结束当前 graph run。
+---
 
 ## 图状态模型
 
@@ -243,133 +176,44 @@ START
 
 ### `AgentGraphState`
 
-`AgentGraphState` 是 checkpoint-safe 的 Pydantic 模型，保存 entry orchestration run 的流程状态。
+`AgentGraphState` 是 checkpoint-safe 的 Pydantic 模型，所有子图共用。核心字段按职责分组：
 
-核心字段：
+**会话级持久字段（跨 run 通过 reducer 累积）：**
+- `messages`：通过 `add_messages` reducer 在同一 thread 跨 run 累积的对话历史
 
-- `run_id`
-- `thread_id`
-- `user_id`
-- `session_id`
-- `entry_input`
-- `entry_text`
-- `messages`（通过 `add_messages` reducer 在同一 thread 跨 run 累积）
-- `intent`
-- `intent_reason`
-- `router_decision`
-- `requires_planning`
-- `plan_steps`
-- `current_step_index`
-- `step_results`
-- `react_iterations`
-- `tool_results`
-- `execution_trace`
-- `evidence_summary`
-- `citations`
-- `matches`
-- `pending_confirmation`
-- `draft`
-- `answer`
-- `answer_completed`
-- `events`
-- `errors`
-- `replan_history`
-- `created_at`
-- `updated_at`
+**单次 run 执行状态（新一轮重置）：**
+- `run_id`、`thread_id`、`user_id`、`session_id`
+- `entry_input`、`entry_text`
+- `router_decision`（含 `route`、`requires_clarification`、`requires_planning`）
+- `plan_steps`：`PlanStepState` 列表
+- `current_step_index`、`step_results`、`plan_retry_counts`、`plan_aborted`
+- `tool_messages`：当前工具动作的临时消息交换
+- `active_tool_context`、`pending_tool_step_id`、`pending_tool_call_id`、`pending_react_iteration`
+- `tool_results`、`react_iterations`、`react_status`、`react_stop_reason`
+- `execution_trace`、`evidence_summary`、`citations`、`matches`
+- `pending_confirmation`、`confirmation_decision`
+- `answer`、`answer_completed`、`draft`
+- `events`、`errors`、`replan_history`
+- `created_at`、`updated_at`
 
-其中，`messages` 是会话级持久状态；`router_decision`、`plan_steps`、`answer`、`events`、`pending_confirmation` 等是单次 run 的执行状态，新一轮开始时会重置，防止上一轮产物冒充当前轮结果。
-
-辅助方法：
-
-- `add_event()`：追加结构化事件，并刷新 `updated_at`。
-- `update_step_status()`：更新 `plan_steps` 中指定 step 的状态。
-- `to_run_snapshot()`：转换为只读查询模型 `AgentRunSnapshot`。
+辅助方法：`add_event()`、`update_step_status()`、`to_run_snapshot()`
 
 ### `AgentEvent`
 
-`AgentEvent` 表示图执行过程中的结构化事件。
+结构化事件，字段：`event_id`、`run_id`、`thread_id`、`type`、`timestamp`、`payload`
 
-字段：
-
-- `event_id`
-- `run_id`
-- `thread_id`
-- `type`
-- `timestamp`
-- `payload`
-
-当前事件类型集合包括：
-
-```text
-entry_started
-intent_classified
-plan_created
-plan_validated
-step_started
-react_iteration
-tool_called
-tool_result
-confirmation_required
-confirmation_resumed
-draft_ready
-answer_delta
-answer_completed
-step_completed
-step_failed
-replan_attempted
-replan_completed
-run_completed
-run_failed
-```
-
-当前 orchestration graph 已实际写入：
-
-- `entry_started`
-- `intent_classified`
-- `plan_created`
-- `plan_validated`
-- `step_started`
-- `step_completed`
-- `step_failed`
-- `tool_called`
-- `tool_result`
-- `confirmation_required`
-- `confirmation_resumed`
-- `react_iteration`
-- `answer_completed`
-- `run_completed`
-- `run_failed`
-
-其余事件类型是统一事件模型中的已定义类型，当前节点按需写入。
+当前 graph 实际写入的事件类型：
+`entry_started`、`intent_classified`、`plan_created`、`plan_validated`、`step_started`、`step_completed`、`step_failed`、`tool_called`、`tool_result`、`confirmation_required`、`confirmation_resumed`、`react_iteration`、`draft_ready`、`answer_completed`、`run_completed`、`run_failed`
 
 ### `AgentRunSnapshot`
 
-`AgentRunSnapshot` 是 API 查询用只读模型。
+API 查询用只读模型。状态推断逻辑：
 
-字段：
-
-- `run_id`
-- `thread_id`
-- `user_id`
-- `session_id`
-- `status`
-- `intent`
-- `entry_text`
-- `plan_steps`
-- `execution_trace`
-- `answer`
-- `last_event`
-- `errors`
-- `created_at`
-- `updated_at`
-
-`status` 由 `_infer_status()` 根据状态推断：
-
-- `failed`：`errors` 非空。
-- `completed`：`answer_completed=True`。
-- `waiting_confirmation`：`pending_confirmation` 非空。
-- `running`：intent 已识别。
-- `pending`：默认状态。
+- `failed`：`errors` 非空
+- `completed`：`answer_completed=True`
+- `waiting_confirmation`：`pending_confirmation` 非空
+- `running`：intent 已识别
+- `pending`：默认状态
 
 ## Runtime 集成
 
@@ -377,7 +221,7 @@ run_failed
 
 ### `_get_orch_graph()`
 
-懒加载 orchestration graph：
+懒加载，首次 entry 时构建并缓存：
 
 ```text
 _get_orch_graph()
@@ -387,145 +231,39 @@ _get_orch_graph()
   -> cache in self._orch_graph
 ```
 
-图在首次调用 entry 时构建。
-
 ### `execute_entry()`
-
-当前逻辑：
 
 ```text
 graph = self._get_orch_graph()
 initial_state = AgentGraphState(...)
-invoke_result = graph.invoke(initial_state, config)
+invoke_result = self._stream_entry_graph(graph, initial_state, config, on_progress)
 if invoke_result["__interrupt__"]:
     return waiting_confirmation EntryResult
 result_state = AgentGraphState.model_validate(invoke_result)
 return EntryResult(...)
 ```
 
-为了兼容现有 API，最终仍映射回 `EntryResult`。
+最终映射回 `EntryResult` 兼容现有 Web API。
 
-### `get_run_snapshot()`
+### `get_run_snapshot()` / `list_run_snapshots()`
 
-通过 checkpointer 查询指定 `run_id` 的 checkpoint，并转换为 `AgentRunSnapshot`。
-
-匹配规则：
-
-```text
-state.run_id == requested_run_id
-```
-
-### `list_run_snapshots()`
-
-从 checkpointer 中列出最近 checkpoint，并按 `run_id` 去重、按 `user_id` 可选过滤，返回 `AgentRunSnapshot` 列表。同一 `thread_id` 下的多个 run 会分别返回。
+通过 checkpointer 查询指定 `run_id` 或列出最近 checkpoint，按 `run_id` 去重，按 `user_id` 可选过滤。同一 `thread_id` 下多个 run 分别返回。
 
 ## HITL 中断与恢复流程
 
-当前 HITL 主要在计划执行路径中处理高风险工具确认，核心节点是 `confirm_step`。
+HITL 在计划执行路径中处理高风险工具确认，核心在 `confirm_step`。
 
-### 触发确认
+### 触发 → 中断 → 恢复
 
-计划步骤进入 `execute_plan_step` 后，如果工具返回 `pending_confirmation`，节点会：
+1. 工具返回 `pending_confirmation` → `execute_plan_step` 写入 `state.pending_confirmation`，步骤标记 `awaiting_confirmation`
+2. 条件边路由到 `confirm_step`，调用 `interrupt(confirm_payload)` 暂停图
+3. `__interrupt__[0].value` 返回给 API 层，转为 `EntryResult.pending_confirmation`（`run_status=waiting_confirmation`）
+4. 用户确认/拒绝后，通过 `Command(resume={"decision": "confirm"|"reject"})` 恢复同一 `thread_id`
+5. `interrupt()` 返回 resume value，`confirm_step` 处理决定：
+   - **confirm**：带上 `confirmed=True` 重新执行工具 → `handle_step_success`
+   - **reject**：标记步骤 `skipped`，递归跳过依赖步骤 → `handle_step_failure`
 
-- 写入 `state.pending_confirmation`。
-- 将当前 plan step 状态标记为 `awaiting_confirmation`。
-- 写入 `confirmation_required` 事件。
-
-随后条件边 `_after_step_execution()` 根据当前步骤状态把流程路由到 `confirm_step`。
-
-### 中断点
-
-`confirm_step` 会根据 `state.pending_confirmation` 和当前 plan step 构造 `confirm_payload`，然后调用 LangGraph 的 `interrupt()`：
-
-```text
-resume_value = interrupt(confirm_payload)
-```
-
-第一次执行到这里时，graph run 会暂停。`graph.invoke()` 返回值中会包含：
-
-```text
-__interrupt__[0].value == confirm_payload
-```
-
-`AgentRuntime.execute_entry()` 从 `invoke_result["__interrupt__"]` 读取 payload，并转换为：
-
-```text
-EntryResult.pending_confirmation
-EntryResult.run_status = waiting_confirmation
-```
-
-API / SSE 再把该确认信息交给前端。前端会在“需要你确认的操作”面板中展示这条 LangGraph run。
-
-### 恢复执行
-
-用户确认或拒绝后，后端使用原 run 的 `thread_id` 恢复 graph：
-
-```text
-graph.invoke(Command(resume=...), {"configurable": {"thread_id": thread_id}})
-```
-
-恢复后会重新进入同一个 `interrupt()` 调用位置。这次 `interrupt()` 不再暂停，而是返回外部传入的 resume value：
-
-```text
-{"decision": "confirm" | "reject", "user_id": "..."}
-```
-
-如果 decision 是 `confirm`：
-
-- `confirm_step` 带上 `confirmed=True`、`action_id` 和 `token` 再次调用对应工具。
-- 工具成功后写入 `state.step_results`。
-- 当前步骤标记为 `completed`。
-- 写入 `confirmation_resumed` 和 `step_completed` 事件。
-- 后续进入 `handle_step_success`，再回到计划步骤循环。
-
-如果 decision 是 `reject`：
-
-- 当前步骤标记为 `skipped`。
-- 依赖该步骤的后续步骤会被递归标记为 `skipped`。
-- 写入 `confirmation_resumed` 和 `step_failed` 事件。
-- 后续进入 `handle_step_failure`。
-
-### checkpoint 的作用
-
-HITL 流程依赖 checkpoint 保存以下现场：
-
-- `thread_id`：恢复同一个 graph run。
-- `current_step_index`：恢复到等待确认的计划步骤。
-- `plan_steps`：保存每个步骤的状态。
-- `pending_confirmation`：保存确认 payload。
-- `step_results`：避免恢复后重复执行已完成步骤。
-- `events`：保留确认前后的可观测事件。
-
-因此，确认不是应用层临时返回，而是 graph run 的一个可 checkpoint、可 resume 的暂停点。
-
-## 与现有流程的关系
-
-当前 LangGraph 总图是 entry 主流程的默认编排器。普通 entry 分支仍复用既有 capture / ask / summarize / direct_answer 实现；计划驱动路径已经在图内拆成 step-level 状态机。
-
-已复用的现有能力：
-
-- `DefaultIntentRouter`
-- `DefaultTaskPlanner`
-- `PlanValidator`
-- `execute_capture()`
-- `execute_ask()`
-- `AnswerVerifier`
-- `ToolRegistry`
-- `MemoryFacade`
-
-因此，路由、规划、普通 entry 分支仍沿用已有业务行为；计划步骤、确认、ReAct 轮次和最终输出由 LangGraph 统一推进，并通过 graph state、checkpoint 和 run snapshot 查询。
-
-## 当前边界
-
-当前实现边界如下：
-
-- checkpoint 粒度覆盖 orchestration graph 节点、计划步骤节点和 ReAct 子图节点。
-- 普通 `capture / ask / summarize / direct_answer` 分支仍调用既有 runtime 方法。
-- `GET /api/entry/stream` 的所有 intent（包含 `ask`）均进入 orchestration graph 并写入 checkpoint。
-- 所有 entry 路径均已统一进入 orchestration graph 并写入 checkpoint。
-- `EntryResult` 仍是 Web API 的兼容返回模型。
-
-这些是当前已实现行为的边界，不在本文中作为待办展开。
+checkpoint 保存的现场：`thread_id`、`current_step_index`、`plan_steps`、`pending_confirmation`、`step_results`、`events`。确认不是应用层临时返回，而是 graph run 的可 checkpoint、可 resume 的暂停点。
 
 ## 测试覆盖
 
@@ -533,27 +271,16 @@ HITL 流程依赖 checkpoint 保存以下现场：
 
 覆盖内容：
 
-- `AgentGraphState` 默认值、序列化、事件追加、step 状态更新和 snapshot 转换。
-- `AgentEvent` 序列化。
-- `AgentRunSnapshot` 默认值。
-- `run_id` 和 `thread_id` 生成。
-- `plan_steps_to_plan_created_events()`。
-- `execution_trace_to_events()`。
-- orchestration graph 构建与 checkpointer 存在性。
-- `direct_answer`、`ask`、`capture_text` 通过总图执行。
-- HITL confirm/reject 路由、interrupt/resume 和 run 状态字段。
-- ReAct helper、ReAct 单轮迭代、ReAct 子图和主图 ReAct 路由。
-- `EntryResult.events` 透传、execution trace 从事件派生、事件到 SSE tuple 转换。
-- run snapshot 列表和单个 snapshot 查询。
-
-当前验证命令：
+- `AgentGraphState` 默认值、序列化、事件追加、step 状态更新和 snapshot 转换
+- `AgentEvent` 序列化、`AgentRunSnapshot` 默认值
+- `run_id`/`thread_id` 生成
+- orchestration graph 构建与 checkpointer 存在性
+- `direct_answer`、`ask`、`capture_text` 通过总图执行
+- HITL confirm/reject 路由、interrupt/resume 和 run 状态字段
+- ReAct helper、单轮迭代、独立 ToolNode 返回消费、退出状态和子图路由
+- `EntryResult.events` 透传、execution trace 派生、事件到 SSE tuple 转换
+- run snapshot 列表和单个 snapshot 查询
 
 ```bash
 uv run pytest tests/test_orchestration.py
-```
-
-最近一次检查结果：
-
-```text
-所有核心测试通过。
 ```

@@ -223,7 +223,7 @@ Graphiti node / edge / fact 主导召回、排序和推理
 - 已支持相似检索按 parent 去重，并在回答证据中区分 parent summary 与 chunk content
 - 已补基础回归样本：`test_verifier.py` 覆盖 web citation 计分与孤儿 citation，`test_plan_executor.py` 覆盖 resolve 多级回退和 `relation_fact + snippet` 相关执行路径
 - 已实现统一证据模型 `EvidenceItem`（`core/evidence.py`），将 Graphiti `fact_refs / edge_refs / citation_hits`、本地 note/chunk、web 搜索结果和工具结果收敛为可追踪证据结构
-- `ToolResult` 已扩展 `evidence` 字段，`graph_search / web_search` 工具返回统一证据
+- LangChain 工具 artifact 提供 `evidence` 字段，`graph_search / web_search` 返回统一证据
 - `RuntimeAskMixin.execute_ask()` 已积累三层检索的 `EvidenceItem`，`AskResult.evidence` 随 API 响应返回
 - `AnswerVerifier.verify()` 已支持可选 `evidence` 参数，基于 evidence 类型和 orphan 状态增加证据充分性评分
 - `ReActStepRunner` 已支持在迭代间传递 `evidence`，每次 `ReActIteration` 保留工具返回的证据

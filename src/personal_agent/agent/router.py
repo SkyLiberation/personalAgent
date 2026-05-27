@@ -139,7 +139,9 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
             else llm_result.risk_level
         ),
         requires_confirmation=(
-            defaults.requires_confirmation or llm_result.requires_confirmation
+            False
+            if llm_result.route == "solidify_conversation"
+            else defaults.requires_confirmation or llm_result.requires_confirmation
         ),
         requires_clarification=(
             llm_result.requires_clarification or defaults.requires_clarification
@@ -204,6 +206,12 @@ class DefaultIntentRouter:
         if not text.strip():
             return _default_router_decision("unknown", "消息内容为空。")
         if not self._llm_configured:
+            logger.warning(
+                "Router LLM not configured: api_key=%s, base_url=%s, model=%s",
+                bool(self._settings.openai_api_key),
+                bool(self._settings.openai_base_url),
+                bool(self._settings.openai_small_model),
+            )
             return None
 
         prompt = (
@@ -247,7 +255,7 @@ class DefaultIntentRouter:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=500,
                 response_format={"type": "json_object"},
             )
             content = (response.choices[0].message.content or "").strip()
@@ -278,8 +286,19 @@ class DefaultIntentRouter:
                 clarification_prompt=str(payload.get("clarification_prompt") or ""),
                 user_visible_message=reason,
             )
-        except Exception:
-            logger.exception("Failed to classify entry intent with LLM")
+        except json.JSONDecodeError as exc:
+            logger.exception(
+                "Router LLM JSON decode failed: %s, raw content (first 500 chars): %s",
+                exc,
+                content[:500],
+            )
+            return None
+        except Exception as exc:
+            logger.exception(
+                "Router LLM call failed: type=%s, message=%s",
+                type(exc).__name__,
+                exc,
+            )
             return None
 
     @property

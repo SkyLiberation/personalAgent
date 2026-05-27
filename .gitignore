@@ -9,4 +9,5 @@ frontend/dist/
 log
 .playwright-mcp/
 evals/open_ragbench/results/
-scripts/assets/checkpoints*
+scripts/assets
+!scripts/assets/entry-orchestration.md

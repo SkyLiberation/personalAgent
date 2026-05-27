@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 
 import time
 
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import interrupt
 
-from ..orchestration_models import AgentGraphState, PlanStepState, execution_trace_from_events
+from ..orchestration_models import AgentGraphState, PlanStepState
 from ._deps import (
     OrchestrationDeps,
-    _MAX_RETRIES,
     _RETRY_DELAY_SECONDS,
     _REACT_MAX_ITERATIONS_CAP,
     _default_plan_answer,
@@ -106,9 +106,9 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
     Idempotency: if a tool_call step already has a result in step_results,
     skip execution.
 
-    ReAct steps are *not* dispatched here — the state is seeded and the
-    ``_after_step_execution`` conditional edge routes to the ``react_step``
-    subgraph.
+    ReAct steps are *not* dispatched here: the state is seeded and the
+    PlanExecutionGraph routes into ReactGraph. Tool calls are prepared as LangChain
+    messages so the appropriate subgraph ``ToolNode`` performs execution.
     """
     if state.current_step_index >= len(state.plan_steps):
         return {}
@@ -135,7 +135,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
                 "events": state.events,
             }
 
-    # ---- ReAct branch: seed state and let subgraph handle execution ----
+    # ---- ReAct branch: seed state and let ReactGraph handle execution ----
     if getattr(step, "execution_mode", "deterministic") == "react":
         state.react_step_id = step.step_id
         state.react_max_iterations = min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP)
@@ -143,13 +143,15 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
         state.react_iteration_index = 0
         state.react_done = False
         state.react_result = {}
+        state.react_status = "running"
+        state.react_stop_reason = ""
         state.react_user_prompt = ""
         state.react_iterations = []
         logger.info(
             "Seeded ReAct state for step %s (max_iter=%d, tools=%s)",
             step.step_id, state.react_max_iterations, state.react_allowed_tools,
         )
-        # Status stays "running" — _after_step_execution routes to react_step subgraph
+        # Step status stays "running" so PlanExecutionGraph routes to ReactGraph.
         return {
             "plan_steps": state.plan_steps,
             "react_step_id": state.react_step_id,
@@ -158,48 +160,206 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
             "react_iteration_index": 0,
             "react_done": False,
             "react_result": {},
+            "react_status": "running",
+            "react_stop_reason": "",
             "react_user_prompt": "",
             "react_iterations": [],
+            "events": state.events,
+        }
+
+    if step.action_type == "tool_call":
+        if not step.tool_name:
+            return _fail_current_step(state, step, ValueError("tool_call step missing tool_name"))
+        return {
+            "tool_messages": [_begin_tool_call(
+                state,
+                context="plan",
+                tool_name=step.tool_name,
+                tool_input=step.tool_input,
+                step_id=step.step_id,
+                suffix=step.step_id,
+            )],
+            "active_tool_context": "plan",
+            "pending_tool_step_id": state.pending_tool_step_id,
+            "pending_tool_call_id": state.pending_tool_call_id,
+            "pending_react_iteration": None,
+            "plan_steps": state.plan_steps,
             "events": state.events,
         }
 
     try:
         _dispatch_plan_step(step, sd, state, deps)
     except Exception as exc:
-        err_msg = f"{type(exc).__name__}: {exc}"
-        logger.warning("Plan step %s failed: %s", step.step_id, err_msg)
-        sd.status = "failed"
-        sd.retry_count = sd.retry_count + 1
-        state.plan_retry_counts[step.step_id] = sd.retry_count
-        state.errors.append(f"[{step.step_id}] {err_msg}")
-        state.add_event("step_failed", {
-            "step_id": step.step_id,
-            "error": err_msg,
-            "on_failure": step.on_failure,
-            "retry_count": sd.retry_count,
-        })
-        return {
-            "plan_steps": state.plan_steps,
-            "step_results": state.step_results,
-            "errors": state.errors,
-            "plan_retry_counts": state.plan_retry_counts,
-            "events": state.events,
-        }
+        return _fail_current_step(state, step, exc)
 
-    # If the step triggered a confirmation request, don't mark completed yet
+    return _complete_current_step(state, step)
+
+
+def _node_consume_plan_tool_result(state: AgentGraphState) -> dict:
+    """Consume the latest ToolNode artifact for a deterministic plan step."""
+    if state.current_step_index >= len(state.plan_steps):
+        _clear_pending_tool_call(state)
+        return _pending_tool_updates(state)
+    sd = state.plan_steps[state.current_step_index]
+    step = sd.to_plan_step()
+    if state.active_tool_context != "plan" or state.pending_tool_step_id != step.step_id:
+        _clear_pending_tool_call(state)
+        return _fail_current_step(
+            state,
+            step,
+            RuntimeError("工具返回上下文与当前计划步骤不匹配。"),
+        )
+    artifact = _latest_tool_artifact(state)
+    tool_call_id = state.pending_tool_call_id
+    _clear_pending_tool_call(state)
+    state.tool_results.append(artifact)
+    state.add_event("tool_result", {
+        "context": "plan",
+        "step_id": step.step_id,
+        "tool_call_id": tool_call_id,
+        "ok": bool(artifact.get("ok")),
+        "result_summary": _helpers._summarize_result(artifact.get("data")),
+    })
+    if not artifact.get("ok"):
+        return _fail_current_step(
+            state,
+            step,
+            RuntimeError(artifact.get("error") or f"Tool {step.tool_name} returned failure"),
+        )
+
+    result_data = artifact.get("data") if artifact.get("data") is not None else {"ok": True}
+    state.step_results[step.step_id] = result_data
+    if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
+        state.pending_confirmation = {
+            "step_id": step.step_id,
+            "action_id": result_data.get("action_id"),
+            "token": result_data.get("token"),
+            "action_type": "delete_note",
+            "note_id": result_data.get("note_id"),
+            "title": result_data.get("title"),
+            "summary": result_data.get("summary"),
+        }
+    else:
+        state.pending_confirmation = None
+    return _complete_current_step(state, step)
+
+
+def _begin_tool_call(
+    state: AgentGraphState,
+    *,
+    context: str,
+    tool_name: str,
+    tool_input: dict | None,
+    step_id: str,
+    suffix: str,
+    iteration: int | None = None,
+) -> AIMessage:
+    call_id = f"{state.run_id}:{suffix}:{len(state.tool_results)}"
+    state.active_tool_context = context
+    state.pending_tool_step_id = step_id
+    state.pending_tool_call_id = call_id
+    state.pending_react_iteration = iteration
+    state.add_event("tool_called", {
+        "context": context,
+        "step_id": step_id,
+        "tool_name": tool_name,
+        "tool_call_id": call_id,
+        "iteration": iteration,
+    })
+    return AIMessage(
+        content="",
+        tool_calls=[{
+            "name": tool_name,
+            "args": tool_input or {},
+            "id": call_id,
+            "type": "tool_call",
+        }],
+    )
+
+
+def _latest_tool_artifact(state: AgentGraphState) -> dict:
+    expected_call_id = state.pending_tool_call_id
+    if not expected_call_id:
+        return {"ok": False, "data": None, "error": "缺少待处理工具调用标识。", "evidence": []}
+    message = next(
+        (
+            item for item in reversed(state.tool_messages)
+            if isinstance(item, ToolMessage) and item.tool_call_id == expected_call_id
+        ),
+        None,
+    )
+    if message is None:
+        return {"ok": False, "data": None, "error": "工具节点未返回匹配当前调用的结果。", "evidence": []}
+    artifact = getattr(message, "artifact", None)
+    if isinstance(artifact, dict) and "ok" in artifact:
+        return artifact
+    return {
+        "ok": False,
+        "data": None,
+        "error": str(getattr(message, "content", "工具执行失败。")),
+        "evidence": [],
+    }
+
+
+def _clear_pending_tool_call(state: AgentGraphState) -> None:
+    state.active_tool_context = None
+    state.pending_tool_step_id = ""
+    state.pending_tool_call_id = ""
+    state.pending_react_iteration = None
+
+
+def _pending_tool_updates(state: AgentGraphState) -> dict:
+    return {
+        "active_tool_context": state.active_tool_context,
+        "pending_tool_step_id": state.pending_tool_step_id,
+        "pending_tool_call_id": state.pending_tool_call_id,
+        "pending_react_iteration": state.pending_react_iteration,
+    }
+
+
+def _fail_current_step(state: AgentGraphState, step: "PlanStep", exc: Exception) -> dict:
+    sd = state.plan_steps[state.current_step_index]
+    err_msg = f"{type(exc).__name__}: {exc}"
+    logger.warning("Plan step %s failed: %s", step.step_id, err_msg)
+    sd.status = "failed"
+    sd.retry_count = sd.retry_count + 1
+    sd.failure_reason = err_msg
+    sd.recoverable = step.on_failure == "retry" and sd.retry_count < sd.max_retries
+    state.plan_retry_counts[step.step_id] = sd.retry_count
+    state.errors.append(f"[{step.step_id}] {err_msg}")
+    state.add_event("step_failed", {
+        "step_id": step.step_id,
+        "error": err_msg,
+        "on_failure": step.on_failure,
+        "retry_count": sd.retry_count,
+    })
+    result = {
+        "plan_steps": state.plan_steps,
+        "step_results": state.step_results,
+        "errors": state.errors,
+        "plan_retry_counts": state.plan_retry_counts,
+        "events": state.events,
+    }
+    result.update(_pending_tool_updates(state))
+    return result
+
+
+def _complete_current_step(state: AgentGraphState, step: "PlanStep") -> dict:
+    sd = state.plan_steps[state.current_step_index]
     if state.pending_confirmation is not None:
         sd.status = "awaiting_confirmation"
         state.add_event("confirmation_required", state.pending_confirmation)
         logger.info("Step %s awaiting confirmation", step.step_id)
-        return {
+        result = {
             "plan_steps": state.plan_steps,
             "step_results": state.step_results,
             "answer": state.answer,
             "pending_confirmation": state.pending_confirmation,
             "events": state.events,
         }
+        result.update(_pending_tool_updates(state))
+        return result
 
-    # Normal success — no confirmation needed
     sd.status = "completed"
     display_output = _step_display_output(step, state.step_results.get(step.step_id))
     sd.output_label = display_output.get("output_label", "")
@@ -212,12 +372,15 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
     }
     completion_payload.update(display_output)
     state.add_event("step_completed", completion_payload)
-    return {
+    result = {
         "plan_steps": state.plan_steps,
         "step_results": state.step_results,
         "answer": state.answer,
+        "pending_confirmation": state.pending_confirmation,
         "events": state.events,
     }
+    result.update(_pending_tool_updates(state))
+    return result
 
 
 def _step_display_output(step, result_data: object) -> dict[str, str]:
@@ -282,24 +445,25 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
     step = sd.to_plan_step()
     on_failure = sd.on_failure
     retry_count = sd.retry_count
+    max_retries = sd.max_retries
 
     # Retry logic
-    if on_failure == "retry" and retry_count < _MAX_RETRIES:
+    if on_failure == "retry" and retry_count < max_retries:
         logger.info(
             "Retrying step %s (attempt %d/%d)",
-            step.step_id, retry_count + 1, _MAX_RETRIES,
+            step.step_id, retry_count + 1, max_retries,
         )
         state.add_event("replan_attempted", {
             "step_id": step.step_id,
             "attempt": retry_count + 1,
-            "max_retries": _MAX_RETRIES,
+            "max_retries": max_retries,
         })
         time.sleep(_RETRY_DELAY_SECONDS)
         sd.status = "planned"  # Reset so select_next_step picks it up again
         return {"plan_steps": state.plan_steps}
 
     # Retries exhausted — try replanning
-    if on_failure == "retry" and retry_count >= _MAX_RETRIES:
+    if on_failure == "retry" and retry_count >= max_retries:
         replanner = deps.replanner
         if replanner is not None:
             state.add_event("replan_attempted", {
@@ -430,52 +594,33 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         decision = str(resume_value.get("decision", "reject")).lower()
 
     if decision == "confirm":
-        # Re-execute the tool with confirmed=True parameters
         tool_input = dict(step.tool_input or {})
         tool_input["confirmed"] = True
         tool_input["action_id"] = pending.get("action_id", "")
         tool_input["token"] = pending.get("token", "")
-
-        result = deps.tool_registry.execute(step.tool_name, **tool_input)
-        if result is not None and hasattr(result, "ok") and not result.ok:
-            err_msg = result.error or f"确认后工具 {step.tool_name} 执行失败"
-            sd.status = "failed"
-            state.pending_confirmation = None
-            state.confirmation_decision = "rejected"
-            state.errors.append(f"[{step.step_id}] {err_msg}")
-            state.add_event("step_failed", {
-                "step_id": step.step_id,
-                "error": err_msg,
-            })
-            logger.warning("Confirmed step %s failed: %s", step.step_id, err_msg)
-            return {
-                "plan_steps": state.plan_steps,
-                "errors": state.errors,
-                "confirmation_decision": "rejected",
-            }
-
-        result_data = (
-            result.data
-            if hasattr(result, "data") and result.data is not None
-            else {"ok": True, "confirmed": True, "note_id": pending.get("note_id")}
-        )
-        state.step_results[step.step_id] = result_data
-        sd.status = "completed"
+        sd.status = "running"
         state.confirmation_decision = "confirmed"
-        state.pending_confirmation = None
-
         state.add_event("confirmation_resumed", {
             "step_id": step.step_id,
             "decision": "confirmed",
         })
-        state.add_event("step_completed", {
-            "step_id": step.step_id,
-            "result_summary": _helpers._summarize_result(result_data),
-        })
-        logger.info("Step %s confirmed and executed", step.step_id)
+        logger.info("Step %s confirmed; dispatching through main ToolNode", step.step_id)
         return {
+            "tool_messages": [_begin_tool_call(
+                state,
+                context="plan",
+                tool_name=step.tool_name or "",
+                tool_input=tool_input,
+                step_id=step.step_id,
+                suffix=f"{step.step_id}:confirmed",
+            )],
+            "active_tool_context": "plan",
+            "pending_tool_step_id": state.pending_tool_step_id,
+            "pending_tool_call_id": state.pending_tool_call_id,
+            "pending_react_iteration": None,
             "plan_steps": state.plan_steps,
             "confirmation_decision": "confirmed",
+            "events": state.events,
         }
 
     # Reject (or unknown decision)
@@ -547,18 +692,7 @@ def _dispatch_plan_step(
         step_results[step.step_id] = result_data
 
     elif step.action_type == "tool_call":
-        result_data = _execute_tool_call_step(step, deps)
-        step_results[step.step_id] = result_data
-        if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
-            state.pending_confirmation = {
-                "step_id": step.step_id,
-                "action_id": result_data.get("action_id"),
-                "token": result_data.get("token"),
-                "action_type": "delete_note",
-                "note_id": result_data.get("note_id"),
-                "title": result_data.get("title"),
-                "summary": result_data.get("summary"),
-            }
+        raise RuntimeError("tool_call must be executed by the main graph ToolNode")
 
     elif step.action_type == "resolve":
         result_data = _execute_resolve_step(step, state, deps)
@@ -601,17 +735,6 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps
             "related_episode_uuids": result.related_episode_uuids,
         }
     return {"answer": "", "entity_names": [], "relation_facts": [], "hint": "graph disabled or empty"}
-
-
-def _execute_tool_call_step(step, deps: OrchestrationDeps) -> object:
-    if not step.tool_name:
-        raise ValueError("tool_call step missing tool_name")
-    result = deps.tool_registry.execute(
-        step.tool_name, **(step.tool_input or {})
-    )
-    if result is not None and hasattr(result, "ok") and not result.ok:
-        raise RuntimeError(result.error or f"Tool {step.tool_name} returned failure")
-    return result.data if hasattr(result, "data") and result.data is not None else {"ok": True}
 
 
 def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
@@ -824,6 +947,8 @@ def _after_step_execution(state: AgentGraphState) -> str:
             return "handle_failure"
         if sd.execution_mode == "react" and sd.status == "running":
             return "react_step"
+        if sd.action_type == "tool_call" and sd.status == "running":
+            return "tool_node"
     return "handle_success"
 
 
@@ -837,7 +962,7 @@ def _after_step_failure(state: AgentGraphState) -> str:
 def _after_confirm_step(state: AgentGraphState) -> str:
     """After confirmation: route to success or failure handler."""
     if state.confirmation_decision == "confirmed":
-        return "handle_success"
+        return "tool_node"
     return "handle_failure"
 
 

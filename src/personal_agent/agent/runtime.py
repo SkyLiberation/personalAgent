@@ -13,7 +13,7 @@ from ..storage.ask_history_store import AskHistoryStore
 from ..storage.postgres_cross_session_store import PostgresCrossSessionStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..storage.postgres_pending_action_store import PostgresPendingActionStore
-from ..tools import ToolRegistry
+from ..tools import ToolExecutor
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
 from .orchestration_models import AgentGraphState, AgentRunSnapshot, PlanStepState
@@ -89,14 +89,17 @@ def _snapshot_intent(snapshot: dict) -> str:
 
 
 def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) -> dict:
-    """Read persisted state for an interrupted run instead of the invoke envelope."""
+    """Merge parent checkpoint state with streamed child state at an interrupt."""
+    streamed_values = {
+        key: value for key, value in fallback.items() if key != "__interrupt__"
+    } if isinstance(fallback, dict) else {}
     try:
         values = graph.get_state(config).values
         if isinstance(values, dict):
-            return values
+            return {**values, **streamed_values}
     except Exception:
         logger.debug("Could not read state after graph interrupt", exc_info=True)
-    return fallback if isinstance(fallback, dict) else {}
+    return streamed_values
 
 
 class AgentRuntime(
@@ -132,16 +135,16 @@ class AgentRuntime(
         self.pending_action_store = pending_action_store or PostgresPendingActionStore(settings.postgres_url)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
-        self._tool_registry = ToolRegistry()
+        self._tool_executor = ToolExecutor()
         self._register_tools()
-        self._planner = DefaultTaskPlanner(settings, tool_registry=self._tool_registry)
+        self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
         self._cross_session = PostgresCrossSessionStore(settings.postgres_url)
         self.memory = MemoryFacade(store, ask_history_store, cross_session_store=self._cross_session)
         self._verifier = AnswerVerifier()
-        self._plan_validator = PlanValidator(tool_registry=self._tool_registry)
+        self._plan_validator = PlanValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
         self._react_runner = ReActStepRunner(
-            tool_registry=self._tool_registry,
+            tool_executor=self._tool_executor,
             memory=self.memory,
             settings=settings,
         )
@@ -158,8 +161,8 @@ class AgentRuntime(
         return self._intent_router
 
     @property
-    def tool_registry(self):
-        return self._tool_registry
+    def tool_executor(self):
+        return self._tool_executor
 
     @property
     def planner(self):
@@ -225,15 +228,12 @@ class AgentRuntime(
         # model is used directly, LangGraph omits nullable defaults while
         # resuming an existing thread, leaving prior-run transient values in
         # the input checkpoint until the first node resets them.
-        if on_progress is None:
-            invoke_result = graph.invoke(initial_state.model_dump(), config)
-        else:
-            invoke_result = self._stream_entry_graph(
-                graph,
-                initial_state.model_dump(),
-                config,
-                on_progress,
-            )
+        invoke_result = self._stream_entry_graph(
+            graph,
+            initial_state.model_dump(),
+            config,
+            on_progress or (lambda _event_type, _payload: None),
+        )
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
             return self._entry_result_from_interrupt(
@@ -241,7 +241,11 @@ class AgentRuntime(
                 interrupt_data,
                 run_id=run_id,
                 thread_id=thread_id,
-                fallback_events=initial_state.events,
+                fallback_events=(
+                    invoke_result.get("events", initial_state.events)
+                    if isinstance(invoke_result, dict)
+                    else initial_state.events
+                ),
             )
 
         result_state = AgentGraphState.model_validate(invoke_result)
@@ -284,13 +288,25 @@ class AgentRuntime(
         from .orchestration_models import AgentEvent, events_to_sse_tuples
 
         emitted_event_ids: set[str] = set()
+        observed_events: list[AgentEvent] = []
+        observed_state = dict(initial_state)
         interrupt_result: dict | None = None
-        for update in graph.stream(initial_state, config, stream_mode="updates"):
+        for streamed in graph.stream(initial_state, config, stream_mode="updates", subgraphs=True):
+            update = (
+                streamed[1]
+                if isinstance(streamed, tuple)
+                and len(streamed) == 2
+                and isinstance(streamed[1], dict)
+                else streamed
+            )
+            if not isinstance(update, dict):
+                continue
             if "__interrupt__" in update:
                 interrupt_result = update
             for node_update in update.values():
                 if not isinstance(node_update, dict):
                     continue
+                observed_state.update(node_update)
                 for raw_event in node_update.get("events", []):
                     event = (
                         raw_event
@@ -300,13 +316,18 @@ class AgentRuntime(
                     if event.event_id in emitted_event_ids:
                         continue
                     emitted_event_ids.add(event.event_id)
+                    observed_events.append(event)
                     for event_type, payload in events_to_sse_tuples([event]):
                         # The HTTP layer emits one terminal result with complete
                         # answer/citation metadata after graph completion.
                         if event_type != "done":
                             on_progress(event_type, payload)
         if interrupt_result is not None:
-            return interrupt_result
+            return {
+                **observed_state,
+                "__interrupt__": interrupt_result["__interrupt__"],
+                "events": observed_events or observed_state.get("events", []),
+            }
         return graph.get_state(config).values
 
     def _entry_result_from_interrupt(

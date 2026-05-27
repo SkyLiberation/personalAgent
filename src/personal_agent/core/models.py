@@ -7,6 +7,10 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
+def local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
 class RawIngestItem(BaseModel):
     content: str
     source_type: Literal["text", "link", "pdf", "audio", "image", "note", "file"] = "text"
@@ -97,8 +101,8 @@ class KnowledgeNote(BaseModel):
     parent_note_id: str | None = None
     chunk_index: int | None = None
     source_span: str | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=local_now)
+    updated_at: datetime = Field(default_factory=local_now)
 
 
 class ReviewCard(BaseModel):
@@ -107,7 +111,7 @@ class ReviewCard(BaseModel):
     prompt: str
     answer_hint: str
     interval_days: int = 1
-    due_at: datetime = Field(default_factory=lambda: datetime.utcnow() + timedelta(days=1))
+    due_at: datetime = Field(default_factory=lambda: local_now() + timedelta(days=1))
 
 
 class AskHistoryRecord(BaseModel):
@@ -118,7 +122,7 @@ class AskHistoryRecord(BaseModel):
     answer: str
     citations: list[Citation] = Field(default_factory=list)
     evidence: list = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=local_now)
 
 
 class AgentState(BaseModel):
@@ -140,7 +144,7 @@ class AgentState(BaseModel):
 
 class AuditEvent(BaseModel):
     """A single audit trail entry for HITL operations."""
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=local_now)
     event: str  # created, confirmed, rejected, expired, retried
     actor: str = "system"
     detail: str = ""
@@ -157,9 +161,9 @@ class PendingAction(BaseModel):
     payload: dict[str, object] = Field(default_factory=dict)  # data needed to execute
     token: str = Field(default_factory=lambda: uuid4().hex[:8])  # short confirmation token
     status: Literal["pending", "confirmed", "rejected", "expired", "executed"] = "pending"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=local_now)
     expires_at: datetime = Field(
-        default_factory=lambda: datetime.utcnow() + timedelta(hours=1)
+        default_factory=lambda: local_now() + timedelta(hours=1)
     )
     resolved_at: datetime | None = None
     audit_log: list[AuditEvent] = Field(default_factory=list)

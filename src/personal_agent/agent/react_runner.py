@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from openai import OpenAI
 
 from ..core.config import Settings
-from ..tools import ToolRegistry
+from ..tools import ToolExecutor, tool_property, tool_schema
 from .planner import PlanStep
 
 if TYPE_CHECKING:
@@ -53,11 +53,11 @@ class ReActIteration:
 class ReActStepRunner:
     def __init__(
         self,
-        tool_registry: ToolRegistry,
+        tool_executor: ToolExecutor,
         memory: MemoryFacade,
         settings: Settings,
     ) -> None:
-        self._registry = tool_registry
+        self._executor = tool_executor
         self._memory = memory
         self._settings = settings
 
@@ -120,12 +120,12 @@ class ReActStepRunner:
             elif self._is_blocked_tool(tool_name):
                 observation = f"错误：工具 '{tool_name}' 是高风险/写操作工具，不允许在 ReAct 中调用。"
             else:
-                tool_result = self._registry.execute(tool_name, **tool_input)
-                if tool_result.ok:
-                    observation = self._summarize_tool_result(tool_result.data)
+                tool_result = self._executor.invoke_direct(tool_name, **tool_input)
+                if tool_result.get("ok"):
+                    observation = self._summarize_tool_result(tool_result.get("data"))
                 else:
-                    observation = f"工具执行失败：{tool_result.error}"
-                iteration_evidence = tool_result.evidence if (tool_result.ok and tool_result.evidence) else []
+                    observation = f"工具执行失败：{tool_result.get('error')}"
+                iteration_evidence = tool_result.get("evidence", []) if tool_result.get("ok") else []
 
             iterations.append(ReActIteration(
                 thought=thought, action_tool=tool_name,
@@ -157,18 +157,22 @@ class ReActStepRunner:
 
     def _resolve_allowed_tools(self, step: PlanStep) -> set[str]:
         allowed = set(step.allowed_tools) if step.allowed_tools else set(DEFAULT_ALLOWED_TOOLS)
-        registered = {t.name for t in self._registry.list_tools()}
+        registered = {t.name for t in self._executor.list_tools()}
         return allowed & registered
 
     def _is_blocked_tool(self, tool_name: str) -> bool:
         spec = None
-        for t in self._registry.list_tools():
+        for t in self._executor.list_tools():
             if t.name == tool_name:
                 spec = t
                 break
         if spec is None:
             return True
-        if spec.risk_level == "high" or spec.requires_confirmation or spec.writes_longterm:
+        if (
+            tool_property(spec, "risk_level", "low") == "high"
+            or tool_property(spec, "requires_confirmation", False)
+            or tool_property(spec, "writes_longterm", False)
+        ):
             return True
         if any(tool_name.startswith(p) for p in BLOCKED_TOOL_PREFIXES):
             return True
@@ -186,12 +190,13 @@ class ReActStepRunner:
 
     def _format_tools(self, allowed: set[str]) -> str:
         lines: list[str] = []
-        for spec in self._registry.list_tools():
+        for spec in self._executor.list_tools():
             if spec.name in allowed:
                 lines.append(f"- {spec.name}: {spec.description}")
-                if spec.input_schema:
-                    props = spec.input_schema.get("properties", {})
-                    required = spec.input_schema.get("required", [])
+                schema = tool_schema(spec)
+                if schema:
+                    props = schema.get("properties", {})
+                    required = schema.get("required", [])
                     for pname, pdef in props.items():
                         req_mark = " (必填)" if pname in required else ""
                         desc = pdef.get("description", pdef.get("type", ""))

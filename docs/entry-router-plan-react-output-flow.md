@@ -41,10 +41,10 @@ Entry
 - `DefaultIntentRouter`：入口意图路由器。
 - `DefaultTaskPlanner`：任务规划器。
 - `PlanValidator`：计划校验器。
-- `orchestration_graph`：entry 总编排图，负责 route、普通分支、plan、step、ReAct、HITL 和 finalize。
+- `orchestration_graph`：entry 父图，组合 `EntryGraph`、普通分支、`PlanExecutionGraph` 与 `ReactGraph`。
 - `Replanner`：步骤失败后的重新规划器。
 - `AnswerVerifier`：回答证据校验器。
-- `ToolRegistry`：工具注册与执行入口。
+- `ToolExecutor`：注册 LangChain `@tool` 工具；执行期由计划图和 ReAct 图中的 `ToolNode` 调度。
 - `MemoryFacade`：工作记忆、会话摘要、历史上下文。
 - `GraphitiStore`：图谱写入、图谱检索和 Graphiti client 构建。
 
@@ -56,11 +56,10 @@ Web / Feishu / CLI
   -> AgentRuntime.entry()
   -> AgentRuntime.execute_entry()
   -> build_entry_orchestration_graph()
-     -> normalize_entry
-     -> route_intent / DefaultIntentRouter.classify()
-     -> requires_clarification? -> prepare_clarify_entry -> interrupt_clarify_entry -> route_intent
+     -> EntryGraph: normalize_entry -> route_intent / clarification interrupt-resume
      -> capture / ask / summarize / direct_answer branch
-        或 plan_task -> validate_plan -> step loop / ReAct / HITL
+        或 PlanExecutionGraph: plan_task -> validate_plan -> step loop / HITL
+           -> ReactGraph（仅 react step）
      -> finalize_entry_result
   -> API response 或 SSE events
 ```
@@ -93,7 +92,7 @@ Web / Feishu / CLI
 在 `execute_entry()` 内部，第一步是构造 `AgentGraphState` 并调用：
 
 ```text
-graph.invoke(initial_state, {"configurable": {"thread_id": thread_id}})
+graph.stream(initial_state, {"configurable": {"thread_id": thread_id}}, subgraphs=True)
 ```
 
 所有 entry 请求都会先进入 `normalize_entry` 和 `route_intent`。Router 使用 LLM 优先、规则兜底的方式判断意图与信息是否充分：当输出 `requires_clarification=True` 时，图先在 `prepare_clarify_entry` 保存待补充 payload，再由 `interrupt_clarify_entry` 暂停，让用户选择补充“记录内容 / 提出问题 / 总结内容 / 执行操作”。补充文本写回 `entry_text` 后重新进入 `route_intent`。
@@ -223,18 +222,15 @@ Planner 也是 LLM-first + heuristic fallback：
 ```text
 del-1 retrieve  检索待删除候选笔记，execution_mode=react，allowed_tools=["graph_search"]
 del-2 resolve   从候选中确定目标 note_id
-del-3 verify    高风险安全校验，需要确认
-del-4 tool_call 调用 delete_note，需要确认
-del-5 compose   生成删除结果摘要
+del-3 tool_call 调用 delete_note，由工具层请求并校验确认
+del-4 compose   生成删除结果摘要
 ```
 
 `solidify_conversation` 的固化计划模板是：
 
 ```text
-sol-1 retrieve  检索可供固化判断参考的知识上下文
-sol-2 compose   由 LLM 从候选对话中语义选择依据并整理成入库文本
-sol-3 verify    校验知识文本
-sol-4 tool_call 调用 capture_text 写入知识库
+sol-1 compose   由 LLM 从候选对话中语义选择依据并整理成入库文本
+sol-2 tool_call 调用 capture_text 写入知识库，正文由执行器注入
 ```
 
 ### 4.4 Planner 使用的 model
@@ -244,10 +240,10 @@ Planner 使用 `settings.openai_small_model`，默认 `gpt-4.1-nano`。
 调用参数：
 
 - `temperature=0`
-- `max_tokens=500`
+- `max_tokens=4096`
 - `response_format={"type": "json_object"}`
 
-Planner prompt 会把可用工具列表一起传给模型。工具列表来自 `ToolRegistry.list_tools()`。
+Planner prompt 会把可用工具列表一起传给模型。工具列表来自 `ToolExecutor.list_tools()`。
 
 ## 5. PlanExecutor 执行阶段
 
@@ -296,9 +292,9 @@ planned -> running -> completed / failed / skipped
 
 - `retrieve`：调用 `_execute_retrieve()`，当前直接走 `runtime.graph_store.ask()`。
 - `resolve`：调用 `_execute_resolve()`，把模糊删除目标解析成具体 `note_id`。
-- `tool_call`：调用 `_execute_tool_call()`，通过 `ToolRegistry.execute()` 执行工具。
+- `tool_call`：生成 tool-call message，通过 `PlanExecutionGraph.plan_tool_node` 执行工具。
 - `compose`：调用 `_execute_compose()`，生成自然语言结果。
-- `verify`：调用 `_execute_verify()`，使用 `AnswerVerifier` 做校验。
+- `verify`：调用 `_execute_verify()`，仅用于存在可验证回答的流程；删除确认与固化写入不规划该步骤。
 
 如果 `step.execution_mode == "react"` 且存在 `ReActStepRunner`，则先走 ReAct 分支，而不是 deterministic 分支。
 
@@ -306,7 +302,7 @@ planned -> running -> completed / failed / skipped
 
 如果 step 失败：
 
-1. `on_failure == "retry"` 时会最多重试 `MAX_RETRIES=3`。
+1. `on_failure == "retry"` 时按步骤状态中的 `max_retries` 重试（默认 3 次）。
 2. 重试耗尽后，如果配置了 `Replanner`，调用 `Replanner.replan()`。
 3. Replanner 返回 revised steps 后，会跳过依赖失败步骤的旧步骤，并把新步骤加入执行列表重新拓扑排序。
 4. 如果无法重规划，则按 `skip` 或 `abort` 语义继续或中断。
@@ -356,7 +352,7 @@ ReAct 被刻意限制在低风险场景：
 3. 如果 JSON 中有 `done=true`，返回 `result`。
 4. 否则读取 `tool` 和 `input`。
 5. 校验工具是否允许。
-6. 通过 `ToolRegistry.execute(tool_name, **tool_input)` 执行工具。
+6. 将 tool-call message 路由到 `ReactGraph.react_tool_node` 执行工具。
 7. 将 observation 追加回 prompt，进入下一轮。
 8. 每轮发送 `react_iteration` 事件。
 
@@ -693,7 +689,7 @@ POST /api/entry
   -> AgentRuntime.execute_entry()
   -> orchestration graph
      -> route_intent: delete_knowledge
-     -> plan_task: 生成 del-1..del-5
+     -> plan_task: 生成 del-1..del-4
      -> validate_plan
   -> step loop
      -> del-1 retrieve, execution_mode=react
@@ -703,11 +699,10 @@ POST /api/entry
         -> local similarity fallback
         -> keyword fallback
         -> recent citations fallback
-     -> del-3 verify
-     -> del-4 tool_call delete_note
+     -> del-3 tool_call delete_note
         -> 创建 pending action
         -> 发 pending_action_created
-     -> del-5 compose
+     -> del-4 compose
   -> EntryResult(plan_steps=[...])
   -> API/SSE 输出，等待用户二次确认
 ```
@@ -718,14 +713,12 @@ POST /api/entry
 POST /api/entry
   -> EntryInput(text="把刚才结论沉淀成知识")
   -> route_intent: solidify_conversation
-  -> plan_task: sol-1..sol-4
+  -> plan_task: sol-1..sol-2
   -> step loop
-     -> retrieve 可供固化判断参考的知识上下文
      -> compose 将带轮次标识的候选对话交给 LLM 选择并生成草稿
         -> save_draft()
         -> emit draft_ready
         -> 模型未给出合格正文时终止写入
-     -> verify
      -> tool_call capture_text
         -> 复用 capture 链路写入 KnowledgeNote
         -> 标记 draft/conclusion 已固化

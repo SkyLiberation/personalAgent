@@ -5,8 +5,9 @@ import pytest
 from personal_agent.agent.plan_validator import PlanValidationResult, PlanValidator
 from personal_agent.agent.planner import PlanStep
 from personal_agent.agent.router import RouterDecision
-from personal_agent.tools import ToolRegistry
-from personal_agent.tools.base import BaseTool, ToolResult, ToolSpec
+from langchain_core.tools import tool
+
+from personal_agent.tools import ToolExecutor, tool_response, tool_success
 
 
 class TestPlanValidationResult:
@@ -104,8 +105,8 @@ class TestPlanValidatorStructural:
                      tool_name="nonexistent_tool"),
         ]
         result = validator.validate(steps, default_decision)
-        # When no ToolRegistry is injected, unknown tool is a warning (not blocking)
-        assert any("ToolRegistry" in w or "tool_name" in w for w in result.warnings)
+        # When no ToolExecutor is injected, unknown tool is a warning (not blocking)
+        assert any("ToolExecutor" in w or "tool_name" in w for w in result.warnings)
 
     def test_invalid_risk_level_rejected(self, validator, default_decision):
         steps = [
@@ -299,12 +300,11 @@ class TestPlanValidatorPlanLevel:
             PlanStep(step_id="del-1", action_type="retrieve", description="检索待删除的候选笔记",
                      tool_name="graph_search", expected_output="匹配的候选笔记列表",
                      success_criteria="命中至少 1 条笔记"),
-            PlanStep(step_id="del-2", action_type="verify", description="安全校验",
-                     depends_on=["del-1"], risk_level="high", requires_confirmation=True,
-                     expected_output="安全校验通过或返回待确认列表"),
-            PlanStep(step_id="del-3", action_type="tool_call", description="执行删除",
+            PlanStep(step_id="del-2", action_type="resolve", description="定位目标",
+                     depends_on=["del-1"]),
+            PlanStep(step_id="del-3", action_type="tool_call", description="请求确认并执行删除",
                      tool_name="delete_note", depends_on=["del-2"], risk_level="high",
-                     on_failure="abort"),
+                     requires_confirmation=True, on_failure="abort"),
             PlanStep(step_id="del-4", action_type="compose", description="汇总删除结果",
                      depends_on=["del-3"]),
         ]
@@ -315,122 +315,52 @@ class TestPlanValidatorPlanLevel:
         decision = RouterDecision(route="solidify_conversation", risk_level="low",
                                   requires_planning=True)
         steps = [
-            PlanStep(step_id="sol-1", action_type="retrieve", description="获取最近对话记录",
-                     expected_output="最近若干轮对话"),
-            PlanStep(step_id="sol-2", action_type="compose", description="提取候选事实和结论",
-                     depends_on=["sol-1"]),
-            PlanStep(step_id="sol-3", action_type="verify", description="校验提取内容",
-                     depends_on=["sol-2"]),
-            PlanStep(step_id="sol-4", action_type="tool_call", description="写入知识库",
-                     tool_name="capture_text", depends_on=["sol-3"]),
+            PlanStep(step_id="sol-1", action_type="compose", description="提取候选事实和结论"),
+            PlanStep(step_id="sol-2", action_type="tool_call", description="写入知识库",
+                     tool_name="capture_text", depends_on=["sol-1"]),
         ]
         result = validator.validate(steps, decision)
         assert result.valid
 
 
-class _GovernanceHighRiskTool(BaseTool):
-    @property
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="dangerous_op",
-            description="高风险操作",
-            input_schema={
-                "type": "object",
-                "properties": {"target": {"type": "string"}},
-                "required": ["target"],
-            },
-            risk_level="high",
-            requires_confirmation=True,
-        )
-
-    def execute(self, **kwargs):
-        return ToolResult(ok=True, data="done")
+@tool("dangerous_op", description="高风险操作", response_format="content_and_artifact", extras={"risk_level": "high", "requires_confirmation": True})
+def _governance_high_risk(target: str):
+    return tool_response(tool_success("done"))
 
 
-class _GovernanceWriteTool(BaseTool):
-    @property
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="write_op",
-            description="写入操作",
-            input_schema={
-                "type": "object",
-                "properties": {"content": {"type": "string"}},
-                "required": ["content"],
-            },
-            writes_longterm=True,
-        )
-
-    def execute(self, **kwargs):
-        return ToolResult(ok=True, data="saved")
+@tool("write_op", description="写入操作", response_format="content_and_artifact", extras={"writes_longterm": True})
+def _governance_write(content: str):
+    return tool_response(tool_success("saved"))
 
 
-class _DeferredCaptureTextTool(BaseTool):
-    @property
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="capture_text",
-            description="保存生成后的草稿",
-            input_schema={
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-            },
-            writes_longterm=True,
-        )
-
-    def execute(self, **kwargs):
-        return ToolResult(ok=True, data="saved")
+@tool("capture_text", description="保存生成后的草稿", response_format="content_and_artifact", extras={"writes_longterm": True})
+def _deferred_capture_text(text: str):
+    return tool_response(tool_success("saved"))
 
 
-class _GovernanceExternalTool(BaseTool):
-    @property
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="external_op",
-            description="外部操作",
-            input_schema={
-                "type": "object",
-                "properties": {"url": {"type": "string"}},
-                "required": ["url"],
-            },
-            accesses_external=True,
-        )
-
-    def execute(self, **kwargs):
-        return ToolResult(ok=True, data="fetched")
+@tool("external_op", description="外部操作", response_format="content_and_artifact", extras={"accesses_external": True})
+def _governance_external(url: str):
+    return tool_response(tool_success("fetched"))
 
 
-class _ReadOnlyGraphSearchTool(BaseTool):
-    @property
-    def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="graph_search",
-            description="只读图谱检索",
-            input_schema={
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-            },
-            risk_level="low",
-        )
-
-    def execute(self, **kwargs):
-        return ToolResult(ok=True, data={"results": []})
+@tool("graph_search", description="只读图谱检索", response_format="content_and_artifact", extras={"risk_level": "low"})
+def _read_only_graph_search(query: str = ""):
+    return tool_response(tool_success({"results": []}))
 
 
 class TestPlanValidatorGovernance:
     @pytest.fixture
     def registry(self):
-        reg = ToolRegistry()
-        reg.register(_GovernanceHighRiskTool())
-        reg.register(_GovernanceWriteTool())
-        reg.register(_GovernanceExternalTool())
-        reg.register(_DeferredCaptureTextTool())
+        reg = ToolExecutor()
+        reg.register(_governance_high_risk)
+        reg.register(_governance_write)
+        reg.register(_governance_external)
+        reg.register(_deferred_capture_text)
         return reg
 
     @pytest.fixture
     def validator(self, registry):
-        return PlanValidator(tool_registry=registry)
+        return PlanValidator(tool_executor=registry)
 
     @pytest.fixture
     def default_decision(self):
@@ -507,12 +437,8 @@ class TestPlanValidatorGovernance:
         steps = [
             PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
             PlanStep(
-                step_id="sol-2", action_type="verify", description="校验草稿",
-                depends_on=["sol-1"],
-            ),
-            PlanStep(
-                step_id="sol-3", action_type="tool_call", description="保存草稿",
-                tool_name="capture_text", depends_on=["sol-2"],
+                step_id="sol-2", action_type="tool_call", description="保存草稿",
+                tool_name="capture_text", depends_on=["sol-1"],
             ),
         ]
 
@@ -540,19 +466,51 @@ class TestPlanValidatorGovernance:
         assert not result.valid
         assert any("必须依赖 compose" in issue for issue in result.issues)
 
+    def test_solidify_rejects_placeholder_even_with_compose_dependency(self, validator):
+        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        steps = [
+            PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            PlanStep(
+                step_id="sol-2", action_type="tool_call", description="保存占位符",
+                tool_name="capture_text",
+                tool_input={"text": "$sol-1.output"},
+                depends_on=["sol-1"],
+            ),
+        ]
+
+        result = validator.validate(steps, decision)
+
+        assert not result.valid
+        assert any("计划阶段不得提供正文或占位符" in issue for issue in result.issues)
+
+    def test_solidify_rejects_unexecutable_verify_step(self, validator):
+        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        steps = [
+            PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            PlanStep(step_id="sol-2", action_type="verify", description="校验是否已写入",
+                     depends_on=["sol-1"]),
+            PlanStep(step_id="sol-3", action_type="tool_call", description="保存草稿",
+                     tool_name="capture_text", depends_on=["sol-2"]),
+        ]
+
+        result = validator.validate(steps, decision)
+
+        assert not result.valid
+        assert any("没有可兑现的独立执行语义" in issue for issue in result.issues)
+
 
 class TestReActValidation:
     """Validate ReAct-specific checks in PlanValidator."""
 
     @pytest.fixture
     def registry(self):
-        reg = ToolRegistry()
-        reg.register(_ReadOnlyGraphSearchTool())
+        reg = ToolExecutor()
+        reg.register(_read_only_graph_search)
         return reg
 
     @pytest.fixture
     def validator(self, registry):
-        return PlanValidator(tool_registry=registry)
+        return PlanValidator(tool_executor=registry)
 
     @pytest.fixture
     def default_decision(self):
@@ -590,7 +548,7 @@ class TestReActValidation:
             ),
         ]
         result = validator.validate(steps, default_decision)
-        assert any("nonexistent_tool" in i and "未在 ToolRegistry 中注册" in i for i in result.issues)
+        assert any("nonexistent_tool" in i and "未在 ToolExecutor 中注册" in i for i in result.issues)
 
     def test_react_warns_max_iterations_over_cap(self, validator, default_decision):
         steps = [

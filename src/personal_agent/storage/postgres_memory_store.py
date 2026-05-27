@@ -6,7 +6,7 @@ from pathlib import Path
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..core.models import KnowledgeNote, ReviewCard
+from ..core.models import KnowledgeNote, ReviewCard, local_now
 from .postgres_common import PostgresStoreBase
 
 
@@ -200,7 +200,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         return results[:limit]
 
     def due_reviews(self, user_id: str) -> list[ReviewCard]:
-        return [review for review in self.list_reviews(user_id) if review.due_at <= datetime.utcnow()]
+        return [review for review in self.list_reviews(user_id) if review.due_at <= local_now()]
 
     def list_reviews(self, user_id: str) -> list[ReviewCard]:
         self.ensure_schema()

@@ -30,12 +30,14 @@ def _build_react_context(step: "PlanStep", step_results: dict) -> str:
 
 def _format_react_tools(allowed: set[str], deps: OrchestrationDeps) -> str:
     lines: list[str] = []
-    for spec in deps.tool_registry.list_tools():
+    from ...tools import tool_schema
+    for spec in deps.tool_executor.list_tools():
         if spec.name in allowed:
             lines.append(f"- {spec.name}: {spec.description}")
-            if spec.input_schema:
-                props = spec.input_schema.get("properties", {})
-                required = spec.input_schema.get("required", [])
+            schema = tool_schema(spec)
+            if schema:
+                props = schema.get("properties", {})
+                required = schema.get("required", [])
                 for pname, pdef in props.items():
                     req_mark = " (必填)" if pname in required else ""
                     desc = pdef.get("description", pdef.get("type", ""))

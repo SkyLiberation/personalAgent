@@ -102,7 +102,7 @@
 
 ### 4. 外部工具权限治理已有基础模型
 
-工具层已建立统一治理字段（`ToolSpec.risk_level / requires_confirmation / writes_longterm / accesses_external`），`PlanValidator` 会做交叉校验：
+工具层通过 LangChain 工具 `extras` 建立统一治理字段（`risk_level / requires_confirmation / writes_longterm / accesses_external`），`PlanValidator` 会做交叉校验：
 - 高风险工具未设步骤确认 → warning
 - 写入长期知识的工具未设确认 → warning
 - 外部访问工具 → 提示外部副作用 warning

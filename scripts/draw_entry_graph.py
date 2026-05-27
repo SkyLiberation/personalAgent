@@ -15,7 +15,7 @@ def _ensure_src_on_path() -> None:
         sys.path.insert(0, str(src_dir))
 
 
-def _build_mermaid() -> str:
+def _get_orch_graph():
     _ensure_src_on_path()
 
     from personal_agent.agent.service import AgentService
@@ -23,8 +23,20 @@ def _build_mermaid() -> str:
 
     settings = Settings.from_env()
     service = AgentService(settings=settings)
-    graph = service._get_orch_graph()
-    return graph.get_graph().draw_mermaid()
+    return service._get_orch_graph()
+
+
+def _build_mermaid(xray: int | bool = False) -> str:
+    graph = _get_orch_graph()
+    return graph.get_graph(xray=xray).draw_mermaid()
+
+
+def _build_subgraph_mermaid(subgraph_name: str) -> str | None:
+    graph = _get_orch_graph()
+    for namespace, subgraph in graph.get_subgraphs(recurse=True):
+        if namespace.rsplit("|", 1)[-1] == subgraph_name:
+            return subgraph.get_graph().draw_mermaid()
+    return None
 
 
 def main() -> int:
@@ -48,11 +60,63 @@ def main() -> int:
         action="store_true",
         help="Print the Mermaid content instead of writing an asset file.",
     )
+    parser.add_argument(
+        "-x",
+        "--xray",
+        type=int,
+        default=2,
+        help="X-ray recursion depth for subgraph visualization (0 = top-level only, default 1).",
+    )
+    parser.add_argument(
+        "--no-combine",
+        action="store_true",
+        help="Output only the X-ray graph (not combined with top-level).",
+    )
     args = parser.parse_args()
 
-    mermaid = _build_mermaid()
     as_markdown = args.markdown or args.output.suffix.lower() == ".md"
-    content = f"```mermaid\n{mermaid}\n```\n" if as_markdown else mermaid + "\n"
+
+    top_level_mermaid = _build_mermaid(xray=False)
+
+    SUBGRAPH_NAMES = ["entry_graph", "plan_execution_graph", "react_graph"]
+
+    if args.xray <= 0:
+        content = _wrap_mermaid(top_level_mermaid, as_markdown)
+    else:
+        xray_mermaid = _build_mermaid(xray=args.xray)
+        if args.no_combine:
+            content = _wrap_mermaid(xray_mermaid, as_markdown)
+        elif as_markdown:
+            parts = [
+                "# Entry Orchestration Graph (Top Level)\n",
+                _wrap_mermaid(top_level_mermaid, as_markdown=True),
+            ]
+            for name in SUBGRAPH_NAMES:
+                sub_mermaid = _build_subgraph_mermaid(name)
+                if sub_mermaid:
+                    parts.append(f"\n## Subgraph: {name}\n")
+                    parts.append(_wrap_mermaid(sub_mermaid, as_markdown=True))
+            parts.append(
+                "\n# Entry Orchestration Graph (X-Ray depth={})\n".format(args.xray)
+            )
+            parts.append(_wrap_mermaid(xray_mermaid, as_markdown=True))
+            content = "".join(parts)
+        else:
+            parts = [
+                "# Entry Orchestration Graph (Top Level)\n\n",
+                top_level_mermaid,
+            ]
+            for name in SUBGRAPH_NAMES:
+                sub_mermaid = _build_subgraph_mermaid(name)
+                if sub_mermaid:
+                    parts.append(f"\n\n## Subgraph: {name}\n\n")
+                    parts.append(sub_mermaid)
+            parts.append(
+                "\n\n# Entry Orchestration Graph (X-Ray depth={})\n\n".format(args.xray)
+            )
+            parts.append(xray_mermaid)
+            parts.append("\n")
+            content = "".join(parts)
 
     if args.stdout:
         print(content, end="")
@@ -61,6 +125,12 @@ def main() -> int:
         args.output.write_text(content, encoding="utf-8")
         print(args.output)
     return 0
+
+
+def _wrap_mermaid(mermaid: str, as_markdown: bool) -> str:
+    if as_markdown:
+        return f"```mermaid\n{mermaid}\n```\n"
+    return mermaid + "\n"
 
 
 if __name__ == "__main__":

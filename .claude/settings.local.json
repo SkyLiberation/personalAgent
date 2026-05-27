@@ -111,7 +111,28 @@
       "Bash(curl -s http://127.0.0.1:8000/docs -o /dev/null -w \"%{http_code}\")",
       "Bash(curl -s http://127.0.0.1:3000 -o /dev/null -w \"%{http_code}\")",
       "Bash(powershell -Command \"Stop-Process -Id 34908 -Force; Stop-Process -Id 20676 -Force\")",
-      "Bash(curl -s -o /dev/null -w \"backend:%{http_code} frontend:%{http_code}\" http://127.0.0.1:8000/docs http://127.0.0.1:3000)"
+      "Bash(curl -s -o /dev/null -w \"backend:%{http_code} frontend:%{http_code}\" http://127.0.0.1:8000/docs http://127.0.0.1:3000)",
+      "Bash(powershell -Command \"Stop-Process -Id 36172 -Force; Stop-Process -Id 12372 -Force\")",
+      "Bash(python scripts/draw_entry_graph.py --stdout)",
+      "Bash(python scripts/draw_entry_graph.py)",
+      "Bash(powershell -Command \"Get-Process python* | Select-Object Id, ProcessName\")",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object OwningProcess\")",
+      "Bash(powershell -Command \"Stop-Process -Id 33628 -Force\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/docs)",
+      "Bash(powershell -Command \"Stop-Process -Id \\(Get-NetTCPConnection -LocalPort 8000 | Where-Object OwningProcess -gt 0 | Select-Object -First 1 -ExpandProperty OwningProcess\\) -Force\")",
+      "Bash(bash -c \"docker compose ps 2>/dev/null || docker-compose ps 2>/dev/null\")",
+      "Bash(taskkill //F //PID 33628 1016 14692 32256 19792)",
+      "Bash(powershell -Command 'Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }')",
+      "Bash(taskkill //F //PID 3092)",
+      "Bash(mkdir -p d:/mySoft/workspace/personalAgent/.claude/skills)",
+      "Bash(mkdir -p d:/mySoft/workspace/personalAgent/.claude/skills/restart-backend)",
+      "Edit(/.claude/skills/restart-backend/**)",
+      "Bash(rm d:/mySoft/workspace/personalAgent/.claude/skills/restart-backend.md)",
+      "Bash(python -c \"from datetime import datetime, timezone; print\\('now utc:', datetime.now\\(timezone.utc\\).isoformat\\(\\)\\); print\\('now local:', datetime.now\\(\\).isoformat\\(\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "d:\\mySoft\\workspace\\personalAgent\\.claude",
+      "d:\\mySoft\\workspace\\personalAgent\\.claude\\skills"
     ]
   }
 }

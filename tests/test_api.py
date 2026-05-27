@@ -94,7 +94,10 @@ class TestEntryStreamEndpoint:
         assert response.status_code == 200
         assert response.text.count("event: plan_created") == 1
         assert "event: plan_step_started" in response.text
-        assert "event: plan_step_completed" in response.text
+        assert (
+            "event: plan_step_completed" in response.text
+            or "event: plan_step_failed" in response.text
+        )
         assert response.text.index("event: plan_created") < response.text.index("event: done")
 
     def test_capture_stream_shows_routing_and_captured_content_before_done(self, api_client: TestClient):

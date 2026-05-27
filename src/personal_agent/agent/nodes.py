@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from ..core.models import AgentState, Citation, KnowledgeNote, ReviewCard
+from ..core.models import AgentState, Citation, KnowledgeNote, ReviewCard, local_now
 from ..storage.postgres_memory_store import PostgresMemoryStore
 
 
@@ -28,7 +28,7 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
             content=content,
             summary=summary,
             tags=tags,
-            updated_at=datetime.utcnow(),
+            updated_at=local_now(),
         )
         state.note = note
         state.chunk_notes = []
@@ -42,7 +42,7 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
             summary=summary,
             tags=tags,
             chunk_index=0,
-            updated_at=datetime.utcnow(),
+            updated_at=local_now(),
         )
         chunk_notes: list[KnowledgeNote] = []
         for i, ch in enumerate(chunks, 1):
@@ -57,7 +57,7 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
                 parent_note_id=parent.id,
                 chunk_index=i,
                 source_span=ch["source_span"],
-                updated_at=datetime.utcnow(),
+                updated_at=local_now(),
             ))
         state.note = parent
         state.chunk_notes = chunk_notes
@@ -96,7 +96,7 @@ def schedule_review_node(state: AgentState, store: PostgresMemoryStore) -> Agent
         prompt=f"请用一句话回忆：{state.note.summary}",
         answer_hint=state.note.summary,
         interval_days=1,
-        due_at=datetime.utcnow() + timedelta(days=1),
+        due_at=local_now() + timedelta(days=1),
     )
     state.review_card = review
     store.add_review(review)

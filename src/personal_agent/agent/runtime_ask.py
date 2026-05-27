@@ -200,13 +200,13 @@ class RuntimeAskMixin:
         if not self._web_search_available:
             return [], []
         try:
-            tool = self._tool_registry.get("web_search")
+            tool = self._tool_executor.get("web_search")
             if tool is None:
                 return [], []
-            result = tool.execute(query=question, limit=5)
-            if not result.ok or not result.data:
+            result = self._tool_executor.invoke_direct("web_search", query=question, limit=5)
+            if not result.get("ok") or not result.get("data"):
                 return [], []
-            raw_results = result.data.get("results", [])
+            raw_results = result["data"].get("results", [])
             if not isinstance(raw_results, list):
                 return [], []
             citations: list[Citation] = []

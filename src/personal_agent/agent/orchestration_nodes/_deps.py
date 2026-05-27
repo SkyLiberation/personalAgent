@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from ...graphiti.store import GraphitiStore
     from ...memory import MemoryFacade
     from ...storage.postgres_memory_store import PostgresMemoryStore
-    from ...tools import ToolRegistry
+    from ...tools import ToolExecutor
     from ..plan_validator import PlanValidator
     from ..planner import PlanStep
     from ..replanner import Replanner
@@ -37,7 +37,7 @@ class OrchestrationDeps:
     plan_validator: "PlanValidator"
     replanner: "Replanner | None"
     verifier: "AnswerVerifier | None"
-    tool_registry: "ToolRegistry"
+    tool_executor: "ToolExecutor"
     graph_store: "GraphitiStore"
     store: "PostgresMemoryStore"
     execute_ask: Callable[..., "AskResult"]
@@ -56,7 +56,7 @@ class OrchestrationDeps:
             plan_validator=runtime.plan_validator,
             replanner=getattr(runtime, "_replanner", None),
             verifier=getattr(runtime, "_verifier", None),
-            tool_registry=runtime.tool_registry,
+            tool_executor=runtime.tool_executor,
             graph_store=runtime.graph_store,
             store=runtime.store,
             execute_ask=runtime.execute_ask,
@@ -67,10 +67,9 @@ class OrchestrationDeps:
         )
 
 # ---------------------------------------------------------------------------
-# Constants (mirrored from plan_executor for replay-safe retry)
+# Constants for checkpointed orchestration behavior
 # ---------------------------------------------------------------------------
 
-_MAX_RETRIES = 3
 _RETRY_DELAY_SECONDS = 2.0
 
 # ReAct constants (mirrored from react_runner.py)
@@ -213,19 +212,24 @@ def _default_plan_answer(steps: list) -> str:
 
 def _resolve_allowed_tools_for_step(step: "PlanStep", deps: OrchestrationDeps) -> set[str]:
     allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
-    registered = {t.name for t in deps.tool_registry.list_tools()}
+    registered = {t.name for t in deps.tool_executor.list_tools()}
     return allowed & registered
 
 
 def _is_react_tool_blocked(tool_name: str, deps: OrchestrationDeps) -> bool:
     spec = None
-    for t in deps.tool_registry.list_tools():
+    from ...tools import tool_property
+    for t in deps.tool_executor.list_tools():
         if t.name == tool_name:
             spec = t
             break
     if spec is None:
         return True
-    if spec.risk_level == "high" or spec.requires_confirmation or spec.writes_longterm:
+    if (
+        tool_property(spec, "risk_level", "low") == "high"
+        or tool_property(spec, "requires_confirmation", False)
+        or tool_property(spec, "writes_longterm", False)
+    ):
         return True
     if any(tool_name.startswith(p) for p in _REACT_BLOCKED_TOOL_PREFIXES):
         return True

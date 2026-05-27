@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
+from ..core.models import local_now
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -79,7 +79,7 @@ class ResetDebugDataResponse(BaseModel):
     deleted_postgres_rows: int = 0
 
 
-class ToolSpecResponse(BaseModel):
+class ToolDescriptionResponse(BaseModel):
     name: str
     description: str
 
@@ -174,7 +174,7 @@ def create_app() -> FastAPI:
         logger.debug("Health check requested")
         return service.health()
 
-    @app.get("/api/tools", response_model=list[ToolSpecResponse])
+    @app.get("/api/tools", response_model=list[ToolDescriptionResponse])
     def list_tools() -> list[dict[str, object]]:
         specs = service.list_tools()
         return [{"name": s.name, "description": s.description} for s in specs]
@@ -182,7 +182,7 @@ def create_app() -> FastAPI:
     @app.post("/api/tools/{name}/execute", response_model=ToolExecuteResponse)
     def execute_tool(name: str, body: ToolExecuteRequest) -> dict[str, object]:
         result = service.execute_tool(name, **body.kwargs)
-        return {"ok": result.ok, "data": result.data, "error": result.error}
+        return {"ok": result.get("ok", False), "data": result.get("data"), "error": result.get("error")}
 
     @app.get("/api/notes", response_model=list[KnowledgeNote])
     def list_notes(
@@ -254,7 +254,7 @@ def create_app() -> FastAPI:
 
         note.graph_sync_status = "pending"
         note.graph_sync_error = None
-        note.updated_at = datetime.utcnow()
+        note.updated_at = local_now()
         service.store.update_note(note)
         logger.info("Starting manual graph sync retry note_id=%s", note_id)
         service.sync_note_to_graph(note_id)

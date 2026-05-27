@@ -5,13 +5,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ..tools.base import validate_tool_input
+from pydantic import ValidationError
+
+from ..tools import tool_property
 from .planner import PlanStep
 from .router import RiskLevel, RouterDecision
 
 if TYPE_CHECKING:
-    from ..tools import ToolRegistry
-    from ..tools.base import ToolSpec
+    from ..tools import ToolExecutor
+    from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -87,22 +89,22 @@ class PlanValidator:
 
     Validates plan structure, dependency graph integrity, and cross-checks
     against the RouterDecision.  Dynamically resolves known tool names from
-    ToolRegistry so the allowlist never drifts from registered tools.
+    ToolExecutor so the allowlist never drifts from registered tools.
     """
 
-    def __init__(self, tool_registry: "ToolRegistry | None" = None) -> None:
-        self._tool_registry = tool_registry
+    def __init__(self, tool_executor: "ToolExecutor | None" = None) -> None:
+        self._tool_executor = tool_executor
 
     def _get_known_tools(self) -> set[str]:
-        if self._tool_registry is not None:
-            return {s.name for s in self._tool_registry.list_tools()}
+        if self._tool_executor is not None:
+            return {s.name for s in self._tool_executor.list_tools()}
         return set()
 
-    def _get_tool_spec(self, name: str) -> "ToolSpec | None":
-        if self._tool_registry is not None:
-            tool = self._tool_registry.get(name)
+    def _get_tool_spec(self, name: str) -> "BaseTool | None":
+        if self._tool_executor is not None:
+            tool = self._tool_executor.get(name)
             if tool is not None:
-                return tool.spec
+                return tool
         return None
 
     def validate(
@@ -144,19 +146,26 @@ class PlanValidator:
             if s.action_type == "tool_call" and s.tool_name and s.tool_name not in known_tools:
                 if known_tools:
                     issues.append(
-                        f"{prefix} tool_name={s.tool_name!r} 未在 ToolRegistry 中注册。"
+                        f"{prefix} tool_name={s.tool_name!r} 未在 ToolExecutor 中注册。"
                         f"可用工具：{sorted(known_tools)}"
                     )
                 else:
                     warnings.append(
-                        f"{prefix} tool_name={s.tool_name!r} 无法校验（ToolRegistry 未注入）。"
+                        f"{prefix} tool_name={s.tool_name!r} 无法校验（ToolExecutor 未注入）。"
                     )
 
-            # Deep parameter validation against ToolSpec.input_schema
+            # Deep parameter validation against the LangChain tool schema.
             if s.action_type == "tool_call" and s.tool_name and s.tool_name in known_tools:
                 tool_spec = self._get_tool_spec(s.tool_name)
-                if tool_spec is not None and tool_spec.input_schema:
-                    schema_errors = validate_tool_input(tool_spec.input_schema, s.tool_input)
+                if tool_spec is not None and tool_spec.args_schema is not None:
+                    try:
+                        tool_spec.args_schema.model_validate(s.tool_input)
+                        schema_errors: list[str] = []
+                    except ValidationError as exc:
+                        schema_errors = [
+                            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+                            for err in exc.errors()
+                        ]
                     for err in schema_errors:
                         deferred_draft_text = (
                             s.tool_name == "capture_text"
@@ -177,29 +186,39 @@ class PlanValidator:
                 # --- Governance cross-checks ---
                 if tool_spec is not None:
                     # Tool requires confirmation but step doesn't
-                    if tool_spec.requires_confirmation and not s.requires_confirmation:
+                    if tool_property(tool_spec, "requires_confirmation", False) and not s.requires_confirmation:
                         warnings.append(
                             f"{prefix} 工具 {s.tool_name!r} 要求确认（requires_confirmation=True），"
                             f"但步骤未设置 requires_confirmation。"
                         )
                     # Tool writes longterm but step has no confirmation
-                    if tool_spec.writes_longterm and not s.requires_confirmation and s.risk_level != "high":
+                    explicit_solidify_write = (
+                        decision.route == "solidify_conversation"
+                        and s.tool_name == "capture_text"
+                    )
+                    if (
+                        tool_property(tool_spec, "writes_longterm", False)
+                        and not explicit_solidify_write
+                        and not s.requires_confirmation
+                        and s.risk_level != "high"
+                    ):
                         warnings.append(
                             f"{prefix} 工具 {s.tool_name!r} 会写入长期知识（writes_longterm=True），"
                             f"建议步骤增加确认或提升风险等级。"
                         )
                     # Tool accesses external network
-                    if tool_spec.accesses_external:
+                    if tool_property(tool_spec, "accesses_external", False):
                         warnings.append(
                             f"{prefix} 工具 {s.tool_name!r} 会访问外部网络（accesses_external=True），"
                             f"请注意外部副作用。"
                         )
                     # Tool risk is higher than step risk
                     risk_order = {"low": 0, "medium": 1, "high": 2}
-                    if risk_order.get(tool_spec.risk_level, 0) > risk_order.get(s.risk_level, 0):
+                    tool_risk = tool_property(tool_spec, "risk_level", "low")
+                    if risk_order.get(tool_risk, 0) > risk_order.get(s.risk_level, 0):
                         warnings.append(
                             f"{prefix} 工具 {s.tool_name!r} 的固有风险等级为 "
-                            f"{tool_spec.risk_level!r}，高于步骤声明的 {s.risk_level!r}。"
+                            f"{tool_risk!r}，高于步骤声明的 {s.risk_level!r}。"
                         )
 
             if s.risk_level not in VALID_RISK_LEVELS:
@@ -226,16 +245,50 @@ class PlanValidator:
                     f"建议将 risk_level 至少设为 'medium'。"
                 )
 
-            if (
-                decision.route == "solidify_conversation"
-                and s.action_type == "tool_call"
-                and s.tool_name == "capture_text"
-                and not _has_upstream_action_type(steps, s, "compose")
-            ):
-                issues.append(
-                    f"{prefix} 固化写入必须依赖 compose 生成的真实知识草稿，"
-                    "不得直接写入检索结果或步骤占位符。"
-                )
+            if decision.route == "delete_knowledge":
+                if s.action_type == "verify":
+                    issues.append(
+                        f"{prefix} 删除确认由 delete_note 工具执行，"
+                        "当前 verify 步骤无法执行目标确认，不应加入删除计划。"
+                    )
+                if s.action_type == "tool_call" and s.tool_name == "delete_note":
+                    if not _has_upstream_action_type(steps, s, "resolve"):
+                        issues.append(
+                            f"{prefix} delete_note 必须依赖 resolve 动态解析目标 note_id。"
+                        )
+                    if "note_id" in s.tool_input:
+                        issues.append(
+                            f"{prefix} delete_note.note_id 必须由 resolve 执行结果动态注入，"
+                            "不得在计划阶段提供。"
+                        )
+                    if s.risk_level != "high" or not s.requires_confirmation:
+                        issues.append(
+                            f"{prefix} delete_note 必须声明 risk_level='high' "
+                            "且 requires_confirmation=True。"
+                        )
+
+            if decision.route == "solidify_conversation":
+                if s.action_type in {"retrieve", "resolve", "verify"}:
+                    issues.append(
+                        f"{prefix} 固化计划只允许 compose 生成草稿后调用 capture_text；"
+                        f"当前 {s.action_type!r} 步骤没有可兑现的独立执行语义。"
+                    )
+                if s.action_type == "tool_call" and s.tool_name == "capture_text":
+                    if not _has_upstream_action_type(steps, s, "compose"):
+                        issues.append(
+                            f"{prefix} 固化写入必须依赖 compose 生成的真实知识草稿，"
+                            "不得直接写入检索结果或步骤占位符。"
+                        )
+                    if "text" in s.tool_input:
+                        issues.append(
+                            f"{prefix} capture_text.text 必须由 compose 执行结果动态注入，"
+                            "计划阶段不得提供正文或占位符。"
+                        )
+                    if s.risk_level != "low" or s.requires_confirmation:
+                        issues.append(
+                            f"{prefix} 用户已明确请求固化，capture_text 应声明 "
+                            "risk_level='low' 且 requires_confirmation=False。"
+                        )
 
             # ReAct execution mode checks
             exec_mode = getattr(s, "execution_mode", "deterministic")
@@ -258,7 +311,7 @@ class PlanValidator:
                     for tool_name in allowed:
                         if tool_name not in known_tools and known_tools:
                             issues.append(
-                                f"{prefix} allowed_tools 中的 {tool_name!r} 未在 ToolRegistry 中注册。"
+                                f"{prefix} allowed_tools 中的 {tool_name!r} 未在 ToolExecutor 中注册。"
                             )
                 max_iter = getattr(s, "max_iterations", 3)
                 if not isinstance(max_iter, int) or max_iter < 1:
@@ -332,6 +385,16 @@ class PlanValidator:
                 "RouterDecision.requires_confirmation=True，"
                 "但计划中没有 requires_confirmation=True 的步骤。"
             )
+        if (
+            decision.route == "delete_knowledge"
+            and not any(s.action_type == "tool_call" and s.tool_name == "delete_note" for s in steps)
+        ):
+            issues.append("delete_knowledge 计划必须包含 tool_call(delete_note) 步骤。")
+        if (
+            decision.route == "solidify_conversation"
+            and not any(s.action_type == "tool_call" and s.tool_name == "capture_text" for s in steps)
+        ):
+            issues.append("solidify_conversation 计划必须包含 tool_call(capture_text) 步骤。")
 
         # Risk escalation warning
         risk_order = {"low": 0, "medium": 1, "high": 2}
@@ -351,10 +414,15 @@ class PlanValidator:
             if all(s.action_type == "verify" for s in steps):
                 warnings.append("计划中所有步骤都是 verify，缺少实际执行步骤。")
 
-            last_action = steps[-1].action_type
-            if last_action not in ("compose", "verify"):
+            last_step = steps[-1]
+            valid_terminal_action = last_step.action_type in ("compose", "verify") or (
+                decision.route == "solidify_conversation"
+                and last_step.action_type == "tool_call"
+                and last_step.tool_name == "capture_text"
+            )
+            if not valid_terminal_action:
                 warnings.append(
-                    f"计划最后一步是 {last_action!r}，"
+                    f"计划最后一步是 {last_step.action_type!r}，"
                     f"建议以 compose 或 verify 结尾。"
                 )
 

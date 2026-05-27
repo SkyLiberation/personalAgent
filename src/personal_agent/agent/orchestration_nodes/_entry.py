@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from datetime import datetime
-
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
-from ...core.models import EntryInput
+from ...core.models import EntryInput, local_now
 from ..orchestration_models import AgentGraphState, PlanStepState, _new_run_id, _new_thread_id
 from ._deps import OrchestrationDeps
 from ._helpers import (
@@ -52,7 +50,17 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.react_user_prompt = ""
     state.react_done = False
     state.react_result = {}
+    state.react_status = "idle"
+    state.react_stop_reason = ""
+    state.react_pending_thought = ""
+    state.react_pending_tool = ""
+    state.react_pending_input = {}
     state.tool_results = []
+    state.active_tool_context = None
+    state.pending_tool_step_id = ""
+    state.pending_tool_call_id = ""
+    state.pending_react_iteration = None
+    state.tool_messages = []
     state.execution_trace = []
     state.evidence_summary = []
     state.citations = []
@@ -65,7 +73,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.events = []
     state.errors = []
     state.replan_history = []
-    state.created_at = datetime.utcnow()
+    state.created_at = local_now()
     state.updated_at = state.created_at
 
     state.add_event("entry_started", {"text_preview": text[:120] if text else ""})
@@ -76,6 +84,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "thread_id": thread_id,
         "entry_text": text,
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
+        "tool_messages": [],
         "router_decision": None,
         "plan_steps": [],
         "current_step_index": 0,
@@ -90,7 +99,16 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "react_user_prompt": "",
         "react_done": False,
         "react_result": {},
+        "react_status": "idle",
+        "react_stop_reason": "",
+        "react_pending_thought": "",
+        "react_pending_tool": "",
+        "react_pending_input": {},
         "tool_results": [],
+        "active_tool_context": None,
+        "pending_tool_step_id": "",
+        "pending_tool_call_id": "",
+        "pending_react_iteration": None,
         "execution_trace": [],
         "evidence_summary": [],
         "citations": [],
