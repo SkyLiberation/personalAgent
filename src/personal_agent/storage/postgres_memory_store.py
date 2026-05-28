@@ -10,6 +10,12 @@ from ..core.models import KnowledgeNote, ReviewCard, local_now
 from .postgres_common import PostgresStoreBase
 
 
+def _with_local_timezone(value: datetime, reference: datetime) -> datetime:
+    if value.tzinfo is not None and value.utcoffset() is not None:
+        return value
+    return value.replace(tzinfo=reference.tzinfo)
+
+
 class PostgresMemoryStore(PostgresStoreBase):
     """Postgres-backed source of truth for notes and reviews."""
 
@@ -200,7 +206,11 @@ class PostgresMemoryStore(PostgresStoreBase):
         return results[:limit]
 
     def due_reviews(self, user_id: str) -> list[ReviewCard]:
-        return [review for review in self.list_reviews(user_id) if review.due_at <= local_now()]
+        now = local_now()
+        return [
+            review for review in self.list_reviews(user_id)
+            if _with_local_timezone(review.due_at, now) <= now
+        ]
 
     def list_reviews(self, user_id: str) -> list[ReviewCard]:
         self.ensure_schema()

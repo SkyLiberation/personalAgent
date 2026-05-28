@@ -72,7 +72,7 @@ class OrchestrationDeps:
 
 _RETRY_DELAY_SECONDS = 2.0
 
-# ReAct constants (mirrored from react_runner.py)
+# ReAct constants used by checkpointed graph nodes.
 _REACT_MAX_ITERATIONS_CAP = 5
 _REACT_BLOCKED_TOOL_PREFIXES = ("delete_", "capture_")
 _REACT_DEFAULT_ALLOWED_TOOLS = ("graph_search", "web_search")
@@ -206,7 +206,7 @@ def _default_plan_answer(steps: list) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ReAct helper functions (ported from ReActStepRunner for graph use)
+# ReAct helper functions used by the graph-native ReAct nodes.
 # ---------------------------------------------------------------------------
 
 

@@ -8,13 +8,20 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from ...core.models import EntryInput, local_now
-from ..orchestration_models import AgentGraphState, PlanStepState, _new_run_id, _new_thread_id
+from ..orchestration_models import (
+    AgentGraphState,
+    PlanStepState,
+    PlanSubState,
+    ReactSubState,
+    ToolTrackingSubState,
+    _new_run_id,
+    _new_thread_id,
+)
 from ._deps import OrchestrationDeps
 from ._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
     _first_url,
-    _format_dialogue_context,
     _merge_clarification_text,
     _resume_value_get,
 )
@@ -37,42 +44,20 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.thread_id = thread_id
     state.entry_text = text
     state.router_decision = None
-    state.plan_steps = []
-    state.current_step_index = 0
-    state.step_results = {}
-    state.plan_aborted = False
-    state.plan_retry_counts = {}
-    state.react_iterations = []
-    state.react_step_id = ""
-    state.react_iteration_index = 0
-    state.react_max_iterations = 3
-    state.react_allowed_tools = []
-    state.react_user_prompt = ""
-    state.react_done = False
-    state.react_result = {}
-    state.react_status = "idle"
-    state.react_stop_reason = ""
-    state.react_pending_thought = ""
-    state.react_pending_tool = ""
-    state.react_pending_input = {}
+    state.react = ReactSubState()
+    state.plan = PlanSubState()
+    state.tool_tracking = ToolTrackingSubState()
     state.tool_results = []
-    state.active_tool_context = None
-    state.pending_tool_step_id = ""
-    state.pending_tool_call_id = ""
-    state.pending_react_iteration = None
     state.tool_messages = []
     state.execution_trace = []
-    state.evidence_summary = []
     state.citations = []
     state.matches = []
     state.pending_confirmation = None
     state.confirmation_decision = None
-    state.draft = None
     state.answer = None
     state.answer_completed = False
     state.events = []
     state.errors = []
-    state.replan_history = []
     state.created_at = local_now()
     state.updated_at = state.created_at
 
@@ -86,41 +71,19 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
         "router_decision": None,
-        "plan_steps": [],
-        "current_step_index": 0,
-        "step_results": {},
-        "plan_aborted": False,
-        "plan_retry_counts": {},
-        "react_iterations": [],
-        "react_step_id": "",
-        "react_iteration_index": 0,
-        "react_max_iterations": 3,
-        "react_allowed_tools": [],
-        "react_user_prompt": "",
-        "react_done": False,
-        "react_result": {},
-        "react_status": "idle",
-        "react_stop_reason": "",
-        "react_pending_thought": "",
-        "react_pending_tool": "",
-        "react_pending_input": {},
+        "react": state.react,
+        "plan": state.plan,
+        "tool_tracking": state.tool_tracking,
         "tool_results": [],
-        "active_tool_context": None,
-        "pending_tool_step_id": "",
-        "pending_tool_call_id": "",
-        "pending_react_iteration": None,
         "execution_trace": [],
-        "evidence_summary": [],
         "citations": [],
         "matches": [],
         "pending_confirmation": None,
         "confirmation_decision": None,
-        "draft": None,
         "answer": None,
         "answer_completed": False,
         "events": state.events,
         "errors": [],
-        "replan_history": [],
         "created_at": state.created_at,
         "updated_at": state.updated_at,
     }
@@ -259,18 +222,14 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         )
 
     deps.memory.bind_session(state.user_id, state.session_id)
-    deps.memory.refresh_conversation_summary(state.user_id, state.session_id)
-    conversation_context = _format_dialogue_context(state.messages, exclude_latest=True)
+    conversation_messages = _entry_conversation_messages(state, exclude_latest=True)
     decision = deps.intent_router.classify(
         state.entry_input,
-        conversation_context=conversation_context,
-    )
-    deps.memory.working.set_goal(
-        f"入口任务[{decision.route}]: {state.entry_input.text[:60]}"
+        conversation_messages=conversation_messages,
     )
 
     state.router_decision = decision
-    state.plan_steps = []
+    state.plan.steps = []
     state.execution_trace = []
 
     state.add_event("intent_classified", {
@@ -301,7 +260,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
 
     return {
         "router_decision": state.router_decision,
-        "plan_steps": [],
+        "plan": state.plan,
         "execution_trace": [],
         "events": state.events,
     }
@@ -315,17 +274,18 @@ def _node_plan_task(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """
     route = state.router_decision.route if state.router_decision else "unknown"
     entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
-    steps = deps.planner.plan(route, entry_text)
+    planning_messages = _entry_conversation_messages(state, exclude_latest=True)
+    steps = deps.planner.plan(route, entry_text, conversation_messages=planning_messages)
     plan_states = [PlanStepState.from_plan_step(s) for s in steps]
 
-    state.plan_steps = plan_states
+    state.plan.steps = plan_states
     state.add_event("plan_created", {"plan_steps": [pss.model_dump(mode="json") for pss in plan_states]})
 
     logger.info(
         "plan_task run_id=%s route=%s steps=%d",
         state.run_id, route, len(plan_states),
     )
-    return {"plan_steps": plan_states, "events": state.events}
+    return {"plan": state.plan, "events": state.events}
 
 
 def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
@@ -342,7 +302,7 @@ def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
 
     decision = state.router_decision or RouterDecision(route="unknown")
 
-    steps = [sd.to_plan_step() for sd in (state.plan_steps or [])]
+    steps = [sd.to_plan_step() for sd in (state.plan.steps or [])]
     validation = deps.plan_validator.validate(steps, decision)
 
     if validation.blocking:
@@ -382,14 +342,14 @@ def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
             )
 
     plan_states = [PlanStepState.from_plan_step(s) for s in validated_steps]
-    state.plan_steps = plan_states
+    state.plan.steps = plan_states
 
     logger.info(
         "validate_plan run_id=%s steps=%d blocked=%s requires_planning=%s",
         state.run_id, len(plan_states), validation.blocking, state.router_decision.requires_planning if state.router_decision else False,
     )
     return {
-        "plan_steps": plan_states,
+        "plan": state.plan,
         "router_decision": state.router_decision,
         "events": state.events,
     }
@@ -397,7 +357,7 @@ def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
 
 def _after_validate_plan(state: AgentGraphState) -> str:
     """After validation: enter plan execution or ask the user to clarify."""
-    if (state.router_decision and state.router_decision.requires_planning) and state.plan_steps:
+    if (state.router_decision and state.router_decision.requires_planning) and state.plan.steps:
         return "prepare_plan_execution"
     return "direct_answer_branch"
 
@@ -500,12 +460,13 @@ def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
         return {"answer": state.answer}
 
     logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
-    conversation_context = _format_dialogue_context(state.messages, exclude_latest=True)
+    conversation_messages = _entry_conversation_messages(state, exclude_latest=True)
     result = deps.execute_ask(
         entry_input.text,
         entry_input.user_id,
         entry_input.session_id,
-        conversation_context=conversation_context,
+        conversation_messages=conversation_messages,
+        record_history=False,
     )
     state.answer = result.answer
     state.citations = result.citations
@@ -562,6 +523,17 @@ def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -
         state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
+    dialogue_messages = _entry_conversation_messages(state, exclude_latest=True)
+    if dialogue_messages and deps.summarize_thread is not None:
+        messages_text = "\n".join(
+            f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
+            for m in dialogue_messages
+        )
+        summary = deps.summarize_thread(messages_text, entry_input.user_id or "default")
+        state.answer = summary
+        state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
+        return {"answer": state.answer, "execution_trace": state.execution_trace}
+
     chat_id = entry_input.metadata.get("chat_id", "")
     if chat_id:
         state.answer = (
@@ -606,13 +578,11 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
             dialogue_messages = _dialogue_prompt_messages(state.messages)
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
+            system_content = "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"
             response = client.chat.completions.create(
                 model=deps.settings.openai_small_model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。",
-                    },
+                    {"role": "system", "content": system_content},
                     *dialogue_messages,
                 ],
                 max_tokens=300,
@@ -630,6 +600,15 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
     route = state.router_decision.route if state.router_decision else "unknown"
     state.execution_trace = _execution_trace_for_intent(route)
     return {"answer": state.answer, "execution_trace": state.execution_trace}
+
+
+def _entry_conversation_messages(
+    state: AgentGraphState, *, exclude_latest: bool = True
+) -> list[dict[str, str]]:
+    """Return structured thread dialogue from checkpoint messages."""
+    return _dialogue_prompt_messages(state.messages, exclude_latest=exclude_latest)
+
+
 # ---------------------------------------------------------------------------
 # Entry response helpers
 # ---------------------------------------------------------------------------
@@ -723,7 +702,9 @@ def _execution_trace_for_intent(intent: str) -> list[str]:
     return trace_map.get(intent, ["生成通用回复"])
 
 
-def _node_finalize_entry_result(state: AgentGraphState) -> dict:
+def _node_finalize_entry_result(
+    state: AgentGraphState, *, deps: OrchestrationDeps | None = None
+) -> dict:
     if state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:
@@ -734,6 +715,12 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
             "answer": state.answer,
             "intent": state.router_decision.route if state.router_decision else "unknown",
         })
+        logger.info(
+            "finalize_entry_result relies on checkpoint messages run_id=%s intent=%s answer_len=%d",
+            state.run_id,
+            state.router_decision.route if state.router_decision else "unknown",
+            len(state.answer or ""),
+        )
     logger.info(
         "finalize_entry_result run_id=%s intent=%s errors=%d",
         state.run_id, state.router_decision.route if state.router_decision else "unknown", len(state.errors),

@@ -180,23 +180,20 @@ API 层再把它映射为 `EntryResult` 返回前端。
 
 ## Ask 过程
 
-### 1. 会话绑定与上下文刷新
+### 1. 会话绑定与上下文准备
 
 `execute_ask(question, user_id, session_id)` 由 orchestration graph 的 ask 分支调用，先做会话级准备：
 
 ```text
 bind_session(user_id, session_id)
-set_goal("回答用户问题: ...")
-refresh_conversation_summary(user_id, session_id)
-context_snapshot()
+load_conversation_hints(user_id, session_id)
 ```
 
-这里主要依赖 `MemoryFacade` 和 `WorkingMemory`：
+这里主要依赖 `MemoryFacade`：
 
-- `bind_session()`：绑定当前 `user_id:session_id`，切换会话时重置短期工作记忆
-- `conversation_summary`：从最近问答历史拼出上下文
-- `task_goal`：记录当前任务目标
-- `context_snapshot()`：把任务目标、会话摘要、计划和最近步骤拼成 prompt 上下文
+- `bind_session()`：绑定当前 `user_id:session_id`
+- `load_conversation_hints()`：direct ask 可从最近问答历史按时间正序生成受限会话线索；历史助手回复被标记为待核验，不能作为事实证据
+- LangGraph entry 的多轮上下文来自 checkpoint `messages`，不再通过独立 working memory 拼接
 
 ### 2. 第一层：Graphiti 图谱检索
 
@@ -312,6 +309,8 @@ question
 + note evidence snippets
 ```
 
+其中 `working_context` 中的历史对话仅用于解析指代、目标和明确更正。事实结论仍必须由本轮图谱事实、原文证据或网络来源支撑；历史线索与当前证据冲突时，以当前可追溯证据为准。
+
 然后调用 `_generate_answer()`。这里使用的不是 Pydantic 模型，而是配置里的 LLM 参数：
 
 - `settings.openai_api_key`
@@ -407,9 +406,8 @@ ask 最终返回 `AskResult`：
 
 返回前会调用 `MemoryFacade.record_turn()`：
 
-- 优先写入 `AskHistoryStore`，也就是 Postgres 问答历史
-- 同步刷新 `WorkingMemory.conversation_summary`
-- 如果有 citations，会写入 `PostgresCrossSessionStore.recent_citations`，供后续删除知识等操作解析目标
+- 写入 `AskHistoryStore`，也就是 Postgres 问答历史
+- `citations` 保存在本轮 `AskResult` / `ask_history` 中，用于展示、校验和历史查询，不再额外写入跨请求临时 artifact
 
 ## Capture 与 Ask 的模型流转对照
 

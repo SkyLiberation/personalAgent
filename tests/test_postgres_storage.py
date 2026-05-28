@@ -4,10 +4,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from personal_agent.core.models import Citation, KnowledgeNote, PendingAction, ReviewCard
-from personal_agent.storage.postgres_cross_session_store import PostgresCrossSessionStore
+from personal_agent.core.models import KnowledgeNote, ReviewCard
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
 from tests.conftest import POSTGRES_URL
 
 import pytest
@@ -59,34 +57,3 @@ def test_note_chunks_and_episode_mapping_are_persisted(temp_dir: Path):
     store.clear_user_data(user_id, remove_uploaded_files=False)
 
 
-def test_pending_actions_are_database_backed():
-    user_id = _user()
-    store = PostgresPendingActionStore(POSTGRES_URL)
-    action = store.create(
-        PendingAction(
-            user_id=user_id,
-            action_type="delete_note",
-            target_id="note-1",
-            title="删除笔记",
-            description="测试",
-        )
-    )
-
-    confirmed = store.confirm(action.id, action.token, user_id)
-    assert confirmed is not None and confirmed.status == "confirmed"
-    assert store.mark_executed(action.id, user_id).status == "executed"
-    assert store.clear_user(user_id) == 1
-
-
-def test_cross_session_artifacts_are_database_backed():
-    user_id = _user()
-    store = PostgresCrossSessionStore(POSTGRES_URL)
-    draft_id = store.save_draft(user_id, "草稿", source_context="ctx")
-    conclusion_id = store.add_conclusion(user_id, "结论", "session-1")
-    store.add_citations(user_id, [Citation(note_id="n1", title="笔记", snippet="片段")], "问题")
-
-    assert store.get_draft(user_id, draft_id)["text"] == "草稿"
-    assert store.mark_draft_status(user_id, draft_id, "solidified")
-    assert store.mark_conclusion_solidified(user_id, conclusion_id)
-    assert store.recent_citations(user_id)[0]["note_id"] == "n1"
-    assert store.clear_user(user_id) == 3

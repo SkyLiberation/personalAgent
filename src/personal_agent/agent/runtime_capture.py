@@ -24,7 +24,6 @@ class RuntimeCaptureMixin:
     ) -> CaptureResult:
         normalized_user = user_id or self.settings.default_user
         logger.info("Starting capture user=%s source_type=%s", normalized_user, source_type)
-        self.memory.working.set_goal(f"采集知识: {text[:80]}")
         graph = build_capture_graph(self.store)
         state = AgentState(
             mode="capture",
@@ -188,5 +187,4 @@ class RuntimeCaptureMixin:
         maximum = max(initial, self.settings.graph_sync_max_backoff_seconds)
         delay = initial * (multiplier ** max(0, attempt - 1))
         return min(delay, maximum)
-
 

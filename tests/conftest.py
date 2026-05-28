@@ -17,7 +17,7 @@ POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_tes
 ADMIN_POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
 
 
-def stub_router_decision(text: str, _context: str = "") -> RouterDecision:
+def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = None) -> RouterDecision:
     """Deterministic LLM stand-in for integration tests exercising routed branches."""
     stripped = text.strip()
     if not stripped:
@@ -90,16 +90,7 @@ def clean_postgres_business_tables():
                     question TEXT NOT NULL, answer TEXT NOT NULL, citations JSONB NOT NULL DEFAULT '[]'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
-                CREATE TABLE IF NOT EXISTS pending_actions (
-                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, status TEXT NOT NULL,
-                    action_type TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
-                    payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS cross_session_artifacts (
-                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, artifact_type TEXT NOT NULL,
-                    payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL
-                );
-                TRUNCATE knowledge_notes, review_cards, ask_history, pending_actions, cross_session_artifacts;
+                TRUNCATE knowledge_notes, review_cards, ask_history;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

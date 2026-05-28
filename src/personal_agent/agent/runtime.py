@@ -10,16 +10,13 @@ from ..core.models import EntryInput
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..storage.ask_history_store import AskHistoryStore
-from ..storage.postgres_cross_session_store import PostgresCrossSessionStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
-from ..storage.postgres_pending_action_store import PostgresPendingActionStore
 from ..tools import ToolExecutor
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
 from .orchestration_models import AgentGraphState, AgentRunSnapshot, PlanStepState
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
-from .react_runner import ReActStepRunner
 from .replanner import Replanner
 from .router import DefaultIntentRouter
 from .runtime_admin import RuntimeAdminMixin
@@ -74,6 +71,18 @@ def _interrupt_payload_from_result(result: object) -> dict | None:
     return {"message": str(interrupt_value)}
 
 
+def _plan_steps_from_snapshot(snapshot: dict) -> list:
+    """Extract plan step list from a checkpoint snapshot, handling nested model."""
+    plan = snapshot.get("plan")
+    if isinstance(plan, dict) and "steps" in plan:
+        return plan.get("steps") or []
+    plan_model = snapshot.get("plan")
+    if plan_model is not None and hasattr(plan_model, "steps"):
+        return getattr(plan_model, "steps") or []
+    # Legacy flat-schema fallback
+    return snapshot.get("plan_steps") or []
+
+
 def _snapshot_intent(snapshot: dict) -> str:
     """Extract intent string from a raw state snapshot dict.
 
@@ -124,7 +133,6 @@ class AgentRuntime(
         graph_store: GraphitiStore,
         ask_history_store: AskHistoryStore,
         capture_service: "CaptureService | None" = None,
-        pending_action_store: PostgresPendingActionStore | None = None,
     ) -> None:
         if not settings.postgres_url:
             raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
@@ -132,22 +140,15 @@ class AgentRuntime(
         self.store = store
         self.graph_store = graph_store
         self.ask_history_store = ask_history_store
-        self.pending_action_store = pending_action_store or PostgresPendingActionStore(settings.postgres_url)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_executor = ToolExecutor()
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
-        self._cross_session = PostgresCrossSessionStore(settings.postgres_url)
-        self.memory = MemoryFacade(store, ask_history_store, cross_session_store=self._cross_session)
+        self.memory = MemoryFacade(store, ask_history_store)
         self._verifier = AnswerVerifier()
         self._plan_validator = PlanValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
-        self._react_runner = ReActStepRunner(
-            tool_executor=self._tool_executor,
-            memory=self.memory,
-            settings=settings,
-        )
         self._thread_message_loader: (
             Callable[[EntryInput, int], list[dict[str, str]]] | None
         ) = None
@@ -275,7 +276,7 @@ class AgentRuntime(
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan_steps],
+            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
             execution_trace=result_state.execution_trace,
             run_id=run_id,
             thread_id=thread_id,
@@ -355,7 +356,7 @@ class AgentRuntime(
             reply_text=str(interrupt_data.get("message", default_message)),
             plan_steps=[
                 s.model_dump(mode="json") if isinstance(s, PlanStepState) else s
-                for s in (state_snapshot.get("plan_steps") or [])
+                for s in (_plan_steps_from_snapshot(state_snapshot))
             ],
             execution_trace=list(state_snapshot.get("execution_trace") or []),
             run_id=run_id,
@@ -417,7 +418,7 @@ class AgentRuntime(
             intent=result_state.router_decision.route if result_state.router_decision else "unknown",
             reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
             reply_text=reply_text,
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan_steps],
+            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
             execution_trace=result_state.execution_trace,
             run_id=run_id,
             thread_id=thread_id,

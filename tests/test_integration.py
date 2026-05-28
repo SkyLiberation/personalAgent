@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -8,7 +7,7 @@ import pytest
 
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import Settings
-from personal_agent.core.models import EntryInput, KnowledgeNote, PendingAction
+from personal_agent.core.models import EntryInput
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -108,122 +107,7 @@ class TestEntryWithSession:
         assert alice_ids != bob_ids
 
 
-# ── HITL Pending Action tests ───────────────────────────────────────
-
-class TestPendingActionLifecycle:
-    """Test the full HITL pending action create -> confirm -> execute lifecycle."""
-
-    def test_create_pending_action_for_delete(self, service: AgentService):
-        note = service.execute_capture(
-            text="需要删除的测试笔记", source_type="text", user_id="alice"
-        ).note
-        actions = service.list_pending_actions("alice")
-        initial_count = len(actions)
-
-        result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        assert result["ok"]
-        assert result["data"] is not None
-        data = result["data"] if isinstance(result["data"], dict) else {}
-        assert data.get("pending_confirmation") is True
-        assert "action_id" in data
-        assert "token" in data
-        assert note.id == data.get("note_id")
-
-        # Verify action is persisted
-        actions = service.list_pending_actions("alice")
-        assert len(actions) == initial_count + 1
-        assert actions[0].status == "pending"
-
-    def test_confirm_pending_action_executes_delete(self, service: AgentService):
-        note = service.execute_capture(
-            text="即将被删除的笔记", source_type="text", user_id="alice"
-        ).note
-        note_id = note.id
-
-        # Phase 1: create pending action
-        result = service.execute_tool("delete_note", note_id=note_id, user_id="alice")
-        data = result["data"] if isinstance(result["data"], dict) else {}
-        action_id = str(data["action_id"])
-        token = str(data["token"])
-
-        # Phase 2: confirm
-        confirmed = service.confirm_pending_action(action_id, token, "alice")
-        assert confirmed is not None
-        assert confirmed.status == "executed"
-
-        # Note should be deleted
-        deleted_note = service.store.get_note(note_id)
-        assert deleted_note is None
-
-    def test_reject_pending_action(self, service: AgentService):
-        note = service.execute_capture(
-            text="不会被删除的笔记", source_type="text", user_id="alice"
-        ).note
-
-        result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        data = result["data"] if isinstance(result["data"], dict) else {}
-        action_id = str(data["action_id"])
-
-        rejected = service.reject_pending_action(action_id, "alice", "不需要删除")
-        assert rejected is not None
-        assert rejected.status == "rejected"
-        assert len(rejected.audit_log) >= 2  # created + rejected
-
-        # Note should still exist
-        existing = service.store.get_note(note.id)
-        assert existing is not None
-
-    def test_wrong_token_rejected(self, service: AgentService):
-        note = service.execute_capture(
-            text="带Token的笔记", source_type="text", user_id="alice"
-        ).note
-
-        result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        data = result["data"] if isinstance(result["data"], dict) else {}
-        action_id = str(data["action_id"])
-
-        confirmed = service.confirm_pending_action(action_id, "wrong-token", "alice")
-        assert confirmed is None  # Wrong token
-
-    def test_expired_action_auto_rejected(self, service: AgentService, temp_dir: Path):
-        pending_store = service._runtime.pending_action_store
-        now = datetime.utcnow()
-        expired_action = PendingAction(
-            user_id="alice",
-            action_type="delete_note",
-            target_id="note-x",
-            title="过期操作",
-            description="已过期",
-            created_at=now - timedelta(hours=2),
-            expires_at=now - timedelta(hours=1),
-        )
-        pending_store.create(expired_action)
-
-        # Listing actions should mark expired ones
-        actions = pending_store.list_by_user("alice", status="pending")
-        # Expired actions should have been reclassified
-        pending_ids = {a.id for a in actions}
-        assert expired_action.id not in pending_ids
-
-    def test_cross_user_isolation(self, service: AgentService):
-        note = service.execute_capture(
-            text="Alice的笔记", source_type="text", user_id="alice"
-        ).note
-
-        result = service.execute_tool("delete_note", note_id=note.id, user_id="alice")
-        data = result["data"] if isinstance(result["data"], dict) else {}
-        action_id = str(data["action_id"])
-        token = str(data["token"])
-
-        # Bob tries to confirm Alice's action
-        confirmed = service.confirm_pending_action(action_id, token, "bob")
-        assert confirmed is None
-
-        # Alice can still confirm
-        confirmed_alice = service.confirm_pending_action(action_id, token, "alice")
-        assert confirmed_alice is not None
-        assert confirmed_alice.status == "executed"
-
+class TestDeleteNoteTool:
     def test_delete_note_ownership_check(self, service: AgentService):
         note = service.execute_capture(
             text="Alice的私密笔记", source_type="text", user_id="alice"
@@ -233,74 +117,3 @@ class TestPendingActionLifecycle:
         result = service.execute_tool("delete_note", note_id=note.id, user_id="bob")
         assert not result["ok"]
         assert "不属于" in str(result["error"])
-
-
-# ── PendingActionStore unit tests ───────────────────────────────────
-
-class TestPendingActionStore:
-    def test_create_and_retrieve(self, temp_dir: Path):
-        from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
-        store = PostgresPendingActionStore(POSTGRES_URL)
-
-        action = PendingAction(
-            user_id="alice",
-            action_type="delete_note",
-            target_id="note-1",
-            title="删除笔记",
-            description="测试",
-        )
-        created = store.create(action)
-        assert created.id == action.id
-        assert created.token
-
-        retrieved = store.get(action.id, "alice")
-        assert retrieved is not None
-        assert retrieved.status == "pending"
-
-    def test_confirm_flow(self, temp_dir: Path):
-        from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
-        store = PostgresPendingActionStore(POSTGRES_URL)
-
-        action = store.create(PendingAction(
-            user_id="alice", action_type="delete_note", target_id="n1",
-            title="Delete", description="Test",
-        ))
-        confirmed = store.confirm(action.id, action.token, "alice")
-        assert confirmed is not None
-        assert confirmed.status == "confirmed"
-        assert confirmed.resolved_at is not None
-
-        executed = store.mark_executed(action.id, "alice")
-        assert executed is not None
-        assert executed.status == "executed"
-        assert len(executed.audit_log) == 3  # created + confirmed + executed
-
-    def test_expiry_on_load(self, temp_dir: Path):
-        from personal_agent.storage.postgres_pending_action_store import PostgresPendingActionStore
-        store = PostgresPendingActionStore(POSTGRES_URL)
-
-        now = datetime.utcnow()
-        store.create(PendingAction(
-            id="exp-1", user_id="alice", action_type="delete_note", target_id="n1",
-            title="Expired", description="Test",
-            created_at=now - timedelta(hours=2),
-            expires_at=now - timedelta(hours=1),
-        ))
-        store.create(PendingAction(
-            id="exp-2", user_id="alice", action_type="delete_note", target_id="n2",
-            title="Still valid", description="Test",
-            created_at=now,
-            expires_at=now + timedelta(hours=1),
-        ))
-
-        # List should auto-expire the first one
-        pending = store.list_by_user("alice", status="pending")
-        # expired-1 should be gone from "pending"
-        pending_ids = {a.id for a in pending}
-        assert "exp-1" not in pending_ids
-        assert "exp-2" in pending_ids
-
-        # Explicit get of expired should show it as expired
-        expired = store.get("exp-1", "alice")
-        assert expired is not None
-        assert expired.status == "expired"

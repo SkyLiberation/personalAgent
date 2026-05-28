@@ -103,7 +103,7 @@ def _after_plan_execution_graph(state: AgentGraphState) -> str:
 
 def _after_react_graph(state: AgentGraphState) -> str:
     """Feed terminal ReactGraph outcomes through normal step handling."""
-    if state.react_status == "completed":
+    if state.react.status == "completed":
         return "handle_success"
     return "handle_failure"
 
@@ -294,7 +294,10 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         "direct_answer_branch",
         lambda state: _node_direct_answer_branch(state, deps=deps),
     )
-    builder.add_node("finalize_entry_result", _node_finalize_entry_result)
+    builder.add_node(
+        "finalize_entry_result",
+        lambda state: _node_finalize_entry_result(state, deps=deps),
+    )
     builder.add_node("plan_execution_graph", build_plan_execution_graph(deps))
 
     # ---- Edges ----

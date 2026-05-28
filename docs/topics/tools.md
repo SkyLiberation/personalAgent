@@ -34,4 +34,4 @@
 
 ## HITL
 
-`delete_note` 第一次调用仅生成待确认操作，并将 `action_id` 与 `token` 放入 artifact。`PlanExecutionGraph` 在确认节点暂停；用户确认后，同一工具在 `confirmed=True` 的输入下由 `plan_tool_node` 执行删除。高风险工具不会进入 `ReactGraph` 的自主调用。
+`delete_note` 第一次调用仅返回待确认 payload。`PlanExecutionGraph` 将其写入 checkpoint 的 `pending_confirmation` 并在确认节点暂停；用户确认后，同一工具在 `confirmed=True` 的输入下由 `plan_tool_node` 执行删除。高风险工具不会进入 `ReactGraph` 的自主调用。

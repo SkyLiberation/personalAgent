@@ -8,42 +8,6 @@ from personal_agent.agent.planner import DefaultTaskPlanner, PlanStep
 from personal_agent.agent.router import DefaultIntentRouter, RouterDecision
 from personal_agent.agent.runtime import EntryResult
 from personal_agent.core.models import EntryInput
-from personal_agent.memory.working_memory import WorkingMemory
-
-
-class TestWorkingMemoryPlanSteps:
-    @pytest.fixture
-    def wm(self):
-        return WorkingMemory(max_steps=10, max_tool_cache=5)
-
-    def test_context_snapshot_includes_plan_steps(self, wm):
-        wm.set_goal("测试任务")
-        wm.plan_steps = [
-            {"action_type": "retrieve", "tool_name": "graph_search", "description": "检索知识库"},
-            {"action_type": "compose", "tool_name": None, "description": "生成回答"},
-            {"action_type": "verify", "tool_name": None, "description": "校验结果"},
-        ]
-        snapshot = wm.context_snapshot()
-        assert "当前任务计划" in snapshot
-        assert "retrieve" in snapshot
-        assert "graph_search" in snapshot
-        assert "compose" in snapshot
-        assert "verify" in snapshot
-
-    def test_context_snapshot_falls_back_to_old_field_names(self, wm):
-        wm.set_goal("测试")
-        wm.plan_steps = [
-            {"step": "retrieve", "tool": "graph_search"},
-        ]
-        snapshot = wm.context_snapshot()
-        assert "当前任务计划" in snapshot
-        assert "retrieve" in snapshot
-
-    def test_context_snapshot_without_plan_steps_omits_section(self, wm):
-        wm.set_goal("测试任务")
-        wm.plan_steps = []
-        snapshot = wm.context_snapshot()
-        assert "当前任务计划" not in snapshot
 
 
 class TestPlannerEnrichedSteps:
@@ -236,32 +200,6 @@ class TestExecutionTrace:
         assert len(result.execution_trace) == 3
         assert "检索" in result.execution_trace[0]
         assert result.plan_steps == []
-
-    def test_context_snapshot_includes_execution_trace(self):
-        wm = WorkingMemory(max_steps=10, max_tool_cache=5)
-        wm.set_goal("测试任务")
-        wm.execution_trace = [
-            "在知识库中检索",
-            "生成回答",
-            "校验结果",
-        ]
-        snapshot = wm.context_snapshot()
-        assert "执行路径" in snapshot
-        assert "在知识库中检索" in snapshot
-        assert "生成回答" in snapshot
-        assert "校验结果" in snapshot
-
-    def test_context_snapshot_prefers_plan_steps_over_trace(self):
-        wm = WorkingMemory(max_steps=10, max_tool_cache=5)
-        wm.set_goal("测试任务")
-        wm.plan_steps = [
-            {"step_id": "del-1", "action_type": "retrieve", "description": "检索候选笔记", "tool_name": "graph_search"},
-        ]
-        wm.execution_trace = ["步骤1", "步骤2"]
-        snapshot = wm.context_snapshot()
-        assert "当前任务计划" in snapshot
-        assert "执行路径" not in snapshot
-
 
 class TestPlannerValidatorRoundtrip:
     @pytest.fixture

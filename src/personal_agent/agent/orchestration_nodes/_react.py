@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from ..orchestration_models import AgentGraphState
+from ..orchestration_models import AgentGraphState, ReactSubState
 from ._deps import (
     OrchestrationDeps,
     _REACT_MAX_ITERATIONS_CAP,
@@ -28,82 +28,56 @@ def _node_react_init(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
     builds the initial LLM prompt.  The step status stays ``"running"`` —
     ReactGraph will mark it ``"completed"`` on finish.
     """
-    if state.current_step_index >= len(state.plan_steps):
-        state.react_done = True
-        state.react_status = "failed"
-        state.react_stop_reason = "missing_plan_step"
-        return {
-            "react_done": True,
-            "react_status": state.react_status,
-            "react_stop_reason": state.react_stop_reason,
-        }
+    if state.plan.current_step_index >= len(state.plan.steps):
+        state.react = ReactSubState(done=True, status="failed", stop_reason="missing_plan_step")
+        return {"react": state.react}
 
-    sd = state.plan_steps[state.current_step_index]
+    sd = state.plan.steps[state.plan.current_step_index]
     step = sd.to_plan_step()
 
-    state.react_step_id = step.step_id
-    state.react_max_iterations = min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP)
-    state.react_allowed_tools = list(_resolve_allowed_tools_for_step(step, deps))
-    state.react_iteration_index = 0
-    state.react_done = False
-    state.react_result = {}
-    state.react_iterations = []
-    state.react_pending_thought = ""
-    state.react_pending_tool = ""
-    state.react_pending_input = {}
-    state.react_status = "running"
-    state.react_stop_reason = ""
+    state.react = ReactSubState(
+        step_id=step.step_id,
+        max_iterations=min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP),
+        allowed_tools=list(_resolve_allowed_tools_for_step(step, deps)),
+        status="running",
+    )
 
-    # Build initial prompt (same structure as ReActStepRunner.run)
     state.add_event("step_started", {
         "step_id": step.step_id,
         "action_type": "react",
         "description": step.description,
-        "max_iterations": state.react_max_iterations,
+        "max_iterations": state.react.max_iterations,
     })
 
     logger.info(
         "react_init step_id=%s max_iterations=%d",
-        step.step_id, state.react_max_iterations,
+        step.step_id, state.react.max_iterations,
     )
-    return {
-        "react_step_id": step.step_id,
-        "react_max_iterations": state.react_max_iterations,
-        "react_allowed_tools": state.react_allowed_tools,
-        "react_iteration_index": 0,
-        "react_done": False,
-        "react_result": {},
-        "react_iterations": [],
-        "react_pending_thought": "",
-        "react_pending_tool": "",
-        "react_pending_input": {},
-        "react_status": "running",
-        "react_stop_reason": "",
-    }
+    return {"react": state.react}
 
 
 def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Execute one ReAct iteration: LLM think → parse → tool act → observe.
+    """Execute one ReAct iteration: LLM think -> parse -> tool act -> observe.
 
-    On first call the prompt is built from ``react_step_id`` / step context;
+    On first call the prompt is built from ``react.step_id`` / step context;
     subsequent iterations append the previous thought/action/observation to
-    ``react_user_prompt`` so the LLM sees the full history.
+    ``react.user_prompt`` so the LLM sees the full history.
     """
-    if state.react_done:
+    if state.react.done:
         return {}
 
-    step_id = state.react_step_id
-    idx = state.react_iteration_index
-    max_iter = state.react_max_iterations
-    allowed = set(state.react_allowed_tools)
+    step_id = state.react.step_id
+    idx = state.react.iteration_index
+    max_iter = state.react.max_iterations
+    allowed = set(state.react.allowed_tools)
 
     # ---- Build prompt (first iteration) ----
-    if idx == 0 and not state.react_user_prompt:
-        sd = state.plan_steps[state.current_step_index]
+    if idx == 0 and not state.react.user_prompt:
+        sd = state.plan.steps[state.plan.current_step_index]
         step = sd.to_plan_step()
-        context_block = _helpers._build_react_context(step, state.step_results)
+        context_block = _helpers._build_react_context(step, state.plan.results)
         tools_block = _helpers._format_react_tools(allowed, deps)
-        state.react_user_prompt = (
+        state.react.user_prompt = (
             f"## 步骤描述\n{step.description}\n\n"
             f"## 已有上下文\n{context_block}\n\n"
             f"## 可用工具\n{tools_block}\n\n"
@@ -111,13 +85,13 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
         )
 
     # ---- Call LLM ----
-    raw = _helpers._react_llm_respond(state.react_user_prompt, deps)
+    raw = _helpers._react_llm_respond(state.react.user_prompt, deps)
     if raw is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
-        state.react_done = True
-        state.react_status = "failed"
-        state.react_stop_reason = "llm_unavailable"
-        state.react_result = {"answer": "", "react_iterations": len(state.react_iterations), "error": "LLM returned nothing"}
+        state.react.done = True
+        state.react.status = "failed"
+        state.react.stop_reason = "llm_unavailable"
+        state.react.result = {"answer": "", "react_iterations": len(state.react.iterations), "error": "LLM returned nothing"}
         state.add_event("react_iteration", {
             "step_id": step_id,
             "iteration": idx,
@@ -125,18 +99,13 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
             "action_tool": "",
             "observation": "LLM 调用失败，终止 ReAct 循环。",
         })
-        return {
-            "react_done": True,
-            "react_result": state.react_result,
-            "react_status": state.react_status,
-            "react_stop_reason": state.react_stop_reason,
-        }
+        return {"react": state.react}
 
     parsed = _helpers._react_parse_response(raw)
     if parsed is None:
         # Parse failure — record and continue
-        state.react_user_prompt += "\n\n观察：LLM 输出无法解析，请重新输出 JSON。"
-        state.react_iteration_index = idx + 1
+        state.react.user_prompt += "\n\n观察：LLM 输出无法解析，请重新输出 JSON。"
+        state.react.iteration_index = idx + 1
         state.add_event("react_iteration", {
             "step_id": step_id,
             "iteration": idx,
@@ -145,33 +114,25 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
             "action_input": {},
             "observation": "LLM 输出无法解析为 JSON，跳过此轮。",
         })
-        if state.react_iteration_index >= max_iter:
-            state.react_done = True
-            state.react_status = "exhausted"
-            state.react_stop_reason = "parse_failures_exhausted"
-            state.react_result = {"answer": "ReAct 循环未能产出结构化结果。", "react_iterations": len(state.react_iterations)}
-            return {
-                "react_done": True,
-                "react_result": state.react_result,
-                "react_iteration_index": state.react_iteration_index,
-                "react_user_prompt": state.react_user_prompt,
-                "react_status": state.react_status,
-                "react_stop_reason": state.react_stop_reason,
-            }
-        return {"react_iteration_index": state.react_iteration_index, "react_user_prompt": state.react_user_prompt}
+        if state.react.iteration_index >= max_iter:
+            state.react.done = True
+            state.react.status = "exhausted"
+            state.react.stop_reason = "parse_failures_exhausted"
+            state.react.result = {"answer": "ReAct 循环未能产出结构化结果。", "react_iterations": len(state.react.iterations)}
+        return {"react": state.react}
 
     # ---- LLM declared done ----
     if parsed.get("done"):
         result = parsed.get("result", {})
-        state.react_done = True
-        state.react_status = "completed"
-        state.react_stop_reason = "llm_completed"
-        state.react_result = result if isinstance(result, dict) else {"answer": str(result)}
-        state.react_iterations.append({
+        state.react.done = True
+        state.react.status = "completed"
+        state.react.stop_reason = "llm_completed"
+        state.react.result = result if isinstance(result, dict) else {"answer": str(result)}
+        state.react.iterations.append({
             "iteration": idx,
             "thought": str(parsed.get("thought", ""))[:200],
             "done": True,
-            "result": state.react_result,
+            "result": state.react.result,
         })
         state.add_event("react_iteration", {
             "step_id": step_id,
@@ -179,13 +140,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
             "thought": str(parsed.get("thought", ""))[:200],
             "done": True,
         })
-        return {
-            "react_done": True,
-            "react_result": state.react_result,
-            "react_iterations": state.react_iterations,
-            "react_status": state.react_status,
-            "react_stop_reason": state.react_stop_reason,
-        }
+        return {"react": state.react}
 
     # ---- Tool call ----
     tool_name = str(parsed.get("tool", ""))
@@ -201,10 +156,10 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
         observation = f"错误：工具 '{tool_name}' 是高风险/写操作工具，不允许在 ReAct 中调用。"
     else:
         normalized_input = tool_input if isinstance(tool_input, dict) else {}
-        state.react_pending_thought = thought
-        state.react_pending_tool = tool_name
-        state.react_pending_input = normalized_input
-        state.react_status = "waiting_tool"
+        state.react.pending_thought = thought
+        state.react.pending_tool = tool_name
+        state.react.pending_input = normalized_input
+        state.react.status = "waiting_tool"
         return {
             "tool_messages": [_begin_tool_call(
                 state,
@@ -215,14 +170,8 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
                 suffix=f"react:{step_id}:{idx}",
                 iteration=idx,
             )],
-            "active_tool_context": "react",
-            "pending_tool_step_id": state.pending_tool_step_id,
-            "pending_tool_call_id": state.pending_tool_call_id,
-            "pending_react_iteration": idx,
-            "react_pending_thought": thought,
-            "react_pending_tool": tool_name,
-            "react_pending_input": normalized_input,
-            "react_status": "waiting_tool",
+            "tool_tracking": state.tool_tracking,
+            "react": state.react,
             "events": state.events,
         }
 
@@ -231,9 +180,9 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
 
 def _node_consume_react_tool_result(state: AgentGraphState) -> dict:
     """Turn the shared ToolNode result into a ReAct observation."""
-    matches_iteration = state.pending_react_iteration == state.react_iteration_index
-    matches_step = state.pending_tool_step_id == state.react_step_id
-    if state.active_tool_context != "react" or not matches_step or not matches_iteration:
+    matches_iteration = state.tool_tracking.pending_react_iteration == state.react.iteration_index
+    matches_step = state.tool_tracking.pending_step_id == state.react.step_id
+    if state.tool_tracking.active_context != "react" or not matches_step or not matches_iteration:
         artifact = {
             "ok": False,
             "data": None,
@@ -242,7 +191,7 @@ def _node_consume_react_tool_result(state: AgentGraphState) -> dict:
         }
     else:
         artifact = _latest_tool_artifact(state)
-    tool_call_id = state.pending_tool_call_id
+    tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     if artifact.get("ok"):
         observation = _helpers._summarize_react_tool_result(artifact.get("data"))
@@ -251,31 +200,23 @@ def _node_consume_react_tool_result(state: AgentGraphState) -> dict:
     _clear_pending_tool_call(state)
     state.add_event("tool_result", {
         "context": "react",
-        "step_id": state.react_step_id,
+        "step_id": state.react.step_id,
         "tool_call_id": tool_call_id,
         "ok": bool(artifact.get("ok")),
         "result_summary": _helpers._summarize_result(artifact.get("data")),
     })
     result = _record_react_observation(
         state,
-        state.react_pending_thought,
-        state.react_pending_tool,
-        state.react_pending_input,
+        state.react.pending_thought,
+        state.react.pending_tool,
+        state.react.pending_input,
         observation,
     )
-    result.update({
-        "active_tool_context": None,
-        "pending_tool_step_id": "",
-        "pending_tool_call_id": "",
-        "pending_react_iteration": None,
-        "tool_results": state.tool_results,
-        "react_pending_thought": "",
-        "react_pending_tool": "",
-        "react_pending_input": {},
-    })
-    state.react_pending_thought = ""
-    state.react_pending_tool = ""
-    state.react_pending_input = {}
+    result["tool_tracking"] = state.tool_tracking
+    result["tool_results"] = state.tool_results
+    state.react.pending_thought = ""
+    state.react.pending_tool = ""
+    state.react.pending_input = {}
     return result
 
 
@@ -287,8 +228,8 @@ def _record_react_observation(
     observation: str,
 ) -> dict:
     normalized_input = tool_input if isinstance(tool_input, dict) else {}
-    idx = state.react_iteration_index
-    state.react_iterations.append({
+    idx = state.react.iteration_index
+    state.react.iterations.append({
         "iteration": idx,
         "thought": thought[:200],
         "action_tool": tool_name,
@@ -296,71 +237,62 @@ def _record_react_observation(
         "observation": observation[:300],
     })
     state.add_event("react_iteration", {
-        "step_id": state.react_step_id,
+        "step_id": state.react.step_id,
         "iteration": idx,
         "thought": thought[:200],
         "action_tool": tool_name,
         "action_input": normalized_input,
         "observation": observation[:300],
     })
-    state.react_user_prompt += (
+    state.react.user_prompt += (
         f"\n\n思考：{thought}\n"
         f"动作：{tool_name}({_json_dumps_safe(normalized_input)})\n"
         f"观察：{observation}"
     )
-    state.react_iteration_index = idx + 1
-    state.react_status = "running"
-    state.react_stop_reason = ""
-    if state.react_iteration_index >= state.react_max_iterations:
-        state.react_done = True
-        state.react_status = "exhausted"
-        state.react_stop_reason = "max_iterations"
-        final_obs = [it.get("observation", "") for it in state.react_iterations if it.get("observation")]
-        state.react_result = {
+    state.react.iteration_index = idx + 1
+    state.react.status = "running"
+    state.react.stop_reason = ""
+    if state.react.iteration_index >= state.react.max_iterations:
+        state.react.done = True
+        state.react.status = "exhausted"
+        state.react.stop_reason = "max_iterations"
+        final_obs = [it.get("observation", "") for it in state.react.iterations if it.get("observation")]
+        state.react.result = {
             "answer": "\n".join(final_obs) if final_obs else "",
-            "react_iterations": len(state.react_iterations),
+            "react_iterations": len(state.react.iterations),
         }
-    return {
-        "react_done": state.react_done,
-        "react_result": state.react_result,
-        "react_iteration_index": state.react_iteration_index,
-        "react_iterations": state.react_iterations,
-        "react_user_prompt": state.react_user_prompt,
-        "react_status": state.react_status,
-        "react_stop_reason": state.react_stop_reason,
-        "events": state.events,
-    }
+    return {"react": state.react, "events": state.events}
 
 
 def _node_react_finalize(state: AgentGraphState) -> dict:
     """Persist the terminal ReAct outcome and release loop working data."""
-    step_id = state.react_step_id
+    step_id = state.react.step_id
 
-    # Persist result — capture before clearing react_result
-    result_to_persist = dict(state.react_result) if state.react_result else {}
+    # Persist result — capture before clearing
+    result_to_persist = dict(state.react.result) if state.react.result else {}
     if step_id:
-        state.step_results[step_id] = result_to_persist
+        state.plan.results[step_id] = result_to_persist
 
-    completed = state.react_status == "completed"
-    failure_reason = state.react_stop_reason or "ReAct 未完成步骤。"
+    completed = state.react.status == "completed"
+    failure_reason = state.react.stop_reason or "ReAct 未完成步骤。"
     failure_policy = "skip"
     failure_retry_count = 0
-    if state.current_step_index < len(state.plan_steps):
-        sd = state.plan_steps[state.current_step_index]
+    if state.plan.current_step_index < len(state.plan.steps):
+        sd = state.plan.steps[state.plan.current_step_index]
         if sd.step_id == step_id:
             if completed:
                 sd.status = "completed"
             else:
                 reason = (
                     str(result_to_persist.get("error") or "").strip()
-                    or state.react_stop_reason
+                    or state.react.stop_reason
                     or "ReAct 未完成步骤。"
                 )
                 sd.status = "failed"
                 sd.retry_count += 1
                 sd.failure_reason = reason
                 sd.recoverable = sd.on_failure == "retry" and sd.retry_count < sd.max_retries
-                state.plan_retry_counts[step_id] = sd.retry_count
+                state.plan.retry_counts[step_id] = sd.retry_count
                 state.errors.append(f"[{step_id}] {reason}")
                 failure_reason = reason
                 failure_policy = sd.on_failure
@@ -377,37 +309,23 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
             "error": failure_reason,
             "on_failure": failure_policy,
             "retry_count": failure_retry_count,
-            "react_status": state.react_status,
-            "react_stop_reason": state.react_stop_reason,
+            "react_status": state.react.status,
+            "react_stop_reason": state.react.stop_reason,
         })
 
     # Clear loop working data while retaining terminal outcome for audit/replay.
-    state.react_step_id = ""
-    state.react_iteration_index = 0
-    state.react_max_iterations = 3
-    state.react_allowed_tools = []
-    state.react_user_prompt = ""
-    state.react_pending_thought = ""
-    state.react_pending_tool = ""
-    state.react_pending_input = {}
+    react_outcome = ReactSubState(
+        done=state.react.done,
+        result=state.react.result,
+        status=state.react.status,
+        stop_reason=state.react.stop_reason,
+    )
+    state.react = react_outcome
 
     logger.info("react_finalize step_id=%s result_keys=%s", step_id, list(result_to_persist.keys()))
     return {
-        "react_step_id": "",
-        "react_iteration_index": 0,
-        "react_max_iterations": 3,
-        "react_allowed_tools": [],
-        "react_user_prompt": "",
-        "react_done": state.react_done,
-        "react_result": state.react_result,
-        "react_status": state.react_status,
-        "react_stop_reason": state.react_stop_reason,
-        "react_pending_thought": "",
-        "react_pending_tool": "",
-        "react_pending_input": {},
-        "step_results": state.step_results,
-        "plan_steps": state.plan_steps,
-        "plan_retry_counts": state.plan_retry_counts,
+        "react": state.react,
+        "plan": state.plan,
         "errors": state.errors,
         "events": state.events,
     }
@@ -415,11 +333,11 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
 
 def _should_continue_react(state: AgentGraphState) -> str:
     """Conditional edge: continue iterating or finalize."""
-    if state.active_tool_context == "react":
+    if state.tool_tracking.active_context == "react":
         return "tool_node"
-    if state.react_status in {"completed", "failed", "exhausted"}:
+    if state.react.status in {"completed", "failed", "exhausted"}:
         return "finalize"
-    if state.react_done or state.react_iteration_index >= state.react_max_iterations:
+    if state.react.done or state.react.iteration_index >= state.react.max_iterations:
         return "finalize"
     return "iterate"
 
@@ -430,7 +348,3 @@ def _json_dumps_safe(obj: object) -> str:
     if isinstance(obj, dict):
         return _json.dumps(obj, ensure_ascii=False)
     return str(obj)
-
-
-
-

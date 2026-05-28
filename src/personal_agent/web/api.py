@@ -69,8 +69,6 @@ class ResetDebugDataResponse(BaseModel):
     deleted_upload_files: int = 0
     deleted_ask_history: int = 0
     deleted_graph_nodes: int = 0
-    deleted_pending_actions: int = 0
-    deleted_cross_session_artifacts: int = 0
     deleted_checkpoints: int = 0
     deleted_checkpoint_blobs: int = 0
     deleted_checkpoint_writes: int = 0
@@ -94,34 +92,6 @@ class ToolExecuteResponse(BaseModel):
     error: str | None = None
     deleted_ask_history: int = 0
     deleted_graph_episodes: int = 0
-
-
-class PendingActionResponse(BaseModel):
-    id: str
-    user_id: str
-    action_type: str
-    target_id: str
-    title: str
-    description: str
-    status: str
-    created_at: str
-    expires_at: str
-    resolved_at: str | None = None
-    audit_log: list[dict[str, object]] = Field(default_factory=list)
-
-
-class PendingActionListResponse(BaseModel):
-    items: list[PendingActionResponse] = Field(default_factory=list)
-
-
-class ConfirmPendingActionRequest(BaseModel):
-    token: str = Field(min_length=1)
-    user_id: str = "default"
-
-
-class RejectPendingActionRequest(BaseModel):
-    user_id: str = "default"
-    reason: str = ""
 
 
 class ResumeEntryRequest(BaseModel):
@@ -561,76 +531,6 @@ def create_app() -> FastAPI:
         logger.warning("Full debug data reset requested")
         result = service.reset_debug_data()
         return ResetDebugDataResponse(**result.model_dump())
-
-    @app.get("/api/pending-actions", response_model=PendingActionListResponse)
-    def list_pending_actions(
-        request: Request, user_id: str | None = None, status: str | None = None
-    ) -> PendingActionListResponse:
-        resolved_user = user_id or _get_user_id(request, settings)
-        logger.info("Pending actions list requested for user=%s status=%s", resolved_user, status)
-        actions = service.list_pending_actions(resolved_user, status)
-        return PendingActionListResponse(items=[
-            PendingActionResponse(
-                id=a.id,
-                user_id=a.user_id,
-                action_type=a.action_type,
-                target_id=a.target_id,
-                title=a.title,
-                description=a.description,
-                status=a.status,
-                created_at=a.created_at.isoformat(),
-                expires_at=a.expires_at.isoformat(),
-                resolved_at=a.resolved_at.isoformat() if a.resolved_at else None,
-                audit_log=[e.model_dump(mode="json") for e in a.audit_log],
-            )
-            for a in actions
-        ])
-
-    @app.post("/api/pending-actions/{action_id}/confirm", response_model=PendingActionResponse)
-    def confirm_pending_action(
-        action_id: str, body: ConfirmPendingActionRequest, http_request: Request
-    ) -> PendingActionResponse:
-        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
-        logger.info("Confirm pending action id=%s user=%s", action_id, resolved_user)
-        action = service.confirm_pending_action(action_id, body.token, resolved_user)
-        if action is None:
-            raise HTTPException(status_code=404, detail="Pending action not found, invalid token, expired, or already processed.")
-        return PendingActionResponse(
-            id=action.id,
-            user_id=action.user_id,
-            action_type=action.action_type,
-            target_id=action.target_id,
-            title=action.title,
-            description=action.description,
-            status=action.status,
-            created_at=action.created_at.isoformat(),
-            expires_at=action.expires_at.isoformat(),
-            resolved_at=action.resolved_at.isoformat() if action.resolved_at else None,
-            audit_log=[e.model_dump(mode="json") for e in action.audit_log],
-        )
-
-    @app.post("/api/pending-actions/{action_id}/reject", response_model=PendingActionResponse)
-    def reject_pending_action(
-        action_id: str, body: RejectPendingActionRequest, http_request: Request
-    ) -> PendingActionResponse:
-        resolved_user = body.user_id if body.user_id != "default" else _get_user_id(http_request, settings)
-        logger.info("Reject pending action id=%s user=%s reason=%s", action_id, resolved_user, body.reason)
-        action = service.reject_pending_action(action_id, resolved_user, body.reason)
-        if action is None:
-            raise HTTPException(status_code=404, detail="Pending action not found, already processed, or expired.")
-        return PendingActionResponse(
-            id=action.id,
-            user_id=action.user_id,
-            action_type=action.action_type,
-            target_id=action.target_id,
-            title=action.title,
-            description=action.description,
-            status=action.status,
-            created_at=action.created_at.isoformat(),
-            expires_at=action.expires_at.isoformat(),
-            resolved_at=action.resolved_at.isoformat() if action.resolved_at else None,
-            audit_log=[e.model_dump(mode="json") for e in action.audit_log],
-        )
 
     # ---- Run snapshot API (orchestration graph checkpoint queries) ----
 

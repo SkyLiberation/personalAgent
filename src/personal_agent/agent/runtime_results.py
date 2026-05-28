@@ -57,8 +57,6 @@ class ResetResult(BaseModel):
     deleted_upload_files: int = 0
     deleted_ask_history: int = 0
     deleted_graph_nodes: int = 0
-    deleted_pending_actions: int = 0
-    deleted_cross_session_artifacts: int = 0
     deleted_checkpoints: int = 0
     deleted_checkpoint_blobs: int = 0
     deleted_checkpoint_writes: int = 0

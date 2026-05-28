@@ -48,8 +48,8 @@ def _bypass_validator(svc: AgentService) -> MagicMock:
 class TestCrossLayerRegression:
     """Full entry → router → planner → validator → executor cross-layer tests.
 
-    Mocks _intent_router.classify to force planning intents so that PlanExecutor
-    is exercised end-to-end in integration tests.
+    Mocks _intent_router.classify to force planning intents so that the
+    graph-native plan execution path is exercised end-to-end.
     """
 
     def _mock_router(self, svc: AgentService, route: str) -> MagicMock:
@@ -68,8 +68,8 @@ class TestCrossLayerRegression:
         svc._runtime._intent_router = mock_router
         return mock_router
 
-    def test_delete_knowledge_triggers_plan_executor(self, svc: AgentService):
-        """delete_knowledge with requires_planning=True takes PlanExecutor path."""
+    def test_delete_knowledge_triggers_plan_execution_graph(self, svc: AgentService):
+        """delete_knowledge with requires_planning=True takes graph plan execution path."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         # Prime knowledge base with a note to resolve
@@ -86,13 +86,13 @@ class TestCrossLayerRegression:
         entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
         result = svc.entry(entry)
 
-        # PlanExecutor path populates plan_steps with status
+        # Graph plan execution populates plan_steps with status
         assert len(result.plan_steps) > 0
         statuses = {s.get("status") for s in result.plan_steps}
         assert "completed" in statuses or "failed" in statuses
 
-    def test_solidify_conversation_triggers_plan_executor(self, svc: AgentService):
-        """solidify_conversation with requires_planning=True takes PlanExecutor path."""
+    def test_solidify_conversation_triggers_plan_execution_graph(self, svc: AgentService):
+        """solidify_conversation with requires_planning=True takes graph plan execution path."""
         self._mock_router(svc, "solidify_conversation")
         svc.graph_store.ask.return_value = type("R", (), {
             "enabled": False, "answer": "",
@@ -107,8 +107,8 @@ class TestCrossLayerRegression:
         action_types = {s.get("action_type") for s in result.plan_steps}
         assert "compose" in action_types
 
-    def test_delete_knowledge_full_flow_creates_pending_action(self, svc: AgentService, monkeypatch):
-        """Complete delete flow: plan → resolve → tool_call creates pending action."""
+    def test_delete_knowledge_full_flow_waits_for_graph_confirmation(self, svc: AgentService, monkeypatch):
+        """Complete delete flow: plan -> resolve -> tool_call waits for Graph confirmation."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         note = svc.execute_capture(

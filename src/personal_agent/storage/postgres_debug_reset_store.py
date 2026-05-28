@@ -10,8 +10,6 @@ _NAMED_TABLES = {
     "knowledge_notes": "notes",
     "review_cards": "reviews",
     "ask_history": "ask_history",
-    "pending_actions": "pending_actions",
-    "cross_session_artifacts": "cross_session_artifacts",
     "checkpoints": "checkpoints",
     "checkpoint_blobs": "checkpoint_blobs",
     "checkpoint_writes": "checkpoint_writes",

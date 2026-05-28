@@ -10,7 +10,7 @@
 
 计划与执行路径现在通过以下方式可观测：
 
-- `context_snapshot()` 会将 `plan_steps` 拼入 LLM prompt，让生成与校验阶段感知当前计划。
+- `AgentGraphState.plan` 会进入 checkpoint，并由计划执行节点和输出层共享。
 - `EntryResult.plan_steps` 随 API 响应和 SSE `plan_created` 事件返回。
 - 前端在回答卡片中以可折叠面板形式展示“Agent 计划执行 N 步”，包括步骤类型、工具名和当前状态。
 - 非计划驱动路径通过 `execution_trace` 返回，并由前端展示为“Agent 执行路径”。
@@ -45,7 +45,7 @@ Entry
 - `Replanner`：步骤失败后的重新规划器。
 - `AnswerVerifier`：回答证据校验器。
 - `ToolExecutor`：注册 LangChain `@tool` 工具；执行期由计划图和 ReAct 图中的 `ToolNode` 调度。
-- `MemoryFacade`：工作记忆、会话摘要、历史上下文。
+- `MemoryFacade`：长期知识存储门面、direct ask 历史线索、跨请求中间态。
 - `GraphitiStore`：图谱写入、图谱检索和 Graphiti client 构建。
 
 整体入口链路可以概括为：
@@ -101,10 +101,9 @@ graph.stream(initial_state, {"configurable": {"thread_id": thread_id}}, subgraph
 
 1. 规范化 `user_id` 和 `session_id`。
 2. `self.memory.bind_session()` 绑定会话。
-3. `self.memory.refresh_conversation_summary()` 刷新会话摘要。
+3. 从 checkpoint `messages` 构造受限 thread 对话上下文。
 4. 调用 `self._intent_router.classify(entry_input)` 做意图识别。
-5. 将目标写入 working memory。
-6. 根据 `decision.requires_planning` 和 `decision.route` 决定进入计划路径或普通分支。
+5. 根据 `decision.requires_planning` 和 `decision.route` 决定进入计划路径或普通分支。
 
 ## 3. Router 意图路由
 
@@ -245,30 +244,13 @@ Planner 使用 `settings.openai_small_model`，默认 `gpt-4.1-nano`。
 
 Planner prompt 会把可用工具列表一起传给模型。工具列表来自 `ToolExecutor.list_tools()`。
 
-## 5. PlanExecutor 执行阶段
+## 5. Graph 计划执行阶段
 
-计划执行器在 `src/personal_agent/agent/plan_executor.py`，核心类是 `PlanExecutor`。
-
-`execute_entry()` 中，如果需要计划执行，会创建：
-
-```text
-executor = PlanExecutor(
-    self,
-    self.memory,
-    replanner=self._replanner,
-    react_runner=self._react_runner,
-)
-```
-
-然后构造 `AgentState(mode="entry", intent=decision.route, entry_input=...)` 并执行：
-
-```text
-result = executor.execute(validated_steps, state, on_progress=on_progress)
-```
+计划执行现在由 LangGraph `PlanExecutionGraph` 承载，核心节点在 `src/personal_agent/agent/orchestration_nodes/_steps.py`。计划状态保存在 `AgentGraphState.plan` 中，并随每个节点写入 Postgres checkpoint。
 
 ### 5.1 执行顺序
 
-`PlanExecutor` 会先对 steps 做拓扑排序，确保依赖步骤先执行。每个 step 的状态变化为：
+Graph 会先对 steps 做拓扑排序，确保依赖步骤先执行。每个 step 的状态变化为：
 
 ```text
 planned -> running -> completed / failed / skipped
@@ -288,15 +270,15 @@ planned -> running -> completed / failed / skipped
 
 ### 5.2 action_type 分发
 
-`_dispatch_step()` 根据 `action_type` 分发：
+`_dispatch_plan_step()` 根据 `action_type` 分发：
 
-- `retrieve`：调用 `_execute_retrieve()`，当前直接走 `runtime.graph_store.ask()`。
-- `resolve`：调用 `_execute_resolve()`，把模糊删除目标解析成具体 `note_id`。
+- `retrieve`：调用 `_execute_retrieve_step()`，当前直接走 `deps.graph_store.ask()`。
+- `resolve`：调用 `_execute_resolve_step()`，把模糊删除目标解析成具体 `note_id`。
 - `tool_call`：生成 tool-call message，通过 `PlanExecutionGraph.plan_tool_node` 执行工具。
-- `compose`：调用 `_execute_compose()`，生成自然语言结果。
-- `verify`：调用 `_execute_verify()`，仅用于存在可验证回答的流程；删除确认与固化写入不规划该步骤。
+- `compose`：调用 `_execute_compose_step()`，生成自然语言结果或固化草稿。
+- `verify`：调用 `_execute_verify_step()`，仅用于存在可验证回答的流程；删除确认与固化写入不规划该步骤。
 
-如果 `step.execution_mode == "react"` 且存在 `ReActStepRunner`，则先走 ReAct 分支，而不是 deterministic 分支。
+如果 `step.execution_mode == "react"`，则进入 graph-native ReAct 子图，而不是 deterministic 分支。
 
 ### 5.3 失败与重规划
 
@@ -307,18 +289,18 @@ planned -> running -> completed / failed / skipped
 3. Replanner 返回 revised steps 后，会跳过依赖失败步骤的旧步骤，并把新步骤加入执行列表重新拓扑排序。
 4. 如果无法重规划，则按 `skip` 或 `abort` 语义继续或中断。
 
-### 5.4 PlanExecutor 自身使用的 model
+### 5.4 计划执行阶段使用的 model
 
-`PlanExecutor` 本身不直接持有模型调用逻辑。它会间接触发：
+计划执行节点本身不直接持有统一模型调用逻辑，但会间接触发：
 
-- `ReActStepRunner`：用 `openai_small_model` 做工具选择和观察迭代。
+- graph-native ReAct 节点：用 `openai_small_model` 做工具选择和观察迭代。
 - `Replanner`：用 `openai_small_model` 生成替代计划。
-- `_execute_compose()` 中调用 `runtime.execute_ask()`，最终可能用 `openai_model` 生成回答。
-- `_execute_retrieve()` 中调用 `graph_store.ask()`，Graphiti client 使用 `openai_model` 和 embedding model。
+- `_execute_compose_step()` 中调用 `execute_ask()`，最终可能用 `openai_model` 生成回答。
+- `_execute_retrieve_step()` 中调用 `graph_store.ask()`，Graphiti client 使用 `openai_model` 和 embedding model。
 
 ## 6. ReAct 单步推理
 
-ReAct 执行器在 `src/personal_agent/agent/react_runner.py`，核心类是 `ReActStepRunner`。
+ReAct 执行器是 graph-native 子图，相关节点在 `src/personal_agent/agent/orchestration_nodes/_react.py`。
 
 它不是全局 agent loop，而是嵌在某一个 `PlanStep` 里的受控 Thought/Action/Observation loop。只有 step 明确设置：
 
@@ -693,14 +675,13 @@ POST /api/entry
      -> validate_plan
   -> step loop
      -> del-1 retrieve, execution_mode=react
-        -> ReActStepRunner 使用 graph_search
+        -> ReactGraph 使用 graph_search
      -> del-2 resolve
         -> graph episode -> local note
         -> local similarity fallback
         -> keyword fallback
-        -> recent citations fallback
      -> del-3 tool_call delete_note
-        -> 创建 pending action
+        -> 写入 checkpoint pending_confirmation
         -> 发 pending_action_created
      -> del-4 compose
   -> EntryResult(plan_steps=[...])
@@ -716,12 +697,11 @@ POST /api/entry
   -> plan_task: sol-1..sol-2
   -> step loop
      -> compose 将带轮次标识的候选对话交给 LLM 选择并生成草稿
-        -> save_draft()
+        -> 写入 checkpoint plan.results
         -> emit draft_ready
         -> 模型未给出合格正文时终止写入
      -> tool_call capture_text
         -> 复用 capture 链路写入 KnowledgeNote
-        -> 标记 draft/conclusion 已固化
   -> EntryResult(plan_steps=[...])
 ```
 

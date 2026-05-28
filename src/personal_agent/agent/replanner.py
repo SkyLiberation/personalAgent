@@ -19,7 +19,7 @@ class Replanner:
     """Generate revised plan steps when a step fails and retries are exhausted.
 
     Two-tier approach:
-      Tier 1: Simple retry (handled by PlanExecutor, this class is Tier 2).
+      Tier 1: Simple retry (handled by the graph step loop, this class is Tier 2).
       Tier 2: LLM replanning — prompt the LLM with the current plan state,
               the error, and intermediate results; parse a revised list of steps.
               Falls back to heuristic if LLM is unavailable or fails.
@@ -181,7 +181,7 @@ class Replanner:
                 salvage_compose = PlanStep(
                     step_id=f"re-{uuid4().hex[:6]}",
                     action_type="compose",
-                    description="固化未完成：基于已提取的候选结论生成部分摘要",
+                    description="固化未完成：基于已提取的草稿内容生成部分摘要",
                     expected_output="总结本次固化尝试中已提取的内容",
                     on_failure="skip",
                 )

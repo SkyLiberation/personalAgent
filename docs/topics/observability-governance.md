@@ -59,13 +59,12 @@
 - notes
 - reviews
 - ask history
-- pending actions
 - cross-session state
 - graph group
 
-### 6. 高风险操作审计
+### 6. 高风险操作确认
 
-`PostgresPendingActionStore` 会记录 pending action 的 audit log，覆盖创建、确认、拒绝、过期和执行等事件。
+高风险删除通过 LangGraph checkpoint 中的 `pending_confirmation` 和 interrupt/resume 完成。当前不再维护独立审批表；生产化审计应在统一事件或操作日志层补充。
 
 ### 7. 测试
 

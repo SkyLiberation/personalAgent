@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from psycopg import connect
 from unittest.mock import MagicMock
 
-from personal_agent.core.models import EntryInput, PendingAction
+from personal_agent.core.models import EntryInput
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -212,16 +212,6 @@ class TestDebugEndpoints:
         service._runtime.execute_capture("用户A笔记", source_type="text", user_id="reset-a")
         service._runtime.execute_capture("用户B笔记", source_type="text", user_id="reset-b")
         service._runtime.execute_ask("问答数据", user_id="reset-a", session_id="s1")
-        service.pending_action_store.create(
-            PendingAction(
-                user_id="reset-b",
-                action_type="delete_note",
-                target_id="n1",
-                title="删除笔记",
-                description="测试",
-            )
-        )
-        service._cross_session.save_draft("reset-a", "草稿")
         service.execute_entry(EntryInput(text="你好", user_id="reset-a", session_id="checkpoint"))
         uploads_dir = temp_dir / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -240,11 +230,9 @@ class TestDebugEndpoints:
         data = response.json()
         assert data["deleted_notes"] >= 2
         assert data["deleted_ask_history"] >= 1
-        assert data["deleted_pending_actions"] >= 1
-        assert data["deleted_cross_session_artifacts"] >= 1
         assert data["deleted_checkpoints"] >= 1
         assert data["deleted_checkpoint_migrations"] >= 1
-        assert data["truncated_postgres_tables"] >= 10
+        assert data["truncated_postgres_tables"] >= 8
         assert data["deleted_postgres_rows"] >= data["deleted_notes"]
         assert data["deleted_upload_files"] == 1
         assert data["deleted_graph_nodes"] == 7
@@ -257,8 +245,6 @@ class TestDebugEndpoints:
                     "knowledge_notes",
                     "review_cards",
                     "ask_history",
-                    "pending_actions",
-                    "cross_session_artifacts",
                     "checkpoints",
                     "checkpoint_blobs",
                     "checkpoint_writes",

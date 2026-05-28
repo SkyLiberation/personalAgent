@@ -108,6 +108,7 @@ class AskHistoryStore:
                     """
                     INSERT INTO ask_history (id, user_id, session_id, question, answer, citations, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                    ON CONFLICT (id) DO NOTHING
                     """,
                     (
                         record.id,

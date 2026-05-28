@@ -65,7 +65,7 @@ class TestDefaultIntentRouter:
         assert decision.requires_retrieval is True
         assert "web_search" in decision.candidate_tools
 
-    def test_llm_router_receives_thread_conversation_context(self, monkeypatch):
+    def test_llm_router_receives_thread_conversation_messages(self, monkeypatch):
         from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
@@ -79,11 +79,14 @@ class TestDefaultIntentRouter:
         monkeypatch.setattr(router, "_classify_with_llm", classify)
         router.classify(
             EntryInput(source_type="text", text="它有什么用？"),
-            conversation_context="用户: 什么是 DNS？\n助手: DNS 是域名系统。",
+            conversation_messages=[
+                {"role": "user", "content": "什么是 DNS？"},
+                {"role": "assistant", "content": "DNS 是域名系统。"},
+            ],
         )
 
         assert captured["text"] == "它有什么用？"
-        assert "DNS" in captured["context"]
+        assert any("DNS" in item.get("content", "") for item in captured["context"])
 
     def test_llm_decision_is_not_overridden_by_contextual_keyword_rules(self, monkeypatch):
         from personal_agent.core.config import Settings
@@ -103,7 +106,10 @@ class TestDefaultIntentRouter:
 
         decision = router.classify(
             EntryInput(text="将DNS相关知识存储至知识库"),
-            conversation_context="用户: 什么是DNS\n助手: DNS 是域名系统。",
+            conversation_messages=[
+                {"role": "user", "content": "什么是DNS"},
+                {"role": "assistant", "content": "DNS 是域名系统。"},
+            ],
         )
 
         assert decision.route == "capture_text"
@@ -139,7 +145,10 @@ class TestDefaultIntentRouter:
 
         decision = router.classify(
             EntryInput(text="记一下：DNS 是将域名转换为 IP 地址的系统。"),
-            conversation_context="用户: 什么是DNS\n助手: DNS 是域名系统。",
+            conversation_messages=[
+                {"role": "user", "content": "什么是DNS"},
+                {"role": "assistant", "content": "DNS 是域名系统。"},
+            ],
         )
 
         assert decision.route == "capture_text"

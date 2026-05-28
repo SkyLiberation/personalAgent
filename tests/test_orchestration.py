@@ -12,12 +12,16 @@ from personal_agent.agent.orchestration_models import (
     AgentRunSnapshot,
     AgentRunStatus,
     PlanStepState,
+    PlanSubState,
+    ReactSubState,
+    ToolTrackingSubState,
     _new_run_id,
     _new_thread_id,
     execution_trace_to_events,
     plan_steps_to_plan_created_events,
 )
 from personal_agent.agent.orchestration_nodes import OrchestrationDeps
+from personal_agent.agent.orchestration_nodes._helpers import _dialogue_prompt_messages
 from personal_agent.agent.router import RouterDecision
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput
@@ -40,27 +44,26 @@ class TestAgentGraphState:
             entry_text="什么是服务降级？",
             router_decision=RouterDecision(route="ask"),
             answer="服务降级是在系统压力过大时...",
-            plan_steps=[
+            plan=PlanSubState(steps=[
                 {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
-            ],
+            ]),
             execution_trace=["检索知识库", "生成回答"],
             messages=[HumanMessage(content="你好"), AIMessage(content="你好，有什么可以帮你的？")],
-            pending_tool_step_id="s1",
-            pending_tool_call_id="r1:s1:0",
+            tool_tracking=ToolTrackingSubState(pending_step_id="s1", pending_call_id="r1:s1:0"),
         )
         data = state.model_dump(mode="json")
         restored = AgentGraphState.model_validate(data)
         assert restored.run_id == state.run_id
         assert restored.user_id == "user-1"
         assert restored.answer == state.answer
-        assert len(restored.plan_steps) == 1
-        assert restored.plan_steps[0].step_id == "s1"
+        assert len(restored.plan.steps) == 1
+        assert restored.plan.steps[0].step_id == "s1"
         assert [message.content for message in restored.messages] == [
             "你好",
             "你好，有什么可以帮你的？",
         ]
-        assert restored.pending_tool_step_id == "s1"
-        assert restored.pending_tool_call_id == "r1:s1:0"
+        assert restored.tool_tracking.pending_step_id == "s1"
+        assert restored.tool_tracking.pending_call_id == "r1:s1:0"
 
     def test_add_event_appends_and_updates_timestamp(self):
         state = AgentGraphState(run_id="r1")
@@ -72,14 +75,14 @@ class TestAgentGraphState:
 
     def test_update_step_status(self):
         state = AgentGraphState(
-            plan_steps=[
+            plan=PlanSubState(steps=[
                 {"step_id": "s1", "status": "running"},
                 {"step_id": "s2", "status": "planned"},
-            ]
+            ])
         )
         state.update_step_status("s1", "completed")
-        assert state.plan_steps[0].status == "completed"
-        assert state.plan_steps[1].status == "planned"
+        assert state.plan.steps[0].status == "completed"
+        assert state.plan.steps[1].status == "planned"
 
     def test_to_run_snapshot_pending(self):
         state = AgentGraphState()
@@ -143,6 +146,20 @@ class TestRunIdHelpers:
         assert tid == "user-1:sess-1"
 
 
+class TestDialogueMessageRendering:
+    def test_dialogue_messages_keep_recent_visible_turns(self):
+        messages = [
+            HumanMessage(content=f"old-{index}-" + ("x" * 900))
+            for index in range(8)
+        ]
+        messages.append(AIMessage(content="最新更正：使用新集群"))
+
+        rendered = _dialogue_prompt_messages(messages)
+
+        assert rendered[-1] == {"role": "assistant", "content": "最新更正：使用新集群"}
+        assert rendered[0]["content"].startswith("old-0-")
+
+
 class TestNormalizeEntry:
     def test_new_run_clears_previous_thread_progress(self):
         from personal_agent.agent.orchestration_graph import _node_normalize_entry
@@ -164,8 +181,7 @@ class TestNormalizeEntry:
             tool_messages=[AIMessage(content="", tool_calls=[{
                 "name": "graph_search", "args": {}, "id": "old-call", "type": "tool_call",
             }])],
-            pending_tool_step_id="old-step",
-            pending_tool_call_id="old-call",
+            tool_tracking=ToolTrackingSubState(pending_step_id="old-step", pending_call_id="old-call"),
         )
         state.add_event("run_completed", {"answer": state.answer})
 
@@ -180,8 +196,8 @@ class TestNormalizeEntry:
         assert result["citations"] == []
         assert result["errors"] == []
         assert result["tool_messages"] == []
-        assert result["pending_tool_step_id"] == ""
-        assert result["pending_tool_call_id"] == ""
+        assert result["tool_tracking"].pending_step_id == ""
+        assert result["tool_tracking"].pending_call_id == ""
         assert result["messages"][0].content == "什么是DNS"
         assert [message.content for message in state.messages] == [
             "今天西安天气怎么样",
@@ -266,6 +282,90 @@ class TestOrchestrationGraphIntegration:
         react_graph = build_react_graph(deps)
         assert "react_tool_node" in react_graph.get_graph().nodes
 
+    def test_route_intent_does_not_use_ask_history_when_thread_is_empty(self, runtime, monkeypatch):
+        captured_messages: list[list[dict[str, str]]] = []
+
+        runtime.memory.record_turn(
+            "test-user",
+            "persisted-context",
+            "上一轮用户问题",
+            "上一轮助手回答",
+        )
+
+        def classify(entry_input, conversation_messages=None):
+            captured_messages.append(conversation_messages or [])
+            return RouterDecision(route="direct_answer", user_visible_message="直接回答。")
+
+        monkeypatch.setattr(runtime._intent_router, "classify", classify)
+
+        runtime.execute_entry(
+            EntryInput(text="继续", user_id="test-user", session_id="persisted-context")
+        )
+
+        assert captured_messages == [[]]
+
+    def test_direct_answer_does_not_duplicate_thread_dialogue_in_system_context(self, runtime, monkeypatch):
+        from personal_agent.agent.orchestration_nodes._entry import _node_direct_answer_branch
+
+        captured_messages: list[list[dict]] = []
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                captured_messages.append(kwargs["messages"])
+
+                class Message:
+                    content = "继续回答"
+
+                class Choice:
+                    message = Message()
+
+                class Response:
+                    choices = [Choice()]
+
+                return Response()
+
+        class FakeChat:
+            completions = FakeCompletions()
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = FakeChat()
+
+        monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+        monkeypatch.setattr(runtime.settings, "openai_api_key", "test-key")
+        monkeypatch.setattr(runtime.settings, "openai_base_url", "http://llm.test")
+        monkeypatch.setattr(runtime.settings, "openai_small_model", "small")
+        runtime.memory.bind_session("test-user", "direct-dup")
+        runtime.memory.record_turn(
+            "test-user",
+            "direct-dup",
+            "不应重复注入的历史摘要",
+            "不应重复注入的历史回答",
+        )
+
+        state = AgentGraphState(
+            run_id="direct-dup-run",
+            user_id="test-user",
+            session_id="direct-dup",
+            entry_input=EntryInput(text="继续", user_id="test-user", session_id="direct-dup"),
+            entry_text="继续",
+            router_decision=RouterDecision(route="direct_answer"),
+            messages=[
+                HumanMessage(content="上一轮用户问题"),
+                AIMessage(content="上一轮助手回答"),
+                HumanMessage(content="继续"),
+            ],
+        )
+
+        result = _node_direct_answer_branch(state, deps=OrchestrationDeps.from_runtime(runtime))
+        system_content = captured_messages[0][0]["content"]
+        user_contents = [item["content"] for item in captured_messages[0][1:]]
+
+        assert result["answer"] == "继续回答"
+        assert "上一轮用户问题" not in system_content
+        assert "不应重复注入的历史摘要" not in system_content
+        assert "上一轮用户问题" in user_contents
+
     def test_direct_answer_through_orch_graph(self, runtime):
         """A simple direct_answer should flow through the graph and produce a result."""
         entry = EntryInput(
@@ -276,6 +376,16 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent in ("direct_answer", "unknown", "capture_text")
         assert result.reply_text
+        history = runtime.ask_history_store.list_history(
+            "test-user", session_id="orch-test"
+        )
+        assert history == []
+        latest = runtime._get_orch_graph().get_state(
+            {"configurable": {"thread_id": result.thread_id}}
+        ).values
+        contents = [message.content for message in latest["messages"]]
+        assert "你好" in contents
+        assert result.reply_text in contents
 
     def test_ask_through_orch_graph(self, runtime):
         """An ask intent should flow through the graph."""
@@ -287,6 +397,38 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent == "ask"
         assert result.reply_text
+        history = runtime.ask_history_store.list_history(
+            "test-user", session_id="orch-test-ask"
+        )
+        assert history == []
+        latest = runtime._get_orch_graph().get_state(
+            {"configurable": {"thread_id": result.thread_id}}
+        ).values
+        assert "什么是服务降级？" in [message.content for message in latest["messages"]]
+
+    def test_mixed_visible_branches_accumulate_checkpoint_messages(self, runtime):
+        first = runtime.execute_entry(
+            EntryInput(text="你好", user_id="test-user", session_id="mixed-dialogue")
+        )
+        second = runtime.execute_entry(
+            EntryInput(
+                text="什么是服务降级？",
+                user_id="test-user",
+                session_id="mixed-dialogue",
+            )
+        )
+
+        history = runtime.ask_history_store.list_history(
+            "test-user", session_id="mixed-dialogue"
+        )
+        assert history == []
+        assert first.thread_id == second.thread_id
+        latest = runtime._get_orch_graph().get_state(
+            {"configurable": {"thread_id": second.thread_id}}
+        ).values
+        contents = [message.content for message in latest["messages"]]
+        assert "你好" in contents
+        assert "什么是服务降级？" in contents
 
     def test_capture_through_orch_graph(self, runtime):
         """A capture_text intent should flow through the graph."""
@@ -305,6 +447,10 @@ class TestOrchestrationGraphIntegration:
             ]
             assert tool_results
             assert "服务降级" in tool_results[0]["payload"]["content_preview"]
+            history = runtime.ask_history_store.list_history(
+                "test-user", session_id="orch-test-cap"
+            )
+            assert history == []
 
     def test_summary_loads_platform_thread_context_only_after_routing(self, runtime, monkeypatch):
         loaded: list[tuple[str, int]] = []
@@ -333,6 +479,10 @@ class TestOrchestrationGraphIntegration:
         assert result.intent == "summarize_thread"
         assert loaded == [("feishu-summary", 20)]
         assert "项目今天完成发布" in result.reply_text
+        history = runtime.ask_history_store.list_history(
+            "test-user", session_id="feishu-summary"
+        )
+        assert history == []
 
     def test_non_summary_entry_does_not_load_platform_thread_context(self, runtime):
         loaded: list[str] = []
@@ -375,7 +525,6 @@ class TestOrchestrationGraphIntegration:
         assert result.intent == "solidify_conversation"
         assert "DNS 是域名系统" in result.reply_text
         assert any("DNS 是域名系统" in note.content for note in runtime.store.list_notes("test-user"))
-        assert runtime.memory.list_drafts("test-user", status="solidified")
         capture_step = next(
             step for step in result.plan_steps if step.get("tool_name") == "capture_text"
         )
@@ -384,6 +533,10 @@ class TestOrchestrationGraphIntegration:
         assert "plan_created" in event_types
         assert "draft_ready" in event_types
         assert event_types.count("step_completed") >= 2
+        history = runtime.ask_history_store.list_history(
+            "test-user", session_id="solidify-session"
+        )
+        assert history == []
 
     def test_solidify_extracts_structured_note_body_before_capture(self, runtime, monkeypatch):
         monkeypatch.setattr(
@@ -427,7 +580,7 @@ class TestOrchestrationGraphIntegration:
         monkeypatch.setattr(
             runtime._planner,
             "plan",
-            lambda _intent, _context: [
+            lambda _intent, _context, conversation_messages=None: [
                 PlanStep(step_id="bad-1", action_type="retrieve", description="获取上下文"),
                 PlanStep(
                     step_id="bad-2",
@@ -491,6 +644,50 @@ class TestOrchestrationGraphIntegration:
         stored = next(note.content for note in notes if "DNS 是域名系统" in note.content)
         assert "西安" not in stored
         assert "JSON Schema" not in stored
+
+    def test_solidify_compose_does_not_use_ask_history_without_thread_messages(self, runtime, monkeypatch):
+        from personal_agent.agent.orchestration_nodes._steps import _execute_compose_step
+        from personal_agent.agent.planner import PlanStep
+
+        prompts: list[str] = []
+
+        def reply(prompt, deps):
+            prompts.append(prompt)
+            return (
+                '{"done":true,"result":{"title":"Redis","content":'
+                '"Redis 是内存数据结构存储。"}}'
+            )
+
+        monkeypatch.setattr(
+            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            reply,
+        )
+        runtime.memory.bind_session("test-user", "persisted-solidify")
+        runtime.memory.record_turn(
+            "test-user",
+            "persisted-solidify",
+            "Redis 是什么？",
+            "Redis 是内存数据结构存储。",
+        )
+        state = AgentGraphState(
+            run_id="solidify-fallback",
+            user_id="test-user",
+            session_id="persisted-solidify",
+            entry_text="把刚才的知识固化下来",
+            router_decision=RouterDecision(route="solidify_conversation"),
+            messages=[HumanMessage(content="把刚才的知识固化下来")],
+        )
+
+        answer = _execute_compose_step(
+            PlanStep(step_id="sol-1", action_type="compose", description="整理草稿"),
+            state,
+            OrchestrationDeps.from_runtime(runtime),
+        )
+
+        assert answer == "Redis\n\nRedis 是内存数据结构存储。"
+        assert prompts
+        assert "Redis 是什么？" not in prompts[0]
+        assert "暂无检索结果" in prompts[0]
 
     def test_solidify_streams_plan_progress_during_graph_execution(self, runtime, monkeypatch):
         monkeypatch.setattr(
@@ -699,10 +896,12 @@ class TestPhase3RoutingFunctions:
         from personal_agent.agent.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
-            plan_steps=[
-                {"step_id": "s1", "action_type": "tool_call", "status": "awaiting_confirmation"},
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {"step_id": "s1", "action_type": "tool_call", "status": "awaiting_confirmation"},
+                ],
+                current_step_index=0,
+            ),
         )
         assert _after_step_execution(state) == "confirm_step"
 
@@ -710,10 +909,12 @@ class TestPhase3RoutingFunctions:
         from personal_agent.agent.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
-            plan_steps=[
-                {"step_id": "s1", "action_type": "tool_call", "status": "failed"},
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {"step_id": "s1", "action_type": "tool_call", "status": "failed"},
+                ],
+                current_step_index=0,
+            ),
         )
         assert _after_step_execution(state) == "handle_failure"
 
@@ -721,10 +922,12 @@ class TestPhase3RoutingFunctions:
         from personal_agent.agent.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
-            plan_steps=[
-                {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
+                ],
+                current_step_index=0,
+            ),
         )
         assert _after_step_execution(state) == "handle_success"
 
@@ -805,19 +1008,23 @@ class TestPhase3ExecutePlanStep:
         state = AgentGraphState(
             run_id="r1",
             user_id="u1",
-            plan_steps=[
-                {
-                    "step_id": "s1",
-                    "action_type": "tool_call",
-                    "tool_name": "capture_text",
-                    "status": "running",
-                },
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {
+                        "step_id": "s1",
+                        "action_type": "tool_call",
+                        "tool_name": "capture_text",
+                        "status": "running",
+                    },
+                ],
+                current_step_index=0,
+            ),
             entry_text="test",
-            active_tool_context="plan",
-            pending_tool_step_id="s1",
-            pending_tool_call_id="r1:s1:0",
+            tool_tracking=ToolTrackingSubState(
+                active_context="plan",
+                pending_step_id="s1",
+                pending_call_id="r1:s1:0",
+            ),
             tool_messages=[
                 ToolMessage(
                     content="待确认",
@@ -826,11 +1033,10 @@ class TestPhase3ExecutePlanStep:
                         "ok": True,
                         "data": {
                             "pending_confirmation": True,
-                            "action_id": "act-1",
-                            "token": "abc123",
                             "note_id": "n1",
                             "title": "测试笔记",
                             "summary": "删除测试",
+                            "description": "删除说明",
                         },
                         "error": None,
                         "evidence": [],
@@ -839,9 +1045,9 @@ class TestPhase3ExecutePlanStep:
             ],
         )
         result = _node_consume_plan_tool_result(state)
-        assert result["plan_steps"][0].status == "awaiting_confirmation"
+        assert result["plan"].steps[0].status == "awaiting_confirmation"
         assert state.events[-1].type == "confirmation_required"
-        assert state.pending_tool_call_id == ""
+        assert state.tool_tracking.pending_call_id == ""
 
     def test_plan_tool_result_rejects_stale_call_id(self, runtime):
         from langchain_core.messages import ToolMessage
@@ -849,12 +1055,14 @@ class TestPhase3ExecutePlanStep:
 
         state = AgentGraphState(
             run_id="r1",
-            plan_steps=[PlanStepState(
+            plan=PlanSubState(steps=[PlanStepState(
                 step_id="s1", action_type="tool_call", tool_name="graph_search", status="running",
-            )],
-            active_tool_context="plan",
-            pending_tool_step_id="s1",
-            pending_tool_call_id="r1:s1:expected",
+            )]),
+            tool_tracking=ToolTrackingSubState(
+                active_context="plan",
+                pending_step_id="s1",
+                pending_call_id="r1:s1:expected",
+            ),
             tool_messages=[ToolMessage(
                 content="旧结果",
                 tool_call_id="r1:s0:stale",
@@ -864,7 +1072,7 @@ class TestPhase3ExecutePlanStep:
 
         _node_consume_plan_tool_result(state)
 
-        assert state.plan_steps[0].status == "failed"
+        assert state.plan.steps[0].status == "failed"
         assert "未返回匹配当前调用的结果" in state.errors[-1]
 
     def test_node_completes_normally_when_no_pending_confirmation(self, runtime):
@@ -874,40 +1082,44 @@ class TestPhase3ExecutePlanStep:
         state = AgentGraphState(
             run_id="r1",
             user_id="u1",
-            plan_steps=[
-                {
-                    "step_id": "s1",
-                    "action_type": "retrieve",
-                    "description": "检索",
-                    "status": "running",
-                },
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {
+                        "step_id": "s1",
+                        "action_type": "retrieve",
+                        "description": "检索",
+                        "status": "running",
+                    },
+                ],
+                current_step_index=0,
+            ),
             entry_text="test",
         )
 
         result = _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["plan_steps"][0].status == "completed"
+        assert result["plan"].steps[0].status == "completed"
 
     def test_failure_records_step_retry_budget_and_reason(self, runtime):
         from personal_agent.agent.orchestration_graph import _node_execute_plan_step
 
         state = AgentGraphState(
-            plan_steps=[
-                PlanStepState(
-                    step_id="bad-1",
-                    action_type="unsupported",
-                    status="running",
-                    on_failure="retry",
-                    max_retries=1,
-                ),
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    PlanStepState(
+                        step_id="bad-1",
+                        action_type="unsupported",
+                        status="running",
+                        on_failure="retry",
+                        max_retries=1,
+                    ),
+                ],
+                current_step_index=0,
+            ),
         )
 
         _node_execute_plan_step(state, deps=OrchestrationDeps.from_runtime(runtime))
 
-        step = state.plan_steps[0]
+        step = state.plan.steps[0]
         assert step.status == "failed"
         assert step.retry_count == 1
         assert step.max_retries == 1
@@ -971,29 +1183,31 @@ class TestPhase3ExecutePlanStep:
         state = AgentGraphState(
             user_id="u1",
             entry_text="删除关于DNS的知识",
-            plan_steps=[
-                PlanStepState(
-                    step_id="resolve-1",
-                    action_type="resolve",
-                    status="running",
-                    on_failure="skip",
-                ),
-                PlanStepState(
-                    step_id="delete-1",
-                    action_type="tool_call",
-                    tool_name="delete_note",
-                    depends_on=["resolve-1"],
-                ),
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    PlanStepState(
+                        step_id="resolve-1",
+                        action_type="resolve",
+                        status="running",
+                        on_failure="skip",
+                    ),
+                    PlanStepState(
+                        step_id="delete-1",
+                        action_type="tool_call",
+                        tool_name="delete_note",
+                        depends_on=["resolve-1"],
+                    ),
+                ],
+                current_step_index=0,
+            ),
         )
         deps = OrchestrationDeps.from_runtime(runtime)
 
         _node_execute_plan_step(state, deps=deps)
         _node_handle_step_failure(state, deps=deps)
 
-        assert state.plan_steps[0].status == "failed"
-        assert state.plan_steps[1].status == "skipped"
+        assert state.plan.steps[0].status == "failed"
+        assert state.plan.steps[1].status == "skipped"
         assert "未找到可删除的知识笔记" in state.answer
 
 
@@ -1205,44 +1419,46 @@ class TestPhase4ReActNodes:
 
         state = AgentGraphState(
             run_id="r1",
-            plan_steps=[
-                {
-                    "step_id": "ask-1",
-                    "action_type": "retrieve",
-                    "description": "检索知识库",
-                    "execution_mode": "react",
-                    "allowed_tools": ["graph_search"],
-                    "max_iterations": 3,
-                    "status": "running",
-                },
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {
+                        "step_id": "ask-1",
+                        "action_type": "retrieve",
+                        "description": "检索知识库",
+                        "execution_mode": "react",
+                        "allowed_tools": ["graph_search"],
+                        "max_iterations": 3,
+                        "status": "running",
+                    },
+                ],
+                current_step_index=0,
+            ),
         )
         result = _node_react_init(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["react_step_id"] == "ask-1"
-        assert result["react_max_iterations"] == 3
-        assert result["react_allowed_tools"] == ["graph_search"]
-        assert result["react_iteration_index"] == 0
-        assert result["react_done"] is False
-        assert not result["react_result"]
-        assert result["react_status"] == "running"
+        assert result["react"].step_id == "ask-1"
+        assert result["react"].max_iterations == 3
+        assert result["react"].allowed_tools == ["graph_search"]
+        assert result["react"].iteration_index == 0
+        assert result["react"].done is False
+        assert not result["react"].result
+        assert result["react"].status == "running"
 
     def test_should_continue_react_when_not_done(self):
         from personal_agent.agent.orchestration_graph import _should_continue_react
 
-        state = AgentGraphState(react_done=False, react_iteration_index=0, react_max_iterations=3)
+        state = AgentGraphState(react=ReactSubState(done=False, iteration_index=0, max_iterations=3))
         assert _should_continue_react(state) == "iterate"
 
     def test_should_continue_react_when_done(self):
         from personal_agent.agent.orchestration_graph import _should_continue_react
 
-        state = AgentGraphState(react_done=True, react_iteration_index=0, react_max_iterations=3)
+        state = AgentGraphState(react=ReactSubState(done=True, iteration_index=0, max_iterations=3))
         assert _should_continue_react(state) == "finalize"
 
     def test_should_continue_react_when_exhausted(self):
         from personal_agent.agent.orchestration_graph import _should_continue_react
 
-        state = AgentGraphState(react_done=False, react_iteration_index=3, react_max_iterations=3)
+        state = AgentGraphState(react=ReactSubState(done=False, iteration_index=3, max_iterations=3))
         assert _should_continue_react(state) == "finalize"
 
     def test_react_finalize_writes_result_and_clears_state(self):
@@ -1250,28 +1466,32 @@ class TestPhase4ReActNodes:
 
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_result={"answer": "42", "react_iterations": 2},
-            react_user_prompt="...",
-            react_done=True,
-            react_status="completed",
-            react_stop_reason="llm_completed",
-            react_iteration_index=2,
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search"],
-            plan_steps=[
-                {"step_id": "ask-1", "action_type": "retrieve", "status": "running"},
-            ],
-            current_step_index=0,
+            react=ReactSubState(
+                step_id="ask-1",
+                result={"answer": "42", "react_iterations": 2},
+                user_prompt="...",
+                done=True,
+                status="completed",
+                stop_reason="llm_completed",
+                iteration_index=2,
+                max_iterations=3,
+                allowed_tools=["graph_search"],
+            ),
+            plan=PlanSubState(
+                steps=[
+                    {"step_id": "ask-1", "action_type": "retrieve", "status": "running"},
+                ],
+                current_step_index=0,
+            ),
         )
         result = _node_react_finalize(state)
-        assert state.step_results["ask-1"] == {"answer": "42", "react_iterations": 2}
-        assert state.plan_steps[0].status == "completed"
-        assert result["react_step_id"] == ""
-        assert result["react_done"] is True
-        assert result["react_result"] == {"answer": "42", "react_iterations": 2}
-        assert result["react_status"] == "completed"
-        assert result["react_stop_reason"] == "llm_completed"
+        assert state.plan.results["ask-1"] == {"answer": "42", "react_iterations": 2}
+        assert state.plan.steps[0].status == "completed"
+        assert result["react"].step_id == ""
+        assert result["react"].done is True
+        assert result["react"].result == {"answer": "42", "react_iterations": 2}
+        assert result["react"].status == "completed"
+        assert result["react"].stop_reason == "llm_completed"
 
     def test_react_failed_outcome_is_a_failed_plan_step(self):
         from personal_agent.agent.orchestration_graph import (
@@ -1280,12 +1500,14 @@ class TestPhase4ReActNodes:
         )
 
         state = AgentGraphState(
-            react_step_id="ask-1",
-            react_result={"answer": "", "error": "LLM returned nothing"},
-            react_done=True,
-            react_status="failed",
-            react_stop_reason="llm_unavailable",
-            plan_steps=[
+            react=ReactSubState(
+                step_id="ask-1",
+                result={"answer": "", "error": "LLM returned nothing"},
+                done=True,
+                status="failed",
+                stop_reason="llm_unavailable",
+            ),
+            plan=PlanSubState(steps=[
                 PlanStepState(
                     step_id="ask-1",
                     action_type="retrieve",
@@ -1293,14 +1515,14 @@ class TestPhase4ReActNodes:
                     on_failure="retry",
                     max_retries=1,
                 ),
-            ],
+            ]),
         )
 
         _node_react_finalize(state)
 
-        assert state.plan_steps[0].status == "failed"
-        assert state.plan_steps[0].failure_reason == "LLM returned nothing"
-        assert state.plan_steps[0].recoverable is False
+        assert state.plan.steps[0].status == "failed"
+        assert state.plan.steps[0].failure_reason == "LLM returned nothing"
+        assert state.plan.steps[0].recoverable is False
         assert state.errors == ["[ask-1] LLM returned nothing"]
         assert _after_react_graph(state) == "handle_failure"
 
@@ -1335,14 +1557,18 @@ class TestPhase4ReActIterateNode:
 
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_iteration_index=0,
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search"],
-            react_user_prompt="搜索X相关的内容",
-            react_done=False,
-            plan_steps=[{"step_id": "ask-1", "status": "running"}],
-            current_step_index=0,
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=0,
+                max_iterations=3,
+                allowed_tools=["graph_search"],
+                user_prompt="搜索X相关的内容",
+                done=False,
+            ),
+            plan=PlanSubState(
+                steps=[{"step_id": "ask-1", "status": "running"}],
+                current_step_index=0,
+            ),
         )
 
         def _mock_llm(prompt, rt):
@@ -1354,25 +1580,29 @@ class TestPhase4ReActIterateNode:
         )
 
         result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["react_done"] is True
-        assert result["react_result"]["answer"] == "X是一种技术"
-        assert len(result["react_iterations"]) >= 1
-        assert result["react_iterations"][-1]["done"] is True
-        assert result["react_status"] == "completed"
+        assert result["react"].done is True
+        assert result["react"].result["answer"] == "X是一种技术"
+        assert len(result["react"].iterations) >= 1
+        assert result["react"].iterations[-1]["done"] is True
+        assert result["react"].status == "completed"
 
     def test_react_iterate_parse_failure_increments_index(self, runtime, monkeypatch):
         from personal_agent.agent.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_iteration_index=0,
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search"],
-            react_user_prompt="搜索",
-            react_done=False,
-            plan_steps=[{"step_id": "ask-1", "status": "running"}],
-            current_step_index=0,
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=0,
+                max_iterations=3,
+                allowed_tools=["graph_search"],
+                user_prompt="搜索",
+                done=False,
+            ),
+            plan=PlanSubState(
+                steps=[{"step_id": "ask-1", "status": "running"}],
+                current_step_index=0,
+            ),
         )
 
         def _mock_llm(prompt, rt):
@@ -1385,22 +1615,26 @@ class TestPhase4ReActIterateNode:
 
         result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         # Parse failure: index increments, not done yet
-        assert result["react_iteration_index"] == 1
-        assert result.get("react_done") is not True
+        assert result["react"].iteration_index == 1
+        assert result["react"].done is not True
 
     def test_react_iterate_parse_failure_exhausts(self, runtime, monkeypatch):
         from personal_agent.agent.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_iteration_index=2,  # last iteration (0-based, max=3 → index 2 is the 3rd)
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search"],
-            react_user_prompt="搜索",
-            react_done=False,
-            plan_steps=[{"step_id": "ask-1", "status": "running"}],
-            current_step_index=0,
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=2,  # last iteration (0-based, max=3 → index 2 is the 3rd)
+                max_iterations=3,
+                allowed_tools=["graph_search"],
+                user_prompt="搜索",
+                done=False,
+            ),
+            plan=PlanSubState(
+                steps=[{"step_id": "ask-1", "status": "running"}],
+                current_step_index=0,
+            ),
         )
 
         def _mock_llm(prompt, rt):
@@ -1412,23 +1646,27 @@ class TestPhase4ReActIterateNode:
         )
 
         result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["react_done"] is True
-        assert result["react_status"] == "exhausted"
-        assert result["react_stop_reason"] == "parse_failures_exhausted"
+        assert result["react"].done is True
+        assert result["react"].status == "exhausted"
+        assert result["react"].stop_reason == "parse_failures_exhausted"
 
     def test_react_iterate_blocked_tool(self, runtime, monkeypatch):
         from personal_agent.agent.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_iteration_index=0,
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search", "delete_note"],
-            react_user_prompt="删除笔记",
-            react_done=False,
-            plan_steps=[{"step_id": "ask-1", "status": "running"}],
-            current_step_index=0,
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=0,
+                max_iterations=3,
+                allowed_tools=["graph_search", "delete_note"],
+                user_prompt="删除笔记",
+                done=False,
+            ),
+            plan=PlanSubState(
+                steps=[{"step_id": "ask-1", "status": "running"}],
+                current_step_index=0,
+            ),
         )
 
         def _mock_llm(prompt, rt):
@@ -1441,24 +1679,28 @@ class TestPhase4ReActIterateNode:
 
         result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
         # Tool is blocked — observation should indicate error
-        assert len(result["react_iterations"]) >= 1
-        obs = result["react_iterations"][-1].get("observation", "")
+        assert len(result["react"].iterations) >= 1
+        obs = result["react"].iterations[-1].get("observation", "")
         assert "高风险" in obs or "不允许" in obs
-        assert result["react_iteration_index"] == 1
+        assert result["react"].iteration_index == 1
 
     def test_react_iterate_llm_returns_none(self, runtime, monkeypatch):
         from personal_agent.agent.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_iteration_index=0,
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search"],
-            react_user_prompt="搜索",
-            react_done=False,
-            plan_steps=[{"step_id": "ask-1", "status": "running"}],
-            current_step_index=0,
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=0,
+                max_iterations=3,
+                allowed_tools=["graph_search"],
+                user_prompt="搜索",
+                done=False,
+            ),
+            plan=PlanSubState(
+                steps=[{"step_id": "ask-1", "status": "running"}],
+                current_step_index=0,
+            ),
         )
 
         monkeypatch.setattr(
@@ -1467,10 +1709,10 @@ class TestPhase4ReActIterateNode:
         )
 
         result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
-        assert result["react_done"] is True
-        assert "react_iterations" in result.get("react_result", {})
-        assert result["react_status"] == "failed"
-        assert result["react_stop_reason"] == "llm_unavailable"
+        assert result["react"].done is True
+        assert "react_iterations" in result["react"].result
+        assert result["react"].status == "failed"
+        assert result["react"].stop_reason == "llm_unavailable"
 
 
 class TestPhase4ReActMainGraphIntegration:
@@ -1510,19 +1752,21 @@ class TestPhase4ReActMainGraphIntegration:
         )
         state = AgentGraphState(
             run_id="r1",
-            react_step_id="ask-1",
-            react_max_iterations=2,
-            react_allowed_tools=["graph_search"],
-            react_user_prompt="检索",
-            plan_steps=[{"step_id": "ask-1", "status": "running"}],
+            react=ReactSubState(
+                step_id="ask-1",
+                max_iterations=2,
+                allowed_tools=["graph_search"],
+                user_prompt="检索",
+            ),
+            plan=PlanSubState(steps=[{"step_id": "ask-1", "status": "running"}]),
         )
 
         result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
 
-        assert result["active_tool_context"] == "react"
+        assert result["tool_tracking"].active_context == "react"
         assert result["tool_messages"][0].tool_calls[0]["name"] == "graph_search"
-        assert result["pending_tool_step_id"] == "ask-1"
-        assert result["pending_react_iteration"] == 0
+        assert result["tool_tracking"].pending_step_id == "ask-1"
+        assert result["tool_tracking"].pending_react_iteration == 0
         assert _should_continue_react(state) == "tool_node"
 
     def test_react_consumes_shared_tool_node_observation(self):
@@ -1530,15 +1774,19 @@ class TestPhase4ReActMainGraphIntegration:
         from personal_agent.agent.orchestration_graph import _node_consume_react_tool_result
 
         state = AgentGraphState(
-            react_step_id="ask-1",
-            react_max_iterations=2,
-            active_tool_context="react",
-            pending_tool_step_id="ask-1",
-            pending_tool_call_id="r1:react:ask-1:0:0",
-            pending_react_iteration=0,
-            react_pending_thought="检索",
-            react_pending_tool="graph_search",
-            react_pending_input={"query": "X"},
+            react=ReactSubState(
+                step_id="ask-1",
+                max_iterations=2,
+                pending_thought="检索",
+                pending_tool="graph_search",
+                pending_input={"query": "X"},
+            ),
+            tool_tracking=ToolTrackingSubState(
+                active_context="react",
+                pending_step_id="ask-1",
+                pending_call_id="r1:react:ask-1:0:0",
+                pending_react_iteration=0,
+            ),
             tool_messages=[ToolMessage(
                 content="找到结果",
                 tool_call_id="r1:react:ask-1:0:0",
@@ -1548,10 +1796,10 @@ class TestPhase4ReActMainGraphIntegration:
 
         result = _node_consume_react_tool_result(state)
 
-        assert result["active_tool_context"] is None
-        assert result["pending_tool_call_id"] == ""
-        assert state.react_iteration_index == 1
-        assert "X是" in state.react_iterations[0]["observation"]
+        assert result["tool_tracking"].active_context is None
+        assert result["tool_tracking"].pending_call_id == ""
+        assert state.react.iteration_index == 1
+        assert "X是" in state.react.iterations[0]["observation"]
 
     def test_main_graph_routes_react_through_main_nodes(self, runtime, monkeypatch):
         """An ask entry with plan steps routes ReAct through main graph nodes."""
@@ -1573,71 +1821,77 @@ class TestPhase4ReActMainGraphIntegration:
             user_id="u1",
             entry_text="什么是服务降级？",
             router_decision=RouterDecision(route="ask", requires_planning=True),
-            plan_steps=[
-                {
-                    "step_id": "ask-1",
-                    "action_type": "retrieve",
-                    "description": "在知识库中检索相关内容",
-                    "tool_name": "graph_search",
-                    "execution_mode": "react",
-                    "allowed_tools": ["graph_search", "web_search"],
-                    "max_iterations": 3,
-                    "status": "planned",
-                },
-                {
-                    "step_id": "ask-2",
-                    "action_type": "compose",
-                    "description": "整合生成回答",
-                    "depends_on": ["ask-1"],
-                    "status": "planned",
-                },
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {
+                        "step_id": "ask-1",
+                        "action_type": "retrieve",
+                        "description": "在知识库中检索相关内容",
+                        "tool_name": "graph_search",
+                        "execution_mode": "react",
+                        "allowed_tools": ["graph_search", "web_search"],
+                        "max_iterations": 3,
+                        "status": "planned",
+                    },
+                    {
+                        "step_id": "ask-2",
+                        "action_type": "compose",
+                        "description": "整合生成回答",
+                        "depends_on": ["ask-1"],
+                        "status": "planned",
+                    },
+                ],
+                current_step_index=0,
+            ),
         )
 
         config = {"configurable": {"thread_id": "test-main-react"}}
         result = AgentGraphState.model_validate(graph.invoke(state, config))
         # The graph should complete with answer set
-        assert result.answer or result.plan_steps[0].status == "completed"
+        assert result.answer or result.plan.steps[0].status == "completed"
 
     def test_after_step_execution_routes_to_react_step(self):
         from personal_agent.agent.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
-            plan_steps=[
-                {
-                    "step_id": "ask-1",
-                    "execution_mode": "react",
-                    "status": "running",
-                },
-            ],
-            current_step_index=0,
+            plan=PlanSubState(
+                steps=[
+                    {
+                        "step_id": "ask-1",
+                        "execution_mode": "react",
+                        "status": "running",
+                    },
+                ],
+                current_step_index=0,
+            ),
         )
         assert _after_step_execution(state) == "react_step"
 
     def test_react_state_serialization_roundtrip(self):
         """Verify the new ReAct fields survive JSON serialization."""
         state = AgentGraphState(
-            react_step_id="ask-1",
-            react_iteration_index=2,
-            react_max_iterations=3,
-            react_allowed_tools=["graph_search"],
-            react_user_prompt="...",
-            react_done=True,
-            react_result={"answer": "42"},
-            react_status="completed",
-            react_stop_reason="llm_completed",
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=2,
+                max_iterations=3,
+                allowed_tools=["graph_search"],
+                user_prompt="...",
+                done=True,
+                result={"answer": "42"},
+                status="completed",
+                stop_reason="llm_completed",
+            ),
         )
         data = state.model_dump(mode="json")
         restored = AgentGraphState.model_validate(data)
-        assert restored.react_step_id == "ask-1"
-        assert restored.react_iteration_index == 2
-        assert restored.react_max_iterations == 3
-        assert restored.react_allowed_tools == ["graph_search"]
-        assert restored.react_done is True
-        assert restored.react_result == {"answer": "42"}
-        assert restored.react_status == "completed"
-        assert restored.react_stop_reason == "llm_completed"
+        assert restored.react.step_id == "ask-1"
+        assert restored.react.iteration_index == 2
+        assert restored.react.max_iterations == 3
+        assert restored.react.allowed_tools == ["graph_search"]
+        assert restored.react.done is True
+        assert restored.react.result == {"answer": "42"}
+        assert restored.react.status == "completed"
+        assert restored.react.stop_reason == "llm_completed"
 
 
 # ============================================================================

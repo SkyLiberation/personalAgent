@@ -28,7 +28,7 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setattr(
         DefaultIntentRouter,
         "_classify_with_llm",
-        lambda _self, text, context="": stub_router_decision(text, context),
+        lambda _self, text, messages=None: stub_router_decision(text, messages),
     )
     return CliRunner()
 

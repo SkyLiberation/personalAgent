@@ -5,10 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import re
 from langchain_core.messages import BaseMessage
 
-from ._deps import OrchestrationDeps, _REACT_SYSTEM_PROMPT, _REACT_DEFAULT_ALLOWED_TOOLS, _REACT_BLOCKED_TOOL_PREFIXES
+from ._deps import OrchestrationDeps, _REACT_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from ._deps import PlanStep
@@ -174,22 +173,16 @@ def _dialogue_history(messages: list[BaseMessage], *, exclude_latest: bool = Fal
     return [message for message in history[-12:] if message.type in {"human", "ai"}]
 
 
-def _dialogue_prompt_messages(messages: list[BaseMessage]) -> list[dict[str, str]]:
+def _dialogue_prompt_messages(
+    messages: list[BaseMessage], *, exclude_latest: bool = False
+) -> list[dict[str, str]]:
     return [
         {
             "role": "assistant" if message.type == "ai" else "user",
             "content": str(message.content),
         }
-        for message in _dialogue_history(messages)
+        for message in _dialogue_history(messages, exclude_latest=exclude_latest)
     ]
-
-
-def _format_dialogue_context(messages: list[BaseMessage], *, exclude_latest: bool = False) -> str:
-    lines: list[str] = []
-    for message in _dialogue_history(messages, exclude_latest=exclude_latest):
-        label = "用户" if message.type == "human" else "助手"
-        lines.append(f"{label}: {message.content}")
-    return "\n".join(lines)
 
 
 def _format_solidify_candidate_context(messages: list[BaseMessage]) -> str:

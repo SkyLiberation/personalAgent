@@ -1,211 +1,268 @@
-# 记忆层说明
+# Agent 记忆层说明
 
-本文汇总当前项目记忆层的职责划分、读写路径、降级策略、已知限制和后续演进方向。对应代码主要位于 [src/personal_agent/memory/](../../src/personal_agent/memory/) 和 [src/personal_agent/storage/](../../src/personal_agent/storage/)。
+本文说明当前项目的 Agent 记忆体系：哪些信息属于短期记忆，哪些信息会沉淀为长期记忆，以及这些记忆如何进入 prompt、checkpoint 和业务存储。对应代码主要位于 [src/personal_agent/memory/](../../src/personal_agent/memory/) 和 [src/personal_agent/storage/](../../src/personal_agent/storage/)。
 
 ## 设计目标
 
-当前记忆层不追求“把所有历史都塞进模型上下文”，而是把不同生命周期的信息拆开管理：
+Agent 的记忆不等于“把所有历史都塞进上下文”。当前实现按生命周期和可信度拆分记忆：
 
-- 当前活跃任务需要的短期上下文，放进 `WorkingMemory`
-- 会话问答历史，放进 `Postgres.ask_history`
-- 需要跨请求续接、但还不是正式知识的中间态，放进 `PostgresCrossSessionStore`
-- 需要用户确认的高风险动作，放进 `PostgresPendingActionStore`
-- 正式长期知识和复习卡，生产运行中放进 `PostgresMemoryStore`
+- **短期记忆**：当前 thread 的对话、计划、执行状态和中断恢复现场，服务于本次或同一 thread 内的连续任务
+- **会话记忆**：最近问答历史生成的受限线索，服务于追问、指代和用户更正
+- **长期记忆**：用户显式沉淀或系统固化的知识 note、chunk、复习卡，服务于长期检索和事实依据
+这个分层的核心原则是：**执行现场用 checkpoint 恢复，正式知识用长期存储检索，会话历史只提供线索，不充当事实证据。**
 
 ## 当前状态摘要
 
-`MemoryFacade` 已在 `ask` 链路中参与会话摘要、上下文拼接和问答历史写入。`execute_entry()` 会绑定 session、刷新摘要、写入 task goal 和 plan steps；`PlanExecutor` 也会把执行过程写入 `WorkingMemory.recent_steps`。
+LangGraph entry 已使用 Postgres checkpoint 持久化当前执行现场，用于审批中断、恢复和 run snapshot 查询。Graph 主流程直接读取 `AgentGraphState`，不再存在额外的进程内 working memory 层。
 
-跨请求确认状态已从 `WorkingMemory` 中分离。待确认操作持久化到 `pending_actions`，最近 citations、固化草稿和候选结论持久化到 `cross_session_artifacts`，用于删除目标解析和固化续接。
+通过 `execute_entry()` 进入的多轮对话，以同一 `thread_id` 的 checkpoint `messages` 作为唯一会话真源。Graph 完成节点只把助手回复追加到 checkpoint，不再同步写入 `Postgres.ask_history`，避免同一轮对话在 checkpoint 和历史表之间形成双写。
 
-LangGraph checkpoint 已使用 Postgres 持久化，用于审批中断、恢复和 run snapshot 查询。`WorkingMemory` 仍只承担进程内 scratchpad，正式知识与可恢复流程状态分别落入明确的数据表。
+待确认操作不再额外写入业务审批表，而是保留在 LangGraph checkpoint 的 `pending_confirmation` 中。solidify 草稿同样不写入业务中间态表，而是保留在 checkpoint 的 `plan.results` 中，并通过 `draft_ready` 事件向前端展示。
 
-## 组件分层
+## 记忆分层
 
-### 1. `WorkingMemory`
+### 1. 短期记忆：Thread 执行现场
 
-代码位置：[working_memory.py](../../src/personal_agent/memory/working_memory.py)
+短期记忆描述 Agent 正在做什么、做到哪一步、是否等待用户确认。它不是普通聊天历史缓存，而是可恢复的运行现场。
 
-作用：
+主要载体：
 
-- 保存当前任务目标 `task_goal`
-- 保存会话摘要 `conversation_summary`
-- 保存最近执行/推理步骤 `recent_steps`
-- 保存当前计划 `plan_steps`
-- 预留工具结果缓存 `_tool_cache`
-
-特点：
-
-- 进程内内存对象
-- 只服务当前活跃 session
-- 服务重启会丢失
-- 不承担跨请求恢复职责
-
-`context_snapshot()` 会把 `task_goal / conversation_summary / plan_steps / recent_steps` 拼成一段上下文，供回答生成、校验和计划感知使用。
-
-### 2. `MemoryFacade`
-
-代码位置：[facade.py](../../src/personal_agent/memory/facade.py)
+- LangGraph `AgentGraphState`
+- Postgres checkpoint
+- 同一 `thread_id` 下的 `state.messages`
+- `plan / react / events / execution_trace / pending_confirmation`
 
 作用：
 
-- 作为运行时统一的记忆层门面
-- 绑定当前 `user_id:session_id`
-- 从历史记录刷新 `conversation_summary`
-- 记录 ask 链路中的问答历史
-- 代理 cross-session 草稿、citations、候选结论读写
+- 承接同一 thread 内的连续对话
+- 保存路由、规划、ReAct、步骤执行和输出状态
+- 支持 `interrupt/resume`
+- 支持 run snapshot 查询
 
-当前 runtime 不直接四处分散操作各个 store，而是优先通过 `MemoryFacade` 统一进入。
+典型字段位于 [orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)，checkpoint 构建位于 [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)。
 
-### 3. `AskHistoryStore`
+短期记忆的 prompt 使用规则：
 
-代码位置：[ask_history_store.py](../../src/personal_agent/storage/ask_history_store.py)
+- entry 各分支优先读取 checkpoint 中的 thread 对话和执行状态
+- 如果 `state.messages` 已经包含近期对话，就不再从 `ask_history` 重建同一批历史
+- `direct_answer` 会把 thread 对话作为 chat messages 使用，不再同时把同一批内容塞进 system context
 
-作用：
+### 2. 会话记忆：受限历史线索
 
-- 作为问答历史主存储
-- 持久化 `question / answer / citations / session_id / created_at`
-- 支持按用户、按会话读取历史
-- 支持关键词搜索和删除
+会话记忆来自 `Postgres.ask_history`，保存 direct ask 这类非 Graph 入口产生的问答轮次。它不再作为 LangGraph entry 的上下文 fallback，因为 entry 的多轮对话已经由 Postgres checkpoint 中的 `state.messages` 保存。
 
-当 `Postgres` 可用时，问答历史优先读写这里。
+主要载体：
 
-### 4. `PostgresMemoryStore`
+- [ask_history_store.py](../../src/personal_agent/storage/ask_history_store.py)
+- [facade.py](../../src/personal_agent/memory/facade.py) 中的 `MemoryFacade.load_conversation_hints()`
 
-代码位置：[postgres_memory_store.py](../../src/personal_agent/storage/postgres_memory_store.py)
-
-作用：
-
-- 保存长期知识 note（支持 parent note + chunk notes 模型，通过 `parent_note_id / chunk_index / source_span` 建立文档级关联；chunk 主要作为原文证据和 citation 定位单元）
-- 保存复习卡
-- 提供本地相似检索（含按 parent 去重）、图谱 episode 到 note 的映射、chunk 查询（`get_chunks_for_parent` / `get_parent_note`）和级联删除
-
-运行时统一使用 `PostgresMemoryStore`。
-
-### 5. `PostgresCrossSessionStore`
-
-代码位置：[postgres_cross_session_store.py](../../src/personal_agent/storage/postgres_cross_session_store.py)
-
-作用：
-
-- 保存最近 ask 引用过的 `recent_citations`
-- 保存 `solidify_conversation` 生成的 `solidify_drafts`
-- 保存从会话中提炼出的 `candidate_conclusions`
-
-它承载的是“跨请求保留，但还没进入正式知识库”的中间态信息。
-
-这些数据会落到 Postgres `cross_session_artifacts`，并带有 TTL 和数量上限，不是长期知识真源。
-
-### 6. `PostgresPendingActionStore`
-
-代码位置：[pending_action_store.py](../../src/personal_agent/storage/pending_action_store.py)
-
-作用：
-
-- 保存待确认删除等高风险动作
-- 记录 token、状态、过期时间和审计日志
-- 支持 `pending / confirmed / rejected / executed / expired`
-
-这部分状态已经从 `WorkingMemory` 中拆出，避免会话切换或进程重启后丢失审批状态。
-
-## 当前读写路径
-
-### ask 链路
-
-1. `MemoryFacade.bind_session()` 绑定 `user_id:session_id`
-2. `refresh_conversation_summary()` 读取最近问答历史
-3. `WorkingMemory.context_snapshot()` 生成当前上下文
-4. runtime 基于上下文生成回答
-5. `record_turn()` 持久化本轮问答
-6. 如有 citations，同时写入 `PostgresCrossSessionStore.recent_citations`
-
-### entry / planner 链路
-
-1. `execute_entry()` 先绑定 session 并刷新摘要
-2. planner 生成结构化步骤
-3. `WorkingMemory.plan_steps` 保存当前计划
-4. `PlanExecutor` 执行中持续写入 `WorkingMemory.recent_steps`
-
-### `delete_knowledge`
-
-- `resolve` 步骤会优先参考图谱 episode 映射
-- 若不足，再回退到本地相似检索、关键词匹配和 `recent_citations`
-- 真正删除前会创建 `PostgresPendingActionStore` 中的待确认动作
-
-### `solidify_conversation`
-
-1. `compose` 步骤生成草稿答案
-2. 草稿先写入 `PostgresCrossSessionStore.solidify_drafts`
-3. `compose` 同时从草稿中抽取候选结论（`candidate_conclusions`），存入 `PostgresCrossSessionStore`
-4. `draft_ready` 事件可供前端展示
-5. 后续 `capture_text` 工具把草稿正式写入 `KnowledgeNote`
-6. 草稿入库成功后，`PlanExecutor` 自动回写草稿状态为 `solidified`，并同步标记关联的候选结论为已固化
-
-状态闭环已接完：`draft → stored → solidified`，对应 candidate conclusions 也会同步切换 `solidified` 标记。
-
-## 会话摘要
-
-当前“会话摘要”并不是单独调用 LLM 做抽象总结，而是把最近最多 6 轮问答历史按下面的格式拼成字符串：
+`load_conversation_hints()` 会读取最近最多 6 轮问答，按时间正序渲染为受限线索：
 
 ```text
-Q: ...
-A: ...
+以下为历史对话线索，仅用于解析指代、用户目标和明确更正；历史助手回复不是事实证据，必须依据本轮检索结果重新核验。
 
-Q: ...
-A: ...
+用户: ...
+历史助手回复（待核验）: ...
 ```
 
-这段内容会写入 `WorkingMemory.conversation_summary`，再通过 `context_snapshot()` 传给后续回答生成逻辑。
+它不是事实摘要，也不是长期记忆。更准确地说，它是“会话线索”：帮助模型理解“刚才那个”“按上面的改一下”“我说的是另一个公司”这类承接关系。
 
-设计取舍：
+会话记忆的信任边界：
 
-- 原始问答记录会持久化保存
-- 给模型使用的是压缩后的最近上下文
-- 目标是控制 token 成本并保留多轮承接能力
+- 原始问答会持久化保存
+- 给模型使用的是有长度预算的最近线索
+- 历史助手回复必须标记为待核验
+- 当前事实结论仍应由本轮 graph、note、工具或检索证据支撑
 
-## 问答历史
+### 3. 长期记忆：正式知识和复习材料
 
-问答历史统一读写 `Postgres.ask_history`。数据库配置缺失或写入失败属于启动/运行错误，不会转写到本地 JSON。
+长期记忆保存用户希望 Agent 长期记住、可反复检索和引用的知识。
 
-## 已知限制
+主要载体：
 
-### 1. `WorkingMemory` 只支持单个当前活跃 session
+- [postgres_memory_store.py](../../src/personal_agent/storage/postgres_memory_store.py)
+- `Postgres.knowledge_notes`
+- `Postgres.review_cards`
 
-当前 `MemoryFacade.bind_session()` 在切换到不同 `user_id:session_id` 时会直接 `reset()` 当前 `WorkingMemory`。这意味着：
+长期知识模型：
 
-- 切换对话窗口时，旧会话的 `task_goal / plan_steps / recent_steps / tool_cache` 会丢失
-- 重新进入旧会话时，只能依赖已持久化的问答历史重建 `conversation_summary`
-- 当前实现更适合单活跃会话或短事务式 ask/capture 请求
+- parent note 表达文档级或主题级知识
+- chunk note 保存原文片段、证据定位和 citation 单元
+- `parent_note_id / chunk_index / source_span` 用于建立文档和片段关系
+- 复习卡独立保存，用于后续记忆巩固和回顾
 
-如果未来需要“切回旧窗口后继续保留执行态上下文”，更合理的方向是：
+长期记忆的职责：
 
-- 改为 `session_key -> WorkingMemory` 的会话级缓存
-- 配合 TTL / LRU 控制内存占用
+- 作为事实检索和引用的主要来源之一
+- 支持相似检索、关键词检索、按 parent 去重
+- 支持 chunk 查询、父 note 查询和级联删除
+- 与 Graphiti episode 映射配合，支撑图谱语义检索和原文回溯
 
-### 2. `_tool_cache` 目前是预留能力
+长期记忆和会话记忆的区别很重要：`ask_history` 只记录非 Graph ask 的问答存档，`knowledge_notes` 记录“系统正式沉淀并可检索引用的知识”。Graph entry 的对话历史则属于 checkpoint 短期记忆。
 
-`WorkingMemory` 中的 `_tool_cache` 已有 `cache_tool_result()` / `get_cached_result()` 接口和测试，但当前生产代码中还没有实际接入工具结果复用链路。
+## 数据库表与保存内容
 
-现状更像：
+当前记忆相关数据都保存在 `PERSONAL_AGENT_POSTGRES_URL` 指向的 Postgres 中。不同表保存的不是同一种“记忆”，而是不同生命周期的数据。
 
-- 能力接口已建好
-- 但还没有真正被 ask / planner / executor 使用
+| 表 | 记忆类型 | 保存内容 | 主要写入来源 | 生命周期 |
+| --- | --- | --- | --- | --- |
+| `checkpoints` / `checkpoint_blobs` / `checkpoint_writes` | 短期记忆 / 可恢复执行现场 | LangGraph checkpoint，包括 `AgentGraphState.messages`、`plan`、`react`、`events`、`execution_trace`、`pending_confirmation`、当前 `answer` 等 | `execute_entry()` 的 LangGraph 编排 | 同一 `thread_id` 的对话与运行恢复周期 |
+| `knowledge_notes` | 长期记忆 | 正式知识 note 和 chunk。核心字段在 `payload` JSONB 中，表层索引字段包括 `id`、`user_id`、`parent_note_id`、`graph_episode_uuid`、`created_at`、`updated_at` | `capture_text`、`capture_link`、`capture_file`、`solidify_conversation` 后续入库 | 长期保存，除非用户删除 |
+| `review_cards` | 长期复习记忆 | 复习卡 `payload`，关联 `note_id`，并保存 `due_at` | capture / digest 相关流程 | 长期保存，随 note 删除级联清理 |
+| `ask_history` | 非 Graph 问答历史 | direct ask 的 `question`、`answer`、`citations`、`user_id`、`session_id`、`created_at` | 直接调用 `execute_ask(record_history=True)` | 历史/API 存档；Graph entry 不写入 |
 
-### 3. `PostgresCrossSessionStore` 是中间态，不是正式知识库
+### `checkpoints`：Graph 短期记忆真源
 
-`recent_citations / solidify_drafts / candidate_conclusions` 都带 TTL 和数量上限。它的目标是支撑删除解析、草稿续接和候选结论沉淀，而不是替代长期 note 存储。
+LangGraph 的 Postgres checkpointer 会维护 `checkpoints`、`checkpoint_blobs` 和 `checkpoint_writes`。这些表不是业务 store 手写 schema，而是由 `PostgresSaver.setup()` 创建。
+
+这里保存的是可恢复的 graph state。对 Agent 记忆最关键的是：
+
+- `messages`：同一 `thread_id` 下跨 run 累积的用户/助手对话
+- `plan`：计划步骤、当前步骤、步骤结果
+- `react`：ReAct 单步推理状态、迭代结果和停止原因
+- `events`：前端和 run snapshot 可见的运行事件
+- `execution_trace`：非计划分支的轻量执行路径
+- `pending_confirmation`：等待用户确认或补充的信息
+- `answer / answer_completed`：当前 run 的最终输出状态
+
+因此，LangGraph entry 的多轮对话不再写入 `ask_history`。同一会话的短期上下文以 checkpoint `messages` 为唯一真源。
+
+### `knowledge_notes`：正式长期知识
+
+`knowledge_notes` 保存用户明确采集或固化后的知识。表结构将可检索索引字段放在外层，将完整 note 放在 `payload` JSONB 中。
+
+外层字段：
+
+- `id`：note 或 chunk id
+- `user_id`：所属用户
+- `parent_note_id`：chunk 指向 parent note；parent note 为空
+- `graph_episode_uuid`：与 Graphiti episode 的映射
+- `payload`：完整 `KnowledgeNote`
+- `created_at / updated_at`
+
+`payload` 中通常包含标题、摘要、正文、source 信息、chunk 信息、entity/relation、citation 定位、图谱同步状态等。它是当前系统中最接近“长期事实记忆”的业务真源。
+
+### `review_cards`：复习材料
+
+`review_cards` 保存与 note 关联的复习卡：
+
+- `id`
+- `note_id`
+- `payload`：完整 `ReviewCard`
+- `due_at`：下次复习时间
+
+它依附于长期知识，不保存对话上下文。
+
+### `ask_history`：非 Graph 问答存档
+
+`ask_history` 只保存 direct ask 产生的问答历史：
+
+- `id`
+- `user_id`
+- `session_id`
+- `question`
+- `answer`
+- `citations`
+- `created_at`
+
+它的用途是历史列表、搜索，以及 direct ask 没有 checkpoint thread 时生成受限会话线索。它不是 Graph entry 的多轮对话真源，也不会作为正式事实证据。
+
+### `pending_confirmation`：Graph HITL 暂停状态
+
+高风险动作的确认状态保存在 checkpoint 的 `AgentGraphState.pending_confirmation` 中。以删除笔记为例，`delete_note` 第一次被调用时不会删除数据，而是返回确认 payload；Graph 将其写入 `pending_confirmation` 并通过 `interrupt()` 暂停：
+
+```json
+{
+  "step_id": "del-3",
+  "action_type": "delete_note",
+  "note_id": "note-123",
+  "title": "DNS",
+  "summary": "DNS 是域名系统...",
+  "description": "将删除笔记「DNS」及其关联的复习卡片和图谱映射。"
+}
+```
+
+用户确认时，前端通过 Graph resume 传入 `{"decision": "confirm"}`。Graph 从 checkpoint 恢复暂停点，把当前步骤的工具输入补上 `confirmed=true`，再次调用 `delete_note`，这次才真正删除 note、chunk、review card 和可用的图谱 episode。
+
+用户拒绝时，Graph 将当前步骤标记为 `skipped`，递归跳过依赖它的后续步骤，清空 `pending_confirmation`，并返回取消说明。
+
+## 读写路径
+
+### direct ask
+
+1. `MemoryFacade.bind_session()` 绑定 `user_id:session_id`
+2. runtime 接收当前问题
+3. 如果调用方没有显式传入 `conversation_messages`，则用 `load_conversation_hints()` 从 `ask_history` 生成受限线索
+4. runtime 基于当前问题、长期知识检索结果和会话线索生成回答
+5. `record_turn()` 持久化本轮问答
+
+### LangGraph entry
+
+1. `execute_entry()` 绑定 session，并用 `thread_id` 从 Postgres checkpoint 恢复当前 state
+2. 路由、规划、direct answer、summarize、ReAct 和 compose/solidify 优先使用 checkpoint 中的 thread 对话和执行状态
+3. 不从 `ask_history` 为 Graph prompt 补历史，避免 checkpoint 和历史表重复表达同一会话
+4. `AgentGraphState.messages / plan / react / events / execution_trace` 写入 checkpoint
+5. 所有成功形成用户可见回复的完成分支在 `finalize_entry_result` 统一追加 assistant message 到 checkpoint
+
+### solidify conversation
+
+1. `compose` 生成草稿答案
+2. 草稿保存在 checkpoint 的 `plan.results` 中
+3. `draft_ready` 事件供前端展示
+4. 后续 `capture_text` 从上游 compose 结果接收草稿，并正式写入 `knowledge_notes`
+
+### delete knowledge
+
+1. 解析删除目标时优先参考图谱 episode 映射
+2. 不足时回退到本地相似检索和关键词匹配
+3. `delete_note` 首次执行时返回 `pending_confirmation`，不删除数据
+4. Graph 通过 checkpoint 暂停并等待用户确认
+5. resume 确认后再次调用 `delete_note(confirmed=true)` 执行删除；拒绝则跳过后续依赖步骤
 
 ## 当前数据落点
 
-- `Postgres.knowledge_notes`：长期知识 note
-- `Postgres.review_cards`：复习卡
-- `Postgres.ask_history`：问答历史
-- `Postgres.pending_actions`：待确认操作及审计载荷
-- `Postgres.cross_session_artifacts`：跨请求中间态
+| 类型 | 数据载体 | 生命周期 | 是否事实来源 |
+| --- | --- | --- | --- |
+| 当前执行现场 | Postgres checkpoint / `AgentGraphState` | thread/run 周期 | 否 |
+| Thread 对话 | checkpoint 中的 `state.messages` | 同一 thread | 否 |
+| 非 Graph 问答历史 | `Postgres.ask_history` | direct ask 历史/API 存档 | 否，仅作线索 |
+| 长期知识 | `Postgres.knowledge_notes` | 长期 | 是 |
+| 复习材料 | `Postgres.review_cards` | 长期 | 是，取决于来源 |
+| 待确认动作 | checkpoint 中的 `pending_confirmation` | thread/run 周期 | 否 |
+
+## 与 prompt 的关系
+
+Agent 构造 prompt 时遵循三个边界：
+
+1. **短期状态优先**：同一 thread 内优先使用 checkpoint 中的 `messages / plan / react / events`
+2. **Graph 不读历史表**：LangGraph entry 不从 `ask_history` 注入历史，避免 checkpoint 与历史表双源
+3. **Direct ask 可读线索**：非 Graph direct ask 没有 checkpoint thread 时，才从 `ask_history` 注入最多 6 轮受限线索
+4. **事实证据另算**：历史回答不直接作为事实依据，事实结论必须依赖长期知识、工具结果或本轮检索
+
+这可以避免两类问题：
+
+- checkpoint 和 `ask_history` 同时维护同一 Graph 会话造成双写和上下文重复
+- 历史回答过期或错误，却被模型当成事实继续传播
+
+## 已知限制
+
+### 1. 会话线索仍是文本格式
+
+`load_conversation_hints()` 目前输出受限文本。更理想的方向是结构化输出，例如：
+
+- 当前用户目标
+- 已确认约束
+- 明确更正
+- 未决问题
+- 最近实体和指代
+
+### 2. 中间态不是长期知识
+
+solidify 草稿只是当前 Graph 运行中的中间结果。只有写入 `knowledge_notes` 后，才进入正式长期记忆。
 
 ## 演进方向
 
-- 继续保持 `WorkingMemory` 作为轻量 scratchpad
-- 明确长期知识的双层定位：Graphiti node / edge / fact 是语义检索与推理单元，PostgresMemoryStore parent/chunk note 是原文证据与回溯单元
-- 需要跨请求恢复的审批/续接语义，继续显式放入持久化模型
-- 基于已持久化的 LangGraph checkpoint 继续扩展多段审批或复杂恢复流
+- 将会话线索从文本摘要演进为结构化会话状态
+- 为事实更新、冲突消解和长会话干扰建立专项评测
+- 明确长期知识的双层定位：Graphiti node/edge/fact 是语义推理单元，Postgres parent/chunk note 是原文证据与回溯单元
+- 基于 Postgres checkpoint 扩展多段审批和复杂恢复流

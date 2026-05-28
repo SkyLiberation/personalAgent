@@ -169,8 +169,6 @@
   "deleted_upload_files": 4,
   "deleted_ask_history": 8,
   "deleted_graph_nodes": 12,
-  "deleted_pending_actions": 3,
-  "deleted_cross_session_artifacts": 6,
   "deleted_checkpoints": 24,
   "deleted_checkpoint_blobs": 35,
   "deleted_checkpoint_writes": 90,
@@ -227,73 +225,7 @@
 - `graph_search` — 入参：`question` (string), `user_id` (string, 可选, 默认 "default")
 - `web_search` — 入参：`question` (string), `user_id` (string, 可选)
 - `capture_text` — 入参：`text` (string), `user_id` (string, 可选, 默认 "default")
-- `delete_note` — 入参：`note_id` (string), `user_id` (string, 可选), `confirmed` (bool), `action_id` (string, 确认时提供), `token` (string, 确认时提供)
-
----
-
-## `GET /api/pending-actions`
-
-返回指定用户的待处理操作列表（HITL 确认队列）。
-
-查询参数：
-
-- `user_id`
-- `status`（可选：`pending` / `confirmed` / `rejected` / `expired` / `executed`）
-
-示例响应：
-
-```json
-{
-  "items": [
-    {
-      "id": "f3a2b1c4-...",
-      "user_id": "default",
-      "action_type": "delete_note",
-      "target_id": "76ac8451-...",
-      "title": "删除笔记「过时的会议记录」",
-      "description": "将删除笔记「过时的会议记录」及其关联的复习卡片。",
-      "status": "pending",
-      "created_at": "2026-05-12T10:30:00",
-      "expires_at": "2026-05-12T11:30:00",
-      "resolved_at": null,
-      "audit_log": [
-        {"timestamp": "...", "event": "created", "actor": "system", "detail": "..."}
-      ]
-    }
-  ]
-}
-```
-
-## `POST /api/pending-actions/{action_id}/confirm`
-
-确认执行某个待处理操作。
-
-请求体：
-
-```json
-{
-  "token": "a1b2c3d4",
-  "user_id": "default"
-}
-```
-
-说明：
-
-- 需要提供正确的 `token`（由创建 pending action 时返回）
-- 过期或已处理的 action 会返回 404
-
-## `POST /api/pending-actions/{action_id}/reject`
-
-拒绝某个待处理操作。
-
-请求体：
-
-```json
-{
-  "user_id": "default",
-  "reason": "这不是我要删除的笔记"
-}
-```
+- `delete_note` — 入参：`note_id` (string), `user_id` (string, 可选), `confirmed` (bool)
 
 ---
 
@@ -314,8 +246,6 @@ data: {
   "pending_confirmation": {
     "step_id": "...",
     "action_type": "delete_note",
-    "action_id": "...",
-    "token": "...",
     "note_id": "...",
     "title": "...",
     "summary": "...",

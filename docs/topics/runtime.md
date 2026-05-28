@@ -32,7 +32,7 @@
 - 持有工具注册表
 - 持有记忆门面
 - 持有 verifier、planner、validator、replanner
-- 执行 capture、ask、digest、entry、graph sync、pending action 等核心流程
+- 执行 capture、ask、digest、entry、graph sync 等核心流程
 
 ### 3. LangGraph 编排
 
@@ -96,7 +96,7 @@ EntryInput
 - 已支持图谱失败时本地回退
 - 已支持 verifier 校验和低置信度重试
 - 已支持图谱异步/手动同步重试
-- 已支持 pending action 确认和拒绝
+- 已支持 Graph HITL 确认和拒绝
 - 已支持 health 和开发环境全量数据 reset
 - 已支持 `plan_steps` 与 `execution_trace` 分离，避免非计划任务生成伪计划
 
@@ -110,13 +110,13 @@ EntryInput
 
 ### `plan_for_entry(entry_input: EntryInput) -> tuple[RouterDecision, list[PlanStep], list[dict]]`
 
-运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续规划和校验，并填充 `WorkingMemory.plan_steps`；普通意图返回空计划，由执行阶段生成 `execution_trace`。
+运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续规划和校验，并写入 checkpoint 中的 `AgentGraphState.plan`；普通意图返回空计划，由执行阶段生成 `execution_trace`。
 
 ## 已知限制
 
 ### 1. `AgentRuntime` 职责过重
 
-当前 `AgentRuntime` 仍同时承担依赖装配、public API facade、entry graph 调用、capture、ask、digest、tool registry、graph sync、pending action、LLM 调用和 admin 操作等职责。虽然 mixin 已经把文件拆小，但对象边界仍然偏“上帝类”：node 已经成为 LangGraph 编排单元，很多业务能力却仍要通过 runtime 方法或 runtime 私有字段间接触达。
+当前 `AgentRuntime` 仍同时承担依赖装配、public API facade、entry graph 调用、capture、ask、digest、tool registry、graph sync、LLM 调用和 admin 操作等职责。虽然 mixin 已经把文件拆小，但对象边界仍然偏“上帝类”：node 已经成为 LangGraph 编排单元，很多业务能力却仍要通过 runtime 方法或 runtime 私有字段间接触达。
 
 这会带来几个问题：
 

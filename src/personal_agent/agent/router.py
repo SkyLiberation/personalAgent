@@ -14,6 +14,7 @@ from ..core.models import EntryInput, EntryIntent
 logger = logging.getLogger(__name__)
 
 RiskLevel = Literal["low", "medium", "high"]
+ConversationMessage = dict[str, str]
 
 
 class RouterDecision(BaseModel):
@@ -35,7 +36,9 @@ class RouterDecision(BaseModel):
 
 class IntentRouter(Protocol):
     def classify(
-        self, entry_input: EntryInput, conversation_context: str = ""
+        self,
+        entry_input: EntryInput,
+        conversation_messages: list[ConversationMessage] | None = None,
     ) -> RouterDecision: ...
 
 
@@ -181,14 +184,18 @@ class DefaultIntentRouter:
         self._settings = settings
 
     def classify(
-        self, entry_input: EntryInput, conversation_context: str = ""
+        self,
+        entry_input: EntryInput,
+        conversation_messages: list[ConversationMessage] | None = None,
     ) -> RouterDecision:
         if entry_input.source_type == "file":
             decision = _default_router_decision("capture_file", "来源消息类型是文件。")
             self._log_decision(entry_input, decision, strategy="source_type")
             return decision
 
-        llm_result = self._classify_with_llm(entry_input.text, conversation_context)
+        llm_result = self._classify_with_llm(
+            entry_input.text, conversation_messages or []
+        )
         if llm_result is not None:
             decision = _merge_with_defaults(llm_result)
             strategy = "empty" if not entry_input.text.strip() else "llm"
@@ -201,7 +208,7 @@ class DefaultIntentRouter:
         return decision
 
     def _classify_with_llm(
-        self, text: str, conversation_context: str = ""
+        self, text: str, conversation_messages: list[ConversationMessage] | None = None
     ) -> RouterDecision | None:
         if not text.strip():
             return _default_router_decision("unknown", "消息内容为空。")
@@ -234,10 +241,25 @@ class DefaultIntentRouter:
             "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), "
             "requires_clarification(bool, 可选), missing_information(字符串数组, 可选), clarification_prompt(字符串, 可选)。"
             "risk_level: 删除类操作应为 high，一般操作为 low。"
-            "requires_confirmation: 删除操作应为 true。\n\n"
-            f"会话前文（可能为空）：\n{conversation_context or '无'}\n\n"
-            f"当前用户输入：{text}"
+            "requires_confirmation: 删除操作应为 true。"
+            "历史 chat messages 只用于理解指代和已有讨论主题；"
+            "请分类最后一条当前用户输入，不要把历史助手回复当作事实证据。"
         )
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一个严谨的意图分类器，只输出 JSON。\n"
+                    f"{prompt}"
+                ),
+            },
+        ]
+        for message in conversation_messages or []:
+            role = message.get("role")
+            content = str(message.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": f"当前用户输入：{text}"})
         try:
             client = OpenAI(
                 api_key=self._settings.openai_api_key,
@@ -247,13 +269,7 @@ class DefaultIntentRouter:
             )
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "你是一个严谨的意图分类器，只输出 JSON。",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 temperature=0,
                 max_tokens=500,
                 response_format={"type": "json_object"},

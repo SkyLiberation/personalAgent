@@ -214,19 +214,19 @@ Graphiti node / edge / fact 主导召回、排序和推理
 - 已支持 `relation_fact + snippet` 证据锚点
 - 已支持回答后 verifier 校验
 - 已支持低置信度自修正和不确定性标注
-- 已支持删除目标解析时利用图谱 episode、本地相似检索、关键词和 recent citations
+- 已支持删除目标解析时利用图谱 episode、本地相似检索和关键词
 - 已支持 ask 三层检索回退（图谱 → 本地 → 网络搜索）
 - 已支持 Graphiti 写入后通过 `search_after_ingest` 发现 related notes（非关键步骤，失败不影响核心图谱同步）
 - 已支持长文 parent + chunk 检索单元：`parent_note_id / chunk_index / source_span`
 - 已支持 chunk note 独立后台图谱同步（capture 设 `graph_sync_status="pending"`，API 层 background_tasks 调用 `sync_note_to_graph()`）
 - 已支持级联删除时清理 chunk 的 graph episode
 - 已支持相似检索按 parent 去重，并在回答证据中区分 parent summary 与 chunk content
-- 已补基础回归样本：`test_verifier.py` 覆盖 web citation 计分与孤儿 citation，`test_plan_executor.py` 覆盖 resolve 多级回退和 `relation_fact + snippet` 相关执行路径
+- 已补基础回归样本：`test_verifier.py` 覆盖 web citation 计分与孤儿 citation，orchestration 回归覆盖 resolve 和 `relation_fact + snippet` 相关执行路径
 - 已实现统一证据模型 `EvidenceItem`（`core/evidence.py`），将 Graphiti `fact_refs / edge_refs / citation_hits`、本地 note/chunk、web 搜索结果和工具结果收敛为可追踪证据结构
 - LangChain 工具 artifact 提供 `evidence` 字段，`graph_search / web_search` 返回统一证据
 - `RuntimeAskMixin.execute_ask()` 已积累三层检索的 `EvidenceItem`，`AskResult.evidence` 随 API 响应返回
 - `AnswerVerifier.verify()` 已支持可选 `evidence` 参数，基于 evidence 类型和 orphan 状态增加证据充分性评分
-- `ReActStepRunner` 已支持在迭代间传递 `evidence`，每次 `ReActIteration` 保留工具返回的证据
+- Graph ReAct 节点已支持在迭代间传递 `evidence`，每次迭代保留工具返回的证据
 
 ## 已知限制
 

@@ -1,25 +1,49 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from ..core.models import local_now
 
-from .working_memory import WorkingMemory
-
 if TYPE_CHECKING:
     from ..core.models import Citation
     from ..storage.ask_history_store import AskHistoryStore
-    from ..storage.postgres_cross_session_store import PostgresCrossSessionStore
     from ..storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
 
+_MAX_HISTORY_QUESTION_CHARS = 300
+_MAX_HISTORY_ANSWER_CHARS = 500
+_MAX_HISTORY_CONTEXT_CHARS = 3600
+_HISTORY_CONTEXT_PREAMBLE = (
+    "以下为历史对话线索，仅用于解析指代、用户目标和明确更正；"
+    "历史助手回复不是事实证据，必须依据本轮检索结果重新核验。"
+)
+
+
+def _compact_context_text(text: str, limit: int) -> str:
+    value = " ".join(text.split())
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 3]}..."
+
+
+def _bounded_history_context(blocks: list[str]) -> str:
+    selected: list[str] = []
+    current_length = len(_HISTORY_CONTEXT_PREAMBLE)
+    for block in reversed(blocks):
+        added_length = len(block) + 2
+        if selected and current_length + added_length > _MAX_HISTORY_CONTEXT_CHARS:
+            break
+        selected.append(block)
+        current_length += added_length
+    selected.reverse()
+    return "\n\n".join([_HISTORY_CONTEXT_PREAMBLE, *selected])
+
 
 class MemoryFacade:
-    """Unified read/write facade over working memory and Postgres stores.
+    """Unified read/write facade over Postgres memory stores.
 
     AgentService uses this single entry-point instead of juggling three
     separate store objects.
@@ -31,12 +55,9 @@ class MemoryFacade:
         self,
         local_store: "PostgresMemoryStore",
         ask_history_store: "AskHistoryStore",
-        cross_session_store: "PostgresCrossSessionStore | None" = None,
     ) -> None:
         self.local = local_store
         self.ask_history = ask_history_store
-        self.cross_session = cross_session_store
-        self.working: WorkingMemory = WorkingMemory()
         self._session_key: str | None = None
 
     # -- session lifecycle --------------------------------------------------
@@ -44,27 +65,27 @@ class MemoryFacade:
     def bind_session(self, user_id: str, session_id: str) -> None:
         key = f"{user_id}:{session_id}"
         if self._session_key != key:
-            self.working.reset()
             self._session_key = key
 
-    # -- conversation summary -----------------------------------------------
+    # -- conversation hints --------------------------------------------------
 
-    def refresh_conversation_summary(self, user_id: str, session_id: str) -> str:
-        """Return the latest few Q&A turns as a plain-text summary block.
+    def load_conversation_hints(self, user_id: str, session_id: str) -> str:
+        """Return bounded recent dialogue hints for reference resolution.
 
         Reads from Postgres ask history.
         """
         records = self._load_conversation_turns(user_id, session_id, limit=6)
         if not records:
-            self.working.set_conversation_summary("暂无对话历史。")
             return ""
         lines = [
-            f"Q: {item.get('question', '')}\nA: {item.get('answer', '')}"
+            (
+                f"用户: {_compact_context_text(item.get('question', ''), _MAX_HISTORY_QUESTION_CHARS)}\n"
+                f"历史助手回复（待核验）: "
+                f"{_compact_context_text(item.get('answer', ''), _MAX_HISTORY_ANSWER_CHARS)}"
+            )
             for item in records
         ]
-        summary = "\n\n".join(lines)
-        self.working.set_conversation_summary(summary)
-        return summary
+        return _bounded_history_context(lines)
 
     def record_turn(
         self,
@@ -73,10 +94,11 @@ class MemoryFacade:
         question: str,
         answer: str,
         citations: "list[Citation] | None" = None,
+        record_id: str | None = None,
     ) -> None:
         """Record a Q&A turn to Postgres."""
         record = {
-            "id": str(uuid4()),
+            "id": record_id or str(uuid4()),
             "user_id": user_id,
             "session_id": session_id,
             "question": question,
@@ -98,85 +120,12 @@ class MemoryFacade:
             )
         )
 
-        # Update the summary after each turn so it stays current
-        self.refresh_conversation_summary(user_id, session_id)
-        self.working.add_step(f"Q: {question[:120]} -> A: {answer[:120]}")
-
-        # Persist citations to cross-session store for delete targeting
-        if citations and self.cross_session is not None:
-            try:
-                self.cross_session.add_citations(user_id, citations, question=question)
-            except Exception:
-                logger.exception("Failed to record citations to cross_session store")
-
-    # -- cross-session state ------------------------------------------------
-
-    def record_citations(
-        self, user_id: str, citations: "list[Citation]", question: str = "",
-    ) -> None:
-        """Record citations from an ask response for future delete targeting."""
-        if self.cross_session is not None:
-            try:
-                self.cross_session.add_citations(user_id, citations, question=question)
-            except Exception:
-                logger.exception("Failed to record citations to cross_session store")
-
-    def recent_citations(self, user_id: str, limit: int = 10) -> list[dict]:
-        """Return recently cited notes for delete targeting resolution."""
-        if self.cross_session is not None:
-            return self.cross_session.recent_citations(user_id, limit)
-        return []
-
-    def save_draft(self, user_id: str, text: str, source_context: str = "") -> str:
-        """Save a solidify draft. Returns the draft ID."""
-        if self.cross_session is not None:
-            return self.cross_session.save_draft(user_id, text, source_context)
-        return ""
-
-    def get_draft(self, user_id: str, draft_id: str) -> dict | None:
-        """Get a specific draft by ID."""
-        if self.cross_session is not None:
-            return self.cross_session.get_draft(user_id, draft_id)
-        return None
-
-    def list_drafts(self, user_id: str, status: str | None = None) -> list[dict]:
-        """List drafts for a user, optionally filtered by status."""
-        if self.cross_session is not None:
-            return self.cross_session.list_drafts(user_id, status)
-        return []
-
-    def add_conclusion(self, user_id: str, text: str, session_id: str = "") -> str:
-        """Record a candidate conclusion from a conversation. Returns conclusion ID."""
-        if self.cross_session is not None:
-            return self.cross_session.add_conclusion(user_id, text, session_id)
-        return ""
-
-    def list_conclusions(
-        self, user_id: str, solidified: bool | None = None,
-    ) -> list[dict]:
-        """List candidate conclusions, optionally filtered by solidified status."""
-        if self.cross_session is not None:
-            return self.cross_session.list_conclusions(user_id, solidified)
-        return []
-
-    def mark_draft_solidified(self, user_id: str, draft_id: str) -> bool:
-        """Mark a solidify draft as solidified after capture_text stores the note."""
-        if self.cross_session is not None:
-            return self.cross_session.mark_draft_status(user_id, draft_id, "solidified")
-        return False
-
-    def mark_conclusion_solidified(self, user_id: str, conclusion_id: str) -> bool:
-        """Mark a candidate conclusion as solidified."""
-        if self.cross_session is not None:
-            return self.cross_session.mark_conclusion_solidified(user_id, conclusion_id)
-        return False
-
     # -- helpers ------------------------------------------------------------
 
     def _load_conversation_turns(
         self, user_id: str, session_id: str, limit: int = 6
     ) -> list[dict]:
-        """Load conversation turns from Postgres."""
+        """Load recent turns in chronological order for prompt rendering."""
         records = self.ask_history.list_history(user_id, limit, session_id)
         return [
             {
@@ -186,5 +135,5 @@ class MemoryFacade:
                 if hasattr(r.created_at, "isoformat")
                 else str(r.created_at),
             }
-            for r in records
+            for r in reversed(records)
         ]

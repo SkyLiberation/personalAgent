@@ -1,460 +1,300 @@
 # 规划层说明
 
-本文汇总当前项目规划层的职责划分、计划生成与执行路径、现有能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/planner.py](../../src/personal_agent/agent/planner.py)、[src/personal_agent/agent/plan_validator.py](../../src/personal_agent/agent/plan_validator.py)、[src/personal_agent/agent/plan_executor.py](../../src/personal_agent/agent/plan_executor.py) 和 [src/personal_agent/agent/replanner.py](../../src/personal_agent/agent/replanner.py)。
+本文说明当前项目如何把复杂或高风险请求拆成可校验、可执行、可恢复的计划步骤。重点不是罗列“已有能力”，而是解释每一种计划步骤的语义、输入输出和它在真实流程中的作用。对应代码主要位于 [planner.py](../../src/personal_agent/agent/planner.py)、[plan_validator.py](../../src/personal_agent/agent/plan_validator.py)、[orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py) 和 [orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)。
 
 ## 设计目标
 
-当前规划层的目标是把复杂或高风险任务从“一次性回答”升级为可观测、可校验、可执行和可恢复的步骤流：
+规划层只服务需要明确步骤边界的任务。普通 `ask / capture / direct_answer / summarize` 直接走 Graph 分支并输出 `execution_trace`；真正进入计划执行的主要是：
 
-- 用 `PlanStep` 表示结构化任务步骤
-- 用 `DefaultTaskPlanner` 根据 intent 生成计划
-- 用 `PlanValidator` 在执行前做结构、依赖、风险和工具校验
-- 用 `PlanExecutor` 按依赖顺序执行计划并回传进度
-- 用 `Replanner` 在失败重试耗尽后尝试替换剩余步骤
+- `delete_knowledge`：删除长期知识，属于高风险操作，必须解析目标并经过确认。
+- `solidify_conversation`：把已有对话结论整理成正式知识，需要先生成草稿，再写入知识库。
 
-## 组件分层
+规划层的核心职责：
 
-### 1. `PlanStep`
+- 用 `PlanStep` 表达任务步骤。
+- 用 `PlanStepState` 保存 checkpoint-safe 执行状态。
+- 用 `PlanValidator` 阻止不安全或不可执行的计划。
+- 用 LangGraph `PlanExecutionGraph` 按步骤推进，并把状态写入 checkpoint。
+- 对高风险工具通过 `interrupt/resume` 接入人工确认。
 
-代码位置：[planner.py](../../src/personal_agent/agent/planner.py)
+## 计划步骤模型
 
-作用：
+`DefaultTaskPlanner` 产出 `PlanStep`。进入 Graph 后会转换为 `PlanStepState`，保存在 `AgentGraphState.plan.steps` 中。
 
-- 表示计划中的一个可执行步骤
-- 记录步骤类型、工具名、工具输入、依赖关系和风险等级
-- 记录执行状态和重试次数
+核心字段：
 
-核心字段包括：
+| 字段 | 含义 |
+| --- | --- |
+| `step_id` | 步骤唯一标识，例如 `del-2` |
+| `action_type` | 步骤类型：`retrieve / resolve / tool_call / compose / verify` |
+| `description` | 面向用户和日志的步骤说明 |
+| `tool_name` | `tool_call` 或 ReAct 可调用的工具名 |
+| `tool_input` | 工具输入；部分字段允许由上游步骤动态注入 |
+| `depends_on` | 前置步骤 id |
+| `risk_level` | 风险等级：`low / medium / high` |
+| `requires_confirmation` | 是否需要用户确认 |
+| `on_failure` | 失败策略：`skip / retry / abort` |
+| `execution_mode` | `deterministic` 或 `react` |
+| `allowed_tools` | ReAct 模式允许调用的工具列表 |
+| `max_iterations` | ReAct 最大迭代轮数 |
 
-- `step_id`
-- `action_type`
-- `description`
-- `tool_name`
-- `tool_input`
-- `depends_on`
-- `expected_output`
-- `success_criteria`
-- `risk_level`
-- `requires_confirmation`
-- `on_failure`
-- `status`
+执行时，Graph 会更新：
+
+- `status`：`planned / running / completed / failed / skipped`
 - `retry_count`
+- `failure_reason`
+- `validation_warnings`
+- `AgentGraphState.plan.results[step_id]`
 
-当前支持的主要 `action_type`：
+## 当前步骤类型
 
-```text
-retrieve
-resolve
-tool_call
-compose
-verify
-```
+### `retrieve`：检索候选信息
 
-### 2. `DefaultTaskPlanner`
-
-代码位置：[planner.py](../../src/personal_agent/agent/planner.py)
-
-作用：
-
-- 接收 router 产出的 intent
-- 优先调用 LLM 生成结构化计划
-- LLM 不可用或输出不可解析时，回退到启发式计划
-- 将 `ToolExecutor.list_tools()` 注入规划 prompt，让 planner 感知当前可用的 LangChain 工具
-
-当前内置启发式计划覆盖：
-
-- `capture_text / capture_link / capture_file`
-- `ask`
-- `summarize_thread`
-- `delete_knowledge`
-- `solidify_conversation`
-- `direct_answer`
-- `unknown`
-
-### 3. `PlanValidator`
-
-代码位置：[plan_validator.py](../../src/personal_agent/agent/plan_validator.py)
-
-作用：
-
-- 执行前校验计划结构
-- 校验依赖图是否完整、是否存在循环依赖
-- 校验 `tool_call` 中的 `tool_name` 是否已注册
-- 校验 `risk_level / on_failure / status`
-- 将计划与 `RouterDecision` 交叉校验
-
-它是规划层的安全门。比如 router 标记 `requires_confirmation=True`，但计划里没有任何确认步骤时，会产生阻断性 issue。
-
-### 4. `PlanExecutor`
-
-代码位置：[plan_executor.py](../../src/personal_agent/agent/plan_executor.py)
-
-作用：
-
-- 对计划步骤做拓扑排序
-- 按依赖顺序执行步骤
-- 将步骤状态从 `planned` 推进到 `running / completed / failed / skipped`
-- 通过 progress callback 发出 SSE 事件
-- 将执行过程写入 `WorkingMemory.recent_steps`
-- 在失败时按 `on_failure` 决定 retry、skip、abort 或 replan
-
-当前 step 分发逻辑：
-
-- `retrieve`：查询图谱或知识侧信息
-- `resolve`：将模糊目标解析为具体 note
-- `tool_call`：生成写入 `tool_messages` 的 tool-call message，由 `PlanExecutionGraph.plan_tool_node` 执行，并按 `pending_tool_call_id` 精确消费 artifact
-- `compose`：生成回答、删除摘要或固化草稿
-- `verify`：校验回答或执行结果
-
-`PlanStep` 已支持可选执行策略字段：
+`retrieve` 用于把用户请求转成候选上下文。当前主要调用图谱检索：
 
 ```text
-execution_mode = "deterministic" | "react"
-allowed_tools = [...]
-max_iterations = 3
+deps.graph_store.ask(question, user_id)
 ```
 
-`execution_mode="react"` 的步骤会进入独立 `ReactGraph` 的小范围 Thought / Action / Observation 节点循环；其他步骤留在 `PlanExecutionGraph` 的确定性 handler。计划图负责依赖、失败处理和审计，ReAct 只作为单步内部策略。
+返回结果会写入 `state.plan.results[step_id]`，常见字段：
 
-当前实现约束：
+- `answer`
+- `entity_names`
+- `relation_facts`
+- `related_episode_uuids`
 
-- `allowed_tools` 为空时默认只允许只读检索工具（`graph_search / web_search`）
-- 高风险、写长期知识和确认类工具不会被 ReAct 调用
-- `max_iterations` 有上限，validator 会对过大值给出 warning
-- 每轮 action / observation 会发出 `react_iteration` 事件
-- `failed` 或 `exhausted` 会进入步骤失败/重试处理，而不是被当作成功结果继续组合
-- `ask` 和 `delete_knowledge` 的 retrieve 步已经启用 ReAct
+在 `delete_knowledge` 中，`retrieve` 的重要输出是 `related_episode_uuids`。这些 episode uuid 后续会被 `resolve` 映射回本地 `knowledge_notes`。
 
-当前 entry 编排分为 `EntryGraph -> PlanExecutionGraph -> ReactGraph` 三层。两个执行子图分别持有自己的 `ToolNode`，并通过 `tool_messages`、`pending_tool_call_id` 和 `pending_react_iteration` 保持可校验、可恢复边界。
+### `resolve`：把模糊目标解析为具体对象
 
-### 5. `Replanner`
+`resolve` 不执行删除，也不修改数据库。它只回答一个问题：
 
-代码位置：[replanner.py](../../src/personal_agent/agent/replanner.py)
+> 用户说“删除这条 / 删除关于 DNS 的知识 / 删除刚才那条”，到底对应哪一个 `note_id`？
 
-作用：
+当前 `delete_knowledge` 的 `resolve` 逻辑在 [_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py) 中，顺序如下。
 
-- 在步骤失败且 retry 耗尽后尝试重新规划
-- 优先调用 LLM 生成替代步骤
-- LLM 不可用或失败时，使用启发式补救计划
-- 保留已完成步骤，只替换未完成或失败的后续步骤
+第一步：使用图谱 episode 映射。
 
-默认步骤重试预算以 checkpoint-safe 状态保存：
+1. 遍历上游步骤结果。
+2. 查找 `related_episode_uuids`。
+3. 调用 `PostgresMemoryStore.find_notes_by_graph_episode_uuids(user_id, uuids)`。
+4. 将匹配到的 note 转成候选项。
+
+候选项结构类似：
+
+```json
+{
+  "note_id": "...",
+  "title": "...",
+  "summary": "...",
+  "source": "graph_episode"
+}
+```
+
+第二步：如果图谱映射没有候选，则让 LLM 在本地 note 候选中选择。
+
+1. 读取当前用户的 parent notes：`list_notes(user_id, include_chunks=False)`。
+2. 取最近最多 100 条。
+3. 只把 `note_id / title / summary` 提供给模型。
+4. 要求模型只在目标明显对应时返回一个候选 `note_id`；不确定或多候选时返回 `null`。
+
+这一步的关键约束是：LLM 只能从已有候选 ID 中选择，不能生成新 ID，也不能执行删除。
+
+如果仍然没有候选，`resolve` 会失败并写入用户可见回答：
 
 ```text
-step.max_retries = 3
-step.failure_reason
-step.recoverable
+未找到可删除的知识笔记，请提供更具体的标题或内容描述。
 ```
 
-## 当前执行路径
+如果找到候选，`resolve` 返回：
 
-### entry 入口
+```json
+{
+  "note_id": "...",
+  "title": "...",
+  "summary": "...",
+  "source": "...",
+  "candidates": [...]
+}
+```
 
-1. `AgentRuntime.execute_entry()` 接收入口请求
-2. `DefaultIntentRouter` 产出 `RouterDecision`
-3. 若 `requires_planning=True`，`DefaultTaskPlanner` 生成 `PlanStep` 列表
-4. `PlanValidator` 校验真实执行计划
-5. 校验结果写入 `WorkingMemory.plan_steps`
-6. 若 `requires_planning=False`，不生成正式计划，后续由 runtime 记录轻量 `execution_trace`
+随后 Graph 会把 `note_id` 动态注入依赖该 `resolve` 步骤的 `tool_call(delete_note)`：
 
-注意：
+```text
+resolve result.note_id
+  -> delete_note.tool_input.note_id
+  -> delete_note.tool_input.user_id
+```
 
-- 当前只有需要计划驱动的 entry 才会生成可执行 `plan_steps`
-- 普通 `ask / capture / direct_answer` 使用 `execution_trace` 表达执行路径
-- `PlanValidator` 已注入 `ToolExecutor`，工具校验不再依赖硬编码白名单
+因此，删除哪些数据不是 planner 在计划阶段拍脑袋决定的，而是运行时通过 `resolve` 从真实知识库候选中解析出来。
 
-### 计划驱动执行
+### `tool_call`：调用工具
 
-只有 `RouterDecision.requires_planning=True` 且存在有效步骤时，才进入 `PlanExecutor`。
+`tool_call` 不在普通 Python handler 中直接执行，而是交给 LangGraph `ToolNode`。Graph 会创建 tool-call message，并通过 `tool_messages` 和 `pending_tool_call_id` 精确消费结果。
 
-当前主要覆盖：
+当前关键工具：
 
-- `delete_knowledge`
-- `solidify_conversation`
+- `delete_note`
+- `capture_text`
 
-其他意图走 entry orchestration graph 内置普通分支，并通过 `execution_trace` 可观测：
+`delete_note` 的行为：
 
-- `capture`
-- `ask`
-- `summarize`
-- `direct_answer`
-- `unknown`
+1. 未确认时，不删除数据，只返回 `pending_confirmation=true`。
+2. Graph 检测到 pending confirmation 后进入 `interrupt()`。
+3. 用户确认后，resume 时携带确认决策，Graph 将 `confirmed=true` 注入工具输入。
+4. 工具在二次调用时真正删除。
 
-### 计划与执行路径可观测
+真正删除时会清理：
 
-真实计划会进入：
+- 目标 `knowledge_notes` 记录
+- 如果目标是 parent note，则级联删除子 chunk notes
+- 关联 `review_cards`
+- 上传文件引用
+- Graphiti episode 映射，若图谱可用
 
-- `WorkingMemory.plan_steps`
-- `EntryResult.plan_steps`
-- SSE `plan_created / plan_step_started / plan_step_completed / plan_step_failed / plan_execution_complete`
-- 前端可折叠计划面板
+`capture_text` 的行为：
 
-非计划驱动路径会进入：
+- 将文本写入长期知识库。
+- 生成 `KnowledgeNote`。
+- 复用 capture 链路做 chunk、review card、图谱同步等后续处理。
 
-- `WorkingMemory.execution_trace`
-- `EntryResult.execution_trace`
-- SSE `execution_trace`
-- 前端“Agent 执行路径”面板
+### `compose`：生成用户可见文本或草稿
 
-这避免把不会被 `PlanExecutor` 执行的步骤展示成正式计划。
+`compose` 用于把前置步骤结果整理为自然语言输出。不同 intent 下语义不同。
+
+在 `delete_knowledge` 中：
+
+- 依赖 `delete_note` 的结果。
+- 生成删除结果摘要，例如“已创建确认请求”“已删除某笔记”“未找到目标”。
+
+在 `solidify_conversation` 中：
+
+- 从 checkpoint `state.messages` 中读取候选会话。
+- 让模型判断哪些会话事实属于本次固化范围。
+- 生成一条可独立入库的知识草稿。
+- 如果没有足以固化的知识正文，则失败，不写入知识库。
+
+solidify 的草稿保存在 checkpoint 的 `plan.results` 中，并发出 `draft_ready` 事件，便于前端展示。
+
+### `verify`：校验回答或结果
+
+`verify` 用于对回答事实依据做校验。当前计划驱动主流程中，删除计划不允许添加独立 `verify` 步骤，因为删除确认由 `delete_note` 工具和 HITL 流程承担；solidify 也不允许 `verify`，因为当前只有 `compose -> capture_text` 两步具有明确执行语义。
 
 ## 典型计划
 
-### `delete_knowledge`
+### 删除知识：`delete_knowledge`
 
-当前固化计划模板：
-
-```text
-retrieve -> resolve -> tool_call(delete_note) -> compose
-```
-
-含义：
-
-- `retrieve`：检索候选笔记
-- `resolve`：将模糊删除请求解析成具体 note_id
-- `tool_call`：调用 `delete_note`；工具层创建确认请求并在恢复执行时校验确认载荷
-- `compose`：生成删除结果摘要
-
-`resolve` 当前会按顺序尝试：
-
-- 图谱 episode UUID 映射本地 note
-- 本地相似检索
-- 关键词匹配
-- 最近 citations
-
-resolve 返回的候选笔记现已包含 `parent_note_id` / `parent_title`，前端可展示 chunk 所属的父文档。
-
-高风险删除步骤当前由 LangGraph entry 总编排承载 HITL：`execute_plan_step` 收到 `delete_note` 返回的 pending confirmation 后，会进入 `confirm_step`，通过 `interrupt()` 暂停 run；前端确认或拒绝后调用 `/api/entry/runs/{run_id}/resume`，后端用 checkpoint 中的 `thread_id` 恢复同一个 graph run。`delete_note` 工具仍保留 `action_id / token`，作为确认载荷和工具层审计边界。
-
-### `solidify_conversation`
-
-当前启发式计划：
+当前模板：
 
 ```text
-compose -> tool_call(capture_text)
+del-1 retrieve
+  -> del-2 resolve
+  -> del-3 tool_call(delete_note)
+  -> del-4 compose
 ```
 
-含义：
+步骤含义：
 
-- `compose`：将近期候选会话以轮次标识提供给 LLM，由模型根据当前保存请求语义选择依据并生成入库草稿；无合格正文时不写入。同时从草稿中抽取候选结论（`candidate_conclusions`）并存入 `PostgresCrossSessionStore`
-- `tool_call`：复用 `capture_text` 写入长期知识库；正文由执行器从上游 compose 结果注入
-- `tool_call` 成功后自动回写：草稿标记为 `solidified`，关联候选结论同步切换已固化状态
+| 步骤 | 作用 | 是否修改数据 |
+| --- | --- | --- |
+| `retrieve` | 找删除候选，通常通过图谱检索拿到 episode uuid | 否 |
+| `resolve` | 从候选中确定一个真实 `note_id` | 否 |
+| `tool_call(delete_note)` | 创建确认动作；确认后删除 note/chunk/review/图谱映射 | 是，且必须确认 |
+| `compose` | 生成删除结果说明 | 否 |
 
-当前 `compose` 还会产出 `draft_ready` 事件，并把草稿和候选结论保存到 `PostgresCrossSessionStore`。后续 `tool_call(capture_text)` 成功后，计划执行节点会完成 `draft → stored → solidified` 状态回写。
+关键安全规则：
 
-## 当前能力
+- `delete_note.note_id` 不能由 planner 提前写死，必须由 `resolve` 动态注入。
+- `delete_note` 必须依赖 `resolve`。
+- `delete_note` 必须声明 `risk_level="high"` 和 `requires_confirmation=True`。
+- 删除计划不允许用 `verify` 代替确认。
 
-- 已具备结构化 `PlanStep`
-- 已具备 LLM 优先、启发式兜底的规划器
-- 已具备动态工具列表注入
-- 已具备执行前计划校验
-- 已具备工具名动态校验，避免硬编码白名单漂移
-- 已具备依赖图校验和循环依赖检测
-- 已具备风险等级和确认要求校验
-- 已具备工具治理交叉校验（工具固有 vs 步骤声明的 risk_level、requires_confirmation、writes_longterm、accesses_external）
-- 已具备计划阶段 `tool_input` 深度参数校验（基于 LangChain 工具的 Pydantic schema）
-- 已具备计划执行器和步骤状态机
-- 已具备 SSE 进度事件和前端计划面板
-- 已具备 `plan_steps` 与 `execution_trace` 语义拆分
-- 已具备失败重试、依赖跳过、abort 和重规划
-- 已具备删除目标解析链路
-- 已具备固化草稿生成和注入 `capture_text` 的基础链路
-- 已具备固化草稿状态回写闭环（draft → stored → solidified）
-- 已具备候选结论抽取与固化同步标记
+### 固化对话：`solidify_conversation`
 
-## 已知限制
+当前模板：
 
-### 1. LLM 规划输出仍依赖文本约束
+```text
+sol-1 compose
+  -> sol-2 tool_call(capture_text)
+```
 
-虽然 planner 要求 LLM 输出 JSON，并且 validator 会做二次校验，但当前字段语义仍主要由 prompt 约束。复杂任务下可能出现：
+步骤含义：
 
-- 步骤过泛
-- 依赖不合理
-- 工具输入不完整
-- 风险等级低估
+| 步骤 | 作用 | 是否修改数据 |
+| --- | --- | --- |
+| `compose` | 从 checkpoint 对话中选择本次用户要求固化的知识，生成草稿 | 否 |
+| `tool_call(capture_text)` | 把草稿写入 `knowledge_notes` | 是 |
 
-### 2. `PlanValidator` 深度参数校验仍可增强
+关键安全规则：
 
-`PlanValidator` 已基于 LangChain 工具 schema 对 `tool_call` 步骤的 `tool_input` 做前置校验，缺失必填字段或类型不匹配会生成阻断性 issue；实际调用由 `ToolNode` 再次校验参数。
+- 固化计划不允许出现 `retrieve / resolve / verify`，因为当前这些步骤没有独立可兑现语义。
+- `capture_text.text` 不能由 planner 提前填写，也不能是占位符。
+- 正文必须来自上游 `compose` 的真实草稿，并由 Graph 动态注入。
+- 用户已明确要求固化，因此 `capture_text` 是 `risk_level="low"` 且 `requires_confirmation=False`。
 
-当前校验覆盖 required 字段检查和基础类型匹配（string/boolean/integer/number），复杂嵌套结构校验仍需补充。
+## 校验规则
 
-### 3. 审批和恢复已使用持久化 checkpoint
+`PlanValidator` 是计划执行前的安全门。它会检查：
 
-删除类操作已通过 LangGraph `interrupt/resume` 接入 checkpoint，当前 `confirm_step` 可以暂停 run，并在用户确认或拒绝后从同一个 `thread_id` 恢复。底层 `PostgresPendingActionStore` 仍承担 token、过期时间和审计载荷；checkpoint 由 `PostgresSaver` 写入与业务数据相同的 Postgres 数据库，支持跨进程恢复。
+- `action_type` 是否有效。
+- `depends_on` 是否引用存在的步骤。
+- 依赖图是否有环。
+- `tool_call.tool_name` 是否已注册。
+- 工具参数是否满足 LangChain tool schema。
+- `risk_level / on_failure / status` 是否合法。
+- ReAct 步骤是否越权调用高风险工具。
+- intent 特定规则是否满足。
 
-### 4. 重规划仍偏补救式
+其中 intent 特定规则最重要：
 
-`Replanner` 能在失败后生成替代步骤，但当前更偏“失败后 salvage”，还不是完整的全局动态规划。比如：
+- `delete_knowledge` 必须包含 `tool_call(delete_note)`。
+- `delete_knowledge` 的 `delete_note` 必须依赖 `resolve`。
+- `solidify_conversation` 必须包含 `tool_call(capture_text)`。
+- `solidify_conversation` 的 `capture_text` 必须依赖 `compose`。
 
-- 未统一重新校验 revised steps
-- 对已执行副作用的建模有限
-- 对工具级权限和风险继承已有基础支持（LangChain 工具 `extras` governance 字段），但 revised steps 重新校验仍未统一
+如果校验有 blocking issue，Graph 会尝试 fallback plan；如果仍不可用，则转成用户可见的澄清或错误提示，不会执行危险工具。
 
-### 5. ReAct 单步策略已接入，仍需扩展
+## ReAct 步骤
 
-`PlanExecutor` 已能按 `execution_mode` 在确定性 handler 和 `ReActStepRunner` 之间分发。ReAct runner 当前定位为单步内部的受控检索/观察循环，而不是替代整个计划执行器。
+`PlanStep.execution_mode="react"` 表示该步骤内部可以运行受控 Thought / Action / Observation 循环。当前主要用于检索类步骤。
 
-已落地能力：
+约束：
 
-- `PlanStep.execution_mode / allowed_tools / max_iterations`
-- `PlanValidator` 对 ReAct 的风险、确认、工具白名单和迭代上限校验
-- `PlanExecutor._dispatch_step()` 的 ReAct 分支
-- `ReActStepRunner` 的 Thought / Action / Observation 循环和 `react_iteration` 事件
-- `tests/test_react_runner.py` 与 `tests/test_plan_executor.py::TestReActStepDispatch`
+- 默认只允许只读工具，例如 `graph_search / web_search`。
+- 不允许高风险、写长期知识或需要确认的工具。
+- `max_iterations` 有上限。
+- 每轮 action / observation 都会进入事件流。
+- ReAct 失败或耗尽会回到计划步骤状态机，按 `on_failure` 处理。
 
-剩余改进主要是扩大适用步骤、沉淀更稳定的 ReAct prompt/事件 schema，并评估是否需要用 LangGraph `StateGraph` 重写 runner 内部状态机。
+ReAct 是单步内部策略，不替代整体计划执行器。
 
-### 6. ~~graph state 中的计划步骤仍使用 dict~~（已通过 PlanStepState 强类型化解决）
+## 可观测性与恢复
 
-`AgentGraphState.plan_steps` 已收敛为 `list[PlanStepState]`（Pydantic BaseModel），`_plan_step_to_dict()` / `_plan_step_from_dict()` 已移除。规划器产出 `PlanStep` 后通过 `PlanStepState.from_plan_step()` 写入 graph state，执行/校验/ReAct 节点通过 `sd.to_plan_step()` 获取业务对象，API 边界统一 `model_dump(mode="json")` 序列化。
+计划执行状态保存在 `AgentGraphState.plan`，并进入 Postgres checkpoint。
+
+用户和前端可以看到：
+
+- `EntryResult.plan_steps`
+- SSE `plan_created`
+- SSE `plan_step_started`
+- SSE `plan_step_completed`
+- SSE `plan_step_failed`
+- SSE `draft_ready`
+- run snapshot 中的 plan / pending confirmation
+
+当高风险工具需要确认时，Graph 会暂停在 checkpoint 中。用户通过 resume 接口确认或拒绝后，后端用同一个 `thread_id` 恢复，不需要重新规划。
+
+## 已知边界
+
+- planner LLM 仍依赖 prompt 约束，复杂任务下可能生成过泛或不可执行的步骤，因此必须经过 `PlanValidator`。
+- `resolve` 当前只选择单个删除目标；多目标批量删除需要额外设计候选确认 UI 和计划 schema。
+- 本地候选选择只给 LLM `note_id / title / summary`，不会给全文，能降低误删风险，但也可能导致召回不足。
+- replan 当前更偏失败补救；revised steps 的完整复校验仍是后续重点。
+- solidify 的范围判断依赖 checkpoint 对话和 LLM，仍需要更系统的长会话干扰评测。
 
 ## 演进方向
 
-- 为规划层新增独立文档化的 plan schema，并让 LLM 输出更稳定
-- 明确哪些 intent 必须由 `PlanExecutor` 驱动，逐步减少双轨执行
-- 为 revised steps 增加重新校验流程
-- ~~将 graph state 中的 `plan_steps: list[dict]` 收敛为强类型 `PlanStepState`~~（已完成）
-- 基于 Postgres checkpoint 扩展多段审批和长任务恢复
-
-## 下一步实现方案：重规划步骤复校验
-
-目标：让 `Replanner` 产出的 revised steps 与初始 planner 产出的步骤走同一套 `PlanValidator` 安全门禁，避免失败补救步骤绕过工具存在性、参数 schema、风险等级、确认要求和权限治理。
-
-### 1. 统一 revised plan 数据结构
-
-让 `Replanner` 返回结构化结果：
-
-```text
-ReplanResult
-  revised_steps
-  reason
-  preserved_step_ids
-  replaced_step_ids
-  risk_notes
-```
-
-`revised_steps` 必须继续使用 `PlanStep`，不要引入第二套 step schema。
-
-### 2. 在 PlanExecutor 中接入复校验
-
-在失败触发 replan 后，执行顺序改为：
-
-```text
-failed step
-  -> Replanner.replan()
-  -> PlanValidator.validate(revised_steps)
-  -> 通过：替换后续未执行步骤
-  -> warning：记录到 progress event / execution_trace
-  -> blocking issue：放弃 revised steps，进入原有失败策略
-```
-
-保留已完成步骤，不允许 replan 修改已经产生副作用的步骤。
-
-### 3. 风险和确认继承规则
-
-新增明确规则：
-
-- revised step 的 `risk_level` 不能低于被替换步骤和目标工具的固有风险
-- 写长期知识或删除类工具必须保留 `requires_confirmation`
-- `allowed_tools` 不能扩展到原计划未授权的高风险工具
-- 外部访问工具必须保留 `accesses_external` warning
-
-这些规则优先放在 `PlanValidator`，避免 executor 内散落安全逻辑。
-
-### 4. 事件与可观测性
-
-## 下一步实现方案：PlanStepState 强类型化
-
-目标：把 graph checkpoint 状态中的 `plan_steps: list[dict]` 收敛成明确、可序列化、可校验的 `PlanStepState`，让计划步骤在 planner、validator、orchestration nodes、API 和前端之间共享同一套 schema。
-
-### 1. 新增 checkpoint-safe 模型
-
-在 `orchestration_models.py` 或独立 `plan_state.py` 中新增：
-
-```text
-PlanStepState
-  step_id
-  action_type
-  description
-  tool_name
-  tool_input
-  depends_on
-  expected_output
-  success_criteria
-  risk_level
-  requires_confirmation
-  on_failure
-  status
-  retry_count
-  execution_mode
-  allowed_tools
-  max_iterations
-  validation_warnings
-```
-
-模型应使用 Pydantic `BaseModel`，保证 `model_dump(mode="json")` 可直接进入 checkpoint / API。
-
-### 2. 明确与 `PlanStep` 的关系
-
-短期保留 planner 输出 `PlanStep`：
-
-```text
-DefaultTaskPlanner -> list[PlanStep]
-PlanStepState.from_plan_step()
-AgentGraphState.plan_steps: list[PlanStepState]
-```
-
-业务执行需要 `PlanStep` 时，使用显式方法：
-
-```text
-PlanStepState.to_plan_step()
-```
-
-这样转换仍存在，但集中在模型方法中，不再散落 `_plan_step_to_dict()` / `_plan_step_from_dict()` helper。
-
-### 3. 修改 graph state 和节点
-
-- `AgentGraphState.plan_steps` 改为 `list[PlanStepState]`。
-- `_node_plan_task()` 写入 `PlanStepState`。
-- `_node_validate_plan()` 从 `PlanStepState` 转回 `PlanStep` 校验，再写回 `PlanStepState`。
-- `select_next_step / execute_plan_step / handle_step_*` 直接访问强类型字段。
-- API 返回时统一 `model_dump(mode="json")`。
-
-### 4. 直接切换状态结构
-
-不保留旧 `list[dict]` checkpoint 兼容。改造完成后，`AgentGraphState.plan_steps` 只接受 `list[PlanStepState]`，相关节点、API 映射和测试数据同步切换。
-
-测试覆盖：
-
-- 新 `PlanStepState` 可以 checkpoint roundtrip。
-- planner 新增字段时 API、SSE、前端计划面板不丢字段。
-- orchestration graph 中不再出现 `_plan_step_to_dict()` / `_plan_step_from_dict()`。
-
-补充 replan 相关事件：
-
-```text
-plan_replan_attempt
-plan_replanned
-plan_replan_rejected
-```
-
-事件 payload 至少包含：
-
-```text
-failed_step_id
-replaced_step_ids
-new_step_ids
-validation_issues
-validation_warnings
-reason
-```
-
-### 5. 测试落点
-
-- revised steps 工具不存在时被阻断
-- revised steps 缺少必填 `tool_input` 时被阻断
-- revised steps 降低风险等级时被修正或阻断
-- revised steps 尝试绕过确认删除时被阻断
-- revised steps 通过校验后只替换未完成步骤
-- `plan_replan_rejected` 事件 payload 包含校验问题
+- 为 `resolve` 增加结构化候选确认 UI，支持多候选人工选择。
+- 为 revised steps 接入与初始计划完全一致的复校验。
+- 为计划步骤定义更稳定的 JSON schema，并加入独立 contract tests。
+- 为删除、固化、长会话干扰建立专项 eval。

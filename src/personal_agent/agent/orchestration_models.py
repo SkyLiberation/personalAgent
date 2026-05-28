@@ -2,7 +2,7 @@
 
 These models are serialisable and checkpoint-safe.  They carry the run-time
 state of an entry orchestration execution, distinct from the business-fact stores
-(PostgresMemoryStore, AskHistoryStore, PostgresPendingActionStore, PostgresCrossSessionStore).
+(PostgresMemoryStore, AskHistoryStore).
 """
 
 from __future__ import annotations
@@ -197,6 +197,43 @@ class PlanStepState(BaseModel):
 # AgentGraphState — the checkpoint-able state for the orchestration graph
 # ---------------------------------------------------------------------------
 
+class ReactSubState(BaseModel):
+    """ReAct loop private state — only meaningful inside react_graph."""
+
+    iterations: list[dict[str, Any]] = Field(default_factory=list)
+    step_id: str = ""
+    iteration_index: int = 0
+    max_iterations: int = 3
+    allowed_tools: list[str] = Field(default_factory=list)
+    user_prompt: str = ""
+    done: bool = False
+    result: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["idle", "running", "waiting_tool", "completed", "failed", "exhausted"] = "idle"
+    stop_reason: str = ""
+    pending_thought: str = ""
+    pending_tool: str = ""
+    pending_input: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanSubState(BaseModel):
+    """Plan execution private state — only meaningful inside plan_execution_graph."""
+
+    steps: list[PlanStepState] = Field(default_factory=list)
+    current_step_index: int = 0
+    results: dict[str, Any] = Field(default_factory=dict)
+    aborted: bool = False
+    retry_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ToolTrackingSubState(BaseModel):
+    """Tool call tracking — shared across plan and react execution."""
+
+    active_context: Literal["plan", "react"] | None = None
+    pending_step_id: str = ""
+    pending_call_id: str = ""
+    pending_react_iteration: int | None = None
+
+
 class AgentGraphState(BaseModel):
     """Checkpoint-safe, serialisable state for the entry orchestration graph.
 
@@ -205,10 +242,11 @@ class AgentGraphState(BaseModel):
     - This holds resumable process state and reducer-backed dialogue messages.
     - Per-run results are reset on a new entry; ``messages`` persists within
       the stable conversation thread.
-    - Business facts live in PostgresMemoryStore / AskHistoryStore /
-      PostgresPendingActionStore / PostgresCrossSessionStore.
+    - Business facts live in PostgresMemoryStore / AskHistoryStore.
     - Large payloads (note text, full search results) are stored by
       reference, not by value.
+    - Sub-system state (react, plan, tool_tracking) is grouped into
+      sub-models to reduce field count and clarify ownership boundaries.
     """
 
     # Identity
@@ -231,50 +269,24 @@ class AgentGraphState(BaseModel):
     # Routing
     router_decision: RouterDecision | None = None
 
-    # Plan
-    plan_steps: list[PlanStepState] = Field(default_factory=list)
-    current_step_index: int = 0
-    step_results: dict[str, Any] = Field(default_factory=dict)
-    plan_aborted: bool = False
-    plan_retry_counts: dict[str, int] = Field(default_factory=dict)  # step_id → retry_count
-
-    # ReAct tracking
-    react_iterations: list[dict[str, Any]] = Field(default_factory=list)
-    # ReAct main-graph runtime state (ephemeral within a step, checkpointed per iteration)
-    react_step_id: str = ""
-    react_iteration_index: int = 0
-    react_max_iterations: int = 3
-    react_allowed_tools: list[str] = Field(default_factory=list)
-    react_user_prompt: str = ""
-    react_done: bool = False
-    react_result: dict[str, Any] = Field(default_factory=dict)
-    react_status: Literal["idle", "running", "waiting_tool", "completed", "failed", "exhausted"] = "idle"
-    react_stop_reason: str = ""
-    react_pending_thought: str = ""
-    react_pending_tool: str = ""
-    react_pending_input: dict[str, Any] = Field(default_factory=dict)
+    # Sub-models (grouped private state)
+    react: ReactSubState = Field(default_factory=ReactSubState)
+    plan: PlanSubState = Field(default_factory=PlanSubState)
+    tool_tracking: ToolTrackingSubState = Field(default_factory=ToolTrackingSubState)
 
     # Tool results
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
-    active_tool_context: Literal["plan", "react"] | None = None
-    pending_tool_step_id: str = ""
-    pending_tool_call_id: str = ""
-    pending_react_iteration: int | None = None
 
     # Lightweight execution trace (for non-planning intents)
     execution_trace: list[str] = Field(default_factory=list)
 
     # Evidence & citations (summary form to avoid checkpoint bloat)
-    evidence_summary: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
-    matches: list[dict[str, Any]] = Field(default_factory=list)  # note refs, not full notes
+    matches: list[dict[str, Any]] = Field(default_factory=list)
 
     # HITL
-    pending_confirmation: dict[str, Any] | None = None  # latest interrupt payload
-    confirmation_decision: str | None = None  # "confirmed" | "rejected" | None, routing marker for _after_confirm_step
-
-    # Draft
-    draft: str | None = None
+    pending_confirmation: dict[str, Any] | None = None
+    confirmation_decision: str | None = None
 
     # Final
     answer: str | None = None
@@ -285,9 +297,6 @@ class AgentGraphState(BaseModel):
 
     # Errors
     errors: list[str] = Field(default_factory=list)
-
-    # Replan history
-    replan_history: list[dict[str, Any]] = Field(default_factory=list)
 
     # Timestamps
     created_at: datetime = Field(default_factory=local_now)
@@ -309,7 +318,7 @@ class AgentGraphState(BaseModel):
         return event
 
     def update_step_status(self, step_id: str, status: str) -> None:
-        for s in self.plan_steps:
+        for s in self.plan.steps:
             if s.step_id == step_id:
                 s.status = status
                 return
@@ -325,7 +334,7 @@ class AgentGraphState(BaseModel):
             status=resolved_status,
             intent=self.router_decision.route if self.router_decision else "unknown",
             entry_text=self.entry_text,
-            plan_steps=[s.model_dump(mode="json") for s in self.plan_steps],
+            plan_steps=[s.model_dump(mode="json") for s in self.plan.steps],
             execution_trace=self.execution_trace,
             answer=self.answer,
             pending_confirmation=self.pending_confirmation,

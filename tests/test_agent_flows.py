@@ -214,6 +214,31 @@ class TestAskFlow:
         assert result.session_id == "current-session"
         assert service.list_ask_history(session_id="current-session") == []
 
+    def test_thread_dialogue_replaces_persisted_history_in_answer_prompt(self, service: AgentService):
+        service.execute_capture(text="部署平台当前为新集群。", source_type="text")
+        service._runtime.memory.bind_session("default", "context-session")
+        service._runtime.memory.record_turn(
+            "default",
+            "context-session",
+            "部署平台是什么？",
+            "旧回答只应作为历史线索。",
+        )
+        service._runtime._generate_answer = MagicMock(return_value="部署平台当前为新集群。")
+
+        service.execute_ask(
+            question="部署平台",
+            session_id="context-session",
+            conversation_messages=[
+                {"role": "user", "content": "我刚才更正为新集群。"},
+            ],
+            record_history=False,
+        )
+
+        prompt = service._runtime._generate_answer.call_args_list[0].args[0]
+        assert "我刚才更正为新集群" in prompt
+        assert "旧回答只应作为历史线索" not in prompt
+        assert "不是事实证据" in prompt
+
 
 class TestDigestFlow:
     def test_digest_returns_message(self, service: AgentService):
@@ -254,7 +279,10 @@ class TestEntryFlow:
         result = service.entry(entry)
         assert result.intent == "ask"
         assert result.reply_text
-        assert service.list_ask_history(limit=1)
+        assert service.list_ask_history(limit=1) == []
+        snapshot = service._runtime.get_run_snapshot(result.run_id or "")
+        assert snapshot is not None
+        assert snapshot.thread_id == result.thread_id
 
     def test_entry_empty_text(self, service: AgentService):
         entry = EntryInput(text="", source_platform="test")

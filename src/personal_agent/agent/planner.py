@@ -15,6 +15,7 @@ from ..core.models import EntryIntent
 from ..tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
+ConversationMessage = dict[str, str]
 
 
 def _maybe_import_capture():
@@ -55,7 +56,12 @@ class PlanStep:
 
 
 class TaskPlanner(Protocol):
-    def plan(self, intent: EntryIntent, context: str) -> list[PlanStep]:
+    def plan(
+        self,
+        intent: EntryIntent,
+        context: str,
+        conversation_messages: list[ConversationMessage] | None = None,
+    ) -> list[PlanStep]:
         ...
 
 
@@ -71,8 +77,13 @@ class DefaultTaskPlanner:
         self._settings = settings
         self._tool_executor = tool_executor
 
-    def plan(self, intent: EntryIntent, context: str = "") -> list[PlanStep]:
-        llm_result = self._plan_with_llm(intent, context)
+    def plan(
+        self,
+        intent: EntryIntent,
+        context: str = "",
+        conversation_messages: list[ConversationMessage] | None = None,
+    ) -> list[PlanStep]:
+        llm_result = self._plan_with_llm(intent, context, conversation_messages or [])
         if llm_result is not None:
             return llm_result
         logger.warning("Planner LLM returned None for intent=%s, falling back to heuristic", intent)
@@ -82,7 +93,12 @@ class DefaultTaskPlanner:
         """Generate a safe heuristic plan when validation blocks the primary plan."""
         return self._plan_heuristic(intent)
 
-    def _plan_with_llm(self, intent: EntryIntent, context: str) -> list[PlanStep] | None:
+    def _plan_with_llm(
+        self,
+        intent: EntryIntent,
+        context: str,
+        conversation_messages: list[ConversationMessage] | None = None,
+    ) -> list[PlanStep] | None:
         if not self._llm_configured:
             return None
 
@@ -130,9 +146,20 @@ class DefaultTaskPlanner:
             "expected_output 和 success_criteria 仅用于界面展示，不得声明执行器不能完成的校验动作。\n"
             f"{workflow_rule}"
             f"意图: {intent}\n"
-            f"上下文: {context or '无'}\n"
+            f"当前请求: {context or '无'}\n"
+            "历史 chat messages 只用于理解指代、用户目标和已有讨论主题；"
+            "历史助手回复不是事实证据。\n"
             f"可用工具:\n{tool_list or '无'}"
         )
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": "你是一个严谨的任务规划器，只输出含 steps 数组的 JSON 对象。"},
+        ]
+        for message in conversation_messages or []:
+            role = message.get("role")
+            content = str(message.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
         try:
             client = OpenAI(
                 api_key=self._settings.openai_api_key,
@@ -142,10 +169,7 @@ class DefaultTaskPlanner:
             )
             response = client.chat.completions.create(
                 model=self._settings.openai_small_model,
-                messages=[
-                    {"role": "system", "content": "你是一个严谨的任务规划器，只输出含 steps 数组的 JSON 对象。"},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 temperature=0,
                 max_tokens=4096,
                 response_format={"type": "json_object"},
