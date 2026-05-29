@@ -4,7 +4,7 @@
 
 ## `GET /api/health`
 
-返回服务状态、Graphiti 配置状态，以及问答历史存储是否可用。
+返回服务状态以及 Graphiti 配置状态。
 
 说明：
 
@@ -23,9 +23,6 @@
     "embedding_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "embedding_model": "text-embedding-v4",
     "search_strategy": "hybrid_rrf"
-  },
-  "ask_history": {
-    "configured": true
   }
 }
 ```
@@ -65,67 +62,6 @@
 查询参数：
 
 - `user_id`
-
-## `GET /api/ask-history`
-
-返回指定用户的问答历史。
-
-查询参数：
-
-- `user_id`
-- `limit`（默认 20）
-- `session_id`
-
-说明：
-
-- 传入 `session_id` 时，只返回该会话下的历史
-- 不传 `session_id` 时，返回该用户最近的全量历史
-- `limit` 默认 20
-
-示例响应：
-
-```json
-{
-  "items": [
-    {
-      "id": "0f0b8fe7-3e4d-4b95-8bb5-2ab4e6f0c99a",
-      "user_id": "default",
-      "session_id": "11dd2242-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-      "question": "支付系统重构项目第一阶段方案包括什么？",
-      "answer": "第一阶段方案主要围绕拆分核心链路、隔离高风险模块以及补齐监控展开。",
-      "citations": [],
-      "created_at": "2026-05-08T15:10:00.000000Z"
-    }
-  ]
-}
-```
-
-## `GET /api/ask-history/search`
-
-搜索问答历史记录。
-
-查询参数：
-
-- `q`（必填）：搜索关键词
-- `user_id`
-- `limit`（默认 20）
-- `session_id`
-
-响应格式同 `GET /api/ask-history`。
-
-## `DELETE /api/ask-history/{record_id}`
-
-删除单条问答历史记录。
-
-查询参数：
-
-- `user_id`
-
-响应：
-
-```json
-{"ok": true, "deleted_id": "0f0b8fe7-..."}
-```
 
 ## `POST /api/notes/{note_id}/graph-sync`
 
@@ -167,7 +103,6 @@
   "deleted_notes": 12,
   "deleted_reviews": 12,
   "deleted_upload_files": 4,
-  "deleted_ask_history": 8,
   "deleted_graph_nodes": 12,
   "deleted_checkpoints": 24,
   "deleted_checkpoint_blobs": 35,

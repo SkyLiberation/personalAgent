@@ -89,9 +89,6 @@
 - `GET /api/notes/{note_id}/chunks`
 - `DELETE /api/notes/{note_id}`
 - `GET /api/digest`
-- `GET /api/ask-history`
-- `GET /api/ask-history/search`
-- `DELETE /api/ask-history/{record_id}`
 - `GET /api/entry/stream`
 - `POST /api/entry/upload`
 - `GET /api/entry/runs`

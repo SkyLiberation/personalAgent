@@ -24,7 +24,13 @@ class RuntimeCaptureMixin:
     ) -> CaptureResult:
         normalized_user = user_id or self.settings.default_user
         logger.info("Starting capture user=%s source_type=%s", normalized_user, source_type)
-        graph = build_capture_graph(self.store)
+        preextract = (
+            self._preextract_service
+            if getattr(self, "_preextract_service", None)
+            and self._preextract_service.is_enabled()
+            else None
+        )
+        graph = build_capture_graph(self.store, preextract_service=preextract)
         state = AgentState(
             mode="capture",
             user_id=normalized_user,
@@ -63,11 +69,17 @@ class RuntimeCaptureMixin:
             result.note.updated_at = local_now()
             self.store.update_note(result.note)
 
-        # Set pending status on chunk notes for background graph sync
+        # Set pending status on chunk notes for background graph sync.
+        # Skip graph_worthy=False chunks (set by preextract_node when LangExtract
+        # judges the section as low-value, e.g. table-of-contents, boilerplate).
         if self.graph_store.configured():
             for chunk in result.chunk_notes:
-                chunk.graph_sync_status = "pending"
-                chunk.graph_sync_error = None
+                if chunk.graph_worthy is False:
+                    chunk.graph_sync_status = "skipped"
+                    chunk.graph_sync_error = None
+                else:
+                    chunk.graph_sync_status = "pending"
+                    chunk.graph_sync_error = None
                 self.store.update_note(chunk)
 
         logger.info(
@@ -94,7 +106,7 @@ class RuntimeCaptureMixin:
             return False
 
         trace_id = uuid4().hex[:12]
-        max_attempts = max(1, self.settings.graph_sync_max_attempts)
+        max_attempts = max(1, self.settings.graphiti.sync_max_attempts)
         logger.info("Starting background graph sync note_id=%s trace_id=%s", note_id, trace_id)
         note.graph_sync_status = "pending"
         note.graph_sync_error = None
@@ -182,9 +194,9 @@ class RuntimeCaptureMixin:
         return any(signal in normalized for signal in retryable_signals)
 
     def _graph_retry_backoff_seconds(self, attempt: int) -> float:
-        initial = max(0.0, self.settings.graph_sync_initial_backoff_seconds)
-        multiplier = max(1.0, self.settings.graph_sync_backoff_multiplier)
-        maximum = max(initial, self.settings.graph_sync_max_backoff_seconds)
+        initial = max(0.0, self.settings.graphiti.sync_initial_backoff_seconds)
+        multiplier = max(1.0, self.settings.graphiti.sync_backoff_multiplier)
+        maximum = max(initial, self.settings.graphiti.sync_max_backoff_seconds)
         delay = initial * (multiplier ** max(0, attempt - 1))
         return min(delay, maximum)
 

@@ -830,7 +830,6 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
             question,
             state.user_id,
             state.session_id,
-            record_history=False,
         )
         return ask_result.answer
     except Exception:

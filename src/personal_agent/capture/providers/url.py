@@ -21,10 +21,10 @@ class FirecrawlUrlCaptureProvider(UrlCaptureProvider):
         self.logger = logger or logging.getLogger(__name__)
 
     def can_handle(self, url: str) -> bool:
-        return bool(self.settings.firecrawl_api_key)
+        return bool(self.settings.firecrawl.api_key)
 
     def capture(self, url: str) -> UrlCaptureResult:
-        base_url = self.settings.firecrawl_base_url.rstrip("/")
+        base_url = self.settings.firecrawl.base_url.rstrip("/")
         payload = {
             "url": url,
             "formats": ["markdown"],
@@ -35,11 +35,11 @@ class FirecrawlUrlCaptureProvider(UrlCaptureProvider):
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.settings.firecrawl_api_key}",
+                "Authorization": f"Bearer {self.settings.firecrawl.api_key}",
             },
             method="POST",
         )
-        timeout_seconds = max(5, self.settings.firecrawl_timeout_ms / 1000)
+        timeout_seconds = max(5, self.settings.firecrawl.timeout_ms / 1000)
         self.logger.info("Firecrawl scrape requested url=%s base_url=%s", url, base_url)
         try:
             with urlopen(request, timeout=timeout_seconds) as response:

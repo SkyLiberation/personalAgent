@@ -2,8 +2,6 @@ import { FormEvent, type Dispatch, type SetStateAction, useEffect, useRef, useSt
 import {
   buildEntryStreamUrl,
   confirmPendingAction,
-  deleteAskHistoryRecord,
-  fetchAskHistory,
   fetchDigest,
   fetchEntryRuns,
   fetchNotes,
@@ -13,7 +11,6 @@ import {
   resetDebugData,
   resumeEntryRun,
   retryGraphSync,
-  searchAskHistory,
   setApiKey,
   uploadEntryFile,
   type AskHistoryItem,
@@ -169,23 +166,15 @@ export default function App() {
       setStatus("正在刷新记忆视图...");
     }
     try {
-      const [noteItems, digestResult, askHistoryResult, allAskHistoryResult, runResult] = await Promise.all([
+      const [noteItems, digestResult, runResult] = await Promise.all([
         fetchNotes(userId),
         fetchDigest(userId),
-        fetchAskHistory(userId, 20, sessionId),
-        fetchAskHistory(userId, 100),
         fetchEntryRuns(userId, 100),
       ]);
       setNotes(noteItems);
       setDigest(digestResult);
-      const historyItems = mergeRunBackedHistory(askHistoryResult.items.map((item) => ({
-        ...item,
-        status: "done" as const,
-      })), runResult.items, sessionId);
-      const allHistoryItems = mergeRunBackedHistory(allAskHistoryResult.items.map((item) => ({
-        ...item,
-        status: "done" as const,
-      })), runResult.items);
+      const historyItems = mergeRunBackedHistory([], runResult.items, sessionId);
+      const allHistoryItems = mergeRunBackedHistory([], runResult.items);
       setAskHistory((current) => mergeAskHistory(historyItems, current));
       setAllAskHistory((current) => {
         const merged = new Map<string, AskHistoryView>();
@@ -376,35 +365,19 @@ export default function App() {
     }
     setIsSearchingHistory(true);
     try {
-      const [result, runResult] = await Promise.all([
-        searchAskHistory(query.trim(), userId, 50),
-        fetchEntryRuns(userId, 100),
-      ]);
+      const runResult = await fetchEntryRuns(userId, 100);
       const normalizedQuery = query.trim().toLowerCase();
       const matchingRuns = runResult.items.filter(
         (run) =>
           run.entry_text.toLowerCase().includes(normalizedQuery) ||
           (run.answer ?? "").toLowerCase().includes(normalizedQuery),
       );
-      const items = mergeRunBackedHistory(
-        result.items.map((item) => ({ ...item, status: "done" as const })),
-        matchingRuns,
-      );
+      const items = mergeRunBackedHistory([], matchingRuns);
       setAskHistory(items);
     } catch (error) {
       console.error("Failed to search ask history:", error);
     } finally {
       setIsSearchingHistory(false);
-    }
-  }
-
-  async function handleDeleteHistoryRecord(recordId: string) {
-    try {
-      await deleteAskHistoryRecord(recordId, userId);
-      setAskHistory((current) => current.filter((item) => item.id !== recordId));
-      setAllAskHistory((current) => current.filter((item) => item.id !== recordId));
-    } catch (error) {
-      console.error("Failed to delete ask history record:", error);
     }
   }
 
@@ -814,14 +787,8 @@ export default function App() {
 
   async function refreshAskHistorySelection(fallbackItem?: AskHistoryView) {
     try {
-      const [response, runResult] = await Promise.all([
-        fetchAskHistory(userId, 20, sessionId),
-        fetchEntryRuns(userId, 100),
-      ]);
-      const serverItems = mergeRunBackedHistory(response.items.map((item) => ({
-        ...item,
-        status: "done" as const,
-      })), runResult.items, sessionId);
+      const runResult = await fetchEntryRuns(userId, 100);
+      const serverItems = mergeRunBackedHistory([], runResult.items, sessionId);
       setAskHistory((currentHistory) => {
         const merged = mergeAskHistory(serverItems, currentHistory, fallbackItem);
         setSelectedAskId((currentSelectedId) => {
@@ -835,13 +802,7 @@ export default function App() {
         });
         return merged;
       });
-      const allHistoryResponse = await fetchAskHistory(userId, 100);
-      setAllAskHistory(
-        mergeRunBackedHistory(allHistoryResponse.items.map((item) => ({
-          ...item,
-          status: "done" as const,
-        })), runResult.items)
-      );
+      setAllAskHistory(mergeRunBackedHistory([], runResult.items));
     } catch (error) {
       console.error(error);
     }
@@ -849,11 +810,13 @@ export default function App() {
 
   function startNewDialog() {
     const nextSessionId = crypto.randomUUID();
-    setSessionId(nextSessionId);
-    localStorage.setItem("personal-agent-session-id", nextSessionId);
     setAskHistory([]);
     setSelectedAskId(null);
     setQuestion("");
+    setHistorySearchQuery("");
+    setExpandedPlans(new Set());
+    setSessionId(nextSessionId);
+    localStorage.setItem("personal-agent-session-id", nextSessionId);
     setStatus("已开始新对话，可以继续追问。");
     setActiveTab("ask");
   }
@@ -863,9 +826,14 @@ export default function App() {
       setActiveTab("ask");
       return;
     }
-    setStatus("正在加载对话历史...");
+    setAskHistory([]);
+    setSelectedAskId(null);
+    setQuestion("");
+    setHistorySearchQuery("");
+    setExpandedPlans(new Set());
     setSessionId(targetSessionId);
     localStorage.setItem("personal-agent-session-id", targetSessionId);
+    setStatus("正在加载对话历史...");
     setActiveTab("ask");
   }
 
@@ -1193,14 +1161,6 @@ export default function App() {
                           <div className="chat-meta">
                             <span>你</span>
                             <time>{formatDateTime(item.created_at)}</time>
-                            <button
-                              type="button"
-                              className="history-delete-button"
-                              title="删除此轮对话"
-                              onClick={() => void handleDeleteHistoryRecord(item.id)}
-                            >
-                              ✕
-                            </button>
                           </div>
                           <p>{item.question}</p>
                         </article>

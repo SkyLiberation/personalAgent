@@ -7,9 +7,9 @@ from langgraph.types import Command
 
 from ..core.config import Settings
 from ..core.models import EntryInput
+from ..extract import PreExtractService
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
-from ..storage.ask_history_store import AskHistoryStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..tools import ToolExecutor
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
@@ -131,7 +131,6 @@ class AgentRuntime(
         settings: Settings,
         store: PostgresMemoryStore,
         graph_store: GraphitiStore,
-        ask_history_store: AskHistoryStore,
         capture_service: "CaptureService | None" = None,
     ) -> None:
         if not settings.postgres_url:
@@ -139,16 +138,16 @@ class AgentRuntime(
         self.settings = settings
         self.store = store
         self.graph_store = graph_store
-        self.ask_history_store = ask_history_store
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_executor = ToolExecutor()
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
-        self.memory = MemoryFacade(store, ask_history_store)
+        self.memory = MemoryFacade(store)
         self._verifier = AnswerVerifier()
         self._plan_validator = PlanValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
+        self._preextract_service = PreExtractService(settings.langextract)
         self._thread_message_loader: (
             Callable[[EntryInput, int], list[dict[str, str]]] | None
         ) = None

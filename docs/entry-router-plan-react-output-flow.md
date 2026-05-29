@@ -45,7 +45,7 @@ Entry
 - `Replanner`：步骤失败后的重新规划器。
 - `AnswerVerifier`：回答证据校验器。
 - `ToolExecutor`：注册 LangChain `@tool` 工具；执行期由计划图和 ReAct 图中的 `ToolNode` 调度。
-- `MemoryFacade`：长期知识存储门面、direct ask 历史线索、跨请求中间态。
+- `MemoryFacade`：长期知识存储门面与跨请求中间态。
 - `GraphitiStore`：图谱写入、图谱检索和 Graphiti client 构建。
 
 整体入口链路可以概括为：
@@ -499,10 +499,10 @@ SSE 事件包括：
 Graphiti LLM 配置：
 
 ```text
-model       = settings.graphiti_llm_model       or settings.openai_model
-small_model = settings.graphiti_llm_small_model or settings.openai_small_model
-base_url    = settings.graphiti_llm_base_url    or settings.openai_base_url
-api_key     = settings.graphiti_llm_api_key     or settings.openai_api_key
+model       = settings.graphiti.llm_model       or settings.openai.model
+small_model = settings.graphiti.llm_small_model or settings.openai.small_model
+base_url    = settings.graphiti.llm_base_url    or settings.openai.base_url
+api_key     = settings.graphiti.llm_api_key     or settings.openai.api_key
 ```
 
 自定义的 `GraphitiOpenAIClient` 会使用：

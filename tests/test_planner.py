@@ -13,10 +13,10 @@ from personal_agent.core.models import EntryInput
 class TestPlannerEnrichedSteps:
     @pytest.fixture
     def planner(self):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         return DefaultTaskPlanner(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+            Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
 
     def test_plan_delete_knowledge_heuristic(self, planner):
@@ -76,10 +76,10 @@ class TestPlannerEnrichedSteps:
         consumed by entry nodes or graph execution. This test documents the
         current Phase 2 behavior — plan execution will be added in later phases.
         """
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         planner = DefaultTaskPlanner(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+            Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
         steps = planner.plan("ask", "什么是服务降级？")
         assert len(steps) == 4
@@ -125,10 +125,10 @@ class TestDefaultIntentRouterNewIntents:
         assert decision.requires_confirmation is True
 
     def test_router_decision_has_all_fields(self):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         router = DefaultIntentRouter(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+            Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
         entry = EntryInput(text="什么是服务降级？")
         decision = router.classify(entry)
@@ -144,10 +144,10 @@ class TestDefaultIntentRouterNewIntents:
         assert hasattr(decision, "user_visible_message")
 
     def test_router_decision_file_source(self):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         router = DefaultIntentRouter(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+            Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
         entry = EntryInput(source_type="file", text="test.pdf")
         decision = router.classify(entry)
@@ -204,10 +204,10 @@ class TestExecutionTrace:
 class TestPlannerValidatorRoundtrip:
     @pytest.fixture
     def planner(self):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         return DefaultTaskPlanner(
-            Settings(openai_api_key=None, openai_base_url=None, openai_small_model="")
+            Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
 
     def test_heuristic_plans_pass_validation(self, planner):
@@ -299,7 +299,7 @@ class TestPlannerValidatorRoundtrip:
 
 class TestPlannerLlmContract:
     def test_llm_plan_parses_object_contract_and_react_fields(self, monkeypatch):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         request: dict[str, object] = {}
 
@@ -333,7 +333,7 @@ class TestPlannerLlmContract:
 
         monkeypatch.setattr("personal_agent.agent.planner.OpenAI", FakeOpenAI)
         planner = DefaultTaskPlanner(
-            Settings(openai_api_key="k", openai_base_url="http://llm", openai_small_model="small")
+            Settings(openai=OpenAIConfig(api_key="k", base_url="http://llm", small_model="small"))
         )
 
         steps = planner.plan("delete_knowledge", "删除 DNS 笔记")
@@ -344,7 +344,7 @@ class TestPlannerLlmContract:
         assert steps[0].max_iterations == 2
 
     def test_llm_array_output_falls_back_to_safe_workflow(self, monkeypatch):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         class FakeOpenAI:
             def __init__(self, **_kwargs):
@@ -358,7 +358,7 @@ class TestPlannerLlmContract:
 
         monkeypatch.setattr("personal_agent.agent.planner.OpenAI", FakeOpenAI)
         planner = DefaultTaskPlanner(
-            Settings(openai_api_key="k", openai_base_url="http://llm", openai_small_model="small")
+            Settings(openai=OpenAIConfig(api_key="k", base_url="http://llm", small_model="small"))
         )
 
         steps = planner.plan("solidify_conversation", "固化该结论")

@@ -17,7 +17,7 @@ from ..agent.service import AgentService
 from ..capture import CaptureService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
-from ..core.models import AskHistoryRecord, EntryInput, KnowledgeNote, ReviewCard
+from ..core.models import EntryInput, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -44,11 +44,6 @@ class GraphSyncResponse(BaseModel):
     queued: bool = False
 
 
-class AskHistoryResponse(BaseModel):
-    items: list[AskHistoryRecord] = Field(default_factory=list)
-
-
-
 class EntryResponse(BaseModel):
     intent: str
     reason: str
@@ -67,7 +62,6 @@ class ResetDebugDataResponse(BaseModel):
     deleted_notes: int = 0
     deleted_reviews: int = 0
     deleted_upload_files: int = 0
-    deleted_ask_history: int = 0
     deleted_graph_nodes: int = 0
     deleted_checkpoints: int = 0
     deleted_checkpoint_blobs: int = 0
@@ -90,7 +84,6 @@ class ToolExecuteResponse(BaseModel):
     ok: bool
     data: object = None
     error: str | None = None
-    deleted_ask_history: int = 0
     deleted_graph_episodes: int = 0
 
 
@@ -116,11 +109,11 @@ def create_app() -> FastAPI:
     app.state.service = service
 
     # Auth + rate limiting (applied before CORS)
-    api_keys = settings.api_keys
+    api_keys = settings.web.api_keys
     if api_keys:
         rate_limiter = RateLimiter(
-            max_requests=settings.rate_limit_requests,
-            window_seconds=settings.rate_limit_window_seconds,
+            max_requests=settings.web.rate_limit_requests,
+            window_seconds=settings.web.rate_limit_window_seconds,
         )
         app.add_middleware(AuthMiddleware, api_keys=api_keys, rate_limiter=rate_limiter)
         logger.info("Auth enabled with %d API keys and rate limiting", len(api_keys))
@@ -129,7 +122,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=settings.web.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -170,14 +163,6 @@ def create_app() -> FastAPI:
         logger.info("Digest requested for user=%s", resolved_user)
         result = service.digest(resolved_user)
         return DigestResponse(**result.model_dump())
-
-    @app.get("/api/ask-history", response_model=AskHistoryResponse)
-    def get_ask_history(
-        request: Request, user_id: str | None = None, limit: int = 20, session_id: str | None = None
-    ) -> AskHistoryResponse:
-        resolved_user = user_id or _get_user_id(request, settings)
-        logger.info("Ask history requested for user=%s session=%s limit=%s", resolved_user, session_id, limit)
-        return AskHistoryResponse(items=service.list_ask_history(resolved_user, limit, session_id))
 
     @app.delete("/api/notes/{note_id}")
     def delete_note(
@@ -500,31 +485,6 @@ def create_app() -> FastAPI:
             pending_confirmation=result.pending_confirmation,
             run_status=result.run_status,
         )
-
-    @app.get("/api/ask-history/search", response_model=AskHistoryResponse)
-    def search_ask_history(
-        request: Request,
-        q: str = "",
-        user_id: str | None = None,
-        limit: int = 20,
-        session_id: str | None = None,
-    ) -> AskHistoryResponse:
-        resolved_user = user_id or _get_user_id(request, settings)
-        if not q.strip():
-            return AskHistoryResponse(items=[])
-        logger.info("Ask history search for user=%s query=%s", resolved_user, q[:80])
-        return AskHistoryResponse(items=service.search_ask_history(resolved_user, q, limit, session_id))
-
-    @app.delete("/api/ask-history/{record_id}")
-    def delete_ask_history_record(
-        record_id: str, request: Request, user_id: str | None = None
-    ) -> dict[str, object]:
-        resolved_user = user_id or _get_user_id(request, settings)
-        logger.info("Delete ask history record id=%s user=%s", record_id, resolved_user)
-        deleted = service.delete_ask_record(resolved_user, record_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Record not found or not owned by user.")
-        return {"ok": True, "deleted_id": record_id}
 
     @app.post("/api/debug/reset-database", response_model=ResetDebugDataResponse)
     def reset_debug_data() -> ResetDebugDataResponse:

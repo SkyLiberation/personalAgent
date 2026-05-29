@@ -85,7 +85,7 @@ class KnowledgeNote(BaseModel):
     user_id: str = "default"
     source_type: str = "text"
     source_ref: str | None = None
-    graph_sync_status: Literal["idle", "pending", "synced", "failed"] = "idle"
+    graph_sync_status: Literal["idle", "pending", "synced", "failed", "skipped"] = "idle"
     graph_sync_error: str | None = None
     title: str
     content: str
@@ -101,6 +101,10 @@ class KnowledgeNote(BaseModel):
     parent_note_id: str | None = None
     chunk_index: int | None = None
     source_span: str | None = None
+    section_map: dict | None = None
+    graph_worthy: bool | None = None
+    preextract_status: Literal["ok", "skipped", "failed"] | None = None
+    preextract_topic: str | None = None
     created_at: datetime = Field(default_factory=local_now)
     updated_at: datetime = Field(default_factory=local_now)
 
@@ -112,17 +116,6 @@ class ReviewCard(BaseModel):
     answer_hint: str
     interval_days: int = 1
     due_at: datetime = Field(default_factory=lambda: local_now() + timedelta(days=1))
-
-
-class AskHistoryRecord(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
-    user_id: str = "default"
-    session_id: str = "default"
-    question: str
-    answer: str
-    citations: list[Citation] = Field(default_factory=list)
-    evidence: list = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=local_now)
 
 
 class AgentState(BaseModel):

@@ -275,10 +275,10 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
 def build_graphiti_llm_client(settings: Settings) -> GraphitiOpenAIClient:
     return GraphitiOpenAIClient(
         config=LLMConfig(
-            api_key=settings.graphiti_llm_api_key or settings.openai_api_key,
-            base_url=settings.graphiti_llm_base_url or settings.openai_base_url,
-            model=settings.graphiti_llm_model or settings.openai_model,
-            small_model=settings.graphiti_llm_small_model
-            or settings.openai_small_model,
+            api_key=settings.graphiti.llm_api_key or settings.openai.api_key,
+            base_url=settings.graphiti.llm_base_url or settings.openai.base_url,
+            model=settings.graphiti.llm_model or settings.openai.model,
+            small_model=settings.graphiti.llm_small_model
+            or settings.openai.small_model,
         )
     )

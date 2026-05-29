@@ -8,7 +8,7 @@ import pytest
 from personal_agent.agent.plan_validator import PlanValidationResult
 from personal_agent.agent.router import RouterDecision
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
+from personal_agent.core.config import OpenAIConfig, Settings
 from personal_agent.core.models import EntryInput
 from tests.conftest import POSTGRES_URL
 
@@ -20,10 +20,12 @@ def test_settings(temp_dir: Path) -> Settings:
     return Settings(
         data_dir=temp_dir,
         postgres_url=POSTGRES_URL,
-        openai_api_key=None,
-        openai_base_url=None,
-        openai_model="gpt-4.1-mini",
-        openai_small_model="gpt-4.1-nano",
+        openai=OpenAIConfig(
+            api_key=None,
+            base_url=None,
+            model="gpt-4.1-mini",
+            small_model="gpt-4.1-nano",
+        ),
     )
 
 

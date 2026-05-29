@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from personal_agent.agent.runtime_llm import RuntimeLlmMixin
-from personal_agent.core.config import Settings
+from personal_agent.core.config import OpenAIConfig, Settings
 
 
 class _Runtime(RuntimeLlmMixin):
@@ -28,11 +28,13 @@ def test_generate_answer_limits_sdk_waiting(monkeypatch):
     monkeypatch.setattr("personal_agent.agent.runtime_llm.OpenAI", FakeOpenAI)
     runtime = _Runtime(
         Settings(
-            openai_api_key="key",
-            openai_base_url="https://example.test/v1",
-            openai_model="model",
-            openai_timeout_seconds=7.0,
-            openai_max_retries=0,
+            openai=OpenAIConfig(
+                api_key="key",
+                base_url="https://example.test/v1",
+                model="model",
+                timeout_seconds=7.0,
+                max_retries=0,
+            )
         )
     )
 
@@ -55,9 +57,11 @@ def test_generate_answer_failure_opens_short_circuit(monkeypatch):
     monkeypatch.setattr("personal_agent.agent.runtime_llm.OpenAI", FakeOpenAI)
     runtime = _Runtime(
         Settings(
-            openai_api_key="key",
-            openai_base_url="https://example.test/v1",
-            openai_model="model",
+            openai=OpenAIConfig(
+                api_key="key",
+                base_url="https://example.test/v1",
+                model="model",
+            )
         )
     )
 

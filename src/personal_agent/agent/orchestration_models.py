@@ -1,8 +1,8 @@
 """AgentGraphState, AgentEvent and related types for LangGraph orchestration.
 
 These models are serialisable and checkpoint-safe.  They carry the run-time
-state of an entry orchestration execution, distinct from the business-fact stores
-(PostgresMemoryStore, AskHistoryStore).
+state of an entry orchestration execution, distinct from the business-fact store
+(PostgresMemoryStore).
 """
 
 from __future__ import annotations
@@ -242,7 +242,7 @@ class AgentGraphState(BaseModel):
     - This holds resumable process state and reducer-backed dialogue messages.
     - Per-run results are reset on a new entry; ``messages`` persists within
       the stable conversation thread.
-    - Business facts live in PostgresMemoryStore / AskHistoryStore.
+    - Business facts live in PostgresMemoryStore.
     - Large payloads (note text, full search results) are stored by
       reference, not by value.
     - Sub-system state (react, plan, tool_tracking) is grouped into

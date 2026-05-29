@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.config import Settings
+from personal_agent.core.config import GraphitiConfig, Settings
 from personal_agent.graphiti.search_strategies import (
     STRATEGIES,
+    apply_search_config_overrides,
     get_graph_search_strategy,
     list_graph_search_strategies,
 )
@@ -28,7 +29,48 @@ class TestGraphSearchStrategies:
         assert all(item["description"] for item in items)
 
     def test_store_uses_configured_strategy(self, temp_dir):
-        settings = Settings(data_dir=temp_dir, graph_search_strategy="edge_rrf")
+        settings = Settings(
+            data_dir=temp_dir,
+            graphiti=GraphitiConfig(search_strategy="edge_rrf"),
+        )
         store = GraphitiStore(settings)
         assert store.search_strategy.name == "edge_rrf"
         assert store.status()["search_strategy"] == "edge_rrf"
+
+    def test_apply_overrides_caps_hops_and_limit(self):
+        base = get_graph_search_strategy("hybrid_rrf")
+        original_hops = base.search_config.edge_config.bfs_max_depth
+        original_limit = base.search_config.limit
+
+        tuned = apply_search_config_overrides(
+            base, max_hops=2, limit=5, min_score=0.3
+        )
+
+        assert tuned.search_config.edge_config.bfs_max_depth == 2
+        assert tuned.search_config.node_config.bfs_max_depth == 2
+        assert tuned.search_config.limit == 5
+        assert tuned.search_config.reranker_min_score == 0.3
+        # base recipe must not be mutated
+        assert base.search_config.edge_config.bfs_max_depth == original_hops
+        assert base.search_config.limit == original_limit
+
+    def test_apply_overrides_noop_when_all_none(self):
+        base = get_graph_search_strategy("hybrid_rrf")
+        same = apply_search_config_overrides(base)
+        assert same is base
+
+    def test_store_applies_settings_overrides(self, temp_dir):
+        settings = Settings(
+            data_dir=temp_dir,
+            graphiti=GraphitiConfig(
+                search_strategy="hybrid_rrf",
+                search_max_hops=2,
+                search_limit=6,
+                search_min_score=0.2,
+            ),
+        )
+        store = GraphitiStore(settings)
+        cfg = store.search_strategy.search_config
+        assert cfg.edge_config.bfs_max_depth == 2
+        assert cfg.limit == 6
+        assert cfg.reranker_min_score == 0.2

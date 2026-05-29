@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from ..core.config import Settings
 from ..graphiti.store import GraphitiStore
-from ..storage.ask_history_store import AskHistoryStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from .runtime import AgentRuntime
 
@@ -26,7 +25,6 @@ class AgentService(AgentRuntime):
             settings=resolved_settings,
             store=store,
             graph_store=GraphitiStore(resolved_settings),
-            ask_history_store=AskHistoryStore(resolved_settings.postgres_url),
             capture_service=capture_service,
         )
         self._runtime = self

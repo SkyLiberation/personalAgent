@@ -24,7 +24,13 @@ USER_ID = "ragbench_smoke_k25"
 NOTE_MODE = os.getenv("RAGBENCH_GRAPHITI_NOTE_MODE", "parent_sections")
 
 settings = Settings.from_env()
-settings = settings.model_copy(update={"graph_search_strategy": "hybrid_rrf"})
+settings = settings.model_copy(
+    update={
+        "graphiti": settings.graphiti.model_copy(
+            update={"search_strategy": "hybrid_rrf"}
+        )
+    }
+)
 store = GraphitiStore(settings)
 
 print(f"Store configured: {store.configured()}", file=sys.stderr)

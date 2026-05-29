@@ -231,7 +231,13 @@ class GraphitiRetrievalStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        settings = context.settings.model_copy(update={"graph_search_strategy": self.graph_strategy_name})
+        settings = context.settings.model_copy(
+            update={
+                "graphiti": context.settings.graphiti.model_copy(
+                    update={"search_strategy": self.graph_strategy_name}
+                )
+            }
+        )
         graph_store = GraphitiStore(settings)
         if not graph_store.configured():
             raise RuntimeError("Graphiti is not configured. Check Neo4j, OpenAI, and embedding settings.")
@@ -284,7 +290,7 @@ def _ensure_graphiti_corpus(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest_matches = (
             manifest.get("user_id") == user_id
-            and manifest.get("graphiti_group_prefix") == graph_store.settings.graphiti_group_prefix
+            and manifest.get("graphiti_group_prefix") == graph_store.settings.graphiti.group_prefix
             and manifest.get("note_mode", "parent_sections") == note_mode
             and manifest.get("note_count") == len(notes)
             and set(manifest.get("note_ids", [])) == expected_note_ids
@@ -334,7 +340,7 @@ def _ensure_graphiti_corpus(
             json.dumps(
                 {
                     "user_id": user_id,
-                    "graphiti_group_prefix": graph_store.settings.graphiti_group_prefix,
+                    "graphiti_group_prefix": graph_store.settings.graphiti.group_prefix,
                     "note_mode": note_mode,
                     "note_count": len(notes),
                     "note_ids": sorted(expected_note_ids),

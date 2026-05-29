@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
+from personal_agent.core.config import OpenAIConfig, Settings
 from personal_agent.core.models import EntryInput, KnowledgeNote
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
 from tests.conftest import POSTGRES_URL, stub_router_decision
@@ -19,9 +19,11 @@ def test_settings(temp_dir: Path) -> Settings:
     return Settings(
         data_dir=temp_dir,
         postgres_url=POSTGRES_URL,
-        openai_api_key=None,
-        openai_base_url=None,
-        openai_model="gpt-4.1-mini",
+        openai=OpenAIConfig(
+            api_key=None,
+            base_url=None,
+            model="gpt-4.1-mini",
+        ),
     )
 
 
@@ -196,33 +198,9 @@ class TestAskFlow:
         result = service.execute_ask(question="测试", session_id="test-session-42")
         assert result.session_id == "test-session-42"
 
-    def test_ask_persists_history(self, service: AgentService):
-        service.execute_capture(text="测试知识", source_type="text")
-        service.execute_ask(question="测试", session_id="s1")
-        history = service.list_ask_history(session_id="s1")
-        assert len(history) >= 1
-        assert history[0].question == "测试"
-
-    def test_internal_ask_can_skip_visible_history(self, service: AgentService):
-        service.execute_capture(text="内部摘要所需知识", source_type="text")
-        result = service.execute_ask(
-            question="生成内部摘要",
-            session_id="current-session",
-            record_history=False,
-        )
-
-        assert result.session_id == "current-session"
-        assert service.list_ask_history(session_id="current-session") == []
-
     def test_thread_dialogue_replaces_persisted_history_in_answer_prompt(self, service: AgentService):
         service.execute_capture(text="部署平台当前为新集群。", source_type="text")
         service._runtime.memory.bind_session("default", "context-session")
-        service._runtime.memory.record_turn(
-            "default",
-            "context-session",
-            "部署平台是什么？",
-            "旧回答只应作为历史线索。",
-        )
         service._runtime._generate_answer = MagicMock(return_value="部署平台当前为新集群。")
 
         service.execute_ask(
@@ -231,12 +209,10 @@ class TestAskFlow:
             conversation_messages=[
                 {"role": "user", "content": "我刚才更正为新集群。"},
             ],
-            record_history=False,
         )
 
         prompt = service._runtime._generate_answer.call_args_list[0].args[0]
         assert "我刚才更正为新集群" in prompt
-        assert "旧回答只应作为历史线索" not in prompt
         assert "不是事实证据" in prompt
 
 
@@ -279,7 +255,6 @@ class TestEntryFlow:
         result = service.entry(entry)
         assert result.intent == "ask"
         assert result.reply_text
-        assert service.list_ask_history(limit=1) == []
         snapshot = service._runtime.get_run_snapshot(result.run_id or "")
         assert snapshot is not None
         assert snapshot.thread_id == result.thread_id

@@ -61,17 +61,17 @@ def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
     from openai import OpenAI
 
     settings = deps.settings
-    if not (settings.openai_api_key and settings.openai_base_url):
+    if not (settings.openai.api_key and settings.openai.base_url):
         return None
     try:
         client = OpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            timeout=settings.openai_timeout_seconds,
-            max_retries=settings.openai_max_retries,
+            api_key=settings.openai.api_key,
+            base_url=settings.openai.base_url,
+            timeout=settings.openai.timeout_seconds,
+            max_retries=settings.openai.max_retries,
         )
         response = client.chat.completions.create(
-            model=settings.openai_small_model,
+            model=settings.openai.small_model,
             messages=[
                 {"role": "system", "content": _REACT_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},

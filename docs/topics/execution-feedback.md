@@ -72,7 +72,6 @@
 - 已支持 `draft_ready` 事件
 - 已支持 citation 元数据返回
 - 已支持图谱同步手动重试
-- 已支持问答历史搜索、单条删除和按会话删除
 - 已补事件回归样本：orchestration/API 回归覆盖 `draft_ready`、`confirmation_required`、计划步骤状态和 ReAct dispatch 事件
 
 ## 已知限制

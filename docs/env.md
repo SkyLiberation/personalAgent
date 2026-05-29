@@ -22,7 +22,7 @@ FEISHU_BASE_URL=https://open.feishu.cn
 
 说明：
 
-- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。知识、复习、问答历史、待确认操作、跨请求状态及 LangGraph checkpoint 都以 Postgres 为唯一持久化存储。
+- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。知识、复习、待确认操作、跨请求状态及 LangGraph checkpoint 都以 Postgres 为唯一持久化存储。
 - `uploads/` 仍用于保存原始上传文件；数据库保存其引用及提取后的知识内容。
 
 ## 飞书配置

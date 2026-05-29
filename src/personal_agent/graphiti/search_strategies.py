@@ -87,6 +87,40 @@ def get_graph_search_strategy(name: str | None) -> GraphSearchStrategy:
     return STRATEGIES[normalized]
 
 
+def apply_search_config_overrides(
+    strategy: GraphSearchStrategy,
+    *,
+    max_hops: int | None = None,
+    limit: int | None = None,
+    min_score: float | None = None,
+) -> GraphSearchStrategy:
+    base_config = strategy.search_config
+    config_updates: dict[str, Any] = {}
+    if limit is not None and limit > 0:
+        config_updates["limit"] = limit
+    if min_score is not None and min_score > 0:
+        config_updates["reranker_min_score"] = min_score
+
+    sub_updates: dict[str, Any] = {}
+    if max_hops is not None and max_hops > 0:
+        for sub_name in ("edge_config", "node_config", "community_config"):
+            sub = getattr(base_config, sub_name, None)
+            if sub is None:
+                continue
+            sub_updates[sub_name] = sub.model_copy(update={"bfs_max_depth": max_hops})
+
+    if not config_updates and not sub_updates:
+        return strategy
+
+    new_config = base_config.model_copy(update={**config_updates, **sub_updates})
+    return BaseGraphSearchStrategy(
+        name=strategy.name,
+        description=strategy.description,
+        search_config=new_config,
+        citation_limit=getattr(strategy, "citation_limit", 12),
+    )
+
+
 def list_graph_search_strategies() -> list[dict[str, str]]:
     return [
         {"name": strategy.name, "description": strategy.description}

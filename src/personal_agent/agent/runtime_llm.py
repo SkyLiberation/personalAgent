@@ -11,20 +11,20 @@ _LLM_FAILURE_COOLDOWN_SECONDS = 30.0
 
 class RuntimeLlmMixin:
     def _generate_answer(self, prompt: str) -> str | None:
-        if not (self.settings.openai_api_key and self.settings.openai_base_url and self.settings.openai_model):
+        if not (self.settings.openai.api_key and self.settings.openai.base_url and self.settings.openai.model):
             return None
         if time.monotonic() < getattr(self, "_answer_llm_unavailable_until", 0.0):
             logger.info("Skipping answer generation while LLM failure cooldown is active")
             return None
         try:
             client = OpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=self.settings.openai_timeout_seconds,
-                max_retries=self.settings.openai_max_retries,
+                api_key=self.settings.openai.api_key,
+                base_url=self.settings.openai.base_url,
+                timeout=self.settings.openai.timeout_seconds,
+                max_retries=self.settings.openai.max_retries,
             )
             response = client.chat.completions.create(
-                model=self.settings.openai_model,
+                model=self.settings.openai.model,
                 messages=[
                     {"role": "system", "content": "你是一个严谨、善于归纳总结的个人知识库问答助手。你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"},
                     {"role": "user", "content": prompt},
@@ -46,7 +46,7 @@ class RuntimeLlmMixin:
         Completes with ('answer_complete', {'answer': full_text}).
         On failure, yields ('answer_error', {'error': message}) and stops.
         """
-        if not (self.settings.openai_api_key and self.settings.openai_base_url and self.settings.openai_model):
+        if not (self.settings.openai.api_key and self.settings.openai.base_url and self.settings.openai.model):
             yield ("answer_error", {"error": "LLM not configured"})
             return
         if time.monotonic() < getattr(self, "_answer_llm_unavailable_until", 0.0):
@@ -54,13 +54,13 @@ class RuntimeLlmMixin:
             return
         try:
             client = OpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=self.settings.openai_timeout_seconds,
-                max_retries=self.settings.openai_max_retries,
+                api_key=self.settings.openai.api_key,
+                base_url=self.settings.openai.base_url,
+                timeout=self.settings.openai.timeout_seconds,
+                max_retries=self.settings.openai.max_retries,
             )
             stream = client.chat.completions.create(
-                model=self.settings.openai_model,
+                model=self.settings.openai.model,
                 messages=[
                     {"role": "system", "content": "你是一个严谨、善于归纳总结的个人知识库问答助手。你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"},
                     {"role": "user", "content": prompt},

@@ -184,34 +184,12 @@ class TestNotesEndpoint:
         assert "Bob的笔记" in bob_titles
 
 
-class TestAskHistoryEndpoint:
-    def test_list_ask_history(self, api_client: TestClient):
-        service = api_client.app.state.service
-        service._runtime.execute_ask("历史测试问题", user_id="test-user", session_id="s1")
-        response = api_client.get(
-            "/api/ask-history", params={"user_id": "test-user", "session_id": "s1"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "items" in data
-        assert len(data["items"]) >= 1
-
-    def test_ask_history_empty_for_new_user(self, api_client: TestClient):
-        response = api_client.get(
-            "/api/ask-history", params={"user_id": "no-such-user"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["items"] == []
-
-
 class TestDebugEndpoints:
     def test_reset_database_clears_all_persisted_debug_data(self, api_client: TestClient, temp_dir: Path):
         service = api_client.app.state.service
         service.graph_store.clear_all_data = MagicMock(return_value=7)
         service._runtime.execute_capture("用户A笔记", source_type="text", user_id="reset-a")
         service._runtime.execute_capture("用户B笔记", source_type="text", user_id="reset-b")
-        service._runtime.execute_ask("问答数据", user_id="reset-a", session_id="s1")
         service.execute_entry(EntryInput(text="你好", user_id="reset-a", session_id="checkpoint"))
         uploads_dir = temp_dir / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -229,10 +207,9 @@ class TestDebugEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["deleted_notes"] >= 2
-        assert data["deleted_ask_history"] >= 1
         assert data["deleted_checkpoints"] >= 1
         assert data["deleted_checkpoint_migrations"] >= 1
-        assert data["truncated_postgres_tables"] >= 8
+        assert data["truncated_postgres_tables"] >= 7
         assert data["deleted_postgres_rows"] >= data["deleted_notes"]
         assert data["deleted_upload_files"] == 1
         assert data["deleted_graph_nodes"] == 7
@@ -244,7 +221,6 @@ class TestDebugEndpoints:
                 for table in (
                     "knowledge_notes",
                     "review_cards",
-                    "ask_history",
                     "checkpoints",
                     "checkpoint_blobs",
                     "checkpoint_writes",

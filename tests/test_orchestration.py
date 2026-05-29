@@ -247,7 +247,6 @@ class TestOrchestrationGraphIntegration:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -256,7 +255,6 @@ class TestOrchestrationGraphIntegration:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
         runtime._intent_router._classify_with_llm = stub_router_decision
         return runtime
@@ -284,13 +282,6 @@ class TestOrchestrationGraphIntegration:
 
     def test_route_intent_does_not_use_ask_history_when_thread_is_empty(self, runtime, monkeypatch):
         captured_messages: list[list[dict[str, str]]] = []
-
-        runtime.memory.record_turn(
-            "test-user",
-            "persisted-context",
-            "上一轮用户问题",
-            "上一轮助手回答",
-        )
 
         def classify(entry_input, conversation_messages=None):
             captured_messages.append(conversation_messages or [])
@@ -332,16 +323,10 @@ class TestOrchestrationGraphIntegration:
                 self.chat = FakeChat()
 
         monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
-        monkeypatch.setattr(runtime.settings, "openai_api_key", "test-key")
-        monkeypatch.setattr(runtime.settings, "openai_base_url", "http://llm.test")
-        monkeypatch.setattr(runtime.settings, "openai_small_model", "small")
+        monkeypatch.setattr(runtime.settings.openai, "api_key", "test-key")
+        monkeypatch.setattr(runtime.settings.openai, "base_url", "http://llm.test")
+        monkeypatch.setattr(runtime.settings.openai, "small_model", "small")
         runtime.memory.bind_session("test-user", "direct-dup")
-        runtime.memory.record_turn(
-            "test-user",
-            "direct-dup",
-            "不应重复注入的历史摘要",
-            "不应重复注入的历史回答",
-        )
 
         state = AgentGraphState(
             run_id="direct-dup-run",
@@ -363,7 +348,6 @@ class TestOrchestrationGraphIntegration:
 
         assert result["answer"] == "继续回答"
         assert "上一轮用户问题" not in system_content
-        assert "不应重复注入的历史摘要" not in system_content
         assert "上一轮用户问题" in user_contents
 
     def test_direct_answer_through_orch_graph(self, runtime):
@@ -376,10 +360,6 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent in ("direct_answer", "unknown", "capture_text")
         assert result.reply_text
-        history = runtime.ask_history_store.list_history(
-            "test-user", session_id="orch-test"
-        )
-        assert history == []
         latest = runtime._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
         ).values
@@ -397,10 +377,6 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent == "ask"
         assert result.reply_text
-        history = runtime.ask_history_store.list_history(
-            "test-user", session_id="orch-test-ask"
-        )
-        assert history == []
         latest = runtime._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
         ).values
@@ -418,10 +394,6 @@ class TestOrchestrationGraphIntegration:
             )
         )
 
-        history = runtime.ask_history_store.list_history(
-            "test-user", session_id="mixed-dialogue"
-        )
-        assert history == []
         assert first.thread_id == second.thread_id
         latest = runtime._get_orch_graph().get_state(
             {"configurable": {"thread_id": second.thread_id}}
@@ -447,10 +419,6 @@ class TestOrchestrationGraphIntegration:
             ]
             assert tool_results
             assert "服务降级" in tool_results[0]["payload"]["content_preview"]
-            history = runtime.ask_history_store.list_history(
-                "test-user", session_id="orch-test-cap"
-            )
-            assert history == []
 
     def test_summary_loads_platform_thread_context_only_after_routing(self, runtime, monkeypatch):
         loaded: list[tuple[str, int]] = []
@@ -479,10 +447,6 @@ class TestOrchestrationGraphIntegration:
         assert result.intent == "summarize_thread"
         assert loaded == [("feishu-summary", 20)]
         assert "项目今天完成发布" in result.reply_text
-        history = runtime.ask_history_store.list_history(
-            "test-user", session_id="feishu-summary"
-        )
-        assert history == []
 
     def test_non_summary_entry_does_not_load_platform_thread_context(self, runtime):
         loaded: list[str] = []
@@ -533,10 +497,6 @@ class TestOrchestrationGraphIntegration:
         assert "plan_created" in event_types
         assert "draft_ready" in event_types
         assert event_types.count("step_completed") >= 2
-        history = runtime.ask_history_store.list_history(
-            "test-user", session_id="solidify-session"
-        )
-        assert history == []
 
     def test_solidify_extracts_structured_note_body_before_capture(self, runtime, monkeypatch):
         monkeypatch.setattr(
@@ -645,50 +605,6 @@ class TestOrchestrationGraphIntegration:
         assert "西安" not in stored
         assert "JSON Schema" not in stored
 
-    def test_solidify_compose_does_not_use_ask_history_without_thread_messages(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_nodes._steps import _execute_compose_step
-        from personal_agent.agent.planner import PlanStep
-
-        prompts: list[str] = []
-
-        def reply(prompt, deps):
-            prompts.append(prompt)
-            return (
-                '{"done":true,"result":{"title":"Redis","content":'
-                '"Redis 是内存数据结构存储。"}}'
-            )
-
-        monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
-            reply,
-        )
-        runtime.memory.bind_session("test-user", "persisted-solidify")
-        runtime.memory.record_turn(
-            "test-user",
-            "persisted-solidify",
-            "Redis 是什么？",
-            "Redis 是内存数据结构存储。",
-        )
-        state = AgentGraphState(
-            run_id="solidify-fallback",
-            user_id="test-user",
-            session_id="persisted-solidify",
-            entry_text="把刚才的知识固化下来",
-            router_decision=RouterDecision(route="solidify_conversation"),
-            messages=[HumanMessage(content="把刚才的知识固化下来")],
-        )
-
-        answer = _execute_compose_step(
-            PlanStep(step_id="sol-1", action_type="compose", description="整理草稿"),
-            state,
-            OrchestrationDeps.from_runtime(runtime),
-        )
-
-        assert answer == "Redis\n\nRedis 是内存数据结构存储。"
-        assert prompts
-        assert "Redis 是什么？" not in prompts[0]
-        assert "暂无检索结果" in prompts[0]
-
     def test_solidify_streams_plan_progress_during_graph_execution(self, runtime, monkeypatch):
         monkeypatch.setattr(
             "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
@@ -791,7 +707,6 @@ class TestOrchestrationGraphIntegration:
     def test_persisted_snapshots_are_visible_before_new_execution(self, temp_dir):
         from personal_agent.agent.runtime import AgentRuntime
         from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 
         settings = Settings(
@@ -804,7 +719,6 @@ class TestOrchestrationGraphIntegration:
                 settings=settings,
                 store=PostgresMemoryStore(settings.data_dir, settings.postgres_url),
                 graph_store=GraphitiStore(settings),
-                ask_history_store=AskHistoryStore(postgres_url=settings.postgres_url),
             )
 
         original = create_runtime()
@@ -988,7 +902,6 @@ class TestPhase3ExecutePlanStep:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -997,7 +910,6 @@ class TestPhase3ExecutePlanStep:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_tool_node_result_sets_awaiting_confirmation(self, runtime):
@@ -1224,7 +1136,6 @@ class TestPhase3InterruptResumeIntegration:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -1233,7 +1144,6 @@ class TestPhase3InterruptResumeIntegration:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_execute_entry_returns_run_id_and_status(self, runtime):
@@ -1326,7 +1236,6 @@ class TestPhase4ReActHelpers:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -1335,7 +1244,6 @@ class TestPhase4ReActHelpers:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_resolve_allowed_tools_for_step(self, runtime):
@@ -1402,7 +1310,6 @@ class TestPhase4ReActNodes:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -1411,7 +1318,6 @@ class TestPhase4ReActNodes:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_react_init_seeds_state(self, runtime):
@@ -1540,7 +1446,6 @@ class TestPhase4ReActIterateNode:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -1549,7 +1454,6 @@ class TestPhase4ReActIterateNode:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_react_iterate_done_sets_flag(self, runtime, monkeypatch):
@@ -1728,7 +1632,6 @@ class TestPhase4ReActMainGraphIntegration:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.storage.ask_history_store import AskHistoryStore
         from personal_agent.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
@@ -1737,7 +1640,6 @@ class TestPhase4ReActMainGraphIntegration:
             settings=stub_settings,
             store=store,
             graph_store=GraphitiStore(stub_settings),
-            ask_history_store=AskHistoryStore(postgres_url=stub_settings.postgres_url),
         )
 
     def test_react_action_routes_to_shared_tool_node(self, runtime, monkeypatch):

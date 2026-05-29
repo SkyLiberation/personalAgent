@@ -55,7 +55,6 @@ class RuntimeAskMixin:
         user_id: str | None = None,
         session_id: str | None = None,
         conversation_messages: list[dict[str, str]] | None = None,
-        record_history: bool = True,
     ) -> AskResult:
         normalized_user = user_id or self.settings.default_user
         normalized_session = session_id or "default"
@@ -69,12 +68,6 @@ class RuntimeAskMixin:
                 "当前会话对话线索（仅用于理解追问和更正，不作为事实证据）：\n"
                 f"{structured_context}"
             )
-        else:
-            history_hints = self.memory.load_conversation_hints(
-                normalized_user, normalized_session
-            )
-            if history_hints:
-                context_parts.append(f"会话线索：{history_hints}")
         working_context = "\n\n".join(context_parts)
         trace_steps: list[str] = []
 
@@ -109,11 +102,6 @@ class RuntimeAskMixin:
                         evidence=all_evidence,
                         session_id=normalized_session,
                     )
-                    if record_history:
-                        self.memory.record_turn(
-                            normalized_user, normalized_session, question, answer,
-                            citations=citations,
-                        )
                     logger.info(
                         "Ask resolved from graph user=%s matches=%s citations=%s verify=%.2f",
                         normalized_user, len(matches), len(citations), verification.evidence_score,
@@ -172,11 +160,6 @@ class RuntimeAskMixin:
                 add_trace_step(
                     f"网络搜索完成: score={web_verification.evidence_score:.2f} ok={web_verification.ok}"
                 )
-                if record_history:
-                    self.memory.record_turn(
-                        normalized_user, normalized_session, question, web_answer,
-                        citations=web_citations,
-                    )
                 logger.info(
                     "Ask resolved from web user=%s citations=%s verify=%.2f",
                     normalized_user, len(web_citations), web_verification.evidence_score,
@@ -196,11 +179,6 @@ class RuntimeAskMixin:
             evidence=all_evidence,
             session_id=normalized_session,
         )
-        if record_history:
-            self.memory.record_turn(
-                normalized_user, normalized_session, question, final_answer,
-                citations=local_citations,
-            )
         logger.info(
             "Ask resolved locally user=%s matches=%s citations=%s verify=%.2f",
             normalized_user, len(local_matches), len(local_citations), verification.evidence_score,
@@ -413,36 +391,7 @@ class RuntimeAskMixin:
 
         blocks: list[str] = []
         seen: set[str] = set()
-
-        for fact_ref in graph_result.fact_refs:
-            fact = fact_ref.fact.strip()
-            if not fact or fact in seen:
-                continue
-            relation = _format_graph_relation(
-                fact,
-                fact_ref.source_node_name,
-                fact_ref.target_node_name,
-                citation_snippets.get(fact),
-            )
-            blocks.append(relation)
-            seen.add(fact)
-            if len(blocks) >= limit:
-                return blocks
-
-        for edge_ref in graph_result.edge_refs:
-            fact = edge_ref.fact.strip()
-            if not fact or fact in seen:
-                continue
-            relation = _format_graph_relation(
-                fact,
-                edge_ref.source_node_name,
-                edge_ref.target_node_name,
-                citation_snippets.get(fact),
-            )
-            blocks.append(relation)
-            seen.add(fact)
-            if len(blocks) >= limit:
-                return blocks
+        focus_budget = max(1, limit - max(1, limit // 4))
 
         for hit in graph_result.citation_hits:
             fact = hit.relation_fact.strip()
@@ -455,8 +404,38 @@ class RuntimeAskMixin:
                 relation += f" [score={hit.score}]"
             blocks.append(relation)
             seen.add(fact)
+            if len(blocks) >= focus_budget:
+                break
+
+        for fact_ref in graph_result.fact_refs:
             if len(blocks) >= limit:
                 return blocks
+            fact = fact_ref.fact.strip()
+            if not fact or fact in seen:
+                continue
+            relation = _format_graph_relation(
+                fact,
+                fact_ref.source_node_name,
+                fact_ref.target_node_name,
+                citation_snippets.get(fact),
+            )
+            blocks.append(relation)
+            seen.add(fact)
+
+        for edge_ref in graph_result.edge_refs:
+            if len(blocks) >= limit:
+                return blocks
+            fact = edge_ref.fact.strip()
+            if not fact or fact in seen:
+                continue
+            relation = _format_graph_relation(
+                fact,
+                edge_ref.source_node_name,
+                edge_ref.target_node_name,
+                citation_snippets.get(fact),
+            )
+            blocks.append(relation)
+            seen.add(fact)
 
         for fact in graph_result.relation_facts:
             normalized = fact.strip()

@@ -216,7 +216,7 @@ npm run build
 docker compose up --build
 ```
 
-`Ask History` 的服务端存档默认使用 `Postgres` 中的 `ask_history` 表，保存问句、回答、引用、`session_id` 以及时间戳。
+`Ask History` 不再单独存档 — 同一会话的问答以 LangGraph checkpoint 中的 `state.messages` 为唯一真源，前端历史列表通过 `/api/entry/runs` 渲染最近 run snapshot。
 
 ## 常见排障
 

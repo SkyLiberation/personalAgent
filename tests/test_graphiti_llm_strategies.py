@@ -5,7 +5,7 @@ from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.prompts.models import Message
 from pydantic import BaseModel
 
-from personal_agent.core.config import Settings
+from personal_agent.core.config import GraphitiConfig, OpenAIConfig, Settings
 from personal_agent.graphiti.llm_strategies import (
     GraphitiOpenAIClient,
     build_graphiti_llm_client,
@@ -66,14 +66,18 @@ async def test_graphiti_client_uses_json_schema_and_disables_thinking(monkeypatc
 
 def test_graphiti_client_prefers_llm_override_settings():
     settings = Settings(
-        openai_api_key="general-key",
-        openai_base_url="https://general.example/v1",
-        openai_model="general-model",
-        openai_small_model="general-small-model",
-        graphiti_llm_api_key="graph-key",
-        graphiti_llm_base_url="https://api.moonshot.cn/v1",
-        graphiti_llm_model="kimi-k2.5",
-        graphiti_llm_small_model="kimi-k2.5",
+        openai=OpenAIConfig(
+            api_key="general-key",
+            base_url="https://general.example/v1",
+            model="general-model",
+            small_model="general-small-model",
+        ),
+        graphiti=GraphitiConfig(
+            llm_api_key="graph-key",
+            llm_base_url="https://api.moonshot.cn/v1",
+            llm_model="kimi-k2.5",
+            llm_small_model="kimi-k2.5",
+        ),
     )
 
     llm_client = build_graphiti_llm_client(settings)

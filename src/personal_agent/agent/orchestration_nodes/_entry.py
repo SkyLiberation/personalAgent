@@ -466,7 +466,6 @@ def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
         entry_input.user_id,
         entry_input.session_id,
         conversation_messages=conversation_messages,
-        record_history=False,
     )
     state.answer = result.answer
     state.citations = result.citations
@@ -562,25 +561,25 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
     if (
-        deps.settings.openai_api_key
-        and deps.settings.openai_base_url
-        and deps.settings.openai_small_model
+        deps.settings.openai.api_key
+        and deps.settings.openai.base_url
+        and deps.settings.openai.small_model
     ):
         from openai import OpenAI
 
         try:
             client = OpenAI(
-                api_key=deps.settings.openai_api_key,
-                base_url=deps.settings.openai_base_url,
-                timeout=deps.settings.openai_timeout_seconds,
-                max_retries=deps.settings.openai_max_retries,
+                api_key=deps.settings.openai.api_key,
+                base_url=deps.settings.openai.base_url,
+                timeout=deps.settings.openai.timeout_seconds,
+                max_retries=deps.settings.openai.max_retries,
             )
             dialogue_messages = _dialogue_prompt_messages(state.messages)
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
             system_content = "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"
             response = client.chat.completions.create(
-                model=deps.settings.openai_small_model,
+                model=deps.settings.openai.small_model,
                 messages=[
                     {"role": "system", "content": system_content},
                     *dialogue_messages,

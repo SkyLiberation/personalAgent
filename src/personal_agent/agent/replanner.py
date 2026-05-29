@@ -93,13 +93,13 @@ class Replanner:
         )
         try:
             client = OpenAI(
-                api_key=self._settings.openai_api_key,
-                base_url=self._settings.openai_base_url,
-                timeout=self._settings.openai_timeout_seconds,
-                max_retries=self._settings.openai_max_retries,
+                api_key=self._settings.openai.api_key,
+                base_url=self._settings.openai.base_url,
+                timeout=self._settings.openai.timeout_seconds,
+                max_retries=self._settings.openai.max_retries,
             )
             response = client.chat.completions.create(
-                model=self._settings.openai_small_model,
+                model=self._settings.openai.small_model,
                 messages=[
                     {"role": "system", "content": "你是一个严谨的任务重新规划器，只输出 JSON。"},
                     {"role": "user", "content": prompt},
@@ -224,7 +224,7 @@ class Replanner:
     @property
     def _llm_configured(self) -> bool:
         return bool(
-            self._settings.openai_api_key
-            and self._settings.openai_base_url
-            and self._settings.openai_small_model
+            self._settings.openai.api_key
+            and self._settings.openai.base_url
+            and self._settings.openai.small_model
         )

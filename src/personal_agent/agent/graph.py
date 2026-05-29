@@ -3,19 +3,39 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from ..core.models import AgentState
+from ..extract import PreExtractService
 from ..storage.postgres_memory_store import PostgresMemoryStore
-from .nodes import answer_node, capture_node, enrich_node, link_node, schedule_review_node
+from .nodes import (
+    answer_node,
+    capture_node,
+    enrich_node,
+    link_node,
+    preextract_node,
+    schedule_review_node,
+)
 
 
-def build_capture_graph(store: PostgresMemoryStore):
+def build_capture_graph(
+    store: PostgresMemoryStore,
+    preextract_service: PreExtractService | None = None,
+):
     graph = StateGraph(AgentState)
     graph.add_node("capture", lambda state: capture_node(state, store))
+    if preextract_service is not None:
+        graph.add_node(
+            "preextract",
+            lambda state: preextract_node(state, store, preextract_service),
+        )
     graph.add_node("enrich", lambda state: enrich_node(state, store))
     graph.add_node("link", lambda state: link_node(state, store))
     graph.add_node("schedule_review", lambda state: schedule_review_node(state, store))
 
     graph.add_edge(START, "capture")
-    graph.add_edge("capture", "enrich")
+    if preextract_service is not None:
+        graph.add_edge("capture", "preextract")
+        graph.add_edge("preextract", "enrich")
+    else:
+        graph.add_edge("capture", "enrich")
     graph.add_edge("enrich", "link")
     graph.add_edge("link", "schedule_review")
     graph.add_edge("schedule_review", END)

@@ -86,15 +86,10 @@ export type AskHistoryItem = {
   created_at: string;
 };
 
-export type AskHistoryResponse = {
-  items: AskHistoryItem[];
-};
-
 export type ResetDebugDataResponse = {
   deleted_notes: number;
   deleted_reviews: number;
   deleted_upload_files: number;
-  deleted_ask_history: number;
   deleted_graph_nodes: number;
   deleted_pending_actions: number;
   deleted_cross_session_artifacts: number;
@@ -178,13 +173,6 @@ export function fetchNotes(userId = "default"): Promise<Note[]> {
 
 export function fetchDigest(userId = "default"): Promise<DigestResponse> {
   return requestJson<DigestResponse>(`/api/digest?user_id=${encodeURIComponent(userId)}`);
-}
-
-export function fetchAskHistory(userId = "default", limit = 20, sessionId?: string): Promise<AskHistoryResponse> {
-  const sessionQuery = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : "";
-  return requestJson<AskHistoryResponse>(
-    `/api/ask-history?user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(String(limit))}${sessionQuery}`
-  );
 }
 
 export type PlanStep = {
@@ -319,28 +307,6 @@ export function uploadEntryFile(
     method: "POST",
     body,
   });
-}
-
-export function searchAskHistory(
-  query: string,
-  userId = "default",
-  limit = 20,
-  sessionId?: string
-): Promise<AskHistoryResponse> {
-  const sessionQuery = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : "";
-  return requestJson<AskHistoryResponse>(
-    `/api/ask-history/search?q=${encodeURIComponent(query)}&user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(String(limit))}${sessionQuery}`
-  );
-}
-
-export function deleteAskHistoryRecord(
-  recordId: string,
-  userId = "default"
-): Promise<{ ok: boolean; deleted_id: string }> {
-  return requestJson<{ ok: boolean; deleted_id: string }>(
-    `/api/ask-history/${encodeURIComponent(recordId)}?user_id=${encodeURIComponent(userId)}`,
-    { method: "DELETE" }
-  );
 }
 
 export function retryGraphSync(noteId: string): Promise<GraphSyncResponse> {

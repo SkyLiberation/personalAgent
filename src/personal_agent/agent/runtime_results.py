@@ -55,7 +55,6 @@ class ResetResult(BaseModel):
     deleted_notes: int = 0
     deleted_reviews: int = 0
     deleted_upload_files: int = 0
-    deleted_ask_history: int = 0
     deleted_graph_nodes: int = 0
     deleted_checkpoints: int = 0
     deleted_checkpoint_blobs: int = 0

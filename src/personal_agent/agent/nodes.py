@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 from ..core.models import AgentState, Citation, KnowledgeNote, ReviewCard, local_now
+from ..extract import PreExtractService
+from ..extract.schemas import SectionMap, SectionRecord
 from ..storage.postgres_memory_store import PostgresMemoryStore
+
+logger = logging.getLogger(__name__)
 
 
 def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
@@ -62,6 +67,91 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
         state.note = parent
         state.chunk_notes = chunk_notes
     return state
+
+
+def preextract_node(
+    state: AgentState,
+    store: PostgresMemoryStore,
+    service: PreExtractService,
+) -> AgentState:
+    """Run lightweight LangExtract pre-extraction.
+
+    Records section_map / preextract_status on the parent note. If the service
+    returns >= 2 sections, replace the mechanical chunks with section-based
+    chunks (so downstream graphiti only deep-extracts on graph_worthy ones).
+    Disabled / short / failed → no-op, leaving capture_node's chunks intact.
+    """
+    if state.note is None or state.raw_item is None:
+        return state
+
+    if not service.is_enabled():
+        state.note.preextract_status = "skipped"
+        return state
+
+    if not service.should_run(state.note.content):
+        state.note.preextract_status = "skipped"
+        return state
+
+    try:
+        section_map = service.extract(state.note.content)
+    except Exception as exc:  # noqa: BLE001 — boundary
+        logger.warning("preextract_node failed user=%s err=%s", state.note.user_id, exc)
+        state.note.preextract_status = "failed"
+        return state
+
+    state.note.section_map = section_map.model_dump(mode="json") if section_map.sections else None
+    state.note.preextract_status = "ok" if section_map.sections else "skipped"
+    if section_map.doc_topic:
+        state.note.preextract_topic = section_map.doc_topic
+    if section_map.sections:
+        # Mark parent with aggregate graph_worthy: True if any section is worthy.
+        state.note.graph_worthy = any(s.graph_worthy for s in section_map.sections)
+
+    if len(section_map.sections) >= 2:
+        state.chunk_notes = _chunk_notes_from_sections(
+            state.note,
+            state.raw_item,
+            section_map.sections,
+        )
+    else:
+        # Single-section / single-note path: tag the note itself with worthy flag.
+        for chunk in state.chunk_notes:
+            chunk.graph_worthy = state.note.graph_worthy
+
+    return state
+
+
+def _chunk_notes_from_sections(
+    parent: KnowledgeNote,
+    raw_item,
+    sections: list[SectionRecord],
+) -> list[KnowledgeNote]:
+    chunks: list[KnowledgeNote] = []
+    full_text = parent.content
+    for i, section in enumerate(sections, 1):
+        start = max(0, section.char_start)
+        end = section.char_end if section.char_end > start else len(full_text)
+        body = full_text[start:end].strip() or full_text[:120]
+        title = section.topic or section.title or f"Section {i}"
+        chunks.append(
+            KnowledgeNote(
+                user_id=raw_item.user_id,
+                source_type=raw_item.source_type,
+                source_ref=raw_item.source_ref,
+                title=title[:80],
+                content=body,
+                summary=(section.summary or body[:120]).replace("\n", " "),
+                tags=_extract_tags(body),
+                parent_note_id=parent.id,
+                chunk_index=i,
+                source_span=f"{start}-{end}",
+                graph_worthy=section.graph_worthy,
+                preextract_status="ok",
+                preextract_topic=section.topic or None,
+                updated_at=local_now(),
+            )
+        )
+    return chunks
 
 
 def enrich_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:

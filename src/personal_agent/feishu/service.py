@@ -105,10 +105,10 @@ class FeishuService:
         return messages
 
     def start_event_listener(self) -> None:
-        if not self.settings.feishu_enabled:
+        if not self.settings.feishu.enabled:
             logger.info("Skip Feishu long connection because integration is disabled")
             return
-        if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):
+        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
             logger.info("Skip Feishu long connection because app credentials are not configured")
             return
 
@@ -118,11 +118,11 @@ class FeishuService:
                 return
 
             self._ws_client = lark.ws.Client(
-                self.settings.feishu_app_id,
-                self.settings.feishu_app_secret,
+                self.settings.feishu.app_id,
+                self.settings.feishu.app_secret,
                 event_handler=self._event_handler(),
                 log_level=lark.LogLevel.INFO,
-                domain=self.settings.feishu_base_url.rstrip("/"),
+                domain=self.settings.feishu.base_url.rstrip("/"),
             )
             self._ws_thread = threading.Thread(
                 target=self._run_event_listener,
@@ -252,7 +252,7 @@ class FeishuService:
             return False
 
     def _reply_to_message(self, incoming_message: FeishuIncomingMessage, reply_text: str) -> None:
-        if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):
+        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
             logger.info("Skip Feishu reply because app credentials are not configured event_id=%s", incoming_message.event_id)
             return
 
@@ -320,9 +320,9 @@ class FeishuService:
     def _client_value(self) -> lark.Client:
         if self._client is None:
             self._client = lark.Client.builder() \
-                .app_id(self.settings.feishu_app_id or "") \
-                .app_secret(self.settings.feishu_app_secret or "") \
-                .domain(self.settings.feishu_base_url.rstrip("/")) \
+                .app_id(self.settings.feishu.app_id or "") \
+                .app_secret(self.settings.feishu.app_secret or "") \
+                .domain(self.settings.feishu.base_url.rstrip("/")) \
                 .log_level(lark.LogLevel.INFO) \
                 .build()
         return self._client
@@ -351,7 +351,7 @@ class FeishuService:
 
     def download_file(self, message_id: str, file_key: str) -> tuple[bytes, str] | None:
         """Download file binary from Feishu. Returns (file_bytes, filename) or None."""
-        if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):
+        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
             logger.warning("Skip Feishu file download because app credentials are not configured")
             return None
         try:
@@ -377,7 +377,7 @@ class FeishuService:
 
     def fetch_recent_messages(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
         """Fetch recent messages from a Feishu chat. Returns list of {role, content} dicts."""
-        if not (self.settings.feishu_app_id and self.settings.feishu_app_secret):
+        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
             logger.warning("Skip Feishu message fetch because app credentials are not configured")
             return []
         try:
@@ -409,7 +409,7 @@ class FeishuService:
             return []
 
     def _resolve_user_id(self, open_id: str, sender_user_id: str) -> str:
-        if self.settings.feishu_use_default_user:
+        if self.settings.feishu.use_default_user:
             return self.settings.default_user
         return open_id or sender_user_id or self.settings.default_user
 

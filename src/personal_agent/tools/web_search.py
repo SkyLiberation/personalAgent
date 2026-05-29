@@ -28,7 +28,7 @@ def build_web_search_tool(
         extras={"risk_level": "low", "accesses_external": True},
     )
     def web_search(query: str, limit: int = 5, scrape: bool = False):
-        if not settings.firecrawl_api_key:
+        if not settings.firecrawl.api_key:
             return tool_response(tool_failure("Firecrawl API key 未配置，无法执行网络搜索。"))
         limit = max(1, min(limit, 10))
         try:

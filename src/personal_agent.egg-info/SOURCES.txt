@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 src/personal_agent/__init__.py
@@ -65,7 +66,6 @@ src/personal_agent/graphiti/store.py
 src/personal_agent/memory/__init__.py
 src/personal_agent/memory/facade.py
 src/personal_agent/storage/__init__.py
-src/personal_agent/storage/ask_history_store.py
 src/personal_agent/storage/postgres_common.py
 src/personal_agent/storage/postgres_debug_reset_store.py
 src/personal_agent/storage/postgres_memory_store.py

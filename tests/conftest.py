@@ -9,7 +9,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import connect
 from psycopg import sql
 
-from personal_agent.core.config import Settings
+from personal_agent.core.config import OpenAIConfig, Settings
 from personal_agent.core.models import Citation, KnowledgeNote
 from personal_agent.agent.router import RouterDecision
 
@@ -85,12 +85,7 @@ def clean_postgres_business_tables():
                     id TEXT PRIMARY KEY, note_id TEXT NOT NULL, payload JSONB NOT NULL,
                     due_at TIMESTAMPTZ NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS ask_history (
-                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT 'default',
-                    question TEXT NOT NULL, answer TEXT NOT NULL, citations JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                );
-                TRUNCATE knowledge_notes, review_cards, ask_history;
+                TRUNCATE knowledge_notes, review_cards;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )
@@ -114,10 +109,12 @@ def settings() -> Settings:
     return Settings(
         data_dir="./data",
         postgres_url=POSTGRES_URL,
-        openai_api_key="sk-test-key",
-        openai_base_url="https://api.openai.com/v1",
-        openai_model="gpt-4.1-mini",
-        openai_small_model="gpt-4.1-nano",
+        openai=OpenAIConfig(
+            api_key="sk-test-key",
+            base_url="https://api.openai.com/v1",
+            model="gpt-4.1-mini",
+            small_model="gpt-4.1-nano",
+        ),
     )
 
 

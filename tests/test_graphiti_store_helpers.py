@@ -18,10 +18,10 @@ def test_settings_reads_graphiti_timeout_env(monkeypatch):
 
     settings = Settings.from_env()
 
-    assert settings.graphiti_add_episode_timeout_seconds == 12.5
-    assert settings.graphiti_search_timeout_seconds == 3
-    assert settings.graphiti_episode_max_chars == 99
-    assert settings.graphiti_content_filter_fallback is False
+    assert settings.graphiti.add_episode_timeout_seconds == 12.5
+    assert settings.graphiti.search_timeout_seconds == 3
+    assert settings.graphiti.episode_max_chars == 99
+    assert settings.graphiti.content_filter_fallback is False
 
 
 def test_settings_reads_openai_request_limits(monkeypatch):
@@ -31,8 +31,8 @@ def test_settings_reads_openai_request_limits(monkeypatch):
 
     settings = Settings.from_env()
 
-    assert settings.openai_timeout_seconds == 9.5
-    assert settings.openai_max_retries == 1
+    assert settings.openai.timeout_seconds == 9.5
+    assert settings.openai.max_retries == 1
 
 
 def test_settings_reads_graphiti_llm_override_env(monkeypatch):
@@ -46,10 +46,10 @@ def test_settings_reads_graphiti_llm_override_env(monkeypatch):
 
     settings = Settings.from_env()
 
-    assert settings.graphiti_llm_api_key == "graph-key"
-    assert settings.graphiti_llm_base_url == "https://graph.example/v1"
-    assert settings.graphiti_llm_model == "graph-model"
-    assert settings.graphiti_llm_small_model == "graph-small-model"
+    assert settings.graphiti.llm_api_key == "graph-key"
+    assert settings.graphiti.llm_base_url == "https://graph.example/v1"
+    assert settings.graphiti.llm_model == "graph-model"
+    assert settings.graphiti.llm_small_model == "graph-small-model"
 
 
 def test_graphiti_episode_body_honors_max_chars():

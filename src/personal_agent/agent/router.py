@@ -215,9 +215,9 @@ class DefaultIntentRouter:
         if not self._llm_configured:
             logger.warning(
                 "Router LLM not configured: api_key=%s, base_url=%s, model=%s",
-                bool(self._settings.openai_api_key),
-                bool(self._settings.openai_base_url),
-                bool(self._settings.openai_small_model),
+                bool(self._settings.openai.api_key),
+                bool(self._settings.openai.base_url),
+                bool(self._settings.openai.small_model),
             )
             return None
 
@@ -262,13 +262,13 @@ class DefaultIntentRouter:
         messages.append({"role": "user", "content": f"当前用户输入：{text}"})
         try:
             client = OpenAI(
-                api_key=self._settings.openai_api_key,
-                base_url=self._settings.openai_base_url,
-                timeout=self._settings.openai_timeout_seconds,
-                max_retries=self._settings.openai_max_retries,
+                api_key=self._settings.openai.api_key,
+                base_url=self._settings.openai.base_url,
+                timeout=self._settings.openai.timeout_seconds,
+                max_retries=self._settings.openai.max_retries,
             )
             response = client.chat.completions.create(
-                model=self._settings.openai_small_model,
+                model=self._settings.openai.small_model,
                 messages=messages,
                 temperature=0,
                 max_tokens=500,
@@ -320,9 +320,9 @@ class DefaultIntentRouter:
     @property
     def _llm_configured(self) -> bool:
         return bool(
-            self._settings.openai_api_key
-            and self._settings.openai_base_url
-            and self._settings.openai_small_model
+            self._settings.openai.api_key
+            and self._settings.openai.base_url
+            and self._settings.openai.small_model
         )
 
     def _log_decision(

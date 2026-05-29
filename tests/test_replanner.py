@@ -9,11 +9,12 @@ from personal_agent.agent.replanner import Replanner
 class TestReplannerHeuristic:
     @pytest.fixture
     def settings(self):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         return Settings(
-            openai_api_key="", openai_base_url="", openai_model="",
-            openai_small_model="",
+            openai=OpenAIConfig(
+                api_key="", base_url="", model="", small_model="",
+            )
         )
 
     @pytest.fixture
@@ -95,11 +96,12 @@ class TestReplannerIntentSpecific:
 
     @pytest.fixture
     def settings(self):
-        from personal_agent.core.config import Settings
+        from personal_agent.core.config import OpenAIConfig, Settings
 
         return Settings(
-            openai_api_key="", openai_base_url="", openai_model="",
-            openai_small_model="",
+            openai=OpenAIConfig(
+                api_key="", base_url="", model="", small_model="",
+            )
         )
 
     @pytest.fixture

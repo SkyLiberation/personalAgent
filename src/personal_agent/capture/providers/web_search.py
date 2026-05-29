@@ -27,18 +27,18 @@ class FirecrawlWebSearchProvider:
             self.logger = _logger
 
     def search(self, query: str, limit: int = 5) -> list[WebSearchResult]:
-        base_url = self._settings.firecrawl_base_url.rstrip("/")
+        base_url = self._settings.firecrawl.base_url.rstrip("/")
         payload: dict[str, Any] = {"query": query, "limit": min(limit, 10)}
         request = Request(
             f"{base_url}/v1/search",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._settings.firecrawl_api_key}",
+                "Authorization": f"Bearer {self._settings.firecrawl.api_key}",
             },
             method="POST",
         )
-        timeout_seconds = max(5, self._settings.firecrawl_timeout_ms / 1000)
+        timeout_seconds = max(5, self._settings.firecrawl.timeout_ms / 1000)
 
         try:
             with urlopen(request, timeout=timeout_seconds) as response:

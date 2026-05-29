@@ -28,7 +28,11 @@ from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from .llm_strategies import build_graphiti_llm_client
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
 from .reranker import GraphCitationHit
-from .search_strategies import GraphSearchStrategy, get_graph_search_strategy
+from .search_strategies import (
+    GraphSearchStrategy,
+    apply_search_config_overrides,
+    get_graph_search_strategy,
+)
 
 logger = logging.getLogger(__name__)
 CONTENT_FILTER_ERROR_MARKERS = (
@@ -79,34 +83,37 @@ class GraphitiStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._indices_ready = False
-        self.search_strategy: GraphSearchStrategy = get_graph_search_strategy(
-            settings.graph_search_strategy
+        self.search_strategy: GraphSearchStrategy = apply_search_config_overrides(
+            get_graph_search_strategy(settings.graphiti.search_strategy),
+            max_hops=settings.graphiti.search_max_hops,
+            limit=settings.graphiti.search_limit,
+            min_score=settings.graphiti.search_min_score,
         )
 
     def configured(self) -> bool:
         return bool(
-            self.settings.graphiti_uri
-            and self.settings.graphiti_user
-            and self.settings.graphiti_password
-            and (self.settings.graphiti_llm_api_key or self.settings.openai_api_key)
-            and (self.settings.graphiti_llm_base_url or self.settings.openai_base_url)
-            and (self.settings.graphiti_llm_model or self.settings.openai_model)
-            and (self.settings.embedding_api_key or self.settings.openai_api_key)
-            and (self.settings.embedding_base_url or self.settings.openai_base_url)
-            and self.settings.openai_embedding_model
+            self.settings.graphiti.uri
+            and self.settings.graphiti.user
+            and self.settings.graphiti.password
+            and (self.settings.graphiti.llm_api_key or self.settings.openai.api_key)
+            and (self.settings.graphiti.llm_base_url or self.settings.openai.base_url)
+            and (self.settings.graphiti.llm_model or self.settings.openai.model)
+            and (self.settings.openai.embedding_api_key or self.settings.openai.api_key)
+            and (self.settings.openai.embedding_base_url or self.settings.openai.base_url)
+            and self.settings.openai.embedding_model
         )
 
     def status(self) -> dict[str, str | bool]:
         return {
             "configured": self.configured(),
-            "base_url": self.settings.graphiti_llm_base_url
-            or self.settings.openai_base_url
+            "base_url": self.settings.graphiti.llm_base_url
+            or self.settings.openai.base_url
             or "",
-            "model": self.settings.graphiti_llm_model or self.settings.openai_model,
-            "embedding_base_url": self.settings.embedding_base_url
-            or self.settings.openai_base_url
+            "model": self.settings.graphiti.llm_model or self.settings.openai.model,
+            "embedding_base_url": self.settings.openai.embedding_base_url
+            or self.settings.openai.base_url
             or "",
-            "embedding_model": self.settings.openai_embedding_model,
+            "embedding_model": self.settings.openai.embedding_model,
             "search_strategy": self.search_strategy.name,
         }
 
@@ -160,9 +167,9 @@ class GraphitiStore:
 
     def clear_all_data(self) -> int:
         if not (
-            self.settings.graphiti_uri
-            and self.settings.graphiti_user
-            and self.settings.graphiti_password
+            self.settings.graphiti.uri
+            and self.settings.graphiti.user
+            and self.settings.graphiti.password
         ):
             return 0
         if not self._neo4j_reachable():
@@ -188,7 +195,7 @@ class GraphitiStore:
             return False
 
     def _neo4j_reachable(self, timeout_seconds: float = 0.5) -> bool:
-        uri = self.settings.graphiti_uri
+        uri = self.settings.graphiti.uri
         if not uri:
             return False
 
@@ -218,8 +225,8 @@ class GraphitiStore:
             note_id=note.id,
             user_id=note.user_id,
             attempt=attempt,
-            model=self.settings.graphiti_llm_model or self.settings.openai_model,
-            embedding_model=self.settings.openai_embedding_model,
+            model=self.settings.graphiti.llm_model or self.settings.openai.model,
+            embedding_model=self.settings.openai.embedding_model,
         ) as span:
             graphiti = await self._build_client(trace_id=span["trace_id"])
             trace_id = span["trace_id"]
@@ -237,7 +244,7 @@ class GraphitiStore:
                                 name=note.title,
                                 episode_body=_graphiti_episode_body(
                                     note,
-                                    max_chars=self.settings.graphiti_episode_max_chars,
+                                    max_chars=self.settings.graphiti.episode_max_chars,
                                 ),
                                 source_description=f"Personal note {note.id}",
                                 reference_time=note.created_at,
@@ -246,11 +253,11 @@ class GraphitiStore:
                                 entity_types=ENTITY_TYPES,
                                 custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                             ),
-                            timeout=self.settings.graphiti_add_episode_timeout_seconds,
+                            timeout=self.settings.graphiti.add_episode_timeout_seconds,
                         )
                     except Exception as exc:
                         if (
-                            not self.settings.graphiti_content_filter_fallback
+                            not self.settings.graphiti.content_filter_fallback
                             or not _looks_like_content_filter_error(exc)
                         ):
                             raise
@@ -269,7 +276,7 @@ class GraphitiStore:
                                 entity_types=ENTITY_TYPES,
                                 custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                             ),
-                            timeout=self.settings.graphiti_add_episode_timeout_seconds,
+                            timeout=self.settings.graphiti.add_episode_timeout_seconds,
                         )
 
                 related_episode_uuids: list[str] = []
@@ -287,7 +294,7 @@ class GraphitiStore:
                                 config=COMBINED_HYBRID_SEARCH_RRF,
                                 group_ids=[self._group_id(note.user_id)],
                             ),
-                            timeout=self.settings.graphiti_search_timeout_seconds,
+                            timeout=self.settings.graphiti.search_timeout_seconds,
                         )
                     related_episode_uuids = _related_episode_ids_from_edges(
                         [edge.episodes for edge in search_result.edges],
@@ -373,8 +380,8 @@ class GraphitiStore:
             "graphiti.ask",
             trace_id=trace_id,
             user_id=user_id,
-            model=self.settings.graphiti_llm_model or self.settings.openai_model,
-            embedding_model=self.settings.openai_embedding_model,
+            model=self.settings.graphiti.llm_model or self.settings.openai.model,
+            embedding_model=self.settings.openai.embedding_model,
         ) as span:
             graphiti = await self._build_client(trace_id=span["trace_id"])
             trace_id = span["trace_id"]
@@ -391,7 +398,7 @@ class GraphitiStore:
                             config=self.search_strategy.search_config,
                             group_ids=[self._group_id(user_id)],
                         ),
-                        timeout=self.settings.graphiti_search_timeout_seconds,
+                        timeout=self.settings.graphiti.search_timeout_seconds,
                     )
 
                 node_names_by_uuid = {
@@ -507,8 +514,8 @@ class GraphitiStore:
 
     async def _clear_all_data(self) -> int:
         driver = AsyncGraphDatabase.driver(
-            self.settings.graphiti_uri,
-            auth=(self.settings.graphiti_user, self.settings.graphiti_password),
+            self.settings.graphiti.uri,
+            auth=(self.settings.graphiti.user, self.settings.graphiti.password),
         )
         try:
             async with driver.session() as session:
@@ -535,16 +542,16 @@ class GraphitiStore:
         llm_client = build_graphiti_llm_client(self.settings)
         embedder = DashScopeCompatibleEmbedder(
             config=OpenAIEmbedderConfig(
-                api_key=self.settings.embedding_api_key or self.settings.openai_api_key,
-                base_url=self.settings.embedding_base_url
-                or self.settings.openai_base_url,
-                embedding_model=self.settings.openai_embedding_model,
+                api_key=self.settings.openai.embedding_api_key or self.settings.openai.api_key,
+                base_url=self.settings.openai.embedding_base_url
+                or self.settings.openai.base_url,
+                embedding_model=self.settings.openai.embedding_model,
             )
         )
         graphiti = Graphiti(
-            uri=self.settings.graphiti_uri,
-            user=self.settings.graphiti_user,
-            password=self.settings.graphiti_password,
+            uri=self.settings.graphiti.uri,
+            user=self.settings.graphiti.user,
+            password=self.settings.graphiti.password,
             llm_client=llm_client,
             embedder=embedder,
         )
@@ -553,7 +560,7 @@ class GraphitiStore:
                 logger,
                 "graphiti.build_indices",
                 trace_id=trace_id,
-                graphiti_uri=self.settings.graphiti_uri,
+                graphiti_uri=self.settings.graphiti.uri,
             ):
                 await asyncio.wait_for(
                     graphiti.build_indices_and_constraints(), timeout=45
@@ -564,12 +571,12 @@ class GraphitiStore:
                 logging.INFO,
                 "graphiti.indices.ready",
                 trace_id=trace_id,
-                graphiti_uri=self.settings.graphiti_uri,
+                graphiti_uri=self.settings.graphiti.uri,
             )
         return graphiti
 
     def _group_id(self, user_id: str) -> str:
-        raw = f"{self.settings.graphiti_group_prefix}-{user_id}"
+        raw = f"{self.settings.graphiti.group_prefix}-{user_id}"
         normalized = []
         for char in raw:
             if char.isalnum() or char in {"-", "_"}:
