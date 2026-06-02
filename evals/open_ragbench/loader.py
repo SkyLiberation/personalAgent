@@ -40,6 +40,8 @@ def ensure_dataset(cache_dir: Path | None = None) -> Path:
 
     Returns the path to the ``official/pdf/arxiv/`` directory.
     """
+    if cache_dir is None:
+        cache_dir = Path(__file__).resolve().parents[2] / "data" / "huggingface"
     root = snapshot_download(
         _DATASET_REPO,
         repo_type="dataset",

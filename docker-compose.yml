@@ -33,7 +33,7 @@ services:
       - neo4j-data:/data
       - neo4j-logs:/logs
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_DB: personal_agent
       POSTGRES_USER: postgres

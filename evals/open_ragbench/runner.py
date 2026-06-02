@@ -43,6 +43,8 @@ class BenchmarkContext:
     graphiti_manifest_path: Path | None
     graphiti_note_mode: CorpusNoteMode
     graphiti_continue_on_ingest_error: bool
+    eval_snapshots: dict[str, list[dict]] | None = None
+    planner_cache: dict[str, tuple[object, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,9 +56,10 @@ class BenchmarkRunResult:
     num_docs: int
     num_queries: int
     corpus_mode: str
+    diagnostics: list[dict] | None = None
 
     def as_dict(self) -> dict:
-        return {
+        payload = {
             "strategy": self.strategy,
             "description": self.description,
             "elapsed_seconds": self.elapsed_seconds,
@@ -65,6 +68,9 @@ class BenchmarkRunResult:
             "corpus_mode": self.corpus_mode,
             "metrics": self.report.as_dict(),
         }
+        if self.diagnostics is not None:
+            payload["diagnostics"] = self.diagnostics
+        return payload
 
 
 @dataclass(frozen=True)
@@ -278,61 +284,91 @@ def _ensure_graphiti_corpus(
     note_mode: CorpusNoteMode,
     continue_on_ingest_error: bool,
 ) -> dict[str, str]:
-    """Ingest the benchmark corpus into Graphiti once per runner process."""
+    """Ingest the benchmark corpus into Graphiti, with incremental support.
+
+    If a manifest already exists and `reset=False`, loads cached mappings for
+    already-ingested notes and only ingests the new ones (incremental mode).
+    If `reset=True`, clears the graph and re-ingests everything from scratch.
+    """
     cache_key = f"{user_id}:{note_mode}:{len(notes)}:{','.join(note.id for note in notes[:5])}"
     if cache_key in _GRAPHITI_INGEST_CACHE:
         return _GRAPHITI_INGEST_CACHE[cache_key]
 
     expected_note_ids = {note.id for note in notes}
-    if not reset:
-        if manifest_path is None or not manifest_path.exists():
-            raise RuntimeError("--reuse-graphiti requires a matching Graphiti manifest file.")
+
+    # --- Incremental mode: load existing manifest, ingest only new notes ---
+    existing_episode_map: dict[str, str] = {}
+    existing_note_ids: set[str] = set()
+    if not reset and manifest_path is not None and manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest_matches = (
+        if (
             manifest.get("user_id") == user_id
             and manifest.get("graphiti_group_prefix") == graph_store.settings.graphiti.group_prefix
             and manifest.get("note_mode", "parent_sections") == note_mode
-            and manifest.get("note_count") == len(notes)
-            and set(manifest.get("note_ids", [])) == expected_note_ids
-        )
-        if not manifest_matches:
-            raise RuntimeError(
-                "--reuse-graphiti manifest does not match the selected corpus/user. "
-                "Run without --reuse-graphiti to rebuild the eval graph."
-            )
-        episode_to_note_id = {
-            str(episode_uuid): str(note_id)
-            for episode_uuid, note_id in manifest.get("episode_to_note_id", {}).items()
-        }
-        if not episode_to_note_id:
-            raise RuntimeError("--reuse-graphiti manifest has no episode mapping.")
-        _GRAPHITI_INGEST_CACHE[cache_key] = episode_to_note_id
-        return episode_to_note_id
+        ):
+            existing_episode_map = {
+                str(k): str(v) for k, v in manifest.get("episode_to_note_id", {}).items()
+            }
+            existing_note_ids = set(manifest.get("note_ids", []))
+
+    # If manifest covers all requested notes exactly, reuse without ingest
+    if existing_note_ids >= expected_note_ids and existing_episode_map:
+        _GRAPHITI_INGEST_CACHE[cache_key] = existing_episode_map
+        return existing_episode_map
 
     if reset:
         graph_store.clear_user_group(user_id)
+        existing_episode_map = {}
+        existing_note_ids = set()
 
-    episode_to_note_id: dict[str, str] = {}
+    # Only ingest notes not already in the manifest
+    new_notes = [n for n in notes if n.id not in existing_note_ids]
+    episode_to_note_id: dict[str, str] = dict(existing_episode_map)
     ingest_errors: list[dict[str, str]] = []
-    for index, original_note in enumerate(notes, start=1):
+    total = len(new_notes)
+
+    import asyncio
+    max_workers = 10
+
+    async def _async_ingest_one(store, original_note, index, total_count):
         note = original_note.model_copy(update={"user_id": user_id})
-        result = graph_store.ingest_note(note, trace_id=f"ragbench-ingest-{index}")
-        if not result.enabled or not result.episode_uuid:
+        print(f"  Ingesting [{index}/{total_count}] {note.id[:40]}...", flush=True)
+        try:
+            result = await store._ingest_note(note, trace_id=f"ragbench-ingest-{index}")
+            if not result.enabled or not result.episode_uuid:
+                return (None, original_note.id, result.error or "missing episode_uuid")
+            return (result.episode_uuid, original_note.id, None)
+        except Exception as exc:
+            return (None, original_note.id, str(exc)[:200])
+
+    async def _run_all():
+        sem = asyncio.Semaphore(max_workers)
+        async def _limited(coro):
+            async with sem:
+                return await coro
+        tasks = [
+            _limited(_async_ingest_one(graph_store, new_notes[i], i + 1, total))
+            for i in range(total)
+        ]
+        return await asyncio.gather(*tasks)
+
+    all_results = asyncio.run(_run_all())
+    for episode_uuid, note_id, error in all_results:
+        if error:
             if continue_on_ingest_error:
-                ingest_errors.append({
-                    "note_id": note.id,
-                    "error": result.error or "missing episode_uuid",
-                })
-                continue
-            raise RuntimeError(
-                f"Graphiti ingest failed for note {note.id}: {result.error or 'missing episode_uuid'}"
-            )
-        episode_to_note_id[result.episode_uuid] = original_note.id
+                ingest_errors.append({"note_id": note_id, "error": error})
+            else:
+                raise RuntimeError(f"Graphiti ingest failed for note {note_id}: {error}")
+        elif episode_uuid:
+            episode_to_note_id[episode_uuid] = note_id
+
+    print(f"  Ingest complete: {len(episode_to_note_id)} episodes, {len(ingest_errors)} errors", flush=True)
 
     if not episode_to_note_id:
         detail = ingest_errors[:3]
         raise RuntimeError(f"Graphiti ingest produced no episodes. Sample errors: {detail}")
 
+    all_note_ids = existing_note_ids | expected_note_ids
     _GRAPHITI_INGEST_CACHE[cache_key] = episode_to_note_id
     if manifest_path is not None:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,8 +378,8 @@ def _ensure_graphiti_corpus(
                     "user_id": user_id,
                     "graphiti_group_prefix": graph_store.settings.graphiti.group_prefix,
                     "note_mode": note_mode,
-                    "note_count": len(notes),
-                    "note_ids": sorted(expected_note_ids),
+                    "note_count": len(all_note_ids),
+                    "note_ids": sorted(all_note_ids),
                     "episode_to_note_id": episode_to_note_id,
                     "ingest_errors": ingest_errors,
                 },
@@ -352,6 +388,7 @@ def _ensure_graphiti_corpus(
             ),
             encoding="utf-8",
         )
+        print(f"  Manifest saved: {manifest_path} ({len(episode_to_note_id)} episodes, {len(ingest_errors)} errors)")
     return episode_to_note_id
 
 
@@ -407,6 +444,81 @@ class _GraphRagIndex:
     sections: list[_GraphRagSection]
     document_frequency: dict[str, int]
     num_sections: int
+
+
+def _record_eval_snapshot(context: BenchmarkContext, strategy_name: str, snapshot: dict) -> None:
+    if context.eval_snapshots is None:
+        return
+    context.eval_snapshots.setdefault(strategy_name, []).append(snapshot)
+
+
+def _get_eval_plan(query: RAGBenchQuery, settings: Settings, context: BenchmarkContext):
+    from personal_agent.agent.query_planner import plan_retrieval
+
+    if context.planner_cache is None:
+        return plan_retrieval(query.query_text, "", settings), False
+    if query.query_id in context.planner_cache:
+        return context.planner_cache[query.query_id], True
+    result = plan_retrieval(query.query_text, "", settings)
+    context.planner_cache[query.query_id] = result
+    return result, False
+
+
+def _new_eval_store(
+    settings: Settings,
+    docs: dict[str, RAGBenchDoc],
+    *,
+    user_id: str = "ragbench_eval",
+):
+    from pathlib import Path
+    import tempfile
+    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ragbench_eval_"))
+    store = PostgresMemoryStore(
+        data_dir=tmp_dir,
+        postgres_url=settings.postgres_url,
+        embedding_provider=settings.embedding_provider,
+        embedding_model=settings.openai.embedding_model,
+        embedding_api_key=settings.openai.embedding_api_key or settings.openai.api_key,
+        embedding_base_url=settings.openai.embedding_base_url or settings.openai.base_url,
+    )
+    store.ensure_schema()
+    notes = [
+        note.model_copy(update={"user_id": user_id})
+        for note in corpus_to_notes(docs)
+    ]
+    for note in notes:
+        store.add_note(note)
+    return store, notes
+
+
+def _attach_graph_episode_ids_to_store(store, notes: list[KnowledgeNote], episode_to_note_id: dict[str, str]) -> None:
+    note_by_id = {note.id: note for note in notes}
+    for episode_uuid, note_id in episode_to_note_id.items():
+        note = note_by_id.get(note_id)
+        if note is None:
+            continue
+        store.add_note(note.model_copy(update={"graph_episode_uuid": episode_uuid}))
+
+
+def _ensure_eval_graph_mapping(
+    *,
+    graph_store: GraphitiStore,
+    notes: list[KnowledgeNote],
+    context: BenchmarkContext,
+) -> dict[str, str]:
+    if not graph_store.configured():
+        return {}
+    return _ensure_graphiti_corpus(
+        graph_store=graph_store,
+        notes=notes,
+        user_id=context.graphiti_user_id,
+        reset=context.reset_graphiti,
+        manifest_path=context.graphiti_manifest_path,
+        note_mode=context.graphiti_note_mode,
+        continue_on_ingest_error=context.graphiti_continue_on_ingest_error,
+    )
 
 
 def _build_graphrag_index(docs: dict[str, RAGBenchDoc]) -> _GraphRagIndex:
@@ -543,9 +655,232 @@ _GRAPHRAG_STOPWORDS = {
 }
 
 
+@dataclass(frozen=True)
+class AskPipelineStrategy:
+    """Retrieval-only proxy for the Ask pipeline.
+
+    This intentionally stops before answer generation. It evaluates whether the
+    query planner and retrieval sources put relevant note IDs in the top-k.
+    """
+
+    name: str = "ask_pipeline"
+    description: str = (
+        "Ask retrieval proxy with QueryUnderstanding + RetrievalPlan: "
+        "query rewrite, graph/local retrieval, sub-query decomposition, note-id normalized output."
+    )
+    use_planner: bool = True
+    use_rewrite: bool = True
+    include_graph: bool = True
+    include_subqueries: bool = True
+    local_only: bool = False
+
+    def evaluate(
+        self,
+        queries: list[RAGBenchQuery],
+        docs: dict[str, RAGBenchDoc],
+        *,
+        limit: int,
+        context: BenchmarkContext,
+    ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
+        settings = context.settings
+        store, all_notes = _new_eval_store(settings, docs)
+        graph_store = GraphitiStore(settings)
+        episode_to_note_id: dict[str, str] = {}
+        if self.include_graph and not self.local_only:
+            episode_to_note_id = _ensure_eval_graph_mapping(
+                graph_store=graph_store,
+                notes=all_notes,
+                context=context,
+            )
+            _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
+
+        from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+
+        rankings: list[tuple[str, list[str]]] = []
+        relevance: dict[str, set[str]] = {}
+
+        for query in queries:
+            planner_cache_hit = False
+            if self.use_planner:
+                (understanding, plan), planner_cache_hit = _get_eval_plan(query, settings, context)
+            else:
+                understanding = QueryUnderstanding(
+                    needs_personal_memory=True,
+                    query_rewrite=query.query_text,
+                    filters=RetrievalFilters(),
+                )
+                plan = RetrievalPlan(
+                    sources=["local"],
+                    parallel=False,
+                    query=query.query_text,
+                    sub_queries=[],
+                    filters=RetrievalFilters(),
+                )
+
+            effective_query = (plan.query or query.query_text) if self.use_rewrite else query.query_text
+            sources = ["local"] if self.local_only else list(plan.sources)
+            if not self.include_graph and "graph" in sources:
+                sources = [source for source in sources if source != "graph"]
+            if "local" not in sources:
+                sources.append("local")
+
+            result_ids: list[str] = []
+            local_ids: list[str] = []
+            graph_ids: list[str] = []
+            subquery_ids: list[str] = []
+
+            if "local" in sources:
+                local_matches = store.find_similar_notes(
+                    "ragbench_eval",
+                    effective_query,
+                    limit=limit,
+                    filters=plan.filters,
+                )
+                for match in local_matches:
+                    local_ids.append(match.id)
+                    if match.id not in result_ids:
+                        result_ids.append(match.id)
+
+            if "graph" in sources and graph_store.configured() and episode_to_note_id:
+                graph_result = graph_store.ask(effective_query, context.graphiti_user_id)
+                if graph_result.enabled:
+                    for hit in graph_result.citation_hits:
+                        note_id = episode_to_note_id.get(hit.episode_uuid)
+                        if note_id is None:
+                            continue
+                        graph_ids.append(note_id)
+                        if note_id not in result_ids:
+                            result_ids.append(note_id)
+                    for episode_uuid in graph_result.related_episode_uuids:
+                        note_id = episode_to_note_id.get(episode_uuid)
+                        if note_id is None:
+                            continue
+                        graph_ids.append(note_id)
+                        if note_id not in result_ids:
+                            result_ids.append(note_id)
+
+            sub_queries = plan.sub_queries if self.include_subqueries else []
+            for sub_q in sub_queries:
+                sub_matches = store.find_similar_notes(
+                    "ragbench_eval",
+                    sub_q,
+                    limit=limit,
+                    filters=plan.filters,
+                )
+                for match in sub_matches:
+                    subquery_ids.append(match.id)
+                    if match.id not in result_ids:
+                        result_ids.append(match.id)
+
+            rankings.append((query.query_id, result_ids[:limit]))
+            section_id, parent_id = expected_note_ids(query)
+            relevance[query.query_id] = {section_id, parent_id}
+            _record_eval_snapshot(
+                context,
+                self.name,
+                {
+                    "query_id": query.query_id,
+                    "query_text": query.query_text,
+                    "expected_note_ids": [section_id, parent_id],
+                    "planner": {
+                        "enabled": self.use_planner,
+                        "sources": list(plan.sources),
+                        "effective_sources": sources,
+                        "rewrite": plan.query,
+                        "used_query": effective_query,
+                        "sub_queries": list(sub_queries),
+                        "filters": plan.filters.model_dump(exclude_defaults=True),
+                        "needs_freshness": understanding.needs_freshness,
+                        "needs_graph_reasoning": understanding.needs_graph_reasoning,
+                        "cache_hit": planner_cache_hit,
+                    },
+                    "local_ids": local_ids[:limit],
+                    "graph_note_ids": graph_ids[:limit],
+                    "subquery_ids": subquery_ids[:limit],
+                    "ranked_ids": result_ids[:limit],
+                },
+            )
+
+        return rankings, relevance
+
+
+@dataclass(frozen=True)
+class RuntimeAskStrategy:
+    """Full production runtime Ask path, used as an explicit diagnostic strategy."""
+
+    name: str = "current_runtime_ask"
+    description: str = (
+        "Full AgentRuntime.execute_ask path over the eval corpus. "
+        "Runs generation/verifier, so it is slower than retrieval-only strategies."
+    )
+
+    def evaluate(
+        self,
+        queries: list[RAGBenchQuery],
+        docs: dict[str, RAGBenchDoc],
+        *,
+        limit: int,
+        context: BenchmarkContext,
+    ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
+        from personal_agent.agent.runtime import AgentRuntime
+
+        settings = context.settings
+        eval_user_id = context.graphiti_user_id
+        store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
+        graph_store = GraphitiStore(settings)
+        if settings.ask.graph_provider.strip().lower() == "graphiti":
+            episode_to_note_id = _ensure_eval_graph_mapping(
+                graph_store=graph_store,
+                notes=all_notes,
+                context=context,
+            )
+            _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
+        runtime = AgentRuntime(settings, store, graph_store)
+
+        rankings: list[tuple[str, list[str]]] = []
+        relevance: dict[str, set[str]] = {}
+        for query in queries:
+            result = runtime.execute_ask(
+                query.query_text,
+                user_id=eval_user_id,
+                session_id=f"ragbench_{query.query_id}",
+            )
+            ranked_ids: list[str] = []
+            for match in result.matches:
+                if match.id not in ranked_ids:
+                    ranked_ids.append(match.id)
+            rankings.append((query.query_id, ranked_ids[:limit]))
+            section_id, parent_id = expected_note_ids(query)
+            relevance[query.query_id] = {section_id, parent_id}
+            _record_eval_snapshot(
+                context,
+                self.name,
+                {
+                    "query_id": query.query_id,
+                    "query_text": query.query_text,
+                    "expected_note_ids": [section_id, parent_id],
+                    "ranked_ids": ranked_ids[:limit],
+                    "citation_note_ids": [citation.note_id for citation in result.citations[:limit]],
+                    "evidence_ids": [item.source_id for item in result.evidence[:limit]],
+                    "graph_provider": settings.ask.graph_provider,
+                },
+            )
+        return rankings, relevance
+
+
 def list_strategy_names() -> list[str]:
     real_graph_names = [f"graphiti_{name}" for name in sorted(STRATEGIES)]
-    return ["keyword", "citation_reranker", "graphrag", *real_graph_names]
+    return [
+        "keyword",
+        "citation_reranker",
+        "graphrag",
+        "ask_pipeline",
+        "ask_pipeline_no_rewrite",
+        "ask_pipeline_local_only",
+        "ask_pipeline_no_planner",
+        "current_runtime_ask",
+        *real_graph_names,
+    ]
 
 
 def get_strategy(name: str) -> BenchmarkStrategy:
@@ -556,6 +891,42 @@ def get_strategy(name: str) -> BenchmarkStrategy:
         return CitationRerankStrategy()
     if normalized == "graphrag":
         return GraphRagStrategy()
+    if normalized == "ask_pipeline":
+        return AskPipelineStrategy()
+    if normalized == "ask_pipeline_no_rewrite":
+        return AskPipelineStrategy(
+            name="ask_pipeline_no_rewrite",
+            description=(
+                "Ask retrieval proxy with planner routing but original query text; "
+                "used to isolate query rewrite impact."
+            ),
+            use_rewrite=False,
+        )
+    if normalized == "ask_pipeline_local_only":
+        return AskPipelineStrategy(
+            name="ask_pipeline_local_only",
+            description=(
+                "Ask retrieval proxy constrained to local Postgres retrieval; "
+                "used to isolate graph contribution and latency."
+            ),
+            include_graph=False,
+            local_only=True,
+        )
+    if normalized == "ask_pipeline_no_planner":
+        return AskPipelineStrategy(
+            name="ask_pipeline_no_planner",
+            description=(
+                "Local retrieval over the original query with no LLM planner; "
+                "used as the current Postgres hybrid baseline."
+            ),
+            use_planner=False,
+            use_rewrite=False,
+            include_graph=False,
+            include_subqueries=False,
+            local_only=True,
+        )
+    if normalized == "current_runtime_ask":
+        return RuntimeAskStrategy()
     if normalized.startswith("graphiti_"):
         graph_strategy_name = normalized.removeprefix("graphiti_")
         if graph_strategy_name in STRATEGIES:
@@ -584,6 +955,8 @@ def run_open_ragbench(
         seed=seed,
         corpus_mode=corpus_mode,
     )
+    eval_snapshots: dict[str, list[dict]] = {}
+    planner_cache: dict[str, tuple[object, object]] = {}
     context = BenchmarkContext(
         settings=settings or Settings.from_env(),
         graphiti_user_id=graphiti_user_id,
@@ -591,6 +964,8 @@ def run_open_ragbench(
         graphiti_manifest_path=graphiti_manifest_path,
         graphiti_note_mode=graphiti_note_mode,
         graphiti_continue_on_ingest_error=graphiti_continue_on_ingest_error,
+        eval_snapshots=eval_snapshots,
+        planner_cache=planner_cache,
     )
     results: list[BenchmarkRunResult] = []
     for strategy_name in strategy_names:
@@ -608,6 +983,7 @@ def run_open_ragbench(
                 num_docs=len(docs),
                 num_queries=len(queries),
                 corpus_mode=corpus_mode,
+                diagnostics=eval_snapshots.get(strategy.name),
             )
         )
     return results
@@ -651,19 +1027,108 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep evaluating when individual Graphiti episodes fail to ingest.",
     )
+    parser.add_argument(
+        "--graph-search-limit",
+        type=int,
+        default=None,
+        help="Override Graphiti search_config.limit for real Graphiti/current_runtime_ask evals.",
+    )
+    parser.add_argument(
+        "--graph-search-citation-limit",
+        type=int,
+        default=None,
+        help="Override project-side Graphiti citation hit limit for episode -> note mapping.",
+    )
+    parser.add_argument(
+        "--ask-graph-provider",
+        choices=("graphiti", "graphrag"),
+        default=None,
+        help="Override the production ask graph provider for current_runtime_ask.",
+    )
+    parser.add_argument(
+        "--ask-reranker",
+        choices=("heuristic", "llm"),
+        default=None,
+        help="Override the production ask reranker for current_runtime_ask.",
+    )
+    parser.add_argument(
+        "--ask-candidate-enricher",
+        choices=("parent_child", "none"),
+        default=None,
+        help="Override parent/child candidate enrichment before production ask rerank.",
+    )
+    parser.add_argument(
+        "--ask-graph-note-evidence-mode",
+        choices=("none", "all", "cited_overlap"),
+        default=None,
+        help="Control whether Graphiti mapped notes enter production ContextPack evidence.",
+    )
+    parser.add_argument(
+        "--ask-context-max-items",
+        type=int,
+        default=None,
+        help="Override the maximum number of evidence items selected into ContextPack.",
+    )
+    parser.add_argument(
+        "--ask-context-char-budget",
+        type=int,
+        default=None,
+        help="Override the ContextPack character budget.",
+    )
+    parser.add_argument(
+        "--ask-llm-rerank-top-n",
+        type=int,
+        default=None,
+        help="Override the number of heuristic candidates sent to the LLM reranker.",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON output path.")
     return parser.parse_args()
+
+
+def _settings_from_args(args: argparse.Namespace) -> Settings:
+    settings = Settings.from_env()
+    ask_updates: dict[str, object] = {}
+    if args.ask_graph_provider is not None:
+        ask_updates["graph_provider"] = args.ask_graph_provider
+    if args.ask_reranker is not None:
+        ask_updates["reranker"] = args.ask_reranker
+    if args.ask_candidate_enricher is not None:
+        ask_updates["candidate_enricher"] = args.ask_candidate_enricher
+    if args.ask_graph_note_evidence_mode is not None:
+        ask_updates["graph_note_evidence_mode"] = args.ask_graph_note_evidence_mode
+    if args.ask_context_max_items is not None:
+        ask_updates["context_max_items"] = args.ask_context_max_items
+    if args.ask_context_char_budget is not None:
+        ask_updates["context_char_budget"] = args.ask_context_char_budget
+    if args.ask_llm_rerank_top_n is not None:
+        ask_updates["llm_rerank_top_n"] = args.ask_llm_rerank_top_n
+    if ask_updates:
+        settings = settings.model_copy(
+            update={"ask": settings.ask.model_copy(update=ask_updates)}
+        )
+    graph_updates: dict[str, object] = {}
+    if args.graph_search_limit is not None:
+        graph_updates["search_limit"] = args.graph_search_limit
+    if args.graph_search_citation_limit is not None:
+        graph_updates["search_citation_limit"] = args.graph_search_citation_limit
+    if graph_updates:
+        settings = settings.model_copy(
+            update={"graphiti": settings.graphiti.model_copy(update=graph_updates)}
+        )
+    return settings
 
 
 def main() -> None:
     args = _parse_args()
     strategy_names = [name.strip() for name in args.strategies.split(",") if name.strip()]
+    settings = _settings_from_args(args)
     results = run_open_ragbench(
         strategy_names=strategy_names,
         num_queries=args.num_queries,
         seed=args.seed,
         corpus_mode=args.corpus_mode,
         limit=args.limit,
+        settings=settings,
         graphiti_user_id=args.graphiti_user_id,
         reset_graphiti=not args.reuse_graphiti,
         graphiti_manifest_path=args.graphiti_manifest,

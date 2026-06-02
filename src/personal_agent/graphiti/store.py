@@ -53,6 +53,15 @@ MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*")
 BLOCKQUOTE_RE = re.compile(r"^\s*>\s?")
 
 
+def _episode_uuids_from_search_result(search_result: object) -> list[str]:
+    episode_uuids: list[str] = []
+    for episode in getattr(search_result, "episodes", []) or []:
+        uuid = getattr(episode, "uuid", None)
+        if uuid and uuid not in episode_uuids:
+            episode_uuids.append(uuid)
+    return episode_uuids
+
+
 class GraphCaptureResult(BaseModel):
     enabled: bool = False
     error: str | None = None
@@ -87,6 +96,7 @@ class GraphitiStore:
             get_graph_search_strategy(settings.graphiti.search_strategy),
             max_hops=settings.graphiti.search_max_hops,
             limit=settings.graphiti.search_limit,
+            citation_limit=settings.graphiti.search_citation_limit,
             min_score=settings.graphiti.search_min_score,
         )
 
@@ -138,6 +148,39 @@ class GraphitiStore:
             return GraphCaptureResult(
                 enabled=False, error=str(exc)[:500] or exc.__class__.__name__
             )
+
+    def ingest_notes(
+        self,
+        notes: list[KnowledgeNote],
+        *,
+        trace_id: str | None = None,
+        max_workers: int | None = None,
+    ) -> dict[str, GraphCaptureResult]:
+        if not notes:
+            return {}
+        if not self.configured():
+            return {
+                note.id: GraphCaptureResult(enabled=False, error="Graphiti is not configured.")
+                for note in notes
+            }
+        if not self._neo4j_reachable():
+            return {
+                note.id: GraphCaptureResult(enabled=False, error="Neo4j is not reachable.")
+                for note in notes
+            }
+        worker_count = max(1, max_workers or self.settings.graphiti.sync_max_workers)
+        try:
+            return asyncio.run(
+                self._ingest_notes(notes, trace_id=trace_id, max_workers=worker_count)
+            )
+        except Exception as exc:
+            logger.exception("Graphiti batch ingest failed notes=%s", len(notes))
+            return {
+                note.id: GraphCaptureResult(
+                    enabled=False, error=str(exc)[:500] or exc.__class__.__name__
+                )
+                for note in notes
+            }
 
     def ask(
         self, question: str, user_id: str, trace_id: str | None = None
@@ -372,6 +415,29 @@ class GraphitiStore:
             finally:
                 await graphiti.close()
 
+    async def _ingest_notes(
+        self,
+        notes: list[KnowledgeNote],
+        *,
+        trace_id: str | None,
+        max_workers: int,
+    ) -> dict[str, GraphCaptureResult]:
+        bootstrap = await self._build_client(trace_id=trace_id)
+        await bootstrap.close()
+        semaphore = asyncio.Semaphore(max(1, max_workers))
+
+        async def _limited(note: KnowledgeNote, index: int) -> tuple[str, GraphCaptureResult]:
+            async with semaphore:
+                result = await self._ingest_note(
+                    note,
+                    trace_id=f"{trace_id or 'graph-batch'}-{index}",
+                )
+                return note.id, result
+
+        tasks = [_limited(note, index + 1) for index, note in enumerate(notes)]
+        pairs = await asyncio.gather(*tasks)
+        return dict(pairs)
+
     async def _ask(
         self, question: str, user_id: str, trace_id: str | None = None
     ) -> GraphAskResult:
@@ -409,9 +475,10 @@ class GraphitiStore:
                 )
                 entity_names = _dedupe([node.name for node in search_result.nodes])
                 relation_facts = _dedupe([hit.relation_fact for hit in ranked_hits])
-                related_episode_uuids = _dedupe(
-                    [hit.episode_uuid for hit in ranked_hits]
-                )
+                related_episode_uuids = _dedupe([
+                    *[hit.episode_uuid for hit in ranked_hits],
+                    *_episode_uuids_from_search_result(search_result),
+                ])
 
                 ask_node_refs = [
                     GraphNodeRef(
@@ -584,6 +651,61 @@ class GraphitiStore:
             else:
                 normalized.append("_")
         return "".join(normalized)
+
+    def get_topology(self, user_id: str | None = None) -> dict:
+        """Query Neo4j for all entity nodes and edges, return force-graph format."""
+        if not self._neo4j_reachable():
+            return {"nodes": [], "links": [], "error": "Neo4j is not reachable."}
+        try:
+            return asyncio.run(self._get_topology(user_id))
+        except Exception as exc:
+            logger.warning("get_topology failed: %s", exc)
+            return {"nodes": [], "links": [], "error": str(exc)[:200]}
+
+    async def _get_topology(self, user_id: str | None = None) -> dict:  # noqa: ARG002
+        driver = AsyncGraphDatabase.driver(
+            self.settings.graphiti.uri,
+            auth=(self.settings.graphiti.user, self.settings.graphiti.password),
+        )
+        try:
+            async with driver.session() as session:
+                node_query = "MATCH (n:Entity) RETURN n.uuid AS id, n.name AS name, labels(n) AS labels, n.summary AS summary"
+                result = await session.run(node_query)
+                records = await result.data()
+                nodes = [
+                    {
+                        "id": r["id"],
+                        "name": r["name"] or "",
+                        "labels": [
+                            label for label in (r["labels"] or []) if label != "Entity"
+                        ],
+                        "summary": r.get("summary") or "",
+                    }
+                    for r in records
+                    if r.get("id")
+                ]
+
+                edge_query = (
+                    "MATCH (a:Entity)-[r]->(b:Entity) "
+                    "RETURN a.uuid AS source, b.uuid AS target, "
+                    "r.fact AS fact, r.uuid AS uuid"
+                )
+                result = await session.run(edge_query)
+                records = await result.data()
+                links = [
+                    {
+                        "source": r["source"],
+                        "target": r["target"],
+                        "fact": r.get("fact") or "",
+                        "uuid": r.get("uuid") or "",
+                    }
+                    for r in records
+                    if r.get("source") and r.get("target")
+                ]
+
+            return {"nodes": nodes, "links": links}
+        finally:
+            await driver.close()
 
 
 def _graphiti_episode_body(note: KnowledgeNote, max_chars: int = 8000) -> str:

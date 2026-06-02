@@ -391,11 +391,17 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
                     file_bytes=file_bytes,
                     source_type="file",
                 )
+                capture_metadata = {
+                    **entry_input.metadata,
+                    "original_filename": original_filename,
+                    "captured_at": local_now().isoformat(),
+                }
                 result = deps.execute_capture(
                     text=capture_text,
                     source_type="file",
                     user_id=entry_input.user_id,
                     source_ref=entry_input.source_ref or file_path,
+                    metadata=capture_metadata,
                 )
                 state.answer = f"已收进知识库：{result.note.title}"
                 state.execution_trace = _execution_trace_for_intent(intent)
@@ -417,6 +423,7 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
     capture_text = entry_input.text
     source_type = "text"
     source_ref = entry_input.source_ref
+    capture_metadata = {**entry_input.metadata, "captured_at": local_now().isoformat()}
     if intent == "capture_link":
         source_type = "link"
         url = entry_input.metadata.get("url") or _first_url(entry_input.text)
@@ -430,12 +437,14 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
             state.execution_trace = _execution_trace_for_intent(intent)
             return {"answer": state.answer, "execution_trace": state.execution_trace}
         capture_text = deps.capture_service.capture_text_from_url(url)
+        capture_metadata["url"] = url
 
     result = deps.execute_capture(
         text=capture_text,
         source_type=source_type,
         user_id=entry_input.user_id,
         source_ref=source_ref,
+        metadata=capture_metadata,
     )
     state.answer = f"已收进知识库：{result.note.title}"
     state.execution_trace = _execution_trace_for_intent(intent)

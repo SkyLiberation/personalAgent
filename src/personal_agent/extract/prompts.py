@@ -12,7 +12,8 @@ PROMPT_DESCRIPTION = (
     "information_density (high/medium/low), graph_worthy (true ONLY when the "
     "passage contains decisions, dependencies, definitions, causes, tradeoffs, "
     "or contrasts; lists of links, table-of-contents, acknowledgements, "
-    "boilerplate are graph_worthy=false), reason (<=30 chars justification). "
+    "boilerplate are graph_worthy=false), reason (one of: decision, contrast, "
+    "definition, dependency, tradeoff, boilerplate, enumeration). "
     "Use exact source spans for extraction_text. Respond as JSON."
 )
 
@@ -37,7 +38,7 @@ EXAMPLES: list[lx.data.ExampleData] = [
                     "contains_relations": True,
                     "information_density": "high",
                     "graph_worthy": True,
-                    "reason": "包含定义和对比",
+                    "reason": "definition",
                 },
             )
         ],
@@ -59,7 +60,7 @@ EXAMPLES: list[lx.data.ExampleData] = [
                     "contains_relations": False,
                     "information_density": "low",
                     "graph_worthy": False,
-                    "reason": "纯目录无信息",
+                    "reason": "boilerplate",
                 },
             )
         ],

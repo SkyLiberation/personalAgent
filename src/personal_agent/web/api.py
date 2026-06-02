@@ -419,8 +419,13 @@ def create_app() -> FastAPI:
         result = service.entry(entry_input)
 
         if result.capture_result and service.graph_store.configured():
-            for chunk in (result.capture_result.chunk_notes or []):
-                background_tasks.add_task(service.sync_note_to_graph, chunk.id)
+            chunk_ids = [
+                chunk.id
+                for chunk in (result.capture_result.chunk_notes or [])
+                if chunk.graph_sync_status == "pending"
+            ]
+            if chunk_ids:
+                background_tasks.add_task(service.sync_notes_to_graph, chunk_ids)
 
         return {
             "intent": result.intent,
@@ -491,6 +496,14 @@ def create_app() -> FastAPI:
         logger.warning("Full debug data reset requested")
         result = service.reset_debug_data()
         return ResetDebugDataResponse(**result.model_dump())
+
+    # ---- Graph topology API ----
+
+    @app.get("/api/graph/topology")
+    def get_graph_topology(request: Request, user_id: str | None = None):
+        """Return all entity nodes and edges from Neo4j for force-graph rendering."""
+        resolved_user = user_id or _get_user_id(request, settings)
+        return service.graph_store.get_topology(resolved_user)
 
     # ---- Run snapshot API (orchestration graph checkpoint queries) ----
 

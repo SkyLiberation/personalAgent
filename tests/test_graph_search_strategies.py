@@ -41,18 +41,21 @@ class TestGraphSearchStrategies:
         base = get_graph_search_strategy("hybrid_rrf")
         original_hops = base.search_config.edge_config.bfs_max_depth
         original_limit = base.search_config.limit
+        original_citation_limit = base.citation_limit
 
         tuned = apply_search_config_overrides(
-            base, max_hops=2, limit=5, min_score=0.3
+            base, max_hops=2, limit=5, citation_limit=18, min_score=0.3
         )
 
         assert tuned.search_config.edge_config.bfs_max_depth == 2
         assert tuned.search_config.node_config.bfs_max_depth == 2
         assert tuned.search_config.limit == 5
+        assert tuned.citation_limit == 18
         assert tuned.search_config.reranker_min_score == 0.3
         # base recipe must not be mutated
         assert base.search_config.edge_config.bfs_max_depth == original_hops
         assert base.search_config.limit == original_limit
+        assert base.citation_limit == original_citation_limit
 
     def test_apply_overrides_noop_when_all_none(self):
         base = get_graph_search_strategy("hybrid_rrf")
@@ -66,6 +69,7 @@ class TestGraphSearchStrategies:
                 search_strategy="hybrid_rrf",
                 search_max_hops=2,
                 search_limit=6,
+                search_citation_limit=16,
                 search_min_score=0.2,
             ),
         )
@@ -73,4 +77,5 @@ class TestGraphSearchStrategies:
         cfg = store.search_strategy.search_config
         assert cfg.edge_config.bfs_max_depth == 2
         assert cfg.limit == 6
+        assert store.search_strategy.citation_limit == 16
         assert cfg.reranker_min_score == 0.2

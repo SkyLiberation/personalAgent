@@ -87,36 +87,16 @@ def test_to_section_map_normalizes_attributes() -> None:
     assert section_map.doc_topic == "Checkpoint vs Store"
 
 
-def test_should_run_respects_disabled_flag() -> None:
-    cfg = LangExtractConfig(enabled=False, api_key="k", min_doc_chars=10)
-    svc = PreExtractService(cfg)
-    assert svc.should_run("x" * 100) is False
-
-
 def test_should_run_respects_min_doc_chars() -> None:
-    cfg = LangExtractConfig(enabled=True, api_key="k", min_doc_chars=50)
+    cfg = LangExtractConfig(api_key="k", min_doc_chars=50)
     svc = PreExtractService(cfg)
     assert svc.should_run("x" * 30) is False
     assert svc.should_run("x" * 60) is True
 
 
-def test_should_run_requires_api_key() -> None:
-    cfg = LangExtractConfig(enabled=True, api_key=None, min_doc_chars=10)
-    svc = PreExtractService(cfg)
-    assert svc.should_run("x" * 100) is False
-
-
-def test_extract_returns_empty_when_disabled() -> None:
-    cfg = LangExtractConfig(enabled=False, api_key="k")
-    svc = PreExtractService(cfg)
-    out = svc.extract("anything")
-    assert isinstance(out, SectionMap)
-    assert out.sections == []
-
-
 def test_extract_falls_back_on_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = LangExtractConfig(
-        enabled=True, api_key="k", min_doc_chars=10, fallback_on_error=True
+        api_key="k", min_doc_chars=10, fallback_on_error=True
     )
     svc = PreExtractService(cfg)
 
@@ -134,7 +114,7 @@ def test_extract_raises_when_fallback_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = LangExtractConfig(
-        enabled=True, api_key="k", min_doc_chars=10, fallback_on_error=False
+        api_key="k", min_doc_chars=10, fallback_on_error=False
     )
     svc = PreExtractService(cfg)
 
@@ -147,10 +127,18 @@ def test_extract_raises_when_fallback_disabled(
         svc.extract("x" * 100)
 
 
+def test_extract_short_doc_returns_empty_section_map() -> None:
+    cfg = LangExtractConfig(api_key="k", min_doc_chars=100)
+    svc = PreExtractService(cfg)
+    out = svc.extract("tiny")
+    assert isinstance(out, SectionMap)
+    assert out.sections == []
+
+
 def test_extract_calls_run_extract_with_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cfg = LangExtractConfig(enabled=True, api_key="k", min_doc_chars=1)
+    cfg = LangExtractConfig(api_key="k", min_doc_chars=1)
     svc = PreExtractService(cfg)
 
     captured: dict[str, Any] = {}

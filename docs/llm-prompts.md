@@ -545,13 +545,16 @@ Respond with JSON.
 | 5 | `runtime_llm.py:26` | `_generate_answer()` | `openai_model` | 0.3 | 600 | 答案生成 |
 | 6 | `runtime_llm.py:62` | `_generate_answer_stream()` | `openai_model` | 0.3 | 600 | 流式答案生成 |
 | 7 | `_entry.py:593` | `_node_direct_answer_branch()` | `openai_small_model` | 默认 | 300 | 直接回答 |
-| 8 | `llm_strategies.py:240` | `_generate_response()` | graphiti model | 0.6 | 可配置 | 图谱实体/关系抽取 |
-| 9 | `store.py:247` | `add_episode()` | graphiti model | 默认 | 默认 | Episode 提取 |
-| 10 | `store.py:270` | `add_episode()` (retry) | graphiti model | 默认 | 默认 | Episode 提取重试 |
+| 8 | `query_planner.py` | `_call_planner_llm()` | LangExtract model (`qwen3-coder-flash`) | 0 | 500 | Ask 查询理解、rewrite、filters、检索计划 |
+| 9 | `rerankers.py` | `LlmEvidenceReranker._rank_ids()` | LangExtract model (`qwen3-coder-flash`) 或 `openai_small_model` | 0 | 700 | Ask evidence listwise rerank |
+| 10 | `llm_strategies.py:240` | `_generate_response()` | graphiti model | 0.6 | 可配置 | 图谱实体/关系抽取 |
+| 11 | `store.py:247` | `add_episode()` | graphiti model | 默认 | 默认 | Episode 提取 |
+| 12 | `store.py:270` | `add_episode()` (retry) | graphiti model | 默认 | 默认 | Episode 提取重试 |
 
 **模型说明**:
 - `openai_small_model` — 用于结构化输出任务（分类、规划、ReAct），temperature=0，低 max_tokens，要求 JSON 格式
 - `openai_model` — 用于答案生成，temperature=0.3，更高 max_tokens，自然语言输出
+- LangExtract model — 默认 `qwen3-coder-flash`，Ask query planner 和可选 LLM rerank 优先使用它的 strict `json_schema` 输出，未配置 extract key 时回退到 `openai_small_model`
 - graphiti model — Graphiti 库内部使用的模型，用于知识图谱实体和关系抽取
 
 **提示词设计模式总结**:

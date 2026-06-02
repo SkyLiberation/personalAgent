@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from hashlib import sha256
 import time
 from uuid import uuid4
 
@@ -21,16 +22,36 @@ class RuntimeCaptureMixin:
         source_type: str = "text",
         user_id: str | None = None,
         source_ref: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> CaptureResult:
         normalized_user = user_id or self.settings.default_user
-        logger.info("Starting capture user=%s source_type=%s", normalized_user, source_type)
-        preextract = (
-            self._preextract_service
-            if getattr(self, "_preextract_service", None)
-            and self._preextract_service.is_enabled()
-            else None
+        normalized_metadata = dict(metadata or {})
+        source_fingerprint = _source_fingerprint(
+            text=text,
+            source_type=source_type,
+            source_ref=source_ref,
         )
-        graph = build_capture_graph(self.store, preextract_service=preextract)
+        existing_note = self.store.find_note_by_source_fingerprint(
+            normalized_user,
+            source_fingerprint,
+        )
+        if existing_note is not None:
+            logger.info(
+                "Capture skipped duplicate user=%s note_id=%s source_type=%s fingerprint=%s",
+                normalized_user, existing_note.id, source_type, source_fingerprint[:12],
+            )
+            return CaptureResult(
+                note=existing_note,
+                chunk_notes=self.store.get_chunks_for_parent(existing_note.id),
+                related_notes=[],
+                review_card=None,
+            )
+
+        logger.info("Starting capture user=%s source_type=%s", normalized_user, source_type)
+        graph = build_capture_graph(
+            self.store,
+            preextract_service=self._preextract_service,
+        )
         state = AgentState(
             mode="capture",
             user_id=normalized_user,
@@ -39,45 +60,53 @@ class RuntimeCaptureMixin:
                 source_type=source_type,
                 source_ref=source_ref,
                 user_id=normalized_user,
+                metadata=normalized_metadata,
+                source_fingerprint=source_fingerprint,
             ),
         )
         result = AgentState.model_validate(graph.invoke(state))
         if result.note is None:
             raise ValueError("Capture flow did not produce a note.")
 
-        graph_result = self.graph_store.ingest_note(result.note)
         related_notes = result.matches
-        if graph_result.enabled is True:
-            updated_note = self._merge_graph_capture(result.note, graph_result)
-            self.store.update_note(updated_note)
-            result.note = updated_note
-            graph_related_notes = self.store.find_notes_by_graph_episode_uuids(
-                normalized_user, graph_result.related_episode_uuids
-            )
-            related_notes = _merge_notes(graph_related_notes, related_notes)
-            updated_note.related_note_ids = [n.id for n in related_notes if n.id != updated_note.id]
-            updated_note.updated_at = local_now()
-            self.store.update_note(updated_note)
-            result.note = updated_note
-        else:
-            result.note.graph_sync_status = "failed"
-            result.note.graph_sync_error = (
-                graph_result.error
-                if isinstance(graph_result.error, str) and graph_result.error
-                else "Graphiti ingest returned disabled result."
-            )
+        if result.chunk_notes and self.graph_store.configured():
+            result.note.graph_sync_status = "skipped"
+            result.note.graph_sync_error = "Graph sync delegated to graph-worthy chunks."
             result.note.updated_at = local_now()
             self.store.update_note(result.note)
+        else:
+            graph_result = self.graph_store.ingest_note(result.note)
+            if graph_result.enabled is True:
+                result.note, related_notes = self._apply_graph_capture_result(
+                    result.note,
+                    graph_result,
+                    related_notes,
+                )
+            else:
+                result.note.graph_sync_status = "failed"
+                result.note.graph_sync_error = (
+                    graph_result.error
+                    if isinstance(graph_result.error, str) and graph_result.error
+                    else "Graphiti ingest returned disabled result."
+                )
+                result.note.updated_at = local_now()
+                self.store.update_note(result.note)
 
         # Set pending status on chunk notes for background graph sync.
         # Skip graph_worthy=False chunks (set by preextract_node when LangExtract
         # judges the section as low-value, e.g. table-of-contents, boilerplate).
         if self.graph_store.configured():
+            sync_budget = max(0, self.settings.graphiti.sync_max_notes_per_capture)
+            eligible_seen = 0
             for chunk in result.chunk_notes:
                 if chunk.graph_worthy is False:
                     chunk.graph_sync_status = "skipped"
                     chunk.graph_sync_error = None
+                elif sync_budget and eligible_seen >= sync_budget:
+                    chunk.graph_sync_status = "skipped"
+                    chunk.graph_sync_error = "Graph sync budget exceeded for this capture."
                 else:
+                    eligible_seen += 1
                     chunk.graph_sync_status = "pending"
                     chunk.graph_sync_error = None
                 self.store.update_note(chunk)
@@ -130,13 +159,11 @@ class RuntimeCaptureMixin:
 
                 graph_result = self.graph_store.ingest_note(note, trace_id=trace_id, attempt=attempt)
                 if graph_result.enabled is True:
-                    updated_note = self._merge_graph_capture(note, graph_result)
-                    related_notes = self.store.find_notes_by_graph_episode_uuids(
-                        note.user_id, graph_result.related_episode_uuids
+                    updated_note, _related_notes = self._apply_graph_capture_result(
+                        note,
+                        graph_result,
+                        [],
                     )
-                    updated_note.related_note_ids = [item.id for item in related_notes if item.id != updated_note.id]
-                    updated_note.updated_at = local_now()
-                    self.store.update_note(updated_note)
                     log_event(logger, logging.INFO, "graph_sync.completed",
                         trace_id=trace_id, note_id=note_id, user_id=note.user_id, attempt=attempt,
                         episode_uuid=updated_note.graph_episode_uuid,
@@ -170,6 +197,107 @@ class RuntimeCaptureMixin:
         self.store.update_note(note)
         logger.warning("Background graph sync failed note_id=%s error=%s", note_id, note.graph_sync_error)
         return False
+
+    def sync_notes_to_graph(self, note_ids: list[str]) -> dict[str, bool]:
+        """Sync multiple notes to Graphiti concurrently.
+
+        This mirrors the Open RAGBench ingestion pattern: gather eligible notes,
+        run async Graphiti ingest under a semaphore, then merge each result back
+        into Postgres.
+        """
+        unique_note_ids = list(dict.fromkeys(note_ids))
+        notes = [note for note_id in unique_note_ids for note in [self.store.get_note(note_id)] if note is not None]
+        if not notes:
+            return {}
+        if not self.graph_store.configured():
+            for note in notes:
+                note.graph_sync_status = "idle"
+                note.graph_sync_error = None
+                note.updated_at = local_now()
+                self.store.update_note(note)
+            return {note.id: False for note in notes}
+
+        trace_id = uuid4().hex[:12]
+        max_workers = max(1, self.settings.graphiti.sync_max_workers)
+        for note in notes:
+            if note.graph_sync_status == "skipped":
+                continue
+            note.graph_sync_status = "pending"
+            note.graph_sync_error = None
+            note.updated_at = local_now()
+            self.store.update_note(note)
+
+        active_notes = [note for note in notes if note.graph_sync_status != "skipped"]
+        if not active_notes:
+            return {note.id: False for note in notes}
+
+        log_event(
+            logger,
+            logging.INFO,
+            "graph_sync.batch.started",
+            trace_id=trace_id,
+            note_count=len(active_notes),
+            max_workers=max_workers,
+        )
+        results = self.graph_store.ingest_notes(
+            active_notes,
+            trace_id=trace_id,
+            max_workers=max_workers,
+        )
+
+        outcomes: dict[str, bool] = {
+            note.id: False for note in notes if note.graph_sync_status == "skipped"
+        }
+        for note in active_notes:
+            graph_result = results.get(note.id) or GraphCaptureResult(
+                enabled=False,
+                error="Graphiti batch ingest returned no result.",
+            )
+            if graph_result.enabled is True:
+                updated_note, _related_notes = self._apply_graph_capture_result(
+                    note,
+                    graph_result,
+                    [],
+                )
+                outcomes[updated_note.id] = True
+                continue
+
+            note.graph_sync_status = "failed"
+            note.graph_sync_error = graph_result.error or "Graph sync failed."
+            note.updated_at = local_now()
+            self.store.update_note(note)
+            outcomes[note.id] = False
+
+        log_event(
+            logger,
+            logging.INFO,
+            "graph_sync.batch.completed",
+            trace_id=trace_id,
+            note_count=len(active_notes),
+            succeeded=sum(1 for ok in outcomes.values() if ok),
+            failed=sum(1 for ok in outcomes.values() if not ok),
+        )
+        return outcomes
+
+    def _apply_graph_capture_result(
+        self,
+        note: KnowledgeNote,
+        graph_result: GraphCaptureResult,
+        related_notes: list[KnowledgeNote],
+    ) -> tuple[KnowledgeNote, list[KnowledgeNote]]:
+        updated_note = self._merge_graph_capture(note, graph_result)
+        graph_related_notes = self.store.find_notes_by_graph_episode_uuids(
+            note.user_id,
+            graph_result.related_episode_uuids,
+        )
+        merged_related_notes = _merge_notes(graph_related_notes, related_notes)
+        updated_note.related_note_ids = [
+            item.id for item in merged_related_notes if item.id != updated_note.id
+        ]
+        updated_note.updated_at = local_now()
+        self.store.update_note(updated_note)
+        return updated_note, merged_related_notes
+
     def _merge_graph_capture(self, note: KnowledgeNote, graph_result: GraphCaptureResult) -> KnowledgeNote:
         note.graph_episode_uuid = graph_result.episode_uuid
         note.entity_names = graph_result.entity_names
@@ -180,6 +308,53 @@ class RuntimeCaptureMixin:
         note.graph_sync_status = "synced"
         note.graph_sync_error = None
         note.updated_at = local_now()
+
+        # --- Quality observability (PG-0) ---
+        from ..graphiti.quality_vocab import all_relations_weak
+
+        entity_count = len(graph_result.entity_names)
+        relation_count = len(graph_result.relation_facts)
+        fact_lengths = [len(f) for f in graph_result.relation_facts if f.strip()]
+        avg_fact_length = round(
+            sum(fact_lengths) / len(fact_lengths) if fact_lengths else 0.0, 1
+        )
+        zero_entities = note.graph_worthy is True and entity_count == 0
+        weak_only = (
+            all_relations_weak(graph_result.relation_facts)
+            if relation_count > 0
+            else False
+        )
+
+        note.graph_quality_entity_count = entity_count
+        note.graph_quality_relation_count = relation_count
+        note.graph_quality_avg_fact_length = avg_fact_length
+        note.graph_quality_zero_entities = zero_entities
+        note.graph_quality_weak_relations_only = weak_only
+
+        log_event(
+            logger, logging.INFO, "graph_quality.metrics",
+            note_id=note.id,
+            user_id=note.user_id,
+            entity_count=entity_count,
+            relation_count=relation_count,
+            avg_fact_length=avg_fact_length,
+            zero_entities=zero_entities,
+            weak_relations_only=weak_only,
+            preextract_topic=note.preextract_topic,
+        )
+
+        if zero_entities:
+            preview = note.content[:120].replace("\n", " ")
+            logger.warning(
+                "graph_quality.anomaly zero_entities note_id=%s topic=%s preview=%r",
+                note.id, note.preextract_topic, preview,
+            )
+        if weak_only:
+            logger.warning(
+                "graph_quality.anomaly weak_relations_only note_id=%s topic=%s relations=%s",
+                note.id, note.preextract_topic, graph_result.relation_facts[:5],
+            )
+
         return note
 
     def _is_retryable_graph_error(self, error: str | None) -> bool:
@@ -199,4 +374,11 @@ class RuntimeCaptureMixin:
         maximum = max(initial, self.settings.graphiti.sync_max_backoff_seconds)
         delay = initial * (multiplier ** max(0, attempt - 1))
         return min(delay, maximum)
+
+
+def _source_fingerprint(text: str, source_type: str, source_ref: str | None) -> str:
+    normalized_text = " ".join(text.split())
+    normalized_ref = (source_ref or "").strip().lower()
+    payload = "\0".join([source_type.strip().lower(), normalized_ref, normalized_text])
+    return sha256(payload.encode("utf-8")).hexdigest()
 

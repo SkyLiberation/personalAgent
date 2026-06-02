@@ -677,6 +677,20 @@ button:disabled {
   gap: 14px;
 }
 
+.graph-container {
+  width: 100%;
+  min-height: 500px;
+  border-radius: 12px;
+  background: rgba(20, 17, 15, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  position: relative;
+}
+
+.graph-container canvas {
+  display: block;
+}
+
 .filter-toolbar {
   display: flex;
   flex-wrap: wrap;

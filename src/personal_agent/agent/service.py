@@ -20,7 +20,16 @@ class AgentService(AgentRuntime):
         resolved_settings = settings or Settings.from_env()
         if not resolved_settings.postgres_url:
             raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
-        store = PostgresMemoryStore(resolved_settings.data_dir, resolved_settings.postgres_url)
+        store = PostgresMemoryStore(
+            resolved_settings.data_dir,
+            resolved_settings.postgres_url,
+            embedding_provider=resolved_settings.embedding_provider,
+            embedding_model=resolved_settings.openai.embedding_model,
+            embedding_api_key=resolved_settings.openai.embedding_api_key
+            or resolved_settings.openai.api_key,
+            embedding_base_url=resolved_settings.openai.embedding_base_url
+            or resolved_settings.openai.base_url,
+        )
         super().__init__(
             settings=resolved_settings,
             store=store,

@@ -1,9 +1,10 @@
-import { FormEvent, type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
+import { FormEvent, type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
   buildEntryStreamUrl,
   confirmPendingAction,
   fetchDigest,
   fetchEntryRuns,
+  fetchGraphTopology,
   fetchNotes,
   fetchPendingActions,
   getApiKey,
@@ -19,10 +20,12 @@ import {
   type EntryPendingConfirmation,
   type EntryResponse,
   type EntryRunSnapshot,
+  type GraphTopology,
   type Note,
   type PendingActionItem,
   type PlanStep,
 } from "./api";
+import ForceGraph2D from "react-force-graph-2d";
 
 function loadUserId(): string {
   try {
@@ -42,8 +45,7 @@ function saveUserId(id: string): void {
 
 type TabId =
   | "ask"
-  | "entity"
-  | "relation"
+  | "graph"
   | "digest"
   | "timeline"
   | "memory";
@@ -96,8 +98,7 @@ type SessionSummary = {
 
 const TABS: Array<{ id: TabId; label: string; kicker: string }> = [
   { id: "ask", label: "对话", kicker: "问答" },
-  { id: "entity", label: "Entity Graph", kicker: "图谱" },
-  { id: "relation", label: "Relation Graph", kicker: "关系" },
+  { id: "graph", label: "Knowledge Graph", kicker: "图谱" },
   { id: "digest", label: "摘要", kicker: "复习" },
   { id: "timeline", label: "Timeline", kicker: "时间" },
   { id: "memory", label: "记忆", kicker: "归档" },
@@ -1434,11 +1435,11 @@ export default function App() {
             </section>
           ) : null}
 
-          {activeTab === "entity" ? (
+          {activeTab === "graph" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
-                <p className="panel-kicker">Entity Graph</p>
-                <h2>看看哪些概念经常一起出现</h2>
+                <p className="panel-kicker">Knowledge Graph</p>
+                <h2>知识图谱全局拓扑</h2>
               </div>
               <div className="filter-toolbar">
                 <span>{hasGraphFilter ? `已筛出 ${filteredNotes.length} 条笔记` : `共 ${notes.length} 条笔记`}</span>
@@ -1450,82 +1451,12 @@ export default function App() {
                   </button>
                 ) : null}
               </div>
-              <div className="entity-cloud">
-                {entityStats.length ? (
-                  entityStats.map((entity, index) => (
-                    <button
-                      key={entity.name}
-                      type="button"
-                      className={`entity-pill entity-size-${Math.min(4, Math.max(1, 5 - index))}`}
-                      data-active={selectedEntity === entity.name}
-                      onClick={() => setSelectedEntity((current) => (current === entity.name ? null : entity.name))}
-                    >
-                      <strong>{entity.name}</strong>
-                      <span>{entity.count} notes</span>
-                    </button>
-                  ))
-                ) : (
-                  <p className="empty-copy">先采集启用图谱的笔记，这里才会逐渐丰富起来。</p>
-                )}
-              </div>
-            </section>
-          ) : null}
-
-          {activeTab === "relation" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <p className="panel-kicker">Relation Graph</p>
-                <h2>追踪实体在不同笔记之间如何建立联系</h2>
-              </div>
-              <div className="filter-toolbar">
-                <span>{hasGraphFilter ? `已筛出 ${filteredNotes.length} 条笔记` : `共 ${notes.length} 条笔记`}</span>
-                {selectedEntity ? <span className="filter-chip">实体：{selectedEntity}</span> : null}
-                {selectedRelationFact ? <span className="filter-chip">关系：{selectedRelationFact}</span> : null}
-              </div>
-              <div className="relation-list">
-                {relationViews.length ? (
-                  relationViews.map((relation) => (
-                    <button
-                      key={relation.fact}
-                      type="button"
-                      className="relation-card"
-                      data-active={selectedRelationFact === relation.fact}
-                      onClick={() =>
-                        setSelectedRelationFact((current) => (current === relation.fact ? null : relation.fact))
-                      }
-                    >
-                      <div className="relation-line">
-                        <span
-                          className="entity-node"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setSelectedEntity((current) => (current === relation.source ? null : relation.source));
-                          }}
-                        >
-                          {relation.source}
-                        </span>
-                        <span className="relation-label">{relation.relation}</span>
-                        <span
-                          className="entity-node"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setSelectedEntity((current) => (current === relation.target ? null : relation.target));
-                          }}
-                        >
-                          {relation.target}
-                        </span>
-                      </div>
-                      <p>{relation.fact}</p>
-                      <span className="relation-meta">
-                        出现 {relation.count} 次 · 最近一次
-                        {formatDateTime(relation.latestAt)}
-                      </span>
-                    </button>
-                  ))
-                ) : (
-                  <p className="empty-copy">暂时还没有关系事实，后续图谱采集会把它们展示在这里。</p>
-                )}
-              </div>
+              <GraphPanel
+                userId={userId}
+                selectedEntity={selectedEntity}
+                onSelectEntity={setSelectedEntity}
+                onSelectRelation={setSelectedRelationFact}
+              />
             </section>
           ) : null}
 
@@ -2202,5 +2133,129 @@ function renderHighlightedAnswer(
       </mark>
       {after}
     </p>
+  );
+}
+
+// ---- Force-directed Knowledge Graph panel ----
+
+const LABEL_COLORS: Record<string, string> = {
+  Technology: "#4a90d9",
+  Concept: "#50b87a",
+  Person: "#e8854a",
+  Organization: "#9b59b6",
+  Event: "#e74c3c",
+};
+const DEFAULT_NODE_COLOR = "#7f8c8d";
+
+function GraphPanel({
+  userId,
+  selectedEntity,
+  onSelectEntity,
+  onSelectRelation,
+}: {
+  userId: string;
+  selectedEntity: string | null;
+  onSelectEntity: Dispatch<SetStateAction<string | null>>;
+  onSelectRelation: Dispatch<SetStateAction<string | null>>;
+}) {
+  const [topology, setTopology] = useState<GraphTopology | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [hoverNode, setHoverNode] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchGraphTopology(userId)
+      .then(setTopology)
+      .catch(() => setTopology({ nodes: [], links: [], error: "请求失败" }))
+      .finally(() => setLoading(false));
+  }, [userId]);
+
+  const data = useCallback(() => {
+    if (!topology) return { nodes: [] as any[], links: [] as any[] };
+    const nodeIds = new Set(topology.nodes.map((n) => n.id));
+    const links = topology.links.filter(
+      (l) => nodeIds.has(l.source) && nodeIds.has(l.target)
+    );
+    const degreeMap = new Map<string, number>();
+    for (const l of links) {
+      degreeMap.set(l.source, (degreeMap.get(l.source) || 0) + 1);
+      degreeMap.set(l.target, (degreeMap.get(l.target) || 0) + 1);
+    }
+    const nodes = topology.nodes.map((n) => ({
+      ...n,
+      val: Math.max(2, (degreeMap.get(n.id) || 0) + 1),
+      color: LABEL_COLORS[n.labels?.[0] || ""] || DEFAULT_NODE_COLOR,
+    }));
+    return { nodes, links };
+  }, [topology])();
+
+  if (loading) {
+    return <div className="graph-container"><p className="empty-copy">加载图谱数据中...</p></div>;
+  }
+  if (!topology || topology.error || !topology.nodes.length) {
+    return (
+      <div className="graph-container">
+        <p className="empty-copy">
+          {topology?.error || "图谱暂无数据，先采集笔记并等待图谱同步完成。"}
+        </p>
+      </div>
+    );
+  }
+
+  const neighborSet = new Set<string>();
+  if (selectedEntity) {
+    const selectedNode = data.nodes.find((n: any) => n.name === selectedEntity);
+    if (selectedNode) {
+      neighborSet.add(selectedNode.id);
+      for (const l of data.links) {
+        const src = typeof l.source === "object" ? (l.source as any).id : l.source;
+        const tgt = typeof l.target === "object" ? (l.target as any).id : l.target;
+        if (src === selectedNode.id) neighborSet.add(tgt);
+        if (tgt === selectedNode.id) neighborSet.add(src);
+      }
+    }
+  }
+
+  return (
+    <div className="graph-container" ref={containerRef}>
+      <ForceGraph2D
+        graphData={data}
+        width={containerRef.current?.clientWidth || 800}
+        height={500}
+        nodeLabel={(node: any) => `${node.name}${node.summary ? "\n" + node.summary.slice(0, 80) : ""}`}
+        nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+          const label = node.name || "";
+          const fontSize = Math.max(10 / globalScale, 3);
+          const isHighlighted = !selectedEntity || neighborSet.has(node.id);
+          ctx.font = `${fontSize}px sans-serif`;
+          ctx.fillStyle = isHighlighted ? (node.color || DEFAULT_NODE_COLOR) : "rgba(180,180,180,0.3)";
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.val || 3, 0, 2 * Math.PI);
+          ctx.fill();
+          if (globalScale > 0.8 && isHighlighted) {
+            ctx.textAlign = "center";
+            ctx.textBaseline = "top";
+            ctx.fillStyle = hoverNode === node.id ? "#fff" : "rgba(220,220,220,0.9)";
+            ctx.fillText(label, node.x, node.y + (node.val || 3) + 2);
+          }
+        }}
+        linkColor={() => "rgba(100,100,100,0.4)"}
+        linkWidth={(link: any) => {
+          const src = typeof link.source === "object" ? link.source.id : link.source;
+          const tgt = typeof link.target === "object" ? link.target.id : link.target;
+          return selectedEntity && neighborSet.has(src) && neighborSet.has(tgt) ? 2 : 0.5;
+        }}
+        onNodeClick={(node: any) => {
+          onSelectEntity((current: string | null) => current === node.name ? null : node.name);
+        }}
+        onLinkClick={(link: any) => {
+          if (link.fact) onSelectRelation((current: string | null) => current === link.fact ? null : link.fact);
+        }}
+        onNodeHover={(node: any) => setHoverNode(node?.id || null)}
+        backgroundColor="transparent"
+        cooldownTicks={80}
+      />
+    </div>
   );
 }

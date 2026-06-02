@@ -9,6 +9,7 @@ from ..core.config import Settings
 from ..core.models import EntryInput
 from ..extract import PreExtractService
 from ..graphiti.store import GraphitiStore
+from ..graphrag import GraphRagStore
 from ..memory import MemoryFacade
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..tools import ToolExecutor
@@ -138,6 +139,7 @@ class AgentRuntime(
         self.settings = settings
         self.store = store
         self.graph_store = graph_store
+        self.graphrag_store = GraphRagStore(store)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_executor = ToolExecutor()

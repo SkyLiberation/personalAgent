@@ -175,6 +175,30 @@ export function fetchDigest(userId = "default"): Promise<DigestResponse> {
   return requestJson<DigestResponse>(`/api/digest?user_id=${encodeURIComponent(userId)}`);
 }
 
+export type GraphTopologyNode = {
+  id: string;
+  name: string;
+  labels?: string[];
+  summary?: string;
+};
+
+export type GraphTopologyLink = {
+  source: string;
+  target: string;
+  fact: string;
+  uuid?: string;
+};
+
+export type GraphTopology = {
+  nodes: GraphTopologyNode[];
+  links: GraphTopologyLink[];
+  error?: string;
+};
+
+export function fetchGraphTopology(userId = "default"): Promise<GraphTopology> {
+  return requestJson<GraphTopology>(`/api/graph/topology?user_id=${encodeURIComponent(userId)}`);
+}
+
 export type PlanStep = {
   step_id: string;
   action_type: string;

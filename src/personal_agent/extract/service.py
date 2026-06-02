@@ -1,8 +1,12 @@
 """Pre-extraction service: text -> SectionMap.
 
-Stays decoupled from the capture graph. Wiring into ``build_capture_graph``
-happens in PR2; PR1 only exposes a synchronous API that callers can drive
-manually (CLI / probe scripts / tests).
+LangExtract is a mandatory step in the capture pipeline. The only
+short-circuits are:
+  * docs shorter than ``min_doc_chars`` (extraction has nothing to learn from)
+  * runtime errors when ``fallback_on_error`` is True (network / LLM hiccups)
+
+Both branches return an empty SectionMap; the caller stamps the parent note
+with ``preextract_status`` so the skip is observable.
 """
 from __future__ import annotations
 
@@ -35,26 +39,19 @@ class PreExtractService:
         self.prompt = prompt
         self.examples = examples if examples is not None else EXAMPLES
 
-    def is_enabled(self) -> bool:
-        return self.config.enabled and bool(self.config.api_key)
-
     def should_run(self, text: str) -> bool:
-        if not self.is_enabled():
-            return False
         return len(text) >= self.config.min_doc_chars
 
     def extract(self, text: str) -> SectionMap:
         """Run pre-extraction and return a SectionMap.
 
-        Returns an empty SectionMap when the service is disabled or the input
-        is too short. On runtime errors, returns an empty SectionMap iff
-        ``config.fallback_on_error`` is True; otherwise re-raises as
-        :class:`PreExtractError`.
+        Returns an empty SectionMap when the input is too short. On runtime
+        errors, returns an empty SectionMap iff ``config.fallback_on_error``
+        is True; otherwise re-raises as :class:`PreExtractError`.
         """
         if not self.should_run(text):
             logger.debug(
-                "pre_extract.skip enabled=%s text_len=%d min=%d",
-                self.is_enabled(),
+                "pre_extract.skip text_len=%d min=%d",
                 len(text),
                 self.config.min_doc_chars,
             )

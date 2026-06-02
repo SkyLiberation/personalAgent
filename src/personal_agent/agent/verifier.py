@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from ..core.models import Citation, KnowledgeNote
@@ -9,11 +10,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
+class ClaimVerification:
+    claim: str
+    status: str  # supported | contradicted | not_found
+    supporting_evidence_ids: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+@dataclass(slots=True)
 class VerificationResult:
     evidence_score: float  # 0.0 (no evidence) to 1.0 (well-supported)
     citation_valid: bool
     issues: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    claim_checks: list[ClaimVerification] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -142,6 +152,25 @@ class AnswerVerifier:
             warnings.append("未命中任何知识库笔记或网络结果，回答可能缺乏依据。")
             score = min(score, 0.15)
 
+        # 4. Claim-level grounding against the selected evidence.
+        claim_checks: list[ClaimVerification] = []
+        if evidence and not answer_empty:
+            claim_checks = _verify_claims(answer, evidence)
+            if claim_checks:
+                supported = [item for item in claim_checks if item.status == "supported"]
+                contradicted = [item for item in claim_checks if item.status == "contradicted"]
+                missing = [item for item in claim_checks if item.status == "not_found"]
+                support_ratio = len(supported) / len(claim_checks)
+                score += min(support_ratio * 0.25, 0.25)
+                if missing:
+                    warnings.append(f"{len(missing)} 个关键结论未能在入选证据中找到直接支撑。")
+                    if len(missing) == len(claim_checks):
+                        issues.append("所有关键结论都未能在入选证据中找到直接支撑。")
+                        score = min(score, 0.35)
+                if contradicted:
+                    issues.append(f"{len(contradicted)} 个关键结论可能与证据冲突。")
+                    score = min(score, 0.25)
+
         score = max(0.0, min(1.0, round(score, 2)))
 
         result = VerificationResult(
@@ -149,6 +178,7 @@ class AnswerVerifier:
             citation_valid=citation_valid,
             issues=issues,
             warnings=warnings,
+            claim_checks=claim_checks,
         )
 
         if issues:
@@ -159,3 +189,101 @@ class AnswerVerifier:
             logger.info("Answer verification passed score=%.2f", score)
 
         return result
+
+
+def _verify_claims(answer: str, evidence: list) -> list[ClaimVerification]:
+    claims = _extract_claims(answer)
+    evidence_items = [_evidence_record(item) for item in evidence]
+    checks: list[ClaimVerification] = []
+    for claim in claims:
+        claim_terms = _terms(claim)
+        if not claim_terms:
+            continue
+        best_overlap = 0
+        best_ids: list[str] = []
+        best_text = ""
+        for evidence_id, text in evidence_items:
+            evidence_terms = _terms(text)
+            overlap = len(claim_terms & evidence_terms)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_ids = [evidence_id]
+                best_text = text
+            elif overlap == best_overlap and overlap > 0:
+                best_ids.append(evidence_id)
+        support_threshold = max(2, min(5, len(claim_terms) // 3))
+        coverage = best_overlap / max(len(claim_terms), 1)
+        if best_overlap >= support_threshold and coverage >= 0.45:
+            status = "supported"
+            reason = f"overlap={best_overlap}/{len(claim_terms)}, coverage={coverage:.2f}"
+            if _negation_mismatch(claim, best_text):
+                status = "contradicted"
+                reason += ", negation_mismatch"
+            checks.append(ClaimVerification(
+                claim=claim,
+                status=status,
+                supporting_evidence_ids=best_ids[:3],
+                reason=reason,
+            ))
+        else:
+            checks.append(ClaimVerification(
+                claim=claim,
+                status="not_found",
+                supporting_evidence_ids=[],
+                reason=f"best_overlap={best_overlap}/{len(claim_terms)}, coverage={coverage:.2f}",
+            ))
+    return checks
+
+
+def _extract_claims(answer: str, limit: int = 8) -> list[str]:
+    cleaned = re.sub(r"\[[Ee]?\d+\]", "", answer)
+    parts = re.split(r"[。！？!?；;\n]+", cleaned)
+    claims: list[str] = []
+    skip_markers = ("校验提示", "注意", "证据不足", "不确定", "无法回答")
+    for part in parts:
+        claim = part.strip(" -:：\t\r")
+        if len(claim) < 8:
+            continue
+        if any(marker in claim for marker in skip_markers):
+            continue
+        if claim not in claims:
+            claims.append(claim)
+        if len(claims) >= limit:
+            break
+    return claims
+
+
+def _evidence_record(item) -> tuple[str, str]:
+    evidence_id = str(getattr(item, "evidence_id", "") or getattr(item, "source_id", "") or "")
+    parts = [
+        str(getattr(item, "title", "") or ""),
+        str(getattr(item, "fact", "") or ""),
+        str(getattr(item, "snippet", "") or ""),
+    ]
+    metadata = getattr(item, "metadata", {}) or {}
+    if isinstance(metadata, dict):
+        parts.extend(str(value) for value in metadata.values() if isinstance(value, str))
+    return evidence_id, " ".join(parts)
+
+
+def _terms(text: str) -> set[str]:
+    terms: set[str] = set()
+    lowered = text.lower()
+    for token in re.findall(r"[a-z0-9_+-]{2,}", lowered):
+        terms.add(token)
+    for run in re.findall(r"[\u3400-\u9fff]{2,}", text):
+        terms.add(run)
+        for size in (2, 3):
+            for index in range(0, max(0, len(run) - size + 1)):
+                terms.add(run[index:index + size])
+    return terms
+
+
+def _negation_mismatch(claim: str, evidence_text: str) -> bool:
+    claim_negated = _has_negation(claim)
+    evidence_negated = _has_negation(evidence_text)
+    return claim_negated != evidence_negated and bool(evidence_text)
+
+
+def _has_negation(text: str) -> bool:
+    return any(marker in text for marker in ("不", "没有", "未", "不能", "无法", "不会", "不是", "no ", "not "))

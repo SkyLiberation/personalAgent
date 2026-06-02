@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import personal_agent.core.config as config_module
 from personal_agent.core.config import Settings
 from personal_agent.core.models import KnowledgeNote
@@ -7,6 +9,7 @@ from personal_agent.graphiti.store import (
     _graphiti_episode_body,
     _graphiti_safe_episode_body,
     _looks_like_content_filter_error,
+    _episode_uuids_from_search_result,
 )
 
 
@@ -15,6 +18,9 @@ def test_settings_reads_graphiti_timeout_env(monkeypatch):
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_SEARCH_TIMEOUT_SECONDS", "3")
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_EPISODE_MAX_CHARS", "99")
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK", "false")
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_WORKERS", "7")
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_NOTES_PER_CAPTURE", "11")
+    monkeypatch.setenv("PERSONAL_AGENT_GRAPH_SEARCH_CITATION_LIMIT", "17")
 
     settings = Settings.from_env()
 
@@ -22,6 +28,9 @@ def test_settings_reads_graphiti_timeout_env(monkeypatch):
     assert settings.graphiti.search_timeout_seconds == 3
     assert settings.graphiti.episode_max_chars == 99
     assert settings.graphiti.content_filter_fallback is False
+    assert settings.graphiti.sync_max_workers == 7
+    assert settings.graphiti.sync_max_notes_per_capture == 11
+    assert settings.graphiti.search_citation_limit == 17
 
 
 def test_settings_reads_openai_request_limits(monkeypatch):
@@ -76,3 +85,16 @@ def test_content_filter_error_detection_supports_provider_messages():
     assert _looks_like_content_filter_error(Exception("400 high risk content"))
     assert _looks_like_content_filter_error(Exception("content_filter blocked"))
     assert not _looks_like_content_filter_error(Exception("connection timed out"))
+
+
+def test_episode_uuids_from_search_result_dedupes_raw_episodes():
+    result = SimpleNamespace(
+        episodes=[
+            SimpleNamespace(uuid="ep-1"),
+            SimpleNamespace(uuid="ep-2"),
+            SimpleNamespace(uuid="ep-1"),
+            SimpleNamespace(uuid=""),
+        ]
+    )
+
+    assert _episode_uuids_from_search_result(result) == ["ep-1", "ep-2"]

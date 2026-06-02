@@ -16,6 +16,8 @@ class RawIngestItem(BaseModel):
     source_type: Literal["text", "link", "pdf", "audio", "image", "note", "file"] = "text"
     source_ref: str | None = None
     user_id: str = "default"
+    metadata: dict[str, str] = Field(default_factory=dict)
+    source_fingerprint: str | None = None
 
 
 EntryIntent = Literal[
@@ -85,6 +87,8 @@ class KnowledgeNote(BaseModel):
     user_id: str = "default"
     source_type: str = "text"
     source_ref: str | None = None
+    source_fingerprint: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
     graph_sync_status: Literal["idle", "pending", "synced", "failed", "skipped"] = "idle"
     graph_sync_error: str | None = None
     title: str
@@ -105,6 +109,11 @@ class KnowledgeNote(BaseModel):
     graph_worthy: bool | None = None
     preextract_status: Literal["ok", "skipped", "failed"] | None = None
     preextract_topic: str | None = None
+    graph_quality_entity_count: int | None = None
+    graph_quality_relation_count: int | None = None
+    graph_quality_avg_fact_length: float | None = None
+    graph_quality_zero_entities: bool | None = None
+    graph_quality_weak_relations_only: bool | None = None
     created_at: datetime = Field(default_factory=local_now)
     updated_at: datetime = Field(default_factory=local_now)
 

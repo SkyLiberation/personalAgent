@@ -47,41 +47,17 @@ def _make_state(text: str) -> AgentState:
 
 
 def _stub_service(section_map: SectionMap) -> PreExtractService:
-    cfg = LangExtractConfig(enabled=True, api_key="k", min_doc_chars=1)
+    cfg = LangExtractConfig(api_key="k", min_doc_chars=1)
     service = PreExtractService(cfg)
     service.extract = MagicMock(return_value=section_map)  # type: ignore[method-assign]
     return service
 
 
-def test_capture_graph_without_preextract_uses_mechanical_chunking() -> None:
-    """When no PreExtractService is wired, the graph behaves like before PR2."""
+def test_capture_graph_requires_preextract_service() -> None:
+    """build_capture_graph now requires a PreExtractService — calling without one must raise."""
     store = FakeStore()
-    graph = build_capture_graph(store)
-    state = _make_state("a short note worth keeping")
-    result_dict = graph.invoke(state)
-    result = AgentState.model_validate(result_dict)
-
-    assert result.note is not None
-    assert result.note.section_map is None
-    assert result.note.preextract_status is None
-    assert result.note.graph_worthy is None
-
-
-def test_preextract_disabled_marks_status_skipped() -> None:
-    """Service.is_enabled() False → preextract_status='skipped', no chunks rewritten."""
-    store = FakeStore()
-    cfg = LangExtractConfig(enabled=False, api_key="k")
-    # Even though enabled=False, runtime won't pass the service to the graph.
-    # Simulate the alternative: someone passed it anyway. is_enabled gate handles it.
-    service = PreExtractService(cfg)
-    graph = build_capture_graph(store, preextract_service=service)
-    state = _make_state("a short note " * 60)  # > min_doc_chars default
-    result_dict = graph.invoke(state)
-    result = AgentState.model_validate(result_dict)
-
-    assert result.note.preextract_status == "skipped"
-    assert result.note.section_map is None
-    assert result.note.graph_worthy is None
+    with pytest.raises(TypeError):
+        build_capture_graph(store)  # type: ignore[call-arg]
 
 
 def test_preextract_short_doc_skipped() -> None:
@@ -91,7 +67,7 @@ def test_preextract_short_doc_skipped() -> None:
         SectionRecord(topic="should-not-be-used", graph_worthy=True),
     ])
     service = _stub_service(section_map)
-    service.config = LangExtractConfig(enabled=True, api_key="k", min_doc_chars=1000)
+    service.config = LangExtractConfig(api_key="k", min_doc_chars=1000)
     graph = build_capture_graph(store, preextract_service=service)
 
     state = _make_state("tiny")
@@ -161,7 +137,7 @@ def test_preextract_replaces_chunks_with_sections() -> None:
 def test_preextract_failure_records_status_and_keeps_existing_chunks() -> None:
     """If service.extract raises, preextract_status='failed' but graph survives."""
     store = FakeStore()
-    cfg = LangExtractConfig(enabled=True, api_key="k", min_doc_chars=1, fallback_on_error=False)
+    cfg = LangExtractConfig(api_key="k", min_doc_chars=1, fallback_on_error=False)
     service = PreExtractService(cfg)
     service.extract = MagicMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
     graph = build_capture_graph(store, preextract_service=service)

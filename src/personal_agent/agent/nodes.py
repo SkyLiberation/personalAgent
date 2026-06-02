@@ -16,7 +16,9 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
         return state
 
     content = state.raw_item.content.strip()
-    title = content[:24] + ("..." if len(content) > 24 else "")
+    metadata = dict(state.raw_item.metadata or {})
+    title_source = metadata.get("title") or metadata.get("original_filename") or metadata.get("filename") or content
+    title = title_source[:80] + ("..." if len(title_source) > 80 else "")
     summary = content[:120]
     tags = _extract_tags(content)
 
@@ -29,6 +31,8 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
             user_id=state.raw_item.user_id,
             source_type=state.raw_item.source_type,
             source_ref=state.raw_item.source_ref,
+            source_fingerprint=state.raw_item.source_fingerprint,
+            metadata=metadata,
             title=title or "Untitled note",
             content=content,
             summary=summary,
@@ -42,6 +46,8 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
             user_id=state.raw_item.user_id,
             source_type=state.raw_item.source_type,
             source_ref=state.raw_item.source_ref,
+            source_fingerprint=state.raw_item.source_fingerprint,
+            metadata=metadata,
             title=title or "Untitled document",
             content=content,
             summary=summary,
@@ -55,6 +61,8 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
                 user_id=state.raw_item.user_id,
                 source_type=state.raw_item.source_type,
                 source_ref=state.raw_item.source_ref,
+                source_fingerprint=state.raw_item.source_fingerprint,
+                metadata=metadata,
                 title=ch["title"],
                 content=ch["content"],
                 summary=ch["content"][:120].replace("\n", " "),
@@ -79,13 +87,10 @@ def preextract_node(
     Records section_map / preextract_status on the parent note. If the service
     returns >= 2 sections, replace the mechanical chunks with section-based
     chunks (so downstream graphiti only deep-extracts on graph_worthy ones).
-    Disabled / short / failed → no-op, leaving capture_node's chunks intact.
+    Short docs / runtime failures fall through to capture_node's mechanical
+    chunks with a status marker on the note.
     """
     if state.note is None or state.raw_item is None:
-        return state
-
-    if not service.is_enabled():
-        state.note.preextract_status = "skipped"
         return state
 
     if not service.should_run(state.note.content):
@@ -138,6 +143,8 @@ def _chunk_notes_from_sections(
                 user_id=raw_item.user_id,
                 source_type=raw_item.source_type,
                 source_ref=raw_item.source_ref,
+                source_fingerprint=raw_item.source_fingerprint,
+                metadata=dict(raw_item.metadata or {}),
                 title=title[:80],
                 content=body,
                 summary=(section.summary or body[:120]).replace("\n", " "),

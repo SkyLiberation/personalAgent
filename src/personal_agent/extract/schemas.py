@@ -12,6 +12,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 InformationDensity = Literal["high", "medium", "low"]
+ReasonCategory = Literal[
+    "decision",       # contains decisions, choices, or recommendations
+    "contrast",       # contains comparisons or alternatives
+    "definition",     # contains definitions, specifications, or formal descriptions
+    "dependency",     # contains causal chains, dependencies, or prerequisites
+    "tradeoff",       # contains cost/benefit analysis or explicit tradeoffs
+    "boilerplate",    # structural/navigational content (TOC, headers, acknowledgements)
+    "enumeration",    # flat lists without reasoning (file paths, field names, bullet points)
+]
 
 
 class SectionRecord(BaseModel):
@@ -40,9 +49,12 @@ class SectionRecord(BaseModel):
             "causes, tradeoffs, or contrasts that justify deep graph extraction."
         ),
     )
-    reason: str = Field(
+    reason: ReasonCategory | str = Field(
         default="",
-        description="<=30 char justification for the graph_worthy verdict.",
+        description=(
+            "Classification of why graph_worthy was set. Must be one of: "
+            "decision, contrast, definition, dependency, boilerplate, enumeration."
+        ),
     )
 
 

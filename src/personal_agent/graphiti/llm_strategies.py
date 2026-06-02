@@ -38,9 +38,13 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
     - ``facts`` → ``edges`` key mapping
     - ``source_entity`` → ``source_entity_name``, ``target_entity`` → ``target_entity_name``
     - ``relation`` → ``relation_type``
+    - summaries[].entity_name → summaries[].name
+    - entity_resolutions[].entity_name → entity_resolutions[].name
     """
     _normalize_entities(payload)
     _normalize_edges(payload)
+    _normalize_summaries(payload)
+    _normalize_resolutions(payload)
     return payload
 
 
@@ -167,8 +171,96 @@ def _normalize_edges(payload: dict[str, Any]) -> None:
     payload.pop("facts", None)
 
 
+def _normalize_summaries(payload: dict[str, Any]) -> None:
+    """Map entity_name → name in summaries list for SummarizedEntities.
+
+    Also handles LLM format variants:
+    - {"entity_name": "summary_text", ...} → dict of name→summary pairs
+    - {"summary": [...]} or {"entity_summaries": [...]} → wrong key name
+    """
+    raw = payload.get("summaries")
+
+    # Try alternate key names
+    if raw is None:
+        for alt_key in ("entity_summaries", "summary"):
+            if alt_key in payload:
+                raw = payload.pop(alt_key)
+                payload["summaries"] = raw
+                break
+
+    # Convert dict-of-name→summary to list format
+    if isinstance(raw, dict):
+        items = []
+        for name, summary in raw.items():
+            if isinstance(summary, str):
+                items.append({"name": str(name).strip(), "summary": summary})
+            elif isinstance(summary, dict):
+                summary["name"] = summary.get("name") or str(name).strip()
+                items.append(summary)
+        payload["summaries"] = items
+        raw = items
+
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if isinstance(item, dict) and "name" not in item:
+            name = item.pop("entity_name", None) or item.pop("entity", None)
+            if name:
+                item["name"] = str(name).strip()
+
+
+def _normalize_resolutions(payload: dict[str, Any]) -> None:
+    """Map entity_name → name in entity_resolutions for NodeResolutions.
+
+    Also handles common LLM format variants:
+    - {"0": "{...}", "1": "{...}"} → numeric-keyed dict of JSON strings
+    - {"resolution_0": "{...}"} → prefixed keys
+    - {"resolution": [...]} or {"resolutions": [...]} → wrong key name
+    - {"entity_resolutions": {"0": ...}} → nested dict instead of list
+    """
+    raw = payload.get("entity_resolutions")
+
+    # Try alternate key names first
+    if raw is None:
+        for alt_key in ("resolutions", "resolution", "entity_resolution"):
+            if alt_key in payload:
+                raw = payload.pop(alt_key)
+                payload["entity_resolutions"] = raw
+                break
+
+    # Convert dict-of-items to list
+    if isinstance(raw, dict):
+        items = []
+        for key, val in sorted(raw.items(), key=lambda kv: kv[0]):
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if isinstance(val, dict):
+                items.append(val)
+            elif isinstance(val, list):
+                items.extend(v for v in val if isinstance(v, dict))
+        payload["entity_resolutions"] = items
+        raw = items
+
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if isinstance(item, dict) and "name" not in item:
+            name = item.pop("entity_name", None) or item.pop("entity", None)
+            if name:
+                item["name"] = str(name).strip()
+
+
 def _flatten_nested_maps(obj: Any) -> Any:
-    """Recursively convert nested dicts to JSON strings for Neo4j compatibility."""
+    """Recursively convert nested dicts to JSON strings for Neo4j compatibility.
+
+    Only flattens dict-valued scalars (single nested objects). Lists of dicts
+    are left intact because they are structural data consumed by graphiti_core's
+    Pydantic models (ExtractedEntities, NodeResolutions, CombinedExtraction,
+    etc.) before reaching Neo4j.
+    """
     if isinstance(obj, dict):
         return {key: _flatten_value_for_neo4j(val) for key, val in obj.items()}
     if isinstance(obj, list):
@@ -179,14 +271,40 @@ def _flatten_nested_maps(obj: Any) -> Any:
 def _flatten_value_for_neo4j(value: Any) -> Any:
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, list):
-        if any(isinstance(v, dict) for v in value):
-            return [
-                json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v
-                for v in value
-            ]
-        return value
+    # Lists are left as-is: lists of dicts are Pydantic structural data,
+    # lists of primitives are already Neo4j-compatible.
     return value
+
+
+def _ensure_model_fields(parsed: dict[str, Any], response_model: type) -> dict[str, Any]:
+    """Wrap a flat LLM response into the expected model structure when needed.
+
+    When qwen3-coder-flash ignores json_schema constraints, it may return
+    e.g. {"entity_name": "summary"} instead of {"summaries": [...]}.
+    This detects missing required list fields and wraps the dict as items.
+    """
+    if not hasattr(response_model, "model_fields"):
+        return parsed
+    model_fields = response_model.model_fields
+    for field_name, field_info in model_fields.items():
+        if field_name in parsed:
+            continue
+        # Check if this is a required list field missing from parsed
+        annotation = field_info.annotation
+        origin = getattr(annotation, "__origin__", None)
+        if origin is list and field_name not in parsed:
+            # The entire parsed dict might BE the items in disguise
+            # Convert dict-of-items to list wrapped under the field name
+            if all(isinstance(v, (str, dict)) for v in parsed.values()):
+                items = []
+                for key, val in parsed.items():
+                    if isinstance(val, str):
+                        items.append({"name": str(key).strip(), "summary": val})
+                    elif isinstance(val, dict):
+                        val.setdefault("name", str(key).strip())
+                        items.append(val)
+                return {field_name: items}
+    return parsed
 
 
 def _ensure_json_keyword(messages: list[dict[str, str]]) -> None:
@@ -260,15 +378,22 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
                 "LLM returned non-JSON content (len=%d): %s...", len(raw), raw[:200]
             )
             raise
-        # Normalize entity/edge field names, then flatten nested maps for Neo4j
+        # When a response_model is specified, ensure the parsed dict contains
+        # the model's required fields. If not, attempt to wrap the entire dict
+        # as the value of the first required list field (handles cases where
+        # qwen3-coder-flash returns {entity_name: summary} instead of
+        # {"summaries": [{name, summary}]} or {"entity_resolutions": [...]}).
+        if response_model is not None and isinstance(parsed, dict):
+            parsed = _ensure_model_fields(parsed, response_model)
+        # Normalize entity/edge field names for graphiti_core Pydantic models.
         normalized = _normalize_extraction(parsed)
         return _flatten_nested_maps(normalized)
 
     async def _respect_min_interval(self) -> None:
         last_call: float = getattr(GraphitiOpenAIClient, "_last_api_call_ts", 0.0)
         elapsed = time.monotonic() - last_call
-        if elapsed < 2.0:
-            await asyncio.sleep(2.0 - elapsed)
+        if elapsed < 0.1:
+            await asyncio.sleep(0.1 - elapsed)
         GraphitiOpenAIClient._last_api_call_ts = time.monotonic()
 
 

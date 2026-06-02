@@ -6,8 +6,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import OpenAIConfig, Settings
-from personal_agent.core.models import EntryInput, KnowledgeNote
+from personal_agent.core.config import LangExtractConfig, OpenAIConfig, Settings
+from personal_agent.core.models import Citation, EntryInput, KnowledgeNote
+from personal_agent.agent.runtime_ask import _graph_matches_to_evidence
+from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+from personal_agent.extract.schemas import SectionMap
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
@@ -24,6 +27,7 @@ def test_settings(temp_dir: Path) -> Settings:
             base_url=None,
             model="gpt-4.1-mini",
         ),
+        langextract=LangExtractConfig(api_key="stub", min_doc_chars=100_000),
     )
 
 
@@ -38,6 +42,11 @@ def service(test_settings: Settings) -> AgentService:
     mock_store.ingest_note.return_value = GraphCaptureResult(enabled=False)
     svc.graph_store = mock_store
     svc._runtime.graph_store = mock_store
+    # Stub the preextract service so capture tests don't hit a live LLM. The
+    # high min_doc_chars in test_settings already makes should_run() return
+    # False for every test fixture text, but we replace .extract() too in case
+    # someone bumps the threshold.
+    svc._preextract_service.extract = MagicMock(return_value=SectionMap())  # type: ignore[method-assign]
     svc._intent_router._classify_with_llm = stub_router_decision
     return svc
 
@@ -67,6 +76,26 @@ class TestCaptureFlow:
             text="来源笔记", source_type="text", source_ref="https://example.com"
         )
         assert result.note.source_ref == "https://example.com"
+
+    def test_capture_duplicate_fingerprint_reuses_existing_note(self, service: AgentService):
+        first = service.execute_capture(
+            text="重复采集内容",
+            source_type="link",
+            source_ref="https://example.com/a",
+            metadata={"title": "示例文章"},
+        )
+        second = service.execute_capture(
+            text="重复采集内容",
+            source_type="link",
+            source_ref="https://example.com/a",
+            metadata={"title": "示例文章"},
+        )
+
+        assert second.note.id == first.note.id
+        assert second.note.source_fingerprint == first.note.source_fingerprint
+        assert second.note.metadata["title"] == "示例文章"
+        assert len(service.store.list_notes(first.note.user_id, include_chunks=False)) == 1
+        assert service.graph_store.ingest_note.call_count == 1
 
     def test_short_text_single_note_no_chunks(self, service: AgentService):
         result = service.execute_capture(text="这是一条短笔记", source_type="text")
@@ -131,7 +160,45 @@ class TestCaptureFlow:
         result = service.execute_capture(text=long_content, source_type="text")
         for chunk in result.chunk_notes:
             assert chunk.graph_sync_status == "pending"
+        assert result.note.graph_sync_status == "skipped"
+        assert "delegated" in (result.note.graph_sync_error or "")
         service.graph_store.configured.return_value = False  # Restore for other tests
+
+    def test_batch_graph_sync_updates_multiple_chunks(self, service: AgentService):
+        service.graph_store.configured.return_value = True
+        chunk1 = KnowledgeNote(
+            title="chunk1",
+            content="Redis 缓存热点数据。",
+            summary="Redis",
+            user_id="default",
+            graph_sync_status="pending",
+        )
+        chunk2 = KnowledgeNote(
+            title="chunk2",
+            content="服务降级关闭非核心能力。",
+            summary="服务降级",
+            user_id="default",
+            graph_sync_status="pending",
+        )
+        service.store.add_note(chunk1)
+        service.store.add_note(chunk2)
+        service.graph_store.ingest_notes = MagicMock(return_value={
+            chunk1.id: GraphCaptureResult(
+                enabled=True,
+                episode_uuid="ep-1",
+                entity_names=["Redis"],
+                relation_facts=["Redis 缓存热点数据"],
+            ),
+            chunk2.id: GraphCaptureResult(enabled=False, error="rate limit"),
+        })
+
+        outcomes = service.sync_notes_to_graph([chunk1.id, chunk2.id])
+
+        assert outcomes == {chunk1.id: True, chunk2.id: False}
+        assert service.store.get_note(chunk1.id).graph_sync_status == "synced"
+        assert service.store.get_note(chunk2.id).graph_sync_status == "failed"
+        service.graph_store.ingest_notes.assert_called_once()
+        service.graph_store.configured.return_value = False
 
     def test_chunk_delete_cleans_graph_episodes(self, service: AgentService):
         """When cascade-deleting, chunk graph episodes should be cleaned up."""
@@ -198,6 +265,43 @@ class TestAskFlow:
         result = service.execute_ask(question="测试", session_id="test-session-42")
         assert result.session_id == "test-session-42"
 
+    def test_ask_pushes_filters_into_local_retrieval(self, service: AgentService, monkeypatch):
+        from personal_agent.agent import runtime_ask
+
+        file_note = KnowledgeNote(
+            title="部署文件",
+            content="蓝绿发布需要先切一半流量。",
+            summary="蓝绿发布文件说明",
+            user_id="default",
+            source_type="file",
+            source_ref="D:/uploads/deploy.md",
+        )
+        link_note = KnowledgeNote(
+            title="部署链接",
+            content="蓝绿发布需要先切一半流量。",
+            summary="蓝绿发布链接说明",
+            user_id="default",
+            source_type="link",
+            source_ref="https://example.com/deploy",
+        )
+        service.store.add_note(file_note)
+        service.store.add_note(link_note)
+        filters = RetrievalFilters(source_types=["file"], source_ref_contains="deploy.md")
+
+        monkeypatch.setattr(
+            runtime_ask,
+            "plan_retrieval",
+            lambda *_args, **_kwargs: (
+                QueryUnderstanding(query_rewrite="蓝绿发布", filters=filters),
+                RetrievalPlan(query="蓝绿发布", filters=filters),
+            ),
+        )
+
+        result = service.execute_ask(question="只看 deploy.md 文件，蓝绿发布怎么做？")
+
+        assert [note.id for note in result.matches] == [file_note.id]
+        assert result.citations[0].note_id == file_note.id
+
     def test_thread_dialogue_replaces_persisted_history_in_answer_prompt(self, service: AgentService):
         service.execute_capture(text="部署平台当前为新集群。", source_type="text")
         service._runtime.memory.bind_session("default", "context-session")
@@ -214,6 +318,137 @@ class TestAskFlow:
         prompt = service._runtime._generate_answer.call_args_list[0].args[0]
         assert "我刚才更正为新集群" in prompt
         assert "不是事实证据" in prompt
+
+    def test_ask_prompt_uses_context_pack_ranking_metadata(self, service: AgentService):
+        service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
+        service._runtime._generate_answer = MagicMock(return_value="服务降级是关闭非核心能力。")
+
+        service.execute_ask(question="什么是服务降级？")
+
+        prompt = service._runtime._generate_answer.call_args_list[0].args[0]
+        assert "ContextPack" in prompt
+        assert "rank_reason" in prompt
+
+    def test_graph_matches_become_context_pack_evidence(self):
+        note = KnowledgeNote(
+            id="graph-note",
+            title="Graph note",
+            content="Graphiti mapped note content",
+            summary="Graphiti mapped note summary",
+            graph_episode_uuid="ep-1",
+        )
+
+        evidence = _graph_matches_to_evidence(
+            "Graphiti mapped note",
+            [note],
+            [Citation(note_id=note.id, title=note.title, snippet=note.summary)],
+        )
+
+        assert evidence[0].source_id == "graph-note"
+        assert evidence[0].score == 0.55
+        assert evidence[0].metadata["retrieved_by"] == "graphiti"
+
+    def test_graphrag_provider_enters_context_pack_without_graphiti(
+        self,
+        service: AgentService,
+        monkeypatch,
+    ):
+        from personal_agent.agent import runtime_ask
+
+        service.settings = service.settings.model_copy(
+            update={
+                "ask": service.settings.ask.model_copy(update={"graph_provider": "graphrag"})
+            }
+        )
+        service._runtime.settings = service.settings
+        service._generate_answer = MagicMock(return_value="Redis 使用热点订单缓存降低数据库压力。")
+        service.store.add_note(KnowledgeNote(
+            id="gr-parent",
+            title="Redis cache architecture",
+            content="Redis cache document.",
+            summary="Redis cache architecture.",
+            user_id="default",
+        ))
+        service.store.add_note(KnowledgeNote(
+            id="gr-child",
+            title="Redis cache architecture",
+            content="Redis stores hot order data and reduces database pressure.",
+            summary="Redis stores hot order data.",
+            user_id="default",
+            parent_note_id="gr-parent",
+            chunk_index=0,
+        ))
+
+        monkeypatch.setattr(
+            runtime_ask,
+            "plan_retrieval",
+            lambda *_args, **_kwargs: (
+                QueryUnderstanding(query_rewrite="redis database pressure"),
+                RetrievalPlan(
+                    sources=["graph"],
+                    parallel=False,
+                    query="redis database pressure",
+                    sub_queries=[],
+                    filters=RetrievalFilters(),
+                ),
+            ),
+        )
+
+        result = service.execute_ask(question="Redis 如何降低数据库压力？")
+
+        assert service.graph_store.ask.call_count == 0
+        assert any(note.id in {"gr-child", "gr-parent"} for note in result.matches)
+        assert any(item.metadata.get("retrieved_by") == "graphrag" for item in result.evidence)
+
+    def test_graph_raw_episode_evidence_requires_overlap(self):
+        noisy = KnowledgeNote(
+            id="graph-noisy",
+            title="Unrelated",
+            content="audio codec experiment",
+            summary="audio codec experiment",
+            graph_episode_uuid="ep-noisy",
+        )
+
+        evidence = _graph_matches_to_evidence(
+            "pressure broadening atmospheric biases",
+            [noisy],
+            [],
+            mode="cited_overlap",
+            min_overlap=2,
+        )
+
+        assert evidence == []
+
+    def test_graph_note_evidence_can_be_disabled(self):
+        note = KnowledgeNote(
+            id="graph-note",
+            title="Graph note",
+            content="Graphiti mapped note content",
+            summary="Graphiti mapped note summary",
+            graph_episode_uuid="ep-1",
+        )
+
+        evidence = _graph_matches_to_evidence(
+            "Graphiti mapped note",
+            [note],
+            [Citation(note_id=note.id, title=note.title, snippet=note.summary)],
+            mode="none",
+        )
+
+        assert evidence == []
+
+    def test_retry_prompt_includes_claim_grounding_feedback(self, service: AgentService):
+        service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
+        service._runtime._generate_answer = MagicMock(side_effect=[
+            "服务降级可以自动扩容数据库集群。",
+            "服务降级是在系统压力过大时主动关闭非核心能力。",
+        ])
+
+        service.execute_ask(question="什么是服务降级？")
+
+        retry_prompt = service._runtime._generate_answer.call_args_list[1].args[0]
+        assert "claim-level grounding" in retry_prompt
+        assert "可用证据" in retry_prompt
 
 
 class TestDigestFlow:

@@ -6,13 +6,13 @@ remains as a lightweight display type derived from ``EvidenceItem``.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from .models import Citation, KnowledgeNote
-from ..graphiti.reranker import GraphCitationHit
 from ..graphiti.store import GraphAskResult
 
 
@@ -27,6 +27,185 @@ class EvidenceItem(BaseModel):
     url: str | None = None
     score: float = 0.0
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RankedEvidence(BaseModel):
+    evidence: EvidenceItem
+    score: float = 0.0
+    reason: str = ""
+    selected_for_prompt: bool = False
+    estimated_chars: int = 0
+
+
+class ContextPack(BaseModel):
+    question: str
+    selected: list[RankedEvidence] = Field(default_factory=list)
+    dropped: list[RankedEvidence] = Field(default_factory=list)
+    char_budget: int = 5000
+    used_chars: int = 0
+
+    @property
+    def evidence(self) -> list[EvidenceItem]:
+        return [item.evidence for item in self.selected]
+
+
+def build_context_pack(
+    question: str,
+    evidence: list[EvidenceItem],
+    *,
+    max_items: int = 12,
+    char_budget: int = 5000,
+) -> ContextPack:
+    """Rank, dedupe, and select evidence for prompt assembly.
+
+    This is intentionally lightweight and deterministic: it gives us a clear
+    boundary before introducing heavier cross-encoder or LLM rerankers.
+    """
+    return select_ranked_evidence(
+        question,
+        rank_evidence_items(question, evidence),
+        max_items=max_items,
+        char_budget=char_budget,
+    )
+
+
+def rank_evidence_items(question: str, evidence: list[EvidenceItem]) -> list[RankedEvidence]:
+    """Return deterministic heuristic ranking before prompt budget selection."""
+    ranked = [_rank_evidence_item(question, item) for item in _dedupe_evidence_items(evidence)]
+    ranked.sort(key=lambda item: item.score, reverse=True)
+    return ranked
+
+
+def select_ranked_evidence(
+    question: str,
+    ranked: list[RankedEvidence],
+    *,
+    max_items: int = 12,
+    char_budget: int = 5000,
+) -> ContextPack:
+    """Select ranked evidence with diversity and prompt budget constraints."""
+    ranked = [
+        item.model_copy(update={"selected_for_prompt": False})
+        for item in ranked
+    ]
+
+    selected: list[RankedEvidence] = []
+    dropped: list[RankedEvidence] = []
+    used_chars = 0
+    seen_sources: set[tuple[str, str]] = set()
+
+    for item in ranked:
+        diversity_key = (item.evidence.source_type, item.evidence.source_id or item.evidence.url or item.evidence.title)
+        duplicate_source = diversity_key in seen_sources and item.evidence.source_type in {"note", "chunk", "web"}
+        would_fit = used_chars + item.estimated_chars <= char_budget
+        must_select_first = not selected
+        if len(selected) < max_items and (would_fit or must_select_first) and not duplicate_source:
+            item.selected_for_prompt = True
+            selected.append(item)
+            used_chars += item.estimated_chars
+            if diversity_key[1]:
+                seen_sources.add(diversity_key)
+        else:
+            item.selected_for_prompt = False
+            dropped.append(item)
+
+    return ContextPack(
+        question=question,
+        selected=selected,
+        dropped=dropped,
+        char_budget=char_budget,
+        used_chars=used_chars,
+    )
+
+
+def _dedupe_evidence_items(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
+    deduped: list[EvidenceItem] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in evidence:
+        key = (
+            item.source_type,
+            item.source_id or item.url or "",
+            (item.fact or "").strip(),
+            (item.snippet or "").strip()[:180],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _rank_evidence_item(question: str, item: EvidenceItem) -> RankedEvidence:
+    score = 0.0
+    reasons: list[str] = []
+    content = " ".join(part for part in [item.title, item.fact or "", item.snippet] if part)
+
+    overlap = _term_overlap(question, content)
+    if overlap:
+        score += min(overlap * 0.12, 0.48)
+        reasons.append(f"term_overlap={overlap}")
+
+    if item.score:
+        normalized_source_score = min(max(float(item.score), 0.0), 1.0)
+        score += normalized_source_score * 0.25
+        reasons.append(f"source_score={normalized_source_score:.2f}")
+
+    source_weight = {
+        "chunk": 0.22,
+        "note": 0.18,
+        "graph_fact": 0.16,
+        "web": 0.14,
+        "tool": 0.10,
+    }.get(item.source_type, 0.0)
+    score += source_weight
+    reasons.append(f"source={item.source_type}")
+
+    if item.snippet:
+        score += 0.10
+        reasons.append("snippet")
+    if item.fact:
+        score += 0.08
+        reasons.append("fact")
+    if item.source_span:
+        score += 0.05
+        reasons.append("source_span")
+    if item.url:
+        score += 0.04
+        reasons.append("url")
+
+    if item.metadata.get("orphan") is True:
+        score -= 0.12
+        reasons.append("orphan_penalty")
+    if item.metadata.get("published_at"):
+        score += 0.04
+        reasons.append("freshness_metadata")
+
+    estimated_chars = min(max(len(content), 80), 900)
+    return RankedEvidence(
+        evidence=item,
+        score=round(max(score, 0.0), 4),
+        reason=", ".join(reasons) or "baseline",
+        estimated_chars=estimated_chars,
+    )
+
+
+def _term_overlap(question: str, content: str) -> int:
+    question_terms = _terms(question)
+    content_terms = _terms(content)
+    return len(question_terms & content_terms)
+
+
+def _terms(text: str) -> set[str]:
+    terms: set[str] = set()
+    lowered = text.lower()
+    for token in re.findall(r"[a-z0-9_+-]{2,}", lowered):
+        terms.add(token)
+    for run in re.findall(r"[\u3400-\u9fff]{2,}", text):
+        terms.add(run)
+        for size in (2, 3):
+            for index in range(0, max(0, len(run) - size + 1)):
+                terms.add(run[index:index + size])
+    return terms
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +224,8 @@ def graph_result_to_evidence(
     - ``citation_hits`` with episode -> note lookup -> ``source_type="note"`` / ``"chunk"``
     - ``citation_hits`` without episode match -> ``source_type="graph_fact"``, ``orphan=True``
     """
-    from ..agent.runtime_helpers import _best_snippet  # noqa: lazy to avoid circular
+    # Lazy import avoids a circular dependency with the ask runtime helpers.
+    from ..agent.runtime_helpers import _best_snippet
 
     items: list[EvidenceItem] = []
     seen_facts: set[str] = set()
@@ -137,7 +317,12 @@ def notes_to_evidence(matches: list[KnowledgeNote]) -> list[EvidenceItem]:
             title=note.title,
             snippet=snippet,
             source_span=note.source_span,
-            metadata={"graph_episode_uuid": note.graph_episode_uuid},
+            metadata={
+                "graph_episode_uuid": note.graph_episode_uuid,
+                "source_ref": note.source_ref,
+                "source_fingerprint": note.source_fingerprint,
+                **note.metadata,
+            },
         ))
     return items
 

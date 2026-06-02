@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from personal_agent.agent.verifier import AnswerVerifier, VerificationResult
+from personal_agent.core.evidence import EvidenceItem
 from personal_agent.core.models import Citation, KnowledgeNote
 
 
@@ -91,6 +92,75 @@ class TestAnswerVerifier:
         assert result.citation_valid is False
         # Score should be low since both citations are orphan and only 1 match
         assert result.evidence_score < 0.4
+
+    def test_claim_level_grounding_marks_supported_claim(self):
+        verifier = AnswerVerifier()
+        evidence = [
+            EvidenceItem(
+                source_type="chunk",
+                source_id="c1",
+                title="服务降级",
+                snippet="服务降级是在系统压力过大时主动关闭非核心能力。",
+            )
+        ]
+
+        result = verifier.verify(
+            "什么是服务降级",
+            "服务降级是在系统压力过大时主动关闭非核心能力。",
+            [],
+            [],
+            evidence=evidence,
+        )
+
+        assert result.claim_checks
+        assert result.claim_checks[0].status == "supported"
+        assert result.evidence_score >= 0.25
+
+    def test_claim_level_grounding_warns_missing_claim(self):
+        verifier = AnswerVerifier()
+        evidence = [
+            EvidenceItem(
+                source_type="chunk",
+                source_id="c1",
+                title="服务降级",
+                snippet="服务降级是在系统压力过大时主动关闭非核心能力。",
+            )
+        ]
+
+        result = verifier.verify(
+            "什么是服务降级",
+            "服务降级可以自动扩容数据库集群。",
+            [],
+            [],
+            evidence=evidence,
+        )
+
+        assert result.claim_checks
+        assert result.claim_checks[0].status == "not_found"
+        assert any("关键结论" in warning for warning in result.warnings)
+
+    def test_claim_level_grounding_detects_negation_conflict(self):
+        verifier = AnswerVerifier()
+        evidence = [
+            EvidenceItem(
+                source_type="chunk",
+                source_id="c1",
+                title="服务降级",
+                snippet="服务降级不会自动扩容数据库集群。",
+            )
+        ]
+
+        result = verifier.verify(
+            "服务降级会自动扩容吗",
+            "服务降级会自动扩容数据库集群。",
+            [],
+            [],
+            evidence=evidence,
+        )
+
+        assert result.claim_checks
+        assert result.claim_checks[0].status == "contradicted"
+        assert result.issues
 
 
 class TestAnswerVerifierWebCitations:

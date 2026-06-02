@@ -92,6 +92,7 @@ def apply_search_config_overrides(
     *,
     max_hops: int | None = None,
     limit: int | None = None,
+    citation_limit: int | None = None,
     min_score: float | None = None,
 ) -> GraphSearchStrategy:
     base_config = strategy.search_config
@@ -110,14 +111,19 @@ def apply_search_config_overrides(
             sub_updates[sub_name] = sub.model_copy(update={"bfs_max_depth": max_hops})
 
     if not config_updates and not sub_updates:
-        return strategy
+        if citation_limit is None or citation_limit <= 0:
+            return strategy
 
     new_config = base_config.model_copy(update={**config_updates, **sub_updates})
     return BaseGraphSearchStrategy(
         name=strategy.name,
         description=strategy.description,
         search_config=new_config,
-        citation_limit=getattr(strategy, "citation_limit", 12),
+        citation_limit=(
+            citation_limit
+            if citation_limit is not None and citation_limit > 0
+            else getattr(strategy, "citation_limit", 12)
+        ),
     )
 
 

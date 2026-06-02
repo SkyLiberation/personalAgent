@@ -19,6 +19,7 @@ class GraphitiConfig(_StrictBase):
     search_strategy: str = "hybrid_rrf"
     search_max_hops: int = 2
     search_limit: int = 10
+    search_citation_limit: int = 20
     search_min_score: float = 0.0
 
     llm_api_key: str | None = None
@@ -27,6 +28,8 @@ class GraphitiConfig(_StrictBase):
     llm_small_model: str | None = None
 
     sync_max_attempts: int = 3
+    sync_max_workers: int = 4
+    sync_max_notes_per_capture: int = 12
     sync_initial_backoff_seconds: float = 2.0
     sync_backoff_multiplier: float = 2.0
     sync_max_backoff_seconds: float = 20.0
@@ -41,7 +44,7 @@ class OpenAIConfig(_StrictBase):
     api_key: str | None = None
     base_url: str | None = None
     model: str = "gpt-4.1-mini"
-    small_model: str = "gpt-4.1-nano"
+    small_model: str = "deepseek-v4-flash"
     embedding_model: str = "text-embedding-3-small"
     timeout_seconds: float = 30.0
     max_retries: int = 2
@@ -76,17 +79,36 @@ class LangExtractConfig(_StrictBase):
     Decoupled from OpenAIConfig (DeepSeek) and GraphitiConfig (Kimi) so the
     extraction layer can target a model that supports OpenAI-style structured
     outputs (e.g. qwen3-coder-flash) without disturbing the other LLM paths.
+
+    LangExtract is now a mandatory step in the capture pipeline. ``api_key``
+    must be populated; missing keys surface as a runtime error on the first
+    capture attempt.
     """
 
-    enabled: bool = False
     api_key: str | None = None
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model_id: str = "qwen3-coder-flash"
-    max_char_buffer: int = 2000
+    max_char_buffer: int = 6000
     extraction_passes: int = 1
     max_workers: int = 4
-    min_doc_chars: int = 500
+    min_doc_chars: int = 200
     fallback_on_error: bool = True
+
+
+class AskConfig(_StrictBase):
+    graph_provider: str = "graphiti"
+    reranker: str = "heuristic"
+    candidate_enricher: str = "parent_child"
+    parent_child_top_n: int = 3
+    parent_child_min_overlap: int = 2
+    neighbor_chunk_window: int = 0
+    graph_note_evidence_mode: str = "all"
+    graph_note_evidence_min_overlap: int = 2
+    context_max_items: int = 12
+    context_char_budget: int = 5000
+    llm_rerank_top_n: int = 20
+    llm_rerank_timeout_seconds: float = 20.0
+    llm_rerank_model: str | None = None
 
 
 class Settings(_StrictBase):
@@ -104,6 +126,7 @@ class Settings(_StrictBase):
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
+    ask: AskConfig = Field(default_factory=AskConfig)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -134,6 +157,9 @@ class Settings(_StrictBase):
                 search_limit=int(
                     os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_LIMIT", "10")
                 ),
+                search_citation_limit=int(
+                    os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_CITATION_LIMIT", "20")
+                ),
                 search_min_score=float(
                     os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_MIN_SCORE", "0.0")
                 ),
@@ -143,6 +169,12 @@ class Settings(_StrictBase):
                 llm_small_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL"),
                 sync_max_attempts=int(
                     os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")
+                ),
+                sync_max_workers=int(
+                    os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_WORKERS", "4")
+                ),
+                sync_max_notes_per_capture=int(
+                    os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_NOTES_PER_CAPTURE", "12")
                 ),
                 sync_initial_backoff_seconds=float(
                     os.getenv("PERSONAL_AGENT_GRAPH_SYNC_INITIAL_BACKOFF_SECONDS", "2.0")
@@ -170,7 +202,7 @@ class Settings(_StrictBase):
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-                small_model=os.getenv("OPENAI_SMALL_MODEL", "gpt-4.1-nano"),
+                small_model=os.getenv("OPENAI_SMALL_MODEL", "deepseek-v4-flash"),
                 embedding_model=os.getenv(
                     "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
                 ),
@@ -208,9 +240,6 @@ class Settings(_StrictBase):
                 ),
             ),
             langextract=LangExtractConfig(
-                enabled=_as_bool(
-                    os.getenv("PERSONAL_AGENT_EXTRACT_ENABLED", "false")
-                ),
                 api_key=os.getenv("PERSONAL_AGENT_EXTRACT_API_KEY")
                 or os.getenv("EMBEDDING_API_KEY"),
                 base_url=os.getenv(
@@ -221,7 +250,7 @@ class Settings(_StrictBase):
                     "PERSONAL_AGENT_EXTRACT_MODEL", "qwen3-coder-flash"
                 ),
                 max_char_buffer=int(
-                    os.getenv("PERSONAL_AGENT_EXTRACT_MAX_CHAR_BUFFER", "2000")
+                    os.getenv("PERSONAL_AGENT_EXTRACT_MAX_CHAR_BUFFER", "6000")
                 ),
                 extraction_passes=int(
                     os.getenv("PERSONAL_AGENT_EXTRACT_PASSES", "1")
@@ -230,11 +259,46 @@ class Settings(_StrictBase):
                     os.getenv("PERSONAL_AGENT_EXTRACT_MAX_WORKERS", "4")
                 ),
                 min_doc_chars=int(
-                    os.getenv("PERSONAL_AGENT_EXTRACT_MIN_DOC_CHARS", "500")
+                    os.getenv("PERSONAL_AGENT_EXTRACT_MIN_DOC_CHARS", "200")
                 ),
                 fallback_on_error=_as_bool(
                     os.getenv("PERSONAL_AGENT_EXTRACT_FALLBACK_ON_ERROR", "true")
                 ),
+            ),
+            ask=AskConfig(
+                graph_provider=os.getenv("PERSONAL_AGENT_ASK_GRAPH_PROVIDER", "graphiti"),
+                reranker=os.getenv("PERSONAL_AGENT_ASK_RERANKER", "heuristic"),
+                candidate_enricher=os.getenv(
+                    "PERSONAL_AGENT_ASK_CANDIDATE_ENRICHER", "parent_child"
+                ),
+                parent_child_top_n=int(
+                    os.getenv("PERSONAL_AGENT_ASK_PARENT_CHILD_TOP_N", "3")
+                ),
+                parent_child_min_overlap=int(
+                    os.getenv("PERSONAL_AGENT_ASK_PARENT_CHILD_MIN_OVERLAP", "2")
+                ),
+                neighbor_chunk_window=int(
+                    os.getenv("PERSONAL_AGENT_ASK_NEIGHBOR_CHUNK_WINDOW", "0")
+                ),
+                graph_note_evidence_mode=os.getenv(
+                    "PERSONAL_AGENT_ASK_GRAPH_NOTE_EVIDENCE_MODE", "all"
+                ),
+                graph_note_evidence_min_overlap=int(
+                    os.getenv("PERSONAL_AGENT_ASK_GRAPH_NOTE_EVIDENCE_MIN_OVERLAP", "2")
+                ),
+                context_max_items=int(
+                    os.getenv("PERSONAL_AGENT_ASK_CONTEXT_MAX_ITEMS", "12")
+                ),
+                context_char_budget=int(
+                    os.getenv("PERSONAL_AGENT_ASK_CONTEXT_CHAR_BUDGET", "5000")
+                ),
+                llm_rerank_top_n=int(
+                    os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_TOP_N", "20")
+                ),
+                llm_rerank_timeout_seconds=float(
+                    os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_TIMEOUT_SECONDS", "20")
+                ),
+                llm_rerank_model=os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_MODEL"),
             ),
         )
 
