@@ -13,6 +13,7 @@ from ..core.evidence import (
     web_results_to_evidence,
 )
 from ..core.models import AgentState, Citation, KnowledgeNote
+from ..core.projections import MatchRef, match_ref_from_note
 from ..core.query_understanding import RetrievalFilters
 from ..graphiti.store import GraphAskResult
 from .ask_pipeline_factory import AskPipelineFactory
@@ -42,15 +43,10 @@ _DIALOGUE_CONTEXT_POLICY = (
 
 
 def _conversation_messages_text(messages: list[dict[str, str]]) -> str:
-    lines: list[str] = []
-    for message in messages[-12:]:
-        role = message.get("role")
-        content = str(message.get("content", "")).strip()
-        if not content or role not in {"user", "assistant"}:
-            continue
-        label = "用户" if role == "user" else "助手"
-        lines.append(f"{label}: {content}")
-    return "\n".join(lines)
+    # 入参通常已由短期记忆策略窗口化；此处统一渲染为「用户/助手」文本。
+    from .short_term_context import render_as_text
+
+    return render_as_text(messages)
 
 
 def _dedupe_evidence(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
@@ -85,6 +81,10 @@ def _order_matches_by_evidence(
         seen.add(note.id)
     ordered.extend(note for note in matches if note.id not in seen)
     return ordered
+
+
+def _match_refs(matches: list[KnowledgeNote]) -> list[MatchRef]:
+    return [match_ref_from_note(note) for note in matches]
 
 
 def _graph_matches_to_evidence(
@@ -124,10 +124,10 @@ def _graph_matches_to_evidence(
 def _note_term_overlap(question: str, note: KnowledgeNote) -> int:
     question_terms = _terms(question)
     note_terms = _terms(" ".join([
-        note.title,
-        note.summary,
-        note.preextract_topic or "",
-        note.content,
+        note.body.title,
+        note.body.summary,
+        note.preextract.topic or "",
+        note.body.content,
     ]))
     return len(question_terms & note_terms)
 
@@ -265,7 +265,7 @@ class RuntimeAskMixin:
             matches, citations = self._graph_matches_and_citations(
                 normalized_user, question, graph_result, retrieval_plan.filters
             )
-            notes_by_episode = {n.graph_episode_uuid: n for n in matches if n.graph_episode_uuid is not None}
+            notes_by_episode = {n.graph.episode_uuid: n for n in matches if n.graph.episode_uuid is not None}
             if retrieval_plan.filters.active() and not matches and not citations:
                 add_trace_step("图谱结果未通过 metadata filters，已跳过")
             elif self._graph_has_evidence(graph_result, matches, citations):
@@ -305,7 +305,7 @@ class RuntimeAskMixin:
                     sub_matches, sub_citations = self._graph_matches_and_citations(
                         normalized_user, sub_q, sub_graph, retrieval_plan.filters
                     )
-                    notes_by_ep = {n.graph_episode_uuid: n for n in sub_matches if n.graph_episode_uuid}
+                    notes_by_ep = {n.graph.episode_uuid: n for n in sub_matches if n.graph.episode_uuid}
                     if not (retrieval_plan.filters.active() and not sub_matches and not sub_citations):
                         combined_matches = _merge_notes(combined_matches, sub_matches)
                         combined_citations = _merge_citations(combined_citations, sub_citations)
@@ -371,7 +371,7 @@ class RuntimeAskMixin:
             question,
             final_answer,
             combined_citations,
-            combined_matches,
+            _match_refs(combined_matches),
             web_enabled=any(c.source_type == "web" for c in combined_citations),
             evidence=context_pack.evidence,
         )
@@ -420,7 +420,7 @@ class RuntimeAskMixin:
                     question,
                     final_answer,
                     combined_citations,
-                    combined_matches,
+                    _match_refs(combined_matches),
                     web_enabled=True,
                     evidence=context_pack.evidence,
                 )
@@ -440,10 +440,12 @@ class RuntimeAskMixin:
         if not verification.ok or not verification.sufficient:
             final_answer = _annotate_answer(final_answer, verification)
 
+        ordered_matches = _order_matches_by_evidence(combined_matches, context_pack.evidence)
         ask_result = AskResult(
             answer=final_answer,
             citations=combined_citations,
-            matches=_order_matches_by_evidence(combined_matches, context_pack.evidence),
+            matches=ordered_matches,
+            match_refs=_match_refs(ordered_matches),
             evidence=context_pack.evidence,
             session_id=normalized_session,
         )
@@ -507,7 +509,7 @@ class RuntimeAskMixin:
                 matches=matches,
                 citations=citations,
                 evidence=evidence,
-                answer=matches[0].summary if matches else None,
+                answer=matches[0].body.summary if matches else None,
             )
         if provider != "graphiti":
             logger.warning("Unknown graph provider=%s; falling back to graphiti", provider)
@@ -521,15 +523,15 @@ class RuntimeAskMixin:
         user_id: str,
         filters: RetrievalFilters | None = None,
     ) -> AgentState:
-        """Run the local LangGraph ask graph and return the resulting state."""
+        """Run local note retrieval and return an ask-shaped state."""
         matches = self.store.find_similar_notes(user_id, question, filters=filters)
         citations = [
-            Citation(note_id=note.id, title=note.title, snippet=note.summary[:80])
+            Citation(note_id=note.id, title=note.body.title, snippet=note.body.summary[:80])
             for note in matches
         ]
         answer = None
         if matches:
-            answer = f"根据你已有的笔记，最相关的结论是：{matches[0].summary}"
+            answer = f"根据你已有的笔记，最相关的结论是：{matches[0].body.summary}"
         return AgentState(
             mode="ask",
             question=question,
@@ -651,20 +653,31 @@ class RuntimeAskMixin:
         else:
             evidence_block = "\n\n".join(evidence_lines)
 
+        # Citation / match hints are gated by ContextPack.selected so they cannot
+        # smuggle un-reranked, un-budgeted evidence into the prompt. Only ids that
+        # survived rerank + char budget may surface as anchor hints.
+        selected_ids = {
+            ranked.evidence.source_id
+            for ranked in context_pack.selected
+            if ranked.evidence.source_id
+        }
+
         citation_hint = ""
-        if citations:
+        if citations and selected_ids:
             citation_hint = "\n".join(
                 f"- {c.title}: {(c.relation_fact or c.snippet)[:160]}"
-                for c in citations[:8]
-                if c.title or c.snippet or c.relation_fact
+                for c in citations
+                if c.note_id in selected_ids and (c.title or c.snippet or c.relation_fact)
             )
         if not citation_hint:
             citation_hint = "无"
 
         match_hint = ""
-        if matches:
+        if matches and selected_ids:
             match_hint = "\n".join(
-                f"- {note.title}: {note.summary[:160]}" for note in matches[:8]
+                f"- {note.body.title}: {note.body.summary[:160]}"
+                for note in matches
+                if note.id in selected_ids
             )
         if not match_hint:
             match_hint = "无"
@@ -712,15 +725,15 @@ class RuntimeAskMixin:
         fallback_facts = _graph_fact_lines(graph_result, limit=8)
         for index, note in enumerate(matches[:5]):
             relation_fact = None
-            if note.graph_episode_uuid:
-                episode_facts = facts_by_episode.get(note.graph_episode_uuid, [])
+            if note.graph.episode_uuid:
+                episode_facts = facts_by_episode.get(note.graph.episode_uuid, [])
                 if episode_facts:
                     relation_fact = episode_facts[0]
             if relation_fact is None and index < len(fallback_facts):
                 relation_fact = fallback_facts[index]
             citations.append(Citation(
-                note_id=note.id, title=note.title,
-                snippet=note.summary[:120],
+                note_id=note.id, title=note.body.title,
+                snippet=note.body.summary[:120],
                 relation_fact=relation_fact,
             ))
         return citations
@@ -737,7 +750,7 @@ class RuntimeAskMixin:
         if not graph_result.citation_hits:
             return matches, self._graph_citations(matches, graph_result)
 
-        notes_by_episode_uuid = {n.graph_episode_uuid: n for n in matches if n.graph_episode_uuid is not None}
+        notes_by_episode_uuid = {n.graph.episode_uuid: n for n in matches if n.graph.episode_uuid is not None}
         citations: list[Citation] = []
         matched_notes: list[KnowledgeNote] = []
         seen_note_ids: set[str] = set()
@@ -750,7 +763,7 @@ class RuntimeAskMixin:
             citation_key = (note.id, hit.relation_fact)
             if citation_key not in seen_citation_keys:
                 citations.append(Citation(
-                    note_id=note.id, title=note.title,
+                    note_id=note.id, title=note.body.title,
                     snippet=_best_snippet(note, hit, question),
                     relation_fact=hit.relation_fact,
                 ))
@@ -928,7 +941,7 @@ class RuntimeAskMixin:
         if generated:
             return generated
         if matches:
-            return f"结合你前面的提问和当前笔记内容，我更倾向于认为：{matches[0].summary}"
+            return f"结合你前面的提问和当前笔记内容，我更倾向于认为：{matches[0].body.summary}"
         return "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
 
     def _build_note_evidence_blocks(
@@ -945,8 +958,8 @@ class RuntimeAskMixin:
                 candidate_snippets = _top_sentences(_evidence_content(note), 3)
             excerpt = "\n".join(f"- {s}" for s in candidate_snippets[:3] if s.strip())
             if not excerpt:
-                excerpt = f"- {note.summary}"
-            blocks.append(f"[笔记] {note.title}\n摘要：{note.summary}\n证据片段：\n{excerpt}")
+                excerpt = f"- {note.body.summary}"
+            blocks.append(f"[笔记] {note.body.title}\n摘要：{note.body.summary}\n证据片段：\n{excerpt}")
         return blocks
 
     def _retry_if_needed(
@@ -976,7 +989,7 @@ class RuntimeAskMixin:
             if regenerated:
                 current_answer = regenerated
                 current_verification = self._verifier.verify(
-                    question, current_answer, citations, matches,
+                    question, current_answer, citations, _match_refs(matches),
                     web_enabled=web_enabled,
                     evidence=evidence,
                 )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from ..core.models import Citation, EntryIntent, KnowledgeNote, ReviewCard
+from ..core.projections import MatchRef
 from .verifier import VerificationResult
 
 
@@ -17,6 +18,7 @@ class AskResult(BaseModel):
     answer: str
     citations: list[Citation] = Field(default_factory=list)
     matches: list[KnowledgeNote] = Field(default_factory=list)
+    match_refs: list[MatchRef] = Field(default_factory=list)
     evidence: list = Field(default_factory=list)
     session_id: str = "default"
 

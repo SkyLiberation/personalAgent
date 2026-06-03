@@ -15,6 +15,7 @@ from personal_agent.core.evidence import (
 )
 from personal_agent.core.rerankers import LlmEvidenceReranker
 from personal_agent.core.models import Citation, KnowledgeNote
+from tests.note_factory import make_note
 
 
 class TestEvidenceItem:
@@ -195,14 +196,14 @@ class TestEvidenceRerankers:
 
 class TestCandidateEnrichers:
     def test_parent_hit_adds_query_relevant_children(self):
-        parent = KnowledgeNote(
+        parent = make_note(
             id="p1",
             user_id="u1",
             title="Atmosphere paper",
             content="abstract about pressure broadening",
             summary="abstract about pressure broadening",
         )
-        weak_child = KnowledgeNote(
+        weak_child = make_note(
             id="c1",
             user_id="u1",
             title="Appendix",
@@ -211,7 +212,7 @@ class TestCandidateEnrichers:
             parent_note_id="p1",
             chunk_index=1,
         )
-        strong_child = KnowledgeNote(
+        strong_child = make_note(
             id="c2",
             user_id="u1",
             title="Precision requirements",
@@ -236,7 +237,7 @@ class TestCandidateEnrichers:
             "Are biases on atmospheric inferences expected to decrease with lower perturbation levels on pressure-broadening parameters?",
             evidence=notes_to_evidence([parent]),
             matches=[parent],
-            citations=[Citation(note_id=parent.id, title=parent.title, snippet=parent.summary)],
+            citations=[Citation(note_id=parent.id, title=parent.body.title, snippet=parent.body.summary)],
             store=FakeStore(),
         )
 

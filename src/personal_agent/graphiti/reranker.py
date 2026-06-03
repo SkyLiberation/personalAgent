@@ -3,16 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from pydantic import BaseModel, Field
+from ..core.graph_results import GraphCitationHit
 
+__all__ = ["GraphCitationHit", "rank_graph_citation_hits"]
 
-class GraphCitationHit(BaseModel):
-    episode_uuid: str
-    relation_fact: str
-    endpoint_names: list[str] = Field(default_factory=list)
-    matched_terms: list[str] = Field(default_factory=list)
-    entity_overlap_count: int = 0
-    score: int = 0
 
 
 def rank_graph_citation_hits(

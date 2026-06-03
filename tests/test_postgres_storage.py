@@ -4,10 +4,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from personal_agent.core.models import KnowledgeNote, ReviewCard
+from personal_agent.core.models import ReviewCard
 from personal_agent.core.query_understanding import RetrievalFilters
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
+from tests.note_factory import make_note
 
 import pytest
 
@@ -21,14 +22,14 @@ def _user() -> str:
 def test_notes_and_reviews_are_persisted_in_postgres(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-    note = KnowledgeNote(id=str(uuid4()), title="测试", content="内容", summary="摘要", user_id=user_id)
+    note = make_note(id=str(uuid4()), title="测试", content="内容", summary="摘要", user_id=user_id)
     store.add_note(note)
     store.add_review(
         ReviewCard(note_id=note.id, prompt="复习", answer_hint="答案", due_at=datetime.utcnow() - timedelta(days=1))
     )
 
     reloaded = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-    assert reloaded.get_note(note.id).title == "测试"
+    assert reloaded.get_note(note.id).body.title == "测试"
     assert len(reloaded.due_reviews(user_id)) == 1
 
     result = reloaded.clear_user_data(user_id, remove_uploaded_files=False)
@@ -39,8 +40,8 @@ def test_notes_and_reviews_are_persisted_in_postgres(temp_dir: Path):
 def test_note_chunks_and_episode_mapping_are_persisted(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-    parent = KnowledgeNote(id=str(uuid4()), title="父", content="全文", summary="摘要", user_id=user_id)
-    child = KnowledgeNote(
+    parent = make_note(id=str(uuid4()), title="父", content="全文", summary="摘要", user_id=user_id)
+    child = make_note(
         id=str(uuid4()),
         title="子",
         content="片段",
@@ -54,7 +55,7 @@ def test_note_chunks_and_episode_mapping_are_persisted(temp_dir: Path):
     store.add_note(child)
 
     assert store.get_chunks_for_parent(parent.id)[0].id == child.id
-    assert store.find_notes_by_graph_episode_uuids(user_id, [child.graph_episode_uuid])[0].id == child.id
+    assert store.find_notes_by_graph_episode_uuids(user_id, [child.graph.episode_uuid])[0].id == child.id
     store.clear_user_data(user_id, remove_uploaded_files=False)
 
 
@@ -62,7 +63,7 @@ def test_find_note_by_source_fingerprint_prefers_parent(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
     fingerprint = "fp-" + uuid4().hex
-    parent = KnowledgeNote(
+    parent = make_note(
         id=str(uuid4()),
         title="来源文章",
         content="全文",
@@ -72,7 +73,7 @@ def test_find_note_by_source_fingerprint_prefers_parent(temp_dir: Path):
         source_fingerprint=fingerprint,
         metadata={"title": "来源文章", "author": "tester"},
     )
-    child = KnowledgeNote(
+    child = make_note(
         id=str(uuid4()),
         title="来源文章片段",
         content="片段",
@@ -89,21 +90,21 @@ def test_find_note_by_source_fingerprint_prefers_parent(temp_dir: Path):
 
     assert found is not None
     assert found.id == parent.id
-    assert found.metadata["author"] == "tester"
+    assert found.source.metadata["author"] == "tester"
     store.clear_user_data(user_id, remove_uploaded_files=False)
 
 
 def test_find_similar_notes_supports_chinese_ngram_search(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-    target = KnowledgeNote(
+    target = make_note(
         id=str(uuid4()),
         title="服务降级",
         content="服务降级是在系统压力过大时主动关闭非核心能力。",
         summary="系统压力过大时关闭非核心能力",
         user_id=user_id,
     )
-    distractor = KnowledgeNote(
+    distractor = make_note(
         id=str(uuid4()),
         title="缓存策略",
         content="缓存策略用于减少数据库访问。",
@@ -124,7 +125,7 @@ def test_find_similar_notes_supports_chinese_ngram_search(temp_dir: Path):
 def test_find_similar_notes_applies_metadata_filters(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-    link_note = KnowledgeNote(
+    link_note = make_note(
         id=str(uuid4()),
         title="RAG 链接",
         content="RAG 检索增强生成资料。",
@@ -134,7 +135,7 @@ def test_find_similar_notes_applies_metadata_filters(temp_dir: Path):
         source_ref="https://example.com/rag",
         metadata={"author": "alice"},
     )
-    file_note = KnowledgeNote(
+    file_note = make_note(
         id=str(uuid4()),
         title="RAG 文件",
         content="RAG 检索增强生成资料。",
@@ -168,7 +169,7 @@ def test_graph_episode_lookup_applies_filters(temp_dir: Path):
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
     link_episode = str(uuid4())
     file_episode = str(uuid4())
-    link_note = KnowledgeNote(
+    link_note = make_note(
         id=str(uuid4()),
         title="链接笔记",
         content="Graphiti 资料",
@@ -177,7 +178,7 @@ def test_graph_episode_lookup_applies_filters(temp_dir: Path):
         source_type="link",
         graph_episode_uuid=link_episode,
     )
-    file_note = KnowledgeNote(
+    file_note = make_note(
         id=str(uuid4()),
         title="文件笔记",
         content="Graphiti 资料",
@@ -202,7 +203,7 @@ def test_graph_episode_lookup_applies_filters(temp_dir: Path):
 def test_find_similar_notes_expands_chunk_to_parent_and_neighbors(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-    parent = KnowledgeNote(
+    parent = make_note(
         id=str(uuid4()),
         title="RAG 架构文档",
         content="完整文档",
@@ -210,7 +211,7 @@ def test_find_similar_notes_expands_chunk_to_parent_and_neighbors(temp_dir: Path
         user_id=user_id,
         chunk_index=0,
     )
-    chunk1 = KnowledgeNote(
+    chunk1 = make_note(
         id=str(uuid4()),
         title="检索",
         content="向量检索负责语义召回。",
@@ -219,7 +220,7 @@ def test_find_similar_notes_expands_chunk_to_parent_and_neighbors(temp_dir: Path
         parent_note_id=parent.id,
         chunk_index=1,
     )
-    chunk2 = KnowledgeNote(
+    chunk2 = make_note(
         id=str(uuid4()),
         title="重排",
         content="Cross encoder rerank 负责统一精排候选证据。",
@@ -228,7 +229,7 @@ def test_find_similar_notes_expands_chunk_to_parent_and_neighbors(temp_dir: Path
         parent_note_id=parent.id,
         chunk_index=2,
     )
-    chunk3 = KnowledgeNote(
+    chunk3 = make_note(
         id=str(uuid4()),
         title="生成",
         content="生成阶段只使用 ContextPack。",
@@ -275,14 +276,14 @@ def test_find_similar_notes_merges_vector_only_candidates(temp_dir: Path):
         return vectors["other"]
 
     store._embed_text = fake_embed  # type: ignore[method-assign]
-    target = KnowledgeNote(
+    target = make_note(
         id=str(uuid4()),
         title="Alpha",
         content="alpha unique body",
         summary="first",
         user_id=user_id,
     )
-    distractor = KnowledgeNote(
+    distractor = make_note(
         id=str(uuid4()),
         title="Beta",
         content="beta unique body",

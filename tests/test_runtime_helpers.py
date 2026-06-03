@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 from pathlib import Path
 
@@ -14,7 +12,6 @@ from personal_agent.agent.runtime import (
 )
 from personal_agent.core.models import (
     Citation,
-    KnowledgeNote,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
@@ -23,6 +20,7 @@ from personal_agent.graphiti.store import GraphCaptureResult
 from personal_agent.graphiti.store import GraphAskResult
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
+from tests.note_factory import make_note
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -74,7 +72,7 @@ class TestExtractQuestionKeywords:
 
 class TestBestSnippet:
     def test_returns_best_matching_sentence(self):
-        note = KnowledgeNote(
+        note = make_note(
             id="n1", title="缓存策略", user_id="test",
             content="Redis 使用内存存储数据。缓存失效策略包括 TTL 和 LRU。",
             summary="关于 Redis 缓存的笔记",
@@ -93,7 +91,7 @@ class TestBestSnippet:
         assert "缓存失效策略" in snippet or len(snippet) > 0
 
     def test_fallback_to_summary(self):
-        note = KnowledgeNote(
+        note = make_note(
             id="n2", title="测试笔记", user_id="test",
             content="一些无关的内容。",
             summary="这是关于缓存策略的摘要说明，包含重要信息。",
@@ -165,7 +163,7 @@ class TestGraphRefModels:
 
 class TestMergeGraphCaptureRefs:
     def test_merge_populates_refs(self):
-        note = KnowledgeNote(title="test", content="c", summary="s", user_id="u1")
+        note = make_note(title="test", content="c", summary="s", user_id="u1")
         graph_result = GraphCaptureResult(
             enabled=True,
             episode_uuid="ep-1",
@@ -176,18 +174,18 @@ class TestMergeGraphCaptureRefs:
             edge_refs=[GraphEdgeRef(uuid="e1", fact="Redis supports caching", source_node_name="Redis")],
             fact_refs=[GraphFactRef(fact="Redis supports caching", edge_uuid="e1", source_node_name="Redis")],
         )
-        from personal_agent.agent.runtime import AgentRuntime
-        rt = object.__new__(AgentRuntime)
-        rt._merge_graph_capture(note, graph_result)
-        assert note.graph_episode_uuid == "ep-1"
-        assert note.entity_names == ["Redis"]
-        assert len(note.graph_node_refs) == 1
-        assert note.graph_node_refs[0].uuid == "n1"
-        assert len(note.graph_edge_refs) == 1
-        assert note.graph_edge_refs[0].source_node_name == "Redis"
-        assert len(note.graph_fact_refs) == 1
-        assert note.graph_fact_refs[0].edge_uuid == "e1"
-        assert note.graph_sync_status == "synced"
+        from personal_agent.agent.ingestion_pipeline import IngestionPipeline
+        pipeline = object.__new__(IngestionPipeline)
+        pipeline._merge_graph_capture(note, graph_result)
+        assert note.graph.episode_uuid == "ep-1"
+        assert note.graph.entity_names == ["Redis"]
+        assert len(note.graph.node_refs) == 1
+        assert note.graph.node_refs[0].uuid == "n1"
+        assert len(note.graph.edge_refs) == 1
+        assert note.graph.edge_refs[0].source_node_name == "Redis"
+        assert len(note.graph.fact_refs) == 1
+        assert note.graph.fact_refs[0].edge_uuid == "e1"
+        assert note.graph_sync.status == "synced"
 
 
 class TestGraphAskSemanticEvidence:
@@ -242,7 +240,7 @@ class TestGraphAskSemanticEvidence:
                 )
             ],
         )
-        note = KnowledgeNote(
+        note = make_note(
             id="note1",
             title="缓存方案",
             content="订单服务依赖 Redis 缓存热点数据，从而降低数据库压力。",
@@ -274,7 +272,7 @@ class TestGraphAskSemanticEvidence:
 class TestGraphRefsSerialization:
     def test_note_with_graph_refs_roundtrips(self, temp_dir: Path):
         store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-        note = KnowledgeNote(
+        note = make_note(
             id="n1", title="Graph note", content="content", summary="summary",
             user_id="test",
             graph_episode_uuid="ep-1",
@@ -287,15 +285,15 @@ class TestGraphRefsSerialization:
         store.add_note(note)
         loaded = store.get_note("n1")
         assert loaded is not None
-        assert loaded.graph_episode_uuid == "ep-1"
-        assert len(loaded.graph_node_refs) == 1
-        assert loaded.graph_node_refs[0].labels == ["Tech"]
-        assert len(loaded.graph_edge_refs) == 1
-        assert len(loaded.graph_fact_refs) == 1
+        assert loaded.graph.episode_uuid == "ep-1"
+        assert len(loaded.graph.node_refs) == 1
+        assert loaded.graph.node_refs[0].labels == ["Tech"]
+        assert len(loaded.graph.edge_refs) == 1
+        assert len(loaded.graph.fact_refs) == 1
 
     def test_note_without_refs_loads_cleanly(self, temp_dir: Path):
         store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
-        note = KnowledgeNote(
+        note = make_note(
             id="n2", title="Old note", content="c", summary="s", user_id="test",
             entity_names=["Python"],
             relation_facts=["Python is a language"],
@@ -303,7 +301,7 @@ class TestGraphRefsSerialization:
         store.add_note(note)
         loaded = store.get_note("n2")
         assert loaded is not None
-        assert loaded.entity_names == ["Python"]
-        assert loaded.graph_node_refs == []
-        assert loaded.graph_edge_refs == []
-        assert loaded.graph_fact_refs == []
+        assert loaded.graph.entity_names == ["Python"]
+        assert loaded.graph.node_refs == []
+        assert loaded.graph.edge_refs == []
+        assert loaded.graph.fact_refs == []

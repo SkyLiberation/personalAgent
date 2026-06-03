@@ -129,7 +129,10 @@ def _call_planner_llm(
 
     user_content = f"Current datetime: {local_now().isoformat()}\nQuestion: {question}"
     if conversation_context:
-        user_content += f"\n\nConversation context:\n{conversation_context[:800]}"
+        char_budget = getattr(
+            getattr(settings, "short_term", None), "char_budget", 800
+        )
+        user_content += f"\n\nConversation context:\n{conversation_context[:char_budget]}"
 
     start = time.monotonic()
     response = client.chat.completions.create(

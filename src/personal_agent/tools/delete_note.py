@@ -40,10 +40,10 @@ def build_delete_note_tool(
                 graph_failed = 0
                 if graph_store.configured():
                     for candidate in [deleted_note, *chunks_before]:
-                        if not candidate.graph_episode_uuid:
+                        if not candidate.graph.episode_uuid:
                             continue
                         try:
-                            if graph_store.delete_episode(candidate.graph_episode_uuid):
+                            if graph_store.delete_episode(candidate.graph.episode_uuid):
                                 graph_cleaned += 1
                         except Exception:
                             logger.exception("Failed to delete graph episode for note %s", candidate.id)
@@ -53,8 +53,8 @@ def build_delete_note_tool(
                     graph_result += f"，{graph_failed} 个图谱 episode 清理失败(已记录日志)"
                 return tool_response(tool_success({
                     "deleted_note_id": note_id,
-                    "title": deleted_note.title,
-                    "message": f"已删除笔记「{deleted_note.title}」{graph_result}。",
+                    "title": deleted_note.body.title,
+                    "message": f"已删除笔记「{deleted_note.body.title}」{graph_result}。",
                 }))
             except Exception as exc:
                 logger.exception("delete_note execution failed for note_id=%s", note_id)
@@ -63,18 +63,18 @@ def build_delete_note_tool(
         chunks = store.get_chunks_for_parent(note_id)
         cascade_note = "及其所有子章节笔记" if chunks else ""
         description = (
-            f"将删除笔记「{note.title}」{cascade_note}"
+            f"将删除笔记「{note.body.title}」{cascade_note}"
             + (f"（共 {len(chunks) + 1} 条笔记）" if chunks else "")
             + "及其关联的复习卡片"
-            + ("和图谱映射。" if note.graph_episode_uuid else "。")
+            + ("和图谱映射。" if note.graph.episode_uuid else "。")
         )
         return tool_response(tool_success({
             "note_id": note_id,
-            "title": note.title,
-            "summary": note.summary,
+            "title": note.body.title,
+            "summary": note.body.summary,
             "description": description,
             "pending_confirmation": True,
-            "message": f"确认删除笔记「{note.title}」？",
+            "message": f"确认删除笔记「{note.body.title}」？",
         }))
 
     return delete_note

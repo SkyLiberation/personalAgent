@@ -7,8 +7,6 @@ import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
-
 from graphiti_core.embedder.openai import OpenAIEmbedderConfig
 from graphiti_core.graphiti import Graphiti
 from graphiti_core.nodes import EpisodeType, EpisodicNode
@@ -16,18 +14,18 @@ from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RR
 from neo4j import AsyncGraphDatabase
 
 from ..core.config import Settings
+from ..core.graph_results import GraphAskResult, GraphCaptureResult
 from ..core.logging_utils import log_event, trace_span
 from ..core.models import (
-    Citation,
     KnowledgeNote,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
 )
+from ..core.projections import GraphIngestDocument, graph_ingest_document_from_note
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from .llm_strategies import build_graphiti_llm_client
 from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
-from .reranker import GraphCitationHit
 from .search_strategies import (
     GraphSearchStrategy,
     apply_search_config_overrides,
@@ -60,32 +58,6 @@ def _episode_uuids_from_search_result(search_result: object) -> list[str]:
         if uuid and uuid not in episode_uuids:
             episode_uuids.append(uuid)
     return episode_uuids
-
-
-class GraphCaptureResult(BaseModel):
-    enabled: bool = False
-    error: str | None = None
-    episode_uuid: str | None = None
-    entity_names: list[str] = Field(default_factory=list)
-    relation_facts: list[str] = Field(default_factory=list)
-    related_episode_uuids: list[str] = Field(default_factory=list)
-    node_refs: list[GraphNodeRef] = Field(default_factory=list)
-    edge_refs: list[GraphEdgeRef] = Field(default_factory=list)
-    fact_refs: list[GraphFactRef] = Field(default_factory=list)
-
-
-class GraphAskResult(BaseModel):
-    enabled: bool = False
-    error: str | None = None
-    answer: str | None = None
-    entity_names: list[str] = Field(default_factory=list)
-    relation_facts: list[str] = Field(default_factory=list)
-    related_episode_uuids: list[str] = Field(default_factory=list)
-    citations: list[Citation] = Field(default_factory=list)
-    citation_hits: list["GraphCitationHit"] = Field(default_factory=list)
-    node_refs: list[GraphNodeRef] = Field(default_factory=list)
-    edge_refs: list[GraphEdgeRef] = Field(default_factory=list)
-    fact_refs: list[GraphFactRef] = Field(default_factory=list)
 
 
 class GraphitiStore:
@@ -261,12 +233,13 @@ class GraphitiStore:
         trace_id: str | None = None,
         attempt: int | None = None,
     ) -> GraphCaptureResult:
+        document = graph_ingest_document_from_note(note)
         with trace_span(
             logger,
             "graphiti.ingest_note",
             trace_id=trace_id,
-            note_id=note.id,
-            user_id=note.user_id,
+            note_id=document.id,
+            user_id=document.user_id,
             attempt=attempt,
             model=self.settings.graphiti.llm_model or self.settings.openai.model,
             embedding_model=self.settings.openai.embedding_model,
@@ -284,15 +257,15 @@ class GraphitiStore:
                     try:
                         add_result = await asyncio.wait_for(
                             graphiti.add_episode(
-                                name=note.title,
+                                name=document.title,
                                 episode_body=_graphiti_episode_body(
-                                    note,
+                                    document,
                                     max_chars=self.settings.graphiti.episode_max_chars,
                                 ),
-                                source_description=f"Personal note {note.id}",
-                                reference_time=note.created_at,
+                                source_description=f"Personal note {document.id}",
+                                reference_time=document.created_at,
                                 source=EpisodeType.text,
-                                group_id=self._group_id(note.user_id),
+                                group_id=self._group_id(document.user_id),
                                 entity_types=ENTITY_TYPES,
                                 custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                             ),
@@ -306,16 +279,16 @@ class GraphitiStore:
                             raise
                         logger.warning(
                             "Graphiti add_episode hit content filter; retrying with safe fallback body note=%s",
-                            note.id,
+                            document.id,
                         )
                         add_result = await asyncio.wait_for(
                             graphiti.add_episode(
-                                name=note.title,
-                                episode_body=_graphiti_safe_episode_body(note),
-                                source_description=f"Personal note {note.id} (content-filter fallback)",
-                                reference_time=note.created_at,
+                                name=document.title,
+                                episode_body=_graphiti_safe_episode_body(document),
+                                source_description=f"Personal note {document.id} (content-filter fallback)",
+                                reference_time=document.created_at,
                                 source=EpisodeType.text,
-                                group_id=self._group_id(note.user_id),
+                                group_id=self._group_id(document.user_id),
                                 entity_types=ENTITY_TYPES,
                                 custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
                             ),
@@ -333,9 +306,9 @@ class GraphitiStore:
                     ):
                         search_result = await asyncio.wait_for(
                             graphiti.search_(
-                                query=note.summary,
+                                query=document.summary,
                                 config=COMBINED_HYBRID_SEARCH_RRF,
-                                group_ids=[self._group_id(note.user_id)],
+                                group_ids=[self._group_id(document.user_id)],
                             ),
                             timeout=self.settings.graphiti.search_timeout_seconds,
                         )
@@ -346,7 +319,7 @@ class GraphitiStore:
                 except Exception:
                     logger.warning(
                         "search_after_ingest failed for note=%s, continuing without related episodes",
-                        note.id,
+                        document.id,
                     )
 
                 node_names_by_uuid = {node.uuid: node.name for node in add_result.nodes}
@@ -395,7 +368,7 @@ class GraphitiStore:
                     logging.INFO,
                     "graphiti.ingest_note.completed",
                     trace_id=trace_id,
-                    note_id=note.id,
+                    note_id=document.id,
                     attempt=attempt,
                     episode_uuid=add_result.episode.uuid,
                     entity_count=len(add_result.nodes),
@@ -708,8 +681,8 @@ class GraphitiStore:
             await driver.close()
 
 
-def _graphiti_episode_body(note: KnowledgeNote, max_chars: int = 8000) -> str:
-    content = note.content.strip()
+def _graphiti_episode_body(document: GraphIngestDocument, max_chars: int = 8000) -> str:
+    content = document.content.strip()
     if not content:
         return content
 
@@ -717,8 +690,8 @@ def _graphiti_episode_body(note: KnowledgeNote, max_chars: int = 8000) -> str:
     if lines and lines[0].startswith("Uploaded file: "):
         lines = lines[2:] if len(lines) > 1 and not lines[1].strip() else lines[1:]
 
-    is_markdown = note.source_type == "note" and Path(
-        note.source_ref
+    is_markdown = document.source_type == "note" and Path(
+        document.source_ref
     ).suffix.lower() in {".md", ".markdown"}
     if not is_markdown:
         return content[:max_chars]
@@ -759,12 +732,12 @@ def _graphiti_episode_body(note: KnowledgeNote, max_chars: int = 8000) -> str:
     return compact[:max_chars]
 
 
-def _graphiti_safe_episode_body(note: KnowledgeNote) -> str:
+def _graphiti_safe_episode_body(document: GraphIngestDocument) -> str:
     parts = [
-        f"Title: {_clean_safe_text(note.title, 240)}",
-        f"Summary: {_clean_safe_text(note.summary, 800)}",
+        f"Title: {_clean_safe_text(document.title, 240)}",
+        f"Summary: {_clean_safe_text(document.summary, 800)}",
     ]
-    excerpt = _clean_safe_text(note.content, 1200)
+    excerpt = _clean_safe_text(document.content, 1200)
     if excerpt:
         parts.append(f"Excerpt: {excerpt}")
     return "\n".join(part for part in parts if part.strip())

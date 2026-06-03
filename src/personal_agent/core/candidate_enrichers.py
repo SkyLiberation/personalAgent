@@ -7,6 +7,7 @@ from typing import Protocol
 from .config import Settings
 from .evidence import EvidenceItem, notes_to_evidence, rank_evidence_items
 from .models import Citation, KnowledgeNote
+from .projections import EvidenceSource, evidence_source_from_note
 from .query_understanding import RetrievalFilters
 
 
@@ -91,12 +92,12 @@ class ParentChildCandidateEnricher:
             added.append(note)
 
         for note in matches:
-            if note.parent_note_id:
+            if note.chunk.parent_note_id:
                 add_note(store.get_parent_note(note.id))  # type: ignore[attr-defined]
                 if self.settings.ask.neighbor_chunk_window > 0:
                     for neighbor in _neighbor_chunks(
                         note,
-                        store.get_chunks_for_parent(note.parent_note_id),  # type: ignore[attr-defined]
+                        store.get_chunks_for_parent(note.chunk.parent_note_id),  # type: ignore[attr-defined]
                         self.settings.ask.neighbor_chunk_window,
                     ):
                         add_note(neighbor)
@@ -144,13 +145,13 @@ def _neighbor_chunks(
     chunks: list[KnowledgeNote],
     window: int,
 ) -> list[KnowledgeNote]:
-    if note.chunk_index is None or window <= 0:
+    if note.chunk.index is None or window <= 0:
         return []
     return [
         chunk for chunk in chunks
         if chunk.id != note.id
-        and chunk.chunk_index is not None
-        and abs(chunk.chunk_index - note.chunk_index) <= window
+        and chunk.chunk.index is not None
+        and abs(chunk.chunk.index - note.chunk.index) <= window
     ]
 
 
@@ -161,11 +162,10 @@ def _note_by_id(notes: list[KnowledgeNote], note_id: str) -> KnowledgeNote | Non
     return None
 
 
-def _term_overlap(question: str, note: KnowledgeNote) -> int:
+def _term_overlap(question: str, note: KnowledgeNote | EvidenceSource) -> int:
+    source = evidence_source_from_note(note) if isinstance(note, KnowledgeNote) else note
     question_terms = _terms(question)
-    content_terms = _terms(
-        " ".join([note.title, note.summary, note.preextract_topic or "", note.content])
-    )
+    content_terms = _terms(" ".join([source.title, source.summary, source.content]))
     return len(question_terms & content_terms)
 
 
@@ -183,26 +183,27 @@ def _terms(text: str) -> set[str]:
 
 
 def _notes_to_citations(notes: list[KnowledgeNote]) -> list[Citation]:
+    sources = [evidence_source_from_note(note) for note in notes]
     return [
-        Citation(note_id=note.id, title=note.title, snippet=note.summary[:120])
-        for note in notes
+        Citation(note_id=source.id, title=source.title, snippet=source.summary[:120])
+        for source in sources
     ]
 
 
 def _note_matches_filters(note: KnowledgeNote, filters: RetrievalFilters | None) -> bool:
     if filters is None or not filters.active():
         return True
-    if filters.source_types and note.source_type not in filters.source_types:
+    if filters.source_types and note.source.type not in filters.source_types:
         return False
     if filters.parent_note_id.strip():
         parent_id = filters.parent_note_id.strip()
-        if note.id != parent_id and note.parent_note_id != parent_id:
+        if note.id != parent_id and note.chunk.parent_note_id != parent_id:
             return False
     if filters.source_ref_contains.strip():
-        if filters.source_ref_contains.strip().lower() not in (note.source_ref or "").lower():
+        if filters.source_ref_contains.strip().lower() not in (note.source.ref or "").lower():
             return False
     if filters.metadata_contains.strip():
-        metadata_text = " ".join(str(value) for value in note.metadata.values()).lower()
+        metadata_text = " ".join(str(value) for value in note.source.metadata.values()).lower()
         if filters.metadata_contains.strip().lower() not in metadata_text:
             return False
     if filters.tags:

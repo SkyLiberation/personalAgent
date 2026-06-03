@@ -222,7 +222,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         )
 
     deps.memory.bind_session(state.user_id, state.session_id)
-    conversation_messages = _entry_conversation_messages(state, exclude_latest=True)
+    conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
     decision = deps.intent_router.classify(
         state.entry_input,
         conversation_messages=conversation_messages,
@@ -274,7 +274,7 @@ def _node_plan_task(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """
     route = state.router_decision.route if state.router_decision else "unknown"
     entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
-    planning_messages = _entry_conversation_messages(state, exclude_latest=True)
+    planning_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
     steps = deps.planner.plan(route, entry_text, conversation_messages=planning_messages)
     plan_states = [PlanStepState.from_plan_step(s) for s in steps]
 
@@ -403,12 +403,12 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
                     source_ref=entry_input.source_ref or file_path,
                     metadata=capture_metadata,
                 )
-                state.answer = f"已收进知识库：{result.note.title}"
+                state.answer = f"已收进知识库：{result.note.body.title}"
                 state.execution_trace = _execution_trace_for_intent(intent)
                 state.add_event("tool_result", {
                     "tool_name": "capture_file",
-                    "title": result.note.title,
-                    "content_preview": result.note.content[:800],
+                    "title": result.note.body.title,
+                    "content_preview": result.note.body.content[:800],
                 })
                 return {
                     "answer": state.answer,
@@ -446,12 +446,12 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
         source_ref=source_ref,
         metadata=capture_metadata,
     )
-    state.answer = f"已收进知识库：{result.note.title}"
+    state.answer = f"已收进知识库：{result.note.body.title}"
     state.execution_trace = _execution_trace_for_intent(intent)
     state.add_event("tool_result", {
         "tool_name": "capture_text" if intent == "capture_text" else "capture_link",
-        "title": result.note.title,
-        "content_preview": result.note.content[:800],
+        "title": result.note.body.title,
+        "content_preview": result.note.body.content[:800],
     })
     return {
         "answer": state.answer,
@@ -469,7 +469,7 @@ def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
         return {"answer": state.answer}
 
     logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
-    conversation_messages = _entry_conversation_messages(state, exclude_latest=True)
+    conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
     result = deps.execute_ask(
         entry_input.text,
         entry_input.user_id,
@@ -480,7 +480,7 @@ def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
     state.citations = result.citations
     state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
     state.matches = [
-        {"id": m.id, "title": m.title, "summary": m.summary}
+        {"id": m.id, "title": m.body.title, "summary": m.body.summary}
         for m in (result.matches or [])
     ]
     return {
@@ -583,7 +583,10 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
                 timeout=deps.settings.openai.timeout_seconds,
                 max_retries=deps.settings.openai.max_retries,
             )
-            dialogue_messages = _dialogue_prompt_messages(state.messages)
+            dialogue_messages = _dialogue_prompt_messages(
+                state.messages,
+                cfg=getattr(deps.settings, "short_term", None),
+            )
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
             system_content = "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"
@@ -611,10 +614,36 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
 
 
 def _entry_conversation_messages(
-    state: AgentGraphState, *, exclude_latest: bool = True
+    state: AgentGraphState,
+    *,
+    exclude_latest: bool = True,
+    deps: "OrchestrationDeps | None" = None,
 ) -> list[dict[str, str]]:
-    """Return structured thread dialogue from checkpoint messages."""
-    return _dialogue_prompt_messages(state.messages, exclude_latest=exclude_latest)
+    """Return structured thread dialogue from checkpoint messages.
+
+    When ``deps`` is provided, applies the unified short-term策略 (token 预算 +
+    单条截断 + 溢出滚动摘要)；否则回退到默认窗口（无摘要）。
+    """
+    from ...core.config import ShortTermMemoryConfig
+    from ..short_term_context import build_dialogue_context
+
+    if deps is None:
+        return _dialogue_prompt_messages(state.messages, exclude_latest=exclude_latest)
+
+    cfg = getattr(deps.settings, "short_term", None) or ShortTermMemoryConfig()
+    summarizer = None
+    if deps.summarize_thread is not None:
+        user_id = state.user_id or "default"
+
+        def summarizer(text: str) -> str:
+            return deps.summarize_thread(text, user_id)
+
+    return build_dialogue_context(
+        state.messages,
+        cfg,
+        exclude_latest=exclude_latest,
+        summarizer=summarizer,
+    )
 
 
 # ---------------------------------------------------------------------------

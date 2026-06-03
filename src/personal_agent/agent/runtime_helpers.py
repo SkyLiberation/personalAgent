@@ -125,9 +125,9 @@ def _best_snippet(note: KnowledgeNote, hit: GraphCitationHit, question: str) -> 
     best_score = -1
     question_keywords = _extract_question_keywords(question)
     fact_tokens = _tokenize_for_overlap(hit.relation_fact)
-    entity_names = [n for n in (hit.endpoint_names or note.entity_names or []) if len(n) >= 2]
+    entity_names = [n for n in (hit.endpoint_names or note.graph.entity_names or []) if len(n) >= 2]
 
-    for part in _split_sentences(note.content):
+    for part in _split_sentences(note.body.content):
         if len(part) < 10:
             continue
         score = 0
@@ -157,7 +157,7 @@ def _best_snippet(note: KnowledgeNote, hit: GraphCitationHit, question: str) -> 
     # Weak anchoring: return summary with a marker
     if best_part:
         return best_part[:160]
-    return note.summary[:160]
+    return note.body.summary[:160]
 
 
 def _tokenize_for_overlap(text: str) -> set[str]:
@@ -218,14 +218,14 @@ def _evidence_content(note: KnowledgeNote) -> str:
     documents into prompts. Chunk notes and standalone short notes use
     content directly.
     """
-    if note.parent_note_id is not None:
+    if note.chunk.parent_note_id is not None:
         # Chunk note — content is already focused
-        return note.content[:500]
-    if note.chunk_index == 0:
+        return note.body.content[:500]
+    if note.chunk.index == 0:
         # Parent note — use summary to keep prompts compact
-        return note.summary
+        return note.body.summary
     # Standalone note — use content
-    return note.content[:500]
+    return note.body.content[:500]
 
 
 def _top_sentences(text: str, limit: int = 3) -> list[str]:

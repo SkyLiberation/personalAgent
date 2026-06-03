@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-from ..core.models import AgentState, Citation, KnowledgeNote, ReviewCard, local_now
+from ..core.models import (
+    AgentState,
+    Citation,
+    ChunkDraft,
+    KnowledgeNote,
+    NoteBody,
+    NoteChunk,
+    NotePreExtract,
+    NoteSource,
+    ReviewCard,
+    local_now,
+)
 from ..extract import PreExtractService
-from ..extract.schemas import SectionMap, SectionRecord
+from ..extract.schemas import SectionMap
+from ..extract.schemas import SectionRecord
 from ..storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
@@ -22,58 +34,44 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     summary = content[:120]
     tags = _extract_tags(content)
 
+    state.note = KnowledgeNote(
+        user_id=state.raw_item.user_id,
+        source=NoteSource(
+            type=state.raw_item.source_type,
+            ref=state.raw_item.source_ref,
+            fingerprint=state.raw_item.source_fingerprint,
+            metadata=metadata,
+        ),
+        body=NoteBody(title=title or "Untitled note", content=content, summary=summary),
+        tags=tags,
+        updated_at=local_now(),
+    )
+    state.chunk_drafts = []
+    state.chunk_notes = []
+    return state
+
+
+def structural_chunk_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+    """Create deterministic chunk drafts without committing final chunk notes."""
+    if state.note is None or state.raw_item is None:
+        return state
+
     from ..core.chunking import chunk_content
 
-    chunks = chunk_content(content, state.raw_item.source_type)
-
+    chunks = chunk_content(state.note.body.content, state.raw_item.source_type)
     if len(chunks) <= 1:
-        note = KnowledgeNote(
-            user_id=state.raw_item.user_id,
-            source_type=state.raw_item.source_type,
-            source_ref=state.raw_item.source_ref,
-            source_fingerprint=state.raw_item.source_fingerprint,
-            metadata=metadata,
-            title=title or "Untitled note",
-            content=content,
-            summary=summary,
-            tags=tags,
-            updated_at=local_now(),
+        state.chunk_drafts = []
+        return state
+
+    state.note.chunk.index = 0
+    state.chunk_drafts = [
+        ChunkDraft(
+            title=ch["title"],
+            content=ch["content"],
+            source_span=ch["source_span"],
         )
-        state.note = note
-        state.chunk_notes = []
-    else:
-        parent = KnowledgeNote(
-            user_id=state.raw_item.user_id,
-            source_type=state.raw_item.source_type,
-            source_ref=state.raw_item.source_ref,
-            source_fingerprint=state.raw_item.source_fingerprint,
-            metadata=metadata,
-            title=title or "Untitled document",
-            content=content,
-            summary=summary,
-            tags=tags,
-            chunk_index=0,
-            updated_at=local_now(),
-        )
-        chunk_notes: list[KnowledgeNote] = []
-        for i, ch in enumerate(chunks, 1):
-            chunk_notes.append(KnowledgeNote(
-                user_id=state.raw_item.user_id,
-                source_type=state.raw_item.source_type,
-                source_ref=state.raw_item.source_ref,
-                source_fingerprint=state.raw_item.source_fingerprint,
-                metadata=metadata,
-                title=ch["title"],
-                content=ch["content"],
-                summary=ch["content"][:120].replace("\n", " "),
-                tags=_extract_tags(ch["content"]),
-                parent_note_id=parent.id,
-                chunk_index=i,
-                source_span=ch["source_span"],
-                updated_at=local_now(),
-            ))
-        state.note = parent
-        state.chunk_notes = chunk_notes
+        for ch in chunks
+    ]
     return state
 
 
@@ -84,46 +82,103 @@ def preextract_node(
 ) -> AgentState:
     """Run lightweight LangExtract pre-extraction.
 
-    Records section_map / preextract_status on the parent note. If the service
-    returns >= 2 sections, replace the mechanical chunks with section-based
-    chunks (so downstream graphiti only deep-extracts on graph_worthy ones).
-    Short docs / runtime failures fall through to capture_node's mechanical
-    chunks with a status marker on the note.
+    Records section_map / preextract_status on the parent note. This node does
+    not create or replace chunk notes; chunk materialization is handled by
+    chunk_reconcile_node.
     """
     if state.note is None or state.raw_item is None:
         return state
 
-    if not service.should_run(state.note.content):
-        state.note.preextract_status = "skipped"
+    if not service.should_run(state.note.body.content):
+        state.note.preextract.status = "skipped"
         return state
 
     try:
-        section_map = service.extract(state.note.content)
+        section_map = service.extract(state.note.body.content)
     except Exception as exc:  # noqa: BLE001 — boundary
         logger.warning("preextract_node failed user=%s err=%s", state.note.user_id, exc)
-        state.note.preextract_status = "failed"
+        state.note.preextract.status = "failed"
         return state
 
-    state.note.section_map = section_map.model_dump(mode="json") if section_map.sections else None
-    state.note.preextract_status = "ok" if section_map.sections else "skipped"
+    state.note.preextract.section_map = section_map.model_dump(mode="json") if section_map.sections else None
+    state.note.preextract.status = "ok" if section_map.sections else "skipped"
     if section_map.doc_topic:
-        state.note.preextract_topic = section_map.doc_topic
+        state.note.preextract.topic = section_map.doc_topic
     if section_map.sections:
         # Mark parent with aggregate graph_worthy: True if any section is worthy.
-        state.note.graph_worthy = any(s.graph_worthy for s in section_map.sections)
+        state.note.preextract.graph_worthy = any(s.graph_worthy for s in section_map.sections)
 
+    return state
+
+
+def chunk_reconcile_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+    """Build final chunk notes from semantic sections or structural drafts."""
+    if state.note is None or state.raw_item is None:
+        return state
+
+    section_map = (
+        SectionMap.model_validate(state.note.preextract.section_map)
+        if state.note.preextract.section_map
+        else SectionMap()
+    )
     if len(section_map.sections) >= 2:
+        state.note.chunk.index = 0
         state.chunk_notes = _chunk_notes_from_sections(
             state.note,
             state.raw_item,
             section_map.sections,
         )
-    else:
-        # Single-section / single-note path: tag the note itself with worthy flag.
-        for chunk in state.chunk_notes:
-            chunk.graph_worthy = state.note.graph_worthy
+        return state
 
+    state.chunk_notes = _chunk_notes_from_drafts(
+        state.note,
+        state.raw_item,
+        state.chunk_drafts,
+        graph_worthy=state.note.preextract.graph_worthy,
+    )
+    if state.chunk_notes:
+        state.note.chunk.index = 0
     return state
+
+
+def _chunk_notes_from_drafts(
+    parent: KnowledgeNote,
+    raw_item,
+    drafts: list[ChunkDraft],
+    *,
+    graph_worthy: bool | None,
+) -> list[KnowledgeNote]:
+    chunks: list[KnowledgeNote] = []
+    for i, draft in enumerate(drafts, 1):
+        chunks.append(
+            KnowledgeNote(
+                user_id=raw_item.user_id,
+                source=NoteSource(
+                    type=raw_item.source_type,
+                    ref=raw_item.source_ref,
+                    fingerprint=raw_item.source_fingerprint,
+                    metadata=dict(raw_item.metadata or {}),
+                ),
+                body=NoteBody(
+                    title=draft.title,
+                    content=draft.content,
+                    summary=draft.content[:120].replace("\n", " "),
+                ),
+                tags=_extract_tags(draft.content),
+                chunk=NoteChunk(
+                    parent_note_id=parent.id,
+                    index=i,
+                    source_span=draft.source_span,
+                ),
+                preextract=NotePreExtract(
+                    graph_worthy=graph_worthy,
+                    status=parent.preextract.status,
+                    topic=parent.preextract.topic,
+                ),
+                updated_at=local_now(),
+            )
+        )
+    return chunks
 
 
 def _chunk_notes_from_sections(
@@ -132,7 +187,7 @@ def _chunk_notes_from_sections(
     sections: list[SectionRecord],
 ) -> list[KnowledgeNote]:
     chunks: list[KnowledgeNote] = []
-    full_text = parent.content
+    full_text = parent.body.content
     for i, section in enumerate(sections, 1):
         start = max(0, section.char_start)
         end = section.char_end if section.char_end > start else len(full_text)
@@ -141,20 +196,24 @@ def _chunk_notes_from_sections(
         chunks.append(
             KnowledgeNote(
                 user_id=raw_item.user_id,
-                source_type=raw_item.source_type,
-                source_ref=raw_item.source_ref,
-                source_fingerprint=raw_item.source_fingerprint,
-                metadata=dict(raw_item.metadata or {}),
-                title=title[:80],
-                content=body,
-                summary=(section.summary or body[:120]).replace("\n", " "),
+                source=NoteSource(
+                    type=raw_item.source_type,
+                    ref=raw_item.source_ref,
+                    fingerprint=raw_item.source_fingerprint,
+                    metadata=dict(raw_item.metadata or {}),
+                ),
+                body=NoteBody(
+                    title=title[:80],
+                    content=body,
+                    summary=(section.summary or body[:120]).replace("\n", " "),
+                ),
                 tags=_extract_tags(body),
-                parent_note_id=parent.id,
-                chunk_index=i,
-                source_span=f"{start}-{end}",
-                graph_worthy=section.graph_worthy,
-                preextract_status="ok",
-                preextract_topic=section.topic or None,
+                chunk=NoteChunk(parent_note_id=parent.id, index=i, source_span=f"{start}-{end}"),
+                preextract=NotePreExtract(
+                    graph_worthy=section.graph_worthy,
+                    status="ok",
+                    topic=section.topic or None,
+                ),
                 updated_at=local_now(),
             )
         )
@@ -165,9 +224,9 @@ def enrich_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if state.note is None:
         return state
 
-    state.note.summary = summarize_text(state.note.content)
+    state.note.body.summary = summarize_text(state.note.body.content)
     if not state.note.tags:
-        state.note.tags = _extract_tags(state.note.content)
+        state.note.tags = _extract_tags(state.note.body.content)
     return state
 
 
@@ -175,7 +234,7 @@ def link_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     if state.note is None:
         return state
 
-    matches = store.find_similar_notes(state.note.user_id, state.note.content)
+    matches = store.find_similar_notes(state.note.user_id, state.note.body.content)
     state.matches = matches
     state.note.related_note_ids = [match.id for match in matches]
     store.add_note(state.note)
@@ -190,8 +249,8 @@ def schedule_review_node(state: AgentState, store: PostgresMemoryStore) -> Agent
 
     review = ReviewCard(
         note_id=state.note.id,
-        prompt=f"请用一句话回忆：{state.note.summary}",
-        answer_hint=state.note.summary,
+        prompt=f"请用一句话回忆：{state.note.body.summary}",
+        answer_hint=state.note.body.summary,
         interval_days=1,
         due_at=local_now() + timedelta(days=1),
     )
@@ -212,9 +271,9 @@ def answer_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
         return state
 
     best = matches[0]
-    state.answer = f"根据你已有的笔记，最相关的结论是：{best.summary}"
+    state.answer = f"根据你已有的笔记，最相关的结论是：{best.body.summary}"
     state.citations = [
-        Citation(note_id=note.id, title=note.title, snippet=note.summary[:80]) for note in matches
+        Citation(note_id=note.id, title=note.body.title, snippet=note.body.summary[:80]) for note in matches
     ]
     return state
 
@@ -225,7 +284,7 @@ def digest_node(store: PostgresMemoryStore, user_id: str) -> str:
     lines = ["今日知识简报"]
     if notes:
         lines.append("最近新增笔记：")
-        lines.extend(f"- {note.title}: {note.summary}" for note in notes)
+        lines.extend(f"- {note.body.title}: {note.body.summary}" for note in notes)
     if due:
         lines.append("待复习内容：")
         lines.extend(f"- {review.prompt}" for review in due)

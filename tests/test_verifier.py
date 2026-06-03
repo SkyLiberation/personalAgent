@@ -3,10 +3,11 @@ from __future__ import annotations
 from personal_agent.agent.verifier import AnswerVerifier, VerificationResult
 from personal_agent.core.evidence import EvidenceItem
 from personal_agent.core.models import Citation, KnowledgeNote
+from tests.note_factory import make_note
 
 
 def _note(note_id: str, title: str = "测试笔记") -> KnowledgeNote:
-    return KnowledgeNote(
+    return make_note(
         id=note_id,
         title=title,
         content=f"{title}的正文内容。",

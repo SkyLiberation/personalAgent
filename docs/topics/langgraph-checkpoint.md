@@ -164,9 +164,9 @@ START → react_init → react_iterate ⇄ react_tool_node → consume_react_too
 
 **安全限制：** 只允许只读检索工具（`graph_search`/`web_search`），高风险写操作被 `_is_react_tool_blocked()` 阻断。默认最多 `_REACT_MAX_ITERATIONS_CAP`（3）轮迭代，达到上限后状态为 `exhausted`。
 
-### 子图 4：CaptureGraph（独立子图，不在 entry 编排内）
+### Capture 分支
 
-`build_capture_graph()` 是独立的采集子图，用于 `execute_capture()` 流程，不在 entry orchestration 父图内。其结构为：文本/链接输入 → 增强 → 关联 → 复习调度。
+Capture 不再维护独立 LangGraph 子图。`execute_capture()` 直接调用 `run_capture_flow()` 执行确定性业务节点：采集归一 → 结构 chunk 草案 → LangExtract 预抽取 → chunk 调和 → 增强 → 关联 → 复习调度。entry orchestration 父图只负责路由到 `_node_capture_branch()`，不会为 capture 额外 compile 子图。
 
 ---
 

@@ -11,6 +11,7 @@ from ._deps import OrchestrationDeps, _REACT_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from ._deps import PlanStep
+    from ...core.config import ShortTermMemoryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -167,22 +168,38 @@ def _merge_clarification_text(original: str, supplemental: str, option_id: str) 
     return supplemental
 
 
-def _dialogue_history(messages: list[BaseMessage], *, exclude_latest: bool = False) -> list[BaseMessage]:
+def _dialogue_history(
+    messages: list[BaseMessage],
+    *,
+    exclude_latest: bool = False,
+    cfg: "ShortTermMemoryConfig | None" = None,
+) -> list[BaseMessage]:
     """Return recent user-visible dialogue messages for prompt context."""
+    from ...core.config import ShortTermMemoryConfig
+
+    max_messages = (cfg or ShortTermMemoryConfig()).max_messages
     history = messages[:-1] if exclude_latest and messages else messages
-    return [message for message in history[-12:] if message.type in {"human", "ai"}]
+    return [
+        message
+        for message in history[-max_messages:]
+        if message.type in {"human", "ai"}
+    ]
 
 
 def _dialogue_prompt_messages(
-    messages: list[BaseMessage], *, exclude_latest: bool = False
+    messages: list[BaseMessage],
+    *,
+    exclude_latest: bool = False,
+    cfg: "ShortTermMemoryConfig | None" = None,
 ) -> list[dict[str, str]]:
-    return [
-        {
-            "role": "assistant" if message.type == "ai" else "user",
-            "content": str(message.content),
-        }
-        for message in _dialogue_history(messages, exclude_latest=exclude_latest)
-    ]
+    """Token-budgeted, single-message-truncated dialogue window for prompts."""
+    from ...core.config import ShortTermMemoryConfig
+    from ..short_term_context import apply_window
+
+    window = apply_window(
+        messages, cfg or ShortTermMemoryConfig(), exclude_latest=exclude_latest
+    )
+    return window.kept
 
 
 def _format_solidify_candidate_context(messages: list[BaseMessage]) -> str:

@@ -15,11 +15,12 @@ from personal_agent.graphiti.store import (
     GraphFactRef,
     GraphNodeRef,
 )
+from tests.note_factory import make_note
 
 
 def _note(note_id: str, title: str = "测试笔记", episode_uuid: str | None = None,
           parent_note_id: str | None = None, source_span: str | None = None) -> KnowledgeNote:
-    return KnowledgeNote(
+    return make_note(
         id=note_id, title=title,
         content=f"{title}的正文内容。", summary=f"{title}摘要",
         graph_episode_uuid=episode_uuid,

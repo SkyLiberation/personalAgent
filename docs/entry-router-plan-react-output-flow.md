@@ -382,10 +382,10 @@ START
 - `capture_link`：提取 URL，调用 `CaptureService.capture_text_from_url()` 抓取正文，再调用 `execute_capture()`。
 - `capture_text`：直接调用 `execute_capture()`。
 
-`execute_capture()` 继续走 capture graph：
+`execute_capture()` 继续走 capture flow：
 
 ```text
-capture -> enrich -> link -> schedule_review
+capture -> structural_chunk -> preextract -> chunk_reconcile -> enrich -> link -> schedule_review
 ```
 
 然后尝试调用 `graph_store.ingest_note()` 写入 Graphiti。如果成功，会把 episode、entity、relation、node/edge/fact refs 合并回 note；如果失败，会记录 `graph_sync_status="failed"`。
@@ -400,9 +400,9 @@ capture -> enrich -> link -> schedule_review
 Graphiti graph ask
   -> 如果证据充分，直接返回
   -> 否则合并本地检索
-Local memory ask graph
-  -> build_ask_graph(answer_node)
-  -> 本地笔记 matches/citations
+Local memory retrieval
+  -> 本地 lexical/vector/parent-child evidence pipeline
+  -> 本地笔记 matches/citations/evidence
 Web search fallback
   -> 证据不足且 web_search 可用时触发
 ```

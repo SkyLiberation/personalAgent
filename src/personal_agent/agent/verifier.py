@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.models import Citation, KnowledgeNote
+from ..core.projections import MatchRef, match_ref_from_note
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +59,17 @@ class AnswerVerifier:
         question: str,
         answer: str,
         citations: list[Citation],
-        matches: list[KnowledgeNote],
+        matches: list[KnowledgeNote | MatchRef],
         web_enabled: bool = False,
         evidence: list | None = None,
     ) -> VerificationResult:
         issues: list[str] = []
         warnings: list[str] = []
-        match_ids = {note.id for note in matches}
+        match_refs = [
+            match_ref_from_note(match) if isinstance(match, KnowledgeNote) else match
+            for match in matches
+        ]
+        match_ids = {match.id for match in match_refs}
 
         # Separate note-based and web-based citations
         note_citations = [c for c in citations if c.source_type != "web"]

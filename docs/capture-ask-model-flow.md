@@ -6,8 +6,9 @@
 
 - [src/personal_agent/web/api.py](../src/personal_agent/web/api.py)
 - [src/personal_agent/agent/runtime_capture.py](../src/personal_agent/agent/runtime_capture.py)
+- [src/personal_agent/agent/graph_capture_flow.py](../src/personal_agent/agent/graph_capture_flow.py)
 - [src/personal_agent/agent/runtime_ask.py](../src/personal_agent/agent/runtime_ask.py)
-- [src/personal_agent/agent/graph.py](../src/personal_agent/agent/graph.py)
+- [src/personal_agent/agent/capture_flow.py](../src/personal_agent/agent/capture_flow.py)
 - [src/personal_agent/agent/nodes.py](../src/personal_agent/agent/nodes.py)
 - [src/personal_agent/core/models.py](../src/personal_agent/core/models.py)
 - [src/personal_agent/core/evidence.py](../src/personal_agent/core/evidence.py)
@@ -22,7 +23,7 @@
 当前架构已经具备 RAG 的基本闭环：
 
 ```text
-capture: 原始输入 -> note -> LangExtract 预抽取(SectionMap) -> 按 section 切 chunk -> 本地存储 -> graph_worthy=True 的 chunk 入 Graphiti
+capture: 原始输入 -> RawIngestItem -> 确定性 parent/chunk 草案 -> LangExtract 预抽取(SectionMap) -> 可选语义重建/标注 chunk -> 本地存储 -> graph_worthy=True 的 chunk 入 Graphiti
 ask: question -> QueryUnderstanding -> RetrievalPlan -> graph(Graphiti/GraphRAG)+local 并行/web 主动 -> EvidenceItem -> ContextPack -> 生成 -> 校验
 ```
 
@@ -38,7 +39,7 @@ ask: question -> QueryUnderstanding -> RetrievalPlan -> graph(Graphiti/GraphRAG)
 | RAG 层 | 优秀架构通常具备 | 当前实现 | 主要差距 |
 | --- | --- | --- | --- |
 | Ingestion | 文档解析、清洗、结构保留、元数据抽取、增量更新 | `CaptureService` 提取正文，`RawIngestItem` 承载来源、metadata 和 source fingerprint；重复 fingerprint 默认复用已有 note | 元数据自动抽取仍较少，缺少版本更新和权限细粒度策略 |
-| Chunking | 语义切分、层级 chunk、标题路径、窗口重叠 | LangExtract 预抽取产出 `SectionMap`，按语义 section 替换机械 chunk；每个 chunk 携带 `graph_worthy / preextract_topic / source_span`；local retrieval 已支持 chunk 命中后展开 parent/neighbor | 仍缺标题路径回填、窗口重叠和页码/章节等结构化定位 |
+| Chunking | 语义切分、层级 chunk、标题路径、窗口重叠 | `core.chunking` 先产出确定性的 parent/chunk 草案；LangExtract 预抽取产出 `SectionMap`，再由 chunk 调和层按语义 section 替换或标注机械 chunk；每个 chunk 携带 `preextract.graph_worthy / preextract.topic / chunk.source_span`；local retrieval 已支持 chunk 命中后展开 parent/neighbor | 仍缺标题路径回填、窗口重叠和页码/章节等结构化定位 |
 | Indexing | 向量索引、全文/倒排索引（FTS/BM25 打分）、图谱、关键词、时间索引并存 | Postgres FTS + pg_trgm + pgvector 本地索引；Graphiti 实体关系图（按 `graph_worthy` 路由仅入高价值 chunk）；GraphRAG parent-section 结构图 provider 已接入生产 ask 并有缓存索引；local/vector 已支持 metadata filters 下推 | 尚缺向量重建/回填任务、GraphRAG/Graphiti 混合融合策略和更强跨来源统一 rerank |
 | Query Understanding | 改写、分解、时效识别、过滤条件、检索计划 | `QueryUnderstanding` 模型 + `query_planner.py` 优先用 LangExtract LLM 的 strict json_schema 做 query rewrite / 意图识别 / 子查询分解 / filters 抽取 | filters 已进入 local/vector 检索和 graph note 映射过滤；复杂自然语言时间范围仍需增强 |
 | Retrieval | 多路召回、元数据过滤、parent-child 展开 | `RetrievalPlan` 动态路由，graph+local 并行（ThreadPoolExecutor），graph provider 可切换 Graphiti/GraphRAG，web 按 freshness 主动触发，子查询分解多跳检索；local/vector 已支持 metadata filters 和 parent/neighbor 展开 | Graphiti 原生 metadata 过滤、GraphRAG 与 local 去重/融合权重、web freshness window、raw candidate debug 仍需增强 |
@@ -58,8 +59,9 @@ Capture / Indexing Pipeline
   -> Source normalization
   -> Content extraction
   -> Cleaning + metadata enrichment
+  -> Structural note/chunk draft (deterministic heading/paragraph fallback)
   -> LangExtract pre-extraction (SectionMap, graph_worthy 路由)
-  -> Semantic chunking (按 SectionMap 切)
+  -> Semantic chunk reconciliation (>=2 sections 时重建 chunk，否则保留草案并标注)
   -> Local document store
   -> Local lexical/vector indexes
   -> Graph extraction / Graphiti episode (仅 graph_worthy=True 的 chunk)
@@ -80,6 +82,200 @@ Ask / Retrieval-Augmented Generation Pipeline
 
 当前代码已经覆盖其中大部分在线主链路：所有来源会先变成 `EvidenceItem`，再由工厂装配的 reranker 和 `ContextPack` 的 context assembly 决定哪些证据进入 prompt。剩余重点是验证 LLM rerank 的真实收益、补齐 MMR/压缩/更强 verifier，并完善评测和质量治理。
 
+### Model / Layer 依赖类图
+
+这张图描述“层如何消费模型”，不是 Python 继承关系。为了表达分层，使用 `flowchart + subgraph`：
+
+- 蓝色节点是处理层。
+- 白色节点是已落地的模型。
+- 绿色节点是已落地的 projection / read model（`projections.py`，已被多层真实消费）。
+- 黄色虚线节点是尚未落地的未来可观测性模型（仅 `RetrievalCandidate` / `VerificationReport`）。
+- 红色虚线箭头是绕过统一证据池（ContextPack）的 hint 旁路，属于已知技术债，不是设计意图。
+
+`KnowledgeNote` 保留为 persistence schema，各业务层应尽量消费 projection。注意 `projections.py` 中的 `RetrievalDocument / GraphIngestDocument / MatchRef / EvidenceSource` 已不是“未来”——它们已被 graphrag/graphiti/postgres/verifier 等层真实依赖。
+
+采集侧的分层边界需要特别明确：
+
+- `CaptureLayer` 负责来源归一、正文提取、去重决策，并产出可落库的 parent/chunk 草案；它必须是确定性的，保证 LangExtract 跳过或失败时仍有稳定的笔记结构。
+- `PreExtractLayer` 只负责语义预抽取，产出 `SectionMap`、`topic`、`graph_worthy` 和 source span；它不拥有采集事实，也不直接落库。
+- `ChunkReconcileLayer` 是两者之间的薄编排层：当 `SectionMap.sections >= 2` 时用语义 section 重建 chunk；否则保留 `CaptureLayer` 的机械 chunk，并只把预抽取状态写到 `NotePreExtract`。
+- `GraphIngestLayer` 只消费已经稳定下来的 `GraphIngestDocument`，并根据 `graph_worthy` 做深抽取路由，避免图谱摄取反向影响采集结构。
+
+```mermaid
+flowchart LR
+    classDef layer fill:#e8f1ff,stroke:#4f7ccf,stroke-width:1px,color:#10233f
+    classDef model fill:#ffffff,stroke:#9aa4b2,stroke-width:1px,color:#172033
+    classDef projection fill:#e9f9ee,stroke:#2e9e5b,stroke-width:1px,color:#0c3b22
+    classDef future fill:#fff7e6,stroke:#d08b00,stroke-dasharray: 5 3,color:#3b2a00
+    classDef pipeline fill:#f4f6fb,stroke:#3a4f7a,stroke-width:2px,color:#10233f
+
+    subgraph Ingest["Ingest Pipeline"]
+        direction TB
+
+        subgraph Capture["Capture / Indexing"]
+            direction TB
+            EntryLayer["入口层<br/>route intent<br/>bind user/session<br/>normalize source scope"]:::layer
+            EntryInput["EntryInput<br/>text: 用户输入<br/>user_id/session_id<br/>source_type/source_ref<br/>metadata"]:::model
+            CaptureLayer["采集层<br/>extract content<br/>fingerprint dedupe<br/>duplicate skip / version decision"]:::layer
+            RawIngestItem["RawIngestItem<br/>content: 入库正文<br/>source_type/source_ref<br/>metadata<br/>source_fingerprint"]:::model
+            StructuralChunkLayer["结构切分层<br/>deterministic heading/paragraph chunking<br/>build parent/chunk draft<br/>fallback owner"]:::layer
+            ChunkDraft["ChunkDraft<br/>title/content/source_span<br/>mechanical boundaries<br/>not persisted directly"]:::model
+            PreExtractLayer["语义预抽取层<br/>SectionMap only<br/>topic / graph_worthy<br/>source_span grounding"]:::layer
+            SectionMap["SectionMap<br/>doc_topic<br/>sections: SectionRecord[]"]:::model
+            SectionRecord["SectionRecord<br/>topic/summary<br/>char_start/char_end<br/>contains_entities<br/>information_density<br/>graph_worthy<br/>reason"]:::model
+            ChunkReconcileLayer["chunk 调和层<br/>&gt;=2 sections: rebuild chunks<br/>0/1 section: keep draft<br/>stamp preextract status"]:::layer
+            KnowledgeNote["KnowledgeNote<br/>persistence aggregate<br/>id/user_id<br/>tags/related_note_ids<br/>created_at/updated_at"]:::model
+            NoteSource["NoteSource<br/>type/ref/fingerprint<br/>metadata"]:::model
+            NoteBody["NoteBody<br/>title<br/>content<br/>summary"]:::model
+            NoteChunk["NoteChunk<br/>parent_note_id<br/>index<br/>source_span"]:::model
+            NotePreExtract["NotePreExtract<br/>section_map<br/>graph_worthy<br/>status<br/>topic"]:::model
+            NoteGraphKnowledge["NoteGraphKnowledge<br/>episode_uuid<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs"]:::model
+            NoteGraphSync["NoteGraphSync<br/>status<br/>error"]:::model
+            NoteGraphQuality["NoteGraphQuality<br/>entity_count<br/>relation_count<br/>avg_fact_length<br/>zero_entities<br/>weak_relations_only"]:::model
+            EvidenceSource["EvidenceSource<br/>projection (landed)<br/>id/title/content/summary<br/>source metadata<br/>parent_note_id/source_span"]:::projection
+            RetrievalDocument["RetrievalDocument<br/>projection (landed)<br/>title/summary/content<br/>tags/metadata<br/>parent/chunk refs<br/>preextract/entity/relation terms"]:::projection
+            GraphIngestDocument["GraphIngestDocument<br/>projection (landed)<br/>id/user_id/title<br/>content/summary<br/>source metadata<br/>created_at"]:::projection
+            IndexLayer["本地索引层<br/>persist notes<br/>FTS / pg_trgm / pgvector<br/>graph sync status"]:::layer
+            ReviewLayer["回顾任务层<br/>schedule review<br/>due_at / interval<br/>prompt + answer hint"]:::layer
+            ReviewCard["ReviewCard<br/>id/note_id<br/>prompt<br/>answer_hint<br/>interval_days<br/>due_at"]:::model
+            GraphIngestLayer["图谱摄取层<br/>entity extraction<br/>relation extraction<br/>episode mapping"]:::layer
+            GraphCaptureResult["GraphCaptureResult<br/>enabled/error<br/>episode_uuid<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs"]:::model
+            GraphWritebackLayer["图谱回写编排层<br/>merge GraphCaptureResult<br/>update graph knowledge/sync/quality<br/>persist updated note"]:::layer
+
+            EntryLayer --> EntryInput
+            EntryInput --> CaptureLayer
+            CaptureLayer --> RawIngestItem
+            CaptureLayer -. duplicate .-> KnowledgeNote
+            RawIngestItem --> StructuralChunkLayer
+            StructuralChunkLayer --> ChunkDraft
+            RawIngestItem --> PreExtractLayer
+            PreExtractLayer --> SectionMap
+            SectionMap --> SectionRecord
+            ChunkDraft --> ChunkReconcileLayer
+            SectionMap --> ChunkReconcileLayer
+            ChunkReconcileLayer -. populates .-> NotePreExtract
+            ChunkReconcileLayer -. creates final .-> NoteChunk
+            RawIngestItem --> KnowledgeNote
+            KnowledgeNote --> NoteSource
+            KnowledgeNote --> NoteBody
+            KnowledgeNote --> NoteChunk
+            KnowledgeNote --> NotePreExtract
+            KnowledgeNote --> NoteGraphKnowledge
+            KnowledgeNote --> NoteGraphSync
+            KnowledgeNote --> NoteGraphQuality
+            KnowledgeNote -. projection .-> EvidenceSource
+            KnowledgeNote -. projection .-> RetrievalDocument
+            KnowledgeNote -. projection .-> GraphIngestDocument
+            KnowledgeNote --> IndexLayer
+            IndexLayer --> ReviewLayer
+            ReviewLayer --> ReviewCard
+            ReviewCard --> KnowledgeNote
+            GraphIngestDocument --> GraphIngestLayer
+            GraphIngestLayer --> GraphCaptureResult
+            GraphCaptureResult --> GraphWritebackLayer
+            KnowledgeNote --> GraphWritebackLayer
+            GraphWritebackLayer --> NoteGraphKnowledge
+            GraphWritebackLayer --> NoteGraphSync
+            GraphWritebackLayer --> NoteGraphQuality
+            GraphWritebackLayer --> IndexLayer
+        end
+    end
+
+    subgraph Ask["Ask Pipeline"]
+        direction TB
+
+        subgraph QueryPlan["Ask Planning"]
+            direction TB
+            QueryLayer["查询理解层<br/>rewrite query<br/>infer filters<br/>derive retrieval plan"]:::layer
+            QueryUnderstanding["QueryUnderstanding<br/>needs_freshness<br/>needs_personal_memory<br/>needs_graph_reasoning<br/>query_rewrite<br/>sub_queries<br/>filters<br/>answer_policy"]:::model
+            RetrievalFilters["RetrievalFilters<br/>source_types<br/>source_ref_contains<br/>tags<br/>created_after/created_before<br/>metadata_contains<br/>parent_note_id"]:::model
+            RetrievalPlan["RetrievalPlan<br/>sources: graph/local/web<br/>parallel<br/>query<br/>sub_queries<br/>filters"]:::model
+
+            QueryLayer --> QueryUnderstanding
+            QueryUnderstanding --> RetrievalFilters
+            QueryUnderstanding --> RetrievalPlan
+            RetrievalFilters --> RetrievalPlan
+        end
+
+        subgraph Retrieval["Retrieval Layer"]
+            direction TB
+            RetrievalLayer["统一召回层<br/>local: FTS/pg_trgm/pgvector/RRF<br/>KG: Graphiti entities/facts/edges<br/>structural: section_graph<br/>web: freshness/external<br/>sub-query wrapper"]:::layer
+            GraphAskResult["GraphAskResult<br/>enabled/error<br/>answer<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs<br/>citation_hits<br/>related_episode_uuids"]:::model
+            GraphCitationHit["GraphCitationHit<br/>episode_uuid<br/>relation_fact<br/>endpoint_names<br/>matched_terms<br/>entity_overlap_count<br/>score"]:::model
+            WebSearchResult["WebSearchResult<br/>title<br/>url<br/>snippet<br/>source<br/>published_at"]:::model
+            RetrievalCandidate["RetrievalCandidate<br/>source<br/>raw_id/note_id<br/>raw_score/normalized_score<br/>rank<br/>debug"]:::future
+            Citation["Citation<br/>note_id<br/>title/snippet<br/>relation_fact<br/>url<br/>source_type"]:::model
+
+            RetrievalLayer --> GraphAskResult
+            GraphAskResult --> GraphCitationHit
+            RetrievalLayer --> WebSearchResult
+            RetrievalLayer -. future raw candidates .-> RetrievalCandidate
+            RetrievalLayer --> Citation
+        end
+
+        subgraph EvidenceContext["Evidence / Enrichment / Rerank / Context"]
+            direction TB
+            NormalizeLayer["证据标准化层<br/>notes/facts/web to EvidenceItem<br/>merge citations<br/>dedupe evidence<br/>attach retrieved_by/source metadata"]:::layer
+            EvidenceItem["EvidenceItem<br/>source_type<br/>source_id/title<br/>snippet/fact<br/>source_span/url<br/>score<br/>metadata"]:::model
+            EnrichmentLayer["候选补全层<br/>parent_child<br/>neighbor chunks<br/>no-op ablation"]:::layer
+            RerankLayer["统一排序层<br/>heuristic rerank<br/>LLM listwise rerank<br/>score normalization<br/>budget / diversity selection"]:::layer
+            RankedEvidence["RankedEvidence<br/>evidence<br/>score<br/>reason<br/>selected"]:::model
+            ContextLayer["上下文组装层<br/>selected evidence<br/>dropped evidence<br/>prompt evidence ids"]:::layer
+            ContextPack["ContextPack<br/>selected: RankedEvidence[]<br/>dropped: RankedEvidence[]<br/>used_chars<br/>char_budget"]:::model
+
+            NormalizeLayer --> EvidenceItem
+            EvidenceItem --> EnrichmentLayer
+            EnrichmentLayer --> EvidenceItem
+            EvidenceItem --> RerankLayer
+            RerankLayer --> RankedEvidence
+            RankedEvidence --> ContextLayer
+            ContextLayer --> ContextPack
+        end
+
+        subgraph Answering["Generation / Verification"]
+            direction TB
+            GenerationLayer["生成层<br/>grounded answer<br/>citation hints<br/>dialogue policy<br/>evidence id references"]:::layer
+            VerificationLayer["校验层<br/>claim extraction<br/>grounding check<br/>contradiction check<br/>retry/fallback"]:::layer
+            VerificationReport["VerificationReport<br/>claims<br/>supported<br/>contradicted<br/>missing<br/>evidence_score<br/>retry_reason"]:::future
+            MatchRef["MatchRef<br/>projection<br/>id<br/>title"]:::future
+            AskResult["AskResult<br/>answer<br/>citations<br/>matches<br/>match_refs<br/>evidence<br/>session_id"]:::model
+
+            GenerationLayer --> VerificationLayer
+            MatchRef --> VerificationLayer
+            VerificationLayer -. future report .-> VerificationReport
+            VerificationLayer --> AskResult
+        end
+    end
+
+    class Ingest pipeline
+    class Ask pipeline
+
+    %% Cross-pipeline data flow: Ingest 产物 → Ask 消费
+    IndexLayer --> QueryLayer
+    KnowledgeNote --> RetrievalLayer
+    RetrievalDocument --> RetrievalLayer
+    RetrievalPlan --> RetrievalLayer
+    GraphAskResult --> NormalizeLayer
+    WebSearchResult --> NormalizeLayer
+    RetrievalCandidate -. future adapter .-> NormalizeLayer
+    KnowledgeNote --> NormalizeLayer
+    NormalizeLayer -. internal projection .-> EvidenceSource
+    Citation --> NormalizeLayer
+    ContextPack --> GenerationLayer
+    ContextPack --> VerificationLayer
+    Citation -. hint bypass .-> GenerationLayer
+    KnowledgeNote -. match hint bypass .-> GenerationLayer
+    Citation -. hint bypass .-> VerificationLayer
+    KnowledgeNote -. projection .-> MatchRef
+    EvidenceItem --> AskResult
+    Citation --> AskResult
+    MatchRef --> AskResult
+    KnowledgeNote --> AskResult
+    linkStyle 68,69,70 stroke:#d33,stroke-width:1.5px,color:#d33
+```
+
+> **已知偏差（红色 hint bypass 边）**：设计原则是“进入 prompt 的证据只来自统一 rerank 后的 `ContextPack.selected`”，但当前 [`_build_unified_answer_prompt()`](../src/personal_agent/agent/runtime_ask.py) 仍把 `citations[:8]`（引用锚点摘要）和 `matches[:8]`（匹配笔记摘要）作为 hint 直接拼进 prompt，未经过 rerank 和 char_budget。verifier 也接收同一份 citations。这是与“统一证据池”原则冲突的技术债，对应 §6 的 raw-evidence 旁路警告，应在后续让 citation/match hint 从 `ContextPack` 派生，而不是另起一路。`EvidenceSource` 不是 NormalizeLayer 的独立上游：NormalizeLayer 实际消费 `KnowledgeNote`，内部经 `evidence_source_from_note()` 投影成 `EvidenceSource`。
+
 ## Capture / Indexing Pipeline
 
 ### 1. Source normalization
@@ -91,16 +287,6 @@ EntryInput(source_type="text"|"link"|"file")
   -> CaptureService 提取正文
   -> RawIngestItem
 ```
-
-核心模型：
-
-- `EntryInput.text`：用户提交的文本、链接或文件入口信息。
-- `EntryInput.source_type`：来源类型。
-- `EntryInput.source_ref`：URL、上传文件路径等来源引用。
-- `RawIngestItem.content`：真正进入索引流水线的正文。
-- `RawIngestItem.user_id`：知识归属和检索隔离边界。
-- `RawIngestItem.metadata`：入口侧传入的标题、文件名、URL、采集时间等来源信息。
-- `RawIngestItem.source_fingerprint`：由 `execute_capture()` 基于 `source_type + source_ref + 正文归一化内容` 生成的去重指纹。
 
 当前已落地：
 
@@ -116,13 +302,13 @@ EntryInput(source_type="text"|"link"|"file")
 
 ### 2. Cleaning and chunking
 
-当前 `build_capture_graph()` 固定执行：
+当前 `run_capture_flow()` 固定执行：
 
 ```text
-capture -> preextract -> enrich -> link -> schedule_review
+capture -> structural_chunk -> preextract -> chunk_reconcile -> enrich -> link -> schedule_review
 ```
 
-`capture_node` 生成 `KnowledgeNote`；`preextract_node` 调用 LangExtract 跑轻量预抽取（详见后文 §2.5），产出 `SectionMap` 后**用语义 section 替换机械 chunk**：
+`capture_node` 生成 parent `KnowledgeNote`；`structural_chunk_node` 产出确定性 `ChunkDraft`；`preextract_node` 调用 LangExtract 跑轻量预抽取（详见后文 §2.5）；`chunk_reconcile_node` 负责最终落定 chunk：有多个 semantic section 时重建 chunk，否则保留机械草案并标注预抽取状态。
 
 ```text
 KnowledgeNote(parent)
@@ -131,23 +317,11 @@ KnowledgeNote(parent)
   -> ...
 ```
 
-核心字段：
-
-- `KnowledgeNote.content`：原文或 chunk 正文。
-- `KnowledgeNote.summary`：摘要，当前也参与展示和本地匹配。
-- `KnowledgeNote.parent_note_id`：chunk 的父文档。
-- `KnowledgeNote.chunk_index`：chunk 顺序。
-- `KnowledgeNote.source_span`：chunk 在原文中的位置（"char_start-char_end"）。
-- `KnowledgeNote.graph_worthy`：LangExtract 判定该 chunk 是否值得入图。
-- `KnowledgeNote.preextract_status`：`ok / skipped / failed`，记录预抽取在该 note 上的执行状态。
-- `KnowledgeNote.preextract_topic`：来自 SectionMap.doc_topic 或 section.topic 的一句话主题。
-- `KnowledgeNote.section_map`：parent note 上保留完整 SectionMap JSON，可作为后续检索路由依据。
-
 当前能力：
 
 - chunk 已按 LangExtract 语义 section 切分，并保留 `source_span`。
 - parent note 适合展示和文档级召回，chunk note 适合证据级召回。
-- 每个 chunk 已携带 `graph_worthy / preextract_topic / source_span`，可用于后续检索和入图路由。
+- 每个 chunk 已携带 `preextract.graph_worthy / preextract.topic / chunk.source_span`，可用于后续检索和入图路由。
 
 剩余目标：
 
@@ -167,18 +341,7 @@ PreExtractService(LangExtractConfig)
   .extract(text) -> SectionMap
 ```
 
-`SectionMap` 由若干 `SectionRecord` 组成，每个 record 包含：
-
-| 字段 | 含义 |
-| --- | --- |
-| `topic` | 一句话主题，<=80 char |
-| `summary` | 段落摘要，<=200 char |
-| `char_start / char_end` | 在原文中的精确偏移，由 LangExtract 的 source grounding 给出 |
-| `contains_entities` | 段落涉及的代表实体名 |
-| `contains_relations` | 是否含主谓宾关系语句 |
-| `information_density` | high / medium / low |
-| `graph_worthy` | 路由信号：True 时该段进入 graphiti，False 时跳过 |
-| `reason` | <=80 char 判断理由，便于 audit |
+`SectionMap / SectionRecord` 的字段和它们与 capture layer 的依赖关系见上方类图。
 
 #### 2.5.2 LLM 后端
 
@@ -205,11 +368,11 @@ LangExtractConfig
 
 #### 2.5.4 路由消费
 
-[src/personal_agent/agent/runtime_capture.py](../src/personal_agent/agent/runtime_capture.py) 在 chunk 写库时按 `graph_worthy` 分流：
+[src/personal_agent/agent/graph_capture_flow.py](../src/personal_agent/agent/graph_capture_flow.py) 在 capture 本地流程完成后按 `graph_worthy` 分流：
 
 ```text
-graph_worthy=True   -> graph_sync_status = "pending"   (走 graphiti 深抽取)
-graph_worthy=False  -> graph_sync_status = "skipped"   (跳过深抽取，仍入本地索引)
+preextract.graph_worthy=True   -> graph_sync.status = "pending"   (走 graphiti 深抽取)
+preextract.graph_worthy=False  -> graph_sync.status = "skipped"   (跳过深抽取，仍入本地索引)
 ```
 
 也就是说本地 lexical/vector 索引会拿到全部 chunk，而 graphiti 只拿到高价值 chunk，节约图谱构建成本。
@@ -224,7 +387,7 @@ graph_worthy=False  -> graph_sync_status = "skipped"   (跳过深抽取，仍入
 | `extraction_passes` | 1 | 多遍抽取以提升召回。当前 prompt 单 pass 已饱和，passes>1 是浪费 |
 | `max_workers` | 4 | LangExtract 并发 LLM 调用数 |
 | `min_doc_chars` | 200 | 短于此长度的文档不跑预抽取，直接进入下游 |
-| `fallback_on_error` | true | 抽取失败时返回空 SectionMap 而非抛错；`preextract_status="failed"` 仍会记录 |
+| `fallback_on_error` | true | 抽取失败时返回空 SectionMap 而非抛错；`preextract.status="failed"` 仍会记录 |
 
 `max_char_buffer` 调优实测（19K 字真实文档，model=qwen3-coder-flash）：
 
@@ -245,11 +408,11 @@ graph_worthy=False  -> graph_sync_status = "skipped"   (跳过深抽取，仍入
 
 | 场景 | 行为 |
 | --- | --- |
-| `len(text) < min_doc_chars` | `preextract_status="skipped"`，下游使用 capture_node 的机械 chunk |
-| LangExtract 调用抛异常 + `fallback_on_error=true` | `preextract_status="failed"`，下游使用机械 chunk |
+| `len(text) < min_doc_chars` | `preextract.status="skipped"`，下游使用 capture_node 的机械 chunk |
+| LangExtract 调用抛异常 + `fallback_on_error=true` | `preextract.status="failed"`，下游使用机械 chunk |
 | LangExtract 调用抛异常 + `fallback_on_error=false` | 抛 `PreExtractError`，capture 失败 |
-| SectionMap 只有 1 个 section | `preextract_status="ok"`，但保留机械 chunk，仅在每个 chunk 上盖 `graph_worthy=parent.graph_worthy` |
-| SectionMap >= 2 个 section | `preextract_status="ok"`，**用 section 替换机械 chunk**，每个 chunk 带 `graph_worthy / preextract_topic / source_span` |
+| SectionMap 只有 1 个 section | `preextract.status="ok"`，但保留机械 chunk，仅在每个 chunk 上盖 `preextract.graph_worthy=parent.preextract.graph_worthy` |
+| SectionMap >= 2 个 section | `preextract.status="ok"`，**用 section 替换机械 chunk**，每个 chunk 带 `preextract.graph_worthy / preextract.topic / chunk.source_span` |
 
 #### 2.5.7 已落地强化与下一步
 
@@ -287,7 +450,7 @@ query
 
 当前已具备：
 
-- Lexical index：Postgres FTS + `pg_trgm`，含 title / summary / preextract_topic / content 字段权重。
+- Lexical index：Postgres FTS + `pg_trgm`，含 `body.title / body.summary / preextract.topic / body.content` 字段权重。
 - Vector index：`embedding_vector vector(128)` + HNSW cosine index。
 - Hybrid merge：lexical / vector 两路召回后做 RRF 融合。
 - Parent-child expansion：chunk 命中后展开父文档和邻近 chunk。
@@ -308,13 +471,13 @@ GraphitiStore.ingest_note(result.note)
 
 返回 `GraphCaptureResult`，再回写到 `KnowledgeNote`：
 
-- `graph_episode_uuid`
-- `entity_names`
-- `relation_facts`
-- `graph_node_refs`
-- `graph_edge_refs`
-- `graph_fact_refs`
-- `graph_sync_status`
+- `graph.episode_uuid`
+- `graph.entity_names`
+- `graph.relation_facts`
+- `graph.node_refs`
+- `graph.edge_refs`
+- `graph.fact_refs`
+- `graph_sync.status`
 - `graph_sync_error`
 
 长文 capture 已改为 parent 不重复入图：parent 标记为 `skipped`，`graph_worthy=True` 的 chunks 进入 pending 队列，随后由 `sync_notes_to_graph(chunk_ids)` 批量并发同步。`graph_worthy=False` 或超出单次 capture budget 的 chunk 会标记为 `skipped`。
@@ -326,6 +489,20 @@ GraphitiStore.ingest_note(result.note)
 - 后台同步状态还没有独立队列表，重试历史和 per-user 限流仍主要靠 note 字段与日志。
 
 ## Ask / RAG Pipeline
+
+Ask 主链路按层理解如下：
+
+| 层 | 作用 | 当前组件 |
+| --- | --- | --- |
+| Query understanding | 理解问题、改写、抽取 filters、判断 freshness / personal memory / graph reasoning | `QueryUnderstanding` |
+| Retrieval planning | 决定召回源、并行策略、子查询、filters 下推 | `RetrievalPlan` |
+| Retrieval layer | 从多个来源召回候选 | local / Graphiti KG / section_graph / web / sub-query |
+| Candidate normalization | 把不同来源结果统一成 evidence | `notes_to_evidence` / `graph_result_to_evidence` / `web_results_to_evidence` |
+| Candidate enrichment | 对已召回候选做 parent/child/neighbor 补全 | `parent_child` / `none` |
+| Rerank | 跨来源排序、预算控制、多样性 | `heuristic` / `llm` |
+| Context assembly | 选择最终进入 prompt 的证据与引用 | `ContextPack` |
+| Generation | 基于证据生成答案 | `_compose_unified_answer` |
+| Verification | claim grounding、retry、fallback | `AnswerVerifier` |
 
 ### 1. Query understanding
 
@@ -341,19 +518,26 @@ question + context -> plan_retrieval() [LangExtract LLM, strict json_schema]
 effective_query = plan.query (rewritten) or question
 ```
 
-`QueryUnderstanding` 模型已实现的字段：
-
-- `needs_freshness`：是否需要今天、最新、实时信息。
-- `needs_personal_memory`：是否需要个人知识库。
-- `needs_graph_reasoning`：是否需要实体关系、多跳推理。
-- `query_rewrite`：适合检索的改写问题。
-- `sub_queries`：多跳或复合问题拆解。
-- `filters`：`RetrievalFilters`，表达来源类型、source_ref/文件名、时间范围、标签、metadata、parent_note_id。
-- `answer_policy`：必须引用、允许 web、证据不足时拒答。
-
 实现细节：`query_planner.py` 优先复用 LangExtract 的 OpenAI-compatible 配置，即 `settings.langextract.api_key / base_url / model_id`，默认是 `qwen3-coder-flash + DashScope compatible endpoint`。调用时使用 `response_format={"type":"json_schema","strict":true}` 约束 `QueryUnderstanding` 输出，避免 `json_object` 在复杂 query 下 schema 漂移；如果未配置 LangExtract API key，则 fallback 到原 `openai.small_model`。LLM 调用失败时 graceful fallback 到默认 plan，并用 `_heuristic_filters()` 兜底识别“最近/今天/昨天/上周/链接/文件/xxx.md”等常见 filters。
 
-### 2. Retrieval plan
+### 2. Retrieval layer：统一召回层
+
+Retrieval 是 Ask 流程里最复杂的一层，当前应按“路由计划 -> 多个 retriever -> 召回结果”来理解，而不是把 Graph retrieval、Local retrieval、Web retrieval 当成互不相关的章节。
+
+当前所有召回相关组件都属于同一个 Retrieval layer：
+
+| 子步骤 | 当前组件 | 输入 | 输出 | 主要作用 | 是否属于召回 |
+| --- | --- | --- | --- | --- | --- |
+| Retrieval routing | `RetrievalPlan` | `QueryUnderstanding` | sources / parallel / filters / sub_queries | 决定查哪些源、是否并行、用什么 query 和 filters | 是，召回调度 |
+| Local retriever | Postgres FTS + pg_trgm + pgvector + RRF | rewritten query + filters | note/chunk matches | 本地全文、模糊、向量混合召回 | 是 |
+| KG retriever | Graphiti | query + user_id | entity/fact/edge/episode candidates | 实体关系、事实边、多跳语义召回 | 是 |
+| Structural retriever | 当前 `GraphRagStore` / section graph | query + user_id + filters | parent/section note candidates | 基于 parent-section 结构做传播式召回 | 是 |
+| Web retriever | Firecrawl / web search | question | web snippets + citations | 新鲜信息或外部公开信息召回 | 是 |
+| Sub-query expansion | `RetrievalPlan.sub_queries` | 拆分后的子问题 | 各 retriever 的补充候选 | 多跳/复合问题的召回扩展 wrapper | 是，召回增强 |
+
+注意：`parent_child` 不属于 retrieval layer 的主召回器，它是**召回后的 candidate enrichment**。当前 structural retriever 和 `parent_child` 都使用 parent-child 结构信号，因此需要后续 ablation 判断两者是互补还是重复。
+
+#### 2.1 Retrieval plan
 
 **已实现**（[query_planner.py](../src/personal_agent/agent/query_planner.py) 中的 `_derive_plan()`）。
 
@@ -388,7 +572,41 @@ parallel = “graph” in sources AND “local” in sources
 - 基于 plan.sources 优先级决定 evidence 预算分配。
 - 复杂时间表达的专用解析器，提升 filters 的稳定性。
 
-### 3. Graph retrieval
+#### 2.2 Local retriever：本地混合召回
+
+当前本地召回：
+
+```text
+query
+  -> CJK n-gram + lexical terms
+  -> Postgres FTS / pg_trgm lexical candidates
+  -> pgvector cosine vector candidates
+  -> RRF 融合
+  -> chunk 命中后展开 parent / 邻近 chunk
+  -> KnowledgeNote matches + Citation
+```
+
+命中的 notes 会转成：
+
+- `matches`
+- `Citation`
+- `EvidenceItem(source_type="note"|"chunk")`
+
+当前已具备：
+
+- Lexical index：Postgres FTS + `pg_trgm`，含 `body.title / body.summary / preextract.topic / body.content` 字段权重。
+- Vector index：`embedding_vector vector(128)` + HNSW cosine index。
+- Hybrid merge：lexical / vector 两路召回后做 RRF 融合。
+- Metadata filters：`RetrievalPlan.filters` 已下推到 local lexical/vector SQL。
+- Parent-child expansion：chunk 命中后展开父文档和邻近 chunk。
+
+当前问题：
+
+- `find_similar_notes()` 仍直接返回 expanded notes，尚未暴露 raw lexical/vector candidates 给 rerank/debug。
+- local hash embedding 是可用兜底，不等价于高质量语义 embedding；生产环境应配置 OpenAI-compatible embedding API。
+- 复杂自然语言时间范围还需要加强解析。
+
+#### 2.3 KG retriever：Graphiti 实体关系图谱召回
 
 当前图谱检索：
 
@@ -408,14 +626,7 @@ GraphitiStore.ask(question, user_id, trace_id)
 - `edge_rrf`
 - `edge_node_distance`
 
-`GraphCitationHit` 是当前图谱 rerank 的关键输出：
-
-- `episode_uuid`：支撑事实的 episode。
-- `relation_fact`：关系事实。
-- `endpoint_names`：关系两端实体。
-- `matched_terms`：命中的问题关键词。
-- `entity_overlap_count`：问题实体重叠数量。
-- `score`：启发式相关性分数。
+`GraphCitationHit` 是当前图谱 rerank 的关键输出，用于把 Graphiti relation fact 映射回 episode/note，字段见上方类图。
 
 当前 prompt 装配：
 
@@ -433,41 +644,31 @@ graph facts for prompt:
 - `ranked_fact_refs`：进入生成上下文的事实。
 - `citation_hits`：可映射到 note/chunk 的引用事实。
 
-### 4. Local retrieval
+#### 2.4 Structural retriever：section graph / 当前 GraphRAG
 
-当前本地回退：
-
-```text
-build_ask_graph(store)
-  -> answer_node()
-  -> PostgresMemoryStore.find_similar_notes(user_id, question)
-```
-
-命中的 notes 会转成：
-
-- `matches`
-- `Citation`
-- `EvidenceItem(source_type="note"|"chunk")`
-
-当前问题：
-
-- metadata filter 已通过 `RetrievalPlan.filters` 下推到 local lexical/vector SQL，但复杂自然语言时间范围还需要加强。
-- `find_similar_notes()` 仍直接返回 expanded notes，尚未暴露 raw lexical/vector candidates 给 A3 rerank。
-- local hash embedding 是可用兜底，不等价于高质量语义 embedding；生产环境应配置 OpenAI-compatible embedding API。
-
-推荐目标：
+当前 `GraphRagStore` 更准确是 structural retriever，不是微软 GraphRAG，也不是 Graphiti 的 KG 替代品。它从 Postgres notes/chunks 构建 parent-section 结构图：
 
 ```text
-local retrieval:
-  lexical candidates top 50
-  + vector candidates top 50
-  + RRF / score normalization
-  + parent / neighbor expansion
-  -> normalize to EvidenceItem
-  -> unified rerank
+user notes/chunks
+  -> parent note / section chunk graph
+  -> token + IDF score
+  -> section score 与 parent score 相互传播
+  -> structural note candidates
 ```
 
-### 5. Web retrieval
+当前价值：
+
+- 对长文 chunk 有较强宽召回，30q 中 R@10 高于 Graphiti bridge。
+- 不需要实体摄取、不写 Neo4j，按 user/filters/note 更新时间签名做缓存失效。
+- 命中的 notes 以 `EvidenceItem(metadata.retrieved_by="graphrag")` 进入同一个 ContextPack。
+
+当前边界：
+
+- 它不是实体/关系知识图谱，没有 community summary，也没有微软 GraphRAG 的 global/local/drift search。
+- 它和 `parent_child` candidate enrichment 都使用 parent-child 结构信号，存在重复风险。
+- 后续应从 `graph_provider` 维度中拆出，作为 `structural_retriever` 与 local/KG/web 同层装配。
+
+#### 2.5 Web retriever：外部新鲜信息召回
 
 当前 web 有两种触发方式：
 
@@ -487,9 +688,30 @@ if not verification.sufficient and _web_search_available:
 - 生成时明确区分“个人知识库记录”和“网络搜索结果”。
 - 对网络结果增加来源可信度和时间新鲜度排序。
 
-### 6. Candidate normalization
+#### 2.6 Sub-query retrieval：多跳召回扩展
 
-当前已有统一证据模型 `EvidenceItem`，并已经成为 ask 生成前的统一候选边界。
+`RetrievalPlan.sub_queries` 不是独立 retriever，而是召回层的 wrapper。它把复合问题拆成多个子问题，再复用 local/KG/structural retriever 补充候选。
+
+当前行为：
+
+```text
+main query retrieval
+  + for each sub_query:
+      local retrieval
+      graph retrieval
+      structural retrieval
+  -> merge into the same evidence pool
+```
+
+当前短板：
+
+- 子查询结果没有独立预算，可能挤占主查询证据。
+- 子查询召回与主查询召回的贡献没有在 diagnostics 中清晰分层。
+- 后续需要在 retrieval snapshot 中记录每个 sub_query 的 raw candidates、source 和 rank。
+
+### 3. Candidate normalization：候选标准化
+
+当前已有统一证据模型 `EvidenceItem`，并已经成为 ask 生成前的统一候选边界；字段和依赖见上方类图。
 
 当前转换：
 
@@ -499,30 +721,43 @@ local matches  -> notes_to_evidence()
 web results    -> web_results_to_evidence()
 ```
 
-所有来源先归一到候选证据池：
-
-```text
-EvidenceItem(
-  source_type="graph_fact"|"note"|"chunk"|"web"|"tool",
-  source_id=...,
-  title=...,
-  snippet=...,
-  fact=...,
-  source_span=...,
-  url=...,
-  score=...,
-  metadata=...
-)
-```
-
 然后统一进行：
 
 - 去重：同一 note、同一 fact、同一 URL 合并。
 - 归因：graph fact 尽量映射回 note/chunk/source_span。
 - 过滤：低分、过旧、无引用、跨用户污染候选剔除。
-- 扩展：local chunk 命中后补 parent、邻近 chunk；graph fact 尽量映射回 note/chunk。
+- 打标签：保留 `retrieved_by=local|graphiti|section_graph|web` 等来源信息，供后续 rerank 和 diagnostics 使用。
 
-### 7. Unified rerank
+### 4. Candidate enrichment：召回后候选补全
+
+Candidate enrichment 位于 Retrieval 之后、Rerank 之前。它不是新的主召回器，而是对已经召回到的候选做结构补全，避免“只命中 parent 摘要但缺少关键 chunk”或“只命中 chunk 但缺少父文档上下文”。
+
+当前已落地：
+
+| Enricher | 当前状态 | 输入 | 输出 | 作用 |
+| --- | --- | --- | --- | --- |
+| `none` | 可配置 | 原始 evidence/matches | 不扩展 | ablation / debug |
+| `parent_child` | 默认 | 已召回 note/chunk + filters | 补 parent、高 overlap child、可选 neighbor chunks | small-to-big / big-to-small 结构补全 |
+
+与 Retrieval layer 的边界：
+
+- local retriever 的 parent/neighbor expansion 是本地召回内部的第一层补齐。
+- structural retriever 是一个独立召回器，会从全量 parent-section 图中直接找候选。
+- `parent_child` 是召回后补全，只基于已召回候选继续展开。
+
+因此当前最需要验证的是：
+
+```text
+local + parent_child
+local + section_graph + no_enricher
+local + section_graph + parent_child
+kg_graphiti + parent_child
+local + kg_graphiti + section_graph + parent_child
+```
+
+如果 `section_graph + no_enricher` 接近 `local + parent_child`，说明两者重复较大，应保留更简单、可解释、低延迟的一方；如果两者组合提升 R@10 但降低 R@3/R@5，则需要加 MMR/source diversity 和 per-source budget。
+
+### 5. Unified rerank：统一排序
 
 当前已有两层 rerank：
 
@@ -557,7 +792,7 @@ EvidenceItem candidates
 - parent/chunk 覆盖多样性。
 - 与对话上下文指代的匹配程度。
 
-### 8. Context assembly
+### 6. Context assembly：上下文组装
 
 当前最终回答已使用统一 prompt：
 
@@ -597,7 +832,7 @@ Instructions:
 - raw graph edges 可以保留给调试，但不应默认全部进入生成上下文。
 - 对话历史只能放在 constraints 区，不能混进 evidence 区。
 
-### 9. Grounded generation
+### 7. Grounded generation：基于证据生成
 
 当前最终生成调用 `_generate_answer()`，使用：
 
@@ -620,7 +855,7 @@ Graphiti 内部还会使用：
 - 证据不足时拒答或给出不确定性，而不是填补空白。
 - 对冲突证据要显式指出冲突来源。
 
-### 10. Verification and fallback
+### 8. Verification and fallback：校验、重试与兜底
 
 当前 `AnswerVerifier.verify()` 会检查：
 
@@ -652,38 +887,7 @@ answer claims
 
 ## 推荐的新模型边界
 
-当前模型已经可用，但建议逐步把“检索过程”和“回答结果”拆得更清楚。
-
-### 已有核心模型
-
-| 模型 | 当前职责 |
-| --- | --- |
-| `EntryInput` | 统一入口输入，承载文本、链接、文件等来源 |
-| `RawIngestItem` | capture 待入库正文和来源 |
-| `AgentState` | LangGraph 节点间状态 |
-| `KnowledgeNote` | 长期知识、chunk、图谱 episode 映射、原文证据载体；含 `section_map / graph_worthy / preextract_status / preextract_topic` 由 LangExtract 写入 |
-| `SectionMap` / `SectionRecord` | LangExtract 预抽取产出的文档级语义切分 + 路由信号 |
-| `LangExtractConfig` | LangExtract 后端的独立配置（model_id / base_url / api_key / max_char_buffer / 等） |
-| `QueryUnderstanding` | 结构化表达时效性、个人知识库需求、图谱推理需求、改写问题、子查询、filters 和回答策略 |
-| `RetrievalPlan` | 决定 graph/local/web 来源、是否并行、检索 query、子查询和 filters |
-| `GraphCaptureResult` | 图谱写入结果 |
-| `GraphAskResult` | 图谱检索结果 |
-| `GraphCitationHit` | 图谱关系事实到 episode/note 的候选引用 |
-| `Citation` | 对外展示和 verifier 使用的轻量引用 |
-| `EvidenceItem` | 统一 graph/note/chunk/web/tool 证据 |
-| `RankedEvidence` | `ContextPack` 中的排序结果，记录分数、原因和是否进入 prompt |
-| `ContextPack` | 最终 prompt 上下文包，记录 evidence 顺序、预算、selected/dropped |
-| `CaptureResult` | capture 输出 |
-| `AskResult` | ask 输出 |
-
-### 建议新增或强化的模型
-
-| 模型 | 建议职责 |
-| --- | --- |
-| `RetrievalCandidate` | 原始候选，保留来源原始分数和 debug 信息 |
-| `VerificationReport` | claim-level 支撑关系、冲突、缺口和 fallback 决策 |
-
-剩余建议模型主要服务于可观测性和评测：原始候选、rerank 过程、verification report 可以更完整地持久化或输出到 trace。
+当前核心模型、字段、建议新增模型和 layer 依赖已经集中在上方 `Model / Layer 依赖类图` 中。后续不再在正文重复列字段；模型边界的下一步重点是把 `RetrievalCandidate`、`VerificationReport` 这类可观测性模型真正落地，并输出到 trace / eval。
 
 ## 目标 Ask 流程
 
@@ -693,12 +897,15 @@ answer claims
 EntryInput(text=question)
   -> QueryUnderstanding
   -> RetrievalPlan
-  -> graph retrieval
-  -> local lexical retrieval
-  -> local vector retrieval
-  -> optional web retrieval
-  -> EvidenceItem candidates
-  -> unified rerank
+  -> Retrieval layer
+       - local retriever: FTS / pg_trgm / pgvector / RRF
+       - KG retriever: Graphiti entity/fact/edge retrieval
+       - structural retriever: section_graph parent-section propagation
+       - web retriever: freshness / external evidence
+       - sub-query retrieval wrapper
+  -> Candidate normalization: all sources -> EvidenceItem
+  -> Candidate enrichment: parent_child / neighbor / none
+  -> Unified rerank: heuristic / LLM / future MMR
   -> ContextPack
   -> grounded generation
   -> claim verification
@@ -1121,14 +1328,14 @@ llm_rerank_top_n=20
 当前现状：
 
 - `graphiti/ontology.py` 的 `ENTITY_TYPES / CUSTOM_EXTRACTION_INSTRUCTIONS` 只是约束 Graphiti 抽取行为，没有任何 precision/recall 评测、抽样人审或对比基准。
-- `graph_sync_status` 仅记录单 note 同步成功/失败，不记录抽到了几个实体、几条关系、是否合理。
+- `graph_sync.status` 仅记录单 note 同步成功/失败；抽到了几个实体、几条关系、是否合理由 `graph_quality` 记录。
 - 没有抽取质量回归集，每次模型/prompt 调整都是盲调。
 
 风险：长文 chunk 大量入图后，错误事实会沉默地污染 `citation_hits`，verifier 检查 citation 是否回指 note 时也无法发现事实本身就是错的。
 
 当前已具备的可见度：
 
-- `_merge_graph_capture()` 在每次 sync 成功后计算 entity_count / relation_count / avg_fact_length / zero_entities / weak_relations_only。
+- `GraphCaptureFlow.merge_graph_capture()` 在每次 sync 成功后计算 entity_count / relation_count / avg_fact_length / zero_entities / weak_relations_only。
 - 质量指标会写入 note 字段，并通过 `graph_quality.metrics` 结构化日志输出。
 - `zero_entities` 或 `weak_relations_only` 会触发 WARNING。
 - `probe_graph_health.py` 可输出聚合健康报告。
@@ -1153,7 +1360,7 @@ llm_rerank_top_n=20
 
 最小防御：
 
-- 维护一个 user-level 关系同义表（投资/出资/持股 → 投资类），在 `_merge_graph_capture` 时归一化。
+- 维护一个 user-level 关系同义表（投资/出资/持股 → 投资类），在 `GraphCaptureFlow.merge_graph_capture()` 时归一化。
 - 对涉及方向语义的关系类型（收购、隶属、上下级）增加抽样人审入口。
 
 #### 3. 多跳错误传播
@@ -1222,7 +1429,7 @@ PG-0 已落地：
 
 - [probe_graph_health.py](../scripts/probe_graph_health.py) 输出 node_count / edge_count / avg_degree / isolated_nodes（需 `--neo4j` 参数）。
 - 健康报告 CLI 可定期执行，用于回答“图谱是否还值得维持”。
-- `_merge_graph_capture()` 在 zero_entities / weak_relations_only 时发 WARNING 日志。
+- `GraphCaptureFlow.merge_graph_capture()` 在 zero_entities / weak_relations_only 时发 WARNING 日志。
 
 仍缺：连通分量分析、重复实体比率、月度自动化 audit cron。
 
@@ -1247,7 +1454,7 @@ PG-0 已落地：
 
 - **PG-0（已实现）**：抽取数量/异常 trace + 弱关系词表。对应代码：
   - [quality_vocab.py](../src/personal_agent/graphiti/quality_vocab.py) — 弱关系词表 + `is_weak_relation()` / `all_relations_weak()`
-  - [runtime_capture.py](../src/personal_agent/agent/runtime_capture.py) `_merge_graph_capture()` — 每次 sync 成功后计算 entity_count / relation_count / avg_fact_length / zero_entities / weak_relations_only，写入 note 质量字段 + 发 `graph_quality.metrics` 结构化日志 + 异常 WARNING
+  - [graph_capture_flow.py](../src/personal_agent/agent/graph_capture_flow.py) `GraphCaptureFlow.merge_graph_capture()` — 每次 sync 成功后计算 entity_count / relation_count / avg_fact_length / zero_entities / weak_relations_only，写入 note 质量字段 + 发 `graph_quality.metrics` 结构化日志 + 异常 WARNING
   - [models.py](../src/personal_agent/core/models.py) `KnowledgeNote` — 5 个可选质量字段（`graph_quality_*`）
   - [probe_graph_health.py](../scripts/probe_graph_health.py) — 聚合健康报告 CLI（Postgres + 可选 Neo4j）
 - **PG-1（已落地基础版）**：通过 LangExtract `graph_worthy` 路由、parent/chunk 去重、批量并发同步和单次 capture budget 降低图谱构建成本。剩余是真正 bulk add、优先级队列和文档级摘要入图。

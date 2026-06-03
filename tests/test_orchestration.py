@@ -1040,10 +1040,10 @@ class TestPhase3ExecutePlanStep:
 
     def test_resolve_uses_llm_to_select_local_delete_candidate(self, runtime, monkeypatch):
         from personal_agent.agent.orchestration_nodes._steps import _execute_resolve_step
-        from personal_agent.core.models import KnowledgeNote
+        from tests.note_factory import make_note
 
         runtime.store.add_note(
-            KnowledgeNote(
+            make_note(
                 id="note-dns",
                 user_id="u1",
                 title="DNS 基础概念",
@@ -1074,10 +1074,10 @@ class TestPhase3ExecutePlanStep:
             _node_execute_plan_step,
             _node_handle_step_failure,
         )
-        from personal_agent.core.models import KnowledgeNote
+        from tests.note_factory import make_note
 
         runtime.store.add_note(
-            KnowledgeNote(
+            make_note(
                 id="note-other",
                 user_id="u1",
                 title="其他主题",

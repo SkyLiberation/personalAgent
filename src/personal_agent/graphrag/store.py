@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from threading import Lock
 
 from ..core.models import Citation, KnowledgeNote
+from ..core.projections import RetrievalDocument, retrieval_document_from_note
 from ..core.query_understanding import RetrievalFilters
 from ..storage.postgres_memory_store import PostgresMemoryStore
 
@@ -82,8 +83,8 @@ class GraphRagStore:
         citations = [
             Citation(
                 note_id=note.id,
-                title=note.title,
-                snippet=(note.summary or note.content)[:160],
+                title=note.body.title,
+                snippet=(note.body.summary or note.body.content)[:160],
                 relation_fact="GraphRAG structural match",
             )
             for note in matches[:5]
@@ -170,26 +171,27 @@ class GraphRagStore:
 
 def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
     notes_by_id = {note.id: note for note in notes}
-    children_by_parent: dict[str, list[KnowledgeNote]] = {}
-    parent_notes: list[KnowledgeNote] = []
-    standalone_children: list[KnowledgeNote] = []
+    documents = [retrieval_document_from_note(note) for note in notes]
+    children_by_parent: dict[str, list[RetrievalDocument]] = {}
+    parent_documents: list[RetrievalDocument] = []
+    standalone_children: list[RetrievalDocument] = []
 
-    for note in notes:
-        if note.parent_note_id:
-            children_by_parent.setdefault(note.parent_note_id, []).append(note)
+    for document in documents:
+        if document.parent_note_id:
+            children_by_parent.setdefault(document.parent_note_id, []).append(document)
         else:
-            parent_notes.append(note)
+            parent_documents.append(document)
 
-    parent_ids = {note.id for note in parent_notes}
-    for note in notes:
-        if note.parent_note_id and note.parent_note_id not in parent_ids:
-            standalone_children.append(note)
+    parent_ids = {document.id for document in parent_documents}
+    for document in documents:
+        if document.parent_note_id and document.parent_note_id not in parent_ids:
+            standalone_children.append(document)
 
     graph_docs: list[_GraphRagDoc] = []
     sections: list[_GraphRagSection] = []
     document_frequency: dict[str, int] = {}
 
-    for parent in [*parent_notes, *standalone_children]:
+    for parent in [*parent_documents, *standalone_children]:
         children = sorted(
             children_by_parent.get(parent.id, []),
             key=lambda item: item.chunk_index if item.chunk_index is not None else 10_000,
@@ -240,18 +242,18 @@ def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
     )
 
 
-def _note_text(note: KnowledgeNote, *, include_content: bool) -> str:
+def _note_text(document: RetrievalDocument, *, include_content: bool) -> str:
     parts = [
-        note.title,
-        note.summary,
-        note.preextract_topic or "",
-        " ".join(note.tags),
-        " ".join(note.entity_names),
-        " ".join(note.relation_facts),
-        " ".join(str(value) for value in note.metadata.values() if value),
+        document.title,
+        document.summary,
+        document.preextract_topic or "",
+        " ".join(document.tags),
+        " ".join(document.entity_names),
+        " ".join(document.relation_facts),
+        " ".join(str(value) for value in document.metadata.values() if value),
     ]
     if include_content:
-        parts.append(note.content)
+        parts.append(document.content)
     return " ".join(part for part in parts if part)
 
 
@@ -287,11 +289,12 @@ def _graphrag_tokens(text: str) -> list[str]:
 
 
 def _signature(notes: list[KnowledgeNote]) -> str:
+    documents = [retrieval_document_from_note(note) for note in notes]
     parts = [
-        f"{note.id}:{note.updated_at.isoformat()}:{note.parent_note_id or ''}:{note.chunk_index or ''}"
-        for note in sorted(notes, key=lambda item: item.id)
+        f"{document.id}:{document.updated_at.isoformat()}:{document.parent_note_id or ''}:{document.chunk_index or ''}"
+        for document in sorted(documents, key=lambda item: item.id)
     ]
-    return f"{len(notes)}|" + "|".join(parts)
+    return f"{len(documents)}|" + "|".join(parts)
 
 
 def _filters_signature(filters: RetrievalFilters | None) -> str:
@@ -303,23 +306,23 @@ def _filters_signature(filters: RetrievalFilters | None) -> str:
 def _note_matches_filters(note: KnowledgeNote, filters: RetrievalFilters | None) -> bool:
     if filters is None or not filters.active():
         return True
-    if filters.source_types and note.source_type not in filters.source_types:
+    if filters.source_types and note.source.type not in filters.source_types:
         return False
     if filters.source_ref_contains.strip():
         needle = filters.source_ref_contains.strip().lower()
-        if needle not in (note.source_ref or "").lower():
+        if needle not in (note.source.ref or "").lower():
             return False
     if filters.tags:
         note_tags = {tag.lower() for tag in note.tags}
         if not all(tag.lower() in note_tags for tag in filters.tags):
             return False
     if filters.metadata_contains.strip():
-        metadata_text = " ".join(str(value) for value in note.metadata.values()).lower()
+        metadata_text = " ".join(str(value) for value in note.source.metadata.values()).lower()
         if filters.metadata_contains.strip().lower() not in metadata_text:
             return False
     if filters.parent_note_id.strip():
         parent_id = filters.parent_note_id.strip()
-        if note.id != parent_id and note.parent_note_id != parent_id:
+        if note.id != parent_id and note.chunk.parent_note_id != parent_id:
             return False
     return True
 

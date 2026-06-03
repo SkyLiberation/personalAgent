@@ -20,9 +20,9 @@ from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
 from .replanner import Replanner
 from .router import DefaultIntentRouter
+from .ingestion_pipeline import IngestionPipeline
 from .runtime_admin import RuntimeAdminMixin
 from .runtime_ask import RuntimeAskMixin
-from .runtime_capture import RuntimeCaptureMixin
 from .runtime_entry import RuntimeEntryMixin
 from .runtime_helpers import (
     _annotate_answer,
@@ -114,7 +114,6 @@ def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) ->
 
 class AgentRuntime(
     RuntimeToolsMixin,
-    RuntimeCaptureMixin,
     RuntimeAskMixin,
     RuntimeEntryMixin,
     RuntimeAdminMixin,
@@ -143,18 +142,55 @@ class AgentRuntime(
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_executor = ToolExecutor()
+        self._preextract_service = PreExtractService(settings.langextract)
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
         self.memory = MemoryFacade(store)
         self._verifier = AnswerVerifier()
         self._plan_validator = PlanValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
-        self._preextract_service = PreExtractService(settings.langextract)
         self._thread_message_loader: (
             Callable[[EntryInput, int], list[dict[str, str]]] | None
         ) = None
         # Orchestration graph — built lazily on first use
         self._orch_graph = None
+
+    # ---- ingestion pipeline (capture → graph) ----
+
+    def _ingestion(self) -> IngestionPipeline:
+        """Build a pipeline bound to current settings/store/graph_store.
+
+        Built per-call so test doubles that swap ``self.graph_store`` after
+        construction (a common fixture pattern) take effect immediately.
+        """
+        return IngestionPipeline(
+            settings=self.settings,
+            store=self.store,
+            graph_store=self.graph_store,
+            preextract_service=self._preextract_service,
+        )
+
+    def execute_capture(
+        self,
+        text: str,
+        source_type: str = "text",
+        user_id: str | None = None,
+        source_ref: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> "CaptureResult":
+        return self._ingestion().ingest(
+            text=text,
+            source_type=source_type,
+            user_id=user_id,
+            source_ref=source_ref,
+            metadata=metadata,
+        )
+
+    def sync_note_to_graph(self, note_id: str) -> bool:
+        return self._ingestion().sync_note_to_graph(note_id)
+
+    def sync_notes_to_graph(self, note_ids: list[str]) -> dict[str, bool]:
+        return self._ingestion().sync_notes_to_graph(note_ids)
 
     # ---- public properties (delegate to private fields so test mocks are visible) ----
 

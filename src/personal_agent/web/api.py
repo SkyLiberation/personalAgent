@@ -176,7 +176,7 @@ def create_app() -> FastAPI:
         note = service.store.get_note(note_id)
         if note is None or note.user_id != resolved_user:
             raise HTTPException(status_code=404, detail="Note not found or not owned by user.")
-        graph_episode_uuid = note.graph_episode_uuid
+        graph_episode_uuid = note.graph.episode_uuid
 
         has_chunks = bool(service.store.get_chunks_for_parent(note_id))
         cascade_chunks = cascade or has_chunks
@@ -207,8 +207,8 @@ def create_app() -> FastAPI:
             logger.warning("Graph sync retry requested but graph is not configured note_id=%s", note_id)
             return GraphSyncResponse(note=note, queued=False)
 
-        note.graph_sync_status = "pending"
-        note.graph_sync_error = None
+        note.graph_sync.status = "pending"
+        note.graph_sync.error = None
         note.updated_at = local_now()
         service.store.update_note(note)
         logger.info("Starting manual graph sync retry note_id=%s", note_id)
@@ -217,7 +217,7 @@ def create_app() -> FastAPI:
         logger.info(
             "Finished manual graph sync retry note_id=%s graph_sync_status=%s",
             note_id,
-            updated_note.graph_sync_status,
+            updated_note.graph_sync.status,
         )
         return GraphSyncResponse(note=updated_note, queued=False)
 
@@ -422,7 +422,7 @@ def create_app() -> FastAPI:
             chunk_ids = [
                 chunk.id
                 for chunk in (result.capture_result.chunk_notes or [])
-                if chunk.graph_sync_status == "pending"
+                if chunk.graph_sync.status == "pending"
             ]
             if chunk_ids:
                 background_tasks.add_task(service.sync_notes_to_graph, chunk_ids)

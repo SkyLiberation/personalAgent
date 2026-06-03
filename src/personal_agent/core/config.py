@@ -111,6 +111,19 @@ class AskConfig(_StrictBase):
     llm_rerank_model: str | None = None
 
 
+class ShortTermMemoryConfig(_StrictBase):
+    """短期记忆（thread 对话）进 prompt 前的统一裁剪策略。"""
+
+    max_messages: int = 12              # 进 prompt 的对话最大消息数
+    token_budget: int = 1500            # 对话上下文总 token 预算（字符启发式估算）
+    per_message_char_limit: int = 1200  # 单条消息截断阈值（字符）
+    char_budget: int = 800              # planner 等纯文本场景的字符预算
+    rolling_summary_enabled: bool = True
+    rolling_summary_trigger: int = 20   # 累计消息数达到此值才触发溢出滚动摘要
+    cjk_chars_per_token: float = 1.5
+    latin_chars_per_token: float = 4.0
+
+
 class Settings(_StrictBase):
     data_dir: Path = Path("./data")
     log_level: str = "INFO"
@@ -127,6 +140,7 @@ class Settings(_StrictBase):
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
+    short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -299,6 +313,32 @@ class Settings(_StrictBase):
                     os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_TIMEOUT_SECONDS", "20")
                 ),
                 llm_rerank_model=os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_MODEL"),
+            ),
+            short_term=ShortTermMemoryConfig(
+                max_messages=int(
+                    os.getenv("PERSONAL_AGENT_STM_MAX_MESSAGES", "12")
+                ),
+                token_budget=int(
+                    os.getenv("PERSONAL_AGENT_STM_TOKEN_BUDGET", "1500")
+                ),
+                per_message_char_limit=int(
+                    os.getenv("PERSONAL_AGENT_STM_PER_MESSAGE_CHAR_LIMIT", "1200")
+                ),
+                char_budget=int(
+                    os.getenv("PERSONAL_AGENT_STM_CHAR_BUDGET", "800")
+                ),
+                rolling_summary_enabled=_as_bool(
+                    os.getenv("PERSONAL_AGENT_STM_ROLLING_SUMMARY_ENABLED", "true")
+                ),
+                rolling_summary_trigger=int(
+                    os.getenv("PERSONAL_AGENT_STM_ROLLING_SUMMARY_TRIGGER", "20")
+                ),
+                cjk_chars_per_token=float(
+                    os.getenv("PERSONAL_AGENT_STM_CJK_CHARS_PER_TOKEN", "1.5")
+                ),
+                latin_chars_per_token=float(
+                    os.getenv("PERSONAL_AGENT_STM_LATIN_CHARS_PER_TOKEN", "4.0")
+                ),
             ),
         )
 

@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import personal_agent.core.config as config_module
 from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
+from personal_agent.core.projections import graph_ingest_document_from_note
+from tests.note_factory import make_note
 from personal_agent.graphiti.store import (
     _graphiti_episode_body,
     _graphiti_safe_episode_body,
@@ -62,19 +63,19 @@ def test_settings_reads_graphiti_llm_override_env(monkeypatch):
 
 
 def test_graphiti_episode_body_honors_max_chars():
-    note = KnowledgeNote(title="T", content="abcdef", summary="S")
+    note = make_note(title="T", content="abcdef", summary="S")
 
-    assert _graphiti_episode_body(note, max_chars=3) == "abc"
+    assert _graphiti_episode_body(graph_ingest_document_from_note(note), max_chars=3) == "abc"
 
 
 def test_safe_episode_body_removes_urls_and_limits_raw_content():
-    note = KnowledgeNote(
+    note = make_note(
         title="T",
         summary="summary with https://example.com/link",
         content="content " * 300,
     )
 
-    body = _graphiti_safe_episode_body(note)
+    body = _graphiti_safe_episode_body(graph_ingest_document_from_note(note))
 
     assert "https://" not in body
     assert body.startswith("Title: T")

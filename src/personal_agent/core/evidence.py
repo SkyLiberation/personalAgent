@@ -13,7 +13,8 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from .models import Citation, KnowledgeNote
-from ..graphiti.store import GraphAskResult
+from .projections import EvidenceSource, evidence_source_from_note
+from .graph_results import GraphAskResult
 
 
 class EvidenceItem(BaseModel):
@@ -268,12 +269,12 @@ def graph_result_to_evidence(
     for hit in graph_result.citation_hits:
         note = notes_by_episode.get(hit.episode_uuid)
         if note is not None:
-            source_type = "chunk" if note.parent_note_id is not None else "note"
+            source_type = "chunk" if note.chunk.parent_note_id is not None else "note"
             snippet = _best_snippet(note, hit, question)
             items.append(EvidenceItem(
                 source_type=source_type,
                 source_id=note.id,
-                title=note.title,
+                title=note.body.title,
                 snippet=snippet,
                 fact=hit.relation_fact,
                 score=float(hit.score),
@@ -305,23 +306,27 @@ def graph_result_to_evidence(
     return items
 
 
-def notes_to_evidence(matches: list[KnowledgeNote]) -> list[EvidenceItem]:
+def notes_to_evidence(matches: list[KnowledgeNote | EvidenceSource]) -> list[EvidenceItem]:
     """Convert local note/chunk matches to ``EvidenceItem``."""
     items: list[EvidenceItem] = []
-    for note in matches:
-        source_type = "chunk" if note.parent_note_id is not None else "note"
-        snippet = note.content[:500] if source_type == "chunk" else note.summary
+    for match in matches:
+        source = (
+            evidence_source_from_note(match)
+            if isinstance(match, KnowledgeNote)
+            else match
+        )
+        source_type = "chunk" if source.parent_note_id is not None else "note"
+        snippet = source.content[:500] if source_type == "chunk" else source.summary
         items.append(EvidenceItem(
             source_type=source_type,
-            source_id=note.id,
-            title=note.title,
+            source_id=source.id,
+            title=source.title,
             snippet=snippet,
-            source_span=note.source_span,
+            source_span=source.source_span,
             metadata={
-                "graph_episode_uuid": note.graph_episode_uuid,
-                "source_ref": note.source_ref,
-                "source_fingerprint": note.source_fingerprint,
-                **note.metadata,
+                "source_ref": source.source_ref,
+                "source_fingerprint": source.source_fingerprint,
+                **source.metadata,
             },
         ))
     return items

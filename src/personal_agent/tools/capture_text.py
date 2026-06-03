@@ -22,10 +22,10 @@ def build_capture_text_tool(capture_executor: Callable) -> BaseTool:
             result = capture_executor(text=text, source_type=source_type, user_id=user_id)
             return tool_response(tool_success({
                 "note_id": result.note.id,
-                "title": result.note.title,
-                "summary": result.note.summary,
-                "content_preview": result.note.content[:800],
-                "graph_sync_status": result.note.graph_sync_status,
+                "title": result.note.body.title,
+                "summary": result.note.body.summary,
+                "content_preview": result.note.body.content[:800],
+                "graph_sync_status": result.note.graph_sync.status,
             }))
         except Exception as exc:
             logger.exception("capture_text failed")

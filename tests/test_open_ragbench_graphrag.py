@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
+from tests.note_factory import make_note
 from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
 from evals.open_ragbench.loader import RAGBenchDoc, RAGBenchQuery
@@ -127,7 +127,7 @@ def test_ask_pipeline_ablation_reuses_planner_cache(monkeypatch):
     class FakeStore:
         def find_similar_notes(self, user_id, query, limit=8, filters=None):
             return [
-                KnowledgeNote(
+                make_note(
                     id="ragbench_paper-a_sec_0",
                     user_id=user_id,
                     title="Redis",

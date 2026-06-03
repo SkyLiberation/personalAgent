@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from ..core.models import KnowledgeNote, ReviewCard, local_now
+from ..core.projections import retrieval_document_from_note
 from ..core.query_understanding import RetrievalFilters
 from .postgres_common import PostgresStoreBase
 
@@ -29,16 +30,17 @@ _EMBEDDING_DIMENSIONS = 128
 
 
 def _search_text_for_note(note: KnowledgeNote) -> str:
+    document = retrieval_document_from_note(note)
     parts = [
-        note.title,
-        note.summary,
-        note.preextract_topic or "",
-        " ".join(note.tags),
-        " ".join(note.entity_names),
-        " ".join(note.relation_facts),
-        " ".join(str(value) for value in note.metadata.values() if value),
-        note.source_fingerprint or "",
-        note.content,
+        document.title,
+        document.summary,
+        document.preextract_topic or "",
+        " ".join(document.tags),
+        " ".join(document.entity_names),
+        " ".join(document.relation_facts),
+        " ".join(str(value) for value in document.metadata.values() if value),
+        document.source_fingerprint or "",
+        document.content,
     ]
     return _compact_whitespace(" ".join(part for part in parts if part))
 
@@ -108,11 +110,11 @@ def _filters_sql(filters: RetrievalFilters | None) -> tuple[str, list[object]]:
 
     source_types = [item.strip() for item in filters.source_types if item.strip()]
     if source_types:
-        clauses.append("AND payload->>'source_type' = ANY(%s)")
+        clauses.append("AND payload#>>'{source,type}' = ANY(%s)")
         params.append(source_types)
 
     if filters.source_ref_contains.strip():
-        clauses.append("AND lower(coalesce(payload->>'source_ref', '')) LIKE %s")
+        clauses.append("AND lower(coalesce(payload#>>'{source,ref}', '')) LIKE %s")
         params.append(f"%{filters.source_ref_contains.strip().lower()}%")
 
     tags = [tag.strip().lower() for tag in filters.tags if tag.strip()]
@@ -136,7 +138,7 @@ def _filters_sql(filters: RetrievalFilters | None) -> tuple[str, list[object]]:
         params.append(filters.created_before.strip())
 
     if filters.metadata_contains.strip():
-        clauses.append("AND lower(coalesce(payload->>'metadata', '')) LIKE %s")
+        clauses.append("AND lower(coalesce(payload#>>'{source,metadata}', '')) LIKE %s")
         params.append(f"%{filters.metadata_contains.strip().lower()}%")
 
     if filters.parent_note_id.strip():
@@ -149,18 +151,18 @@ def _filters_sql(filters: RetrievalFilters | None) -> tuple[str, list[object]]:
 def _note_matches_filters(note: KnowledgeNote, filters: RetrievalFilters | None) -> bool:
     if filters is None or not filters.active():
         return True
-    if filters.source_types and note.source_type not in filters.source_types:
+    if filters.source_types and note.source.type not in filters.source_types:
         return False
     if filters.source_ref_contains.strip():
         needle = filters.source_ref_contains.strip().lower()
-        if needle not in (note.source_ref or "").lower():
+        if needle not in (note.source.ref or "").lower():
             return False
     if filters.tags:
         note_tags = {tag.lower() for tag in note.tags}
         if not all(tag.lower() in note_tags for tag in filters.tags):
             return False
     if filters.metadata_contains.strip():
-        metadata_text = " ".join(str(value) for value in note.metadata.values()).lower()
+        metadata_text = " ".join(str(value) for value in note.source.metadata.values()).lower()
         if filters.metadata_contains.strip().lower() not in metadata_text:
             return False
     if filters.created_after.strip():
@@ -177,7 +179,7 @@ def _note_matches_filters(note: KnowledgeNote, filters: RetrievalFilters | None)
             pass
     if filters.parent_note_id.strip():
         parent_id = filters.parent_note_id.strip()
-        if note.id != parent_id and note.parent_note_id != parent_id:
+        if note.id != parent_id and note.chunk.parent_note_id != parent_id:
             return False
     return True
 
@@ -297,40 +299,31 @@ class PostgresMemoryStore(PostgresStoreBase):
                     UPDATE knowledge_notes
                     SET search_text = concat_ws(
                             ' ',
-                            payload->>'title',
-                            payload->>'summary',
-                            payload->>'preextract_topic',
-                            payload->>'source_fingerprint',
-                            payload->>'metadata',
-                            payload->>'content'
+                            payload#>>'{body,title}',
+                            payload#>>'{body,summary}',
+                            payload#>>'{preextract,topic}',
+                            payload#>>'{source,fingerprint}',
+                            payload#>>'{source,metadata}',
+                            payload#>>'{body,content}'
                         ),
                         search_vector = to_tsvector(
                             'simple',
                             concat_ws(
                                 ' ',
-                                payload->>'title',
-                                payload->>'summary',
-                                payload->>'preextract_topic',
-                                payload->>'source_fingerprint',
-                                payload->>'metadata',
-                                payload->>'content'
+                                payload#>>'{body,title}',
+                                payload#>>'{body,summary}',
+                                payload#>>'{preextract,topic}',
+                                payload#>>'{source,fingerprint}',
+                                payload#>>'{source,metadata}',
+                                payload#>>'{body,content}'
                             )
                         ),
-                        source_fingerprint = COALESCE(source_fingerprint, payload->>'source_fingerprint'),
+                        source_fingerprint = COALESCE(source_fingerprint, payload#>>'{source,fingerprint}'),
                         embedding_vector = CASE
                             WHEN embedding_vector IS NULL THEN NULL
                             ELSE embedding_vector
                         END
                     WHERE search_text = '' OR search_vector = ''::tsvector
-                    """
-                )
-                cur.execute(
-                    """
-                    UPDATE knowledge_notes
-                    SET source_fingerprint = payload->>'source_fingerprint'
-                    WHERE source_fingerprint IS NULL
-                      AND payload ? 'source_fingerprint'
-                      AND payload->>'source_fingerprint' IS NOT NULL
                     """
                 )
                 cur.execute(
@@ -388,10 +381,10 @@ class PostgresMemoryStore(PostgresStoreBase):
                     (
                         note.id,
                         note.user_id,
-                        note.parent_note_id,
-                        note.graph_episode_uuid,
+                        note.chunk.parent_note_id,
+                        note.graph.episode_uuid,
                         Jsonb(note.model_dump(mode="json")),
-                        note.source_fingerprint,
+                        note.source.fingerprint,
                         search_text,
                         search_text,
                         embedding_vector,
@@ -468,7 +461,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     """
                     SELECT payload FROM knowledge_notes
                     WHERE parent_note_id = %s
-                    ORDER BY (payload->>'chunk_index')::integer NULLS LAST
+                    ORDER BY (payload#>>'{chunk,index}')::integer NULLS LAST
                     """,
                     (parent_note_id,),
                 )
@@ -476,9 +469,9 @@ class PostgresMemoryStore(PostgresStoreBase):
 
     def get_parent_note(self, note_id: str) -> KnowledgeNote | None:
         note = self.get_note(note_id)
-        if note is None or note.parent_note_id is None:
+        if note is None or note.chunk.parent_note_id is None:
             return None
-        return self.get_note(note.parent_note_id)
+        return self.get_note(note.chunk.parent_note_id)
 
     def find_notes_by_graph_episode_uuids(
         self, user_id: str, episode_uuids: list[str], filters: RetrievalFilters | None = None
@@ -498,7 +491,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     (user_id, episode_uuids, *filter_params),
                 )
                 by_episode = {
-                    note.graph_episode_uuid: note
+                    note.graph.episode_uuid: note
                     for row in cur.fetchall()
                     for note in [KnowledgeNote.model_validate(row["payload"])]
                 }
@@ -535,10 +528,10 @@ class PostgresMemoryStore(PostgresStoreBase):
                            (
                                CASE WHEN search_vector @@ q.tsq THEN ts_rank_cd(search_vector, q.tsq) * 6 ELSE 0 END
                                + similarity(search_text, %s) * 3
-                               + CASE WHEN lower(payload->>'title') LIKE ANY(%s) THEN 4 ELSE 0 END
-                               + CASE WHEN lower(payload->>'summary') LIKE ANY(%s) THEN 2 ELSE 0 END
-                               + CASE WHEN lower(coalesce(payload->>'preextract_topic', '')) LIKE ANY(%s) THEN 2 ELSE 0 END
-                               + CASE WHEN lower(payload->>'content') LIKE ANY(%s) THEN 1 ELSE 0 END
+                               + CASE WHEN lower(payload#>>'{{body,title}}') LIKE ANY(%s) THEN 4 ELSE 0 END
+                               + CASE WHEN lower(payload#>>'{{body,summary}}') LIKE ANY(%s) THEN 2 ELSE 0 END
+                               + CASE WHEN lower(coalesce(payload#>>'{{preextract,topic}}', '')) LIKE ANY(%s) THEN 2 ELSE 0 END
+                               + CASE WHEN lower(payload#>>'{{body,content}}') LIKE ANY(%s) THEN 1 ELSE 0 END
                                + CASE WHEN parent_note_id IS NOT NULL THEN 0.25 ELSE 0 END
                            ) AS score
                     FROM knowledge_notes, q
@@ -678,12 +671,12 @@ class PostgresMemoryStore(PostgresStoreBase):
         for note in ranked_notes:
             if len(results) >= limit:
                 break
-            if note.parent_note_id:
+            if note.chunk.parent_note_id:
                 add(note)
-                parent = self.get_note(note.parent_note_id)
+                parent = self.get_note(note.chunk.parent_note_id)
                 add(parent)
-                if note.parent_note_id not in seen_parent_ids:
-                    seen_parent_ids.add(note.parent_note_id)
+                if note.chunk.parent_note_id not in seen_parent_ids:
+                    seen_parent_ids.add(note.chunk.parent_note_id)
                     for neighbor in self._neighbor_chunks(note):
                         add(neighbor)
             else:
@@ -691,14 +684,14 @@ class PostgresMemoryStore(PostgresStoreBase):
         return results[:limit]
 
     def _neighbor_chunks(self, note: KnowledgeNote) -> list[KnowledgeNote]:
-        if note.parent_note_id is None or note.chunk_index is None:
+        if note.chunk.parent_note_id is None or note.chunk.index is None:
             return []
-        chunks = self.get_chunks_for_parent(note.parent_note_id)
+        chunks = self.get_chunks_for_parent(note.chunk.parent_note_id)
         return [
             chunk for chunk in chunks
             if chunk.id != note.id
-            and chunk.chunk_index is not None
-            and abs(chunk.chunk_index - note.chunk_index) <= 1
+            and chunk.chunk.index is not None
+            and abs(chunk.chunk.index - note.chunk.index) <= 1
         ]
 
     def due_reviews(self, user_id: str) -> list[ReviewCard]:
@@ -765,10 +758,10 @@ class PostgresMemoryStore(PostgresStoreBase):
         uploads_dir = (self.data_dir / "uploads").resolve()
         removed = 0
         for note in notes:
-            if not note.source_ref:
+            if not note.source.ref:
                 continue
             try:
-                source_path = Path(note.source_ref).resolve()
+                source_path = Path(note.source.ref).resolve()
                 if _is_relative_to(source_path, uploads_dir) and source_path.is_file():
                     source_path.unlink()
                     removed += 1

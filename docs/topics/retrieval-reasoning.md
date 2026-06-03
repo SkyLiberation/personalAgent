@@ -264,7 +264,7 @@ chunk note 现已支持独立图谱同步：capture 阶段对每个 chunk 设 `g
 
 `KnowledgeNote` 已新增 `graph_node_refs / graph_edge_refs / graph_fact_refs` 结构化字段，保留 Graphiti 的节点 UUID、类型标签、摘要、边的方向和 episode 归属。原有的 `entity_names / relation_facts` 字符串字段保留用于向后兼容。
 
-`GraphCaptureResult` 和 `GraphAskResult` 同步携带 `node_refs / edge_refs / fact_refs`，`_merge_graph_capture` 会将结构化引用写入本地笔记。`_build_graph_answer_prompt` 已升级为在实体名称旁附带节点摘要。
+`GraphCaptureResult` 和 `GraphAskResult` 同步携带 `node_refs / edge_refs / fact_refs`，`GraphCaptureFlow.merge_graph_capture()` 会将结构化引用写入本地笔记。`_build_graph_answer_prompt` 已升级为在实体名称旁附带节点摘要。
 
 ### 8. verifier 重试链路存在结果重复计算
 

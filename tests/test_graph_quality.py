@@ -1,9 +1,7 @@
 """Unit tests for graph extraction quality observability (PG-0)."""
 from __future__ import annotations
 
-import pytest
-
-from personal_agent.core.models import KnowledgeNote
+from tests.note_factory import make_note
 from personal_agent.graphiti.quality_vocab import (
     all_relations_weak,
     is_weak_relation,
@@ -55,18 +53,18 @@ class TestAllRelationsWeak:
 
 class TestKnowledgeNoteQualityFields:
     def test_quality_fields_default_none(self) -> None:
-        note = KnowledgeNote(title="t", content="c", summary="s")
-        assert note.graph_quality_entity_count is None
-        assert note.graph_quality_relation_count is None
-        assert note.graph_quality_avg_fact_length is None
-        assert note.graph_quality_zero_entities is None
-        assert note.graph_quality_weak_relations_only is None
+        note = make_note(title="t", content="c", summary="s")
+        assert note.graph_quality.entity_count is None
+        assert note.graph_quality.relation_count is None
+        assert note.graph_quality.avg_fact_length is None
+        assert note.graph_quality.zero_entities is None
+        assert note.graph_quality.weak_relations_only is None
 
     def test_quality_fields_settable(self) -> None:
-        note = KnowledgeNote(title="t", content="c", summary="s")
-        note.graph_quality_entity_count = 5
-        note.graph_quality_relation_count = 3
-        note.graph_quality_avg_fact_length = 12.5
-        note.graph_quality_zero_entities = False
-        note.graph_quality_weak_relations_only = False
-        assert note.graph_quality_entity_count == 5
+        note = make_note(title="t", content="c", summary="s")
+        note.graph_quality.entity_count = 5
+        note.graph_quality.relation_count = 3
+        note.graph_quality.avg_fact_length = 12.5
+        note.graph_quality.zero_entities = False
+        note.graph_quality.weak_relations_only = False
+        assert note.graph_quality.entity_count == 5

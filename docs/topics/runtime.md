@@ -1,6 +1,6 @@
 # 运行时与编排层说明
 
-本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)、[src/personal_agent/agent/graph.py](../../src/personal_agent/agent/graph.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
+本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)、[src/personal_agent/agent/capture_flow.py](../../src/personal_agent/agent/capture_flow.py)、[src/personal_agent/agent/graph_capture_flow.py](../../src/personal_agent/agent/graph_capture_flow.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
 
 ## 设计目标
 
@@ -36,7 +36,7 @@
 
 ### 3. LangGraph 编排
 
-代码位置：[orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[orchestration_nodes.py](../../src/personal_agent/agent/orchestration_nodes.py)、[graph.py](../../src/personal_agent/agent/graph.py)、[nodes.py](../../src/personal_agent/agent/nodes.py)
+代码位置：[orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)、[capture_flow.py](../../src/personal_agent/agent/capture_flow.py)、[graph_capture_flow.py](../../src/personal_agent/agent/graph_capture_flow.py)、[nodes.py](../../src/personal_agent/agent/nodes.py)
 
 作用：
 
@@ -44,8 +44,9 @@
 - `build_entry_graph()`：归一化、意图路由与澄清 interrupt/resume
 - `build_plan_execution_graph()`：计划、确定性步骤、HITL、重试与最终汇总
 - `build_react_graph()`：受限 ReAct 轮次及其工具执行边界
-- `build_capture_graph()`：采集、增强、关联、复习调度
-- `build_ask_graph()`：本地问答
+- `run_capture_flow()`：capture 分支的确定性业务流，不单独 compile LangGraph
+- `GraphCaptureFlow`：capture 后的图谱摄取、graph sync 状态回写、批量同步和质量指标
+- `execute_ask()`：ask 运行时 pipeline，负责 graph/local/web 检索、rerank、生成和校验
 
 ## 当前执行路径
 
@@ -53,9 +54,9 @@
 
 ```text
 text/source
-  -> capture graph
+  -> run_capture_flow()
   -> PostgresMemoryStore
-  -> optional Graphiti sync
+  -> GraphCaptureFlow optional Graphiti sync
   -> CaptureResult
 ```
 
@@ -65,7 +66,7 @@ text/source
 question
   -> bind session / refresh memory
   -> graph ask
-  -> graph answer or local ask graph fallback
+  -> local/vector retrieval and evidence pipeline
   -> verifier
   -> optional retry
   -> record turn
@@ -173,7 +174,7 @@ EntryInput
 
 1. 定义 `EntryOrchestrationDeps` 的最终形态：只包含 node 需要的显式 service/callable，不再从 runtime 私有字段直接读。
 2. 抽出 `AskService`：先迁移 `execute_ask()` 的主体逻辑，runtime 只保留转发方法。
-3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture graph、store、Graphiti sync 的编排移出 runtime。
+3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture flow、store、Graphiti sync 的编排移出 runtime。
 4. 工具对 runtime 的依赖已通过 `build_capture_text_tool(capture_executor)` 的依赖注入消除。
 5. ~~清理 `RuntimeEntryMixin.plan_for_entry()` 等 LangGraph 改造后的兼容遗留方法。~~ **已完成**：`plan_for_entry()` 已删除（118 行死代码），`runtime_entry.py` 从 163 行精简到 40 行。
 6. 最后压缩 `AgentRuntime.__init__()`：只装配依赖容器和 graph，不再承载具体业务流程。

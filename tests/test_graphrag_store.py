@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from personal_agent.core.models import KnowledgeNote, local_now
 from personal_agent.graphrag import GraphRagStore
+from tests.note_factory import make_note
 
 
 class FakeStore:
@@ -15,14 +16,14 @@ class FakeStore:
 
 
 def test_graphrag_store_ranks_child_and_reuses_cache():
-    parent = KnowledgeNote(
+    parent = make_note(
         id="parent",
         user_id="u1",
         title="Redis cache architecture",
         content="Long document.",
         summary="Redis cache design.",
     )
-    child = KnowledgeNote(
+    child = make_note(
         id="child",
         user_id="u1",
         parent_note_id="parent",
@@ -31,7 +32,7 @@ def test_graphrag_store_ranks_child_and_reuses_cache():
         content="Redis stores hot order data and reduces database pressure.",
         summary="Redis stores hot order data.",
     )
-    other = KnowledgeNote(
+    other = make_note(
         id="other",
         user_id="u1",
         title="Payment UI",
@@ -50,7 +51,7 @@ def test_graphrag_store_ranks_child_and_reuses_cache():
 
 
 def test_graphrag_store_invalidates_cache_when_note_updates():
-    note = KnowledgeNote(
+    note = make_note(
         id="n1",
         user_id="u1",
         title="Old deployment",

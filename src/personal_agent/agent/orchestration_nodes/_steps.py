@@ -710,8 +710,8 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
                     matched = deps.store.find_notes_by_graph_episode_uuids(user_id, str_uuids)
                     for note in matched:
                         candidates.append({
-                            "note_id": note.id, "title": note.title,
-                            "summary": note.summary, "source": "graph_episode",
+                            "note_id": note.id, "title": note.body.title,
+                            "summary": note.body.summary, "source": "graph_episode",
                         })
                 except Exception:
                     logger.exception("Episode UUID lookup failed in resolve")
@@ -751,8 +751,8 @@ def _select_local_delete_candidate_with_llm(
     candidate_by_id = {
         note.id: {
             "note_id": note.id,
-            "title": note.title,
-            "summary": note.summary,
+            "title": note.body.title,
+            "summary": note.body.summary,
             "source": "llm_candidate_selection",
         }
         for note in selectable_notes
@@ -760,8 +760,8 @@ def _select_local_delete_candidate_with_llm(
     prompt_candidates = [
         {
             "note_id": note.id,
-            "title": note.title[:200],
-            "summary": (note.summary or "")[:300],
+            "title": note.body.title[:200],
+            "summary": (note.body.summary or "")[:300],
         }
         for note in selectable_notes
     ]
