@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Protocol
 
-from .config import Settings
+from .config import OpenAIConfig, Settings
 from .evidence import (
     ContextPack,
     EvidenceItem,
@@ -13,6 +13,7 @@ from .evidence import (
     rank_evidence_items,
     select_ranked_evidence,
 )
+from .llm_trace import log_llm_parse, traced_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -95,20 +96,20 @@ class LlmEvidenceReranker:
         )
 
     def _rank_ids(self, question: str, candidates: list[RankedEvidence]) -> list[str]:
-        from openai import OpenAI
-
         api_key, base_url, model = _llm_config(self.settings)
         if not api_key:
             raise RuntimeError("LLM reranker requires PERSONAL_AGENT_EXTRACT_API_KEY or OPENAI_API_KEY")
 
-        client = OpenAI(
+        llm_config = OpenAIConfig(
             api_key=api_key,
             base_url=base_url,
-            timeout=self.settings.ask.llm_rerank_timeout_seconds,
+            model=model,
+            timeout_seconds=self.settings.ask.llm_rerank_timeout_seconds,
             max_retries=1,
         )
-        response = client.chat.completions.create(
-            model=model,
+        result = traced_chat_completion(
+            llm_config,
+            prompt_name="evidence_rerank",
             temperature=0,
             max_tokens=700,
             response_format=_rerank_response_format(),
@@ -116,8 +117,11 @@ class LlmEvidenceReranker:
                 {
                     "role": "system",
                     "content": (
-                        "Rank evidence ids by how directly they support answering the question. "
+                        "Rank evidence ids for a retrieval-augmented answer. "
                         "Prefer exact, grounded, source-specific evidence over broad or tangential text. "
+                        "For multi-hop, comparison, temporal, or cross-source questions, preserve complementary "
+                        "evidence that covers different entities, sources, dates, or facts needed to answer the "
+                        "whole question; do not rank near-duplicates above missing parts of the evidence set. "
                         "Return JSON only."
                     ),
                 },
@@ -126,10 +130,30 @@ class LlmEvidenceReranker:
                     "content": _rerank_prompt(question, candidates),
                 },
             ],
+            model=model,
+            metadata={"component": "evidence_reranker", "candidate_count": len(candidates)},
+            upload_inputs_outputs=self.settings.langsmith.upload_inputs,
         )
-        content = response.choices[0].message.content or "{}"
-        parsed = json.loads(content)
-        ranked_ids = parsed.get("ranked_ids", [])
+        try:
+            parsed = json.loads(result.content or "{}")
+        except Exception as exc:
+            log_llm_parse(
+                prompt_name="evidence_rerank",
+                model=model,
+                parse_schema="EvidenceRerank",
+                parse_ok=False,
+                parse_error=str(exc),
+                latency_ms=result.latency_ms,
+            )
+            raise
+        log_llm_parse(
+            prompt_name="evidence_rerank",
+            model=model,
+            parse_schema="EvidenceRerank",
+            parse_ok=True,
+            latency_ms=result.latency_ms,
+        )
+        ranked_ids = parsed if isinstance(parsed, list) else parsed.get("ranked_ids", [])
         if not isinstance(ranked_ids, list):
             return []
         valid_ids = {item.evidence.evidence_id for item in candidates}
@@ -214,10 +238,13 @@ def _rerank_prompt(question: str, candidates: list[RankedEvidence]) -> str:
     for item in candidates:
         evidence = item.evidence
         text = " ".join(part for part in [evidence.fact, evidence.snippet] if part)
+        retrieved_by = evidence.metadata.get("retrieved_by") or evidence.metadata.get("source") or ""
         lines.append(
             "\n".join([
                 f"- id: {evidence.evidence_id}",
                 f"  source_type: {evidence.source_type}",
+                f"  retrieved_by: {retrieved_by}",
+                f"  source_id: {evidence.source_id}",
                 f"  title: {evidence.title[:160]}",
                 f"  text: {text[:700]}",
                 f"  heuristic_reason: {item.reason}",

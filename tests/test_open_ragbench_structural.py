@@ -8,8 +8,8 @@ from evals.open_ragbench.loader import RAGBenchDoc, RAGBenchQuery
 from evals.open_ragbench.runner import (
     AskPipelineStrategy,
     BenchmarkContext,
-    GraphRagStrategy,
     RuntimeAskStrategy,
+    StructuralRetrieverStrategy,
     get_strategy,
     run_open_ragbench,
     list_strategy_names,
@@ -27,9 +27,9 @@ def _context() -> BenchmarkContext:
     )
 
 
-def test_graphrag_is_registered():
-    assert "graphrag" in list_strategy_names()
-    assert isinstance(get_strategy("graphrag"), GraphRagStrategy)
+def test_structural_is_registered():
+    assert "structural" in list_strategy_names()
+    assert isinstance(get_strategy("structural"), StructuralRetrieverStrategy)
 
 
 def test_ask_pipeline_eval_variants_are_registered():
@@ -47,7 +47,7 @@ def test_ask_pipeline_eval_variants_are_registered():
     assert isinstance(get_strategy("current_runtime_ask"), RuntimeAskStrategy)
 
 
-def test_graphrag_ranks_matching_section_or_parent():
+def test_structural_ranks_matching_section_or_parent():
     docs = {
         "paper-a": RAGBenchDoc(
             doc_id="paper-a",
@@ -76,7 +76,7 @@ def test_graphrag_ranks_matching_section_or_parent():
         )
     ]
 
-    rankings, relevance = GraphRagStrategy().evaluate(queries, docs, limit=3, context=_context())
+    rankings, relevance = StructuralRetrieverStrategy().evaluate(queries, docs, limit=3, context=_context())
 
     assert rankings[0][0] == "q1"
     assert rankings[0][1][0] in relevance["q1"]

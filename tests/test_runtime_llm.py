@@ -25,7 +25,7 @@ def test_generate_answer_limits_sdk_waiting(monkeypatch):
                 )
             )
 
-    monkeypatch.setattr("personal_agent.agent.runtime_llm.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
     runtime = _Runtime(
         Settings(
             openai=OpenAIConfig(
@@ -54,7 +54,7 @@ def test_generate_answer_failure_opens_short_circuit(monkeypatch):
                 completions=SimpleNamespace(create=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
             )
 
-    monkeypatch.setattr("personal_agent.agent.runtime_llm.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
     runtime = _Runtime(
         Settings(
             openai=OpenAIConfig(

@@ -4,9 +4,8 @@ import json
 import logging
 from uuid import uuid4
 
-from openai import OpenAI
-
 from ..core.config import Settings
+from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from .planner import PlanStep
 
 logger = logging.getLogger(__name__)
@@ -91,15 +90,12 @@ class Replanner:
             "  on_failure(skip/abort)。\n"
             "不要包含已经完成的步骤。如果无法重新规划，返回 {\"steps\": []}。"
         )
+        model = self._settings.openai.small_model
+        latency_ms = None
         try:
-            client = OpenAI(
-                api_key=self._settings.openai.api_key,
-                base_url=self._settings.openai.base_url,
-                timeout=self._settings.openai.timeout_seconds,
-                max_retries=self._settings.openai.max_retries,
-            )
-            response = client.chat.completions.create(
-                model=self._settings.openai.small_model,
+            llm_result = traced_chat_completion(
+                self._settings.openai,
+                prompt_name="replanner",
                 messages=[
                     {"role": "system", "content": "你是一个严谨的任务重新规划器，只输出 JSON。"},
                     {"role": "user", "content": prompt},
@@ -107,11 +103,23 @@ class Replanner:
                 temperature=0,
                 max_tokens=500,
                 response_format={"type": "json_object"},
+                metadata={"intent": intent, "failed_step_id": failed_step.step_id},
+                upload_inputs_outputs=self._settings.langsmith.upload_inputs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = llm_result.content
+            model = llm_result.model
+            latency_ms = llm_result.latency_ms
             payload = json.loads(content)
             steps_data = payload.get("steps", [])
             if not isinstance(steps_data, list) or not steps_data:
+                log_llm_parse(
+                    prompt_name="replanner",
+                    model=model,
+                    parse_ok=False,
+                    parse_schema="PlanStep[]",
+                    parse_error="steps missing or empty",
+                    latency_ms=latency_ms,
+                )
                 return None
 
             valid_actions = {"retrieve", "tool_call", "compose", "verify"}
@@ -143,7 +151,26 @@ class Replanner:
                     requires_confirmation=bool(item.get("requires_confirmation", False)),
                     on_failure=str(item.get("on_failure") or "skip"),
                 ))
+            log_llm_parse(
+                prompt_name="replanner",
+                model=model,
+                parse_ok=bool(revised),
+                parse_schema="PlanStep[]",
+                parse_error="" if revised else "no valid revised steps",
+                latency_ms=latency_ms,
+            )
             return revised if revised else None
+        except json.JSONDecodeError as exc:
+            log_llm_parse(
+                prompt_name="replanner",
+                model=model,
+                parse_ok=False,
+                parse_schema="PlanStep[]",
+                parse_error=str(exc),
+                latency_ms=latency_ms,
+            )
+            logger.exception("Replanner LLM JSON decode failed, falling back to heuristic")
+            return None
         except Exception:
             logger.exception("Replanner LLM call failed, falling back to heuristic")
             return None

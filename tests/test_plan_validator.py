@@ -7,7 +7,7 @@ from personal_agent.agent.planner import PlanStep
 from personal_agent.agent.router import RouterDecision
 from langchain_core.tools import tool
 
-from personal_agent.tools import ToolExecutor, tool_response, tool_success
+from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
 
 
 class TestPlanValidationResult:
@@ -323,27 +323,56 @@ class TestPlanValidatorPlanLevel:
         assert result.valid
 
 
-@tool("dangerous_op", description="高风险操作", response_format="content_and_artifact", extras={"risk_level": "high", "requires_confirmation": True})
+@tool(
+    "dangerous_op",
+    description="高风险操作",
+    response_format="content_and_artifact",
+    extras=governance_extras(
+        risk_level="high",
+        requires_confirmation=True,
+        side_effects=("irreversible",),
+    ),
+)
 def _governance_high_risk(target: str):
     return tool_response(tool_success("done"))
 
 
-@tool("write_op", description="写入操作", response_format="content_and_artifact", extras={"writes_longterm": True})
+@tool(
+    "write_op",
+    description="写入操作",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("write_longterm",)),
+)
 def _governance_write(content: str):
     return tool_response(tool_success("saved"))
 
 
-@tool("capture_text", description="保存生成后的草稿", response_format="content_and_artifact", extras={"writes_longterm": True})
+@tool(
+    "capture_text",
+    description="保存生成后的草稿",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("write_longterm",)),
+)
 def _deferred_capture_text(text: str):
     return tool_response(tool_success("saved"))
 
 
-@tool("external_op", description="外部操作", response_format="content_and_artifact", extras={"accesses_external": True})
+@tool(
+    "external_op",
+    description="外部操作",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("external_network",)),
+)
 def _governance_external(url: str):
     return tool_response(tool_success("fetched"))
 
 
-@tool("graph_search", description="只读图谱检索", response_format="content_and_artifact", extras={"risk_level": "low"})
+@tool(
+    "graph_search",
+    description="只读图谱检索",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("read_local",)),
+)
 def _read_only_graph_search(query: str = ""):
     return tool_response(tool_success({"results": []}))
 
@@ -389,7 +418,7 @@ class TestPlanValidatorGovernance:
                      tool_name="write_op", risk_level="low"),
         ]
         result = validator.validate(steps, default_decision)
-        assert any("写入长期知识" in w for w in result.warnings)
+        assert any("修改长期知识" in w for w in result.warnings)
 
     def test_tool_writes_longterm_with_high_risk_no_warning(self, validator, default_decision):
         steps = [
@@ -397,7 +426,7 @@ class TestPlanValidatorGovernance:
                      tool_name="write_op", risk_level="high"),
         ]
         result = validator.validate(steps, default_decision)
-        assert not any("写入长期知识" in w for w in result.warnings)
+        assert not any("修改长期知识" in w for w in result.warnings)
 
     def test_tool_accesses_external_warns(self, validator, default_decision):
         steps = [

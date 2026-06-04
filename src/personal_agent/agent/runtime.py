@@ -6,12 +6,15 @@ from typing import Callable, TYPE_CHECKING
 from langgraph.types import Command
 
 from ..core.config import Settings
+from ..core.langsmith_tracing import configure_langsmith_environment, langsmith_trace_context
 from ..core.models import EntryInput
+from ..core.observability import RunMetrics
 from ..extract import PreExtractService
 from ..graphiti.store import GraphitiStore
-from ..graphrag import GraphRagStore
 from ..memory import MemoryFacade
+from ..ms_graphrag import MicrosoftGraphRagStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..structural_retriever import StructuralRetrieverStore
 from ..tools import ToolExecutor
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
@@ -131,14 +134,17 @@ class AgentRuntime(
         settings: Settings,
         store: PostgresMemoryStore,
         graph_store: GraphitiStore,
+        ms_graphrag_store: MicrosoftGraphRagStore | None = None,
         capture_service: "CaptureService | None" = None,
     ) -> None:
         if not settings.postgres_url:
             raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
         self.settings = settings
+        configure_langsmith_environment(settings.langsmith)
         self.store = store
         self.graph_store = graph_store
-        self.graphrag_store = GraphRagStore(store)
+        self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
+        self.structural_retriever = StructuralRetrieverStore(store)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_executor = ToolExecutor()
@@ -166,9 +172,15 @@ class AgentRuntime(
         return IngestionPipeline(
             settings=self.settings,
             store=self.store,
-            graph_store=self.graph_store,
+            graph_store=self._active_graph_store(),
             preextract_service=self._preextract_service,
         )
+
+    def _active_graph_store(self):
+        provider = self.settings.ask.graph_provider.strip().lower()
+        if provider in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
+            return self.ms_graphrag_store
+        return self.graph_store
 
     def execute_capture(
         self,
@@ -262,18 +274,42 @@ class AgentRuntime(
 
         config = {"configurable": {"thread_id": thread_id}}
 
+        metadata = _entry_trace_metadata(
+            run_id=run_id,
+            thread_id=thread_id,
+            user_id=normalized_user,
+            session_id=normalized_session,
+            entry_input=entry_input,
+        )
+        run_metrics = RunMetrics(
+            run_id=run_id,
+            thread_id=thread_id,
+            user_id=normalized_user,
+            session_id=normalized_session,
+        )
+
         # Pass explicit null/default values as channel updates. When a Pydantic
         # model is used directly, LangGraph omits nullable defaults while
         # resuming an existing thread, leaving prior-run transient values in
         # the input checkpoint until the first node resets them.
-        invoke_result = self._stream_entry_graph(
-            graph,
-            initial_state.model_dump(),
-            config,
-            on_progress or (lambda _event_type, _payload: None),
-        )
+        try:
+            with langsmith_trace_context(
+                self.settings.langsmith,
+                metadata=metadata,
+                tags=["entry", f"source:{metadata['source_platform']}"],
+            ):
+                invoke_result = self._stream_entry_graph(
+                    graph,
+                    initial_state.model_dump(),
+                    config,
+                    on_progress or (lambda _event_type, _payload: None),
+                )
+        except Exception as exc:
+            run_metrics.complete(status="failed", error_type=exc.__class__.__name__)
+            raise
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
+            run_metrics.complete(status="waiting_confirmation", interrupt_kind=interrupt_data.get("kind"))
             return self._entry_result_from_interrupt(
                 _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
@@ -307,8 +343,16 @@ class AgentRuntime(
                 session_id=normalized_session,
             )
 
+        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
+        run_metrics.intent = intent
+        run_metrics.complete(
+            status="completed",
+            plan_step_count=len(result_state.plan.steps),
+            tool_result_count=len(result_state.tool_results),
+            event_count=len(result_state.events),
+        )
         return EntryResult(
-            intent=result_state.router_decision.route if result_state.router_decision else "unknown",
+            intent=intent,
             reason=result_state.router_decision.user_visible_message if result_state.router_decision else "未提供路由说明。",
             reply_text=reply_text,
             capture_result=capture_result,
@@ -431,15 +475,44 @@ class AgentRuntime(
             "text": text or "",
             "option_id": option_id or "",
         }
+        run_metrics = RunMetrics(
+            run_id=run_id,
+            thread_id=thread_id,
+            user_id=user_id,
+        )
 
         logger.info(
             "Resuming graph run_id=%s thread_id=%s decision=%s",
             run_id, thread_id, decision,
         )
 
-        invoke_result = graph.invoke(Command(resume=resume_value), config)
+        try:
+            with langsmith_trace_context(
+                self.settings.langsmith,
+                metadata={
+                    "app": "personal-agent",
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "user_id": user_id,
+                    "resume_decision": decision,
+                },
+                tags=["entry", "resume"],
+            ):
+                invoke_result = graph.invoke(Command(resume=resume_value), config)
+        except Exception as exc:
+            run_metrics.complete(
+                status="failed",
+                resume_decision=decision,
+                error_type=exc.__class__.__name__,
+            )
+            raise
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
+            run_metrics.complete(
+                status="waiting_confirmation",
+                resume_decision=decision,
+                interrupt_kind=interrupt_data.get("kind"),
+            )
             return self._entry_result_from_interrupt(
                 _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
@@ -450,9 +523,19 @@ class AgentRuntime(
         result_state = AgentGraphState.model_validate(invoke_result)
 
         reply_text = result_state.answer or "操作已完成。"
+        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
+        run_metrics.intent = intent
+        run_metrics.session_id = result_state.session_id
+        run_metrics.complete(
+            status="completed",
+            resume_decision=decision,
+            plan_step_count=len(result_state.plan.steps),
+            tool_result_count=len(result_state.tool_results),
+            event_count=len(result_state.events),
+        )
 
         return EntryResult(
-            intent=result_state.router_decision.route if result_state.router_decision else "unknown",
+            intent=intent,
             reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
             reply_text=reply_text,
             plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
@@ -509,6 +592,26 @@ class AgentRuntime(
 
     def entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
         return self.execute_entry(entry_input, on_progress=on_progress)
+
+
+def _entry_trace_metadata(
+    *,
+    run_id: str,
+    thread_id: str,
+    user_id: str,
+    session_id: str,
+    entry_input: EntryInput,
+) -> dict[str, object]:
+    return {
+        "app": "personal-agent",
+        "run_id": run_id,
+        "thread_id": thread_id,
+        "user_id": user_id,
+        "session_id": session_id,
+        "source_platform": entry_input.source_platform or "unknown",
+        "source_type": entry_input.source_type,
+        "has_source_ref": bool(entry_input.source_ref),
+    }
 
 
 __all__ = [

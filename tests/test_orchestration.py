@@ -322,7 +322,7 @@ class TestOrchestrationGraphIntegration:
             def __init__(self, **_kwargs):
                 self.chat = FakeChat()
 
-        monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
         monkeypatch.setattr(runtime.settings.openai, "api_key", "test-key")
         monkeypatch.setattr(runtime.settings.openai, "base_url", "http://llm.test")
         monkeypatch.setattr(runtime.settings.openai, "small_model", "small")
@@ -913,7 +913,7 @@ class TestPhase3ExecutePlanStep:
         )
 
     def test_tool_node_result_sets_awaiting_confirmation(self, runtime):
-        """A ToolNode artifact requesting confirmation pauses the current step."""
+        """A ToolGateway artifact requesting confirmation pauses the current step."""
         from langchain_core.messages import ToolMessage
         from personal_agent.agent.orchestration_graph import _node_consume_plan_tool_result
 
@@ -936,6 +936,8 @@ class TestPhase3ExecutePlanStep:
                 active_context="plan",
                 pending_step_id="s1",
                 pending_call_id="r1:s1:0",
+                pending_tool_name="capture_text",
+                pending_tool_input={"text": "待保存正文", "user_id": "u1"},
             ),
             tool_messages=[
                 ToolMessage(
@@ -956,9 +958,14 @@ class TestPhase3ExecutePlanStep:
                 ),
             ],
         )
-        result = _node_consume_plan_tool_result(state)
+        result = _node_consume_plan_tool_result(state, deps=OrchestrationDeps.from_runtime(runtime))
         assert result["plan"].steps[0].status == "awaiting_confirmation"
         assert state.events[-1].type == "confirmation_required"
+        tool_result_event = next(event for event in state.events if event.type == "tool_result")
+        assert tool_result_event.payload["tool_name"] == "capture_text"
+        assert tool_result_event.payload["input"]["text"] == "待保存正文"
+        assert tool_result_event.payload["invocation"]["permission_scope"] == "memory:write"
+        assert tool_result_event.payload["invocation"]["side_effects"] == ["write_longterm"]
         assert state.tool_tracking.pending_call_id == ""
 
     def test_plan_tool_result_rejects_stale_call_id(self, runtime):
@@ -1620,7 +1627,7 @@ class TestPhase4ReActIterateNode:
 
 
 class TestPhase4ReActMainGraphIntegration:
-    """Integration tests for ReAct execution through the main graph ToolNode."""
+    """Integration tests for ReAct execution through the main graph ToolGateway."""
 
     @pytest.fixture
     def stub_settings(self, temp_dir):
@@ -1668,10 +1675,12 @@ class TestPhase4ReActMainGraphIntegration:
         assert result["tool_tracking"].active_context == "react"
         assert result["tool_messages"][0].tool_calls[0]["name"] == "graph_search"
         assert result["tool_tracking"].pending_step_id == "ask-1"
+        assert result["tool_tracking"].pending_tool_name == "graph_search"
+        assert result["tool_tracking"].pending_tool_input == {"query": "X"}
         assert result["tool_tracking"].pending_react_iteration == 0
         assert _should_continue_react(state) == "tool_node"
 
-    def test_react_consumes_shared_tool_node_observation(self):
+    def test_react_consumes_shared_tool_node_observation(self, runtime):
         from langchain_core.messages import ToolMessage
         from personal_agent.agent.orchestration_graph import _node_consume_react_tool_result
 
@@ -1687,6 +1696,8 @@ class TestPhase4ReActMainGraphIntegration:
                 active_context="react",
                 pending_step_id="ask-1",
                 pending_call_id="r1:react:ask-1:0:0",
+                pending_tool_name="graph_search",
+                pending_tool_input={"query": "X"},
                 pending_react_iteration=0,
             ),
             tool_messages=[ToolMessage(
@@ -1696,12 +1707,16 @@ class TestPhase4ReActMainGraphIntegration:
             )],
         )
 
-        result = _node_consume_react_tool_result(state)
+        result = _node_consume_react_tool_result(state, deps=OrchestrationDeps.from_runtime(runtime))
 
         assert result["tool_tracking"].active_context is None
         assert result["tool_tracking"].pending_call_id == ""
         assert state.react.iteration_index == 1
         assert "X是" in state.react.iterations[0]["observation"]
+        tool_result_event = next(event for event in state.events if event.type == "tool_result")
+        assert tool_result_event.payload["context"] == "react"
+        assert tool_result_event.payload["invocation"]["execution_mode"] == "react"
+        assert tool_result_event.payload["invocation"]["permission_scope"] == "memory:read"
 
     def test_main_graph_routes_react_through_main_nodes(self, runtime, monkeypatch):
         """An ask entry with plan steps routes ReAct through main graph nodes."""

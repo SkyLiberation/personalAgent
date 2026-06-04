@@ -8,7 +8,7 @@ from langchain_core.tools import BaseTool, tool
 from ..capture.providers.web_search import FirecrawlWebSearchProvider
 from ..core.config import Settings
 from ..core.evidence import EvidenceItem
-from .base import tool_failure, tool_response, tool_success
+from .base import governance_extras, tool_failure, tool_response, tool_success
 
 if TYPE_CHECKING:
     from ..capture import CaptureService
@@ -23,9 +23,13 @@ def build_web_search_tool(
 ) -> BaseTool:
     @tool(
         "web_search",
-        description="在公网互联网上搜索与问题相关的最新信息，返回网页标题、URL 和摘要。仅在个人知识库和图谱无法覆盖时使用。",
+        description="在公网互联网上搜索与问题相关的最新信息，返回网页标题、URL 和摘要。会访问外部网络；仅在个人知识库和图谱无法覆盖时使用。",
         response_format="content_and_artifact",
-        extras={"risk_level": "low", "accesses_external": True},
+        extras=governance_extras(
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="network:read",
+        ),
     )
     def web_search(query: str, limit: int = 5, scrape: bool = False):
         if not settings.firecrawl.api_key:

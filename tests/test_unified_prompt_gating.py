@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.runtime_ask import RuntimeAskMixin
+from personal_agent.agent.runtime_ask import RuntimeAskMixin, _selected_citations, _selected_matches
 from personal_agent.core.evidence import ContextPack, EvidenceItem, RankedEvidence
 from personal_agent.core.models import Citation
 from tests.note_factory import make_note
@@ -53,3 +53,17 @@ class TestUnifiedPromptHintGating:
         # Both hint sections fall back to the "无" placeholder.
         assert "引用锚点摘要：\n无" in prompt
         assert "匹配笔记摘要：\n无" in prompt
+
+    def test_selected_helpers_drop_unselected_hints(self):
+        pack = ContextPack(question="q", selected=[_ranked("p1")])
+        matches = [
+            make_note(id="p1", title="kept-note", summary="kept summary"),
+            make_note(id="p2", title="dropped-note", summary="dropped summary"),
+        ]
+        citations = [
+            Citation(note_id="p1", title="kept-citation", snippet="s"),
+            Citation(note_id="p2", title="dropped-citation", snippet="s"),
+        ]
+
+        assert [note.id for note in _selected_matches(matches, pack.evidence)] == ["p1"]
+        assert [citation.note_id for citation in _selected_citations(citations, pack.evidence)] == ["p1"]

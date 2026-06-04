@@ -79,8 +79,8 @@ src/personal_agent/graphiti/quality_vocab.py
 src/personal_agent/graphiti/reranker.py
 src/personal_agent/graphiti/search_strategies.py
 src/personal_agent/graphiti/store.py
-src/personal_agent/graphrag/__init__.py
-src/personal_agent/graphrag/store.py
+src/personal_agent/structural_retriever/__init__.py
+src/personal_agent/structural_retriever/store.py
 src/personal_agent/memory/__init__.py
 src/personal_agent/memory/facade.py
 src/personal_agent/storage/__init__.py
@@ -115,11 +115,11 @@ tests/test_graph_reranker.py
 tests/test_graph_search_strategies.py
 tests/test_graphiti_llm_strategies.py
 tests/test_graphiti_store_helpers.py
-tests/test_graphrag_store.py
+tests/test_structural_retriever_store.py
 tests/test_integration.py
 tests/test_memory.py
 tests/test_open_ragbench_adapter.py
-tests/test_open_ragbench_graphrag.py
+tests/test_open_ragbench_structural.py
 tests/test_orchestration.py
 tests/test_plan_validator.py
 tests/test_planner.py

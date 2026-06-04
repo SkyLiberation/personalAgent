@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool
 
 from ..core.models import EntryIntent
 from .base import tool_failure
+from .gateway import ToolAuditSink, ToolGateway, ToolGatewayContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,50 +24,50 @@ _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
 class ToolExecutor:
     """Registered LangChain tools and non-graph administrative invocation.
 
-    Agent executions are dispatched by the ``ToolNode`` embedded in the main
-    orchestration graph.  ``invoke_direct`` is retained for non-agent callers
-    such as the debug API and legacy synchronous helpers.
+    Agent executions are dispatched by the LangGraph-native ``ToolGateway`` node
+    embedded in the orchestration graph. ``invoke_direct`` uses the same gateway
+    so non-agent callers share policy and audit behavior.
     """
 
-    def __init__(self) -> None:
-        self._tools: dict[str, BaseTool] = {}
+    def __init__(self, audit_sink: ToolAuditSink | None = None) -> None:
+        self._gateway = ToolGateway(audit_sink=audit_sink)
 
     def register(self, tool: BaseTool) -> None:
-        if tool.name in self._tools:
+        if tool.name in self:
             logger.warning("Tool %s is already registered, overwriting.", tool.name)
-        self._tools[tool.name] = tool
+        self._gateway.register(tool)
 
     def list_tools(self) -> list[BaseTool]:
-        return list(self._tools.values())
+        return self._gateway.list_tools()
 
     def get(self, name: str) -> BaseTool | None:
-        return self._tools.get(name)
+        return self._gateway.get(name)
+
+    def graph_node(self):
+        return self._gateway.invoke_graph
 
     def invoke_direct(self, name: str, **kwargs: Any) -> dict[str, Any]:
-        tool = self._tools.get(name)
-        if tool is None:
+        if name not in self:
             return tool_failure(f"未找到工具：{name}")
-        try:
-            message = tool.invoke({
-                "name": name,
-                "args": kwargs,
-                "id": f"direct-{name}",
-                "type": "tool_call",
-            })
-            artifact = getattr(message, "artifact", None)
-            if isinstance(artifact, dict) and "ok" in artifact:
-                return artifact
-            return tool_failure(str(getattr(message, "content", "工具执行失败。")))
-        except Exception as exc:
-            logger.exception("Direct tool execution failed for %s", name)
-            return tool_failure(str(exc)[:500])
+        tool_call_id = f"direct-{name}"
+        return self._gateway.invoke(
+            name,
+            kwargs,
+            ToolGatewayContext(
+                execution_mode="direct",
+                tool_call_id=tool_call_id,
+                user_id=kwargs.get("user_id"),
+            ),
+        )
 
     def match_tool(self, intent: EntryIntent, description: str = "") -> BaseTool | None:
         name = _INTENT_TOOL_MAP.get(intent)
-        if name and name in self._tools:
-            return self._tools[name]
+        if name:
+            matched = self.get(name)
+            if matched is not None:
+                return matched
         lowered = description.lower()
-        return next((tool for name, tool in self._tools.items() if name in lowered), None)
+        return next((tool for tool in self.list_tools() if tool.name in lowered), None)
 
     def invoke_with_fallback(self, intent: EntryIntent, description: str = "", **kwargs: Any) -> dict[str, Any]:
         primary = self.match_tool(intent, description)
@@ -74,16 +75,16 @@ class ToolExecutor:
             result = self.invoke_direct(primary.name, **kwargs)
             if result["ok"]:
                 return result
-        for name, tool in self._tools.items():
+        for tool in self.list_tools():
             if primary is not None and tool.name == primary.name:
                 continue
-            result = self.invoke_direct(name, **kwargs)
+            result = self.invoke_direct(tool.name, **kwargs)
             if result["ok"]:
                 return result
         return tool_failure(f"所有工具均未成功处理意图 {intent}")
 
     def __len__(self) -> int:
-        return len(self._tools)
+        return len(self.list_tools())
 
     def __contains__(self, name: str) -> bool:
-        return name in self._tools
+        return self.get(name) is not None

@@ -15,6 +15,8 @@ from graphiti_core.llm_client.openai_generic_client import (
 from graphiti_core.prompts.models import Message
 
 from ..core.config import Settings
+from ..core.llm_trace import log_llm_parse
+from ..core.logging_utils import log_event
 from .ontology import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
@@ -318,12 +320,24 @@ def _ensure_json_keyword(messages: list[dict[str, str]]) -> None:
         messages.append({"role": "system", "content": "Respond with JSON."})
 
 
+def _traceable_graphiti_completion(fn):
+    try:
+        from langsmith import traceable
+    except Exception:
+        return fn
+    return traceable(name="graphiti.llm_completion", run_type="llm")(fn)
+
+
 class GraphitiOpenAIClient(OpenAIGenericClient):
     """OpenAI-compatible client with rate limiting and field normalization.
 
     Uses structured output schemas for Graphiti response models and disables
     Kimi thinking so extraction output remains machine-readable.
     """
+
+    def __init__(self, *args, upload_inputs_outputs: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.upload_inputs_outputs = upload_inputs_outputs
 
     async def _generate_response(
         self,
@@ -354,14 +368,22 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
 
         await self._respect_min_interval()
 
+        model = self.model or DEFAULT_MODEL
+        response_model_name = (
+            getattr(response_model, "__name__", "structured_response")
+            if response_model is not None
+            else "json_object"
+        )
+        start = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model or DEFAULT_MODEL,
+            response = await self._create_completion(
+                model=model,
                 messages=openai_messages,
                 temperature=0.6,
                 max_tokens=self.max_tokens,
                 response_format=response_format,
                 extra_body={"thinking": {"type": "disabled"}},
+                response_model_name=response_model_name,
             )
         except openai.RateLimitError as exc:
             from graphiti_core.llm_client.errors import RateLimitError
@@ -371,13 +393,41 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
             ) from exc
 
         raw = response.choices[0].message.content or "{}"
+        latency_ms = round((time.monotonic() - start) * 1000, 2)
+        log_event(
+            logger,
+            logging.INFO,
+            "llm.call",
+            prompt_name="graphiti_extraction",
+            prompt_version="v1",
+            model=model,
+            latency_ms=latency_ms,
+            response_chars=len(raw),
+            response_model=response_model_name,
+            component="graphiti",
+        )
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
+            log_llm_parse(
+                prompt_name="graphiti_extraction",
+                model=model,
+                parse_schema=response_model_name,
+                parse_ok=False,
+                parse_error="non-json response",
+                latency_ms=latency_ms,
+            )
             logger.warning(
                 "LLM returned non-JSON content (len=%d): %s...", len(raw), raw[:200]
             )
             raise
+        log_llm_parse(
+            prompt_name="graphiti_extraction",
+            model=model,
+            parse_schema=response_model_name,
+            parse_ok=True,
+            latency_ms=latency_ms,
+        )
         # When a response_model is specified, ensure the parsed dict contains
         # the model's required fields. If not, attempt to wrap the entire dict
         # as the value of the first required list field (handles cases where
@@ -388,6 +438,74 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
         # Normalize entity/edge field names for graphiti_core Pydantic models.
         normalized = _normalize_extraction(parsed)
         return _flatten_nested_maps(normalized)
+
+    async def _create_completion(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict[str, Any],
+        extra_body: dict[str, Any],
+        response_model_name: str,
+    ):
+        runner = (
+            self._traced_create_completion
+            if self.upload_inputs_outputs
+            else self._create_completion_impl
+        )
+        return await runner(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            extra_body=extra_body,
+            response_model_name=response_model_name,
+        )
+
+    @_traceable_graphiti_completion
+    async def _traced_create_completion(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict[str, Any],
+        extra_body: dict[str, Any],
+        response_model_name: str,
+    ):
+        return await self._create_completion_impl(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            extra_body=extra_body,
+            response_model_name=response_model_name,
+        )
+
+    async def _create_completion_impl(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict[str, Any],
+        extra_body: dict[str, Any],
+        response_model_name: str,
+    ):
+        return await self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            extra_body=extra_body,
+        )
 
     async def _respect_min_interval(self) -> None:
         last_call: float = getattr(GraphitiOpenAIClient, "_last_api_call_ts", 0.0)
@@ -405,5 +523,6 @@ def build_graphiti_llm_client(settings: Settings) -> GraphitiOpenAIClient:
             model=settings.graphiti.llm_model or settings.openai.model,
             small_model=settings.graphiti.llm_small_model
             or settings.openai.small_model,
-        )
+        ),
+        upload_inputs_outputs=settings.langsmith.upload_inputs,
     )

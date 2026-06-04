@@ -12,7 +12,13 @@ from ._deps import (
     _resolve_allowed_tools_for_step,
 )
 from . import _helpers
-from ._steps import _begin_tool_call, _clear_pending_tool_call, _latest_tool_artifact
+from ._steps import (
+    _begin_tool_call,
+    _clear_pending_tool_call,
+    _latest_tool_artifact,
+    _log_tool_invocation_event,
+    _tool_result_event_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,8 +184,8 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
     return _record_react_observation(state, thought, tool_name, tool_input, observation)
 
 
-def _node_consume_react_tool_result(state: AgentGraphState) -> dict:
-    """Turn the shared ToolNode result into a ReAct observation."""
+def _node_consume_react_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
+    """Turn the shared ToolGateway result into a ReAct observation."""
     matches_iteration = state.tool_tracking.pending_react_iteration == state.react.iteration_index
     matches_step = state.tool_tracking.pending_step_id == state.react.step_id
     if state.tool_tracking.active_context != "react" or not matches_step or not matches_iteration:
@@ -197,14 +203,17 @@ def _node_consume_react_tool_result(state: AgentGraphState) -> dict:
         observation = _helpers._summarize_react_tool_result(artifact.get("data"))
     else:
         observation = f"工具执行失败：{artifact.get('error') or '未知错误'}"
+    state.add_event("tool_result", _tool_result_event_payload(
+        state,
+        deps=deps,
+        context="react",
+        step_id=state.react.step_id,
+        tool_call_id=tool_call_id,
+        artifact=artifact,
+    ))
+    if deps is not None:
+        _log_tool_invocation_event(state, deps, artifact, execution_mode="react")
     _clear_pending_tool_call(state)
-    state.add_event("tool_result", {
-        "context": "react",
-        "step_id": state.react.step_id,
-        "tool_call_id": tool_call_id,
-        "ok": bool(artifact.get("ok")),
-        "result_summary": _helpers._summarize_result(artifact.get("data")),
-    })
     result = _record_react_observation(
         state,
         state.react.pending_thought,

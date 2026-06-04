@@ -155,7 +155,7 @@ def test_call_planner_llm_prefers_langextract_json_schema(monkeypatch) -> None:
             request["client"] = kwargs
             self.chat = FakeChat()
 
-    monkeypatch.setattr("personal_agent.agent.query_planner.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
     settings = Settings(
         openai=OpenAIConfig(api_key="openai-k", base_url="https://openai.invalid", small_model="deepseek"),
         langextract=LangExtractConfig(

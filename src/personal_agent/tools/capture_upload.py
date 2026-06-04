@@ -6,7 +6,7 @@ from pathlib import Path
 from langchain_core.tools import BaseTool, tool
 
 from ..capture import CaptureService
-from .base import tool_failure, tool_response, tool_success
+from .base import governance_extras, tool_failure, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,13 @@ def build_capture_upload_tool(capture_service: CaptureService, uploads_dir: Path
 
     @tool(
         "capture_upload",
-        description="解析上传的文件（支持 PDF、文本文件），返回提取后的正文内容。",
+        description="解析用户上传的文件（支持 PDF、文本文件），返回提取后的正文内容，供后续写入长期知识。不要用它读取非上传目录中的任意文件。",
         response_format="content_and_artifact",
-        extras={"risk_level": "low", "writes_longterm": True},
+        extras=governance_extras(
+            risk_level="low",
+            side_effects=("write_longterm",),
+            permission_scope="memory:write",
+        ),
     )
     def capture_upload(file_path: str, filename: str, content_type: str | None = None):
         path = Path(file_path)

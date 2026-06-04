@@ -17,13 +17,13 @@ class RuntimeToolsMixin:
             self._tool_executor.register(
                 build_capture_upload_tool(self.capture_service, self.settings.data_dir / "uploads")
             )
-        self._tool_executor.register(build_graph_search_tool(self.graph_store))
+        self._tool_executor.register(build_graph_search_tool(self._active_graph_store()))
         self._tool_executor.register(build_capture_text_tool(
             lambda text, source_type="text", user_id="default": self.execute_capture(
                 text=text, source_type=source_type, user_id=user_id,
             )
         ))
-        self._tool_executor.register(build_delete_note_tool(self.store, self.graph_store))
+        self._tool_executor.register(build_delete_note_tool(self.store, self._active_graph_store()))
         if self.settings.firecrawl.api_key:
             from ..capture.providers.web_search import FirecrawlWebSearchProvider
             web_provider = FirecrawlWebSearchProvider(self.settings)

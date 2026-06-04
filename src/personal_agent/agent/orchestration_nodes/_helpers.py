@@ -59,20 +59,15 @@ def _summarize_react_tool_result(data: object) -> str:
 
 
 def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
-    from openai import OpenAI
+    from ...core.llm_trace import traced_chat_completion
 
     settings = deps.settings
     if not (settings.openai.api_key and settings.openai.base_url):
         return None
     try:
-        client = OpenAI(
-            api_key=settings.openai.api_key,
-            base_url=settings.openai.base_url,
-            timeout=settings.openai.timeout_seconds,
-            max_retries=settings.openai.max_retries,
-        )
-        response = client.chat.completions.create(
-            model=settings.openai.small_model,
+        result = traced_chat_completion(
+            settings.openai,
+            prompt_name="react",
             messages=[
                 {"role": "system", "content": _REACT_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -80,8 +75,10 @@ def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
             temperature=0,
             max_tokens=400,
             response_format={"type": "json_object"},
+            metadata={"component": "react"},
+            upload_inputs_outputs=settings.langsmith.upload_inputs,
         )
-        return (response.choices[0].message.content or "").strip() or None
+        return result.content or None
     except Exception:
         logger.exception("ReAct LLM call failed")
         return None
@@ -89,10 +86,26 @@ def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
 
 def _react_parse_response(raw: str) -> dict | None:
     import json as _json
+    from ...core.llm_trace import log_llm_parse
 
     try:
-        return _json.loads(raw)
-    except (_json.JSONDecodeError, TypeError):
+        parsed = _json.loads(raw)
+        log_llm_parse(
+            prompt_name="react",
+            model="unknown",
+            parse_ok=isinstance(parsed, dict),
+            parse_schema="ReactAction",
+            parse_error="" if isinstance(parsed, dict) else "parsed value is not object",
+        )
+        return parsed
+    except (_json.JSONDecodeError, TypeError) as exc:
+        log_llm_parse(
+            prompt_name="react",
+            model="unknown",
+            parse_ok=False,
+            parse_schema="ReactAction",
+            parse_error=str(exc),
+        )
         return None
 
 

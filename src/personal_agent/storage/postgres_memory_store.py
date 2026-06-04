@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import time
+import logging
 from collections import defaultdict
 from datetime import datetime
 from hashlib import blake2b
@@ -10,10 +12,19 @@ from pathlib import Path
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from ..core.config import LangSmithConfig
+from ..core.embedding_trace import (
+    log_embedding_fallback,
+    log_local_embedding,
+    traced_embedding,
+)
+from ..core.logging_utils import log_event
 from ..core.models import KnowledgeNote, ReviewCard, local_now
 from ..core.projections import retrieval_document_from_note
 from ..core.query_understanding import RetrievalFilters
 from .postgres_common import PostgresStoreBase
+
+logger = logging.getLogger(__name__)
 
 
 def _with_local_timezone(value: datetime, reference: datetime) -> datetime:
@@ -196,6 +207,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         embedding_model: str = "local-hash-v1",
         embedding_api_key: str | None = None,
         embedding_base_url: str | None = None,
+        langsmith_config: LangSmithConfig | None = None,
     ) -> None:
         super().__init__(postgres_url)
         self.data_dir = data_dir
@@ -203,6 +215,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         self.embedding_model = embedding_model
         self.embedding_api_key = embedding_api_key
         self.embedding_base_url = embedding_base_url
+        self.langsmith_config = langsmith_config or LangSmithConfig()
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_schema(self) -> None:
@@ -509,6 +522,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         if not normalized_query:
             return []
 
+        start = time.monotonic()
         terms = _query_terms(normalized_query)
         patterns = [f"%{term}%" for term in terms[:12]] or [f"%{normalized_query}%"]
         candidate_limit = max(limit * 8, 50)
@@ -590,24 +604,54 @@ class PostgresMemoryStore(PostgresStoreBase):
             query_embedding,
             candidate_limit,
         )
-        return self._expand_ranked_notes(candidates, limit, filters)
+        result = self._expand_ranked_notes(candidates, limit, filters)
+        log_event(
+            logger,
+            logging.INFO,
+            "retrieval.local",
+            component="postgres_memory_store",
+            provider="postgres",
+            query_chars=len(normalized_query),
+            limit=limit,
+            candidate_limit=candidate_limit,
+            lexical_candidates=len(lexical_rows),
+            vector_candidates=len(vector_rows),
+            merged_candidates=len(candidates),
+            result_count=len(result),
+            filters_active=bool(filters and filters.active()),
+            embedding_used=query_embedding is not None,
+            latency_ms=round((time.monotonic() - start) * 1000, 2),
+        )
+        return result
 
     def _embed_text(self, text: str) -> list[float] | None:
         if not text.strip():
             return None
         if self.embedding_provider == "local" or not self.embedding_api_key:
+            log_local_embedding(
+                model=self.embedding_model,
+                input_chars=len(text),
+                metadata={"component": "postgres_memory_store"},
+            )
             return _local_embedding(text)
         try:
-            from openai import OpenAI
-
-            client = OpenAI(
+            result = traced_embedding(
                 api_key=self.embedding_api_key,
                 base_url=self.embedding_base_url,
-                timeout=30.0,
+                model=self.embedding_model,
+                text=text,
+                timeout_seconds=30.0,
+                metadata={"component": "postgres_memory_store"},
+                upload_inputs_outputs=self.langsmith_config.upload_inputs,
             )
-            response = client.embeddings.create(model=self.embedding_model, input=text[:8000])
-            return [float(value) for value in response.data[0].embedding]
-        except Exception:
+            return result.vector
+        except Exception as exc:
+            log_embedding_fallback(
+                model=self.embedding_model,
+                provider=self.embedding_provider,
+                input_chars=len(text[:8000]),
+                reason=str(exc),
+            )
             return _local_embedding(text)
 
     def _merge_lexical_and_vector_rows(

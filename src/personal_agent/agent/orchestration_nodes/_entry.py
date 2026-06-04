@@ -574,15 +574,9 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
         and deps.settings.openai.base_url
         and deps.settings.openai.small_model
     ):
-        from openai import OpenAI
+        from ...core.llm_trace import traced_chat_completion
 
         try:
-            client = OpenAI(
-                api_key=deps.settings.openai.api_key,
-                base_url=deps.settings.openai.base_url,
-                timeout=deps.settings.openai.timeout_seconds,
-                max_retries=deps.settings.openai.max_retries,
-            )
             dialogue_messages = _dialogue_prompt_messages(
                 state.messages,
                 cfg=getattr(deps.settings, "short_term", None),
@@ -590,15 +584,19 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
             system_content = "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"
-            response = client.chat.completions.create(
-                model=deps.settings.openai.small_model,
+            result = traced_chat_completion(
+                deps.settings.openai,
+                prompt_name="direct_answer",
                 messages=[
                     {"role": "system", "content": system_content},
                     *dialogue_messages,
                 ],
+                model=deps.settings.openai.small_model,
                 max_tokens=300,
+                metadata={"component": "orchestration", "route": state.router_decision.route},
+                upload_inputs_outputs=deps.settings.langsmith.upload_inputs,
             )
-            generated = (response.choices[0].message.content or "").strip()
+            generated = result.content.strip()
             if generated:
                 state.answer = generated
                 route = state.router_decision.route if state.router_decision else "unknown"

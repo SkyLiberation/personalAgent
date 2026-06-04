@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from ..core.config import Settings
 from ..graphiti.store import GraphitiStore
+from ..ms_graphrag import MicrosoftGraphRagStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from .runtime import AgentRuntime
 
@@ -29,11 +30,13 @@ class AgentService(AgentRuntime):
             or resolved_settings.openai.api_key,
             embedding_base_url=resolved_settings.openai.embedding_base_url
             or resolved_settings.openai.base_url,
+            langsmith_config=resolved_settings.langsmith,
         )
         super().__init__(
             settings=resolved_settings,
             store=store,
             graph_store=GraphitiStore(resolved_settings),
+            ms_graphrag_store=MicrosoftGraphRagStore(resolved_settings),
             capture_service=capture_service,
         )
         self._runtime = self

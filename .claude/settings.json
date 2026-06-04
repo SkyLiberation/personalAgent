@@ -5,7 +5,11 @@
       "Bash(SEMAPHORE_LIMIT=3 python -c ' *)",
       "Bash(python -c \"from personal_agent.graphiti.llm_strategies import NormalizedAnthropicClient, AnthropicStrategy; print\\('Import OK'\\)\")",
       "Bash(git branch *)",
-      "Bash(python -m pytest tests/test_capture_graph_preextract.py tests/test_runtime_helpers.py tests/test_agent_flows.py --tb=short)"
+      "Bash(python -m pytest tests/test_capture_graph_preextract.py tests/test_runtime_helpers.py tests/test_agent_flows.py --tb=short)",
+      "Bash(curl -s \"https://huggingface.co/api/datasets/yixuantt/MultiHopRAG\")",
+      "Bash(curl -s \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/MultiHopRAG.json\")",
+      "Bash(curl -sL \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/MultiHopRAG.json\")",
+      "Bash(curl -sL \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/corpus.json\")"
     ]
   }
 }

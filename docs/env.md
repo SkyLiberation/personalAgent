@@ -72,6 +72,7 @@ PERSONAL_AGENT_OPENAI_MAX_RETRIES=2
 
 ```env
 PERSONAL_AGENT_ASK_RERANKER=heuristic
+PERSONAL_AGENT_ASK_GRAPH_PROVIDER=graphiti
 PERSONAL_AGENT_ASK_CANDIDATE_ENRICHER=parent_child
 PERSONAL_AGENT_ASK_PARENT_CHILD_TOP_N=3
 PERSONAL_AGENT_ASK_PARENT_CHILD_MIN_OVERLAP=2
@@ -86,10 +87,33 @@ PERSONAL_AGENT_ASK_LLM_RERANK_MODEL=
 ```
 
 - `PERSONAL_AGENT_ASK_RERANKER` 当前可选 `heuristic` / `llm`。默认 `heuristic` 保持原有稳定路径；`llm` 会先用启发式召回 top N，再用 strict `json_schema` listwise rerank 重排证据。
+- `PERSONAL_AGENT_ASK_GRAPH_PROVIDER` 当前可选 `graphiti` / `structural` / `hybrid` / `ms_graphrag`。`graphiti` 使用在线实体关系图谱；`structural` 使用本地 parent-section 结构召回；`hybrid` 组合 structural + Graphiti；`ms_graphrag` 调用 Microsoft GraphRAG CLI 的离线索引与 query 项目。
 - `PERSONAL_AGENT_ASK_CANDIDATE_ENRICHER` 当前可选 `parent_child` / `none`。默认 `parent_child` 会在 rerank 前补齐 parent 命中的高相关 child sections，以及 child 命中的 parent。邻近 chunk 默认不补，避免给 LLM rerank 注入过多相邻但不直接回答的候选。
 - `PERSONAL_AGENT_ASK_GRAPH_NOTE_EVIDENCE_MODE` 当前可选 `all` / `cited_overlap` / `none`。`all` 会把 Graphiti 映射回来的 notes 作为 evidence 交给 ContextPack；`cited_overlap` 只放入 citation 命中或 query overlap 足够的 notes；`none` 关闭该桥接。
 - LLM rerank 优先复用 `PERSONAL_AGENT_EXTRACT_*` 的 DashScope/qwen 配置；未配置 extract key 时回退到 `OPENAI_*`。
 - `PERSONAL_AGENT_ASK_CONTEXT_MAX_ITEMS` 和 `PERSONAL_AGENT_ASK_CONTEXT_CHAR_BUDGET` 控制进入 prompt 的 evidence 数量和字符预算。
+
+## Microsoft GraphRAG 配置
+
+Microsoft GraphRAG 通过外部 `graphrag` CLI 接入。需要先安装 CLI，并准备其项目目录；官方流程是 `graphrag init --root <root>` 创建 `.env/settings.yaml/input`，`graphrag index --root <root>` 构建索引，`graphrag query --root <root> --method local|global|drift|basic --query "..."` 查询。
+
+```env
+PERSONAL_AGENT_ASK_GRAPH_PROVIDER=ms_graphrag
+PERSONAL_AGENT_MS_GRAPHRAG_ENABLED=true
+PERSONAL_AGENT_MS_GRAPHRAG_ROOT=./data/ms_graphrag
+PERSONAL_AGENT_MS_GRAPHRAG_EXECUTABLE=graphrag
+PERSONAL_AGENT_MS_GRAPHRAG_QUERY_METHOD=local
+PERSONAL_AGENT_MS_GRAPHRAG_INDEX_METHOD=standard
+PERSONAL_AGENT_MS_GRAPHRAG_RESPONSE_TYPE=Multiple Paragraphs
+PERSONAL_AGENT_MS_GRAPHRAG_AUTO_INDEX=false
+PERSONAL_AGENT_MS_GRAPHRAG_COMMAND_TIMEOUT_SECONDS=600
+```
+
+说明：
+
+- `ms_graphrag` 与 Graphiti 的主要差别是离线批处理：capture/sync 会把 note 导出到 `ROOT/input/*.txt`；只有 `AUTO_INDEX=true` 或手动执行 `graphrag index` 后，query 才会看到新内容。
+- 当前 adapter 把 GraphRAG query 的生成结果包装成 `graph_fact` evidence；Microsoft GraphRAG CLI 不返回本项目可直接使用的 episode UUID，因此评估 runner 会把答案文本再投影回本地 note ids 计算 IR 指标。
+- GraphRAG 的模型/embedding 具体配置由其项目目录下的 `settings.yaml` / `.env` 管理，不复用 `PERSONAL_AGENT_GRAPHITI_LLM_*`。
 
 ## Embedding 配置
 
@@ -185,6 +209,32 @@ PERSONAL_AGENT_CORS_ORIGINS=http://localhost:3000  # 多个用逗号分隔
 ```env
 AGENT_MAX_VERIFY_RETRIES=1  # 答案校验失败后最大重试次数
 ```
+
+## LangSmith 可观测性
+
+LangSmith 默认关闭。开启后，运行时会把项目配置桥接到 LangSmith 标准环境变量，并在 entry 执行入口创建 trace context。
+
+```env
+PERSONAL_AGENT_LANGSMITH_ENABLED=false
+PERSONAL_AGENT_LANGSMITH_PROJECT=personal-agent-dev
+PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false
+PERSONAL_AGENT_TRACE_SAMPLE_RATE=1.0
+LANGSMITH_API_KEY=
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_WORKSPACE_ID=
+```
+
+说明：
+
+- `PERSONAL_AGENT_LANGSMITH_ENABLED=true` 后才会启用 tracing。
+- `LANGSMITH_API_KEY` 为 LangSmith API key。
+- `PERSONAL_AGENT_LANGSMITH_PROJECT` 会写入 `LANGSMITH_PROJECT`。
+- `LANGSMITH_ENDPOINT` 默认使用 LangSmith SaaS endpoint。
+- `LANGSMITH_WORKSPACE_ID` 仅在 API key 关联多个 workspace 时需要。
+- `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 控制 entry trace 采样率，`1.0` 表示全量，`0` 表示不上传。
+- `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS` 是隐私策略开关，当前先进入配置层，后续 LLM wrapper 接入脱敏/上传策略时使用。
+
+生产环境建议先只上传 metadata 和摘要，确认脱敏策略后再允许完整 prompt / tool input trace。
 
 ## LangGraph 总编排与 Checkpoint 配置
 

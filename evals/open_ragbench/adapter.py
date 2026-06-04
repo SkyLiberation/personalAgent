@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from personal_agent.core.models import KnowledgeNote
+from personal_agent.core.models import KnowledgeNote, NoteBody, NoteChunk, NoteSource
 
 from .loader import RAGBenchDoc, RAGBenchQuery
 
@@ -35,10 +35,8 @@ def corpus_to_notes(docs: dict[str, RAGBenchDoc], mode: CorpusNoteMode = "parent
         parent = KnowledgeNote(
             id=parent_id,
             user_id=_EVAL_USER,
-            title=doc.title,
-            content=doc.abstract,
-            summary=doc.abstract[:200],
-            source_type="text",
+            source=NoteSource(type="text"),
+            body=NoteBody(title=doc.title, content=doc.abstract, summary=doc.abstract[:200]),
         )
         if mode in {"parent_sections", "parent_only"}:
             notes.append(parent)
@@ -48,12 +46,13 @@ def corpus_to_notes(docs: dict[str, RAGBenchDoc], mode: CorpusNoteMode = "parent
             child = KnowledgeNote(
                 id=f"{parent_id}_sec_{idx}",
                 user_id=_EVAL_USER,
-                title=section_text[:80],
-                content=section_text,
-                summary=section_text[:200],
-                source_type="text",
-                parent_note_id=parent_id,
-                chunk_index=idx,
+                source=NoteSource(type="text"),
+                body=NoteBody(
+                    title=section_text[:80],
+                    content=section_text,
+                    summary=section_text[:200],
+                ),
+                chunk=NoteChunk(parent_note_id=parent_id, index=idx),
             )
             notes.append(child)
     return notes

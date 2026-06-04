@@ -303,6 +303,33 @@ def graph_result_to_evidence(
                 },
             ))
 
+    # 4. provider-level relation facts/answers. Some graph providers (for
+    # example Microsoft GraphRAG CLI queries) return a synthesized answer
+    # rather than episode-level citation hits.
+    for index, fact in enumerate(graph_result.relation_facts):
+        normalized = fact.strip()
+        if not normalized or normalized in seen_facts:
+            continue
+        seen_facts.add(normalized)
+        items.append(EvidenceItem(
+            source_type="graph_fact",
+            source_id=f"relation_fact_{index}",
+            fact=normalized,
+            score=0.55,
+            metadata={"retrieved_by": "graph_provider_relation_fact"},
+        ))
+
+    if graph_result.answer:
+        answer = graph_result.answer.strip()
+        if answer and answer not in seen_facts:
+            items.append(EvidenceItem(
+                source_type="graph_fact",
+                source_id="graph_answer",
+                fact=answer,
+                score=0.5,
+                metadata={"retrieved_by": "graph_provider_answer"},
+            ))
+
     return items
 
 

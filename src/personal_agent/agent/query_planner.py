@@ -9,12 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from datetime import timedelta
 
-from openai import OpenAI
-
-from ..core.config import Settings
+from ..core.config import OpenAIConfig, Settings
+from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.models import local_now
 from ..core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
@@ -121,10 +119,12 @@ def _call_planner_llm(
 ) -> QueryUnderstanding:
     """Call the planner model with strict structured output."""
     api_key, base_url, model = _planner_llm_config(settings)
-    client = OpenAI(
+    llm_config = OpenAIConfig(
         api_key=api_key,
         base_url=base_url,
-        timeout=15.0,
+        model=model,
+        timeout_seconds=15.0,
+        max_retries=settings.openai.max_retries,
     )
 
     user_content = f"Current datetime: {local_now().isoformat()}\nQuestion: {question}"
@@ -134,25 +134,49 @@ def _call_planner_llm(
         )
         user_content += f"\n\nConversation context:\n{conversation_context[:char_budget]}"
 
-    start = time.monotonic()
-    response = client.chat.completions.create(
-        model=model,
+    result = traced_chat_completion(
+        llm_config,
+        prompt_name="query_planner",
         messages=[
             {"role": "system", "content": _PLANNER_SYSTEM},
             {"role": "user", "content": user_content},
         ],
+        model=model,
         temperature=0.0,
         max_tokens=500,
         response_format=_planner_response_format(),
+        metadata={
+            "component": "query_planner",
+            "has_conversation_context": bool(conversation_context),
+        },
+        upload_inputs_outputs=settings.langsmith.upload_inputs,
     )
-    duration_ms = (time.monotonic() - start) * 1000
-    logger.info("Query planner completed in %.0fms model=%s", duration_ms, model)
+    logger.info("Query planner completed in %.0fms model=%s", result.latency_ms, model)
 
-    raw = response.choices[0].message.content or "{}"
+    raw = result.content or "{}"
     if raw.rstrip()[-1:] not in ("}", "]"):
         raw = _repair_truncated_json(raw)
-    data = json.loads(raw)
-    return QueryUnderstanding(**data)
+    try:
+        data = json.loads(raw)
+        understanding = QueryUnderstanding(**data)
+    except Exception as exc:
+        log_llm_parse(
+            prompt_name="query_planner",
+            model=model,
+            parse_schema="QueryUnderstanding",
+            parse_ok=False,
+            parse_error=str(exc),
+            latency_ms=result.latency_ms,
+        )
+        raise
+    log_llm_parse(
+        prompt_name="query_planner",
+        model=model,
+        parse_schema="QueryUnderstanding",
+        parse_ok=True,
+        latency_ms=result.latency_ms,
+    )
+    return understanding
 
 
 def _planner_llm_config(settings: Settings) -> tuple[str | None, str | None, str]:

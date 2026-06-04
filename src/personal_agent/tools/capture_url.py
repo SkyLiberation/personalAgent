@@ -5,7 +5,7 @@ import logging
 from langchain_core.tools import BaseTool, tool
 
 from ..capture import CaptureService
-from .base import tool_failure, tool_response, tool_success
+from .base import governance_extras, tool_failure, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +13,13 @@ logger = logging.getLogger(__name__)
 def build_capture_url_tool(capture_service: CaptureService) -> BaseTool:
     @tool(
         "capture_url",
-        description="抓取指定网页的正文内容，返回提取后的纯文本。",
+        description="抓取指定网页的正文内容，返回提取后的纯文本。会访问外部网络；不要在已有上传文件或本地笔记足够回答时使用。",
         response_format="content_and_artifact",
-        extras={"risk_level": "low", "accesses_external": True},
+        extras=governance_extras(
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="network:read",
+        ),
     )
     def capture_url(url: str):
         try:

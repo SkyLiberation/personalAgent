@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from personal_agent.core.models import KnowledgeNote, local_now
-from personal_agent.graphrag import GraphRagStore
+from personal_agent.structural_retriever import StructuralRetrieverStore
 from tests.note_factory import make_note
 
 
@@ -15,7 +15,7 @@ class FakeStore:
         return [note for note in self.notes if note.user_id == user_id]
 
 
-def test_graphrag_store_ranks_child_and_reuses_cache():
+def test_structural_retriever_ranks_child_and_reuses_cache():
     parent = make_note(
         id="parent",
         user_id="u1",
@@ -40,7 +40,7 @@ def test_graphrag_store_ranks_child_and_reuses_cache():
         summary="Payment user interface.",
     )
     fake_store = FakeStore([parent, child, other])
-    store = GraphRagStore(fake_store)  # type: ignore[arg-type]
+    store = StructuralRetrieverStore(fake_store)  # type: ignore[arg-type]
 
     first = store.search_notes("How does Redis reduce database pressure?", "u1", limit=3)
     second = store.search_notes("How does Redis reduce database pressure?", "u1", limit=3)
@@ -50,7 +50,7 @@ def test_graphrag_store_ranks_child_and_reuses_cache():
     assert fake_store.calls == 2
 
 
-def test_graphrag_store_invalidates_cache_when_note_updates():
+def test_structural_retriever_invalidates_cache_when_note_updates():
     note = make_note(
         id="n1",
         user_id="u1",
@@ -59,7 +59,7 @@ def test_graphrag_store_invalidates_cache_when_note_updates():
         summary="Blue deployment.",
     )
     fake_store = FakeStore([note])
-    store = GraphRagStore(fake_store)  # type: ignore[arg-type]
+    store = StructuralRetrieverStore(fake_store)  # type: ignore[arg-type]
 
     assert store.search_notes("blue deployment", "u1", limit=1)[0].id == "n1"
 

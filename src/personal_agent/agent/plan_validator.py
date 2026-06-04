@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from ..tools import tool_property
+from ..tools import tool_governance
 from .planner import PlanStep
 from .router import RiskLevel, RouterDecision
 
@@ -185,8 +185,9 @@ class PlanValidator:
 
                 # --- Governance cross-checks ---
                 if tool_spec is not None:
+                    governance = tool_governance(tool_spec)
                     # Tool requires confirmation but step doesn't
-                    if tool_property(tool_spec, "requires_confirmation", False) and not s.requires_confirmation:
+                    if governance.requires_confirmation and not s.requires_confirmation:
                         warnings.append(
                             f"{prefix} 工具 {s.tool_name!r} 要求确认（requires_confirmation=True），"
                             f"但步骤未设置 requires_confirmation。"
@@ -197,24 +198,24 @@ class PlanValidator:
                         and s.tool_name == "capture_text"
                     )
                     if (
-                        tool_property(tool_spec, "writes_longterm", False)
+                        any(effect in governance.side_effects for effect in ("write_longterm", "delete_longterm"))
                         and not explicit_solidify_write
                         and not s.requires_confirmation
                         and s.risk_level != "high"
                     ):
                         warnings.append(
-                            f"{prefix} 工具 {s.tool_name!r} 会写入长期知识（writes_longterm=True），"
+                            f"{prefix} 工具 {s.tool_name!r} 会修改长期知识（side_effects={governance.side_effects!r}），"
                             f"建议步骤增加确认或提升风险等级。"
                         )
                     # Tool accesses external network
-                    if tool_property(tool_spec, "accesses_external", False):
+                    if "external_network" in governance.side_effects:
                         warnings.append(
-                            f"{prefix} 工具 {s.tool_name!r} 会访问外部网络（accesses_external=True），"
+                            f"{prefix} 工具 {s.tool_name!r} 会访问外部网络（side_effects 包含 external_network），"
                             f"请注意外部副作用。"
                         )
                     # Tool risk is higher than step risk
                     risk_order = {"low": 0, "medium": 1, "high": 2}
-                    tool_risk = tool_property(tool_spec, "risk_level", "low")
+                    tool_risk = governance.risk_level
                     if risk_order.get(tool_risk, 0) > risk_order.get(s.risk_level, 0):
                         warnings.append(
                             f"{prefix} 工具 {s.tool_name!r} 的固有风险等级为 "

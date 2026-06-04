@@ -298,3 +298,36 @@ def test_find_similar_notes_merges_vector_only_candidates(temp_dir: Path):
     assert matches
     assert matches[0].id == target.id
     store.clear_user_data(user_id, remove_uploaded_files=False)
+
+
+def test_find_similar_notes_emits_retrieval_metrics(temp_dir: Path, monkeypatch):
+    user_id = _user()
+    store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
+    events: list[dict[str, object]] = []
+
+    def capture_event(_logger, _level, event_name, **payload):
+        events.append({"event": event_name, **payload})
+
+    monkeypatch.setattr(
+        "personal_agent.storage.postgres_memory_store.log_event",
+        capture_event,
+    )
+    store.add_note(
+        make_note(
+            id=str(uuid4()),
+            title="Redis cache",
+            content="Redis cache protects hot order reads.",
+            summary="cache",
+            user_id=user_id,
+        )
+    )
+
+    matches = store.find_similar_notes(user_id, "Redis cache", limit=3)
+
+    retrieval_events = [event for event in events if event["event"] == "retrieval.local"]
+    assert matches
+    assert retrieval_events
+    assert retrieval_events[-1]["query_chars"] == len("Redis cache")
+    assert retrieval_events[-1]["result_count"] == len(matches)
+    assert retrieval_events[-1]["filters_active"] is False
+    store.clear_user_data(user_id, remove_uploaded_files=False)

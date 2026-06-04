@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from time import perf_counter
 
+from ..core.observability import record_verification_result
 from ..core.models import Citation, KnowledgeNote
 from ..core.projections import MatchRef, match_ref_from_note
 
@@ -62,7 +64,12 @@ class AnswerVerifier:
         matches: list[KnowledgeNote | MatchRef],
         web_enabled: bool = False,
         evidence: list | None = None,
+        run_id: str | None = None,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        step_id: str | None = None,
     ) -> VerificationResult:
+        started = perf_counter()
         issues: list[str] = []
         warnings: list[str] = []
         match_refs = [
@@ -192,6 +199,21 @@ class AnswerVerifier:
             logger.info("Answer verification passed with warnings score=%.2f warnings=%s", score, warnings)
         else:
             logger.info("Answer verification passed score=%.2f", score)
+
+        record_verification_result(
+            question=question,
+            answer=answer,
+            result=result,
+            matches_count=len(matches),
+            citations_count=len(citations),
+            web_enabled=web_enabled,
+            evidence_count=len(evidence or []),
+            latency_ms=round((perf_counter() - started) * 1000, 2),
+            run_id=run_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            step_id=step_id,
+        )
 
         return result
 

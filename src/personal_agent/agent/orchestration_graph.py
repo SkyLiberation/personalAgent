@@ -6,7 +6,6 @@ import logging
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
 from psycopg import connect
 from psycopg.rows import dict_row
 
@@ -155,9 +154,12 @@ def build_react_graph(deps: OrchestrationDeps):
     builder.add_node("react_iterate", lambda state: _node_react_iterate(state, deps=deps))
     builder.add_node(
         "react_tool_node",
-        ToolNode(deps.tool_executor.list_tools(), messages_key="tool_messages"),
+        deps.tool_executor.graph_node(),
     )
-    builder.add_node("consume_react_tool_result", _node_consume_react_tool_result)
+    builder.add_node(
+        "consume_react_tool_result",
+        lambda state: _node_consume_react_tool_result(state, deps=deps),
+    )
     builder.add_node("react_finalize", _node_react_finalize)
 
     builder.add_edge(START, "react_init")
@@ -198,9 +200,12 @@ def build_plan_execution_graph(deps: OrchestrationDeps):
     builder.add_node("confirm_step", lambda state: _node_confirm_step(state, deps=deps))
     builder.add_node(
         "plan_tool_node",
-        ToolNode(deps.tool_executor.list_tools(), messages_key="tool_messages"),
+        deps.tool_executor.graph_node(),
     )
-    builder.add_node("consume_plan_tool_result", _node_consume_plan_tool_result)
+    builder.add_node(
+        "consume_plan_tool_result",
+        lambda state: _node_consume_plan_tool_result(state, deps=deps),
+    )
     builder.add_node("react_graph", build_react_graph(deps))
     builder.add_node("finalize_plan_execution", _node_finalize_plan_execution)
 

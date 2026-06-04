@@ -6,7 +6,7 @@ from langchain_core.tools import BaseTool, tool
 
 from ..core.evidence import EvidenceItem
 from ..graphiti.store import GraphitiStore
-from .base import tool_failure, tool_response, tool_success
+from .base import governance_extras, tool_failure, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
     @tool(
         "graph_search",
-        description="在个人知识图谱中搜索与问题相关的实体、关系和笔记，返回结构化的图谱检索结果。",
+        description="在个人知识图谱中搜索与问题相关的实体、关系和笔记，返回结构化检索结果。只读本地长期知识，不产生写入副作用。",
         response_format="content_and_artifact",
-        extras={"risk_level": "low"},
+        extras=governance_extras(
+            risk_level="low",
+            side_effects=("read_local",),
+            permission_scope="memory:read",
+        ),
     )
     def graph_search(question: str, user_id: str = "default"):
         if not graph_store.configured():

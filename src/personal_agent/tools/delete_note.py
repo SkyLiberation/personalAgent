@@ -6,7 +6,7 @@ from langchain_core.tools import BaseTool, tool
 
 from ..graphiti.store import GraphitiStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
-from .base import tool_failure, tool_response, tool_success
+from .base import governance_extras, tool_failure, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +17,22 @@ def build_delete_note_tool(
 ) -> BaseTool:
     @tool(
         "delete_note",
-        description="根据笔记 ID 删除笔记、关联复习卡片和图谱映射。执行删除前需要用户确认。",
+        description="根据笔记 ID 删除笔记、关联复习卡片和图谱映射。必须先返回确认 payload，只有用户确认后才能在 confirmed=True 时执行删除。",
         response_format="content_and_artifact",
-        extras={"risk_level": "high", "requires_confirmation": True, "writes_longterm": True},
+        extras=governance_extras(
+            risk_level="high",
+            requires_confirmation=True,
+            side_effects=("delete_longterm",),
+            permission_scope="memory:delete",
+            idempotency_key_required=True,
+            audit_required=True,
+        ),
     )
     def delete_note(
         note_id: str,
         user_id: str = "default",
         confirmed: bool = False,
+        idempotency_key: str = "",
     ):
         note = store.get_note(note_id)
         if note is None or note.user_id != user_id:

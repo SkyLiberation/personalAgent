@@ -231,6 +231,8 @@ class ToolTrackingSubState(BaseModel):
     active_context: Literal["plan", "react"] | None = None
     pending_step_id: str = ""
     pending_call_id: str = ""
+    pending_tool_name: str = ""
+    pending_tool_input: dict[str, Any] = Field(default_factory=dict)
     pending_react_iteration: int | None = None
 
 
@@ -262,7 +264,7 @@ class AgentGraphState(BaseModel):
     # Durable conversation history accumulated across runs in one thread.
     messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
 
-    # Ephemeral ToolNode exchange for the current action only; unlike
+    # Ephemeral ToolGateway exchange for the current action only; unlike
     # ``messages`` it is overwritten instead of accumulated across the thread.
     tool_messages: list[AnyMessage] = Field(default_factory=list)
 

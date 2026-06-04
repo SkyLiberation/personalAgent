@@ -51,7 +51,7 @@ episode；如果只想做 smoke 或策略初筛，优先使用 `--graphiti-note-
 
 - `keyword`：评估 `LocalMemoryStore.find_similar_notes`。
 - `citation_reranker`：把 section 包装成伪关系边，评估 `rank_graph_citation_hits`。
-- `graphrag`：离线 GraphRAG-style baseline，基于文档-章节图做 section 局部评分，并向父文档/兄弟 section 传播分数。
+- `structural`：离线 structural retriever baseline，基于文档-章节图做 section 局部评分，并向父文档/兄弟 section 传播分数。
 - `current_runtime_ask`：完整生产 `AgentRuntime.execute_ask()` 路径，会执行生成和 verifier，是 Ask 效果主回归口径；因为很慢，建议复用 Graphiti manifest 后再跑。
 - `ask_pipeline`：Ask retrieval proxy，运行 planner、local/graph 检索和 sub-query 检索，但不做答案生成、不跑 verifier；输出统一 note id，并在 JSON 中写入 query 级 diagnostics。它只用于诊断，不代表最终生产 Ask 效果。同一轮 ablation 会共享 planner 输出，避免重复调用 LLM 导致策略不可比。
 - `ask_pipeline_no_rewrite`：保留 planner routing/sub-query，但强制使用原始 query，用于隔离 query rewrite 的影响。
@@ -83,7 +83,7 @@ uv run pytest evals/open_ragbench --num-queries 3 -q
 uv run python -m evals.open_ragbench.runner `
   --num-queries 50 `
   --corpus-mode relevant `
-  --strategies keyword,citation_reranker,graphrag `
+  --strategies keyword,citation_reranker,structural `
   --output evals/open_ragbench/results/latest.json
 ```
 

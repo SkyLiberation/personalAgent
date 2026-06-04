@@ -239,9 +239,18 @@ class TestPlannerValidatorRoundtrip:
         from personal_agent.agent.plan_validator import PlanValidator
         from personal_agent.agent.router import _default_router_decision
         from langchain_core.tools import tool
-        from personal_agent.tools import ToolExecutor, tool_response, tool_success
+        from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
 
-        @tool("delete_note", description="delete", response_format="content_and_artifact")
+        @tool(
+            "delete_note",
+            description="delete",
+            response_format="content_and_artifact",
+            extras=governance_extras(
+                risk_level="high",
+                requires_confirmation=True,
+                side_effects=("delete_longterm",),
+            ),
+        )
         def delete_note(note_id: str):
             return tool_response(tool_success(note_id))
 
@@ -272,9 +281,18 @@ class TestPlannerValidatorRoundtrip:
         from personal_agent.agent.plan_validator import PlanValidator
         from personal_agent.agent.router import _default_router_decision
         from langchain_core.tools import tool
-        from personal_agent.tools import ToolExecutor, tool_response, tool_success
+        from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
 
-        @tool("delete_note", description="delete", response_format="content_and_artifact")
+        @tool(
+            "delete_note",
+            description="delete",
+            response_format="content_and_artifact",
+            extras=governance_extras(
+                risk_level="high",
+                requires_confirmation=True,
+                side_effects=("delete_longterm",),
+            ),
+        )
         def delete_note(note_id: str):
             return tool_response(tool_success(note_id))
 
@@ -331,7 +349,7 @@ class TestPlannerLlmContract:
                     )))]
                 )
 
-        monkeypatch.setattr("personal_agent.agent.planner.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
         planner = DefaultTaskPlanner(
             Settings(openai=OpenAIConfig(api_key="k", base_url="http://llm", small_model="small"))
         )
@@ -356,7 +374,7 @@ class TestPlannerLlmContract:
                     )
                 )
 
-        monkeypatch.setattr("personal_agent.agent.planner.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
         planner = DefaultTaskPlanner(
             Settings(openai=OpenAIConfig(api_key="k", base_url="http://llm", small_model="small"))
         )

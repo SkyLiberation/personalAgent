@@ -5,7 +5,7 @@ from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.prompts.models import Message
 from pydantic import BaseModel
 
-from personal_agent.core.config import GraphitiConfig, OpenAIConfig, Settings
+from personal_agent.core.config import GraphitiConfig, LangSmithConfig, OpenAIConfig, Settings
 from personal_agent.graphiti.llm_strategies import (
     GraphitiOpenAIClient,
     build_graphiti_llm_client,
@@ -78,9 +78,11 @@ def test_graphiti_client_prefers_llm_override_settings():
             llm_model="kimi-k2.5",
             llm_small_model="kimi-k2.5",
         ),
+        langsmith=LangSmithConfig(upload_inputs=True),
     )
 
     llm_client = build_graphiti_llm_client(settings)
 
     assert llm_client.model == "kimi-k2.5"
+    assert llm_client.upload_inputs_outputs is True
     assert str(llm_client.client.base_url) == "https://api.moonshot.cn/v1/"

@@ -350,7 +350,7 @@ class TestAskFlow:
         assert evidence[0].score == 0.55
         assert evidence[0].metadata["retrieved_by"] == "graphiti"
 
-    def test_graphrag_provider_enters_context_pack_without_graphiti(
+    def test_structural_provider_enters_context_pack_without_graphiti(
         self,
         service: AgentService,
         monkeypatch,
@@ -359,7 +359,7 @@ class TestAskFlow:
 
         service.settings = service.settings.model_copy(
             update={
-                "ask": service.settings.ask.model_copy(update={"graph_provider": "graphrag"})
+                "ask": service.settings.ask.model_copy(update={"graph_provider": "structural"})
             }
         )
         service._runtime.settings = service.settings
@@ -400,7 +400,7 @@ class TestAskFlow:
 
         assert service.graph_store.ask.call_count == 0
         assert any(note.id in {"gr-child", "gr-parent"} for note in result.matches)
-        assert any(item.metadata.get("retrieved_by") == "graphrag" for item in result.evidence)
+        assert any(item.metadata.get("retrieved_by") == "structural" for item in result.evidence)
 
     def test_graph_raw_episode_evidence_requires_overlap(self):
         noisy = make_note(

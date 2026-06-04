@@ -111,7 +111,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
 
     ReAct steps are *not* dispatched here: the state is seeded and the
     PlanExecutionGraph routes into ReactGraph. Tool calls are prepared as LangChain
-    messages so the appropriate subgraph ``ToolNode`` performs execution.
+    messages so the appropriate subgraph ``ToolGateway`` performs execution.
     """
     if state.plan.current_step_index >= len(state.plan.steps):
         return {}
@@ -180,8 +180,8 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
     return _complete_current_step(state, step)
 
 
-def _node_consume_plan_tool_result(state: AgentGraphState) -> dict:
-    """Consume the latest ToolNode artifact for a deterministic plan step."""
+def _node_consume_plan_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
+    """Consume the latest ToolGateway artifact for a deterministic plan step."""
     if state.plan.current_step_index >= len(state.plan.steps):
         _clear_pending_tool_call(state)
         return _pending_tool_updates(state)
@@ -196,15 +196,18 @@ def _node_consume_plan_tool_result(state: AgentGraphState) -> dict:
         )
     artifact = _latest_tool_artifact(state)
     tool_call_id = state.tool_tracking.pending_call_id
-    _clear_pending_tool_call(state)
     state.tool_results.append(artifact)
-    state.add_event("tool_result", {
-        "context": "plan",
-        "step_id": step.step_id,
-        "tool_call_id": tool_call_id,
-        "ok": bool(artifact.get("ok")),
-        "result_summary": _helpers._summarize_result(artifact.get("data")),
-    })
+    state.add_event("tool_result", _tool_result_event_payload(
+        state,
+        deps=deps,
+        context="plan",
+        step_id=step.step_id,
+        tool_call_id=tool_call_id,
+        artifact=artifact,
+    ))
+    if deps is not None:
+        _log_tool_invocation_event(state, deps, artifact, execution_mode="deterministic")
+    _clear_pending_tool_call(state)
     if not artifact.get("ok"):
         return _fail_current_step(
             state,
@@ -228,6 +231,77 @@ def _node_consume_plan_tool_result(state: AgentGraphState) -> dict:
     return _complete_current_step(state, step)
 
 
+def _tool_result_event_payload(
+    state: AgentGraphState,
+    *,
+    deps: OrchestrationDeps | None,
+    context: str,
+    step_id: str,
+    tool_call_id: str | None,
+    artifact: dict,
+) -> dict:
+    payload = {
+        "context": "plan",
+        "step_id": step_id,
+        "tool_call_id": tool_call_id,
+        "ok": bool(artifact.get("ok")),
+        "result_summary": _helpers._summarize_result(artifact.get("data")),
+        "tool_name": state.tool_tracking.pending_tool_name,
+        "input": state.tool_tracking.pending_tool_input,
+        "output": artifact,
+        "artifact_ok": artifact.get("ok"),
+        "error": artifact.get("error"),
+        "evidence": artifact.get("evidence", []),
+    }
+    payload["context"] = context
+    spec = _lookup_tool_spec(deps, state.tool_tracking.pending_tool_name)
+    if spec is not None:
+        from ...tools import tool_invocation_event
+        payload["invocation"] = tool_invocation_event(
+            spec,
+            tool_call_id=tool_call_id or "",
+            input=state.tool_tracking.pending_tool_input,
+            output=artifact,
+            execution_mode="react" if context == "react" else "deterministic",
+            step_id=step_id,
+            thread_id=state.thread_id,
+            user_id=state.user_id,
+        )
+    return payload
+
+
+def _lookup_tool_spec(deps: OrchestrationDeps | None, tool_name: str):
+    if deps is None or not tool_name:
+        return None
+    return deps.tool_executor.get(tool_name)
+
+
+def _log_tool_invocation_event(
+    state: AgentGraphState,
+    deps: OrchestrationDeps,
+    artifact: dict,
+    *,
+    execution_mode: str,
+) -> None:
+    spec = _lookup_tool_spec(deps, state.tool_tracking.pending_tool_name)
+    if spec is None:
+        return
+    from ...tools import tool_invocation_event
+    logger.info(
+        "Graph tool invocation completed",
+        extra={"tool_invocation": tool_invocation_event(
+            spec,
+            tool_call_id=state.tool_tracking.pending_call_id,
+            input=state.tool_tracking.pending_tool_input,
+            output=artifact,
+            execution_mode=execution_mode,
+            step_id=state.tool_tracking.pending_step_id,
+            thread_id=state.thread_id,
+            user_id=state.user_id,
+        )},
+    )
+
+
 def _begin_tool_call(
     state: AgentGraphState,
     *,
@@ -243,6 +317,8 @@ def _begin_tool_call(
         active_context=context,
         pending_step_id=step_id,
         pending_call_id=call_id,
+        pending_tool_name=tool_name,
+        pending_tool_input=tool_input or {},
         pending_react_iteration=iteration,
     )
     state.add_event("tool_called", {
@@ -565,13 +641,17 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     if decision == "confirm":
         tool_input = dict(step.tool_input or {})
         tool_input["confirmed"] = True
+        tool_input.setdefault(
+            "idempotency_key",
+            f"{state.thread_id}:{state.run_id}:{step.step_id}:confirmed",
+        )
         sd.status = "running"
         state.confirmation_decision = "confirmed"
         state.add_event("confirmation_resumed", {
             "step_id": step.step_id,
             "decision": "confirmed",
         })
-        logger.info("Step %s confirmed; dispatching through main ToolNode", step.step_id)
+        logger.info("Step %s confirmed; dispatching through main ToolGateway", step.step_id)
         return {
             "tool_messages": [_begin_tool_call(
                 state,
@@ -656,7 +736,7 @@ def _dispatch_plan_step(
         step_results[step.step_id] = result_data
 
     elif step.action_type == "tool_call":
-        raise RuntimeError("tool_call must be executed by the main graph ToolNode")
+        raise RuntimeError("tool_call must be executed by the main graph ToolGateway")
 
     elif step.action_type == "resolve":
         result_data = _execute_resolve_step(step, state, deps)
@@ -848,6 +928,10 @@ def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) 
                 answer=state.answer,
                 citations=state.citations,
                 matches=[],
+                run_id=state.run_id,
+                thread_id=state.thread_id,
+                user_id=state.user_id,
+                step_id=step.step_id,
             )
     except Exception:
         logger.exception("Verify step %s error", step.step_id)

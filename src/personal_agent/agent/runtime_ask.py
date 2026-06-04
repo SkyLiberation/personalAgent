@@ -83,6 +83,53 @@ def _order_matches_by_evidence(
     return ordered
 
 
+def _selected_matches(
+    matches: list[KnowledgeNote],
+    evidence: list[EvidenceItem],
+) -> list[KnowledgeNote]:
+    selected_ids = {
+        item.source_id
+        for item in evidence
+        if item.source_id and item.source_type in {"note", "chunk"}
+    }
+    return [note for note in _order_matches_by_evidence(matches, evidence) if note.id in selected_ids]
+
+
+def _selected_citations(
+    citations: list[Citation],
+    evidence: list[EvidenceItem],
+) -> list[Citation]:
+    selected_note_ids = {
+        item.source_id
+        for item in evidence
+        if item.source_id and item.source_type in {"note", "chunk"}
+    }
+    selected_web_urls = {
+        item.url or item.source_id
+        for item in evidence
+        if item.source_type == "web" and (item.url or item.source_id)
+    }
+    selected: list[Citation] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    for citation in citations:
+        keep = (
+            citation.source_type == "web"
+            and citation.url is not None
+            and citation.url in selected_web_urls
+        ) or (
+            citation.source_type != "web"
+            and citation.note_id in selected_note_ids
+        )
+        if not keep:
+            continue
+        key = (citation.note_id, citation.url or "", citation.relation_fact)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(citation)
+    return selected
+
+
 def _match_refs(matches: list[KnowledgeNote]) -> list[MatchRef]:
     return [match_ref_from_note(note) for note in matches]
 
@@ -257,8 +304,14 @@ class RuntimeAskMixin:
             combined_matches = _merge_notes(combined_matches, graph_result.matches)
             combined_citations = _merge_citations(combined_citations, graph_result.citations)
             all_evidence.extend(graph_result.evidence)
+            retrieved_by = sorted({
+                item.metadata.get("retrieved_by")
+                for item in graph_result.evidence
+                if item.metadata.get("retrieved_by")
+            })
+            provider_label = "+".join(retrieved_by) if retrieved_by else graph_provider
             add_trace_step(
-                f"GraphRAG 候选已进入统一证据池 matches={len(graph_result.matches)} "
+                f"{provider_label} 候选已进入统一证据池 matches={len(graph_result.matches)} "
                 f"citations={len(graph_result.citations)} evidence={len(graph_result.evidence)}"
             )
         elif graph_result and graph_result.enabled is True:
@@ -350,7 +403,7 @@ class RuntimeAskMixin:
         context_pack = build_enriched_context_pack(all_evidence)
         selected_graph_items = [
             item for item in context_pack.evidence
-            if item.source_type == "graph_fact" or item.metadata.get("retrieved_by") in {"graphiti", "graphrag"}
+            if item.source_type == "graph_fact" or item.metadata.get("retrieved_by") in {"graphiti", "structural"}
         ]
         add_trace_step(
             f"ContextPack({ask_components.reranker.name}): "
@@ -358,31 +411,35 @@ class RuntimeAskMixin:
             f"graph_selected={len(selected_graph_items)} "
             f"chars={context_pack.used_chars}/{context_pack.char_budget}"
         )
+        selected_matches = _selected_matches(combined_matches, context_pack.evidence)
+        selected_citations = _selected_citations(combined_citations, context_pack.evidence)
 
         # --- Single generation from the unified evidence pool ---
         final_answer = self._compose_unified_answer(
             question,
             context_pack,
-            combined_matches,
-            combined_citations,
+            selected_matches,
+            selected_citations,
             working_context,
         )
         verification = self._verifier.verify(
             question,
             final_answer,
-            combined_citations,
-            _match_refs(combined_matches),
-            web_enabled=any(c.source_type == "web" for c in combined_citations),
+            selected_citations,
+            _match_refs(selected_matches),
+            web_enabled=any(c.source_type == "web" for c in selected_citations),
             evidence=context_pack.evidence,
+            thread_id=f"{normalized_user}:{normalized_session}",
+            user_id=normalized_user,
         )
-        if combined_matches or combined_citations:
+        if selected_matches or selected_citations:
             retry_result = self._retry_if_needed(
                 question,
                 final_answer,
-                combined_citations,
-                combined_matches,
+                selected_citations,
+                selected_matches,
                 verification,
-                web_enabled=any(c.source_type == "web" for c in combined_citations),
+                web_enabled=any(c.source_type == "web" for c in selected_citations),
                 evidence=context_pack.evidence,
             )
             final_answer = retry_result.answer
@@ -400,7 +457,7 @@ class RuntimeAskMixin:
                 context_pack = build_enriched_context_pack(all_evidence)
                 selected_graph_items = [
                     item for item in context_pack.evidence
-                    if item.source_type == "graph_fact" or item.metadata.get("retrieved_by") in {"graphiti", "graphrag"}
+                    if item.source_type == "graph_fact" or item.metadata.get("retrieved_by") in {"graphiti", "structural"}
                 ]
                 add_trace_step(f"知识库证据不足，网络搜索候选已进入统一证据池 citations={len(web_citations)}")
                 add_trace_step(
@@ -409,26 +466,30 @@ class RuntimeAskMixin:
                     f"graph_selected={len(selected_graph_items)} "
                     f"chars={context_pack.used_chars}/{context_pack.char_budget}"
                 )
+                selected_matches = _selected_matches(combined_matches, context_pack.evidence)
+                selected_citations = _selected_citations(combined_citations, context_pack.evidence)
                 final_answer = self._compose_unified_answer(
                     question,
                     context_pack,
-                    combined_matches,
-                    combined_citations,
+                    selected_matches,
+                    selected_citations,
                     working_context,
                 )
                 verification = self._verifier.verify(
                     question,
                     final_answer,
-                    combined_citations,
-                    _match_refs(combined_matches),
+                    selected_citations,
+                    _match_refs(selected_matches),
                     web_enabled=True,
                     evidence=context_pack.evidence,
+                    thread_id=f"{normalized_user}:{normalized_session}",
+                    user_id=normalized_user,
                 )
                 retry_result = self._retry_if_needed(
                     question,
                     final_answer,
-                    combined_citations,
-                    combined_matches,
+                    selected_citations,
+                    selected_matches,
                     verification,
                     web_enabled=True,
                     evidence=context_pack.evidence,
@@ -440,10 +501,11 @@ class RuntimeAskMixin:
         if not verification.ok or not verification.sufficient:
             final_answer = _annotate_answer(final_answer, verification)
 
-        ordered_matches = _order_matches_by_evidence(combined_matches, context_pack.evidence)
+        ordered_matches = _selected_matches(combined_matches, context_pack.evidence)
+        result_citations = _selected_citations(combined_citations, context_pack.evidence)
         ask_result = AskResult(
             answer=final_answer,
-            citations=combined_citations,
+            citations=result_citations,
             matches=ordered_matches,
             match_refs=_match_refs(ordered_matches),
             evidence=context_pack.evidence,
@@ -452,8 +514,8 @@ class RuntimeAskMixin:
         logger.info(
             "Ask resolved from unified evidence user=%s matches=%s citations=%s evidence=%s verify=%.2f",
             normalized_user,
-            len(combined_matches),
-            len(combined_citations),
+            len(ordered_matches),
+            len(result_citations),
             len(context_pack.evidence),
             verification.evidence_score,
         )
@@ -483,39 +545,90 @@ class RuntimeAskMixin:
         trace_id: str,
         filters: RetrievalFilters | None = None,
     ) -> GraphAskResult | AgentState | None:
-        if provider == "graphrag":
-            matches, citations = self.graphrag_store.ask(
-                question,
-                user_id,
-                limit=self.settings.graphiti.search_limit,
-                filters=filters,
+        if provider == "structural":
+            return self._run_structural_retrieval(question, user_id, filters)
+        if provider in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
+            if not self.ms_graphrag_store.configured():
+                return None
+            return self.ms_graphrag_store.ask(question, user_id, trace_id=trace_id)
+        if provider == "hybrid":
+            structural_state = self._run_structural_retrieval(question, user_id, filters)
+            if not self.graph_store.configured():
+                return structural_state
+            graph_result = self.graph_store.ask(question, user_id, trace_id=trace_id)
+            if not graph_result.enabled:
+                return structural_state
+            graph_matches, graph_citations = self._graph_matches_and_citations(
+                user_id, question, graph_result, filters
             )
-            evidence = [
-                item.model_copy(
-                    update={
-                        "score": max(item.score, 0.58),
-                        "metadata": {
-                            **item.metadata,
-                            "retrieved_by": "graphrag",
-                        },
-                    }
-                )
-                for item in notes_to_evidence(matches)
-            ]
+            graph_evidence: list[EvidenceItem] = []
+            if not (filters and filters.active() and not graph_matches and not graph_citations):
+                notes_by_episode = {
+                    note.graph.episode_uuid: note
+                    for note in graph_matches
+                    if note.graph.episode_uuid is not None
+                }
+                if self._graph_has_evidence(graph_result, graph_matches, graph_citations):
+                    graph_evidence.extend(
+                        graph_result_to_evidence(graph_result, notes_by_episode, question)
+                    )
+                    graph_evidence.extend(
+                        _graph_matches_to_evidence(
+                            question,
+                            graph_matches,
+                            graph_citations,
+                            mode=self.settings.ask.graph_note_evidence_mode,
+                            min_overlap=self.settings.ask.graph_note_evidence_min_overlap,
+                        )
+                    )
             return AgentState(
                 mode="ask",
                 question=question,
                 user_id=user_id,
-                matches=matches,
-                citations=citations,
-                evidence=evidence,
-                answer=matches[0].body.summary if matches else None,
+                matches=_merge_notes(structural_state.matches, graph_matches),
+                citations=_merge_citations(structural_state.citations, graph_citations),
+                evidence=[*structural_state.evidence, *graph_evidence],
+                answer=structural_state.answer or graph_result.answer,
             )
         if provider != "graphiti":
             logger.warning("Unknown graph provider=%s; falling back to graphiti", provider)
         if not self.graph_store.configured():
             return None
         return self.graph_store.ask(question, user_id, trace_id=trace_id)
+
+    def _run_structural_retrieval(
+        self,
+        question: str,
+        user_id: str,
+        filters: RetrievalFilters | None = None,
+    ) -> AgentState:
+        matches, citations = self.structural_retriever.ask(
+            question,
+            user_id,
+            limit=self.settings.graphiti.search_limit,
+            filters=filters,
+        )
+        evidence = [
+            item.model_copy(
+                update={
+                    "score": max(item.score, 0.58),
+                    "metadata": {
+                        **item.metadata,
+                        "retrieved_by": "structural",
+                    },
+                }
+            )
+            for item in notes_to_evidence(matches)
+        ]
+        return AgentState(
+            mode="ask",
+            question=question,
+            user_id=user_id,
+            matches=matches,
+            citations=citations,
+            evidence=evidence,
+            answer=matches[0].body.summary if matches else None,
+        )
 
     def _run_local_retrieval(
         self,

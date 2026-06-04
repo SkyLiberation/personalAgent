@@ -5,9 +5,8 @@ import logging
 from pydantic import BaseModel, Field
 from typing import Literal, Protocol
 
-from openai import OpenAI
-
 from ..core.config import Settings
+from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.logging_utils import log_event
 from ..core.models import EntryInput, EntryIntent
 
@@ -260,28 +259,45 @@ class DefaultIntentRouter:
             if role in {"user", "assistant"} and content:
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": f"当前用户输入：{text}"})
+        content = ""
+        model = self._settings.openai.small_model
+        latency_ms = None
         try:
-            client = OpenAI(
-                api_key=self._settings.openai.api_key,
-                base_url=self._settings.openai.base_url,
-                timeout=self._settings.openai.timeout_seconds,
-                max_retries=self._settings.openai.max_retries,
-            )
-            response = client.chat.completions.create(
-                model=self._settings.openai.small_model,
+            llm_result = traced_chat_completion(
+                self._settings.openai,
+                prompt_name="router",
                 messages=messages,
                 temperature=0,
                 max_tokens=500,
                 response_format={"type": "json_object"},
+                metadata={"source": "intent_router"},
+                upload_inputs_outputs=self._settings.langsmith.upload_inputs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = llm_result.content
+            model = llm_result.model
+            latency_ms = llm_result.latency_ms
             logger.info("LLM intent classification raw response: %s", content)
             payload = json.loads(content)
+            log_llm_parse(
+                prompt_name="router",
+                model=model,
+                parse_ok=True,
+                parse_schema="RouterDecision",
+                latency_ms=latency_ms,
+            )
             intent = payload.get("intent", "unknown")
             if intent not in _RECOGNIZED_INTENTS:
                 logger.warning(
                     "LLM returned unrecognised intent=%s",
                     intent,
+                )
+                log_llm_parse(
+                    prompt_name="router",
+                    model=model,
+                    parse_ok=False,
+                    parse_schema="RouterDecision",
+                    parse_error=f"unrecognised intent={intent}",
+                    latency_ms=latency_ms,
                 )
                 return None
             reason = str(payload.get("reason") or "由模型完成意图分类。")
@@ -303,6 +319,14 @@ class DefaultIntentRouter:
                 user_visible_message=reason,
             )
         except json.JSONDecodeError as exc:
+            log_llm_parse(
+                prompt_name="router",
+                model=model,
+                parse_ok=False,
+                parse_schema="RouterDecision",
+                parse_error=str(exc),
+                latency_ms=latency_ms,
+            )
             logger.exception(
                 "Router LLM JSON decode failed: %s, raw content (first 500 chars): %s",
                 exc,

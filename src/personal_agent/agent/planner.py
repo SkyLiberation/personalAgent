@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from openai import OpenAI
-
 from ..core.config import Settings
+from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.models import EntryIntent
 from ..tools import ToolExecutor
 
@@ -160,21 +159,22 @@ class DefaultTaskPlanner:
             if role in {"user", "assistant"} and content:
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": prompt})
+        model = self._settings.openai.small_model
+        latency_ms = None
         try:
-            client = OpenAI(
-                api_key=self._settings.openai.api_key,
-                base_url=self._settings.openai.base_url,
-                timeout=self._settings.openai.timeout_seconds,
-                max_retries=self._settings.openai.max_retries,
-            )
-            response = client.chat.completions.create(
-                model=self._settings.openai.small_model,
+            llm_result = traced_chat_completion(
+                self._settings.openai,
+                prompt_name="planner",
                 messages=messages,
                 temperature=0,
                 max_tokens=4096,
                 response_format={"type": "json_object"},
+                metadata={"intent": intent},
+                upload_inputs_outputs=self._settings.langsmith.upload_inputs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = llm_result.content
+            model = llm_result.model
+            latency_ms = llm_result.latency_ms
             # TODO: 临时打点，用于收集 planner LLM 原始输出样本，后续移除
             _capture = _maybe_import_capture()
             if _capture is not None:
@@ -184,9 +184,25 @@ class DefaultTaskPlanner:
                     pass
             payload = json.loads(content)
             if not isinstance(payload, dict):
+                log_llm_parse(
+                    prompt_name="planner",
+                    model=model,
+                    parse_ok=False,
+                    parse_schema="PlanStep[]",
+                    parse_error="payload is not object",
+                    latency_ms=latency_ms,
+                )
                 return None
             steps_data = payload.get("steps", [])
             if not isinstance(steps_data, list):
+                log_llm_parse(
+                    prompt_name="planner",
+                    model=model,
+                    parse_ok=False,
+                    parse_schema="PlanStep[]",
+                    parse_error="steps is not list",
+                    latency_ms=latency_ms,
+                )
                 return None
             steps: list[PlanStep] = []
             valid_actions = {"retrieve", "resolve", "tool_call", "compose", "verify"}
@@ -229,7 +245,26 @@ class DefaultTaskPlanner:
                     allowed_tools=[str(name) for name in allowed_tools if name],
                     max_iterations=max_iterations,
                 ))
+            log_llm_parse(
+                prompt_name="planner",
+                model=model,
+                parse_ok=bool(steps),
+                parse_schema="PlanStep[]",
+                parse_error="" if steps else "no valid steps",
+                latency_ms=latency_ms,
+            )
             return steps if steps else None
+        except json.JSONDecodeError as exc:
+            log_llm_parse(
+                prompt_name="planner",
+                model=model,
+                parse_ok=False,
+                parse_schema="PlanStep[]",
+                parse_error=str(exc),
+                latency_ms=latency_ms,
+            )
+            logger.exception("Planner LLM JSON decode failed, falling back to heuristic")
+            return None
         except Exception:
             logger.exception("Failed to plan with LLM, falling back to heuristic")
             return None

@@ -40,6 +40,25 @@ class GraphitiConfig(_StrictBase):
     content_filter_fallback: bool = True
 
 
+class MicrosoftGraphRagConfig(_StrictBase):
+    enabled: bool = False
+    root: Path = Path("./data/ms_graphrag")
+    executable: str = "graphrag"
+    completion_model_provider: str = "openai"
+    completion_model: str | None = None
+    completion_api_key: str | None = None
+    completion_api_base: str | None = None
+    embedding_model_provider: str = "openai"
+    embedding_model: str | None = None
+    embedding_api_key: str | None = None
+    embedding_api_base: str | None = None
+    query_method: str = "local"
+    index_method: str = "standard"
+    response_type: str = "Multiple Paragraphs"
+    auto_index: bool = False
+    command_timeout_seconds: float = 600.0
+
+
 class OpenAIConfig(_StrictBase):
     api_key: str | None = None
     base_url: str | None = None
@@ -71,6 +90,16 @@ class WebApiConfig(_StrictBase):
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+
+
+class LangSmithConfig(_StrictBase):
+    enabled: bool = False
+    api_key: str | None = None
+    endpoint: str = "https://api.smith.langchain.com"
+    project: str = "personal-agent-dev"
+    workspace_id: str | None = None
+    upload_inputs: bool = False
+    sample_rate: float = 1.0
 
 
 class LangExtractConfig(_StrictBase):
@@ -134,10 +163,12 @@ class Settings(_StrictBase):
     max_verify_retries: int = 1
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
+    ms_graphrag: MicrosoftGraphRagConfig = Field(default_factory=MicrosoftGraphRagConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     web: WebApiConfig = Field(default_factory=WebApiConfig)
+    langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
@@ -212,6 +243,30 @@ class Settings(_StrictBase):
                     os.getenv("PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK", "true")
                 ),
             ),
+            ms_graphrag=MicrosoftGraphRagConfig(
+                enabled=_as_bool(os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_ENABLED", "false")),
+                root=Path(os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_ROOT", "./data/ms_graphrag")),
+                executable=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EXECUTABLE", "graphrag"),
+                completion_model_provider=os.getenv(
+                    "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL_PROVIDER", "openai"
+                ),
+                completion_model=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL"),
+                completion_api_key=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY"),
+                completion_api_base=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE"),
+                embedding_model_provider=os.getenv(
+                    "PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_MODEL_PROVIDER", "openai"
+                ),
+                embedding_model=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_MODEL"),
+                embedding_api_key=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_API_KEY"),
+                embedding_api_base=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_API_BASE"),
+                query_method=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_QUERY_METHOD", "local"),
+                index_method=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_INDEX_METHOD", "standard"),
+                response_type=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_RESPONSE_TYPE", "Multiple Paragraphs"),
+                auto_index=_as_bool(os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_AUTO_INDEX", "false")),
+                command_timeout_seconds=float(
+                    os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMMAND_TIMEOUT_SECONDS", "600")
+                ),
+            ),
             openai=OpenAIConfig(
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL"),
@@ -252,6 +307,20 @@ class Settings(_StrictBase):
                 cors_origins=_parse_cors_origins(
                     os.getenv("PERSONAL_AGENT_CORS_ORIGINS", "http://localhost:3000")
                 ),
+            ),
+            langsmith=LangSmithConfig(
+                enabled=_as_bool(os.getenv("PERSONAL_AGENT_LANGSMITH_ENABLED", "false")),
+                api_key=os.getenv("LANGSMITH_API_KEY"),
+                endpoint=os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
+                project=os.getenv(
+                    "PERSONAL_AGENT_LANGSMITH_PROJECT",
+                    os.getenv("LANGSMITH_PROJECT", "personal-agent-dev"),
+                ),
+                workspace_id=os.getenv("LANGSMITH_WORKSPACE_ID"),
+                upload_inputs=_as_bool(
+                    os.getenv("PERSONAL_AGENT_TRACE_UPLOAD_INPUTS", "false")
+                ),
+                sample_rate=float(os.getenv("PERSONAL_AGENT_TRACE_SAMPLE_RATE", "1.0")),
             ),
             langextract=LangExtractConfig(
                 api_key=os.getenv("PERSONAL_AGENT_EXTRACT_API_KEY")

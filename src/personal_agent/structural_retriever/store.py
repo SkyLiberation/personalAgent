@@ -12,7 +12,7 @@ from ..storage.postgres_memory_store import PostgresMemoryStore
 
 
 @dataclass(frozen=True)
-class _GraphRagSection:
+class _StructuralSection:
     note_id: str
     parent_id: str | None
     doc_id: str
@@ -21,39 +21,39 @@ class _GraphRagSection:
 
 
 @dataclass(frozen=True)
-class _GraphRagDoc:
+class _StructuralDoc:
     note_id: str
     doc_id: str
     tokens: set[str]
-    sections: list[_GraphRagSection]
+    sections: list[_StructuralSection]
 
 
 @dataclass(frozen=True)
-class _GraphRagIndex:
-    docs: list[_GraphRagDoc]
-    sections: list[_GraphRagSection]
+class _StructuralIndex:
+    docs: list[_StructuralDoc]
+    sections: list[_StructuralSection]
     document_frequency: dict[str, int]
     num_sections: int
     notes_by_id: dict[str, KnowledgeNote]
 
 
 @dataclass(frozen=True)
-class _GraphRagCacheEntry:
+class _StructuralCacheEntry:
     signature: str
-    index: _GraphRagIndex
+    index: _StructuralIndex
 
 
-class GraphRagStore:
-    """Lightweight production GraphRAG provider over persisted notes.
+class StructuralRetrieverStore:
+    """Structural retriever over persisted parent/chunk notes.
 
-    This is a structural graph over parent notes and chunk notes. It does not
-    perform LLM/entity ingestion, so cache invalidation is based on the current
-    note set rather than an external graph database manifest.
+    This builds a deterministic parent-section graph over local notes. It does
+    not perform LLM/entity ingestion, community detection, or global summary
+    generation; cache invalidation is based on the current note set.
     """
 
     def __init__(self, store: PostgresMemoryStore) -> None:
         self.store = store
-        self._cache: dict[tuple[str, str], _GraphRagCacheEntry] = {}
+        self._cache: dict[tuple[str, str], _StructuralCacheEntry] = {}
         self._lock = Lock()
 
     def configured(self) -> bool:
@@ -85,7 +85,7 @@ class GraphRagStore:
                 note_id=note.id,
                 title=note.body.title,
                 snippet=(note.body.summary or note.body.content)[:160],
-                relation_fact="GraphRAG structural match",
+                relation_fact="Structural retriever match",
             )
             for note in matches[:5]
         ]
@@ -94,11 +94,11 @@ class GraphRagStore:
     def rank_note_ids(
         self,
         query: str,
-        index: _GraphRagIndex,
+        index: _StructuralIndex,
         *,
         limit: int,
     ) -> list[str]:
-        query_tokens = _graphrag_tokens(query)
+        query_tokens = _structural_tokens(query)
         if not query_tokens:
             return []
 
@@ -133,7 +133,7 @@ class GraphRagStore:
         scored_items.extend((score, note_id) for note_id, score in section_scores.items())
         scored_items.extend((score, note_id) for note_id, score in parent_scores.items())
         scored_items.sort(
-            key=lambda item: (item[0], _graphrag_tiebreak(item[1], sections_by_id)),
+            key=lambda item: (item[0], _structural_tiebreak(item[1], sections_by_id)),
             reverse=True,
         )
 
@@ -152,7 +152,7 @@ class GraphRagStore:
         self,
         user_id: str,
         filters: RetrievalFilters | None,
-    ) -> _GraphRagIndex:
+    ) -> _StructuralIndex:
         notes = [
             note
             for note in self.store.list_notes(user_id, include_chunks=True)
@@ -164,12 +164,12 @@ class GraphRagStore:
             cached = self._cache.get(cache_key)
             if cached is not None and cached.signature == signature:
                 return cached.index
-            index = build_graphrag_index(notes)
-            self._cache[cache_key] = _GraphRagCacheEntry(signature=signature, index=index)
+            index = build_structural_index(notes)
+            self._cache[cache_key] = _StructuralCacheEntry(signature=signature, index=index)
             return index
 
 
-def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
+def build_structural_index(notes: list[KnowledgeNote]) -> _StructuralIndex:
     notes_by_id = {note.id: note for note in notes}
     documents = [retrieval_document_from_note(note) for note in notes]
     children_by_parent: dict[str, list[RetrievalDocument]] = {}
@@ -187,8 +187,8 @@ def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
         if document.parent_note_id and document.parent_note_id not in parent_ids:
             standalone_children.append(document)
 
-    graph_docs: list[_GraphRagDoc] = []
-    sections: list[_GraphRagSection] = []
+    graph_docs: list[_StructuralDoc] = []
+    sections: list[_StructuralSection] = []
     document_frequency: dict[str, int] = {}
 
     for parent in [*parent_documents, *standalone_children]:
@@ -196,11 +196,11 @@ def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
             children_by_parent.get(parent.id, []),
             key=lambda item: item.chunk_index if item.chunk_index is not None else 10_000,
         )
-        parent_tokens = set(_graphrag_tokens(_note_text(parent, include_content=not children)))
-        doc_sections: list[_GraphRagSection] = []
+        parent_tokens = set(_structural_tokens(_note_text(parent, include_content=not children)))
+        doc_sections: list[_StructuralSection] = []
         for index, child in enumerate(children):
-            child_tokens = set(_graphrag_tokens(_note_text(child, include_content=True)))
-            section = _GraphRagSection(
+            child_tokens = set(_structural_tokens(_note_text(child, include_content=True)))
+            section = _StructuralSection(
                 note_id=child.id,
                 parent_id=parent.id,
                 doc_id=parent.id,
@@ -212,7 +212,7 @@ def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
             for token in child_tokens:
                 document_frequency[token] = document_frequency.get(token, 0) + 1
         if not children:
-            section = _GraphRagSection(
+            section = _StructuralSection(
                 note_id=parent.id,
                 parent_id=None,
                 doc_id=parent.id,
@@ -225,7 +225,7 @@ def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
                 document_frequency[token] = document_frequency.get(token, 0) + 1
 
         graph_docs.append(
-            _GraphRagDoc(
+            _StructuralDoc(
                 note_id=parent.id,
                 doc_id=parent.id,
                 tokens=parent_tokens,
@@ -233,7 +233,7 @@ def build_graphrag_index(notes: list[KnowledgeNote]) -> _GraphRagIndex:
             )
         )
 
-    return _GraphRagIndex(
+    return _StructuralIndex(
         docs=graph_docs,
         sections=sections,
         document_frequency=document_frequency,
@@ -257,7 +257,7 @@ def _note_text(document: RetrievalDocument, *, include_content: bool) -> str:
     return " ".join(part for part in parts if part)
 
 
-def _token_score(query_tokens: list[str], candidate_tokens: set[str], graph: _GraphRagIndex) -> float:
+def _token_score(query_tokens: list[str], candidate_tokens: set[str], graph: _StructuralIndex) -> float:
     score = 0.0
     for token in query_tokens:
         if token not in candidate_tokens:
@@ -268,17 +268,17 @@ def _token_score(query_tokens: list[str], candidate_tokens: set[str], graph: _Gr
     return score
 
 
-def _graphrag_tiebreak(note_id: str, sections_by_id: dict[str, _GraphRagSection]) -> float:
+def _structural_tiebreak(note_id: str, sections_by_id: dict[str, _StructuralSection]) -> float:
     section = sections_by_id.get(note_id)
     if section is None:
         return 0.0
     return -float(section.index)
 
 
-def _graphrag_tokens(text: str) -> list[str]:
+def _structural_tokens(text: str) -> list[str]:
     tokens: list[str] = []
     for raw in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]+", text.lower()):
-        if len(raw) < 2 or raw in _GRAPHRAG_STOPWORDS:
+        if len(raw) < 2 or raw in _STRUCTURAL_STOPWORDS:
             continue
         tokens.append(raw)
         if re.fullmatch(r"[\u4e00-\u9fff]{4,}", raw):
@@ -327,7 +327,7 @@ def _note_matches_filters(note: KnowledgeNote, filters: RetrievalFilters | None)
     return True
 
 
-_GRAPHRAG_STOPWORDS = {
+_STRUCTURAL_STOPWORDS = {
     "the",
     "and",
     "for",

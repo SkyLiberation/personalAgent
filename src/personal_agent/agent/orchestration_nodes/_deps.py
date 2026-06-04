@@ -218,17 +218,18 @@ def _resolve_allowed_tools_for_step(step: "PlanStep", deps: OrchestrationDeps) -
 
 def _is_react_tool_blocked(tool_name: str, deps: OrchestrationDeps) -> bool:
     spec = None
-    from ...tools import tool_property
+    from ...tools import tool_governance
     for t in deps.tool_executor.list_tools():
         if t.name == tool_name:
             spec = t
             break
     if spec is None:
         return True
+    governance = tool_governance(spec)
     if (
-        tool_property(spec, "risk_level", "low") == "high"
-        or tool_property(spec, "requires_confirmation", False)
-        or tool_property(spec, "writes_longterm", False)
+        governance.risk_level == "high"
+        or governance.requires_confirmation
+        or any(effect in governance.side_effects for effect in ("write_longterm", "delete_longterm", "send_external", "irreversible"))
     ):
         return True
     if any(tool_name.startswith(p) for p in _REACT_BLOCKED_TOOL_PREFIXES):

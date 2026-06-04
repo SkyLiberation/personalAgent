@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RetrievalFilters(BaseModel):
@@ -43,6 +43,26 @@ class RetrievalFilters(BaseModel):
         default="",
         description="Restrict retrieval to a parent document/chunk tree.",
     )
+
+    @field_validator(
+        "source_ref_contains",
+        "created_after",
+        "created_before",
+        "metadata_contains",
+        "parent_note_id",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_string_filter(cls, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            for item in value:
+                text = str(item).strip()
+                if text:
+                    return text
+            return ""
+        return str(value).strip()
 
     def active(self) -> bool:
         return bool(

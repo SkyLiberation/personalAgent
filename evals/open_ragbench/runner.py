@@ -14,6 +14,7 @@ from personal_agent.core.config import Settings
 from personal_agent.core.models import KnowledgeNote
 from personal_agent.graphiti.store import GraphAskResult, GraphitiStore
 from personal_agent.graphiti.search_strategies import STRATEGIES
+from personal_agent.ms_graphrag import MicrosoftGraphRagStore
 
 from .adapter import CorpusNoteMode, corpus_to_edges, corpus_to_notes, expected_episode, expected_note_ids
 from .loader import CorpusMode, RAGBenchDoc, RAGBenchQuery, load_benchmark
@@ -187,10 +188,10 @@ class CitationRerankStrategy:
 
 
 @dataclass(frozen=True)
-class GraphRagStrategy:
-    name: str = "graphrag"
+class StructuralRetrieverStrategy:
+    name: str = "structural"
     description: str = (
-        "Offline GraphRAG-style baseline over a document-section graph with "
+        "Offline structural retriever baseline over a document-section graph with "
         "local section scoring and parent/sibling score propagation."
     )
 
@@ -202,12 +203,12 @@ class GraphRagStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        graph = _build_graphrag_index(docs)
+        graph = _build_structural_index(docs)
 
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}
         for query in queries:
-            rankings.append((query.query_id, _rank_graphrag_notes(query.query_text, graph, limit=limit)))
+            rankings.append((query.query_id, _rank_structural_notes(query.query_text, graph, limit=limit)))
             section_id, parent_id = expected_note_ids(query)
             relevance[query.query_id] = {section_id, parent_id}
         return rankings, relevance
@@ -422,7 +423,7 @@ def _ranked_note_ids_from_graph_result(
 
 
 @dataclass(frozen=True)
-class _GraphRagSection:
+class _StructuralSection:
     note_id: str
     parent_id: str
     doc_id: str
@@ -431,17 +432,17 @@ class _GraphRagSection:
 
 
 @dataclass(frozen=True)
-class _GraphRagDoc:
+class _StructuralDoc:
     note_id: str
     doc_id: str
     tokens: set[str]
-    sections: list[_GraphRagSection]
+    sections: list[_StructuralSection]
 
 
 @dataclass(frozen=True)
-class _GraphRagIndex:
-    docs: list[_GraphRagDoc]
-    sections: list[_GraphRagSection]
+class _StructuralIndex:
+    docs: list[_StructuralDoc]
+    sections: list[_StructuralSection]
     document_frequency: dict[str, int]
     num_sections: int
 
@@ -499,7 +500,11 @@ def _attach_graph_episode_ids_to_store(store, notes: list[KnowledgeNote], episod
         note = note_by_id.get(note_id)
         if note is None:
             continue
-        store.add_note(note.model_copy(update={"graph_episode_uuid": episode_uuid}))
+        # graph_episode_uuid is a nested field (note.graph.episode_uuid); a flat
+        # model_copy update is silently dropped by pydantic, so set it explicitly.
+        updated = note.model_copy(deep=True)
+        updated.graph.episode_uuid = episode_uuid
+        store.add_note(updated)
 
 
 def _ensure_eval_graph_mapping(
@@ -521,29 +526,29 @@ def _ensure_eval_graph_mapping(
     )
 
 
-def _build_graphrag_index(docs: dict[str, RAGBenchDoc]) -> _GraphRagIndex:
-    graph_docs: list[_GraphRagDoc] = []
-    sections: list[_GraphRagSection] = []
+def _build_structural_index(docs: dict[str, RAGBenchDoc]) -> _StructuralIndex:
+    graph_docs: list[_StructuralDoc] = []
+    sections: list[_StructuralSection] = []
     document_frequency: dict[str, int] = {}
 
     for doc_id, doc in docs.items():
         parent_id = f"ragbench_{doc_id}"
-        doc_tokens = set(_graphrag_tokens(f"{doc.title}\n{doc.abstract}"))
-        doc_sections: list[_GraphRagSection] = []
+        doc_tokens = set(_structural_tokens(f"{doc.title}\n{doc.abstract}"))
+        doc_sections: list[_StructuralSection] = []
         for index, section_text in enumerate(doc.sections):
-            section = _GraphRagSection(
+            section = _StructuralSection(
                 note_id=f"{parent_id}_sec_{index}",
                 parent_id=parent_id,
                 doc_id=doc_id,
                 index=index,
-                tokens=set(_graphrag_tokens(section_text)),
+                tokens=set(_structural_tokens(section_text)),
             )
             doc_sections.append(section)
             sections.append(section)
             for token in section.tokens:
                 document_frequency[token] = document_frequency.get(token, 0) + 1
         graph_docs.append(
-            _GraphRagDoc(
+            _StructuralDoc(
                 note_id=parent_id,
                 doc_id=doc_id,
                 tokens=doc_tokens,
@@ -551,7 +556,7 @@ def _build_graphrag_index(docs: dict[str, RAGBenchDoc]) -> _GraphRagIndex:
             )
         )
 
-    return _GraphRagIndex(
+    return _StructuralIndex(
         docs=graph_docs,
         sections=sections,
         document_frequency=document_frequency,
@@ -559,8 +564,8 @@ def _build_graphrag_index(docs: dict[str, RAGBenchDoc]) -> _GraphRagIndex:
     )
 
 
-def _rank_graphrag_notes(query: str, graph: _GraphRagIndex, *, limit: int) -> list[str]:
-    query_tokens = _graphrag_tokens(query)
+def _rank_structural_notes(query: str, graph: _StructuralIndex, *, limit: int) -> list[str]:
+    query_tokens = _structural_tokens(query)
     if not query_tokens:
         return []
 
@@ -591,7 +596,7 @@ def _rank_graphrag_notes(query: str, graph: _GraphRagIndex, *, limit: int) -> li
     scored_items: list[tuple[float, str]] = []
     scored_items.extend((score, note_id) for note_id, score in section_scores.items())
     scored_items.extend((score, note_id) for note_id, score in parent_scores.items())
-    scored_items.sort(key=lambda item: (item[0], _graphrag_tiebreak(item[1], sections_by_id)), reverse=True)
+    scored_items.sort(key=lambda item: (item[0], _structural_tiebreak(item[1], sections_by_id)), reverse=True)
 
     ranked: list[str] = []
     seen: set[str] = set()
@@ -605,7 +610,7 @@ def _rank_graphrag_notes(query: str, graph: _GraphRagIndex, *, limit: int) -> li
     return ranked
 
 
-def _token_score(query_tokens: list[str], candidate_tokens: set[str], graph: _GraphRagIndex) -> float:
+def _token_score(query_tokens: list[str], candidate_tokens: set[str], graph: _StructuralIndex) -> float:
     score = 0.0
     for token in query_tokens:
         if token not in candidate_tokens:
@@ -616,23 +621,23 @@ def _token_score(query_tokens: list[str], candidate_tokens: set[str], graph: _Gr
     return score
 
 
-def _graphrag_tiebreak(note_id: str, sections_by_id: dict[str, _GraphRagSection]) -> float:
+def _structural_tiebreak(note_id: str, sections_by_id: dict[str, _StructuralSection]) -> float:
     section = sections_by_id.get(note_id)
     if section is None:
         return 0.0
     return -float(section.index)
 
 
-def _graphrag_tokens(text: str) -> list[str]:
+def _structural_tokens(text: str) -> list[str]:
     tokens: list[str] = []
     for raw in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]+", text.lower()):
-        if len(raw) < 2 or raw in _GRAPHRAG_STOPWORDS:
+        if len(raw) < 2 or raw in _STRUCTURAL_STOPWORDS:
             continue
         tokens.append(raw)
     return tokens
 
 
-_GRAPHRAG_STOPWORDS = {
+_STRUCTURAL_STOPWORDS = {
     "the",
     "and",
     "for",
@@ -828,14 +833,19 @@ class RuntimeAskStrategy:
         eval_user_id = context.graphiti_user_id
         store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
         graph_store = GraphitiStore(settings)
-        if settings.ask.graph_provider.strip().lower() == "graphiti":
+        if settings.ask.graph_provider.strip().lower() in {"graphiti", "hybrid"}:
             episode_to_note_id = _ensure_eval_graph_mapping(
                 graph_store=graph_store,
                 notes=all_notes,
                 context=context,
             )
             _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
-        runtime = AgentRuntime(settings, store, graph_store)
+        ms_store = MicrosoftGraphRagStore(settings)
+        if settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
+            ms_store.clear_all_data()
+            ms_store.ingest_notes(all_notes, trace_id="ragbench-msgraphrag-ingest")
+            ms_store.build_index()
+        runtime = AgentRuntime(settings, store, graph_store, ms_graphrag_store=ms_store)
 
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}
@@ -849,6 +859,16 @@ class RuntimeAskStrategy:
             for match in result.matches:
                 if match.id not in ranked_ids:
                     ranked_ids.append(match.id)
+            if (
+                settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"}
+                and not ranked_ids
+            ):
+                projection_text = " ".join(
+                    part for part in [result.answer, *[item.fact or item.snippet for item in result.evidence]]
+                    if part
+                )
+                projected = store.find_similar_notes(eval_user_id, projection_text, limit=limit)
+                ranked_ids = [note.id for note in projected]
             rankings.append((query.query_id, ranked_ids[:limit]))
             section_id, parent_id = expected_note_ids(query)
             relevance[query.query_id] = {section_id, parent_id}
@@ -863,6 +883,7 @@ class RuntimeAskStrategy:
                     "citation_note_ids": [citation.note_id for citation in result.citations[:limit]],
                     "evidence_ids": [item.source_id for item in result.evidence[:limit]],
                     "graph_provider": settings.ask.graph_provider,
+                    "projection": "answer_to_local_notes" if settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"} else "",
                 },
             )
         return rankings, relevance
@@ -873,7 +894,7 @@ def list_strategy_names() -> list[str]:
     return [
         "keyword",
         "citation_reranker",
-        "graphrag",
+        "structural",
         "ask_pipeline",
         "ask_pipeline_no_rewrite",
         "ask_pipeline_local_only",
@@ -889,8 +910,8 @@ def get_strategy(name: str) -> BenchmarkStrategy:
         return KeywordSearchStrategy()
     if normalized == "citation_reranker":
         return CitationRerankStrategy()
-    if normalized == "graphrag":
-        return GraphRagStrategy()
+    if normalized == "structural":
+        return StructuralRetrieverStrategy()
     if normalized == "ask_pipeline":
         return AskPipelineStrategy()
     if normalized == "ask_pipeline_no_rewrite":
@@ -1041,7 +1062,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ask-graph-provider",
-        choices=("graphiti", "graphrag"),
+        choices=("graphiti", "structural", "hybrid", "ms_graphrag"),
         default=None,
         help="Override the production ask graph provider for current_runtime_ask.",
     )
@@ -1081,6 +1102,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Override the number of heuristic candidates sent to the LLM reranker.",
     )
+    parser.add_argument(
+        "--ask-disable-web",
+        action="store_true",
+        help="Disable production web fallback during eval to keep corpus-only metrics clean.",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON output path.")
     return parser.parse_args()
 
@@ -1114,6 +1140,10 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
     if graph_updates:
         settings = settings.model_copy(
             update={"graphiti": settings.graphiti.model_copy(update=graph_updates)}
+        )
+    if args.ask_disable_web:
+        settings = settings.model_copy(
+            update={"firecrawl": settings.firecrawl.model_copy(update={"api_key": None})}
         )
     return settings
 

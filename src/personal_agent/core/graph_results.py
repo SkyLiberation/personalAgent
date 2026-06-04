@@ -1,7 +1,7 @@
 """Provider-neutral graph result models.
 
-These models are the boundary between graph providers (Graphiti, GraphRAG,
-future hybrid) and the core evidence/normalize layer. They live in ``core`` so
+These models are the boundary between graph providers (Graphiti, structural
+retrievers, future hybrid) and the core evidence/normalize layer. They live in ``core`` so
 that ``core.evidence`` no longer has to import from ``graphiti.store`` (which
 would be a layering inversion: core depending on a concrete provider).
 
