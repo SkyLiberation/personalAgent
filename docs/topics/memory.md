@@ -1,148 +1,253 @@
 # Agent 记忆层说明
 
-本文说明当前项目的 Agent 记忆体系：哪些信息属于短期记忆，哪些信息会沉淀为长期记忆，以及这些记忆如何进入 prompt、checkpoint 和业务存储。对应代码主要位于 [src/personal_agent/memory/](../../src/personal_agent/memory/) 和 [src/personal_agent/storage/](../../src/personal_agent/storage/)。
+优秀 Agent 的记忆层不是把所有历史都塞进上下文，而是把不同生命周期、不同可信度的信息放到不同载体里，再按任务需要取回。当前项目的记忆层可以理解为“两条真源、一个证据出口”：短期执行现场由 LangGraph checkpoint 承载，长期知识由 Postgres note/chunk/review 承载，最终进入回答的是经过检索、归一、排序和预算筛选后的 evidence。
+
+对应代码主要位于 [src/personal_agent/agent/](../../src/personal_agent/agent/)、[src/personal_agent/memory/](../../src/personal_agent/memory/)、[src/personal_agent/storage/](../../src/personal_agent/storage/)、[src/personal_agent/graphiti/](../../src/personal_agent/graphiti/) 和 [src/personal_agent/core/evidence.py](../../src/personal_agent/core/evidence.py)。
 
 ## 设计目标
 
-Agent 的记忆不等于"把所有历史都塞进上下文"。当前实现按生命周期和可信度拆分记忆：
+记忆层需要同时满足两类要求：
 
-- **短期记忆**：当前 thread 的对话、计划、执行状态和中断恢复现场，服务于本次或同一 thread 内的连续任务
-- **长期记忆**：用户显式沉淀或系统固化的知识 note、chunk、复习卡，服务于长期检索和事实依据
+- 对模型友好：进入 prompt 的上下文要短、准、可解释，能帮助模型理解指代、当前任务和可引用证据。
+- 对系统可靠：对话现场、长期事实、图谱语义、复习材料和 HITL 暂停状态必须有清晰边界，避免历史回答被误当事实。
 
-这个分层的核心原则是：**执行现场用 checkpoint 恢复，正式知识用长期存储检索。** 不存在独立的"会话存档"层 —— LangGraph entry 是唯一对话入口，对话历史以 checkpoint `messages` 为唯一真源。
+因此当前记忆层遵循一个核心原则：
 
-## 当前状态摘要
+```text
+执行现场用 checkpoint 恢复
+正式知识用长期存储检索
+回答依据用 evidence 进入 prompt
+```
 
-LangGraph entry 使用 Postgres checkpoint 持久化当前执行现场，用于审批中断、恢复和 run snapshot 查询。Graph 主流程直接读取 `AgentGraphState`，不再存在额外的进程内 working memory 层。
+也就是说，项目里不存在独立的“会话存档表”或进程内 working memory 真源。LangGraph entry 是唯一对话入口，同一 `thread_id` 的对话历史以 checkpoint `messages` 为短期真源；长期事实只有显式 capture / solidify 后才会进入 `knowledge_notes`。
 
-通过 `execute_entry()` 进入的多轮对话，以同一 `thread_id` 的 checkpoint `messages` 作为唯一会话真源。Graph 完成节点只把助手回复追加到 checkpoint。
+## 当前实现与能力
 
-待确认操作不写入业务审批表，而是保留在 LangGraph checkpoint 的 `pending_confirmation` 中。solidify 草稿同样不写入业务中间态表，而是保留在 checkpoint 的 `plan.results` 中，并通过 `draft_ready` 事件向前端展示。
+当前记忆层可以按“短期现场 -> 短期上下文窗口 -> 长期写入 -> 长期检索 -> 图谱语义 -> Evidence 组装 -> Prompt 使用”的链路理解。它不是单一 Memory 类，而是一组围绕生命周期和可信度分工的模型与存储边界。
 
-## 记忆分层
+### 短期执行现场
 
-### 1. 短期记忆：Thread 执行现场
-
-短期记忆描述 Agent 正在做什么、做到哪一步、是否等待用户确认。它不是普通聊天历史缓存，而是可恢复的运行现场。
-
-主要载体：
-
-- LangGraph `AgentGraphState`
-- Postgres checkpoint
-- 同一 `thread_id` 下的 `state.messages`
-- `plan / react / events / execution_trace / pending_confirmation`
-
-作用：
-
-- 承接同一 thread 内的连续对话
-- 保存路由、规划、ReAct、步骤执行和输出状态
-- 支持 `interrupt/resume`
-- 支持 run snapshot 查询
-
-典型字段位于 [orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)，checkpoint 构建位于 [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)。
-
-短期记忆的 prompt 使用规则：
-
-- entry 各分支优先读取 checkpoint 中的 thread 对话和执行状态
-- `direct_answer` 会把 thread 对话作为 chat messages 使用，不再同时把同一批内容塞进 system context
-- 不存在历史问答表 fallback：thread 为空就是空，不会从其他存档补历史
-
-#### 短期记忆的上下文管理
-
-checkpoint `messages` 是同一 thread 内累积的全量真源，但不会原样进 prompt。进 prompt 前会经过统一的短期记忆策略（[short_term_context.py](../../src/personal_agent/agent/short_term_context.py)），由 [ShortTermMemoryConfig](../../src/personal_agent/core/config.py) 配置，对应 `PERSONAL_AGENT_STM_*` 环境变量。四个调用点（router/planner/ask/direct_answer）统一收敛到这一层：
-
-- **token 预算**：用字符启发式估算 token（CJK ≈ 1.5 字/token、拉丁 ≈ 4 字/token），从最近往前累加，超 `token_budget`（默认 1500）即停。长消息不会撑爆预算，短消息也不会浪费窗口。
-- **条数上限**：同时受 `max_messages`（默认 12）约束，token 与条数取先到者。
-- **单条消息截断**：单条超过 `per_message_char_limit`（默认 1200 字符）的消息保留首尾、中间插 `…[已截断]…`，不再整条丢弃。
-- **角色过滤 + 排除当前轮**：只保留 user/assistant，entry 各分支以 `exclude_latest=True` 把本轮输入从对话线索剔除。兼容 LangGraph `BaseMessage` 与 dict 两种入参。
-- **溢出滚动摘要**：当累计消息数达到 `rolling_summary_trigger`（默认 20）且确有溢出时，把被裁掉的更早对话交给 `summarize_thread` 压成要点，作为 `[早前对话摘要]` 注入窗口顶部。摘要失败或 LLM 不可用时静默降级为纯截断。可用 `rolling_summary_enabled` 关闭。
-- **纯文本场景**：planner 的 query understanding 用 `char_budget`（默认 800）做字符级截断，常量同样集中到配置。
-
-进入 prompt 的对话线索还附带引用边界（`_DIALOGUE_CONTEXT_POLICY`）：只用于理解指代、用户目标和明确更正，不作为事实证据；与当前可追溯证据冲突时以证据为准。
-
-**演进空间**：token 估算是字符启发式，非精确分词器；`build_dialogue_context` 已预留 `summarizer` 注入接口，后续可替换为精确 tokenizer 或更复杂的分层摘要（如多轮累积摘要）。超出窗口且未触发摘要的旧消息仍只在 prompt 层裁剪，数据始终保留在 checkpoint，可在后续 thread 恢复时重新进入窗口。
-
-### 2. 长期记忆：正式知识和复习材料
-
-长期记忆保存用户希望 Agent 长期记住、可反复检索和引用的知识。
+短期记忆保存 Agent 正在做什么、做到哪一步、是否等待用户确认。它不是普通聊天缓存，而是可恢复的运行现场。
 
 主要载体：
 
-- [postgres_memory_store.py](../../src/personal_agent/storage/postgres_memory_store.py)
-- `Postgres.knowledge_notes`
-- `Postgres.review_cards`
+- [AgentGraphState](../../src/personal_agent/agent/orchestration_models.py)：checkpoint-safe 的图执行状态。
+- Postgres checkpoint：由 LangGraph Postgres checkpointer 管理 `checkpoints`、`checkpoint_blobs`、`checkpoint_writes`。
+- `messages`：同一 `thread_id` 下跨 run 累积的用户/助手对话。
+- `plan / react / tool_tracking / events / execution_trace / pending_confirmation`：当前执行、恢复、确认和审计需要的状态。
 
-长期知识模型：
+这层的价值是保证同一 thread 内的多轮任务可连续、可暂停、可恢复。高风险确认、solidify 草稿、计划步骤结果都先保存在 checkpoint 中；只有正式写入 `knowledge_notes` 后，才算长期知识。
 
-- parent note 表达文档级或主题级知识
-- chunk note 保存原文片段、证据定位和 citation 单元
-- `parent_note_id / chunk_index / source_span` 用于建立文档和片段关系
-- 复习卡独立保存，用于后续记忆巩固和回顾
+### 短期上下文窗口
 
-长期记忆的职责：
+checkpoint `messages` 是同一 thread 内累积的全量真源，但不会原样进入 prompt。进入 router、planner、ask、direct_answer 前，会经过 [short_term_context.py](../../src/personal_agent/agent/short_term_context.py) 的统一策略。
 
-- 作为事实检索和引用的主要来源之一
-- 支持相似检索、关键词检索、按 parent 去重
-- 支持 chunk 查询、父 note 查询和级联删除
-- 与 Graphiti episode 映射配合，支撑图谱语义检索和原文回溯
+当前已落地能力：
 
-`knowledge_notes` 记录"系统正式沉淀并可检索引用的知识"；Graph entry 的对话历史属于 checkpoint 短期记忆，不进入长期记忆，除非通过 solidify 流程显式沉淀。
+- token 预算：用字符启发式估算 token，CJK 和拉丁字符按不同折算率处理。
+- 条数上限：同时受 `max_messages` 和 `token_budget` 约束。
+- 单条截断：超长消息保留首尾，中间插入截断标记。
+- 角色过滤：只保留 user / assistant，过滤工具消息等内部消息。
+- 排除当前轮：entry 分支可用 `exclude_latest=True` 避免本轮输入重复进入上下文。
+- 滚动摘要：溢出消息达到触发条件时，可调用 `summarize_thread` 生成 `[早前对话摘要]`。
+- 纯文本预算：planner query understanding 使用 `char_budget` 做字符级裁剪。
 
-## 数据库表与保存内容
+当前滚动摘要仍是轻量 prompt 策略，有两个需要明确治理的风险：
 
-当前记忆相关数据都保存在 `PERSONAL_AGENT_POSTGRES_URL` 指向的 Postgres 中。不同表保存的不是同一种"记忆"，而是不同生命周期的数据。
+- 每次重新摘要可能不稳定：同一批历史对话可能被 LLM 压出不同重点，影响 planner、ask 或 direct answer 的行为一致性。
+- 摘要可能把助手推测写成事实：历史助手回答里的猜测、方案或未验证判断，如果被摘要成确定表述，会污染后续上下文。
+
+因此，进入 prompt 的短期对话线索必须带有明确边界：只用于理解指代、用户目标、已确认选择和待办状态，不作为事实证据；如果与当前可追溯 evidence、工具结果或长期知识冲突，以当前证据为准。
+
+### 长期知识写入
+
+长期记忆保存用户希望 Agent 长期记住、可反复检索和引用的知识。它由 [PostgresMemoryStore](../../src/personal_agent/storage/postgres_memory_store.py) 管理，核心业务表是 `knowledge_notes` 和 `review_cards`。
+
+写入来源：
+
+- `capture_text`：把用户输入的知识沉淀为 note。
+- `capture_url`：提取链接正文后沉淀为 note。
+- `capture_upload`：提取上传文件内容或元数据后沉淀为 note。
+- `solidify_conversation`：先在 checkpoint 形成草稿，再通过 capture 写入长期知识。
+
+长期知识采用 parent/chunk 双层结构：parent note 表达文档级或主题级知识，chunk note 保存原文片段、证据定位和 citation 单元。`parent_note_id / chunk_index / source_span` 用来建立文档和片段关系，避免长文直接塞进 prompt。
+
+### 图谱语义同步
+
+长期 note 可以同步到 Graphiti。Postgres 保存原文、摘要、chunk 和 episode 映射；Graphiti 保存实体、关系和 episode 级语义索引。
+
+当前实现中的关键边界：
+
+- `KnowledgeNote.graph_sync` 记录图谱同步状态：`idle / pending / synced / failed / skipped`。
+- `KnowledgeNote.graph` 保存 episode、entity、relation、node、edge、fact 引用。
+- `GraphCaptureResult` 是图谱写入结果模型，屏蔽 Graphiti 具体返回结构。
+- `graph_episode_uuid` 是 Postgres note/chunk 与 Graphiti episode 的回溯桥。
+
+因此，Graphiti 不是替代 `knowledge_notes` 的长期事实库，而是长期知识的语义检索层。真正用于原文回溯和引用的业务真源仍然在 Postgres note/chunk。
+
+### 长期检索与证据组装
+
+Ask 路径不会直接把所有 note 塞进 prompt，而是先从本地长期知识、图谱结果和必要的外部工具结果中生成 evidence，再统一排序和裁剪。
+
+当前检索与证据链路：
+
+- `PostgresMemoryStore.search_notes()`：基于 `search_text`、`search_vector`、embedding 和 filters 做本地 note/chunk 检索。
+- `GraphitiStore.ask()`：基于图谱 episode、edge、fact 做语义检索。
+- `EvidenceItem`：把 graph fact、note、chunk、web、tool 结果统一成证据项。
+- `ContextPack`：对 evidence 去重、排序、按字符预算选择进入 prompt 的证据。
+- `Citation`：从 selected evidence 派生用户可见引用。
+
+这层的价值是把“模型看到的上下文”从存储结构中解耦出来。存储可以是 note、chunk、Graphiti fact 或 web hit，但进入 prompt 前都必须变成统一 evidence，并经过预算和引用边界控制。
+
+### HITL 与删除恢复
+
+高风险删除不是直接改长期存储。`delete_note` 首次执行只返回确认 payload，Graph 将其写入 `AgentGraphState.pending_confirmation` 并中断。用户确认后，Graph 从 checkpoint 恢复，给同一步骤补上 `confirmed=True` 和 `idempotency_key`，再次调用工具才真正删除 note、chunk、review card 和可用的图谱 episode。
+
+用户拒绝时，Graph 会把当前步骤标记为 skipped，递归跳过依赖它的后续步骤，清空 `pending_confirmation`，并返回取消说明。
+
+### 复习材料
+
+`review_cards` 保存与长期 note 关联的复习卡。capture 流程生成 note 后会派生到期提醒卡，digest 接口返回近期 note 和到期 card，用于知识回顾。复习卡依附于长期知识，不保存对话上下文。
+
+## 核心模型与契约
+
+### AgentGraphState 短期记忆状态
+
+`AgentGraphState` 是 LangGraph checkpoint 中最重要的短期记忆模型。它保存可恢复过程状态，不保存长期事实。
+
+核心字段：
+
+- `run_id / thread_id / user_id / session_id`：运行和会话身份。
+- `messages`：同一 thread 内跨 run 累积的用户/助手对话。
+- `tool_messages`：当前动作的内部工具交换通道，不污染用户可见对话。
+- `router_decision`：入口意图分类结果。
+- `plan`：计划步骤、步骤结果、当前步骤和重试信息。
+- `react`：ReAct 迭代、允许工具、停止原因和结果。
+- `tool_tracking`：当前工具调用归属，用于恢复后消费正确结果。
+- `citations / matches`：回答阶段的轻量证据摘要。
+- `pending_confirmation`：等待用户确认的高风险动作。
+- `answer / answer_completed`：当前 run 的最终输出状态。
+- `events / errors`：运行事件和错误。
+
+这个模型的边界很关键：它是“运行现场”，不是长期事实库。大文本、完整检索结果和业务知识应通过引用或长期存储承载，避免 checkpoint 膨胀。
+
+### ShortTermMemoryConfig 与 WindowResult
+
+短期上下文策略由 `ShortTermMemoryConfig` 配置，由 `apply_window()` 和 `build_dialogue_context()` 执行。
+
+| 能力 | 字段 / 模型 | 当前用途 |
+| --- | --- | --- |
+| token 预算 | `token_budget` | 从最近消息往前累加，防止 prompt 被历史对话撑爆 |
+| 条数上限 | `max_messages` | 限制进入 prompt 的对话轮数 |
+| 单条截断 | `per_message_char_limit` | 超长消息保留首尾，避免单条消息吞掉窗口 |
+| 纯文本预算 | `char_budget` | 给 planner query understanding 等纯文本场景使用 |
+| 滚动摘要 | `rolling_summary_enabled`、`rolling_summary_trigger` | 对溢出旧消息生成 `[早前对话摘要]` |
+| 结果模型 | `WindowResult` | 输出 kept、overflow、total_considered，便于摘要和测试 |
+
+这层把“checkpoint 存全量”和“prompt 用窗口”分开：数据不会因为 prompt 裁剪而丢失，只是本轮不会全部喂给模型。
+
+### ThreadSummary 目标契约
+
+当前代码还没有独立的 `ThreadSummary` 模型，滚动摘要仍是 `[早前对话摘要]` 文本。后续应该把摘要从单段自然语言升级为结构化会话状态，避免摘要漂移和事实污染。
+
+建议目标结构：
+
+| 分类 | 含义 | Prompt 使用边界 |
+| --- | --- | --- |
+| `user_goals` | 用户当前想完成的任务和目标 | 只作为意图线索 |
+| `user_constraints` | 用户明确提出的约束、偏好、格式要求 | 可作为会话内约束，但不等同外部事实 |
+| `confirmed_decisions` | 用户已经确认的选择、拒绝项、执行方向 | 可作为本 thread 的决策状态 |
+| `pending_tasks` | 尚未完成或等待继续处理的事项 | 只作为任务状态 |
+| `open_questions` | 尚未澄清的问题和冲突点 | 不能当事实使用 |
+| `assistant_assumptions` | 助手提出但用户未确认的假设、判断、方案 | 不能当事实，使用前必须重新验证 |
+| `unverified_claims` | 对项目、外部世界或资料内容的未验证声明 | 不能当事实，必须依赖 evidence / tool result |
+| `evidence_refs` | 如果摘要引用了工具、note 或 web 证据，记录来源 id | 只有能回溯到 evidence 时才可作为事实线索 |
+
+配套 prompt 规则应该明确：
+
+```text
+短期摘要是历史对话线索，不是事实证据。
+user_goals、user_constraints、confirmed_decisions 可用于理解当前任务。
+assistant_assumptions、unverified_claims、open_questions 不能作为事实使用。
+项目事实、外部事实和长期知识结论必须依赖当前 evidence、工具结果或长期记忆检索。
+如果摘要与当前证据冲突，以当前证据为准。
+```
+
+更成熟的实现还应将 `ThreadSummary` 持久化或增量更新，避免每次对溢出历史重新摘要造成不稳定。
+
+### MemoryFacade 长期记忆入口
+
+`MemoryFacade` 是长期记忆统一入口的设计锚点，内部持有 `PostgresMemoryStore`。它不管理短期对话历史，因为短期记忆完全属于 LangGraph checkpoint。
+
+当前职责：
+
+- 绑定 `user_id:session_id` 生命周期。
+- 给 `AgentService` 提供统一 memory 入口。
+- 明确长期知识和短期 checkpoint 的边界。
+
+当前不足也很明确：这个类现在很薄，还没有真正成为长期记忆的唯一访问边界。`AgentRuntime`、`ingestion_pipeline`、`runtime_ask`、`web/api` 和 `delete_note` 工具仍然存在直接访问 `PostgresMemoryStore` 的路径。后续应该把 capture、search、get、list、update、delete、review、graph episode 映射等长期记忆操作都收敛到 `MemoryFacade`，让外部层只表达“我要做什么记忆操作”，而不是直接操作 `knowledge_notes`、`review_cards`、chunk 或 graph mapping 这些内部结构。
+
+这个类的设计价值在于隔离调用方：未来即使增加多个长期存储后端、权限过滤、用户画像、workspace 策略、审计或记忆压缩，也可以在 facade 层收敛。
+
+### PostgresMemoryStore 长期知识存储
+
+`PostgresMemoryStore` 是 note 和 review 的业务真源。
+
+当前核心表：
 
 | 表 | 记忆类型 | 保存内容 | 主要写入来源 | 生命周期 |
 | --- | --- | --- | --- | --- |
-| `checkpoints` / `checkpoint_blobs` / `checkpoint_writes` | 短期记忆 / 可恢复执行现场 | LangGraph checkpoint，包括 `AgentGraphState.messages`、`plan`、`react`、`events`、`execution_trace`、`pending_confirmation`、当前 `answer` 等 | `execute_entry()` 的 LangGraph 编排 | 同一 `thread_id` 的对话与运行恢复周期 |
-| `knowledge_notes` | 长期记忆 | 正式知识 note 和 chunk。核心字段在 `payload` JSONB 中，表层索引字段包括 `id`、`user_id`、`parent_note_id`、`graph_episode_uuid`、`created_at`、`updated_at` | `capture_text`、`capture_link`、`capture_file`、`solidify_conversation` 后续入库 | 长期保存，除非用户删除 |
-| `review_cards` | 长期复习记忆 | 复习卡 `payload`，关联 `note_id`，并保存 `due_at` | capture / digest 相关流程 | 长期保存，随 note 删除级联清理 |
+| `knowledge_notes` | 长期知识 | parent note、chunk note、source、graph refs、search_text、search_vector、embedding_vector | capture / solidify / graph sync | 长期保存，除非用户删除 |
+| `review_cards` | 长期复习记忆 | 复习卡 payload、note_id、due_at | capture / digest 相关流程 | 长期保存，随 note 删除清理 |
+| `checkpoints` / `checkpoint_blobs` / `checkpoint_writes` | 短期现场 | LangGraph checkpoint state | LangGraph checkpointer | 同一 thread 的对话与恢复周期 |
 
-### `checkpoints`：Graph 短期记忆真源
+`knowledge_notes` 的外层字段服务检索和索引：`id`、`user_id`、`parent_note_id`、`source_fingerprint`、`graph_episode_uuid`、`search_text`、`search_vector`、`embedding_vector`、`created_at`、`updated_at`。完整 `KnowledgeNote` 放在 `payload` JSONB 中。
 
-LangGraph 的 Postgres checkpointer 会维护 `checkpoints`、`checkpoint_blobs` 和 `checkpoint_writes`。这些表不是业务 store 手写 schema，而是由 `PostgresSaver.setup()` 创建。
+### KnowledgeNote 长期知识模型
 
-这里保存的是可恢复的 graph state。对 Agent 记忆最关键的是：
+`KnowledgeNote` 是长期知识的业务模型，也是 note/chunk 的统一载体。
 
-- `messages`：同一 `thread_id` 下跨 run 累积的用户/助手对话
-- `plan`：计划步骤、当前步骤、步骤结果
-- `react`：ReAct 单步推理状态、迭代结果和停止原因
-- `events`：前端和 run snapshot 可见的运行事件
-- `execution_trace`：非计划分支的轻量执行路径
-- `pending_confirmation`：等待用户确认或补充的信息
-- `answer / answer_completed`：当前 run 的最终输出状态
+核心子模型：
 
-同一会话的短期上下文以 checkpoint `messages` 为唯一真源。
+- `NoteSource`：source type、source ref、fingerprint、metadata。
+- `NoteBody`：title、content、summary。
+- `NoteChunk`：parent_note_id、index、source_span。
+- `NotePreExtract`：section_map、graph_worthy、status、topic。
+- `NoteGraphKnowledge`：episode、entities、relations、node_refs、edge_refs、fact_refs。
+- `NoteGraphSync`：图谱同步状态和错误。
+- `NoteGraphQuality`：实体数量、关系数量、弱关系等质量指标。
 
-### `knowledge_notes`：正式长期知识
+同一个模型既可以表达 parent note，也可以表达 chunk note。区别由 `chunk.parent_note_id` 决定：为空表示 parent，非空表示 chunk。
 
-`knowledge_notes` 保存用户明确采集或固化后的知识。表结构将可检索索引字段放在外层，将完整 note 放在 `payload` JSONB 中。
+### GraphCaptureResult / GraphAskResult 图谱边界
 
-外层字段：
+`GraphCaptureResult` 和 `GraphAskResult` 是图谱 provider 与核心证据层之间的边界模型。它们位于 `core`，避免核心 evidence 层反向依赖具体的 Graphiti 实现。
 
-- `id`：note 或 chunk id
-- `user_id`：所属用户
-- `parent_note_id`：chunk 指向 parent note；parent note 为空
-- `graph_episode_uuid`：与 Graphiti episode 的映射
-- `payload`：完整 `KnowledgeNote`
-- `created_at / updated_at`
+当前用途：
 
-`payload` 中通常包含标题、摘要、正文、source 信息、chunk 信息、entity/relation、citation 定位、图谱同步状态等。它是当前系统中最接近"长期事实记忆"的业务真源。
+- `GraphCaptureResult`：承接图谱写入结果，包括 episode、entity、relation、node、edge、fact 引用。
+- `GraphAskResult`：承接图谱查询结果，包括 answer、relation facts、citation hits、node/edge/fact refs。
+- `GraphCitationHit`：表示 episode 级 citation 命中，后续可映射回 note/chunk。
 
-### `review_cards`：复习材料
+这层的价值是 provider-neutral：现在可以接 Graphiti，也保留了未来接 structural retriever 或其他 graph provider 的空间。
 
-`review_cards` 保存与 note 关联的复习卡：
+### EvidenceItem / ContextPack 证据上下文
 
-- `id`
-- `note_id`
-- `payload`：完整 `ReviewCard`
-- `due_at`：下次复习时间
+`EvidenceItem` 是回答阶段的统一证据模型，`ContextPack` 是进 prompt 前的证据包。
 
-它依附于长期知识，不保存对话上下文。capture 流程生成 note 之后会自动派生一张到期提醒卡，`digest` 接口把到期卡返回前端用于复习提醒。
+`EvidenceItem.source_type` 当前支持：
 
-### `pending_confirmation`：Graph HITL 暂停状态
+- `graph_fact`：图谱事实或关系。
+- `note`：长期 parent note。
+- `chunk`：长期 chunk note。
+- `web`：外部搜索结果。
+- `tool`：工具输出。
 
-高风险动作的确认状态保存在 checkpoint 的 `AgentGraphState.pending_confirmation` 中。以删除笔记为例，`delete_note` 第一次被调用时不会删除数据，而是返回确认 payload；Graph 将其写入 `pending_confirmation` 并通过 `interrupt()` 暂停：
+`ContextPack` 保存 selected / dropped 两组 evidence，并记录 `char_budget` 与 `used_chars`。只有 selected evidence 会进入 prompt；citations 也由 selected evidence 派生，避免引用和上下文不一致。
+
+### PendingConfirmation HITL 暂停状态
+
+`pending_confirmation` 是 checkpoint 中的高风险动作暂停状态。以删除笔记为例，payload 通常包含：
 
 ```json
 {
@@ -155,65 +260,304 @@ LangGraph 的 Postgres checkpointer 会维护 `checkpoints`、`checkpoint_blobs`
 }
 ```
 
-用户确认时，前端通过 Graph resume 传入 `{"decision": "confirm"}`。Graph 从 checkpoint 恢复暂停点，把当前步骤的工具输入补上 `confirmed=true`，再次调用 `delete_note`，这次才真正删除 note、chunk、review card 和可用的图谱 episode。
+它不是长期知识，也不是业务审批表。它属于当前 thread/run 的可恢复执行现场。
 
-用户拒绝时，Graph 将当前步骤标记为 `skipped`，递归跳过依赖它的后续步骤，清空 `pending_confirmation`，并返回取消说明。
+## Model / Layer 依赖类图
 
-## 读写路径
+这张图描述“记忆层如何消费模型与存储契约”，不是 Python 继承关系。为表达分层，沿用 [tools.md](tools.md) 的约定：
 
-### LangGraph entry（唯一对话入口）
+- 蓝色节点是处理层。
+- 白色节点是已落地的模型 / 契约。
+- 绿色节点是已落地、被多层共同消费的证据 projection。
+- 黄色虚线节点是尚未落地的未来模型 / 后端能力。
 
-1. `execute_entry()` 绑定 session，并用 `thread_id` 从 Postgres checkpoint 恢复当前 state
-2. 路由、规划、direct answer、summarize、ReAct 和 compose/solidify 优先使用 checkpoint 中的 thread 对话和执行状态
-3. `AgentGraphState.messages / plan / react / events / execution_trace` 写入 checkpoint
-4. 所有成功形成用户可见回复的完成分支在 `finalize_entry_result` 统一追加 assistant message 到 checkpoint
+关键边界需要特别明确：
 
-### solidify conversation
+- `AgentGraphState` 是短期执行现场，保存 checkpoint 可恢复状态，不是长期事实库。
+- `ShortTermMemoryConfig` 只决定 prompt 窗口，不决定数据是否保留；完整 thread 对话仍在 checkpoint。
+- `ThreadSummary` 还未落地；它是后续把滚动摘要从不稳定文本升级为结构化会话状态的目标模型。
+- `MemoryFacade` 是长期记忆统一入口的目标边界；当前仍有 runtime、API、工具和 ingestion 流程直接访问 `PostgresMemoryStore`，这是后续需要收敛的重点。
+- `KnowledgeNote` 是长期业务真源；Graphiti episode 是语义索引和关系检索层。
+- `EvidenceItem / ContextPack` 是回答前的统一证据出口，避免 prompt 直接依赖底层存储结构。
 
-1. `compose` 生成草稿答案
-2. 草稿保存在 checkpoint 的 `plan.results` 中
-3. `draft_ready` 事件供前端展示
-4. 后续 `capture_text` 从上游 compose 结果接收草稿，并正式写入 `knowledge_notes`
+```mermaid
+flowchart LR
+    classDef layer fill:#e8f1ff,stroke:#4f7ccf,stroke-width:1px,color:#10233f
+    classDef model fill:#ffffff,stroke:#9aa4b2,stroke-width:1px,color:#172033
+    classDef projection fill:#e9f9ee,stroke:#2e9e5b,stroke-width:1px,color:#0c3b22
+    classDef future fill:#fff7e6,stroke:#d08b00,stroke-dasharray: 5 3,color:#3b2a00
+    classDef pipeline fill:#f4f6fb,stroke:#3a4f7a,stroke-width:2px,color:#10233f
 
-### delete knowledge
+    subgraph MemoryLayer["Memory Layer"]
+        direction TB
 
-1. 解析删除目标时优先参考图谱 episode 映射
-2. 不足时回退到本地相似检索和关键词匹配
-3. `delete_note` 首次执行时返回 `pending_confirmation`，不删除数据
-4. Graph 通过 checkpoint 暂停并等待用户确认
-5. resume 确认后再次调用 `delete_note(confirmed=true)` 执行删除；拒绝则跳过后续依赖步骤
+        subgraph ShortTerm["短期记忆 / 执行现场"]
+            direction TB
+            EntryLayer["LangGraph Entry<br/>execute_entry()<br/>router / planner / ask<br/>interrupt / resume"]:::layer
+            AgentGraphState["AgentGraphState<br/>messages<br/>plan / react<br/>tool_tracking<br/>events / errors<br/>pending_confirmation<br/>answer"]:::model
+            CheckpointStore["Postgres Checkpoint<br/>checkpoints<br/>checkpoint_blobs<br/>checkpoint_writes"]:::model
+            ShortTermConfig["ShortTermMemoryConfig<br/>token_budget<br/>max_messages<br/>per_message_char_limit<br/>rolling_summary"]:::model
+            WindowResult["WindowResult<br/>kept<br/>overflow<br/>total_considered"]:::model
+            ThreadSummary["ThreadSummary<br/>结构化会话摘要 (未落地)<br/>user_goals<br/>confirmed_decisions<br/>assistant_assumptions<br/>unverified_claims<br/>evidence_refs"]:::future
+            EntryLayer --> AgentGraphState
+            AgentGraphState --> CheckpointStore
+            CheckpointStore -. restore .-> AgentGraphState
+            AgentGraphState -. messages .-> ShortTermConfig
+            ShortTermConfig --> WindowResult
+            WindowResult -. overflow summary .-> ThreadSummary
+        end
 
-## 当前数据落点
+        subgraph LongTerm["长期记忆 / 业务真源"]
+            direction TB
+            CaptureLayer["Capture / Solidify<br/>capture_text/url/upload<br/>solidify draft -> capture"]:::layer
+            MemoryFacade["MemoryFacade<br/>target unified entry<br/>capture/search/get/list<br/>update/delete/review<br/>graph mapping"]:::layer
+            DirectStoreAccess["Direct Store Access<br/>runtime / API / tools<br/>ingestion pipeline<br/>(待收敛)"]:::future
+            PostgresMemoryStore["PostgresMemoryStore<br/>add/update/search/delete note<br/>review cards<br/>embedding / tsvector"]:::layer
+            KnowledgeNote["KnowledgeNote<br/>source<br/>body<br/>chunk<br/>preextract<br/>graph<br/>graph_sync<br/>graph_quality"]:::model
+            ReviewCard["ReviewCard<br/>note_id<br/>payload<br/>due_at"]:::model
+            KnowledgeTables["Postgres Business Tables<br/>knowledge_notes<br/>review_cards"]:::model
+            CaptureLayer --> KnowledgeNote
+            MemoryFacade --> PostgresMemoryStore
+            DirectStoreAccess -. current bypass .-> PostgresMemoryStore
+            DirectStoreAccess -. should route through .-> MemoryFacade
+            PostgresMemoryStore --> KnowledgeTables
+            PostgresMemoryStore --> KnowledgeNote
+            PostgresMemoryStore --> ReviewCard
+        end
 
-| 类型 | 数据载体 | 生命周期 | 是否事实来源 |
-| --- | --- | --- | --- |
-| 当前执行现场 | Postgres checkpoint / `AgentGraphState` | thread/run 周期 | 否 |
-| Thread 对话 | checkpoint 中的 `state.messages` | 同一 thread | 否 |
-| 长期知识 | `Postgres.knowledge_notes` | 长期 | 是 |
-| 复习材料 | `Postgres.review_cards` | 长期 | 是，取决于来源 |
-| 待确认动作 | checkpoint 中的 `pending_confirmation` | thread/run 周期 | 否 |
+        subgraph GraphMemory["图谱语义记忆"]
+            direction TB
+            GraphitiStore["GraphitiStore<br/>ingest_note(s)<br/>ask<br/>delete_episode"]:::layer
+            GraphCaptureResult["GraphCaptureResult<br/>episode_uuid<br/>entity_names<br/>relation_facts<br/>node/edge/fact refs"]:::model
+            GraphAskResult["GraphAskResult<br/>answer<br/>relation_facts<br/>citation_hits<br/>node/edge/fact refs"]:::model
+            GraphEpisode["Graphiti Episode / Neo4j<br/>entities<br/>relations<br/>facts"]:::model
+            GraphSyncPolicy["Graph Sync Policy<br/>batch sync<br/>retry / quality gate<br/>(可继续深化)"]:::future
+            KnowledgeNote -. graph_episode_uuid .-> GraphEpisode
+            GraphitiStore --> GraphEpisode
+            GraphitiStore --> GraphCaptureResult
+            GraphitiStore --> GraphAskResult
+            GraphCaptureResult -. update graph refs .-> KnowledgeNote
+            GraphSyncPolicy -. future drives .-> GraphitiStore
+        end
 
-## 与 prompt 的关系
+        subgraph EvidenceFlow["证据出口 / Prompt 上下文"]
+            direction TB
+            RetrievalLayer["Retrieval Layer<br/>local search<br/>graph ask<br/>web/tool evidence"]:::layer
+            EvidenceItem["EvidenceItem<br/>source_type<br/>source_id<br/>title/snippet/fact<br/>source_span/url<br/>score/metadata"]:::projection
+            ContextPack["ContextPack<br/>selected<br/>dropped<br/>char_budget<br/>used_chars"]:::projection
+            Citation["Citation<br/>note_id/title/snippet<br/>relation_fact/url<br/>source_type"]:::projection
+            PromptLayer["Prompt Assembly<br/>dialogue context<br/>selected evidence<br/>citation boundary"]:::layer
+            PostgresMemoryStore --> RetrievalLayer
+            GraphAskResult --> RetrievalLayer
+            RetrievalLayer --> EvidenceItem
+            EvidenceItem --> ContextPack
+            ContextPack --> Citation
+            WindowResult --> PromptLayer
+            ThreadSummary -. dialogue clues only .-> PromptLayer
+            ContextPack --> PromptLayer
+        end
 
-Agent 构造 prompt 时遵循两个边界：
+        subgraph Hitl["HITL / 高风险恢复"]
+            direction TB
+            PendingConfirmation["pending_confirmation<br/>confirm payload<br/>checkpoint pause<br/>resume decision"]:::model
+            DeleteTool["delete_note<br/>first call returns confirm<br/>confirmed=true deletes"]:::layer
+            AgentGraphState --> PendingConfirmation
+            PendingConfirmation --> DeleteTool
+            DeleteTool --> PostgresMemoryStore
+            DeleteTool --> GraphitiStore
+        end
 
-1. **短期状态优先**：同一 thread 内优先使用 checkpoint 中的 `messages / plan / react / events`
-2. **事实证据另算**：事实结论必须依赖长期知识、工具结果或本轮检索，历史助手回复不直接作为事实依据
+        DurableIdempotency["Durable Idempotency Ledger<br/>跨进程幂等账本 (未落地)"]:::future
+        MemoryPolicyEngine["Memory Policy Engine<br/>权限 / 隐私 / 保留策略 (未落地)"]:::future
+        MemoryEval["Memory Eval Suite<br/>召回 / 冲突 / 干扰评测 (未落地)"]:::future
+        DurableIdempotency -. future guard .-> DeleteTool
+        MemoryPolicyEngine -. future authorize .-> MemoryFacade
+        MemoryEval -. future evaluate .-> RetrievalLayer
+    end
 
-这可以避免：历史回答过期或错误，却被模型当成事实继续传播。
+    class MemoryLayer pipeline
+```
 
-## 已知限制
+## 与优秀 Agent 记忆层的对照
 
-### 1. 中间态不是长期知识
+| 维度 | 优秀 Agent 记忆层 | 当前项目状态 |
+| --- | --- | --- |
+| 短期 / 长期分层 | 执行现场和长期事实分离 | 已用 checkpoint 承载短期现场，`knowledge_notes` 承载长期知识 |
+| 对话真源 | 同一 thread 对话可恢复，prompt 有窗口策略 | 已用 checkpoint `messages` 做真源，并通过 `short_term_context` 裁剪 |
+| 长期知识模型 | 文档级知识和片段级证据可回溯 | 已用 parent/chunk note、`source_span`、citation 单元表达 |
+| 图谱记忆 | 图谱用于语义关系，不替代原文真源 | 已用 Graphiti episode 与 Postgres note/chunk 映射 |
+| 证据出口 | 多来源检索结果归一为 evidence，再进 prompt | 已用 `EvidenceItem`、`ContextPack`、`Citation` 收敛 |
+| HITL 恢复 | 高风险动作可暂停、确认、恢复 | 已用 checkpoint `pending_confirmation` 支持删除确认 |
+| prompt 边界 | 历史对话不直接当事实，证据优先 | 已明确短期对话只用于指代和目标理解 |
+| 短期摘要治理 | 摘要应区分目标、决策、假设、未验证声明和证据引用 | 当前仍是文本滚动摘要，结构化 `ThreadSummary` 尚未落地 |
+| 复习记忆 | 长期知识可转化为复习材料 | 已有 `review_cards` 和 digest 返回 |
+| 权限与隐私 | 用户级、session、来源和保留策略可配置 | 当前有 user/session 隔离，真实 policy engine 仍可扩展 |
+| 评测闭环 | 评估召回、遗忘、冲突、长会话干扰 | 当前有单元测试，专项 memory eval 仍可补齐 |
 
-solidify 草稿只是当前 Graph 运行中的中间结果。只有写入 `knowledge_notes` 后，才进入正式长期记忆。
+## 主要差距
 
-### 2. 跨 session 的对话上下文需手动迁移
+当前实现已经把“短期执行现场”和“长期正式知识”分开，也已经建立 evidence 出口。距离成熟生产级记忆层，主要差距在于长期记忆入口收敛、治理策略落地、检索质量评测和跨后端一致性：
 
-不同 `session_id` 拥有独立 checkpoint thread。如果需要在新会话里引用旧会话的结论，需要先 solidify 进 `knowledge_notes`，再在新会话里检索。
+1. MemoryFacade 还没有成为长期记忆唯一入口
 
-## 演进方向
+   当前 `MemoryFacade` 已经表达了长期记忆门面的方向，但 `runtime_ask`、`ingestion_pipeline`、`runtime_entry`、`web/api` 和 `delete_note` 工具仍然直接访问 `PostgresMemoryStore`。这会让权限、workspace、审计、graph sync 一致性和删除策略难以统一收口。下一步应让外部层只依赖 `MemoryFacade`，由 facade 再协调 Postgres、Graphiti、review 和 policy。
 
-- 为事实更新、冲突消解和长会话干扰建立专项评测
-- 明确长期知识的双层定位：Graphiti node/edge/fact 是语义推理单元，Postgres parent/chunk note 是原文证据与回溯单元
-- 基于 Postgres checkpoint 扩展多段审批和复杂恢复流
+2. 长期记忆还没有真实权限 / 隐私策略后端
+
+   当前 `user_id`、`session_id` 和 note source 信息已经进入模型，但还没有独立的 memory policy engine。后续需要按用户、workspace、来源、敏感级别、保留期限控制 capture、search、delete 和 graph sync。
+
+3. 图谱和 Postgres 的一致性还可以继续增强
+
+   当前通过 `graph_episode_uuid` 和 graph refs 建立映射，删除时也会清理可用 episode。下一步可以补充更系统的同步状态机、失败重试、批量对账和孤儿 episode 检测。
+
+4. 长期知识缺少冲突消解和版本管理
+
+   `source_fingerprint` 可以处理重复采集，但对于同一主题的事实更新、旧知识过期、不同来源冲突，还没有独立的版本链、置信度或 supersede 机制。
+
+5. 短期摘要仍是轻量文本策略，存在稳定性和事实污染风险
+
+   当前滚动摘要是 prompt 层能力，失败时会静默降级为截断；摘要本身也可能每次重新生成而不稳定，或者把助手推测、未验证判断写成事实。后续需要结构化 `ThreadSummary`，把用户目标、约束、已确认决策、待办、助手假设、未验证声明和 evidence refs 分开，并在 prompt 中明确摘要不能替代事实证据。
+
+6. 记忆质量还缺少专项评测
+
+   当前有短期窗口、evidence、检索和流程测试，但还没有系统化 memory eval，例如长期召回率、错误引用率、历史干扰率、冲突处理准确率和图谱孤儿证据率。
+
+## 按优先级排序的演进建议
+
+当前工程已经完成了记忆层的核心边界：checkpoint 短期现场、Postgres 长期知识、Graphiti 语义索引、Evidence 统一出口。下一阶段的优先级应该先把长期记忆访问边界收敛起来，再在这个边界上做权限、审计、一致性和评测。
+
+### P0：将 MemoryFacade 收敛为唯一长期记忆入口
+
+最高收益的下一步不是先增加更多存储能力，而是先把长期记忆访问统一收口。目标是让 API、Agent Runtime、编排节点、工具层和 ingestion 流程都只依赖 `MemoryFacade`，不直接访问 `PostgresMemoryStore`。
+
+优先收敛的方法：
+
+- `capture_text / capture_url / capture_upload / solidify` 通过 facade 写入长期知识。
+- ask 检索通过 facade 执行本地 note/chunk search 和 graph episode 回溯。
+- `delete_note` 工具通过 facade 完成 get、确认 payload、级联删除、review 清理和 graph episode 清理。
+- digest 通过 facade 获取 recent notes 和 due reviews。
+- Web API 通过 facade 执行 list/get/update/delete/chunks。
+- `OrchestrationDeps` 不再同时暴露 `memory` 和 `store`，避免编排节点天然绕过 facade。
+
+判断标准：`PostgresMemoryStore` 只被 `MemoryFacade`、底层迁移/测试或极少数内部实现直接使用，业务层不再知道长期记忆的内部表和组合细节。
+
+### P1：建立 Memory Policy Engine
+
+Facade 收敛后，再把长期记忆访问纳入统一策略判断：
+
+- 用户级 / workspace 级访问控制。
+- capture、search、delete、graph sync 的 allow / deny。
+- 来源类型和敏感级别策略。
+- 长期保留期限和自动清理策略。
+- 不同客户端来源的权限差异，例如 Web、飞书、调试 API。
+
+这样可以让 memory 层不只是按 `user_id` 过滤，而是具备生产级的权限和隐私边界。
+
+### P2：把图谱同步升级为可对账系统
+
+当前 note 与 Graphiti episode 已经有映射，但同步治理还可以继续增强：
+
+- 持久化同步任务状态。
+- 对 `pending / failed / synced / skipped` 做批量查询和重试。
+- 检测 Postgres note 已删除但 Graphiti episode 残留的孤儿数据。
+- 对 graph quality 指标建立阈值和重建策略。
+- 将批量 sync、delete episode、失败原因接入审计。
+
+这一步能把“图谱可用”升级为“图谱长期一致可维护”。
+
+### P3：引入知识版本与冲突消解
+
+长期记忆真正难的不是写入，而是更新和遗忘。后续可以围绕 `KnowledgeNote` 扩展：
+
+- 同一 source fingerprint 的版本链。
+- 同一主题事实的 supersede / deprecated 标记。
+- 多来源冲突检测。
+- 来源可信度和时间新鲜度。
+- 回答时对冲突证据做显式提示。
+
+这一步能减少“旧知识被继续引用”或“多条记忆互相打架”的问题。
+
+### P4：升级短期摘要策略
+
+当前短期上下文已经有窗口、截断和可选滚动摘要。下一步可以继续优化：
+
+- 用真实 tokenizer 替代字符启发式。
+- 持久化 thread rolling summary，避免每次重新摘要。
+- 引入结构化 `ThreadSummary`，分开保存用户目标、用户约束、已确认决策、待办事项、开放问题、助手假设、未验证声明和 evidence refs。
+- 对摘要加入 prompt 边界：摘要只能帮助理解上下文，不能作为既定事实；项目事实、外部事实和长期知识结论必须依赖 evidence、工具结果或长期记忆检索。
+- 对 `assistant_assumptions`、`unverified_claims` 和 `open_questions` 做显式降权或禁止事实使用，避免把助手推测写成事实。
+- 支持增量更新摘要，减少同一批历史每次重新摘要导致的输出抖动。
+
+这一步能提升长会话稳定性，尤其是多轮规划、恢复和用户更正场景。
+
+### P5：完善 Evidence Rerank 与引用治理
+
+当前 `ContextPack` 已经能统一 evidence 并按预算选择。后续可以继续增强：
+
+- 引入 cross-encoder 或 LLM reranker。
+- 对 note/chunk/graph/web/tool 设定可解释权重。
+- 对 orphan graph fact 做更严格降权或屏蔽。
+- 引用必须来自 selected evidence，继续保持 prompt 与 citation 一致。
+- 对证据不足的回答触发澄清或拒答。
+
+### P6：建立 Memory Eval Suite
+
+需要用评测证明记忆层不是“看起来有检索”，而是真的提升回答质量：
+
+- 长期知识召回率。
+- 引用正确率。
+- 历史对话干扰率。
+- 旧知识过期识别率。
+- 图谱事实孤儿率。
+- chunk 命中和 parent 回溯准确率。
+- HITL 恢复和删除一致性。
+
+这一步会让记忆层从工程实现变成可持续优化的系统能力。
+
+## 面试讲解口径
+
+面试时不要把记忆层讲成“我把聊天记录存起来了”，而要讲成：
+
+> 我把记忆层按生命周期和可信度拆开：当前执行现场放在 LangGraph checkpoint，用于多轮对话、暂停和恢复；真正长期事实必须通过 capture 或 solidify 写入 Postgres note/chunk；图谱只做语义索引和关系检索，原文证据仍回到 note/chunk；最终进入 prompt 的不是原始存储，而是统一 Evidence 和 ContextPack。
+
+可以按四层来讲：
+
+1. 短期执行现场层
+
+   同一 `thread_id` 的对话、计划、ReAct、工具结果、HITL 暂停状态都在 `AgentGraphState` 和 Postgres checkpoint 中。这样多轮任务、用户确认、恢复执行都能回到同一个现场。短期摘要只作为会话线索，不能替代 evidence；后续应升级为结构化 `ThreadSummary`，区分用户目标、已确认决策、助手假设和未验证声明。
+
+2. 长期知识存储层
+
+   只有用户显式 capture 或 solidify 后，内容才进入 `knowledge_notes`。长期知识采用 parent/chunk 结构，parent 保存主题级摘要，chunk 保存片段证据和 `source_span`，避免把长文直接塞进上下文。
+
+3. 图谱语义索引层
+
+   Graphiti 负责实体、关系和 episode 检索，但它不是长期事实真源。Postgres note/chunk 通过 `graph_episode_uuid` 映射回 Graphiti，回答时可以用图谱找到关系，再回到 note/chunk 做原文引用。
+
+4. Evidence 出口层
+
+   本地 note、chunk、graph fact、web 和 tool 结果都会统一成 `EvidenceItem`，再由 `ContextPack` 去重、排序、按预算选择。历史对话只帮助理解指代，不直接作为事实依据；事实回答必须依赖 selected evidence。
+
+这个项目记忆层最值得强调的亮点有：
+
+- 短期记忆和长期记忆真源分离，避免把聊天历史当事实库。
+- checkpoint 保存可恢复执行现场，支持 HITL 暂停和 resume。
+- 长期知识用 parent/chunk note 支撑原文回溯和 citation。
+- Graphiti 是语义索引层，不替代 Postgres 业务真源。
+- `EvidenceItem / ContextPack` 让多来源证据以统一形状进入 prompt。
+- prompt 边界清楚：历史对话用于理解上下文，事实结论以证据为准。
+- 对短期摘要的风险有明确认识：摘要可能不稳定，也可能把助手推测写成事实，因此后续要结构化分类并在 prompt 中声明“摘要不是既定事实”。
+- 已经有 `MemoryFacade` 作为长期记忆统一入口的设计锚点，下一步要把工具、API、runtime 和 ingestion 的直接 store 访问收敛进去。
+
+面试中需要注意边界表述：
+
+- 可以说“已有短期 checkpoint 记忆和长期 note/chunk 记忆”，不要说“所有记忆都统一在一个 MemoryStore 中”。
+- 可以说“Graphiti 已作为语义检索层接入”，不要说“Graphiti 是唯一长期事实库”。
+- 可以说“有滚动摘要能力，并已识别稳定性和事实污染风险”，不要说“已经有完整持久化结构化 ThreadSummary”。
+- 可以说“已有 user/session 隔离”，不要说“完整权限和隐私策略已落地”。
+- 可以说“已有 evidence 统一出口”，不要说“已有完整 memory eval 闭环”。
+- 可以说“`MemoryFacade` 是目标统一入口”，不要说“所有长期记忆访问都已经经过 Facade”。
+
+最适合收尾的一句话：
+
+> 我这个记忆层真正想解决的不是“让 Agent 记住更多”，而是“让 Agent 知道什么只是当前对话现场，什么才是可引用的长期事实”。所以我把 checkpoint、note/chunk、Graphiti 和 evidence 分成不同层，最后只把经过筛选和可追溯的证据交给模型。

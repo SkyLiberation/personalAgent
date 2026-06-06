@@ -37,6 +37,7 @@ def test_langsmith_config_reads_env(monkeypatch):
 def test_configure_langsmith_environment_sets_standard_vars(monkeypatch):
     for key in (
         "LANGSMITH_TRACING",
+        "LANGSMITH_TRACING_V2",
         "LANGSMITH_API_KEY",
         "LANGSMITH_PROJECT",
         "LANGSMITH_ENDPOINT",
@@ -55,12 +56,14 @@ def test_configure_langsmith_environment_sets_standard_vars(monkeypatch):
     )
 
     assert os.environ["LANGSMITH_TRACING"] == "true"
+    assert os.environ["LANGSMITH_TRACING_V2"] == "true"
     assert os.environ["LANGSMITH_API_KEY"] == "ls-test"
     assert os.environ["LANGSMITH_PROJECT"] == "agent-test"
     assert os.environ["LANGSMITH_ENDPOINT"] == "https://smith.example"
     assert os.environ["LANGSMITH_WORKSPACE_ID"] == "workspace-1"
 
     configure_langsmith_environment(LangSmithConfig(enabled=False))
+    assert os.environ["LANGSMITH_TRACING_V2"] == "false"
 
 
 def test_disabled_langsmith_environment_forces_tracing_off(monkeypatch):
@@ -69,12 +72,46 @@ def test_disabled_langsmith_environment_forces_tracing_off(monkeypatch):
     configure_langsmith_environment(LangSmithConfig(enabled=False))
 
     assert os.environ["LANGSMITH_TRACING"] == "false"
+    assert os.environ["LANGSMITH_TRACING_V2"] == "false"
 
 
 def test_langsmith_trace_context_disabled_is_noop():
     ctx = langsmith_trace_context(
         LangSmithConfig(enabled=False),
         metadata={"run_id": "r1"},
+    )
+
+    assert isinstance(ctx, nullcontext)
+
+
+def test_unsampled_trace_context_disables_global_tracer(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_tracing_context(**kwargs):
+        captured.update(kwargs)
+        return nullcontext()
+
+    import langsmith
+
+    monkeypatch.setattr(langsmith, "tracing_context", fake_tracing_context, raising=False)
+
+    # Enabled but sample_rate=0 must actively turn tracing off, otherwise the
+    # LANGSMITH_* global tracer keeps emitting runs regardless of sampling.
+    langsmith_trace_context(
+        LangSmithConfig(enabled=True, sample_rate=0.0),
+        metadata={"run_id": "r1"},
+    )
+
+    assert captured == {"enabled": False}
+
+
+def test_langsmith_llm_span_disabled_is_noop():
+    from personal_agent.core.langsmith_tracing import langsmith_llm_span
+
+    ctx = langsmith_llm_span(
+        LangSmithConfig(enabled=False),
+        name="llm.stream",
+        metadata={"prompt_name": "answer_generation_stream"},
     )
 
     assert isinstance(ctx, nullcontext)
@@ -98,7 +135,12 @@ def test_traced_chat_completion_returns_content_and_metadata(monkeypatch):
                     SimpleNamespace(
                         message=SimpleNamespace(content='{"ok": true}')
                     )
-                ]
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=11,
+                    completion_tokens=7,
+                    total_tokens=18,
+                ),
             )
 
     monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
@@ -113,6 +155,9 @@ def test_traced_chat_completion_returns_content_and_metadata(monkeypatch):
     assert result.content == '{"ok": true}'
     assert result.model == "small"
     assert result.prompt_name == "router"
+    assert result.input_tokens == 11
+    assert result.output_tokens == 7
+    assert result.total_tokens == 18
     assert captured["create"]["response_format"] == {"type": "json_object"}
 
 
@@ -141,6 +186,7 @@ def test_traced_chat_completion_honors_upload_switch(monkeypatch):
 
     monkeypatch.setattr("personal_agent.core.llm_trace._chat_completion_impl", fake_impl)
     monkeypatch.setattr("personal_agent.core.llm_trace._traced_chat_completion", fake_traced)
+    monkeypatch.setattr("personal_agent.core.llm_trace._redacted_traced_chat_completion", fake_impl)
     config = OpenAIConfig(api_key="key", base_url="https://llm.invalid", small_model="small")
 
     traced_chat_completion(
@@ -156,3 +202,35 @@ def test_traced_chat_completion_honors_upload_switch(monkeypatch):
     )
 
     assert calls == ["impl", "traced"]
+
+
+def test_redacted_trace_processors_hide_prompt_content():
+    from personal_agent.core.llm_trace import (
+        LlmTraceResult,
+        _redacted_inputs,
+        _redacted_outputs,
+    )
+
+    inputs = _redacted_inputs({
+        "prompt_name": "router",
+        "prompt_version": "v1",
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "model": "small",
+        "temperature": 0,
+        "max_tokens": 10,
+        "metadata": {"source": "intent_router"},
+    })
+    outputs = _redacted_outputs(LlmTraceResult(
+        content="private output",
+        model="small",
+        latency_ms=1.2,
+        prompt_name="router",
+        prompt_version="v1",
+    ))
+
+    assert inputs["prompt_name"] == "router"
+    assert inputs["message_count"] == 1
+    assert inputs["message_chars"] == len("private prompt")
+    assert "private prompt" not in str(inputs)
+    assert outputs["response_chars"] == len("private output")
+    assert "private output" not in str(outputs)

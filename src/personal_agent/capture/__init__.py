@@ -3,9 +3,11 @@ from .providers import (
     BuiltinUrlCaptureProvider,
     DefaultUploadCaptureProvider,
     FirecrawlUrlCaptureProvider,
-    FirecrawlWebSearchProvider,
+    TavilyWebSearchProvider,
     UploadCaptureProvider,
     UrlCaptureProvider,
+    WebSearchProvider,
+    build_web_search_provider,
 )
 from .service import CaptureService
 
@@ -14,9 +16,11 @@ __all__ = [
     "CaptureService",
     "DefaultUploadCaptureProvider",
     "FirecrawlUrlCaptureProvider",
-    "FirecrawlWebSearchProvider",
+    "TavilyWebSearchProvider",
     "UploadCaptureRequest",
     "UploadCaptureProvider",
     "UrlCaptureProvider",
     "UrlCaptureResult",
+    "WebSearchProvider",
+    "build_web_search_provider",
 ]

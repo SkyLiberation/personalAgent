@@ -180,7 +180,7 @@ class GraphitiStore:
             logger.exception("Graphiti group reset failed for user %s", user_id)
             return 0
 
-    def clear_all_data(self) -> int:
+    def clear_all_data(self, preserve_group_ids: list[str] | None = None) -> int:
         if not (
             self.settings.graphiti.uri
             and self.settings.graphiti.user
@@ -190,7 +190,9 @@ class GraphitiStore:
         if not self._neo4j_reachable():
             return 0
         try:
-            return asyncio.run(self._clear_all_data())
+            return asyncio.run(
+                self._clear_all_data(preserve_group_ids=preserve_group_ids)
+            )
         except Exception:
             logger.exception("Graphiti database reset failed")
             return 0
@@ -552,13 +554,54 @@ class GraphitiStore:
         finally:
             await graphiti.close()
 
-    async def _clear_all_data(self) -> int:
+    async def _clear_all_data(self, preserve_group_ids: list[str] | None = None) -> int:
         driver = AsyncGraphDatabase.driver(
             self.settings.graphiti.uri,
             auth=(self.settings.graphiti.user, self.settings.graphiti.password),
         )
+        protected_group_ids = sorted(set(preserve_group_ids or []))
         try:
             async with driver.session() as session:
+                if protected_group_ids:
+                    count_result = await session.run(
+                        """
+                        MATCH (n)
+                        WHERE coalesce(n.group_id, '') NOT IN $protected_group_ids
+                        RETURN count(n) AS total
+                        """,
+                        protected_group_ids=protected_group_ids,
+                    )
+                    record = await count_result.single()
+                    deleted_count = int(record["total"]) if record else 0
+                    rel_result = await session.run(
+                        """
+                        MATCH (a)-[r]->(b)
+                        WHERE coalesce(r.group_id, '') NOT IN $protected_group_ids
+                          AND NOT (
+                            coalesce(a.group_id, '') IN $protected_group_ids
+                            AND coalesce(b.group_id, '') IN $protected_group_ids
+                          )
+                        DELETE r
+                        """,
+                        protected_group_ids=protected_group_ids,
+                    )
+                    await rel_result.consume()
+                    node_result = await session.run(
+                        """
+                        MATCH (n)
+                        WHERE coalesce(n.group_id, '') NOT IN $protected_group_ids
+                        DETACH DELETE n
+                        """,
+                        protected_group_ids=protected_group_ids,
+                    )
+                    await node_result.consume()
+                    logger.info(
+                        "Cleared Neo4j database except protected groups nodes=%s protected_groups=%s",
+                        deleted_count,
+                        protected_group_ids,
+                    )
+                    return deleted_count
+
                 count_result = await session.run("MATCH (n) RETURN count(n) AS total")
                 record = await count_result.single()
                 deleted_count = int(record["total"]) if record else 0
@@ -624,6 +667,9 @@ class GraphitiStore:
             else:
                 normalized.append("_")
         return "".join(normalized)
+
+    def group_id_for_user(self, user_id: str) -> str:
+        return self._group_id(user_id)
 
     def get_topology(self, user_id: str | None = None) -> dict:
         """Query Neo4j for all entity nodes and edges, return force-graph format."""

@@ -5,7 +5,7 @@ import time
 
 from openai import OpenAI
 
-from ..core.langsmith_tracing import langsmith_trace_context
+from ..core.langsmith_tracing import langsmith_llm_span, report_usage_metadata
 from ..core.llm_trace import traced_chat_completion
 from ..core.logging_utils import log_event
 
@@ -62,11 +62,16 @@ class RuntimeLlmMixin:
                 max_retries=self.settings.openai.max_retries,
             )
             start = time.monotonic()
-            with langsmith_trace_context(
+            with langsmith_llm_span(
                 self.settings.langsmith,
-                metadata={"component": "runtime_llm", "prompt_name": "answer_generation_stream"},
+                name="llm.answer_generation_stream",
+                metadata={
+                    "component": "runtime_llm",
+                    "prompt_name": "answer_generation_stream",
+                    "model": self.settings.openai.model,
+                },
                 tags=["llm", "stream", "answer_generation"],
-            ):
+            ) as run:
                 stream = client.chat.completions.create(
                     model=self.settings.openai.model,
                     messages=[
@@ -76,13 +81,26 @@ class RuntimeLlmMixin:
                     temperature=0.3,
                     max_tokens=600,
                     stream=True,
+                    stream_options={"include_usage": True},
                 )
                 full_text = ""
+                usage: dict[str, int] = {}
                 for chunk in stream:
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        for key, attr in (
+                            ("input_tokens", "prompt_tokens"),
+                            ("output_tokens", "completion_tokens"),
+                            ("total_tokens", "total_tokens"),
+                        ):
+                            value = getattr(chunk_usage, attr, None)
+                            if isinstance(value, int):
+                                usage[key] = value
                     delta = chunk.choices[0].delta.content if chunk.choices else ""
                     if delta:
                         full_text += delta
                         yield ("answer_delta", {"delta": delta, "answer": full_text})
+                report_usage_metadata(run, usage)
                 latency_ms = round((time.monotonic() - start) * 1000, 2)
                 if full_text.strip():
                     self._answer_llm_unavailable_until = 0.0
@@ -94,6 +112,9 @@ class RuntimeLlmMixin:
                         model=self.settings.openai.model,
                         latency_ms=latency_ms,
                         response_chars=len(full_text.strip()),
+                        input_tokens=usage.get("input_tokens"),
+                        output_tokens=usage.get("output_tokens"),
+                        total_tokens=usage.get("total_tokens"),
                     )
                     yield ("answer_complete", {"answer": full_text.strip()})
                 else:

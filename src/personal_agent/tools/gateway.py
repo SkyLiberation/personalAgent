@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Protocol
@@ -9,22 +12,87 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from ..core.observability import record_tool_audit
-from .base import tool_failure, tool_governance, tool_invocation_event
+from .base import (
+    ToolArtifact,
+    ToolError,
+    ToolGovernance,
+    ToolInvocationEvent,
+    tool_failure,
+    tool_governance,
+    tool_invocation_event,
+    url_allowed,
+)
 
 logger = logging.getLogger(__name__)
 
+_EXTERNAL_NETWORK_EFFECTS = frozenset({"external_network", "send_external"})
+# 异常类型 -> 错误分类的默认映射，用于未显式抛出 ToolError 的底层异常。
+_TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = (TimeoutError, ConnectionError, OSError)
+
+
+def _current_langsmith_run_id() -> str | None:
+    """Return the active LangSmith run id, if a trace is in progress."""
+    try:
+        from langsmith.run_helpers import get_current_run_tree
+
+        run_tree = get_current_run_tree()
+        if run_tree is not None and run_tree.id is not None:
+            return str(run_tree.id)
+    except Exception:  # pragma: no cover - tracing must never break tool exec
+        pass
+    return None
+
+
+def _classify_exception(exc: BaseException) -> str:
+    """Map a raw exception to a ToolErrorKind when the tool did not classify it."""
+    if isinstance(exc, ToolError):
+        return exc.kind
+    if isinstance(exc, (ValueError, TypeError, KeyError)):
+        return "invalid_param"
+    if isinstance(exc, PermissionError):
+        return "permission"
+    if isinstance(exc, _TRANSIENT_EXCEPTIONS):
+        return "transient"
+    return "unrecoverable"
+
 
 class ToolAuditSink(Protocol):
-    def record(self, event: dict[str, Any]) -> None:
+    def record(self, event: ToolInvocationEvent) -> None:
         """Persist or forward a normalized tool invocation event."""
 
 
 @dataclass(slots=True)
 class InMemoryToolAuditSink:
-    events: list[dict[str, Any]] = field(default_factory=list)
+    events: list[ToolInvocationEvent] = field(default_factory=list)
 
-    def record(self, event: dict[str, Any]) -> None:
+    def record(self, event: ToolInvocationEvent) -> None:
         self.events.append(event)
+
+
+class IdempotencyStore(Protocol):
+    def seen(self, key: str) -> bool:
+        """Return True if this idempotency key was already committed."""
+
+    def commit(self, key: str) -> None:
+        """Mark an idempotency key as committed so replays are rejected."""
+
+
+@dataclass(slots=True)
+class InMemoryIdempotencyStore:
+    """Process-local idempotency ledger.
+
+    Guards confirmed high-risk executions against duplicate side effects from
+    checkpoint resume, user double-confirmation, or network retries. A durable
+    backend can replace this without changing the gateway contract.
+    """
+
+    _committed: set[str] = field(default_factory=set)
+
+    def seen(self, key: str) -> bool:
+        return key in self._committed
+
+    def commit(self, key: str) -> None:
+        self._committed.add(key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,17 +105,34 @@ class ToolGatewayContext:
     react_allowed_tools: frozenset[str] = frozenset()
 
 
+@dataclass(frozen=True, slots=True)
+class _PolicyViolation:
+    """A pre-execution policy rejection carrying its error classification."""
+
+    message: str
+    kind: str = "permission"
+
+
 class ToolGateway:
     """LangGraph-native boundary for policy, execution, and audit.
 
     The gateway keeps the same ``tool_messages`` contract expected by the
     graph, but centralizes project-specific governance before a real tool can
-    touch storage or the network.
+    touch storage or the network: error-kind-driven retries, external-access
+    domain allow-listing, idempotent side-effect dedup, and structured audit.
     """
 
-    def __init__(self, audit_sink: ToolAuditSink | None = None) -> None:
+    def __init__(
+        self,
+        audit_sink: ToolAuditSink | None = None,
+        *,
+        idempotency_store: IdempotencyStore | None = None,
+    ) -> None:
         self._tools: dict[str, BaseTool] = {}
         self.audit_sink = audit_sink
+        self._idempotency = idempotency_store or InMemoryIdempotencyStore()
+        self._rate_windows: dict[tuple[str, str], deque[float]] = {}
+        self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-gateway")
 
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
@@ -61,32 +146,143 @@ class ToolGateway:
     def invoke(self, name: str, args: dict[str, Any], context: ToolGatewayContext) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
-            return tool_failure(f"未找到工具：{name}")
+            return tool_failure(f"未找到工具：{name}", error_kind="invalid_param").model_dump(mode="json")
 
         started = perf_counter()
-        output: dict[str, Any]
+        output: ToolArtifact
+        attempts = 0
+        timed_out = False
+        rate_limited = False
         try:
             violation = self._validate_policy(tool, args, context)
             if violation is not None:
-                output = tool_failure(violation)
+                output = tool_failure(violation.message, error_kind=violation.kind)
+            elif self._is_rate_limited(tool, context):
+                rate_limited = True
+                output = tool_failure(
+                    f"工具 {tool.name} 触发速率限制，请稍后再试。", error_kind="transient"
+                )
             else:
-                message = tool.invoke({
-                    "name": name,
-                    "args": args,
-                    "id": context.tool_call_id,
-                    "type": "tool_call",
-                })
-                artifact = getattr(message, "artifact", None)
-                if isinstance(artifact, dict) and "ok" in artifact:
-                    output = artifact
-                else:
-                    output = tool_failure(str(getattr(message, "content", "工具执行失败。")))
+                output, attempts, timed_out = self._invoke_with_strategy(tool, name, args, context)
+                self._commit_idempotency(tool, args, output)
         except Exception as exc:
             logger.exception("Tool gateway execution failed for %s", name)
-            output = tool_failure(str(exc)[:500])
+            output = tool_failure(str(exc)[:500], error_kind=_classify_exception(exc))
+            attempts = max(attempts, 1)
 
-        self._record_invocation(tool, args, output, context, (perf_counter() - started) * 1000)
-        return output
+        self._record_invocation(
+            tool,
+            args,
+            output,
+            context,
+            (perf_counter() - started) * 1000,
+            attempts=attempts,
+            timed_out=timed_out,
+            rate_limited=rate_limited,
+        )
+        return output.model_dump(mode="json")
+
+    def _invoke_with_strategy(
+        self,
+        tool: BaseTool,
+        name: str,
+        args: dict[str, Any],
+        context: ToolGatewayContext,
+    ) -> tuple[ToolArtifact, int, bool]:
+        governance = tool_governance(tool)
+        max_attempts = governance.max_retries + 1
+        timed_out = False
+        last_output: ToolArtifact | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                output = self._invoke_once(tool, name, args, context)
+                # 仅瞬时类失败才重试；参数/权限/不可恢复错误立即返还。
+                if (
+                    not output.ok
+                    and output.error_kind == "transient"
+                    and attempt < max_attempts
+                ):
+                    last_output = output
+                    self._sleep_before_retry(governance.retry_backoff_seconds, attempt)
+                    continue
+                return output, attempt, timed_out
+            except TimeoutError:
+                timed_out = True
+                last_output = tool_failure(
+                    f"工具 {tool.name} 执行超时（>{governance.timeout_seconds}s）。",
+                    error_kind="transient",
+                )
+                if attempt < max_attempts:
+                    self._sleep_before_retry(governance.retry_backoff_seconds, attempt)
+                    continue
+                return last_output, attempt, timed_out
+            except Exception as exc:
+                kind = _classify_exception(exc)
+                last_output = tool_failure(str(exc)[:500], error_kind=kind)
+                if kind == "transient" and attempt < max_attempts:
+                    self._sleep_before_retry(governance.retry_backoff_seconds, attempt)
+                    continue
+                return last_output, attempt, timed_out
+        return (
+            last_output or tool_failure(f"工具 {tool.name} 未执行。", error_kind="unrecoverable"),
+            max_attempts,
+            timed_out,
+        )
+
+    def _invoke_once(
+        self,
+        tool: BaseTool,
+        name: str,
+        args: dict[str, Any],
+        context: ToolGatewayContext,
+    ) -> ToolArtifact:
+        governance = tool_governance(tool)
+
+        def run_tool():
+            return tool.invoke({
+                "name": name,
+                "args": args,
+                "id": context.tool_call_id,
+                "type": "tool_call",
+            })
+
+        if governance.timeout_seconds is None:
+            message = run_tool()
+        else:
+            future = self._executor.submit(run_tool)
+            try:
+                message = future.result(timeout=float(governance.timeout_seconds))
+            except TimeoutError:
+                future.cancel()
+                raise
+        artifact = getattr(message, "artifact", None)
+        if isinstance(artifact, ToolArtifact):
+            return artifact
+        if isinstance(artifact, dict) and "ok" in artifact:
+            return ToolArtifact.model_validate(artifact)
+        return tool_failure(str(getattr(message, "content", "工具执行失败。")))
+
+    @staticmethod
+    def _sleep_before_retry(backoff_seconds: float, attempt: int) -> None:
+        if backoff_seconds <= 0:
+            return
+        time.sleep(backoff_seconds * attempt)
+
+    def _is_rate_limited(self, tool: BaseTool, context: ToolGatewayContext) -> bool:
+        governance = tool_governance(tool)
+        limit = governance.rate_limit_per_minute
+        if limit is None or limit <= 0:
+            return False
+        subject = context.user_id or context.thread_id or "anonymous"
+        key = (tool.name, subject)
+        now = time.monotonic()
+        window = self._rate_windows.setdefault(key, deque())
+        while window and now - window[0] >= 60.0:
+            window.popleft()
+        if len(window) >= limit:
+            return True
+        window.append(now)
+        return False
 
     def invoke_graph(self, state: Any) -> dict[str, list[ToolMessage]]:
         call = self._latest_tool_call(state)
@@ -96,7 +292,7 @@ class ToolGateway:
                     ToolMessage(
                         content="工具节点未收到待执行的工具调用。",
                         tool_call_id="",
-                        artifact=tool_failure("工具节点未收到待执行的工具调用。"),
+                        artifact=tool_failure("工具节点未收到待执行的工具调用。").model_dump(mode="json"),
                     )
                 ]
             }
@@ -123,32 +319,83 @@ class ToolGateway:
         tool: BaseTool,
         args: dict[str, Any],
         context: ToolGatewayContext,
-    ) -> str | None:
+    ) -> _PolicyViolation | None:
         governance = tool_governance(tool)
         if context.execution_mode == "react":
             if tool.name not in context.react_allowed_tools:
-                return f"工具 {tool.name} 不在当前 ReAct 允许列表中。"
+                return _PolicyViolation(f"工具 {tool.name} 不在当前 ReAct 允许列表中。")
             blocked_effects = {"write_longterm", "delete_longterm", "send_external", "irreversible"}
             if (
                 governance.risk_level == "high"
                 or governance.requires_confirmation
                 or blocked_effects.intersection(governance.side_effects)
             ):
-                return f"工具 {tool.name} 不允许在 ReAct 自主执行中调用。"
+                return _PolicyViolation(f"工具 {tool.name} 不允许在 ReAct 自主执行中调用。")
+
+        domain_violation = self._validate_external_access(tool, governance, args)
+        if domain_violation is not None:
+            return domain_violation
 
         is_confirmed_execution = bool(args.get("confirmed"))
         if governance.requires_confirmation and governance.risk_level == "high" and is_confirmed_execution:
-            if governance.idempotency_key_required and not str(args.get("idempotency_key", "")).strip():
-                return f"工具 {tool.name} 执行高风险确认动作时缺少 idempotency_key。"
+            key = str(args.get("idempotency_key", "")).strip()
+            if governance.idempotency_key_required and not key:
+                return _PolicyViolation(
+                    f"工具 {tool.name} 执行高风险确认动作时缺少 idempotency_key。",
+                    kind="invalid_param",
+                )
+            if key and self._idempotency.seen(key):
+                return _PolicyViolation(
+                    f"工具 {tool.name} 的确认动作已执行过（idempotency_key={key}），已跳过重复副作用。",
+                    kind="unrecoverable",
+                )
         return None
+
+    def _validate_external_access(
+        self,
+        tool: BaseTool,
+        governance: ToolGovernance,
+        args: dict[str, Any],
+    ) -> _PolicyViolation | None:
+        """Enforce domain allow-listing on external-network tool arguments."""
+        if not _EXTERNAL_NETWORK_EFFECTS.intersection(governance.side_effects):
+            return None
+        if not governance.allowed_domains:
+            return None
+        for value in args.values():
+            if not isinstance(value, str) or "://" not in value:
+                continue
+            if not url_allowed(value, governance.allowed_domains):
+                return _PolicyViolation(
+                    f"工具 {tool.name} 的目标 URL 不在允许域名列表中。",
+                    kind="permission",
+                )
+        return None
+
+    def _commit_idempotency(
+        self, tool: BaseTool, args: dict[str, Any], output: ToolArtifact
+    ) -> None:
+        """Record a successful confirmed side effect so replays are rejected."""
+        if not output.ok:
+            return
+        governance = tool_governance(tool)
+        if not (governance.idempotency_key_required and bool(args.get("confirmed"))):
+            return
+        key = str(args.get("idempotency_key", "")).strip()
+        if key:
+            self._idempotency.commit(key)
 
     def _record_invocation(
         self,
         tool: BaseTool,
         args: dict[str, Any],
-        output: dict[str, Any],
+        output: ToolArtifact,
         context: ToolGatewayContext,
         latency_ms: float,
+        *,
+        attempts: int = 1,
+        timed_out: bool = False,
+        rate_limited: bool = False,
     ) -> None:
         event = tool_invocation_event(
             tool,
@@ -160,11 +407,15 @@ class ToolGateway:
             thread_id=context.thread_id,
             user_id=context.user_id,
             latency_ms=latency_ms,
+            langsmith_run_id=_current_langsmith_run_id(),
+            attempts=attempts,
+            timed_out=timed_out,
+            rate_limited=rate_limited,
         )
         if self.audit_sink is not None:
             self.audit_sink.record(event)
         record_tool_audit(event)
-        logger.info("Tool invocation completed", extra={"tool_invocation": event})
+        logger.info("Tool invocation completed", extra={"tool_invocation": event.model_dump(mode="json")})
 
     def _context_from_state(self, state: Any, call_id: str) -> ToolGatewayContext:
         tracking = getattr(state, "tool_tracking", None)

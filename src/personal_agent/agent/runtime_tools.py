@@ -24,14 +24,14 @@ class RuntimeToolsMixin:
             )
         ))
         self._tool_executor.register(build_delete_note_tool(self.store, self._active_graph_store()))
-        if self.settings.firecrawl.api_key:
-            from ..capture.providers.web_search import FirecrawlWebSearchProvider
-            web_provider = FirecrawlWebSearchProvider(self.settings)
+        if self.settings.web_search.api_key:
+            from ..capture.providers.web_search import build_web_search_provider
+            web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
 
     @property
     def _web_search_available(self) -> bool:
-        return bool(self.settings.firecrawl.api_key)
+        return bool(self.settings.web_search.api_key)
 
     def list_tools(self) -> list:
         return self._tool_executor.list_tools()

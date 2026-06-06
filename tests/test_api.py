@@ -213,7 +213,8 @@ class TestDebugEndpoints:
         assert data["deleted_postgres_rows"] >= data["deleted_notes"]
         assert data["deleted_upload_files"] == 1
         assert data["deleted_graph_nodes"] == 7
-        service.graph_store.clear_all_data.assert_called_once_with()
+        service.graph_store.clear_all_data.assert_called_once()
+        assert "preserve_group_ids" in service.graph_store.clear_all_data.call_args.kwargs
         assert not (uploads_dir / "orphan.txt").exists()
 
         with connect(POSTGRES_URL) as conn:
@@ -232,6 +233,45 @@ class TestDebugEndpoints:
                 assert cur.fetchone()[0] >= 1
                 cur.execute("DROP TABLE debug_extra_rows")
             conn.commit()
+
+    def test_reset_database_protects_eval_graph_manifest_groups(
+        self,
+        api_client: TestClient,
+        temp_dir: Path,
+    ):
+        from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids
+
+        service = api_client.app.state.service
+        manifest_dir = temp_dir / "evals" / "open_ragbench" / "results"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "graphiti_manifest.json").write_text(
+            """
+            {
+              "user_id": "ragbench_eval_cached",
+              "graphiti_group_prefix": "personal-agent",
+              "episode_to_note_id": {"episode-1": "note-1"}
+            }
+            """,
+            encoding="utf-8",
+        )
+        (manifest_dir / "other_manifest.json").write_text(
+            """
+            {
+              "user_id": "other_prefix_eval",
+              "graphiti_group_prefix": "other-prefix",
+              "episode_to_note_id": {"episode-2": "note-2"}
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        protected_groups = _protected_eval_graph_group_ids(
+            service.settings,
+            graph_store=service.graph_store,
+            project_root=temp_dir,
+        )
+
+        assert protected_groups == ["personal-agent-ragbench_eval_cached"]
 
 
 class TestToolsEndpoint:

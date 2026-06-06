@@ -1143,7 +1143,7 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
         )
     if args.ask_disable_web:
         settings = settings.model_copy(
-            update={"firecrawl": settings.firecrawl.model_copy(update={"api_key": None})}
+            update={"web_search": settings.web_search.model_copy(update={"api_key": None})}
         )
     return settings
 

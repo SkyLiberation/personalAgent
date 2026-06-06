@@ -49,11 +49,11 @@ class Citation(BaseModel):
 
 
 class WebSearchResult(BaseModel):
-    """A single web search hit from an external provider (Firecrawl, etc.)."""
+    """A single web search hit from an external provider."""
     title: str
     url: str
     snippet: str
-    source: str = "firecrawl"
+    source: str = "web_search"
     published_at: str | None = None
 
 

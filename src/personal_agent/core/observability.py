@@ -29,23 +29,30 @@ def record_metric(
     )
 
 
-def record_tool_audit(event: dict[str, Any]) -> None:
+def _event_payload(event: Any) -> dict[str, Any]:
+    if hasattr(event, "model_dump"):
+        return event.model_dump(mode="json")
+    return dict(event)
+
+
+def record_tool_audit(event: Any) -> None:
     """Emit the normalized business audit event for a tool invocation."""
-    if not event.get("audit_required", True):
+    payload = _event_payload(event)
+    if not payload.get("audit_required", True):
         return
     log_event(
         logger,
-        logging.INFO if event.get("artifact_ok") else logging.WARNING,
+        logging.INFO if payload.get("artifact_ok") else logging.WARNING,
         "tool.audit",
-        **event,
+        **payload,
     )
     record_metric(
         "tool.invocation",
         dimensions={
-            "tool_name": event.get("tool_name"),
-            "execution_mode": event.get("execution_mode"),
-            "risk_level": event.get("risk_level"),
-            "ok": event.get("artifact_ok"),
+            "tool_name": payload.get("tool_name"),
+            "execution_mode": payload.get("execution_mode"),
+            "risk_level": payload.get("risk_level"),
+            "ok": payload.get("artifact_ok"),
         },
     )
 

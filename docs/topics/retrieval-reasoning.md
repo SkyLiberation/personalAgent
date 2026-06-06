@@ -8,7 +8,7 @@
 
 - 优先使用 Graphiti/Neo4j 图谱检索
 - 图谱不可用时回退本地笔记检索
-- 本地检索证据不足时回退到 Firecrawl 网络搜索
+- 本地检索证据不足时回退到可配置 web search provider
 - 将 Graphiti 抽取出的 node / edge / fact 作为语义检索与推理主材料
 - 将 chunk / note 原文片段作为证据出处和 citation 定位材料
 - 将图谱事实、笔记片段和网络搜索结果组织成可追溯证据

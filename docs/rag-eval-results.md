@@ -392,7 +392,7 @@ ingest 规模见上方 [Graphiti Ingest 数据量统计](#multihoprag-30qgrouppe
 - **端到端显著低于 retrieval-only**：overall MRR 0.589 → 0.375，R@5 0.919 → 0.681，R@10 0.919 → 0.708。`current_runtime_ask` 的 `AskResult.matches` 只保留进入最终 ContextPack 的证据（`_selected_matches` 按 `context_pack.evidence` 过滤），diagnostics 显示端到端每 query 平均只返回 **4.8 个 match**（expected 平均 1.9，最多 4），而 retrieval-only 直接返回 top-10 候选。多跳 set-recall 需要凑齐 2-4 篇 evidence，被裁剪到 ~5 个的最终证据池会系统性丢尾部 evidence。
 - **窄预算不是主因**（见下方 wide-budget 对照，假设被证伪）：把 `context_max_items/char_budget` 从 12/5000 放宽到 24/12000，每 query match 仅从 4.8 升到 5.9，但**所有指标反而下降**（MRR 0.375 → 0.283，R@5 0.681 → 0.614）。说明瓶颈不在预算大小，而在候选进入证据池后的**排序/装配质量**。
 - **temporal_query 退化最重**（R@5 0.310）：时间型多跳需要更多并列 evidence；inference_query 受影响最小（R@5 0.781），更依赖单条强相关链。
-- **web 检索噪声无害但增加耗时**：日志中多次 Firecrawl 402（额度不足）来自生产 web fallback，MultiHopRAG evidence 全在本地语料，不影响 parent-note 指标。
+- **web 检索噪声无害但增加耗时**：日志中多次旧 Firecrawl web fallback 402（额度不足），MultiHopRAG evidence 全在本地语料，不影响 parent-note 指标。
 - **下一步**：见下方 wide-budget 对照得出的真实瓶颈与后续方向。
 
 #### wide-budget 对照（证伪窄预算假设，30 queries）
@@ -562,7 +562,7 @@ ingest 规模见上方 [Graphiti Ingest 数据量统计](#multihoprag-30qgrouppe
 - MultiHopRAG overall 只有小幅改善：MRR 0.422 → 0.434，R@3 0.575 → 0.589，R@10 0.706 → 0.733。
 - R@5/NDCG@5 下降，说明放宽预算和 coverage prompt 把更多正确 evidence 推进 top10，但前 5 的排序质量变差；多跳仍需要 source-aware MMR / set coverage reranker，而不是简单扩大候选池。
 - comparison_query 从 hybrid narrow 的 MRR 0.333 提升到 0.667，但 temporal_query 从 0.905 降到 0.762，说明单一融合权重无法同时服务三类多跳问题。
-- 评测已禁用 web fallback，因此不再受 Firecrawl 402 影响；仍出现 Graphiti/httpx 异步 client 关闭时的 `Event loop is closed` 噪声，但结果文件已完整写出。
+- 评测已禁用 web fallback，因此不再受旧 Firecrawl 402 影响；仍出现 Graphiti/httpx 异步 client 关闭时的 `Event loop is closed` 噪声，但结果文件已完整写出。
 
 #### Microsoft GraphRAG CLI provider
 

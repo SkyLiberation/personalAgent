@@ -48,7 +48,7 @@ class ToolExecutor:
 
     def invoke_direct(self, name: str, **kwargs: Any) -> dict[str, Any]:
         if name not in self:
-            return tool_failure(f"未找到工具：{name}")
+            return tool_failure(f"未找到工具：{name}").model_dump(mode="json")
         tool_call_id = f"direct-{name}"
         return self._gateway.invoke(
             name,
@@ -81,7 +81,7 @@ class ToolExecutor:
             result = self.invoke_direct(tool.name, **kwargs)
             if result["ok"]:
                 return result
-        return tool_failure(f"所有工具均未成功处理意图 {intent}")
+        return tool_failure(f"所有工具均未成功处理意图 {intent}").model_dump(mode="json")
 
     def __len__(self) -> int:
         return len(self.list_tools())

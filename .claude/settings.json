@@ -9,7 +9,20 @@
       "Bash(curl -s \"https://huggingface.co/api/datasets/yixuantt/MultiHopRAG\")",
       "Bash(curl -s \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/MultiHopRAG.json\")",
       "Bash(curl -sL \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/MultiHopRAG.json\")",
-      "Bash(curl -sL \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/corpus.json\")"
+      "Bash(curl -sL \"https://huggingface.co/datasets/yixuantt/MultiHopRAG/resolve/main/corpus.json\")",
+      "Bash(python -c \"import langsmith, langgraph, langchain_core; print\\('langsmith', langsmith.__version__\\); print\\('langgraph', langgraph.__version__\\); print\\('langchain_core', langchain_core.__version__\\)\")",
+      "Bash(python -m pytest tests/test_langsmith_tracing.py -q)",
+      "Bash(python -m pytest tests/test_langsmith_tracing.py tests/test_orchestration.py -q)",
+      "Bash(python -m pytest tests/test_orchestration.py::TestDialogueMessageRendering::test_dialogue_messages_keep_recent_visible_turns -q)",
+      "Bash(python -m pytest tests/test_langsmith_tracing.py tests/test_graphiti_llm_strategies.py -q)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest \"tests/test_api.py::TestNotesEndpoint::test_list_notes_isolated_by_user\" -q)",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_Process -Filter 'ProcessId = 33852 OR ProcessId = 36244' | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List\")",
+      "Bash(curl -s -m 5 http://127.0.0.1:8000/api/health)",
+      "Bash(python -m pytest tests/test_tools.py -q)",
+      "Bash(python -m pytest tests/test_tools.py tests/test_observability.py tests/test_orchestration.py tests/test_plan_validator.py tests/test_planner.py -q)",
+      "Bash(python -m pytest tests/test_api.py tests/test_langsmith_tracing.py -q)",
+      "Bash(python -m pytest tests/test_api.py::TestToolsEndpoint::test_list_tools -q)"
     ]
   }
 }

@@ -266,7 +266,7 @@ def _tool_result_event_payload(
             step_id=step_id,
             thread_id=state.thread_id,
             user_id=state.user_id,
-        )
+        ).model_dump(mode="json")
     return payload
 
 
@@ -298,7 +298,7 @@ def _log_tool_invocation_event(
             step_id=state.tool_tracking.pending_step_id,
             thread_id=state.thread_id,
             user_id=state.user_id,
-        )},
+        ).model_dump(mode="json")},
     )
 
 

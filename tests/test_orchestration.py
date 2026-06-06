@@ -739,6 +739,31 @@ class TestOrchestrationGraphIntegration:
         finally:
             restarted._get_orch_graph().checkpointer.conn.close()
 
+    def test_cached_orchestration_graph_rebuilds_when_checkpointer_connection_closed(self, temp_dir):
+        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+
+        settings = Settings(
+            data_dir=temp_dir,
+            postgres_url=POSTGRES_URL,
+        )
+        runtime = AgentRuntime(
+            settings=settings,
+            store=PostgresMemoryStore(settings.data_dir, settings.postgres_url),
+            graph_store=GraphitiStore(settings),
+        )
+
+        first_graph = runtime._get_orch_graph()
+        first_graph.checkpointer.conn.close()
+        rebuilt_graph = runtime._get_orch_graph()
+
+        try:
+            assert rebuilt_graph is not first_graph
+            assert rebuilt_graph.checkpointer.conn.closed is False
+        finally:
+            rebuilt_graph.checkpointer.conn.close()
+
     def test_session_runs_share_thread_and_remain_queryable_by_run_id(self, runtime):
         first = runtime.execute_entry(
             EntryInput(text="你好", user_id="test-user", session_id="shared-thread")

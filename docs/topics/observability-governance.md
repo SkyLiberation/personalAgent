@@ -85,8 +85,11 @@ LangGraph checkpoint 保存可恢复执行现场：
 
 - `LangSmithConfig` 从环境变量读取项目、endpoint、API key、workspace、采样率和上传策略开关。
 - `configure_langsmith_environment()` 将项目配置桥接到 LangSmith 标准环境变量。
-- `execute_entry()` 和 `resume_entry()` 外层会进入 `langsmith_trace_context()`。
+- `execute_entry()` 和 `resume_entry()` 外层会进入 `langsmith_trace_context()`，并通过 LangGraph `config` 设置 `run_name`（`execute_entry` / `resume_entry`）、业务 metadata 和 tags，使整棵节点/LLM/工具子树挂在同一个可检索的顶层 run 下。
 - 顶层 trace metadata 会携带 `run_id / thread_id / user_id / session_id / source_platform / source_type` 等业务字段。
+- LLM 调用会读取 `response.usage` 并通过 `run_tree.set(usage_metadata=...)` 上报 token，使 LangSmith 能聚合 token 与成本；非流式与流式回答都已覆盖。
+- 采样未命中时，`langsmith_trace_context()` 会返回 `tracing_context(enabled=False)` 主动关闭由 `LANGSMITH_*` 环境变量安装的全局 tracer，使 `sample_rate` 真正生效，而不是被全局 tracer 绕过。
+- 工具审计事件会通过 `get_current_run_tree()` 填充 `langsmith_run_id`，把业务审计记录与 LangSmith run 关联。
 - `PERSONAL_AGENT_LANGSMITH_ENABLED=false` 时会强制设置 `LANGSMITH_TRACING=false`，避免外部环境误开。
 
 核心规划链路也已开始接入 LLM trace wrapper：

@@ -21,6 +21,40 @@ class LlmTraceResult:
     prompt_name: str
     prompt_version: str
     raw_response: Any = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+def _extract_usage(response: Any) -> dict[str, int]:
+    """Pull token counts from an OpenAI-style response, tolerating absences."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    counts: dict[str, int] = {}
+    for key, attr in (
+        ("input_tokens", "prompt_tokens"),
+        ("output_tokens", "completion_tokens"),
+        ("total_tokens", "total_tokens"),
+    ):
+        value = getattr(usage, attr, None)
+        if isinstance(value, int):
+            counts[key] = value
+    return counts
+
+
+def _report_usage_to_run_tree(usage: dict[str, int]) -> None:
+    """Attach token usage to the active LangSmith run so cost rolls up."""
+    if not usage:
+        return
+    try:
+        from langsmith.run_helpers import get_current_run_tree
+
+        run_tree = get_current_run_tree()
+        if run_tree is not None:
+            run_tree.set(usage_metadata=usage)
+    except Exception:  # pragma: no cover - tracing must never break the call
+        pass
 
 
 def traced_chat_completion(
@@ -36,7 +70,7 @@ def traced_chat_completion(
     metadata: dict[str, object] | None = None,
     upload_inputs_outputs: bool = False,
 ) -> LlmTraceResult:
-    runner = _traced_chat_completion if upload_inputs_outputs else _chat_completion_impl
+    runner = _traced_chat_completion if upload_inputs_outputs else _redacted_traced_chat_completion
     return runner(
         config,
         prompt_name=prompt_name,
@@ -47,6 +81,16 @@ def traced_chat_completion(
         max_tokens=max_tokens,
         response_format=response_format,
         metadata=metadata or {},
+        langsmith_extra={
+            "name": f"llm.{prompt_name}",
+            "metadata": {
+                "prompt_name": prompt_name,
+                "prompt_version": prompt_version,
+                "model": model or config.small_model or config.model,
+                "upload_inputs_outputs": upload_inputs_outputs,
+                **(metadata or {}),
+            },
+        },
     )
 
 
@@ -82,6 +126,85 @@ def _traceable(fn):
     return traceable(name="llm.chat_completion", run_type="llm")(fn)
 
 
+def _redacted_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    messages = inputs.get("messages") or []
+    message_count = len(messages) if isinstance(messages, list) else 0
+    message_chars = 0
+    roles: list[str] = []
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            roles.append(str(message.get("role") or ""))
+            message_chars += len(str(message.get("content") or ""))
+    return {
+        "prompt_name": inputs.get("prompt_name"),
+        "prompt_version": inputs.get("prompt_version"),
+        "model": inputs.get("model") or getattr(inputs.get("config"), "small_model", None)
+        or getattr(inputs.get("config"), "model", None),
+        "temperature": inputs.get("temperature"),
+        "max_tokens": inputs.get("max_tokens"),
+        "response_format": inputs.get("response_format"),
+        "message_count": message_count,
+        "message_roles": roles,
+        "message_chars": message_chars,
+        "metadata": inputs.get("metadata") or {},
+    }
+
+
+def _redacted_outputs(output: LlmTraceResult) -> dict[str, Any]:
+    return {
+        "prompt_name": output.prompt_name,
+        "prompt_version": output.prompt_version,
+        "model": output.model,
+        "latency_ms": output.latency_ms,
+        "response_chars": len(output.content or ""),
+        "input_tokens": output.input_tokens,
+        "output_tokens": output.output_tokens,
+        "total_tokens": output.total_tokens,
+    }
+
+
+def _traceable_redacted(fn):
+    try:
+        from langsmith import traceable
+    except Exception:
+        return fn
+    return traceable(
+        name="llm.chat_completion",
+        run_type="llm",
+        process_inputs=_redacted_inputs,
+        process_outputs=_redacted_outputs,
+    )(fn)
+
+
+@_traceable_redacted
+def _redacted_traced_chat_completion(
+    config: OpenAIConfig,
+    *,
+    prompt_name: str,
+    prompt_version: str,
+    messages: list[dict[str, str]],
+    model: str | None,
+    temperature: float,
+    max_tokens: int,
+    response_format: dict[str, object] | None,
+    metadata: dict[str, object],
+    langsmith_extra: dict[str, object] | None = None,
+) -> LlmTraceResult:
+    return _chat_completion_impl(
+        config,
+        prompt_name=prompt_name,
+        prompt_version=prompt_version,
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format=response_format,
+        metadata=metadata,
+    )
+
+
 @_traceable
 def _traced_chat_completion(
     config: OpenAIConfig,
@@ -94,6 +217,7 @@ def _traced_chat_completion(
     max_tokens: int,
     response_format: dict[str, object] | None,
     metadata: dict[str, object],
+    langsmith_extra: dict[str, object] | None = None,
 ) -> LlmTraceResult:
     return _chat_completion_impl(
         config,
@@ -139,6 +263,8 @@ def _chat_completion_impl(
     response = client.chat.completions.create(**kwargs)
     latency_ms = round((perf_counter() - start) * 1000, 2)
     content = (response.choices[0].message.content or "").strip()
+    usage = _extract_usage(response)
+    _report_usage_to_run_tree(usage)
     log_event(
         logger,
         logging.INFO,
@@ -148,6 +274,9 @@ def _chat_completion_impl(
         model=resolved_model,
         latency_ms=latency_ms,
         response_chars=len(content),
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        total_tokens=usage.get("total_tokens"),
         **metadata,
     )
     return LlmTraceResult(
@@ -157,4 +286,7 @@ def _chat_completion_impl(
         prompt_name=prompt_name,
         prompt_version=prompt_version,
         raw_response=response,
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        total_tokens=usage.get("total_tokens"),
     )

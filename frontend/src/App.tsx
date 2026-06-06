@@ -746,6 +746,7 @@ export default function App() {
                 answer: finalAnswer,
                 citations: payload.citations ?? item.citations,
                 graph_enabled: payload.graph_enabled ?? item.graph_enabled,
+                run_id: payload.run_id ?? item.run_id,
                 status: "done",
               }
             : item
@@ -963,7 +964,7 @@ export default function App() {
 
   async function onResetDebugData() {
     const confirmed = window.confirm(
-      "这会清空 Postgres 中全部业务与 checkpoint 数据、data/uploads 下全部源文件，以及配置的 Neo4j 数据库中全部图谱节点和关系。此操作影响所有用户且不可撤销，确定继续吗？"
+      "这会清空 Postgres 中全部业务与 checkpoint 数据、data/uploads 下全部源文件，以及配置的 Neo4j 数据库中除 eval manifest 缓存分组外的图谱节点和关系。此操作影响所有用户且不可撤销，确定继续吗？"
     );
     if (!confirmed) {
       return;
@@ -988,7 +989,7 @@ export default function App() {
       }
       await refreshAll();
       setStatus(
-        `调试数据已清空：Postgres 清空 ${result.truncated_postgres_tables} 张表共 ${result.deleted_postgres_rows} 行（含 ${result.deleted_notes} 条笔记、${result.deleted_checkpoints} 条 checkpoint）；同时删除 ${result.deleted_upload_files} 个上传文件和 ${result.deleted_graph_nodes} 个 Neo4j 图谱节点。`
+        `调试数据已清空：Postgres 清空 ${result.truncated_postgres_tables} 张表共 ${result.deleted_postgres_rows} 行（含 ${result.deleted_notes} 条笔记、${result.deleted_checkpoints} 条 checkpoint）；同时删除 ${result.deleted_upload_files} 个上传文件和 ${result.deleted_graph_nodes} 个非 eval 缓存 Neo4j 图谱节点。`
       );
     } catch (error) {
       console.error(error);
@@ -1616,7 +1617,7 @@ export default function App() {
             <div>
               <p className="sub-panel-title">调试重置</p>
               <p className="danger-copy">
-                一键清空 Postgres 中全部业务及 checkpoint 数据、所有上传源文件，以及配置的 Neo4j 数据库中的全部图谱数据。
+                一键清空 Postgres 中全部业务及 checkpoint 数据、所有上传源文件，以及配置的 Neo4j 数据库中除 eval manifest 缓存分组外的图谱数据。
                 此操作影响所有用户，仅适用于开发调试。
               </p>
             </div>
@@ -1960,9 +1961,7 @@ function mergeRunBackedHistory(
   sessionId?: string,
 ): AskHistoryView[] {
   const merged = attachRunSnapshots(items, runs);
-  const representedPrompts = new Set(
-    merged.map((item) => `${item.session_id}\u0000${item.question}`),
-  );
+  const representedKeys = new Set(merged.flatMap(historyIdentityKeys));
   const latestRuns = [...runs].sort((left, right) =>
     String(right.updated_at ?? right.created_at ?? "").localeCompare(
       String(left.updated_at ?? left.created_at ?? ""),
@@ -1975,8 +1974,8 @@ function mergeRunBackedHistory(
       (run.status !== "waiting_confirmation" && !run.answer) ||
       (!run.plan_steps.length && !run.execution_trace.length)
     ) continue;
-    const promptKey = `${run.session_id}\u0000${run.entry_text}`;
-    if (representedPrompts.has(promptKey)) continue;
+    const runKeys = runIdentityKeys(run);
+    if (runKeys.some((key) => representedKeys.has(key))) continue;
     merged.push({
       id: `run-${run.run_id}`,
       user_id: run.user_id,
@@ -1995,7 +1994,7 @@ function mergeRunBackedHistory(
         ? run.confirmation_decision
         : null,
     });
-    representedPrompts.add(promptKey);
+    for (const key of runKeys) representedKeys.add(key);
   }
   return merged;
 }
@@ -2012,7 +2011,7 @@ function mergeAskHistory(
     const localItem = currentItems.find(
       (candidate) =>
         candidate.id === item.id ||
-        (candidate.question === item.question && candidate.answer === item.answer),
+        sameHistoryItem(candidate, item),
     );
     merged.push(
       localItem
@@ -2029,6 +2028,7 @@ function mergeAskHistory(
         : item,
     );
     seen.add(item.id);
+    if (localItem) seen.add(localItem.id);
   }
 
   const localCandidates = fallbackItem ? [fallbackItem, ...currentItems] : currentItems;
@@ -2037,9 +2037,7 @@ function mergeAskHistory(
       continue;
     }
     const matchedServerItem = serverItems.find(
-      (serverItem) =>
-        serverItem.question === item.question &&
-        serverItem.answer === item.answer
+      (serverItem) => sameHistoryItem(serverItem, item)
     );
     if (matchedServerItem) {
       continue;
@@ -2051,6 +2049,25 @@ function mergeAskHistory(
   return merged
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .slice(0, 20);
+}
+
+function historyIdentityKeys(item: AskHistoryView): string[] {
+  const keys = [`prompt:${item.session_id}\u0000${item.question}`];
+  if (item.run_id) keys.push(`run:${item.run_id}`);
+  return keys;
+}
+
+function runIdentityKeys(run: EntryRunSnapshot): string[] {
+  return [
+    `run:${run.run_id}`,
+    `prompt:${run.session_id}\u0000${run.entry_text}`,
+  ];
+}
+
+function sameHistoryItem(left: AskHistoryView, right: AskHistoryView): boolean {
+  if (left.id === right.id) return true;
+  if (left.run_id && right.run_id && left.run_id === right.run_id) return true;
+  return left.session_id === right.session_id && left.question === right.question;
 }
 
 function renderHighlightedAnswer(

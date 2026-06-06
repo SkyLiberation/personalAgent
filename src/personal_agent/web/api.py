@@ -335,7 +335,10 @@ def create_app() -> FastAPI:
                     "note": capture_data.get("note") if capture_data else None,
                     "reply": result.reply_text,
                 })
-                yield _sse_event("done", {"reply": result.reply_text})
+                yield _sse_event("done", {
+                    "reply": result.reply_text,
+                    "run_id": result.run_id,
+                })
 
             elif result.intent == "ask":
                 ask_data = result.ask_result.model_dump(mode="json") if result.ask_result else {}
@@ -359,11 +362,15 @@ def create_app() -> FastAPI:
                     "citations": ask_data.get("citations", []),
                     "matches": ask_data.get("matches", []),
                     "session_id": session_id,
+                    "run_id": result.run_id,
                 })
 
             else:
                 yield _sse_event("status", {"message": result.reason})
-                yield _sse_event("done", {"reply": result.reply_text})
+                yield _sse_event("done", {
+                    "reply": result.reply_text,
+                    "run_id": result.run_id,
+                })
 
         return StreamingResponse(
             event_generator(),

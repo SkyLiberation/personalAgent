@@ -86,13 +86,17 @@
 
 ## `POST /api/debug/reset-database`
 
-用于开发调试时清空所有持久化数据。该操作影响所有用户且不可撤销。
+用于开发调试时清空持久化调试数据。该操作影响所有用户且不可撤销。
 
 会清理：
 
 - `PERSONAL_AGENT_POSTGRES_URL` 指向的当前 schema 中全部普通表数据，包括业务表与 LangGraph checkpoint 表
 - `data/uploads/` 中全部上传源文件
-- 配置的 Graphiti / Neo4j 数据库中的全部节点和关系
+- 配置的 Graphiti / Neo4j 数据库中除 eval manifest 缓存分组外的节点和关系
+
+Neo4j 清理会读取 `evals/**/*manifest*.json` 中的 Graphiti eval manifest；当其中的
+`graphiti_group_prefix` 与当前配置匹配且存在 `episode_to_note_id` 时，该 `user_id`
+对应的 Graphiti `group_id` 会被保留，以便 `--reuse-graphiti` 渐进式评估缓存继续复用。
 
 `checkpoint_migrations` 同样会被清空；操作完成后服务会立即重新写入 LangGraph 所需的迁移版本记录。
 

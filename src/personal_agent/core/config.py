@@ -77,6 +77,15 @@ class FirecrawlConfig(_StrictBase):
     timeout_ms: int = 60000
 
 
+class WebSearchConfig(_StrictBase):
+    provider: str = "tavily"
+    api_key: str | None = None
+    base_url: str | None = None
+    timeout_ms: int = 60000
+    # 外部访问来源白名单（域名后缀）。空表示不限制。
+    allowed_domains: tuple[str, ...] = ()
+
+
 class FeishuConfig(_StrictBase):
     enabled: bool = False
     app_id: str | None = None
@@ -166,6 +175,7 @@ class Settings(_StrictBase):
     ms_graphrag: MicrosoftGraphRagConfig = Field(default_factory=MicrosoftGraphRagConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
@@ -286,6 +296,19 @@ class Settings(_StrictBase):
                 api_key=os.getenv("FIRECRAWL_API_KEY"),
                 base_url=os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"),
                 timeout_ms=int(os.getenv("FIRECRAWL_TIMEOUT_MS", "60000")),
+            ),
+            web_search=WebSearchConfig(
+                provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "tavily"),
+                api_key=os.getenv("PERSONAL_AGENT_WEB_SEARCH_API_KEY"),
+                base_url=os.getenv("PERSONAL_AGENT_WEB_SEARCH_BASE_URL"),
+                timeout_ms=int(
+                    os.getenv("PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS", "60000")
+                ),
+                allowed_domains=tuple(
+                    d.strip()
+                    for d in os.getenv("PERSONAL_AGENT_WEB_SEARCH_ALLOWED_DOMAINS", "").split(",")
+                    if d.strip()
+                ),
             ),
             feishu=FeishuConfig(
                 enabled=_as_bool(os.getenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")),

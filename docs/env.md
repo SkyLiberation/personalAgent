@@ -161,9 +161,20 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=kimi-k2.5
 - `PERSONAL_AGENT_GRAPH_SEARCH_LIMIT` 控制 Graphiti search 原始返回规模，`PERSONAL_AGENT_GRAPH_SEARCH_CITATION_LIMIT` 控制项目侧从 Graphiti edges 中保留多少 citation hits 用于 episode -> note 映射。
 - 如果 Neo4j 或模型配置缺失，图谱写入/检索会失败，日志中会提示具体原因
 
+## Web 搜索配置
+
+`web_search` 工具使用可扩展 provider 配置。当前内置 provider 为 `tavily`：
+
+```env
+PERSONAL_AGENT_WEB_SEARCH_PROVIDER=tavily
+PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_web_search_key
+PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://api.tavily.com
+PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS=60000
+```
+
 ## Firecrawl 配置
 
-网页抓取工具使用的 Firecrawl API：
+网页抓取工具使用的 Firecrawl API；这组配置不再驱动 `web_search`：
 
 ```env
 FIRECRAWL_API_KEY=your_firecrawl_key

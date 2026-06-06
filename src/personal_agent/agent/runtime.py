@@ -239,6 +239,9 @@ class AgentRuntime(
 
     def _get_orch_graph(self):
         """Lazily build and cache the entry orchestration graph."""
+        if self._orch_graph is not None and _graph_checkpointer_closed(self._orch_graph):
+            logger.warning("Cached orchestration graph checkpointer connection is closed; rebuilding graph")
+            self._orch_graph = None
         if self._orch_graph is None:
             checkpointer = _build_checkpointer(self.settings)
             deps = OrchestrationDeps.from_runtime(self)
@@ -281,6 +284,11 @@ class AgentRuntime(
             session_id=normalized_session,
             entry_input=entry_input,
         )
+        # Name the LangGraph root run and attach business metadata so the whole
+        # node/LLM/tool subtree hangs off one searchable "execute_entry" run.
+        config["run_name"] = "execute_entry"
+        config["metadata"] = dict(metadata)
+        config["tags"] = ["entry", f"source:{metadata['source_platform']}"]
         run_metrics = RunMetrics(
             run_id=run_id,
             thread_id=thread_id,
@@ -468,7 +476,18 @@ class AgentRuntime(
             Final EntryResult after graph completion.
         """
         graph = self._get_orch_graph()
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "run_name": "resume_entry",
+            "metadata": {
+                "app": "personal-agent",
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "user_id": user_id,
+                "resume_decision": decision,
+            },
+            "tags": ["entry", "resume"],
+        }
         resume_value = {
             "decision": decision,
             "user_id": user_id,
@@ -612,6 +631,12 @@ def _entry_trace_metadata(
         "source_type": entry_input.source_type,
         "has_source_ref": bool(entry_input.source_ref),
     }
+
+
+def _graph_checkpointer_closed(graph) -> bool:
+    checkpointer = getattr(graph, "checkpointer", None)
+    conn = getattr(checkpointer, "conn", None)
+    return bool(getattr(conn, "closed", False))
 
 
 __all__ = [
