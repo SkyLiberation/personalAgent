@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.runtime_ask import RuntimeAskMixin, _selected_citations, _selected_matches
+from personal_agent.agent.runtime_ask import AskService, _selected_citations, _selected_matches
 from personal_agent.core.evidence import ContextPack, EvidenceItem, RankedEvidence
 from personal_agent.core.models import Citation
 from tests.note_factory import make_note
@@ -16,7 +16,7 @@ def _ranked(source_id: str, source_type: str = "note") -> RankedEvidence:
 
 def _build(context_pack, matches, citations) -> str:
     # _build_unified_answer_prompt uses only its parameters, no instance state.
-    runtime = RuntimeAskMixin.__new__(RuntimeAskMixin)
+    runtime = AskService.__new__(AskService)
     return runtime._build_unified_answer_prompt(
         "question", context_pack, matches, citations, ""
     )

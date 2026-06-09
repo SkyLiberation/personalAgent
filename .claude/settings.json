@@ -22,7 +22,26 @@
       "Bash(python -m pytest tests/test_tools.py -q)",
       "Bash(python -m pytest tests/test_tools.py tests/test_observability.py tests/test_orchestration.py tests/test_plan_validator.py tests/test_planner.py -q)",
       "Bash(python -m pytest tests/test_api.py tests/test_langsmith_tracing.py -q)",
-      "Bash(python -m pytest tests/test_api.py::TestToolsEndpoint::test_list_tools -q)"
+      "Bash(python -m pytest tests/test_api.py::TestToolsEndpoint::test_list_tools -q)",
+      "Bash(python -c \"import ast,sys; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\),f\\) for f in ['src/personal_agent/agent/runtime.py','src/personal_agent/agent/runtime_llm.py','src/personal_agent/agent/runtime_ask.py','src/personal_agent/agent/thread_summarizer.py','src/personal_agent/agent/runtime_entry.py','src/personal_agent/agent/orchestration_nodes/_deps.py','src/personal_agent/agent/orchestration_nodes/_entry.py']]; print\\('OK'\\)\")",
+      "Bash(python -m pytest tests/test_runtime_llm.py tests/test_unified_prompt_gating.py tests/test_short_term_context.py -q)",
+      "Bash(python -m pytest tests/test_agent_flows.py tests/test_orchestration.py -q)",
+      "Bash(python -m pytest tests/test_orchestration.py -q)",
+      "Bash(python -m pytest \"tests/test_orchestration.py::TestDialogueMessageRendering::test_dialogue_messages_keep_recent_visible_turns\" -q)",
+      "Bash(python -m pytest \"tests/test_agent_flows.py::TestAskFlow::test_structural_provider_enters_context_pack_without_graphiti\" -q)",
+      "Bash(python -m pytest tests/test_agent_flows.py tests/test_orchestration.py tests/test_runtime_llm.py tests/test_unified_prompt_gating.py tests/test_short_term_context.py -q)",
+      "Bash(python -m pytest tests/ -q -p no:cacheprovider)",
+      "Bash(python -m pytest \"tests/test_api.py::TestNotesEndpoint::test_list_notes_isolated_by_user\" \"tests/test_runtime_helpers.py::TestGraphAskSemanticEvidence::test_graph_prompt_prioritizes_fact_network\" -q)",
+      "Bash(python -m pytest \"tests/test_runtime_helpers.py::TestGraphAskSemanticEvidence::test_graph_prompt_prioritizes_fact_network\" -q)",
+      "Bash(python -m pytest \"tests/test_runtime_helpers.py::TestGraphAskSemanticEvidence::test_graph_prompt_prioritizes_fact_network\" tests/test_runtime_helpers.py -q)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/personal_agent/agent/entry_orchestrator.py',encoding='utf-8'\\).read\\(\\)\\); print\\('entry_orchestrator OK'\\)\")",
+      "Bash(sed -n '6,13p' tests/test_runtime_helpers.py)",
+      "Bash(sed -n '9p' tests/test_planner.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/personal_agent/agent/runtime.py',encoding='utf-8'\\).read\\(\\)\\); print\\('runtime.py parses'\\)\")",
+      "Bash(python -c \"from personal_agent.agent.runtime import AgentRuntime, _interrupt_payload_from_result, _best_snippet; print\\('runtime imports OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/personal_agent/agent/runtime_admin.py',encoding='utf-8'\\).read\\(\\)\\); print\\('admin OK'\\)\")",
+      "Bash(python -c \"import personal_agent.agent.runtime; import personal_agent.agent.entry_orchestrator; import personal_agent.agent.runtime_admin; from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids; print\\('all modules import OK'\\)\")",
+      "Bash(python -m pytest tests/test_orchestration.py tests/test_agent_flows.py tests/test_api.py tests/test_runtime_helpers.py tests/test_runtime_llm.py tests/test_unified_prompt_gating.py tests/test_short_term_context.py -q)"
     ]
   }
 }

@@ -246,21 +246,21 @@ class TestAskFlow:
         assert isinstance(result.session_id, str)
 
     def test_ask_without_evidence_skips_answer_model_until_evidence_exists(self, service: AgentService):
-        service._runtime._generate_answer = MagicMock(return_value="不应生成")
+        service._runtime._llm.generate_answer = MagicMock(return_value="不应生成")
 
         result = service.execute_ask(question="今天西安天气怎么样")
 
         assert "个人知识库" in result.answer
-        service._runtime._generate_answer.assert_not_called()
+        service._runtime._llm.generate_answer.assert_not_called()
 
     def test_empty_graph_evidence_skips_answer_model(self, service: AgentService):
         service.graph_store.ask.return_value = GraphAskResult(enabled=True)
-        service._runtime._generate_answer = MagicMock(return_value="不应生成")
+        service._runtime._llm.generate_answer = MagicMock(return_value="不应生成")
 
         result = service.execute_ask(question="今天西安天气怎么样")
 
         assert "个人知识库" in result.answer
-        service._runtime._generate_answer.assert_not_called()
+        service._runtime._llm.generate_answer.assert_not_called()
 
     def test_ask_with_session_id(self, service: AgentService):
         service.execute_capture(text="测试知识", source_type="text")
@@ -307,7 +307,7 @@ class TestAskFlow:
     def test_thread_dialogue_replaces_persisted_history_in_answer_prompt(self, service: AgentService):
         service.execute_capture(text="部署平台当前为新集群。", source_type="text")
         service._runtime.memory.bind_session("default", "context-session")
-        service._runtime._generate_answer = MagicMock(return_value="部署平台当前为新集群。")
+        service._runtime._llm.generate_answer = MagicMock(return_value="部署平台当前为新集群。")
 
         service.execute_ask(
             question="部署平台",
@@ -317,17 +317,17 @@ class TestAskFlow:
             ],
         )
 
-        prompt = service._runtime._generate_answer.call_args_list[0].args[0]
+        prompt = service._runtime._llm.generate_answer.call_args_list[0].args[0]
         assert "我刚才更正为新集群" in prompt
         assert "不是事实证据" in prompt
 
     def test_ask_prompt_uses_context_pack_ranking_metadata(self, service: AgentService):
         service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
-        service._runtime._generate_answer = MagicMock(return_value="服务降级是关闭非核心能力。")
+        service._runtime._llm.generate_answer = MagicMock(return_value="服务降级是关闭非核心能力。")
 
         service.execute_ask(question="什么是服务降级？")
 
-        prompt = service._runtime._generate_answer.call_args_list[0].args[0]
+        prompt = service._runtime._llm.generate_answer.call_args_list[0].args[0]
         assert "ContextPack" in prompt
         assert "rank_reason" in prompt
 
@@ -363,7 +363,7 @@ class TestAskFlow:
             }
         )
         service._runtime.settings = service.settings
-        service._generate_answer = MagicMock(return_value="Redis 使用热点订单缓存降低数据库压力。")
+        service._llm.generate_answer = MagicMock(return_value="Redis 使用热点订单缓存降低数据库压力。")
         service.store.add_note(make_note(
             id="gr-parent",
             title="Redis cache architecture",
@@ -441,14 +441,14 @@ class TestAskFlow:
 
     def test_retry_prompt_includes_claim_grounding_feedback(self, service: AgentService):
         service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
-        service._runtime._generate_answer = MagicMock(side_effect=[
+        service._runtime._llm.generate_answer = MagicMock(side_effect=[
             "服务降级可以自动扩容数据库集群。",
             "服务降级是在系统压力过大时主动关闭非核心能力。",
         ])
 
         service.execute_ask(question="什么是服务降级？")
 
-        retry_prompt = service._runtime._generate_answer.call_args_list[1].args[0]
+        retry_prompt = service._runtime._llm.generate_answer.call_args_list[1].args[0]
         assert "claim-level grounding" in retry_prompt
         assert "可用证据" in retry_prompt
 

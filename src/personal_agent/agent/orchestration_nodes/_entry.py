@@ -521,23 +521,23 @@ def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -
                 entry_input.session_id,
             )
 
-    if messages and deps.summarize_thread is not None:
+    if messages and deps.summarize_chat is not None:
         messages_text = "\n".join(
             f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
             for m in messages
         )
-        summary = deps.summarize_thread(messages_text, entry_input.user_id or "default")
+        summary = deps.summarize_chat(messages_text, entry_input.user_id or "default")
         state.answer = summary
         state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
     dialogue_messages = _entry_conversation_messages(state, exclude_latest=True)
-    if dialogue_messages and deps.summarize_thread is not None:
+    if dialogue_messages and deps.summarize_chat is not None:
         messages_text = "\n".join(
             f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
             for m in dialogue_messages
         )
-        summary = deps.summarize_thread(messages_text, entry_input.user_id or "default")
+        summary = deps.summarize_chat(messages_text, entry_input.user_id or "default")
         state.answer = summary
         state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
         return {"answer": state.answer, "execution_trace": state.execution_trace}
@@ -630,11 +630,11 @@ def _entry_conversation_messages(
 
     cfg = getattr(deps.settings, "short_term", None) or ShortTermMemoryConfig()
     summarizer = None
-    if deps.summarize_thread is not None:
+    if deps.compress_context is not None:
         user_id = state.user_id or "default"
 
         def summarizer(text: str) -> str:
-            return deps.summarize_thread(text, user_id)
+            return deps.compress_context(text, user_id)
 
     return build_dialogue_context(
         state.messages,

@@ -5,7 +5,6 @@ import json
 import logging
 from pathlib import Path
 
-from ..core.models import local_now
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -155,7 +154,7 @@ def create_app() -> FastAPI:
     ) -> list[KnowledgeNote]:
         resolved_user = user_id or _get_user_id(request, settings)
         logger.info("Listing notes for user=%s flat=%s", resolved_user, flat)
-        return service.store.list_notes(resolved_user, include_chunks=not flat)
+        return service.memory.list_notes(resolved_user, include_chunks=not flat)
 
     @app.get("/api/digest", response_model=DigestResponse)
     def get_digest(request: Request, user_id: str | None = None) -> DigestResponse:
@@ -173,33 +172,31 @@ def create_app() -> FastAPI:
     ) -> dict[str, object]:
         resolved_user = user_id or _get_user_id(request, settings)
         logger.info("Delete note id=%s user=%s cascade=%s", note_id, resolved_user, cascade)
-        note = service.store.get_note(note_id)
-        if note is None or note.user_id != resolved_user:
+        note = service.memory.get_note(note_id, user_id=resolved_user)
+        if note is None:
             raise HTTPException(status_code=404, detail="Note not found or not owned by user.")
-        graph_episode_uuid = note.graph.episode_uuid
 
-        has_chunks = bool(service.store.get_chunks_for_parent(note_id))
-        cascade_chunks = cascade or has_chunks
-        service.store.delete_note(note_id, resolved_user, cascade_chunks=cascade_chunks)
-
-        if service.graph_store.configured() and graph_episode_uuid:
-            try:
-                service.graph_store.delete_episode(str(graph_episode_uuid))
-            except Exception:
-                logger.exception("Graph episode deletion failed for note %s", note_id)
-        return {"ok": True, "deleted_note_id": note_id}
+        result = service.memory.delete_note_confirmed(note_id, resolved_user)
+        if not result.ok:
+            raise HTTPException(status_code=404, detail=result.error or "Note not found or not owned by user.")
+        return {
+            "ok": True,
+            "deleted_note_id": note_id,
+            "graph_cleaned": result.graph_cleaned,
+            "graph_failed": result.graph_failed,
+        }
 
     @app.get("/api/notes/{note_id}/chunks", response_model=list[KnowledgeNote])
     def get_note_chunks(note_id: str, request: Request) -> list[KnowledgeNote]:
         resolved_user = _get_user_id(request, settings)
-        note = service.store.get_note(note_id)
-        if note is None or note.user_id != resolved_user:
+        note = service.memory.get_note(note_id, user_id=resolved_user)
+        if note is None:
             raise HTTPException(status_code=404, detail="Note not found.")
-        return service.store.get_chunks_for_parent(note_id)
+        return service.memory.list_chunks(note_id, user_id=resolved_user)
 
     @app.post("/api/notes/{note_id}/graph-sync", response_model=GraphSyncResponse)
     def retry_graph_sync(note_id: str) -> GraphSyncResponse:
-        note = service.store.get_note(note_id)
+        note = service.memory.get_note(note_id)
         if note is None:
             raise HTTPException(status_code=404, detail="Note not found.")
 
@@ -207,13 +204,10 @@ def create_app() -> FastAPI:
             logger.warning("Graph sync retry requested but graph is not configured note_id=%s", note_id)
             return GraphSyncResponse(note=note, queued=False)
 
-        note.graph_sync.status = "pending"
-        note.graph_sync.error = None
-        note.updated_at = local_now()
-        service.store.update_note(note)
+        note = service.memory.mark_graph_sync_pending(note_id) or note
         logger.info("Starting manual graph sync retry note_id=%s", note_id)
         service.sync_note_to_graph(note_id)
-        updated_note = service.store.get_note(note_id) or note
+        updated_note = service.memory.get_note(note_id) or note
         logger.info(
             "Finished manual graph sync retry note_id=%s graph_sync_status=%s",
             note_id,
@@ -593,10 +587,6 @@ def _frontend_dist_dir() -> Path:
 
 def _sse_event(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-
-    thread.join(timeout=5)
 
 
 app = create_app()

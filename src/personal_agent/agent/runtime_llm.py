@@ -5,6 +5,7 @@ import time
 
 from openai import OpenAI
 
+from ..core.config import Settings
 from ..core.langsmith_tracing import langsmith_llm_span, report_usage_metadata
 from ..core.llm_trace import traced_chat_completion
 from ..core.logging_utils import log_event
@@ -12,12 +13,41 @@ from ..core.logging_utils import log_event
 logger = logging.getLogger(__name__)
 _LLM_FAILURE_COOLDOWN_SECONDS = 30.0
 
+_ANSWER_SYSTEM_PROMPT = (
+    "你是一个严谨、善于归纳总结的个人知识库问答助手。"
+    "你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"
+)
 
-class RuntimeLlmMixin:
-    def _generate_answer(self, prompt: str) -> str | None:
-        if not (self.settings.openai.api_key and self.settings.openai.base_url and self.settings.openai.model):
+
+class LlmClient:
+    """Answer-generation LLM client (sync + streaming).
+
+    Extracted from the former ``RuntimeLlmMixin`` so collaborators depend on an
+    explicit object instead of a sibling method bolted onto a shared ``self``.
+    Owns its own failure-cooldown state.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._unavailable_until = 0.0
+
+    def _configured(self) -> bool:
+        oa = self.settings.openai
+        return bool(oa.api_key and oa.base_url and oa.model)
+
+    def _in_cooldown(self) -> bool:
+        return time.monotonic() < self._unavailable_until
+
+    def _mark_failure(self) -> None:
+        self._unavailable_until = time.monotonic() + _LLM_FAILURE_COOLDOWN_SECONDS
+
+    def _mark_success(self) -> None:
+        self._unavailable_until = 0.0
+
+    def generate_answer(self, prompt: str) -> str | None:
+        if not self._configured():
             return None
-        if time.monotonic() < getattr(self, "_answer_llm_unavailable_until", 0.0):
+        if self._in_cooldown():
             logger.info("Skipping answer generation while LLM failure cooldown is active")
             return None
         try:
@@ -25,7 +55,7 @@ class RuntimeLlmMixin:
                 self.settings.openai,
                 prompt_name="answer_generation",
                 messages=[
-                    {"role": "system", "content": "你是一个严谨、善于归纳总结的个人知识库问答助手。你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"},
+                    {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 model=self.settings.openai.model,
@@ -34,24 +64,24 @@ class RuntimeLlmMixin:
                 metadata={"component": "runtime_llm"},
                 upload_inputs_outputs=self.settings.langsmith.upload_inputs,
             )
-            self._answer_llm_unavailable_until = 0.0
+            self._mark_success()
             return result.content or None
         except Exception:
-            self._answer_llm_unavailable_until = time.monotonic() + _LLM_FAILURE_COOLDOWN_SECONDS
+            self._mark_failure()
             logger.exception("Failed to generate answer from LLM")
             return None
 
-    def _generate_answer_stream(self, prompt: str):
+    def generate_answer_stream(self, prompt: str):
         """Stream tokens from the LLM in real time via SSE-compatible chunks.
 
         Yields (event_type, payload) tuples suitable for SSE streaming.
         Completes with ('answer_complete', {'answer': full_text}).
         On failure, yields ('answer_error', {'error': message}) and stops.
         """
-        if not (self.settings.openai.api_key and self.settings.openai.base_url and self.settings.openai.model):
+        if not self._configured():
             yield ("answer_error", {"error": "LLM not configured"})
             return
-        if time.monotonic() < getattr(self, "_answer_llm_unavailable_until", 0.0):
+        if self._in_cooldown():
             yield ("answer_error", {"error": "LLM temporarily unavailable"})
             return
         try:
@@ -75,7 +105,7 @@ class RuntimeLlmMixin:
                 stream = client.chat.completions.create(
                     model=self.settings.openai.model,
                     messages=[
-                        {"role": "system", "content": "你是一个严谨、善于归纳总结的个人知识库问答助手。你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"},
+                        {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.3,
@@ -103,7 +133,7 @@ class RuntimeLlmMixin:
                 report_usage_metadata(run, usage)
                 latency_ms = round((time.monotonic() - start) * 1000, 2)
                 if full_text.strip():
-                    self._answer_llm_unavailable_until = 0.0
+                    self._mark_success()
                     log_event(
                         logger,
                         logging.INFO,
@@ -129,8 +159,6 @@ class RuntimeLlmMixin:
                     )
                     yield ("answer_error", {"error": "LLM returned empty response"})
         except Exception:
-            self._answer_llm_unavailable_until = time.monotonic() + _LLM_FAILURE_COOLDOWN_SECONDS
+            self._mark_failure()
             logger.exception("Failed to stream answer from LLM")
             yield ("answer_error", {"error": "LLM streaming failed"})
-
-

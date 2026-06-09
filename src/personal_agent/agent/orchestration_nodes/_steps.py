@@ -787,7 +787,7 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
             str_uuids = [str(u) for u in episode_uuids if u]
             if str_uuids:
                 try:
-                    matched = deps.store.find_notes_by_graph_episode_uuids(user_id, str_uuids)
+                    matched = deps.memory.find_by_graph_episodes(user_id, str_uuids)
                     for note in matched:
                         candidates.append({
                             "note_id": note.id, "title": note.body.title,
@@ -820,7 +820,7 @@ def _select_local_delete_candidate_with_llm(
     delete_request: str, user_id: str, deps: OrchestrationDeps,
 ) -> list[dict]:
     try:
-        notes = deps.store.list_notes(user_id, include_chunks=False)
+        notes = deps.memory.list_notes(user_id, include_chunks=False)
     except Exception:
         logger.exception("Local note listing failed in resolve")
         return []

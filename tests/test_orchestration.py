@@ -265,7 +265,7 @@ class TestOrchestrationGraphIntegration:
             build_react_graph,
         )
 
-        graph = runtime._get_orch_graph()
+        graph = runtime._entry._get_orch_graph()
         assert graph is not None
         # Should be compiled with a checkpointer
         assert graph.checkpointer is not None
@@ -360,7 +360,7 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent in ("direct_answer", "unknown", "capture_text")
         assert result.reply_text
-        latest = runtime._get_orch_graph().get_state(
+        latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
         ).values
         contents = [message.content for message in latest["messages"]]
@@ -377,7 +377,7 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.intent == "ask"
         assert result.reply_text
-        latest = runtime._get_orch_graph().get_state(
+        latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
         ).values
         assert "什么是服务降级？" in [message.content for message in latest["messages"]]
@@ -395,7 +395,7 @@ class TestOrchestrationGraphIntegration:
         )
 
         assert first.thread_id == second.thread_id
-        latest = runtime._get_orch_graph().get_state(
+        latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": second.thread_id}}
         ).values
         contents = [message.content for message in latest["messages"]]
@@ -430,7 +430,7 @@ class TestOrchestrationGraphIntegration:
         runtime.set_thread_message_loader(load_messages)
         monkeypatch.setattr(
             runtime,
-            "_summarize_thread",
+            "summarize_chat",
             lambda messages, _user_id: f"总结结果：{messages}",
         )
 
@@ -725,11 +725,11 @@ class TestOrchestrationGraphIntegration:
         result = original.execute_entry(
             EntryInput(text="你好", user_id="test-user", session_id="persisted-run")
         )
-        original._get_orch_graph().checkpointer.conn.close()
+        original._entry._get_orch_graph().checkpointer.conn.close()
 
         restarted = create_runtime()
         try:
-            assert restarted._orch_graph is None
+            assert restarted._entry._orch_graph is None
             listed = restarted.list_run_snapshots(user_id="test-user", limit=10)
             restored = restarted.get_run_snapshot(result.run_id or "")
 
@@ -737,7 +737,7 @@ class TestOrchestrationGraphIntegration:
             assert restored is not None
             assert restored.thread_id == "test-user:persisted-run"
         finally:
-            restarted._get_orch_graph().checkpointer.conn.close()
+            restarted._entry._get_orch_graph().checkpointer.conn.close()
 
     def test_cached_orchestration_graph_rebuilds_when_checkpointer_connection_closed(self, temp_dir):
         from personal_agent.agent.runtime import AgentRuntime
@@ -754,9 +754,9 @@ class TestOrchestrationGraphIntegration:
             graph_store=GraphitiStore(settings),
         )
 
-        first_graph = runtime._get_orch_graph()
+        first_graph = runtime._entry._get_orch_graph()
         first_graph.checkpointer.conn.close()
-        rebuilt_graph = runtime._get_orch_graph()
+        rebuilt_graph = runtime._entry._get_orch_graph()
 
         try:
             assert rebuilt_graph is not first_graph
@@ -782,7 +782,7 @@ class TestOrchestrationGraphIntegration:
         }
         assert first.run_id in listed_ids
         assert second.run_id in listed_ids
-        latest = runtime._get_orch_graph().get_state(
+        latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": "test-user:shared-thread"}}
         ).values
         contents = [message.content for message in latest["messages"]]
@@ -800,7 +800,7 @@ class TestOrchestrationGraphIntegration:
 
         config = {"configurable": {"thread_id": second.thread_id}}
         second_run_states = []
-        for checkpoint in runtime._get_orch_graph().checkpointer.list(config):
+        for checkpoint in runtime._entry._get_orch_graph().checkpointer.list(config):
             values = checkpoint.checkpoint.get("channel_values", {})
             if values.get("run_id") == second.run_id:
                 second_run_states.append(AgentGraphState.model_validate(values))
@@ -1188,7 +1188,7 @@ class TestPhase3InterruptResumeIntegration:
     def test_resume_entry_accepts_valid_decision(self, runtime):
         """resume_entry should be callable and return an EntryResult."""
         # Build the graph to ensure checkpointer is ready
-        runtime._get_orch_graph()
+        runtime._entry._get_orch_graph()
         # Even without a prior interrupted run, resume_entry should
         # handle the graph invocation gracefully (LangGraph may start
         # a fresh run or return the final state).

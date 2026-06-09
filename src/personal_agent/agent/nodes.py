@@ -18,12 +18,12 @@ from ..core.models import (
 from ..extract import PreExtractService
 from ..extract.schemas import SectionMap
 from ..extract.schemas import SectionRecord
-from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..memory import MemoryFacade
 
 logger = logging.getLogger(__name__)
 
 
-def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def capture_node(state: AgentState, store: MemoryFacade) -> AgentState:
     if state.raw_item is None:
         return state
 
@@ -51,7 +51,7 @@ def capture_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     return state
 
 
-def structural_chunk_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def structural_chunk_node(state: AgentState, store: MemoryFacade) -> AgentState:
     """Create deterministic chunk drafts without committing final chunk notes."""
     if state.note is None or state.raw_item is None:
         return state
@@ -77,7 +77,7 @@ def structural_chunk_node(state: AgentState, store: PostgresMemoryStore) -> Agen
 
 def preextract_node(
     state: AgentState,
-    store: PostgresMemoryStore,
+    store: MemoryFacade,
     service: PreExtractService,
 ) -> AgentState:
     """Run lightweight LangExtract pre-extraction.
@@ -111,7 +111,7 @@ def preextract_node(
     return state
 
 
-def chunk_reconcile_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def chunk_reconcile_node(state: AgentState, store: MemoryFacade) -> AgentState:
     """Build final chunk notes from semantic sections or structural drafts."""
     if state.note is None or state.raw_item is None:
         return state
@@ -220,7 +220,7 @@ def _chunk_notes_from_sections(
     return chunks
 
 
-def enrich_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def enrich_node(state: AgentState, store: MemoryFacade) -> AgentState:
     if state.note is None:
         return state
 
@@ -230,7 +230,7 @@ def enrich_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     return state
 
 
-def link_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def link_node(state: AgentState, store: MemoryFacade) -> AgentState:
     if state.note is None:
         return state
 
@@ -243,7 +243,7 @@ def link_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     return state
 
 
-def schedule_review_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def schedule_review_node(state: AgentState, store: MemoryFacade) -> AgentState:
     if state.note is None:
         return state
 
@@ -259,7 +259,7 @@ def schedule_review_node(state: AgentState, store: PostgresMemoryStore) -> Agent
     return state
 
 
-def answer_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
+def answer_node(state: AgentState, store: MemoryFacade) -> AgentState:
     if not state.question:
         return state
 
@@ -278,7 +278,7 @@ def answer_node(state: AgentState, store: PostgresMemoryStore) -> AgentState:
     return state
 
 
-def digest_node(store: PostgresMemoryStore, user_id: str) -> str:
+def digest_node(store: MemoryFacade, user_id: str) -> str:
     due = store.due_reviews(user_id)
     notes = store.list_notes(user_id)[-5:]
     lines = ["今日知识简报"]

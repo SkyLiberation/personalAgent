@@ -8,7 +8,7 @@ from threading import Lock
 from ..core.models import Citation, KnowledgeNote
 from ..core.projections import RetrievalDocument, retrieval_document_from_note
 from ..core.query_understanding import RetrievalFilters
-from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..memory import MemoryFacade
 
 
 @dataclass(frozen=True)
@@ -51,8 +51,8 @@ class StructuralRetrieverStore:
     generation; cache invalidation is based on the current note set.
     """
 
-    def __init__(self, store: PostgresMemoryStore) -> None:
-        self.store = store
+    def __init__(self, memory: MemoryFacade) -> None:
+        self.memory = memory
         self._cache: dict[tuple[str, str], _StructuralCacheEntry] = {}
         self._lock = Lock()
 
@@ -155,7 +155,7 @@ class StructuralRetrieverStore:
     ) -> _StructuralIndex:
         notes = [
             note
-            for note in self.store.list_notes(user_id, include_chunks=True)
+            for note in self.memory.list_notes(user_id, include_chunks=True)
             if _note_matches_filters(note, filters)
         ]
         signature = _signature(notes)

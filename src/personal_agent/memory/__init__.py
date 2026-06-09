@@ -1,3 +1,3 @@
-from .facade import MemoryFacade
+from .facade import DeleteMemoryResult, MemoryFacade
 
-__all__ = ["MemoryFacade"]
+__all__ = ["DeleteMemoryResult", "MemoryFacade"]

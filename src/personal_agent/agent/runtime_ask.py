@@ -192,7 +192,40 @@ def _terms(text: str) -> set[str]:
     return terms
 
 
-class RuntimeAskMixin:
+class AskService:
+    """Ask pipeline as an explicit collaborator.
+
+    Previously ``RuntimeAskMixin`` mixed into ``AgentRuntime`` and reached
+    sibling methods (``_generate_answer``) and fields via a shared ``self``.
+    It now receives its dependencies explicitly, including a shared
+    ``LlmClient``.
+    """
+
+    def __init__(
+        self,
+        *,
+        settings,
+        graph_store,
+        ms_graphrag_store,
+        structural_retriever,
+        memory,
+        tool_executor,
+        verifier,
+        llm,
+    ) -> None:
+        self.settings = settings
+        self.graph_store = graph_store
+        self.ms_graphrag_store = ms_graphrag_store
+        self.structural_retriever = structural_retriever
+        self.memory = memory
+        self._tool_executor = tool_executor
+        self._verifier = verifier
+        self._llm = llm
+
+    @property
+    def _web_search_available(self) -> bool:
+        return bool(self.settings.web_search.api_key)
+
     def execute_ask(
         self,
         question: str,
@@ -229,7 +262,7 @@ class RuntimeAskMixin:
                 evidence=evidence,
                 matches=combined_matches,
                 citations=combined_citations,
-                store=self.store,
+                store=self.memory,
                 filters=retrieval_plan.filters,
             )
             combined_matches = enriched.matches
@@ -637,7 +670,7 @@ class RuntimeAskMixin:
         filters: RetrievalFilters | None = None,
     ) -> AgentState:
         """Run local note retrieval and return an ask-shaped state."""
-        matches = self.store.find_similar_notes(user_id, question, filters=filters)
+        matches = self.memory.search_memory(user_id, question, filters=filters)
         citations = [
             Citation(note_id=note.id, title=note.body.title, snippet=note.body.summary[:80])
             for note in matches
@@ -717,7 +750,7 @@ class RuntimeAskMixin:
         working_context: str,
     ) -> str:
         prompt = self._build_web_answer_prompt(question, web_results, web_citations, working_context)
-        generated = self._generate_answer(prompt)
+        generated = self._llm.generate_answer(prompt)
         if generated:
             return generated
         if web_citations:
@@ -823,7 +856,7 @@ class RuntimeAskMixin:
         prompt = self._build_unified_answer_prompt(
             question, context_pack, matches, citations, working_context
         )
-        generated = self._generate_answer(prompt)
+        generated = self._llm.generate_answer(prompt)
         if generated:
             return generated
         if context_pack.selected:
@@ -859,7 +892,7 @@ class RuntimeAskMixin:
         filters: RetrievalFilters | None = None,
     ) -> tuple[list[KnowledgeNote], list[Citation]]:
         episode_uuids = _graph_episode_uuids(graph_result)
-        matches = self.store.find_notes_by_graph_episode_uuids(user_id, episode_uuids, filters=filters)
+        matches = self.memory.find_by_graph_episodes(user_id, episode_uuids, filters=filters)
         if not graph_result.citation_hits:
             return matches, self._graph_citations(matches, graph_result)
 
@@ -1017,7 +1050,7 @@ class RuntimeAskMixin:
         prompt = self._build_graph_answer_prompt(
             question, graph_result, matches, citations, working_context,
         )
-        generated = self._generate_answer(prompt)
+        generated = self._llm.generate_answer(prompt)
         if generated:
             return generated
         if citations:
@@ -1050,7 +1083,7 @@ class RuntimeAskMixin:
         citations: list[Citation], working_context: str,
     ) -> str:
         prompt = self._build_local_answer_prompt(question, matches, citations, working_context)
-        generated = self._generate_answer(prompt)
+        generated = self._llm.generate_answer(prompt)
         if generated:
             return generated
         if matches:
@@ -1098,7 +1131,7 @@ class RuntimeAskMixin:
                 current_verification,
                 evidence=evidence,
             )
-            regenerated = self._generate_answer(correction_prompt)
+            regenerated = self._llm.generate_answer(correction_prompt)
             if regenerated:
                 current_answer = regenerated
                 current_verification = self._verifier.verify(

@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from ...core.models import EntryInput
     from ...graphiti.store import GraphitiStore
     from ...memory import MemoryFacade
-    from ...storage.postgres_memory_store import PostgresMemoryStore
     from ...tools import ToolExecutor
     from ..plan_validator import PlanValidator
     from ..planner import PlanStep
@@ -39,11 +38,11 @@ class OrchestrationDeps:
     verifier: "AnswerVerifier | None"
     tool_executor: "ToolExecutor"
     graph_store: "GraphitiStore"
-    store: "PostgresMemoryStore"
     execute_ask: Callable[..., "AskResult"]
     execute_capture: Callable[..., "CaptureResult"] | None = None
     capture_service: "CaptureService | None" = None
-    summarize_thread: Callable[[str, str], str] | None = None
+    summarize_chat: Callable[[str, str], str] | None = None
+    compress_context: Callable[[str, str], str] | None = None
     load_thread_messages: Callable[["EntryInput", int], list[dict[str, str]]] | None = None
 
     @classmethod
@@ -58,11 +57,11 @@ class OrchestrationDeps:
             verifier=getattr(runtime, "_verifier", None),
             tool_executor=runtime.tool_executor,
             graph_store=runtime.graph_store,
-            store=runtime.store,
             execute_ask=runtime.execute_ask,
             execute_capture=runtime.execute_capture,
             capture_service=runtime.capture_service,
-            summarize_thread=runtime._summarize_thread,
+            summarize_chat=runtime.summarize_chat,
+            compress_context=runtime.compress_context,
             load_thread_messages=runtime.load_thread_messages,
         )
 

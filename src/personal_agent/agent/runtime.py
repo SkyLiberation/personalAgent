@@ -3,30 +3,33 @@ from __future__ import annotations
 import logging
 from typing import Callable, TYPE_CHECKING
 
-from langgraph.types import Command
-
 from ..core.config import Settings
-from ..core.langsmith_tracing import configure_langsmith_environment, langsmith_trace_context
-from ..core.models import EntryInput
-from ..core.observability import RunMetrics
+from ..core.langsmith_tracing import configure_langsmith_environment
+from ..core.models import EntryInput, KnowledgeNote
 from ..extract import PreExtractService
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..ms_graphrag import MicrosoftGraphRagStore
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..structural_retriever import StructuralRetrieverStore
-from ..tools import ToolExecutor
-from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
-from .orchestration_nodes import OrchestrationDeps
-from .orchestration_models import AgentGraphState, AgentRunSnapshot, PlanStepState
+from ..tools import (
+    ToolExecutor,
+    build_capture_text_tool,
+    build_capture_upload_tool,
+    build_capture_url_tool,
+    build_delete_note_tool,
+    build_graph_search_tool,
+    build_web_search_tool,
+)
+from .entry_orchestrator import EntryOrchestrator
+from .nodes import digest_node
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
 from .replanner import Replanner
-from .router import DefaultIntentRouter
+from .router import DefaultIntentRouter, RouterDecision
 from .ingestion_pipeline import IngestionPipeline
-from .runtime_admin import RuntimeAdminMixin
-from .runtime_ask import RuntimeAskMixin
-from .runtime_entry import RuntimeEntryMixin
+from .runtime_admin import _protected_eval_graph_group_ids
+from .runtime_ask import AskService
 from .runtime_helpers import (
     _annotate_answer,
     _best_snippet,
@@ -42,7 +45,8 @@ from .runtime_helpers import (
     _tokenize_for_overlap,
     _top_sentences,
 )
-from .runtime_llm import RuntimeLlmMixin
+from .runtime_llm import LlmClient
+from .thread_summarizer import ThreadSummarizer
 from .runtime_results import (
     AskResult,
     CaptureResult,
@@ -51,7 +55,7 @@ from .runtime_results import (
     ResetResult,
     RetryResult,
 )
-from .runtime_tools import RuntimeToolsMixin
+from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from .verifier import AnswerVerifier
 
 if TYPE_CHECKING:
@@ -59,74 +63,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+class AgentRuntime:
+    """Composition root for capture / ask / digest / entry operations.
 
-def _interrupt_payload_from_result(result: object) -> dict | None:
-    """Extract the first LangGraph interrupt payload from an invoke result."""
-    if not isinstance(result, dict) or "__interrupt__" not in result:
-        return None
-
-    interrupts = result.get("__interrupt__") or []
-    if not interrupts:
-        return {}
-
-    interrupt_value = getattr(interrupts[0], "value", interrupts[0])
-    if isinstance(interrupt_value, dict):
-        return interrupt_value
-    return {"message": str(interrupt_value)}
-
-
-def _plan_steps_from_snapshot(snapshot: dict) -> list:
-    """Extract plan step list from a checkpoint snapshot, handling nested model."""
-    plan = snapshot.get("plan")
-    if isinstance(plan, dict) and "steps" in plan:
-        return plan.get("steps") or []
-    plan_model = snapshot.get("plan")
-    if plan_model is not None and hasattr(plan_model, "steps"):
-        return getattr(plan_model, "steps") or []
-    # Legacy flat-schema fallback
-    return snapshot.get("plan_steps") or []
-
-
-def _snapshot_intent(snapshot: dict) -> str:
-    """Extract intent string from a raw state snapshot dict.
-
-    Handles three forms of ``router_decision`` in the snapshot:
-    None (before routing), a dict (legacy checkpoints), or a RouterDecision instance.
-    """
-    rd = snapshot.get("router_decision")
-    if rd is None:
-        return "unknown"
-    if isinstance(rd, dict):
-        return str(rd.get("route", "unknown"))
-    return str(getattr(rd, "route", "unknown"))
-
-
-def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) -> dict:
-    """Merge parent checkpoint state with streamed child state at an interrupt."""
-    streamed_values = {
-        key: value for key, value in fallback.items() if key != "__interrupt__"
-    } if isinstance(fallback, dict) else {}
-    try:
-        values = graph.get_state(config).values
-        if isinstance(values, dict):
-            return {**values, **streamed_values}
-    except Exception:
-        logger.debug("Could not read state after graph interrupt", exc_info=True)
-    return streamed_values
-
-
-class AgentRuntime(
-    RuntimeToolsMixin,
-    RuntimeAskMixin,
-    RuntimeEntryMixin,
-    RuntimeAdminMixin,
-    RuntimeLlmMixin,
-):
-    """Unified execution runtime for capture / ask / digest / entry operations.
-
-    The public runtime object remains the integration point while behavior is
-    split across focused inherited method groups to keep each module small and
-    reviewable.
+    Owns the stores and wires explicit collaborators — ``LlmClient``,
+    ``ThreadSummarizer``, ``AskService`` (answering) and ``EntryOrchestrator``
+    (LangGraph entry flow) — and exposes thin delegating methods. No behavior
+    is inherited via mixins; everything here is either local glue over the
+    shared stores or a one-line delegation to a collaborator.
     """
 
     def __init__(
@@ -144,22 +88,91 @@ class AgentRuntime(
         self.store = store
         self.graph_store = graph_store
         self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
-        self.structural_retriever = StructuralRetrieverStore(store)
+        self.memory = MemoryFacade(store, graph_store)
+        self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
         self._tool_executor = ToolExecutor()
         self._preextract_service = PreExtractService(settings.langextract)
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
-        self.memory = MemoryFacade(store)
         self._verifier = AnswerVerifier()
         self._plan_validator = PlanValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
+        # Explicit collaborators.
+        self._llm = LlmClient(settings)
+        self._summarizer = ThreadSummarizer(self._llm)
+        self._entry = EntryOrchestrator(self)
         self._thread_message_loader: (
             Callable[[EntryInput, int], list[dict[str, str]]] | None
         ) = None
-        # Orchestration graph — built lazily on first use
-        self._orch_graph = None
+
+    # ---- tool registry (capture / search / delete tools) ----
+
+    def _register_tools(self) -> None:
+        if self.capture_service is not None:
+            self._tool_executor.register(build_capture_url_tool(self.capture_service))
+            self._tool_executor.register(
+                build_capture_upload_tool(self.capture_service, self.settings.data_dir / "uploads")
+            )
+        self._tool_executor.register(build_graph_search_tool(self._active_graph_store()))
+        self._tool_executor.register(build_capture_text_tool(
+            lambda text, source_type="text", user_id="default": self.execute_capture(
+                text=text, source_type=source_type, user_id=user_id,
+            )
+        ))
+        self._tool_executor.register(build_delete_note_tool(self.memory))
+        if self.settings.web_search.api_key:
+            from ..capture.providers.web_search import build_web_search_provider
+            web_provider = build_web_search_provider(self.settings)
+            self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
+
+    @property
+    def _web_search_available(self) -> bool:
+        return bool(self.settings.web_search.api_key)
+
+    def list_tools(self) -> list:
+        return self._tool_executor.list_tools()
+
+    def execute_tool(self, name: str, **kwargs: object):
+        return self._tool_executor.invoke_direct(name, **kwargs)
+
+
+    # ---- delegation to explicit collaborators ----
+
+    def _ask_service(self) -> AskService:
+        """Build an ask service bound to current settings/stores.
+
+        Built per-call (mirroring ``_ingestion()``) so test doubles that swap
+        ``self.settings`` / ``self.graph_store`` after construction take effect.
+        The shared ``LlmClient`` / verifier are reused so cooldown state and
+        test mocks remain visible.
+        """
+        return AskService(
+            settings=self.settings,
+            graph_store=self.graph_store,
+            ms_graphrag_store=self.ms_graphrag_store,
+            structural_retriever=self.structural_retriever,
+            memory=self.memory,
+            tool_executor=self._tool_executor,
+            verifier=self._verifier,
+            llm=self._llm,
+        )
+
+    def execute_ask(self, *args, **kwargs) -> "AskResult":
+        return self._ask_service().execute_ask(*args, **kwargs)
+
+    def _generate_answer(self, prompt: str) -> str | None:
+        return self._llm.generate_answer(prompt)
+
+    def _generate_answer_stream(self, prompt: str):
+        return self._llm.generate_answer_stream(prompt)
+
+    def summarize_chat(self, messages_text: str, user_id: str = "default") -> str:
+        return self._summarizer.summarize_chat(messages_text, user_id)
+
+    def compress_context(self, messages_text: str, user_id: str = "default") -> str:
+        return self._summarizer.compress_context(messages_text, user_id)
 
     # ---- ingestion pipeline (capture → graph) ----
 
@@ -171,7 +184,7 @@ class AgentRuntime(
         """
         return IngestionPipeline(
             settings=self.settings,
-            store=self.store,
+            memory=self.memory,
             graph_store=self._active_graph_store(),
             preextract_service=self._preextract_service,
         )
@@ -235,408 +248,87 @@ class AgentRuntime(
             return []
         return self._thread_message_loader(entry_input, limit)
 
-    # ---- orchestration graph ----
+    # ---- entry orchestration (delegated to EntryOrchestrator) ----
 
-    def _get_orch_graph(self):
-        """Lazily build and cache the entry orchestration graph."""
-        if self._orch_graph is not None and _graph_checkpointer_closed(self._orch_graph):
-            logger.warning("Cached orchestration graph checkpointer connection is closed; rebuilding graph")
-            self._orch_graph = None
-        if self._orch_graph is None:
-            checkpointer = _build_checkpointer(self.settings)
-            deps = OrchestrationDeps.from_runtime(self)
-            self._orch_graph = build_entry_orchestration_graph(deps, checkpointer=checkpointer)
-            logger.info("Entry orchestration graph built with Postgres checkpoints")
-        return self._orch_graph
-
-    def execute_entry(
-        self, entry_input: EntryInput, on_progress=None
-    ) -> EntryResult:
-        """Execute an entry through the LangGraph orchestration graph."""
-        graph = self._get_orch_graph()
-        from .orchestration_models import AgentGraphState, _new_run_id, _new_thread_id
-
-        normalized_user = entry_input.user_id or self.settings.default_user
-        normalized_session = entry_input.session_id or "default"
-        run_id = _new_run_id()
-        thread_id = _new_thread_id(normalized_user, normalized_session)
-
-        initial_state = AgentGraphState(
-            run_id=run_id,
-            thread_id=thread_id,
-            user_id=normalized_user,
-            session_id=normalized_session,
-            entry_input=entry_input.model_copy(
-                update={
-                    "user_id": normalized_user,
-                    "session_id": normalized_session,
-                }
-            ),
-            entry_text=entry_input.text or "",
-        )
-
-        config = {"configurable": {"thread_id": thread_id}}
-
-        metadata = _entry_trace_metadata(
-            run_id=run_id,
-            thread_id=thread_id,
-            user_id=normalized_user,
-            session_id=normalized_session,
-            entry_input=entry_input,
-        )
-        # Name the LangGraph root run and attach business metadata so the whole
-        # node/LLM/tool subtree hangs off one searchable "execute_entry" run.
-        config["run_name"] = "execute_entry"
-        config["metadata"] = dict(metadata)
-        config["tags"] = ["entry", f"source:{metadata['source_platform']}"]
-        run_metrics = RunMetrics(
-            run_id=run_id,
-            thread_id=thread_id,
-            user_id=normalized_user,
-            session_id=normalized_session,
-        )
-
-        # Pass explicit null/default values as channel updates. When a Pydantic
-        # model is used directly, LangGraph omits nullable defaults while
-        # resuming an existing thread, leaving prior-run transient values in
-        # the input checkpoint until the first node resets them.
-        try:
-            with langsmith_trace_context(
-                self.settings.langsmith,
-                metadata=metadata,
-                tags=["entry", f"source:{metadata['source_platform']}"],
-            ):
-                invoke_result = self._stream_entry_graph(
-                    graph,
-                    initial_state.model_dump(),
-                    config,
-                    on_progress or (lambda _event_type, _payload: None),
-                )
-        except Exception as exc:
-            run_metrics.complete(status="failed", error_type=exc.__class__.__name__)
-            raise
-        interrupt_data = _interrupt_payload_from_result(invoke_result)
-        if interrupt_data is not None:
-            run_metrics.complete(status="waiting_confirmation", interrupt_kind=interrupt_data.get("kind"))
-            return self._entry_result_from_interrupt(
-                _checkpoint_values_after_interrupt(graph, config, invoke_result),
-                interrupt_data,
-                run_id=run_id,
-                thread_id=thread_id,
-                fallback_events=(
-                    invoke_result.get("events", initial_state.events)
-                    if isinstance(invoke_result, dict)
-                    else initial_state.events
-                ),
-            )
-
-        result_state = AgentGraphState.model_validate(invoke_result)
-
-        # Map graph state back to EntryResult for API compatibility
-        reply_text = result_state.answer or "暂时没有可执行的结果。"
-
-        capture_result = None
-        ask_result = None
-        if result_state.router_decision and result_state.router_decision.route in ("capture_text", "capture_link", "capture_file"):
-            for item in reversed(result_state.tool_results):
-                capture_payload = item.get("capture_result") if isinstance(item, dict) else None
-                if isinstance(capture_payload, dict):
-                    capture_result = CaptureResult.model_validate(capture_payload)
-                    break
-        elif result_state.router_decision and result_state.router_decision.route == "ask":
-            ask_result = AskResult(
-                answer=reply_text,
-                citations=result_state.citations,
-                matches=[],
-                session_id=normalized_session,
-            )
-
-        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
-        run_metrics.intent = intent
-        run_metrics.complete(
-            status="completed",
-            plan_step_count=len(result_state.plan.steps),
-            tool_result_count=len(result_state.tool_results),
-            event_count=len(result_state.events),
-        )
-        return EntryResult(
-            intent=intent,
-            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "未提供路由说明。",
-            reply_text=reply_text,
-            capture_result=capture_result,
-            ask_result=ask_result,
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
-            execution_trace=result_state.execution_trace,
-            run_id=run_id,
-            thread_id=thread_id,
-            run_status="completed",
-            events=[e.model_dump(mode="json") for e in result_state.events],
-        )
-
-    def _stream_entry_graph(self, graph, initial_state: dict, config: dict, on_progress):
-        """Run graph nodes while forwarding newly persisted events to a caller."""
-        from .orchestration_models import AgentEvent, events_to_sse_tuples
-
-        emitted_event_ids: set[str] = set()
-        observed_events: list[AgentEvent] = []
-        observed_state = dict(initial_state)
-        interrupt_result: dict | None = None
-        for streamed in graph.stream(initial_state, config, stream_mode="updates", subgraphs=True):
-            update = (
-                streamed[1]
-                if isinstance(streamed, tuple)
-                and len(streamed) == 2
-                and isinstance(streamed[1], dict)
-                else streamed
-            )
-            if not isinstance(update, dict):
-                continue
-            if "__interrupt__" in update:
-                interrupt_result = update
-            for node_update in update.values():
-                if not isinstance(node_update, dict):
-                    continue
-                observed_state.update(node_update)
-                for raw_event in node_update.get("events", []):
-                    event = (
-                        raw_event
-                        if isinstance(raw_event, AgentEvent)
-                        else AgentEvent.model_validate(raw_event)
-                    )
-                    if event.event_id in emitted_event_ids:
-                        continue
-                    emitted_event_ids.add(event.event_id)
-                    observed_events.append(event)
-                    for event_type, payload in events_to_sse_tuples([event]):
-                        # The HTTP layer emits one terminal result with complete
-                        # answer/citation metadata after graph completion.
-                        if event_type != "done":
-                            on_progress(event_type, payload)
-        if interrupt_result is not None:
-            return {
-                **observed_state,
-                "__interrupt__": interrupt_result["__interrupt__"],
-                "events": observed_events or observed_state.get("events", []),
-            }
-        return graph.get_state(config).values
-
-    def _entry_result_from_interrupt(
-        self,
-        invoke_result: object,
-        interrupt_data: dict,
-        *,
-        run_id: str,
-        thread_id: str,
-        fallback_events: list | None = None,
-    ) -> EntryResult:
-        state_snapshot = invoke_result if isinstance(invoke_result, dict) else {}
-        kind = str(interrupt_data.get("kind") or "")
-        is_clarification = kind == "clarification_required"
-        reason = "需要补充信息" if is_clarification else "操作需要用户确认"
-        default_message = "请补充更多信息后继续。" if is_clarification else "此操作需要您的确认。"
-
-        logger.info(
-            "Graph interrupted run_id=%s thread_id=%s kind=%s step=%s",
-            run_id, thread_id, kind or "confirmation", interrupt_data.get("step_id", "?"),
-        )
-        return EntryResult(
-            intent=_snapshot_intent(state_snapshot),
-            reason=reason,
-            reply_text=str(interrupt_data.get("message", default_message)),
-            plan_steps=[
-                s.model_dump(mode="json") if isinstance(s, PlanStepState) else s
-                for s in (_plan_steps_from_snapshot(state_snapshot))
-            ],
-            execution_trace=list(state_snapshot.get("execution_trace") or []),
-            run_id=run_id,
-            thread_id=thread_id,
-            pending_confirmation=interrupt_data,
-            run_status="waiting_confirmation",
-            events=[
-                e.model_dump(mode="json") if hasattr(e, "model_dump") else e
-                for e in (state_snapshot.get("events") or fallback_events or [])
-            ],
-        )
+    def execute_entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
+        return self._entry.execute_entry(entry_input, on_progress=on_progress)
 
     def resume_entry(
         self, run_id: str, thread_id: str, decision: str, user_id: str,
         text: str | None = None, option_id: str | None = None,
     ) -> EntryResult:
-        """Resume a graph run that was interrupted for HITL confirmation.
+        return self._entry.resume_entry(
+            run_id, thread_id, decision, user_id, text=text, option_id=option_id,
+        )
 
-        Args:
-            run_id: The run to resume.
-            thread_id: Thread ID from the original run config.
-            decision: ``"confirm"``, ``"reject"`` or ``"clarify"``.
-            user_id: Authenticated user making the decision.
-            text: Supplemental text for clarification interrupts.
-            option_id: Optional clarification option selected by the user.
+    def get_run_snapshot(self, run_id: str):
+        return self._entry.get_run_snapshot(run_id)
 
-        Returns:
-            Final EntryResult after graph completion.
-        """
-        graph = self._get_orch_graph()
-        config = {
-            "configurable": {"thread_id": thread_id},
-            "run_name": "resume_entry",
-            "metadata": {
-                "app": "personal-agent",
-                "run_id": run_id,
-                "thread_id": thread_id,
-                "user_id": user_id,
-                "resume_decision": decision,
-            },
-            "tags": ["entry", "resume"],
+    def list_run_snapshots(self, user_id: str | None = None, limit: int = 50):
+        return self._entry.list_run_snapshots(user_id=user_id, limit=limit)
+
+    # ---- digest / intent (formerly RuntimeEntryMixin) ----
+
+    def execute_digest(self, user_id: str | None = None) -> DigestResult:
+        normalized_user = user_id or self.settings.default_user
+        logger.info("Generating digest user=%s", normalized_user)
+        return DigestResult(
+            message=digest_node(self.memory, normalized_user),
+            recent_notes=self.memory.list_recent_notes(normalized_user),
+            due_reviews=self.memory.due_reviews(normalized_user),
+        )
+
+    def classify_intent(self, entry_input: EntryInput) -> RouterDecision:
+        """Public wrapper for intent classification."""
+        return self._intent_router.classify(entry_input)
+
+    # ---- admin / maintenance (formerly RuntimeAdminMixin) ----
+
+    def list_notes(self, user_id: str | None = None) -> list[KnowledgeNote]:
+        normalized_user = user_id or self.settings.default_user
+        return list(reversed(self.memory.list_notes(normalized_user)))
+
+    def health(self) -> dict[str, object]:
+        graph_status = self.graph_store.status()
+        return {
+            "status": "ok",
+            "graphiti": graph_status,
         }
-        resume_value = {
-            "decision": decision,
-            "user_id": user_id,
-            "text": text or "",
-            "option_id": option_id or "",
-        }
-        run_metrics = RunMetrics(
-            run_id=run_id,
-            thread_id=thread_id,
-            user_id=user_id,
+
+    def reset_debug_data(self) -> ResetResult:
+        logger.warning("Resetting all development data stores")
+        protected_eval_groups = _protected_eval_graph_group_ids(
+            self.settings,
+            graph_store=self.graph_store,
+        )
+        deleted_graph_nodes = self.graph_store.clear_all_data(
+            preserve_group_ids=protected_eval_groups
+        )
+        self.memory.ensure_schema()
+        checkpointer = self._entry._get_orch_graph().checkpointer
+        counts = PostgresDebugResetStore(self.settings.postgres_url).clear_all_data()
+        checkpointer.setup()
+        deleted_upload_files = clear_upload_files(self.settings.data_dir)
+        return ResetResult(
+            deleted_notes=counts["notes"],
+            deleted_reviews=counts["reviews"],
+            deleted_upload_files=deleted_upload_files,
+            deleted_graph_nodes=deleted_graph_nodes,
+            deleted_checkpoints=counts["checkpoints"],
+            deleted_checkpoint_blobs=counts["checkpoint_blobs"],
+            deleted_checkpoint_writes=counts["checkpoint_writes"],
+            deleted_checkpoint_migrations=counts["checkpoint_migrations"],
+            truncated_postgres_tables=counts["postgres_tables"],
+            deleted_postgres_rows=counts["postgres_rows"],
         )
 
-        logger.info(
-            "Resuming graph run_id=%s thread_id=%s decision=%s",
-            run_id, thread_id, decision,
-        )
-
-        try:
-            with langsmith_trace_context(
-                self.settings.langsmith,
-                metadata={
-                    "app": "personal-agent",
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "user_id": user_id,
-                    "resume_decision": decision,
-                },
-                tags=["entry", "resume"],
-            ):
-                invoke_result = graph.invoke(Command(resume=resume_value), config)
-        except Exception as exc:
-            run_metrics.complete(
-                status="failed",
-                resume_decision=decision,
-                error_type=exc.__class__.__name__,
-            )
-            raise
-        interrupt_data = _interrupt_payload_from_result(invoke_result)
-        if interrupt_data is not None:
-            run_metrics.complete(
-                status="waiting_confirmation",
-                resume_decision=decision,
-                interrupt_kind=interrupt_data.get("kind"),
-            )
-            return self._entry_result_from_interrupt(
-                _checkpoint_values_after_interrupt(graph, config, invoke_result),
-                interrupt_data,
-                run_id=run_id,
-                thread_id=thread_id,
-            )
-
-        result_state = AgentGraphState.model_validate(invoke_result)
-
-        reply_text = result_state.answer or "操作已完成。"
-        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
-        run_metrics.intent = intent
-        run_metrics.session_id = result_state.session_id
-        run_metrics.complete(
-            status="completed",
-            resume_decision=decision,
-            plan_step_count=len(result_state.plan.steps),
-            tool_result_count=len(result_state.tool_results),
-            event_count=len(result_state.events),
-        )
-
-        return EntryResult(
-            intent=intent,
-            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
-            reply_text=reply_text,
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
-            execution_trace=result_state.execution_trace,
-            run_id=run_id,
-            thread_id=thread_id,
-            run_status="completed",
-            events=[e.model_dump(mode="json") for e in result_state.events],
-        )
-
-    def get_run_snapshot(self, run_id: str) -> AgentRunSnapshot | None:
-        """Return a read-only snapshot for the most recent checkpoint of a run."""
-        try:
-            checkpointer = self._get_orch_graph().checkpointer
-            for ct in checkpointer.list(None, limit=500):
-                if ct.checkpoint and "channel_values" in ct.checkpoint:
-                    cv = ct.checkpoint["channel_values"]
-                    state = AgentGraphState.model_validate(cv)
-                    if state.run_id == run_id:
-                        return state.to_run_snapshot()
-        except Exception:
-            logger.debug("Could not retrieve run snapshot for run_id=%s", run_id, exc_info=True)
-        return None
-
-    def list_run_snapshots(
-        self, user_id: str | None = None, limit: int = 50,
-    ) -> list[AgentRunSnapshot]:
-        """List recent run snapshots, optionally filtered by user.
-
-        Returns the most recent checkpoint per run_id. Multiple runs may share
-        one LangGraph thread for a conversation session.
-        """
-        try:
-            checkpointer = self._get_orch_graph().checkpointer
-            newest_by_run: dict[str, AgentRunSnapshot] = {}
-            for ct in checkpointer.list(None, limit=500):
-                if ct.checkpoint and "channel_values" in ct.checkpoint:
-                    cv = ct.checkpoint["channel_values"]
-                    state = AgentGraphState.model_validate(cv)
-                    if user_id and state.user_id != user_id:
-                        continue
-                    if state.run_id in newest_by_run:
-                        continue
-                    newest_by_run[state.run_id] = state.to_run_snapshot()
-            snapshots = list(newest_by_run.values())
-            snapshots.sort(key=lambda s: s.updated_at, reverse=True)
-            return snapshots[:limit]
-        except Exception:
-            logger.debug("Could not list run snapshots", exc_info=True)
-        return []
+    # ---- short aliases ----
 
     def digest(self, user_id: str | None = None) -> DigestResult:
         return self.execute_digest(user_id=user_id)
 
     def entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
         return self.execute_entry(entry_input, on_progress=on_progress)
-
-
-def _entry_trace_metadata(
-    *,
-    run_id: str,
-    thread_id: str,
-    user_id: str,
-    session_id: str,
-    entry_input: EntryInput,
-) -> dict[str, object]:
-    return {
-        "app": "personal-agent",
-        "run_id": run_id,
-        "thread_id": thread_id,
-        "user_id": user_id,
-        "session_id": session_id,
-        "source_platform": entry_input.source_platform or "unknown",
-        "source_type": entry_input.source_type,
-        "has_source_ref": bool(entry_input.source_ref),
-    }
-
-
-def _graph_checkpointer_closed(graph) -> bool:
-    checkpointer = getattr(graph, "checkpointer", None)
-    conn = getattr(checkpointer, "conn", None)
-    return bool(getattr(conn, "closed", False))
 
 
 __all__ = [

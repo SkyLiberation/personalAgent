@@ -10,7 +10,7 @@ from ..core.logging_utils import log_event, trace_span
 from ..core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
 from ..extract import PreExtractService
 from ..graphiti.store import GraphCaptureResult, GraphitiStore
-from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..memory import MemoryFacade
 from .nodes import (
     capture_node,
     chunk_reconcile_node,
@@ -42,12 +42,12 @@ class IngestionPipeline:
     def __init__(
         self,
         settings: Settings,
-        store: PostgresMemoryStore,
+        memory: MemoryFacade,
         graph_store: GraphitiStore,
         preextract_service: PreExtractService,
     ) -> None:
         self.settings = settings
-        self.store = store
+        self.memory = memory
         self.graph_store = graph_store
         self.preextract_service = preextract_service
 
@@ -70,7 +70,7 @@ class IngestionPipeline:
             source_type=source_type,
             source_ref=source_ref,
         )
-        existing_note = self.store.find_note_by_source_fingerprint(
+        existing_note = self.memory.find_note_by_source_fingerprint(
             normalized_user,
             source_fingerprint,
         )
@@ -81,7 +81,7 @@ class IngestionPipeline:
             )
             return CaptureResult(
                 note=existing_note,
-                chunk_notes=self.store.get_chunks_for_parent(existing_note.id),
+                chunk_notes=self.memory.list_chunks(existing_note.id),
                 related_notes=[],
                 review_card=None,
             )
@@ -133,13 +133,13 @@ class IngestionPipeline:
         entry-driven capture share the same behavior without creating a second
         graph layer.
         """
-        state = capture_node(state, self.store)
-        state = structural_chunk_node(state, self.store)
-        state = preextract_node(state, self.store, self.preextract_service)
-        state = chunk_reconcile_node(state, self.store)
-        state = enrich_node(state, self.store)
-        state = link_node(state, self.store)
-        state = schedule_review_node(state, self.store)
+        state = capture_node(state, self.memory)
+        state = structural_chunk_node(state, self.memory)
+        state = preextract_node(state, self.memory, self.preextract_service)
+        state = chunk_reconcile_node(state, self.memory)
+        state = enrich_node(state, self.memory)
+        state = link_node(state, self.memory)
+        state = schedule_review_node(state, self.memory)
         return state
 
     # ------------------------------------------------------------------
@@ -154,7 +154,7 @@ class IngestionPipeline:
             note.graph_sync.status = "skipped"
             note.graph_sync.error = "Graph sync delegated to graph-worthy chunks."
             note.updated_at = local_now()
-            self.store.update_note(note)
+            self.memory.update_note(note)
         else:
             graph_result = self.graph_store.ingest_note(note)
             if graph_result.enabled is True:
@@ -171,7 +171,7 @@ class IngestionPipeline:
                     else "Graphiti ingest returned disabled result."
                 )
                 note.updated_at = local_now()
-                self.store.update_note(note)
+                self.memory.update_note(note)
 
         if self.graph_store.configured():
             self._mark_chunk_graph_sync(result.chunk_notes)
@@ -198,14 +198,14 @@ class IngestionPipeline:
                 eligible_seen += 1
                 chunk.graph_sync.status = "pending"
                 chunk.graph_sync.error = None
-            self.store.update_note(chunk)
+            self.memory.update_note(chunk)
 
     # ------------------------------------------------------------------
     # Background sync entries
     # ------------------------------------------------------------------
 
     def sync_note_to_graph(self, note_id: str) -> bool:
-        note = self.store.get_note(note_id)
+        note = self.memory.get_note(note_id)
         if note is None:
             logger.warning("Graph sync skipped because note_id=%s was not found", note_id)
             return False
@@ -214,7 +214,7 @@ class IngestionPipeline:
             note.graph_sync.status = "idle"
             note.graph_sync.error = None
             note.updated_at = local_now()
-            self.store.update_note(note)
+            self.memory.update_note(note)
             return False
 
         trace_id = uuid4().hex[:12]
@@ -223,7 +223,7 @@ class IngestionPipeline:
         note.graph_sync.status = "pending"
         note.graph_sync.error = None
         note.updated_at = local_now()
-        self.store.update_note(note)
+        self.memory.update_note(note)
 
         last_error: str | None = None
         with trace_span(
@@ -235,10 +235,10 @@ class IngestionPipeline:
             max_attempts=max_attempts,
         ):
             for attempt in range(1, max_attempts + 1):
-                note = self.store.get_note(note_id) or note
+                note = self.memory.get_note(note_id) or note
                 note.graph_sync.status = "pending"
                 note.updated_at = local_now()
-                self.store.update_note(note)
+                self.memory.update_note(note)
 
                 log_event(
                     logger,
@@ -314,11 +314,11 @@ class IngestionPipeline:
                     continue
                 break
 
-        note = self.store.get_note(note_id) or note
+        note = self.memory.get_note(note_id) or note
         note.graph_sync.status = "failed"
         note.graph_sync.error = last_error or "Graph sync failed."
         note.updated_at = local_now()
-        self.store.update_note(note)
+        self.memory.update_note(note)
         logger.warning("Background graph sync failed note_id=%s error=%s", note_id, note.graph_sync.error)
         return False
 
@@ -328,7 +328,7 @@ class IngestionPipeline:
         notes = [
             note
             for note_id in unique_note_ids
-            for note in [self.store.get_note(note_id)]
+            for note in [self.memory.get_note(note_id)]
             if note is not None
         ]
         if not notes:
@@ -338,7 +338,7 @@ class IngestionPipeline:
                 note.graph_sync.status = "idle"
                 note.graph_sync.error = None
                 note.updated_at = local_now()
-                self.store.update_note(note)
+                self.memory.update_note(note)
             return {note.id: False for note in notes}
 
         trace_id = uuid4().hex[:12]
@@ -349,7 +349,7 @@ class IngestionPipeline:
             note.graph_sync.status = "pending"
             note.graph_sync.error = None
             note.updated_at = local_now()
-            self.store.update_note(note)
+            self.memory.update_note(note)
 
         active_notes = [note for note in notes if note.graph_sync.status != "skipped"]
         if not active_notes:
@@ -389,7 +389,7 @@ class IngestionPipeline:
             note.graph_sync.status = "failed"
             note.graph_sync.error = graph_result.error or "Graph sync failed."
             note.updated_at = local_now()
-            self.store.update_note(note)
+            self.memory.update_note(note)
             outcomes[note.id] = False
 
         log_event(
@@ -414,7 +414,7 @@ class IngestionPipeline:
         related_notes: list[KnowledgeNote],
     ) -> tuple[KnowledgeNote, list[KnowledgeNote]]:
         updated_note = self._merge_graph_capture(note, graph_result)
-        graph_related_notes = self.store.find_notes_by_graph_episode_uuids(
+        graph_related_notes = self.memory.find_by_graph_episodes(
             note.user_id,
             graph_result.related_episode_uuids,
         )
@@ -423,7 +423,7 @@ class IngestionPipeline:
             item.id for item in merged_related_notes if item.id != updated_note.id
         ]
         updated_note.updated_at = local_now()
-        self.store.update_note(updated_note)
+        self.memory.update_note(updated_note)
         return updated_note, merged_related_notes
 
     def _merge_graph_capture(

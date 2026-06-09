@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from personal_agent.agent.runtime_llm import RuntimeLlmMixin
+from personal_agent.agent.runtime_llm import LlmClient
 from personal_agent.core.config import OpenAIConfig, Settings
 
 
-class _Runtime(RuntimeLlmMixin):
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
+def _make_client(settings: Settings) -> LlmClient:
+    return LlmClient(settings)
 
 
 def test_generate_answer_limits_sdk_waiting(monkeypatch):
@@ -26,7 +25,7 @@ def test_generate_answer_limits_sdk_waiting(monkeypatch):
             )
 
     monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
-    runtime = _Runtime(
+    runtime = _make_client(
         Settings(
             openai=OpenAIConfig(
                 api_key="key",
@@ -38,7 +37,7 @@ def test_generate_answer_limits_sdk_waiting(monkeypatch):
         )
     )
 
-    assert runtime._generate_answer("问题") == "答案"
+    assert runtime.generate_answer("问题") == "答案"
     assert captured["timeout"] == 7.0
     assert captured["max_retries"] == 0
 
@@ -55,7 +54,7 @@ def test_generate_answer_failure_opens_short_circuit(monkeypatch):
             )
 
     monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
-    runtime = _Runtime(
+    runtime = _make_client(
         Settings(
             openai=OpenAIConfig(
                 api_key="key",
@@ -65,6 +64,6 @@ def test_generate_answer_failure_opens_short_circuit(monkeypatch):
         )
     )
 
-    assert runtime._generate_answer("第一次") is None
-    assert runtime._generate_answer("第二次") is None
+    assert runtime.generate_answer("第一次") is None
+    assert runtime.generate_answer("第二次") is None
     assert calls == 1

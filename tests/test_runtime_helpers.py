@@ -212,7 +212,7 @@ class TestGraphAskSemanticEvidence:
         assert _graph_episode_uuids(graph_result) == ["ep-fact", "ep-edge", "ep-related"]
 
     def test_graph_prompt_prioritizes_fact_network(self):
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.agent.runtime_ask import AskService
 
         graph_result = GraphAskResult(
             enabled=True,
@@ -254,7 +254,7 @@ class TestGraphAskSemanticEvidence:
             relation_fact="订单服务依赖 Redis 缓存热点数据",
         )
 
-        rt = object.__new__(AgentRuntime)
+        rt = object.__new__(AskService)
         prompt = rt._build_graph_answer_prompt(
             "订单服务为什么用 Redis？",
             graph_result,

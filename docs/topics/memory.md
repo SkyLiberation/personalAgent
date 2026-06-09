@@ -185,7 +185,7 @@ assistant_assumptions、unverified_claims、open_questions 不能作为事实使
 - 给 `AgentService` 提供统一 memory 入口。
 - 明确长期知识和短期 checkpoint 的边界。
 
-当前不足也很明确：这个类现在很薄，还没有真正成为长期记忆的唯一访问边界。`AgentRuntime`、`ingestion_pipeline`、`runtime_ask`、`web/api` 和 `delete_note` 工具仍然存在直接访问 `PostgresMemoryStore` 的路径。后续应该把 capture、search、get、list、update、delete、review、graph episode 映射等长期记忆操作都收敛到 `MemoryFacade`，让外部层只表达“我要做什么记忆操作”，而不是直接操作 `knowledge_notes`、`review_cards`、chunk 或 graph mapping 这些内部结构。
+当前已经完成 P0 收敛：`AgentRuntime`、`ingestion_pipeline`、`runtime_ask`、`web/api`、`delete_note` 工具、structural retriever 和编排删除解析都通过 `MemoryFacade` 访问长期记忆，不再直接操作 `PostgresMemoryStore`。外部层只表达“我要做什么记忆操作”，不直接拼装 `knowledge_notes`、`review_cards`、chunk 或 graph mapping 这些内部结构。
 
 这个类的设计价值在于隔离调用方：未来即使增加多个长期存储后端、权限过滤、用户画像、workspace 策略、审计或记忆压缩，也可以在 facade 层收敛。
 
@@ -276,7 +276,7 @@ assistant_assumptions、unverified_claims、open_questions 不能作为事实使
 - `AgentGraphState` 是短期执行现场，保存 checkpoint 可恢复状态，不是长期事实库。
 - `ShortTermMemoryConfig` 只决定 prompt 窗口，不决定数据是否保留；完整 thread 对话仍在 checkpoint。
 - `ThreadSummary` 还未落地；它是后续把滚动摘要从不稳定文本升级为结构化会话状态的目标模型。
-- `MemoryFacade` 是长期记忆统一入口的目标边界；当前仍有 runtime、API、工具和 ingestion 流程直接访问 `PostgresMemoryStore`，这是后续需要收敛的重点。
+- `MemoryFacade` 是长期记忆统一入口；runtime、API、工具、ingestion、structural retriever 和编排删除解析都通过它访问长期记忆。
 - `KnowledgeNote` 是长期业务真源；Graphiti episode 是语义索引和关系检索层。
 - `EvidenceItem / ContextPack` 是回答前的统一证据出口，避免 prompt 直接依赖底层存储结构。
 
@@ -311,15 +311,12 @@ flowchart LR
             direction TB
             CaptureLayer["Capture / Solidify<br/>capture_text/url/upload<br/>solidify draft -> capture"]:::layer
             MemoryFacade["MemoryFacade<br/>target unified entry<br/>capture/search/get/list<br/>update/delete/review<br/>graph mapping"]:::layer
-            DirectStoreAccess["Direct Store Access<br/>runtime / API / tools<br/>ingestion pipeline<br/>(待收敛)"]:::future
             PostgresMemoryStore["PostgresMemoryStore<br/>add/update/search/delete note<br/>review cards<br/>embedding / tsvector"]:::layer
             KnowledgeNote["KnowledgeNote<br/>source<br/>body<br/>chunk<br/>preextract<br/>graph<br/>graph_sync<br/>graph_quality"]:::model
             ReviewCard["ReviewCard<br/>note_id<br/>payload<br/>due_at"]:::model
             KnowledgeTables["Postgres Business Tables<br/>knowledge_notes<br/>review_cards"]:::model
             CaptureLayer --> KnowledgeNote
             MemoryFacade --> PostgresMemoryStore
-            DirectStoreAccess -. current bypass .-> PostgresMemoryStore
-            DirectStoreAccess -. should route through .-> MemoryFacade
             PostgresMemoryStore --> KnowledgeTables
             PostgresMemoryStore --> KnowledgeNote
             PostgresMemoryStore --> ReviewCard
@@ -396,54 +393,35 @@ flowchart LR
 
 ## 主要差距
 
-当前实现已经把“短期执行现场”和“长期正式知识”分开，也已经建立 evidence 出口。距离成熟生产级记忆层，主要差距在于长期记忆入口收敛、治理策略落地、检索质量评测和跨后端一致性：
+当前实现已经把“短期执行现场”和“长期正式知识”分开，也已经建立 evidence 出口，并完成了长期记忆访问入口向 `MemoryFacade` 的 P0 收敛。距离成熟生产级记忆层，主要差距在于治理策略落地、检索质量评测和跨后端一致性：
 
-1. MemoryFacade 还没有成为长期记忆唯一入口
-
-   当前 `MemoryFacade` 已经表达了长期记忆门面的方向，但 `runtime_ask`、`ingestion_pipeline`、`runtime_entry`、`web/api` 和 `delete_note` 工具仍然直接访问 `PostgresMemoryStore`。这会让权限、workspace、审计、graph sync 一致性和删除策略难以统一收口。下一步应让外部层只依赖 `MemoryFacade`，由 facade 再协调 Postgres、Graphiti、review 和 policy。
-
-2. 长期记忆还没有真实权限 / 隐私策略后端
+1. 长期记忆还没有真实权限 / 隐私策略后端
 
    当前 `user_id`、`session_id` 和 note source 信息已经进入模型，但还没有独立的 memory policy engine。后续需要按用户、workspace、来源、敏感级别、保留期限控制 capture、search、delete 和 graph sync。
 
-3. 图谱和 Postgres 的一致性还可以继续增强
+2. 图谱和 Postgres 的一致性还可以继续增强
 
    当前通过 `graph_episode_uuid` 和 graph refs 建立映射，删除时也会清理可用 episode。下一步可以补充更系统的同步状态机、失败重试、批量对账和孤儿 episode 检测。
 
-4. 长期知识缺少冲突消解和版本管理
+3. 长期知识缺少冲突消解和版本管理
 
    `source_fingerprint` 可以处理重复采集，但对于同一主题的事实更新、旧知识过期、不同来源冲突，还没有独立的版本链、置信度或 supersede 机制。
 
-5. 短期摘要仍是轻量文本策略，存在稳定性和事实污染风险
+4. 短期摘要仍是轻量文本策略，存在稳定性和事实污染风险
 
    当前滚动摘要是 prompt 层能力，失败时会静默降级为截断；摘要本身也可能每次重新生成而不稳定，或者把助手推测、未验证判断写成事实。后续需要结构化 `ThreadSummary`，把用户目标、约束、已确认决策、待办、助手假设、未验证声明和 evidence refs 分开，并在 prompt 中明确摘要不能替代事实证据。
 
-6. 记忆质量还缺少专项评测
+5. 记忆质量还缺少专项评测
 
    当前有短期窗口、evidence、检索和流程测试，但还没有系统化 memory eval，例如长期召回率、错误引用率、历史干扰率、冲突处理准确率和图谱孤儿证据率。
 
 ## 按优先级排序的演进建议
 
-当前工程已经完成了记忆层的核心边界：checkpoint 短期现场、Postgres 长期知识、Graphiti 语义索引、Evidence 统一出口。下一阶段的优先级应该先把长期记忆访问边界收敛起来，再在这个边界上做权限、审计、一致性和评测。
+当前工程已经完成了记忆层的核心边界：checkpoint 短期现场、Postgres 长期知识、Graphiti 语义索引、Evidence 统一出口，以及 `MemoryFacade` 统一入口。下一阶段的优先级应该在这个边界上做权限、审计、一致性和评测。
 
-### P0：将 MemoryFacade 收敛为唯一长期记忆入口
+### P0：建立 Memory Policy Engine
 
-最高收益的下一步不是先增加更多存储能力，而是先把长期记忆访问统一收口。目标是让 API、Agent Runtime、编排节点、工具层和 ingestion 流程都只依赖 `MemoryFacade`，不直接访问 `PostgresMemoryStore`。
-
-优先收敛的方法：
-
-- `capture_text / capture_url / capture_upload / solidify` 通过 facade 写入长期知识。
-- ask 检索通过 facade 执行本地 note/chunk search 和 graph episode 回溯。
-- `delete_note` 工具通过 facade 完成 get、确认 payload、级联删除、review 清理和 graph episode 清理。
-- digest 通过 facade 获取 recent notes 和 due reviews。
-- Web API 通过 facade 执行 list/get/update/delete/chunks。
-- `OrchestrationDeps` 不再同时暴露 `memory` 和 `store`，避免编排节点天然绕过 facade。
-
-判断标准：`PostgresMemoryStore` 只被 `MemoryFacade`、底层迁移/测试或极少数内部实现直接使用，业务层不再知道长期记忆的内部表和组合细节。
-
-### P1：建立 Memory Policy Engine
-
-Facade 收敛后，再把长期记忆访问纳入统一策略判断：
+Facade 收敛后，最高收益的下一步是把长期记忆访问纳入统一策略判断：
 
 - 用户级 / workspace 级访问控制。
 - capture、search、delete、graph sync 的 allow / deny。
@@ -453,7 +431,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 
 这样可以让 memory 层不只是按 `user_id` 过滤，而是具备生产级的权限和隐私边界。
 
-### P2：把图谱同步升级为可对账系统
+### P1：把图谱同步升级为可对账系统
 
 当前 note 与 Graphiti episode 已经有映射，但同步治理还可以继续增强：
 
@@ -465,7 +443,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 
 这一步能把“图谱可用”升级为“图谱长期一致可维护”。
 
-### P3：引入知识版本与冲突消解
+### P2：引入知识版本与冲突消解
 
 长期记忆真正难的不是写入，而是更新和遗忘。后续可以围绕 `KnowledgeNote` 扩展：
 
@@ -477,7 +455,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 
 这一步能减少“旧知识被继续引用”或“多条记忆互相打架”的问题。
 
-### P4：升级短期摘要策略
+### P3：升级短期摘要策略
 
 当前短期上下文已经有窗口、截断和可选滚动摘要。下一步可以继续优化：
 
@@ -490,7 +468,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 
 这一步能提升长会话稳定性，尤其是多轮规划、恢复和用户更正场景。
 
-### P5：完善 Evidence Rerank 与引用治理
+### P4：完善 Evidence Rerank 与引用治理
 
 当前 `ContextPack` 已经能统一 evidence 并按预算选择。后续可以继续增强：
 
@@ -500,7 +478,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 - 引用必须来自 selected evidence，继续保持 prompt 与 citation 一致。
 - 对证据不足的回答触发澄清或拒答。
 
-### P6：建立 Memory Eval Suite
+### P5：建立 Memory Eval Suite
 
 需要用评测证明记忆层不是“看起来有检索”，而是真的提升回答质量：
 
@@ -547,7 +525,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 - `EvidenceItem / ContextPack` 让多来源证据以统一形状进入 prompt。
 - prompt 边界清楚：历史对话用于理解上下文，事实结论以证据为准。
 - 对短期摘要的风险有明确认识：摘要可能不稳定，也可能把助手推测写成事实，因此后续要结构化分类并在 prompt 中声明“摘要不是既定事实”。
-- 已经有 `MemoryFacade` 作为长期记忆统一入口的设计锚点，下一步要把工具、API、runtime 和 ingestion 的直接 store 访问收敛进去。
+- `MemoryFacade` 已经成为长期记忆统一入口，工具、API、runtime、ingestion、structural retriever 和编排删除解析都通过它访问长期记忆。
 
 面试中需要注意边界表述：
 
@@ -556,7 +534,7 @@ Facade 收敛后，再把长期记忆访问纳入统一策略判断：
 - 可以说“有滚动摘要能力，并已识别稳定性和事实污染风险”，不要说“已经有完整持久化结构化 ThreadSummary”。
 - 可以说“已有 user/session 隔离”，不要说“完整权限和隐私策略已落地”。
 - 可以说“已有 evidence 统一出口”，不要说“已有完整 memory eval 闭环”。
-- 可以说“`MemoryFacade` 是目标统一入口”，不要说“所有长期记忆访问都已经经过 Facade”。
+- 可以说“`MemoryFacade` 已经收敛主要长期记忆访问入口”，不要说“权限、workspace 和审计策略已经完整落地”。
 
 最适合收尾的一句话：
 
