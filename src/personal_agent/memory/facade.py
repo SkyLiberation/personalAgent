@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ..core.models import KnowledgeNote, ReviewCard, local_now
+from ..core.models import KnowledgeNote, MemoryEpisode, ReviewCard, local_now
 from ..core.query_understanding import RetrievalFilters
 
 if TYPE_CHECKING:
@@ -134,6 +134,33 @@ class MemoryFacade:
     ) -> list[KnowledgeNote]:
         return self.local.find_notes_by_graph_episode_uuids(user_id, episode_uuids, filters=filters)
 
+    def list_episodes(
+        self,
+        user_id: str,
+        *,
+        limit: int = 50,
+        session_id: str | None = None,
+        workflow: str | None = None,
+        outcome: str | None = None,
+    ) -> list[MemoryEpisode]:
+        return self.local.list_episodes(
+            user_id,
+            limit=limit,
+            session_id=session_id,
+            workflow=workflow,
+            outcome=outcome,
+        )
+
+    def search_episodes(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+        session_id: str | None = None,
+    ) -> list[MemoryEpisode]:
+        return self.local.search_episodes(user_id, query, limit=limit, session_id=session_id)
+
     # -- reviews ------------------------------------------------------------
 
     def list_reviews(self, user_id: str) -> list[ReviewCard]:
@@ -152,6 +179,12 @@ class MemoryFacade:
             raise PermissionError(f"Note {note.id} does not belong to user {user_id}.")
         self.local.add_note(note)
         return note
+
+    def add_episode(self, episode: MemoryEpisode, *, user_id: str | None = None) -> MemoryEpisode:
+        if user_id is not None and episode.user_id != user_id:
+            raise PermissionError(f"Episode {episode.id} does not belong to user {user_id}.")
+        self.local.add_episode(episode)
+        return episode
 
     # -- updates ------------------------------------------------------------
 

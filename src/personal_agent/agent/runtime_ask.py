@@ -8,6 +8,7 @@ from uuid import uuid4
 from ..core.evidence import (
     ContextPack,
     EvidenceItem,
+    episodes_to_evidence,
     graph_result_to_evidence,
     notes_to_evidence,
     web_results_to_evidence,
@@ -286,6 +287,7 @@ class AskService:
             f"QueryPlan: sources={retrieval_plan.sources} parallel={retrieval_plan.parallel} "
             f"rewrite={effective_query[:60]} freshness={understanding.needs_freshness} "
             f"graph_reasoning={understanding.needs_graph_reasoning} "
+            f"episodic={understanding.needs_episodic_context} "
             f"filters={retrieval_plan.filters.model_dump(exclude_defaults=True)}"
         )
 
@@ -421,6 +423,25 @@ class AskService:
             )
         elif use_local:
             add_trace_step("本地检索未返回可回答证据")
+
+        if understanding.needs_episodic_context:
+            episodes = self.memory.search_episodes(
+                normalized_user,
+                effective_query,
+                limit=5,
+                session_id=normalized_session,
+            )
+            if not episodes:
+                episodes = self.memory.search_episodes(
+                    normalized_user,
+                    effective_query,
+                    limit=5,
+                )
+            if episodes:
+                all_evidence.extend(episodes_to_evidence(episodes))
+                add_trace_step(f"历史执行记录已进入统一证据池 episodes={len(episodes)}")
+            else:
+                add_trace_step("历史执行记录未返回可回答证据")
 
         # --- Proactive web retrieval joins the same pool before generation ---
         web_tried = False
@@ -778,6 +799,7 @@ class AskService:
                 "chunk": "原文片段",
                 "web": "网络搜索",
                 "tool": "工具结果",
+                "episode": "历史执行记录",
             }.get(item.source_type, item.source_type)
             title = item.title or item.metadata.get("source_node_name") or item.source_id or "无标题"
             content = item.fact or item.snippet or ""
@@ -830,7 +852,7 @@ class AskService:
 
         return (
             "你是个人知识库助手。请只基于下面统一证据池回答用户问题。"
-            "证据可能来自图谱事实、原文片段、个人笔记或网络搜索；需要区分个人知识库和网络来源。"
+            "证据可能来自图谱事实、原文片段、个人笔记、历史执行记录或网络搜索；需要区分个人知识库、执行历史和网络来源。"
             f"{_DIALOGUE_CONTEXT_POLICY}"
             "回答要求：先给直接结论，再补充必要说明；每个关键结论尽量标注证据编号，如 [E1]。"
             "如果证据不足或证据之间冲突，要明确说明，不要补空白。\n\n"

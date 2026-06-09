@@ -91,6 +91,10 @@ class QueryUnderstanding(BaseModel):
         default=False,
         description="True when the question requires multi-hop entity relationship reasoning.",
     )
+    needs_episodic_context: bool = Field(
+        default=False,
+        description="True when the question asks about prior runs, decisions, failures, or what the agent did before.",
+    )
     query_rewrite: str = Field(
         default="",
         description="Retrieval-optimized rewrite of the original question.",

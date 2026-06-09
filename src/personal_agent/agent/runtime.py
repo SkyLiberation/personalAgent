@@ -22,6 +22,7 @@ from ..tools import (
     build_web_search_tool,
 )
 from .entry_orchestrator import EntryOrchestrator
+from .episodic_memory import record_entry_episode
 from .nodes import digest_node
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
@@ -251,15 +252,19 @@ class AgentRuntime:
     # ---- entry orchestration (delegated to EntryOrchestrator) ----
 
     def execute_entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
-        return self._entry.execute_entry(entry_input, on_progress=on_progress)
+        result = self._entry.execute_entry(entry_input, on_progress=on_progress)
+        record_entry_episode(self.memory, result, entry_input)
+        return result
 
     def resume_entry(
         self, run_id: str, thread_id: str, decision: str, user_id: str,
         text: str | None = None, option_id: str | None = None,
     ) -> EntryResult:
-        return self._entry.resume_entry(
+        result = self._entry.resume_entry(
             run_id, thread_id, decision, user_id, text=text, option_id=option_id,
         )
+        record_entry_episode(self.memory, result)
+        return result
 
     def get_run_snapshot(self, run_id: str):
         return self._entry.get_run_snapshot(run_id)

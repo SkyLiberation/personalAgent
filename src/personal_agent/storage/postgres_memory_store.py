@@ -19,7 +19,7 @@ from ..core.embedding_trace import (
     traced_embedding,
 )
 from ..core.logging_utils import log_event
-from ..core.models import KnowledgeNote, ReviewCard, local_now
+from ..core.models import KnowledgeNote, MemoryEpisode, ReviewCard, local_now
 from ..core.projections import retrieval_document_from_note
 from ..core.query_understanding import RetrievalFilters
 from .postgres_common import PostgresStoreBase
@@ -52,6 +52,22 @@ def _search_text_for_note(note: KnowledgeNote) -> str:
         " ".join(str(value) for value in document.metadata.values() if value),
         document.source_fingerprint or "",
         document.content,
+    ]
+    return _compact_whitespace(" ".join(part for part in parts if part))
+
+
+def _search_text_for_episode(episode: MemoryEpisode) -> str:
+    parts = [
+        episode.title,
+        episode.summary,
+        episode.workflow,
+        episode.outcome,
+        episode.entry_text,
+        " ".join(episode.decisions),
+        " ".join(episode.open_items),
+        " ".join(episode.tool_refs),
+        " ".join(episode.note_refs),
+        " ".join(str(value) for value in episode.metadata.values() if value),
     ]
     return _compact_whitespace(" ".join(part for part in parts if part))
 
@@ -352,6 +368,41 @@ class PostgresMemoryStore(PostgresStoreBase):
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS review_cards_note_idx ON review_cards (note_id, due_at)"
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS memory_episodes (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL,
+                        thread_id TEXT NOT NULL,
+                        run_id TEXT NOT NULL,
+                        workflow TEXT NOT NULL,
+                        outcome TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        payload JSONB NOT NULL,
+                        search_text TEXT NOT NULL DEFAULT '',
+                        search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_episodes_user_idx ON memory_episodes (user_id, created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_episodes_thread_idx ON memory_episodes (thread_id, created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_episodes_workflow_idx ON memory_episodes (user_id, workflow, created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_episodes_search_vector_idx ON memory_episodes USING GIN (search_vector)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_episodes_search_text_trgm_idx ON memory_episodes USING GIN (search_text gin_trgm_ops)"
+                )
             conn.commit()
         self._initialized = True
 
@@ -424,6 +475,151 @@ class PostgresMemoryStore(PostgresStoreBase):
                     (review.id, review.note_id, Jsonb(review.model_dump(mode="json")), review.due_at),
                 )
             conn.commit()
+
+    def add_episode(self, episode: MemoryEpisode) -> None:
+        self.ensure_schema()
+        search_text = _search_text_for_episode(episode)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO memory_episodes
+                        (
+                            id, user_id, session_id, thread_id, run_id, workflow, outcome,
+                            title, summary, payload, search_text, search_vector, created_at, updated_at
+                        )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, to_tsvector('simple', %s), %s, %s
+                    )
+                    ON CONFLICT (id) DO UPDATE SET
+                        user_id = EXCLUDED.user_id,
+                        session_id = EXCLUDED.session_id,
+                        thread_id = EXCLUDED.thread_id,
+                        run_id = EXCLUDED.run_id,
+                        workflow = EXCLUDED.workflow,
+                        outcome = EXCLUDED.outcome,
+                        title = EXCLUDED.title,
+                        summary = EXCLUDED.summary,
+                        payload = EXCLUDED.payload,
+                        search_text = EXCLUDED.search_text,
+                        search_vector = EXCLUDED.search_vector,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        episode.id,
+                        episode.user_id,
+                        episode.session_id,
+                        episode.thread_id,
+                        episode.run_id,
+                        episode.workflow,
+                        episode.outcome,
+                        episode.title,
+                        episode.summary,
+                        Jsonb(episode.model_dump(mode="json")),
+                        search_text,
+                        search_text,
+                        episode.created_at,
+                        episode.updated_at,
+                    ),
+                )
+            conn.commit()
+
+    def list_episodes(
+        self,
+        user_id: str,
+        *,
+        limit: int = 50,
+        session_id: str | None = None,
+        workflow: str | None = None,
+        outcome: str | None = None,
+    ) -> list[MemoryEpisode]:
+        self.ensure_schema()
+        clauses = ["user_id = %s"]
+        params: list[object] = [user_id]
+        if session_id:
+            clauses.append("session_id = %s")
+            params.append(session_id)
+        if workflow:
+            clauses.append("workflow = %s")
+            params.append(workflow)
+        if outcome:
+            clauses.append("outcome = %s")
+            params.append(outcome)
+        params.append(max(1, limit))
+        where_sql = " AND ".join(clauses)
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM memory_episodes
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                return [MemoryEpisode.model_validate(row["payload"]) for row in cur.fetchall()]
+
+    def search_episodes(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+        session_id: str | None = None,
+    ) -> list[MemoryEpisode]:
+        self.ensure_schema()
+        normalized_query = _compact_whitespace(query)
+        if not normalized_query:
+            return self.list_episodes(user_id, limit=limit, session_id=session_id)
+        terms = _query_terms(normalized_query)
+        patterns = [f"%{term}%" for term in terms[:12]] or [f"%{normalized_query}%"]
+        clauses = ["user_id = %s"]
+        params: list[object] = [user_id]
+        if session_id:
+            clauses.append("session_id = %s")
+            params.append(session_id)
+        where_sql = " AND ".join(clauses)
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    WITH q AS (
+                        SELECT plainto_tsquery('simple', %s) AS tsq
+                    )
+                    SELECT payload,
+                           (
+                               CASE WHEN search_vector @@ q.tsq THEN ts_rank_cd(search_vector, q.tsq) * 6 ELSE 0 END
+                               + similarity(search_text, %s) * 3
+                               + CASE WHEN lower(title) LIKE ANY(%s) THEN 4 ELSE 0 END
+                               + CASE WHEN lower(summary) LIKE ANY(%s) THEN 2 ELSE 0 END
+                               + CASE WHEN lower(search_text) LIKE ANY(%s) THEN 1 ELSE 0 END
+                           ) AS score
+                    FROM memory_episodes, q
+                    WHERE {where_sql}
+                      AND (
+                          search_vector @@ q.tsq
+                          OR search_text %% %s
+                          OR lower(search_text) LIKE ANY(%s)
+                      )
+                    ORDER BY score DESC, created_at DESC
+                    LIMIT %s
+                    """,
+                    (
+                        normalized_query,
+                        normalized_query.lower(),
+                        patterns,
+                        patterns,
+                        patterns,
+                        *params,
+                        normalized_query.lower(),
+                        patterns,
+                        max(1, limit),
+                    ),
+                )
+                rows = cur.fetchall()
+        return [MemoryEpisode.model_validate(row["payload"]) for row in rows]
 
     def list_notes(self, user_id: str, *, include_chunks: bool = True) -> list[KnowledgeNote]:
         self.ensure_schema()
@@ -789,11 +985,14 @@ class PostgresMemoryStore(PostgresStoreBase):
                     removed_reviews = 0
                 cur.execute("DELETE FROM knowledge_notes WHERE user_id = %s", (user_id,))
                 removed_notes = cur.rowcount or 0
+                cur.execute("DELETE FROM memory_episodes WHERE user_id = %s", (user_id,))
+                removed_episodes = cur.rowcount or 0
             conn.commit()
         removed_uploads = self._remove_uploads(notes) if remove_uploaded_files else 0
         return {
             "notes": int(removed_notes),
             "reviews": int(removed_reviews),
+            "episodes": int(removed_episodes),
             "conversations": 0,
             "uploads": removed_uploads,
         }

@@ -146,15 +146,15 @@ def create_app() -> FastAPI:
         result = service.execute_tool(name, **body.kwargs)
         return {"ok": result.get("ok", False), "data": result.get("data"), "error": result.get("error")}
 
-    @app.get("/api/notes", response_model=list[KnowledgeNote])
+    @app.get("/api/notes", response_model=list[dict[str, object]])
     def list_notes(
         request: Request,
         user_id: str | None = None,
         flat: bool = False,
-    ) -> list[KnowledgeNote]:
+    ) -> list[dict[str, object]]:
         resolved_user = user_id or _get_user_id(request, settings)
         logger.info("Listing notes for user=%s flat=%s", resolved_user, flat)
-        return service.memory.list_notes(resolved_user, include_chunks=not flat)
+        return [_note_response(note) for note in service.memory.list_notes(resolved_user, include_chunks=not flat)]
 
     @app.get("/api/digest", response_model=DigestResponse)
     def get_digest(request: Request, user_id: str | None = None) -> DigestResponse:
@@ -579,6 +579,22 @@ def create_app() -> FastAPI:
             return FileResponse(frontend_dist / "index.html")
 
     return app
+
+
+def _note_response(note: KnowledgeNote) -> dict[str, object]:
+    payload = note.model_dump(mode="json")
+    payload.update({
+        "title": note.title,
+        "content": note.content,
+        "summary": note.summary,
+        "source_type": note.source_type,
+        "source_ref": note.source_ref,
+        "source_fingerprint": note.source_fingerprint,
+        "parent_note_id": note.parent_note_id,
+        "chunk_index": note.chunk_index,
+        "source_span": note.source_span,
+    })
+    return payload
 
 
 def _frontend_dist_dir() -> Path:

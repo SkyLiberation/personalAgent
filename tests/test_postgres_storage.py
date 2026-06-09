@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from personal_agent.core.models import ReviewCard
+from personal_agent.core.models import MemoryEpisode, ReviewCard
 from personal_agent.core.query_understanding import RetrievalFilters
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
@@ -331,3 +331,35 @@ def test_find_similar_notes_emits_retrieval_metrics(temp_dir: Path, monkeypatch)
     assert retrieval_events[-1]["result_count"] == len(matches)
     assert retrieval_events[-1]["filters_active"] is False
     store.clear_user_data(user_id, remove_uploaded_files=False)
+
+
+def test_memory_episodes_are_persisted_and_searchable(temp_dir: Path):
+    user_id = _user()
+    store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
+    episode = MemoryEpisode(
+        id=f"episode:{uuid4().hex}",
+        user_id=user_id,
+        session_id="s1",
+        thread_id=f"{user_id}:s1",
+        run_id="run-episode-search",
+        workflow="delete_knowledge",
+        title="删除知识: Graphiti 清理",
+        summary="用户确认删除 Graphiti 笔记，并清理图谱 episode。",
+        outcome="completed",
+        entry_text="删除 Graphiti 笔记",
+        decisions=["识别意图为 delete_knowledge，风险 high"],
+        tool_refs=["delete_note"],
+        note_refs=["note-graphiti"],
+    )
+
+    store.add_episode(episode)
+
+    listed = store.list_episodes(user_id, session_id="s1")
+    matches = store.search_episodes(user_id, "上次删除 Graphiti 做了什么", session_id="s1")
+
+    assert listed[0].id == episode.id
+    assert matches
+    assert matches[0].id == episode.id
+
+    result = store.clear_user_data(user_id, remove_uploaded_files=False)
+    assert result["episodes"] == 1

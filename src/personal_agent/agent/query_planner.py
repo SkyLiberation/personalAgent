@@ -25,6 +25,7 @@ Given a user question (and optional conversation context), produce a JSON object
 - needs_freshness (bool): true if the question asks about latest/current/recent/today information
 - needs_personal_memory (bool): true if the question references personal notes, prior knowledge, or things the user previously captured
 - needs_graph_reasoning (bool): true if the question requires multi-hop entity relationship reasoning (e.g. "how does A relate to B", "what connects X and Y")
+- needs_episodic_context (bool): true if the question asks what happened in prior agent runs/workflows, what was changed, why a previous decision was made, what remains unfinished, or asks to continue a previous task
 - query_rewrite (string): rewrite the question into a concise, keyword-rich retrieval query. Remove filler words, resolve pronouns from context, expand abbreviations. If the question is already retrieval-friendly, return it unchanged.
 - sub_queries (string[]): if the question is compound or multi-hop, decompose into 2-3 independent sub-queries. Otherwise empty array.
 - filters (object): structured metadata filters. Use only when the user explicitly asks for a time/source/tag/file constraint.
@@ -47,6 +48,7 @@ _PLANNER_SCHEMA = {
         "needs_freshness": {"type": "boolean"},
         "needs_personal_memory": {"type": "boolean"},
         "needs_graph_reasoning": {"type": "boolean"},
+        "needs_episodic_context": {"type": "boolean"},
         "query_rewrite": {"type": "string"},
         "sub_queries": {"type": "array", "items": {"type": "string"}},
         "filters": {
@@ -80,6 +82,7 @@ _PLANNER_SCHEMA = {
         "needs_freshness",
         "needs_personal_memory",
         "needs_graph_reasoning",
+        "needs_episodic_context",
         "query_rewrite",
         "sub_queries",
         "filters",
@@ -104,6 +107,7 @@ def plan_retrieval(
         logger.warning("Query planner failed, using default plan: %s", exc)
         understanding = QueryUnderstanding(
             needs_personal_memory=True,
+            needs_episodic_context=_looks_like_episodic_query(question),
             query_rewrite=question,
             filters=_heuristic_filters(question),
         )
@@ -236,6 +240,9 @@ def _derive_plan(question: str, understanding: QueryUnderstanding) -> RetrievalP
         sources.append("graph")
         sources.append("local")
 
+    if understanding.needs_episodic_context and "local" not in sources:
+        sources.append("local")
+
     if understanding.needs_freshness or understanding.answer_policy == "allow_web":
         sources.append("web")
 
@@ -257,6 +264,16 @@ def _derive_plan(question: str, understanding: QueryUnderstanding) -> RetrievalP
         sub_queries=understanding.sub_queries,
         filters=understanding.filters,
     )
+
+
+def _looks_like_episodic_query(question: str) -> bool:
+    markers = (
+        "上次", "之前", "刚才", "当时", "历史", "做过", "做了什么", "改了什么",
+        "为什么这么", "为什么当时", "继续", "进展", "做到哪", "失败在哪里",
+        "未完成", "遗留", "run", "workflow",
+    )
+    lowered = question.lower()
+    return any(marker in question or marker in lowered for marker in markers)
 
 
 def _heuristic_filters(question: str) -> RetrievalFilters:

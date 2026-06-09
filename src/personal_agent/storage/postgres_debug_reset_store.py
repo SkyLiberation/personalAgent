@@ -8,6 +8,7 @@ from .postgres_common import PostgresStoreBase
 
 _NAMED_TABLES = {
     "knowledge_notes": "notes",
+    "memory_episodes": "episodes",
     "review_cards": "reviews",
     "checkpoints": "checkpoints",
     "checkpoint_blobs": "checkpoint_blobs",

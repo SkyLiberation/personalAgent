@@ -23,7 +23,7 @@ def _run_local_pipeline(state: AgentState, store, service: PreExtractService) ->
     plumbing they don't exercise.
     """
     pipeline = object.__new__(IngestionPipeline)
-    pipeline.store = store
+    pipeline.memory = store
     pipeline.preextract_service = service
     return pipeline._run_local_pipeline(state)
 

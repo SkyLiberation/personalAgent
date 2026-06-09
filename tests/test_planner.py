@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from personal_agent.agent.planner import DefaultTaskPlanner, PlanStep
@@ -71,10 +69,10 @@ class TestPlannerEnrichedSteps:
             assert hasattr(s, "on_failure")
             assert hasattr(s, "status")
 
-    def test_planner_generates_but_does_not_execute_documented(self):
-        """Baseline: planner generates PlanStep objects but they are not
-        consumed by entry nodes or graph execution. This test documents the
-        current Phase 2 behavior — plan execution will be added in later phases.
+    def test_planner_projects_workflow_deterministically(self):
+        """The planner projects a fixed WorkflowSpec into PlanStep objects with
+        no LLM call. Projection is deterministic: the same intent always yields
+        the same topology, every step starting in ``planned`` status.
         """
         from personal_agent.core.config import OpenAIConfig, Settings
 
@@ -85,7 +83,7 @@ class TestPlannerEnrichedSteps:
         assert len(steps) == 4
         for s in steps:
             assert isinstance(s, PlanStep)
-            assert s.action_type in {"retrieve", "tool_call", "compose", "verify"}
+            assert s.action_type in {"retrieve", "resolve", "tool_call", "compose", "verify"}
             assert s.status == "planned"
 
 
@@ -315,70 +313,46 @@ class TestPlannerValidatorRoundtrip:
         assert any("note_id" in issue for issue in result.issues)
 
 
-class TestPlannerLlmContract:
-    def test_llm_plan_parses_object_contract_and_react_fields(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+class TestWorkflowRegistry:
+    def test_delete_knowledge_requires_projection(self):
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-        request: dict[str, object] = {}
+        spec = WORKFLOW_REGISTRY.select("delete_knowledge")
+        assert spec.requires_projection is True
+        assert spec.intent == "delete_knowledge"
 
-        class FakeOpenAI:
-            def __init__(self, **_kwargs):
-                self.chat = SimpleNamespace(
-                    completions=SimpleNamespace(create=self._create)
-                )
+    def test_solidify_requires_projection(self):
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-            def _create(self, **kwargs):
-                request.update(kwargs)
-                return SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(content=(
-                        '{"steps":['
-                        '{"step_id":"del-1","action_type":"retrieve","description":"检索候选",'
-                        '"tool_name":null,"tool_input":{},"depends_on":[],'
-                        '"risk_level":"low","requires_confirmation":false,"on_failure":"retry",'
-                        '"execution_mode":"react","allowed_tools":["graph_search"],"max_iterations":2},'
-                        '{"step_id":"del-2","action_type":"resolve","description":"定位目标",'
-                        '"tool_name":null,"tool_input":{},"depends_on":["del-1"],'
-                        '"risk_level":"low","requires_confirmation":false,"on_failure":"abort"},'
-                        '{"step_id":"del-3","action_type":"tool_call","description":"请求确认删除",'
-                        '"tool_name":"delete_note","tool_input":{},"depends_on":["del-2"],'
-                        '"risk_level":"high","requires_confirmation":true,"on_failure":"abort"},'
-                        '{"step_id":"del-4","action_type":"compose","description":"汇总结果",'
-                        '"tool_name":null,"tool_input":{},"depends_on":["del-3"],'
-                        '"risk_level":"low","requires_confirmation":false,"on_failure":"skip"}'
-                        ']}'
-                    )))]
-                )
+        spec = WORKFLOW_REGISTRY.select("solidify_conversation")
+        assert spec.requires_projection is True
 
-        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
-        planner = DefaultTaskPlanner(
-            Settings(openai=OpenAIConfig(api_key="k", base_url="http://llm", small_model="small"))
-        )
+    def test_branch_workflows_do_not_require_projection(self):
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-        steps = planner.plan("delete_knowledge", "删除 DNS 笔记")
+        for intent in ("ask", "capture_text", "summarize_thread", "direct_answer"):
+            assert WORKFLOW_REGISTRY.select(intent).requires_projection is False
 
-        assert request["response_format"] == {"type": "json_object"}
-        assert steps[0].execution_mode == "react"
-        assert steps[0].allowed_tools == ["graph_search"]
-        assert steps[0].max_iterations == 2
+    def test_unknown_intent_falls_back_to_unknown_spec(self):
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-    def test_llm_array_output_falls_back_to_safe_workflow(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        spec = WORKFLOW_REGISTRY.select("does-not-exist")
+        assert spec.intent == "unknown"
 
-        class FakeOpenAI:
-            def __init__(self, **_kwargs):
-                self.chat = SimpleNamespace(
-                    completions=SimpleNamespace(
-                        create=lambda **_kwargs: SimpleNamespace(
-                            choices=[SimpleNamespace(message=SimpleNamespace(content="[]"))]
-                        )
-                    )
-                )
+    def test_projections_are_independent(self):
+        """Each projection returns fresh steps so concurrent runs never share
+        mutable execution state.
+        """
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
-        planner = DefaultTaskPlanner(
-            Settings(openai=OpenAIConfig(api_key="k", base_url="http://llm", small_model="small"))
-        )
-
-        steps = planner.plan("solidify_conversation", "固化该结论")
-
-        assert [step.action_type for step in steps] == ["compose", "tool_call"]
+        first = WORKFLOW_REGISTRY.project("delete_knowledge")
+        second = WORKFLOW_REGISTRY.project("delete_knowledge")
+        assert [s.step_id for s in first] == [s.step_id for s in second]
+        # Mutating one projection must not leak into the next.
+        first[0].status = "running"
+        first[2].tool_input["note_id"] = "n-1"
+        assert second[0].status == "planned"
+        assert "note_id" not in second[2].tool_input
+        third = WORKFLOW_REGISTRY.project("delete_knowledge")
+        assert third[0].status == "planned"
+        assert "note_id" not in third[2].tool_input

@@ -41,7 +41,13 @@
       "Bash(python -c \"from personal_agent.agent.runtime import AgentRuntime, _interrupt_payload_from_result, _best_snippet; print\\('runtime imports OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('src/personal_agent/agent/runtime_admin.py',encoding='utf-8'\\).read\\(\\)\\); print\\('admin OK'\\)\")",
       "Bash(python -c \"import personal_agent.agent.runtime; import personal_agent.agent.entry_orchestrator; import personal_agent.agent.runtime_admin; from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids; print\\('all modules import OK'\\)\")",
-      "Bash(python -m pytest tests/test_orchestration.py tests/test_agent_flows.py tests/test_api.py tests/test_runtime_helpers.py tests/test_runtime_llm.py tests/test_unified_prompt_gating.py tests/test_short_term_context.py -q)"
+      "Bash(python -m pytest tests/test_orchestration.py tests/test_agent_flows.py tests/test_api.py tests/test_runtime_helpers.py tests/test_runtime_llm.py tests/test_unified_prompt_gating.py tests/test_short_term_context.py -q)",
+      "Bash(python -m pytest tests/test_planner.py -q)",
+      "Bash(python -m pytest tests/test_orchestration.py tests/test_agent_flows.py -q)",
+      "Bash(python -m pytest tests/test_orchestration.py tests/test_agent_flows.py tests/test_planner.py -p no:cacheprovider -q)",
+      "Bash(grep -rn \"_plan_with_llm\\\\|capture_planner_llm\\\\|prompt_name=\\\\\"planner\\\\\"\" src/)",
+      "Bash(grep -n \"traced_chat_completion\\\\|log_llm_parse\" src/personal_agent/agent/planner.py)",
+      "Bash(python -m pytest \"tests/test_orchestration.py::TestDialogueMessageRendering::test_dialogue_messages_keep_recent_visible_turns\" \"tests/test_orchestration.py::TestPhase3InterruptResumeIntegration::test_interrupt_payload_is_read_from_invoke_result\" tests/test_short_term_context.py tests/test_planner.py -p no:cacheprovider -q)"
     ]
   }
 }

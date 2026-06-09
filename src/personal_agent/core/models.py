@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -254,6 +254,32 @@ class KnowledgeNote(BaseModel):
     @preextract_topic.setter
     def preextract_topic(self, value: str | None) -> None:
         self.preextract.topic = value
+
+
+MemoryKind = Literal["semantic", "episodic", "procedural", "reflection"]
+EpisodeOutcome = Literal["completed", "failed", "waiting_confirmation", "cancelled"]
+
+
+class MemoryEpisode(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    memory_type: MemoryKind = "episodic"
+    user_id: str = "default"
+    session_id: str = "default"
+    thread_id: str = ""
+    run_id: str = ""
+    workflow: EntryIntent = "unknown"
+    title: str = ""
+    summary: str = ""
+    outcome: EpisodeOutcome = "completed"
+    entry_text: str = ""
+    decisions: list[str] = Field(default_factory=list)
+    open_items: list[str] = Field(default_factory=list)
+    event_refs: list[str] = Field(default_factory=list)
+    tool_refs: list[str] = Field(default_factory=list)
+    note_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=local_now)
+    updated_at: datetime = Field(default_factory=local_now)
 
 
 class ReviewCard(BaseModel):

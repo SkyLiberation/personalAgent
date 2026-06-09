@@ -163,6 +163,28 @@ class TestAnswerVerifier:
         assert result.claim_checks[0].status == "contradicted"
         assert result.issues
 
+    def test_episode_evidence_is_sufficient_for_history_question(self):
+        verifier = AnswerVerifier()
+        evidence = [
+            EvidenceItem(
+                source_type="episode",
+                source_id="episode:run-1",
+                title="删除知识",
+                snippet="用户请求删除 Graphiti 笔记，结果是已删除笔记并清理图谱映射。",
+            )
+        ]
+
+        result = verifier.verify(
+            "上次删除 Graphiti 做了什么",
+            "上次删除 Graphiti 时，系统删除了对应笔记并清理了图谱映射。",
+            [],
+            [],
+            evidence=evidence,
+        )
+
+        assert result.sufficient is True
+        assert not any("未命中" in warning for warning in result.warnings)
+
 
 class TestAnswerVerifierWebCitations:
     """Web citation scoring (source_type="web") regression coverage."""

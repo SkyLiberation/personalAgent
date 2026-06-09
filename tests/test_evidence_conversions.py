@@ -3,11 +3,12 @@ from __future__ import annotations
 from personal_agent.core.evidence import (
     EvidenceItem,
     evidence_to_citations,
+    episodes_to_evidence,
     graph_result_to_evidence,
     notes_to_evidence,
     web_results_to_evidence,
 )
-from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.models import Citation, KnowledgeNote, MemoryEpisode
 from personal_agent.graphiti.reranker import GraphCitationHit
 from personal_agent.graphiti.store import (
     GraphAskResult,
@@ -146,6 +147,32 @@ class TestWebResultsToEvidence:
         results = [{"title": "OK", "url": "https://x.com", "snippet": "s"}, "not a dict"]
         items = web_results_to_evidence(results)
         assert len(items) == 1
+
+
+class TestEpisodesToEvidence:
+    def test_basic_conversion(self):
+        episode = MemoryEpisode(
+            id="episode:run-1",
+            user_id="u1",
+            session_id="s1",
+            thread_id="u1:s1",
+            run_id="run-1",
+            workflow="solidify_conversation",
+            title="固化对话",
+            summary="把当前会话沉淀为笔记。",
+            decisions=["识别意图为 solidify_conversation"],
+            open_items=["等待用户补充"],
+            tool_refs=["capture_text"],
+            note_refs=["note-1"],
+        )
+
+        items = episodes_to_evidence([episode])
+
+        assert len(items) == 1
+        assert items[0].source_type == "episode"
+        assert items[0].source_id == "episode:run-1"
+        assert items[0].metadata["workflow"] == "solidify_conversation"
+        assert items[0].metadata["note_refs"] == ["note-1"]
 
 
 class TestEvidenceToCitations:

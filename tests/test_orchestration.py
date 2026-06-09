@@ -156,8 +156,15 @@ class TestDialogueMessageRendering:
 
         rendered = _dialogue_prompt_messages(messages)
 
+        # 最近一条助手消息必须原样保留在窗口末尾。
         assert rendered[-1] == {"role": "assistant", "content": "最新更正：使用新集群"}
-        assert rendered[0]["content"].startswith("old-0-")
+        # token 预算会淘汰最早的若干轮，但保留的是最近的连续后缀且按时序排列。
+        assert len(rendered) < len(messages)
+        kept_old = [m["content"] for m in rendered if m["content"].startswith("old-")]
+        kept_indices = [int(c.split("-")[1]) for c in kept_old]
+        assert kept_indices == sorted(kept_indices)  # 时序保持
+        assert kept_indices[-1] == 7  # 最近的可见轮被保留
+        assert kept_indices[0] > 0  # 最早的轮在预算下被淘汰
 
 
 class TestNormalizeEntry:
@@ -1240,7 +1247,7 @@ class TestPhase3InterruptResumeIntegration:
 
     def test_interrupt_payload_is_read_from_invoke_result(self):
         """LangGraph exposes interrupt payloads through the invoke result."""
-        from personal_agent.agent.runtime import _interrupt_payload_from_result
+        from personal_agent.agent.entry_orchestrator import _interrupt_payload_from_result
 
         class _Interrupt:
             value = {"step_id": "s1", "message": "确认？"}

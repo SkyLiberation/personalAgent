@@ -124,6 +124,7 @@ class AnswerVerifier:
             graph_facts = [e for e in evidence if getattr(e, "source_type", None) == "graph_fact"]
             note_evidence = [e for e in evidence if getattr(e, "source_type", None) in ("note", "chunk")]
             web_evidence = [e for e in evidence if getattr(e, "source_type", None) == "web"]
+            episode_evidence = [e for e in evidence if getattr(e, "source_type", None) == "episode"]
 
             orphan_facts = [e for e in graph_facts if getattr(e, "metadata", {}).get("orphan") is True]
             anchored_facts = len(graph_facts) - len(orphan_facts)
@@ -142,6 +143,9 @@ class AnswerVerifier:
             if web_evidence and len(web_evidence) >= 2:
                 score += 0.05
 
+            if episode_evidence:
+                score += 0.32 if len(episode_evidence) >= 2 else 0.25
+
         # 2f. Answer content checks
         answer_empty = not answer or not answer.strip()
         if answer_empty:
@@ -156,12 +160,14 @@ class AnswerVerifier:
                     break
 
             # Answer length sanity — very short answers with evidence are suspicious
-            if len(answer) < 20 and (match_count > 0 or valid_web_count > 0):
-                warnings.append("回答过短但存在匹配笔记或网络结果，可能未充分使用证据。")
+            has_episode_evidence = bool(evidence and any(getattr(e, "source_type", None) == "episode" for e in evidence))
+            if len(answer) < 20 and (match_count > 0 or valid_web_count > 0 or has_episode_evidence):
+                warnings.append("回答过短但存在匹配笔记、历史执行记录或网络结果，可能未充分使用证据。")
 
         # 3. Question-keyword coverage (lightweight sanity)
-        if match_count == 0 and valid_web_count == 0:
-            warnings.append("未命中任何知识库笔记或网络结果，回答可能缺乏依据。")
+        has_episode_evidence = bool(evidence and any(getattr(e, "source_type", None) == "episode" for e in evidence))
+        if match_count == 0 and valid_web_count == 0 and not has_episode_evidence:
+            warnings.append("未命中任何知识库笔记、历史执行记录或网络结果，回答可能缺乏依据。")
             score = min(score, 0.15)
 
         # 4. Claim-level grounding against the selected evidence.
@@ -229,18 +235,21 @@ def _verify_claims(answer: str, evidence: list) -> list[ClaimVerification]:
         best_overlap = 0
         best_ids: list[str] = []
         best_text = ""
-        for evidence_id, text in evidence_items:
+        best_source_type = ""
+        for evidence_id, text, source_type in evidence_items:
             evidence_terms = _terms(text)
             overlap = len(claim_terms & evidence_terms)
             if overlap > best_overlap:
                 best_overlap = overlap
                 best_ids = [evidence_id]
                 best_text = text
+                best_source_type = source_type
             elif overlap == best_overlap and overlap > 0:
                 best_ids.append(evidence_id)
         support_threshold = max(2, min(5, len(claim_terms) // 3))
         coverage = best_overlap / max(len(claim_terms), 1)
-        if best_overlap >= support_threshold and coverage >= 0.45:
+        coverage_threshold = 0.35 if best_source_type == "episode" else 0.45
+        if best_overlap >= support_threshold and coverage >= coverage_threshold:
             status = "supported"
             reason = f"overlap={best_overlap}/{len(claim_terms)}, coverage={coverage:.2f}"
             if _negation_mismatch(claim, best_text):
@@ -280,8 +289,9 @@ def _extract_claims(answer: str, limit: int = 8) -> list[str]:
     return claims
 
 
-def _evidence_record(item) -> tuple[str, str]:
+def _evidence_record(item) -> tuple[str, str, str]:
     evidence_id = str(getattr(item, "evidence_id", "") or getattr(item, "source_id", "") or "")
+    source_type = str(getattr(item, "source_type", "") or "")
     parts = [
         str(getattr(item, "title", "") or ""),
         str(getattr(item, "fact", "") or ""),
@@ -290,7 +300,7 @@ def _evidence_record(item) -> tuple[str, str]:
     metadata = getattr(item, "metadata", {}) or {}
     if isinstance(metadata, dict):
         parts.extend(str(value) for value in metadata.values() if isinstance(value, str))
-    return evidence_id, " ".join(parts)
+    return evidence_id, " ".join(parts), source_type
 
 
 def _terms(text: str) -> set[str]:

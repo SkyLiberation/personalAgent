@@ -12,6 +12,7 @@ class TestQueryUnderstandingModel:
         assert qu.needs_freshness is False
         assert qu.needs_personal_memory is True
         assert qu.needs_graph_reasoning is False
+        assert qu.needs_episodic_context is False
         assert qu.query_rewrite == ""
         assert qu.sub_queries == []
         assert qu.filters.active() is False
@@ -22,6 +23,7 @@ class TestQueryUnderstandingModel:
             "needs_freshness": True,
             "needs_personal_memory": False,
             "needs_graph_reasoning": True,
+            "needs_episodic_context": True,
             "query_rewrite": "FastAPI dependency injection mechanism",
             "sub_queries": ["What is FastAPI DI", "How does Depends work"],
             "answer_policy": "allow_web",
@@ -29,6 +31,7 @@ class TestQueryUnderstandingModel:
         qu = QueryUnderstanding(**data)
         assert qu.needs_freshness is True
         assert qu.needs_graph_reasoning is True
+        assert qu.needs_episodic_context is True
         assert qu.sub_queries == ["What is FastAPI DI", "How does Depends work"]
 
 
@@ -99,6 +102,17 @@ class TestDerivePlan:
         assert "graph" in plan.sources
         assert "local" in plan.sources
 
+    def test_episodic_question_keeps_local_source(self) -> None:
+        qu = QueryUnderstanding(
+            needs_personal_memory=False,
+            needs_graph_reasoning=False,
+            needs_episodic_context=True,
+            query_rewrite="上次删除 Graphiti 做了什么",
+        )
+        plan = _derive_plan("上次删除 Graphiti 做了什么", qu)
+        assert plan.sources == ["local"]
+        assert plan.parallel is False
+
     def test_no_parallel_when_only_graph(self) -> None:
         qu = QueryUnderstanding(
             needs_personal_memory=False,
@@ -129,7 +143,7 @@ def test_call_planner_llm_prefers_langextract_json_schema(monkeypatch) -> None:
     class FakeMessage:
         content = (
             '{"needs_freshness":false,"needs_personal_memory":true,'
-            '"needs_graph_reasoning":false,"query_rewrite":"redis cache",'
+            '"needs_graph_reasoning":false,"needs_episodic_context":false,"query_rewrite":"redis cache",'
             '"sub_queries":[],"filters":{"source_types":[],'
             '"source_ref_contains":"","tags":[],"created_after":"",'
             '"created_before":"","metadata_contains":"","parent_note_id":""},'
@@ -177,6 +191,7 @@ def test_call_planner_llm_prefers_langextract_json_schema(monkeypatch) -> None:
         "needs_freshness",
         "needs_personal_memory",
         "needs_graph_reasoning",
+        "needs_episodic_context",
         "query_rewrite",
         "sub_queries",
         "filters",

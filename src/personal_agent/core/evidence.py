@@ -12,14 +12,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .models import Citation, KnowledgeNote
+from .models import Citation, KnowledgeNote, MemoryEpisode
 from .projections import EvidenceSource, evidence_source_from_note
 from .graph_results import GraphAskResult
 
 
 class EvidenceItem(BaseModel):
     evidence_id: str = Field(default_factory=lambda: uuid4().hex[:12])
-    source_type: Literal["graph_fact", "note", "chunk", "web", "tool"]
+    source_type: Literal["graph_fact", "note", "chunk", "web", "tool", "episode"]
     source_id: str = ""
     title: str = ""
     snippet: str = ""
@@ -97,7 +97,7 @@ def select_ranked_evidence(
 
     for item in ranked:
         diversity_key = (item.evidence.source_type, item.evidence.source_id or item.evidence.url or item.evidence.title)
-        duplicate_source = diversity_key in seen_sources and item.evidence.source_type in {"note", "chunk", "web"}
+        duplicate_source = diversity_key in seen_sources and item.evidence.source_type in {"note", "chunk", "web", "episode"}
         would_fit = used_chars + item.estimated_chars <= char_budget
         must_select_first = not selected
         if len(selected) < max_items and (would_fit or must_select_first) and not duplicate_source:
@@ -156,6 +156,7 @@ def _rank_evidence_item(question: str, item: EvidenceItem) -> RankedEvidence:
         "note": 0.18,
         "graph_fact": 0.16,
         "web": 0.14,
+        "episode": 0.13,
         "tool": 0.10,
     }.get(item.source_type, 0.0)
     score += source_weight
@@ -375,6 +376,37 @@ def web_results_to_evidence(results: list[dict]) -> list[EvidenceItem]:
             metadata={
                 "source": r.get("source", ""),
                 "published_at": r.get("published_at"),
+            },
+        ))
+    return items
+
+
+def episodes_to_evidence(episodes: list[MemoryEpisode]) -> list[EvidenceItem]:
+    """Convert workflow/run episodes to historical-intent evidence."""
+    items: list[EvidenceItem] = []
+    for episode in episodes:
+        snippet_parts = [episode.summary]
+        if episode.decisions:
+            snippet_parts.append("决策: " + "；".join(episode.decisions[:3]))
+        if episode.open_items:
+            snippet_parts.append("未完成: " + "；".join(episode.open_items[:3]))
+        items.append(EvidenceItem(
+            source_type="episode",
+            source_id=episode.id,
+            title=episode.title,
+            snippet="\n".join(part for part in snippet_parts if part),
+            score=0.6,
+            metadata={
+                "run_id": episode.run_id,
+                "thread_id": episode.thread_id,
+                "session_id": episode.session_id,
+                "workflow": episode.workflow,
+                "outcome": episode.outcome,
+                "entry_text": episode.entry_text,
+                "event_refs": episode.event_refs,
+                "tool_refs": episode.tool_refs,
+                "note_refs": episode.note_refs,
+                **episode.metadata,
             },
         ))
     return items
