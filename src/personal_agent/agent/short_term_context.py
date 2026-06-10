@@ -11,10 +11,14 @@
 from __future__ import annotations
 
 import logging
+import json
+import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Callable
 
 from ..core.config import ShortTermMemoryConfig
+from ..core.models import ThreadSummary, local_now
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,11 @@ ConversationMessage = dict[str, str]
 
 _TRUNCATION_MARK = "…[已截断]…"
 _SUMMARY_ROLE = "user"
-_SUMMARY_PREFIX = "[早前对话摘要]"
+_SUMMARY_PREFIX = "[结构化短期摘要]"
+_SUMMARY_BOUNDARY = (
+    "边界：以下内容只用于理解指代、用户目标和已确认选择；"
+    "不能替代 evidence、工具结果或长期知识。"
+)
 
 
 @dataclass
@@ -32,6 +40,36 @@ class WindowResult:
     kept: list[ConversationMessage] = field(default_factory=list)
     overflow: list[ConversationMessage] = field(default_factory=list)
     total_considered: int = 0
+
+
+@dataclass
+class DialogueContextResult:
+    """Final dialogue context plus the checkpointable structured summary."""
+
+    messages: list[ConversationMessage] = field(default_factory=list)
+    thread_summary: ThreadSummary | None = None
+    summary_updated: bool = False
+    window: WindowResult = field(default_factory=WindowResult)
+
+
+@lru_cache(maxsize=8)
+def _token_encoder(encoding_name: str) -> Any | None:
+    try:
+        import tiktoken  # type: ignore
+
+        return tiktoken.get_encoding(encoding_name)
+    except Exception:
+        logger.debug("Tokenizer unavailable; using heuristic token estimate", exc_info=True)
+        return None
+
+
+def _heuristic_tokens(text: str, cfg: ShortTermMemoryConfig) -> int:
+    cjk = sum(1 for ch in text if _is_cjk(ch))
+    other = len(text) - cjk
+    tokens = cjk / max(cfg.cjk_chars_per_token, 0.1) + other / max(
+        cfg.latin_chars_per_token, 0.1
+    )
+    return max(1, int(tokens + 0.5))
 
 
 def _is_cjk(char: str) -> bool:
@@ -45,19 +83,21 @@ def _is_cjk(char: str) -> bool:
 
 
 def estimate_tokens(text: str, cfg: ShortTermMemoryConfig) -> int:
-    """字符启发式 token 估算：CJK 与拉丁字符分别按不同折算率求和。
+    """Token estimate for prompt budgeting.
 
-    中文模型的精确分词器本就不通用，这里用足够做预算控制的近似：
-    CJK ≈ ``cjk_chars_per_token`` 字/token，其余 ≈ ``latin_chars_per_token`` 字/token。
+    Uses tiktoken when available/configured; otherwise falls back to the
+    previous CJK/Latin heuristic so local tests and offline runs stay usable.
     """
     if not text:
         return 0
-    cjk = sum(1 for ch in text if _is_cjk(ch))
-    other = len(text) - cjk
-    tokens = cjk / max(cfg.cjk_chars_per_token, 0.1) + other / max(
-        cfg.latin_chars_per_token, 0.1
-    )
-    return max(1, int(tokens + 0.5))
+    if cfg.tokenizer_enabled:
+        encoder = _token_encoder(cfg.tokenizer_encoding)
+        if encoder is not None:
+            try:
+                return max(1, len(encoder.encode(text)))
+            except Exception:
+                logger.debug("Tokenizer encode failed; using heuristic", exc_info=True)
+    return _heuristic_tokens(text, cfg)
 
 
 def truncate_message_content(content: str, cfg: ShortTermMemoryConfig) -> str:
@@ -157,39 +197,162 @@ def render_with_budget(
     return text
 
 
+def _clean_items(values: Any, *, limit: int = 12) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        candidates = [values]
+    elif isinstance(values, list):
+        candidates = values
+    else:
+        candidates = [values]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in candidates:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        cleaned.append(text)
+        seen.add(text)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def parse_thread_summary(value: Any) -> ThreadSummary | None:
+    """Parse structured or legacy summary output into ``ThreadSummary``."""
+    if value is None:
+        return None
+    if isinstance(value, ThreadSummary):
+        return value
+    if isinstance(value, dict):
+        return ThreadSummary.model_validate(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    text = _extract_json_object(text) or text
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return ThreadSummary(context_notes=[text], updated_at=local_now())
+    if isinstance(parsed, dict):
+        return ThreadSummary.model_validate(parsed)
+    if isinstance(parsed, list):
+        return ThreadSummary(context_notes=_clean_items(parsed), updated_at=local_now())
+    return ThreadSummary(context_notes=[text], updated_at=local_now())
+
+
+def _extract_json_object(text: str) -> str | None:
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start : end + 1].strip()
+    return None
+
+
+def render_thread_summary(summary: ThreadSummary | None) -> str:
+    """Render structured summary with explicit factual boundaries."""
+    if summary is None or summary.is_empty():
+        return ""
+    sections = [
+        ("用户目标", summary.user_goals),
+        ("用户约束", summary.user_constraints),
+        ("已确认决策", summary.confirmed_decisions),
+        ("待办状态", summary.pending_tasks),
+        ("开放问题", summary.open_questions),
+        ("助手假设（不可当事实）", summary.assistant_assumptions),
+        ("未验证声明（使用前必须重新验证）", summary.unverified_claims),
+        ("证据引用", summary.evidence_refs),
+        ("其他上下文线索", summary.context_notes),
+    ]
+    lines = [_SUMMARY_PREFIX, _SUMMARY_BOUNDARY]
+    for label, items in sections:
+        cleaned = _clean_items(items)
+        if not cleaned:
+            continue
+        lines.append(f"{label}:")
+        lines.extend(f"- {item}" for item in cleaned)
+    return "\n".join(lines)
+
+
+def _summary_message(summary: ThreadSummary | None) -> ConversationMessage | None:
+    rendered = render_thread_summary(summary)
+    if not rendered:
+        return None
+    return {"role": _SUMMARY_ROLE, "content": rendered}
+
+
+def _summary_for_compression(summary: ThreadSummary | None) -> str:
+    rendered = render_thread_summary(summary)
+    if not rendered:
+        return ""
+    return f"已有结构化摘要：\n{rendered}"
+
+
+def build_dialogue_context_result(
+    messages: list[Any],
+    cfg: ShortTermMemoryConfig,
+    *,
+    exclude_latest: bool = False,
+    prior_summary: ThreadSummary | dict[str, Any] | str | None = None,
+    summarizer: Callable[[str], str | dict[str, Any] | ThreadSummary] | None = None,
+) -> DialogueContextResult:
+    """Build prompt dialogue and optionally update a structured thread summary."""
+    window = apply_window(messages, cfg, exclude_latest=exclude_latest)
+    existing_summary = parse_thread_summary(prior_summary)
+    active_summary = existing_summary
+    summary_updated = False
+
+    should_summarize = (
+        cfg.rolling_summary_enabled
+        and window.overflow
+        and summarizer is not None
+        and window.total_considered >= cfg.rolling_summary_trigger
+    )
+    if should_summarize:
+        overflow_parts = [
+            part
+            for part in (_summary_for_compression(existing_summary), render_as_text(window.overflow))
+            if part
+        ]
+        try:
+            generated = summarizer("\n\n".join(overflow_parts))
+            parsed = parse_thread_summary(generated)
+            if parsed is not None and not parsed.is_empty():
+                active_summary = parsed
+                summary_updated = True
+        except Exception:
+            logger.debug("Rolling summary failed; using prior summary or truncation", exc_info=True)
+
+    summary_msg = _summary_message(active_summary) if cfg.rolling_summary_enabled else None
+    output = [summary_msg, *window.kept] if summary_msg else window.kept
+    return DialogueContextResult(
+        messages=output,
+        thread_summary=active_summary,
+        summary_updated=summary_updated,
+        window=window,
+    )
+
+
 def build_dialogue_context(
     messages: list[Any],
     cfg: ShortTermMemoryConfig,
     *,
     exclude_latest: bool = False,
-    summarizer: Callable[[str], str] | None = None,
+    summarizer: Callable[[str], str | dict[str, Any] | ThreadSummary] | None = None,
 ) -> list[ConversationMessage]:
     """构造最终进 prompt 的对话上下文，溢出部分可选滚动摘要。
 
     ``summarizer`` 接受渲染后的溢出文本、返回摘要字符串；通常由
     ``OrchestrationDeps.compress_context`` 适配而来。摘要失败或未配置时静默降级为纯截断。
     """
-    window = apply_window(messages, cfg, exclude_latest=exclude_latest)
-    if not (
-        cfg.rolling_summary_enabled
-        and window.overflow
-        and summarizer is not None
-        and window.total_considered >= cfg.rolling_summary_trigger
-    ):
-        return window.kept
-
-    overflow_text = render_as_text(window.overflow)
-    try:
-        summary = summarizer(overflow_text)
-    except Exception:
-        logger.debug("Rolling summary failed; falling back to truncation", exc_info=True)
-        return window.kept
-    if not summary or not summary.strip():
-        return window.kept
-
-    summary_msg: ConversationMessage = {
-        "role": _SUMMARY_ROLE,
-        "content": f"{_SUMMARY_PREFIX}\n{summary.strip()}",
-    }
-    return [summary_msg, *window.kept]
+    return build_dialogue_context_result(
+        messages,
+        cfg,
+        exclude_latest=exclude_latest,
+        summarizer=summarizer,
+    ).messages
 

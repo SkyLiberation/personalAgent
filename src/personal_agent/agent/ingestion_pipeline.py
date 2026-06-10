@@ -8,7 +8,6 @@ from uuid import uuid4
 from ..core.config import Settings
 from ..core.logging_utils import log_event, trace_span
 from ..core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
-from ..extract import PreExtractService
 from ..graphiti.store import GraphCaptureResult, GraphitiStore
 from ..memory import MemoryFacade
 from .nodes import (
@@ -16,7 +15,6 @@ from .nodes import (
     chunk_reconcile_node,
     enrich_node,
     link_node,
-    preextract_node,
     schedule_review_node,
     structural_chunk_node,
 )
@@ -32,8 +30,8 @@ class IngestionPipeline:
     This is the single home for the deterministic capture pipeline. It owns:
 
     - source-fingerprint dedupe before running the pipeline
-    - the local node sequence (capture → chunk → preextract → reconcile →
-      enrich → link → schedule_review)
+    - the local node sequence (capture → unstructured partition/chunk →
+      reconcile → enrich → link → schedule_review)
     - Graphiti ingestion of the resulting note (or chunk-level delegation)
     - background single-note and batch graph sync entry points
     - graph quality metrics and retry/backoff policy
@@ -44,12 +42,10 @@ class IngestionPipeline:
         settings: Settings,
         memory: MemoryFacade,
         graph_store: GraphitiStore,
-        preextract_service: PreExtractService,
     ) -> None:
         self.settings = settings
         self.memory = memory
         self.graph_store = graph_store
-        self.preextract_service = preextract_service
 
     # ------------------------------------------------------------------
     # Foreground ingestion entry
@@ -131,11 +127,11 @@ class IngestionPipeline:
         Entry orchestration is owned by ``orchestration_graph``. Capture stays
         a deterministic branch workflow here so direct API calls and
         entry-driven capture share the same behavior without creating a second
-        graph layer.
+        graph layer. Document structure and chunking are owned by
+        Unstructured; LangExtract is not run as a Graphiti pre-extraction step.
         """
         state = capture_node(state, self.memory)
         state = structural_chunk_node(state, self.memory)
-        state = preextract_node(state, self.memory, self.preextract_service)
         state = chunk_reconcile_node(state, self.memory)
         state = enrich_node(state, self.memory)
         state = link_node(state, self.memory)
@@ -188,10 +184,7 @@ class IngestionPipeline:
         sync_budget = max(0, self.settings.graphiti.sync_max_notes_per_capture)
         eligible_seen = 0
         for chunk in chunks:
-            if chunk.preextract.graph_worthy is False:
-                chunk.graph_sync.status = "skipped"
-                chunk.graph_sync.error = None
-            elif sync_budget and eligible_seen >= sync_budget:
+            if sync_budget and eligible_seen >= sync_budget:
                 chunk.graph_sync.status = "skipped"
                 chunk.graph_sync.error = "Graph sync budget exceeded for this capture."
             else:
@@ -222,6 +215,8 @@ class IngestionPipeline:
         logger.info("Starting background graph sync note_id=%s trace_id=%s", note_id, trace_id)
         note.graph_sync.status = "pending"
         note.graph_sync.error = None
+        note.graph_sync.attempt_count = 0
+        note.graph_sync.last_attempt_at = None
         note.updated_at = local_now()
         self.memory.update_note(note)
 
@@ -237,6 +232,8 @@ class IngestionPipeline:
             for attempt in range(1, max_attempts + 1):
                 note = self.memory.get_note(note_id) or note
                 note.graph_sync.status = "pending"
+                note.graph_sync.attempt_count = attempt
+                note.graph_sync.last_attempt_at = local_now()
                 note.updated_at = local_now()
                 self.memory.update_note(note)
 
@@ -348,6 +345,8 @@ class IngestionPipeline:
                 continue
             note.graph_sync.status = "pending"
             note.graph_sync.error = None
+            note.graph_sync.attempt_count += 1
+            note.graph_sync.last_attempt_at = local_now()
             note.updated_at = local_now()
             self.memory.update_note(note)
 
@@ -439,6 +438,7 @@ class IngestionPipeline:
         note.graph.fact_refs = graph_result.fact_refs
         note.graph_sync.status = "synced"
         note.graph_sync.error = None
+        note.graph_sync.last_synced_at = local_now()
         note.updated_at = local_now()
 
         from ..graphiti.quality_vocab import all_relations_weak
@@ -450,7 +450,7 @@ class IngestionPipeline:
             sum(fact_lengths) / len(fact_lengths) if fact_lengths else 0.0,
             1,
         )
-        zero_entities = note.preextract.graph_worthy is True and entity_count == 0
+        zero_entities = bool(note.body.content.strip()) and entity_count == 0
         weak_only = (
             all_relations_weak(graph_result.relation_facts)
             if relation_count > 0

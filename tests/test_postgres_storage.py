@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from personal_agent.core.models import MemoryEpisode, ReviewCard
+from personal_agent.core.models import MemoryEpisode, MemoryItem, ReviewCard
 from personal_agent.core.query_understanding import RetrievalFilters
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
@@ -333,6 +333,70 @@ def test_find_similar_notes_emits_retrieval_metrics(temp_dir: Path, monkeypatch)
     store.clear_user_data(user_id, remove_uploaded_files=False)
 
 
+def test_find_similar_notes_excludes_superseded_and_deprecated_notes(temp_dir: Path):
+    user_id = _user()
+    store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
+    old = make_note(
+        id="old",
+        title="部署流程旧版",
+        content="部署流程使用 Jenkins。",
+        summary="Jenkins",
+        user_id=user_id,
+        version_status="superseded",
+        superseded_by_note_id="new",
+    )
+    deprecated = make_note(
+        id="deprecated",
+        title="部署流程废弃版",
+        content="部署流程使用手工上传。",
+        summary="手工上传",
+        user_id=user_id,
+        version_status="deprecated",
+    )
+    new = make_note(
+        id="new",
+        title="部署流程新版",
+        content="部署流程使用 GitHub Actions。",
+        summary="GitHub Actions",
+        user_id=user_id,
+    )
+    for note in (old, deprecated, new):
+        store.add_note(note)
+
+    matches = store.find_similar_notes(user_id, "部署流程 使用", limit=10)
+
+    assert [note.id for note in matches] == ["new"]
+
+
+def test_graph_episode_lookup_excludes_superseded_notes(temp_dir: Path):
+    user_id = _user()
+    store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
+    old = make_note(
+        id="old",
+        title="旧图谱",
+        content="旧事实",
+        summary="旧",
+        user_id=user_id,
+        graph_episode_uuid="ep-old",
+        version_status="superseded",
+        superseded_by_note_id="new",
+    )
+    new = make_note(
+        id="new",
+        title="新图谱",
+        content="新事实",
+        summary="新",
+        user_id=user_id,
+        graph_episode_uuid="ep-new",
+    )
+    store.add_note(old)
+    store.add_note(new)
+
+    matches = store.find_notes_by_graph_episode_uuids(user_id, ["ep-old", "ep-new"])
+
+    assert [note.id for note in matches] == ["new"]
+
+
 def test_memory_episodes_are_persisted_and_searchable(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
@@ -363,3 +427,39 @@ def test_memory_episodes_are_persisted_and_searchable(temp_dir: Path):
 
     result = store.clear_user_data(user_id, remove_uploaded_files=False)
     assert result["episodes"] == 1
+
+
+def test_memory_items_are_persisted_and_searchable(temp_dir: Path):
+    user_id = _user()
+    store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
+    item = MemoryItem(
+        id="proc-1",
+        memory_type="procedural",
+        user_id=user_id,
+        title="发布流程偏好",
+        content="用户偏好先跑单元测试，再执行灰度发布。",
+        status="confirmed",
+        confidence=0.9,
+        applies_to=["release"],
+    )
+    reflection = MemoryItem(
+        id="refl-1",
+        memory_type="reflection",
+        user_id=user_id,
+        title="失败复盘",
+        content="删除目标不明确时应先让用户选择候选。",
+        status="candidate",
+        applies_to=["delete_knowledge"],
+    )
+
+    store.add_memory_item(item)
+    store.add_memory_item(reflection)
+
+    procedural = store.search_memory_items(user_id, "先跑单元测试", memory_type="procedural")
+    reflections = store.list_memory_items(user_id, memory_type="reflection", status="candidate")
+
+    assert procedural[0].id == "proc-1"
+    assert reflections[0].id == "refl-1"
+
+    result = store.clear_user_data(user_id, remove_uploaded_files=False)
+    assert result["memory_items"] == 2

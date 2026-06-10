@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.episodic_memory import build_entry_episode
+from personal_agent.agent.episodic_memory import build_entry_episode, build_reflection_candidate
 from personal_agent.agent.runtime_results import EntryResult
 from personal_agent.core.models import EntryInput
 
@@ -76,3 +76,32 @@ def test_build_entry_episode_records_open_item_for_confirmation():
     assert episode.outcome == "waiting_confirmation"
     assert episode.entry_text == "删除 Graphiti 笔记"
     assert episode.open_items == ["确认删除笔记「Graphiti」？"]
+
+
+def test_failed_entry_builds_reflection_candidate():
+    result = EntryResult(
+        intent="delete_knowledge",
+        reason="计划执行失败",
+        reply_text="删除失败",
+        run_id="run-failed",
+        thread_id="alice:s1",
+        run_status="failed",
+        execution_trace=["检索候选", "resolve 失败"],
+        events=[
+            {
+                "type": "step_failed",
+                "payload": {"failure_reason": "未找到明确删除目标"},
+            }
+        ],
+    )
+    entry_input = EntryInput(text="删除旧 Graphiti 笔记", user_id="alice", session_id="s1")
+    episode = build_entry_episode(result, entry_input)
+
+    reflection = build_reflection_candidate(result, episode)
+
+    assert reflection is not None
+    assert reflection.id == "reflection:run-failed"
+    assert reflection.memory_type == "reflection"
+    assert reflection.status == "candidate"
+    assert reflection.source_episode_ids == [episode.id]
+    assert "未找到明确删除目标" in reflection.content

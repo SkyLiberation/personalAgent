@@ -60,6 +60,10 @@ def _clone_step(s: PlanStep) -> PlanStep:
         execution_mode=getattr(s, "execution_mode", "deterministic"),
         allowed_tools=list(getattr(s, "allowed_tools", [])),
         max_iterations=getattr(s, "max_iterations", 3),
+        workflow_id=getattr(s, "workflow_id", ""),
+        workflow_version=getattr(s, "workflow_version", ""),
+        workflow_step_id=getattr(s, "workflow_step_id", ""),
+        projection_kind=getattr(s, "projection_kind", "workflow_step"),
     )
 
 
@@ -84,11 +88,11 @@ def _has_upstream_action_type(
     return False
 
 
-class PlanValidator:
-    """Pre-execution plan validation.
+class StepProjectionValidator:
+    """Pre-execution workflow step projection validation.
 
-    Validates plan structure, dependency graph integrity, and cross-checks
-    against the RouterDecision.  Dynamically resolves known tool names from
+    Validates projection structure, dependency graph integrity, and cross-checks
+    against the RouterDecision. Dynamically resolves known tool names from
     ToolExecutor so the allowlist never drifts from registered tools.
     """
 
@@ -450,3 +454,6 @@ class PlanValidator:
             logger.info("Plan validation passed cleanly.")
 
         return result
+
+
+PlanValidator = StepProjectionValidator

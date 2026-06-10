@@ -29,6 +29,19 @@ def record_metric(
     )
 
 
+def _current_langsmith_run_id() -> str | None:
+    """Return the active LangSmith run id, if a trace is in progress."""
+    try:
+        from langsmith.run_helpers import get_current_run_tree
+
+        run_tree = get_current_run_tree()
+        if run_tree is not None and run_tree.id is not None:
+            return str(run_tree.id)
+    except Exception:  # pragma: no cover - tracing must never break audit
+        pass
+    return None
+
+
 def _event_payload(event: Any) -> dict[str, Any]:
     if hasattr(event, "model_dump"):
         return event.model_dump(mode="json")
@@ -53,6 +66,64 @@ def record_tool_audit(event: Any) -> None:
             "execution_mode": payload.get("execution_mode"),
             "risk_level": payload.get("risk_level"),
             "ok": payload.get("artifact_ok"),
+        },
+    )
+
+
+def record_policy_decision(
+    *,
+    action: str,
+    effect: str,
+    rule: str,
+    reason: str = "",
+    tool_name: str | None = None,
+    permission_scope: str | None = None,
+    resource: str | None = None,
+    risk_level: str | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    source_platform: str | None = None,
+    execution_mode: str | None = None,
+    thread_id: str | None = None,
+    audit_required: bool = True,
+) -> None:
+    """Record why the policy engine allowed / denied / required confirmation.
+
+    Non-allow decisions are always logged so authorization outcomes stay
+    queryable. Plain allows respect ``audit_required`` to avoid log noise.
+    """
+    if effect == "allow" and not audit_required:
+        return
+    payload = {
+        "action": action,
+        "effect": effect,
+        "rule": rule,
+        "reason": reason,
+        "tool_name": tool_name,
+        "permission_scope": permission_scope,
+        "resource": resource,
+        "risk_level": risk_level,
+        "user_id": user_id,
+        "session_id": session_id,
+        "source_platform": source_platform,
+        "execution_mode": execution_mode,
+        "thread_id": thread_id,
+        "langsmith_run_id": _current_langsmith_run_id(),
+    }
+    log_event(
+        logger,
+        logging.INFO if effect == "allow" else logging.WARNING,
+        "policy.decision",
+        **payload,
+    )
+    record_metric(
+        "policy.decision",
+        dimensions={
+            "action": action,
+            "effect": effect,
+            "rule": rule,
+            "tool_name": tool_name,
+            "risk_level": risk_level,
         },
     )
 

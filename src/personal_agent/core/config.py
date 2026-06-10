@@ -112,15 +112,16 @@ class LangSmithConfig(_StrictBase):
 
 
 class LangExtractConfig(_StrictBase):
-    """LangExtract pre-extraction layer.
+    """LangExtract layer config.
 
     Decoupled from OpenAIConfig (DeepSeek) and GraphitiConfig (Kimi) so the
     extraction layer can target a model that supports OpenAI-style structured
     outputs (e.g. qwen3-coder-flash) without disturbing the other LLM paths.
 
-    LangExtract is now a mandatory step in the capture pipeline. ``api_key``
-    must be populated; missing keys surface as a runtime error on the first
-    capture attempt.
+    LangExtract's active role is ask-time query understanding
+    (``agent/query_planner.py``), which reuses this config. It is no longer a
+    capture-pipeline pre-extraction step. If ``api_key`` is missing, the query
+    planner falls back to a default plan and heuristic filters.
     """
 
     api_key: str | None = None
@@ -153,13 +154,32 @@ class ShortTermMemoryConfig(_StrictBase):
     """短期记忆（thread 对话）进 prompt 前的统一裁剪策略。"""
 
     max_messages: int = 12              # 进 prompt 的对话最大消息数
-    token_budget: int = 1500            # 对话上下文总 token 预算（字符启发式估算）
+    token_budget: int = 1500            # 对话上下文总 token 预算
     per_message_char_limit: int = 1200  # 单条消息截断阈值（字符）
     char_budget: int = 800              # planner 等纯文本场景的字符预算
     rolling_summary_enabled: bool = True
     rolling_summary_trigger: int = 20   # 累计消息数达到此值才触发溢出滚动摘要
+    tokenizer_enabled: bool = True      # 优先使用 tiktoken，缺失时回退到字符启发式
+    tokenizer_encoding: str = "cl100k_base"
     cjk_chars_per_token: float = 1.5
     latin_chars_per_token: float = 4.0
+
+
+class PolicyConfig(_StrictBase):
+    """Programmable allow/deny overrides for the unified policy engine.
+
+    Empty tuples mean "defer to the code-internal default rules" (current
+    behavior). Populate these to pin authorization per user / source / tool /
+    scope without changing code.
+    """
+
+    deny_users: tuple[str, ...] = ()
+    allow_users: tuple[str, ...] = ()
+    deny_sources: tuple[str, ...] = ()
+    allow_sources: tuple[str, ...] = ()
+    deny_tools: tuple[str, ...] = ()
+    deny_scopes: tuple[str, ...] = ()
+    require_confirmation_for_high_risk: bool = True
 
 
 class Settings(_StrictBase):
@@ -182,6 +202,7 @@ class Settings(_StrictBase):
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
+    policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -425,6 +446,12 @@ class Settings(_StrictBase):
                 rolling_summary_trigger=int(
                     os.getenv("PERSONAL_AGENT_STM_ROLLING_SUMMARY_TRIGGER", "20")
                 ),
+                tokenizer_enabled=_as_bool(
+                    os.getenv("PERSONAL_AGENT_STM_TOKENIZER_ENABLED", "true")
+                ),
+                tokenizer_encoding=os.getenv(
+                    "PERSONAL_AGENT_STM_TOKENIZER_ENCODING", "cl100k_base"
+                ),
                 cjk_chars_per_token=float(
                     os.getenv("PERSONAL_AGENT_STM_CJK_CHARS_PER_TOKEN", "1.5")
                 ),
@@ -432,11 +459,29 @@ class Settings(_StrictBase):
                     os.getenv("PERSONAL_AGENT_STM_LATIN_CHARS_PER_TOKEN", "4.0")
                 ),
             ),
+            policy=PolicyConfig(
+                deny_users=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_USERS", "")),
+                allow_users=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_ALLOW_USERS", "")),
+                deny_sources=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_SOURCES", "")),
+                allow_sources=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_ALLOW_SOURCES", "")),
+                deny_tools=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_TOOLS", "")),
+                deny_scopes=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_SCOPES", "")),
+                require_confirmation_for_high_risk=_as_bool(
+                    os.getenv("PERSONAL_AGENT_POLICY_CONFIRM_HIGH_RISK", "true")
+                ),
+            ),
         )
 
 
 def _as_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_csv(raw: str) -> tuple[str, ...]:
+    """Parse a comma-separated env value into a tuple of trimmed tokens."""
+    if not raw.strip():
+        return ()
+    return tuple(token.strip() for token in raw.split(",") if token.strip())
 
 
 def _parse_api_keys(raw: str) -> dict[str, str]:

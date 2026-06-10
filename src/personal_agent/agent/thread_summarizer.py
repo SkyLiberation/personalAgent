@@ -28,16 +28,27 @@ _CHAT_DIGEST_PROMPT = (
 
 _CONTEXT_COMPRESSION_PROMPT = (
     "你在为一个多轮对话压缩较早的历史，供后续轮次理解上下文使用。"
-    "这不是面向用户的纪要，目标是保留后续对话所需的线索：\n"
-    "- 用户想做什么、当前未完成的目标和约束；\n"
-    "- 指代对象（人名、文件、概念等代词所指）；\n"
-    "- 用户明确给出的事实或更正。\n"
+    "这不是面向用户的纪要，目标是维护结构化 ThreadSummary。\n"
     "要求：\n"
     "- 只压缩、不展开，不要补充对话中没有的信息；\n"
-    "- 区分「用户陈述」与「助手推测」，对助手的推测性结论用「（助手推测）」标注，"
-    "不要把助手的历史回复当成已确认事实；\n"
-    "- 用紧凑的中文要点，不需要标题和客套。\n\n"
-    "较早的对话：\n{messages_text}"
+    "- 用户明确确认的内容才能进入 user_goals、user_constraints、confirmed_decisions 或 pending_tasks；\n"
+    "- 助手历史回复、建议、推测只能进入 assistant_assumptions，不能当事实；\n"
+    "- 对话中出现但没有证据支撑或用户确认的事实判断放入 unverified_claims；\n"
+    "- 开放问题、冲突点、待澄清事项放入 open_questions；\n"
+    "- evidence_refs 只能放对话里明确出现的 note_id、citation、tool ref 或文件/URL 引用。\n"
+    "只返回合法 JSON，不要 Markdown，不要解释。JSON schema:\n"
+    "{\n"
+    '  "user_goals": ["..."],\n'
+    '  "user_constraints": ["..."],\n'
+    '  "confirmed_decisions": ["..."],\n'
+    '  "pending_tasks": ["..."],\n'
+    '  "open_questions": ["..."],\n'
+    '  "assistant_assumptions": ["..."],\n'
+    '  "unverified_claims": ["..."],\n'
+    '  "evidence_refs": ["..."],\n'
+    '  "context_notes": ["..."]\n'
+    "}\n\n"
+    "待更新的摘要和新增较早对话：\n{messages_text}"
 )
 
 

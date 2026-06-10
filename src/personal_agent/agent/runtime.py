@@ -5,11 +5,11 @@ from typing import Callable, TYPE_CHECKING
 
 from ..core.config import Settings
 from ..core.langsmith_tracing import configure_langsmith_environment
-from ..core.models import EntryInput, KnowledgeNote
-from ..extract import PreExtractService
+from ..core.models import EntryInput, KnowledgeNote, MemoryItem
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..ms_graphrag import MicrosoftGraphRagStore
+from ..policy import PolicyEngine, PolicyRules
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..structural_retriever import StructuralRetrieverStore
 from ..tools import (
@@ -64,6 +64,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _policy_rules_from_settings(settings: Settings) -> PolicyRules:
+    """Build the policy override rule set from configured allow/deny lists."""
+    cfg = settings.policy
+    return PolicyRules(
+        deny_users=frozenset(cfg.deny_users),
+        allow_users=frozenset(cfg.allow_users),
+        deny_sources=frozenset(cfg.deny_sources),
+        allow_sources=frozenset(cfg.allow_sources),
+        deny_tools=frozenset(cfg.deny_tools),
+        deny_scopes=frozenset(cfg.deny_scopes),
+        require_confirmation_for_high_risk=cfg.require_confirmation_for_high_risk,
+    )
+
+
 class AgentRuntime:
     """Composition root for capture / ask / digest / entry operations.
 
@@ -89,12 +104,12 @@ class AgentRuntime:
         self.store = store
         self.graph_store = graph_store
         self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
-        self.memory = MemoryFacade(store, graph_store)
+        self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
+        self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
-        self._tool_executor = ToolExecutor()
-        self._preextract_service = PreExtractService(settings.langextract)
+        self._tool_executor = ToolExecutor(policy_engine=self._policy_engine)
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
         self._verifier = AnswerVerifier()
@@ -187,7 +202,6 @@ class AgentRuntime:
             settings=self.settings,
             memory=self.memory,
             graph_store=self._active_graph_store(),
-            preextract_service=self._preextract_service,
         )
 
     def _active_graph_store(self):
@@ -195,6 +209,9 @@ class AgentRuntime:
         if provider in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
             return self.ms_graphrag_store
         return self.graph_store
+
+    def _bind_active_graph_store_to_memory(self) -> None:
+        self.memory.graph = self._active_graph_store()
 
     def execute_capture(
         self,
@@ -217,6 +234,82 @@ class AgentRuntime:
 
     def sync_notes_to_graph(self, note_ids: list[str]) -> dict[str, bool]:
         return self._ingestion().sync_notes_to_graph(note_ids)
+
+    def list_graph_sync_tasks(
+        self,
+        *,
+        user_id: str | None = None,
+        statuses: list[str] | None = None,
+        include_chunks: bool = True,
+        limit: int | None = None,
+    ):
+        return self.memory.list_graph_sync_tasks(
+            user_id=user_id,
+            statuses=statuses,
+            include_chunks=include_chunks,
+            limit=limit,
+        )
+
+    def reconcile_graph_sync(
+        self,
+        user_id: str,
+        *,
+        graph_episode_uuids: list[str] | None = None,
+        retry_statuses: list[str] | None = None,
+        clean_orphans: bool = False,
+    ):
+        self._bind_active_graph_store_to_memory()
+        return self.memory.reconcile_graph_sync(
+            user_id,
+            graph_episode_uuids=graph_episode_uuids,
+            retry_statuses=retry_statuses,
+            clean_orphans=clean_orphans,
+            sync_note=self.sync_note_to_graph,
+        )
+
+    def supersede_note(self, old_note_id: str, new_note_id: str, *, user_id: str, reason: str = ""):
+        return self.memory.supersede_note(old_note_id, new_note_id, user_id=user_id, reason=reason)
+
+    def mark_note_deprecated(self, note_id: str, *, user_id: str, reason: str = ""):
+        return self.memory.mark_note_deprecated(note_id, user_id=user_id, reason=reason)
+
+    def mark_notes_conflicted(self, note_ids: list[str], *, user_id: str, reason: str = ""):
+        return self.memory.mark_notes_conflicted(note_ids, user_id=user_id, reason=reason)
+
+    def add_memory_item(self, item: MemoryItem, *, user_id: str | None = None) -> MemoryItem:
+        return self.memory.add_memory_item(item, user_id=user_id)
+
+    def list_memory_items(
+        self,
+        user_id: str,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        return self.memory.list_memory_items(
+            user_id,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
+
+    def search_memory_items(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        memory_type: str | None = None,
+        status: str | None = "confirmed",
+        limit: int = 5,
+    ) -> list[MemoryItem]:
+        return self.memory.search_memory_items(
+            user_id,
+            query,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
 
     # ---- public properties (delegate to private fields so test mocks are visible) ----
 

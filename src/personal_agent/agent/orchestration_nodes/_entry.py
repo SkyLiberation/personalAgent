@@ -577,9 +577,10 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
         from ...core.llm_trace import traced_chat_completion
 
         try:
-            dialogue_messages = _dialogue_prompt_messages(
-                state.messages,
-                cfg=getattr(deps.settings, "short_term", None),
+            dialogue_messages = _entry_conversation_messages(
+                state,
+                exclude_latest=False,
+                deps=deps,
             )
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
@@ -623,7 +624,7 @@ def _entry_conversation_messages(
     单条截断 + 溢出滚动摘要)；否则回退到默认窗口（无摘要）。
     """
     from ...core.config import ShortTermMemoryConfig
-    from ..short_term_context import build_dialogue_context
+    from ..short_term_context import build_dialogue_context_result
 
     if deps is None:
         return _dialogue_prompt_messages(state.messages, exclude_latest=exclude_latest)
@@ -636,12 +637,16 @@ def _entry_conversation_messages(
         def summarizer(text: str) -> str:
             return deps.compress_context(text, user_id)
 
-    return build_dialogue_context(
+    result = build_dialogue_context_result(
         state.messages,
         cfg,
         exclude_latest=exclude_latest,
+        prior_summary=state.thread_summary,
         summarizer=summarizer,
     )
+    if result.summary_updated:
+        state.thread_summary = result.thread_summary
+    return result.messages
 
 
 # ---------------------------------------------------------------------------

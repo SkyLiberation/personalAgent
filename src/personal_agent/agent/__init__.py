@@ -3,7 +3,7 @@ from .router import DefaultIntentRouter, IntentRouter
 from .runtime import AgentRuntime, AskResult, CaptureResult, DigestResult, EntryResult, ResetResult
 from .service import AgentService
 from .verifier import AnswerVerifier, VerificationResult
-from .workflow import WORKFLOW_REGISTRY, WorkflowRegistry, WorkflowSpec
+from .workflow import WORKFLOW_REGISTRY, WorkflowRegistry, WorkflowSpec, WorkflowStepSpec
 
 __all__ = [
     "AgentRuntime",
@@ -23,4 +23,5 @@ __all__ = [
     "WORKFLOW_REGISTRY",
     "WorkflowRegistry",
     "WorkflowSpec",
+    "WorkflowStepSpec",
 ]

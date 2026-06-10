@@ -11,7 +11,12 @@ from typing import Any, Protocol
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from ..core.observability import record_tool_audit
+from ..core.observability import (
+    _current_langsmith_run_id,
+    record_policy_decision,
+    record_tool_audit,
+)
+from ..policy import PolicyDecision, PolicyEngine, PolicyInput
 from .base import (
     ToolArtifact,
     ToolError,
@@ -28,19 +33,6 @@ logger = logging.getLogger(__name__)
 _EXTERNAL_NETWORK_EFFECTS = frozenset({"external_network", "send_external"})
 # 异常类型 -> 错误分类的默认映射，用于未显式抛出 ToolError 的底层异常。
 _TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = (TimeoutError, ConnectionError, OSError)
-
-
-def _current_langsmith_run_id() -> str | None:
-    """Return the active LangSmith run id, if a trace is in progress."""
-    try:
-        from langsmith.run_helpers import get_current_run_tree
-
-        run_tree = get_current_run_tree()
-        if run_tree is not None and run_tree.id is not None:
-            return str(run_tree.id)
-    except Exception:  # pragma: no cover - tracing must never break tool exec
-        pass
-    return None
 
 
 def _classify_exception(exc: BaseException) -> str:
@@ -102,6 +94,8 @@ class ToolGatewayContext:
     step_id: str | None = None
     thread_id: str | None = None
     user_id: str | None = None
+    session_id: str | None = None
+    source_platform: str | None = None
     react_allowed_tools: frozenset[str] = frozenset()
 
 
@@ -127,10 +121,12 @@ class ToolGateway:
         audit_sink: ToolAuditSink | None = None,
         *,
         idempotency_store: IdempotencyStore | None = None,
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self._tools: dict[str, BaseTool] = {}
         self.audit_sink = audit_sink
         self._idempotency = idempotency_store or InMemoryIdempotencyStore()
+        self._policy = policy_engine or PolicyEngine()
         self._rate_windows: dict[tuple[str, str], deque[float]] = {}
         self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-gateway")
 
@@ -321,35 +317,80 @@ class ToolGateway:
         context: ToolGatewayContext,
     ) -> _PolicyViolation | None:
         governance = tool_governance(tool)
-        if context.execution_mode == "react":
-            if tool.name not in context.react_allowed_tools:
-                return _PolicyViolation(f"工具 {tool.name} 不在当前 ReAct 允许列表中。")
-            blocked_effects = {"write_longterm", "delete_longterm", "send_external", "irreversible"}
-            if (
-                governance.risk_level == "high"
-                or governance.requires_confirmation
-                or blocked_effects.intersection(governance.side_effects)
-            ):
-                return _PolicyViolation(f"工具 {tool.name} 不允许在 ReAct 自主执行中调用。")
+        decision = self._policy.evaluate(
+            PolicyInput(
+                action="tool_call",
+                user_id=context.user_id,
+                session_id=context.session_id,
+                source_platform=context.source_platform,
+                execution_mode=context.execution_mode,
+                tool_name=tool.name,
+                risk_level=governance.risk_level,
+                requires_confirmation=governance.requires_confirmation,
+                side_effects=tuple(governance.side_effects),
+                permission_scope=governance.permission_scope,
+                confirmed=bool(args.get("confirmed")),
+                react_allowed_tools=context.react_allowed_tools,
+            )
+        )
+        self._record_policy_decision(tool, governance, context, decision)
+        if decision.effect in ("deny", "require_escalation"):
+            return _PolicyViolation(decision.reason, kind=decision.error_kind)
+        # require_confirmation 不阻断调用：工具会走无副作用的确认预览分支，生成
+        # pending_confirmation 负载，由图层的 HITL interrupt 暂停等待用户确认。真实
+        # 副作用只在 confirmed=true 时发生，并受下方幂等机制保护。
 
         domain_violation = self._validate_external_access(tool, governance, args)
         if domain_violation is not None:
             return domain_violation
 
+        # 策略放行后，gateway 仍负责确认动作的幂等机制（key 必填 + 重放拒绝）。
+        return self._validate_idempotency(tool, governance, args)
+
+    def _validate_idempotency(
+        self,
+        tool: BaseTool,
+        governance: ToolGovernance,
+        args: dict[str, Any],
+    ) -> _PolicyViolation | None:
         is_confirmed_execution = bool(args.get("confirmed"))
-        if governance.requires_confirmation and governance.risk_level == "high" and is_confirmed_execution:
-            key = str(args.get("idempotency_key", "")).strip()
-            if governance.idempotency_key_required and not key:
-                return _PolicyViolation(
-                    f"工具 {tool.name} 执行高风险确认动作时缺少 idempotency_key。",
-                    kind="invalid_param",
-                )
-            if key and self._idempotency.seen(key):
-                return _PolicyViolation(
-                    f"工具 {tool.name} 的确认动作已执行过（idempotency_key={key}），已跳过重复副作用。",
-                    kind="unrecoverable",
-                )
+        if not (governance.requires_confirmation and governance.risk_level == "high" and is_confirmed_execution):
+            return None
+        key = str(args.get("idempotency_key", "")).strip()
+        if governance.idempotency_key_required and not key:
+            return _PolicyViolation(
+                f"工具 {tool.name} 执行高风险确认动作时缺少 idempotency_key。",
+                kind="invalid_param",
+            )
+        if key and self._idempotency.seen(key):
+            return _PolicyViolation(
+                f"工具 {tool.name} 的确认动作已执行过（idempotency_key={key}），已跳过重复副作用。",
+                kind="unrecoverable",
+            )
         return None
+
+    def _record_policy_decision(
+        self,
+        tool: BaseTool,
+        governance: ToolGovernance,
+        context: ToolGatewayContext,
+        decision: PolicyDecision,
+    ) -> None:
+        record_policy_decision(
+            action="tool_call",
+            effect=decision.effect,
+            rule=decision.rule,
+            reason=decision.reason,
+            tool_name=tool.name,
+            permission_scope=governance.permission_scope,
+            risk_level=governance.risk_level,
+            user_id=context.user_id,
+            session_id=context.session_id,
+            source_platform=context.source_platform,
+            execution_mode=context.execution_mode,
+            thread_id=context.thread_id,
+            audit_required=governance.audit_required,
+        )
 
     def _validate_external_access(
         self,
@@ -422,12 +463,16 @@ class ToolGateway:
         react = getattr(state, "react", None)
         active_context = getattr(tracking, "active_context", None)
         execution_mode = "react" if active_context == "react" else "deterministic"
+        entry_input = getattr(state, "entry_input", None)
+        source_platform = getattr(entry_input, "source_platform", None)
         return ToolGatewayContext(
             execution_mode=execution_mode,
             tool_call_id=call_id,
             step_id=getattr(tracking, "pending_step_id", None),
             thread_id=getattr(state, "thread_id", None),
             user_id=getattr(state, "user_id", None),
+            session_id=getattr(state, "session_id", None),
+            source_platform=source_platform,
             react_allowed_tools=frozenset(getattr(react, "allowed_tools", []) or []),
         )
 

@@ -10,7 +10,6 @@ from personal_agent.core.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.core.models import Citation, EntryInput
 from personal_agent.agent.runtime_ask import _graph_matches_to_evidence
 from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-from personal_agent.extract.schemas import SectionMap
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
 from tests.conftest import POSTGRES_URL, stub_router_decision
 from tests.note_factory import make_note
@@ -43,11 +42,6 @@ def service(test_settings: Settings) -> AgentService:
     mock_store.ingest_note.return_value = GraphCaptureResult(enabled=False)
     svc.graph_store = mock_store
     svc._runtime.graph_store = mock_store
-    # Stub the preextract service so capture tests don't hit a live LLM. The
-    # high min_doc_chars in test_settings already makes should_run() return
-    # False for every test fixture text, but we replace .extract() too in case
-    # someone bumps the threshold.
-    svc._preextract_service.extract = MagicMock(return_value=SectionMap())  # type: ignore[method-assign]
     svc._intent_router._classify_with_llm = stub_router_decision
     return svc
 
@@ -200,6 +194,123 @@ class TestCaptureFlow:
         assert service.store.get_note(chunk2.id).graph_sync.status == "failed"
         service.graph_store.ingest_notes.assert_called_once()
         service.graph_store.configured.return_value = False
+
+    def test_graph_sync_tasks_are_queryable_by_status(self, service: AgentService):
+        pending = make_note(
+            title="pending",
+            content="待同步",
+            summary="待同步",
+            user_id="default",
+            graph_sync_status="pending",
+        )
+        failed = make_note(
+            title="failed",
+            content="同步失败",
+            summary="失败",
+            user_id="default",
+            graph_sync_status="failed",
+            graph_sync_error="rate limit",
+        )
+        service.store.add_note(pending)
+        service.store.add_note(failed)
+
+        tasks = service.list_graph_sync_tasks(user_id="default", statuses=["pending", "failed"])
+
+        assert {task.note_id for task in tasks} == {pending.id, failed.id}
+        failed_task = next(task for task in tasks if task.note_id == failed.id)
+        assert failed_task.error == "rate limit"
+        assert failed_task.status == "failed"
+
+    def test_graph_sync_reconcile_retries_and_reports_orphans(self, service: AgentService):
+        service.graph_store.configured.return_value = True
+        service.graph_store.delete_episode = MagicMock(return_value=True)
+        failed = make_note(
+            title="failed",
+            content="Redis 缓存热点数据。",
+            summary="Redis",
+            user_id="default",
+            graph_sync_status="failed",
+            graph_sync_error="rate limit",
+        )
+        weak = make_note(
+            title="weak",
+            content="弱图谱",
+            summary="弱图谱",
+            user_id="default",
+            graph_episode_uuid="ep-weak",
+            graph_sync_status="synced",
+            graph_quality_zero_entities=True,
+        )
+        service.store.add_note(failed)
+        service.store.add_note(weak)
+        service.graph_store.ingest_note = MagicMock(return_value=GraphCaptureResult(
+            enabled=True,
+            episode_uuid="ep-fixed",
+            entity_names=["Redis"],
+            relation_facts=["Redis 缓存热点数据"],
+        ))
+
+        report = service.reconcile_graph_sync(
+            "default",
+            graph_episode_uuids=["ep-weak", "ep-orphan"],
+            retry_statuses=["failed"],
+            clean_orphans=True,
+        )
+
+        assert report.checked_notes >= 2
+        assert report.retried_count == 1
+        assert report.orphan_episode_count == 1
+        assert report.cleaned_orphan_count == 1
+        assert report.weak_quality_count == 1
+        assert service.store.get_note(failed.id).graph_sync.status == "synced"
+        service.graph_store.delete_episode.assert_called_once_with("ep-orphan")
+        service.graph_store.configured.return_value = False
+
+    def test_supersede_note_marks_old_note_stale(self, service: AgentService):
+        old = make_note(
+            id="old-deploy",
+            title="部署流程旧版",
+            content="部署流程使用 Jenkins。",
+            summary="Jenkins",
+            user_id="default",
+        )
+        new = make_note(
+            id="new-deploy",
+            title="部署流程新版",
+            content="部署流程使用 GitHub Actions。",
+            summary="GitHub Actions",
+            user_id="default",
+        )
+        service.store.add_note(old)
+        service.store.add_note(new)
+
+        old_note, new_note = service.supersede_note(
+            "old-deploy",
+            "new-deploy",
+            user_id="default",
+            reason="部署流程迁移",
+        )
+
+        assert old_note.version.status == "superseded"
+        assert old_note.version.superseded_by_note_id == "new-deploy"
+        assert old_note.id in new_note.version.supersedes_note_ids
+        matches = service.memory.search_memory("default", "部署流程 使用 Jenkins GitHub", limit=10)
+        assert [note.id for note in matches] == ["new-deploy"]
+
+    def test_conflicted_notes_are_marked_for_evidence_layer(self, service: AgentService):
+        first = make_note(id="conflict-a", title="缓存", content="缓存使用 Redis。", summary="Redis", user_id="default")
+        second = make_note(id="conflict-b", title="缓存", content="缓存使用 Dragonfly。", summary="Dragonfly", user_id="default")
+        service.store.add_note(first)
+        service.store.add_note(second)
+
+        notes = service.mark_notes_conflicted(
+            ["conflict-a", "conflict-b"],
+            user_id="default",
+            reason="来源冲突",
+        )
+
+        assert {note.version.status for note in notes} == {"conflicted"}
+        assert service.store.get_note("conflict-a").version.conflict_note_ids == ["conflict-b"]
 
     def test_chunk_delete_cleans_graph_episodes(self, service: AgentService):
         """When cascade-deleting, chunk graph episodes should be cleaned up."""

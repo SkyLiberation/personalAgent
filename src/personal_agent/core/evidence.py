@@ -12,14 +12,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .models import Citation, KnowledgeNote, MemoryEpisode
+from .models import Citation, KnowledgeNote, MemoryEpisode, MemoryItem
 from .projections import EvidenceSource, evidence_source_from_note
 from .graph_results import GraphAskResult
 
 
 class EvidenceItem(BaseModel):
     evidence_id: str = Field(default_factory=lambda: uuid4().hex[:12])
-    source_type: Literal["graph_fact", "note", "chunk", "web", "tool", "episode"]
+    source_type: Literal["graph_fact", "note", "chunk", "web", "tool", "episode", "procedural", "reflection"]
     source_id: str = ""
     title: str = ""
     snippet: str = ""
@@ -96,6 +96,14 @@ def select_ranked_evidence(
     seen_sources: set[tuple[str, str]] = set()
 
     for item in ranked:
+        version_status = str(item.evidence.metadata.get("version_status") or "current")
+        superseded = bool(item.evidence.metadata.get("superseded_by_note_id"))
+        if item.evidence.source_type in {"note", "chunk"} and (
+            version_status in {"superseded", "deprecated"} or superseded
+        ):
+            item.selected_for_prompt = False
+            dropped.append(item)
+            continue
         diversity_key = (item.evidence.source_type, item.evidence.source_id or item.evidence.url or item.evidence.title)
         duplicate_source = diversity_key in seen_sources and item.evidence.source_type in {"note", "chunk", "web", "episode"}
         would_fit = used_chars + item.estimated_chars <= char_budget
@@ -157,6 +165,8 @@ def _rank_evidence_item(question: str, item: EvidenceItem) -> RankedEvidence:
         "graph_fact": 0.16,
         "web": 0.14,
         "episode": 0.13,
+        "procedural": 0.12,
+        "reflection": 0.11,
         "tool": 0.10,
     }.get(item.source_type, 0.0)
     score += source_weight
@@ -178,6 +188,17 @@ def _rank_evidence_item(question: str, item: EvidenceItem) -> RankedEvidence:
     if item.metadata.get("orphan") is True:
         score -= 0.12
         reasons.append("orphan_penalty")
+    version_status = item.metadata.get("version_status")
+    if version_status == "conflicted":
+        score -= 0.18
+        reasons.append("conflict_penalty")
+    elif version_status in {"superseded", "deprecated"} or item.metadata.get("superseded_by_note_id"):
+        score -= 1.0
+        reasons.append("stale_version_penalty")
+    confidence = item.metadata.get("version_confidence")
+    if isinstance(confidence, int | float):
+        score += max(0.0, min(float(confidence), 1.0)) * 0.05
+        reasons.append(f"version_confidence={float(confidence):.2f}")
     if item.metadata.get("published_at"):
         score += 0.04
         reasons.append("freshness_metadata")
@@ -354,6 +375,14 @@ def notes_to_evidence(matches: list[KnowledgeNote | EvidenceSource]) -> list[Evi
             metadata={
                 "source_ref": source.source_ref,
                 "source_fingerprint": source.source_fingerprint,
+                "version_status": match.version.status if isinstance(match, KnowledgeNote) else "current",
+                "version": match.version.version if isinstance(match, KnowledgeNote) else 1,
+                "version_id": match.version.version_id if isinstance(match, KnowledgeNote) else "",
+                "topic_key": match.version.topic_key if isinstance(match, KnowledgeNote) else None,
+                "supersedes_note_ids": match.version.supersedes_note_ids if isinstance(match, KnowledgeNote) else [],
+                "superseded_by_note_id": match.version.superseded_by_note_id if isinstance(match, KnowledgeNote) else None,
+                "conflict_note_ids": match.version.conflict_note_ids if isinstance(match, KnowledgeNote) else [],
+                "version_confidence": match.version.confidence if isinstance(match, KnowledgeNote) else 1.0,
                 **source.metadata,
             },
         ))
@@ -410,6 +439,31 @@ def episodes_to_evidence(episodes: list[MemoryEpisode]) -> list[EvidenceItem]:
             },
         ))
     return items
+
+
+def memory_items_to_evidence(items: list[MemoryItem]) -> list[EvidenceItem]:
+    """Convert procedural/reflection long-term memory to evidence."""
+    evidence: list[EvidenceItem] = []
+    for item in items:
+        evidence.append(EvidenceItem(
+            source_type=item.memory_type,
+            source_id=item.id,
+            title=item.title,
+            snippet=item.content[:700],
+            score=item.confidence,
+            metadata={
+                "memory_type": item.memory_type,
+                "status": item.status,
+                "session_id": item.session_id,
+                "thread_id": item.thread_id,
+                "source_episode_ids": item.source_episode_ids,
+                "source_run_ids": item.source_run_ids,
+                "evidence_refs": item.evidence_refs,
+                "applies_to": item.applies_to,
+                **item.metadata,
+            },
+        ))
+    return evidence
 
 
 def evidence_to_citations(evidence: list[EvidenceItem]) -> list[Citation]:

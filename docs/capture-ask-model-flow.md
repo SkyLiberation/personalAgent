@@ -20,16 +20,17 @@
 
 ## 当前结论
 
-当前架构已经具备 RAG 的基本闭环：
+当前架构已经具备 RAG 的基本闭环，capture 侧已改为以 Unstructured 作为结构化处理入口：先把原始内容 partition 成文档元素，再基于元素和标题边界 chunk。parent 仍是整篇文章级 source/document anchor，child 则不再是自写固定 chunk，而是来自 Unstructured element chunks。它已经比“整篇 parent + 固定 child”更接近优秀 RAG 的 ingestion 方向，但仍缺页码/坐标在多格式文件中的完整落库、窗口重叠、版本链和 chunk 质量评测。
 
 ```text
-capture: 原始输入 -> RawIngestItem -> 确定性 parent/chunk 草案 -> LangExtract 预抽取(SectionMap) -> 可选语义重建/标注 chunk -> 本地存储 -> graph_worthy=True 的 chunk 入 Graphiti
+capture: 原始输入 -> RawIngestItem -> Unstructured partition(elements) -> chunk_by_title(element chunks) -> 本地存储 -> chunk 入 Graphiti
 ask: question -> QueryUnderstanding -> RetrievalPlan -> graph(Graphiti)+structural+local 并行/web 主动 -> EvidenceItem -> ContextPack -> 生成 -> 校验
 ```
 
-它的优势是分层清楚、证据模型已开始统一、图谱与原文 note 有 episode 映射、回答后有 verifier、**预抽取层已落地，能基于语义 section 切 chunk 并把低价值段落（目录、boilerplate）从图谱深抽取中过滤掉**、**QueryUnderstanding + RetrievalPlan 已落地，支持 query rewrite、意图识别、并行多源检索、子查询分解和 metadata filters 下推**、**本地 lexical/vector 检索已落地，支持 Postgres FTS、pg_trgm、pgvector、RRF 融合、filters 和 chunk small-to-big 展开**、**claim-level verifier 已落地，能抽取关键结论并检查 selected evidence 是否支撑**、**capture fingerprint + metadata 已落地，可跳过同 user 下重复采集并把来源 metadata 传入 EvidenceItem**、**Graphiti 批量并发同步已落地，长文 parent 不再重复做图谱深抽取，worthy chunks 按预算后台同步**、**Structural retriever 已作为生产 provider 接入，可通过 `PERSONAL_AGENT_ASK_GRAPH_PROVIDER=graphiti|structural` 切换；它直接基于 Postgres notes/chunks 构建 parent-section 结构索引，并按用户/filters/note 更新时间做渐进式缓存失效**、**filters 已落地，时间/来源/文件范围能进入 local/vector 检索并约束 graph note 映射**、**ask 组件装配已开始工厂化，ContextPack 前支持 parent/child candidate enrichment 和 heuristic/LLM rerank 可插拔**。主要差距在 rerank 融合策略、上下文压缩、图谱质量治理、版本化 ingestion 和评测体系：
+它的优势是分层清楚、证据模型已开始统一、图谱与原文 note 有 episode 映射、回答后有 verifier、**Unstructured partition/chunk 已接入 capture 主链路，chunk 可携带 title_path、page_number、element_ids 和 element metadata**、**QueryUnderstanding + RetrievalPlan 已落地，支持 query rewrite、意图识别、并行多源检索、子查询分解和 metadata filters 下推**、**本地 lexical/vector 检索已落地，支持 Postgres FTS、pg_trgm、pgvector、RRF 融合、filters 和 chunk small-to-big 展开**、**claim-level verifier 已落地，能抽取关键结论并检查 selected evidence 是否支撑**、**capture fingerprint + metadata 已落地，可跳过同 user 下重复采集并把来源 metadata 传入 EvidenceItem**、**Graphiti 批量并发同步已落地，长文 parent 不再重复做图谱深抽取，chunks 按预算后台同步**、**Structural retriever 已作为生产 provider 接入，可通过 `PERSONAL_AGENT_ASK_GRAPH_PROVIDER=graphiti|structural` 切换；它基于 Postgres notes/chunks 构建 parent-section 结构索引，并按用户/filters/note 更新时间做渐进式缓存失效**、**filters 已落地，时间/来源/文件范围能进入 local/vector 检索并约束 graph note 映射**、**ask 组件装配已开始工厂化，ContextPack 前支持 parent/child candidate enrichment 和 heuristic/LLM rerank 可插拔**。主要差距在 chunk 质量评测、层级索引、rerank 融合策略、上下文压缩、图谱质量治理、版本化 ingestion 和评测体系：
 
 - 图谱 `citation_hits` 已优先进入 graph prompt；graph/structural/local/web 也已进入轻量 `ContextPack`；rerank 已拆成 `heuristic` / `llm` 可插拔组件。30q 结果显示 LLM rerank + parent_child + structural provider 的 MRR/R@10 最好，但仍需 100q 验证稳定性。
+- capture 侧的 parent-child 仍不能高估：parent 主要是整篇文章级回溯锚点，child 现在来自 Unstructured element chunks，已经不再是固定长度 chunk；但如果缺少 title_path/page/coordinates 完整落库和 chunk eval，它仍只是结构化 chunk 基线，不等于完整优秀 RAG 的层级索引。
 - 当前 rerank 已跨来源运行，LLM listwise rerank 已有入口，但缺少 MMR、多样性约束、学习型融合和更细粒度压缩。
 - claim-level grounding 当前是启发式 overlap / negation 检查，尚未引入 LLM/entailment verifier。
 - observability 主要靠日志和 trace step，已有部分图谱质量指标和 Open RAGBench 雏形，但尚缺少稳定回归集、rerank 过程快照和 prompt 上下文快照。
@@ -39,8 +40,8 @@ ask: question -> QueryUnderstanding -> RetrievalPlan -> graph(Graphiti)+structur
 | RAG 层 | 优秀架构通常具备 | 当前实现 | 主要差距 |
 | --- | --- | --- | --- |
 | Ingestion | 文档解析、清洗、结构保留、元数据抽取、增量更新 | `CaptureService` 提取正文，`RawIngestItem` 承载来源、metadata 和 source fingerprint；重复 fingerprint 默认复用已有 note | 元数据自动抽取仍较少，缺少版本更新和权限细粒度策略 |
-| Chunking | 语义切分、层级 chunk、标题路径、窗口重叠 | `core.chunking` 先产出确定性的 parent/chunk 草案；LangExtract 预抽取产出 `SectionMap`，再由 chunk 调和层按语义 section 替换或标注机械 chunk；每个 chunk 携带 `preextract.graph_worthy / preextract.topic / chunk.source_span`；local retrieval 已支持 chunk 命中后展开 parent/neighbor | 仍缺标题路径回填、窗口重叠和页码/章节等结构化定位 |
-| Indexing | 向量索引、全文/倒排索引（FTS/BM25 打分）、图谱、关键词、时间索引并存 | Postgres FTS + pg_trgm + pgvector 本地索引；Graphiti 实体关系图（按 `graph_worthy` 路由仅入高价值 chunk）；structural parent-section provider 已接入生产 ask 并有缓存索引；local/vector 已支持 metadata filters 下推 | 尚缺向量重建/回填任务、structural/Graphiti 混合融合策略和更强跨来源统一 rerank |
+| Chunking | 文档元素切分、层级 chunk、标题路径、窗口重叠、边界校验、覆盖率校验 | Unstructured partition + `chunk_by_title` 已作为 capture 主链路；child chunk 可携带 `title_path / page_number / element_ids / element metadata`；local retrieval 已支持 chunk 命中后展开 parent/neighbor | 仍缺多格式文件的完整 coordinates/table metadata 落库、窗口重叠、chunk eval、按元素类型的预算策略和版本化 chunk 更新 |
+| Indexing | 向量索引、全文/倒排索引（FTS/BM25 打分）、图谱、关键词、时间索引并存 | Postgres FTS + pg_trgm + pgvector 本地索引；Graphiti 实体关系图消费 chunk-level notes；structural parent-section provider 已接入生产 ask 并有缓存索引；local/vector 已支持 metadata filters 下推 | 尚缺向量重建/回填任务、structural/Graphiti 混合融合策略和更强跨来源统一 rerank |
 | Query Understanding | 改写、分解、时效识别、过滤条件、检索计划 | `QueryUnderstanding` 模型 + `query_planner.py` 优先用 LangExtract LLM 的 strict json_schema 做 query rewrite / 意图识别 / 子查询分解 / filters 抽取 | filters 已进入 local/vector 检索和 graph note 映射过滤；复杂自然语言时间范围仍需增强 |
 | Retrieval | 多路召回、元数据过滤、parent-child 展开 | `RetrievalPlan` 动态路由，graph+local 并行（ThreadPoolExecutor），graph provider 可切换 Graphiti/structural，web 按 freshness 主动触发，子查询分解多跳检索；local/vector 已支持 metadata filters 和 parent/neighbor 展开 | Graphiti 原生 metadata 过滤、structural 与 local 去重/融合权重、web freshness window、raw candidate debug 仍需增强 |
 | Rerank | Cross-encoder/LLM rerank、MMR、多样性、阈值 | `AskPipelineFactory` 装配 candidate enricher + reranker；`parent_child` 默认补齐 parent 命中的高相关 child sections 和 child 命中的 parent/neighbor chunks；`heuristic` 为默认，`llm` listwise rerank 可通过配置启用；Graphiti 仍有图谱 edge rerank | 尚缺 MMR、融合权重、阈值和系统化组合评测 |
@@ -59,12 +60,11 @@ Capture / Indexing Pipeline
   -> Source normalization
   -> Content extraction
   -> Cleaning + metadata enrichment
-  -> Structural note/chunk draft (deterministic heading/paragraph fallback)
-  -> LangExtract pre-extraction (SectionMap, graph_worthy 路由)
-  -> Semantic chunk reconciliation (>=2 sections 时重建 chunk，否则保留草案并标注)
+  -> Unstructured partition (Title / NarrativeText / ListItem / Table / ...)
+  -> Structure-aware chunking (chunk_by_title / element metadata)
   -> Local document store
   -> Local lexical/vector indexes
-  -> Graph extraction / Graphiti episode (仅 graph_worthy=True 的 chunk)
+  -> Graph extraction / Graphiti episode (chunk-level)
   -> Index status + trace
 
 Ask / Retrieval-Augmented Generation Pipeline
@@ -95,10 +95,10 @@ Ask / Retrieval-Augmented Generation Pipeline
 
 采集侧的分层边界需要特别明确：
 
-- `CaptureLayer` 负责来源归一、正文提取、去重决策，并产出可落库的 parent/chunk 草案；它必须是确定性的，保证 LangExtract 跳过或失败时仍有稳定的笔记结构。
-- `PreExtractLayer` 只负责语义预抽取，产出 `SectionMap`、`topic`、`graph_worthy` 和 source span；它不拥有采集事实，也不直接落库。
-- `ChunkReconcileLayer` 是两者之间的薄编排层：当 `SectionMap.sections >= 2` 时用语义 section 重建 chunk；否则保留 `CaptureLayer` 的机械 chunk，并只把预抽取状态写到 `NotePreExtract`。
-- `GraphIngestLayer` 只消费已经稳定下来的 `GraphIngestDocument`，并根据 `graph_worthy` 做深抽取路由，避免图谱摄取反向影响采集结构。
+- `CaptureLayer` 负责来源归一、正文提取、去重决策，并生成 parent note。
+- `DocumentPartitionLayer` 使用 Unstructured 把正文切成 typed elements，再用 `chunk_by_title` 生成结构化 chunk drafts；它是 capture 侧 chunk 策略的主路径。
+- `ChunkMaterializeLayer` 把 Unstructured chunk drafts 落成 child notes，并保留 `title_path / page_number / element_ids / element metadata`。
+- `GraphIngestLayer` 只消费已经稳定下来的 `GraphIngestDocument`，避免图谱摄取反向影响采集结构。LangExtract 和 Graphiti 不再默认串联；如果需要语义抽取，应作为 Graphiti 的替代 provider，而不是前置重复抽取。
 
 ```mermaid
 flowchart LR
@@ -117,17 +117,14 @@ flowchart LR
             EntryInput["EntryInput<br/>text: 用户输入<br/>user_id/session_id<br/>source_type/source_ref<br/>metadata"]:::model
             CaptureLayer["采集层<br/>extract content<br/>fingerprint dedupe<br/>duplicate skip / version decision"]:::layer
             RawIngestItem["RawIngestItem<br/>content: 入库正文<br/>source_type/source_ref<br/>metadata<br/>source_fingerprint"]:::model
-            StructuralChunkLayer["结构切分层<br/>deterministic heading/paragraph chunking<br/>build parent/chunk draft<br/>fallback owner"]:::layer
-            ChunkDraft["ChunkDraft<br/>title/content/source_span<br/>mechanical boundaries<br/>not persisted directly"]:::model
-            PreExtractLayer["语义预抽取层<br/>SectionMap only<br/>topic / graph_worthy<br/>source_span grounding"]:::layer
-            SectionMap["SectionMap<br/>doc_topic<br/>sections: SectionRecord[]"]:::model
-            SectionRecord["SectionRecord<br/>topic/summary<br/>char_start/char_end<br/>contains_entities<br/>information_density<br/>graph_worthy<br/>reason"]:::model
-            ChunkReconcileLayer["chunk 调和层<br/>&gt;=2 sections: rebuild chunks<br/>0/1 section: keep draft<br/>stamp preextract status"]:::layer
+            StructuralChunkLayer["Unstructured partition 层<br/>Title/NarrativeText/ListItem/Table<br/>chunk_by_title"]:::layer
+            ChunkDraft["ChunkDraft<br/>title/content/source_span<br/>title_path/page_number/element_ids<br/>not persisted directly"]:::model
+            ChunkReconcileLayer["chunk materialize 层<br/>ChunkDraft -> child KnowledgeNote<br/>preserve element metadata"]:::layer
             KnowledgeNote["KnowledgeNote<br/>persistence aggregate<br/>id/user_id<br/>tags/related_note_ids<br/>created_at/updated_at"]:::model
             NoteSource["NoteSource<br/>type/ref/fingerprint<br/>metadata"]:::model
             NoteBody["NoteBody<br/>title<br/>content<br/>summary"]:::model
             NoteChunk["NoteChunk<br/>parent_note_id<br/>index<br/>source_span"]:::model
-            NotePreExtract["NotePreExtract<br/>section_map<br/>graph_worthy<br/>status<br/>topic"]:::model
+            NotePreExtract["NotePreExtract<br/>保留字段<br/>capture 主链路不再写入"]:::model
             NoteGraphKnowledge["NoteGraphKnowledge<br/>episode_uuid<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs"]:::model
             NoteGraphSync["NoteGraphSync<br/>status<br/>error"]:::model
             NoteGraphQuality["NoteGraphQuality<br/>entity_count<br/>relation_count<br/>avg_fact_length<br/>zero_entities<br/>weak_relations_only"]:::model
@@ -147,11 +144,7 @@ flowchart LR
             CaptureLayer -. duplicate .-> KnowledgeNote
             RawIngestItem --> StructuralChunkLayer
             StructuralChunkLayer --> ChunkDraft
-            RawIngestItem --> PreExtractLayer
-            PreExtractLayer --> SectionMap
-            SectionMap --> SectionRecord
             ChunkDraft --> ChunkReconcileLayer
-            SectionMap --> ChunkReconcileLayer
             ChunkReconcileLayer -. populates .-> NotePreExtract
             ChunkReconcileLayer -. creates final .-> NoteChunk
             RawIngestItem --> KnowledgeNote
@@ -303,132 +296,55 @@ EntryInput(source_type="text"|"link"|"file")
 
 ### 2. Cleaning and chunking
 
-当前 `run_capture_flow()` 固定执行：
+当前 `IngestionPipeline._run_local_pipeline()` 固定执行：
 
 ```text
-capture -> structural_chunk -> preextract -> chunk_reconcile -> enrich -> link -> schedule_review
+capture -> unstructured partition/chunk -> chunk materialize -> enrich -> link -> schedule_review
 ```
 
-`capture_node` 生成 parent `KnowledgeNote`；`structural_chunk_node` 产出确定性 `ChunkDraft`；`preextract_node` 调用 LangExtract 跑轻量预抽取（详见后文 §2.5）；`chunk_reconcile_node` 负责最终落定 chunk：有多个 semantic section 时重建 chunk，否则保留机械草案并标注预抽取状态。
+`capture_node` 生成 parent `KnowledgeNote`；`structural_chunk_node` 现在是 Unstructured-backed partition/chunk 节点，调用 `partition_text()` 把正文转成 typed elements，再用 `chunk_by_title()` 生成结构化 `ChunkDraft`；`chunk_reconcile_node` 只负责把 chunk draft materialize 成 child `KnowledgeNote`。
 
 ```text
 KnowledgeNote(parent)
-  -> KnowledgeNote(chunk 1, graph_worthy=True/False)
-  -> KnowledgeNote(chunk 2, graph_worthy=True/False)
+  -> KnowledgeNote(chunk 1, title_path/page_number/element_ids)
+  -> KnowledgeNote(chunk 2, title_path/page_number/element_ids)
   -> ...
 ```
 
 当前能力：
 
-- chunk 已按 LangExtract 语义 section 切分，并保留 `source_span`。
-- parent note 适合展示和文档级召回，chunk note 适合证据级召回。
-- 每个 chunk 已携带 `preextract.graph_worthy / preextract.topic / chunk.source_span`，可用于后续检索和入图路由。
+- parent note 适合展示、来源回溯和文档级聚合，chunk note 适合证据级召回。
+- child chunk 来自 Unstructured element chunks，而不是自写固定长度 chunk。
+- 每个 chunk 可携带 `chunk.source_span / chunk.title_path / chunk.page_number / chunk.element_ids`，source metadata 中也会保留 Unstructured chunk metadata。
+- LangExtract 不再作为 Graphiti 前置抽取步骤；Graphiti 直接消费 chunk-level notes。
 
 剩余目标：
 
-- 回填标题路径、章节、页码、段落位置等更完整结构信息。
-- 回填 chunk 的标题路径、章节层级和页码，让 small-to-big 展开后的上下文更容易定位。
+- 完整接入 `partition_pdf / partition_docx / partition_html` 等文件原生 partition，而不是所有入口都先压平成纯文本。
+- 按元素类型配置 chunk 预算：表格、列表、标题段、叙述段不应共享同一个 chunk 规则。
+- 为 chunk 质量建立 eval：覆盖率、边界合理性、标题路径正确率、表格保真度、检索命中率。
+- 给 Unstructured coordinates / table HTML / orig_elements 做更完整落库和前端回溯展示。
 
-### 2.5 LangExtract 轻量预抽取层
+### 2.5 Unstructured 结构化处理层
 
-代码：[src/personal_agent/extract/](../src/personal_agent/extract/)
+代码：[src/personal_agent/core/document_partition.py](../src/personal_agent/core/document_partition.py)
 
-这是 capture 流水线的强制步骤之一，介于 `capture_node` 与 `enrich_node` 之间。它的职责是用一次低成本 LLM 调用产出**文档级语义切分 + 路由信号**，让下游的图谱深抽取（graphiti `ingest_note`）只跑在真正值得入图的段落上。
-
-#### 2.5.1 模型边界
-
-```text
-PreExtractService(LangExtractConfig)
-  .extract(text) -> SectionMap
-```
-
-`SectionMap / SectionRecord` 的字段和它们与 capture layer 的依赖关系见上方类图。
-
-#### 2.5.2 LLM 后端
-
-走 OpenAI-compatible 协议，与 graphiti（Kimi）/ 主对话（DeepSeek）独立配置：
+Unstructured 是 capture 侧的结构化处理入口。它负责把正文或文档内容 partition 成 typed elements，再基于标题和元素边界生成 RAG chunks：
 
 ```text
-LangExtractConfig
-  api_key = PERSONAL_AGENT_EXTRACT_API_KEY 或 EMBEDDING_API_KEY
-  base_url = https://dashscope.aliyuncs.com/compatible-mode/v1
-  model_id = qwen3-coder-flash
+partition_text(text)
+  -> [Title, NarrativeText, ListItem, Table, ...]
+  -> chunk_by_title(elements)
+  -> ChunkDraft(title/content/source_span/title_path/page_number/element_ids/metadata)
 ```
 
-选 `qwen3-coder-flash` 是因为它在阿里百炼里**支持 OpenAI 风格的 `response_format=json_schema`**，这是 LangExtract 默认的强约束路径。同价位的 `qwen3.6-flash` / `deepseek-v4-flash` 都不支持 json_schema，只能退到 json_object + fence_output 的弱约束路径，schema 漂移风险更高。
+当前工程先接入轻量 `partition_text + chunk_by_title`，source 文件、URL、上传文件的元数据仍由 `NoteSource.metadata` 承载。下一步应把 upload provider 改成直接把文件 bytes 交给对应 `partition_*`，以保留 PDF/Word/HTML 的页码、坐标、表格和元素结构。
 
-#### 2.5.3 判断准则的来源
+和 LangExtract / Graphiti 的边界：
 
-`graph_worthy` 不是 LangExtract 自带的能力，而是由我们的 prompt + few-shot 引导 LLM 判断：
-
-- **Schema 字段定义**：`SectionRecord.graph_worthy` 在 [src/personal_agent/extract/schemas.py](../src/personal_agent/extract/schemas.py) 中定义，附自然语言 description。
-- **Prompt 准则**：[src/personal_agent/extract/prompts.py](../src/personal_agent/extract/prompts.py) 中的 `PROMPT_DESCRIPTION` 明确写出：包含 decisions / dependencies / definitions / causes / tradeoffs / contrasts 时判 True；纯目录、致谢、引用列表、字段列表、boilerplate 判 False。
-- **Few-shot 对照**：两条 example 钉住口径——FastAPI Depends() 缓存机制是正样本（包含定义和对比 → True），目录章节列表是负样本（纯目录无信息 → False）。
-
-判断逻辑 100% 落在 LLM 上，由 prompt + few-shot 引导。换业务场景（如 `is_pii`、`risk_level`）只需改 prompt + examples，schema 完全自由。
-
-#### 2.5.4 路由消费
-
-[src/personal_agent/agent/graph_capture_flow.py](../src/personal_agent/agent/graph_capture_flow.py) 在 capture 本地流程完成后按 `graph_worthy` 分流：
-
-```text
-preextract.graph_worthy=True   -> graph_sync.status = "pending"   (走 graphiti 深抽取)
-preextract.graph_worthy=False  -> graph_sync.status = "skipped"   (跳过深抽取，仍入本地索引)
-```
-
-也就是说本地 lexical/vector 索引会拿到全部 chunk，而 graphiti 只拿到高价值 chunk，节约图谱构建成本。
-
-#### 2.5.5 调优参数
-
-`LangExtractConfig` 关键调优旋钮：
-
-| 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| `max_char_buffer` | 6000 | LangExtract 切给 LLM 的单次窗口字数。越大 section 越粗 |
-| `extraction_passes` | 1 | 多遍抽取以提升召回。当前 prompt 单 pass 已饱和，passes>1 是浪费 |
-| `max_workers` | 4 | LangExtract 并发 LLM 调用数 |
-| `min_doc_chars` | 200 | 短于此长度的文档不跑预抽取，直接进入下游 |
-| `fallback_on_error` | true | 抽取失败时返回空 SectionMap 而非抛错；`preextract.status="failed"` 仍会记录 |
-
-`max_char_buffer` 调优实测（19K 字真实文档，model=qwen3-coder-flash）：
-
-| max_char_buffer | sections | graph_worthy | 过滤率 | 耗时 |
-| --- | --- | --- | --- | --- |
-| 2000 | 78 | 65 / 13 | 18% | 30s |
-| 4000 | 41 | 39 / 2 | 5% | 30s |
-| **6000** | **37** | **28 / 9** | **24%** | **32s** |
-| 8000 | 35 | 35 / 0 | 0% | 29s |
-
-关键观察：
-
-- buffer 越大、section 越粗。粒度从 78 直降到 35。
-- buffer=8000 时 LLM 上下文太大，反而把 boilerplate 和决策段揉在一起，**过滤功能彻底失效**。
-- buffer=6000 是粒度和过滤率的最佳折中——比 buffer=2000 节约 54% 的 graphiti 调用，同时保住 24% 的过滤率。
-
-#### 2.5.6 失败模式与降级
-
-| 场景 | 行为 |
-| --- | --- |
-| `len(text) < min_doc_chars` | `preextract.status="skipped"`，下游使用 capture_node 的机械 chunk |
-| LangExtract 调用抛异常 + `fallback_on_error=true` | `preextract.status="failed"`，下游使用机械 chunk |
-| LangExtract 调用抛异常 + `fallback_on_error=false` | 抛 `PreExtractError`，capture 失败 |
-| SectionMap 只有 1 个 section | `preextract.status="ok"`，但保留机械 chunk，仅在每个 chunk 上盖 `preextract.graph_worthy=parent.preextract.graph_worthy` |
-| SectionMap >= 2 个 section | `preextract.status="ok"`，**用 section 替换机械 chunk**，每个 chunk 带 `preextract.graph_worthy / preextract.topic / chunk.source_span` |
-
-#### 2.5.7 已落地强化与下一步
-
-已落地：
-
-- **schema 强约束**：[src/personal_agent/extract/openai_schema.py](../src/personal_agent/extract/openai_schema.py) 提供手写 `build_section_openai_schema()`，替换默认 examples-derived schema，把 `information_density` 从自由 string 收紧为 `enum: ["high","medium","low"]`。
-- **OpenAI json_schema 路径实测**：通过请求拦截探针 [scripts/probe_extract_request_capture.py](../scripts/probe_extract_request_capture.py) 确认 LangExtract 1.5 会向 DashScope 下发 `response_format = {"type": "json_schema", "strict": true, ...}`。
-- **schema 覆盖路径固定**：语言模型用 `OpenAILanguageModel(...)` 直接构造并通过 `model=` 参数传入 `lx.extract`，避免 `factory.create_model` 覆盖自定义 schema。
-- **Live 漂移验证**：实测 38 个 section 的 `information_density` 全部落在 enum 内。
-
-建议下一步：
-
-- **离线 eval**：把第一次跑出的 SectionMap 人肉标注成 golden set，未来改 prompt 时跑回归。
-- **分类化 reason**：让 LLM 必须从固定枚举里选 reason（`decision / contrast / definition / boilerplate / toc / list`），便于自动化质量审计。同样可以走 enum 约束。
-- **二次校验**：对 `graph_worthy=True` 但 `information_density=low` 的矛盾样本，再跑一次更便宜的小模型反向 challenge——契合 §10.6.5 的两层验证思路。
+- Unstructured 负责文档结构，不负责实体关系事实抽取。
+- Graphiti 负责图谱抽取和时序图检索。
+- LangExtract 如果继续使用，应作为可选 semantic extraction provider，与 Graphiti 二选一，而不是 Graphiti 的默认前置步骤。
 
 ### 3. Local store and local indexes
 
@@ -481,7 +397,7 @@ GraphitiStore.ingest_note(result.note)
 - `graph_sync.status`
 - `graph_sync_error`
 
-长文 capture 已改为 parent 不重复入图：parent 标记为 `skipped`，`graph_worthy=True` 的 chunks 进入 pending 队列，随后由 `sync_notes_to_graph(chunk_ids)` 批量并发同步。`graph_worthy=False` 或超出单次 capture budget 的 chunk 会标记为 `skipped`。
+长文 capture 已改为 parent 不重复入图：parent 标记为 `skipped`，Unstructured 生成的 child chunks 进入 pending 队列，随后由 `sync_notes_to_graph(chunk_ids)` 批量并发同步；超出单次 capture budget 的 chunk 会标记为 `skipped`。
 
 仍需改进：
 
@@ -998,23 +914,23 @@ EntryInput(text=question)
 EntryInput(source)
   -> SourceDocument
   -> cleaned document
-  -> LangExtract pre-extraction (SectionMap)
-  -> KnowledgeNote parent + section-based chunks (graph_worthy 路由)
+  -> Unstructured partition (document elements)
+  -> KnowledgeNote parent + element/title-based chunks
   -> metadata / fingerprint / duplicate skip
   -> local lexical index
   -> local vector index
-  -> graph index (仅 graph_worthy=True 的 chunk)
+  -> graph index (chunk-level Graphiti ingestion)
   -> index status
   -> CaptureResult
 ```
 
-当前已贴近该目标流程：
+当前只覆盖了该目标流程的一部分：
 
-- capture 不只是"存 note"，而是完整索引流水线。
-- **LangExtract 已落地为强制步骤**，产出 SectionMap 替换机械 chunk 并为 chunk 打 `graph_worthy` 路由信号。
-- chunk 是检索单元，parent 是展示和上下文扩展单元。
-- Graphiti 是图谱索引之一，不应替代本地向量/全文索引；且只对 `graph_worthy=True` 的 chunk 跑深抽取。
-- 每个索引状态已有基础可观测和重试能力；剩余是独立队列表、版本链和更完整 source metadata。
+- capture 不只是"存 note"，已经包含基础 chunk、metadata/fingerprint、local index 和 graph sync 状态，但整体仍更像基础 chunk + index 流水线。
+- **Unstructured 已接入主链路**，产出 element/title-based chunks；LangExtract 不再作为 Graphiti 前置抽取步骤。
+- chunk 是检索和证据单元，parent 是展示、来源回溯和文档级聚合单元；当前 parent-child 主要还是“整篇 parent + chunk children”，不能等同于完整层级索引。
+- Graphiti 是图谱索引之一，不应替代本地向量/全文索引；当前按 chunk-level note 入图，并受单次 capture budget 控制。
+- 每个索引状态已有基础可观测和重试能力；剩余是高质量 semantic chunk、独立队列表、版本链和更完整 source metadata。
 
 ## 演进优先级
 
@@ -1030,7 +946,7 @@ A1-A7 已经把原先最影响效果的主链路补齐：
 - **A6 Graphiti 批量/预算化同步**：长文 parent 不重复入图，worthy chunks 批量并发同步，单次 capture 有同步预算。
 - **A7 filters 下推**：`RetrievalFilters` 进入 planner、local lexical/vector SQL 和 graph episode -> note 映射过滤。
 - **A8 Ask 组件工厂 + 可插拔 rerank**：`AskPipelineFactory` 装配 ask 组件；`ContextPack` 的排序和预算选择已拆成独立步骤；`PERSONAL_AGENT_ASK_RERANKER=heuristic|llm` 可切换启发式/LLM listwise rerank，Open RAGBench runner 支持通过 CLI 覆盖 rerank 组合参数。
-- **A9 parent/child candidate enrichment**：rerank 前默认执行 `parent_child` enrichment。parent 命中时补充 query-relevant child sections；child 命中时补充 parent 和邻近 chunks，避免 LLM rerank 只看到 parent abstract 或孤立 section。
+- **A9 parent/child candidate enrichment（基础版）**：rerank 前默认执行 `parent_child` enrichment。parent 命中时补充高 overlap child chunks；child 命中时补充 parent 和可选邻近 chunks，避免 LLM rerank 只看到 parent abstract 或孤立 chunk。需要注意，这只是召回后结构补全，不是高质量层级 chunking 本身；如果 child chunk 仍是固定或弱语义切分，enrichment 只能缓解上下文缺失，不能从根上提升 chunk 语义边界。
 
 ### 未落地优先级排序
 
@@ -1088,7 +1004,7 @@ A1-A7 已经把原先最影响效果的主链路补齐：
 
 #### B5：Graph Quality 治理
 
-Graphiti 已有质量指标、弱关系告警和 `graph_worthy` 路由，但还缺实体/关系质量回归、同名消歧和关系归一化。
+Graphiti 已有质量指标和弱关系告警，但还缺实体/关系质量回归、同名消歧和关系归一化。
 
 优先修改：
 
@@ -1118,7 +1034,7 @@ A6 已把 chunk 同步批量并发化，但后台同步仍是 background task + 
 优先修改：
 
 - 建 graph_sync_jobs 表，记录 note_id、priority、attempts、last_error、next_run_at、locked_at。
-- 预算按 `information_density / graph_worthy reason / section topic / source_type` 排序，而不是按 chunk 顺序截断。
+- 预算按 Unstructured element category、title_path、page_number、chunk length、source_type 和后续质量信号排序，而不是按 chunk 顺序截断。
 - 评估 Graphiti single-client bulk add，减少每个 worker 独立建 client 的连接和索引检查开销。
 
 预期收益：提升长文导入稳定性和成本控制，避免后台同步不可观测。
@@ -1141,7 +1057,7 @@ Open RAGBench / MultiHopRAG 的检索质量评估结果、Graphiti ingest 数据
 
 ## 当前设计要点
 
-- capture 的稳定主线是本地 note/chunk 入库、metadata/fingerprint 去重、LangExtract 预抽取、graph_worthy 路由和 Graphiti 批量后台同步。
+- capture 的稳定主线是本地 note/chunk 入库、metadata/fingerprint 去重、Unstructured partition/chunk 和 Graphiti 批量后台同步。
 - ask 的当前主线是 `QueryUnderstanding -> RetrievalPlan(filters) -> graph(Graphiti)/structural/local/web 多源检索 -> EvidenceItem -> ContextPack -> grounded generation -> claim-level verifier/retry`。
 - `KnowledgeNote` 同时承担长期知识、chunk 定位、metadata/filter、图谱 episode 映射和原文证据载体。
 - `EvidenceItem / RankedEvidence / ContextPack` 已经成为检索候选、rerank 和 prompt assembly 的核心边界。
@@ -1186,7 +1102,7 @@ Open RAGBench / MultiHopRAG 的检索质量评估结果、Graphiti ingest 数据
 - 建一个 100 条左右的人工标注集，月度跑一次 precision/recall。
 - 增加连通分量、重复实体比率、月度自动化 audit。
 
-**LangExtract 预抽取层已经提供了一层”轻量可见度”**：每个 section 都有 `topic / summary / contains_entities / graph_worthy / reason`，当 `graph_worthy=True` 但 graphiti 抽出的实体数为 0 时，可作为质量异常 signal。下一步把这些信号汇总到 trace 即可。
+**Unstructured 结构化层已经提供了一层文档结构可见度**：每个 chunk 可以回溯到 element category、title_path、page_number、element_ids 和 source metadata。当特定元素类型（例如表格、列表、标题段）在检索或图谱抽取中表现异常时，可以把这些结构信号汇总到 trace 和评测里。
 
 #### 2. 关系方向反转 / 类型混淆
 
@@ -1240,7 +1156,7 @@ Open RAGBench / MultiHopRAG 的检索质量评估结果、Graphiti ingest 数据
 
 当前已有三层缓解：
 
-- LangExtract `graph_worthy` 路由：实测 19K 字文档，37 个 section 中 9 个被判为 not-worthy 直接跳过深抽取，省约 24% 的 Graphiti 调用。
+- Unstructured chunking：长文 parent 不重复入图，Graphiti 同步委派给 child chunks，并通过单次 capture budget 控制成本。
 - parent/chunk 去重：长文 parent 不再重复入图，图谱同步委派给 worthy chunks。
 - 批量并发和预算：`sync_notes_to_graph()` 批量并发同步，`PERSONAL_AGENT_GRAPH_SYNC_MAX_NOTES_PER_CAPTURE` 限制单次 capture 入图数量。
 
@@ -1298,7 +1214,7 @@ PG-0 已落地：
   - [graph_capture_flow.py](../src/personal_agent/agent/graph_capture_flow.py) `GraphCaptureFlow.merge_graph_capture()` — 每次 sync 成功后计算 entity_count / relation_count / avg_fact_length / zero_entities / weak_relations_only，写入 note 质量字段 + 发 `graph_quality.metrics` 结构化日志 + 异常 WARNING
   - [models.py](../src/personal_agent/core/models.py) `KnowledgeNote` — 5 个可选质量字段（`graph_quality_*`）
   - [probe_graph_health.py](../scripts/probe_graph_health.py) — 聚合健康报告 CLI（Postgres + 可选 Neo4j）
-- **PG-1（已落地基础版）**：通过 LangExtract `graph_worthy` 路由、parent/chunk 去重、批量并发同步和单次 capture budget 降低图谱构建成本。剩余是真正 bulk add、优先级队列和文档级摘要入图。
+- **PG-1（已落地基础版）**：通过 Unstructured chunk、parent/chunk 去重、批量并发同步和单次 capture budget 降低图谱构建成本。剩余是真正 bulk add、优先级队列和文档级摘要入图。
 - PG-2：user-level alias 表 + capture 前实体归一化。
 - PG-3：图谱健康月度 audit 脚本（密度/连通性/重复实体）。
 - PG-4：抽取质量回归集 + 月度 precision/recall。

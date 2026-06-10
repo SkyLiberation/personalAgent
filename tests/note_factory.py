@@ -9,6 +9,7 @@ from personal_agent.core.models import (
     NoteGraphKnowledge,
     NoteGraphQuality,
     NoteGraphSync,
+    NoteVersion,
     NotePreExtract,
     NoteSource,
 )
@@ -43,6 +44,13 @@ def make_note(
     graph_quality_avg_fact_length: float | None = None,
     graph_quality_zero_entities: bool | None = None,
     graph_quality_weak_relations_only: bool | None = None,
+    version_status: str = "current",
+    version_number: int = 1,
+    version_topic_key: str | None = None,
+    supersedes_note_ids: list[str] | None = None,
+    superseded_by_note_id: str | None = None,
+    conflict_note_ids: list[str] | None = None,
+    version_confidence: float = 1.0,
     **kwargs: Any,
 ) -> KnowledgeNote:
     return KnowledgeNote(
@@ -80,5 +88,15 @@ def make_note(
             avg_fact_length=graph_quality_avg_fact_length,
             zero_entities=graph_quality_zero_entities,
             weak_relations_only=graph_quality_weak_relations_only,
+        ),
+        version=NoteVersion(
+            status=version_status,
+            version=version_number,
+            topic_key=version_topic_key,
+            source_fingerprint=source_fingerprint,
+            supersedes_note_ids=list(supersedes_note_ids or []),
+            superseded_by_note_id=superseded_by_note_id,
+            conflict_note_ids=list(conflict_note_ids or []),
+            confidence=version_confidence,
         ),
     )

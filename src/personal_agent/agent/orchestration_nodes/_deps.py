@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from ...core.models import EntryInput
     from ...graphiti.store import GraphitiStore
     from ...memory import MemoryFacade
+    from ...policy import PolicyEngine
     from ...tools import ToolExecutor
     from ..plan_validator import PlanValidator
     from ..planner import PlanStep
@@ -39,6 +40,7 @@ class OrchestrationDeps:
     tool_executor: "ToolExecutor"
     graph_store: "GraphitiStore"
     execute_ask: Callable[..., "AskResult"]
+    policy_engine: "PolicyEngine | None" = None
     execute_capture: Callable[..., "CaptureResult"] | None = None
     capture_service: "CaptureService | None" = None
     summarize_chat: Callable[[str, str], str] | None = None
@@ -58,6 +60,7 @@ class OrchestrationDeps:
             tool_executor=runtime.tool_executor,
             graph_store=runtime.graph_store,
             execute_ask=runtime.execute_ask,
+            policy_engine=getattr(runtime, "_policy_engine", None),
             execute_capture=runtime.execute_capture,
             capture_service=runtime.capture_service,
             summarize_chat=runtime.summarize_chat,
@@ -73,7 +76,6 @@ _RETRY_DELAY_SECONDS = 2.0
 
 # ReAct constants used by checkpointed graph nodes.
 _REACT_MAX_ITERATIONS_CAP = 5
-_REACT_BLOCKED_TOOL_PREFIXES = ("delete_", "capture_")
 _REACT_DEFAULT_ALLOWED_TOOLS = ("graph_search", "web_search")
 
 _REACT_SYSTEM_PROMPT = (
@@ -216,21 +218,31 @@ def _resolve_allowed_tools_for_step(step: "PlanStep", deps: OrchestrationDeps) -
 
 
 def _is_react_tool_blocked(tool_name: str, deps: OrchestrationDeps) -> bool:
-    spec = None
+    """Whether a tool may not run in ReAct autonomous mode, per the policy engine.
+
+    The tool's governance snapshot is fed to the shared ``PolicyEngine`` so the
+    block decision matches what the ToolGateway would enforce at execution time.
+    """
+    from ...policy import PolicyEngine, PolicyInput
     from ...tools import tool_governance
-    for t in deps.tool_executor.list_tools():
-        if t.name == tool_name:
-            spec = t
-            break
+
+    spec = next((t for t in deps.tool_executor.list_tools() if t.name == tool_name), None)
     if spec is None:
         return True
     governance = tool_governance(spec)
-    if (
-        governance.risk_level == "high"
-        or governance.requires_confirmation
-        or any(effect in governance.side_effects for effect in ("write_longterm", "delete_longterm", "send_external", "irreversible"))
-    ):
-        return True
-    if any(tool_name.startswith(p) for p in _REACT_BLOCKED_TOOL_PREFIXES):
-        return True
-    return False
+    engine = deps.policy_engine or PolicyEngine()
+    decision = engine.evaluate(
+        PolicyInput(
+            action="tool_call",
+            execution_mode="react",
+            tool_name=tool_name,
+            risk_level=governance.risk_level,
+            requires_confirmation=governance.requires_confirmation,
+            side_effects=tuple(governance.side_effects),
+            permission_scope=governance.permission_scope,
+            # ReAct 预过滤只判断工具本身是否属于高风险/写操作，不在此校验
+            # allow-list（调用点已先做 allow-list 检查），故放开允许集合。
+            react_allowed_tools=frozenset({tool_name}),
+        )
+    )
+    return not decision.allowed

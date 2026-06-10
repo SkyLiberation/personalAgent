@@ -2,16 +2,35 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from ..core.models import KnowledgeNote, MemoryEpisode, ReviewCard, local_now
+from ..core.models import (
+    GraphReconcileIssue,
+    GraphReconcileReport,
+    GraphSyncTask,
+    KnowledgeNote,
+    MemoryEpisode,
+    MemoryItem,
+    ReviewCard,
+    local_now,
+)
+from ..core.observability import record_policy_decision
+from ..core.logging_utils import log_event
 from ..core.query_understanding import RetrievalFilters
+from ..policy import PolicyAction, PolicyDecision, PolicyEngine, PolicyInput
 
 if TYPE_CHECKING:
     from ..graphiti.store import GraphitiStore
     from ..storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
+
+_MEMORY_SCOPES: dict[str, str] = {
+    "memory_read": "memory:read",
+    "memory_write": "memory:write",
+    "memory_delete": "memory:delete",
+    "memory_graph_sync": "memory:write",
+}
 
 
 @dataclass(frozen=True)
@@ -31,6 +50,22 @@ class DeleteMemoryResult:
     error: str | None = None
 
 
+def _graph_sync_task_from_note(note: KnowledgeNote) -> GraphSyncTask:
+    return GraphSyncTask(
+        note_id=note.id,
+        user_id=note.user_id,
+        title=note.body.title,
+        status=note.graph_sync.status,
+        error=note.graph_sync.error,
+        episode_uuid=note.graph.episode_uuid,
+        attempt_count=note.graph_sync.attempt_count,
+        last_attempt_at=note.graph_sync.last_attempt_at,
+        last_synced_at=note.graph_sync.last_synced_at,
+        updated_at=note.updated_at,
+        quality=note.graph_quality,
+    )
+
+
 class MemoryFacade:
     """Unified read facade over Postgres long-term memory stores.
 
@@ -43,10 +78,49 @@ class MemoryFacade:
         self,
         local_store: "PostgresMemoryStore",
         graph_store: "GraphitiStore | None" = None,
+        *,
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self.local = local_store
         self.graph = graph_store
+        self._policy = policy_engine or PolicyEngine()
         self._session_key: str | None = None
+
+    # -- policy enforcement -------------------------------------------------
+
+    def _enforce(
+        self,
+        action: PolicyAction,
+        *,
+        subject: str | None,
+        owner: str | None = None,
+        resource: str | None = None,
+        confirmed: bool = False,
+    ) -> PolicyDecision:
+        """Evaluate a memory access decision and audit non-allow outcomes."""
+        decision = self._policy.evaluate(
+            PolicyInput(
+                action=action,
+                user_id=subject,
+                execution_mode="memory",
+                resource=resource,
+                resource_owner=owner,
+                permission_scope=_MEMORY_SCOPES.get(action, "memory:access"),
+                confirmed=confirmed,
+            )
+        )
+        if not decision.allowed:
+            record_policy_decision(
+                action=action,
+                effect=decision.effect,
+                rule=decision.rule,
+                reason=decision.reason,
+                permission_scope=_MEMORY_SCOPES.get(action, "memory:access"),
+                resource=resource,
+                user_id=subject,
+                execution_mode="memory",
+            )
+        return decision
 
     # -- session lifecycle --------------------------------------------------
 
@@ -175,22 +249,76 @@ class MemoryFacade:
     # -- writes -------------------------------------------------------------
 
     def add_note(self, note: KnowledgeNote, *, user_id: str | None = None) -> KnowledgeNote:
-        if user_id is not None and note.user_id != user_id:
-            raise PermissionError(f"Note {note.id} does not belong to user {user_id}.")
+        if user_id is not None:
+            decision = self._enforce(
+                "memory_write", subject=user_id, owner=note.user_id, resource=note.id,
+            )
+            if not decision.allowed:
+                raise PermissionError(decision.reason)
         self.local.add_note(note)
         return note
 
     def add_episode(self, episode: MemoryEpisode, *, user_id: str | None = None) -> MemoryEpisode:
-        if user_id is not None and episode.user_id != user_id:
-            raise PermissionError(f"Episode {episode.id} does not belong to user {user_id}.")
+        if user_id is not None:
+            decision = self._enforce(
+                "memory_write", subject=user_id, owner=episode.user_id, resource=episode.id,
+            )
+            if not decision.allowed:
+                raise PermissionError(decision.reason)
         self.local.add_episode(episode)
         return episode
+
+    def add_memory_item(self, item: MemoryItem, *, user_id: str | None = None) -> MemoryItem:
+        if user_id is not None:
+            decision = self._enforce(
+                "memory_write", subject=user_id, owner=item.user_id, resource=item.id,
+            )
+            if not decision.allowed:
+                raise PermissionError(decision.reason)
+        self.local.add_memory_item(item)
+        return item
+
+    def list_memory_items(
+        self,
+        user_id: str,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        return self.local.list_memory_items(
+            user_id,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
+
+    def search_memory_items(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        memory_type: str | None = None,
+        status: str | None = "confirmed",
+        limit: int = 5,
+    ) -> list[MemoryItem]:
+        return self.local.search_memory_items(
+            user_id,
+            query,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
 
     # -- updates ------------------------------------------------------------
 
     def update_note(self, note: KnowledgeNote, *, user_id: str | None = None) -> KnowledgeNote:
-        if user_id is not None and note.user_id != user_id:
-            raise PermissionError(f"Note {note.id} does not belong to user {user_id}.")
+        if user_id is not None:
+            decision = self._enforce(
+                "memory_write", subject=user_id, owner=note.user_id, resource=note.id,
+            )
+            if not decision.allowed:
+                raise PermissionError(decision.reason)
         self.local.update_note(note)
         return note
 
@@ -198,11 +326,337 @@ class MemoryFacade:
         note = self.get_note(note_id, user_id=user_id)
         if note is None:
             return None
+        if user_id is not None:
+            decision = self._enforce(
+                "memory_graph_sync", subject=user_id, owner=note.user_id, resource=note.id,
+            )
+            if not decision.allowed:
+                raise PermissionError(decision.reason)
         note.graph_sync.status = "pending"
         note.graph_sync.error = None
         note.updated_at = local_now()
         self.local.update_note(note)
         return note
+
+    def supersede_note(
+        self,
+        old_note_id: str,
+        new_note_id: str,
+        *,
+        user_id: str,
+        reason: str = "",
+    ) -> tuple[KnowledgeNote, KnowledgeNote]:
+        old_note = self.get_note(old_note_id, user_id=user_id)
+        new_note = self.get_note(new_note_id, user_id=user_id)
+        if old_note is None or new_note is None:
+            raise ValueError("old_note_id or new_note_id does not exist for user.")
+        decision = self._enforce(
+            "memory_write", subject=user_id, owner=user_id, resource=f"{old_note_id}->{new_note_id}",
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+
+        old_note.version.status = "superseded"
+        old_note.version.superseded_by_note_id = new_note.id
+        old_note.version.valid_until = local_now()
+        old_note.version.reason = reason
+        new_note.version.status = "current"
+        new_note.version.version = max(new_note.version.version, old_note.version.version + 1)
+        if old_note.id not in new_note.version.supersedes_note_ids:
+            new_note.version.supersedes_note_ids.append(old_note.id)
+        new_note.version.topic_key = new_note.version.topic_key or old_note.version.topic_key
+        new_note.version.source_fingerprint = (
+            new_note.version.source_fingerprint or new_note.source.fingerprint
+        )
+        new_note.version.reason = reason
+        old_note.updated_at = local_now()
+        new_note.updated_at = local_now()
+        self.local.update_note(old_note)
+        self.local.update_note(new_note)
+        log_event(
+            logger,
+            logging.INFO,
+            "memory.version.superseded",
+            user_id=user_id,
+            old_note_id=old_note.id,
+            new_note_id=new_note.id,
+            reason=reason,
+        )
+        return old_note, new_note
+
+    def mark_note_deprecated(
+        self,
+        note_id: str,
+        *,
+        user_id: str,
+        reason: str = "",
+    ) -> KnowledgeNote:
+        note = self.get_note(note_id, user_id=user_id)
+        if note is None:
+            raise ValueError(f"note {note_id} does not exist for user.")
+        decision = self._enforce(
+            "memory_write", subject=user_id, owner=note.user_id, resource=note.id,
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+        note.version.status = "deprecated"
+        note.version.valid_until = local_now()
+        note.version.reason = reason
+        note.updated_at = local_now()
+        self.local.update_note(note)
+        log_event(
+            logger,
+            logging.INFO,
+            "memory.version.deprecated",
+            user_id=user_id,
+            note_id=note.id,
+            reason=reason,
+        )
+        return note
+
+    def mark_notes_conflicted(
+        self,
+        note_ids: list[str],
+        *,
+        user_id: str,
+        reason: str = "",
+    ) -> list[KnowledgeNote]:
+        notes = [note for note_id in dict.fromkeys(note_ids) for note in [self.get_note(note_id, user_id=user_id)] if note]
+        if len(notes) < 2:
+            raise ValueError("At least two existing notes are required to mark a conflict.")
+        decision = self._enforce(
+            "memory_write", subject=user_id, owner=user_id, resource="memory_conflict",
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+        ids = [note.id for note in notes]
+        for note in notes:
+            note.version.status = "conflicted"
+            note.version.conflict_note_ids = [item for item in ids if item != note.id]
+            note.version.reason = reason
+            note.updated_at = local_now()
+            self.local.update_note(note)
+        log_event(
+            logger,
+            logging.WARNING,
+            "memory.version.conflicted",
+            user_id=user_id,
+            note_ids=ids,
+            reason=reason,
+        )
+        return notes
+
+    def list_graph_sync_tasks(
+        self,
+        *,
+        user_id: str | None = None,
+        statuses: list[str] | None = None,
+        include_chunks: bool = True,
+        limit: int | None = None,
+    ) -> list[GraphSyncTask]:
+        notes = self.local.list_notes_by_graph_sync_status(
+            user_id=user_id,
+            statuses=statuses,
+            include_chunks=include_chunks,
+            limit=limit,
+        )
+        return [_graph_sync_task_from_note(note) for note in notes]
+
+    def reconcile_graph_sync(
+        self,
+        user_id: str,
+        *,
+        graph_episode_uuids: list[str] | None = None,
+        retry_statuses: list[str] | None = None,
+        clean_orphans: bool = False,
+        sync_note: Callable[[str], bool] | None = None,
+    ) -> GraphReconcileReport:
+        decision = self._enforce(
+            "memory_graph_sync", subject=user_id, owner=user_id, resource="graph_sync_reconcile",
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+
+        notes = self.local.list_notes_by_graph_sync_status(user_id=user_id, include_chunks=True)
+        report = GraphReconcileReport(user_id=user_id, checked_notes=len(notes))
+        log_event(
+            logger,
+            logging.INFO,
+            "graph_sync.reconcile.started",
+            user_id=user_id,
+            checked_notes=len(notes),
+            retry_statuses=retry_statuses or [],
+            clean_orphans=clean_orphans,
+            graph_episode_inventory_count=len(graph_episode_uuids or []),
+        )
+        retry_set = set(retry_statuses or [])
+        known_episodes = {note.graph.episode_uuid for note in notes if note.graph.episode_uuid}
+
+        for note in notes:
+            status = note.graph_sync.status
+            if status == "pending":
+                report.pending_count += 1
+                report.issues.append(GraphReconcileIssue(
+                    issue_type="pending_sync",
+                    severity="info",
+                    note_id=note.id,
+                    episode_uuid=note.graph.episode_uuid,
+                    message=f"Graph sync is pending for note {note.id}.",
+                    action="retry_sync" if "pending" in retry_set else "none",
+                ))
+            elif status == "failed":
+                report.failed_count += 1
+                report.issues.append(GraphReconcileIssue(
+                    issue_type="failed_sync",
+                    severity="warning",
+                    note_id=note.id,
+                    episode_uuid=note.graph.episode_uuid,
+                    message=note.graph_sync.error or f"Graph sync failed for note {note.id}.",
+                    action="retry_sync" if "failed" in retry_set else "none",
+                ))
+            elif status == "synced":
+                report.synced_count += 1
+                if not note.graph.episode_uuid:
+                    report.issues.append(GraphReconcileIssue(
+                        issue_type="missing_episode",
+                        severity="error",
+                        note_id=note.id,
+                        message=f"Note {note.id} is marked synced but has no graph episode uuid.",
+                        action="retry_sync" if "synced" in retry_set else "none",
+                    ))
+            elif status == "skipped":
+                report.skipped_count += 1
+
+            if note.graph_quality.zero_entities or note.graph_quality.weak_relations_only:
+                report.weak_quality_count += 1
+                report.issues.append(GraphReconcileIssue(
+                    issue_type="weak_quality",
+                    severity="warning",
+                    note_id=note.id,
+                    episode_uuid=note.graph.episode_uuid,
+                    message=f"Graph quality is weak for note {note.id}.",
+                    action="rebuild",
+                ))
+
+            if sync_note is not None and status in retry_set:
+                try:
+                    if bool(sync_note(note.id)):
+                        report.retried_count += 1
+                        note = self.get_note(note.id, user_id=user_id) or note
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "graph_sync.reconcile.retry.completed",
+                            user_id=user_id,
+                            note_id=note.id,
+                            status=note.graph_sync.status,
+                            episode_uuid=note.graph.episode_uuid,
+                        )
+                    else:
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "graph_sync.reconcile.retry.failed",
+                            user_id=user_id,
+                            note_id=note.id,
+                            error="sync_note returned False",
+                        )
+                        report.issues.append(GraphReconcileIssue(
+                            issue_type="retry_failed",
+                            severity="warning",
+                            note_id=note.id,
+                            episode_uuid=note.graph.episode_uuid,
+                            message=f"Retry did not sync note {note.id}.",
+                            action="retry_sync",
+                            error="sync_note returned False",
+                        ))
+                except Exception as exc:
+                    logger.exception("Graph sync retry failed note_id=%s", note.id)
+                    log_event(
+                        logger,
+                        logging.ERROR,
+                        "graph_sync.reconcile.retry.failed",
+                        user_id=user_id,
+                        note_id=note.id,
+                        error=str(exc),
+                    )
+                    report.issues.append(GraphReconcileIssue(
+                        issue_type="retry_failed",
+                        severity="error",
+                        note_id=note.id,
+                        episode_uuid=note.graph.episode_uuid,
+                        message=f"Retry raised for note {note.id}.",
+                        action="retry_sync",
+                        error=str(exc),
+                    ))
+
+            note.graph_sync.last_reconciled_at = report.generated_at
+            note.updated_at = local_now()
+            self.local.update_note(note)
+
+        for episode_uuid in sorted(set(graph_episode_uuids or []) - known_episodes):
+            issue = GraphReconcileIssue(
+                issue_type="orphan_episode",
+                severity="warning",
+                episode_uuid=episode_uuid,
+                message=f"Graph episode {episode_uuid} has no backing Postgres note.",
+                action="delete_episode" if clean_orphans else "none",
+            )
+            report.orphan_episode_count += 1
+            if clean_orphans and self.graph is not None and self.graph.configured():
+                try:
+                    issue.fixed = bool(self.graph.delete_episode(episode_uuid))
+                    if issue.fixed:
+                        report.cleaned_orphan_count += 1
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "graph_sync.reconcile.orphan_deleted",
+                            user_id=user_id,
+                            episode_uuid=episode_uuid,
+                        )
+                    else:
+                        issue.error = "delete_episode returned False"
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "graph_sync.reconcile.orphan_delete_failed",
+                            user_id=user_id,
+                            episode_uuid=episode_uuid,
+                            error=issue.error,
+                        )
+                except Exception as exc:
+                    logger.exception("Failed to delete orphan graph episode %s", episode_uuid)
+                    log_event(
+                        logger,
+                        logging.ERROR,
+                        "graph_sync.reconcile.orphan_delete_failed",
+                        user_id=user_id,
+                        episode_uuid=episode_uuid,
+                        error=str(exc),
+                    )
+                    issue.issue_type = "delete_failed"
+                    issue.severity = "error"
+                    issue.error = str(exc)
+            report.issues.append(issue)
+
+        log_event(
+            logger,
+            logging.INFO,
+            "graph_sync.reconcile.completed",
+            user_id=user_id,
+            checked_notes=report.checked_notes,
+            pending_count=report.pending_count,
+            failed_count=report.failed_count,
+            synced_count=report.synced_count,
+            skipped_count=report.skipped_count,
+            orphan_episode_count=report.orphan_episode_count,
+            weak_quality_count=report.weak_quality_count,
+            retried_count=report.retried_count,
+            cleaned_orphan_count=report.cleaned_orphan_count,
+            issue_count=len(report.issues),
+        )
+        return report
 
     # -- deletion -----------------------------------------------------------
 
@@ -233,6 +687,11 @@ class MemoryFacade:
         )
 
     def delete_note_confirmed(self, note_id: str, user_id: str) -> DeleteMemoryResult:
+        decision = self._enforce(
+            "memory_delete", subject=user_id, owner=user_id, resource=note_id, confirmed=True,
+        )
+        if not decision.allowed:
+            return DeleteMemoryResult(ok=False, note_id=note_id, error=decision.reason)
         note = self.get_note(note_id, user_id=user_id)
         if note is None:
             return DeleteMemoryResult(

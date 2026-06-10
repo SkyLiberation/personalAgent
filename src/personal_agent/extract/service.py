@@ -1,7 +1,10 @@
 """Pre-extraction service: text -> SectionMap.
 
-LangExtract is a mandatory step in the capture pipeline. The only
-short-circuits are:
+NOTE: This service is no longer wired into the capture pipeline. Document
+structure and chunking are now owned by Unstructured (partition +
+chunk_by_title); LangExtract is not run as a Graphiti pre-extraction step.
+This module is retained for tests/experiments and potential reuse. When it
+does run, the only short-circuits are:
   * docs shorter than ``min_doc_chars`` (extraction has nothing to learn from)
   * runtime errors when ``fallback_on_error`` is True (network / LLM hiccups)
 

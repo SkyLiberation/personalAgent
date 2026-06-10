@@ -16,7 +16,7 @@ class RawIngestItem(BaseModel):
     source_type: Literal["text", "link", "pdf", "audio", "image", "note", "file"] = "text"
     source_ref: str | None = None
     user_id: str = "default"
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     source_fingerprint: str | None = None
 
 
@@ -37,6 +37,41 @@ class EntryInput(BaseModel):
     source_type: str = "text"
     source_ref: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ThreadSummary(BaseModel):
+    """Structured short-term summary persisted in the thread checkpoint.
+
+    This is a dialogue cue, not a factual evidence source. Fields deliberately
+    separate confirmed user state from assistant-side guesses and unverified
+    claims so prompt rendering can preserve that boundary.
+    """
+
+    user_goals: list[str] = Field(default_factory=list)
+    user_constraints: list[str] = Field(default_factory=list)
+    confirmed_decisions: list[str] = Field(default_factory=list)
+    pending_tasks: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    assistant_assumptions: list[str] = Field(default_factory=list)
+    unverified_claims: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    context_notes: list[str] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=local_now)
+
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.user_goals,
+                self.user_constraints,
+                self.confirmed_decisions,
+                self.pending_tasks,
+                self.open_questions,
+                self.assistant_assumptions,
+                self.unverified_claims,
+                self.evidence_refs,
+                self.context_notes,
+            )
+        )
 
 
 class Citation(BaseModel):
@@ -86,7 +121,7 @@ class NoteSource(BaseModel):
     type: str = "text"
     ref: str | None = None
     fingerprint: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class NoteBody(BaseModel):
@@ -99,12 +134,20 @@ class NoteChunk(BaseModel):
     parent_note_id: str | None = None
     index: int | None = None
     source_span: str | None = None
+    title_path: list[str] = Field(default_factory=list)
+    page_number: int | None = None
+    element_ids: list[str] = Field(default_factory=list)
 
 
 class ChunkDraft(BaseModel):
     title: str
     content: str
     source_span: str
+    title_path: list[str] = Field(default_factory=list)
+    page_number: int | None = None
+    element_ids: list[str] = Field(default_factory=list)
+    category: str = "CompositeElement"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class NotePreExtract(BaseModel):
@@ -126,6 +169,10 @@ class NoteGraphKnowledge(BaseModel):
 class NoteGraphSync(BaseModel):
     status: Literal["idle", "pending", "synced", "failed", "skipped"] = "idle"
     error: str | None = None
+    attempt_count: int = 0
+    last_attempt_at: datetime | None = None
+    last_synced_at: datetime | None = None
+    last_reconciled_at: datetime | None = None
 
 
 class NoteGraphQuality(BaseModel):
@@ -134,6 +181,74 @@ class NoteGraphQuality(BaseModel):
     avg_fact_length: float | None = None
     zero_entities: bool | None = None
     weak_relations_only: bool | None = None
+
+
+class NoteVersion(BaseModel):
+    version_id: str = Field(default_factory=lambda: str(uuid4()))
+    version: int = 1
+    status: Literal["current", "superseded", "deprecated", "conflicted"] = "current"
+    topic_key: str | None = None
+    source_fingerprint: str | None = None
+    supersedes_note_ids: list[str] = Field(default_factory=list)
+    superseded_by_note_id: str | None = None
+    conflict_note_ids: list[str] = Field(default_factory=list)
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    confidence: float = 1.0
+    trust_level: Literal["low", "medium", "high"] = "medium"
+    reason: str = ""
+
+    @property
+    def is_current(self) -> bool:
+        return self.status == "current" and self.superseded_by_note_id is None
+
+
+class GraphSyncTask(BaseModel):
+    note_id: str
+    user_id: str
+    title: str = ""
+    status: Literal["idle", "pending", "synced", "failed", "skipped"]
+    error: str | None = None
+    episode_uuid: str | None = None
+    attempt_count: int = 0
+    last_attempt_at: datetime | None = None
+    last_synced_at: datetime | None = None
+    updated_at: datetime | None = None
+    quality: NoteGraphQuality = Field(default_factory=NoteGraphQuality)
+
+
+class GraphReconcileIssue(BaseModel):
+    issue_type: Literal[
+        "pending_sync",
+        "failed_sync",
+        "missing_episode",
+        "orphan_episode",
+        "weak_quality",
+        "delete_failed",
+        "retry_failed",
+    ]
+    severity: Literal["info", "warning", "error"] = "warning"
+    note_id: str | None = None
+    episode_uuid: str | None = None
+    message: str = ""
+    action: Literal["none", "retry_sync", "delete_episode", "rebuild"] = "none"
+    fixed: bool = False
+    error: str | None = None
+
+
+class GraphReconcileReport(BaseModel):
+    user_id: str
+    checked_notes: int = 0
+    pending_count: int = 0
+    failed_count: int = 0
+    synced_count: int = 0
+    skipped_count: int = 0
+    orphan_episode_count: int = 0
+    weak_quality_count: int = 0
+    retried_count: int = 0
+    cleaned_orphan_count: int = 0
+    issues: list[GraphReconcileIssue] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=local_now)
 
 
 class KnowledgeNote(BaseModel):
@@ -148,6 +263,7 @@ class KnowledgeNote(BaseModel):
     graph: NoteGraphKnowledge = Field(default_factory=NoteGraphKnowledge)
     graph_sync: NoteGraphSync = Field(default_factory=NoteGraphSync)
     graph_quality: NoteGraphQuality = Field(default_factory=NoteGraphQuality)
+    version: NoteVersion = Field(default_factory=NoteVersion)
     created_at: datetime = Field(default_factory=local_now)
     updated_at: datetime = Field(default_factory=local_now)
 
@@ -176,11 +292,11 @@ class KnowledgeNote(BaseModel):
         self.source.fingerprint = value
 
     @property
-    def metadata(self) -> dict[str, str]:
+    def metadata(self) -> dict[str, Any]:
         return self.source.metadata
 
     @metadata.setter
-    def metadata(self, value: dict[str, str]) -> None:
+    def metadata(self, value: dict[str, Any]) -> None:
         self.source.metadata = value
 
     @property
@@ -277,6 +393,25 @@ class MemoryEpisode(BaseModel):
     event_refs: list[str] = Field(default_factory=list)
     tool_refs: list[str] = Field(default_factory=list)
     note_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=local_now)
+    updated_at: datetime = Field(default_factory=local_now)
+
+
+class MemoryItem(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    memory_type: Literal["procedural", "reflection"]
+    user_id: str = "default"
+    session_id: str | None = None
+    thread_id: str = ""
+    title: str = ""
+    content: str = ""
+    status: Literal["candidate", "confirmed", "rejected", "superseded"] = "candidate"
+    confidence: float = 0.5
+    source_episode_ids: list[str] = Field(default_factory=list)
+    source_run_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    applies_to: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=local_now)
     updated_at: datetime = Field(default_factory=local_now)

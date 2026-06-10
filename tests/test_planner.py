@@ -39,22 +39,16 @@ class TestPlannerEnrichedSteps:
         assert steps[1].requires_confirmation is False
         assert steps[1].risk_level == "low"
 
-    def test_plan_ask_heuristic(self, planner):
+    def test_plan_ask_is_ordinary_workflow(self, planner):
         steps = planner.plan("ask", "什么是服务降级？")
-        assert len(steps) == 4  # retrieve, compose, verify, web_search fallback
-        assert steps[0].action_type == "retrieve"
-        assert steps[0].tool_name == "graph_search"
-        assert steps[1].depends_on == ["ask-1"]
-        assert steps[3].tool_name == "web_search"
-        assert steps[3].on_failure == "skip"
+        assert steps == []
 
-    def test_plan_unknown_intent_fallback(self, planner):
+    def test_plan_unknown_intent_has_no_projection(self, planner):
         steps = planner.plan("unknown", "随便说点什么")
-        assert len(steps) == 1
-        assert steps[0].action_type == "compose"
+        assert steps == []
 
     def test_plan_step_has_all_required_fields(self, planner):
-        steps = planner.plan("ask", "测试问题")
+        steps = planner.plan("delete_knowledge", "删除旧笔记")
         for s in steps:
             assert hasattr(s, "step_id")
             assert hasattr(s, "action_type")
@@ -70,21 +64,26 @@ class TestPlannerEnrichedSteps:
             assert hasattr(s, "status")
 
     def test_planner_projects_workflow_deterministically(self):
-        """The planner projects a fixed WorkflowSpec into PlanStep objects with
-        no LLM call. Projection is deterministic: the same intent always yields
-        the same topology, every step starting in ``planned`` status.
+        """The planner projects a fixed WorkflowSpec into runtime step
+        projections with no LLM call. Projection is deterministic: the same
+        intent always yields the same topology, every step starting in
+        ``planned`` status.
         """
         from personal_agent.core.config import OpenAIConfig, Settings
 
         planner = DefaultTaskPlanner(
             Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
-        steps = planner.plan("ask", "什么是服务降级？")
+        steps = planner.plan("delete_knowledge", "删除旧笔记")
         assert len(steps) == 4
         for s in steps:
             assert isinstance(s, PlanStep)
             assert s.action_type in {"retrieve", "resolve", "tool_call", "compose", "verify"}
             assert s.status == "planned"
+            assert s.workflow_id == "delete_knowledge"
+            assert s.workflow_version == "v1"
+            assert s.workflow_step_id == s.step_id
+            assert s.projection_kind == "workflow_step"
 
 
 class TestDefaultIntentRouterNewIntents:
@@ -214,24 +213,17 @@ class TestPlannerValidatorRoundtrip:
 
         validator = PlanValidator()
 
-        for intent in ("ask", "capture_text", "delete_knowledge", "solidify_conversation"):
+        for intent in ("delete_knowledge", "solidify_conversation"):
             decision = _default_router_decision(intent)
             steps = planner.plan(intent, "测试输入")
             result = validator.validate(steps, decision)
-            # Heuristic plans should pass validation cleanly
+            # Step-projecting workflows should pass validation cleanly.
             assert result.valid, f"Intent {intent} plan failed: {result.issues}"
             assert len(steps) > 0
 
-    def test_empty_plan_text_produces_valid_plan(self, planner):
-        from personal_agent.agent.plan_validator import PlanValidator
-        from personal_agent.agent.router import _default_router_decision
-
-        validator = PlanValidator()
-        decision = _default_router_decision("unknown")
-        steps = planner.plan("unknown", "")
-        result = validator.validate(steps, decision)
-        # unknown intent produces a single compose step — should pass
-        assert result.valid
+    def test_ordinary_workflows_do_not_enter_plan_validation_path(self, planner):
+        for intent in ("ask", "capture_text", "capture_link", "capture_file", "unknown"):
+            assert planner.plan(intent, "测试输入") == []
 
     def test_delete_note_id_may_be_supplied_by_transitive_resolve_step(self):
         from personal_agent.agent.plan_validator import PlanValidator
@@ -332,6 +324,38 @@ class TestWorkflowRegistry:
 
         for intent in ("ask", "capture_text", "summarize_thread", "direct_answer"):
             assert WORKFLOW_REGISTRY.select(intent).requires_projection is False
+            assert WORKFLOW_REGISTRY.project(intent) == []
+
+    def test_workflow_specs_expose_governance_metadata(self):
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
+
+        delete_spec = WORKFLOW_REGISTRY.select("delete_knowledge")
+        assert delete_spec.allows_llm_decision_node is True
+        assert delete_spec.allows_tools is True
+        assert delete_spec.has_high_risk_side_effect is True
+        assert delete_spec.hitl_policy == "required_for_delete"
+        assert delete_spec.recovery_policy == "checkpoint_step"
+
+        ask_spec = WORKFLOW_REGISTRY.select("ask")
+        assert ask_spec.requires_projection is False
+        assert ask_spec.allows_llm_decision_node is True
+        assert ask_spec.recovery_policy == "branch"
+
+    def test_workflow_specs_have_node_level_contracts(self):
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY, WorkflowStepSpec
+
+        ask_spec = WORKFLOW_REGISTRY.select("ask")
+        assert ask_spec.steps
+        assert all(isinstance(step, WorkflowStepSpec) for step in ask_spec.steps)
+        assert any(step.llm_decision_node == "query_understanding" for step in ask_spec.steps)
+        assert any(step.allowed_tools == ("graph_search", "web_search") for step in ask_spec.steps)
+        assert WORKFLOW_REGISTRY.project("ask") == []
+
+        delete_spec = WORKFLOW_REGISTRY.select("delete_knowledge")
+        delete_step = next(step for step in delete_spec.steps if step.step_id == "del-3")
+        assert delete_step.side_effects == ("delete_longterm",)
+        assert delete_step.hitl_policy == "required_for_delete"
+        assert delete_step.recovery_policy == "abort"
 
     def test_unknown_intent_falls_back_to_unknown_spec(self):
         from personal_agent.agent.workflow import WORKFLOW_REGISTRY

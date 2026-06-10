@@ -19,7 +19,7 @@ from ..core.embedding_trace import (
     traced_embedding,
 )
 from ..core.logging_utils import log_event
-from ..core.models import KnowledgeNote, MemoryEpisode, ReviewCard, local_now
+from ..core.models import KnowledgeNote, MemoryEpisode, MemoryItem, ReviewCard, local_now
 from ..core.projections import retrieval_document_from_note
 from ..core.query_understanding import RetrievalFilters
 from .postgres_common import PostgresStoreBase
@@ -68,6 +68,21 @@ def _search_text_for_episode(episode: MemoryEpisode) -> str:
         " ".join(episode.tool_refs),
         " ".join(episode.note_refs),
         " ".join(str(value) for value in episode.metadata.values() if value),
+    ]
+    return _compact_whitespace(" ".join(part for part in parts if part))
+
+
+def _search_text_for_memory_item(item: MemoryItem) -> str:
+    parts = [
+        item.memory_type,
+        item.title,
+        item.content,
+        item.status,
+        " ".join(item.applies_to),
+        " ".join(item.source_episode_ids),
+        " ".join(item.source_run_ids),
+        " ".join(item.evidence_refs),
+        " ".join(str(value) for value in item.metadata.values() if value),
     ]
     return _compact_whitespace(" ".join(part for part in parts if part))
 
@@ -403,6 +418,32 @@ class PostgresMemoryStore(PostgresStoreBase):
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS memory_episodes_search_text_trgm_idx ON memory_episodes USING GIN (search_text gin_trgm_ops)"
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS memory_items (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        memory_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        payload JSONB NOT NULL,
+                        search_text TEXT NOT NULL DEFAULT '',
+                        search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_items_user_type_idx ON memory_items (user_id, memory_type, status, created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_items_search_vector_idx ON memory_items USING GIN (search_vector)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_items_search_text_trgm_idx ON memory_items USING GIN (search_text gin_trgm_ops)"
+                )
             conn.commit()
         self._initialized = True
 
@@ -524,6 +565,142 @@ class PostgresMemoryStore(PostgresStoreBase):
                     ),
                 )
             conn.commit()
+
+    def add_memory_item(self, item: MemoryItem) -> None:
+        self.ensure_schema()
+        search_text = _search_text_for_memory_item(item)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO memory_items
+                        (
+                            id, user_id, memory_type, status, title, content,
+                            payload, search_text, search_vector, created_at, updated_at
+                        )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, to_tsvector('simple', %s), %s, %s
+                    )
+                    ON CONFLICT (id) DO UPDATE SET
+                        user_id = EXCLUDED.user_id,
+                        memory_type = EXCLUDED.memory_type,
+                        status = EXCLUDED.status,
+                        title = EXCLUDED.title,
+                        content = EXCLUDED.content,
+                        payload = EXCLUDED.payload,
+                        search_text = EXCLUDED.search_text,
+                        search_vector = EXCLUDED.search_vector,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        item.id,
+                        item.user_id,
+                        item.memory_type,
+                        item.status,
+                        item.title,
+                        item.content,
+                        Jsonb(item.model_dump(mode="json")),
+                        search_text,
+                        search_text,
+                        item.created_at,
+                        item.updated_at,
+                    ),
+                )
+            conn.commit()
+
+    def list_memory_items(
+        self,
+        user_id: str,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        self.ensure_schema()
+        clauses = ["user_id = %s"]
+        params: list[object] = [user_id]
+        if memory_type:
+            clauses.append("memory_type = %s")
+            params.append(memory_type)
+        if status:
+            clauses.append("status = %s")
+            params.append(status)
+        params.append(max(1, limit))
+        where_sql = " AND ".join(clauses)
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM memory_items
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                return [MemoryItem.model_validate(row["payload"]) for row in cur.fetchall()]
+
+    def search_memory_items(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        memory_type: str | None = None,
+        status: str | None = "confirmed",
+        limit: int = 5,
+    ) -> list[MemoryItem]:
+        self.ensure_schema()
+        normalized_query = _compact_whitespace(query)
+        if not normalized_query:
+            return self.list_memory_items(
+                user_id, memory_type=memory_type, status=status, limit=limit
+            )
+        clauses = ["user_id = %s"]
+        params: list[object] = [user_id]
+        if memory_type:
+            clauses.append("memory_type = %s")
+            params.append(memory_type)
+        if status:
+            clauses.append("status = %s")
+            params.append(status)
+        where_sql = " AND ".join(clauses)
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    WITH q AS (
+                        SELECT plainto_tsquery('simple', %s) AS tsq
+                    )
+                    SELECT payload,
+                           (
+                               CASE WHEN search_vector @@ q.tsq THEN ts_rank_cd(search_vector, q.tsq) * 6 ELSE 0 END
+                               + similarity(search_text, %s) * 3
+                               + CASE WHEN lower(title) LIKE %s THEN 4 ELSE 0 END
+                               + CASE WHEN lower(content) LIKE %s THEN 2 ELSE 0 END
+                           ) AS score
+                    FROM memory_items, q
+                    WHERE {where_sql}
+                      AND (
+                          search_vector @@ q.tsq
+                          OR search_text %% %s
+                          OR lower(search_text) LIKE %s
+                      )
+                    ORDER BY score DESC, created_at DESC
+                    LIMIT %s
+                    """,
+                    (
+                        normalized_query,
+                        normalized_query.lower(),
+                        f"%{normalized_query.lower()}%",
+                        f"%{normalized_query.lower()}%",
+                        *params,
+                        normalized_query.lower(),
+                        f"%{normalized_query.lower()}%",
+                        max(1, limit),
+                    ),
+                )
+                return [MemoryItem.model_validate(row["payload"]) for row in cur.fetchall()]
 
     def list_episodes(
         self,
@@ -654,7 +831,14 @@ class PostgresMemoryStore(PostgresStoreBase):
                     """
                     SELECT payload FROM knowledge_notes
                     WHERE user_id = %s AND source_fingerprint = %s
-                    ORDER BY (parent_note_id IS NOT NULL), created_at DESC
+                    ORDER BY
+                        CASE
+                            WHEN coalesce(payload#>>'{version,status}', 'current') = 'current'
+                                 AND coalesce(payload#>>'{version,superseded_by_note_id}', '') = ''
+                            THEN 0 ELSE 1
+                        END,
+                        (parent_note_id IS NOT NULL),
+                        created_at DESC
                     LIMIT 1
                     """,
                     (user_id, source_fingerprint),
@@ -695,6 +879,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     f"""
                     SELECT payload FROM knowledge_notes
                     WHERE user_id = %s AND graph_episode_uuid = ANY(%s)
+                    {_active_version_sql()}
                     {filter_sql}
                     """,
                     (user_id, episode_uuids, *filter_params),
@@ -705,6 +890,43 @@ class PostgresMemoryStore(PostgresStoreBase):
                     for note in [KnowledgeNote.model_validate(row["payload"])]
                 }
         return [by_episode[item] for item in episode_uuids if item in by_episode]
+
+    def list_notes_by_graph_sync_status(
+        self,
+        *,
+        user_id: str | None = None,
+        statuses: list[str] | None = None,
+        include_chunks: bool = True,
+        limit: int | None = None,
+    ) -> list[KnowledgeNote]:
+        self.ensure_schema()
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        if statuses:
+            clauses.append("payload#>>'{graph_sync,status}' = ANY(%s)")
+            params.append(statuses)
+        if not include_chunks:
+            clauses.append("parent_note_id IS NULL")
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = "LIMIT %s"
+            params.append(max(1, limit))
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM knowledge_notes
+                    {where_sql}
+                    ORDER BY updated_at DESC
+                    {limit_sql}
+                    """,
+                    tuple(params),
+                )
+                return [KnowledgeNote.model_validate(row["payload"]) for row in cur.fetchall()]
 
     def find_similar_notes(
         self,
@@ -727,6 +949,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         lexical_rows: list[dict] = []
         vector_rows: list[dict] = []
         filter_sql, filter_params = _filters_sql(filters)
+        active_version_sql = _active_version_sql()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -746,6 +969,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                            ) AS score
                     FROM knowledge_notes, q
                     WHERE user_id = %s
+                      {active_version_sql}
                       {filter_sql}
                       AND (
                           search_vector @@ q.tsq
@@ -777,6 +1001,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                                1 - (embedding_vector <=> %s::vector(128)) AS vector_score
                         FROM knowledge_notes
                         WHERE user_id = %s
+                          {active_version_sql}
                           {filter_sql}
                           AND embedding_vector IS NOT NULL
                           AND embedding_model = %s
@@ -903,6 +1128,8 @@ class PostgresMemoryStore(PostgresStoreBase):
         def add(note: KnowledgeNote | None) -> None:
             if note is None or note.id in seen_note_ids:
                 return
+            if not _note_is_current(note):
+                return
             if not _note_matches_filters(note, filters):
                 return
             seen_note_ids.add(note.id)
@@ -987,12 +1214,15 @@ class PostgresMemoryStore(PostgresStoreBase):
                 removed_notes = cur.rowcount or 0
                 cur.execute("DELETE FROM memory_episodes WHERE user_id = %s", (user_id,))
                 removed_episodes = cur.rowcount or 0
+                cur.execute("DELETE FROM memory_items WHERE user_id = %s", (user_id,))
+                removed_memory_items = cur.rowcount or 0
             conn.commit()
         removed_uploads = self._remove_uploads(notes) if remove_uploaded_files else 0
         return {
             "notes": int(removed_notes),
             "reviews": int(removed_reviews),
             "episodes": int(removed_episodes),
+            "memory_items": int(removed_memory_items),
             "conversations": 0,
             "uploads": removed_uploads,
         }
@@ -1019,3 +1249,14 @@ def _is_relative_to(path: Path, base: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _note_is_current(note: KnowledgeNote) -> bool:
+    return note.version.status == "current" and note.version.superseded_by_note_id is None
+
+
+def _active_version_sql() -> str:
+    return (
+        "AND coalesce(payload#>>'{version,status}', 'current') = 'current' "
+        "AND coalesce(payload#>>'{version,superseded_by_note_id}', '') = ''"
+    )

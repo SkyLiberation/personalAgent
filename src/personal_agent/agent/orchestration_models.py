@@ -14,11 +14,10 @@ from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
 
-from ..core.models import local_now
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-from ..core.models import Citation, EntryInput, EntryIntent
+from ..core.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
 from .router import RouterDecision
 
 if TYPE_CHECKING:
@@ -118,10 +117,10 @@ class AgentRunSnapshot(BaseModel):
 
 
 class PlanStepState(BaseModel):
-    """Checkpoint-safe, serialisable plan step state.
+    """Checkpoint-safe, serialisable workflow step projection state.
 
-    Mirrors the ``PlanStep`` dataclass fields so that the orchestration
-    graph can store and resume plan steps without dict conversion.
+    Mirrors the ``PlanStep`` dataclass fields so that the orchestration graph
+    can store and resume step projections without dict conversion.
     """
 
     step_id: str = ""
@@ -143,13 +142,17 @@ class PlanStepState(BaseModel):
     execution_mode: str = "deterministic"
     allowed_tools: list[str] = Field(default_factory=list)
     max_iterations: int = 3
+    workflow_id: str = ""
+    workflow_version: str = ""
+    workflow_step_id: str = ""
+    projection_kind: str = "workflow_step"
     output_label: str = ""
     output_title: str = ""
     output_preview: str = ""
 
     @classmethod
     def from_plan_step(cls, s: "PlanStep") -> "PlanStepState":
-        """Create a PlanStepState from a planner-produced PlanStep."""
+        """Create a PlanStepState from a workflow step projection."""
         return cls(
             step_id=s.step_id,
             action_type=s.action_type,
@@ -167,10 +170,14 @@ class PlanStepState(BaseModel):
             execution_mode=s.execution_mode,
             allowed_tools=s.allowed_tools,
             max_iterations=s.max_iterations,
+            workflow_id=s.workflow_id,
+            workflow_version=s.workflow_version,
+            workflow_step_id=s.workflow_step_id,
+            projection_kind=s.projection_kind,
         )
 
     def to_plan_step(self) -> "PlanStep":
-        """Convert back to a PlanStep for validator / executor consumption."""
+        """Convert back to a step projection for validator / executor consumption."""
         from .planner import PlanStep
 
         return PlanStep(
@@ -190,6 +197,10 @@ class PlanStepState(BaseModel):
             execution_mode=self.execution_mode,
             allowed_tools=self.allowed_tools,
             max_iterations=self.max_iterations,
+            workflow_id=self.workflow_id,
+            workflow_version=self.workflow_version,
+            workflow_step_id=self.workflow_step_id,
+            projection_kind=self.projection_kind,
         )
 
 
@@ -263,6 +274,7 @@ class AgentGraphState(BaseModel):
 
     # Durable conversation history accumulated across runs in one thread.
     messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+    thread_summary: ThreadSummary | None = None
 
     # Ephemeral ToolGateway exchange for the current action only; unlike
     # ``messages`` it is overwritten instead of accumulated across the thread.

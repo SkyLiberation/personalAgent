@@ -102,7 +102,20 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
-                TRUNCATE knowledge_notes, review_cards, memory_episodes;
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    memory_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    search_text TEXT NOT NULL DEFAULT '',
+                    search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
+                TRUNCATE knowledge_notes, review_cards, memory_episodes, memory_items;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

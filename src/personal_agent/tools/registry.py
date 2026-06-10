@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from ..core.models import EntryIntent
+from ..policy import PolicyEngine
 from .base import tool_failure
 from .gateway import ToolAuditSink, ToolGateway, ToolGatewayContext
 
@@ -29,8 +30,13 @@ class ToolExecutor:
     so non-agent callers share policy and audit behavior.
     """
 
-    def __init__(self, audit_sink: ToolAuditSink | None = None) -> None:
-        self._gateway = ToolGateway(audit_sink=audit_sink)
+    def __init__(
+        self,
+        audit_sink: ToolAuditSink | None = None,
+        *,
+        policy_engine: PolicyEngine | None = None,
+    ) -> None:
+        self._gateway = ToolGateway(audit_sink=audit_sink, policy_engine=policy_engine)
 
     def register(self, tool: BaseTool) -> None:
         if tool.name in self:
@@ -57,6 +63,8 @@ class ToolExecutor:
                 execution_mode="direct",
                 tool_call_id=tool_call_id,
                 user_id=kwargs.get("user_id"),
+                session_id=kwargs.get("session_id"),
+                source_platform=kwargs.get("source_platform"),
             ),
         )
 

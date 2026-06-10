@@ -149,7 +149,7 @@ class TestRunIdHelpers:
 class TestDialogueMessageRendering:
     def test_dialogue_messages_keep_recent_visible_turns(self):
         messages = [
-            HumanMessage(content=f"old-{index}-" + ("x" * 900))
+            HumanMessage(content=f"old-{index}-" + ("这是一段需要被预算裁剪的历史消息。" * 180))
             for index in range(8)
         ]
         messages.append(AIMessage(content="最新更正：使用新集群"))

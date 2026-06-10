@@ -261,6 +261,20 @@ class TestToolExecutor:
         assert other_user["ok"] is True
         assert sink.events[1].rate_limited is True
 
+    def test_gateway_denies_tool_blocked_by_policy_override(self):
+        from personal_agent.policy import PolicyEngine, PolicyRules
+
+        sink = InMemoryToolAuditSink()
+        engine = PolicyEngine(PolicyRules(deny_tools=frozenset({"echo"})))
+        executor = ToolExecutor(audit_sink=sink, policy_engine=engine)
+        executor.register(echo)
+
+        result = executor.invoke_direct("echo", message="hi", user_id="u1")
+
+        assert result["ok"] is False
+        assert "被策略禁止" in result["error"]
+        assert sink.events[0].artifact_ok is False
+
     def test_gateway_retries_transient_exception(self):
         flaky_attempts["count"] = 0
         sink = InMemoryToolAuditSink()

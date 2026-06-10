@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..core.models import EntryInput, MemoryEpisode, local_now
+from ..core.models import EntryInput, MemoryEpisode, MemoryItem, local_now
 from .runtime_results import EntryResult
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,9 @@ def record_entry_episode(memory, result: EntryResult, entry_input: EntryInput | 
     episode = build_entry_episode(result, entry_input)
     try:
         memory.add_episode(episode, user_id=episode.user_id)
+        reflection = build_reflection_candidate(result, episode)
+        if reflection is not None:
+            memory.add_memory_item(reflection, user_id=reflection.user_id)
     except Exception:
         logger.exception("Failed to record memory episode run_id=%s", result.run_id)
         return None
@@ -61,6 +64,67 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
         created_at=now,
         updated_at=now,
     )
+
+
+def build_reflection_candidate(result: EntryResult, episode: MemoryEpisode) -> MemoryItem | None:
+    """Build a deterministic reflection candidate for failed or blocked runs."""
+    if episode.outcome not in {"failed", "cancelled"} and not result.errors:
+        return None
+    title = f"反思候选: {episode.workflow} {episode.outcome}"
+    error_lines = _errors_from_result(result)
+    trace = "；".join(str(item) for item in result.execution_trace[:5])
+    content_parts = [
+        f"workflow={episode.workflow}",
+        f"outcome={episode.outcome}",
+        f"entry={_clip(episode.entry_text, 180)}",
+    ]
+    if error_lines:
+        content_parts.append("errors=" + "；".join(_clip(item, 160) for item in error_lines[:5]))
+    if trace:
+        content_parts.append(f"trace={_clip(trace, 260)}")
+    if episode.open_items:
+        content_parts.append("open_items=" + "；".join(episode.open_items[:3]))
+    return MemoryItem(
+        id=f"reflection:{episode.run_id}",
+        memory_type="reflection",
+        user_id=episode.user_id,
+        session_id=episode.session_id,
+        thread_id=episode.thread_id,
+        title=title,
+        content="\n".join(content_parts),
+        status="candidate",
+        confidence=0.5,
+        source_episode_ids=[episode.id],
+        source_run_ids=[episode.run_id],
+        evidence_refs=[*episode.event_refs[:8], *episode.note_refs[:8]],
+        applies_to=[episode.workflow],
+        metadata={
+            "outcome": episode.outcome,
+            "reason": result.reason,
+            "error_count": len(error_lines),
+            "generated_by": "deterministic_entry_episode",
+        },
+        created_at=episode.updated_at,
+        updated_at=episode.updated_at,
+    )
+
+
+def _errors_from_result(result: EntryResult) -> list[str]:
+    raw_errors = getattr(result, "errors", None) or []
+    errors = [str(error) for error in raw_errors if error]
+    for event in result.events:
+        event_data = _coerce_event(event)
+        if event_data.get("type") not in {"step_failed", "run_failed"}:
+            continue
+        payload = event_data.get("payload")
+        if isinstance(payload, dict):
+            for key in ("error", "failure_reason", "message"):
+                value = payload.get(key)
+                if value:
+                    errors.append(str(value))
+    if not errors and result.reason:
+        errors.append(str(result.reason))
+    return _unique(errors)
 
 
 def _coerce_event(event: object) -> dict[str, Any]:

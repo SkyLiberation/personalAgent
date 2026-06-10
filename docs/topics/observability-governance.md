@@ -155,18 +155,25 @@ LangGraph checkpoint 保存可恢复执行现场：
 
 限流是进程内的，不适合多实例。API Key 模型适合个人或轻量多用户场景，还没有组织、角色、租户、key 生命周期管理。
 
-### 6. Policy Engine 尚未落地
+### 6. Policy Engine 已落地（统一策略层）
 
-当前项目已经有多处治理元数据和轻量策略：
+历史上治理元数据和轻量策略分散在多处：
 
 - 工具层的 `risk_level / side_effects / permission_scope / requires_confirmation`。
 - Web 层的 API Key、进程内限流和 `user_id` 隔离。
 - 记忆层的 `user_id / session_id / source` 等访问边界。
 - `delete_note` 的 HITL、幂等 key 和工具审计 payload。
 
-但这些能力还没有收敛成统一 Policy Engine。也就是说，系统还没有一个集中策略模块接收 `user_id / workspace / source_platform / tool_name / action / resource / risk_level / side_effects / permission_scope`，再输出 `allow / deny / require_confirmation / require_escalation / audit_required`。
+这些能力现已收敛成统一 `PolicyEngine`（`personal_agent/policy/`）。它接收归一化的 `PolicyInput`（`action / user_id / session_id / source_platform / tool_name / resource / risk_level / side_effects / permission_scope / confirmed / react_allowed_tools / resource_owner`），输出 `PolicyDecision`（`allow / deny / require_confirmation / require_escalation` + `audit_required / rule / reason`）。
 
-这里的 Policy Engine 属于观测与治理层的横切能力，但会被入口层、工具层、记忆层和规划执行共同消费。落到记忆层，它对应 [memory.md](memory.md) 中提到的 `Memory Policy Engine`：负责长期知识的 capture、search、delete、graph sync 等访问策略。落到工具层，它会成为 `ToolGateway` 的授权后端：判断某次工具调用是否允许执行、是否需要确认或升级。
+落地范围：
+
+- **工具层**：`ToolGateway._validate_policy` 委托给 `PolicyEngine`，统一 ReAct 自主守卫、高风险确认门、override 拒绝。幂等 key 与外部域名白名单仍由 gateway 作为执行机制保留。每个非放行决策通过 `record_policy_decision` 写入审计与指标。
+- **记忆层**：`MemoryFacade` 的 capture/update/delete 通过引擎做 owner 校验与删除确认门，对应 [memory.md](memory.md) 的 `Memory Policy Engine`。
+- **规划/ReAct**：`_is_react_tool_blocked` 复用同一引擎，确保预过滤与 gateway 执行期判定一致。
+- **可配置覆盖**：`PolicyConfig`（`Settings.policy`）支持按用户/来源/工具/权限域配置 allow/deny 列表，以及关闭高风险确认门，默认空集合时完全沿用代码内默认规则。
+
+`workspace` 维度在 `PolicyInput` 中已预留字段，但当前未引入业务 workspace 概念，默认 `None`。
 
 ## LangSmith 接入目标
 
@@ -334,24 +341,26 @@ LLM 子 run 建议携带：
 - 不打开 LangSmith 也能查询某用户所有高风险操作。
 - 可以回答“谁在什么时候删除了哪条笔记，是否确认，结果如何”。
 
-### P4：Policy Engine 与权限后端
+### P4：Policy Engine 与权限后端（已完成）
 
 目标：把散落在入口、工具、记忆和规划流程中的轻量权限判断收敛为统一策略服务。
 
 工作项：
 
-- 定义统一 `PolicyDecision`：`allow / deny / require_confirmation / require_escalation`。
-- 定义统一输入：用户、workspace、入口来源、action、resource、工具名、参数摘要、风险等级、副作用、权限域。
-- 将 `ToolGateway` 的高风险确认、ReAct guard、`permission_scope` 判断接入策略接口。
-- 将 `MemoryFacade` 的 capture、search、delete、graph sync 接入 Memory Policy。
-- 将 Web / 飞书 / CLI 等入口来源纳入策略上下文。
-- 将策略结果写入审计事件，便于追踪“为什么允许 / 拒绝 / 要求确认”。
+- ✅ 定义统一 `PolicyDecision`：`allow / deny / require_confirmation / require_escalation`（含 `audit_required / rule / reason`）。
+- ✅ 定义统一输入 `PolicyInput`：用户、session、入口来源、action、resource、工具名、风险等级、副作用、权限域、确认标志、ReAct 允许集、资源 owner（`workspace` 字段预留，暂不引入业务概念）。
+- ✅ 将 `ToolGateway` 的高风险确认、ReAct guard、`permission_scope` 判断接入 `PolicyEngine`。
+- ✅ 将 `MemoryFacade` 的 capture / update / delete 接入 Memory Policy（owner 校验 + 删除确认门）。
+- ✅ 将入口来源（`source_platform`）纳入策略上下文，经 `ToolGatewayContext` 从 `AgentGraphState.entry_input` 透传。
+- ✅ 将策略结果写入审计事件（`record_policy_decision`），便于追踪“为什么允许 / 拒绝 / 要求确认”。
+
+实现：`personal_agent/policy/`（`models.py` + `engine.py`），可配置覆盖见 `Settings.policy`（`PolicyConfig`）。
 
 验收：
 
-- 可以针对用户、workspace、入口来源和工具权限配置 allow / deny。
-- `delete_note` 这类高风险动作的确认要求来自策略决策，而不是只写死在工具实现里。
-- 长期记忆的读写删除都能通过同一个策略接口解释授权结果。
+- ✅ 可以针对用户、入口来源和工具/权限域配置 allow / deny（`PolicyRules`）。
+- ✅ `delete_note` 这类高风险动作的确认要求来自策略决策（`tool.high_risk_confirmation`），不再只写死在工具实现里。
+- ✅ 长期记忆的读写删除都通过同一个策略接口解释授权结果。
 
 ### P5：metrics 与告警
 

@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from langchain_core.messages import AIMessage, HumanMessage
+
+from personal_agent.agent.orchestration_models import AgentGraphState
+from personal_agent.agent.orchestration_nodes._entry import _entry_conversation_messages
 from personal_agent.core.config import ShortTermMemoryConfig
 from personal_agent.agent.short_term_context import (
     apply_window,
     build_dialogue_context,
+    build_dialogue_context_result,
     estimate_tokens,
+    parse_thread_summary,
     render_as_text,
+    render_thread_summary,
     render_with_budget,
     truncate_message_content,
 )
+from personal_agent.core.models import ThreadSummary
 
 
 def _cfg(**overrides) -> ShortTermMemoryConfig:
@@ -30,7 +40,7 @@ class _FakeBaseMessage:
 
 
 def test_estimate_tokens_cjk_vs_latin():
-    cfg = _cfg()
+    cfg = _cfg(tokenizer_enabled=False)
     # 中文按 1.5 字/token：6 字 ≈ 4 token
     assert estimate_tokens("你好世界一二", cfg) == 4
     # 英文按 4 字/token：8 字 ≈ 2 token
@@ -130,7 +140,7 @@ def test_build_dialogue_context_injects_summary_on_overflow():
         return "早前要点"
 
     out = build_dialogue_context(msgs, cfg, summarizer=summarizer)
-    assert out[0]["content"].startswith("[早前对话摘要]")
+    assert out[0]["content"].startswith("[结构化短期摘要]")
     assert "早前要点" in out[0]["content"]
     assert [m["content"] for m in out[1:]] == ["m3", "m4"]
     assert "m0" in captured["text"]  # 溢出内容确实喂给了 summarizer
@@ -162,4 +172,103 @@ def test_build_dialogue_context_no_summary_below_trigger():
     )
     msgs = [_msg("user", f"m{i}") for i in range(5)]
     out = build_dialogue_context(msgs, cfg, summarizer=lambda _t: "SUMMARY")
-    assert all("[早前对话摘要]" not in m["content"] for m in out)
+    assert all("[结构化短期摘要]" not in m["content"] for m in out)
+
+
+def test_parse_and_render_thread_summary_json_keeps_boundaries():
+    summary = parse_thread_summary(
+        """
+        {
+          "user_goals": ["继续优化 memory P1"],
+          "confirmed_decisions": ["不考虑兼容性"],
+          "assistant_assumptions": ["可能需要改 short_term_context"],
+          "unverified_claims": ["某个外部库一定可用"],
+          "evidence_refs": ["note-1"]
+        }
+        """
+    )
+
+    rendered = render_thread_summary(summary)
+
+    assert isinstance(summary, ThreadSummary)
+    assert "用户目标" in rendered
+    assert "助手假设（不可当事实）" in rendered
+    assert "未验证声明（使用前必须重新验证）" in rendered
+    assert "不能替代 evidence" in rendered
+
+
+def test_parse_thread_summary_accepts_fenced_json():
+    summary = parse_thread_summary(
+        '```json\n{"user_constraints": ["回答要简洁"]}\n```'
+    )
+
+    assert summary is not None
+    assert summary.user_constraints == ["回答要简洁"]
+
+
+def test_build_dialogue_context_result_updates_structured_summary():
+    cfg = _cfg(
+        max_messages=1,
+        token_budget=10_000,
+        rolling_summary_enabled=True,
+        rolling_summary_trigger=2,
+    )
+    msgs = [_msg("user", "目标：优化短期摘要"), _msg("assistant", "我会处理"), _msg("user", "继续")]
+    captured = {}
+
+    def summarizer(text: str) -> str:
+        captured["text"] = text
+        return '{"user_goals": ["优化短期摘要"], "pending_tasks": ["继续执行 P1"]}'
+
+    result = build_dialogue_context_result(msgs, cfg, summarizer=summarizer)
+
+    assert result.summary_updated is True
+    assert result.thread_summary is not None
+    assert result.thread_summary.user_goals == ["优化短期摘要"]
+    assert result.messages[0]["content"].startswith("[结构化短期摘要]")
+    assert result.messages[-1]["content"] == "继续"
+    assert "目标：优化短期摘要" in captured["text"]
+
+
+def test_build_dialogue_context_result_reuses_prior_summary_when_no_overflow():
+    cfg = _cfg(max_messages=10, token_budget=10_000, rolling_summary_enabled=True)
+    prior = ThreadSummary(user_goals=["回答当前追问"])
+    msgs = [_msg("user", "现在怎么做？")]
+
+    result = build_dialogue_context_result(msgs, cfg, prior_summary=prior)
+
+    assert result.summary_updated is False
+    assert result.messages[0]["content"].startswith("[结构化短期摘要]")
+    assert "回答当前追问" in result.messages[0]["content"]
+    assert result.messages[1]["content"] == "现在怎么做？"
+
+
+def test_entry_conversation_messages_persist_thread_summary():
+    state = AgentGraphState(
+        user_id="u1",
+        messages=[
+            HumanMessage(content="目标：升级短期摘要"),
+            AIMessage(content="我会先检查实现"),
+            HumanMessage(content="继续"),
+        ],
+    )
+    deps = SimpleNamespace(
+        settings=SimpleNamespace(
+            short_term=_cfg(
+                max_messages=1,
+                token_budget=10_000,
+                rolling_summary_enabled=True,
+                rolling_summary_trigger=2,
+            )
+        ),
+        compress_context=lambda text, _user_id: (
+            '{"user_goals": ["升级短期摘要"], "confirmed_decisions": ["不考虑兼容性"]}'
+        ),
+    )
+
+    messages = _entry_conversation_messages(state, exclude_latest=False, deps=deps)
+
+    assert state.thread_summary is not None
+    assert state.thread_summary.user_goals == ["升级短期摘要"]
+    assert messages[0]["content"].startswith("[结构化短期摘要]")
+    assert messages[-1]["content"] == "继续"

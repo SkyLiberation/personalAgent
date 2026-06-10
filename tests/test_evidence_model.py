@@ -32,7 +32,7 @@ class TestEvidenceItem:
         assert len(item.evidence_id) == 12
 
     def test_all_source_types(self):
-        for st in ("graph_fact", "note", "chunk", "web", "tool"):
+        for st in ("graph_fact", "note", "chunk", "web", "tool", "episode", "procedural", "reflection"):
             item = EvidenceItem(source_type=st)
             assert item.source_type == st
 
@@ -132,6 +132,21 @@ class TestContextPack:
 
         assert ranked[0].evidence.source_id == "c1"
         assert [item.evidence.source_id for item in pack.selected] == ["c1"]
+
+    def test_deprecated_note_evidence_is_not_selected(self):
+        note = make_note(
+            id="old",
+            title="旧部署流程",
+            content="部署流程使用 Jenkins。",
+            summary="Jenkins",
+            version_status="deprecated",
+        )
+
+        pack = build_context_pack("部署流程", notes_to_evidence([note]), max_items=3)
+
+        assert pack.selected == []
+        assert pack.dropped
+        assert pack.dropped[0].evidence.metadata["version_status"] == "deprecated"
 
 
 class TestEvidenceRerankers:

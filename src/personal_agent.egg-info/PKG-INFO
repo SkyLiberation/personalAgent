@@ -15,11 +15,13 @@ Requires-Dist: psycopg[binary]>=3.2.12
 Requires-Dist: pypdf>=5.9.0
 Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: tiktoken>=0.12.0
 Requires-Dist: typer>=0.12.3
 Requires-Dist: uvicorn>=0.38.0
 Requires-Dist: langgraph-checkpoint-postgres>=2.0.0
 Requires-Dist: neo4j>=6.0.0
 Requires-Dist: langextract>=1.5.0
+Requires-Dist: unstructured>=0.18.0
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
@@ -48,7 +50,7 @@ Dynamic: license-file
 | `入口层` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
 | `意图识别 / 路由层` | [agent/router.py](src/personal_agent/agent/router.py) | 通过 `DefaultIntentRouter` 统一处理入口意图；模型调用重试后仍失败时明确返回不可用提示 | [docs/topics/routing.md](docs/topics/routing.md) |
 | `规划层` | [agent/planner.py](src/personal_agent/agent/planner.py), [agent/plan_validator.py](src/personal_agent/agent/plan_validator.py), [agent/replanner.py](src/personal_agent/agent/replanner.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/) | 已具备结构化规划、动态工具校验、阻断式安全门禁、计划节点执行、目标解析、失败重试/重规划和前端计划面板 | [docs/topics/planning.md](docs/topics/planning.md) |
-| `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_graph.py](src/personal_agent/agent/orchestration_graph.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py), [agent/capture_flow.py](src/personal_agent/agent/capture_flow.py), [agent/graph_capture_flow.py](src/personal_agent/agent/graph_capture_flow.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 默认进入 LangGraph entry 总编排，支持 route/plan/step/ReAct/HITL/checkpoint；`AgentService` 是兼容入口并继承 runtime | [docs/topics/runtime.md](docs/topics/runtime.md)、[docs/topics/langgraph-checkpoint.md](docs/topics/langgraph-checkpoint.md) |
+| `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_graph.py](src/personal_agent/agent/orchestration_graph.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 默认进入 LangGraph entry 总编排，支持 route/plan/step/ReAct/HITL/checkpoint；`AgentService` 是兼容入口并继承 runtime | [docs/topics/runtime.md](docs/topics/runtime.md)、[docs/topics/langgraph-checkpoint.md](docs/topics/langgraph-checkpoint.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / web_search / delete_note` | [docs/topics/tools.md](docs/topics/tools.md) |
 | `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有受限会话线索、Postgres 长期记忆/问答历史、LangGraph checkpoint 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
 | `检索与推理层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持三层检索回退（图谱 → 本地 → 网络搜索）、Graphiti `node / edge / fact` 优先的语义推理、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；多跳推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |

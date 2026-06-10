@@ -5,16 +5,16 @@ from personal_agent.core.evidence import (
     evidence_to_citations,
     episodes_to_evidence,
     graph_result_to_evidence,
+    memory_items_to_evidence,
     notes_to_evidence,
     web_results_to_evidence,
 )
-from personal_agent.core.models import Citation, KnowledgeNote, MemoryEpisode
+from personal_agent.core.models import KnowledgeNote, MemoryEpisode, MemoryItem
 from personal_agent.graphiti.reranker import GraphCitationHit
 from personal_agent.graphiti.store import (
     GraphAskResult,
     GraphEdgeRef,
     GraphFactRef,
-    GraphNodeRef,
 )
 from tests.note_factory import make_note
 
@@ -173,6 +173,33 @@ class TestEpisodesToEvidence:
         assert items[0].source_id == "episode:run-1"
         assert items[0].metadata["workflow"] == "solidify_conversation"
         assert items[0].metadata["note_refs"] == ["note-1"]
+
+
+class TestMemoryItemsToEvidence:
+    def test_procedural_and_reflection_conversion(self):
+        items = [
+            MemoryItem(
+                id="proc-1",
+                memory_type="procedural",
+                title="发布流程偏好",
+                content="先跑测试再灰度。",
+                status="confirmed",
+                confidence=0.9,
+            ),
+            MemoryItem(
+                id="refl-1",
+                memory_type="reflection",
+                title="失败复盘",
+                content="目标不清楚时先澄清。",
+                status="candidate",
+            ),
+        ]
+
+        evidence = memory_items_to_evidence(items)
+
+        assert [item.source_type for item in evidence] == ["procedural", "reflection"]
+        assert evidence[0].score == 0.9
+        assert evidence[1].metadata["status"] == "candidate"
 
 
 class TestEvidenceToCitations:
