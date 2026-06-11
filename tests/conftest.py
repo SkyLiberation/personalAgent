@@ -98,7 +98,6 @@ def clean_postgres_business_tables():
                     summary TEXT NOT NULL,
                     payload JSONB NOT NULL,
                     search_text TEXT NOT NULL DEFAULT '',
-                    search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
@@ -111,7 +110,6 @@ def clean_postgres_business_tables():
                     content TEXT NOT NULL,
                     payload JSONB NOT NULL,
                     search_text TEXT NOT NULL DEFAULT '',
-                    search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );

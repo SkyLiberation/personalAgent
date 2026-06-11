@@ -21,6 +21,7 @@ class LlmTraceResult:
     prompt_name: str
     prompt_version: str
     raw_response: Any = None
+    tool_calls: list[dict[str, Any]] | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
@@ -41,6 +42,25 @@ def _extract_usage(response: Any) -> dict[str, int]:
         if isinstance(value, int):
             counts[key] = value
     return counts
+
+
+def _extract_tool_calls(message: Any) -> list[dict[str, Any]]:
+    tool_calls = getattr(message, "tool_calls", None) or []
+    normalized: list[dict[str, Any]] = []
+    for call in tool_calls:
+        if isinstance(call, dict):
+            normalized.append(call)
+            continue
+        function = getattr(call, "function", None)
+        normalized.append({
+            "id": getattr(call, "id", ""),
+            "type": getattr(call, "type", "function"),
+            "function": {
+                "name": getattr(function, "name", ""),
+                "arguments": getattr(function, "arguments", "{}"),
+            },
+        })
+    return normalized
 
 
 def _report_usage_to_run_tree(usage: dict[str, int]) -> None:
@@ -67,6 +87,8 @@ def traced_chat_completion(
     temperature: float = 0,
     max_tokens: int = 500,
     response_format: dict[str, object] | None = None,
+    tools: list[dict[str, object]] | None = None,
+    tool_choice: str | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
     upload_inputs_outputs: bool = False,
 ) -> LlmTraceResult:
@@ -80,6 +102,8 @@ def traced_chat_completion(
         temperature=temperature,
         max_tokens=max_tokens,
         response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
         metadata=metadata or {},
         langsmith_extra={
             "name": f"llm.{prompt_name}",
@@ -145,6 +169,12 @@ def _redacted_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         "temperature": inputs.get("temperature"),
         "max_tokens": inputs.get("max_tokens"),
         "response_format": inputs.get("response_format"),
+        "tool_names": [
+            str((tool.get("function") or {}).get("name"))
+            for tool in (inputs.get("tools") or [])
+            if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+        ],
+        "tool_choice": inputs.get("tool_choice"),
         "message_count": message_count,
         "message_roles": roles,
         "message_chars": message_chars,
@@ -159,6 +189,7 @@ def _redacted_outputs(output: LlmTraceResult) -> dict[str, Any]:
         "model": output.model,
         "latency_ms": output.latency_ms,
         "response_chars": len(output.content or ""),
+        "tool_call_count": len(output.tool_calls or []),
         "input_tokens": output.input_tokens,
         "output_tokens": output.output_tokens,
         "total_tokens": output.total_tokens,
@@ -189,6 +220,8 @@ def _redacted_traced_chat_completion(
     temperature: float,
     max_tokens: int,
     response_format: dict[str, object] | None,
+    tools: list[dict[str, object]] | None,
+    tool_choice: str | dict[str, object] | None,
     metadata: dict[str, object],
     langsmith_extra: dict[str, object] | None = None,
 ) -> LlmTraceResult:
@@ -201,6 +234,8 @@ def _redacted_traced_chat_completion(
         temperature=temperature,
         max_tokens=max_tokens,
         response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
         metadata=metadata,
     )
 
@@ -216,6 +251,8 @@ def _traced_chat_completion(
     temperature: float,
     max_tokens: int,
     response_format: dict[str, object] | None,
+    tools: list[dict[str, object]] | None,
+    tool_choice: str | dict[str, object] | None,
     metadata: dict[str, object],
     langsmith_extra: dict[str, object] | None = None,
 ) -> LlmTraceResult:
@@ -228,6 +265,8 @@ def _traced_chat_completion(
         temperature=temperature,
         max_tokens=max_tokens,
         response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
         metadata=metadata,
     )
 
@@ -242,6 +281,8 @@ def _chat_completion_impl(
     temperature: float,
     max_tokens: int,
     response_format: dict[str, object] | None,
+    tools: list[dict[str, object]] | None,
+    tool_choice: str | dict[str, object] | None,
     metadata: dict[str, object],
 ) -> LlmTraceResult:
     resolved_model = model or config.small_model or config.model
@@ -260,9 +301,15 @@ def _chat_completion_impl(
     }
     if response_format is not None:
         kwargs["response_format"] = response_format
+    if tools is not None:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
     response = client.chat.completions.create(**kwargs)
     latency_ms = round((perf_counter() - start) * 1000, 2)
-    content = (response.choices[0].message.content or "").strip()
+    message = response.choices[0].message
+    content = (message.content or "").strip()
+    tool_calls = _extract_tool_calls(message)
     usage = _extract_usage(response)
     _report_usage_to_run_tree(usage)
     log_event(
@@ -274,6 +321,7 @@ def _chat_completion_impl(
         model=resolved_model,
         latency_ms=latency_ms,
         response_chars=len(content),
+        tool_call_count=len(tool_calls),
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
         total_tokens=usage.get("total_tokens"),
@@ -286,6 +334,7 @@ def _chat_completion_impl(
         prompt_name=prompt_name,
         prompt_version=prompt_version,
         raw_response=response,
+        tool_calls=tool_calls,
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
         total_tokens=usage.get("total_tokens"),

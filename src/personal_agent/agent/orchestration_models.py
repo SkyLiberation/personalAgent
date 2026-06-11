@@ -231,7 +231,7 @@ class PlanSubState(BaseModel):
 
     steps: list[PlanStepState] = Field(default_factory=list)
     current_step_index: int = 0
-    results: dict[str, Any] = Field(default_factory=dict)
+    step_results: dict[str, Any] = Field(default_factory=dict)
     aborted: bool = False
     retry_counts: dict[str, int] = Field(default_factory=dict)
 

@@ -575,6 +575,7 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
         and deps.settings.openai.small_model
     ):
         from ...core.llm_trace import traced_chat_completion
+        from ...core.prompts import get_prompt
 
         try:
             dialogue_messages = _entry_conversation_messages(
@@ -584,12 +585,13 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
             )
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
-            system_content = "你是一个友好、简洁的个人知识库助手。直接回答用户，不需要检索知识库。保持简短。"
+            direct_prompt = get_prompt("direct_answer.system")
             result = traced_chat_completion(
                 deps.settings.openai,
                 prompt_name="direct_answer",
+                prompt_version=direct_prompt.version,
                 messages=[
-                    {"role": "system", "content": system_content},
+                    {"role": "system", "content": direct_prompt.template},
                     *dialogue_messages,
                 ],
                 model=deps.settings.openai.small_model,

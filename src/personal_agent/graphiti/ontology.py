@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..core.prompts import get_prompt
+
 
 class PersonEntity(BaseModel):
     role: str | None = Field(default=None, description="The person's role, title, or responsibility.")
@@ -43,19 +45,7 @@ ENTITY_TYPES: dict[str, type[BaseModel]] = {
 }
 
 
-CUSTOM_EXTRACTION_INSTRUCTIONS = """
-Extract entities and relationships for a personal knowledge graph.
-
-Prioritize:
-- people, organizations, projects, systems, and technical concepts
-- decisions, dependencies, causes, tradeoffs, and applications
-- facts that connect a concept to a project, problem, strategy, or outcome
-
-When possible:
-- normalize the same concept under one stable name
-- preserve directional relationships such as "depends on", "causes", "applies to", "belongs to"
-- avoid vague entities like "this", "that", or generic pronouns
-""".strip()
+CUSTOM_EXTRACTION_INSTRUCTIONS = get_prompt("graphiti.custom_extraction").template
 
 
 def _coerce_to_text(value: Any) -> str:

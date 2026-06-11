@@ -118,10 +118,10 @@ class LangExtractConfig(_StrictBase):
     extraction layer can target a model that supports OpenAI-style structured
     outputs (e.g. qwen3-coder-flash) without disturbing the other LLM paths.
 
-    LangExtract's active role is ask-time query understanding
-    (``agent/query_planner.py``), which reuses this config. It is no longer a
-    capture-pipeline pre-extraction step. If ``api_key`` is missing, the query
-    planner falls back to a default plan and heuristic filters.
+    This config drives only the optional LangExtract pre-extraction layer
+    (``extract/``), which is currently dormant in the production capture/ask
+    paths. Ask-time query understanding has its own ``PlannerConfig`` and no
+    longer reuses this config.
     """
 
     api_key: str | None = None
@@ -132,6 +132,27 @@ class LangExtractConfig(_StrictBase):
     max_workers: int = 4
     min_doc_chars: int = 200
     fallback_on_error: bool = True
+
+
+class PlannerConfig(_StrictBase):
+    """Structured-output LLM config for ask-time query understanding and rerank.
+
+    This is the model used by ``agent/query_planner.py`` (query understanding /
+    retrieval plan) and the optional LLM listwise reranker
+    (``core/rerankers.py``). It is independent from the capture-time
+    ``LangExtractConfig`` on purpose: query planning is an ask-side concern and
+    has nothing to do with the (currently dormant) LangExtract pre-extraction
+    layer. It only needs an endpoint that supports OpenAI-style strict
+    ``json_schema`` outputs (e.g. ``qwen3-coder-flash``).
+
+    If ``api_key`` is missing, the query planner falls back to a default plan +
+    heuristic filters, and the LLM reranker falls back to the heuristic ranker.
+    """
+
+    api_key: str | None = None
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model_id: str = "qwen3-coder-flash"
+    timeout_seconds: float = 15.0
 
 
 class AskConfig(_StrictBase):
@@ -200,6 +221,7 @@ class Settings(_StrictBase):
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
+    planner: PlannerConfig = Field(default_factory=PlannerConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
@@ -390,6 +412,19 @@ class Settings(_StrictBase):
                 ),
                 fallback_on_error=_as_bool(
                     os.getenv("PERSONAL_AGENT_EXTRACT_FALLBACK_ON_ERROR", "true")
+                ),
+            ),
+            planner=PlannerConfig(
+                api_key=os.getenv("PERSONAL_AGENT_PLANNER_API_KEY"),
+                base_url=os.getenv(
+                    "PERSONAL_AGENT_PLANNER_BASE_URL",
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                ),
+                model_id=os.getenv(
+                    "PERSONAL_AGENT_PLANNER_MODEL", "qwen3-coder-flash"
+                ),
+                timeout_seconds=float(
+                    os.getenv("PERSONAL_AGENT_PLANNER_TIMEOUT_SECONDS", "15.0")
                 ),
             ),
             ask=AskConfig(

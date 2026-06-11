@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import json
 import logging
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from typing import Literal, Protocol
 
 from ..core.config import Settings
+from ..core.llm_schemas import strict_json_schema_response
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.logging_utils import log_event
 from ..core.models import EntryInput, EntryIntent
+from ..core.prompts import get_prompt, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,43 @@ _RECOGNIZED_INTENTS = {
 }
 
 
+_ROUTER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "route": {
+            "type": "string",
+            "enum": sorted(_RECOGNIZED_INTENTS),
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "requires_tools": {"type": "boolean"},
+        "requires_retrieval": {"type": "boolean"},
+        "requires_planning": {"type": "boolean"},
+        "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+        "requires_confirmation": {"type": "boolean"},
+        "requires_clarification": {"type": "boolean"},
+        "missing_information": {"type": "array", "items": {"type": "string"}},
+        "clarification_prompt": {"type": "string"},
+        "candidate_tools": {"type": "array", "items": {"type": "string"}},
+        "user_visible_message": {"type": "string"},
+    },
+    "required": [
+        "route",
+        "confidence",
+        "requires_tools",
+        "requires_retrieval",
+        "requires_planning",
+        "risk_level",
+        "requires_confirmation",
+        "requires_clarification",
+        "missing_information",
+        "clarification_prompt",
+        "candidate_tools",
+        "user_visible_message",
+    ],
+    "additionalProperties": False,
+}
+
+
 def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
     """Merge LLM classification result with default decision to fill control fields.
 
@@ -220,45 +258,16 @@ class DefaultIntentRouter:
             )
             return None
 
-        prompt = (
-            "你是一个入口路由分类器。"
-            "请把用户输入分类到以下意图之一：capture_text, capture_link, capture_file, ask, summarize_thread, delete_knowledge, solidify_conversation, direct_answer, unknown。"
-            "capture_text: 用户想记录文字内容。capture_link: 用户发来链接想收录。"
-            "ask: 需要检索个人知识库、公共网络或最新外部事实才能可靠回答的问题。"
-            "summarize_thread: 需要总结群聊/会话。delete_knowledge: 删除过时或错误的知识笔记。"
-            "solidify_conversation: 把对话结论沉淀为知识。"
-            "例如已有对话在讨论 DNS，用户再说“将DNS相关知识存储至知识库”，是在要求整理已有会话知识，"
-            "必须归为 solidify_conversation，不能把这条操作指令本身按 capture_text 存储。"
-            "只有用户输入本身提供了需要原样记录的实质正文时，才归为 capture_text。"
-            "direct_answer: 闲聊、问候、感谢、澄清性问题、无需检索的简单说明或常识性问题。"
-            "请重点判断信息是否具有时效性：当前天气、实时价格、最新新闻、航班状态等依赖最新外部事实的问题应归为 ask，"
-            "不得仅因问题简单而归为 direct_answer。"
-            "当输入不足以安全确定或执行意图时设置 requires_clarification=true，并提供 missing_information 和 clarification_prompt；"
-            "例如仅说“帮我”或“删除”需要澄清，而“删除关于 DNS 的知识”已提供检索范围，"
-            "应归为 delete_knowledge 且 requires_clarification=false，后续会检索候选并要求用户确认。"
-            "“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
-            "只返回 JSON，字段：intent(必填), reason(必填), risk_level(low/medium/high, 可选), requires_confirmation(bool, 可选), "
-            "requires_clarification(bool, 可选), missing_information(字符串数组, 可选), clarification_prompt(字符串, 可选)。"
-            "risk_level: 删除类操作应为 high，一般操作为 low。"
-            "requires_confirmation: 删除操作应为 true。"
-            "历史 chat messages 只用于理解指代和已有讨论主题；"
-            "请分类最后一条当前用户输入，不要把历史助手回复当作事实证据。"
-        )
+        system_prompt = get_prompt("router.classify.system")
         messages: list[dict[str, str]] = [
-            {
-                "role": "system",
-                "content": (
-                    "你是一个严谨的意图分类器，只输出 JSON。\n"
-                    f"{prompt}"
-                ),
-            },
+            {"role": "system", "content": system_prompt.template},
         ]
         for message in conversation_messages or []:
             role = message.get("role")
             content = str(message.get("content", "")).strip()
             if role in {"user", "assistant"} and content:
                 messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": f"当前用户输入：{text}"})
+        messages.append({"role": "user", "content": render_prompt("router.classify.user", text=text)})
         content = ""
         model = self._settings.openai.small_model
         latency_ms = None
@@ -266,10 +275,14 @@ class DefaultIntentRouter:
             llm_result = traced_chat_completion(
                 self._settings.openai,
                 prompt_name="router",
+                prompt_version=system_prompt.version,
                 messages=messages,
                 temperature=0,
                 max_tokens=500,
-                response_format={"type": "json_object"},
+                response_format=strict_json_schema_response(
+                    "router_decision",
+                    _ROUTER_RESPONSE_SCHEMA,
+                ),
                 metadata={"source": "intent_router"},
                 upload_inputs_outputs=self._settings.langsmith.upload_inputs,
             )
@@ -277,50 +290,35 @@ class DefaultIntentRouter:
             model = llm_result.model
             latency_ms = llm_result.latency_ms
             logger.info("LLM intent classification raw response: %s", content)
-            payload = json.loads(content)
+            llm_decision = RouterDecision.model_validate_json(content)
             log_llm_parse(
                 prompt_name="router",
+                prompt_version=system_prompt.version,
                 model=model,
                 parse_ok=True,
                 parse_schema="RouterDecision",
                 latency_ms=latency_ms,
             )
-            intent = payload.get("intent", "unknown")
-            if intent not in _RECOGNIZED_INTENTS:
+            if llm_decision.route not in _RECOGNIZED_INTENTS:
                 logger.warning(
                     "LLM returned unrecognised intent=%s",
-                    intent,
+                    llm_decision.route,
                 )
                 log_llm_parse(
                     prompt_name="router",
+                    prompt_version=system_prompt.version,
                     model=model,
                     parse_ok=False,
                     parse_schema="RouterDecision",
-                    parse_error=f"unrecognised intent={intent}",
+                    parse_error=f"unrecognised intent={llm_decision.route}",
                     latency_ms=latency_ms,
                 )
                 return None
-            reason = str(payload.get("reason") or "由模型完成意图分类。")
-            risk = (
-                payload.get("risk_level", "low")
-                if isinstance(payload.get("risk_level"), str)
-                else None
-            )
-            return RouterDecision(
-                route=intent,
-                confidence=0.8,
-                risk_level=risk if risk in ("low", "medium", "high") else "low",
-                requires_confirmation=bool(payload.get("requires_confirmation", False)),
-                requires_clarification=bool(payload.get("requires_clarification", False)),
-                missing_information=payload.get("missing_information")
-                if isinstance(payload.get("missing_information"), list)
-                else [],
-                clarification_prompt=str(payload.get("clarification_prompt") or ""),
-                user_visible_message=reason,
-            )
-        except json.JSONDecodeError as exc:
+            return llm_decision
+        except ValidationError as exc:
             log_llm_parse(
                 prompt_name="router",
+                prompt_version=system_prompt.version,
                 model=model,
                 parse_ok=False,
                 parse_schema="RouterDecision",
@@ -328,7 +326,7 @@ class DefaultIntentRouter:
                 latency_ms=latency_ms,
             )
             logger.exception(
-                "Router LLM JSON decode failed: %s, raw content (first 500 chars): %s",
+                "Router LLM schema validation failed: %s, raw content (first 500 chars): %s",
                 exc,
                 content[:500],
             )

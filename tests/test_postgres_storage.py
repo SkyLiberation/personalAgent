@@ -94,7 +94,7 @@ def test_find_note_by_source_fingerprint_prefers_parent(temp_dir: Path):
     store.clear_user_data(user_id, remove_uploaded_files=False)
 
 
-def test_find_similar_notes_supports_chinese_ngram_search(temp_dir: Path):
+def test_find_similar_notes_supports_chinese_bm25_search(temp_dir: Path):
     user_id = _user()
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
     target = make_note(

@@ -5,13 +5,63 @@ import logging
 from uuid import uuid4
 
 from ..core.config import Settings
+from ..core.llm_schemas import strict_json_schema_response
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
+from ..core.prompts import get_prompt, render_prompt
 from .planner import PlanStep
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 0.5
+
+_REPLANNER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step_id": {"type": "string"},
+                    "action_type": {
+                        "type": "string",
+                        "enum": ["retrieve", "tool_call", "compose", "verify"],
+                    },
+                    "description": {"type": "string"},
+                    "tool_name": {"type": ["string", "null"]},
+                    "tool_input": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": True,
+                    },
+                    "depends_on": {"type": "array", "items": {"type": "string"}},
+                    "expected_output": {"type": "string"},
+                    "success_criteria": {"type": "string"},
+                    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "requires_confirmation": {"type": "boolean"},
+                    "on_failure": {"type": "string", "enum": ["skip", "abort"]},
+                },
+                "required": [
+                    "step_id",
+                    "action_type",
+                    "description",
+                    "tool_name",
+                    "tool_input",
+                    "depends_on",
+                    "expected_output",
+                    "success_criteria",
+                    "risk_level",
+                    "requires_confirmation",
+                    "on_failure",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["steps"],
+    "additionalProperties": False,
+}
 
 
 class Replanner:
@@ -72,23 +122,15 @@ class Replanner:
                 f"- {k}: {str(v)[:200]}" for k, v in observations.items()
             )
 
-        prompt = (
-            "你是一个任务重新规划器。当前计划中的某个步骤执行失败了，"
-            "请根据失败信息和中间结果，生成替换剩余未完成步骤的新计划。"
-            "已经完成的步骤不要重新执行。\n\n"
-            f"原始意图: {intent}\n\n"
-            f"原始计划步骤:\n{steps_summary}\n\n"
-            f"失败步骤: {failed_step.step_id} ({failed_step.action_type})\n"
-            f"失败原因: {error}\n\n"
-            f"已完成的中间结果:\n{obs_summary or '无'}\n\n"
-            "请返回一个 JSON 对象，包含 'steps' 数组。每个步骤包含：\n"
-            "  step_id(新的短标识), action_type, description,\n"
-            "  tool_name(nullable), tool_input(对象, nullable),\n"
-            "  depends_on(前置步骤 step_id 数组),\n"
-            "  expected_output, success_criteria,\n"
-            "  risk_level(low/medium/high), requires_confirmation(bool),\n"
-            "  on_failure(skip/abort)。\n"
-            "不要包含已经完成的步骤。如果无法重新规划，返回 {\"steps\": []}。"
+        system_prompt = get_prompt("replanner.system")
+        prompt = render_prompt(
+            "replanner.user",
+            intent=intent,
+            steps_summary=steps_summary,
+            failed_step_id=failed_step.step_id,
+            failed_action_type=failed_step.action_type,
+            error=error,
+            obs_summary=obs_summary or "无",
         )
         model = self._settings.openai.small_model
         latency_ms = None
@@ -96,13 +138,17 @@ class Replanner:
             llm_result = traced_chat_completion(
                 self._settings.openai,
                 prompt_name="replanner",
+                prompt_version=system_prompt.version,
                 messages=[
-                    {"role": "system", "content": "你是一个严谨的任务重新规划器，只输出 JSON。"},
+                    {"role": "system", "content": system_prompt.template},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0,
                 max_tokens=500,
-                response_format={"type": "json_object"},
+                response_format=strict_json_schema_response(
+                    "replan_steps",
+                    _REPLANNER_RESPONSE_SCHEMA,
+                ),
                 metadata={"intent": intent, "failed_step_id": failed_step.step_id},
                 upload_inputs_outputs=self._settings.langsmith.upload_inputs,
             )
@@ -114,6 +160,7 @@ class Replanner:
             if not isinstance(steps_data, list) or not steps_data:
                 log_llm_parse(
                     prompt_name="replanner",
+                    prompt_version=system_prompt.version,
                     model=model,
                     parse_ok=False,
                     parse_schema="PlanStep[]",
@@ -130,8 +177,8 @@ class Replanner:
                 action = str(item.get("action_type") or "")
                 if action not in valid_actions:
                     continue
-                tool = item.get("tool_name") or item.get("tool")
-                tool_input = item.get("tool_input") or item.get("params") or {}
+                tool = item.get("tool_name")
+                tool_input = item.get("tool_input") or {}
                 if not isinstance(tool_input, dict):
                     tool_input = {}
                 depends_on = item.get("depends_on", [])
@@ -153,6 +200,7 @@ class Replanner:
                 ))
             log_llm_parse(
                 prompt_name="replanner",
+                prompt_version=system_prompt.version,
                 model=model,
                 parse_ok=bool(revised),
                 parse_schema="PlanStep[]",
@@ -163,6 +211,7 @@ class Replanner:
         except json.JSONDecodeError as exc:
             log_llm_parse(
                 prompt_name="replanner",
+                prompt_version=system_prompt.version,
                 model=model,
                 parse_ok=False,
                 parse_schema="PlanStep[]",

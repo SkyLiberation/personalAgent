@@ -359,7 +359,7 @@ memory_episodes
   note_refs
   decisions
   open_items
-  search_text / tsvector
+  search_text / BM25 index
   created_at
   updated_at
 ```
@@ -520,12 +520,12 @@ flowchart LR
             direction TB
             CaptureLayer["Capture / Solidify<br/>capture_text/url/upload<br/>solidify draft -> capture"]:::layer
             MemoryFacade["MemoryFacade<br/>target unified entry<br/>capture/search/get/list<br/>update/delete/review<br/>graph mapping"]:::layer
-            PostgresMemoryStore["PostgresMemoryStore<br/>add/update/search/delete note<br/>review cards<br/>embedding / tsvector"]:::layer
+            PostgresMemoryStore["PostgresMemoryStore<br/>add/update/search/delete note<br/>review cards<br/>embedding / BM25 index"]:::layer
             KnowledgeNote["KnowledgeNote<br/>source<br/>body<br/>chunk<br/>preextract<br/>graph<br/>graph_sync<br/>graph_quality"]:::model
             ReviewCard["ReviewCard<br/>note_id<br/>payload<br/>due_at"]:::model
             MemoryEpisode["MemoryEpisode<br/>episodic memory<br/>thread_id/run_id<br/>workflow/outcome<br/>decisions/open_items<br/>event/tool/note refs"]:::model
             KnowledgeTables["Postgres Business Tables<br/>knowledge_notes<br/>review_cards"]:::model
-            EpisodeTables["Postgres Episode Table<br/>memory_episodes<br/>search_text / tsvector"]:::model
+            EpisodeTables["Postgres Episode Table<br/>memory_episodes<br/>search_text / BM25 index"]:::model
             CaptureLayer --> KnowledgeNote
             MemoryFacade --> PostgresMemoryStore
             PostgresMemoryStore --> KnowledgeTables

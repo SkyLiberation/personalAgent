@@ -1430,7 +1430,7 @@ class TestPhase4ReActNodes:
             ),
         )
         result = _node_react_finalize(state)
-        assert state.plan.results["ask-1"] == {"answer": "42", "react_iterations": 2}
+        assert state.plan.step_results["ask-1"] == {"answer": "42", "react_iterations": 2}
         assert state.plan.steps[0].status == "completed"
         assert result["react"].step_id == ""
         assert result["react"].done is True

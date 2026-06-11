@@ -33,7 +33,9 @@ services:
       - neo4j-data:/data
       - neo4j-logs:/logs
   postgres:
-    image: pgvector/pgvector:pg17
+    # ParadeDB ships pg_search (BM25) + pgvector preinstalled.
+    # PG18+ image stores data in a subdir, so mount /var/lib/postgresql.
+    image: paradedb/paradedb:latest
     environment:
       POSTGRES_DB: personal_agent
       POSTGRES_USER: postgres
@@ -41,7 +43,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
 
 volumes:
   neo4j-data:

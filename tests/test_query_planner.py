@@ -1,7 +1,7 @@
 """Unit tests for query planner (P2 retrieval optimization)."""
 from __future__ import annotations
 
-from personal_agent.core.config import LangExtractConfig, OpenAIConfig, Settings
+from personal_agent.core.config import OpenAIConfig, PlannerConfig, Settings
 from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.agent.query_planner import _call_planner_llm, _derive_plan, _heuristic_filters
 
@@ -137,7 +137,7 @@ class TestHeuristicFilters:
         assert filters.created_before
 
 
-def test_call_planner_llm_prefers_langextract_json_schema(monkeypatch) -> None:
+def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
     request: dict = {}
 
     class FakeMessage:
@@ -172,8 +172,8 @@ def test_call_planner_llm_prefers_langextract_json_schema(monkeypatch) -> None:
     monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
     settings = Settings(
         openai=OpenAIConfig(api_key="openai-k", base_url="https://openai.invalid", small_model="deepseek"),
-        langextract=LangExtractConfig(
-            api_key="extract-k",
+        planner=PlannerConfig(
+            api_key="planner-k",
             base_url="https://dashscope.invalid/compatible-mode/v1",
             model_id="qwen3-coder-flash",
         ),
@@ -182,7 +182,7 @@ def test_call_planner_llm_prefers_langextract_json_schema(monkeypatch) -> None:
     understanding = _call_planner_llm("Redis 怎么缓存订单？", "", settings)
 
     assert understanding.query_rewrite == "redis cache"
-    assert request["client"]["api_key"] == "extract-k"
+    assert request["client"]["api_key"] == "planner-k"
     assert request["client"]["base_url"] == "https://dashscope.invalid/compatible-mode/v1"
     assert request["model"] == "qwen3-coder-flash"
     assert request["response_format"]["type"] == "json_schema"

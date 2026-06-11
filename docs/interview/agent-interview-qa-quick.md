@@ -529,7 +529,7 @@ Graph 会清空 pending confirmation，把当前步骤标记为 skipped/cancelle
 
 因为助手历史里可能有幻觉、猜测、未验证方案。把它们长期保存并再次检索，会形成“自我污染”。
 
-因此长期知识必须通过 capture 或 solidify 写入，且后续还需要更强的 ThreadSummary，把用户明确事实、助手假设、未确认声明分开。
+因此长期知识必须通过 capture 或 solidify 写入。结构化 ThreadSummary 已经落地，把用户明确事实、助手假设、未确认声明分字段保存并随 checkpoint 持久化；剩余待补的是让 solidify 强制只消费其已确认字段。
 
 ### Q3：solidify_conversation 风险在哪里？
 
@@ -537,10 +537,10 @@ Graph 会清空 pending confirmation，把当前步骤标记为 skipped/cancelle
 
 当前固化流程会先 compose 草稿，再调用 capture_text。若无法生成合格正文则不写入。
 
-未来更稳的做法是：
+更稳的做法是（结构化 ThreadSummary 已落地，区分字段已具备，剩下是让 solidify 真正只采信已确认部分）：
 
-- 引入结构化 ThreadSummary。
-- 区分用户明确事实、已确认决策、助手假设、未验证声明。
+- 结构化 ThreadSummary 已分字段保存用户明确事实、已确认决策、助手假设、未验证声明。
+- solidify 的 compose 强制只消费已确认字段，对助手假设 / 未验证声明默认不写入。
 - 对不确定内容要求用户确认。
 
 ## 13. 模型分工
@@ -635,7 +635,7 @@ evals 验证 Agent 策略是否真的有效，例如：
 - PolicyEngine 已落地，但还需要接入更完整的 workspace/tenant/RBAC/ABAC 权限模型。
 - 工具审计和 policy 决策还需要独立持久化审计表与查询界面。
 - 幂等账本目前是进程内，不适合多实例生产。
-- ThreadSummary 还不够结构化，solidify 有污染风险。
+- ThreadSummary 已结构化并随 checkpoint 持久化，但 solidify 还没强制只消费已确认字段，仍有污染风险。
 - 知识冲突、版本链、过期知识治理还不完整。
 - 图谱抽取质量缺少人工标注 precision/recall 回归集。
 - Context compression 和 LLM/entailment verifier 还可以加强。

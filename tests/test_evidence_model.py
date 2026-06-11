@@ -159,7 +159,7 @@ class TestEvidenceRerankers:
 
     def test_llm_reranker_reorders_candidates(self, monkeypatch):
         settings = Settings(
-            langextract=Settings().langextract.model_copy(update={"api_key": "test-key"}),
+            planner=Settings().planner.model_copy(update={"api_key": "test-key"}),
             ask=Settings().ask.model_copy(update={"reranker": "llm", "llm_rerank_top_n": 2}),
         )
         evidence = [

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage
 
 from ._deps import OrchestrationDeps, _REACT_SYSTEM_PROMPT
+from ...core.llm_schemas import strict_json_schema_response, strict_tool_definition
+from ...core.prompts import get_prompt
 
 if TYPE_CHECKING:
     from ._deps import PlanStep
@@ -58,29 +61,123 @@ def _summarize_react_tool_result(data: object) -> str:
     return str(data)[:300]
 
 
-def _react_llm_respond(user_prompt: str, deps: OrchestrationDeps) -> str | None:
+_FINISH_REACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "finish_react",
+        "description": "结束当前 ReAct 步骤，并返回最终答案。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string", "description": "简短说明为什么可以结束。"},
+                "answer": {"type": "string", "description": "本步骤的最终答案或结构化结果摘要。"},
+            },
+            "required": ["thought", "answer"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+}
+
+
+def _react_llm_respond(
+    user_prompt: str,
+    deps: OrchestrationDeps,
+    allowed_tools: set[str] | None = None,
+) -> str | None:
     from ...core.llm_trace import traced_chat_completion
 
     settings = deps.settings
     if not (settings.openai.api_key and settings.openai.base_url):
         return None
+    tools = None
+    if allowed_tools is not None:
+        tool_defs = [
+            strict_tool_definition(spec)
+            for spec in deps.tool_executor.list_tools()
+            if spec.name in allowed_tools
+        ]
+        tools = tool_defs + [_FINISH_REACT_TOOL]
     try:
+        react_prompt = get_prompt("react.system")
         result = traced_chat_completion(
             settings.openai,
             prompt_name="react",
+            prompt_version=react_prompt.version,
             messages=[
                 {"role": "system", "content": _REACT_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0,
             max_tokens=400,
-            response_format={"type": "json_object"},
+            tools=tools,
+            tool_choice="auto" if tools else None,
             metadata={"component": "react"},
+            upload_inputs_outputs=settings.langsmith.upload_inputs,
+        )
+        if result.tool_calls:
+            call = result.tool_calls[0]
+            function = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(function, dict):
+                return None
+            name = str(function.get("name") or "")
+            try:
+                arguments = json.loads(str(function.get("arguments") or "{}"))
+            except json.JSONDecodeError:
+                arguments = {}
+            if name == "finish_react":
+                return json.dumps({
+                    "thought": str(arguments.get("thought") or ""),
+                    "done": True,
+                    "result": {"answer": str(arguments.get("answer") or "")},
+                }, ensure_ascii=False)
+            return json.dumps({
+                "thought": str(arguments.pop("thought", "")),
+                "tool": name,
+                "input": arguments,
+            }, ensure_ascii=False)
+        return result.content or None
+    except Exception:
+        logger.exception("ReAct LLM call failed")
+        return None
+
+
+def _structured_llm_respond(
+    prompt_name: str,
+    user_prompt: str,
+    deps: OrchestrationDeps,
+    schema: dict,
+    *,
+    max_tokens: int = 500,
+) -> str | None:
+    from ...core.llm_trace import traced_chat_completion
+
+    settings = deps.settings
+    if not (settings.openai.api_key and settings.openai.base_url):
+        return None
+    try:
+        system_prompt = get_prompt("structured.system")
+        try:
+            prompt_version = get_prompt(f"{prompt_name}.user").version
+        except KeyError:
+            prompt_version = system_prompt.version
+        result = traced_chat_completion(
+            settings.openai,
+            prompt_name=prompt_name,
+            prompt_version=prompt_version,
+            messages=[
+                {"role": "system", "content": system_prompt.template},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=max_tokens,
+            response_format=strict_json_schema_response(prompt_name, schema),
+            metadata={"component": prompt_name},
             upload_inputs_outputs=settings.langsmith.upload_inputs,
         )
         return result.content or None
     except Exception:
-        logger.exception("ReAct LLM call failed")
+        logger.exception("Structured LLM call failed: %s", prompt_name)
         return None
 
 

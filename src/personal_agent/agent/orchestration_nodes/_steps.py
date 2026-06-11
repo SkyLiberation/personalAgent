@@ -11,6 +11,7 @@ import time
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import interrupt
 
+from ...core.prompts import render_prompt
 from ..orchestration_models import (
     AgentGraphState,
     PlanStepState,
@@ -36,6 +37,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_DELETE_CANDIDATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "thought": {"type": "string"},
+        "note_id": {"type": ["string", "null"]},
+    },
+    "required": ["thought", "note_id"],
+    "additionalProperties": False,
+}
+
+_SOLIDIFY_DRAFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "thought": {"type": "string"},
+        "selected_turn_ids": {"type": "array", "items": {"type": "string"}},
+        "title": {"type": "string"},
+        "content": {"type": "string"},
+    },
+    "required": ["thought", "selected_turn_ids", "title", "content"],
+    "additionalProperties": False,
+}
+
 # ===================================================================
 # Phase 2: plan execution loop nodes (step-level checkpointing)
 # ===================================================================
@@ -53,7 +76,7 @@ def _node_prepare_plan_execution(state: AgentGraphState) -> dict:
     state.plan = PlanSubState(
         steps=sorted_steps,
         current_step_index=0,
-        results=state.plan.results or {},
+        step_results=state.plan.step_results or {},
         aborted=False,
         retry_counts=state.plan.retry_counts or {},
     )
@@ -122,7 +145,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
     # Idempotency: skip side-effect steps that already ran
     if step.action_type == "tool_call" and step.tool_name:
         idem_key = step.step_id
-        if idem_key in state.plan.results:
+        if idem_key in state.plan.step_results:
             logger.info(
                 "Skipping already-executed tool_call step %s (idempotent)",
                 step.step_id,
@@ -216,7 +239,7 @@ def _node_consume_plan_tool_result(state: AgentGraphState, *, deps: Orchestratio
         )
 
     result_data = artifact.get("data") if artifact.get("data") is not None else {"ok": True}
-    state.plan.results[step.step_id] = result_data
+    state.plan.step_results[step.step_id] = result_data
     if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
         state.pending_confirmation = {
             "step_id": step.step_id,
@@ -313,12 +336,15 @@ def _begin_tool_call(
     iteration: int | None = None,
 ) -> AIMessage:
     call_id = f"{state.run_id}:{suffix}:{len(state.tool_results)}"
+    normalized_input = dict(tool_input or {})
+    if tool_name == "graph_search" and "user_id" not in normalized_input:
+        normalized_input["user_id"] = state.user_id
     state.tool_tracking = ToolTrackingSubState(
         active_context=context,
         pending_step_id=step_id,
         pending_call_id=call_id,
         pending_tool_name=tool_name,
-        pending_tool_input=tool_input or {},
+        pending_tool_input=normalized_input,
         pending_react_iteration=iteration,
     )
     state.add_event("tool_called", {
@@ -332,7 +358,7 @@ def _begin_tool_call(
         content="",
         tool_calls=[{
             "name": tool_name,
-            "args": tool_input or {},
+            "args": normalized_input,
             "id": call_id,
             "type": "tool_call",
         }],
@@ -412,14 +438,14 @@ def _complete_current_step(state: AgentGraphState, step: "PlanStep") -> dict:
         return result
 
     sd.status = "completed"
-    display_output = _step_display_output(step, state.plan.results.get(step.step_id))
+    display_output = _step_display_output(step, state.plan.step_results.get(step.step_id))
     sd.output_label = display_output.get("output_label", "")
     sd.output_title = display_output.get("output_title", "")
     sd.output_preview = display_output.get("output_preview", "")
     completion_payload = {
         "step_id": step.step_id,
         "description": step.description,
-        "result_summary": _helpers._summarize_result(state.plan.results.get(step.step_id)),
+        "result_summary": _helpers._summarize_result(state.plan.step_results.get(step.step_id)),
     }
     completion_payload.update(display_output)
     state.add_event("step_completed", completion_payload)
@@ -462,7 +488,7 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps
 
     # Inject resolved note_id into dependent tool_call steps
     if step.action_type == "resolve":
-        result_data = state.plan.results.get(step.step_id)
+        result_data = state.plan.step_results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("note_id"):
             _inject_note_id_into_steps(
                 step.step_id, str(result_data["note_id"]), state.user_id, state.plan.steps,
@@ -470,7 +496,7 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps
 
     # Inject compose draft text into dependent capture_text steps
     if step.action_type == "compose":
-        result_data = state.plan.results.get(step.step_id)
+        result_data = state.plan.step_results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("answer"):
             _inject_draft_text_into_steps(
                 step.step_id, str(result_data["answer"]), state.user_id, state.plan.steps,
@@ -523,7 +549,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
                 # Reconstruct plan step objects for replanner
                 step_objs = [s.to_plan_step() for s in state.plan.steps]
                 revised = replanner.replan(
-                    step_objs, step, err_msg, state.plan.results, intent,
+                    step_objs, step, err_msg, state.plan.step_results, intent,
                 )
                 if revised:
                     # Validate revised steps
@@ -729,7 +755,7 @@ def _dispatch_plan_step(
     The graph-native executor operates on ``AgentGraphState`` so every step
     update can be checkpointed.
     """
-    step_results: dict = state.plan.results
+    step_results: dict = state.plan.step_results
 
     if step.action_type == "retrieve":
         result_data = _execute_retrieve_step(step, state, deps)
@@ -779,7 +805,7 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
     candidates: list[dict] = []
 
     # 1. Graph episode UUID mapping
-    for sid, data in state.plan.results.items():
+    for sid, data in state.plan.step_results.items():
         if not isinstance(data, dict):
             continue
         episode_uuids = data.get("related_episode_uuids")
@@ -845,19 +871,19 @@ def _select_local_delete_candidate_with_llm(
         }
         for note in selectable_notes
     ]
-    prompt = (
-        "你负责从已有知识笔记候选中定位用户明确要求删除的目标。"
-        "只在目标与候选明显对应时选择一条；不确定或有多个可能目标时返回 null。"
-        "不要执行删除，也不要生成不存在的 ID。"
-        "输出 JSON："
-        '{"thought":"简短判断","done":true,"result":{"note_id":"候选ID或null"}}。\n\n'
-        f"用户删除请求：{delete_request}\n"
-        f"候选笔记：{json.dumps(prompt_candidates, ensure_ascii=False)}"
+    prompt = render_prompt(
+        "delete_candidate_resolve.user",
+        delete_request=delete_request,
+        prompt_candidates=json.dumps(prompt_candidates, ensure_ascii=False),
     )
-    raw = _helpers._react_llm_respond(prompt, deps)
+    raw = _helpers._structured_llm_respond(
+        "delete_candidate_resolve",
+        prompt,
+        deps,
+        _DELETE_CANDIDATE_SCHEMA,
+    )
     parsed = _helpers._react_parse_response(raw) if raw else None
-    result = parsed.get("result") if isinstance(parsed, dict) else None
-    note_id = result.get("note_id") if isinstance(result, dict) else None
+    note_id = parsed.get("note_id") if isinstance(parsed, dict) else None
     if isinstance(note_id, str) and note_id in candidate_by_id:
         return [candidate_by_id[note_id]]
     return []
@@ -865,7 +891,7 @@ def _select_local_delete_candidate_with_llm(
 
 def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> str:
     context_parts: list[str] = []
-    for sid, data in state.plan.results.items():
+    for sid, data in state.plan.step_results.items():
         if isinstance(data, dict):
             if data.get("answer"):
                 context_parts.append(str(data["answer"]))
@@ -883,21 +909,26 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
         dialogue = _helpers._format_solidify_candidate_context(state.messages)
         if not dialogue:
             dialogue = context
-        solidify_prompt = (
-            "你负责决定哪些会话事实属于用户本次指定的固化范围，并将它们整理为一条可独立入库的中文知识笔记。"
-            "候选会话可能同时包含多个无关主题，必须根据当前保存请求进行语义选择；"
-            "不要仅因为某段出现在上下文中就写入笔记，也不要写入操作指令本身。"
-            "当当前保存请求使用“该知识”“这个内容”“上述回答”等指代且未另行指定主题时，"
-            "只提炼保存请求之前最近一轮助手回答所表达的知识，不要选择更早的其他主题。"
-            "如果候选会话中没有足以支撑本次请求的知识，请将正文留空。\n\n"
-            "请输出 JSON："
-            '{"thought":"范围判断理由","done":true,"result":{"selected_turn_ids":["turn-N"],'
-            '"title":"知识标题","content":"仅包含被选择知识的正文"}}。\n\n'
-            f"当前保存请求：{state.entry_text}\n\n候选会话：\n{dialogue}"
+        solidify_prompt = render_prompt(
+            "solidify_draft.user",
+            entry_text=state.entry_text,
+            dialogue=dialogue,
         )
         try:
-            raw_answer = _helpers._react_llm_respond(solidify_prompt, deps)
-            answer = _helpers._solidify_note_text(raw_answer) if raw_answer else None
+            raw_answer = _helpers._structured_llm_respond(
+                "solidify_draft",
+                solidify_prompt,
+                deps,
+                _SOLIDIFY_DRAFT_SCHEMA,
+                max_tokens=900,
+            )
+            parsed_answer = _helpers._react_parse_response(raw_answer) if raw_answer else None
+            if isinstance(parsed_answer, dict):
+                title = str(parsed_answer.get("title") or "").strip()
+                body = str(parsed_answer.get("content") or "").strip()
+                answer = f"{title}\n\n{body}" if title and body else body or title
+            else:
+                answer = None
         except Exception:
             logger.exception("Solidify compose step %s failed", step.step_id)
             answer = None
@@ -988,6 +1019,3 @@ def _after_confirm_step(state: AgentGraphState) -> str:
 def _after_step_success(state: AgentGraphState) -> str:
     """After handling success: always continue to next step."""
     return "continue_loop"
-
-
-

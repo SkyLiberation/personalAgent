@@ -24,6 +24,34 @@ from .planner import PlanStep
 
 ProjectionPolicy = Literal["none", "step_projection"]
 
+# Branch semantics taken when a step finishes or cannot resolve. ``continue``
+# advances to dependents by the normal dependency loop; the others describe how
+# the workflow diverges from the happy path. ``human_select`` marks a node that
+# must surface candidates for explicit user choice (e.g. multi-candidate delete).
+BranchPolicy = Literal["continue", "clarify", "abort", "human_select", "branch"]
+
+# Terminal sentinels a conditional edge may target instead of another step id.
+EDGE_END = "END"
+EDGE_CLARIFY = "clarify"
+EDGE_ABORT = "abort"
+EDGE_SENTINELS = frozenset({EDGE_END, EDGE_CLARIFY, EDGE_ABORT})
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowConditionalEdge:
+    """A declarative conditional transition out of a workflow node.
+
+    ``condition`` is a stable, human-readable label for the branch trigger
+    (e.g. ``"no_candidate"``, ``"rejected"``). ``target`` is either another
+    step id within the same workflow or one of :data:`EDGE_SENTINELS`. The edge
+    is a contract describing *intended* control flow so that
+    ``WorkflowSpecValidator`` can keep it consistent with the executable graph;
+    it does not by itself rewire LangGraph.
+    """
+
+    condition: str
+    target: str
+
 
 @dataclass(frozen=True, slots=True)
 class WorkflowStepSpec:
@@ -32,7 +60,8 @@ class WorkflowStepSpec:
     The fields intentionally mirror the runtime projection shape where useful,
     but this object is stronger than ``PlanStep``: it belongs to the workflow
     source of truth and can carry non-UI contracts such as decision node names,
-    side effects, HITL policy, and node recovery policy.
+    side effects, HITL policy, node recovery policy, and the conditional edges
+    that describe how the workflow diverges from the happy path.
     """
 
     step_id: str
@@ -53,6 +82,8 @@ class WorkflowStepSpec:
     side_effects: tuple[str, ...] = ()
     hitl_policy: str = "none"
     recovery_policy: str = "skip"
+    branch_policy: BranchPolicy = "continue"
+    conditional_edges: tuple[WorkflowConditionalEdge, ...] = ()
     project_to_plan: bool = True
 
     def to_projection(self, workflow_id: str, workflow_version: str) -> PlanStep:
@@ -99,20 +130,10 @@ class WorkflowSpec:
     hitl_policy: str = "none"
     recovery_policy: str = "branch"
 
-    def __post_init__(self) -> None:
-        ids = [s.step_id for s in self.steps]
-        duplicates = {sid for sid in ids if ids.count(sid) > 1}
-        if duplicates:
-            raise ValueError(f"Workflow {self.workflow_id} has duplicate step ids: {sorted(duplicates)}")
-
-        known = set(ids)
-        for step in self.steps:
-            unknown_deps = [dep for dep in step.depends_on if dep not in known]
-            if unknown_deps:
-                raise ValueError(
-                    f"Workflow {self.workflow_id} step {step.step_id} depends on unknown steps: "
-                    f"{unknown_deps}"
-                )
+    # NOTE: structural integrity (unique step ids, resolvable dependencies,
+    # acyclic graph) is intentionally NOT enforced in ``__post_init__``. It is
+    # owned by ``WorkflowSpecValidator`` so all spec validation lives in one
+    # place and can report every issue at once instead of raising on the first.
 
     @property
     def requires_projection(self) -> bool:
@@ -151,6 +172,17 @@ class WorkflowRegistry:
     def select(self, intent: str) -> WorkflowSpec:
         """Return the spec for an intent, or the ``unknown`` fallback spec."""
         return self._by_intent.get(intent, self._unknown)
+
+    def all_specs(self) -> list[WorkflowSpec]:
+        """Return every registered spec (deduplicated, stable order)."""
+        seen: set[str] = set()
+        specs: list[WorkflowSpec] = []
+        for spec in self._by_intent.values():
+            if spec.workflow_id in seen:
+                continue
+            seen.add(spec.workflow_id)
+            specs.append(spec)
+        return specs
 
     def project(self, intent: str) -> list[PlanStep]:
         """Project the matched workflow into runtime steps when required."""
@@ -288,6 +320,10 @@ def _build_registry() -> WorkflowRegistry:
                     expected_output="匹配的候选笔记列表（含 note_id / title / summary）",
                     success_criteria="命中至少 1 条候选笔记",
                     recovery_policy="clarify",
+                    branch_policy="clarify",
+                    conditional_edges=(
+                        WorkflowConditionalEdge("no_candidate", EDGE_CLARIFY),
+                    ),
                 ),
                 WorkflowStepSpec(
                     "del-2",
@@ -298,6 +334,11 @@ def _build_registry() -> WorkflowRegistry:
                     success_criteria="至少解析出 1 个有效 note_id",
                     llm_decision_node="delete_target_resolve",
                     recovery_policy="clarify",
+                    branch_policy="human_select",
+                    conditional_edges=(
+                        WorkflowConditionalEdge("ambiguous_candidate", EDGE_CLARIFY),
+                        WorkflowConditionalEdge("no_candidate", EDGE_CLARIFY),
+                    ),
                 ),
                 WorkflowStepSpec(
                     "del-3",
@@ -312,6 +353,10 @@ def _build_registry() -> WorkflowRegistry:
                     side_effects=("delete_longterm",),
                     hitl_policy="required_for_delete",
                     recovery_policy="abort",
+                    branch_policy="abort",
+                    conditional_edges=(
+                        WorkflowConditionalEdge("rejected", EDGE_ABORT),
+                    ),
                 ),
                 WorkflowStepSpec(
                     "del-4",
@@ -338,6 +383,10 @@ def _build_registry() -> WorkflowRegistry:
                     expected_output="格式化的知识笔记草稿",
                     llm_decision_node="solidify_draft",
                     recovery_policy="abort",
+                    branch_policy="abort",
+                    conditional_edges=(
+                        WorkflowConditionalEdge("no_draft", EDGE_ABORT),
+                    ),
                 ),
                 WorkflowStepSpec(
                     "sol-2",
@@ -350,6 +399,7 @@ def _build_registry() -> WorkflowRegistry:
                     on_failure="abort",
                     side_effects=("write_longterm",),
                     recovery_policy="abort",
+                    branch_policy="abort",
                 ),
             ),
             projection_policy="step_projection",

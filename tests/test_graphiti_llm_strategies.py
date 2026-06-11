@@ -6,6 +6,7 @@ from graphiti_core.prompts.models import Message
 from pydantic import BaseModel
 
 from personal_agent.core.config import GraphitiConfig, LangSmithConfig, OpenAIConfig, Settings
+from personal_agent.core.llm_schemas import strictify_schema
 from personal_agent.graphiti.llm_strategies import (
     GraphitiOpenAIClient,
     build_graphiti_llm_client,
@@ -58,7 +59,8 @@ async def test_graphiti_client_uses_json_schema_and_disables_thinking(monkeypatc
         "type": "json_schema",
         "json_schema": {
             "name": "StructuredResponse",
-            "schema": StructuredResponse.model_json_schema(),
+            "schema": strictify_schema(StructuredResponse.model_json_schema()),
+            "strict": True,
         },
     }
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}

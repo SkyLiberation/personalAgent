@@ -39,6 +39,29 @@ def _compact_whitespace(value: str) -> str:
 
 _EMBEDDING_DIMENSIONS = 128
 
+# pg_search (ParadeDB) BM25 configuration.
+# The lexical path is backed by a BM25 index built on the ``search_text`` column.
+# Chinese segmentation is handled by pg_search's own tokenizer (not zhparser /
+# not tsvector). Tokenizer name is centralized here so it can be adjusted to
+# match the installed pg_search version without touching the SQL builders.
+_BM25_TOKENIZER = "chinese_compatible"
+_BM25_KEY_FIELD = "id"
+_BM25_TEXT_FIELD = "search_text"
+
+
+def _bm25_text_fields_json() -> str:
+    """JSON config for the BM25 index ``text_fields`` option.
+
+    Single-field index over ``search_text`` with the Chinese-compatible
+    tokenizer. Field-level weighting (former title*4 / summary*2 ...) is
+    intentionally dropped in this first version; see plan trade-off #1.
+    """
+    return (
+        '{"' + _BM25_TEXT_FIELD + '": {"tokenizer": {"type": "'
+        + _BM25_TOKENIZER + '"}}}'
+    )
+
+
 
 def _search_text_for_note(note: KnowledgeNote) -> str:
     document = retrieval_document_from_note(note)
@@ -85,6 +108,20 @@ def _search_text_for_memory_item(item: MemoryItem) -> str:
         " ".join(str(value) for value in item.metadata.values() if value),
     ]
     return _compact_whitespace(" ".join(part for part in parts if part))
+
+
+def _bm25_bonus(score: float) -> float:
+    """Saturating bonus from a raw BM25 score, kept on the RRF scale.
+
+    BM25 scores are unbounded and not comparable across queries, so we map them
+    through a saturating curve capped near the magnitude of a top RRF term
+    (~1/61). This lets a strong BM25 hit nudge ordering without letting an
+    outlier score dominate the rank-based fusion.
+    """
+    if score <= 0.0:
+        return 0.0
+    # score/(score+k) saturates in [0,1); scale so the cap matches RRF magnitude.
+    return 0.016 * (score / (score + 8.0))
 
 
 def _query_terms(query: str) -> list[str]:
@@ -255,7 +292,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_search")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS knowledge_notes (
@@ -266,7 +303,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         graph_episode_uuid TEXT,
                         payload JSONB NOT NULL,
                         search_text TEXT NOT NULL DEFAULT '',
-                        search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
                         embedding_vector VECTOR(128),
                         embedding_model TEXT,
                         created_at TIMESTAMPTZ NOT NULL,
@@ -276,9 +312,10 @@ class PostgresMemoryStore(PostgresStoreBase):
                 )
                 cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS search_text TEXT NOT NULL DEFAULT ''")
                 cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS source_fingerprint TEXT")
-                cur.execute(
-                    "ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector"
-                )
+                # Legacy tsvector lexical path removed in favor of pg_search BM25.
+                cur.execute("DROP INDEX IF EXISTS knowledge_notes_search_vector_idx")
+                cur.execute("DROP INDEX IF EXISTS knowledge_notes_search_text_trgm_idx")
+                cur.execute("ALTER TABLE knowledge_notes DROP COLUMN IF EXISTS search_vector")
                 cur.execute(
                     """
                     DO $$
@@ -326,18 +363,13 @@ class PostgresMemoryStore(PostgresStoreBase):
                     "CREATE INDEX IF NOT EXISTS knowledge_notes_fingerprint_idx ON knowledge_notes (user_id, source_fingerprint)"
                 )
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS knowledge_notes_search_vector_idx ON knowledge_notes USING GIN (search_vector)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS knowledge_notes_search_text_trgm_idx ON knowledge_notes USING GIN (search_text gin_trgm_ops)"
-                )
-                cur.execute(
                     """
                     CREATE INDEX IF NOT EXISTS knowledge_notes_embedding_hnsw_idx
                     ON knowledge_notes
                     USING hnsw (embedding_vector vector_cosine_ops)
                     """
                 )
+                # Backfill search_text for legacy rows (BM25 index reads this column).
                 cur.execute(
                     """
                     UPDATE knowledge_notes
@@ -350,24 +382,16 @@ class PostgresMemoryStore(PostgresStoreBase):
                             payload#>>'{source,metadata}',
                             payload#>>'{body,content}'
                         ),
-                        search_vector = to_tsvector(
-                            'simple',
-                            concat_ws(
-                                ' ',
-                                payload#>>'{body,title}',
-                                payload#>>'{body,summary}',
-                                payload#>>'{preextract,topic}',
-                                payload#>>'{source,fingerprint}',
-                                payload#>>'{source,metadata}',
-                                payload#>>'{body,content}'
-                            )
-                        ),
-                        source_fingerprint = COALESCE(source_fingerprint, payload#>>'{source,fingerprint}'),
-                        embedding_vector = CASE
-                            WHEN embedding_vector IS NULL THEN NULL
-                            ELSE embedding_vector
-                        END
-                    WHERE search_text = '' OR search_vector = ''::tsvector
+                        source_fingerprint = COALESCE(source_fingerprint, payload#>>'{source,fingerprint}')
+                    WHERE search_text = ''
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS knowledge_notes_bm25_idx
+                    ON knowledge_notes
+                    USING bm25 (id, search_text)
+                    WITH (key_field='{_BM25_KEY_FIELD}', text_fields='{_bm25_text_fields_json()}')
                     """
                 )
                 cur.execute(
@@ -397,12 +421,14 @@ class PostgresMemoryStore(PostgresStoreBase):
                         summary TEXT NOT NULL,
                         payload JSONB NOT NULL,
                         search_text TEXT NOT NULL DEFAULT '',
-                        search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
                         created_at TIMESTAMPTZ NOT NULL,
                         updated_at TIMESTAMPTZ NOT NULL
                     )
                     """
                 )
+                cur.execute("DROP INDEX IF EXISTS memory_episodes_search_vector_idx")
+                cur.execute("DROP INDEX IF EXISTS memory_episodes_search_text_trgm_idx")
+                cur.execute("ALTER TABLE memory_episodes DROP COLUMN IF EXISTS search_vector")
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS memory_episodes_user_idx ON memory_episodes (user_id, created_at DESC)"
                 )
@@ -413,10 +439,12 @@ class PostgresMemoryStore(PostgresStoreBase):
                     "CREATE INDEX IF NOT EXISTS memory_episodes_workflow_idx ON memory_episodes (user_id, workflow, created_at DESC)"
                 )
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS memory_episodes_search_vector_idx ON memory_episodes USING GIN (search_vector)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS memory_episodes_search_text_trgm_idx ON memory_episodes USING GIN (search_text gin_trgm_ops)"
+                    f"""
+                    CREATE INDEX IF NOT EXISTS memory_episodes_bm25_idx
+                    ON memory_episodes
+                    USING bm25 (id, search_text)
+                    WITH (key_field='{_BM25_KEY_FIELD}', text_fields='{_bm25_text_fields_json()}')
+                    """
                 )
                 cur.execute(
                     """
@@ -429,20 +457,24 @@ class PostgresMemoryStore(PostgresStoreBase):
                         content TEXT NOT NULL,
                         payload JSONB NOT NULL,
                         search_text TEXT NOT NULL DEFAULT '',
-                        search_vector TSVECTOR NOT NULL DEFAULT ''::tsvector,
                         created_at TIMESTAMPTZ NOT NULL,
                         updated_at TIMESTAMPTZ NOT NULL
                     )
                     """
                 )
+                cur.execute("DROP INDEX IF EXISTS memory_items_search_vector_idx")
+                cur.execute("DROP INDEX IF EXISTS memory_items_search_text_trgm_idx")
+                cur.execute("ALTER TABLE memory_items DROP COLUMN IF EXISTS search_vector")
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS memory_items_user_type_idx ON memory_items (user_id, memory_type, status, created_at DESC)"
                 )
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS memory_items_search_vector_idx ON memory_items USING GIN (search_vector)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS memory_items_search_text_trgm_idx ON memory_items USING GIN (search_text gin_trgm_ops)"
+                    f"""
+                    CREATE INDEX IF NOT EXISTS memory_items_bm25_idx
+                    ON memory_items
+                    USING bm25 (id, search_text)
+                    WITH (key_field='{_BM25_KEY_FIELD}', text_fields='{_bm25_text_fields_json()}')
+                    """
                 )
             conn.commit()
         self._initialized = True
@@ -464,11 +496,11 @@ class PostgresMemoryStore(PostgresStoreBase):
                     INSERT INTO knowledge_notes
                         (
                             id, user_id, parent_note_id, graph_episode_uuid, payload,
-                            source_fingerprint, search_text, search_vector, embedding_vector, embedding_model,
+                            source_fingerprint, search_text, embedding_vector, embedding_model,
                             created_at, updated_at
                         )
                     VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, to_tsvector('simple', %s),
+                        %s, %s, %s, %s, %s, %s, %s,
                         %s::vector(128), %s, %s, %s
                     )
                     ON CONFLICT (id) DO UPDATE SET
@@ -478,7 +510,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         payload = EXCLUDED.payload,
                         source_fingerprint = EXCLUDED.source_fingerprint,
                         search_text = EXCLUDED.search_text,
-                        search_vector = EXCLUDED.search_vector,
                         embedding_vector = EXCLUDED.embedding_vector,
                         embedding_model = EXCLUDED.embedding_model,
                         updated_at = EXCLUDED.updated_at
@@ -490,7 +521,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         note.graph.episode_uuid,
                         Jsonb(note.model_dump(mode="json")),
                         note.source.fingerprint,
-                        search_text,
                         search_text,
                         embedding_vector,
                         self.embedding_model,
@@ -527,11 +557,11 @@ class PostgresMemoryStore(PostgresStoreBase):
                     INSERT INTO memory_episodes
                         (
                             id, user_id, session_id, thread_id, run_id, workflow, outcome,
-                            title, summary, payload, search_text, search_vector, created_at, updated_at
+                            title, summary, payload, search_text, created_at, updated_at
                         )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, to_tsvector('simple', %s), %s, %s
+                        %s, %s, %s
                     )
                     ON CONFLICT (id) DO UPDATE SET
                         user_id = EXCLUDED.user_id,
@@ -544,7 +574,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         summary = EXCLUDED.summary,
                         payload = EXCLUDED.payload,
                         search_text = EXCLUDED.search_text,
-                        search_vector = EXCLUDED.search_vector,
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -558,7 +587,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         episode.title,
                         episode.summary,
                         Jsonb(episode.model_dump(mode="json")),
-                        search_text,
                         search_text,
                         episode.created_at,
                         episode.updated_at,
@@ -576,11 +604,11 @@ class PostgresMemoryStore(PostgresStoreBase):
                     INSERT INTO memory_items
                         (
                             id, user_id, memory_type, status, title, content,
-                            payload, search_text, search_vector, created_at, updated_at
+                            payload, search_text, created_at, updated_at
                         )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s, to_tsvector('simple', %s), %s, %s
+                        %s, %s, %s
                     )
                     ON CONFLICT (id) DO UPDATE SET
                         user_id = EXCLUDED.user_id,
@@ -590,7 +618,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         content = EXCLUDED.content,
                         payload = EXCLUDED.payload,
                         search_text = EXCLUDED.search_text,
-                        search_vector = EXCLUDED.search_vector,
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -601,7 +628,6 @@ class PostgresMemoryStore(PostgresStoreBase):
                         item.title,
                         item.content,
                         Jsonb(item.model_dump(mode="json")),
-                        search_text,
                         search_text,
                         item.created_at,
                         item.updated_at,
@@ -669,34 +695,17 @@ class PostgresMemoryStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    WITH q AS (
-                        SELECT plainto_tsquery('simple', %s) AS tsq
-                    )
                     SELECT payload,
-                           (
-                               CASE WHEN search_vector @@ q.tsq THEN ts_rank_cd(search_vector, q.tsq) * 6 ELSE 0 END
-                               + similarity(search_text, %s) * 3
-                               + CASE WHEN lower(title) LIKE %s THEN 4 ELSE 0 END
-                               + CASE WHEN lower(content) LIKE %s THEN 2 ELSE 0 END
-                           ) AS score
-                    FROM memory_items, q
+                           paradedb.score(id) AS score
+                    FROM memory_items
                     WHERE {where_sql}
-                      AND (
-                          search_vector @@ q.tsq
-                          OR search_text %% %s
-                          OR lower(search_text) LIKE %s
-                      )
+                      AND id @@@ paradedb.match('search_text', %s)
                     ORDER BY score DESC, created_at DESC
                     LIMIT %s
                     """,
                     (
-                        normalized_query,
-                        normalized_query.lower(),
-                        f"%{normalized_query.lower()}%",
-                        f"%{normalized_query.lower()}%",
                         *params,
-                        normalized_query.lower(),
-                        f"%{normalized_query.lower()}%",
+                        normalized_query,
                         max(1, limit),
                     ),
                 )
@@ -750,8 +759,6 @@ class PostgresMemoryStore(PostgresStoreBase):
         normalized_query = _compact_whitespace(query)
         if not normalized_query:
             return self.list_episodes(user_id, limit=limit, session_id=session_id)
-        terms = _query_terms(normalized_query)
-        patterns = [f"%{term}%" for term in terms[:12]] or [f"%{normalized_query}%"]
         clauses = ["user_id = %s"]
         params: list[object] = [user_id]
         if session_id:
@@ -762,36 +769,17 @@ class PostgresMemoryStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    WITH q AS (
-                        SELECT plainto_tsquery('simple', %s) AS tsq
-                    )
                     SELECT payload,
-                           (
-                               CASE WHEN search_vector @@ q.tsq THEN ts_rank_cd(search_vector, q.tsq) * 6 ELSE 0 END
-                               + similarity(search_text, %s) * 3
-                               + CASE WHEN lower(title) LIKE ANY(%s) THEN 4 ELSE 0 END
-                               + CASE WHEN lower(summary) LIKE ANY(%s) THEN 2 ELSE 0 END
-                               + CASE WHEN lower(search_text) LIKE ANY(%s) THEN 1 ELSE 0 END
-                           ) AS score
-                    FROM memory_episodes, q
+                           paradedb.score(id) AS score
+                    FROM memory_episodes
                     WHERE {where_sql}
-                      AND (
-                          search_vector @@ q.tsq
-                          OR search_text %% %s
-                          OR lower(search_text) LIKE ANY(%s)
-                      )
+                      AND id @@@ paradedb.match('search_text', %s)
                     ORDER BY score DESC, created_at DESC
                     LIMIT %s
                     """,
                     (
-                        normalized_query,
-                        normalized_query.lower(),
-                        patterns,
-                        patterns,
-                        patterns,
                         *params,
-                        normalized_query.lower(),
-                        patterns,
+                        normalized_query,
                         max(1, limit),
                     ),
                 )
@@ -941,8 +929,6 @@ class PostgresMemoryStore(PostgresStoreBase):
             return []
 
         start = time.monotonic()
-        terms = _query_terms(normalized_query)
-        patterns = [f"%{term}%" for term in terms[:12]] or [f"%{normalized_query}%"]
         candidate_limit = max(limit * 8, 50)
 
         query_embedding = _vector_literal(self._embed_text(normalized_query))
@@ -954,42 +940,20 @@ class PostgresMemoryStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    WITH q AS (
-                        SELECT plainto_tsquery('simple', %s) AS tsq
-                    )
                     SELECT payload,
-                           (
-                               CASE WHEN search_vector @@ q.tsq THEN ts_rank_cd(search_vector, q.tsq) * 6 ELSE 0 END
-                               + similarity(search_text, %s) * 3
-                               + CASE WHEN lower(payload#>>'{{body,title}}') LIKE ANY(%s) THEN 4 ELSE 0 END
-                               + CASE WHEN lower(payload#>>'{{body,summary}}') LIKE ANY(%s) THEN 2 ELSE 0 END
-                               + CASE WHEN lower(coalesce(payload#>>'{{preextract,topic}}', '')) LIKE ANY(%s) THEN 2 ELSE 0 END
-                               + CASE WHEN lower(payload#>>'{{body,content}}') LIKE ANY(%s) THEN 1 ELSE 0 END
-                               + CASE WHEN parent_note_id IS NOT NULL THEN 0.25 ELSE 0 END
-                           ) AS score
-                    FROM knowledge_notes, q
+                           paradedb.score(id) AS score
+                    FROM knowledge_notes
                     WHERE user_id = %s
                       {active_version_sql}
                       {filter_sql}
-                      AND (
-                          search_vector @@ q.tsq
-                          OR search_text %% %s
-                          OR lower(search_text) LIKE ANY(%s)
-                      )
+                      AND id @@@ paradedb.match('search_text', %s)
                     ORDER BY score DESC, updated_at DESC
                     LIMIT %s
                     """,
                     (
-                        normalized_query,
-                        normalized_query.lower(),
-                        patterns,
-                        patterns,
-                        patterns,
-                        patterns,
                         user_id,
                         *filter_params,
-                        normalized_query.lower(),
-                        patterns,
+                        normalized_query,
                         candidate_limit,
                     ),
                 )
@@ -1088,10 +1052,12 @@ class PostgresMemoryStore(PostgresStoreBase):
         for rank, row in enumerate(lexical_rows, 1):
             note = KnowledgeNote.model_validate(row["payload"])
             payloads[note.id] = row["payload"]
-            score = float(row["score"] or 0.0)
-            # RRF keeps strong lexical hits stable while still allowing vector recall.
+            bm25_score = float(row["score"] or 0.0)
+            # RRF on rank is the primary, scale-robust signal. BM25 raw scores are
+            # unbounded (commonly 0~20+) and not comparable to cosine similarity,
+            # so we add only a small saturating bonus instead of the old /100 scale.
             scores[note.id] += 1.0 / (60 + rank)
-            scores[note.id] += min(score, 10.0) / 100.0
+            scores[note.id] += _bm25_bonus(bm25_score)
 
         vector_scored: list[tuple[float, object, str]] = []
         if query_embedding:

@@ -1,6 +1,6 @@
 # RAG 评估结果
 
-本文集中记录 Ask / 检索链路的评估结果，从 `docs/capture-ask-model-flow.md` 中拆出，便于独立维护评测口径、数据集规模和关键指标。架构设计仍以 [capture-ask-model-flow.md](capture-ask-model-flow.md) 为准。
+本文集中记录 Ask / 检索链路的评估结果，从 `docs/workflow/capture-ask-model-flow.md` 中拆出，便于独立维护评测口径、数据集规模和关键指标。架构设计仍以 [capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) 为准。
 
 覆盖两个评估数据集：
 
@@ -40,7 +40,7 @@ manifest：[evals/open_ragbench/results/graphiti_30q_manifest.json](../evals/ope
 观察：
 
 - 每 episode 约 5 个实体、9 条关系，密度合理，未出现 zero-entity 大面积塌陷。
-- 553 个孤立实体（14.5%）是抽取质量的关注点——这些实体进入了图但没有关系边，对多跳检索无贡献。对应 [capture-ask-model-flow.md](capture-ask-model-flow.md) 失败模式 #1（抽取质量黑盒）的监控信号。
+- 553 个孤立实体（14.5%）是抽取质量的关注点——这些实体进入了图但没有关系边，对多跳检索无贡献。对应 [capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) 失败模式 #1（抽取质量黑盒）的监控信号。
 - ingest 成本：737 episodes 各跑一次实体/关系抽取 LLM 调用，是 30q 评测中最贵的一步，因此必须靠 manifest 缓存复用。
 
 > 复现命令：`scripts/probe_graph_health.py --user ragbench_eval_30q --neo4j`，或直接对 `group_id` 跑 Cypher `MATCH (n:Entity {group_id:$g}) RETURN count(n)`。

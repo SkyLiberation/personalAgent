@@ -1,8 +1,9 @@
 """Query planner: produces a QueryUnderstanding + RetrievalPlan from LLM.
 
-Uses the LangExtract-compatible structured-output model by default. This keeps
-planner JSON parsing stable without changing the other small-model paths
-(router, task planner, replanner).
+Uses a dedicated structured-output model (``settings.planner``) by default.
+This keeps planner JSON parsing stable without changing the other small-model
+paths (router, task planner, replanner), and is intentionally independent from
+the capture-time LangExtract layer.
 """
 from __future__ import annotations
 
@@ -14,33 +15,10 @@ from datetime import timedelta
 from ..core.config import OpenAIConfig, Settings
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.models import local_now
+from ..core.prompts import get_prompt, render_prompt
 from ..core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
 logger = logging.getLogger(__name__)
-
-_PLANNER_SYSTEM = """\
-You are a retrieval planner for a personal knowledge management system.
-Given a user question (and optional conversation context), produce a JSON object with these fields:
-
-- needs_freshness (bool): true if the question asks about latest/current/recent/today information
-- needs_personal_memory (bool): true if the question references personal notes, prior knowledge, or things the user previously captured
-- needs_graph_reasoning (bool): true if the question requires multi-hop entity relationship reasoning (e.g. "how does A relate to B", "what connects X and Y")
-- needs_episodic_context (bool): true if the question asks what happened in prior agent runs/workflows, what was changed, why a previous decision was made, what remains unfinished, or asks to continue a previous task
-- query_rewrite (string): rewrite the question into a concise, keyword-rich retrieval query. Remove filler words, resolve pronouns from context, expand abbreviations. If the question is already retrieval-friendly, return it unchanged.
-- sub_queries (string[]): if the question is compound or multi-hop, decompose into 2-3 independent sub-queries. Otherwise empty array.
-- filters (object): structured metadata filters. Use only when the user explicitly asks for a time/source/tag/file constraint.
-  - source_types: array of source types, e.g. ["link"], ["file"], ["text"], ["note"], ["pdf"]
-  - source_ref_contains: filename, URL/domain, or source reference substring
-  - tags: tag names
-  - created_after / created_before: ISO datetime bounds when the user asks for today/yesterday/last week/recent saved notes
-  - metadata_contains: author/title/file metadata substring
-  - parent_note_id: note id only when explicitly provided
-- answer_policy (string): one of "must_cite", "allow_web", "refuse_if_insufficient"
-  - "must_cite": default, answer only from personal knowledge
-  - "allow_web": when freshness is needed or personal KB is unlikely to have the answer
-  - "refuse_if_insufficient": when the user explicitly asks about their own data and nothing else
-
-Respond ONLY with valid JSON, no markdown fences."""
 
 _PLANNER_SCHEMA = {
     "type": "object",
@@ -127,22 +105,32 @@ def _call_planner_llm(
         api_key=api_key,
         base_url=base_url,
         model=model,
-        timeout_seconds=15.0,
+        timeout_seconds=settings.planner.timeout_seconds,
         max_retries=settings.openai.max_retries,
     )
 
-    user_content = f"Current datetime: {local_now().isoformat()}\nQuestion: {question}"
+    conversation_context_block = ""
     if conversation_context:
         char_budget = getattr(
             getattr(settings, "short_term", None), "char_budget", 800
         )
-        user_content += f"\n\nConversation context:\n{conversation_context[:char_budget]}"
+        conversation_context_block = (
+            f"\n\nConversation context:\n{conversation_context[:char_budget]}"
+        )
+    system_prompt = get_prompt("query_planner.system")
+    user_content = render_prompt(
+        "query_planner.user",
+        current_datetime=local_now().isoformat(),
+        question=question,
+        conversation_context_block=conversation_context_block,
+    )
 
     result = traced_chat_completion(
         llm_config,
         prompt_name="query_planner",
+        prompt_version=system_prompt.version,
         messages=[
-            {"role": "system", "content": _PLANNER_SYSTEM},
+            {"role": "system", "content": system_prompt.template},
             {"role": "user", "content": user_content},
         ],
         model=model,
@@ -166,6 +154,7 @@ def _call_planner_llm(
     except Exception as exc:
         log_llm_parse(
             prompt_name="query_planner",
+            prompt_version=system_prompt.version,
             model=model,
             parse_schema="QueryUnderstanding",
             parse_ok=False,
@@ -175,6 +164,7 @@ def _call_planner_llm(
         raise
     log_llm_parse(
         prompt_name="query_planner",
+        prompt_version=system_prompt.version,
         model=model,
         parse_schema="QueryUnderstanding",
         parse_ok=True,
@@ -184,12 +174,12 @@ def _call_planner_llm(
 
 
 def _planner_llm_config(settings: Settings) -> tuple[str | None, str | None, str]:
-    """Prefer LangExtract's qwen/json_schema endpoint for planner calls."""
-    if settings.langextract.api_key:
+    """Use the dedicated planner endpoint, else fall back to the openai small model."""
+    if settings.planner.api_key:
         return (
-            settings.langextract.api_key,
-            settings.langextract.base_url,
-            settings.langextract.model_id,
+            settings.planner.api_key,
+            settings.planner.base_url,
+            settings.planner.model_id,
         )
     return (
         settings.openai.api_key,

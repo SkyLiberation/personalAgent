@@ -2,11 +2,11 @@
 
 优秀 Agent 不一定需要把所有请求都交给一个开放式 planner。很多生产 Agent 更适合先把业务能力做成明确 workflow，再把其中需要展示、校验、恢复和确认的步骤投影成结构化 plan。
 
-当前项目里的 `ask_branch`、`capture_branch`、`delete_knowledge` 和 `solidify_conversation` 本质上都是 workflow。所谓“规划层”更准确的命名是 **Workflow / Step Planning Layer**：固定流程已经下沉为声明式 `WorkflowSpec`，由 `WorkflowRegistry` 按 intent 选择；只有标记为 `requires_projection=True` 的 workflow 才会确定性投影成 `PlanStep`、`PlanStepState`、`plan.results` 和步骤事件，以复用工具层校验、LangGraph checkpoint、HITL 和前端计划面板。它不是、也刻意不做成开放式自主规划器。
+当前项目里的 `ask_branch`、`capture_branch`、`delete_knowledge` 和 `solidify_conversation` 本质上都是 workflow。所谓“规划层”更准确的命名是 **Workflow / Step Planning Layer**：固定流程已经下沉为声明式 `WorkflowSpec`，由 `WorkflowRegistry` 按 intent 选择；只有标记为 `requires_projection=True` 的 workflow 才会确定性投影成 `PlanStep`、`PlanStepState`、`plan.step_results` 和步骤事件，以复用工具层校验、LangGraph checkpoint、HITL 和前端计划面板。它不是、也刻意不做成开放式自主规划器。
 
 当前受控执行链路是：`WorkflowRegistry` 根据 intent 选中 `WorkflowSpec`，`DefaultTaskPlanner` 对需要步骤执行的 workflow 做**确定性投影**（规划路径不再调用 LLM）；`PlanValidator` 校验步骤结构、依赖图和 intent 规则，并读取工具 schema / 治理契约做执行前阻断；Graph 把步骤推进到 checkpoint-safe 的 `PlanStepState`；工具调用再通过工具层的 `ToolGateway` 执行 timeout、retry、rate limit、HITL、幂等和审计。普通 `ask / capture / direct_answer / summarize` 走各自 Graph 分支和 `execution_trace`，不生成伪 plan。真正需要 LLM 的语义判断（删除目标解析、固化草稿生成）保留在执行期的 `resolve` / `compose` decision node。
 
-对应代码主要位于 [src/personal_agent/agent/workflow.py](../../src/personal_agent/agent/workflow.py)、[src/personal_agent/agent/planner.py](../../src/personal_agent/agent/planner.py)、[src/personal_agent/agent/plan_validator.py](../../src/personal_agent/agent/plan_validator.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py) 和 [src/personal_agent/agent/orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)。
+对应代码主要位于 [src/personal_agent/agent/workflow.py](../../src/personal_agent/agent/workflow.py)、[src/personal_agent/agent/workflow_validator.py](../../src/personal_agent/agent/workflow_validator.py)、[src/personal_agent/agent/planner.py](../../src/personal_agent/agent/planner.py)、[src/personal_agent/agent/plan_validator.py](../../src/personal_agent/agent/plan_validator.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py) 和 [src/personal_agent/agent/orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)。
 
 ## 设计原则
 
@@ -33,7 +33,8 @@ PlanStep 是 workflow 的可视化 / 恢复 / 审计 projection
 | 概念 | 职责 | 当前对应 |
 | --- | --- | --- |
 | Workflow | 业务流程真源，定义固定控制流、状态转移和副作用边界 | `WorkflowSpec` / `WorkflowRegistry`（[workflow.py](../../src/personal_agent/agent/workflow.py)） |
-| Step Projection | 面向前端、checkpoint、审计和 HITL 的步骤视图 | `PlanStep`、`PlanStepState`、`plan.results` |
+| Spec Validation | 校验 workflow spec 自身契约，并核对与真实执行能力一致 | `WorkflowSpecValidator`（[workflow_validator.py](../../src/personal_agent/agent/workflow_validator.py)） |
+| Step Projection | 面向前端、checkpoint、审计和 HITL 的步骤视图 | `PlanStep`、`PlanStepState`、`plan.step_results` |
 | Decision Node | LLM 参与的局部语义决策 | resolve 候选解析、solidify compose、ReAct retrieve |
 | Autonomous Planner | 模型动态生成步骤 DAG，仅用于流程未知的复杂任务 | 当前未落地，后续扩展 |
 
@@ -91,6 +92,7 @@ ToolGateway / MemoryFacade / Evidence / HITL / Events
 - 哪些节点需要 HITL。
 - 哪些节点需要进入前端 step projection。
 - 节点级错误策略：retry / skip / abort / clarify / branch。
+- 节点级 `branch_policy`（`continue / clarify / abort / human_select / branch`）和 `conditional_edges`（`condition -> target`，target 可为同 workflow 内 step_id 或终止哨兵 `END / clarify / abort`），用于声明 workflow 偏离 happy path 时的分支语义。
 
 当前核心结构：
 
@@ -120,13 +122,15 @@ class WorkflowSpec:
 当前语义已经收敛为：
 
 ```text
-WorkflowStepSpec -> workflow source-of-truth node contract
-PlanStep         -> runtime workflow step projection
-PlanStepState    -> checkpoint-safe step run state
-PlanValidator    -> StepProjectionValidator compatibility entrypoint
+WorkflowStepSpec     -> workflow source-of-truth node contract（含 branch_policy / conditional_edges）
+PlanStep             -> runtime workflow step projection
+PlanStepState        -> checkpoint-safe step run state
+WorkflowSpecValidator -> 校验 spec 自身契约（id / 依赖 / 条件边 / 枚举 / 语义 / 无环）
+PlanValidator        -> StepProjectionValidator，校验运行时投影
+plan.step_results    -> 步骤间结构化结果通道
 ```
 
-后续仍可继续清理命名，例如把内部 `plan.results` 收敛为 `step_results`，并新增独立 `WorkflowSpecValidator`。
+内部步骤结果通道已从旧名 `plan.results` 统一重命名为 `plan.step_results`，运行时状态与 workflow projection 命名一致；独立的 `WorkflowSpecValidator` 已落地，与校验运行时投影的 `PlanValidator` 分工明确。
 
 ### Decision Node
 
@@ -197,8 +201,8 @@ compose 输出用户可见结果
 
 | Intent | 步骤拓扑 | 说明 |
 | --- | --- | --- |
-| `delete_knowledge` | `retrieve -> resolve -> tool_call(delete_note) -> compose` | 先找候选，再解析真实 `note_id`，随后创建确认或执行删除 |
-| `solidify_conversation` | `compose -> tool_call(capture_text)` | 先从 checkpoint 对话生成可入库草稿，再写入长期知识 |
+| [`delete_knowledge`](../workflow/delete-knowledge-workflow.md) | `retrieve -> resolve -> tool_call(delete_note) -> compose` | 先找候选，再解析真实 `note_id`，随后创建确认或执行删除 |
+| [`solidify_conversation`](../workflow/solidify-conversation-workflow.md) | `compose -> tool_call(capture_text)` | 先从 checkpoint 对话生成可入库草稿，再写入长期知识 |
 
 固定流程下沉为声明式 spec 后，删除和固化都不是“模型想怎么编排都行”，而是确定性投影出的步骤图。`PlanStep` 是 workflow execution 的 projection，而不是开放式 planner 的自由产物。每次投影返回相互独立的步骤列表，并发 run 不共享可变执行状态。
 
@@ -223,9 +227,9 @@ compose 输出用户可见结果
 - `retry_count`。
 - `failure_reason`。
 - `validation_warnings`。
-- `AgentGraphState.plan.results[step_id]`。
+- `AgentGraphState.plan.step_results[step_id]`。
 
-步骤结果不靠自然语言串联，而是写入结构化 `plan.results`，后续步骤通过依赖关系读取上游结果。例如 `resolve` 产出的 `note_id` 会被动态注入 `delete_note.tool_input.note_id`，`compose` 产出的 solidify 草稿会被动态注入 `capture_text.text`。
+步骤结果不靠自然语言串联，而是写入结构化 `plan.step_results`，后续步骤通过依赖关系读取上游结果。例如 `resolve` 产出的 `note_id` 会被动态注入 `delete_note.tool_input.note_id`，`compose` 产出的 solidify 草稿会被动态注入 `capture_text.text`。
 
 ### 检索与目标解析
 
@@ -258,7 +262,7 @@ compose 输出用户可见结果
 
 在 `delete_knowledge` 中，`compose` 消费 `delete_note` 的 artifact，生成确认请求、删除成功、取消或失败说明。
 
-在 `solidify_conversation` 中，`compose` 从 checkpoint `messages` 中判断哪些会话事实属于本次固化范围，生成一条可独立入库的知识草稿。如果没有足以固化的知识正文，步骤会失败，不写入长期知识。草稿保存在 checkpoint 的 `plan.results` 中，并发出 `draft_ready` 事件，便于前端展示。
+在 `solidify_conversation` 中，`compose` 从 checkpoint `messages` 中判断哪些会话事实属于本次固化范围，生成一条可独立入库的知识草稿。如果没有足以固化的知识正文，步骤会失败，不写入长期知识。草稿保存在 checkpoint 的 `plan.step_results` 中，并发出 `draft_ready` 事件，便于前端展示。
 
 ### ReAct 步骤
 
@@ -308,7 +312,7 @@ compose 输出用户可见结果
 - `failure_reason`：失败原因。
 - `validation_warnings`：校验警告。
 - `tool_call_id` / pending 信息：用于工具消息归属。
-- `result` 或 `AgentGraphState.plan.results[step_id]`：步骤结构化结果。
+- `result` 或 `AgentGraphState.plan.step_results[step_id]`：步骤结构化结果。
 
 这层和 [memory.md](memory.md) 的短期执行现场一致：它属于 checkpoint，可恢复、可暂停、可审计，但不是长期知识真源。
 
@@ -326,9 +330,9 @@ compose 输出用户可见结果
 
 如果存在 blocking issue，Graph 会尝试 fallback plan；如果仍不可用，则转成用户可见澄清或错误提示，不执行危险工具。
 
-### StepResult / plan.results 数据传递
+### StepResult / plan.step_results 数据传递
 
-`plan.results` 是步骤之间传递结构化数据的主要通道。它避免用自然语言描述来驱动后续副作用。
+`plan.step_results` 是步骤之间传递结构化数据的主要通道。它避免用自然语言描述来驱动后续副作用。
 
 典型结果：
 
@@ -388,7 +392,7 @@ compose 输出用户可见结果
 - `resolve` 只能从真实候选中选择目标，不能直接执行删除，也不能让 LLM 生成新对象 ID。
 - `tool_call` 步骤最终仍经过工具层的 `ToolGateway`，规划层不绕过工具治理。
 - `pending_confirmation` 属于短期执行现场，不是长期审批表。
-- `plan.results` 是步骤间结构化数据通道，后续副作用工具不应依赖自然语言占位符。
+- `plan.step_results` 是步骤间结构化数据通道，后续副作用工具不应依赖自然语言占位符。
 
 ```mermaid
 flowchart LR
@@ -414,12 +418,15 @@ flowchart LR
             direction TB
             PlannerLayer["WorkflowRegistry.project()<br/>deterministic projection<br/>no LLM in planning path"]:::layer
             PlanStep["PlanStep<br/>step_id<br/>action_type<br/>depends_on<br/>tool_name/input<br/>risk_level<br/>execution_mode"]:::model
-            DeleteTemplate["DeleteKnowledge WorkflowSpec<br/>retrieve -> resolve<br/>-> delete_note<br/>-> compose"]:::model
-            SolidifyTemplate["Solidify WorkflowSpec<br/>compose draft<br/>-> capture_text"]:::model
+            DeleteTemplate["DeleteKnowledge WorkflowSpec<br/>retrieve -> resolve<br/>-> delete_note<br/>-> compose<br/>branch_policy/edges"]:::model
+            SolidifyTemplate["Solidify WorkflowSpec<br/>compose draft<br/>-> capture_text<br/>branch_policy/edges"]:::model
+            SpecValidator["WorkflowSpecValidator<br/>spec self-consistency<br/>id/deps/edges/enums<br/>+ capability check"]:::layer
             PlanningIntent --> PlannerLayer
             PlannerLayer --> PlanStep
             DeleteTemplate -. projects .-> PlannerLayer
             SolidifyTemplate -. projects .-> PlannerLayer
+            DeleteTemplate -. validated by .-> SpecValidator
+            SolidifyTemplate -. validated by .-> SpecValidator
         end
 
         subgraph Validate["计划校验"]
@@ -453,7 +460,7 @@ flowchart LR
             ResolveStep["resolve<br/>episode -> note mapping<br/>LLM chooses from local candidates<br/>no generated ids"]:::layer
             ComposeStep["compose<br/>delete result text<br/>solidify draft"]:::layer
             ReactStep["react step<br/>bounded iterations<br/>read-only allowlist"]:::layer
-            PlanResults["plan.results<br/>structured step output<br/>note_id<br/>draft_text<br/>ToolArtifact"]:::projection
+            PlanResults["plan.step_results<br/>structured step output<br/>note_id<br/>draft_text<br/>ToolArtifact"]:::projection
             PlanExecutionGraph --> RetrieveStep
             PlanExecutionGraph --> ResolveStep
             PlanExecutionGraph --> ComposeStep
@@ -510,7 +517,7 @@ flowchart LR
 | 工具治理 | 计划不绕过工具层，高风险动作受 HITL 和幂等保护 | 已通过 `ToolGateway` 执行工具，`delete_note` 走确认和 idempotency key |
 | 目标解析 | 模糊对象先解析为真实系统对象，再执行副作用 | 已用 `resolve` 从 graph episode 或本地 note 候选中选择 `note_id` |
 | 状态恢复 | 计划状态可 checkpoint，暂停后能 resume | 已用 `AgentGraphState.plan` 和 Postgres checkpoint 保存步骤状态 |
-| 结果传递 | 步骤间用结构化结果，不靠自然语言猜测 | 已用 `plan.results` 动态注入 `note_id` 和 solidify 草稿 |
+| 结果传递 | 步骤间用结构化结果，不靠自然语言猜测 | 已用 `plan.step_results` 动态注入 `note_id` 和 solidify 草稿 |
 | 可观测性 | 前端和调试侧能看到计划、步骤、暂停和失败 | 已有 plan SSE events、`EntryResult.plan_steps` 和 run snapshot |
 | ReAct 边界 | ReAct 是单步策略，不能越权替代 workflow 执行 | 已限制只读工具、allowlist 和最大迭代 |
 | 评测闭环 | 有计划有效性、目标解析和恢复一致性 eval | 当前有流程和单元测试，专项 planning eval 仍可补齐 |
@@ -519,9 +526,9 @@ flowchart LR
 
 当前规划层已经具备“workflow registry + conditional step projection + 计划校验 + checkpoint 执行 + HITL 恢复”的核心边界：普通 `ask / capture / direct_answer / summarize` 是 branch workflow，不再生成伪 `PlanStep`；`delete_knowledge / solidify_conversation` 才进入 step projection。距离成熟生产级规划 / workflow 层，主要差距集中在计划 schema 的稳定性、目标解析的人机协同、replan 治理和专项评测：
 
-1. WorkflowSpec 还可以继续增强为可执行 graph contract
+1. WorkflowSpec 已增强为带分支契约的可校验 spec，后续可继续驱动 graph 真实分支
 
-   当前已经有 `WorkflowRegistry / WorkflowSpec / WorkflowStepSpec`，并声明了 workflow id、version、intent、projection policy、节点级依赖、LLM decision node、工具、节点副作用、HITL 和 recovery policy。后续还可以继续补条件边、分支策略和专门的 `WorkflowSpecValidator`，让 spec 不只是登记契约，也能直接驱动更多 graph wiring。
+   当前已经有 `WorkflowRegistry / WorkflowSpec / WorkflowStepSpec`，声明了 workflow id、version、intent、projection policy、节点级依赖、LLM decision node、工具、节点副作用、HITL、recovery policy，并已补上 `branch_policy` / `conditional_edges` 分支契约和独立的 `WorkflowSpecValidator`（含 spec↔执行能力一致性校验）。后续可继续把条件边用于驱动或断言 LangGraph 的真实分支边，让 spec 不只是登记和校验契约，也能直接生成更多 graph wiring。
 
 2. 多候选删除还缺少结构化确认 UI
 
@@ -545,11 +552,11 @@ flowchart LR
 
 ## 按优先级排序的演进建议
 
-当前已完成的基线能力包括：planning / workflow 边界收敛、`WorkflowRegistry / WorkflowSpec / WorkflowStepSpec`、conditional step projection、`PlanStep` 来源追溯字段、`StepProjectionValidator` 语义、checkpoint-safe step state、工具层治理和 HITL resume。所以下一阶段不再把“建立 registry / spec / projection”作为待办，而应转向 graph contract、用户确认、replan 治理、schema contract、事实边界、观测和 eval。
+当前已完成的基线能力包括：planning / workflow 边界收敛、`WorkflowRegistry / WorkflowSpec / WorkflowStepSpec`、conditional step projection、`PlanStep` 来源追溯字段、`StepProjectionValidator` 语义、checkpoint-safe step state、工具层治理和 HITL resume；P0 已落地 `WorkflowStepSpec` 的 `branch_policy` / `conditional_edges` 分支契约、独立 `WorkflowSpecValidator`（spec 自洽 + 与执行能力一致性校验）以及 `plan.results` → `plan.step_results` 命名收敛。所以下一阶段不再把“建立 registry / spec / projection / spec 校验”作为待办，而应转向用户确认、replan 治理、schema contract、事实边界、观测和 eval。
 
-### P0：把 WorkflowSpec 继续推进为 graph wiring 真源
+### P0（已完成）：把 WorkflowSpec 推进为 graph wiring 真源
 
-当前 delete 和 solidify 已经是显式 `WorkflowSpec`，并能投影为步骤。下一步可以把 spec 进一步用于生成或校验 LangGraph wiring：
+delete 和 solidify 已经是显式 `WorkflowSpec` 并能投影为步骤。本阶段进一步让 spec 表达分支契约，并用独立 validator 保证 spec 自洽、与真实执行能力一致。
 
 `delete_knowledge` 的节点契约已经表达为：
 
@@ -574,14 +581,18 @@ SolidifyConversationWorkflow
   compose_result
 ```
 
-其中 `retrieve_candidates` 保留 read-only ReAct，`resolve_candidate` 和 `draft_knowledge` 是 LLM decision nodes，但 workflow 主干由系统定义。当前 P0 的重点是把条件边、分支策略和执行 wiring 也从 spec 派生或校验出来。
+其中 `retrieve_candidates` 保留 read-only ReAct，`resolve_candidate` 和 `draft_knowledge` 是 LLM decision nodes，但 workflow 主干由系统定义。
 
-重点产出：
+需要说明边界：当前 `plan_execution_graph` 是**通用步骤循环**（由 `depends_on` + `on_failure` 驱动），并非每个 spec 生成独立 LangGraph 节点。因此"graph wiring 真源"的现实含义是：spec 声明条件分支契约 + 独立 validator 保证 spec 自洽 + 一致性检查防止 spec 与真实执行能力漂移，而不是从 spec 代码生成 LangGraph 拓扑。
 
-- 新增 `WorkflowSpecValidator`，校验 step id、依赖、条件边、projection policy、side effects、HITL 和 recovery policy。
-- 为 `WorkflowStepSpec` 增加条件边 / branch policy，表达 clarify、abort、human_select 等分支。
-- 在 graph 构建或测试中校验 `WorkflowSpec` 与 LangGraph wiring 一致，避免文档化 spec 和真实执行路径漂移。
-- 把 `plan.results` 语义逐步收敛为 `step_results`，让运行时状态与 workflow projection 命名一致。
+已完成产出：
+
+- 新增 `WorkflowSpecValidator`（[workflow_validator.py](../../src/personal_agent/agent/workflow_validator.py)），校验 step id 唯一、依赖存在、条件边 target 合法、`projection_policy` / `branch_policy` / `on_failure` / `execution_mode` 枚举、side_effects、HITL、recovery policy、依赖图无环，以及语义不变量（`delete_longterm` 必须 high-risk + 确认 + HITL，high-risk 必须确认，`human_select` 只用于 resolve）。原 `WorkflowSpec.__post_init__` 的结构校验迁入 validator，统一一处报全部问题。
+- 为 `WorkflowStepSpec` 增加 `branch_policy` 和 `conditional_edges`，表达 clarify、abort、human_select 等分支；delete/solidify 步骤已补上显式分支声明。
+- 新增 `validate_registry_against_capabilities(registry, tool_executor)` 与 [tests/test_workflow_validator.py](../../tests/test_workflow_validator.py)，在测试中校验整个 `WORKFLOW_REGISTRY` 通过 spec 校验，且 action_type 可被 `_dispatch_plan_step` 分发、引用工具已注册、声明副作用与工具治理元数据一致——spec 与真实执行路径漂移即测试红。
+- 把旧的 `plan.results` 统一重命名为 `plan.step_results`，运行时状态与 workflow projection 命名一致。
+
+后续可继续推进的方向（非本阶段范围）：把条件边进一步用于驱动或断言 LangGraph 的真实分支边，以及为 `WorkflowStepSpec` 增加更细的 branch 执行语义。
 
 ### P1：为删除目标解析增加候选确认
 
@@ -674,11 +685,11 @@ workflow / planning 层需要专项评测证明它真的降低风险，而不是
 
 2. 计划校验层
 
-   `PlanValidator` 会检查步骤类型、依赖图、工具是否存在、工具参数 schema、风险等级、ReAct allowlist 和 intent 特定规则，作为执行前安全门。既然投影确定性来自固定 spec，这些校验实际是 spec 与工具契约一致性的结构保证。
+   这里有两道校验，分工明确：`WorkflowSpecValidator` 在 spec 层面校验 workflow 自身契约（step id 唯一、依赖可解析、条件边 target 合法、`branch_policy` / `projection_policy` 等枚举有效、依赖图无环，以及 high-risk / `delete_longterm` 必须确认 + HITL 这类语义不变量），并通过 `validate_registry_against_capabilities` 核对 spec 声明与 ToolExecutor 真实能力一致，避免文档化 spec 和执行路径漂移；`PlanValidator`（即 `StepProjectionValidator`）在运行时投影层面校验步骤类型、依赖图、工具是否存在、工具参数 schema、风险等级、ReAct allowlist 和 intent 特定规则，作为执行前安全门。既然投影确定性来自固定 spec，这两道校验共同保证 spec、投影和工具契约三者一致。
 
 3. 步骤执行与状态恢复层
 
-   执行期用 `PlanStepState` 和 `AgentGraphState.plan` 保存 checkpoint-safe 状态。步骤结果写入 `plan.results`，后续步骤通过结构化结果动态注入参数。例如删除的 `note_id` 来自 `resolve`，固化的 `capture_text.text` 来自 `compose` 草稿。
+   执行期用 `PlanStepState` 和 `AgentGraphState.plan` 保存 checkpoint-safe 状态。步骤结果写入 `plan.step_results`，后续步骤通过结构化结果动态注入参数。例如删除的 `note_id` 来自 `resolve`，固化的 `capture_text.text` 来自 `compose` 草稿。
 
 4. 工具治理和 HITL 层
 
@@ -688,14 +699,16 @@ workflow / planning 层需要专项评测证明它真的降低风险，而不是
 
 - 规划层只服务真正需要步骤边界的任务，避免所有请求都被过度规划。
 - 删除目标必须经过 `resolve` 从真实候选中解析，不能由 planner 直接写死 `note_id`。
+- `WorkflowSpec` 自身有 `WorkflowSpecValidator` 在测试中守门，并核对 spec 声明与真实工具能力一致，文档化 spec 和执行路径漂移会让测试变红。
 - `PlanValidator` 把工具 schema、风险治理和 intent 规则变成执行前硬边界。
 - 计划状态进入 checkpoint，支持高风险确认暂停和 resume。
-- 步骤间通过 `plan.results` 传结构化数据，避免用自然语言猜测后续副作用参数。
+- 步骤间通过 `plan.step_results` 传结构化数据，避免用自然语言猜测后续副作用参数。
 - ReAct 被限制为单步内部策略，且只能调用低风险只读工具。
 - 规划层和工具层、记忆层边界清楚：planning 编排动作，tools 执行动作，memory 保存现场和长期知识。
 
 面试中需要注意边界表述：
 
+- 可以说“`WorkflowStepSpec` 已声明 `branch_policy` / `conditional_edges` 分支契约，并有 `WorkflowSpecValidator` 校验自洽性和与执行能力的一致性”，不要说“spec 已直接生成 LangGraph 的全部条件分支边”——当前执行图仍是由 `depends_on` + `on_failure` 驱动的通用步骤循环。
 - 可以说“固定流程下沉为 `WorkflowSpec`，删除和固化这类 workflow 会确定性投影成 `PlanStep` 并进入校验执行链路”，不要说“已有完全通用自主规划器”。
 - 可以说“删除流程支持 HITL 暂停和恢复”，不要说“所有高风险业务都有完整确认 UI 和回滚”。
 - 可以说“`resolve` 会从图谱映射或本地 note 候选中选择目标”，不要说“已经支持批量多候选删除确认”。

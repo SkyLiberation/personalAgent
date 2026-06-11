@@ -15,6 +15,7 @@ from graphiti_core.llm_client.openai_generic_client import (
 from graphiti_core.prompts.models import Message
 
 from ..core.config import Settings
+from ..core.llm_schemas import strictify_schema
 from ..core.llm_trace import log_llm_parse
 from ..core.logging_utils import log_event
 from .ontology import ENTITY_TYPES
@@ -362,7 +363,8 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
                 "type": "json_schema",
                 "json_schema": {
                     "name": getattr(response_model, "__name__", "structured_response"),
-                    "schema": response_model.model_json_schema(),
+                    "schema": strictify_schema(response_model.model_json_schema()),
+                    "strict": True,
                 },
             }
 

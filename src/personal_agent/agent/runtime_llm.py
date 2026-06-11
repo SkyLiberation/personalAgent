@@ -9,14 +9,10 @@ from ..core.config import Settings
 from ..core.langsmith_tracing import langsmith_llm_span, report_usage_metadata
 from ..core.llm_trace import traced_chat_completion
 from ..core.logging_utils import log_event
+from ..core.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
 _LLM_FAILURE_COOLDOWN_SECONDS = 30.0
-
-_ANSWER_SYSTEM_PROMPT = (
-    "你是一个严谨、善于归纳总结的个人知识库问答助手。"
-    "你的首要任务不是复述检索片段，而是把证据整理成简洁、可信、可读的答案。"
-)
 
 
 class LlmClient:
@@ -44,18 +40,26 @@ class LlmClient:
     def _mark_success(self) -> None:
         self._unavailable_until = 0.0
 
-    def generate_answer(self, prompt: str) -> str | None:
+    def generate_answer(
+        self,
+        prompt: str,
+        *,
+        prompt_name: str = "answer_generation",
+        prompt_version: str | None = None,
+    ) -> str | None:
         if not self._configured():
             return None
         if self._in_cooldown():
             logger.info("Skipping answer generation while LLM failure cooldown is active")
             return None
+        answer_prompt = get_prompt("answer_generation.system")
         try:
             result = traced_chat_completion(
                 self.settings.openai,
-                prompt_name="answer_generation",
+                prompt_name=prompt_name,
+                prompt_version=prompt_version or answer_prompt.version,
                 messages=[
-                    {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
+                    {"role": "system", "content": answer_prompt.template},
                     {"role": "user", "content": prompt},
                 ],
                 model=self.settings.openai.model,
@@ -92,12 +96,14 @@ class LlmClient:
                 max_retries=self.settings.openai.max_retries,
             )
             start = time.monotonic()
+            answer_prompt = get_prompt("answer_generation.system")
             with langsmith_llm_span(
                 self.settings.langsmith,
                 name="llm.answer_generation_stream",
                 metadata={
                     "component": "runtime_llm",
                     "prompt_name": "answer_generation_stream",
+                    "prompt_version": answer_prompt.version,
                     "model": self.settings.openai.model,
                 },
                 tags=["llm", "stream", "answer_generation"],
@@ -105,7 +111,7 @@ class LlmClient:
                 stream = client.chat.completions.create(
                     model=self.settings.openai.model,
                     messages=[
-                        {"role": "system", "content": _ANSWER_SYSTEM_PROMPT},
+                        {"role": "system", "content": answer_prompt.template},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.3,

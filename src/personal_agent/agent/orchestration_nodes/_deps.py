@@ -9,6 +9,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
+from ...core.prompts import get_prompt
+
 if TYPE_CHECKING:
     from ...capture import CaptureService
     from ...core.config import Settings
@@ -78,14 +80,7 @@ _RETRY_DELAY_SECONDS = 2.0
 _REACT_MAX_ITERATIONS_CAP = 5
 _REACT_DEFAULT_ALLOWED_TOOLS = ("graph_search", "web_search")
 
-_REACT_SYSTEM_PROMPT = (
-    "你是一个在受控环境中执行任务步骤的推理助手。"
-    "每一轮你需要输出 JSON：\n"
-    '- 仍在推理：{"thought":"...","tool":"工具名","input":{...}}\n'
-    '- 已完成：{"thought":"...","done":true,"result":{...}}\n\n'
-    "tool 必须在可用工具列表中。result 应包含步骤产出的结构化数据。\n"
-    "不要输出 JSON 以外的内容。"
-)
+_REACT_SYSTEM_PROMPT = get_prompt("react.system").template
 
 
 # ---------------------------------------------------------------------------

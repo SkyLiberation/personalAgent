@@ -14,6 +14,7 @@ from .evidence import (
     select_ranked_evidence,
 )
 from .llm_trace import log_llm_parse, traced_chat_completion
+from .prompts import get_prompt, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -107,27 +108,22 @@ class LlmEvidenceReranker:
             timeout_seconds=self.settings.ask.llm_rerank_timeout_seconds,
             max_retries=1,
         )
+        system_prompt = get_prompt("evidence_rerank.system")
         result = traced_chat_completion(
             llm_config,
             prompt_name="evidence_rerank",
+            prompt_version=system_prompt.version,
             temperature=0,
             max_tokens=700,
             response_format=_rerank_response_format(),
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Rank evidence ids for a retrieval-augmented answer. "
-                        "Prefer exact, grounded, source-specific evidence over broad or tangential text. "
-                        "For multi-hop, comparison, temporal, or cross-source questions, preserve complementary "
-                        "evidence that covers different entities, sources, dates, or facts needed to answer the "
-                        "whole question; do not rank near-duplicates above missing parts of the evidence set. "
-                        "Return JSON only."
-                    ),
-                },
+                {"role": "system", "content": system_prompt.template},
                 {
                     "role": "user",
-                    "content": _rerank_prompt(question, candidates),
+                    "content": render_prompt(
+                        "evidence_rerank.user",
+                        rerank_prompt=_rerank_prompt(question, candidates),
+                    ),
                 },
             ],
             model=model,
@@ -139,6 +135,7 @@ class LlmEvidenceReranker:
         except Exception as exc:
             log_llm_parse(
                 prompt_name="evidence_rerank",
+                prompt_version=system_prompt.version,
                 model=model,
                 parse_schema="EvidenceRerank",
                 parse_ok=False,
@@ -148,6 +145,7 @@ class LlmEvidenceReranker:
             raise
         log_llm_parse(
             prompt_name="evidence_rerank",
+            prompt_version=system_prompt.version,
             model=model,
             parse_schema="EvidenceRerank",
             parse_ok=True,
@@ -205,9 +203,9 @@ def _apply_llm_order(
 
 
 def _llm_config(settings: Settings) -> tuple[str | None, str | None, str]:
-    if settings.langextract.api_key:
-        model = settings.ask.llm_rerank_model or settings.langextract.model_id
-        return settings.langextract.api_key, settings.langextract.base_url, model
+    if settings.planner.api_key:
+        model = settings.ask.llm_rerank_model or settings.planner.model_id
+        return settings.planner.api_key, settings.planner.base_url, model
     model = settings.ask.llm_rerank_model or settings.openai.small_model or settings.openai.model
     return settings.openai.api_key, settings.openai.base_url, model
 

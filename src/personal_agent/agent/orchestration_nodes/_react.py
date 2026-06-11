@@ -81,7 +81,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
     if idx == 0 and not state.react.user_prompt:
         sd = state.plan.steps[state.plan.current_step_index]
         step = sd.to_plan_step()
-        context_block = _helpers._build_react_context(step, state.plan.results)
+        context_block = _helpers._build_react_context(step, state.plan.step_results)
         tools_block = _helpers._format_react_tools(allowed, deps)
         state.react.user_prompt = (
             f"## 步骤描述\n{step.description}\n\n"
@@ -91,7 +91,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
         )
 
     # ---- Call LLM ----
-    raw = _helpers._react_llm_respond(state.react.user_prompt, deps)
+    raw = _helpers._react_llm_respond(state.react.user_prompt, deps, allowed_tools=allowed)
     if raw is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
         state.react.done = True
@@ -280,7 +280,7 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
     # Persist result — capture before clearing
     result_to_persist = dict(state.react.result) if state.react.result else {}
     if step_id:
-        state.plan.results[step_id] = result_to_persist
+        state.plan.step_results[step_id] = result_to_persist
 
     completed = state.react.status == "completed"
     failure_reason = state.react.stop_reason or "ReAct 未完成步骤。"
