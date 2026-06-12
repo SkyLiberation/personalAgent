@@ -18,7 +18,7 @@ solidify_conversation
     -> sol-2 tool_call(capture_text)
 ```
 
-这个 workflow 会投影成前端可展示的 `PlanStep`，但拓扑固定，不由 LLM 规划。LLM 的职责只在 `sol-1`：判断哪些历史 turn 属于本次固化范围，并生成可独立入库的知识草稿。
+这个 workflow 会投影成前端可展示的 `ExecutionStep`，但拓扑固定，不由 LLM 规划。LLM 的职责只在 `sol-1`：判断哪些历史 turn 属于本次固化范围，并生成可独立入库的知识草稿。
 
 ## Step 契约
 
@@ -30,15 +30,15 @@ solidify_conversation
 ## 执行细节
 
 1. Router 将“把刚才结论记下来 / 沉淀一下”归类为 `solidify_conversation`，并标记为需要 step projection。
-2. `DefaultTaskPlanner` 从 `WORKFLOW_REGISTRY` 确定性投影 `sol-1 -> sol-2`。
-3. `PlanValidator` 校验 workflow 必须包含 `tool_call(capture_text)`，且 `sol-2` 依赖 `sol-1`。
+2. `WorkflowStepProjector` 从 `WORKFLOW_REGISTRY` 确定性投影 `sol-1 -> sol-2`。
+3. `StepProjectionValidator` 校验 workflow 必须包含 `tool_call(capture_text)`，且 `sol-2` 依赖 `sol-1`。
 4. `sol-1` 使用 checkpoint 中的历史 `messages` 构造候选 turn，上下文不直接当长期事实，而是供模型选择本次要固化的范围。
 5. `solidify_draft` prompt 要求输出 JSON：`selected_turn_ids/title/content`，并禁止把操作指令本身写入知识。
 6. `_solidify_note_text()` 把 JSON 草稿转换成可入库正文；如果正文为空，workflow 失败并不写库。
 7. `draft_ready` 事件携带草稿，前端可展示给用户理解“将保存什么”。
 8. `sol-2` 的 `capture_text` 输入由 `sol-1` 的草稿动态注入，而不是使用原始“保存一下”指令。
 9. `capture_text` 复用 capture 主链路：结构化解析、Unstructured chunk、Postgres note/chunk、review card、graph sync。
-10. `finalize_plan_execution` 汇总写入结果，并返回 plan steps / execution trace。
+10. `finalize_step_execution` 汇总写入结果，并返回 plan steps / execution trace。
 
 ## 范围选择规则
 

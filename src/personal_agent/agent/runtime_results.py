@@ -35,7 +35,7 @@ class EntryResult(BaseModel):
     reply_text: str
     capture_result: CaptureResult | None = None
     ask_result: AskResult | None = None
-    plan_steps: list[dict[str, object]] = Field(default_factory=list)
+    steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     # Phase 3: HITL interrupt/resume
     run_id: str | None = None

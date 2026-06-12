@@ -13,18 +13,18 @@ from ...core.llm_schemas import structured_response_format, strict_tool_definiti
 from ...core.prompts import get_prompt
 
 if TYPE_CHECKING:
-    from ._deps import PlanStep
+    from ._deps import ExecutionStep
     from ...core.config import ShortTermMemoryConfig
 
 logger = logging.getLogger(__name__)
 
-def _build_react_context(step: "PlanStep", step_results: dict) -> str:
+def _build_react_context(step: "ExecutionStep", results: dict) -> str:
     import json as _json
 
     parts: list[str] = []
     if step.tool_input:
         parts.append(f"步骤输入：{_json.dumps(step.tool_input, ensure_ascii=False)}")
-    for sid, data in step_results.items():
+    for sid, data in results.items():
         if isinstance(data, dict):
             summary = data.get("answer") or data.get("hint") or _json.dumps(data, ensure_ascii=False)[:200]
             parts.append(f"[{sid}] {summary}")

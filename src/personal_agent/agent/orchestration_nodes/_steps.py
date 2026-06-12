@@ -1,4 +1,4 @@
-"""Plan step execution loop nodes, step dispatchers, and conditional edge functions."""
+"""execution step execution loop nodes, step dispatchers, and conditional edge functions."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from langgraph.types import interrupt
 from ...core.prompts import render_prompt
 from ..orchestration_models import (
     AgentGraphState,
-    PlanStepState,
-    PlanSubState,
+    StepRunState,
+    StepExecutionState,
     ReactSubState,
     ToolTrackingSubState,
 )
@@ -23,7 +23,7 @@ from ._deps import (
     OrchestrationDeps,
     _RETRY_DELAY_SECONDS,
     _REACT_MAX_ITERATIONS_CAP,
-    _default_plan_answer,
+    _default_step_answer,
     _inject_draft_text_into_steps,
     _inject_note_id_into_steps,
     _resolve_allowed_tools_for_step,
@@ -33,7 +33,7 @@ from ._deps import (
 from . import _helpers
 
 if TYPE_CHECKING:
-    from ._deps import PlanStep
+    from ._deps import ExecutionStep
 
 logger = logging.getLogger(__name__)
 
@@ -60,37 +60,37 @@ _SOLIDIFY_DRAFT_SCHEMA = {
 }
 
 # ===================================================================
-# Phase 2: plan execution loop nodes (step-level checkpointing)
+# Phase 2: step execution loop nodes (step-level checkpointing)
 # ===================================================================
 
 
-def _node_prepare_plan_execution(state: AgentGraphState) -> dict:
-    """Sort plan steps and initialise execution state."""
-    if not state.plan.steps:
-        logger.info("prepare_plan_execution: no steps to execute")
-        state.plan.aborted = True
-        return {"plan": state.plan}
+def _node_prepare_step_execution(state: AgentGraphState) -> dict:
+    """Sort execution steps and initialise execution state."""
+    if not state.step_execution.steps:
+        logger.info("prepare_step_execution: no steps to execute")
+        state.step_execution.aborted = True
+        return {"step_execution": state.step_execution}
 
     # Topologically sort steps
-    sorted_steps = _topological_sort_steps(state.plan.steps)
-    state.plan = PlanSubState(
+    sorted_steps = _topological_sort_steps(state.step_execution.steps)
+    state.step_execution = StepExecutionState(
         steps=sorted_steps,
         current_step_index=0,
-        step_results=state.plan.step_results or {},
+        results=state.step_execution.results or {},
         aborted=False,
-        retry_counts=state.plan.retry_counts or {},
+        retry_counts=state.step_execution.retry_counts or {},
     )
 
     state.add_event("step_started", {
-        "step_id": "__plan__",
-        "description": f"开始执行 {len(sorted_steps)} 步计划",
+        "step_id": "__steps__",
+        "description": f"开始执行 {len(sorted_steps)} 个步骤",
     })
     logger.info(
-        "prepare_plan_execution run_id=%s steps=%d",
+        "prepare_step_execution run_id=%s steps=%d",
         state.run_id, len(sorted_steps),
     )
     return {
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "events": state.events,
     }
 
@@ -102,9 +102,9 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
     Returns with updated current_step_index or leaves it unchanged
     when no more steps remain (checked by the conditional edge).
     """
-    for i, sd in enumerate(state.plan.steps):
+    for i, sd in enumerate(state.step_execution.steps):
         if sd.status in ("planned",):
-            state.plan.current_step_index = i
+            state.step_execution.current_step_index = i
             sd.status = "running"
             state.add_event("step_started", {
                 "step_id": sd.step_id,
@@ -116,7 +116,7 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
                 state.run_id, sd.step_id, i,
             )
             return {
-                "plan": state.plan,
+                "step_execution": state.step_execution,
                 "events": state.events,
             }
 
@@ -125,27 +125,27 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
     return {}
 
 
-def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Dispatch a single plan step.  Raises on failure; retry/replan handled
+def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Dispatch a single execution step.  Raises on failure; retry/replan handled
     by the handle_step_result node.
 
-    Idempotency: if a tool_call step already has a result in step_results,
+    Idempotency: if a tool_call step already has a result in results,
     skip execution.
 
     ReAct steps are *not* dispatched here: the state is seeded and the
-    PlanExecutionGraph routes into ReactGraph. Tool calls are prepared as LangChain
+    StepExecutionGraph routes into ReactGraph. Tool calls are prepared as LangChain
     messages so the appropriate subgraph ``ToolGateway`` performs execution.
     """
-    if state.plan.current_step_index >= len(state.plan.steps):
+    if state.step_execution.current_step_index >= len(state.step_execution.steps):
         return {}
 
-    sd = state.plan.steps[state.plan.current_step_index]
-    step = sd.to_plan_step()
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    step = sd.to_execution_step()
 
     # Idempotency: skip side-effect steps that already ran
     if step.action_type == "tool_call" and step.tool_name:
         idem_key = step.step_id
-        if idem_key in state.plan.step_results:
+        if idem_key in state.step_execution.results:
             logger.info(
                 "Skipping already-executed tool_call step %s (idempotent)",
                 step.step_id,
@@ -156,7 +156,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
                 "result_summary": "跳过（已执行）",
             })
             return {
-                "plan": state.plan,
+                "step_execution": state.step_execution,
                 "events": state.events,
             }
 
@@ -173,7 +173,7 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
             step.step_id, state.react.max_iterations, state.react.allowed_tools,
         )
         return {
-            "plan": state.plan,
+            "step_execution": state.step_execution,
             "react": state.react,
             "events": state.events,
         }
@@ -184,33 +184,33 @@ def _node_execute_plan_step(state: AgentGraphState, *, deps: OrchestrationDeps) 
         return {
             "tool_messages": [_begin_tool_call(
                 state,
-                context="plan",
+                context="step_execution",
                 tool_name=step.tool_name,
                 tool_input=step.tool_input,
                 step_id=step.step_id,
                 suffix=step.step_id,
             )],
             "tool_tracking": state.tool_tracking,
-            "plan": state.plan,
+            "step_execution": state.step_execution,
             "events": state.events,
         }
 
     try:
-        _dispatch_plan_step(step, sd, state, deps)
+        _dispatch_step(step, sd, state, deps)
     except Exception as exc:
         return _fail_current_step(state, step, exc)
 
     return _complete_current_step(state, step)
 
 
-def _node_consume_plan_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
-    """Consume the latest ToolGateway artifact for a deterministic plan step."""
-    if state.plan.current_step_index >= len(state.plan.steps):
+def _node_consume_step_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
+    """Consume the latest ToolGateway artifact for a deterministic execution step."""
+    if state.step_execution.current_step_index >= len(state.step_execution.steps):
         _clear_pending_tool_call(state)
         return _pending_tool_updates(state)
-    sd = state.plan.steps[state.plan.current_step_index]
-    step = sd.to_plan_step()
-    if state.tool_tracking.active_context != "plan" or state.tool_tracking.pending_step_id != step.step_id:
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    step = sd.to_execution_step()
+    if state.tool_tracking.active_context != "step_execution" or state.tool_tracking.pending_step_id != step.step_id:
         _clear_pending_tool_call(state)
         return _fail_current_step(
             state,
@@ -223,7 +223,7 @@ def _node_consume_plan_tool_result(state: AgentGraphState, *, deps: Orchestratio
     state.add_event("tool_result", _tool_result_event_payload(
         state,
         deps=deps,
-        context="plan",
+        context="step_execution",
         step_id=step.step_id,
         tool_call_id=tool_call_id,
         artifact=artifact,
@@ -239,7 +239,7 @@ def _node_consume_plan_tool_result(state: AgentGraphState, *, deps: Orchestratio
         )
 
     result_data = artifact.get("data") if artifact.get("data") is not None else {"ok": True}
-    state.plan.step_results[step.step_id] = result_data
+    state.step_execution.results[step.step_id] = result_data
     if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
         state.pending_confirmation = {
             "step_id": step.step_id,
@@ -264,7 +264,7 @@ def _tool_result_event_payload(
     artifact: dict,
 ) -> dict:
     payload = {
-        "context": "plan",
+        "context": "step_execution",
         "step_id": step_id,
         "tool_call_id": tool_call_id,
         "ok": bool(artifact.get("ok")),
@@ -337,7 +337,7 @@ def _begin_tool_call(
 ) -> AIMessage:
     call_id = f"{state.run_id}:{suffix}:{len(state.tool_results)}"
     normalized_input = dict(tool_input or {})
-    if context == "plan" and tool_name == "graph_search" and "user_id" not in normalized_input:
+    if context == "step_execution" and tool_name == "graph_search" and "user_id" not in normalized_input:
         normalized_input["user_id"] = state.user_id
     state.tool_tracking = ToolTrackingSubState(
         active_context=context,
@@ -397,15 +397,15 @@ def _pending_tool_updates(state: AgentGraphState) -> dict:
     return {"tool_tracking": state.tool_tracking}
 
 
-def _fail_current_step(state: AgentGraphState, step: "PlanStep", exc: Exception) -> dict:
-    sd = state.plan.steps[state.plan.current_step_index]
+def _fail_current_step(state: AgentGraphState, step: "ExecutionStep", exc: Exception) -> dict:
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
     err_msg = f"{type(exc).__name__}: {exc}"
-    logger.warning("Plan step %s failed: %s", step.step_id, err_msg)
+    logger.warning("execution step %s failed: %s", step.step_id, err_msg)
     sd.status = "failed"
     sd.retry_count = sd.retry_count + 1
     sd.failure_reason = err_msg
     sd.recoverable = step.on_failure == "retry" and sd.retry_count < sd.max_retries
-    state.plan.retry_counts[step.step_id] = sd.retry_count
+    state.step_execution.retry_counts[step.step_id] = sd.retry_count
     state.errors.append(f"[{step.step_id}] {err_msg}")
     state.add_event("step_failed", {
         "step_id": step.step_id,
@@ -414,7 +414,7 @@ def _fail_current_step(state: AgentGraphState, step: "PlanStep", exc: Exception)
         "retry_count": sd.retry_count,
     })
     result = {
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "errors": state.errors,
         "events": state.events,
     }
@@ -422,14 +422,14 @@ def _fail_current_step(state: AgentGraphState, step: "PlanStep", exc: Exception)
     return result
 
 
-def _complete_current_step(state: AgentGraphState, step: "PlanStep") -> dict:
-    sd = state.plan.steps[state.plan.current_step_index]
+def _complete_current_step(state: AgentGraphState, step: "ExecutionStep") -> dict:
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
     if state.pending_confirmation is not None:
         sd.status = "awaiting_confirmation"
         state.add_event("confirmation_required", state.pending_confirmation)
         logger.info("Step %s awaiting confirmation", step.step_id)
         result = {
-            "plan": state.plan,
+            "step_execution": state.step_execution,
             "answer": state.answer,
             "pending_confirmation": state.pending_confirmation,
             "events": state.events,
@@ -438,19 +438,19 @@ def _complete_current_step(state: AgentGraphState, step: "PlanStep") -> dict:
         return result
 
     sd.status = "completed"
-    display_output = _step_display_output(step, state.plan.step_results.get(step.step_id))
+    display_output = _step_display_output(step, state.step_execution.results.get(step.step_id))
     sd.output_label = display_output.get("output_label", "")
     sd.output_title = display_output.get("output_title", "")
     sd.output_preview = display_output.get("output_preview", "")
     completion_payload = {
         "step_id": step.step_id,
         "description": step.description,
-        "result_summary": _helpers._summarize_result(state.plan.step_results.get(step.step_id)),
+        "result_summary": _helpers._summarize_result(state.step_execution.results.get(step.step_id)),
     }
     completion_payload.update(display_output)
     state.add_event("step_completed", completion_payload)
     result = {
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "answer": state.answer,
         "pending_confirmation": state.pending_confirmation,
         "events": state.events,
@@ -480,42 +480,42 @@ def _step_display_output(step, result_data: object) -> dict[str, str]:
 
 def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Post-success: inject dependency outputs into downstream planned steps."""
-    if state.plan.current_step_index >= len(state.plan.steps):
+    if state.step_execution.current_step_index >= len(state.step_execution.steps):
         return {}
 
-    sd = state.plan.steps[state.plan.current_step_index]
-    step = sd.to_plan_step()
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    step = sd.to_execution_step()
 
     # Inject resolved note_id into dependent tool_call steps
     if step.action_type == "resolve":
-        result_data = state.plan.step_results.get(step.step_id)
+        result_data = state.step_execution.results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("note_id"):
             _inject_note_id_into_steps(
-                step.step_id, str(result_data["note_id"]), state.user_id, state.plan.steps,
+                step.step_id, str(result_data["note_id"]), state.user_id, state.step_execution.steps,
             )
 
     # Inject compose draft text into dependent capture_text steps
     if step.action_type == "compose":
-        result_data = state.plan.step_results.get(step.step_id)
+        result_data = state.step_execution.results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("answer"):
             _inject_draft_text_into_steps(
-                step.step_id, str(result_data["answer"]), state.user_id, state.plan.steps,
+                step.step_id, str(result_data["answer"]), state.user_id, state.step_execution.steps,
             )
 
     logger.info(
         "handle_step_success run_id=%s step=%s",
         state.run_id, step.step_id,
     )
-    return {"plan": state.plan, "events": state.events}
+    return {"step_execution": state.step_execution, "events": state.events}
 
 
 def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Handle a failed step: retry, replan, skip, or abort."""
-    if state.plan.current_step_index >= len(state.plan.steps):
+    if state.step_execution.current_step_index >= len(state.step_execution.steps):
         return {}
 
-    sd = state.plan.steps[state.plan.current_step_index]
-    step = sd.to_plan_step()
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    step = sd.to_execution_step()
     on_failure = sd.on_failure
     retry_count = sd.retry_count
     max_retries = sd.max_retries
@@ -533,7 +533,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
         })
         time.sleep(_RETRY_DELAY_SECONDS)
         sd.status = "planned"  # Reset so select_next_step picks it up again
-        return {"plan": state.plan}
+        return {"step_execution": state.step_execution}
 
     # Retries exhausted — try replanning
     if on_failure == "retry" and retry_count >= max_retries:
@@ -546,21 +546,21 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
             try:
                 intent = state.router_decision.route if state.router_decision else "unknown"
                 err_msg = state.errors[-1] if state.errors else "未知错误"
-                # Reconstruct plan step objects for replanner
-                step_objs = [s.to_plan_step() for s in state.plan.steps]
+                # Reconstruct execution step objects for replanner
+                step_objs = [s.to_execution_step() for s in state.step_execution.steps]
                 revised = replanner.replan(
-                    step_objs, step, err_msg, state.plan.step_results, intent,
+                    step_objs, step, err_msg, state.step_execution.results, intent,
                 )
                 if revised:
                     # Validate revised steps
-                    plan_validator = deps.plan_validator
-                    if plan_validator is not None:
+                    step_projection_validator = deps.step_projection_validator
+                    if step_projection_validator is not None:
                         from ..router import RouterDecision
                         decision = state.router_decision or RouterDecision(route="unknown")
-                        validation = plan_validator.validate(revised, decision)
+                        validation = step_projection_validator.validate(revised, decision)
                         if validation.blocking:
                             logger.warning(
-                                "Replan validation blocked for step %s: %s",
+                                "ReStep projection validation blocked for step %s: %s",
                                 step.step_id, validation.issues,
                             )
                             state.add_event("replan_completed", {
@@ -569,23 +569,23 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
                                 "issues": validation.issues,
                             })
                             sd.status = "failed"
-                            state.plan.aborted = True
+                            state.step_execution.aborted = True
                             state.answer = state.answer or f"计划执行失败: {'; '.join(validation.issues[:3])}"
                             return {
-                                "plan": state.plan,
+                                "step_execution": state.step_execution,
                                 "answer": state.answer,
                             }
                         if validation.corrected_steps:
                             revised = validation.corrected_steps
 
                     # Mark failed step as skipped, skip its dependents
-                    _skip_step_dependents(step.step_id, state.plan.steps)
+                    _skip_step_dependents(step.step_id, state.step_execution.steps)
                     sd.status = "skipped"
 
                     # Append revised steps
                     for r in revised:
-                        state.plan.steps.append(PlanStepState.from_plan_step(r))
-                    state.plan.steps = _topological_sort_steps(state.plan.steps)
+                        state.step_execution.steps.append(StepRunState.from_execution_step(r))
+                    state.step_execution.steps = _topological_sort_steps(state.step_execution.steps)
 
                     state.add_event("replan_completed", {
                         "step_id": step.step_id,
@@ -595,7 +595,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
                         "Replanned step %s: %d revised steps added",
                         step.step_id, len(revised),
                     )
-                    return {"plan": state.plan}
+                    return {"step_execution": state.step_execution}
                 else:
                     state.add_event("replan_completed", {
                         "step_id": step.step_id,
@@ -613,18 +613,18 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
     sd.status = "failed"
 
     if on_failure == "abort":
-        state.plan.aborted = True
+        state.step_execution.aborted = True
         state.answer = state.answer or f"执行中断于步骤 {step.step_id}。"
-        return {"plan": state.plan, "answer": state.answer}
+        return {"step_execution": state.step_execution, "answer": state.answer}
 
     if on_failure in ("skip", "retry"):
-        _skip_step_dependents(step.step_id, state.plan.steps)
+        _skip_step_dependents(step.step_id, state.step_execution.steps)
 
     logger.info(
         "handle_step_failure run_id=%s step=%s on_failure=%s",
         state.run_id, step.step_id, on_failure,
     )
-    return {"plan": state.plan}
+    return {"step_execution": state.step_execution}
 
 
 def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
@@ -635,11 +635,11 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     via ``Command(resume=...)``), ``interrupt()`` returns the user's decision
     dict and the node processes the confirm / reject action.
     """
-    if state.plan.current_step_index >= len(state.plan.steps):
+    if state.step_execution.current_step_index >= len(state.step_execution.steps):
         return {}
 
-    sd = state.plan.steps[state.plan.current_step_index]
-    step = sd.to_plan_step()
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    step = sd.to_execution_step()
     pending = state.pending_confirmation or {}
 
     # ---- Build the interrupt payload (presented to the caller) ----
@@ -681,21 +681,21 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         return {
             "tool_messages": [_begin_tool_call(
                 state,
-                context="plan",
+                context="step_execution",
                 tool_name=step.tool_name or "",
                 tool_input=tool_input,
                 step_id=step.step_id,
                 suffix=f"{step.step_id}:confirmed",
             )],
             "tool_tracking": state.tool_tracking,
-            "plan": state.plan,
+            "step_execution": state.step_execution,
             "confirmation_decision": "confirmed",
             "events": state.events,
         }
 
     # Reject (or unknown decision)
     sd.status = "skipped"
-    _skip_step_dependents(step.step_id, state.plan.steps)
+    _skip_step_dependents(step.step_id, state.step_execution.steps)
     state.confirmation_decision = "rejected"
     state.pending_confirmation = None
     if not state.answer:
@@ -711,15 +711,15 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     })
     logger.info("Step %s rejected by user", step.step_id)
     return {
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "confirmation_decision": "rejected",
     }
 
 
-def _node_finalize_plan_execution(state: AgentGraphState) -> dict:
+def _node_finalize_step_execution(state: AgentGraphState) -> dict:
     """Compose default answer if none was set, mark execution complete."""
     if not state.answer:
-        state.answer = _default_plan_answer(state.plan.steps)
+        state.answer = _default_step_answer(state.step_execution.steps)
 
     state.answer_completed = True
 
@@ -729,7 +729,7 @@ def _node_finalize_plan_execution(state: AgentGraphState) -> dict:
 
     state.add_event("answer_completed", {"answer": state.answer})
     logger.info(
-        "finalize_plan_execution run_id=%s answer_len=%d trace_items=%d",
+        "finalize_step_execution run_id=%s answer_len=%d trace_items=%d",
         state.run_id, len(state.answer or ""), len(state.execution_trace),
     )
     return {
@@ -744,9 +744,9 @@ def _node_finalize_plan_execution(state: AgentGraphState) -> dict:
 # Step dispatch
 # ---------------------------------------------------------------------------
 
-def _dispatch_plan_step(
-    step: "PlanStep",
-    sd: PlanStepState,
+def _dispatch_step(
+    step: "ExecutionStep",
+    sd: StepRunState,
     state: AgentGraphState,
     deps: OrchestrationDeps,
 ) -> None:
@@ -755,23 +755,23 @@ def _dispatch_plan_step(
     The graph-native executor operates on ``AgentGraphState`` so every step
     update can be checkpointed.
     """
-    step_results: dict = state.plan.step_results
+    results: dict = state.step_execution.results
 
     if step.action_type == "retrieve":
         result_data = _execute_retrieve_step(step, state, deps)
-        step_results[step.step_id] = result_data
+        results[step.step_id] = result_data
 
     elif step.action_type == "tool_call":
         raise RuntimeError("tool_call must be executed by the main graph ToolGateway")
 
     elif step.action_type == "resolve":
         result_data = _execute_resolve_step(step, state, deps)
-        step_results[step.step_id] = result_data
+        results[step.step_id] = result_data
 
     elif step.action_type == "compose":
         answer = _execute_compose_step(step, state, deps)
         state.answer = answer
-        step_results[step.step_id] = {"answer": answer, "draft": True}
+        results[step.step_id] = {"answer": answer, "draft": True}
         if answer:
             state.add_event("draft_ready", {
                 "step_id": step.step_id,
@@ -805,7 +805,7 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
     candidates: list[dict] = []
 
     # 1. Graph episode UUID mapping
-    for sid, data in state.plan.step_results.items():
+    for sid, data in state.step_execution.results.items():
         if not isinstance(data, dict):
             continue
         episode_uuids = data.get("related_episode_uuids")
@@ -893,7 +893,7 @@ def _select_local_delete_candidate_with_llm(
 
 def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> str:
     context_parts: list[str] = []
-    for sid, data in state.plan.step_results.items():
+    for sid, data in state.step_execution.results.items():
         if isinstance(data, dict):
             if data.get("answer"):
                 context_parts.append(str(data["answer"]))
@@ -978,23 +978,23 @@ def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) 
 
 def _should_execute_step(state: AgentGraphState) -> str:
     """Check if there are more steps to execute."""
-    if state.plan.aborted:
-        return "finalize_plan"
+    if state.step_execution.aborted:
+        return "finalize_steps"
     if (
-        state.plan.current_step_index < len(state.plan.steps)
-        and state.plan.steps[state.plan.current_step_index].status == "running"
+        state.step_execution.current_step_index < len(state.step_execution.steps)
+        and state.step_execution.steps[state.step_execution.current_step_index].status == "running"
     ):
         return "execute_step"
-    for sd in state.plan.steps:
+    for sd in state.step_execution.steps:
         if sd.status in ("planned",):
             return "execute_step"
-    return "finalize_plan"
+    return "finalize_steps"
 
 
 def _after_step_execution(state: AgentGraphState) -> str:
     """Determine whether step succeeded, failed, awaits confirmation, or needs ReAct."""
-    if state.plan.current_step_index < len(state.plan.steps):
-        sd = state.plan.steps[state.plan.current_step_index]
+    if state.step_execution.current_step_index < len(state.step_execution.steps):
+        sd = state.step_execution.steps[state.step_execution.current_step_index]
         if sd.status == "awaiting_confirmation":
             return "confirm_step"
         if sd.status == "failed":
@@ -1008,8 +1008,8 @@ def _after_step_execution(state: AgentGraphState) -> str:
 
 def _after_step_failure(state: AgentGraphState) -> str:
     """After handling failure: continue or abort to finalize."""
-    if state.plan.aborted:
-        return "finalize_plan"
+    if state.step_execution.aborted:
+        return "finalize_steps"
     return "continue_loop"
 
 

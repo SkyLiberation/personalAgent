@@ -80,21 +80,21 @@
 
 ### 6. 要加一个新 intent（比如"更新知识"），改动面有多大？
 
-因为 workflow 是声明式 frozen 的，主要改动集中在几处：在 router 加 intent 分类与默认决策；在 `workflow.py` 的模块级 `_build_registry()`（构造 `WORKFLOW_REGISTRY`）里声明新的 `WorkflowSpec`（节点、依赖、风险、HITL、projection_policy）；如果涉及新工具，在工具层注册并补 args schema 和 governance；如果需要步骤执行，PlanValidator 加 intent 特定规则；最后补 eval。新声明的 spec 还会被 `WorkflowSpecValidator` 和 `validate_registry_against_capabilities` 两道 spec 层闸门检查（对真实注册表跑断言，见 `tests/test_workflow_validator.py`），所以"加一份声明"必须同时通过 spec 自洽与工具能力一致性校验。
+因为 workflow 是声明式 frozen 的，主要改动集中在几处：在 router 加 intent 分类与默认决策；在 `workflow.py` 的模块级 `_build_registry()`（构造 `WORKFLOW_REGISTRY`）里声明新的 `WorkflowSpec`（节点、依赖、风险、HITL、projection_policy）；如果涉及新工具，在工具层注册并补 args schema 和 governance；如果需要步骤执行，StepProjectionValidator 加 intent 特定规则；最后补 eval。新声明的 spec 还会被 `WorkflowSpecValidator` 和 `validate_registry_against_capabilities` 两道 spec 层闸门检查（对真实注册表跑断言，见 `tests/test_workflow_validator.py`），所以"加一份声明"必须同时通过 spec 自洽与工具能力一致性校验。
 
 这个边界是刻意的：流程拓扑集中在 WorkflowRegistry 一处声明，LLM 不能临场发明控制流，所以加 intent 是"加一份声明 + 接治理"，而不是改散落各处的 if-else。
 
-### 7. projection_policy 为什么只给 delete/solidify 开，ask 为什么不投影成 PlanStep？
+### 7. projection_policy 为什么只给 delete/solidify 开，ask 为什么不投影成 ExecutionStep？
 
-因为只有需要步骤状态、HITL 确认或 checkpoint 恢复的 workflow 才值得付出 PlanStep 投影的成本。delete 要确认和恢复，solidify 要先 compose 再 capture，这些都需要可展示、可恢复的步骤图。
+因为只有需要步骤状态、HITL 确认或 checkpoint 恢复的 workflow 才值得付出 ExecutionStep 投影的成本。delete 要确认和恢复，solidify 要先 compose 再 capture，这些都需要可展示、可恢复的步骤图。
 
-ask、capture、direct answer、summarize 有直接 Graph 分支和 `execution_trace`，不需要额外步骤状态。给它们也投影成 PlanStep 只会增加无谓的状态管理开销，所以默认 `projection_policy="none"`。
+ask、capture、direct answer、summarize 有直接 Graph 分支和 `execution_trace`，不需要额外步骤状态。给它们也投影成 ExecutionStep 只会增加无谓的状态管理开销，所以默认 `projection_policy="none"`。
 
-### 8. 真要做开放式 autonomous planner，怎么加 guardrail？和 PlanValidator 什么关系？
+### 8. 真要做开放式 autonomous planner，怎么加 guardrail？和 StepProjectionValidator 什么关系？
 
-PlanValidator（`StepProjectionValidator`）现在校验的是确定性投影出来的步骤图：步骤类型、依赖环、工具注册、args schema、风险等级、ReAct 越权、intent 规则。它本身就是 guardrail 的核心。它之上还有一层更早的闸门：`WorkflowSpecValidator` 在 spec 声明期就把 delete_longterm 必须 high+confirmation+hitl 这类不变式拦在源头，所以非法流程在变成 PlanStep 之前就过不了。
+StepProjectionValidator（`StepProjectionValidator`）现在校验的是确定性投影出来的步骤图：步骤类型、依赖环、工具注册、args schema、风险等级、ReAct 越权、intent 规则。它本身就是 guardrail 的核心。它之上还有一层更早的闸门：`WorkflowSpecValidator` 在 spec 声明期就把 delete_longterm 必须 high+confirmation+hitl 这类不变式拦在源头，所以非法流程在变成 ExecutionStep 之前就过不了。
 
-如果引入 autonomous planner，它生成的计划仍然必须过同一个 PlanValidator，再加几道：限制可组合的工具集（只允许低风险只读）、要求每条计划可映射到已知能力、必须有 eval 覆盖、高风险动作仍走 HITL。也就是说 autonomous planner 只是换了"谁生成计划"，校验、确认、审计这套边界不变。
+如果引入 autonomous planner，它生成的计划仍然必须过同一个 StepProjectionValidator，再加几道：限制可组合的工具集（只允许低风险只读）、要求每条计划可映射到已知能力、必须有 eval 覆盖、高风险动作仍走 HITL。也就是说 autonomous planner 只是换了"谁生成计划"，校验、确认、审计这套边界不变。
 
 ### 9. PolicyEngine 的规则是硬编码还是可配置？
 
@@ -108,7 +108,7 @@ PlanValidator（`StepProjectionValidator`）现在校验的是确定性投影出
 
 ### 11. checkpoint resume 后，工具执行到一半（graph 删了 note 没删）怎么保证一致性？
 
-当前主要靠三层：Postgres 持久幂等账本（`idempotency_key` 防止确认动作重复执行）、步骤状态（`PlanStepState` 记录每步做到哪、失败没失败、重试几次）和 checkpoint history/replay（保留现网失败现场用于复现）。delete 的真实副作用发生在确认 resume 之后，`delete_note` 会先写删除快照，再软删除 note/chunk；默认查询会隐藏关联 review card，后续可通过 `restore_note` 从快照恢复。
+当前主要靠三层：Postgres 持久幂等账本（`idempotency_key` 防止确认动作重复执行）、步骤状态（`StepRunState` 记录每步做到哪、失败没失败、重试几次）和 checkpoint history/replay（保留现网失败现场用于复现）。delete 的真实副作用发生在确认 resume 之后，`delete_note` 会先写删除快照，再软删除 note/chunk；默认查询会隐藏关联 review card，后续可通过 `restore_note` 从快照恢复。
 
 但跨存储的原子性目前没有分布式事务保证，如果删除中途失败，可能出现孤儿 graph episode。文档里也承认这点，对应的兜底方向是图谱对账、孤儿检测和删除同步重试。这是诚实要讲的边界，不要包装成"已经强一致"。
 

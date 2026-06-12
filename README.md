@@ -19,7 +19,7 @@
 | --- | --- | --- | --- |
 | `入口层` | [web/api.py](src/personal_agent/web/api.py), [feishu/service.py](src/personal_agent/feishu/service.py), [main.py](src/personal_agent/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
 | `意图识别 / 路由层` | [agent/router.py](src/personal_agent/agent/router.py) | 通过 `DefaultIntentRouter` 统一处理入口意图；模型调用重试后仍失败时明确返回不可用提示 | [docs/topics/routing.md](docs/topics/routing.md) |
-| `Workflow / 步骤投影层` | [agent/workflow.py](src/personal_agent/agent/workflow.py), [agent/workflow_validator.py](src/personal_agent/agent/workflow_validator.py), [agent/planner.py](src/personal_agent/agent/planner.py), [agent/plan_validator.py](src/personal_agent/agent/plan_validator.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/) | workflow-first：固定 `WorkflowSpec` 是流程真源；`delete_knowledge / solidify_conversation` 被确定性投影成可校验、可恢复、可 HITL 的步骤；当前没有默认启用的 autonomous planner | [docs/topics/planning.md](docs/topics/planning.md) |
+| `Workflow / 步骤投影层` | [agent/workflow.py](src/personal_agent/agent/workflow.py), [agent/workflow_validator.py](src/personal_agent/agent/workflow_validator.py), [agent/step_projector.py](src/personal_agent/agent/step_projector.py), [agent/step_projection_validator.py](src/personal_agent/agent/step_projection_validator.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/) | workflow-first：固定 `WorkflowSpec` 是流程真源；`delete_knowledge / solidify_conversation` 被确定性投影成 `ExecutionStep`，并进入 `step_execution` checkpoint 状态；当前没有默认启用的 autonomous planner | [docs/topics/workflow-step-projection.md](docs/topics/workflow-step-projection.md) |
 | `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_graph.py](src/personal_agent/agent/orchestration_graph.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py), [agent/graph.py](src/personal_agent/agent/graph.py), [agent/nodes.py](src/personal_agent/agent/nodes.py) | `AgentRuntime` 默认进入 LangGraph entry 总编排，支持 route/workflow projection/step/ReAct/HITL/checkpoint；`AgentService` 是兼容入口并继承 runtime | [docs/topics/runtime.md](docs/topics/runtime.md)、[docs/workflow/entry-router-plan-react-output-flow.md](docs/workflow/entry-router-plan-react-output-flow.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、注册中心、意图匹配和失败回退链；已注册 `capture_text / capture_url / capture_upload / graph_search / web_search / delete_note` | [docs/topics/tools.md](docs/topics/tools.md) |
 | `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有受限会话线索、Postgres 长期记忆/问答历史、LangGraph checkpoint 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
@@ -29,7 +29,7 @@
 
 ## Entry 编排图
 
-[docs/mermaid/entry-orchestration.md](docs/mermaid/entry-orchestration.md) 是由 [scripts/draw_entry_graph.py](scripts/draw_entry_graph.py) 生成的当前 LangGraph entry 总编排可视化图源，用来对齐 `normalize_entry -> route_intent -> (按需 clarify) / capture / ask / summarize / direct_answer / plan_task -> step / ReAct / HITL -> finalize_entry_result` 的真实节点结构和条件流转关系。运行 `uv run python scripts/draw_entry_graph.py` 可刷新该图；`uv run python scripts/export_thread_checkpoints.py <thread_id>` 会把持久化 checkpoint 导出到 `scripts/assets/`。
+[docs/mermaid/entry-orchestration.md](docs/mermaid/entry-orchestration.md) 是由 [scripts/draw_entry_graph.py](scripts/draw_entry_graph.py) 生成的当前 LangGraph entry 总编排可视化图源，用来对齐 `normalize_entry -> route_intent -> (按需 clarify) / capture / ask / summarize / direct_answer / project_workflow_steps -> step / ReAct / HITL -> finalize_entry_result` 的真实节点结构和条件流转关系。运行 `uv run python scripts/draw_entry_graph.py` 可刷新该图；`uv run python scripts/export_thread_checkpoints.py <thread_id>` 会把持久化 checkpoint 导出到 `scripts/assets/`。
 
 ## 当前技术栈
 
@@ -128,14 +128,14 @@ personalAgent/                  # 项目根目录
 ├─ log/                         # 运行日志目录
 └─ src/
    └─ personal_agent/           # Python 应用主包
-      ├─ agent/                 # Agent 核心层（runtime / router / planner / orchestration graph / verifier）
+      ├─ agent/                 # Agent 核心层（runtime / router / projector / orchestration graph / verifier）
       │  ├─ runtime.py          # AgentRuntime：统一执行入口
       │  ├─ service.py          # AgentService：兼容入口，继承 runtime
       │  ├─ router.py           # DefaultIntentRouter：LLM-first 意图分类
       │  ├─ workflow.py         # WorkflowSpec / WorkflowRegistry：固定业务流程真源
-      │  ├─ planner.py          # DefaultTaskPlanner：兼容名，当前语义是 WorkflowStepProjector
+      │  ├─ step_projector.py   # WorkflowStepProjector：WorkflowSpec -> ExecutionStep
       │  ├─ orchestration_graph.py   # LangGraph entry 总图装配
-      │  ├─ orchestration_nodes/          # route / plan / step / ReAct / HITL 节点
+      │  ├─ orchestration_nodes/          # route / workflow projection / step / ReAct / HITL 节点
       │  ├─ orchestration_models.py  # AgentGraphState / AgentEvent / run snapshot
       │  ├─ graph.py            # capture / ask 等固定分支图
       │  ├─ nodes.py            # capture / ask 基础节点
@@ -151,7 +151,7 @@ personalAgent/                  # 项目根目录
       ├─ web/                   # FastAPI Web 接口层
       │  ├─ api.py              # API 路由（capture / ask / digest / notes / tools / entry）
       │  └─ auth.py             # AuthMiddleware + RateLimiter
-├─ tests/                       # 单元 + 集成测试（300 条：router / planner / validator / executor / replanner / tools / memory / API / CLI / chunking / regression）
+├─ tests/                       # 单元 + 集成测试（300 条：router / projector / validator / executor / replanner / tools / memory / API / CLI / chunking / regression）
 └─ evals/                       # ask 质量评测用例
 ```
 

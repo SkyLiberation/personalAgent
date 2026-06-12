@@ -6,7 +6,7 @@
 
 ## 架构前提
 
-项目只依赖 `langchain_core`，刻意不用 `AgentExecutor` / `Chain` / `LCEL`，编排交给 LangGraph，治理（ToolGateway / PolicyEngine / PlanValidator / HITL）全部自研。代码核对属实：
+项目只依赖 `langchain_core`，刻意不用 `AgentExecutor` / `Chain` / `LCEL`，编排交给 LangGraph，治理（ToolGateway / PolicyEngine / StepProjectionValidator / HITL）全部自研。代码核对属实：
 
 - `AgentExecutor` / `create_react_agent` / `create_tool_calling_agent`：全仓零命中。
 - LCEL（`Runnable` / `|` 管道）：全仓零命中。
@@ -65,7 +65,7 @@
 
 **1. `Send` API（动态扇出）**
 
-plan 执行当前严格顺序（`select_next_step` → `execute_plan_step` 回环，`orchestration_graph.py:222-256`）。delete / solidify 的步骤有依赖、扇不开。唯一契合的是**子查询并行检索**（已承认的性能短板：子查询当前串行）。但该链路目前用 `ThreadPoolExecutor` 而非图节点，要用 Send 得先把子查询检索改造成图节点，改动不小。结论：将来若把检索并行纳入图编排，Send 是对的工具；现在用 ThreadPoolExecutor 解决同一问题成本更低。
+plan 执行当前严格顺序（`select_next_step` → `execute_step` 回环，`orchestration_graph.py:222-256`）。delete / solidify 的步骤有依赖、扇不开。唯一契合的是**子查询并行检索**（已承认的性能短板：子查询当前串行）。但该链路目前用 `ThreadPoolExecutor` 而非图节点，要用 Send 得先把子查询检索改造成图节点，改动不小。结论：将来若把检索并行纳入图编排，Send 是对的工具；现在用 ThreadPoolExecutor 解决同一问题成本更低。
 
 **2. `stream_mode="messages"`（统一流式通道）**
 

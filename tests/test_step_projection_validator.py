@@ -2,52 +2,52 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.plan_validator import PlanValidationResult, PlanValidator
-from personal_agent.agent.planner import PlanStep
+from personal_agent.agent.step_projection_validator import StepProjectionValidationResult, StepProjectionValidator
+from personal_agent.agent.step_projector import ExecutionStep
 from personal_agent.agent.router import RouterDecision
 from langchain_core.tools import tool
 
 from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
 
 
-class TestPlanValidationResult:
+class TestStepProjectionValidationResult:
     def test_valid_when_no_issues(self):
-        result = PlanValidationResult(valid=True)
+        result = StepProjectionValidationResult(valid=True)
         assert result.valid is True
         assert result.ok is True
 
     def test_invalid_when_issues_exist(self):
-        result = PlanValidationResult(valid=False, issues=["something wrong"])
+        result = StepProjectionValidationResult(valid=False, issues=["something wrong"])
         assert result.valid is False
         assert result.ok is False
 
     def test_ok_with_warnings_only(self):
-        result = PlanValidationResult(valid=True, warnings=["just a heads-up"])
+        result = StepProjectionValidationResult(valid=True, warnings=["just a heads-up"])
         assert result.valid is True
         assert result.ok is True  # warnings don't affect ok
 
 
-class TestPlanValidatorStructural:
+class TestStepProjectionValidatorStructural:
     @pytest.fixture
     def validator(self):
-        return PlanValidator()
+        return StepProjectionValidator()
 
     @pytest.fixture
     def default_decision(self):
         return RouterDecision(route="ask")
 
-    def test_empty_plan_is_invalid(self, validator, default_decision):
+    def test_empty_projection_is_invalid(self, validator, default_decision):
         result = validator.validate([], default_decision)
         assert not result.valid
         assert any("为空" in i or "至少" in i for i in result.issues)
 
-    def test_valid_plan_passes(self, validator, default_decision):
+    def test_valid_projection_passes(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="ask-1", action_type="retrieve", description="检索知识库",
+            ExecutionStep(step_id="ask-1", action_type="retrieve", description="检索知识库",
                      tool_name="graph_search", expected_output="匹配笔记"),
-            PlanStep(step_id="ask-2", action_type="compose", description="生成回答",
+            ExecutionStep(step_id="ask-2", action_type="compose", description="生成回答",
                      depends_on=["ask-1"]),
-            PlanStep(step_id="ask-3", action_type="verify", description="校验结果",
+            ExecutionStep(step_id="ask-3", action_type="verify", description="校验结果",
                      depends_on=["ask-2"]),
         ]
         result = validator.validate(steps, default_decision)
@@ -57,43 +57,43 @@ class TestPlanValidatorStructural:
 
     def test_duplicate_step_ids_flagged(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="dup-1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="dup-1", action_type="compose", description="整理"),
+            ExecutionStep(step_id="dup-1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="dup-1", action_type="compose", description="整理"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("重复" in i for i in result.issues)
 
     def test_empty_step_id_flagged(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="", action_type="retrieve", description="检索"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("为空" in i for i in result.issues)
 
     def test_whitespace_only_step_id_flagged(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="   ", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="   ", action_type="retrieve", description="检索"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("为空" in i for i in result.issues)
 
     def test_invalid_action_type_rejected(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="invalid_action", description="test"),
+            ExecutionStep(step_id="s1", action_type="invalid_action", description="test"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("无效" in i for i in result.issues)
 
     def test_empty_description_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description=""),
+            ExecutionStep(step_id="s1", action_type="retrieve", description=""),
         ]
         result = validator.validate(steps, default_decision)
         assert any("description" in w for w in result.warnings)
 
     def test_missing_tool_name_when_tool_call(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="调用工具",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="调用工具",
                      tool_name=None),
         ]
         result = validator.validate(steps, default_decision)
@@ -101,7 +101,7 @@ class TestPlanValidatorStructural:
 
     def test_unknown_tool_name_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="调用工具",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="调用工具",
                      tool_name="nonexistent_tool"),
         ]
         result = validator.validate(steps, default_decision)
@@ -110,7 +110,7 @@ class TestPlanValidatorStructural:
 
     def test_invalid_risk_level_rejected(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
                      risk_level="critical"),
         ]
         result = validator.validate(steps, default_decision)
@@ -118,7 +118,7 @@ class TestPlanValidatorStructural:
 
     def test_invalid_on_failure_rejected(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
                      on_failure="panic"),
         ]
         result = validator.validate(steps, default_decision)
@@ -126,7 +126,7 @@ class TestPlanValidatorStructural:
 
     def test_non_planned_status_auto_corrected(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
                      status="running"),
         ]
         result = validator.validate(steps, default_decision)
@@ -136,17 +136,17 @@ class TestPlanValidatorStructural:
 
     def test_confirm_with_low_risk_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
                      requires_confirmation=True, risk_level="low"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("requires_confirmation" in w for w in result.warnings)
 
 
-class TestPlanValidatorDependency:
+class TestStepProjectionValidatorDependency:
     @pytest.fixture
     def validator(self):
-        return PlanValidator()
+        return StepProjectionValidator()
 
     @pytest.fixture
     def default_decision(self):
@@ -154,8 +154,8 @@ class TestPlanValidatorDependency:
 
     def test_depends_on_nonexistent_step(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="s2", action_type="compose", description="生成",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s2", action_type="compose", description="生成",
                      depends_on=["missing-id"]),
         ]
         result = validator.validate(steps, default_decision)
@@ -163,9 +163,9 @@ class TestPlanValidatorDependency:
 
     def test_circular_dependency_detected(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="a", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="a", action_type="retrieve", description="检索",
                      depends_on=["b"]),
-            PlanStep(step_id="b", action_type="compose", description="生成",
+            ExecutionStep(step_id="b", action_type="compose", description="生成",
                      depends_on=["a"]),
         ]
         result = validator.validate(steps, default_decision)
@@ -173,10 +173,10 @@ class TestPlanValidatorDependency:
 
     def test_linear_chain_no_cycle_ok(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="a", action_type="retrieve", description="检索"),
-            PlanStep(step_id="b", action_type="compose", description="生成",
+            ExecutionStep(step_id="a", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="b", action_type="compose", description="生成",
                      depends_on=["a"]),
-            PlanStep(step_id="c", action_type="verify", description="校验",
+            ExecutionStep(step_id="c", action_type="verify", description="校验",
                      depends_on=["b"]),
         ]
         result = validator.validate(steps, default_decision)
@@ -184,7 +184,7 @@ class TestPlanValidatorDependency:
 
     def test_self_dependency_is_cycle(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="a", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="a", action_type="retrieve", description="检索",
                      depends_on=["a"]),
         ]
         result = validator.validate(steps, default_decision)
@@ -192,23 +192,23 @@ class TestPlanValidatorDependency:
 
     def test_verify_without_depends_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="s2", action_type="verify", description="校验"),
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s2", action_type="verify", description="校验"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("depends_on 为空" in w for w in result.warnings)
 
 
-class TestPlanValidatorCrossValidation:
+class TestStepProjectionValidatorCrossValidation:
     @pytest.fixture
     def validator(self):
-        return PlanValidator()
+        return StepProjectionValidator()
 
     def test_router_requires_tools_but_no_tool_call(self, validator):
         decision = RouterDecision(route="ask", requires_tools=True)
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="s2", action_type="compose", description="生成"),
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s2", action_type="compose", description="生成"),
         ]
         result = validator.validate(steps, decision)
         assert any("requires_tools" in w for w in result.warnings)
@@ -216,7 +216,7 @@ class TestPlanValidatorCrossValidation:
     def test_router_requires_retrieval_but_no_retrieve(self, validator):
         decision = RouterDecision(route="ask", requires_retrieval=True)
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="调用工具",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="调用工具",
                      tool_name="graph_search"),
         ]
         result = validator.validate(steps, decision)
@@ -225,7 +225,7 @@ class TestPlanValidatorCrossValidation:
     def test_router_requires_confirmation_but_none_in_steps(self, validator):
         decision = RouterDecision(route="delete_knowledge", requires_confirmation=True)
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
         ]
         result = validator.validate(steps, decision)
         assert any("requires_confirmation" in i for i in result.issues)
@@ -233,8 +233,8 @@ class TestPlanValidatorCrossValidation:
     def test_router_requires_confirmation_satisfied(self, validator):
         decision = RouterDecision(route="delete_knowledge", requires_confirmation=True)
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="s2", action_type="verify", description="校验",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s2", action_type="verify", description="校验",
                      requires_confirmation=True, risk_level="high"),
         ]
         result = validator.validate(steps, decision)
@@ -243,7 +243,7 @@ class TestPlanValidatorCrossValidation:
     def test_risk_escalation_warning(self, validator):
         decision = RouterDecision(route="ask", risk_level="low")
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
                      risk_level="high"),
         ]
         result = validator.validate(steps, decision)
@@ -252,71 +252,71 @@ class TestPlanValidatorCrossValidation:
     def test_risk_not_escalated_when_same_level(self, validator):
         decision = RouterDecision(route="ask", risk_level="high")
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
                      risk_level="high"),
         ]
         result = validator.validate(steps, decision)
         assert not any("高于" in w for w in result.warnings)
 
 
-class TestPlanValidatorPlanLevel:
+class TestStepProjectionValidatorProjectionLevel:
     @pytest.fixture
     def validator(self):
-        return PlanValidator()
+        return StepProjectionValidator()
 
     @pytest.fixture
     def default_decision(self):
         return RouterDecision(route="ask")
 
-    def test_plan_ends_with_retrieve_warns(self, validator, default_decision):
+    def test_project_ends_with_retrieve_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="s2", action_type="retrieve", description="再检索"),
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s2", action_type="retrieve", description="再检索"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("最后一步" in w for w in result.warnings)
 
-    def test_plan_ends_with_compose_ok(self, validator, default_decision):
+    def test_project_ends_with_compose_ok(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索"),
-            PlanStep(step_id="s2", action_type="compose", description="生成回答"),
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
+            ExecutionStep(step_id="s2", action_type="compose", description="生成回答"),
         ]
         result = validator.validate(steps, default_decision)
         assert not any("最后一步" in w for w in result.warnings)
 
     def test_all_verify_steps_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="verify", description="校验A",
+            ExecutionStep(step_id="s1", action_type="verify", description="校验A",
                      depends_on=["s0"]),
-            PlanStep(step_id="s2", action_type="verify", description="校验B"),
+            ExecutionStep(step_id="s2", action_type="verify", description="校验B"),
         ]
         result = validator.validate(steps, default_decision)
         assert any("都是 verify" in w for w in result.warnings)
 
-    def test_delete_knowledge_heuristic_plan_passes(self, validator):
+    def test_delete_knowledge_heuristic_projection_passes(self, validator):
         decision = RouterDecision(route="delete_knowledge", risk_level="high",
-                                  requires_confirmation=True, requires_planning=True)
+                                  requires_confirmation=True, requires_step_projection=True)
         steps = [
-            PlanStep(step_id="del-1", action_type="retrieve", description="检索待删除的候选笔记",
+            ExecutionStep(step_id="del-1", action_type="retrieve", description="检索待删除的候选笔记",
                      tool_name="graph_search", expected_output="匹配的候选笔记列表",
                      success_criteria="命中至少 1 条笔记"),
-            PlanStep(step_id="del-2", action_type="resolve", description="定位目标",
+            ExecutionStep(step_id="del-2", action_type="resolve", description="定位目标",
                      depends_on=["del-1"]),
-            PlanStep(step_id="del-3", action_type="tool_call", description="请求确认并执行删除",
+            ExecutionStep(step_id="del-3", action_type="tool_call", description="请求确认并执行删除",
                      tool_name="delete_note", depends_on=["del-2"], risk_level="high",
                      requires_confirmation=True, on_failure="abort"),
-            PlanStep(step_id="del-4", action_type="compose", description="汇总删除结果",
+            ExecutionStep(step_id="del-4", action_type="compose", description="汇总删除结果",
                      depends_on=["del-3"]),
         ]
         result = validator.validate(steps, decision)
         assert result.valid
 
-    def test_solidify_conversation_heuristic_plan_passes(self, validator):
+    def test_solidify_conversation_heuristic_projection_passes(self, validator):
         decision = RouterDecision(route="solidify_conversation", risk_level="low",
-                                  requires_planning=True)
+                                  requires_step_projection=True)
         steps = [
-            PlanStep(step_id="sol-1", action_type="compose", description="提取候选事实和结论"),
-            PlanStep(step_id="sol-2", action_type="tool_call", description="写入知识库",
+            ExecutionStep(step_id="sol-1", action_type="compose", description="提取候选事实和结论"),
+            ExecutionStep(step_id="sol-2", action_type="tool_call", description="写入知识库",
                      tool_name="capture_text", depends_on=["sol-1"]),
         ]
         result = validator.validate(steps, decision)
@@ -377,7 +377,7 @@ def _read_only_graph_search(query: str = ""):
     return tool_response(tool_success({"results": []}))
 
 
-class TestPlanValidatorGovernance:
+class TestStepProjectionValidatorGovernance:
     @pytest.fixture
     def registry(self):
         reg = ToolExecutor()
@@ -389,7 +389,7 @@ class TestPlanValidatorGovernance:
 
     @pytest.fixture
     def validator(self, registry):
-        return PlanValidator(tool_executor=registry)
+        return StepProjectionValidator(tool_executor=registry)
 
     @pytest.fixture
     def default_decision(self):
@@ -397,7 +397,7 @@ class TestPlanValidatorGovernance:
 
     def test_tool_requires_confirmation_but_step_does_not_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="high"),
         ]
         result = validator.validate(steps, default_decision)
@@ -405,7 +405,7 @@ class TestPlanValidatorGovernance:
 
     def test_tool_requires_confirmation_and_step_has_it_passes(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="high",
                      requires_confirmation=True),
         ]
@@ -414,7 +414,7 @@ class TestPlanValidatorGovernance:
 
     def test_tool_writes_longterm_without_confirmation_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="写入操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="写入操作",
                      tool_name="write_op", risk_level="low"),
         ]
         result = validator.validate(steps, default_decision)
@@ -422,7 +422,7 @@ class TestPlanValidatorGovernance:
 
     def test_tool_writes_longterm_with_high_risk_no_warning(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="写入操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="写入操作",
                      tool_name="write_op", risk_level="high"),
         ]
         result = validator.validate(steps, default_decision)
@@ -430,7 +430,7 @@ class TestPlanValidatorGovernance:
 
     def test_tool_accesses_external_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="外部操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="外部操作",
                      tool_name="external_op", risk_level="low"),
         ]
         result = validator.validate(steps, default_decision)
@@ -438,7 +438,7 @@ class TestPlanValidatorGovernance:
 
     def test_tool_risk_higher_than_step_warns(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="low"),
         ]
         result = validator.validate(steps, default_decision)
@@ -446,7 +446,7 @@ class TestPlanValidatorGovernance:
 
     def test_deep_param_validation_missing_required(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", tool_input={}, risk_level="high"),
         ]
         result = validator.validate(steps, default_decision)
@@ -454,7 +454,7 @@ class TestPlanValidatorGovernance:
 
     def test_deep_param_validation_passes_with_valid_input(self, validator, default_decision):
         steps = [
-            PlanStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op",
                      tool_input={"target": "note-123"}, risk_level="high"),
         ]
@@ -462,10 +462,10 @@ class TestPlanValidatorGovernance:
         assert not any("tool_input 参数校验失败" in i for i in result.issues)
 
     def test_capture_text_may_receive_text_from_upstream_compose(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
         steps = [
-            PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
-            PlanStep(
+            ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            ExecutionStep(
                 step_id="sol-2", action_type="tool_call", description="保存草稿",
                 tool_name="capture_text", depends_on=["sol-1"],
             ),
@@ -477,10 +477,10 @@ class TestPlanValidatorGovernance:
         assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
 
     def test_solidify_rejects_capture_without_composed_draft(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
         steps = [
-            PlanStep(step_id="sol-1", action_type="retrieve", description="获取上下文"),
-            PlanStep(
+            ExecutionStep(step_id="sol-1", action_type="retrieve", description="获取上下文"),
+            ExecutionStep(
                 step_id="sol-2",
                 action_type="tool_call",
                 description="保存占位符",
@@ -496,10 +496,10 @@ class TestPlanValidatorGovernance:
         assert any("必须依赖 compose" in issue for issue in result.issues)
 
     def test_solidify_rejects_placeholder_even_with_compose_dependency(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
         steps = [
-            PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
-            PlanStep(
+            ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            ExecutionStep(
                 step_id="sol-2", action_type="tool_call", description="保存占位符",
                 tool_name="capture_text",
                 tool_input={"text": "$sol-1.output"},
@@ -513,12 +513,12 @@ class TestPlanValidatorGovernance:
         assert any("计划阶段不得提供正文或占位符" in issue for issue in result.issues)
 
     def test_solidify_rejects_unexecutable_verify_step(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_planning=True)
+        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
         steps = [
-            PlanStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
-            PlanStep(step_id="sol-2", action_type="verify", description="校验是否已写入",
+            ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            ExecutionStep(step_id="sol-2", action_type="verify", description="校验是否已写入",
                      depends_on=["sol-1"]),
-            PlanStep(step_id="sol-3", action_type="tool_call", description="保存草稿",
+            ExecutionStep(step_id="sol-3", action_type="tool_call", description="保存草稿",
                      tool_name="capture_text", depends_on=["sol-2"]),
         ]
 
@@ -529,7 +529,7 @@ class TestPlanValidatorGovernance:
 
 
 class TestReActValidation:
-    """Validate ReAct-specific checks in PlanValidator."""
+    """Validate ReAct-specific checks in StepProjectionValidator."""
 
     @pytest.fixture
     def registry(self):
@@ -539,7 +539,7 @@ class TestReActValidation:
 
     @pytest.fixture
     def validator(self, registry):
-        return PlanValidator(tool_executor=registry)
+        return StepProjectionValidator(tool_executor=registry)
 
     @pytest.fixture
     def default_decision(self):
@@ -547,7 +547,7 @@ class TestReActValidation:
 
     def test_react_blocks_high_risk(self, validator, default_decision):
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="react", risk_level="high",
                 allowed_tools=["graph_search"], max_iterations=3,
@@ -558,7 +558,7 @@ class TestReActValidation:
 
     def test_react_blocks_requires_confirmation(self, validator, default_decision):
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="react", requires_confirmation=True,
                 allowed_tools=["graph_search"], max_iterations=3,
@@ -569,7 +569,7 @@ class TestReActValidation:
 
     def test_react_validates_allowed_tools_registered(self, validator, default_decision):
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="react",
                 allowed_tools=["graph_search", "nonexistent_tool"],
@@ -581,7 +581,7 @@ class TestReActValidation:
 
     def test_react_warns_max_iterations_over_cap(self, validator, default_decision):
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="react",
                 allowed_tools=["graph_search"],
@@ -593,7 +593,7 @@ class TestReActValidation:
 
     def test_react_invalid_execution_mode(self, validator, default_decision):
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="invalid",
                 allowed_tools=[], max_iterations=3,
@@ -604,7 +604,7 @@ class TestReActValidation:
 
     def test_react_valid_step_passes(self, validator, default_decision):
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="s1", action_type="retrieve", description="检索",
                 execution_mode="react",
                 allowed_tools=["graph_search"],

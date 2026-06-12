@@ -23,7 +23,7 @@
 
 | 上下文类别 | 主要载体 | 生命周期 | 是否可作为事实证据 | 主要用途 |
 | --- | --- | --- | --- | --- |
-| 当前任务状态 | `AgentGraphState.plan / react / events / execution_trace` | Postgres checkpoint | 否 | 告知模型当前任务与执行进度 |
+| 当前任务状态 | `AgentGraphState.step_execution / react / events / execution_trace` | Postgres checkpoint | 否 | 告知模型当前任务与执行进度 |
 | Thread 对话线索 | LangGraph `messages` | 同一 `thread_id` 跨 run checkpoint 持久化 | 否 | entry 流程中的连续对话承接 |
 | 当前回答证据 | Graphiti facts、note/chunk snippet、web citation | 单次 ask | 是，需 verifier 校验 | 生成可追溯答案 |
 | 流程恢复状态 | LangGraph Postgres checkpoint | 运行恢复 / 审批周期 | 否 | interrupt/resume 和任务恢复 |

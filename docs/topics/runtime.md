@@ -42,7 +42,7 @@
 
 - `build_entry_orchestration_graph()`：entry 父图，组合 `EntryGraph`、普通分支与步骤执行子图
 - `build_entry_graph()`：归一化、意图路由与澄清 interrupt/resume
-- `build_plan_execution_graph()`：历史命名，语义是 StepExecutionGraph；负责确定性步骤、HITL、重试与最终汇总
+- `build_step_execution_graph()`：负责确定性步骤、HITL、重试与最终汇总
 - `build_react_graph()`：受限 ReAct 轮次及其工具执行边界
 - `run_capture_flow()`：capture 分支的确定性业务流，不单独 compile LangGraph
 - `GraphCaptureFlow`：capture 后的图谱摄取、graph sync 状态回写、批量同步和质量指标
@@ -81,7 +81,7 @@ EntryInput
   -> build_entry_orchestration_graph()
   -> EntryGraph: normalize_entry -> route_intent / clarification
   -> capture / ask / summarize / direct_answer
-     或 StepExecutionGraph（代码历史名 PlanExecutionGraph）: plan_task -> validate_plan -> step loop / HITL
+     或 StepExecutionGraph: project_workflow_steps -> validate_projected_steps -> step loop / HITL
         -> ReactGraph（仅 react 步骤）
   -> finalize_entry_result
   -> EntryResult
@@ -100,7 +100,7 @@ EntryInput
 - 已支持 Graph HITL 确认和拒绝
 - 已支持 LangGraph checkpoint 历史查询和基于历史 checkpoint 的 fork 回放
 - 已支持 health 和开发环境全量数据 reset
-- 已支持 `plan_steps` 与 `execution_trace` 分离，避免非计划任务生成伪计划
+- 已支持 projected `steps` 与 `execution_trace` 分离，避免普通 branch workflow 生成伪步骤
 
 ## 新增公开方法（v0.2+）
 
@@ -110,15 +110,15 @@ EntryInput
 
 意图分类的公开封装，供入口层在不需要完整 `execute_entry()` 时快速获得路由决策。
 
-### `plan_for_entry(entry_input: EntryInput) -> tuple[RouterDecision, list[PlanStep], list[dict]]`
+### `step_projector / step_projection_validator`
 
-历史兼容方法。运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续做 workflow step projection 和校验，并写入 checkpoint 中的 `AgentGraphState.plan`；普通意图返回空步骤，由执行阶段生成 `execution_trace`。这里的 `requires_planning` 是历史字段名，当前语义更接近 `requires_step_projection`。
+运行时通过只读属性暴露 `WorkflowStepProjector` 和 `StepProjectionValidator` 给 orchestration deps。只有 `RouterDecision.requires_step_projection=True` 时，entry graph 才会继续做 workflow step projection 和校验，并写入 checkpoint 中的 `AgentGraphState.step_execution`；普通意图返回空步骤，由执行阶段生成 `execution_trace`。旧版路由字段和 checkpoint 主状态不再作为兼容入口保留。
 
 ### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
 
 基于 LangGraph `get_state_history()` 返回某次 run 的 checkpoint 时间线摘要，包括 checkpoint id、父 checkpoint id、线程、状态、intent、下一步节点、事件数量、工具结果数量和 pending confirmation。它用于调试和运营后台查看“这次执行是如何走到当前状态的”，不直接暴露完整 checkpoint payload。
 
-这个接口不只是在给 `replay_from_checkpoint()` 提供 `checkpoint_id`，更重要的是帮助人或管理后台**选择应该从哪个历史点回放**。如果只返回一串 checkpoint id，使用者无法判断哪个点是“路由刚完成”、哪个点是“计划刚生成”、哪个点是“删除确认前”、哪个点已经执行过工具。轻量摘要会保留足够的判断信息：
+这个接口不只是在给 `replay_from_checkpoint()` 提供 `checkpoint_id`，更重要的是帮助人或管理后台**选择应该从哪个历史点回放**。如果只返回一串 checkpoint id，使用者无法判断哪个点是“路由刚完成”、哪个点是“步骤刚投影出来”、哪个点是“删除确认前”、哪个点已经执行过工具。轻量摘要会保留足够的判断信息：
 
 ```json
 {
@@ -128,7 +128,7 @@ EntryInput
   "run_id": "abc123",
   "status": "waiting_confirmation",
   "intent": "delete_knowledge",
-  "next": ["confirm_plan_step"],
+  "next": ["confirm_step"],
   "event_count": 7,
   "tool_result_count": 1,
   "pending_confirmation": {
@@ -143,7 +143,7 @@ EntryInput
 
 ### `replay_from_checkpoint(thread_id, checkpoint_id, updates, as_node=None) -> EntryResult`
 
-基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力的核心价值是**现网问题复现**：按用户、run、thread 找到某次失败记录，再从失败前后的真实 checkpoint 分叉重放，保留当时的消息、计划、工具归属、工具结果、pending confirmation 和 errors，而不是只拿用户输入重新跑一遍。对带副作用流程的重放依赖工具层的持久幂等账本保护，避免二次删除或二次写入。
+基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力的核心价值是**现网问题复现**：按用户、run、thread 找到某次失败记录，再从失败前后的真实 checkpoint 分叉重放，保留当时的消息、投影步骤、工具归属、工具结果、pending confirmation 和 errors，而不是只拿用户输入重新跑一遍。对带副作用流程的重放依赖工具层的持久幂等账本保护，避免二次删除或二次写入。
 
 执行过程：
 
@@ -160,7 +160,7 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
   -> 如果再次 interrupt，返回 waiting_confirmation；否则返回新的 EntryResult
 ```
 
-关键点是：`update_state()` 修改的是 LangGraph checkpoint 中的 `AgentGraphState`，不是业务数据库。它适合修正流程状态后重放，比如 `pending_confirmation`、`plan.step_results`、`answer`、`errors`、`tool_tracking` 等；它不等价于“恢复已删除的知识笔记”。
+关键点是：`update_state()` 修改的是 LangGraph checkpoint 中的 `AgentGraphState`，不是业务数据库。它适合修正流程状态后重放，比如 `pending_confirmation`、`step_execution.results`、`answer`、`errors`、`tool_tracking` 等；它不等价于“恢复已删除的知识笔记”。
 
 典型应用场景：现网删除流程复现
 
@@ -181,7 +181,7 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 4. 修代码、prompt 或策略后，再用同一个 checkpoint 重放验证修复是否有效。
 5. 必要时在受控管理后台中用白名单 `updates` 修正候选结果或清空 transient error，让图从修正后的状态继续执行。
 
-这比“拿用户那句话重新跑一遍”更可靠，因为 Agent 失败常常依赖当时的执行现场：历史 `messages`、router/planner 中间状态、`plan.steps`、ReAct 轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。checkpoint replay 保留的是这些现场，而不是只保留入口文本。
+这比“拿用户那句话重新跑一遍”更可靠，因为 Agent 失败常常依赖当时的执行现场：历史 `messages`、router/projector 中间状态、`step_execution.steps`、ReAct 轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。checkpoint replay 保留的是这些现场，而不是只保留入口文本。
 
 不适用场景：
 
@@ -258,7 +258,7 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 2. 抽出 `AskService`：先迁移 `execute_ask()` 的主体逻辑，runtime 只保留转发方法。
 3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture flow、store、Graphiti sync 的编排移出 runtime。
 4. 工具对 runtime 的依赖已通过 `build_capture_text_tool(capture_executor)` 的依赖注入消除。
-5. ~~清理 `RuntimeEntryMixin.plan_for_entry()` 等 LangGraph 改造后的兼容遗留方法。~~ **已完成**：`plan_for_entry()` 已删除（118 行死代码），`runtime_entry.py` 从 163 行精简到 40 行。
+5. ~~清理旧 entry 兼容方法。~~ **已完成**：已删除旧入口死代码，runtime entry 路径收敛到当前 LangGraph 编排。
 6. 最后压缩 `AgentRuntime.__init__()`：只装配依赖容器和 graph，不再承载具体业务流程。
 
 ### 验收标准

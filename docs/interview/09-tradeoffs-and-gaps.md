@@ -2,7 +2,7 @@
 
 ### 1. 为什么没有一开始就做完整权限系统？
 
-当前项目优先把 Agent 的主链路和关键工程边界跑通：入口统一、router 分流、LangGraph 编排、短期/长期记忆分离、WorkflowSpec、PolicyEngine、ToolGateway、PlanValidator、HITL、evidence 出口和基础观测。
+当前项目优先把 Agent 的主链路和关键工程边界跑通：入口统一、router 分流、LangGraph 编排、短期/长期记忆分离、WorkflowSpec、PolicyEngine、ToolGateway、StepProjectionValidator、HITL、evidence 出口和基础观测。
 
 现在 `permission_scope` 已经进入治理契约和 `PolicyEngine`，基础策略判断已落地：工具调用、记忆访问和入口来源都能通过统一 `PolicyInput -> PolicyDecision` 做 allow / deny / require confirmation / require escalation。还不能说完整 SaaS 权限系统已落地，是因为 workspace/tenant 维度、角色/属性权限、长期审计查询和审批流仍需补齐。
 

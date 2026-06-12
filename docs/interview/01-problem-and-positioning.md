@@ -30,7 +30,7 @@
 
 第四是高风险操作安全问题。删除知识不是用户一句话就直接删，而是经过 planning、retrieve、resolve、HITL confirmation、idempotency key 和工具审计，降低误删和重复执行风险。
 
-第五是 Agent 工程边界问题。项目把模型决策和系统执行拆开：模型可以理解意图、生成草稿和做局部语义判断，但固定流程拓扑来自 `WorkflowSpec`，真正触碰长期存储、外部网络或删除动作前，必须经过 `PolicyEngine`、`PlanValidator`、`ToolGateway`、`ToolGovernance` 和 evidence 边界。
+第五是 Agent 工程边界问题。项目把模型决策和系统执行拆开：模型可以理解意图、生成草稿和做局部语义判断，但固定流程拓扑来自 `WorkflowSpec`，真正触碰长期存储、外部网络或删除动作前，必须经过 `PolicyEngine`、`StepProjectionValidator`、`ToolGateway`、`ToolGovernance` 和 evidence 边界。
 
 ### 4. 它和普通 RAG Bot 的区别是什么？
 
@@ -42,7 +42,7 @@
 - 短期执行现场：checkpoint 保存多轮任务和暂停恢复状态。
 - 图谱语义索引：Graphiti 提供实体、关系和 episode 检索，但不替代 Postgres 真源。
 - 工具治理：工具调用有 schema、gateway、timeout、retry、rate limit、HITL、幂等和审计。
-- Workflow / step planning：ask、capture、delete、solidify 本质上都是 workflow；固定拓扑已下沉为 `WorkflowSpec / WorkflowStepSpec / WorkflowRegistry`，其中删除和固化会额外确定性投影成 `PlanStep`，用于步骤展示、HITL、checkpoint 和前端计划面板。
+- Workflow / step planning：ask、capture、delete、solidify 本质上都是 workflow；固定拓扑已下沉为 `WorkflowSpec / WorkflowStepSpec / WorkflowRegistry`，其中删除和固化会额外确定性投影成 `ExecutionStep`，用于步骤展示、HITL、checkpoint 和前端步骤面板。
 - 高风险恢复：删除知识支持确认、拒绝、resume 和依赖步骤跳过。
 - 评测闭环：`evals/` 和 `docs/rag-eval-results.md` 用 Open RAGBench、MultiHopRAG、ask quality、plan/replan 等评测证明策略变化是否真的提升效果。
 

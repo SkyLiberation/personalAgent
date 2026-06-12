@@ -1,4 +1,4 @@
-"""Orchestration graph dependencies and plan utility helpers."""
+"""Orchestration graph dependencies and step execution utility helpers."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     from ...memory import MemoryFacade
     from ...policy import PolicyEngine
     from ...tools import ToolExecutor
-    from ..plan_validator import PlanValidator
-    from ..planner import PlanStep
+    from ..step_projection_validator import StepProjectionValidator
+    from ..step_projector import ExecutionStep
     from ..replanner import Replanner
     from ..router import DefaultIntentRouter
     from ..runtime_results import AskResult, CaptureResult
@@ -35,8 +35,8 @@ class OrchestrationDeps:
     settings: "Settings"
     memory: "MemoryFacade"
     intent_router: "DefaultIntentRouter"
-    planner: object
-    plan_validator: "PlanValidator"
+    step_projector: object
+    step_projection_validator: "StepProjectionValidator"
     replanner: "Replanner | None"
     verifier: "AnswerVerifier | None"
     tool_executor: "ToolExecutor"
@@ -55,8 +55,8 @@ class OrchestrationDeps:
             settings=runtime.settings,
             memory=runtime.memory,
             intent_router=runtime.intent_router,
-            planner=runtime.planner,
-            plan_validator=runtime.plan_validator,
+            step_projector=runtime.step_projector,
+            step_projection_validator=runtime.step_projection_validator,
             replanner=getattr(runtime, "_replanner", None),
             verifier=getattr(runtime, "_verifier", None),
             tool_executor=runtime.tool_executor,
@@ -88,7 +88,7 @@ _REACT_SYSTEM_PROMPT = get_prompt("react.system").template
 # ---------------------------------------------------------------------------
 
 def _topological_sort_steps(steps: list) -> list:
-    """Sort plan steps so dependencies come before dependents."""
+    """Sort execution steps so dependencies come before dependents."""
     if len(steps) <= 1:
         return list(steps)
     step_ids = {s.step_id for s in steps if s.step_id}
@@ -117,9 +117,9 @@ def _topological_sort_steps(steps: list) -> list:
 
 
 def _inject_note_id_into_steps(
-    resolve_step_id: str, note_id: str, user_id: str, plan_steps: list,
+    resolve_step_id: str, note_id: str, user_id: str, steps: list,
 ) -> None:
-    by_id = {s.step_id: s for s in plan_steps}
+    by_id = {s.step_id: s for s in steps}
 
     def depends_on_resolve(step) -> bool:
         pending = list(step.depends_on)
@@ -136,7 +136,7 @@ def _inject_note_id_into_steps(
                 pending.extend(parent.depends_on)
         return False
 
-    for s in plan_steps:
+    for s in steps:
         if s.status != "planned":
             continue
         if (depends_on_resolve(s)
@@ -149,9 +149,9 @@ def _inject_note_id_into_steps(
 
 
 def _inject_draft_text_into_steps(
-    compose_step_id: str, text: str, user_id: str, plan_steps: list,
+    compose_step_id: str, text: str, user_id: str, steps: list,
 ) -> None:
-    by_id = {s.step_id: s for s in plan_steps}
+    by_id = {s.step_id: s for s in steps}
 
     def depends_on_compose(step) -> bool:
         pending = list(step.depends_on)
@@ -168,7 +168,7 @@ def _inject_draft_text_into_steps(
                 pending.extend(parent.depends_on)
         return False
 
-    for s in plan_steps:
+    for s in steps:
         if s.status != "planned":
             continue
         if (depends_on_compose(s)
@@ -180,21 +180,21 @@ def _inject_draft_text_into_steps(
             s.tool_input["user_id"] = user_id
 
 
-def _skip_step_dependents(failed_step_id: str, plan_steps: list) -> None:
+def _skip_step_dependents(failed_step_id: str, steps: list) -> None:
     """Recursively mark dependents of a failed step as skipped."""
-    for s in plan_steps:
+    for s in steps:
         if s.status != "planned":
             continue
         if failed_step_id in s.depends_on:
             s.status = "skipped"
-            _skip_step_dependents(s.step_id, plan_steps)
+            _skip_step_dependents(s.step_id, steps)
 
 
-def _default_plan_answer(steps: list) -> str:
+def _default_step_answer(steps: list) -> str:
     completed = sum(1 for s in steps if s.status == "completed")
     failed = sum(1 for s in steps if s.status == "failed")
     skipped = sum(1 for s in steps if s.status == "skipped")
-    return f"计划执行完成：{completed} 步成功" + (
+    return f"步骤执行完成：{completed} 步成功" + (
         f"，{failed} 步失败" if failed else ""
     ) + (
         f"，{skipped} 步跳过" if skipped else ""
@@ -206,7 +206,7 @@ def _default_plan_answer(steps: list) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_allowed_tools_for_step(step: "PlanStep", deps: OrchestrationDeps) -> set[str]:
+def _resolve_allowed_tools_for_step(step: "ExecutionStep", deps: OrchestrationDeps) -> set[str]:
     allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
     registered = {t.name for t in deps.tool_executor.list_tools()}
     return allowed & registered

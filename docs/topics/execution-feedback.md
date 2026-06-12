@@ -8,7 +8,7 @@
 
 - 同步 API 返回结构化结果
 - SSE 推送流式回答和计划事件
-- 前端可展示 plan panel、citations 和 Graph 确认面板
+- 前端可展示 step panel、citations 和 Graph 确认面板
 - 高风险操作通过 HITL 确认闭环
 - 图谱失败、低置信度和执行失败要有可感知反馈
 
@@ -38,10 +38,10 @@
 - `metadata`
 - `answer_delta`
 - `intent`
-- `plan_created`
-- `plan_step_started`
-- `plan_step_completed`
-- `plan_step_failed`
+- `steps_projected`
+- `step_started`
+- `step_completed`
+- `step_failed`
 - `plan_step_retry`
 - `plan_replan_attempt`
 - `plan_replanned`
@@ -125,7 +125,7 @@ CLI 和飞书入口按自身能力消费同一事件：
 
 - CLI：默认打印 `status / done / error`，调试模式打印 plan 和 trace
 - 飞书：发送用户可见的 `status / confirmation_required / draft_ready / done / error`
-- Web：继续展示完整 plan panel、execution trace、citation 和确认面板
+- Web：继续展示完整 step panel、execution trace、citation 和确认面板
 
 ### 4. 错误与恢复建议结构化
 

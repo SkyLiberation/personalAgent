@@ -8,7 +8,7 @@ from ..core.config import Settings
 from ..core.llm_schemas import strict_json_schema_response
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.prompts import get_prompt, render_prompt
-from .planner import PlanStep
+from .step_projector import ExecutionStep
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ _REPLANNER_RESPONSE_SCHEMA = {
 
 
 class Replanner:
-    """Generate revised plan steps when a step fails and retries are exhausted.
+    """Generate revised execution steps when a step fails and retries are exhausted.
 
     Two-tier approach:
       Tier 1: Simple retry (handled by the graph step loop, this class is Tier 2).
@@ -79,12 +79,12 @@ class Replanner:
 
     def replan(
         self,
-        original_steps: list[PlanStep],
-        failed_step: PlanStep,
+        original_steps: list[ExecutionStep],
+        failed_step: ExecutionStep,
         error: str,
         observations: dict[str, object],
         intent: str,
-    ) -> list[PlanStep] | None:
+    ) -> list[ExecutionStep] | None:
         """Generate revised steps to replace remaining incomplete steps.
 
         Only replaces steps that are still in 'planned' or 'failed' status.
@@ -103,12 +103,12 @@ class Replanner:
 
     def _replan_with_llm(
         self,
-        original_steps: list[PlanStep],
-        failed_step: PlanStep,
+        original_steps: list[ExecutionStep],
+        failed_step: ExecutionStep,
         error: str,
         observations: dict[str, object],
         intent: str,
-    ) -> list[PlanStep] | None:
+    ) -> list[ExecutionStep] | None:
         if not self._llm_configured:
             return None
 
@@ -146,7 +146,7 @@ class Replanner:
                 temperature=0,
                 max_tokens=500,
                 response_format=strict_json_schema_response(
-                    "replan_steps",
+                    "revise_steps",
                     _REPLANNER_RESPONSE_SCHEMA,
                 ),
                 metadata={"intent": intent, "failed_step_id": failed_step.step_id},
@@ -163,14 +163,14 @@ class Replanner:
                     prompt_version=system_prompt.version,
                     model=model,
                     parse_ok=False,
-                    parse_schema="PlanStep[]",
+                    parse_schema="ExecutionStep[]",
                     parse_error="steps missing or empty",
                     latency_ms=latency_ms,
                 )
                 return None
 
             valid_actions = {"retrieve", "tool_call", "compose", "verify"}
-            revised: list[PlanStep] = []
+            revised: list[ExecutionStep] = []
             for item in steps_data:
                 if not isinstance(item, dict):
                     continue
@@ -185,7 +185,7 @@ class Replanner:
                 if not isinstance(depends_on, list):
                     depends_on = []
                 risk = str(item.get("risk_level", "low"))
-                revised.append(PlanStep(
+                revised.append(ExecutionStep(
                     step_id=str(item.get("step_id") or uuid4().hex[:8]),
                     action_type=action,
                     description=str(item.get("description") or f"重新执行: {failed_step.description}"),
@@ -203,7 +203,7 @@ class Replanner:
                 prompt_version=system_prompt.version,
                 model=model,
                 parse_ok=bool(revised),
-                parse_schema="PlanStep[]",
+                parse_schema="ExecutionStep[]",
                 parse_error="" if revised else "no valid revised steps",
                 latency_ms=latency_ms,
             )
@@ -214,7 +214,7 @@ class Replanner:
                 prompt_version=system_prompt.version,
                 model=model,
                 parse_ok=False,
-                parse_schema="PlanStep[]",
+                parse_schema="ExecutionStep[]",
                 parse_error=str(exc),
                 latency_ms=latency_ms,
             )
@@ -226,11 +226,11 @@ class Replanner:
 
     def _replan_heuristic(
         self,
-        original_steps: list[PlanStep],
-        failed_step: PlanStep,
+        original_steps: list[ExecutionStep],
+        failed_step: ExecutionStep,
         error: str,
         intent: str = "",
-    ) -> list[PlanStep] | None:
+    ) -> list[ExecutionStep] | None:
         """Intent-aware heuristic fallback for replanning.
 
         Produces appropriate recovery steps based on the original intent
@@ -241,7 +241,7 @@ class Replanner:
         # Intent-specific recovery strategies
         if intent == "delete_knowledge":
             filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
-            salvage = PlanStep(
+            salvage = ExecutionStep(
                 step_id=f"re-{uuid4().hex[:6]}",
                 action_type="compose",
                 description="删除未完成：汇总已检索到的候选笔记和失败原因",
@@ -254,7 +254,7 @@ class Replanner:
             filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
             has_tool = any(s.action_type == "tool_call" for s in filtered)
             if not has_tool:
-                salvage_compose = PlanStep(
+                salvage_compose = ExecutionStep(
                     step_id=f"re-{uuid4().hex[:6]}",
                     action_type="compose",
                     description="固化未完成：基于已提取的草稿内容生成部分摘要",
@@ -267,7 +267,7 @@ class Replanner:
         if intent == "ask":
             filtered = [s for s in remaining if failed_step.step_id not in s.depends_on]
             if not any(s.action_type == "compose" for s in filtered):
-                salvage = PlanStep(
+                salvage = ExecutionStep(
                     step_id=f"re-{uuid4().hex[:6]}",
                     action_type="compose",
                     description="重新规划：基于可用检索结果生成部分回答",
@@ -284,7 +284,7 @@ class Replanner:
             and all(s.action_type != "compose" for s in filtered)
         )
         if needs_salvage and (filtered or failed_step.action_type == "retrieve"):
-            salvage = PlanStep(
+            salvage = ExecutionStep(
                 step_id=f"re-{uuid4().hex[:6]}",
                 action_type="compose",
                 description="重新规划：根据已有信息生成回答",

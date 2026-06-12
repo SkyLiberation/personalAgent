@@ -17,10 +17,40 @@ from ..core.models import EntryInput
 from ..core.observability import RunMetrics
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
-from .orchestration_models import AgentGraphState, AgentRunSnapshot, PlanStepState
+from .orchestration_models import AgentGraphState, AgentRunSnapshot, StepRunState
 from .runtime_results import AskResult, CaptureResult, EntryResult
 
 logger = logging.getLogger(__name__)
+
+CHECKPOINT_SCHEMA_VERSION = "step_execution_v2"
+LEGACY_REPLAY_UPDATE_KEYS = {
+    "plan",
+    "plan" + "_steps",
+    "requires" + "_planning",
+    "plan" + "_created",
+    "plan" + "_validated",
+}
+ALLOWED_REPLAY_UPDATE_KEYS = {
+    "entry_input",
+    "entry_text",
+    "messages",
+    "thread_summary",
+    "router_decision",
+    "react",
+    "step_execution",
+    "tool_tracking",
+    "tool_messages",
+    "tool_results",
+    "execution_trace",
+    "citations",
+    "matches",
+    "pending_confirmation",
+    "confirmation_decision",
+    "answer",
+    "answer_completed",
+    "events",
+    "errors",
+}
 
 
 def _interrupt_payload_from_result(result: object) -> dict | None:
@@ -38,16 +68,14 @@ def _interrupt_payload_from_result(result: object) -> dict | None:
     return {"message": str(interrupt_value)}
 
 
-def _plan_steps_from_snapshot(snapshot: dict) -> list:
-    """Extract plan step list from a checkpoint snapshot, handling nested model."""
-    plan = snapshot.get("plan")
-    if isinstance(plan, dict) and "steps" in plan:
-        return plan.get("steps") or []
-    plan_model = snapshot.get("plan")
-    if plan_model is not None and hasattr(plan_model, "steps"):
-        return getattr(plan_model, "steps") or []
-    # Legacy flat-schema fallback
-    return snapshot.get("plan_steps") or []
+def _steps_from_snapshot(snapshot: dict) -> list:
+    """Extract projected step list from a checkpoint snapshot."""
+    step_execution = snapshot.get("step_execution")
+    if isinstance(step_execution, dict) and "steps" in step_execution:
+        return step_execution.get("steps") or []
+    if step_execution is not None and hasattr(step_execution, "steps"):
+        return getattr(step_execution, "steps") or []
+    return []
 
 
 def _snapshot_intent(snapshot: dict) -> str:
@@ -86,6 +114,51 @@ def _checkpoint_id_from_config(config: dict | None) -> str | None:
     return str(checkpoint_id) if checkpoint_id else None
 
 
+def _step_execution_summary(state: AgentGraphState) -> dict[str, object]:
+    statuses: dict[str, int] = {}
+    for step in state.step_execution.steps:
+        statuses[step.status] = statuses.get(step.status, 0) + 1
+    return {
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "step_count": len(state.step_execution.steps),
+        "current_step_index": state.step_execution.current_step_index,
+        "aborted": state.step_execution.aborted,
+        "result_keys": sorted(state.step_execution.results.keys()),
+        "statuses": statuses,
+    }
+
+
+def _validate_replay_updates(updates: dict[str, object]) -> None:
+    invalid = sorted(set(updates) - ALLOWED_REPLAY_UPDATE_KEYS)
+    legacy = sorted(set(updates) & LEGACY_REPLAY_UPDATE_KEYS)
+    if legacy:
+        raise ValueError(
+            "Replay updates use legacy checkpoint fields that are no longer supported: "
+            + ", ".join(legacy)
+            + ". Use step_execution-based fields."
+        )
+    if invalid:
+        raise ValueError(
+            "Replay updates contain unsupported fields: "
+            + ", ".join(invalid)
+            + ". Allowed fields are: "
+            + ", ".join(sorted(ALLOWED_REPLAY_UPDATE_KEYS))
+        )
+
+
+def _ensure_checkpoint_schema_supported(values: dict[str, object], checkpoint_id: str) -> None:
+    if "plan" in values:
+        raise ValueError(
+            f"Checkpoint {checkpoint_id} uses legacy plan schema and cannot be replayed. "
+            "Clear or migrate old LangGraph checkpoints before using replay_from_checkpoint."
+        )
+    if "step_execution" not in values:
+        raise ValueError(
+            f"Checkpoint {checkpoint_id} does not contain step_execution state and cannot be replayed "
+            f"as {CHECKPOINT_SCHEMA_VERSION}."
+        )
+
+
 def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
     values = getattr(snapshot, "values", None)
     if not isinstance(values, dict):
@@ -99,6 +172,7 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
     created_at = getattr(snapshot, "created_at", None)
     parent_config = getattr(snapshot, "parent_config", None)
     return {
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "checkpoint_id": _checkpoint_id_from_config(config),
         "parent_checkpoint_id": _checkpoint_id_from_config(parent_config),
         "thread_id": state.thread_id,
@@ -113,6 +187,7 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
         "event_count": len(state.events),
         "tool_result_count": len(state.tool_results),
+        "step_execution": _step_execution_summary(state),
         "answer_completed": state.answer_completed,
         "pending_confirmation": state.pending_confirmation,
     }
@@ -278,7 +353,7 @@ class EntryOrchestrator:
         run_metrics.intent = intent
         run_metrics.complete(
             status="completed",
-            plan_step_count=len(result_state.plan.steps),
+            step_count=len(result_state.step_execution.steps),
             tool_result_count=len(result_state.tool_results),
             event_count=len(result_state.events),
         )
@@ -288,7 +363,7 @@ class EntryOrchestrator:
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
+            steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             run_id=run_id,
             thread_id=thread_id,
@@ -366,9 +441,9 @@ class EntryOrchestrator:
             intent=_snapshot_intent(state_snapshot),
             reason=reason,
             reply_text=str(interrupt_data.get("message", default_message)),
-            plan_steps=[
-                s.model_dump(mode="json") if isinstance(s, PlanStepState) else s
-                for s in (_plan_steps_from_snapshot(state_snapshot))
+            steps=[
+                s.model_dump(mode="json") if isinstance(s, StepRunState) else s
+                for s in (_steps_from_snapshot(state_snapshot))
             ],
             execution_trace=list(state_snapshot.get("execution_trace") or []),
             run_id=run_id,
@@ -471,7 +546,7 @@ class EntryOrchestrator:
         run_metrics.complete(
             status="completed",
             resume_decision=decision,
-            plan_step_count=len(result_state.plan.steps),
+            step_count=len(result_state.step_execution.steps),
             tool_result_count=len(result_state.tool_results),
             event_count=len(result_state.events),
         )
@@ -480,7 +555,7 @@ class EntryOrchestrator:
             intent=intent,
             reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
             reply_text=reply_text,
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
+            steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             run_id=run_id,
             thread_id=thread_id,
@@ -574,6 +649,12 @@ class EntryOrchestrator:
             },
             "tags": ["entry", "replay"],
         }
+        _validate_replay_updates(updates)
+        source_state = graph.get_state(config)
+        source_values = getattr(source_state, "values", None)
+        if not isinstance(source_values, dict):
+            raise ValueError(f"Checkpoint {checkpoint_id} could not be read for replay.")
+        _ensure_checkpoint_schema_supported(source_values, checkpoint_id)
         update_kwargs = {"as_node": as_node} if as_node else {}
         fork_config = graph.update_state(config, updates, **update_kwargs)
         invoke_result = graph.invoke(None, fork_config)
@@ -594,7 +675,7 @@ class EntryOrchestrator:
             intent=intent,
             reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
             reply_text=result_state.answer or "回放已完成。",
-            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
+            steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             run_id=result_state.run_id,
             thread_id=result_state.thread_id,

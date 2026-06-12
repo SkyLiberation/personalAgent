@@ -5,8 +5,8 @@
 对应代码：
 
 - [workflow.py](../../src/personal_agent/agent/workflow.py)：`DeleteKnowledge WorkflowSpec`
-- [planner.py](../../src/personal_agent/agent/planner.py)：把 workflow 确定性投影成 `PlanStep`
-- [plan_validator.py](../../src/personal_agent/agent/plan_validator.py)：执行前校验步骤、工具、风险和确认要求
+- [step_projector.py](../../src/personal_agent/agent/step_projector.py)：把 workflow 确定性投影成 `ExecutionStep`
+- [step_projection_validator.py](../../src/personal_agent/agent/step_projection_validator.py)：执行前校验步骤、工具、风险和确认要求
 - [orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py)：步骤执行、确认暂停、工具结果消费
 - [delete_note.py](../../src/personal_agent/tools/delete_note.py)：真实删除工具入口
 
@@ -34,15 +34,15 @@ delete_knowledge
 ## 执行细节
 
 1. Router 把用户输入归类为 `delete_knowledge`，并设置高风险、需要 step projection。
-2. `DefaultTaskPlanner` 从 `WORKFLOW_REGISTRY` 取出 `delete_knowledge` spec，确定性生成 4 个 `PlanStep`。
-3. `PlanValidator` 校验必须包含 `tool_call(delete_note)`，且高风险删除必须要求确认。
+2. `WorkflowStepProjector` 从 `WORKFLOW_REGISTRY` 取出 `delete_knowledge` spec，确定性生成 4 个 `ExecutionStep`。
+3. `StepProjectionValidator` 校验必须包含 `tool_call(delete_note)`，且高风险删除必须要求确认。
 4. `del-1` 进入 retrieve，调用 graph/local 检索得到候选线索。
 5. `del-2` resolve 尝试通过 `related_episode_uuids` 反查本地 note；如果不可用，再让 LLM 在最近本地 note 列表里选择唯一候选。
 6. `del-3` 的工具输入由 `del-2` 动态注入 `note_id/title/summary/user_id`。
 7. `delete_note` 首次调用返回 `pending_confirmation=True`，图层把它转换成 `confirmation_required` 事件并进入 `interrupt()`。
 8. 用户确认后 resume，`confirm_step` 带 `confirmed=True` 和确定性 `idempotency_key` 重新调度 `delete_note`。
 9. 工具真实删除本地 note/chunk，并清理可映射的 graph episode。
-10. `del-4` 汇总结果，`finalize_plan_execution` 生成最终回答和 `execution_trace`。
+10. `del-4` 汇总结果，`finalize_step_execution` 生成最终回答和 `execution_trace`。
 
 ## HITL 与安全边界
 

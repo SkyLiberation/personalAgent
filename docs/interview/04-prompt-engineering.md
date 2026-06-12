@@ -43,7 +43,7 @@
 - **solidify 不写操作指令 / 范围外内容**：`solidify_draft.user` 约束指代消解和"无支撑则正文留空"。
 - **删除要确认**：不靠 prompt 自觉，router 强制 `delete_knowledge` 默认 `requires_confirmation=true, risk_level=high`，ReAct 节点还显式拦写操作工具。
 
-口径是：prompt 指令是"软约束"，真正不可绕过的是控制流里的 PlanValidator / PolicyEngine / HITL。prompt 负责"通常照做"，代码负责"绝不越界"。
+口径是：prompt 指令是"软约束"，真正不可绕过的是控制流里的 StepProjectionValidator / PolicyEngine / HITL。prompt 负责"通常照做"，代码负责"绝不越界"。
 
 ### 6. 回答语言和口吻是怎么控制的？
 
@@ -56,7 +56,7 @@
 重构后有了基础，但还不完整：
 
 - **registry 测试**：`tests/test_prompt_registry.py` 守三件事——23 个 prompt 都注册了、每个都有 `version`（以 v 开头）和非空 `template`、全部能用样例变量 `render` 出来（含 JSON 字面量转义正确）。这保证了"没有 prompt 漏注册、没有模板占位符写错导致 format 崩"。
-- **行为测试**：`test_unified_prompt_gating.py` 守 hint gating；router / planner / replanner / verifier 等测分类、解析、降级行为。
+- **行为测试**：`test_unified_prompt_gating.py` 守 hint gating；router / query planner / replanner / verifier 等测分类、解析、降级行为。
 
 仍要正视的短板：**没有 prompt snapshot / golden-case eval 回归**，措辞微调可能引发行为漂移仍无自动防护；version 能记录能分化，但没有灰度 / A-B / 回滚；还有遗留硬编码（graphiti 调用处仍写死 `prompt_version="v1"` 而非取 spec.version）。继续生产化要补的是：把 prompt 变更纳入 evals 回归、给关键 grounding 约束加快照测试、补真正的版本治理。
 

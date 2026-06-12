@@ -58,7 +58,7 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
         note_refs=note_refs,
         metadata={
             "reason": result.reason,
-            "plan_step_count": len(result.plan_steps),
+            "step_count": len(result.steps),
             "execution_trace": result.execution_trace,
         },
         created_at=now,

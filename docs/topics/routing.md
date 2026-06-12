@@ -29,7 +29,7 @@
 - `confidence`
 - `requires_tools`
 - `requires_retrieval`
-- `requires_planning`
+- `requires_step_projection`
 - `risk_level`
 - `requires_confirmation`
 - `requires_clarification`
@@ -46,7 +46,7 @@
 
 - 对文本入口使用 LLM 分类
 - LLM 未配置、重试后仍异常或返回未知 intent 时，明确返回模型不可用提示，不猜测用户意图
-- 将 LLM 结果与默认控制字段合并，确保 `requires_tools / requires_retrieval / requires_planning / candidate_tools` 不缺失
+- 将 LLM 结果与默认控制字段合并，确保 `requires_tools / requires_retrieval / requires_step_projection / candidate_tools` 不缺失
 
 ### 3. 确定性文件入口
 
@@ -73,7 +73,7 @@
 
 当前 entry 入口已经不是单纯的 intent 分类。`DefaultIntentRouter` 会返回包含控制字段的 `RouterDecision`，后续 planner、validator、runtime 和 executor 都会读取这些字段决定是否检索、是否调用工具、是否进入计划执行、是否需要确认。
 
-`direct_answer` 已作为低风险、无需检索、无需工具的独立分支接入，用于闲聊、问候、感谢、澄清性问题和简单说明。LLM 路由结果会与 `_default_router_decision()` 合并，确保 `requires_tools / requires_retrieval / requires_planning / candidate_tools` 等控制字段不会缺失。
+`direct_answer` 已作为低风险、无需检索、无需工具的独立分支接入，用于闲聊、问候、感谢、澄清性问题和简单说明。LLM 路由结果会与 `_default_router_decision()` 合并，确保 `requires_tools / requires_retrieval / requires_step_projection / candidate_tools` 等控制字段不会缺失。
 
 ## 当前能力
 
@@ -85,7 +85,7 @@
 - 已具备删除类高风险标记
 - 已具备删除类确认要求
 - 已具备候选工具字段
-- 已能驱动 planner 是否进入 `requires_planning`
+- 已能驱动 planner 是否进入 `requires_step_projection`
 - `ask` 默认候选工具已包含 `graph_search / web_search`
 - 已由 router 通过 `requires_clarification / missing_information / clarification_prompt` 驱动 LangGraph 澄清 interrupt；补充内容会重新进入分类
 

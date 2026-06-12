@@ -18,13 +18,13 @@ ConversationMessage = dict[str, str]
 
 
 class RouterDecision(BaseModel):
-    """Structured routing decision with metadata for downstream planner / executor."""
+    """Structured routing decision with metadata for downstream projector / executor."""
 
     route: EntryIntent = "unknown"
     confidence: float = 0.5
     requires_tools: bool = False
     requires_retrieval: bool = False
-    requires_planning: bool = False
+    requires_step_projection: bool = False
     risk_level: RiskLevel = "low"
     requires_confirmation: bool = False
     requires_clarification: bool = False
@@ -93,7 +93,7 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
             confidence=0.7,
             requires_tools=True,
             requires_retrieval=True,
-            requires_planning=True,
+            requires_step_projection=True,
             risk_level="high",
             requires_confirmation=True,
             candidate_tools=["graph_search"],
@@ -103,7 +103,7 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
         return RouterDecision(
             route=intent,
             confidence=0.75,
-            requires_planning=True,
+            requires_step_projection=True,
             risk_level="low",
             user_visible_message=reason or "将对话结论沉淀为知识。",
         )
@@ -148,7 +148,7 @@ _ROUTER_RESPONSE_SCHEMA = {
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "requires_tools": {"type": "boolean"},
         "requires_retrieval": {"type": "boolean"},
-        "requires_planning": {"type": "boolean"},
+        "requires_step_projection": {"type": "boolean"},
         "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
         "requires_confirmation": {"type": "boolean"},
         "requires_clarification": {"type": "boolean"},
@@ -162,7 +162,7 @@ _ROUTER_RESPONSE_SCHEMA = {
         "confidence",
         "requires_tools",
         "requires_retrieval",
-        "requires_planning",
+        "requires_step_projection",
         "risk_level",
         "requires_confirmation",
         "requires_clarification",
@@ -179,7 +179,7 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
     """Merge LLM classification result with default decision to fill control fields.
 
     The LLM returns intent, clarification metadata and risk metadata, but does
-    not populate requires_tools/requires_retrieval/requires_planning/candidate_tools.
+    not populate requires_tools/requires_retrieval/requires_step_projection/candidate_tools.
     This function merges LLM result with the defaults for the matched intent.
     """
     defaults = _default_router_decision(
@@ -190,7 +190,7 @@ def _merge_with_defaults(llm_result: RouterDecision) -> RouterDecision:
         confidence=llm_result.confidence,
         requires_tools=defaults.requires_tools,
         requires_retrieval=defaults.requires_retrieval,
-        requires_planning=defaults.requires_planning,
+        requires_step_projection=defaults.requires_step_projection,
         risk_level=(
             defaults.risk_level
             if defaults.risk_level == "high"
@@ -231,7 +231,7 @@ class DefaultIntentRouter:
     instead of guessing a route from text keywords.
 
     LLM results are merged with _default_router_decision() to ensure
-    control fields (requires_tools, requires_retrieval, requires_planning,
+    control fields (requires_tools, requires_retrieval, requires_step_projection,
     candidate_tools) are always populated.
     """
 
@@ -380,7 +380,7 @@ class DefaultIntentRouter:
             risk_level=decision.risk_level,
             requires_tools=decision.requires_tools,
             requires_retrieval=decision.requires_retrieval,
-            requires_planning=decision.requires_planning,
+            requires_step_projection=decision.requires_step_projection,
             requires_confirmation=decision.requires_confirmation,
             requires_clarification=decision.requires_clarification,
             candidate_tools=decision.candidate_tools,

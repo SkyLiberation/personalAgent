@@ -36,8 +36,8 @@ def _format_entry_result(result: EntryResult) -> str:
         "run_id": result.run_id,
         "run_status": result.run_status,
     }
-    if result.plan_steps:
-        output["plan_steps"] = result.plan_steps
+    if result.steps:
+        output["steps"] = result.steps
     if result.execution_trace:
         output["execution_trace"] = result.execution_trace
     if result.capture_result:

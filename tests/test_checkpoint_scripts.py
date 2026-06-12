@@ -38,13 +38,87 @@ def test_collect_thread_checkpoints_exports_readable_state_timeline():
     payload = collect_thread_checkpoints(checkpointer, thread_id)
 
     assert payload["thread_id"] == thread_id
+    assert payload["current_checkpoint_schema_version"] == "step_execution_v2"
     assert payload["format"] == "state_timeline"
     assert payload["checkpoint_count"] >= 1
     latest = payload["checkpoints"][0]
-    assert set(latest) == {"step", "source", "timestamp", "checkpoint_id", "state"}
+    assert set(latest) == {
+        "checkpoint_schema_version",
+        "step",
+        "source",
+        "timestamp",
+        "checkpoint_id",
+        "step_execution",
+        "state",
+    }
+    assert latest["checkpoint_schema_version"] == "unknown"
+    assert latest["step_execution"]["step_count"] == 0
     assert latest["state"]["value"] == "start-done"
     assert "channel_versions" not in latest
     assert "pending_writes" not in latest
+
+
+def test_collect_thread_checkpoints_marks_step_execution_schema():
+    class FakeTuple:
+        config = {}
+        metadata = {"step": 1, "source": "loop"}
+        parent_config = None
+        pending_writes = []
+        checkpoint = {
+            "ts": "2026-01-01T00:00:00Z",
+            "id": "ckpt-1",
+            "channel_values": {
+                "step_execution": {
+                    "steps": [
+                        {"step_id": "a", "status": "completed"},
+                        {"step_id": "b", "status": "failed"},
+                    ],
+                    "current_step_index": 1,
+                    "results": {"a": {"ok": True}},
+                    "aborted": False,
+                }
+            },
+        }
+
+    class FakeCheckpointer:
+        def list(self, _config):
+            return [FakeTuple()]
+
+    payload = collect_thread_checkpoints(FakeCheckpointer(), "thread-1")
+    latest = payload["checkpoints"][0]
+
+    assert latest["checkpoint_schema_version"] == "step_execution_v2"
+    assert latest["step_execution"] == {
+        "schema_version": "step_execution_v2",
+        "step_count": 2,
+        "current_step_index": 1,
+        "aborted": False,
+        "result_keys": ["a"],
+        "statuses": {"completed": 1, "failed": 1},
+    }
+
+
+def test_collect_thread_checkpoints_marks_legacy_plan_schema():
+    class FakeTuple:
+        config = {}
+        metadata = {}
+        parent_config = None
+        pending_writes = []
+        checkpoint = {
+            "ts": "2026-01-01T00:00:00Z",
+            "id": "old-ckpt",
+            "channel_values": {"plan": {"steps": []}},
+        }
+
+    class FakeCheckpointer:
+        def list(self, _config):
+            return [FakeTuple()]
+
+    payload = collect_thread_checkpoints(FakeCheckpointer(), "thread-1")
+    latest = payload["checkpoints"][0]
+
+    assert latest["checkpoint_schema_version"] == "legacy_plan_v1"
+    assert latest["step_execution"]["schema_version"] == "legacy_plan_v1"
 
 
 def test_collect_thread_checkpoints_can_export_raw_tuple_data():

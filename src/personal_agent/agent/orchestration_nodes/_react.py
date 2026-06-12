@@ -1,4 +1,4 @@
-"""Bounded ReactGraph nodes used by the plan execution graph."""
+"""Bounded ReactGraph nodes used by the step execution graph."""
 
 from __future__ import annotations
 
@@ -28,18 +28,18 @@ logger = logging.getLogger(__name__)
 
 
 def _node_react_init(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Seed ReAct iteration state from the current plan step.
+    """Seed ReAct iteration state from the current execution step.
 
     Reads the step at ``current_step_index``, resolves allowed tools, and
     builds the initial LLM prompt.  The step status stays ``"running"`` —
     ReactGraph will mark it ``"completed"`` on finish.
     """
-    if state.plan.current_step_index >= len(state.plan.steps):
-        state.react = ReactSubState(done=True, status="failed", stop_reason="missing_plan_step")
+    if state.step_execution.current_step_index >= len(state.step_execution.steps):
+        state.react = ReactSubState(done=True, status="failed", stop_reason="missing_step")
         return {"react": state.react}
 
-    sd = state.plan.steps[state.plan.current_step_index]
-    step = sd.to_plan_step()
+    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    step = sd.to_execution_step()
 
     state.react = ReactSubState(
         step_id=step.step_id,
@@ -79,9 +79,9 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
 
     # ---- Build prompt (first iteration) ----
     if idx == 0 and not state.react.user_prompt:
-        sd = state.plan.steps[state.plan.current_step_index]
-        step = sd.to_plan_step()
-        context_block = _helpers._build_react_context(step, state.plan.step_results)
+        sd = state.step_execution.steps[state.step_execution.current_step_index]
+        step = sd.to_execution_step()
+        context_block = _helpers._build_react_context(step, state.step_execution.results)
         tools_block = _helpers._format_react_tools(allowed, deps)
         state.react.user_prompt = (
             f"## 步骤描述\n{step.description}\n\n"
@@ -280,14 +280,14 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
     # Persist result — capture before clearing
     result_to_persist = dict(state.react.result) if state.react.result else {}
     if step_id:
-        state.plan.step_results[step_id] = result_to_persist
+        state.step_execution.results[step_id] = result_to_persist
 
     completed = state.react.status == "completed"
     failure_reason = state.react.stop_reason or "ReAct 未完成步骤。"
     failure_policy = "skip"
     failure_retry_count = 0
-    if state.plan.current_step_index < len(state.plan.steps):
-        sd = state.plan.steps[state.plan.current_step_index]
+    if state.step_execution.current_step_index < len(state.step_execution.steps):
+        sd = state.step_execution.steps[state.step_execution.current_step_index]
         if sd.step_id == step_id:
             if completed:
                 sd.status = "completed"
@@ -301,7 +301,7 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
                 sd.retry_count += 1
                 sd.failure_reason = reason
                 sd.recoverable = sd.on_failure == "retry" and sd.retry_count < sd.max_retries
-                state.plan.retry_counts[step_id] = sd.retry_count
+                state.step_execution.retry_counts[step_id] = sd.retry_count
                 state.errors.append(f"[{step_id}] {reason}")
                 failure_reason = reason
                 failure_policy = sd.on_failure
@@ -334,7 +334,7 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
     logger.info("react_finalize step_id=%s result_keys=%s", step_id, list(result_to_persist.keys()))
     return {
         "react": state.react,
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "errors": state.errors,
         "events": state.events,
     }

@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+CURRENT_CHECKPOINT_SCHEMA_VERSION = "step_execution_v2"
 
 
 def _ensure_src_on_path() -> None:
@@ -59,6 +60,47 @@ def _application_state(values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _checkpoint_schema(values: dict[str, Any]) -> str:
+    if "plan" in values:
+        return "legacy_plan_v1"
+    if "step_execution" in values:
+        return CURRENT_CHECKPOINT_SCHEMA_VERSION
+    return "unknown"
+
+
+def _step_execution_summary(values: dict[str, Any]) -> dict[str, Any]:
+    step_execution = values.get("step_execution")
+    if isinstance(step_execution, BaseModel):
+        step_execution = step_execution.model_dump(mode="json")
+    if not isinstance(step_execution, dict):
+        return {
+            "schema_version": _checkpoint_schema(values),
+            "step_count": 0,
+            "current_step_index": 0,
+            "aborted": False,
+            "result_keys": [],
+            "statuses": {},
+        }
+    steps = step_execution.get("steps") or []
+    statuses: dict[str, int] = {}
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, BaseModel):
+                step = step.model_dump(mode="json")
+            status = step.get("status") if isinstance(step, dict) else None
+            if status:
+                statuses[str(status)] = statuses.get(str(status), 0) + 1
+    results = step_execution.get("results") or {}
+    return {
+        "schema_version": _checkpoint_schema(values),
+        "step_count": len(steps) if isinstance(steps, list) else 0,
+        "current_step_index": step_execution.get("current_step_index", 0),
+        "aborted": bool(step_execution.get("aborted", False)),
+        "result_keys": sorted(str(key) for key in results) if isinstance(results, dict) else [],
+        "statuses": statuses,
+    }
+
+
 def collect_thread_checkpoints(
     checkpointer: Any, thread_id: str, *, raw: bool = False
 ) -> dict[str, Any]:
@@ -79,17 +121,21 @@ def collect_thread_checkpoints(
 
         checkpoint = checkpoint_tuple.checkpoint or {}
         metadata = checkpoint_tuple.metadata or {}
+        values = checkpoint.get("channel_values", {})
         records.append(
             {
+                "checkpoint_schema_version": _checkpoint_schema(values),
                 "step": metadata.get("step"),
                 "source": metadata.get("source"),
                 "timestamp": checkpoint.get("ts"),
                 "checkpoint_id": checkpoint.get("id"),
-                "state": _application_state(checkpoint.get("channel_values", {})),
+                "step_execution": _step_execution_summary(values),
+                "state": _application_state(values),
             }
         )
     return {
         "thread_id": thread_id,
+        "current_checkpoint_schema_version": CURRENT_CHECKPOINT_SCHEMA_VERSION,
         "checkpoint_count": len(records),
         "format": "raw" if raw else "state_timeline",
         "checkpoints": records,

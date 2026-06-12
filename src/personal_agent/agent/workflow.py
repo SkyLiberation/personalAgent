@@ -3,13 +3,13 @@
 ``WorkflowSpec`` describes business workflows. Ordinary workflows such as
 ``ask`` and ``capture_*`` are selected and then executed by their graph branch.
 Step-executed workflows such as ``delete_knowledge`` and
-``solidify_conversation`` additionally expose selected nodes as ``PlanStep``
-projections for checkpointing, HITL, audit, and the frontend plan panel.
+``solidify_conversation`` additionally expose selected nodes as ``ExecutionStep``
+projections for checkpointing, HITL, audit, and the frontend step panel.
 
 The important boundary is:
 
 - ``WorkflowStepSpec`` is the durable workflow contract.
-- ``PlanStep`` is only a runtime projection of a workflow node.
+- ``ExecutionStep`` is only a runtime projection of a workflow node.
 - Per-request semantics, such as ``note_id`` or draft text, are resolved during
   execution by decision nodes and dynamic result injection.
 """
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from ..core.models import EntryIntent
-from .planner import PlanStep
+from .step_projector import ExecutionStep
 
 ProjectionPolicy = Literal["none", "step_projection"]
 
@@ -58,7 +58,7 @@ class WorkflowStepSpec:
     """A node-level contract inside a workflow.
 
     The fields intentionally mirror the runtime projection shape where useful,
-    but this object is stronger than ``PlanStep``: it belongs to the workflow
+    but this object is stronger than ``ExecutionStep``: it belongs to the workflow
     source of truth and can carry non-UI contracts such as decision node names,
     side effects, HITL policy, node recovery policy, and the conditional edges
     that describe how the workflow diverges from the happy path.
@@ -86,9 +86,9 @@ class WorkflowStepSpec:
     conditional_edges: tuple[WorkflowConditionalEdge, ...] = ()
     project_to_plan: bool = True
 
-    def to_projection(self, workflow_id: str, workflow_version: str) -> PlanStep:
+    def to_projection(self, workflow_id: str, workflow_version: str) -> ExecutionStep:
         """Create a fresh runtime step projection for this workflow node."""
-        return PlanStep(
+        return ExecutionStep(
             step_id=self.step_id,
             action_type=self.action_type,
             description=self.description,
@@ -117,9 +117,9 @@ class WorkflowSpec:
     """A declarative workflow contract.
 
     ``projection_policy='step_projection'`` means selected ``WorkflowStepSpec``
-    nodes are surfaced as runtime ``PlanStep`` projections. ``projection_policy``
+    nodes are surfaced as runtime ``ExecutionStep`` projections. ``projection_policy``
     is intentionally explicit so ordinary workflows can still have rich node
-    contracts without being shown as a plan.
+    contracts without being shown as projected steps.
     """
 
     workflow_id: str
@@ -151,7 +151,7 @@ class WorkflowSpec:
     def has_high_risk_side_effect(self) -> bool:
         return any(s.risk_level == "high" or "delete_longterm" in s.side_effects for s in self.steps)
 
-    def project(self) -> list[PlanStep]:
+    def project(self) -> list[ExecutionStep]:
         """Project this workflow into fresh runtime steps when policy allows it."""
         if not self.requires_projection:
             return []
@@ -184,7 +184,7 @@ class WorkflowRegistry:
             specs.append(spec)
         return specs
 
-    def project(self, intent: str) -> list[PlanStep]:
+    def project(self, intent: str) -> list[ExecutionStep]:
         """Project the matched workflow into runtime steps when required."""
         return self.select(intent).project()
 

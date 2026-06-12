@@ -1,4 +1,4 @@
-from .planner import DefaultTaskPlanner, PlanStep, TaskPlanner
+from .step_projector import WorkflowStepProjector, ExecutionStep, StepProjector
 from .router import DefaultIntentRouter, IntentRouter
 from .runtime import AgentRuntime, AskResult, CaptureResult, DigestResult, EntryResult, ResetResult
 from .service import AgentService
@@ -23,13 +23,13 @@ __all__ = [
     "AskResult",
     "CaptureResult",
     "DefaultIntentRouter",
-    "DefaultTaskPlanner",
+    "WorkflowStepProjector",
     "DigestResult",
     "EntryResult",
     "IntentRouter",
-    "PlanStep",
+    "ExecutionStep",
     "ResetResult",
-    "TaskPlanner",
+    "StepProjector",
     "VerificationResult",
     "WORKFLOW_REGISTRY",
     "WorkflowConditionalEdge",

@@ -1,17 +1,11 @@
-"""Workflow / step planning: deterministic selection and step projection.
+"""Workflow step projection: deterministic workflow selection and step creation.
 
-The planner no longer asks an LLM to invent step topologies. Fixed workflows are
-declared once in :mod:`personal_agent.agent.workflow`; ordinary branch workflows
-are selected there and executed by their own graph branches, while high-value
-checkpointable workflows are projected here into workflow step projections.
-Genuine
-per-request semantic judgment (resolving a delete target, drafting solidify
-text) happens at *execution* time inside the orchestration graph's ``resolve`` /
-``compose`` nodes, not during planning.
-
-``PlanValidator`` validates step projections before execution as the
-pre-execution safety gate. Intents that do not require projection return an
-empty plan and should surface their progress through ``execution_trace``.
+This module is not a planner. Fixed workflows are declared in
+:mod:`personal_agent.agent.workflow`; ordinary branch workflows are selected
+there and executed by their graph branches, while checkpointable workflows are
+projected here into ``ExecutionStep`` objects. Per-request semantic judgment
+(resolving a delete target, drafting solidify text) happens at execution time
+inside the orchestration graph's ``resolve`` / ``compose`` nodes.
 """
 
 from __future__ import annotations
@@ -30,7 +24,7 @@ ConversationMessage = dict[str, str]
 
 
 @dataclass(slots=True)
-class PlanStep:
+class ExecutionStep:
     """A workflow step projection with execution metadata.
 
     action_type: "retrieve", "resolve", "tool_call", "compose", or "verify"
@@ -59,54 +53,48 @@ class PlanStep:
     projection_kind: str = "workflow_step"
 
 
-class TaskPlanner(Protocol):
-    def plan(
+class StepProjector(Protocol):
+    def project(
         self,
         intent: EntryIntent,
         context: str,
         conversation_messages: list[ConversationMessage] | None = None,
-    ) -> list[PlanStep]:
+    ) -> list[ExecutionStep]:
         ...
 
 
-class DefaultTaskPlanner:
+class WorkflowStepProjector:
     """Deterministic workflow selector and step projector.
 
-    Selects the registered :class:`WorkflowSpec` for an intent. Only specs marked
-    ``requires_projection`` are projected into executable ``PlanStep`` objects.
-    There is no LLM call in the planning path: supported workflow contracts are
-    declared in :mod:`personal_agent.agent.workflow`, while semantic decisions
-    are deferred to execution-time graph nodes.
-
-    The ``settings`` / ``tool_executor`` arguments are retained for construction
-    compatibility with the runtime composition root; projection itself needs
-    neither.
+    Selects the registered :class:`WorkflowSpec` for an intent. Only specs with
+    step projection policy are projected into executable ``ExecutionStep``
+    objects. There is no LLM call in this path.
     """
 
     def __init__(self, settings: Settings, tool_executor: ToolExecutor | None = None) -> None:
         self._settings = settings
         self._tool_executor = tool_executor
 
-    def plan(
+    def project(
         self,
         intent: EntryIntent,
         context: str = "",
         conversation_messages: list[ConversationMessage] | None = None,
-    ) -> list[PlanStep]:
+    ) -> list[ExecutionStep]:
         # ``context`` / ``conversation_messages`` no longer shape the topology;
-        # they remain in the signature so callers (and the TaskPlanner protocol)
-        # are unchanged. Per-request semantics are resolved at execution time.
+        # they remain in the signature so callers can pass the same entry context
+        # shape. Per-request semantics are resolved at execution time.
         from .workflow import WORKFLOW_REGISTRY
 
         steps = WORKFLOW_REGISTRY.project(intent)
         spec = WORKFLOW_REGISTRY.select(intent)
         logger.info(
-            "planner selected workflow intent=%s workflow=%s requires_projection=%s steps=%d",
+            "step_projector selected workflow intent=%s workflow=%s requires_projection=%s steps=%d",
             intent, spec.workflow_id, spec.requires_projection, len(steps),
         )
         return steps
 
-    def fallback_plan(self, intent: EntryIntent) -> list[PlanStep]:
+    def fallback_projection(self, intent: EntryIntent) -> list[ExecutionStep]:
         """Return the deterministic step projection for ``intent``.
 
         Kept as a distinct method for validator fallback call sites. Ordinary

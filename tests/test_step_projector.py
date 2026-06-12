@@ -2,23 +2,23 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.planner import DefaultTaskPlanner, PlanStep
+from personal_agent.agent.step_projector import WorkflowStepProjector, ExecutionStep
 from personal_agent.agent.router import DefaultIntentRouter, RouterDecision
 from personal_agent.agent.runtime import EntryResult
 from personal_agent.core.models import EntryInput
 
 
-class TestPlannerEnrichedSteps:
+class TestStepProjectorEnrichedSteps:
     @pytest.fixture
-    def planner(self):
+    def projector(self):
         from personal_agent.core.config import OpenAIConfig, Settings
 
-        return DefaultTaskPlanner(
+        return WorkflowStepProjector(
             Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
 
-    def test_plan_delete_knowledge_heuristic(self, planner):
-        steps = planner.plan("delete_knowledge", "删除那条旧笔记")
+    def test_project_delete_knowledge_heuristic(self, projector):
+        steps = projector.project("delete_knowledge", "删除那条旧笔记")
         assert len(steps) == 4
         action_types = [s.action_type for s in steps]
         assert action_types == ["retrieve", "resolve", "tool_call", "compose"]
@@ -30,8 +30,8 @@ class TestPlannerEnrichedSteps:
             assert s.step_id
             assert s.status == "planned"
 
-    def test_plan_solidify_conversation_heuristic(self, planner):
-        steps = planner.plan("solidify_conversation", "把讨论结论沉淀下来")
+    def test_project_solidify_conversation_heuristic(self, projector):
+        steps = projector.project("solidify_conversation", "把讨论结论沉淀下来")
         assert len(steps) == 2
         action_types = [s.action_type for s in steps]
         assert action_types == ["compose", "tool_call"]
@@ -39,16 +39,16 @@ class TestPlannerEnrichedSteps:
         assert steps[1].requires_confirmation is False
         assert steps[1].risk_level == "low"
 
-    def test_plan_ask_is_ordinary_workflow(self, planner):
-        steps = planner.plan("ask", "什么是服务降级？")
+    def test_project_ask_is_ordinary_workflow(self, projector):
+        steps = projector.project("ask", "什么是服务降级？")
         assert steps == []
 
-    def test_plan_unknown_intent_has_no_projection(self, planner):
-        steps = planner.plan("unknown", "随便说点什么")
+    def test_project_unknown_intent_has_no_projection(self, projector):
+        steps = projector.project("unknown", "随便说点什么")
         assert steps == []
 
-    def test_plan_step_has_all_required_fields(self, planner):
-        steps = planner.plan("delete_knowledge", "删除旧笔记")
+    def test_project_step_has_all_required_fields(self, projector):
+        steps = projector.project("delete_knowledge", "删除旧笔记")
         for s in steps:
             assert hasattr(s, "step_id")
             assert hasattr(s, "action_type")
@@ -63,21 +63,21 @@ class TestPlannerEnrichedSteps:
             assert hasattr(s, "on_failure")
             assert hasattr(s, "status")
 
-    def test_planner_projects_workflow_deterministically(self):
-        """The planner projects a fixed WorkflowSpec into runtime step
+    def test_projector_projects_workflow_deterministically(self):
+        """The projector projects a fixed WorkflowSpec into runtime step
         projections with no LLM call. Projection is deterministic: the same
         intent always yields the same topology, every step starting in
         ``planned`` status.
         """
         from personal_agent.core.config import OpenAIConfig, Settings
 
-        planner = DefaultTaskPlanner(
+        projector = WorkflowStepProjector(
             Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
-        steps = planner.plan("delete_knowledge", "删除旧笔记")
+        steps = projector.project("delete_knowledge", "删除旧笔记")
         assert len(steps) == 4
         for s in steps:
-            assert isinstance(s, PlanStep)
+            assert isinstance(s, ExecutionStep)
             assert s.action_type in {"retrieve", "resolve", "tool_call", "compose", "verify"}
             assert s.status == "planned"
             assert s.workflow_id == "delete_knowledge"
@@ -133,7 +133,7 @@ class TestDefaultIntentRouterNewIntents:
         assert hasattr(decision, "confidence")
         assert hasattr(decision, "requires_tools")
         assert hasattr(decision, "requires_retrieval")
-        assert hasattr(decision, "requires_planning")
+        assert hasattr(decision, "requires_step_projection")
         assert hasattr(decision, "risk_level")
         assert hasattr(decision, "requires_confirmation")
         assert hasattr(decision, "missing_information")
@@ -151,13 +151,13 @@ class TestDefaultIntentRouterNewIntents:
         assert decision.route == "capture_file"
 
 
-class TestEntryResultPlanSteps:
-    def test_entry_result_includes_plan_steps(self):
+class TestEntryResultExecutionSteps:
+    def test_entry_result_includes_steps(self):
         result = EntryResult(
             intent="ask",
             reason="用户提问",
             reply_text="回答内容",
-            plan_steps=[
+            steps=[
                 {
                     "step_id": "ask-1", "action_type": "retrieve",
                     "description": "检索知识库", "tool_name": "graph_search",
@@ -168,18 +168,18 @@ class TestEntryResultPlanSteps:
                 },
             ],
         )
-        assert len(result.plan_steps) == 1
-        assert result.plan_steps[0]["action_type"] == "retrieve"
-        assert result.plan_steps[0]["description"] == "检索知识库"
-        assert result.plan_steps[0]["status"] == "planned"
+        assert len(result.steps) == 1
+        assert result.steps[0]["action_type"] == "retrieve"
+        assert result.steps[0]["description"] == "检索知识库"
+        assert result.steps[0]["status"] == "planned"
 
-    def test_entry_result_plan_steps_defaults_empty(self):
+    def test_entry_result_steps_defaults_empty(self):
         result = EntryResult(
             intent="unknown",
             reason="无法识别",
             reply_text="请重新输入",
         )
-        assert result.plan_steps == []
+        assert result.steps == []
 
 
 class TestExecutionTrace:
@@ -196,37 +196,37 @@ class TestExecutionTrace:
         )
         assert len(result.execution_trace) == 3
         assert "检索" in result.execution_trace[0]
-        assert result.plan_steps == []
+        assert result.steps == []
 
-class TestPlannerValidatorRoundtrip:
+class TestStepProjectorValidatorRoundtrip:
     @pytest.fixture
-    def planner(self):
+    def projector(self):
         from personal_agent.core.config import OpenAIConfig, Settings
 
-        return DefaultTaskPlanner(
+        return WorkflowStepProjector(
             Settings(openai=OpenAIConfig(api_key=None, base_url=None, small_model=""))
         )
 
-    def test_heuristic_plans_pass_validation(self, planner):
-        from personal_agent.agent.plan_validator import PlanValidator
+    def test_heuristic_projections_pass_validation(self, projector):
+        from personal_agent.agent.step_projection_validator import StepProjectionValidator
         from personal_agent.agent.router import _default_router_decision
 
-        validator = PlanValidator()
+        validator = StepProjectionValidator()
 
         for intent in ("delete_knowledge", "solidify_conversation"):
             decision = _default_router_decision(intent)
-            steps = planner.plan(intent, "测试输入")
+            steps = projector.project(intent, "测试输入")
             result = validator.validate(steps, decision)
             # Step-projecting workflows should pass validation cleanly.
-            assert result.valid, f"Intent {intent} plan failed: {result.issues}"
+            assert result.valid, f"Intent {intent} projection failed: {result.issues}"
             assert len(steps) > 0
 
-    def test_ordinary_workflows_do_not_enter_plan_validation_path(self, planner):
+    def test_ordinary_workflows_do_not_enter_step_projection_validation_path(self, projector):
         for intent in ("ask", "capture_text", "capture_link", "capture_file", "unknown"):
-            assert planner.plan(intent, "测试输入") == []
+            assert projector.project(intent, "测试输入") == []
 
     def test_delete_note_id_may_be_supplied_by_transitive_resolve_step(self):
-        from personal_agent.agent.plan_validator import PlanValidator
+        from personal_agent.agent.step_projection_validator import StepProjectionValidator
         from personal_agent.agent.router import _default_router_decision
         from langchain_core.tools import tool
         from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
@@ -247,9 +247,9 @@ class TestPlannerValidatorRoundtrip:
         executor = ToolExecutor()
         executor.register(delete_note)
         steps = [
-            PlanStep(step_id="del-0", action_type="retrieve", description="检索候选"),
-            PlanStep(step_id="del-1", action_type="resolve", description="定位目标", depends_on=["del-0"]),
-            PlanStep(
+            ExecutionStep(step_id="del-0", action_type="retrieve", description="检索候选"),
+            ExecutionStep(step_id="del-1", action_type="resolve", description="定位目标", depends_on=["del-0"]),
+            ExecutionStep(
                 step_id="del-2",
                 action_type="tool_call",
                 description="删除目标",
@@ -258,17 +258,17 @@ class TestPlannerValidatorRoundtrip:
                 requires_confirmation=True,
                 depends_on=["del-1"],
             ),
-            PlanStep(step_id="del-3", action_type="compose", description="生成结果", depends_on=["del-2"]),
+            ExecutionStep(step_id="del-3", action_type="compose", description="生成结果", depends_on=["del-2"]),
         ]
 
-        result = PlanValidator(tool_executor=executor).validate(
+        result = StepProjectionValidator(tool_executor=executor).validate(
             steps, _default_router_decision("delete_knowledge")
         )
 
         assert result.valid
 
     def test_delete_note_without_upstream_resolve_still_requires_note_id(self):
-        from personal_agent.agent.plan_validator import PlanValidator
+        from personal_agent.agent.step_projection_validator import StepProjectionValidator
         from personal_agent.agent.router import _default_router_decision
         from langchain_core.tools import tool
         from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
@@ -289,7 +289,7 @@ class TestPlannerValidatorRoundtrip:
         executor = ToolExecutor()
         executor.register(delete_note)
         steps = [
-            PlanStep(
+            ExecutionStep(
                 step_id="del-1",
                 action_type="tool_call",
                 description="删除目标",
@@ -297,7 +297,7 @@ class TestPlannerValidatorRoundtrip:
             ),
         ]
 
-        result = PlanValidator(tool_executor=executor).validate(
+        result = StepProjectionValidator(tool_executor=executor).validate(
             steps, _default_router_decision("delete_knowledge")
         )
 

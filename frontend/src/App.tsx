@@ -23,7 +23,7 @@ import {
   type GraphTopology,
   type Note,
   type PendingActionItem,
-  type PlanStep,
+  type ExecutionStep,
 } from "./api";
 import ForceGraph2D from "react-force-graph-2d";
 import ReactMarkdown from "react-markdown";
@@ -79,7 +79,7 @@ type TimelineEvent = {
 type AskHistoryView = AskHistoryItem & {
   status: "streaming" | "waiting_confirmation" | "done" | "error";
   error?: string;
-  plan_steps?: PlanStep[];
+  steps?: ExecutionStep[];
   execution_trace?: string[];
   run_id?: string | null;
   pending_confirmation?: EntryPendingConfirmation | null;
@@ -346,7 +346,7 @@ export default function App() {
           ? {
               ...item,
               answer: result.reply_text || item.answer,
-              plan_steps: result.plan_steps?.length ? result.plan_steps : item.plan_steps,
+              steps: result.steps?.length ? result.steps : item.steps,
               execution_trace: result.execution_trace?.length ? result.execution_trace : item.execution_trace,
               run_id: result.run_id ?? item.run_id,
               pending_confirmation: result.pending_confirmation ?? null,
@@ -439,13 +439,13 @@ export default function App() {
       setStatus(payload.reason ?? "正在处理...");
     });
 
-    source.addEventListener("plan_created", (streamEvent) => {
-      const payload = parseSsePayload<{ plan_steps?: PlanStep[] }>(streamEvent);
-      if (payload.plan_steps?.length) {
+    source.addEventListener("steps_projected", (streamEvent) => {
+      const payload = parseSsePayload<{ steps?: ExecutionStep[] }>(streamEvent);
+      if (payload.steps?.length) {
         setAskHistory((current) =>
           current.map((item) =>
             item.id === historyItem.id
-              ? { ...item, plan_steps: payload.plan_steps }
+              ? { ...item, steps: payload.steps }
               : item
           )
         );
@@ -454,7 +454,7 @@ export default function App() {
           next.add(historyItem.id);
           return next;
         });
-        setStatus(`已生成执行计划，共 ${payload.plan_steps.length} 步，正在执行...`);
+        setStatus(`已生成执行步骤，共 ${payload.steps.length} 步，正在执行...`);
       }
     });
 
@@ -471,18 +471,18 @@ export default function App() {
       }
     });
 
-    // Plan execution progress events
-    const updatePlanStepStatus = (
+    // step execution progress events
+    const updateExecutionStepStatus = (
       stepId: string,
       newStatus: string,
-      output?: Pick<PlanStep, "output_label" | "output_title" | "output_preview">
+      output?: Pick<ExecutionStep, "output_label" | "output_title" | "output_preview">
     ) => {
       setAskHistory((current) =>
         current.map((item) =>
-          item.id === historyItem.id && item.plan_steps
+          item.id === historyItem.id && item.steps
             ? {
                 ...item,
-                plan_steps: item.plan_steps.map((ps) =>
+                steps: item.steps.map((ps) =>
                   ps.step_id === stepId ? { ...ps, status: newStatus, ...output } : ps
                 ),
               }
@@ -491,15 +491,15 @@ export default function App() {
       );
     };
 
-    source.addEventListener("plan_step_started", (streamEvent) => {
+    source.addEventListener("step_started", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; description?: string }>(streamEvent);
       if (payload.step_id) {
-        updatePlanStepStatus(payload.step_id, "running");
-        setStatus(payload.description ? `正在执行：${payload.description}` : "正在执行计划步骤...");
+        updateExecutionStepStatus(payload.step_id, "running");
+        setStatus(payload.description ? `正在执行：${payload.description}` : "正在执行步骤...");
       }
     });
 
-    source.addEventListener("plan_step_completed", (streamEvent) => {
+    source.addEventListener("step_completed", (streamEvent) => {
       const payload = parseSsePayload<{
         step_id?: string;
         description?: string;
@@ -508,23 +508,23 @@ export default function App() {
         output_preview?: string;
       }>(streamEvent);
       if (payload.step_id) {
-        updatePlanStepStatus(payload.step_id, "completed", {
+        updateExecutionStepStatus(payload.step_id, "completed", {
           output_label: payload.output_label,
           output_title: payload.output_title,
           output_preview: payload.output_preview,
         });
-        setStatus(payload.description ? `已完成：${payload.description}` : "计划步骤已完成，正在继续...");
+        setStatus(payload.description ? `已完成：${payload.description}` : "步骤已完成，正在继续...");
       }
     });
 
-    source.addEventListener("plan_step_failed", (streamEvent) => {
+    source.addEventListener("step_failed", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
-      if (payload.step_id) updatePlanStepStatus(payload.step_id, "failed");
+      if (payload.step_id) updateExecutionStepStatus(payload.step_id, "failed");
     });
 
-    source.addEventListener("plan_step_skipped", (streamEvent) => {
+    source.addEventListener("step_skipped", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
-      if (payload.step_id) updatePlanStepStatus(payload.step_id, "skipped");
+      if (payload.step_id) updateExecutionStepStatus(payload.step_id, "skipped");
     });
 
     source.addEventListener("pending_action_created", (streamEvent) => {
@@ -611,7 +611,7 @@ export default function App() {
       const payload = parseSsePayload<{ step_id?: string; draft_text?: string }>(streamEvent);
       if (payload.draft_text) {
         if (payload.step_id) {
-          updatePlanStepStatus(payload.step_id, "completed", {
+          updateExecutionStepStatus(payload.step_id, "completed", {
             output_label: "生成草稿",
             output_preview: payload.draft_text,
           });
@@ -640,21 +640,21 @@ export default function App() {
       );
     });
 
-    source.addEventListener("plan_replan_attempt", (streamEvent) => {
+    source.addEventListener("step_replan_attempt", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; reason?: string }>(streamEvent);
       if (payload.step_id) {
         setStatus(`步骤 ${payload.step_id} 失败，正在尝试重新规划...`);
       }
     });
 
-    source.addEventListener("plan_replanned", (streamEvent) => {
+    source.addEventListener("steps_replanned", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; revised_step_count?: number }>(streamEvent);
       if (payload.step_id) {
         setStatus(`已重新规划，生成 ${payload.revised_step_count ?? 0} 个新步骤。`);
       }
     });
 
-    source.addEventListener("plan_replan_failed", (streamEvent) => {
+    source.addEventListener("step_replan_failed", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; reason?: string }>(streamEvent);
       if (payload.step_id) {
         setStatus(`重新规划失败：${payload.reason ?? "无法恢复"}`);
@@ -907,7 +907,7 @@ export default function App() {
               ? {
                   ...item,
                   answer: entryResult.reply_text || "任务已暂停，等待你的确认。",
-                  plan_steps: entryResult.plan_steps ?? item.plan_steps,
+                  steps: entryResult.steps ?? item.steps,
                   execution_trace: entryResult.execution_trace ?? item.execution_trace,
                   run_id: entryResult.run_id,
                   pending_confirmation: confirmation,
@@ -1277,7 +1277,7 @@ export default function App() {
                             </div>
                           ) : null}
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
-                          {item.plan_steps?.length ? (
+                          {item.steps?.length ? (
                             <div className="plan-panel">
                               <button
                                 type="button"
@@ -1291,31 +1291,31 @@ export default function App() {
                                   })
                                 }
                               >
-                                Agent 执行计划 {item.plan_steps.length} 步
+                                Agent 执行步骤 {item.steps.length} 步
                                 <span className="plan-toggle-icon">
                                   {expandedPlans.has(item.id) ? " ▾" : " ▸"}
                                 </span>
                               </button>
                               {expandedPlans.has(item.id) ? (
-                                <ol className="plan-steps-list">
-                                  {item.plan_steps.map((ps, idx) => {
+                                <ol className="steps-list">
+                                  {item.steps.map((ps, idx) => {
                                     const actionType = ps.action_type || (ps as Record<string, unknown>).step as string || "?";
                                     const toolName = ps.tool_name ?? (ps as Record<string, unknown>).tool as string;
                                     const riskLabel = translateRiskLevel(ps.risk_level ?? "low");
                                     return (
-                                      <li key={ps.step_id || idx} className="plan-step-item">
-                                        <span className="plan-step-type">[{translatePlanStep(actionType)}]</span>
-                                        <span className="plan-step-desc">{ps.description || actionType}</span>
-                                        {toolName ? <span className="plan-step-tool">{toolName}</span> : null}
-                                        {riskLabel ? <span className="plan-step-risk">{riskLabel}</span> : null}
-                                        {ps.requires_confirmation ? <span className="plan-step-confirm">待确认</span> : null}
+                                      <li key={ps.step_id || idx} className="step-item">
+                                        <span className="step-type">[{translateExecutionStep(actionType)}]</span>
+                                        <span className="step-desc">{ps.description || actionType}</span>
+                                        {toolName ? <span className="step-tool">{toolName}</span> : null}
+                                        {riskLabel ? <span className="step-risk">{riskLabel}</span> : null}
+                                        {ps.requires_confirmation ? <span className="step-confirm">待确认</span> : null}
                                         {ps.validation_warnings?.map((w, wi) => (
-                                          <span key={wi} className="plan-step-warning" title={w}>警告</span>
+                                          <span key={wi} className="step-warning" title={w}>警告</span>
                                         ))}
-                                        <span className={`plan-step-status status-${ps.status}`}>{ps.status}</span>
-                                        {ps.retry_count && ps.retry_count > 0 ? <span className="plan-step-retry" title={`重试了 ${ps.retry_count} 次`}>重试{ps.retry_count}</span> : null}
+                                        <span className={`step-status status-${ps.status}`}>{ps.status}</span>
+                                        {ps.retry_count && ps.retry_count > 0 ? <span className="step-retry" title={`重试了 ${ps.retry_count} 次`}>重试{ps.retry_count}</span> : null}
                                         {ps.output_preview ? (
-                                          <div className="plan-step-output">
+                                          <div className="step-output">
                                             <span>{ps.output_label ?? "步骤输出"}</span>
                                             {ps.output_title ? <strong>{ps.output_title}</strong> : null}
                                             <p>{ps.output_preview}</p>
@@ -1347,10 +1347,10 @@ export default function App() {
                                 </span>
                               </button>
                               {expandedPlans.has(item.id) ? (
-                                <ol className="plan-steps-list">
+                                <ol className="steps-list">
                                   {item.execution_trace.map((trace, idx) => (
-                                    <li key={idx} className="plan-step-item plan-step-trace">
-                                      <span className="plan-step-desc">{trace}</span>
+                                    <li key={idx} className="step-item step-trace">
+                                      <span className="step-desc">{trace}</span>
                                     </li>
                                   ))}
                                 </ol>
@@ -1756,7 +1756,7 @@ function parseSsePayload<T>(event: MessageEvent<string>): T {
   return JSON.parse(event.data) as T;
 }
 
-function translatePlanStep(actionType: string): string {
+function translateExecutionStep(actionType: string): string {
   switch (actionType) {
     case "retrieve": return "检索";
     case "tool_call": return "调用工具";
@@ -1940,12 +1940,12 @@ function attachRunSnapshots(
       (candidate) =>
         candidate.session_id === item.session_id &&
         candidate.entry_text === item.question &&
-        (candidate.plan_steps.length > 0 || candidate.execution_trace.length > 0),
+        (candidate.steps.length > 0 || candidate.execution_trace.length > 0),
     );
     if (!run) return item;
     return {
       ...item,
-      plan_steps: run.plan_steps.length ? run.plan_steps : item.plan_steps,
+      steps: run.steps.length ? run.steps : item.steps,
       execution_trace: run.execution_trace.length ? run.execution_trace : item.execution_trace,
       run_id: run.run_id,
       pending_confirmation: run.pending_confirmation ?? item.pending_confirmation,
@@ -1974,7 +1974,7 @@ function mergeRunBackedHistory(
     if (sessionId && run.session_id !== sessionId) continue;
     if (
       (run.status !== "waiting_confirmation" && !run.answer) ||
-      (!run.plan_steps.length && !run.execution_trace.length)
+      (!run.steps.length && !run.execution_trace.length)
     ) continue;
     const runKeys = runIdentityKeys(run);
     if (runKeys.some((key) => representedKeys.has(key))) continue;
@@ -1988,7 +1988,7 @@ function mergeRunBackedHistory(
       graph_enabled: false,
       created_at: run.created_at ?? run.updated_at ?? new Date().toISOString(),
       status: run.status === "waiting_confirmation" ? "waiting_confirmation" : "done",
-      plan_steps: run.plan_steps,
+      steps: run.steps,
       execution_trace: run.execution_trace,
       run_id: run.run_id,
       pending_confirmation: run.pending_confirmation ?? null,
@@ -2019,7 +2019,7 @@ function mergeAskHistory(
       localItem
         ? {
             ...item,
-            plan_steps: item.plan_steps?.length ? item.plan_steps : localItem.plan_steps,
+            steps: item.steps?.length ? item.steps : localItem.steps,
             execution_trace: item.execution_trace?.length ? item.execution_trace : localItem.execution_trace,
             run_id: item.run_id ?? localItem.run_id,
             pending_confirmation: item.status === "waiting_confirmation"

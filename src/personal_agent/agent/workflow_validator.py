@@ -1,8 +1,8 @@
 """Workflow spec validation: keep the declarative source of truth self-consistent.
 
 ``WorkflowSpecValidator`` validates a :class:`WorkflowSpec` *as a contract*,
-which is distinct from :class:`~personal_agent.agent.plan_validator.PlanValidator`
-that validates a runtime ``PlanStep`` projection right before execution. The spec
+which is distinct from :class:`~personal_agent.agent.step_projection_validator.StepProjectionValidator`
+that validates a runtime ``ExecutionStep`` projection right before execution. The spec
 validator answers a different question: is the declared workflow internally
 coherent (unique step ids, resolvable dependencies and edges, enum-valid policy
 fields, no dependency cycles, risk/HITL invariants honoured)?
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Action types the orchestration graph's ``_dispatch_plan_step`` can execute.
+# Action types the orchestration graph's ``_dispatch_step`` can execute.
 EXECUTABLE_ACTION_TYPES = {"retrieve", "resolve", "tool_call", "compose", "verify"}
 VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_ON_FAILURE = {"skip", "retry", "abort"}

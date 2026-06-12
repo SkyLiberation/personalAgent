@@ -49,8 +49,8 @@ class TestEntryPipeline:
         # Capture should produce a note
         if result.capture_result:
             assert result.capture_result.note.title is not None
-        # Plan steps should be populated
-        assert isinstance(result.plan_steps, list)
+        # execution steps should be populated
+        assert isinstance(result.steps, list)
 
     def test_entry_ask_intent(self, service: AgentService):
         # Prime knowledge base
@@ -70,7 +70,7 @@ class TestEntryPipeline:
     def test_entry_has_execution_trace(self, service: AgentService):
         entry = EntryInput(text="请帮我总结一下这段时间的笔记", user_id="default")
         result = service.entry(entry)
-        # Non-planning intents produce execution_trace instead of plan_steps
+        # Non-planning intents produce execution_trace instead of steps
         assert isinstance(result.execution_trace, list)
         assert len(result.execution_trace) > 0
         for trace in result.execution_trace:

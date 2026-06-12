@@ -73,13 +73,13 @@ class TestEntryStreamEndpoint:
         assert matching[0]["thread_id"] == "test-user:entry-stream-ask"
         assert matching[0]["intent"] == "ask"
 
-    def test_solidify_stream_emits_plan_only_once(self, api_client: TestClient):
+    def test_solidify_stream_emits_steps_only_once(self, api_client: TestClient):
         api_client.get(
             "/api/entry/stream",
             params={
                 "text": "什么是DNS",
                 "user_id": "test-user",
-                "session_id": "entry-stream-plan",
+                "session_id": "entry-stream-steps",
             },
         )
         response = api_client.get(
@@ -87,18 +87,18 @@ class TestEntryStreamEndpoint:
             params={
                 "text": "把DNS相关讨论结论固化下来",
                 "user_id": "test-user",
-                "session_id": "entry-stream-plan",
+                "session_id": "entry-stream-steps",
             },
         )
 
         assert response.status_code == 200
-        assert response.text.count("event: plan_created") == 1
-        assert "event: plan_step_started" in response.text
+        assert response.text.count("event: steps_projected") == 1
+        assert "event: step_started" in response.text
         assert (
-            "event: plan_step_completed" in response.text
-            or "event: plan_step_failed" in response.text
+            "event: step_completed" in response.text
+            or "event: step_failed" in response.text
         )
-        assert response.text.index("event: plan_created") < response.text.index("event: done")
+        assert response.text.index("event: steps_projected") < response.text.index("event: done")
 
     def test_capture_stream_shows_routing_and_captured_content_before_done(self, api_client: TestClient):
         response = api_client.get(

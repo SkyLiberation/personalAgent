@@ -49,7 +49,7 @@ class EntryResponse(BaseModel):
     reply_text: str
     capture_result: dict | None = None
     ask_result: dict | None = None
-    plan_steps: list[dict[str, object]] = Field(default_factory=list)
+    steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     # Phase 3: HITL interrupt/resume
     run_id: str | None = None
@@ -353,10 +353,10 @@ def create_app() -> FastAPI:
                         continue
                     yield _sse_event(sse_type, payload)
 
-                # Emit plan_steps and execution_trace derived from events
-                if result.plan_steps:
-                    yield _sse_event("plan_created", {
-                        "plan_steps": result.plan_steps,
+                # Emit projected steps and execution_trace derived from events
+                if result.steps:
+                    yield _sse_event("steps_projected", {
+                        "steps": result.steps,
                     })
                 derived_trace = execution_trace_from_events(parsed_events)
                 if derived_trace:
@@ -365,9 +365,9 @@ def create_app() -> FastAPI:
                     })
             elif not result.events and not streamed_graph_events:
                 # Legacy path: use result fields directly
-                if result.plan_steps:
-                    yield _sse_event("plan_created", {
-                        "plan_steps": result.plan_steps,
+                if result.steps:
+                    yield _sse_event("steps_projected", {
+                        "steps": result.steps,
                     })
 
                 if result.execution_trace:
@@ -491,7 +491,7 @@ def create_app() -> FastAPI:
             "reply_text": result.reply_text,
             "capture_result": result.capture_result.model_dump(mode="json") if result.capture_result else None,
             "ask_result": result.ask_result.model_dump(mode="json") if result.ask_result else None,
-            "plan_steps": result.plan_steps,
+            "steps": result.steps,
             "execution_trace": result.execution_trace,
         }
 
@@ -542,7 +542,7 @@ def create_app() -> FastAPI:
             reply_text=result.reply_text,
             capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
             ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
-            plan_steps=result.plan_steps,
+            steps=result.steps,
             execution_trace=result.execution_trace,
             run_id=result.run_id,
             pending_confirmation=result.pending_confirmation,
@@ -573,7 +573,7 @@ def create_app() -> FastAPI:
         status: str
         intent: str
         entry_text: str
-        plan_steps: list[dict[str, object]] = Field(default_factory=list)
+        steps: list[dict[str, object]] = Field(default_factory=list)
         execution_trace: list[str] = Field(default_factory=list)
         answer: str | None = None
         pending_confirmation: dict[str, object] | None = None
@@ -601,7 +601,7 @@ def create_app() -> FastAPI:
             status=snapshot.status.value,
             intent=snapshot.intent,
             entry_text=snapshot.entry_text,
-            plan_steps=snapshot.plan_steps,
+            steps=snapshot.steps,
             execution_trace=snapshot.execution_trace,
             answer=snapshot.answer,
             pending_confirmation=snapshot.pending_confirmation,
@@ -635,19 +635,22 @@ def create_app() -> FastAPI:
         checkpoint_id: str,
         body: ReplayCheckpointRequest,
     ) -> EntryResponse:
-        result = service.replay_from_checkpoint(
-            thread_id=thread_id,
-            checkpoint_id=checkpoint_id,
-            updates=body.updates,
-            as_node=body.as_node,
-        )
+        try:
+            result = service.replay_from_checkpoint(
+                thread_id=thread_id,
+                checkpoint_id=checkpoint_id,
+                updates=body.updates,
+                as_node=body.as_node,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return EntryResponse(
             intent=result.intent,
             reason=result.reason,
             reply_text=result.reply_text,
             capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
             ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
-            plan_steps=result.plan_steps,
+            steps=result.steps,
             execution_trace=result.execution_trace,
             run_id=result.run_id,
             pending_confirmation=result.pending_confirmation,

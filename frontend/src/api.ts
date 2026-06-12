@@ -199,7 +199,7 @@ export function fetchGraphTopology(userId = "default"): Promise<GraphTopology> {
   return requestJson<GraphTopology>(`/api/graph/topology?user_id=${encodeURIComponent(userId)}`);
 }
 
-export type PlanStep = {
+export type ExecutionStep = {
   step_id: string;
   action_type: string;
   description: string;
@@ -238,7 +238,7 @@ export type EntryResponse = {
   intent: string;
   reason: string;
   reply_text: string;
-  plan_steps?: PlanStep[];
+  steps?: ExecutionStep[];
   execution_trace?: string[];
   run_id?: string | null;
   pending_confirmation?: EntryPendingConfirmation | null;
@@ -266,7 +266,7 @@ export type EntryRunSnapshot = {
   status: string;
   intent: string;
   entry_text: string;
-  plan_steps: PlanStep[];
+  steps: ExecutionStep[];
   execution_trace: string[];
   answer?: string | null;
   pending_confirmation?: EntryPendingConfirmation | null;

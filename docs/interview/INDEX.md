@@ -4,7 +4,7 @@
 
 项目最核心的一句话：
 
-> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的记忆、行动和规划都放进可恢复、可校验、可审计、可评测的系统边界里：LangGraph checkpoint 管短期执行现场，Postgres note/chunk 管长期事实，MemoryEpisode 管情景记忆（过往任务的意图与结果）、MemoryItem 管反思 / 程序经验，独立 planner LLM 管查询理解、Unstructured 管文档结构化（LangExtract 作为休眠的可选抽取层保留），Graphiti 做语义索引，Evidence 管回答依据，WorkflowSpec/WorkflowRegistry 管固定流程拓扑，PolicyEngine 管策略决策，ToolGateway 管副作用，WorkflowSpecValidator/PlanValidator 管 spec 与步骤投影安全，evals 模块验证检索、问答和规划策略是否真的有效。
+> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的记忆、行动和规划都放进可恢复、可校验、可审计、可评测的系统边界里：LangGraph checkpoint 管短期执行现场，Postgres note/chunk 管长期事实，MemoryEpisode 管情景记忆（过往任务的意图与结果）、MemoryItem 管反思 / 程序经验，独立 planner LLM 管查询理解、Unstructured 管文档结构化（LangExtract 作为休眠的可选抽取层保留），Graphiti 做语义索引，Evidence 管回答依据，WorkflowSpec/WorkflowRegistry 管固定流程拓扑，PolicyEngine 管策略决策，ToolGateway 管副作用，WorkflowSpecValidator/StepProjectionValidator 管 spec 与步骤投影安全，evals 模块验证检索、问答和规划策略是否真的有效。
 
 
 本文档已按模块拆分。下面按顺序列出各模块及其覆盖的问题，点击模块标题进入对应文件。
@@ -68,7 +68,7 @@
 - 工具结果为什么不直接写入用户 messages？
 - 当前工具层最大不足是什么？
 
-## [Workflow / 步骤投影层](06-planning.md)
+## [Workflow / 步骤投影层](06-workflow-step-projection.md)
 
 - 当前 planning 是怎么落地的？
 - WorkflowSpec / WorkflowRegistry 解决了什么？
@@ -77,8 +77,8 @@
 - `delete_knowledge` 为什么是 `retrieve -> resolve -> delete_note -> compose`？
 - 为什么 `delete_note.note_id` 不能由 planner 直接填？
 - `resolve` 如何防止 LLM 编造 note id？
-- `PlanValidator` 具体防住了什么？
-- `PlanStep` 和 `PlanStepState` 区别是什么？
+- `StepProjectionValidator` 具体防住了什么？
+- `ExecutionStep` 和 `StepRunState` 区别是什么？
 - ReAct 能不能替代 planning？
 
 ## [HITL 与删除恢复](07-hitl-and-delete-recovery.md)
@@ -114,8 +114,8 @@
 - 几路检索分别能检索什么？怎么互补？默认实际启用哪几路？
 - 这么多检索手段，不会有冗余和冲突问题吗？
 - 要加一个新 intent（比如"更新知识"），改动面有多大？
-- projection_policy 为什么只给 delete/solidify 开，ask 为什么不投影成 PlanStep？
-- 真要做开放式 autonomous planner，怎么加 guardrail？和 PlanValidator 什么关系？
+- projection_policy 为什么只给 delete/solidify 开，ask 为什么不投影成 ExecutionStep？
+- 真要做开放式 autonomous planner，怎么加 guardrail？和 StepProjectionValidator 什么关系？
 - PolicyEngine 的规则是硬编码还是可配置？
 - owner 校验依赖 user_id，不传 user_id 就跳过，这算不算越权口子？
 - checkpoint resume 后，工具执行到一半（graph 删了 note 没删）怎么保证一致性？

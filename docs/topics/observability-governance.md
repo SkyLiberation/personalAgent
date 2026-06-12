@@ -26,8 +26,8 @@
 
 - `entry_started`
 - `intent_classified`
-- `plan_created`
-- `plan_validated`
+- `steps_projected`
+- `steps_validated`
 - `step_started`
 - `react_iteration`
 - `tool_called`
@@ -100,7 +100,7 @@ LangGraph checkpoint 保存可恢复执行现场：
 核心规划链路也已开始接入 LLM trace wrapper：
 
 - router：记录 `prompt_name=router`、模型、latency、JSON parse 状态。
-- planner：记录 `prompt_name=planner`、模型、latency、`PlanStep[]` parse 状态。
+- planner：记录 `prompt_name=planner`、模型、latency、`ExecutionStep[]` parse 状态。
 - replanner：记录 `prompt_name=replanner`、失败 step metadata 和 parse 状态。
 - ReAct：记录 `prompt_name=react`、模型调用和 `ReactAction` parse 状态。
 - direct answer：记录 `prompt_name=direct_answer` 与 route metadata。
@@ -241,7 +241,7 @@ PERSONAL_AGENT_TRACE_SAMPLE_RATE=1.0
   "session_id": "session id",
   "intent": "ask | capture_text | delete_knowledge | ...",
   "source_platform": "web | cli | feishu",
-  "requires_planning": true,
+  "requires_step_projection": true,
   "requires_confirmation": false,
   "risk_level": "low"
 }

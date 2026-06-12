@@ -78,7 +78,7 @@ def main() -> int:
 
     top_level_mermaid = _build_mermaid(xray=False)
 
-    SUBGRAPH_NAMES = ["entry_graph", "plan_execution_graph", "react_graph"]
+    SUBGRAPH_NAMES = ["entry_graph", "step_execution_graph", "react_graph"]
 
     if args.xray <= 0:
         content = _wrap_mermaid(top_level_mermaid, as_markdown)

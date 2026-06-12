@@ -264,7 +264,7 @@ data: {
       "status": "waiting_confirmation",
       "intent": "delete_knowledge",
       "entry_text": "删除过期笔记",
-      "plan_steps": [],
+      "steps": [],
       "execution_trace": [],
       "answer": null,
       "pending_confirmation": null,

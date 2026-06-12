@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.planner import PlanStep
+from personal_agent.agent.step_projector import ExecutionStep
 from personal_agent.agent.replanner import Replanner
 
 
@@ -24,17 +24,17 @@ class TestReplannerHeuristic:
     def test_empty_remaining_returns_none(self, replanner):
         """When all steps are completed, replan returns None."""
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索", status="completed"),
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="completed"),
         ]
-        failed = PlanStep(step_id="s2", action_type="compose", description="生成", status="failed")
+        failed = ExecutionStep(step_id="s2", action_type="compose", description="生成", status="failed")
         result = replanner.replan(steps, failed, "error", {}, "ask")
         assert result is None
 
     def test_heuristic_replaces_failed_retrieve_with_compose(self, replanner):
         """When a retrieve step fails and no compose exists, add a salvage compose step."""
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索", status="failed"),
-            PlanStep(step_id="s2", action_type="verify", description="校验", status="planned",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="failed"),
+            ExecutionStep(step_id="s2", action_type="verify", description="校验", status="planned",
                      depends_on=["s1"]),
         ]
         failed = steps[0]
@@ -47,12 +47,12 @@ class TestReplannerHeuristic:
     def test_heuristic_filters_dependent_steps(self, replanner):
         """Steps depending on the failed step are removed from the revised plan."""
         steps = [
-            PlanStep(step_id="a", action_type="retrieve", description="A", status="completed"),
-            PlanStep(step_id="b", action_type="tool_call", description="B", status="failed",
+            ExecutionStep(step_id="a", action_type="retrieve", description="A", status="completed"),
+            ExecutionStep(step_id="b", action_type="tool_call", description="B", status="failed",
                      tool_name="capture_text"),
-            PlanStep(step_id="c", action_type="compose", description="C", status="planned",
+            ExecutionStep(step_id="c", action_type="compose", description="C", status="planned",
                      depends_on=["b"]),
-            PlanStep(step_id="d", action_type="verify", description="D", status="planned"),
+            ExecutionStep(step_id="d", action_type="verify", description="D", status="planned"),
         ]
         failed = steps[1]
         result = replanner.replan(steps, failed, "tool error", {}, "capture_text")
@@ -66,9 +66,9 @@ class TestReplannerHeuristic:
     def test_returns_none_when_no_alternative(self, replanner):
         """When all steps depend on the failed step and no salvage is possible, returns None."""
         steps = [
-            PlanStep(step_id="x", action_type="tool_call", description="X", status="failed",
+            ExecutionStep(step_id="x", action_type="tool_call", description="X", status="failed",
                      tool_name="capture_text"),
-            PlanStep(step_id="y", action_type="compose", description="Y", status="planned",
+            ExecutionStep(step_id="y", action_type="compose", description="Y", status="planned",
                      depends_on=["x"]),
         ]
         failed = steps[0]
@@ -79,8 +79,8 @@ class TestReplannerHeuristic:
     def test_heuristic_preserves_completed_steps(self, replanner):
         """Completed steps are not included in the revised plan."""
         steps = [
-            PlanStep(step_id="s1", action_type="retrieve", description="检索", status="completed"),
-            PlanStep(step_id="s2", action_type="tool_call", description="调用", status="failed",
+            ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="completed"),
+            ExecutionStep(step_id="s2", action_type="tool_call", description="调用", status="failed",
                      tool_name="graph_search"),
         ]
         failed = steps[1]
@@ -111,12 +111,12 @@ class TestReplannerIntentSpecific:
     def test_replan_delete_knowledge_adds_salvage_compose(self, replanner):
         """delete_knowledge: failed retrieve → filters dependent steps, adds salvage compose."""
         steps = [
-            PlanStep(step_id="del-1", action_type="retrieve", description="检索候选笔记", status="failed"),
-            PlanStep(step_id="del-2", action_type="resolve", description="确认笔记", status="planned",
+            ExecutionStep(step_id="del-1", action_type="retrieve", description="检索候选笔记", status="failed"),
+            ExecutionStep(step_id="del-2", action_type="resolve", description="确认笔记", status="planned",
                      depends_on=["del-1"]),
-            PlanStep(step_id="del-3", action_type="tool_call", description="删除笔记", status="planned",
+            ExecutionStep(step_id="del-3", action_type="tool_call", description="删除笔记", status="planned",
                      depends_on=["del-2"], tool_name="delete_note"),
-            PlanStep(step_id="del-4", action_type="compose", description="汇总结果", status="planned",
+            ExecutionStep(step_id="del-4", action_type="compose", description="汇总结果", status="planned",
                      depends_on=["del-3"]),
         ]
         failed = steps[0]
@@ -131,10 +131,10 @@ class TestReplannerIntentSpecific:
     def test_replan_solidify_conversation_adds_salvage_compose(self, replanner):
         """solidify_conversation: all remaining steps depend on failed → no tool_call → salvage compose."""
         steps = [
-            PlanStep(step_id="sol-1", action_type="retrieve", description="检索相关笔记", status="failed"),
-            PlanStep(step_id="sol-2", action_type="compose", description="提炼结论", status="planned",
+            ExecutionStep(step_id="sol-1", action_type="retrieve", description="检索相关笔记", status="failed"),
+            ExecutionStep(step_id="sol-2", action_type="compose", description="提炼结论", status="planned",
                      depends_on=["sol-1"]),
-            PlanStep(step_id="sol-3", action_type="verify", description="校验结论", status="planned",
+            ExecutionStep(step_id="sol-3", action_type="verify", description="校验结论", status="planned",
                      depends_on=["sol-2"]),
         ]
         failed = steps[0]
@@ -148,10 +148,10 @@ class TestReplannerIntentSpecific:
     def test_replan_solidify_with_tool_calls_preserves_filtered(self, replanner):
         """solidify_conversation: tool_call doesn't depend on failed → has_tool → no salvage compose."""
         steps = [
-            PlanStep(step_id="sol-1", action_type="retrieve", description="检索相关笔记", status="failed"),
-            PlanStep(step_id="sol-2", action_type="tool_call", description="固化结论", status="planned",
+            ExecutionStep(step_id="sol-1", action_type="retrieve", description="检索相关笔记", status="failed"),
+            ExecutionStep(step_id="sol-2", action_type="tool_call", description="固化结论", status="planned",
                      tool_name="capture_text"),
-            PlanStep(step_id="sol-3", action_type="compose", description="汇总结果", status="planned",
+            ExecutionStep(step_id="sol-3", action_type="compose", description="汇总结果", status="planned",
                      depends_on=["sol-1"]),
         ]
         failed = steps[0]

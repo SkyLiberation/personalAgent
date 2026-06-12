@@ -13,7 +13,7 @@ graph TD;
 	summarize_branch(summarize_branch)
 	direct_answer_branch(direct_answer_branch)
 	finalize_entry_result(finalize_entry_result)
-	plan_execution_graph(plan_execution_graph)
+	step_execution_graph(step_execution_graph)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> entry_graph;
 	ask_branch --> finalize_entry_result;
@@ -23,10 +23,10 @@ graph TD;
 	entry_graph -.-> capture_branch;
 	entry_graph -.-> direct_answer_branch;
 	entry_graph -.-> finalize_entry_result;
-	entry_graph -.-> plan_execution_graph;
+	entry_graph -.-> step_execution_graph;
 	entry_graph -.-> summarize_branch;
-	plan_execution_graph -.-> direct_answer_branch;
-	plan_execution_graph -.-> finalize_entry_result;
+	step_execution_graph -.-> direct_answer_branch;
+	step_execution_graph -.-> finalize_entry_result;
 	summarize_branch --> finalize_entry_result;
 	finalize_entry_result --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
@@ -63,7 +63,7 @@ graph TD;
 
 ```
 
-## Subgraph: plan_execution_graph
+## Subgraph: step_execution_graph
 ```mermaid
 ---
 config:
@@ -72,46 +72,46 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
-	plan_task(plan_task)
-	validate_plan(validate_plan)
-	prepare_plan_execution(prepare_plan_execution)
+	project_workflow_steps(project_workflow_steps)
+	validate_projected_steps(validate_projected_steps)
+	prepare_step_execution(prepare_step_execution)
 	select_next_step(select_next_step)
-	execute_plan_step(execute_plan_step)
+	execute_step(execute_step)
 	handle_step_success(handle_step_success)
 	handle_step_failure(handle_step_failure)
 	confirm_step(confirm_step)
-	plan_tool_node(plan_tool_node)
-	consume_plan_tool_result(consume_plan_tool_result)
+	step_tool_node(step_tool_node)
+	consume_step_tool_result(consume_step_tool_result)
 	react_graph(react_graph)
-	finalize_plan_execution(finalize_plan_execution)
+	finalize_step_execution(finalize_step_execution)
 	__end__([<p>__end__</p>]):::last
-	__start__ --> plan_task;
+	__start__ --> project_workflow_steps;
 	confirm_step -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
 	confirm_step -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	confirm_step -. &nbsp;tool_node&nbsp; .-> plan_tool_node;
-	consume_plan_tool_result -.-> confirm_step;
-	consume_plan_tool_result -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
-	consume_plan_tool_result -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	consume_plan_tool_result -. &nbsp;tool_node&nbsp; .-> plan_tool_node;
-	consume_plan_tool_result -. &nbsp;react_step&nbsp; .-> react_graph;
-	execute_plan_step -.-> confirm_step;
-	execute_plan_step -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
-	execute_plan_step -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	execute_plan_step -. &nbsp;tool_node&nbsp; .-> plan_tool_node;
-	execute_plan_step -. &nbsp;react_step&nbsp; .-> react_graph;
-	handle_step_failure -. &nbsp;finalize_plan&nbsp; .-> finalize_plan_execution;
+	confirm_step -. &nbsp;tool_node&nbsp; .-> step_tool_node;
+	consume_step_tool_result -.-> confirm_step;
+	consume_step_tool_result -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
+	consume_step_tool_result -. &nbsp;handle_success&nbsp; .-> handle_step_success;
+	consume_step_tool_result -. &nbsp;react_step&nbsp; .-> react_graph;
+	consume_step_tool_result -. &nbsp;tool_node&nbsp; .-> step_tool_node;
+	execute_step -.-> confirm_step;
+	execute_step -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
+	execute_step -. &nbsp;handle_success&nbsp; .-> handle_step_success;
+	execute_step -. &nbsp;react_step&nbsp; .-> react_graph;
+	execute_step -. &nbsp;tool_node&nbsp; .-> step_tool_node;
+	handle_step_failure -. &nbsp;finalize_steps&nbsp; .-> finalize_step_execution;
 	handle_step_failure -. &nbsp;continue_loop&nbsp; .-> select_next_step;
 	handle_step_success -. &nbsp;continue_loop&nbsp; .-> select_next_step;
-	plan_task --> validate_plan;
-	plan_tool_node --> consume_plan_tool_result;
-	prepare_plan_execution --> select_next_step;
+	prepare_step_execution --> select_next_step;
+	project_workflow_steps --> validate_projected_steps;
 	react_graph -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
 	react_graph -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	select_next_step -. &nbsp;execute_step&nbsp; .-> execute_plan_step;
-	select_next_step -. &nbsp;finalize_plan&nbsp; .-> finalize_plan_execution;
-	validate_plan -. &nbsp;direct_answer_branch&nbsp; .-> __end__;
-	validate_plan -.-> prepare_plan_execution;
-	finalize_plan_execution --> __end__;
+	select_next_step -.-> execute_step;
+	select_next_step -. &nbsp;finalize_steps&nbsp; .-> finalize_step_execution;
+	step_tool_node --> consume_step_tool_result;
+	validate_projected_steps -. &nbsp;direct_answer_branch&nbsp; .-> __end__;
+	validate_projected_steps -.-> prepare_step_execution;
+	finalize_step_execution --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
@@ -172,10 +172,10 @@ graph TD;
 	entry_graph\3a__end__ -.-> capture_branch;
 	entry_graph\3a__end__ -.-> direct_answer_branch;
 	entry_graph\3a__end__ -.-> finalize_entry_result;
-	entry_graph\3a__end__ -.-> plan_execution_graph\3aplan_task;
+	entry_graph\3a__end__ -.-> step_execution_graph\3aproject_workflow_steps;
 	entry_graph\3a__end__ -.-> summarize_branch;
-	plan_execution_graph\3a__end__ -.-> direct_answer_branch;
-	plan_execution_graph\3a__end__ -.-> finalize_entry_result;
+	step_execution_graph\3a__end__ -.-> direct_answer_branch;
+	step_execution_graph\3a__end__ -.-> finalize_entry_result;
 	summarize_branch --> finalize_entry_result;
 	finalize_entry_result --> __end__;
 	subgraph entry_graph
@@ -192,59 +192,59 @@ graph TD;
 	entry_graph\3aroute_intent -. &nbsp;return_to_parent&nbsp; .-> entry_graph\3a__end__;
 	entry_graph\3aroute_intent -.-> entry_graph\3aprepare_clarify_entry;
 	end
-	subgraph plan_execution_graph
-	plan_execution_graph\3aplan_task(plan_task)
-	plan_execution_graph\3avalidate_plan(validate_plan)
-	plan_execution_graph\3aprepare_plan_execution(prepare_plan_execution)
-	plan_execution_graph\3aselect_next_step(select_next_step)
-	plan_execution_graph\3aexecute_plan_step(execute_plan_step)
-	plan_execution_graph\3ahandle_step_success(handle_step_success)
-	plan_execution_graph\3ahandle_step_failure(handle_step_failure)
-	plan_execution_graph\3aconfirm_step(confirm_step)
-	plan_execution_graph\3aplan_tool_node(plan_tool_node)
-	plan_execution_graph\3aconsume_plan_tool_result(consume_plan_tool_result)
-	plan_execution_graph\3afinalize_plan_execution(finalize_plan_execution)
-	plan_execution_graph\3a__end__(<p>__end__</p>)
-	plan_execution_graph\3aconfirm_step -. &nbsp;handle_failure&nbsp; .-> plan_execution_graph\3ahandle_step_failure;
-	plan_execution_graph\3aconfirm_step -. &nbsp;handle_success&nbsp; .-> plan_execution_graph\3ahandle_step_success;
-	plan_execution_graph\3aconfirm_step -. &nbsp;tool_node&nbsp; .-> plan_execution_graph\3aplan_tool_node;
-	plan_execution_graph\3aconsume_plan_tool_result -.-> plan_execution_graph\3aconfirm_step;
-	plan_execution_graph\3aconsume_plan_tool_result -. &nbsp;handle_failure&nbsp; .-> plan_execution_graph\3ahandle_step_failure;
-	plan_execution_graph\3aconsume_plan_tool_result -. &nbsp;handle_success&nbsp; .-> plan_execution_graph\3ahandle_step_success;
-	plan_execution_graph\3aconsume_plan_tool_result -. &nbsp;tool_node&nbsp; .-> plan_execution_graph\3aplan_tool_node;
-	plan_execution_graph\3aconsume_plan_tool_result -. &nbsp;react_step&nbsp; .-> plan_execution_graph\3areact_graph\3areact_init;
-	plan_execution_graph\3aexecute_plan_step -.-> plan_execution_graph\3aconfirm_step;
-	plan_execution_graph\3aexecute_plan_step -. &nbsp;handle_failure&nbsp; .-> plan_execution_graph\3ahandle_step_failure;
-	plan_execution_graph\3aexecute_plan_step -. &nbsp;handle_success&nbsp; .-> plan_execution_graph\3ahandle_step_success;
-	plan_execution_graph\3aexecute_plan_step -. &nbsp;tool_node&nbsp; .-> plan_execution_graph\3aplan_tool_node;
-	plan_execution_graph\3aexecute_plan_step -. &nbsp;react_step&nbsp; .-> plan_execution_graph\3areact_graph\3areact_init;
-	plan_execution_graph\3ahandle_step_failure -. &nbsp;finalize_plan&nbsp; .-> plan_execution_graph\3afinalize_plan_execution;
-	plan_execution_graph\3ahandle_step_failure -. &nbsp;continue_loop&nbsp; .-> plan_execution_graph\3aselect_next_step;
-	plan_execution_graph\3ahandle_step_success -. &nbsp;continue_loop&nbsp; .-> plan_execution_graph\3aselect_next_step;
-	plan_execution_graph\3aplan_task --> plan_execution_graph\3avalidate_plan;
-	plan_execution_graph\3aplan_tool_node --> plan_execution_graph\3aconsume_plan_tool_result;
-	plan_execution_graph\3aprepare_plan_execution --> plan_execution_graph\3aselect_next_step;
-	plan_execution_graph\3areact_graph\3areact_finalize -. &nbsp;handle_failure&nbsp; .-> plan_execution_graph\3ahandle_step_failure;
-	plan_execution_graph\3areact_graph\3areact_finalize -. &nbsp;handle_success&nbsp; .-> plan_execution_graph\3ahandle_step_success;
-	plan_execution_graph\3aselect_next_step -. &nbsp;execute_step&nbsp; .-> plan_execution_graph\3aexecute_plan_step;
-	plan_execution_graph\3aselect_next_step -. &nbsp;finalize_plan&nbsp; .-> plan_execution_graph\3afinalize_plan_execution;
-	plan_execution_graph\3avalidate_plan -. &nbsp;direct_answer_branch&nbsp; .-> plan_execution_graph\3a__end__;
-	plan_execution_graph\3avalidate_plan -.-> plan_execution_graph\3aprepare_plan_execution;
-	plan_execution_graph\3afinalize_plan_execution --> plan_execution_graph\3a__end__;
+	subgraph step_execution_graph
+	step_execution_graph\3aproject_workflow_steps(project_workflow_steps)
+	step_execution_graph\3avalidate_projected_steps(validate_projected_steps)
+	step_execution_graph\3aprepare_step_execution(prepare_step_execution)
+	step_execution_graph\3aselect_next_step(select_next_step)
+	step_execution_graph\3aexecute_step(execute_step)
+	step_execution_graph\3ahandle_step_success(handle_step_success)
+	step_execution_graph\3ahandle_step_failure(handle_step_failure)
+	step_execution_graph\3aconfirm_step(confirm_step)
+	step_execution_graph\3astep_tool_node(step_tool_node)
+	step_execution_graph\3aconsume_step_tool_result(consume_step_tool_result)
+	step_execution_graph\3afinalize_step_execution(finalize_step_execution)
+	step_execution_graph\3a__end__(<p>__end__</p>)
+	step_execution_graph\3aconfirm_step -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
+	step_execution_graph\3aconfirm_step -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
+	step_execution_graph\3aconfirm_step -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3astep_tool_node;
+	step_execution_graph\3aconsume_step_tool_result -.-> step_execution_graph\3aconfirm_step;
+	step_execution_graph\3aconsume_step_tool_result -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
+	step_execution_graph\3aconsume_step_tool_result -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
+	step_execution_graph\3aconsume_step_tool_result -. &nbsp;react_step&nbsp; .-> step_execution_graph\3areact_graph\3areact_init;
+	step_execution_graph\3aconsume_step_tool_result -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3astep_tool_node;
+	step_execution_graph\3aexecute_step -.-> step_execution_graph\3aconfirm_step;
+	step_execution_graph\3aexecute_step -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
+	step_execution_graph\3aexecute_step -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
+	step_execution_graph\3aexecute_step -. &nbsp;react_step&nbsp; .-> step_execution_graph\3areact_graph\3areact_init;
+	step_execution_graph\3aexecute_step -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3astep_tool_node;
+	step_execution_graph\3ahandle_step_failure -. &nbsp;finalize_steps&nbsp; .-> step_execution_graph\3afinalize_step_execution;
+	step_execution_graph\3ahandle_step_failure -. &nbsp;continue_loop&nbsp; .-> step_execution_graph\3aselect_next_step;
+	step_execution_graph\3ahandle_step_success -. &nbsp;continue_loop&nbsp; .-> step_execution_graph\3aselect_next_step;
+	step_execution_graph\3aprepare_step_execution --> step_execution_graph\3aselect_next_step;
+	step_execution_graph\3aproject_workflow_steps --> step_execution_graph\3avalidate_projected_steps;
+	step_execution_graph\3areact_graph\3areact_finalize -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
+	step_execution_graph\3areact_graph\3areact_finalize -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
+	step_execution_graph\3aselect_next_step -.-> step_execution_graph\3aexecute_step;
+	step_execution_graph\3aselect_next_step -. &nbsp;finalize_steps&nbsp; .-> step_execution_graph\3afinalize_step_execution;
+	step_execution_graph\3astep_tool_node --> step_execution_graph\3aconsume_step_tool_result;
+	step_execution_graph\3avalidate_projected_steps -. &nbsp;direct_answer_branch&nbsp; .-> step_execution_graph\3a__end__;
+	step_execution_graph\3avalidate_projected_steps -.-> step_execution_graph\3aprepare_step_execution;
+	step_execution_graph\3afinalize_step_execution --> step_execution_graph\3a__end__;
 	subgraph react_graph
-	plan_execution_graph\3areact_graph\3areact_init(react_init)
-	plan_execution_graph\3areact_graph\3areact_iterate(react_iterate)
-	plan_execution_graph\3areact_graph\3areact_tool_node(react_tool_node)
-	plan_execution_graph\3areact_graph\3aconsume_react_tool_result(consume_react_tool_result)
-	plan_execution_graph\3areact_graph\3areact_finalize(react_finalize)
-	plan_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;finalize&nbsp; .-> plan_execution_graph\3areact_graph\3areact_finalize;
-	plan_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;iterate&nbsp; .-> plan_execution_graph\3areact_graph\3areact_iterate;
-	plan_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;tool_node&nbsp; .-> plan_execution_graph\3areact_graph\3areact_tool_node;
-	plan_execution_graph\3areact_graph\3areact_init --> plan_execution_graph\3areact_graph\3areact_iterate;
-	plan_execution_graph\3areact_graph\3areact_iterate -. &nbsp;finalize&nbsp; .-> plan_execution_graph\3areact_graph\3areact_finalize;
-	plan_execution_graph\3areact_graph\3areact_iterate -. &nbsp;tool_node&nbsp; .-> plan_execution_graph\3areact_graph\3areact_tool_node;
-	plan_execution_graph\3areact_graph\3areact_tool_node --> plan_execution_graph\3areact_graph\3aconsume_react_tool_result;
-	plan_execution_graph\3areact_graph\3areact_iterate -. &nbsp;iterate&nbsp; .-> plan_execution_graph\3areact_graph\3areact_iterate;
+	step_execution_graph\3areact_graph\3areact_init(react_init)
+	step_execution_graph\3areact_graph\3areact_iterate(react_iterate)
+	step_execution_graph\3areact_graph\3areact_tool_node(react_tool_node)
+	step_execution_graph\3areact_graph\3aconsume_react_tool_result(consume_react_tool_result)
+	step_execution_graph\3areact_graph\3areact_finalize(react_finalize)
+	step_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;finalize&nbsp; .-> step_execution_graph\3areact_graph\3areact_finalize;
+	step_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;iterate&nbsp; .-> step_execution_graph\3areact_graph\3areact_iterate;
+	step_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3areact_graph\3areact_tool_node;
+	step_execution_graph\3areact_graph\3areact_init --> step_execution_graph\3areact_graph\3areact_iterate;
+	step_execution_graph\3areact_graph\3areact_iterate -. &nbsp;finalize&nbsp; .-> step_execution_graph\3areact_graph\3areact_finalize;
+	step_execution_graph\3areact_graph\3areact_iterate -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3areact_graph\3areact_tool_node;
+	step_execution_graph\3areact_graph\3areact_tool_node --> step_execution_graph\3areact_graph\3aconsume_react_tool_result;
+	step_execution_graph\3areact_graph\3areact_iterate -. &nbsp;iterate&nbsp; .-> step_execution_graph\3areact_graph\3areact_iterate;
 	end
 	end
 	classDef default fill:#f2f0ff,line-height:1.2

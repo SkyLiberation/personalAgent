@@ -4,7 +4,7 @@
 
 可以做几类测试：校验没有 `resolve` 的删除计划必须失败；`delete_note` 不允许出现在 ReAct 步骤中；`delete_note` 必须声明 high risk 和 requires confirmation；`capture_text` 在 solidify 中必须依赖 compose；工具参数不满足 args schema 时不能执行。
 
-这些是 unit / contract tests，目标是证明危险计划不能越过校验。实际分两份：`tests/test_plan_validator.py` 测运行时投影层（PlanStep 危险计划拦截），`tests/test_workflow_validator.py` 测 spec 契约层（WorkflowSpec 自洽性 + spec↔工具能力一致性闸门，例如未注册工具、要求确认的工具但步骤没声明确认都会被拦）。
+这些是 unit / contract tests，目标是证明危险计划不能越过校验。实际分两份：`tests/test_step_projection_validator.py` 测运行时投影层（ExecutionStep 危险计划拦截），`tests/test_workflow_validator.py` 测 spec 契约层（WorkflowSpec 自洽性 + spec↔工具能力一致性闸门，例如未注册工具、要求确认的工具但步骤没声明确认都会被拦）。
 
 ### 2. 怎么测试 `delete_note` 必须经过确认？
 
@@ -32,7 +32,7 @@
 
 ### 6. 线上 Agent 问题怎么复现？
 
-不能只拿用户原始输入重新跑一遍。Agent 的线上失败往往依赖当时的执行现场：同一 thread 的历史 `messages`、router / planner 中间状态、`plan.steps`、ReAct 当前轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。重新输入一句话只能复用入口文本，复现不了当时的 checkpoint 状态。
+不能只拿用户原始输入重新跑一遍。Agent 的线上失败往往依赖当时的执行现场：同一 thread 的历史 `messages`、router / projector 中间状态、`step_execution.steps`、ReAct 当前轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。重新输入一句话只能复用入口文本，复现不了当时的 checkpoint 状态。
 
 项目里用 LangGraph checkpoint 做现网复现：先按用户反馈找到对应 `run_id / thread_id`，通过 `GET /api/entry/runs/{run_id}/history` 查看 checkpoint 时间线摘要，选择失败前或失败中的 `checkpoint_id`，再用 `replay_from_checkpoint(thread_id, checkpoint_id, updates)` 从这个历史现场 fork 一条新执行线继续跑。
 

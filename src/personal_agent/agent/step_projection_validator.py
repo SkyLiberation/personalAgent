@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from ..tools import tool_governance
-from .planner import PlanStep
+from .step_projector import ExecutionStep
 from .router import RiskLevel, RouterDecision
 
 if TYPE_CHECKING:
@@ -25,11 +25,11 @@ MAX_REACT_ITERATIONS = 5
 
 
 @dataclass(slots=True)
-class PlanValidationResult:
+class StepProjectionValidationResult:
     valid: bool
     issues: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    corrected_steps: list[PlanStep] | None = None
+    corrected_steps: list[ExecutionStep] | None = None
     replanned: bool = False
 
     @property
@@ -42,8 +42,8 @@ class PlanValidationResult:
         return not self.ok or self.replanned
 
 
-def _clone_step(s: PlanStep) -> PlanStep:
-    return PlanStep(
+def _clone_step(s: ExecutionStep) -> ExecutionStep:
+    return ExecutionStep(
         step_id=s.step_id,
         action_type=s.action_type,
         description=s.description,
@@ -68,7 +68,7 @@ def _clone_step(s: PlanStep) -> PlanStep:
 
 
 def _has_upstream_action_type(
-    steps: list[PlanStep], step: PlanStep, action_type: str,
+    steps: list[ExecutionStep], step: ExecutionStep, action_type: str,
 ) -> bool:
     """Return whether a step transitively depends on an action type."""
     by_id = {candidate.step_id: candidate for candidate in steps}
@@ -113,9 +113,9 @@ class StepProjectionValidator:
 
     def validate(
         self,
-        steps: list[PlanStep],
+        steps: list[ExecutionStep],
         decision: RouterDecision,
-    ) -> PlanValidationResult:
+    ) -> StepProjectionValidationResult:
         issues: list[str] = []
         warnings: list[str] = []
         bad_status_indices: list[int] = []
@@ -427,19 +427,19 @@ class StepProjectionValidator:
             )
             if not valid_terminal_action:
                 warnings.append(
-                    f"计划最后一步是 {last_step.action_type!r}，"
+                    f"步骤投影最后一步是 {last_step.action_type!r}，"
                     f"建议以 compose 或 verify 结尾。"
                 )
 
         # Build corrected steps if any status values were auto-fixed
-        corrected: list[PlanStep] | None = None
+        corrected: list[ExecutionStep] | None = None
         if bad_status_indices:
             corrected = [_clone_step(s) for s in steps]
             for i in bad_status_indices:
                 corrected[i].status = "planned"
 
         valid = len(issues) == 0
-        result = PlanValidationResult(
+        result = StepProjectionValidationResult(
             valid=valid,
             issues=issues,
             warnings=warnings,
@@ -447,13 +447,11 @@ class StepProjectionValidator:
         )
 
         if issues:
-            logger.warning("Plan validation found %d issues: %s", len(issues), issues)
+            logger.warning("Step projection validation found %d issues: %s", len(issues), issues)
         if warnings:
-            logger.info("Plan validation found %d warnings: %s", len(warnings), warnings)
+            logger.info("Step projection validation found %d warnings: %s", len(warnings), warnings)
         if valid and not warnings:
-            logger.info("Plan validation passed cleanly.")
+            logger.info("Step projection validation passed cleanly.")
 
         return result
 
-
-PlanValidator = StepProjectionValidator

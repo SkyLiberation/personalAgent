@@ -1,4 +1,4 @@
-"""Entry processing nodes: normalize, clarify, route, plan, branch, finalize."""
+"""Entry processing nodes: normalize, clarify, route, project, branch, finalize."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from langgraph.types import interrupt
 from ...core.models import EntryInput, local_now
 from ..orchestration_models import (
     AgentGraphState,
-    PlanStepState,
-    PlanSubState,
+    StepRunState,
+    StepExecutionState,
     ReactSubState,
     ToolTrackingSubState,
     _new_run_id,
@@ -45,7 +45,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.entry_text = text
     state.router_decision = None
     state.react = ReactSubState()
-    state.plan = PlanSubState()
+    state.step_execution = StepExecutionState()
     state.tool_tracking = ToolTrackingSubState()
     state.tool_results = []
     state.tool_messages = []
@@ -72,7 +72,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "tool_messages": [],
         "router_decision": None,
         "react": state.react,
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "tool_tracking": state.tool_tracking,
         "tool_results": [],
         "execution_trace": [],
@@ -201,7 +201,7 @@ def _after_interrupt_clarify(state: AgentGraphState) -> str:
 
 
 # ============================================================================
-# Phase 6: route_intent → should_plan → plan_task → validate_plan (split from
+# Phase 6: route_intent -> should_project_steps -> project_workflow_steps -> validate_projected_steps (split from
 # the former composite route_and_plan node)
 # ============================================================================
 
@@ -229,7 +229,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     )
 
     state.router_decision = decision
-    state.plan.steps = []
+    state.step_execution.steps = []
     state.execution_trace = []
 
     state.add_event("intent_classified", {
@@ -237,7 +237,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         "reason": decision.user_visible_message,
         "confidence": decision.confidence,
         "risk_level": decision.risk_level,
-        "requires_planning": decision.requires_planning,
+        "requires_step_projection": decision.requires_step_projection,
         "requires_clarification": decision.requires_clarification,
     })
 
@@ -248,88 +248,88 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         user_id=state.user_id,
         session_id=state.session_id,
         route=decision.route,
-        requires_planning=decision.requires_planning,
+        requires_step_projection=decision.requires_step_projection,
         requires_clarification=decision.requires_clarification,
         reason=decision.user_visible_message,
     )
 
     logger.info(
-        "route_intent run_id=%s intent=%s requires_planning=%s requires_clarification=%s",
-        state.run_id, decision.route, decision.requires_planning, decision.requires_clarification,
+        "route_intent run_id=%s intent=%s requires_step_projection=%s requires_clarification=%s",
+        state.run_id, decision.route, decision.requires_step_projection, decision.requires_clarification,
     )
 
     return {
         "router_decision": state.router_decision,
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "execution_trace": [],
         "events": state.events,
     }
 
 
-def _node_plan_task(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Generate structured plan steps via the task planner.
+def _node_project_workflow_steps(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Project structured execution steps from the selected workflow.
 
-    Checkpoint boundary: after this node the plan steps exist and can be
+    Checkpoint boundary: after this node the projected steps exist and can be
     inspected before validation.
     """
     route = state.router_decision.route if state.router_decision else "unknown"
     entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
-    planning_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    steps = deps.planner.plan(route, entry_text, conversation_messages=planning_messages)
-    plan_states = [PlanStepState.from_plan_step(s) for s in steps]
+    projection_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
+    steps = deps.step_projector.project(route, entry_text, conversation_messages=projection_messages)
+    step_states = [StepRunState.from_execution_step(s) for s in steps]
 
-    state.plan.steps = plan_states
-    state.add_event("plan_created", {"plan_steps": [pss.model_dump(mode="json") for pss in plan_states]})
+    state.step_execution.steps = step_states
+    state.add_event("steps_projected", {"steps": [pss.model_dump(mode="json") for pss in step_states]})
 
     logger.info(
-        "plan_task run_id=%s route=%s steps=%d",
-        state.run_id, route, len(plan_states),
+        "project_workflow_steps run_id=%s route=%s steps=%d",
+        state.run_id, route, len(step_states),
     )
-    return {"plan": state.plan, "events": state.events}
+    return {"step_execution": state.step_execution, "events": state.events}
 
 
-def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Validate plan steps and handle blocking / fallback / reversion.
+def _node_validate_projected_steps(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+    """Validate execution steps and handle blocking / fallback / reversion.
 
-    Checkpoint boundary: after this node the plan is either confirmed valid
+    Checkpoint boundary: after this node the projected steps are either confirmed valid
     or the intent has been reverted to a clarification fallback (unknown).
 
     If validation completely fails (blocking after retry), the intent is
-    reverted to ``unknown`` and ``requires_planning`` is set to ``False`` so
+    reverted to ``unknown`` and ``requires_step_projection`` is set to ``False`` so
     the routing layer sends the entry to the clarification/direct-answer path.
     """
     from ..router import RouterDecision
 
     decision = state.router_decision or RouterDecision(route="unknown")
 
-    steps = [sd.to_plan_step() for sd in (state.plan.steps or [])]
-    validation = deps.plan_validator.validate(steps, decision)
+    steps = [sd.to_execution_step() for sd in (state.step_execution.steps or [])]
+    validation = deps.step_projection_validator.validate(steps, decision)
 
     if validation.blocking:
         logger.warning(
-            "Plan validation blocked: %d issues, %d warnings. Issues: %s",
+            "Step projection validation blocked: %d issues, %d warnings. Issues: %s",
             len(validation.issues), len(validation.warnings), validation.issues,
         )
         if validation.corrected_steps:
             validated_steps = validation.corrected_steps
         else:
-            validated_steps = deps.planner.fallback_plan(decision.route)
-            revalidation = deps.plan_validator.validate(validated_steps, decision)
+            validated_steps = deps.step_projector.fallback_projection(decision.route)
+            revalidation = deps.step_projection_validator.validate(validated_steps, decision)
             if revalidation.blocking:
                 logger.error(
-                    "Heuristic plan also blocked: %s. Reverting to unknown.",
+                    "Fallback step projection also blocked: %s. Reverting to unknown.",
                     revalidation.issues,
                 )
                 decision = RouterDecision(
                     route="unknown",
                     confidence=0.1,
                     risk_level="low",
-                    user_visible_message=f"计划校验失败: {'; '.join(revalidation.issues[:3])}",
+                    user_visible_message=f"步骤投影校验失败: {'; '.join(revalidation.issues[:3])}",
                 )
-                validated_steps = deps.planner.fallback_plan("unknown")
-                # Revert intent so the routing layer skips plan execution
+                validated_steps = deps.step_projector.fallback_projection("unknown")
+                # Revert intent so the routing layer skips step execution
                 state.router_decision = decision
-                state.add_event("plan_validated", {
+                state.add_event("steps_validated", {
                     "outcome": "reverted_to_unknown",
                     "issues": validation.issues,
                 })
@@ -337,28 +337,28 @@ def _node_validate_plan(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
         validated_steps = validation.corrected_steps or steps
         if not validation.ok:
             logger.warning(
-                "Plan validation found %d non-blocking issues: %s",
+                "Step projection validation found %d non-blocking issues: %s",
                 len(validation.issues), validation.warnings,
             )
 
-    plan_states = [PlanStepState.from_plan_step(s) for s in validated_steps]
-    state.plan.steps = plan_states
+    step_states = [StepRunState.from_execution_step(s) for s in validated_steps]
+    state.step_execution.steps = step_states
 
     logger.info(
-        "validate_plan run_id=%s steps=%d blocked=%s requires_planning=%s",
-        state.run_id, len(plan_states), validation.blocking, state.router_decision.requires_planning if state.router_decision else False,
+        "validate_projected_steps run_id=%s steps=%d blocked=%s requires_step_projection=%s",
+        state.run_id, len(step_states), validation.blocking, state.router_decision.requires_step_projection if state.router_decision else False,
     )
     return {
-        "plan": state.plan,
+        "step_execution": state.step_execution,
         "router_decision": state.router_decision,
         "events": state.events,
     }
 
 
-def _after_validate_plan(state: AgentGraphState) -> str:
-    """After validation: enter plan execution or ask the user to clarify."""
-    if (state.router_decision and state.router_decision.requires_planning) and state.plan.steps:
-        return "prepare_plan_execution"
+def _after_validate_projected_steps(state: AgentGraphState) -> str:
+    """After validation: enter step execution or ask the user to clarify."""
+    if (state.router_decision and state.router_decision.requires_step_projection) and state.step_execution.steps:
+        return "prepare_step_execution"
     return "direct_answer_branch"
 
 
@@ -671,7 +671,7 @@ def _build_clarification_answer(state: AgentGraphState) -> str:
     if missing:
         details = "、".join(missing[:3])
         return f"我还需要你补充：{details}。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
-    if reason and "计划校验失败" in reason:
+    if reason and "步骤投影校验失败" in reason:
         return f"{reason}。请补充更明确的目标或操作范围后我再继续。"
     return "我暂时没判断出你的意图。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
 

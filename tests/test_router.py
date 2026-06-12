@@ -115,7 +115,7 @@ class TestDefaultIntentRouter:
         )
 
         assert decision.route == "capture_text"
-        assert decision.requires_planning is False
+        assert decision.requires_step_projection is False
 
     def test_configured_llm_failure_reports_router_unavailable(self, monkeypatch):
         from personal_agent.core.config import OpenAIConfig, Settings
@@ -176,7 +176,7 @@ class TestDefaultIntentRouter:
         assert decision.route == "delete_knowledge"
         assert decision.risk_level == "high"
         assert decision.requires_confirmation is True
-        assert decision.requires_planning is True
+        assert decision.requires_step_projection is True
 
     def test_delete_defaults_remain_safe_when_llm_omits_risk_fields(self, monkeypatch):
         from personal_agent.core.config import OpenAIConfig, Settings
@@ -205,7 +205,7 @@ class TestDefaultIntentRouter:
         assert hasattr(decision, "confidence")
         assert hasattr(decision, "requires_tools")
         assert hasattr(decision, "requires_retrieval")
-        assert hasattr(decision, "requires_planning")
+        assert hasattr(decision, "requires_step_projection")
         assert hasattr(decision, "risk_level")
         assert hasattr(decision, "requires_confirmation")
         assert hasattr(decision, "requires_clarification")

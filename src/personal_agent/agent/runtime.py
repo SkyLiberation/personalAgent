@@ -26,8 +26,8 @@ from ..tools import (
 from .entry_orchestrator import EntryOrchestrator
 from .episodic_memory import record_entry_episode
 from .nodes import digest_node
-from .planner import DefaultTaskPlanner
-from .plan_validator import PlanValidator
+from .step_projector import WorkflowStepProjector
+from .step_projection_validator import StepProjectionValidator
 from .replanner import Replanner
 from .router import DefaultIntentRouter
 from .ingestion_pipeline import IngestionPipeline
@@ -118,9 +118,9 @@ class AgentRuntime:
             policy_engine=self._policy_engine,
         )
         self._register_tools()
-        self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
+        self._step_projector = WorkflowStepProjector(settings, tool_executor=self._tool_executor)
         self._verifier = AnswerVerifier()
-        self._plan_validator = PlanValidator(tool_executor=self._tool_executor)
+        self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
         # Explicit collaborators.
         self._llm = LlmClient(settings)
@@ -271,12 +271,12 @@ class AgentRuntime:
         return self._tool_executor
 
     @property
-    def planner(self):
-        return self._planner
+    def step_projector(self):
+        return self._step_projector
 
     @property
-    def plan_validator(self):
-        return self._plan_validator
+    def step_projection_validator(self):
+        return self._step_projection_validator
 
     def set_thread_message_loader(
         self, loader: Callable[[EntryInput, int], list[dict[str, str]]] | None

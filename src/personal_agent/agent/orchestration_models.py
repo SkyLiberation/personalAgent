@@ -21,7 +21,7 @@ from ..core.models import Citation, EntryInput, EntryIntent, ThreadSummary, loca
 from .router import RouterDecision
 
 if TYPE_CHECKING:
-    from .planner import PlanStep
+    from .step_projector import ExecutionStep
 
 
 def _new_run_id() -> str:
@@ -46,8 +46,8 @@ AgentEventType = Literal[
     "clarification_required",
     "clarification_resumed",
     "intent_classified",
-    "plan_created",
-    "plan_validated",
+    "steps_projected",
+    "steps_validated",
     "step_started",
     "react_iteration",
     "tool_called",
@@ -100,7 +100,7 @@ class AgentRunSnapshot(BaseModel):
     status: AgentRunStatus = AgentRunStatus.pending
     intent: EntryIntent = "unknown"
     entry_text: str = ""
-    plan_steps: list[dict[str, Any]] = Field(default_factory=list)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     answer: str | None = None
     pending_confirmation: dict[str, Any] | None = None
@@ -112,14 +112,14 @@ class AgentRunSnapshot(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# PlanStepState — checkpoint-safe plan step model
+# StepRunState - checkpoint-safe execution step model
 # ---------------------------------------------------------------------------
 
 
-class PlanStepState(BaseModel):
+class StepRunState(BaseModel):
     """Checkpoint-safe, serialisable workflow step projection state.
 
-    Mirrors the ``PlanStep`` dataclass fields so that the orchestration graph
+    Mirrors the ``ExecutionStep`` dataclass fields so that the orchestration graph
     can store and resume step projections without dict conversion.
     """
 
@@ -151,8 +151,8 @@ class PlanStepState(BaseModel):
     output_preview: str = ""
 
     @classmethod
-    def from_plan_step(cls, s: "PlanStep") -> "PlanStepState":
-        """Create a PlanStepState from a workflow step projection."""
+    def from_execution_step(cls, s: "ExecutionStep") -> "StepRunState":
+        """Create a StepRunState from a workflow step projection."""
         return cls(
             step_id=s.step_id,
             action_type=s.action_type,
@@ -176,11 +176,11 @@ class PlanStepState(BaseModel):
             projection_kind=s.projection_kind,
         )
 
-    def to_plan_step(self) -> "PlanStep":
+    def to_execution_step(self) -> "ExecutionStep":
         """Convert back to a step projection for validator / executor consumption."""
-        from .planner import PlanStep
+        from .step_projector import ExecutionStep
 
-        return PlanStep(
+        return ExecutionStep(
             step_id=self.step_id,
             action_type=self.action_type,
             description=self.description,
@@ -226,12 +226,12 @@ class ReactSubState(BaseModel):
     pending_input: dict[str, Any] = Field(default_factory=dict)
 
 
-class PlanSubState(BaseModel):
-    """Plan execution private state — only meaningful inside plan_execution_graph."""
+class StepExecutionState(BaseModel):
+    """Step execution private state."""
 
-    steps: list[PlanStepState] = Field(default_factory=list)
+    steps: list[StepRunState] = Field(default_factory=list)
     current_step_index: int = 0
-    step_results: dict[str, Any] = Field(default_factory=dict)
+    results: dict[str, Any] = Field(default_factory=dict)
     aborted: bool = False
     retry_counts: dict[str, int] = Field(default_factory=dict)
 
@@ -239,7 +239,7 @@ class PlanSubState(BaseModel):
 class ToolTrackingSubState(BaseModel):
     """Tool call tracking — shared across plan and react execution."""
 
-    active_context: Literal["plan", "react"] | None = None
+    active_context: Literal["step_execution", "react"] | None = None
     pending_step_id: str = ""
     pending_call_id: str = ""
     pending_tool_name: str = ""
@@ -258,7 +258,7 @@ class AgentGraphState(BaseModel):
     - Business facts live in PostgresMemoryStore.
     - Large payloads (note text, full search results) are stored by
       reference, not by value.
-    - Sub-system state (react, plan, tool_tracking) is grouped into
+    - Sub-system state (react, step_execution, tool_tracking) is grouped into
       sub-models to reduce field count and clarify ownership boundaries.
     """
 
@@ -285,7 +285,7 @@ class AgentGraphState(BaseModel):
 
     # Sub-models (grouped private state)
     react: ReactSubState = Field(default_factory=ReactSubState)
-    plan: PlanSubState = Field(default_factory=PlanSubState)
+    step_execution: StepExecutionState = Field(default_factory=StepExecutionState)
     tool_tracking: ToolTrackingSubState = Field(default_factory=ToolTrackingSubState)
 
     # Tool results
@@ -332,7 +332,7 @@ class AgentGraphState(BaseModel):
         return event
 
     def update_step_status(self, step_id: str, status: str) -> None:
-        for s in self.plan.steps:
+        for s in self.step_execution.steps:
             if s.step_id == step_id:
                 s.status = status
                 return
@@ -348,7 +348,7 @@ class AgentGraphState(BaseModel):
             status=resolved_status,
             intent=self.router_decision.route if self.router_decision else "unknown",
             entry_text=self.entry_text,
-            plan_steps=[s.model_dump(mode="json") for s in self.plan.steps],
+            steps=[s.model_dump(mode="json") for s in self.step_execution.steps],
             execution_trace=self.execution_trace,
             answer=self.answer,
             pending_confirmation=self.pending_confirmation,
@@ -376,16 +376,16 @@ def _infer_status(state: AgentGraphState) -> AgentRunStatus:
 # Conversion helpers: EntryResult <-> AgentEvent / AgentGraphState
 # ---------------------------------------------------------------------------
 
-def plan_steps_to_plan_created_events(
-    plan_steps: list[dict[str, Any]], run_id: str, thread_id: str
+def steps_to_steps_projected_events(
+    steps: list[dict[str, Any]], run_id: str, thread_id: str
 ) -> list[AgentEvent]:
-    """Create a ``plan_created`` event from plan step dicts."""
+    """Create a ``steps_projected`` event from projected step dicts."""
     return [
         AgentEvent(
             run_id=run_id,
             thread_id=thread_id,
-            type="plan_created",
-            payload={"plan_steps": plan_steps},
+            type="steps_projected",
+            payload={"steps": steps},
         )
     ]
 
@@ -450,9 +450,9 @@ _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "clarification_required": "confirmation_required",
     "clarification_resumed": "status",
     "intent_classified": "intent",
-    "plan_created": "plan_created",
-    "plan_validated": "status",
-    "step_started": "plan_step_started",
+    "steps_projected": "steps_projected",
+    "steps_validated": "status",
+    "step_started": "step_started",
     "react_iteration": "react_iteration",
     "tool_called": "tool_called",
     "tool_result": "tool_result",
@@ -461,10 +461,10 @@ _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "draft_ready": "draft_ready",
     "answer_delta": "answer_delta",
     "answer_completed": "done",
-    "step_completed": "plan_step_completed",
-    "step_failed": "plan_step_failed",
-    "replan_attempted": "plan_replan_attempt",
-    "replan_completed": "plan_replanned",
+    "step_completed": "step_completed",
+    "step_failed": "step_failed",
+    "replan_attempted": "step_replan_attempt",
+    "replan_completed": "steps_replanned",
     "run_completed": "done",
     "run_failed": "status",
 }

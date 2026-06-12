@@ -42,7 +42,7 @@ ask: question -> QueryUnderstanding -> RetrievalPlan -> graph(Graphiti)+structur
 | Ingestion | 文档解析、清洗、结构保留、元数据抽取、增量更新 | `CaptureService` 提取正文，`RawIngestItem` 承载来源、metadata 和 source fingerprint；重复 fingerprint 默认复用已有 note | 元数据自动抽取仍较少，缺少版本更新和权限细粒度策略 |
 | Chunking | 文档元素切分、层级 chunk、标题路径、窗口重叠、边界校验、覆盖率校验 | Unstructured partition + `chunk_by_title` 已作为 capture 主链路；child chunk 可携带 `title_path / page_number / element_ids / element metadata`；local retrieval 已支持 chunk 命中后展开 parent/neighbor | 仍缺多格式文件的完整 coordinates/table metadata 落库、窗口重叠、chunk eval、按元素类型的预算策略和版本化 chunk 更新 |
 | Indexing | 向量索引、全文/倒排索引（FTS/BM25 打分）、图谱、关键词、时间索引并存 | pg_search BM25 + pgvector 本地索引；Graphiti 实体关系图消费 chunk-level notes；structural parent-section provider 已接入生产 ask 并有缓存索引；local/vector 已支持 metadata filters 下推 | 尚缺向量重建/回填任务、structural/Graphiti 混合融合策略和更强跨来源统一 rerank |
-| Query Understanding | 改写、分解、时效识别、过滤条件、检索计划 | `QueryUnderstanding` 模型 + `query_planner.py` 用独立的 planner LLM（`settings.planner`）的 strict json_schema 做 query rewrite / 意图识别 / 子查询分解 / filters 抽取 | filters 已进入 local/vector 检索和 graph note 映射过滤；复杂自然语言时间范围仍需增强 |
+| Query Understanding | 改写、分解、时效识别、过滤条件、检索计划 | `QueryUnderstanding` 模型 + `query_step_projector.py` 用独立的 planner LLM（`settings.planner`）的 strict json_schema 做 query rewrite / 意图识别 / 子查询分解 / filters 抽取 | filters 已进入 local/vector 检索和 graph note 映射过滤；复杂自然语言时间范围仍需增强 |
 | Retrieval | 多路召回、元数据过滤、parent-child 展开 | `RetrievalPlan` 动态路由，graph+local 并行（ThreadPoolExecutor），graph provider 可切换 Graphiti/structural，web 按 freshness 主动触发，子查询分解多跳检索；local/vector 已支持 metadata filters 和 parent/neighbor 展开 | Graphiti 原生 metadata 过滤、structural 与 local 去重/融合权重、web freshness window、raw candidate debug 仍需增强 |
 | Rerank | Cross-encoder/LLM rerank、MMR、多样性、阈值 | `AskPipelineFactory` 装配 candidate enricher + reranker；`parent_child` 默认补齐 parent 命中的高相关 child sections 和 child 命中的 parent/neighbor chunks；`heuristic` 为默认，`llm` listwise rerank 可通过配置启用；Graphiti 仍有图谱 edge rerank | 尚缺 MMR、融合权重、阈值和系统化组合评测 |
 | Context Assembly | 去重、压缩、引用锚定、预算控制、排序可解释 | `ContextPack` 记录 selected/dropped、rank_score、rank_reason、char budget；统一 prompt 从 ContextPack 构造 | 压缩策略仍较弱，尚未按 claim/section 做摘要压缩 |
@@ -104,203 +104,11 @@ Ask / Retrieval-Augmented Generation Pipeline
 
 #### Capture / Indexing 依赖图
 
-```mermaid
-flowchart LR
-    classDef layer fill:#e8f1ff,stroke:#4f7ccf,stroke-width:1px,color:#10233f
-    classDef model fill:#ffffff,stroke:#9aa4b2,stroke-width:1px,color:#172033
-    classDef projection fill:#e9f9ee,stroke:#2e9e5b,stroke-width:1px,color:#0c3b22
-    classDef future fill:#fff7e6,stroke:#d08b00,stroke-dasharray: 5 3,color:#3b2a00
-    classDef pipeline fill:#f4f6fb,stroke:#3a4f7a,stroke-width:2px,color:#10233f
-
-    subgraph Ingest["Ingest Pipeline"]
-        direction TB
-
-        subgraph Capture["Capture / Indexing"]
-            direction TB
-            EntryLayer["入口层<br/>route intent<br/>bind user/session<br/>normalize source scope"]:::layer
-            EntryInput["EntryInput<br/>text: 用户输入<br/>user_id/session_id<br/>source_type/source_ref<br/>metadata"]:::model
-            CaptureLayer["采集层<br/>extract content<br/>fingerprint dedupe<br/>duplicate skip / version decision"]:::layer
-            RawIngestItem["RawIngestItem<br/>content: 入库正文<br/>source_type/source_ref<br/>metadata<br/>source_fingerprint"]:::model
-            StructuralChunkLayer["Unstructured partition 层<br/>Title/NarrativeText/ListItem/Table<br/>chunk_by_title"]:::layer
-            ChunkDraft["ChunkDraft<br/>title/content/source_span<br/>title_path/page_number/element_ids<br/>not persisted directly"]:::model
-            ChunkReconcileLayer["chunk materialize 层<br/>ChunkDraft -> child KnowledgeNote<br/>preserve element metadata"]:::layer
-            KnowledgeNote["KnowledgeNote<br/>persistence aggregate<br/>id/user_id<br/>tags/related_note_ids<br/>created_at/updated_at"]:::model
-            NoteSource["NoteSource<br/>type/ref/fingerprint<br/>metadata"]:::model
-            NoteBody["NoteBody<br/>title<br/>content<br/>summary"]:::model
-            NoteChunk["NoteChunk<br/>parent_note_id<br/>index<br/>source_span"]:::model
-            NotePreExtract["NotePreExtract<br/>保留字段<br/>capture 主链路不再写入"]:::model
-            NoteGraphKnowledge["NoteGraphKnowledge<br/>episode_uuid<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs"]:::model
-            NoteGraphSync["NoteGraphSync<br/>status<br/>error"]:::model
-            NoteGraphQuality["NoteGraphQuality<br/>entity_count<br/>relation_count<br/>avg_fact_length<br/>zero_entities<br/>weak_relations_only"]:::model
-            EvidenceSource["EvidenceSource<br/>projection (landed)<br/>id/title/content/summary<br/>source metadata<br/>parent_note_id/source_span"]:::projection
-            RetrievalDocument["RetrievalDocument<br/>projection (landed)<br/>title/summary/content<br/>tags/metadata<br/>parent/chunk refs<br/>preextract/entity/relation terms"]:::projection
-            GraphIngestDocument["GraphIngestDocument<br/>projection (landed)<br/>id/user_id/title<br/>content/summary<br/>source metadata<br/>created_at"]:::projection
-            IndexLayer["本地索引层<br/>persist notes<br/>pg_search BM25 / pgvector<br/>graph sync status"]:::layer
-            ReviewLayer["回顾任务层<br/>schedule review<br/>due_at / interval<br/>prompt + answer hint"]:::layer
-            ReviewCard["ReviewCard<br/>id/note_id<br/>prompt<br/>answer_hint<br/>interval_days<br/>due_at"]:::model
-            GraphIngestLayer["图谱摄取层<br/>entity extraction<br/>relation extraction<br/>episode mapping"]:::layer
-            GraphCaptureResult["GraphCaptureResult<br/>enabled/error<br/>episode_uuid<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs"]:::model
-            GraphWritebackLayer["图谱回写编排层<br/>merge GraphCaptureResult<br/>update graph knowledge/sync/quality<br/>persist updated note"]:::layer
-
-            EntryLayer --> EntryInput
-            EntryInput --> CaptureLayer
-            CaptureLayer --> RawIngestItem
-            CaptureLayer -. duplicate .-> KnowledgeNote
-            RawIngestItem --> StructuralChunkLayer
-            StructuralChunkLayer --> ChunkDraft
-            ChunkDraft --> ChunkReconcileLayer
-            ChunkReconcileLayer -. populates .-> NotePreExtract
-            ChunkReconcileLayer -. creates final .-> NoteChunk
-            RawIngestItem --> KnowledgeNote
-            KnowledgeNote --> NoteSource
-            KnowledgeNote --> NoteBody
-            KnowledgeNote --> NoteChunk
-            KnowledgeNote --> NotePreExtract
-            KnowledgeNote --> NoteGraphKnowledge
-            KnowledgeNote --> NoteGraphSync
-            KnowledgeNote --> NoteGraphQuality
-            KnowledgeNote -. projection .-> EvidenceSource
-            KnowledgeNote -. projection .-> RetrievalDocument
-            KnowledgeNote -. projection .-> GraphIngestDocument
-            KnowledgeNote --> IndexLayer
-            IndexLayer --> ReviewLayer
-            ReviewLayer --> ReviewCard
-            ReviewCard --> KnowledgeNote
-            GraphIngestDocument --> GraphIngestLayer
-            GraphIngestLayer --> GraphCaptureResult
-            GraphCaptureResult --> GraphWritebackLayer
-            KnowledgeNote --> GraphWritebackLayer
-            GraphWritebackLayer --> NoteGraphKnowledge
-            GraphWritebackLayer --> NoteGraphSync
-            GraphWritebackLayer --> NoteGraphQuality
-            GraphWritebackLayer --> IndexLayer
-        end
-    end
-
-    AskHandoff["→ Ask Pipeline 消费<br/>KnowledgeNote 实体<br/>RetrievalDocument / EvidenceSource 投影<br/>本地索引就绪"]:::pipeline
-    IndexLayer --> AskHandoff
-    KnowledgeNote --> AskHandoff
-    RetrievalDocument --> AskHandoff
-    EvidenceSource --> AskHandoff
-
-    class Ingest pipeline
-```
+图源见：[Capture / Indexing 依赖图](../mermaid/capture-indexing-model-flow.md)。
 
 #### Ask 依赖图
 
-```mermaid
-flowchart LR
-    classDef layer fill:#e8f1ff,stroke:#4f7ccf,stroke-width:1px,color:#10233f
-    classDef model fill:#ffffff,stroke:#9aa4b2,stroke-width:1px,color:#172033
-    classDef projection fill:#e9f9ee,stroke:#2e9e5b,stroke-width:1px,color:#0c3b22
-    classDef future fill:#fff7e6,stroke:#d08b00,stroke-dasharray: 5 3,color:#3b2a00
-    classDef pipeline fill:#f4f6fb,stroke:#3a4f7a,stroke-width:2px,color:#10233f
-
-    subgraph FromCapture["来自 Capture（已落地产物）"]
-        direction TB
-        KnowledgeNote["KnowledgeNote<br/>persistence aggregate<br/>id/user_id<br/>tags/related_note_ids"]:::model
-        RetrievalDocument["RetrievalDocument<br/>projection (landed)<br/>title/summary/content<br/>tags/metadata<br/>parent/chunk refs"]:::projection
-        EvidenceSource["EvidenceSource<br/>projection (landed)<br/>id/title/content/summary<br/>parent_note_id/source_span"]:::projection
-        CaptureIndexReady["本地索引就绪<br/>pg_search BM25 / pgvector<br/>graph sync status"]:::layer
-    end
-
-    subgraph Ask["Ask Pipeline"]
-        direction TB
-
-        subgraph QueryPlan["Ask Planning"]
-            direction TB
-            QueryLayer["查询理解层<br/>rewrite query<br/>infer filters<br/>derive retrieval plan"]:::layer
-            QueryUnderstanding["QueryUnderstanding<br/>needs_freshness<br/>needs_personal_memory<br/>needs_graph_reasoning<br/>query_rewrite<br/>sub_queries<br/>filters<br/>answer_policy"]:::model
-            RetrievalFilters["RetrievalFilters<br/>source_types<br/>source_ref_contains<br/>tags<br/>created_after/created_before<br/>metadata_contains<br/>parent_note_id"]:::model
-            RetrievalPlan["RetrievalPlan<br/>sources: graph/local/web<br/>parallel<br/>query<br/>sub_queries<br/>filters"]:::model
-
-            QueryLayer --> QueryUnderstanding
-            QueryUnderstanding --> RetrievalFilters
-            QueryUnderstanding --> RetrievalPlan
-            RetrievalFilters --> RetrievalPlan
-        end
-
-        subgraph Retrieval["Retrieval Layer"]
-            direction TB
-            RetrievalLayer["统一召回层<br/>local: BM25/pgvector/RRF<br/>KG: Graphiti entities/facts/edges<br/>structural: section_graph<br/>web: freshness/external<br/>sub-query wrapper"]:::layer
-            GraphAskResult["GraphAskResult<br/>enabled/error<br/>answer<br/>entity_names<br/>relation_facts<br/>node_refs/edge_refs/fact_refs<br/>citation_hits<br/>related_episode_uuids"]:::model
-            GraphCitationRerankStrategy["rank_graph_citation_hits<br/>Graphiti edge citation rerank<br/>episode-addressable facts"]:::model
-            GraphCitationHit["GraphCitationHit<br/>episode_uuid<br/>relation_fact<br/>endpoint_names<br/>matched_terms<br/>entity_overlap_count<br/>score"]:::model
-            WebSearchResult["WebSearchResult<br/>title<br/>url<br/>snippet<br/>source<br/>published_at"]:::model
-            RetrievalCandidate["RetrievalCandidate<br/>source<br/>raw_id/note_id<br/>raw_score/normalized_score<br/>rank<br/>debug"]:::future
-            Citation["Citation<br/>note_id<br/>title/snippet<br/>relation_fact<br/>url<br/>source_type"]:::model
-
-            RetrievalLayer --> GraphAskResult
-            GraphAskResult --> GraphCitationHit
-            RetrievalLayer --> WebSearchResult
-            RetrievalLayer -. future raw candidates .-> RetrievalCandidate
-            RetrievalLayer --> Citation
-            RetrievalLayer --> GraphCitationRerankStrategy
-            GraphCitationRerankStrategy --> GraphCitationHit
-        end
-
-        subgraph EvidenceContext["Evidence / Enrichment / Rerank / Context"]
-            direction TB
-            NormalizeLayer["证据标准化层<br/>notes/facts/web to EvidenceItem<br/>merge citations<br/>dedupe evidence<br/>attach retrieved_by/source metadata"]:::layer
-            EvidenceItem["EvidenceItem<br/>source_type<br/>source_id/title<br/>snippet/fact<br/>source_span/url<br/>score<br/>metadata"]:::model
-            EnrichmentLayer["候选补全层<br/>parent_child<br/>neighbor chunks<br/>no-op ablation"]:::layer
-            RerankLayer["统一排序层<br/>heuristic rerank<br/>LLM listwise rerank<br/>score normalization<br/>budget / diversity selection"]:::layer
-            HeuristicRerankStrategy["heuristic evidence rerank<br/>term overlap + source score<br/>source type/anchor bonuses"]:::model
-            LlmListwiseRerankStrategy["LLM listwise rerank<br/>uses heuristic top-N<br/>fallback to heuristic on failure"]:::model
-            RankedEvidence["RankedEvidence<br/>evidence<br/>score<br/>reason<br/>selected"]:::model
-            ContextLayer["上下文组装层<br/>selected evidence<br/>dropped evidence<br/>prompt evidence ids"]:::layer
-            ContextPack["ContextPack<br/>selected: RankedEvidence[]<br/>dropped: RankedEvidence[]<br/>used_chars<br/>char_budget"]:::model
-
-            NormalizeLayer --> EvidenceItem
-            EvidenceItem --> EnrichmentLayer
-            EnrichmentLayer --> EvidenceItem
-            EvidenceItem --> RerankLayer
-            RerankLayer --> RankedEvidence
-            RankedEvidence --> ContextLayer
-            ContextLayer --> ContextPack
-            RerankLayer --> HeuristicRerankStrategy
-            RerankLayer --> LlmListwiseRerankStrategy
-            LlmListwiseRerankStrategy -. failure fallback .-> HeuristicRerankStrategy
-        end
-
-        subgraph Answering["Generation / Verification"]
-            direction TB
-            GenerationLayer["生成层<br/>grounded answer<br/>citation hints<br/>dialogue policy<br/>evidence id references"]:::layer
-            VerificationLayer["校验层<br/>claim extraction<br/>grounding check<br/>contradiction check<br/>retry/fallback"]:::layer
-            VerificationReport["VerificationReport<br/>claims<br/>supported<br/>contradicted<br/>missing<br/>evidence_score<br/>retry_reason"]:::future
-            MatchRef["MatchRef<br/>projection<br/>id<br/>title"]:::future
-            AskResult["AskResult<br/>answer<br/>citations<br/>matches<br/>match_refs<br/>evidence<br/>session_id"]:::model
-
-            GenerationLayer --> VerificationLayer
-            MatchRef --> VerificationLayer
-            VerificationLayer -. future report .-> VerificationReport
-            VerificationLayer --> AskResult
-        end
-    end
-
-    class Ask pipeline
-
-    %% capture 落地产物 → ask 消费
-    CaptureIndexReady --> QueryLayer
-    KnowledgeNote --> RetrievalLayer
-    RetrievalDocument --> RetrievalLayer
-    KnowledgeNote --> NormalizeLayer
-    NormalizeLayer -. internal projection .-> EvidenceSource
-    KnowledgeNote -. projection .-> MatchRef
-    KnowledgeNote --> AskResult
-
-    %% ask 内部跨子图数据流
-    RetrievalPlan --> RetrievalLayer
-    GraphAskResult --> NormalizeLayer
-    WebSearchResult --> NormalizeLayer
-    RetrievalCandidate -. future adapter .-> NormalizeLayer
-    Citation --> NormalizeLayer
-    ContextPack --> GenerationLayer
-    ContextPack --> VerificationLayer
-    EvidenceItem --> AskResult
-    Citation --> AskResult
-    MatchRef --> AskResult
-```
+图源见：[Ask 依赖图](../mermaid/ask-model-flow.md)。
 
 ## Capture / Indexing Pipeline
 
@@ -490,7 +298,7 @@ Ask 主链路按层理解如下：
 
 ### 1. Query understanding
 
-**已实现**（[query_planner.py](../../src/personal_agent/agent/query_planner.py) + [query_understanding.py](../../src/personal_agent/core/query_understanding.py)）。
+**已实现**（[query_step_projector.py](../../src/personal_agent/agent/query_step_projector.py) + [query_understanding.py](../../src/personal_agent/core/query_understanding.py)）。
 
 当前 `execute_ask()` 在检索前调用 `plan_retrieval(question, context, settings)` 生成结构化查询理解：
 
@@ -502,7 +310,7 @@ question + context -> plan_retrieval() [planner LLM, strict json_schema]
 effective_query = plan.query (rewritten) or question
 ```
 
-实现细节：`query_planner.py` 使用独立的 planner 配置 `settings.planner.api_key / base_url / model_id`（env 前缀 `PERSONAL_AGENT_PLANNER_*`），默认是 `qwen3-coder-flash + DashScope compatible endpoint`。这是一个专用的 ask 侧查询理解配置，与 capture 侧的 LangExtract（`settings.langextract`）相互独立，不再复用。调用时使用 `response_format={"type":"json_schema","strict":true}` 约束 `QueryUnderstanding` 输出，避免 `json_object` 在复杂 query 下 schema 漂移；如果未配置 planner API key，则 fallback 到 `openai.small_model`。LLM 调用失败时 graceful fallback 到默认 plan，并用 `_heuristic_filters()` 兜底识别“最近/今天/昨天/上周/链接/文件/xxx.md”等常见 filters。
+实现细节：`query_step_projector.py` 使用独立的 planner 配置 `settings.planner.api_key / base_url / model_id`（env 前缀 `PERSONAL_AGENT_PLANNER_*`），默认是 `qwen3-coder-flash + DashScope compatible endpoint`。这是一个专用的 ask 侧查询理解配置，与 capture 侧的 LangExtract（`settings.langextract`）相互独立，不再复用。调用时使用 `response_format={"type":"json_schema","strict":true}` 约束 `QueryUnderstanding` 输出，避免 `json_object` 在复杂 query 下 schema 漂移；如果未配置 planner API key，则 fallback 到 `openai.small_model`。LLM 调用失败时 graceful fallback 到默认 plan，并用 `_heuristic_filters()` 兜底识别“最近/今天/昨天/上周/链接/文件/xxx.md”等常见 filters。
 
 ### 2. Retrieval layer：统一召回层
 
@@ -523,7 +331,7 @@ Retrieval 是 Ask 流程里最复杂的一层，当前应按“路由计划 -> �
 
 #### 2.1 Retrieval plan
 
-**已实现**（[query_planner.py](../../src/personal_agent/agent/query_planner.py) 中的 `_derive_plan()`）。
+**已实现**（[query_step_projector.py](../../src/personal_agent/agent/query_step_projector.py) 中的 `_derive_plan()`）。
 
 `RetrievalPlan` 由 `QueryUnderstanding` 驱动，动态决定检索路由：
 

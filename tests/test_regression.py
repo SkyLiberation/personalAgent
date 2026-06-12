@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from personal_agent.agent.plan_validator import PlanValidationResult
+from personal_agent.agent.step_projection_validator import StepProjectionValidationResult
 from personal_agent.agent.router import RouterDecision
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import OpenAIConfig, Settings
@@ -38,20 +38,20 @@ def svc(test_settings: Settings) -> AgentService:
 
 
 def _bypass_validator(svc: AgentService) -> MagicMock:
-    """Replace plan_validator.validate to always pass (note_id resolved at runtime)."""
+    """Replace step_projection_validator.validate to always pass (note_id resolved at runtime)."""
     mock_validator = MagicMock()
-    mock_validator.validate.return_value = PlanValidationResult(
+    mock_validator.validate.return_value = StepProjectionValidationResult(
         valid=True, issues=[], warnings=[], corrected_steps=None,
     )
-    svc._runtime._plan_validator = mock_validator
+    svc._runtime._step_projection_validator = mock_validator
     return mock_validator
 
 
 class TestCrossLayerRegression:
-    """Full entry → router → planner → validator → executor cross-layer tests.
+    """Full entry -> router -> projector -> validator -> executor cross-layer tests.
 
     Mocks _intent_router.classify to force planning intents so that the
-    graph-native plan execution path is exercised end-to-end.
+    graph-native step execution path is exercised end-to-end.
     """
 
     def _mock_router(self, svc: AgentService, route: str) -> MagicMock:
@@ -59,7 +59,7 @@ class TestCrossLayerRegression:
         decision = RouterDecision(
             route=route,
             confidence=0.9,
-            requires_planning=True,
+            requires_step_projection=True,
             requires_retrieval=True,
             risk_level="high" if route == "delete_knowledge" else "low",
             requires_confirmation=route == "delete_knowledge",
@@ -70,8 +70,8 @@ class TestCrossLayerRegression:
         svc._runtime._intent_router = mock_router
         return mock_router
 
-    def test_delete_knowledge_triggers_plan_execution_graph(self, svc: AgentService):
-        """delete_knowledge with requires_planning=True takes graph plan execution path."""
+    def test_delete_knowledge_triggers_step_execution_graph(self, svc: AgentService):
+        """delete_knowledge with requires_step_projection=True takes graph step execution path."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         # Prime knowledge base with a note to resolve
@@ -88,13 +88,13 @@ class TestCrossLayerRegression:
         entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
         result = svc.entry(entry)
 
-        # Graph plan execution populates plan_steps with status
-        assert len(result.plan_steps) > 0
-        statuses = {s.get("status") for s in result.plan_steps}
+        # Graph step execution populates steps with status
+        assert len(result.steps) > 0
+        statuses = {s.get("status") for s in result.steps}
         assert "completed" in statuses or "failed" in statuses
 
-    def test_solidify_conversation_triggers_plan_execution_graph(self, svc: AgentService):
-        """solidify_conversation with requires_planning=True takes graph plan execution path."""
+    def test_solidify_conversation_triggers_step_execution_graph(self, svc: AgentService):
+        """solidify_conversation with requires_step_projection=True takes graph step execution path."""
         self._mock_router(svc, "solidify_conversation")
         svc.graph_store.ask.return_value = type("R", (), {
             "enabled": False, "answer": "",
@@ -105,12 +105,12 @@ class TestCrossLayerRegression:
         entry = EntryInput(text="把关于缓存一致性的结论固化下来", user_id="bob")
         result = svc.entry(entry)
 
-        assert len(result.plan_steps) > 0
-        action_types = {s.get("action_type") for s in result.plan_steps}
+        assert len(result.steps) > 0
+        action_types = {s.get("action_type") for s in result.steps}
         assert "compose" in action_types
 
     def test_delete_knowledge_full_flow_waits_for_graph_confirmation(self, svc: AgentService, monkeypatch):
-        """Complete delete flow: plan -> resolve -> tool_call waits for Graph confirmation."""
+        """Complete delete flow: project -> resolve -> tool_call waits for Graph confirmation."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         note = svc.execute_capture(
@@ -136,8 +136,8 @@ class TestCrossLayerRegression:
         entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
         result = svc.entry(entry)
 
-        # Plan steps should include tool_call with delete_note
-        tool_steps = [s for s in result.plan_steps if s.get("action_type") == "tool_call"]
+        # execution steps should include tool_call with delete_note
+        tool_steps = [s for s in result.steps if s.get("action_type") == "tool_call"]
         assert len(tool_steps) > 0
         assert tool_steps[0].get("status") == "awaiting_confirmation"
         assert result.pending_confirmation
@@ -160,11 +160,11 @@ class TestCrossLayerRegression:
 
         # Result should have a reply (from compose step or default)
         assert result.reply_text
-        # Plan steps should exist
-        assert len(result.plan_steps) > 0
+        # execution steps should exist
+        assert len(result.steps) > 0
 
-    def test_delete_knowledge_plan_steps_status_transitions(self, svc: AgentService):
-        """Verify plan steps transition from 'planned' to final statuses."""
+    def test_delete_knowledge_steps_status_transitions(self, svc: AgentService):
+        """Verify execution steps transition from 'planned' to final statuses."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         svc.execute_capture(
@@ -179,8 +179,8 @@ class TestCrossLayerRegression:
         entry = EntryInput(text="删除那条关于测试笔记的内容", user_id="alice")
         result = svc.entry(entry)
 
-        # All plan steps should have a non-'planned' status (completed, failed, or skipped)
-        for step in result.plan_steps:
+        # All execution steps should have a non-'planned' status (completed, failed, or skipped)
+        for step in result.steps:
             assert step.get("status") != "planned", (
                 f"Step {step.get('step_id')} still 'planned' — expected transition"
             )

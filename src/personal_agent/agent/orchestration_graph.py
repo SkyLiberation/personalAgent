@@ -18,9 +18,9 @@ from .orchestration_nodes import (
     _after_step_execution as _after_step_execution,
     _after_step_failure as _after_step_failure,
     _after_step_success as _after_step_success,
-    _after_validate_plan as _after_validate_plan,
+    _after_validate_projected_steps as _after_validate_projected_steps,
     _build_react_context as _build_react_context,
-    _dispatch_plan_step as _dispatch_plan_step,
+    _dispatch_step as _dispatch_step,
     _format_react_tools as _format_react_tools,
     _is_react_tool_blocked as _is_react_tool_blocked,
     _node_ask_branch as _node_ask_branch,
@@ -31,15 +31,15 @@ from .orchestration_nodes import (
     _node_prepare_clarify as _node_prepare_clarify,
     _node_confirm_step as _node_confirm_step,
     _node_direct_answer_branch as _node_direct_answer_branch,
-    _node_execute_plan_step as _node_execute_plan_step,
-    _node_consume_plan_tool_result as _node_consume_plan_tool_result,
+    _node_execute_step as _node_execute_step,
+    _node_consume_step_tool_result as _node_consume_step_tool_result,
     _node_finalize_entry_result as _node_finalize_entry_result,
-    _node_finalize_plan_execution as _node_finalize_plan_execution,
+    _node_finalize_step_execution as _node_finalize_step_execution,
     _node_handle_step_failure as _node_handle_step_failure,
     _node_handle_step_success as _node_handle_step_success,
     _node_normalize_entry as _node_normalize_entry,
-    _node_plan_task as _node_plan_task,
-    _node_prepare_plan_execution as _node_prepare_plan_execution,
+    _node_project_workflow_steps as _node_project_workflow_steps,
+    _node_prepare_step_execution as _node_prepare_step_execution,
     _node_react_finalize as _node_react_finalize,
     _node_react_init as _node_react_init,
     _node_react_iterate as _node_react_iterate,
@@ -47,7 +47,7 @@ from .orchestration_nodes import (
     _node_route_intent as _node_route_intent,
     _node_select_next_step as _node_select_next_step,
     _node_summarize_branch as _node_summarize_branch,
-    _node_validate_plan as _node_validate_plan,
+    _node_validate_projected_steps as _node_validate_projected_steps,
     _react_llm_respond as _react_llm_respond,
     _resolve_allowed_tools_for_step as _resolve_allowed_tools_for_step,
     _should_continue_react as _should_continue_react,
@@ -73,8 +73,8 @@ def _route_by_intent(state: AgentGraphState) -> str:
         return "finalize_entry_result"
     if state.router_decision and state.router_decision.requires_clarification:
         return "finalize_entry_result"
-    if state.router_decision and state.router_decision.requires_planning:
-        return "plan_execution_graph"
+    if state.router_decision and state.router_decision.requires_step_projection:
+        return "step_execution_graph"
     intent = state.router_decision.route if state.router_decision else "unknown"
     if intent in ("capture_text", "capture_link", "capture_file"):
         return "capture_branch"
@@ -94,9 +94,9 @@ def _after_entry_route(state: AgentGraphState) -> str:
     return "return_to_parent"
 
 
-def _after_plan_execution_graph(state: AgentGraphState) -> str:
-    """A rejected plan returns to the parent for a user-visible answer."""
-    if state.router_decision and not state.router_decision.requires_planning and not state.answer_completed:
+def _after_step_execution_graph(state: AgentGraphState) -> str:
+    """A rejected step projection returns to the parent for a user-visible answer."""
+    if state.router_decision and not state.router_decision.requires_step_projection and not state.answer_completed:
         return "direct_answer_branch"
     return "finalize_entry_result"
 
@@ -187,60 +187,60 @@ def build_react_graph(deps: OrchestrationDeps):
     return builder.compile()
 
 
-def build_plan_execution_graph(deps: OrchestrationDeps):
-    """Build plan validation, deterministic execution, HITL, and ReAct dispatch."""
+def build_step_execution_graph(deps: OrchestrationDeps):
+    """Build step projection validation, deterministic execution, HITL, and ReAct dispatch."""
     builder = StateGraph(AgentGraphState)
-    builder.add_node("plan_task", lambda state: _node_plan_task(state, deps=deps))
-    builder.add_node("validate_plan", lambda state: _node_validate_plan(state, deps=deps))
-    builder.add_node("prepare_plan_execution", _node_prepare_plan_execution)
+    builder.add_node("project_workflow_steps", lambda state: _node_project_workflow_steps(state, deps=deps))
+    builder.add_node("validate_projected_steps", lambda state: _node_validate_projected_steps(state, deps=deps))
+    builder.add_node("prepare_step_execution", _node_prepare_step_execution)
     builder.add_node("select_next_step", _node_select_next_step)
-    builder.add_node("execute_plan_step", lambda state: _node_execute_plan_step(state, deps=deps))
+    builder.add_node("execute_step", lambda state: _node_execute_step(state, deps=deps))
     builder.add_node("handle_step_success", lambda state: _node_handle_step_success(state, deps=deps))
     builder.add_node("handle_step_failure", lambda state: _node_handle_step_failure(state, deps=deps))
     builder.add_node("confirm_step", lambda state: _node_confirm_step(state, deps=deps))
     builder.add_node(
-        "plan_tool_node",
+        "step_tool_node",
         deps.tool_executor.graph_node(),
     )
     builder.add_node(
-        "consume_plan_tool_result",
-        lambda state: _node_consume_plan_tool_result(state, deps=deps),
+        "consume_step_tool_result",
+        lambda state: _node_consume_step_tool_result(state, deps=deps),
     )
     builder.add_node("react_graph", build_react_graph(deps))
-    builder.add_node("finalize_plan_execution", _node_finalize_plan_execution)
+    builder.add_node("finalize_step_execution", _node_finalize_step_execution)
 
-    builder.add_edge(START, "plan_task")
-    builder.add_edge("plan_task", "validate_plan")
+    builder.add_edge(START, "project_workflow_steps")
+    builder.add_edge("project_workflow_steps", "validate_projected_steps")
     builder.add_conditional_edges(
-        "validate_plan",
-        _after_validate_plan,
+        "validate_projected_steps",
+        _after_validate_projected_steps,
         {
-            "prepare_plan_execution": "prepare_plan_execution",
+            "prepare_step_execution": "prepare_step_execution",
             "direct_answer_branch": END,
         },
     )
-    builder.add_edge("prepare_plan_execution", "select_next_step")
+    builder.add_edge("prepare_step_execution", "select_next_step")
     builder.add_conditional_edges(
         "select_next_step",
         _should_execute_step,
         {
-            "execute_step": "execute_plan_step",
-            "finalize_plan": "finalize_plan_execution",
+            "execute_step": "execute_step",
+            "finalize_steps": "finalize_step_execution",
         },
     )
-    for node_name in ("execute_plan_step", "consume_plan_tool_result"):
+    for node_name in ("execute_step", "consume_step_tool_result"):
         builder.add_conditional_edges(
             node_name,
             _after_step_execution,
             {
                 "confirm_step": "confirm_step",
                 "react_step": "react_graph",
-                "tool_node": "plan_tool_node",
+                "tool_node": "step_tool_node",
                 "handle_success": "handle_step_success",
                 "handle_failure": "handle_step_failure",
             },
         )
-    builder.add_edge("plan_tool_node", "consume_plan_tool_result")
+    builder.add_edge("step_tool_node", "consume_step_tool_result")
     builder.add_conditional_edges(
         "react_graph",
         _after_react_graph,
@@ -259,19 +259,19 @@ def build_plan_execution_graph(deps: OrchestrationDeps):
         _after_step_failure,
         {
             "continue_loop": "select_next_step",
-            "finalize_plan": "finalize_plan_execution",
+            "finalize_steps": "finalize_step_execution",
         },
     )
     builder.add_conditional_edges(
         "confirm_step",
         _after_confirm_step,
         {
-            "tool_node": "plan_tool_node",
+            "tool_node": "step_tool_node",
             "handle_success": "handle_step_success",
             "handle_failure": "handle_step_failure",
         },
     )
-    builder.add_edge("finalize_plan_execution", END)
+    builder.add_edge("finalize_step_execution", END)
     return builder.compile()
 
 
@@ -303,7 +303,7 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         "finalize_entry_result",
         lambda state: _node_finalize_entry_result(state, deps=deps),
     )
-    builder.add_node("plan_execution_graph", build_plan_execution_graph(deps))
+    builder.add_node("step_execution_graph", build_step_execution_graph(deps))
 
     # ---- Edges ----
     builder.add_edge(START, "entry_graph")
@@ -312,7 +312,7 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         _route_by_intent,
         {
             "finalize_entry_result": "finalize_entry_result",
-            "plan_execution_graph": "plan_execution_graph",
+            "step_execution_graph": "step_execution_graph",
             "capture_branch": "capture_branch",
             "ask_branch": "ask_branch",
             "summarize_branch": "summarize_branch",
@@ -324,8 +324,8 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
     builder.add_edge("summarize_branch", "finalize_entry_result")
     builder.add_edge("direct_answer_branch", "finalize_entry_result")
     builder.add_conditional_edges(
-        "plan_execution_graph",
-        _after_plan_execution_graph,
+        "step_execution_graph",
+        _after_step_execution_graph,
         {
             "direct_answer_branch": "direct_answer_branch",
             "finalize_entry_result": "finalize_entry_result",

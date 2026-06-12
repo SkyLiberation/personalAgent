@@ -155,7 +155,7 @@ _PROMPTS: dict[str, PromptSpec] = {
             "应归为 delete_knowledge 且 requires_clarification=false，后续会检索候选并要求用户确认。"
             "“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
             "route 是最终意图；user_visible_message 是简短分类理由。"
-            "requires_tools/requires_retrieval/requires_planning/candidate_tools 可以按你的判断填写，系统会再合并默认控制字段。"
+            "requires_tools/requires_retrieval/requires_step_projection/candidate_tools 可以按你的判断填写，系统会再合并默认控制字段。"
             "risk_level: 删除类操作应为 high，一般操作为 low。"
             "requires_confirmation: 删除操作应为 true。"
             "历史 chat messages 只用于理解指代和已有讨论主题；"
@@ -171,13 +171,13 @@ _PROMPTS: dict[str, PromptSpec] = {
     "replanner.system": PromptSpec(
         name="replanner.system",
         version="v2",
-        output_contract="ReplanSteps",
+        output_contract="ReExecutionSteps",
         template="你是一个严谨的任务重新规划器，只返回符合 schema 的 JSON。",
     ),
     "replanner.user": PromptSpec(
         name="replanner.user",
         version="v2",
-        output_contract="ReplanSteps",
+        output_contract="ReExecutionSteps",
         template=(
             "当前计划中的某个步骤执行失败了，请根据失败信息和中间结果，生成替换剩余未完成步骤的新计划。"
             "已经完成的步骤不要重新执行。\n\n"
