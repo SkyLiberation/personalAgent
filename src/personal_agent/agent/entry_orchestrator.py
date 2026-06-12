@@ -78,6 +78,46 @@ def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) ->
     return streamed_values
 
 
+def _checkpoint_id_from_config(config: dict | None) -> str | None:
+    configurable = (config or {}).get("configurable") if isinstance(config, dict) else None
+    if not isinstance(configurable, dict):
+        return None
+    checkpoint_id = configurable.get("checkpoint_id") or configurable.get("checkpoint_ns")
+    return str(checkpoint_id) if checkpoint_id else None
+
+
+def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
+    values = getattr(snapshot, "values", None)
+    if not isinstance(values, dict):
+        return None
+    try:
+        state = AgentGraphState.model_validate(values)
+    except Exception:
+        return None
+    config = getattr(snapshot, "config", None)
+    metadata = getattr(snapshot, "metadata", None)
+    created_at = getattr(snapshot, "created_at", None)
+    parent_config = getattr(snapshot, "parent_config", None)
+    return {
+        "checkpoint_id": _checkpoint_id_from_config(config),
+        "parent_checkpoint_id": _checkpoint_id_from_config(parent_config),
+        "thread_id": state.thread_id,
+        "run_id": state.run_id,
+        "user_id": state.user_id,
+        "session_id": state.session_id,
+        "status": state.to_run_snapshot().status.value,
+        "intent": state.router_decision.route if state.router_decision else "unknown",
+        "next": list(getattr(snapshot, "next", ()) or ()),
+        "metadata": metadata if isinstance(metadata, dict) else {},
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else None,
+        "updated_at": state.updated_at.isoformat() if state.updated_at else None,
+        "event_count": len(state.events),
+        "tool_result_count": len(state.tool_results),
+        "answer_completed": state.answer_completed,
+        "pending_confirmation": state.pending_confirmation,
+    }
+
+
 def _entry_trace_metadata(
     *,
     run_id: str,
@@ -489,4 +529,75 @@ class EntryOrchestrator:
             logger.debug("Could not list run snapshots", exc_info=True)
         return []
 
+    def list_run_history(self, run_id: str, *, limit: int = 100) -> list[dict[str, object]]:
+        """Return checkpoint history for one run using LangGraph state history."""
+        if not run_id.strip():
+            return []
+        try:
+            latest = self.get_run_snapshot(run_id)
+            if latest is None:
+                return []
+            graph = self._get_orch_graph()
+            config = {"configurable": {"thread_id": latest.thread_id}}
+            items: list[dict[str, object]] = []
+            for snapshot in graph.get_state_history(config, limit=max(1, limit)):
+                item = _snapshot_to_history_item(snapshot)
+                if item is None or item.get("run_id") != run_id:
+                    continue
+                items.append(item)
+            return items
+        except Exception:
+            logger.debug("Could not list run history for run_id=%s", run_id, exc_info=True)
+        return []
 
+    def replay_from_checkpoint(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_id: str,
+        updates: dict[str, object],
+        as_node: str | None = None,
+    ) -> EntryResult:
+        """Fork a historical checkpoint, apply state updates, and continue execution."""
+        graph = self._get_orch_graph()
+        config: dict[str, object] = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_id": checkpoint_id,
+            },
+            "run_name": "replay_entry",
+            "metadata": {
+                "app": "personal-agent",
+                "thread_id": thread_id,
+                "source_checkpoint_id": checkpoint_id,
+                "time_travel": True,
+            },
+            "tags": ["entry", "replay"],
+        }
+        update_kwargs = {"as_node": as_node} if as_node else {}
+        fork_config = graph.update_state(config, updates, **update_kwargs)
+        invoke_result = graph.invoke(None, fork_config)
+        interrupt_data = _interrupt_payload_from_result(invoke_result)
+        if interrupt_data is not None:
+            values = _checkpoint_values_after_interrupt(graph, fork_config, invoke_result)
+            run_id = str(values.get("run_id") or "")
+            return self._entry_result_from_interrupt(
+                values,
+                interrupt_data,
+                run_id=run_id,
+                thread_id=thread_id,
+            )
+
+        result_state = AgentGraphState.model_validate(invoke_result)
+        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
+        return EntryResult(
+            intent=intent,
+            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
+            reply_text=result_state.answer or "回放已完成。",
+            plan_steps=[s.model_dump(mode="json") for s in result_state.plan.steps],
+            execution_trace=result_state.execution_trace,
+            run_id=result_state.run_id,
+            thread_id=result_state.thread_id,
+            run_status="completed",
+            events=[e.model_dump(mode="json") for e in result_state.events],
+        )

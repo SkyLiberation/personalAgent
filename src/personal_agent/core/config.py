@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from dotenv import load_dotenv
@@ -69,6 +70,46 @@ class OpenAIConfig(_StrictBase):
     max_retries: int = 2
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
+
+
+class RouterConfig(_StrictBase):
+    """Dedicated LLM config for the intent router (``agent/router.py``).
+
+    The router uses OpenAI-style strict ``json_schema`` structured outputs, so
+    it needs an endpoint that supports them (e.g. gpt-5.4-mini). This is kept
+    separate from ``OpenAIConfig`` (which may point at an endpoint without
+    json_schema support, such as DeepSeek) so the router can target a
+    compatible model without disturbing the other LLM paths.
+
+    ``model`` is exposed as ``small_model`` too, because ``traced_chat_completion``
+    falls back to ``config.small_model`` when no explicit model is passed.
+    """
+
+    api_key: str | None = None
+    base_url: str | None = None
+    model: str = "gpt-5.4-mini"
+    timeout_seconds: float = 30.0
+    max_retries: int = 2
+    extra_body: dict[str, Any] = Field(default_factory=dict)
+    # Structured-output mode: "json_schema" (strict) or "json_object" (valid JSON only).
+    structured_output: str = "json_schema"
+
+    @property
+    def small_model(self) -> str:
+        return self.model
+
+
+class StructuredConfig(RouterConfig):
+    """Dedicated LLM config for structured-output orchestration steps.
+
+    Used by ``_structured_llm_respond`` in
+    ``agent/orchestration_nodes/_helpers.py`` (e.g. the ``solidify_draft`` step),
+    which emits OpenAI-style strict ``json_schema`` outputs. Same shape/rationale
+    as :class:`RouterConfig`: keep it separate from ``OpenAIConfig`` (DeepSeek,
+    no json_schema support) so structured steps can target a compatible model
+    without disturbing the ask/answer paths. Defaults fall back to ``ROUTER_*``
+    then ``OPENAI_*`` when ``STRUCTURED_*`` is unset.
+    """
 
 
 class FirecrawlConfig(_StrictBase):
@@ -215,6 +256,8 @@ class Settings(_StrictBase):
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     ms_graphrag: MicrosoftGraphRagConfig = Field(default_factory=MicrosoftGraphRagConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    router: RouterConfig = Field(default_factory=RouterConfig)
+    structured: StructuredConfig = Field(default_factory=StructuredConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
@@ -334,6 +377,37 @@ class Settings(_StrictBase):
                 max_retries=int(os.getenv("PERSONAL_AGENT_OPENAI_MAX_RETRIES", "2")),
                 embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
                 embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
+            ),
+            router=RouterConfig(
+                api_key=os.getenv("ROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("ROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL"),
+                model=os.getenv("ROUTER_MODEL", "gpt-5.4-mini"),
+                timeout_seconds=float(
+                    os.getenv("PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS", "30")
+                ),
+                max_retries=int(os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")),
+                extra_body=_parse_json_env("ROUTER_EXTRA_BODY"),
+                structured_output=os.getenv("ROUTER_STRUCTURED_OUTPUT", "json_schema"),
+            ),
+            structured=StructuredConfig(
+                api_key=os.getenv("STRUCTURED_API_KEY")
+                or os.getenv("ROUTER_API_KEY")
+                or os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("STRUCTURED_BASE_URL")
+                or os.getenv("ROUTER_BASE_URL")
+                or os.getenv("OPENAI_BASE_URL"),
+                model=os.getenv("STRUCTURED_MODEL")
+                or os.getenv("ROUTER_MODEL", "gpt-5.4-mini"),
+                timeout_seconds=float(
+                    os.getenv("PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS", "30")
+                ),
+                max_retries=int(
+                    os.getenv("PERSONAL_AGENT_STRUCTURED_MAX_RETRIES", "2")
+                ),
+                extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
+                or _parse_json_env("ROUTER_EXTRA_BODY"),
+                structured_output=os.getenv("STRUCTURED_STRUCTURED_OUTPUT")
+                or os.getenv("ROUTER_STRUCTURED_OUTPUT", "json_schema"),
             ),
             firecrawl=FirecrawlConfig(
                 api_key=os.getenv("FIRECRAWL_API_KEY"),
@@ -517,6 +591,21 @@ def _parse_csv(raw: str) -> tuple[str, ...]:
     if not raw.strip():
         return ()
     return tuple(token.strip() for token in raw.split(",") if token.strip())
+
+
+def _parse_json_env(name: str) -> dict[str, Any]:
+    """Parse a JSON-object env var into a dict; empty/invalid yields {}."""
+    import json
+    import os
+
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _parse_api_keys(raw: str) -> dict[str, str]:

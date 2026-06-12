@@ -93,6 +93,11 @@ class ResumeEntryRequest(BaseModel):
     option_id: str = ""
 
 
+class ReplayCheckpointRequest(BaseModel):
+    updates: dict[str, object] = Field(default_factory=dict)
+    as_node: str | None = None
+
+
 def create_app() -> FastAPI:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
@@ -529,6 +534,9 @@ def create_app() -> FastAPI:
     class RunSnapshotListResponse(BaseModel):
         items: list[RunSnapshotResponse] = Field(default_factory=list)
 
+    class RunCheckpointHistoryResponse(BaseModel):
+        items: list[dict[str, object]] = Field(default_factory=list)
+
     def _run_snapshot_to_response(snapshot) -> RunSnapshotResponse:
         last_evt = None
         if snapshot.last_event:
@@ -560,6 +568,38 @@ def create_app() -> FastAPI:
         snapshots = service.list_run_snapshots(resolved_user, limit)
         return RunSnapshotListResponse(
             items=[_run_snapshot_to_response(s) for s in snapshots]
+        )
+
+    @app.get("/api/entry/runs/{run_id}/history", response_model=RunCheckpointHistoryResponse)
+    def list_run_history(run_id: str, limit: int = 100) -> RunCheckpointHistoryResponse:
+        history = service.list_run_history(run_id, limit=limit)
+        if not history:
+            raise HTTPException(status_code=404, detail="Run history not found.")
+        return RunCheckpointHistoryResponse(items=history)
+
+    @app.post("/api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay", response_model=EntryResponse)
+    def replay_checkpoint(
+        thread_id: str,
+        checkpoint_id: str,
+        body: ReplayCheckpointRequest,
+    ) -> EntryResponse:
+        result = service.replay_from_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            updates=body.updates,
+            as_node=body.as_node,
+        )
+        return EntryResponse(
+            intent=result.intent,
+            reason=result.reason,
+            reply_text=result.reply_text,
+            capture_result=result.capture_result.model_dump(mode="json") if result.capture_result else None,
+            ask_result=result.ask_result.model_dump(mode="json") if result.ask_result else None,
+            plan_steps=result.plan_steps,
+            execution_trace=result.execution_trace,
+            run_id=result.run_id,
+            pending_confirmation=result.pending_confirmation,
+            run_status=result.run_status,
         )
 
     frontend_dist = _frontend_dist_dir()

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from langchain_core.messages import BaseMessage
 
 from ._deps import OrchestrationDeps, _REACT_SYSTEM_PROMPT
-from ...core.llm_schemas import strict_json_schema_response, strict_tool_definition
+from ...core.llm_schemas import structured_response_format, strict_tool_definition, strip_json_fence
 from ...core.prompts import get_prompt
 
 if TYPE_CHECKING:
@@ -142,6 +142,25 @@ def _react_llm_respond(
         return None
 
 
+def _describe_schema_fields(schema: dict) -> str:
+    """Render a JSON-schema's properties as a compact field contract for prompts.
+
+    Used in json_object mode where the schema is not enforced server-side, so
+    field names/types must be described to the model. Example output:
+    ``thought(string), selected_turn_ids(array), title(string), content(string)``.
+    """
+    props = schema.get("properties", {})
+    if not isinstance(props, dict) or not props:
+        return "一个 JSON 对象"
+    required = set(schema.get("required", []))
+    parts = []
+    for name, spec in props.items():
+        typ = spec.get("type", "any") if isinstance(spec, dict) else "any"
+        flag = "" if name in required else "（可选）"
+        parts.append(f"{name}({typ}){flag}")
+    return "、".join(parts)
+
+
 def _structured_llm_respond(
     prompt_name: str,
     user_prompt: str,
@@ -153,32 +172,41 @@ def _structured_llm_respond(
     from ...core.llm_trace import traced_chat_completion
 
     settings = deps.settings
-    if not (settings.openai.api_key and settings.openai.base_url):
-        return None
+    structured = settings.structured
+    if not (structured.api_key and structured.base_url):
+        return _react_llm_respond(user_prompt, deps)
     try:
         system_prompt = get_prompt("structured.system")
         try:
             prompt_version = get_prompt(f"{prompt_name}.user").version
         except KeyError:
             prompt_version = system_prompt.version
+        system_content = system_prompt.template
+        # In json_object mode the schema is not enforced server-side, so the
+        # field contract must be conveyed via the prompt.
+        if structured.structured_output == "json_object":
+            system_content += "\n\n输出 JSON 必须且只能包含以下字段：" + _describe_schema_fields(schema)
         result = traced_chat_completion(
-            settings.openai,
+            structured,
             prompt_name=prompt_name,
             prompt_version=prompt_version,
             messages=[
-                {"role": "system", "content": system_prompt.template},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0,
             max_tokens=max_tokens,
-            response_format=strict_json_schema_response(prompt_name, schema),
+            response_format=structured_response_format(
+                prompt_name, schema, structured.structured_output
+            ),
             metadata={"component": prompt_name},
             upload_inputs_outputs=settings.langsmith.upload_inputs,
+            extra_body=structured.extra_body or None,
         )
-        return result.content or None
+        return strip_json_fence(result.content) if result.content else _react_llm_respond(user_prompt, deps)
     except Exception:
         logger.exception("Structured LLM call failed: %s", prompt_name)
-        return None
+        return _react_llm_respond(user_prompt, deps)
 
 
 def _react_parse_response(raw: str) -> dict | None:
@@ -350,4 +378,3 @@ def _summarize_result(data: object) -> str:
     if isinstance(data, str):
         return data[:100]
     return str(data)[:100]
-

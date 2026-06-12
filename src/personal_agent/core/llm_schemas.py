@@ -22,6 +22,40 @@ def strict_json_schema_response(name: str, schema: dict[str, Any]) -> dict[str, 
     }
 
 
+def structured_response_format(
+    name: str, schema: dict[str, Any], mode: str = "json_schema"
+) -> dict[str, Any]:
+    """Build a response_format for the given structured-output mode.
+
+    ``json_schema`` (default) uses OpenAI strict schema enforcement. ``json_object``
+    only guarantees syntactically valid JSON — used for endpoints that reject
+    ``json_schema`` (e.g. DashScope's OpenAI-compatible qwen models). For
+    ``json_object`` the field contract must be described in the prompt instead.
+    """
+    if mode == "json_object":
+        return {"type": "json_object"}
+    return strict_json_schema_response(name, schema)
+
+
+def strip_json_fence(content: str) -> str:
+    """Strip Markdown code fences around a JSON payload.
+
+    Some models (e.g. reasoning models even under json_schema) wrap their
+    structured output in ```json ... ``` fences instead of returning bare JSON.
+    Return the inner payload so downstream JSON parsing succeeds; bare JSON is
+    returned unchanged.
+    """
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def strict_tool_definition(tool: BaseTool) -> dict[str, Any]:
     """Build an OpenAI Chat Completions tool definition from a LangChain tool."""
     return {

@@ -8,7 +8,7 @@ from langchain_core.tools import BaseTool
 from ..core.models import EntryIntent
 from ..policy import PolicyEngine
 from .base import tool_failure
-from .gateway import ToolAuditSink, ToolGateway, ToolGatewayContext
+from .gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,14 @@ class ToolExecutor:
         self,
         audit_sink: ToolAuditSink | None = None,
         *,
+        idempotency_store: IdempotencyStore | None = None,
         policy_engine: PolicyEngine | None = None,
     ) -> None:
-        self._gateway = ToolGateway(audit_sink=audit_sink, policy_engine=policy_engine)
+        self._gateway = ToolGateway(
+            audit_sink=audit_sink,
+            idempotency_store=idempotency_store,
+            policy_engine=policy_engine,
+        )
 
     def register(self, tool: BaseTool) -> None:
         if tool.name in self:

@@ -26,6 +26,8 @@ import {
   type PlanStep,
 } from "./api";
 import ForceGraph2D from "react-force-graph-2d";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 function loadUserId(): string {
   try {
@@ -2070,13 +2072,30 @@ function sameHistoryItem(left: AskHistoryView, right: AskHistoryView): boolean {
   return left.session_id === right.session_id && left.question === right.question;
 }
 
+function MarkdownAnswer({ text }: { text: string }) {
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ node, ...props }) => (
+            <a {...props} target="_blank" rel="noopener noreferrer" />
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 function renderHighlightedAnswer(
   answer: string,
   activeCiteKey: string | null,
   citations?: Citation[],
 ) {
   if (!activeCiteKey || !citations?.length) {
-    return <p>{answer}</p>;
+    return <MarkdownAnswer text={answer} />;
   }
 
   // Find the active citation
@@ -2086,13 +2105,13 @@ function renderHighlightedAnswer(
   });
 
   if (!activeCitation) {
-    return <p>{answer}</p>;
+    return <MarkdownAnswer text={answer} />;
   }
 
   // Find text to highlight: prefer snippet, fall back to relation_fact
   const highlightText = activeCitation.snippet || activeCitation.relation_fact;
   if (!highlightText || highlightText.length < 3) {
-    return <p>{answer}</p>;
+    return <MarkdownAnswer text={answer} />;
   }
 
   // Find the best matching substring in the answer
@@ -2103,7 +2122,7 @@ function renderHighlightedAnswer(
       .split(/\s+/)
       .filter((w) => w.length >= 3);
     if (!factWords.length) {
-      return <p>{answer}</p>;
+      return <MarkdownAnswer text={answer} />;
     }
 
     const parts: React.ReactNode[] = [];

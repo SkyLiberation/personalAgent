@@ -13,6 +13,16 @@ from .logging_utils import log_event
 logger = logging.getLogger(__name__)
 
 
+def _is_reasoning_model(model: str | None) -> bool:
+    """Whether ``model`` belongs to the gpt-5 reasoning family.
+
+    These models reject a non-default ``temperature`` and use
+    ``max_completion_tokens`` instead of ``max_tokens``.
+    """
+    name = (model or "").lower()
+    return name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3")
+
+
 @dataclass(frozen=True, slots=True)
 class LlmTraceResult:
     content: str
@@ -91,6 +101,7 @@ def traced_chat_completion(
     tool_choice: str | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
     upload_inputs_outputs: bool = False,
+    extra_body: dict[str, object] | None = None,
 ) -> LlmTraceResult:
     runner = _traced_chat_completion if upload_inputs_outputs else _redacted_traced_chat_completion
     return runner(
@@ -105,6 +116,7 @@ def traced_chat_completion(
         tools=tools,
         tool_choice=tool_choice,
         metadata=metadata or {},
+        extra_body=extra_body,
         langsmith_extra={
             "name": f"llm.{prompt_name}",
             "metadata": {
@@ -224,6 +236,7 @@ def _redacted_traced_chat_completion(
     tool_choice: str | dict[str, object] | None,
     metadata: dict[str, object],
     langsmith_extra: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
 ) -> LlmTraceResult:
     return _chat_completion_impl(
         config,
@@ -237,6 +250,7 @@ def _redacted_traced_chat_completion(
         tools=tools,
         tool_choice=tool_choice,
         metadata=metadata,
+        extra_body=extra_body,
     )
 
 
@@ -255,6 +269,7 @@ def _traced_chat_completion(
     tool_choice: str | dict[str, object] | None,
     metadata: dict[str, object],
     langsmith_extra: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
 ) -> LlmTraceResult:
     return _chat_completion_impl(
         config,
@@ -268,6 +283,7 @@ def _traced_chat_completion(
         tools=tools,
         tool_choice=tool_choice,
         metadata=metadata,
+        extra_body=extra_body,
     )
 
 
@@ -284,6 +300,7 @@ def _chat_completion_impl(
     tools: list[dict[str, object]] | None,
     tool_choice: str | dict[str, object] | None,
     metadata: dict[str, object],
+    extra_body: dict[str, object] | None = None,
 ) -> LlmTraceResult:
     resolved_model = model or config.small_model or config.model
     start = perf_counter()
@@ -296,15 +313,23 @@ def _chat_completion_impl(
     kwargs: dict[str, Any] = {
         "model": resolved_model,
         "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
     }
+    if _is_reasoning_model(resolved_model):
+        # gpt-5 family rejects non-default temperature and renamed the token
+        # cap to ``max_completion_tokens``. Omit temperature so the API uses
+        # its only supported value (1).
+        kwargs["max_completion_tokens"] = max_tokens
+    else:
+        kwargs["temperature"] = temperature
+        kwargs["max_tokens"] = max_tokens
     if response_format is not None:
         kwargs["response_format"] = response_format
     if tools is not None:
         kwargs["tools"] = tools
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     response = client.chat.completions.create(**kwargs)
     latency_ms = round((perf_counter() - start) * 1000, 2)
     message = response.choices[0].message

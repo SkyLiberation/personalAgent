@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 from typing import Literal, Protocol
 
 from ..core.config import Settings
-from ..core.llm_schemas import strict_json_schema_response
+from ..core.llm_schemas import structured_response_format, strip_json_fence
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.logging_utils import log_event
 from ..core.models import EntryInput, EntryIntent
@@ -32,6 +32,24 @@ class RouterDecision(BaseModel):
     clarification_prompt: str = ""
     candidate_tools: list[str] = Field(default_factory=list)
     user_visible_message: str = ""
+
+    @field_validator(
+        "missing_information",
+        "clarification_prompt",
+        "candidate_tools",
+        "user_visible_message",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_null_to_default(cls, value: object, info: ValidationInfo) -> object:
+        """Treat null from the LLM as the field's empty default.
+
+        Some models emit ``null`` for optional list/string fields instead of
+        omitting them or returning ``[]`` / ``""``.
+        """
+        if value is None:
+            return [] if info.field_name in {"missing_information", "candidate_tools"} else ""
+        return value
 
 
 class IntentRouter(Protocol):
@@ -252,9 +270,9 @@ class DefaultIntentRouter:
         if not self._llm_configured:
             logger.warning(
                 "Router LLM not configured: api_key=%s, base_url=%s, model=%s",
-                bool(self._settings.openai.api_key),
-                bool(self._settings.openai.base_url),
-                bool(self._settings.openai.small_model),
+                bool(self._settings.router.api_key),
+                bool(self._settings.router.base_url),
+                bool(self._settings.router.model),
             )
             return None
 
@@ -269,28 +287,30 @@ class DefaultIntentRouter:
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": render_prompt("router.classify.user", text=text)})
         content = ""
-        model = self._settings.openai.small_model
+        model = self._settings.router.model
         latency_ms = None
         try:
             llm_result = traced_chat_completion(
-                self._settings.openai,
+                self._settings.router,
                 prompt_name="router",
                 prompt_version=system_prompt.version,
                 messages=messages,
                 temperature=0,
                 max_tokens=500,
-                response_format=strict_json_schema_response(
+                response_format=structured_response_format(
                     "router_decision",
                     _ROUTER_RESPONSE_SCHEMA,
+                    self._settings.router.structured_output,
                 ),
                 metadata={"source": "intent_router"},
                 upload_inputs_outputs=self._settings.langsmith.upload_inputs,
+                extra_body=self._settings.router.extra_body or None,
             )
             content = llm_result.content
             model = llm_result.model
             latency_ms = llm_result.latency_ms
             logger.info("LLM intent classification raw response: %s", content)
-            llm_decision = RouterDecision.model_validate_json(content)
+            llm_decision = RouterDecision.model_validate_json(strip_json_fence(content))
             log_llm_parse(
                 prompt_name="router",
                 prompt_version=system_prompt.version,
@@ -342,9 +362,9 @@ class DefaultIntentRouter:
     @property
     def _llm_configured(self) -> bool:
         return bool(
-            self._settings.openai.api_key
-            and self._settings.openai.base_url
-            and self._settings.openai.small_model
+            self._settings.router.api_key
+            and self._settings.router.base_url
+            and self._settings.router.model
         )
 
     def _log_decision(

@@ -11,6 +11,7 @@ from ..memory import MemoryFacade
 from ..ms_graphrag import MicrosoftGraphRagStore
 from ..policy import PolicyEngine, PolicyRules
 from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from ..structural_retriever import StructuralRetrieverStore
 from ..tools import (
     ToolExecutor,
@@ -105,11 +106,16 @@ class AgentRuntime:
         self.graph_store = graph_store
         self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
         self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
+        self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
         self._intent_router = DefaultIntentRouter(settings)
-        self._tool_executor = ToolExecutor(policy_engine=self._policy_engine)
+        self._tool_executor = ToolExecutor(
+            audit_sink=self.tool_governance_store,
+            idempotency_store=self.tool_governance_store,
+            policy_engine=self._policy_engine,
+        )
         self._register_tools()
         self._planner = DefaultTaskPlanner(settings, tool_executor=self._tool_executor)
         self._verifier = AnswerVerifier()
@@ -364,6 +370,26 @@ class AgentRuntime:
 
     def list_run_snapshots(self, user_id: str | None = None, limit: int = 50):
         return self._entry.list_run_snapshots(user_id=user_id, limit=limit)
+
+    def list_run_history(self, run_id: str, limit: int = 100):
+        return self._entry.list_run_history(run_id, limit=limit)
+
+    def replay_from_checkpoint(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_id: str,
+        updates: dict[str, object],
+        as_node: str | None = None,
+    ) -> EntryResult:
+        result = self._entry.replay_from_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            updates=updates,
+            as_node=as_node,
+        )
+        record_entry_episode(self.memory, result)
+        return result
 
     # ---- digest / intent (formerly RuntimeEntryMixin) ----
 

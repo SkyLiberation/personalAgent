@@ -14,6 +14,8 @@ _NAMED_TABLES = {
     "checkpoint_blobs": "checkpoint_blobs",
     "checkpoint_writes": "checkpoint_writes",
     "checkpoint_migrations": "checkpoint_migrations",
+    "tool_idempotency_ledger": "tool_idempotency_ledger",
+    "tool_audit_events": "tool_audit_events",
 }
 
 

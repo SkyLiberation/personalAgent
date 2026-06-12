@@ -68,10 +68,10 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
 
 def build_reflection_candidate(result: EntryResult, episode: MemoryEpisode) -> MemoryItem | None:
     """Build a deterministic reflection candidate for failed or blocked runs."""
-    if episode.outcome not in {"failed", "cancelled"} and not result.errors:
+    error_lines = _errors_from_result(result)
+    if episode.outcome not in {"failed", "cancelled"} and not error_lines:
         return None
     title = f"反思候选: {episode.workflow} {episode.outcome}"
-    error_lines = _errors_from_result(result)
     trace = "；".join(str(item) for item in result.execution_trace[:5])
     content_parts = [
         f"workflow={episode.workflow}",

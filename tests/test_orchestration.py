@@ -711,6 +711,17 @@ class TestOrchestrationGraphIntegration:
         assert snapshot is not None
         assert snapshot.run_id == run_id
 
+    def test_run_history_lists_langgraph_checkpoints(self, runtime):
+        entry = EntryInput(text="你好", user_id="test-user", session_id="history-get")
+        result = runtime.execute_entry(entry)
+
+        history = runtime.list_run_history(result.run_id or "", limit=20)
+
+        assert history
+        assert all(item["run_id"] == result.run_id for item in history)
+        assert all(item["thread_id"] == result.thread_id for item in history)
+        assert any(item["checkpoint_id"] for item in history)
+
     def test_persisted_snapshots_are_visible_before_new_execution(self, temp_dir):
         from personal_agent.agent.runtime import AgentRuntime
         from personal_agent.graphiti.store import GraphitiStore

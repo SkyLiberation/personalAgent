@@ -98,6 +98,7 @@ EntryInput
 - 已支持 verifier 校验和低置信度重试
 - 已支持图谱异步/手动同步重试
 - 已支持 Graph HITL 确认和拒绝
+- 已支持 LangGraph checkpoint 历史查询和基于历史 checkpoint 的 fork 回放
 - 已支持 health 和开发环境全量数据 reset
 - 已支持 `plan_steps` 与 `execution_trace` 分离，避免非计划任务生成伪计划
 
@@ -112,6 +113,19 @@ EntryInput
 ### `plan_for_entry(entry_input: EntryInput) -> tuple[RouterDecision, list[PlanStep], list[dict]]`
 
 运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续规划和校验，并写入 checkpoint 中的 `AgentGraphState.plan`；普通意图返回空计划，由执行阶段生成 `execution_trace`。
+
+### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
+
+基于 LangGraph `get_state_history()` 返回某次 run 的 checkpoint 时间线摘要，包括 checkpoint id、父 checkpoint id、线程、状态、intent、下一步节点、事件数量、工具结果数量和 pending confirmation。它用于调试和运营后台查看“这次执行是如何走到当前状态的”，不直接暴露完整 checkpoint payload。
+
+### `replay_from_checkpoint(thread_id, checkpoint_id, updates, as_node=None) -> EntryResult`
+
+基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力主要用于调试 HITL、计划步骤和恢复一致性问题；对带副作用流程的重放依赖工具层的持久幂等账本保护，避免二次删除或二次写入。
+
+对应 Web API：
+
+- `GET /api/entry/runs/{run_id}/history`
+- `POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay`
 
 ## 已知限制
 

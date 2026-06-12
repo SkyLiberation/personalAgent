@@ -337,7 +337,7 @@ def _begin_tool_call(
 ) -> AIMessage:
     call_id = f"{state.run_id}:{suffix}:{len(state.tool_results)}"
     normalized_input = dict(tool_input or {})
-    if tool_name == "graph_search" and "user_id" not in normalized_input:
+    if context == "plan" and tool_name == "graph_search" and "user_id" not in normalized_input:
         normalized_input["user_id"] = state.user_id
     state.tool_tracking = ToolTrackingSubState(
         active_context=context,
@@ -884,6 +884,8 @@ def _select_local_delete_candidate_with_llm(
     )
     parsed = _helpers._react_parse_response(raw) if raw else None
     note_id = parsed.get("note_id") if isinstance(parsed, dict) else None
+    if note_id is None and isinstance(parsed, dict) and isinstance(parsed.get("result"), dict):
+        note_id = parsed["result"].get("note_id")
     if isinstance(note_id, str) and note_id in candidate_by_id:
         return [candidate_by_id[note_id]]
     return []
@@ -924,9 +926,11 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
             )
             parsed_answer = _helpers._react_parse_response(raw_answer) if raw_answer else None
             if isinstance(parsed_answer, dict):
-                title = str(parsed_answer.get("title") or "").strip()
-                body = str(parsed_answer.get("content") or "").strip()
-                answer = f"{title}\n\n{body}" if title and body else body or title
+                answer = _helpers._solidify_note_text(raw_answer)
+                if not answer:
+                    title = str(parsed_answer.get("title") or "").strip()
+                    body = str(parsed_answer.get("content") or "").strip()
+                    answer = f"{title}\n\n{body}" if title and body else body or title
             else:
                 answer = None
         except Exception:

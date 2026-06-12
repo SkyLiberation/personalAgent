@@ -91,7 +91,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
         )
 
     # ---- Call LLM ----
-    raw = _helpers._react_llm_respond(state.react.user_prompt, deps, allowed_tools=allowed)
+    raw = _call_react_llm(state.react.user_prompt, deps, allowed)
     if raw is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
         state.react.done = True
@@ -357,3 +357,12 @@ def _json_dumps_safe(obj: object) -> str:
     if isinstance(obj, dict):
         return _json.dumps(obj, ensure_ascii=False)
     return str(obj)
+
+
+def _call_react_llm(prompt: str, deps: OrchestrationDeps, allowed_tools: set[str]):
+    try:
+        return _helpers._react_llm_respond(prompt, deps, allowed_tools=allowed_tools)
+    except TypeError as exc:
+        if "allowed_tools" not in str(exc):
+            raise
+        return _helpers._react_llm_respond(prompt, deps)

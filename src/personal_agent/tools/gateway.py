@@ -65,8 +65,14 @@ class IdempotencyStore(Protocol):
     def seen(self, key: str) -> bool:
         """Return True if this idempotency key was already committed."""
 
+    def reserve(self, key: str, *, context: ToolGatewayContext, tool_name: str) -> bool:
+        """Atomically reserve a key before executing a side effect."""
+
     def commit(self, key: str) -> None:
         """Mark an idempotency key as committed so replays are rejected."""
+
+    def release(self, key: str) -> None:
+        """Release a reserved key when execution did not complete."""
 
 
 @dataclass(slots=True)
@@ -83,8 +89,17 @@ class InMemoryIdempotencyStore:
     def seen(self, key: str) -> bool:
         return key in self._committed
 
+    def reserve(self, key: str, *, context: ToolGatewayContext, tool_name: str) -> bool:
+        if self.seen(key):
+            return False
+        self._committed.add(key)
+        return True
+
     def commit(self, key: str) -> None:
         self._committed.add(key)
+
+    def release(self, key: str) -> None:
+        self._committed.discard(key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,8 +174,16 @@ class ToolGateway:
                     f"工具 {tool.name} 触发速率限制，请稍后再试。", error_kind="transient"
                 )
             else:
-                output, attempts, timed_out = self._invoke_with_strategy(tool, name, args, context)
-                self._commit_idempotency(tool, args, output)
+                idempotency_key = self._reserve_idempotency(tool, args, context)
+                try:
+                    output, attempts, timed_out = self._invoke_with_strategy(tool, name, args, context)
+                    self._commit_idempotency(tool, args, output)
+                    if idempotency_key and not output.ok:
+                        self._idempotency.release(idempotency_key)
+                except Exception:
+                    if idempotency_key:
+                        self._idempotency.release(idempotency_key)
+                    raise
         except Exception as exc:
             logger.exception("Tool gateway execution failed for %s", name)
             output = tool_failure(str(exc)[:500], error_kind=_classify_exception(exc))
@@ -344,7 +367,9 @@ class ToolGateway:
         if domain_violation is not None:
             return domain_violation
 
-        # 策略放行后，gateway 仍负责确认动作的幂等机制（key 必填 + 重放拒绝）。
+        # 策略放行后，gateway 仍负责确认动作的幂等前置校验（key 必填）。
+        # 真正的并发去重在执行前的 reserve() 完成，避免 seen()/commit()
+        # 分离导致两个进程同时通过检查。
         return self._validate_idempotency(tool, governance, args)
 
     def _validate_idempotency(
@@ -362,12 +387,26 @@ class ToolGateway:
                 f"工具 {tool.name} 执行高风险确认动作时缺少 idempotency_key。",
                 kind="invalid_param",
             )
-        if key and self._idempotency.seen(key):
-            return _PolicyViolation(
-                f"工具 {tool.name} 的确认动作已执行过（idempotency_key={key}），已跳过重复副作用。",
+        return None
+
+    def _reserve_idempotency(
+        self,
+        tool: BaseTool,
+        args: dict[str, Any],
+        context: ToolGatewayContext,
+    ) -> str | None:
+        governance = tool_governance(tool)
+        if not (governance.idempotency_key_required and bool(args.get("confirmed"))):
+            return None
+        key = str(args.get("idempotency_key", "")).strip()
+        if not key:
+            return None
+        if not self._idempotency.reserve(key, context=context, tool_name=tool.name):
+            raise ToolError(
+                f"工具 {tool.name} 的确认动作已执行过或正在执行（idempotency_key={key}），已跳过重复副作用。",
                 kind="unrecoverable",
             )
-        return None
+        return key
 
     def _record_policy_decision(
         self,

@@ -6,7 +6,7 @@
 - 一次 Agent 运行为什么走到这个结果？
 - 哪些动作产生了副作用，是否符合权限、确认和审计要求？
 
-当前项目已经具备应用内事件、日志、checkpoint、工具治理、基础 Web 治理能力，并已完成 LangSmith 的基础配置与 entry 入口 trace context 接入。因此它已经可以开始使用 LangSmith 观察 LangGraph/LangChain 执行链路，但距离生产级 Agent 可观测性仍有明显差距。
+当前项目已经具备应用内事件、日志、checkpoint、工具治理、Postgres 工具审计、基础 Web 治理能力，并已完成 LangSmith 的基础配置与 entry 入口 trace context 接入。因此它已经可以开始使用 LangSmith 观察 LangGraph/LangChain 执行链路，同时用本地 Postgres 表承接业务副作用审计；距离生产级 Agent 可观测性仍有后续产品化空间。
 
 ## 当前基线
 
@@ -67,7 +67,12 @@ LangGraph checkpoint 保存可恢复执行现场：
 - `rollback_supported`
 - `audit_required`
 
-`tool_invocation_event()` 统一 direct 调用与图执行期工具结果的审计 payload。计划执行和 ReAct 的 `tool_result` 事件会带上 `invocation` 字段。
+`tool_invocation_event()` 统一 direct 调用与图执行期工具结果的审计 payload。计划执行和 ReAct 的 `tool_result` 事件会带上 `invocation` 字段。运行时注入 `PostgresToolGovernanceStore` 作为 `ToolAuditSink`，将完整事件写入 `tool_audit_events`；同一 store 也负责 `tool_idempotency_ledger`，在高风险确认副作用执行前通过 `reserve()` 抢占幂等 key。
+
+已落地表：
+
+- `tool_audit_events`：按 `user_id / tool_name / created_at` 和 `thread_id / step_id / created_at` 建索引，保存工具名、调用 id、线程、步骤、用户、执行模式、结果、错误分类、side effect id 和完整 JSON payload。
+- `tool_idempotency_ledger`：保存 `reserved / committed` 状态、工具名、线程、步骤、调用 id、用户和时间戳，用于跨进程、跨重启、checkpoint 重放下的重复副作用防护。
 
 ### 5. Web 治理
 
@@ -133,9 +138,9 @@ LangGraph checkpoint 保存可恢复执行现场：
 
 当前 `AgentEvent` 是线性事件流，缺少父子 span 结构。一次运行中的路由、规划、检索、工具调用、LLM 生成、校验之间还不能自然形成 trace tree。
 
-### 3. 工具审计还未独立落库
+### 3. 工具审计查询、脱敏和告警仍需产品化
 
-`tool_result.payload.invocation` 已经形成结构化 payload，但还没有写入独立审计表。LangSmith 适合调试和观测，业务审计仍应独立持久化。
+`tool_result.payload.invocation` 已经形成结构化 payload，并已写入 `tool_audit_events`。LangSmith 适合调试和观测，业务审计以 Postgres 表为准。当前差距从“是否落库”转为“如何使用审计表”：还需要查询 API、输入/输出脱敏、确认人/确认时间、业务对象关联、审计导出和告警规则。
 
 ### 4. metrics 与 alert 缺失
 
@@ -325,16 +330,19 @@ LLM 子 run 建议携带：
 - 任意一次失败规划都能定位到 planner raw output。
 - 任意一次 ReAct parse failure 都能看到原始模型输出和解析错误。
 
-### P3：工具审计落库
+### P3：工具审计系统产品化（落库已完成）
 
-目标：把业务副作用与观测 trace 分离。
+目标：在已落库的 `tool_audit_events` / `tool_idempotency_ledger` 基础上，把业务副作用审计从存储能力升级为可查询、可脱敏、可告警的审计系统。
 
 工作项：
 
-- 新建 `tool_invocations` 或 `agent_audit_events` 表。
-- 将 `tool_result.payload.invocation` 写入表。
+- ✅ 新建工具审计表与幂等账本表。
+- ✅ 将 `ToolInvocationEvent` 写入 `tool_audit_events`。
+- ✅ 高风险确认执行前通过 `tool_idempotency_ledger` 抢占幂等 key。
+- 补充工具调用历史查询 API。
+- 补充输入 / 输出脱敏策略。
 - 对高风险工具记录 confirmation payload、确认人、确认时间、执行结果。
-- 为 `delete_note` 补充幂等 key 与删除前快照策略。
+- 为 `delete_note` 补充删除前快照策略。
 
 验收：
 
@@ -419,7 +427,7 @@ LangSmith 会接收 prompt、输出、工具输入输出等观测数据。接入
 | checkpoint 恢复 | 主来源 | 不参与 |
 | LLM prompt/debug | 弱 | 主来源 |
 | trace tree | 弱 | 主来源 |
-| 工具副作用审计 | 结构化 payload，待落库 | 可辅助排查 |
+| 工具副作用审计 | 结构化 payload + Postgres 审计表，主来源 | 可辅助排查 |
 | eval 样本沉淀 | 可提供业务标签 | 主来源 |
 
 两者应该互补，而不是互相替代。

@@ -34,6 +34,7 @@ src/personal_agent/agent/short_term_context.py
 src/personal_agent/agent/thread_summarizer.py
 src/personal_agent/agent/verifier.py
 src/personal_agent/agent/workflow.py
+src/personal_agent/agent/workflow_validator.py
 src/personal_agent/agent/orchestration_nodes/__init__.py
 src/personal_agent/agent/orchestration_nodes/_deps.py
 src/personal_agent/agent/orchestration_nodes/_entry.py
@@ -60,11 +61,13 @@ src/personal_agent/core/embedding_trace.py
 src/personal_agent/core/evidence.py
 src/personal_agent/core/graph_results.py
 src/personal_agent/core/langsmith_tracing.py
+src/personal_agent/core/llm_schemas.py
 src/personal_agent/core/llm_trace.py
 src/personal_agent/core/logging_utils.py
 src/personal_agent/core/models.py
 src/personal_agent/core/observability.py
 src/personal_agent/core/projections.py
+src/personal_agent/core/prompts.py
 src/personal_agent/core/query_understanding.py
 src/personal_agent/core/rerankers.py
 src/personal_agent/extract/__init__.py
@@ -142,6 +145,7 @@ tests/test_planner.py
 tests/test_policy.py
 tests/test_postgres_storage.py
 tests/test_postgres_storage_wiring.py
+tests/test_prompt_registry.py
 tests/test_query_planner.py
 tests/test_regression.py
 tests/test_replanner.py
@@ -153,3 +157,4 @@ tests/test_structural_retriever_store.py
 tests/test_tools.py
 tests/test_unified_prompt_gating.py
 tests/test_verifier.py
+tests/test_workflow_validator.py
