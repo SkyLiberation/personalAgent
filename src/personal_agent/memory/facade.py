@@ -45,8 +45,25 @@ class DeleteMemoryResult:
     description: str = ""
     deleted_note: KnowledgeNote | None = None
     chunks: list[KnowledgeNote] = field(default_factory=list)
+    snapshot_id: str = ""
     graph_cleaned: int = 0
     graph_failed: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class RestoreMemoryResult:
+    """Result of a long-term memory restore use case."""
+
+    ok: bool
+    note_id: str
+    title: str = ""
+    summary: str = ""
+    message: str = ""
+    restored_note: KnowledgeNote | None = None
+    restored_notes: list[KnowledgeNote] = field(default_factory=list)
+    restored_reviews: list[ReviewCard] = field(default_factory=list)
+    snapshot_id: str = ""
     error: str | None = None
 
 
@@ -141,7 +158,7 @@ class MemoryFacade:
     ) -> KnowledgeNote | None:
         return self.local.find_note_by_source_fingerprint(user_id, source_fingerprint)
 
-    def list_notes(self, user_id: str, *, include_chunks: bool = True) -> list[KnowledgeNote]:
+    def list_notes(self, user_id: str = "default", *, include_chunks: bool = True) -> list[KnowledgeNote]:
         return self.local.list_notes(user_id, include_chunks=include_chunks)
 
     def list_recent_notes(
@@ -686,7 +703,15 @@ class MemoryFacade:
             chunks=chunks,
         )
 
-    def delete_note_confirmed(self, note_id: str, user_id: str) -> DeleteMemoryResult:
+    def delete_note_confirmed(
+        self,
+        note_id: str,
+        user_id: str,
+        *,
+        delete_reason: str = "",
+        run_id: str | None = None,
+        checkpoint_id: str | None = None,
+    ) -> DeleteMemoryResult:
         decision = self._enforce(
             "memory_delete", subject=user_id, owner=user_id, resource=note_id, confirmed=True,
         )
@@ -700,34 +725,66 @@ class MemoryFacade:
                 error=f"笔记 {note_id} 不存在或不属于用户 {user_id}。",
             )
         chunks_before = self.list_chunks(note_id, user_id=user_id)
-        deleted_note = self.local.delete_note(note_id, user_id, cascade_chunks=bool(chunks_before))
-        if deleted_note is None:
+        deleted = self.local.delete_note(
+            note_id,
+            user_id,
+            cascade_chunks=bool(chunks_before),
+            deleted_by=user_id,
+            delete_reason=delete_reason,
+            run_id=run_id,
+            checkpoint_id=checkpoint_id,
+        )
+        if deleted is None:
             return DeleteMemoryResult(ok=False, note_id=note_id, error=f"删除失败：笔记 {note_id} 不存在。")
+        deleted_note = deleted.target
 
         graph_cleaned = 0
         graph_failed = 0
-        if self.graph is not None and self.graph.configured():
-            for candidate in [deleted_note, *chunks_before]:
-                if not candidate.graph.episode_uuid:
-                    continue
-                try:
-                    if self.graph.delete_episode(candidate.graph.episode_uuid):
-                        graph_cleaned += 1
-                except Exception:
-                    logger.exception("Failed to delete graph episode for note %s", candidate.id)
-                    graph_failed += 1
-
-        graph_result = f"，已清理 {graph_cleaned} 个图谱 episode" if graph_cleaned else ""
-        if graph_failed:
-            graph_result += f"，{graph_failed} 个图谱 episode 清理失败(已记录日志)"
         return DeleteMemoryResult(
             ok=True,
             note_id=note_id,
             title=deleted_note.body.title,
             summary=deleted_note.body.summary,
-            message=f"已删除笔记「{deleted_note.body.title}」{graph_result}。",
+            message=f"已删除笔记「{deleted_note.body.title}」，可通过删除快照恢复。",
             deleted_note=deleted_note,
-            chunks=chunks_before,
+            chunks=[note for note in deleted.notes if note.id != deleted_note.id],
+            snapshot_id=deleted.snapshot_id,
             graph_cleaned=graph_cleaned,
             graph_failed=graph_failed,
+        )
+
+    def restore_note_confirmed(
+        self,
+        *,
+        note_id: str | None = None,
+        snapshot_id: str | None = None,
+        user_id: str,
+    ) -> RestoreMemoryResult:
+        resource = snapshot_id or note_id or "memory_restore"
+        decision = self._enforce(
+            "memory_write", subject=user_id, owner=user_id, resource=resource, confirmed=True,
+        )
+        if not decision.allowed:
+            return RestoreMemoryResult(ok=False, note_id=note_id or "", error=decision.reason)
+        try:
+            restored = self.local.restore_note(user_id=user_id, note_id=note_id, snapshot_id=snapshot_id)
+        except ValueError as exc:
+            return RestoreMemoryResult(ok=False, note_id=note_id or "", error=str(exc))
+        if restored is None:
+            return RestoreMemoryResult(
+                ok=False,
+                note_id=note_id or "",
+                snapshot_id=snapshot_id or "",
+                error="未找到可恢复的删除快照。",
+            )
+        return RestoreMemoryResult(
+            ok=True,
+            note_id=restored.target.id,
+            title=restored.target.body.title,
+            summary=restored.target.body.summary,
+            message=f"已恢复笔记「{restored.target.body.title}」。",
+            restored_note=restored.target,
+            restored_notes=restored.notes,
+            restored_reviews=restored.review_cards,
+            snapshot_id=restored.snapshot_id,
         )

@@ -101,7 +101,11 @@ Ask 路径不会直接把所有 note 塞进 prompt，而是先从本地长期知
 
 ### HITL 与删除恢复
 
-高风险删除不是直接改长期存储。`delete_note` 首次执行只返回确认 payload，Graph 将其写入 `AgentGraphState.pending_confirmation` 并中断。用户确认后，Graph 从 checkpoint 恢复，给同一步骤补上 `confirmed=True` 和 `idempotency_key`，再次调用工具才真正删除 note、chunk、review card 和可用的图谱 episode。
+高风险删除不是直接物理删除长期存储。`delete_note` 首次执行只返回确认 payload，Graph 将其写入 `AgentGraphState.pending_confirmation` 并中断。用户确认后，Graph 从 checkpoint 恢复，给同一步骤补上 `confirmed=True` 和 `idempotency_key`，再次调用工具才执行软删除。
+
+确认删除时，Postgres 会在 `knowledge_delete_snapshots` 写入删除前快照，保存目标 note、子 chunk 和关联 review card payload；随后给 `knowledge_notes` 写入 `deleted_at / deleted_by / delete_reason / delete_snapshot_id` 等删除元数据。默认列表、检索、chunk 查询和复习卡查询都会排除 `deleted_at IS NOT NULL` 的记录。
+
+删除后的业务恢复由 `restore_note` 工具负责。它必须带 `confirmed=True` 和 `idempotency_key`，并通过 ToolGateway、PolicyEngine、Postgres 幂等账本和工具审计，再从 `snapshot_id` 或 note 最近删除快照恢复 note、chunk 和 review card。
 
 用户拒绝时，Graph 会把当前步骤标记为 skipped，递归跳过依赖它的后续步骤，清空 `pending_confirmation`，并返回取消说明。
 

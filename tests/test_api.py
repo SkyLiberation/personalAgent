@@ -183,6 +183,34 @@ class TestNotesEndpoint:
         assert "Alice的笔记" in alice_titles
         assert "Bob的笔记" in bob_titles
 
+    def test_restore_deleted_note_from_snapshot(self, api_client: TestClient):
+        service = api_client.app.state.service
+        captured = service._runtime.execute_capture("DNS 是域名系统", source_type="text", user_id="restore-user")
+        note_id = captured.note.id
+
+        deleted = api_client.delete("/api/notes/{note_id}".format(note_id=note_id), params={"user_id": "restore-user"})
+
+        assert deleted.status_code == 200
+        snapshot_id = deleted.json()["snapshot_id"]
+        assert snapshot_id
+        listed_after_delete = api_client.get("/api/notes", params={"user_id": "restore-user"}).json()
+        assert all(item["id"] != note_id for item in listed_after_delete)
+
+        restored = api_client.post(
+            f"/api/memory/notes/{note_id}/restore",
+            json={
+                "user_id": "restore-user",
+                "snapshot_id": snapshot_id,
+                "idempotency_key": f"restore:{snapshot_id}",
+            },
+        )
+
+        assert restored.status_code == 200
+        data = restored.json()["data"]
+        assert data["restored_note_id"] == note_id
+        listed_after_restore = api_client.get("/api/notes", params={"user_id": "restore-user"}).json()
+        assert any(item["id"] == note_id for item in listed_after_restore)
+
 
 class TestDebugEndpoints:
     def test_reset_database_clears_all_persisted_debug_data(self, api_client: TestClient, temp_dir: Path):

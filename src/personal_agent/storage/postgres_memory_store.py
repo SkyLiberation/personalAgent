@@ -3,11 +3,13 @@ from __future__ import annotations
 import re
 import time
 import logging
+from dataclasses import dataclass, field
 from collections import defaultdict
 from datetime import datetime
 from hashlib import blake2b
 from math import sqrt
 from pathlib import Path
+from uuid import uuid4
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -25,6 +27,22 @@ from ..core.query_understanding import RetrievalFilters
 from .postgres_common import PostgresStoreBase
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DeleteNoteStorageResult:
+    target: KnowledgeNote
+    notes: list[KnowledgeNote]
+    review_cards: list[ReviewCard] = field(default_factory=list)
+    snapshot_id: str = ""
+
+
+@dataclass(frozen=True)
+class RestoreNoteStorageResult:
+    target: KnowledgeNote
+    notes: list[KnowledgeNote]
+    review_cards: list[ReviewCard] = field(default_factory=list)
+    snapshot_id: str = ""
 
 
 def _with_local_timezone(value: datetime, reference: datetime) -> datetime:
@@ -312,6 +330,12 @@ class PostgresMemoryStore(PostgresStoreBase):
                 )
                 cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS search_text TEXT NOT NULL DEFAULT ''")
                 cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS source_fingerprint TEXT")
+                cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ")
+                cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS deleted_by TEXT")
+                cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS delete_reason TEXT")
+                cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS delete_run_id TEXT")
+                cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS delete_checkpoint_id TEXT")
+                cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS delete_snapshot_id TEXT")
                 # Legacy tsvector lexical path removed in favor of pg_search BM25.
                 cur.execute("DROP INDEX IF EXISTS knowledge_notes_search_vector_idx")
                 cur.execute("DROP INDEX IF EXISTS knowledge_notes_search_text_trgm_idx")
@@ -354,7 +378,21 @@ class PostgresMemoryStore(PostgresStoreBase):
                     "CREATE INDEX IF NOT EXISTS knowledge_notes_user_idx ON knowledge_notes (user_id, created_at)"
                 )
                 cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS knowledge_notes_active_user_idx
+                    ON knowledge_notes (user_id, created_at)
+                    WHERE deleted_at IS NULL
+                    """
+                )
+                cur.execute(
                     "CREATE INDEX IF NOT EXISTS knowledge_notes_parent_idx ON knowledge_notes (parent_note_id)"
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS knowledge_notes_deleted_idx
+                    ON knowledge_notes (user_id, deleted_at DESC)
+                    WHERE deleted_at IS NOT NULL
+                    """
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS knowledge_notes_episode_idx ON knowledge_notes (graph_episode_uuid)"
@@ -406,6 +444,27 @@ class PostgresMemoryStore(PostgresStoreBase):
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS review_cards_note_idx ON review_cards (note_id, due_at)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS knowledge_delete_snapshots (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        target_note_id TEXT NOT NULL,
+                        deleted_by TEXT NOT NULL,
+                        delete_reason TEXT NOT NULL DEFAULT '',
+                        run_id TEXT,
+                        checkpoint_id TEXT,
+                        payload JSONB NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS knowledge_delete_snapshots_note_idx
+                    ON knowledge_delete_snapshots (user_id, target_note_id, created_at DESC)
+                    """
                 )
                 cur.execute(
                     """
@@ -497,11 +556,12 @@ class PostgresMemoryStore(PostgresStoreBase):
                         (
                             id, user_id, parent_note_id, graph_episode_uuid, payload,
                             source_fingerprint, search_text, embedding_vector, embedding_model,
-                            created_at, updated_at
+                            created_at, updated_at, deleted_at, deleted_by, delete_reason,
+                            delete_run_id, delete_checkpoint_id, delete_snapshot_id
                         )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s::vector(128), %s, %s, %s
+                        %s::vector(128), %s, %s, %s, NULL, NULL, NULL, NULL, NULL, NULL
                     )
                     ON CONFLICT (id) DO UPDATE SET
                         user_id = EXCLUDED.user_id,
@@ -512,7 +572,13 @@ class PostgresMemoryStore(PostgresStoreBase):
                         search_text = EXCLUDED.search_text,
                         embedding_vector = EXCLUDED.embedding_vector,
                         embedding_model = EXCLUDED.embedding_model,
-                        updated_at = EXCLUDED.updated_at
+                        updated_at = EXCLUDED.updated_at,
+                        deleted_at = NULL,
+                        deleted_by = NULL,
+                        delete_reason = NULL,
+                        delete_run_id = NULL,
+                        delete_checkpoint_id = NULL,
+                        delete_snapshot_id = NULL
                     """,
                     (
                         note.id,
@@ -792,16 +858,21 @@ class PostgresMemoryStore(PostgresStoreBase):
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT payload FROM knowledge_notes WHERE user_id = %s{clause} ORDER BY created_at",
+                    f"""
+                    SELECT payload FROM knowledge_notes
+                    WHERE user_id = %s AND deleted_at IS NULL{clause}
+                    ORDER BY created_at
+                    """,
                     (user_id,),
                 )
                 return [KnowledgeNote.model_validate(row["payload"]) for row in cur.fetchall()]
 
-    def get_note(self, note_id: str) -> KnowledgeNote | None:
+    def get_note(self, note_id: str, *, include_deleted: bool = False) -> KnowledgeNote | None:
         self.ensure_schema()
+        deleted_sql = "" if include_deleted else "AND deleted_at IS NULL"
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT payload FROM knowledge_notes WHERE id = %s", (note_id,))
+                cur.execute(f"SELECT payload FROM knowledge_notes WHERE id = %s {deleted_sql}", (note_id,))
                 row = cur.fetchone()
         return KnowledgeNote.model_validate(row["payload"]) if row else None
 
@@ -819,6 +890,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     """
                     SELECT payload FROM knowledge_notes
                     WHERE user_id = %s AND source_fingerprint = %s
+                      AND deleted_at IS NULL
                     ORDER BY
                         CASE
                             WHEN coalesce(payload#>>'{version,status}', 'current') = 'current'
@@ -842,6 +914,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     """
                     SELECT payload FROM knowledge_notes
                     WHERE parent_note_id = %s
+                      AND deleted_at IS NULL
                     ORDER BY (payload#>>'{chunk,index}')::integer NULLS LAST
                     """,
                     (parent_note_id,),
@@ -867,6 +940,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     f"""
                     SELECT payload FROM knowledge_notes
                     WHERE user_id = %s AND graph_episode_uuid = ANY(%s)
+                    AND deleted_at IS NULL
                     {_active_version_sql()}
                     {filter_sql}
                     """,
@@ -893,6 +967,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         if user_id is not None:
             clauses.append("user_id = %s")
             params.append(user_id)
+        clauses.append("deleted_at IS NULL")
         if statuses:
             clauses.append("payload#>>'{graph_sync,status}' = ANY(%s)")
             params.append(statuses)
@@ -944,6 +1019,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                            paradedb.score(id) AS score
                     FROM knowledge_notes
                     WHERE user_id = %s
+                      AND deleted_at IS NULL
                       {active_version_sql}
                       {filter_sql}
                       AND id @@@ paradedb.match('search_text', %s)
@@ -965,6 +1041,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                                1 - (embedding_vector <=> %s::vector(128)) AS vector_score
                         FROM knowledge_notes
                         WHERE user_id = %s
+                          AND deleted_at IS NULL
                           {active_version_sql}
                           {filter_sql}
                           AND embedding_vector IS NOT NULL
@@ -1142,13 +1219,24 @@ class PostgresMemoryStore(PostgresStoreBase):
                     """
                     SELECT r.payload FROM review_cards r
                     JOIN knowledge_notes n ON n.id = r.note_id
-                    WHERE n.user_id = %s ORDER BY r.due_at
+                    WHERE n.user_id = %s AND n.deleted_at IS NULL
+                    ORDER BY r.due_at
                     """,
                     (user_id,),
                 )
                 return [ReviewCard.model_validate(row["payload"]) for row in cur.fetchall()]
 
-    def delete_note(self, note_id: str, user_id: str, cascade_chunks: bool = False) -> KnowledgeNote | None:
+    def delete_note(
+        self,
+        note_id: str,
+        user_id: str,
+        cascade_chunks: bool = False,
+        *,
+        deleted_by: str | None = None,
+        delete_reason: str = "",
+        run_id: str | None = None,
+        checkpoint_id: str | None = None,
+    ) -> DeleteNoteStorageResult | None:
         target = self.get_note(note_id)
         if target is None or target.user_id != user_id:
             return None
@@ -1156,14 +1244,207 @@ class PostgresMemoryStore(PostgresStoreBase):
         if cascade_chunks:
             targets.extend(note for note in self.get_chunks_for_parent(note_id) if note.user_id == user_id)
         ids = [note.id for note in targets]
+        now = local_now()
+        snapshot_id = f"kdel-{uuid4().hex}"
         self.ensure_schema()
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT payload FROM review_cards
+                    WHERE note_id = ANY(%s)
+                    ORDER BY due_at
+                    """,
+                    (ids,),
+                )
+                reviews = [ReviewCard.model_validate(row["payload"]) for row in cur.fetchall()]
+                snapshot_payload = {
+                    "snapshot_id": snapshot_id,
+                    "user_id": user_id,
+                    "target_note_id": note_id,
+                    "deleted_by": deleted_by or user_id,
+                    "delete_reason": delete_reason,
+                    "run_id": run_id,
+                    "checkpoint_id": checkpoint_id,
+                    "deleted_at": now.isoformat(),
+                    "notes": [note.model_dump(mode="json") for note in targets],
+                    "review_cards": [review.model_dump(mode="json") for review in reviews],
+                }
+                cur.execute(
+                    """
+                    INSERT INTO knowledge_delete_snapshots (
+                        id, user_id, target_note_id, deleted_by, delete_reason,
+                        run_id, checkpoint_id, payload, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        snapshot_id,
+                        user_id,
+                        note_id,
+                        deleted_by or user_id,
+                        delete_reason,
+                        run_id,
+                        checkpoint_id,
+                        Jsonb(snapshot_payload),
+                        now,
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE knowledge_notes
+                    SET deleted_at = %s,
+                        deleted_by = %s,
+                        delete_reason = %s,
+                        delete_run_id = %s,
+                        delete_checkpoint_id = %s,
+                        delete_snapshot_id = %s,
+                        updated_at = %s
+                    WHERE id = ANY(%s)
+                      AND user_id = %s
+                      AND deleted_at IS NULL
+                    """,
+                    (
+                        now,
+                        deleted_by or user_id,
+                        delete_reason,
+                        run_id,
+                        checkpoint_id,
+                        snapshot_id,
+                        now,
+                        ids,
+                        user_id,
+                    ),
+                )
+            conn.commit()
+        return DeleteNoteStorageResult(
+            target=target,
+            notes=targets,
+            review_cards=reviews,
+            snapshot_id=snapshot_id,
+        )
+
+    def restore_note(
+        self,
+        *,
+        user_id: str,
+        note_id: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> RestoreNoteStorageResult | None:
+        self.ensure_schema()
+        if not note_id and not snapshot_id:
+            raise ValueError("note_id or snapshot_id is required.")
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                if snapshot_id:
+                    cur.execute(
+                        """
+                        SELECT id, payload FROM knowledge_delete_snapshots
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (snapshot_id, user_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, payload FROM knowledge_delete_snapshots
+                        WHERE target_note_id = %s AND user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (note_id, user_id),
+                    )
+                row = cur.fetchone()
+        if row is None:
+            return None
+
+        resolved_snapshot_id = str(row["id"])
+        payload = row["payload"] or {}
+        notes = [
+            KnowledgeNote.model_validate(item)
+            for item in payload.get("notes", [])
+            if isinstance(item, dict)
+        ]
+        reviews = [
+            ReviewCard.model_validate(item)
+            for item in payload.get("review_cards", [])
+            if isinstance(item, dict)
+        ]
+        if not notes:
+            return None
+        target_id = str(payload.get("target_note_id") or note_id or notes[0].id)
+        target = next((item for item in notes if item.id == target_id), notes[0])
+        if any(note.user_id != user_id for note in notes):
+            return None
+
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM review_cards WHERE note_id = ANY(%s)", (ids,))
-                cur.execute("DELETE FROM knowledge_notes WHERE id = ANY(%s)", (ids,))
+                for note in notes:
+                    search_text = _search_text_for_note(note)
+                    embedding_vector = _vector_literal(self._embed_text(search_text))
+                    cur.execute(
+                        """
+                        INSERT INTO knowledge_notes
+                            (
+                                id, user_id, parent_note_id, graph_episode_uuid, payload,
+                                source_fingerprint, search_text, embedding_vector, embedding_model,
+                                created_at, updated_at, deleted_at, deleted_by, delete_reason,
+                                delete_run_id, delete_checkpoint_id, delete_snapshot_id
+                            )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s,
+                            %s::vector(128), %s, %s, %s, NULL, NULL, NULL, NULL, NULL, NULL
+                        )
+                        ON CONFLICT (id) DO UPDATE SET
+                            user_id = EXCLUDED.user_id,
+                            parent_note_id = EXCLUDED.parent_note_id,
+                            graph_episode_uuid = EXCLUDED.graph_episode_uuid,
+                            payload = EXCLUDED.payload,
+                            source_fingerprint = EXCLUDED.source_fingerprint,
+                            search_text = EXCLUDED.search_text,
+                            embedding_vector = EXCLUDED.embedding_vector,
+                            embedding_model = EXCLUDED.embedding_model,
+                            updated_at = EXCLUDED.updated_at,
+                            deleted_at = NULL,
+                            deleted_by = NULL,
+                            delete_reason = NULL,
+                            delete_run_id = NULL,
+                            delete_checkpoint_id = NULL,
+                            delete_snapshot_id = NULL
+                        """,
+                        (
+                            note.id,
+                            note.user_id,
+                            note.chunk.parent_note_id,
+                            note.graph.episode_uuid,
+                            Jsonb(note.model_dump(mode="json")),
+                            note.source.fingerprint,
+                            search_text,
+                            embedding_vector,
+                            self.embedding_model,
+                            note.created_at,
+                            local_now(),
+                        ),
+                    )
+                for review in reviews:
+                    cur.execute(
+                        """
+                        INSERT INTO review_cards (id, note_id, payload, due_at)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            note_id = EXCLUDED.note_id,
+                            payload = EXCLUDED.payload,
+                            due_at = EXCLUDED.due_at
+                        """,
+                        (review.id, review.note_id, Jsonb(review.model_dump(mode="json")), review.due_at),
+                    )
             conn.commit()
-        self._remove_uploads(targets)
-        return target
+        return RestoreNoteStorageResult(
+            target=target,
+            notes=notes,
+            review_cards=reviews,
+            snapshot_id=resolved_snapshot_id,
+        )
 
     def clear_user_data(self, user_id: str, remove_uploaded_files: bool = True) -> dict[str, int]:
         notes = self.list_notes(user_id)

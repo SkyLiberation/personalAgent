@@ -4,13 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-ASSETS_DIR = Path(__file__).resolve().parent / "assets"
-DEFAULT_OUTPUT = ASSETS_DIR / "entry-orchestration.md"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MERMAID_DIR = REPO_ROOT / "docs" / "mermaid"
+DEFAULT_OUTPUT = MERMAID_DIR / "entry-orchestration.md"
 
 
 def _ensure_src_on_path() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    src_dir = repo_root / "src"
+    src_dir = REPO_ROOT / "src"
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
 
@@ -23,7 +23,7 @@ def _get_orch_graph():
 
     settings = Settings.from_env()
     service = AgentService(settings=settings)
-    return service._get_orch_graph()
+    return service._entry._get_orch_graph()
 
 
 def _build_mermaid(xray: int | bool = False) -> str:

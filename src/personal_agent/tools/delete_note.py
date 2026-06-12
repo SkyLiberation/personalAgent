@@ -19,6 +19,7 @@ class DeleteNoteArgs(BaseModel):
         default="",
         description="确认执行删除时必须提供的幂等 key，用于避免重复删除副作用。",
     )
+    delete_reason: str = Field(default="", description="删除原因，会写入删除快照与审计上下文。")
 
 
 def build_delete_note_tool(
@@ -51,14 +52,16 @@ def build_delete_note_tool(
         user_id: str = "default",
         confirmed: bool = False,
         idempotency_key: str = "",
+        delete_reason: str = "",
     ):
         if confirmed:
             try:
-                result = memory.delete_note_confirmed(note_id, user_id)
+                result = memory.delete_note_confirmed(note_id, user_id, delete_reason=delete_reason)
                 if not result.ok:
                     return tool_response(tool_failure(result.error or f"删除失败：笔记 {note_id} 不存在。"))
                 return tool_response(tool_success({
                     "deleted_note_id": note_id,
+                    "snapshot_id": result.snapshot_id,
                     "title": result.title,
                     "message": result.message,
                     "graph_cleaned": result.graph_cleaned,

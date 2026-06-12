@@ -98,6 +98,12 @@ class ReplayCheckpointRequest(BaseModel):
     as_node: str | None = None
 
 
+class RestoreNoteRequest(BaseModel):
+    user_id: str | None = None
+    snapshot_id: str = ""
+    idempotency_key: str = ""
+
+
 def create_app() -> FastAPI:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
@@ -174,6 +180,7 @@ def create_app() -> FastAPI:
         request: Request,
         user_id: str | None = None,
         cascade: bool = False,
+        delete_reason: str = "",
     ) -> dict[str, object]:
         resolved_user = user_id or _get_user_id(request, settings)
         logger.info("Delete note id=%s user=%s cascade=%s", note_id, resolved_user, cascade)
@@ -181,15 +188,60 @@ def create_app() -> FastAPI:
         if note is None:
             raise HTTPException(status_code=404, detail="Note not found or not owned by user.")
 
-        result = service.memory.delete_note_confirmed(note_id, resolved_user)
+        result = service.memory.delete_note_confirmed(note_id, resolved_user, delete_reason=delete_reason)
         if not result.ok:
             raise HTTPException(status_code=404, detail=result.error or "Note not found or not owned by user.")
         return {
             "ok": True,
             "deleted_note_id": note_id,
+            "snapshot_id": result.snapshot_id,
             "graph_cleaned": result.graph_cleaned,
             "graph_failed": result.graph_failed,
         }
+
+    @app.post("/api/memory/notes/{note_id}/restore")
+    def restore_note(
+        note_id: str,
+        body: RestoreNoteRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        resolved_user = body.user_id or _get_user_id(request, settings)
+        idempotency_key = body.idempotency_key or f"api-restore:{resolved_user}:{body.snapshot_id or note_id}"
+        logger.info(
+            "Restore note requested note_id=%s snapshot_id=%s user=%s",
+            note_id, body.snapshot_id, resolved_user,
+        )
+        result = service.execute_tool(
+            "restore_note",
+            note_id=note_id,
+            snapshot_id=body.snapshot_id,
+            user_id=resolved_user,
+            confirmed=True,
+            idempotency_key=idempotency_key,
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail=result.get("error") or "Restore failed.")
+        return {"ok": True, "data": result.get("data")}
+
+    @app.post("/api/memory/delete-snapshots/{snapshot_id}/restore")
+    def restore_note_snapshot(
+        snapshot_id: str,
+        body: RestoreNoteRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        resolved_user = body.user_id or _get_user_id(request, settings)
+        idempotency_key = body.idempotency_key or f"api-restore:{resolved_user}:{snapshot_id}"
+        logger.info("Restore snapshot requested snapshot_id=%s user=%s", snapshot_id, resolved_user)
+        result = service.execute_tool(
+            "restore_note",
+            snapshot_id=snapshot_id,
+            user_id=resolved_user,
+            confirmed=True,
+            idempotency_key=idempotency_key,
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail=result.get("error") or "Restore failed.")
+        return {"ok": True, "data": result.get("data")}
 
     @app.get("/api/notes/{note_id}/chunks", response_model=list[KnowledgeNote])
     def get_note_chunks(note_id: str, request: Request) -> list[KnowledgeNote]:

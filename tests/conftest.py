@@ -80,11 +80,24 @@ def clean_postgres_business_tables():
                 CREATE TABLE IF NOT EXISTS knowledge_notes (
                     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, parent_note_id TEXT,
                     graph_episode_uuid TEXT, payload JSONB NOT NULL,
+                    deleted_at TIMESTAMPTZ, deleted_by TEXT, delete_reason TEXT,
+                    delete_run_id TEXT, delete_checkpoint_id TEXT, delete_snapshot_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS review_cards (
                     id TEXT PRIMARY KEY, note_id TEXT NOT NULL, payload JSONB NOT NULL,
                     due_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_delete_snapshots (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    target_note_id TEXT NOT NULL,
+                    deleted_by TEXT NOT NULL,
+                    delete_reason TEXT NOT NULL DEFAULT '',
+                    run_id TEXT,
+                    checkpoint_id TEXT,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS memory_episodes (
                     id TEXT PRIMARY KEY,
@@ -113,7 +126,7 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
-                TRUNCATE knowledge_notes, review_cards, memory_episodes, memory_items;
+                TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

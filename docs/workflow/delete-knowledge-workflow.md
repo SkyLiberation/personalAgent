@@ -33,7 +33,7 @@ delete_knowledge
 
 ## 执行细节
 
-1. Router 把用户输入归类为 `delete_knowledge`，并设置高风险、需要规划。
+1. Router 把用户输入归类为 `delete_knowledge`，并设置高风险、需要 step projection。
 2. `DefaultTaskPlanner` 从 `WORKFLOW_REGISTRY` 取出 `delete_knowledge` spec，确定性生成 4 个 `PlanStep`。
 3. `PlanValidator` 校验必须包含 `tool_call(delete_note)`，且高风险删除必须要求确认。
 4. `del-1` 进入 retrieve，调用 graph/local 检索得到候选线索。
@@ -63,4 +63,4 @@ delete_knowledge
 
 ## 面试讲法
 
-可以说：删除知识不是“LLM 判断完直接删”，而是固定 workflow：retrieve 只找候选，resolve 只解析目标，真正删除必须经过 `delete_note` 工具、PolicyEngine 和 HITL 确认。这样把语义判断和高风险副作用隔离开，既可恢复，也可审计。
+可以说：删除知识不是“LLM 判断完直接删”，而是固定 workflow：retrieve 只找候选，resolve 只解析目标，真实删除副作用必须经过 `delete_note` 工具、PolicyEngine 和 HITL 确认。确认后执行的是软删除并写入删除快照，这样把语义判断和高风险副作用隔离开，既可恢复，也可审计。

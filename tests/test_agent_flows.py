@@ -214,7 +214,7 @@ class TestCaptureFlow:
         service.store.add_note(pending)
         service.store.add_note(failed)
 
-        tasks = service.list_graph_sync_tasks(user_id="default", statuses=["pending", "failed"])
+        tasks = service.memory.list_graph_sync_tasks(user_id="default", statuses=["pending", "failed"])
 
         assert {task.note_id for task in tasks} == {pending.id, failed.id}
         failed_task = next(task for task in tasks if task.note_id == failed.id)
@@ -284,7 +284,7 @@ class TestCaptureFlow:
         service.store.add_note(old)
         service.store.add_note(new)
 
-        old_note, new_note = service.supersede_note(
+        old_note, new_note = service.memory.supersede_note(
             "old-deploy",
             "new-deploy",
             user_id="default",
@@ -303,7 +303,7 @@ class TestCaptureFlow:
         service.store.add_note(first)
         service.store.add_note(second)
 
-        notes = service.mark_notes_conflicted(
+        notes = service.memory.mark_notes_conflicted(
             ["conflict-a", "conflict-b"],
             user_id="default",
             reason="来源冲突",
@@ -595,7 +595,7 @@ class TestEntryFlow:
         assert result.intent in ("capture_text", "unknown")
         assert result.reply_text
         if result.intent == "capture_text":
-            assert service.list_notes()
+            assert service.memory.list_notes()
 
     def test_entry_ask(self, service: AgentService):
         service.execute_capture(text="服务降级是系统设计中的常见模式", source_type="text")

@@ -5,7 +5,7 @@ from typing import Callable, TYPE_CHECKING
 
 from ..core.config import Settings
 from ..core.langsmith_tracing import configure_langsmith_environment
-from ..core.models import EntryInput, KnowledgeNote, MemoryItem
+from ..core.models import EntryInput
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..ms_graphrag import MicrosoftGraphRagStore
@@ -19,6 +19,7 @@ from ..tools import (
     build_capture_upload_tool,
     build_capture_url_tool,
     build_delete_note_tool,
+    build_restore_note_tool,
     build_graph_search_tool,
     build_web_search_tool,
 )
@@ -28,7 +29,7 @@ from .nodes import digest_node
 from .planner import DefaultTaskPlanner
 from .plan_validator import PlanValidator
 from .replanner import Replanner
-from .router import DefaultIntentRouter, RouterDecision
+from .router import DefaultIntentRouter
 from .ingestion_pipeline import IngestionPipeline
 from .runtime_admin import _protected_eval_graph_group_ids
 from .runtime_ask import AskService
@@ -144,6 +145,7 @@ class AgentRuntime:
             )
         ))
         self._tool_executor.register(build_delete_note_tool(self.memory))
+        self._tool_executor.register(build_restore_note_tool(self.memory))
         if self.settings.web_search.api_key:
             from ..capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
@@ -241,21 +243,6 @@ class AgentRuntime:
     def sync_notes_to_graph(self, note_ids: list[str]) -> dict[str, bool]:
         return self._ingestion().sync_notes_to_graph(note_ids)
 
-    def list_graph_sync_tasks(
-        self,
-        *,
-        user_id: str | None = None,
-        statuses: list[str] | None = None,
-        include_chunks: bool = True,
-        limit: int | None = None,
-    ):
-        return self.memory.list_graph_sync_tasks(
-            user_id=user_id,
-            statuses=statuses,
-            include_chunks=include_chunks,
-            limit=limit,
-        )
-
     def reconcile_graph_sync(
         self,
         user_id: str,
@@ -271,50 +258,6 @@ class AgentRuntime:
             retry_statuses=retry_statuses,
             clean_orphans=clean_orphans,
             sync_note=self.sync_note_to_graph,
-        )
-
-    def supersede_note(self, old_note_id: str, new_note_id: str, *, user_id: str, reason: str = ""):
-        return self.memory.supersede_note(old_note_id, new_note_id, user_id=user_id, reason=reason)
-
-    def mark_note_deprecated(self, note_id: str, *, user_id: str, reason: str = ""):
-        return self.memory.mark_note_deprecated(note_id, user_id=user_id, reason=reason)
-
-    def mark_notes_conflicted(self, note_ids: list[str], *, user_id: str, reason: str = ""):
-        return self.memory.mark_notes_conflicted(note_ids, user_id=user_id, reason=reason)
-
-    def add_memory_item(self, item: MemoryItem, *, user_id: str | None = None) -> MemoryItem:
-        return self.memory.add_memory_item(item, user_id=user_id)
-
-    def list_memory_items(
-        self,
-        user_id: str,
-        *,
-        memory_type: str | None = None,
-        status: str | None = None,
-        limit: int = 50,
-    ) -> list[MemoryItem]:
-        return self.memory.list_memory_items(
-            user_id,
-            memory_type=memory_type,
-            status=status,
-            limit=limit,
-        )
-
-    def search_memory_items(
-        self,
-        user_id: str,
-        query: str,
-        *,
-        memory_type: str | None = None,
-        status: str | None = "confirmed",
-        limit: int = 5,
-    ) -> list[MemoryItem]:
-        return self.memory.search_memory_items(
-            user_id,
-            query,
-            memory_type=memory_type,
-            status=status,
-            limit=limit,
         )
 
     # ---- public properties (delegate to private fields so test mocks are visible) ----
@@ -402,15 +345,7 @@ class AgentRuntime:
             due_reviews=self.memory.due_reviews(normalized_user),
         )
 
-    def classify_intent(self, entry_input: EntryInput) -> RouterDecision:
-        """Public wrapper for intent classification."""
-        return self._intent_router.classify(entry_input)
-
     # ---- admin / maintenance (formerly RuntimeAdminMixin) ----
-
-    def list_notes(self, user_id: str | None = None) -> list[KnowledgeNote]:
-        normalized_user = user_id or self.settings.default_user
-        return list(reversed(self.memory.list_notes(normalized_user)))
 
     def health(self) -> dict[str, object]:
         graph_status = self.graph_store.status()

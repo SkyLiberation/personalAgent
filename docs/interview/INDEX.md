@@ -68,12 +68,12 @@
 - 工具结果为什么不直接写入用户 messages？
 - 当前工具层最大不足是什么？
 
-## [规划层](06-planning.md)
+## [Workflow / 步骤投影层](06-planning.md)
 
 - 当前 planning 是怎么落地的？
 - WorkflowSpec / WorkflowRegistry 解决了什么？
-- 规划层和普通 Todo list 的区别是什么？
-- 哪些任务会进入 planning？哪些不会？
+- 步骤投影和普通 Todo list 的区别是什么？
+- 哪些任务会进入 step projection？哪些不会？
 - `delete_knowledge` 为什么是 `retrieve -> resolve -> delete_note -> compose`？
 - 为什么 `delete_note.note_id` 不能由 planner 直接填？
 - `resolve` 如何防止 LLM 编造 note id？
@@ -87,14 +87,16 @@
 - 用户拒绝确认时会怎样？
 - 为什么确认后还需要 `idempotency_key`？
 - pending confirmation 是长期审批表吗？
+- `replay_from_checkpoint` 在删除流程里解决什么问题？
 
 ## [测试与评测](08-testing-and-eval.md)
 
-- 你会怎么测试规划层不会生成危险计划？
+- 你会怎么测试 workflow projection 不会生成危险步骤？
 - 怎么测试 `delete_note` 必须经过确认？
 - 怎么评估长期记忆召回质量？
 - 怎么评估 solidify 有没有写入错误事实？
 - 单元测试和 Agent eval 的区别是什么？
+- 线上 Agent 问题怎么复现？
 
 ## [工程取舍与不足](09-tradeoffs-and-gaps.md)
 
@@ -118,7 +120,7 @@
 - owner 校验依赖 user_id，不传 user_id 就跳过，这算不算越权口子？
 - checkpoint resume 后，工具执行到一半（graph 删了 note 没删）怎么保证一致性？
 - retry 只对 transient 错误重试，怎么判定 transient？判错会怎样？
-- 横向扩容后进程内幂等账本失效，持久化打算怎么做？
+- 幂等账本持久化后，checkpoint replay 和工具副作用怎么配合？
 
 ## [情景判断追问（冲突 / 边界 / 取舍）](11-scenario-judgment.md)
 

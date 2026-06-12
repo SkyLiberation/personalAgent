@@ -4,11 +4,11 @@
 
 ## 设计目标
 
-运行时与编排层负责把入口、路由、规划、工具、记忆、检索、校验和反馈串成稳定执行链路：
+运行时与编排层负责把入口、路由、Workflow / Step Projection、工具、记忆、检索、校验和反馈串成稳定执行链路：
 
 - `AgentService` 保持薄 facade
 - `AgentRuntime` 拥有核心运行时依赖
-- LangGraph entry 总图承担路由、固定分支、计划步骤、ReAct、HITL 和 checkpoint 编排
+- LangGraph entry 总图承担路由、固定分支、workflow 步骤投影、ReAct、HITL 和 checkpoint 编排
 - 统一返回 Web、CLI、飞书可消费的结果对象
 
 ## 组件分层
@@ -31,7 +31,7 @@
 
 - 持有工具注册表
 - 持有记忆门面
-- 持有 verifier、planner、validator、replanner
+- 持有 verifier、workflow step projector（历史类名仍为 planner）、validator、replanner
 - 执行 capture、ask、digest、entry、graph sync 等核心流程
 
 ### 3. LangGraph 编排
@@ -40,9 +40,9 @@
 
 作用：
 
-- `build_entry_orchestration_graph()`：entry 父图，组合 `EntryGraph`、普通分支与 `PlanExecutionGraph`
+- `build_entry_orchestration_graph()`：entry 父图，组合 `EntryGraph`、普通分支与步骤执行子图
 - `build_entry_graph()`：归一化、意图路由与澄清 interrupt/resume
-- `build_plan_execution_graph()`：计划、确定性步骤、HITL、重试与最终汇总
+- `build_plan_execution_graph()`：历史命名，语义是 StepExecutionGraph；负责确定性步骤、HITL、重试与最终汇总
 - `build_react_graph()`：受限 ReAct 轮次及其工具执行边界
 - `run_capture_flow()`：capture 分支的确定性业务流，不单独 compile LangGraph
 - `GraphCaptureFlow`：capture 后的图谱摄取、graph sync 状态回写、批量同步和质量指标
@@ -81,7 +81,7 @@ EntryInput
   -> build_entry_orchestration_graph()
   -> EntryGraph: normalize_entry -> route_intent / clarification
   -> capture / ask / summarize / direct_answer
-     或 PlanExecutionGraph: plan_task -> validate_plan -> step loop / HITL
+     或 StepExecutionGraph（代码历史名 PlanExecutionGraph）: plan_task -> validate_plan -> step loop / HITL
         -> ReactGraph（仅 react 步骤）
   -> finalize_entry_result
   -> EntryResult
@@ -93,7 +93,7 @@ EntryInput
 - 已将 `AgentService` 收敛为薄 facade
 - 已支持 capture、ask、digest、entry 等统一运行时方法
 - 已支持 LangGraph entry 总编排
-- 已支持计划步骤在 orchestration graph 内执行
+- 已支持 workflow 投影步骤在 orchestration graph 内执行
 - 已支持图谱失败时本地回退
 - 已支持 verifier 校验和低置信度重试
 - 已支持图谱异步/手动同步重试
@@ -112,15 +112,83 @@ EntryInput
 
 ### `plan_for_entry(entry_input: EntryInput) -> tuple[RouterDecision, list[PlanStep], list[dict]]`
 
-运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续规划和校验，并写入 checkpoint 中的 `AgentGraphState.plan`；普通意图返回空计划，由执行阶段生成 `execution_trace`。
+历史兼容方法。运行会话绑定和意图路由。只有 `RouterDecision.requires_planning=True` 时才继续做 workflow step projection 和校验，并写入 checkpoint 中的 `AgentGraphState.plan`；普通意图返回空步骤，由执行阶段生成 `execution_trace`。这里的 `requires_planning` 是历史字段名，当前语义更接近 `requires_step_projection`。
 
 ### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
 
 基于 LangGraph `get_state_history()` 返回某次 run 的 checkpoint 时间线摘要，包括 checkpoint id、父 checkpoint id、线程、状态、intent、下一步节点、事件数量、工具结果数量和 pending confirmation。它用于调试和运营后台查看“这次执行是如何走到当前状态的”，不直接暴露完整 checkpoint payload。
 
+这个接口不只是在给 `replay_from_checkpoint()` 提供 `checkpoint_id`，更重要的是帮助人或管理后台**选择应该从哪个历史点回放**。如果只返回一串 checkpoint id，使用者无法判断哪个点是“路由刚完成”、哪个点是“计划刚生成”、哪个点是“删除确认前”、哪个点已经执行过工具。轻量摘要会保留足够的判断信息：
+
+```json
+{
+  "checkpoint_id": "1f0...",
+  "parent_checkpoint_id": "0e9...",
+  "thread_id": "user:dns-session",
+  "run_id": "abc123",
+  "status": "waiting_confirmation",
+  "intent": "delete_knowledge",
+  "next": ["confirm_plan_step"],
+  "event_count": 7,
+  "tool_result_count": 1,
+  "pending_confirmation": {
+    "kind": "tool_confirmation",
+    "tool_name": "delete_note",
+    "step_id": "delete-1"
+  }
+}
+```
+
+同时它避免直接暴露完整 checkpoint state。完整 state 里可能包含 `messages`、`tool_messages`、`tool_results`、检索结果、用户原文和工具输入输出；直接返回会过大、敏感且难以稳定序列化。摘要只保留选择回放点所需字段。
+
 ### `replay_from_checkpoint(thread_id, checkpoint_id, updates, as_node=None) -> EntryResult`
 
-基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力主要用于调试 HITL、计划步骤和恢复一致性问题；对带副作用流程的重放依赖工具层的持久幂等账本保护，避免二次删除或二次写入。
+基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力的核心价值是**现网问题复现**：按用户、run、thread 找到某次失败记录，再从失败前后的真实 checkpoint 分叉重放，保留当时的消息、计划、工具归属、工具结果、pending confirmation 和 errors，而不是只拿用户输入重新跑一遍。对带副作用流程的重放依赖工具层的持久幂等账本保护，避免二次删除或二次写入。
+
+执行过程：
+
+```text
+GET /api/entry/runs/{run_id}/history
+  -> graph.get_state_history({"configurable": {"thread_id": latest.thread_id}})
+  -> 返回轻量 checkpoint 摘要，供人选择 checkpoint_id
+
+POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
+  body: {"updates": {...}, "as_node": "..."}
+  -> graph.update_state({"thread_id": thread_id, "checkpoint_id": checkpoint_id}, updates, as_node=...)
+  -> 生成 fork_config
+  -> graph.invoke(None, fork_config)
+  -> 如果再次 interrupt，返回 waiting_confirmation；否则返回新的 EntryResult
+```
+
+关键点是：`update_state()` 修改的是 LangGraph checkpoint 中的 `AgentGraphState`，不是业务数据库。它适合修正流程状态后重放，比如 `pending_confirmation`、`plan.step_results`、`answer`、`errors`、`tool_tracking` 等；它不等价于“恢复已删除的知识笔记”。
+
+典型应用场景：现网删除流程复现
+
+```text
+用户：DNS 是什么？
+系统：回答 DNS 概念。
+用户：把这段知识固化下来。
+系统：生成并写入 DNS 知识笔记。
+用户：删除刚才 DNS 这部分知识。
+系统：进入 delete_knowledge 流程，并在删除前产生 HITL 确认。
+```
+
+如果这时发现 planner 选错了候选 note，或者确认 payload 里的 `note_id` 不对，管理员可以：
+
+1. 调 `GET /api/entry/runs/{run_id}/history`，找到 `status=waiting_confirmation`、`intent=delete_knowledge`、`pending_confirmation.tool_name=delete_note` 的 checkpoint。
+2. 调 replay 接口，从该 checkpoint fork。
+3. 先不改或只做最小 `updates`，重放确认是否能复现用户反馈的卡住、误选或状态异常。
+4. 修代码、prompt 或策略后，再用同一个 checkpoint 重放验证修复是否有效。
+5. 必要时在受控管理后台中用白名单 `updates` 修正候选结果或清空 transient error，让图从修正后的状态继续执行。
+
+这比“拿用户那句话重新跑一遍”更可靠，因为 Agent 失败常常依赖当时的执行现场：历史 `messages`、router/planner 中间状态、`plan.steps`、ReAct 轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。checkpoint replay 保留的是这些现场，而不是只保留入口文本。
+
+不适用场景：
+
+- 用户在确认阶段反悔：应走普通 `resume_entry(decision="reject")`，不需要 replay。
+- 删除已经真实执行后想恢复数据：需要删除前快照、软删除、回收站或补偿恢复能力；`replay_from_checkpoint()` 只能回放流程状态，不能自动还原 `knowledge_notes` 表。
+- 普通用户自助功能：replay 是现网复现 / 管理后台能力，不应裸露给用户随意传 `updates`。
+- 生产自动恢复：replay 可能重新经过工具节点，应作为调试 / 管理能力使用；带副作用工具依赖 `tool_idempotency_ledger` 防止重复执行。
 
 对应 Web API：
 

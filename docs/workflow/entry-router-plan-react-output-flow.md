@@ -33,8 +33,8 @@ Web / Feishu / CLI
 
 关键边界：
 
-- Router 是所有 entry 的共同入口；Planner 不是所有 entry 都会用。
-- Planner 当前不是 LLM planner，而是从 `WorkflowRegistry` 确定性投影 `PlanStep`。
+- Router 是所有 entry 的共同入口；步骤投影不是所有 entry 都会用。
+- 当前 `DefaultTaskPlanner` 是历史兼容类名，真实职责是 workflow step projector：从 `WorkflowRegistry` 确定性投影 `PlanStep`，不是 LLM planner。
 - `ask / capture / summarize / direct_answer` 是普通 branch workflow，不生成伪 plan，只返回 `execution_trace`。
 - `delete_knowledge / solidify_conversation` 是 step projection workflow，会生成真实 `plan_steps`，进入 checkpoint-safe 的步骤执行。
 - ReAct 只嵌在某个 step 内，用于受控检索探索，不是全局自主 agent loop。
@@ -52,7 +52,7 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 
 相关调试脚本：
 
-- `uv run python scripts/draw_entry_graph.py`：生成 `scripts/assets/entry-orchestration.md`，用于查看父图、子图和 xray 组合视图。
+- `uv run python scripts/draw_entry_graph.py`：生成 `docs/mermaid/entry-orchestration.md`，用于查看父图、子图和 xray 组合视图。
 - `uv run python scripts/export_thread_checkpoints.py <thread_id>`：导出某个 thread 的 state 时间线。
 - `uv run python scripts/export_thread_checkpoints.py <thread_id> --raw`：导出原始 checkpoint tuple，适合底层调试。
 
@@ -108,9 +108,9 @@ thread_id = f"{user_id}:{session_id}"
 | `summarize_branch` | `summarize_thread` | 路由确认后加载 thread messages，再调用总结模型 |
 | `direct_answer_branch` | `direct_answer / unknown / fallback` | 用小模型生成低风险短答或澄清提示 |
 
-### PlanExecutionGraph
+### StepExecutionGraph（代码历史名 `PlanExecutionGraph`）
 
-`delete_knowledge` 和 `solidify_conversation` 会进入步骤执行图：
+`delete_knowledge` 和 `solidify_conversation` 会进入步骤执行图。当前代码和部分事件字段仍沿用 `plan_execution_graph / plan_*` 历史命名，但语义是执行由固定 `WorkflowSpec` 投影出的 steps：
 
 ```text
 START
@@ -127,8 +127,8 @@ START
   -> END
 ```
 
-- `plan_task`：调用 `DefaultTaskPlanner`，从 `WORKFLOW_REGISTRY` 确定性投影 steps。
-- `validate_plan`：用 `PlanValidator` 校验 action、依赖、工具、风险、确认要求和 intent-specific 规则。
+- `plan_task`：调用历史名 `DefaultTaskPlanner` 的 workflow step projector，从 `WORKFLOW_REGISTRY` 确定性投影 steps。
+- `validate_plan`：用 `PlanValidator`（语义上是 StepProjectionValidator）校验 action、依赖、工具、风险、确认要求和 intent-specific 规则。
 - `prepare_plan_execution`：拓扑排序，初始化 `PlanSubState`。
 - `select_next_step`：选择第一个 `planned` step，标记为 `running`。
 - `execute_plan_step`：按 `action_type` 分发。
@@ -199,7 +199,7 @@ event_id / run_id / thread_id / type / timestamp / payload
 - `confidence`
 - `requires_tools`
 - `requires_retrieval`
-- `requires_planning`
+- `requires_planning`（历史字段名，当前语义是是否需要 step projection）
 - `risk_level`
 - `requires_confirmation`
 - `requires_clarification`
@@ -218,13 +218,13 @@ event_id / run_id / thread_id / type / timestamp / payload
 默认控制语义：
 
 - `ask`：需要检索，候选工具是 `graph_search / web_search`。
-- `delete_knowledge`：需要工具、检索、规划，高风险，需要确认。
-- `solidify_conversation`：需要规划，低风险写入。
+- `delete_knowledge`：需要工具、检索、step projection，高风险，需要确认。
+- `solidify_conversation`：需要 step projection，低风险写入。
 - `direct_answer`：不检索、不调用工具。
 
-## Planner
+## Workflow Step Projection
 
-当前 Planner 是确定性的 workflow step projector，不再让 LLM 生成拓扑。
+当前 `DefaultTaskPlanner` 是确定性的 workflow step projector，不再让 LLM 生成拓扑。这里保留 `Planner` 类名只是历史兼容，不能理解成已经启用了通用 autonomous planner。
 
 ```text
 DefaultTaskPlanner.plan(intent)
@@ -240,7 +240,7 @@ DefaultTaskPlanner.plan(intent)
 | [`delete_knowledge`](delete-knowledge-workflow.md) | `retrieve -> resolve -> tool_call(delete_note) -> compose` | 高风险删除，必须候选解析 + HITL |
 | [`solidify_conversation`](solidify-conversation-workflow.md) | `compose -> tool_call(capture_text)` | 从 checkpoint 对话生成草稿，再写入长期知识 |
 
-普通 `ask / capture / summarize / direct_answer` 也是 workflow，但不投影成 plan。
+普通 `ask / capture / summarize / direct_answer` 也是 workflow，但不投影成 `PlanStep`。
 
 `PlanStep` 是 runtime projection，关键字段包括：
 
@@ -303,7 +303,7 @@ checkpoint 保存的是完整 graph 现场：`thread_id`、`run_id`、`plan.step
 
 输出语义：
 
-- `plan_steps`：真实计划执行步骤，只用于 `requires_planning=True` 的 workflow。
+- `plan_steps`：历史字段名，表示真实步骤投影视图，只用于 `requires_planning=True`（即需要 step projection）的 workflow。
 - `execution_trace`：普通分支和最终结果的轻量路径说明。
 - `events`：图内结构化事件，Web 层可转换为 SSE。
 - `pending_confirmation`：当前 run 暂停时返回给 API / 前端。

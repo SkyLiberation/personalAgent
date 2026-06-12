@@ -99,8 +99,8 @@ class TestEntryWithSession:
         entry2 = EntryInput(text="记一下：Bob的笔记N2", user_id="bob", session_id="s2")
         service.entry(entry2)
 
-        alice_notes = service.list_notes("alice")
-        bob_notes = service.list_notes("bob")
+        alice_notes = service.memory.list_notes("alice")
+        bob_notes = service.memory.list_notes("bob")
         assert len(alice_notes) > 0
         assert len(bob_notes) > 0
         # Each user should only see their own notes

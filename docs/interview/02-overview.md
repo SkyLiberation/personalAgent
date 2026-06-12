@@ -2,15 +2,15 @@
 
 ### 1. 这个 personal agent 的核心链路是什么？
 
-用户请求先进入 LangGraph entry，经过 router（`DefaultIntentRouter`，LLM 分类）判断 intent。普通问答、capture、direct answer、summarize 会走各自分支；需要明确步骤边界的高风险或复杂任务，例如 `delete_knowledge` 和 `solidify_conversation`，会进入 planning。其中 capture 按来源细分为 `capture_text / capture_link / capture_file` 三个意图，summarize 实际意图名是 `summarize_thread`，另有 `unknown` 作为无法判定时的澄清兜底。
+用户请求先进入 LangGraph entry，经过 router（`DefaultIntentRouter`，LLM 分类）判断 intent。普通问答、capture、direct answer、summarize 会走各自分支；需要明确步骤边界的高风险或复杂任务，例如 `delete_knowledge` 和 `solidify_conversation`，会进入 workflow step projection。其中 capture 按来源细分为 `capture_text / capture_link / capture_file` 三个意图，summarize 实际意图名是 `summarize_thread`，另有 `unknown` 作为无法判定时的澄清兜底。
 
-问答路径会从长期记忆、图谱或外部工具中检索证据，统一成 `EvidenceItem`，再由 `ContextPack` 做去重、排序和预算裁剪，最后进入 prompt。写入路径通过 capture 工具把内容沉淀到 Postgres `knowledge_notes`，并可同步 Graphiti。删除路径会先规划、解析目标、生成确认，再通过 HITL resume 真正执行。
+问答路径会从长期记忆、图谱或外部工具中检索证据，统一成 `EvidenceItem`，再由 `ContextPack` 做去重、排序和预算裁剪，最后进入 prompt。写入路径通过 capture 工具把内容沉淀到 Postgres `knowledge_notes`，并可同步 Graphiti。删除路径会先从固定 `WorkflowSpec` 投影步骤、解析目标、生成确认，再通过 HITL resume 真正执行。
 
 ### 2. 你为什么采用多层 Agent 架构？
 
-README 里当前工程不是只拆成 memory、tools、planning，而是分成入口层、意图识别 / 路由层、规划层、运行时 / 编排层、工具层、记忆层、检索与推理层、执行与反馈层、观测与治理层；此外 `evals/` 作为评测模块，用来验证检索、问答和规划策略。
+README 里当前工程不是只拆成 memory、tools、planning，而是分成入口层、意图识别 / 路由层、Workflow / 步骤投影层、运行时 / 编排层、工具层、记忆层、检索与推理层、执行与反馈层、观测与治理层；此外 `evals/` 作为评测模块，用来验证检索、问答和 workflow projection 策略。
 
-这样拆是因为一个 Agent 从用户请求到真实行动，中间不只是“模型回答”这一件事，而是包含入口适配、意图判断、上下文组织、计划生成、工具执行、状态恢复、证据检索、结果反馈和治理审计等多个职责。每一层都应该有清楚边界：
+这样拆是因为一个 Agent 从用户请求到真实行动，中间不只是“模型回答”这一件事，而是包含入口适配、意图判断、上下文组织、workflow 步骤投影、工具执行、状态恢复、证据检索、结果反馈和治理审计等多个职责。每一层都应该有清楚边界：
 
 - 入口层统一 Web API、前端、CLI、飞书等来源。
 - 路由层判断请求应该走 ask、capture（细分 text/link/file 三种来源）、delete_knowledge、solidify_conversation、direct_answer 还是 summarize_thread，无法判定时走 unknown 澄清分支。
