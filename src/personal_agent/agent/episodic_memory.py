@@ -9,7 +9,7 @@ from .runtime_results import EntryResult
 logger = logging.getLogger(__name__)
 
 
-def record_entry_episode(memory, result: EntryResult, entry_input: EntryInput | None = None) -> MemoryEpisode | None:
+def record_entry_episode(memory, result: EntryResult, entry_input: EntryInput | None = None, settings=None) -> MemoryEpisode | None:
     """Persist one deterministic episodic memory for a completed/interrupted entry run."""
     if not result.run_id:
         return None
@@ -22,7 +22,31 @@ def record_entry_episode(memory, result: EntryResult, entry_input: EntryInput | 
     except Exception:
         logger.exception("Failed to record memory episode run_id=%s", result.run_id)
         return None
+    _promote_applied_reflections(memory, result, episode, settings)
     return episode
+
+
+def _promote_applied_reflections(memory, result: EntryResult, episode: MemoryEpisode, settings) -> None:
+    """Adjust confidence/status of reflections that were injected into this run."""
+    applied = getattr(result, "applied_reflection_ids", None) or []
+    if not applied or settings is None:
+        return
+    cfg = getattr(settings, "reflection_replay", None)
+    if cfg is None or not cfg.enabled:
+        return
+    for reflection_id in applied:
+        try:
+            memory.promote_reflection(
+                reflection_id,
+                user_id=episode.user_id,
+                outcome=episode.outcome,
+                promote_step=cfg.promote_step,
+                demote_step=cfg.demote_step,
+                promote_threshold=cfg.promote_threshold,
+                reject_floor=cfg.reject_floor,
+            )
+        except Exception:
+            logger.exception("Failed to promote reflection id=%s", reflection_id)
 
 
 def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = None) -> MemoryEpisode:

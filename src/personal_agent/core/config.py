@@ -254,6 +254,23 @@ class PolicyConfig(_StrictBase):
     require_confirmation_for_high_risk: bool = True
 
 
+class ReflectionReplaySettings(_StrictBase):
+    """跨 run 反思回注闭环（Reflexion）的开关与把关参数。
+
+    失败/取消的 run 会生成 reflection candidate；开启后这些反思会在 replan
+    与 ask 两条链路被回注，并按 run 结果做 confidence 升降与 candidate→confirmed
+    晋升。关闭则回到「只存不用」行为。
+    """
+
+    enabled: bool = True
+    max_items: int = 3              # 每次回注最多注入的反思条数
+    min_confidence: float = 0.3     # 低于此置信度的反思不再回注
+    promote_step: float = 0.2       # 命中后 run 成功，confidence 增量
+    demote_step: float = 0.25       # 命中后 run 失败，confidence 减量
+    promote_threshold: float = 0.8  # confidence 达到此值升为 confirmed
+    reject_floor: float = 0.2       # confidence 触及此值标记 rejected
+
+
 class Settings(_StrictBase):
     data_dir: Path = Path("./data")
     log_level: str = "INFO"
@@ -279,6 +296,7 @@ class Settings(_StrictBase):
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    reflection_replay: ReflectionReplaySettings = Field(default_factory=ReflectionReplaySettings)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -601,6 +619,29 @@ class Settings(_StrictBase):
                 deny_scopes=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_SCOPES", "")),
                 require_confirmation_for_high_risk=_as_bool(
                     os.getenv("PERSONAL_AGENT_POLICY_CONFIRM_HIGH_RISK", "true")
+                ),
+            ),
+            reflection_replay=ReflectionReplaySettings(
+                enabled=_as_bool(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_ENABLED", "true")
+                ),
+                max_items=int(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_MAX_ITEMS", "3")
+                ),
+                min_confidence=float(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_MIN_CONFIDENCE", "0.3")
+                ),
+                promote_step=float(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_PROMOTE_STEP", "0.2")
+                ),
+                demote_step=float(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_DEMOTE_STEP", "0.25")
+                ),
+                promote_threshold=float(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_PROMOTE_THRESHOLD", "0.8")
+                ),
+                reject_floor=float(
+                    os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_REJECT_FLOOR", "0.2")
                 ),
             ),
         )

@@ -10,6 +10,7 @@ from ..core.evidence import (
     EvidenceItem,
     episodes_to_evidence,
     graph_result_to_evidence,
+    memory_items_to_evidence,
     notes_to_evidence,
     web_results_to_evidence,
 )
@@ -439,6 +440,27 @@ class AskService:
                 add_trace_step(f"历史执行记录已进入统一证据池 episodes={len(episodes)}")
             else:
                 add_trace_step("历史执行记录未返回可回答证据")
+
+        # --- Past-failure reflections join the same pool (Reflexion loop) ---
+        reflection_cfg = self.settings.reflection_replay
+        if reflection_cfg.enabled:
+            try:
+                reflections = self.memory.search_memory_items(
+                    normalized_user,
+                    effective_query,
+                    memory_type="reflection",
+                    status=["candidate", "confirmed"],
+                    limit=reflection_cfg.max_items,
+                )
+            except Exception:
+                reflections = []
+            reflections = [
+                item for item in reflections
+                if item.confidence >= reflection_cfg.min_confidence
+            ]
+            if reflections:
+                all_evidence.extend(memory_items_to_evidence(reflections))
+                add_trace_step(f"历史反思已进入统一证据池 reflections={len(reflections)}")
 
         # --- Proactive web retrieval joins the same pool before generation ---
         web_tried = False

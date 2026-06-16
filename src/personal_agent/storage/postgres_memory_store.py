@@ -706,7 +706,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         user_id: str,
         *,
         memory_type: str | None = None,
-        status: str | None = None,
+        status: str | list[str] | None = None,
         limit: int = 50,
     ) -> list[MemoryItem]:
         self.ensure_schema()
@@ -716,8 +716,12 @@ class PostgresMemoryStore(PostgresStoreBase):
             clauses.append("memory_type = %s")
             params.append(memory_type)
         if status:
-            clauses.append("status = %s")
-            params.append(status)
+            if isinstance(status, list):
+                clauses.append("status = ANY(%s)")
+                params.append(status)
+            else:
+                clauses.append("status = %s")
+                params.append(status)
         params.append(max(1, limit))
         where_sql = " AND ".join(clauses)
         with self._connect(row_factory=dict_row) as conn:
@@ -739,7 +743,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         query: str,
         *,
         memory_type: str | None = None,
-        status: str | None = "confirmed",
+        status: str | list[str] | None = "confirmed",
         limit: int = 5,
     ) -> list[MemoryItem]:
         self.ensure_schema()
@@ -754,8 +758,12 @@ class PostgresMemoryStore(PostgresStoreBase):
             clauses.append("memory_type = %s")
             params.append(memory_type)
         if status:
-            clauses.append("status = %s")
-            params.append(status)
+            if isinstance(status, list):
+                clauses.append("status = ANY(%s)")
+                params.append(status)
+            else:
+                clauses.append("status = %s")
+                params.append(status)
         where_sql = " AND ".join(clauses)
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -776,6 +784,23 @@ class PostgresMemoryStore(PostgresStoreBase):
                     ),
                 )
                 return [MemoryItem.model_validate(row["payload"]) for row in cur.fetchall()]
+
+    def get_memory_item(self, item_id: str, *, user_id: str | None = None) -> MemoryItem | None:
+        self.ensure_schema()
+        clauses = ["id = %s"]
+        params: list[object] = [item_id]
+        if user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        where_sql = " AND ".join(clauses)
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT payload FROM memory_items WHERE {where_sql} LIMIT 1",
+                    tuple(params),
+                )
+                row = cur.fetchone()
+                return MemoryItem.model_validate(row["payload"]) if row else None
 
     def list_episodes(
         self,

@@ -294,6 +294,9 @@ class AgentGraphState(BaseModel):
     # Lightweight execution trace (for non-planning intents)
     execution_trace: list[str] = Field(default_factory=list)
 
+    # Reflection ids injected into this run (replan/ask), for post-run promotion
+    applied_reflection_ids: list[str] = Field(default_factory=list)
+
     # Evidence & citations (summary form to avoid checkpoint bloat)
     citations: list[Citation] = Field(default_factory=list)
     matches: list[dict[str, Any]] = Field(default_factory=list)

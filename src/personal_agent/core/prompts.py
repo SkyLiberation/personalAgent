@@ -59,6 +59,7 @@ _PROMPTS: dict[str, PromptSpec] = {
         template=(
             "你是个人知识库助手。请只基于下面统一证据池回答用户问题。"
             "证据可能来自图谱事实、原文片段、个人笔记、历史执行记录或网络搜索；需要区分个人知识库、执行历史和网络来源。"
+            "其中 reflection（反思）类证据是过往失败任务的教训，仅用于规避同类错误，不能作为答案的事实来源。"
             "{dialogue_context_policy}"
             "回答要求：先给直接结论，再补充必要说明；每个关键结论尽量标注证据编号，如 [E1]。"
             "如果证据不足或证据之间冲突，要明确说明，不要补空白。\n\n"
@@ -179,7 +180,7 @@ _PROMPTS: dict[str, PromptSpec] = {
     ),
     "replanner.user": PromptSpec(
         name="replanner.user",
-        version="v2",
+        version="v3",
         output_contract="ReExecutionSteps",
         template=(
             "当前计划中的某个步骤执行失败了，请根据失败信息和中间结果，生成替换剩余未完成步骤的新计划。"
@@ -188,6 +189,7 @@ _PROMPTS: dict[str, PromptSpec] = {
             "原始计划步骤:\n{steps_summary}\n\n"
             "失败步骤: {failed_step_id} ({failed_action_type})\n"
             "失败原因: {error}\n\n"
+            "同类任务过去失败的教训（供参考，避免重蹈覆辙；如与当前情况无关可忽略）:\n{reflections}\n\n"
             "已完成的中间结果:\n{obs_summary}\n\n"
             "请返回一个 JSON 对象，包含 steps 数组。每个步骤包含：step_id, action_type, description, "
             "tool_name, tool_input, depends_on, expected_output, success_criteria, risk_level, "

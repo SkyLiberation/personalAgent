@@ -313,7 +313,7 @@ class AgentRuntime:
 
     def execute_entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
         result = self._entry.execute_entry(entry_input, on_progress=on_progress)
-        record_entry_episode(self.memory, result, entry_input)
+        record_entry_episode(self.memory, result, entry_input, settings=self.settings)
         return result
 
     def resume_entry(
@@ -323,7 +323,7 @@ class AgentRuntime:
         result = self._entry.resume_entry(
             run_id, thread_id, decision, user_id, text=text, option_id=option_id,
         )
-        record_entry_episode(self.memory, result)
+        record_entry_episode(self.memory, result, settings=self.settings)
         return result
 
     def get_run_snapshot(self, run_id: str):
@@ -349,7 +349,7 @@ class AgentRuntime:
             updates=updates,
             as_node=as_node,
         )
-        record_entry_episode(self.memory, result)
+        record_entry_episode(self.memory, result, settings=self.settings)
         return result
 
     # ---- digest / intent (formerly RuntimeEntryMixin) ----

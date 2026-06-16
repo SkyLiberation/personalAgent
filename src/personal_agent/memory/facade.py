@@ -300,7 +300,7 @@ class MemoryFacade:
         user_id: str,
         *,
         memory_type: str | None = None,
-        status: str | None = None,
+        status: str | list[str] | None = None,
         limit: int = 50,
     ) -> list[MemoryItem]:
         return self.local.list_memory_items(
@@ -316,7 +316,7 @@ class MemoryFacade:
         query: str,
         *,
         memory_type: str | None = None,
-        status: str | None = "confirmed",
+        status: str | list[str] | None = "confirmed",
         limit: int = 5,
     ) -> list[MemoryItem]:
         return self.local.search_memory_items(
@@ -326,6 +326,51 @@ class MemoryFacade:
             status=status,
             limit=limit,
         )
+
+    def get_memory_item(self, item_id: str, *, user_id: str | None = None) -> MemoryItem | None:
+        return self.local.get_memory_item(item_id, user_id=user_id)
+
+    def promote_reflection(
+        self,
+        item_id: str,
+        *,
+        user_id: str,
+        outcome: str,
+        promote_step: float = 0.2,
+        demote_step: float = 0.25,
+        promote_threshold: float = 0.8,
+        reject_floor: float = 0.2,
+    ) -> MemoryItem | None:
+        """Adjust a reflection's confidence/status after a run that used it.
+
+        ``outcome == "completed"`` raises confidence (and promotes to
+        ``confirmed`` past ``promote_threshold``); any other outcome lowers it
+        (and marks ``rejected`` at/below ``reject_floor``). Returns the updated
+        item, or None when the item is missing / not a reflection / terminal.
+        """
+        item = self.local.get_memory_item(item_id, user_id=user_id)
+        if item is None or item.memory_type != "reflection":
+            return None
+        if item.status in {"rejected", "superseded"}:
+            return item
+
+        decision = self._enforce(
+            "memory_write", subject=user_id, owner=item.user_id, resource=item.id,
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+
+        if outcome == "completed":
+            item.confidence = min(1.0, item.confidence + promote_step)
+            if item.confidence >= promote_threshold:
+                item.status = "confirmed"
+        else:
+            item.confidence = max(0.0, item.confidence - demote_step)
+            if item.confidence <= reject_floor:
+                item.status = "rejected"
+        item.updated_at = local_now()
+        self.local.add_memory_item(item)
+        return item
 
     # -- updates ------------------------------------------------------------
 

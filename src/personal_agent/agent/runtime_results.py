@@ -37,6 +37,7 @@ class EntryResult(BaseModel):
     ask_result: AskResult | None = None
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
+    applied_reflection_ids: list[str] = Field(default_factory=list)
     # Phase 3: HITL interrupt/resume
     run_id: str | None = None
     thread_id: str | None = None

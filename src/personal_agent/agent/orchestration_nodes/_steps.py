@@ -38,6 +38,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _retrieve_reflections(
+    state: AgentGraphState,
+    deps: OrchestrationDeps,
+    intent: str,
+    error: str,
+):
+    """Fetch same-intent past-failure reflections to inject into replanning.
+
+    Returns a list of MemoryItem (or None) and records the applied ids on the
+    state for post-run promotion. Gated by the reflection_replay config flag.
+    """
+    cfg = deps.settings.reflection_replay
+    if not cfg.enabled:
+        return None
+    try:
+        items = deps.memory.search_memory_items(
+            state.user_id,
+            f"{intent} {error}",
+            memory_type="reflection",
+            status=["candidate", "confirmed"],
+            limit=cfg.max_items,
+        )
+    except Exception:
+        logger.exception("Reflection retrieval for replan failed")
+        return None
+    items = [it for it in items if it.confidence >= cfg.min_confidence]
+    if not items:
+        return None
+    for it in items:
+        if it.id not in state.applied_reflection_ids:
+            state.applied_reflection_ids.append(it.id)
+    return items
+
 # Run-scoped cache for staged ask execution. The ask flow is split across
 # retrieve→compose→verify step nodes, but the underlying retrieval is an
 # expensive single pass (~18s) that must not run more than once. The retrieve
@@ -573,8 +607,11 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
                 err_msg = state.errors[-1] if state.errors else "未知错误"
                 # Reconstruct execution step objects for replanner
                 step_objs = [s.to_execution_step() for s in state.step_execution.steps]
+                # Inject same-intent past-failure reflections (Reflexion loop)
+                reflections = _retrieve_reflections(state, deps, intent, err_msg)
                 revised = replanner.replan(
                     step_objs, step, err_msg, state.step_execution.results, intent,
+                    reflections=reflections,
                 )
                 if revised:
                     # Validate revised steps

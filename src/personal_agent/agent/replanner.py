@@ -7,10 +7,18 @@ from uuid import uuid4
 from ..core.config import Settings
 from ..core.llm_schemas import strict_json_schema_response
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
+from ..core.models import MemoryItem
 from ..core.prompts import get_prompt, render_prompt
 from .step_projector import ExecutionStep
 
 logger = logging.getLogger(__name__)
+
+
+def _clip_reflection(item: MemoryItem, limit: int = 200) -> str:
+    text = " ".join(str(item.content or item.title or "").split())
+    if len(text) > limit:
+        text = text[: limit - 1] + "..."
+    return f"[conf={item.confidence:.2f}] {text}"
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 0.5
@@ -84,19 +92,24 @@ class Replanner:
         error: str,
         observations: dict[str, object],
         intent: str,
+        reflections: list[MemoryItem] | None = None,
     ) -> list[ExecutionStep] | None:
         """Generate revised steps to replace remaining incomplete steps.
 
         Only replaces steps that are still in 'planned' or 'failed' status.
         Completed steps are preserved and prepended to the revised list.
-        Returns None if replanning is not possible.
+        ``reflections`` are past-failure lessons for the same intent, injected
+        into the LLM prompt as advisory context. Returns None if replanning is
+        not possible.
         """
         remaining = [s for s in original_steps if s.status in ("planned", "failed")]
         if not remaining:
             logger.info("Replanner: no remaining steps to replan")
             return None
 
-        llm_result = self._replan_with_llm(original_steps, failed_step, error, observations, intent)
+        llm_result = self._replan_with_llm(
+            original_steps, failed_step, error, observations, intent, reflections
+        )
         if llm_result is not None:
             return llm_result
         return self._replan_heuristic(original_steps, failed_step, error, intent)
@@ -108,6 +121,7 @@ class Replanner:
         error: str,
         observations: dict[str, object],
         intent: str,
+        reflections: list[MemoryItem] | None = None,
     ) -> list[ExecutionStep] | None:
         if not self._llm_configured:
             return None
@@ -121,6 +135,11 @@ class Replanner:
             obs_summary = "\n".join(
                 f"- {k}: {str(v)[:200]}" for k, v in observations.items()
             )
+        reflections_summary = "无"
+        if reflections:
+            reflections_summary = "\n".join(
+                f"- {_clip_reflection(item)}" for item in reflections
+            )
 
         system_prompt = get_prompt("replanner.system")
         prompt = render_prompt(
@@ -130,6 +149,7 @@ class Replanner:
             failed_step_id=failed_step.step_id,
             failed_action_type=failed_step.action_type,
             error=error,
+            reflections=reflections_summary,
             obs_summary=obs_summary or "无",
         )
         model = self._settings.openai.small_model
