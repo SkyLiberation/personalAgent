@@ -135,6 +135,14 @@ class FeishuConfig(_StrictBase):
     use_default_user: bool = True
 
 
+class ReviewDigestConfig(_StrictBase):
+    enabled: bool = False
+    user_id: str = "default"
+    feishu_chat_ids: tuple[str, ...] = ()
+    schedule_time: str = "09:00"
+    timezone: str = "Asia/Shanghai"
+
+
 class WebApiConfig(_StrictBase):
     api_keys: dict[str, str] = Field(default_factory=dict)
     # API keys granted admin scope: cross-user audit queries and un-redacted payloads.
@@ -263,6 +271,7 @@ class Settings(_StrictBase):
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
+    review_digest: ReviewDigestConfig = Field(default_factory=ReviewDigestConfig)
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
@@ -437,6 +446,18 @@ class Settings(_StrictBase):
                 use_default_user=_as_bool(
                     os.getenv("PERSONAL_AGENT_FEISHU_USE_DEFAULT_USER", "true")
                 ),
+            ),
+            review_digest=ReviewDigestConfig(
+                enabled=_as_bool(os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_ENABLED", "false")),
+                user_id=os.getenv(
+                    "PERSONAL_AGENT_REVIEW_DIGEST_USER_ID",
+                    os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
+                ),
+                feishu_chat_ids=_parse_csv(
+                    os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS", "")
+                ),
+                schedule_time=os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_TIME", "09:00"),
+                timezone=os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE", "Asia/Shanghai"),
             ),
             web=WebApiConfig(
                 api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),

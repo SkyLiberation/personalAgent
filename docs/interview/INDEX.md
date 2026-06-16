@@ -131,6 +131,13 @@
 - 如果用户说“不要确认，直接删”，系统应该听吗？
 - 如果做成多用户 SaaS，第一步改哪里？
 
+## [Loop 工程与控制论视角下的自检](13-loop-engineering-and-control-theory.md)
+
+- ask 的 verify 是「独立 checker 模型」还是「自己给自己打分」？
+- 能不能「重启一个 session、状态不丢、接着跑」？
+- 失败时生成的「反思」，下一次会用上吗？（当前的真实断点）
+- 用控制论四维（Model × Context × Loop × Evaluation）自评，本项目在谱系的什么位置？
+
 ## [面试收尾口径](12-closing.md)
 
 - （收尾口径，无分项问题）

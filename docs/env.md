@@ -45,6 +45,35 @@ FEISHU_APP_SECRET=xxx
 
 即可完成本地开发接入。
 
+## Review Digest 飞书触达配置
+
+Review Digest 是应用内 job 能力，环境变量只作为当前阶段的配置型订阅来源；后续可替换为数据库订阅表。
+
+```env
+PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=false
+PERSONAL_AGENT_REVIEW_DIGEST_USER_ID=default
+PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS=oc_xxx,oc_yyy
+PERSONAL_AGENT_REVIEW_DIGEST_TIME=09:00
+PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE=Asia/Shanghai
+```
+
+- `PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=true` 后，`review-digest` job 会从配置生成飞书订阅目标。
+- `PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS` 是飞书会话 ID 列表，多个用逗号分隔。
+- `PERSONAL_AGENT_REVIEW_DIGEST_USER_ID` 决定读取哪个用户的长期知识和复习卡。
+- `PERSONAL_AGENT_REVIEW_DIGEST_TIME` / `TIMEZONE` 描述订阅调度语义；当前 CLI job 不自行常驻调度，应用内 scheduler 或外部触发器都应调用内部 job 入口。
+
+手动触发一次内部 job：
+
+```bash
+uv run personal-agent review-digest
+```
+
+也可以覆盖本次发送目标：
+
+```bash
+uv run personal-agent review-digest --user-id default --chat-id oc_xxx
+```
+
 ## LLM 配置
 
 ```env

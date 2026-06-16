@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from personal_agent.agent.runtime_results import DigestResult
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput
 from personal_agent.feishu.models import FeishuIncomingMessage
@@ -58,3 +59,23 @@ def test_feishu_registered_thread_loader_fetches_only_feishu_chat_context(temp_d
     assert messages == [{"role": "user", "content": "待总结内容"}]
     assert not_feishu == []
     service.fetch_recent_messages.assert_called_once_with("chat-1", limit=20)
+
+
+def test_feishu_digest_command_short_circuits_entry(temp_dir):
+    agent_service = MagicMock()
+    agent_service.digest.return_value = DigestResult(message="今日知识简报\n- A")
+    service = FeishuService(Settings(data_dir=temp_dir), agent_service)
+
+    reply = service.process_incoming_message(
+        FeishuIncomingMessage(
+            text="今日简报",
+            user_id="alice",
+            session_id="chat-1",
+            message_id="msg-1",
+            metadata={"chat_id": "chat-1"},
+        )
+    )
+
+    assert reply == "今日知识简报\n- A"
+    agent_service.digest.assert_called_once_with("alice")
+    agent_service.entry.assert_not_called()

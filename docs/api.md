@@ -82,6 +82,54 @@
 
 - `user_id`
 
+## Review Digest 管理接口
+
+用于管理“复习 Digest -> 飞书”的主动触达订阅。普通 API key 只能管理自身 `user_id` 的订阅；admin key 可以指定 `user_id`。
+
+### `GET /api/review/digest/subscriptions`
+
+查询 Digest 订阅。
+
+查询参数：
+
+- `enabled_only`（bool，默认 false）：只返回启用订阅
+
+### `POST /api/review/digest/subscriptions`
+
+创建或覆盖 Digest 订阅。
+
+请求体：
+
+```json
+{
+  "id": "morning-default",
+  "channel": "feishu",
+  "target_type": "chat_id",
+  "target_id": "oc_xxx",
+  "schedule_time": "09:00",
+  "timezone": "Asia/Shanghai",
+  "enabled": true
+}
+```
+
+### `PATCH /api/review/digest/subscriptions/{subscription_id}`
+
+更新订阅。可更新 `channel`、`target_type`、`target_id`、`schedule_time`、`timezone`、`enabled`；非 admin 请求不能改 `user_id`。
+
+### `POST /api/review/digest/subscriptions/{subscription_id}/send-now`
+
+立即为该订阅生成并投递当天 Digest。后端会写入 `digest_deliveries`，并按 `subscription_id + digest_date` 做幂等；同一天重复调用会返回 `skipped=true` 和同一个 `delivery_id`。
+
+### `GET /api/review/digest/deliveries`
+
+查询 Digest 投递记录。
+
+查询参数：
+
+- `subscription_id`
+- `user_id`（仅 admin 可指定）
+- `limit`（默认 50）
+
 ## `POST /api/notes/{note_id}/graph-sync`
 
 手动重试某条笔记的图谱同步。

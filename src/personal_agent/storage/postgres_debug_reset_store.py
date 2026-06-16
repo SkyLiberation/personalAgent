@@ -17,6 +17,10 @@ _NAMED_TABLES = {
     "tool_idempotency_ledger": "tool_idempotency_ledger",
     "tool_audit_events": "tool_audit_events",
     "tool_policy_decisions": "tool_policy_decisions",
+    "digest_subscriptions": "digest_subscriptions",
+    "digest_deliveries": "digest_deliveries",
+    "digest_delivery_items": "digest_delivery_items",
+    "review_feedback_events": "review_feedback_events",
 }
 
 

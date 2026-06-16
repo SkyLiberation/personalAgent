@@ -179,8 +179,55 @@ def clean_postgres_business_tables():
                     run_id TEXT,
                     langsmith_run_id TEXT
                 );
+                CREATE TABLE IF NOT EXISTS digest_subscriptions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    schedule_time TEXT NOT NULL,
+                    timezone TEXT NOT NULL,
+                    enabled BOOLEAN NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS digest_deliveries (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    digest_date TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    provider_message_id TEXT,
+                    error TEXT,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    sent_at TIMESTAMPTZ
+                );
+                CREATE TABLE IF NOT EXISTS digest_delivery_items (
+                    id TEXT PRIMARY KEY,
+                    delivery_id TEXT NOT NULL,
+                    short_id TEXT NOT NULL,
+                    review_card_id TEXT,
+                    note_id TEXT,
+                    prompt_snapshot TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS review_feedback_events (
+                    id TEXT PRIMARY KEY,
+                    review_card_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    delivery_id TEXT,
+                    outcome TEXT NOT NULL,
+                    source_channel TEXT NOT NULL,
+                    source_message_id TEXT,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
                 TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
+                TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

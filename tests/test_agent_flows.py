@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import LangExtractConfig, OpenAIConfig, Settings
-from personal_agent.core.models import Citation, EntryInput
+from personal_agent.core.models import Citation, EntryInput, ReviewCard, local_now
 from personal_agent.agent.runtime_ask import _graph_matches_to_evidence
 from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
@@ -570,6 +570,7 @@ class TestDigestFlow:
         assert result.message
         assert isinstance(result.recent_notes, list)
         assert isinstance(result.due_reviews, list)
+        assert result.message.startswith("今日知识简报")
 
     def test_digest_includes_recent_notes(self, service: AgentService):
         service.execute_capture(text="笔记1内容", source_type="text")
@@ -586,6 +587,19 @@ class TestDigestFlow:
         bob_titles = {n.body.title for n in result_bob.recent_notes}
         assert "Alice的笔记" in alice_titles
         assert "Bob的笔记" in bob_titles
+
+    def test_digest_uses_review_domain_formatter(self, service: AgentService):
+        capture = service.execute_capture(text="复习触达应该推送到飞书", source_type="text")
+        service.memory.add_review(ReviewCard(
+            note_id=capture.note.id,
+            prompt="请回忆复习触达的主入口",
+            answer_hint="飞书",
+            due_at=local_now(),
+        ))
+        result = service.digest()
+        assert "最近新增笔记：" in result.message
+        assert "待复习内容：" in result.message
+        assert "请回忆复习触达的主入口" in result.message
 
 
 class TestEntryFlow:

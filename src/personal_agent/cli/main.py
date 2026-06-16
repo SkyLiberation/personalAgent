@@ -10,6 +10,10 @@ from ..agent.service import AgentService
 from ..core.config import Settings
 from ..core.logging_utils import setup_logging
 from ..core.models import EntryInput
+from ..feishu import FeishuService
+from ..review import DigestSubscription, ReviewDigestJob, ReviewDigestUseCase, subscriptions_from_settings
+from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
 
 app = typer.Typer(help="Personal knowledge agent CLI")
 logger = logging.getLogger(__name__)
@@ -65,6 +69,46 @@ def entry(
         source_platform="cli",
     ))
     typer.echo(_format_entry_result(result))
+
+
+@app.command("review-digest")
+def review_digest(
+    user_id: str | None = typer.Option(None, help="Override digest user_id for this run."),
+    chat_id: str | None = typer.Option(None, help="Override Feishu chat_id for this run."),
+) -> None:
+    """Run the internal review digest delivery job."""
+    service = _build_service()
+    feishu_service = FeishuService(service.settings, service)
+    digest_store = PostgresReviewDigestStore(service.settings.postgres_url or "")
+    for subscription in subscriptions_from_settings(service.settings):
+        digest_store.upsert_subscription(subscription)
+    job = ReviewDigestJob(
+        ReviewDigestUseCase(service.memory),
+        DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)}),
+        ledger=digest_store,
+    )
+    subscriptions = digest_store.list_subscriptions()
+    if chat_id:
+        resolved_user_id = user_id or service.settings.default_user
+        subscriptions = [
+            DigestSubscription(
+                id=f"manual:feishu:{resolved_user_id}:{chat_id}",
+                user_id=resolved_user_id,
+                channel="feishu",
+                target_type="chat_id",
+                target_id=chat_id,
+                enabled=True,
+            )
+        ]
+    elif user_id:
+        subscriptions = [
+            subscription
+            for subscription in subscriptions
+            if subscription.user_id == user_id
+        ]
+
+    results = [job.run(subscription) for subscription in subscriptions]
+    typer.echo(json.dumps([r.model_dump(mode="json") for r in results], ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

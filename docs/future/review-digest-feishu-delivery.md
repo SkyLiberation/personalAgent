@@ -276,11 +276,12 @@ DigestDeliveryItem
 
 - `review_cards` 是 Review State 的初始存储。
 - `MemoryFacade.due_reviews()` 是 `ReviewRepository.due_cards()` 的当前入口。
-- `digest_node()` 是 `DigestComposer` 的早期实现。
-- `AgentRuntime.digest()` 是对外 facade，可以保留，但内部应委托 `ReviewDigestUseCase`。
+- `digest_node()` 曾是 `DigestComposer` 的早期实现；当前 Digest 生成已收敛到 `ReviewDigestUseCase / DigestFormatter`。
+- `AgentRuntime.digest()` 是对外 facade，可以保留；当前已委托 `ReviewDigestUseCase`。
 - `GET /api/digest` 可以改为读取结构化 `ReviewDigest`，而不是承担主触达职责。
-- `FeishuService._send_via_chat_id()` 可以提炼为 `FeishuDeliveryProvider.send()`。
-- 飞书 incoming message 可以新增 command / feedback 分流，再把普通消息继续交给 `AgentService.entry()`。
+- `FeishuService._send_via_chat_id()` 已提炼出主动发送入口，并可被 `FeishuDeliveryProvider.send()` 消费。
+- 飞书 incoming message 已支持 Digest command 分流；feedback 分流仍待补齐。
+- `digest_subscriptions / digest_deliveries` 已落到 Postgres，并已接入管理 API、CLI job 和 subscription/date 幂等；投递 item 映射和 feedback 写入仍待补齐。
 
 迁移后的方向：
 
@@ -324,7 +325,7 @@ FastAPI startup
 cron、K8s CronJob、systemd timer 可以作为部署层唤醒器，但只允许调用内部 job 入口：
 
 ```text
-python -m personal_agent.jobs run review-digest
+uv run personal-agent review-digest
 ```
 
 它不应该自己拼 Digest 文案，也不应该直接调用飞书 SDK。这样 cron 只是 trigger，不是业务实现。
@@ -406,8 +407,8 @@ POST /api/review/cards/{id}/feedback
 ### Job CLI
 
 ```text
-uv run python -m personal_agent.jobs run review-digest
-uv run python -m personal_agent.jobs run review-digest --subscription-id <id>
+uv run personal-agent review-digest
+uv run personal-agent review-digest --user-id default --chat-id oc_xxx
 ```
 
 CLI 只进入应用内 job，不承载业务逻辑。
@@ -450,10 +451,12 @@ R3 稍后
 
 ### M3：调度和订阅
 
-- 新增 `digest_subscriptions`。
-- 新增 `digest_deliveries`。
-- 实现 `ReviewScheduler.tick()` 和 `ReviewDigestJob.run()`。
-- 支持应用内 JobRunner 或外部 trigger 调用内部 job。
+- ~~新增 `digest_subscriptions`。~~ 已有 Postgres 存储骨架。
+- ~~新增 `digest_deliveries`。~~ 已有 Postgres delivery ledger 和 subscription/date 幂等。
+- ~~实现 `ReviewDigestJob.run()`。~~ 已落地，可由 CLI 内部 job 入口触发。
+- ~~实现管理 API。~~ 已有订阅创建/查询/更新、立即发送、投递记录查询。
+- 待实现 `ReviewScheduler.tick()`。
+- 待实现订阅 UI 和多实例 job lock。
 
 ### M4：复习反馈闭环
 

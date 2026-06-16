@@ -26,7 +26,6 @@ from ..tools import (
 )
 from .entry_orchestrator import EntryOrchestrator
 from .episodic_memory import record_entry_episode
-from .nodes import digest_node
 from .step_projector import WorkflowStepProjector
 from .step_projection_validator import StepProjectionValidator
 from .replanner import Replanner
@@ -59,6 +58,7 @@ from .runtime_results import (
     ResetResult,
     RetryResult,
 )
+from ..review import DigestFormatter, ReviewDigestUseCase
 from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from .verifier import AnswerVerifier
 
@@ -125,6 +125,7 @@ class AgentRuntime:
         self._verifier = AnswerVerifier()
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
+        self._digest_formatter = DigestFormatter()
         # Explicit collaborators.
         self._llm = LlmClient(settings)
         self._summarizer = ThreadSummarizer(self._llm)
@@ -356,10 +357,14 @@ class AgentRuntime:
     def execute_digest(self, user_id: str | None = None) -> DigestResult:
         normalized_user = user_id or self.settings.default_user
         logger.info("Generating digest user=%s", normalized_user)
+        digest = ReviewDigestUseCase(
+            self.memory,
+            formatter=self._digest_formatter,
+        ).generate(normalized_user)
         return DigestResult(
-            message=digest_node(self.memory, normalized_user),
-            recent_notes=self.memory.list_recent_notes(normalized_user),
-            due_reviews=self.memory.due_reviews(normalized_user),
+            message=self._digest_formatter.to_text(digest),
+            recent_notes=digest.recent_notes,
+            due_reviews=digest.due_cards,
         )
 
     # ---- admin / maintenance (formerly RuntimeAdminMixin) ----

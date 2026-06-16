@@ -7,6 +7,8 @@ from psycopg import connect
 from unittest.mock import MagicMock
 
 from personal_agent.core.models import EntryInput
+from personal_agent.review.delivery import DeliveryRouter
+from personal_agent.review.models import DeliveryResult
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -25,7 +27,17 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from personal_agent.web.api import create_app
     app = create_app()
     app.state.service._intent_router._classify_with_llm = stub_router_decision
+    app.state.review_digest_delivery_router = DeliveryRouter({"feishu": _FakeDigestProvider()})
     return TestClient(app)
+
+
+class _FakeDigestProvider:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def send(self, target, message) -> DeliveryResult:
+        self.sent.append((target.target_id, message.text))
+        return DeliveryResult(ok=True, provider_message_id=f"fake-{target.target_id}")
 
 
 class TestHealthEndpoint:
@@ -160,6 +172,87 @@ class TestDigestEndpoint:
         assert "message" in data
         assert "recent_notes" in data
         assert "due_reviews" in data
+
+
+class TestReviewDigestManagementEndpoints:
+    def test_create_list_and_update_digest_subscription(self, api_client: TestClient):
+        created = api_client.post(
+            "/api/review/digest/subscriptions",
+            json={
+                "id": "sub-api-1",
+                "target_id": "chat-1",
+                "schedule_time": "08:30",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
+        assert created.status_code == 200
+        assert created.json()["id"] == "sub-api-1"
+        assert created.json()["user_id"] == "default"
+
+        listed = api_client.get("/api/review/digest/subscriptions")
+        assert listed.status_code == 200
+        assert [item["id"] for item in listed.json()["items"]] == ["sub-api-1"]
+
+        patched = api_client.patch(
+            "/api/review/digest/subscriptions/sub-api-1",
+            json={"enabled": False, "schedule_time": "09:15"},
+        )
+
+        assert patched.status_code == 200
+        assert patched.json()["enabled"] is False
+        assert patched.json()["schedule_time"] == "09:15"
+
+    def test_send_now_writes_digest_delivery(self, api_client: TestClient):
+        service = api_client.app.state.service
+        service.execute_capture("复习 Digest 通过飞书触达", source_type="text", user_id="default")
+        api_client.post(
+            "/api/review/digest/subscriptions",
+            json={
+                "id": "sub-api-send",
+                "target_id": "chat-send",
+            },
+        )
+
+        sent = api_client.post("/api/review/digest/subscriptions/sub-api-send/send-now")
+
+        assert sent.status_code == 200
+        payload = sent.json()
+        assert payload["subscription_id"] == "sub-api-send"
+        assert payload["delivered"] is True
+        assert payload["delivery_id"]
+
+        deliveries = api_client.get("/api/review/digest/deliveries")
+        assert deliveries.status_code == 200
+        items = deliveries.json()["items"]
+        assert items[0]["subscription_id"] == "sub-api-send"
+        assert items[0]["status"] == "sent"
+
+    def test_send_now_is_idempotent_per_day(self, api_client: TestClient):
+        api_client.post(
+            "/api/review/digest/subscriptions",
+            json={
+                "id": "sub-api-idem",
+                "target_id": "chat-idem",
+            },
+        )
+
+        first = api_client.post("/api/review/digest/subscriptions/sub-api-idem/send-now")
+        second = api_client.post("/api/review/digest/subscriptions/sub-api-idem/send-now")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["delivered"] is True
+        assert second.json()["skipped"] is True
+        assert first.json()["delivery_id"] == second.json()["delivery_id"]
+
+    def test_missing_digest_subscription_returns_404(self, api_client: TestClient):
+        response = api_client.patch(
+            "/api/review/digest/subscriptions/missing",
+            json={"enabled": False},
+        )
+
+        assert response.status_code == 404
 
 
 class TestNotesEndpoint:

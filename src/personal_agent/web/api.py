@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,9 @@ from ..core.config import Settings
 from ..core.logging_utils import setup_logging
 from ..core.models import EntryInput, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
+from ..review import DigestSubscription, ReviewDigestJob, ReviewDigestUseCase
+from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
 
@@ -121,12 +125,43 @@ class RestoreNoteRequest(BaseModel):
     idempotency_key: str = ""
 
 
+class DigestSubscriptionRequest(BaseModel):
+    id: str | None = None
+    user_id: str | None = None
+    channel: str = "feishu"
+    target_type: str = "chat_id"
+    target_id: str = Field(min_length=1)
+    schedule_time: str = "09:00"
+    timezone: str = "Asia/Shanghai"
+    enabled: bool = True
+
+
+class DigestSubscriptionPatchRequest(BaseModel):
+    user_id: str | None = None
+    channel: str | None = None
+    target_type: str | None = None
+    target_id: str | None = None
+    schedule_time: str | None = None
+    timezone: str | None = None
+    enabled: bool | None = None
+
+
+class DigestSubscriptionListResponse(BaseModel):
+    items: list[dict[str, object]] = Field(default_factory=list)
+
+
+class DigestDeliveryListResponse(BaseModel):
+    items: list[dict[str, object]] = Field(default_factory=list)
+
+
 def create_app() -> FastAPI:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
     capture_service = CaptureService(settings, logger)
     service = AgentService(settings, capture_service=capture_service)
     feishu_service = FeishuService(settings, service)
+    review_digest_store = PostgresReviewDigestStore(settings.postgres_url or "")
+    review_digest_delivery_router = DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
     logger.info("Logging initialized at %s", log_file)
     app = FastAPI(
         title="Personal Agent API",
@@ -134,6 +169,8 @@ def create_app() -> FastAPI:
         description="FastAPI backend for the personal knowledge management agent.",
     )
     app.state.service = service
+    app.state.review_digest_store = review_digest_store
+    app.state.review_digest_delivery_router = review_digest_delivery_router
 
     # Auth + rate limiting (applied before CORS)
     api_keys = settings.web.api_keys
@@ -199,6 +236,97 @@ def create_app() -> FastAPI:
         logger.info("Digest requested for user=%s", resolved_user)
         result = service.digest(resolved_user)
         return DigestResponse(**result.model_dump())
+
+    # ---- Review Digest management API ----
+
+    @app.get("/api/review/digest/subscriptions", response_model=DigestSubscriptionListResponse)
+    def list_digest_subscriptions(
+        request: Request,
+        enabled_only: bool = False,
+    ) -> DigestSubscriptionListResponse:
+        caller = _get_user_id(request, settings)
+        subscriptions = review_digest_store.list_subscriptions(enabled_only=enabled_only)
+        if not _is_admin(request):
+            subscriptions = [item for item in subscriptions if item.user_id == caller]
+        return DigestSubscriptionListResponse(
+            items=[item.model_dump(mode="json") for item in subscriptions]
+        )
+
+    @app.post("/api/review/digest/subscriptions")
+    def create_digest_subscription(
+        body: DigestSubscriptionRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        caller = _get_user_id(request, settings)
+        user_id = body.user_id if _is_admin(request) and body.user_id else caller
+        subscription = DigestSubscription(
+            id=body.id or uuid4().hex,
+            user_id=user_id,
+            channel=body.channel,
+            target_type=body.target_type,
+            target_id=body.target_id,
+            schedule_time=body.schedule_time,
+            timezone=body.timezone,
+            enabled=body.enabled,
+        )
+        saved = review_digest_store.upsert_subscription(subscription)
+        return saved.model_dump(mode="json")
+
+    @app.patch("/api/review/digest/subscriptions/{subscription_id}")
+    def update_digest_subscription(
+        subscription_id: str,
+        body: DigestSubscriptionPatchRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        existing = _get_digest_subscription_or_404(
+            review_digest_store,
+            subscription_id,
+            request,
+            settings,
+        )
+        updates = {
+            key: value
+            for key, value in body.model_dump().items()
+            if value is not None
+        }
+        if not _is_admin(request):
+            updates.pop("user_id", None)
+        saved = review_digest_store.upsert_subscription(existing.model_copy(update=updates))
+        return saved.model_dump(mode="json")
+
+    @app.post("/api/review/digest/subscriptions/{subscription_id}/send-now")
+    def send_digest_now(
+        subscription_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        subscription = _get_digest_subscription_or_404(
+            review_digest_store,
+            subscription_id,
+            request,
+            settings,
+        )
+        job = ReviewDigestJob(
+            ReviewDigestUseCase(service.memory),
+            app.state.review_digest_delivery_router,
+            ledger=review_digest_store,
+        )
+        result = job.run(subscription)
+        return result.model_dump(mode="json")
+
+    @app.get("/api/review/digest/deliveries", response_model=DigestDeliveryListResponse)
+    def list_digest_deliveries(
+        request: Request,
+        subscription_id: str | None = None,
+        user_id: str | None = None,
+        limit: int = 50,
+    ) -> DigestDeliveryListResponse:
+        resolved_user = user_id if _is_admin(request) else _get_user_id(request, settings)
+        items = review_digest_store.list_deliveries(
+            subscription_id=subscription_id,
+            user_id=resolved_user,
+            limit=limit,
+        )
+        return DigestDeliveryListResponse(items=[_jsonable_row(item) for item in items])
 
     @app.delete("/api/notes/{note_id}")
     def delete_note(
@@ -817,6 +945,31 @@ def _note_response(note: KnowledgeNote) -> dict[str, object]:
         "source_span": note.source_span,
     })
     return payload
+
+
+def _get_digest_subscription_or_404(
+    store: PostgresReviewDigestStore,
+    subscription_id: str,
+    request: Request,
+    settings: Settings,
+) -> DigestSubscription:
+    subscription = store.get_subscription(subscription_id)
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Digest subscription not found.")
+    caller = _get_user_id(request, settings)
+    if not _is_admin(request) and subscription.user_id != caller:
+        raise HTTPException(status_code=404, detail="Digest subscription not found.")
+    return subscription
+
+
+def _jsonable_row(row: dict[str, object]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in row.items():
+        if hasattr(value, "isoformat"):
+            result[key] = value.isoformat()
+        else:
+            result[key] = value
+    return result
 
 
 def _frontend_dist_dir() -> Path:

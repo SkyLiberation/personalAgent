@@ -47,6 +47,19 @@ class FeishuService:
         )
         metadata = dict(incoming_message.metadata)
 
+        if incoming_message.message_type == "text" and _is_digest_command(incoming_message.text):
+            digest_result = self.agent_service.digest(incoming_message.user_id)
+            reply_text = digest_result.message
+            self._reply_to_message(incoming_message, reply_text)
+            logger.info(
+                "Feishu digest command processed event_id=%s message_id=%s user_id=%s reply_length=%s",
+                incoming_message.event_id,
+                incoming_message.message_id,
+                incoming_message.user_id,
+                len(reply_text),
+            )
+            return reply_text
+
         if incoming_message.message_type == "file":
             file_key = metadata.get("file_key", "")
             if file_key and incoming_message.message_id:
@@ -266,6 +279,17 @@ class FeishuService:
             return
         self._send_via_chat_id(incoming_message, reply_text, chat_id)
 
+    def send_text_to_chat(self, chat_id: str, text: str) -> None:
+        """Send a proactive text message to a Feishu chat."""
+        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
+            logger.info("Skip Feishu proactive send because app credentials are not configured chat_id=%s", chat_id)
+            return
+        self._create_chat_message(chat_id=chat_id, text=text)
+
+    def send_digest(self, chat_id: str, digest_text: str) -> None:
+        """Send a review digest to a Feishu chat."""
+        self.send_text_to_chat(chat_id, digest_text)
+
     def _reply_via_message_id(self, incoming_message: FeishuIncomingMessage, reply_text: str) -> None:
         request = ReplyMessageRequest.builder() \
             .message_id(incoming_message.message_id or "") \
@@ -291,12 +315,33 @@ class FeishuService:
         )
 
     def _send_via_chat_id(self, incoming_message: FeishuIncomingMessage, reply_text: str, chat_id: str) -> None:
+        self._create_chat_message(
+            chat_id=chat_id,
+            text=reply_text,
+            event_id=incoming_message.event_id,
+            message_id=incoming_message.message_id,
+        )
+        logger.info(
+            "Feishu reply sent event_id=%s message_id=%s chat_id=%s mode=create",
+            incoming_message.event_id,
+            incoming_message.message_id,
+            chat_id,
+        )
+
+    def _create_chat_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        event_id: str | None = None,
+        message_id: str | None = None,
+    ) -> None:
         request = CreateMessageRequest.builder() \
             .receive_id_type("chat_id") \
             .request_body(
                 CreateMessageRequestBody.builder()
                 .receive_id(chat_id)
-                .content(json.dumps({"text": reply_text}, ensure_ascii=False))
+                .content(json.dumps({"text": text}, ensure_ascii=False))
                 .msg_type("text")
                 .build()
             ) \
@@ -306,16 +351,11 @@ class FeishuService:
         self._ensure_success(
             response=response,
             action="create message",
-            event_id=incoming_message.event_id,
-            message_id=incoming_message.message_id,
+            event_id=event_id,
+            message_id=message_id,
             chat_id=chat_id,
         )
-        logger.info(
-            "Feishu reply sent event_id=%s message_id=%s chat_id=%s mode=create",
-            incoming_message.event_id,
-            incoming_message.message_id,
-            chat_id,
-        )
+        logger.info("Feishu proactive message sent chat_id=%s", chat_id)
 
     def _client_value(self) -> lark.Client:
         if self._client is None:
@@ -441,3 +481,17 @@ def _extract_post_text(content: dict[str, object]) -> str:
                 if text:
                     lines.append(text)
     return "\n".join(lines)
+
+
+def _is_digest_command(text: str) -> bool:
+    normalized = text.strip().lower()
+    return normalized in {
+        "digest",
+        "/digest",
+        "今日简报",
+        "今天简报",
+        "知识简报",
+        "复习一下",
+        "今日复习",
+        "今天复习",
+    }
