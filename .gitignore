@@ -12,3 +12,4 @@ evals/open_ragbench/results/
 scripts/assets
 !scripts/assets/entry-orchestration.md
 evals/multihoprag/results/
+.claude/settings.json

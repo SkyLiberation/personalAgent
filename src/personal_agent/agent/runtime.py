@@ -6,6 +6,7 @@ from typing import Callable, TYPE_CHECKING
 from ..core.config import Settings
 from ..core.langsmith_tracing import configure_langsmith_environment
 from ..core.models import EntryInput
+from ..core.observability import set_policy_decision_sink
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..ms_graphrag import MicrosoftGraphRagStore
@@ -108,6 +109,8 @@ class AgentRuntime:
         self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
         self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
+        # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
+        set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
@@ -160,6 +163,20 @@ class AgentRuntime:
 
     def execute_tool(self, name: str, **kwargs: object):
         return self._tool_executor.invoke_direct(name, **kwargs)
+
+    # ---- tool audit query API (P1) ----
+
+    def query_tool_audit(self, **filters):
+        return self.tool_governance_store.query_audit_events(**filters)
+
+    def query_policy_decisions(self, **filters):
+        return self.tool_governance_store.query_policy_decisions(**filters)
+
+    def trace_tool_call(self, idempotency_key: str, *, reveal: bool = False):
+        return self.tool_governance_store.trace_idempotency(idempotency_key, reveal=reveal)
+
+    def audit_metrics(self, *, window_hours: int = 24):
+        return self.tool_governance_store.audit_metrics(window_hours=window_hours)
 
 
     # ---- delegation to explicit collaborators ----

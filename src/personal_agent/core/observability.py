@@ -3,11 +3,22 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from .logging_utils import log_event
 
 logger = logging.getLogger(__name__)
+
+# Optional durable sink for policy decisions. Registered by the runtime so both
+# the tool gateway and the memory facade persist authorization outcomes without
+# changing their call sites. Failures here must never break the request path.
+_policy_decision_sink: Callable[[dict[str, Any]], None] | None = None
+
+
+def set_policy_decision_sink(sink: Callable[[dict[str, Any]], None] | None) -> None:
+    """Register (or clear) the durable sink for policy decisions."""
+    global _policy_decision_sink
+    _policy_decision_sink = sink
 
 
 def record_metric(
@@ -85,6 +96,7 @@ def record_policy_decision(
     source_platform: str | None = None,
     execution_mode: str | None = None,
     thread_id: str | None = None,
+    run_id: str | None = None,
     audit_required: bool = True,
 ) -> None:
     """Record why the policy engine allowed / denied / required confirmation.
@@ -108,6 +120,7 @@ def record_policy_decision(
         "source_platform": source_platform,
         "execution_mode": execution_mode,
         "thread_id": thread_id,
+        "run_id": run_id,
         "langsmith_run_id": _current_langsmith_run_id(),
     }
     log_event(
@@ -116,6 +129,11 @@ def record_policy_decision(
         "policy.decision",
         **payload,
     )
+    if _policy_decision_sink is not None:
+        try:
+            _policy_decision_sink(payload)
+        except Exception:  # pragma: no cover - persistence must never break the request
+            logger.exception("Failed to persist policy decision")
     record_metric(
         "policy.decision",
         dimensions={

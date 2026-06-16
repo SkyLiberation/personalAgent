@@ -67,6 +67,7 @@ class ToolExecutor:
             ToolGatewayContext(
                 execution_mode="direct",
                 tool_call_id=tool_call_id,
+                run_id=kwargs.get("run_id"),
                 user_id=kwargs.get("user_id"),
                 session_id=kwargs.get("session_id"),
                 source_platform=kwargs.get("source_platform"),

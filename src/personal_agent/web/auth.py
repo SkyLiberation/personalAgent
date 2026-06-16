@@ -52,9 +52,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         app,
         api_keys: dict[str, str],
         rate_limiter: RateLimiter | None = None,
+        admin_api_keys: dict[str, str] | None = None,
     ) -> None:
         super().__init__(app)
         self._api_keys = api_keys
+        self._admin_api_keys = admin_api_keys or {}
         self._rate_limiter = rate_limiter
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
@@ -70,8 +72,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "缺少 API Key。请在 Authorization 头或 X-API-Key 头中提供。"},
             )
 
-        # Look up user
-        user_id = self._api_keys.get(api_key)
+        # Look up user — admin keys also resolve to a user_id and gain admin scope.
+        is_admin = api_key in self._admin_api_keys
+        user_id = self._admin_api_keys.get(api_key) or self._api_keys.get(api_key)
         if user_id is None:
             return JSONResponse(
                 status_code=401,
@@ -87,8 +90,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(retry_after)},
             )
 
-        # Attach user_id to request state
+        # Attach identity to request state
         request.state.user_id = user_id
+        request.state.is_admin = is_admin
 
         return await call_next(request)
 

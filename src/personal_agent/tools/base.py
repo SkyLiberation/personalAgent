@@ -90,6 +90,7 @@ class ToolArtifact(BaseModel):
 
 class ToolInvocationEvent(BaseModel):
     thread_id: str | None = None
+    run_id: str | None = None
     user_id: str | None = None
     tool_name: str
     tool_call_id: str
@@ -101,6 +102,7 @@ class ToolInvocationEvent(BaseModel):
     error: str | None = None
     error_kind: ToolErrorKind | None = None
     evidence: list[Any] = Field(default_factory=list)
+    confirmed: bool = False
     latency_ms: float | None = None
     langsmith_run_id: str | None = None
     attempts: int = 1
@@ -221,6 +223,7 @@ def tool_invocation_event(
     execution_mode: str,
     step_id: str | None = None,
     thread_id: str | None = None,
+    run_id: str | None = None,
     user_id: str | None = None,
     latency_ms: float | None = None,
     langsmith_run_id: str | None = None,
@@ -232,6 +235,7 @@ def tool_invocation_event(
     artifact = _artifact_from(output)
     return ToolInvocationEvent(
         thread_id=thread_id,
+        run_id=run_id,
         user_id=user_id,
         tool_name=tool.name,
         tool_call_id=tool_call_id,
@@ -242,6 +246,7 @@ def tool_invocation_event(
         artifact_ok=artifact.ok,
         error=artifact.error,
         evidence=artifact.evidence,
+        confirmed=bool(input.get("confirmed")),
         latency_ms=latency_ms,
         langsmith_run_id=langsmith_run_id,
         attempts=attempts,

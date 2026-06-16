@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from personal_agent.agent.planner import DefaultTaskPlanner, PlanStep
 from personal_agent.agent.replanner import Replanner
+from personal_agent.agent.step_projector import ExecutionStep
+from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 from personal_agent.core.config import Settings
 
 
@@ -19,7 +20,7 @@ class ReplanEvalCase:
     id: str
     description: str
     intent: str
-    original_steps: list[PlanStep]
+    original_steps: list[ExecutionStep]
     failed_step_id: str
     error: str
     # Expected properties of the revised plan
@@ -28,10 +29,13 @@ class ReplanEvalCase:
     forbidden_action_types: list[str] = field(default_factory=list)
 
 
-def _make_steps_for_intent(intent: str, settings: Settings | None = None) -> list[PlanStep]:
-    """Generate heuristic steps for a given intent."""
-    planner = DefaultTaskPlanner(settings or Settings())
-    return planner.fallback_plan(intent)
+def _make_steps_for_intent(intent: str, settings: Settings | None = None) -> list[ExecutionStep]:
+    """Project deterministic steps for an intent from the workflow registry.
+
+    Replaces the removed ``DefaultTaskPlanner.fallback_plan``; the replanner
+    under test consumes ``ExecutionStep`` projections produced here.
+    """
+    return WORKFLOW_REGISTRY.project(intent)
 
 
 def _make_replanner() -> Replanner:
@@ -41,7 +45,7 @@ def _make_replanner() -> Replanner:
 # ---- Evaluation cases ----
 
 EVAL_CASES: list[ReplanEvalCase] = [
-    # --- delete_knowledge ---
+    # --- delete_knowledge (projected: del-1 retrieve, del-2 resolve, del-3 tool_call, del-4 compose) ---
     ReplanEvalCase(
         id="replan-del-retrieve-fails",
         description="delete_knowledge: retrieve step fails → salvage compose added to remaining valid steps",
@@ -55,42 +59,32 @@ EVAL_CASES: list[ReplanEvalCase] = [
     ),
     ReplanEvalCase(
         id="replan-del-delete-fails",
-        description="delete_knowledge: tool_call (del-4) fails → compose (del-5) kept",
+        description="delete_knowledge: tool_call (del-3) fails → salvage compose kept",
         intent="delete_knowledge",
         original_steps=_make_steps_for_intent("delete_knowledge"),
-        failed_step_id="del-4",
+        failed_step_id="del-3",
         error="DeleteNoteTool: note_id not found",
         expect_revised=True,
         expected_action_types=["compose"],
     ),
-    # --- solidify_conversation ---
+    # --- solidify_conversation (projected: sol-1 compose, sol-2 tool_call) ---
     ReplanEvalCase(
-        id="replan-sol-retrieve-fails",
-        description="solidify_conversation: retrieve (sol-1) fails → sol-3/sol-4 kept (indirect deps), no salvage needed",
+        id="replan-sol-compose-fails",
+        description="solidify_conversation: compose (sol-1) fails → sol-2 filtered (dep), salvage compose added",
         intent="solidify_conversation",
         original_steps=_make_steps_for_intent("solidify_conversation"),
         failed_step_id="sol-1",
-        error="RuntimeError: no conversation history",
-        expect_revised=True,
-        expected_action_types=["verify", "tool_call"],
-    ),
-    ReplanEvalCase(
-        id="replan-sol-compose-fails",
-        description="solidify_conversation: compose (sol-2) fails → sol-4 tool_call kept (indirect dep)",
-        intent="solidify_conversation",
-        original_steps=_make_steps_for_intent("solidify_conversation"),
-        failed_step_id="sol-2",
         error="OpenAIError: model unavailable",
         expect_revised=True,
-        expected_action_types=["tool_call"],
+        expected_action_types=["compose"],
     ),
-    # --- ask ---
+    # --- ask (projected: ask-retrieve, ask-compose, ask-verify) ---
     ReplanEvalCase(
         id="replan-ask-retrieve-fails",
-        description="ask: retrieve fails → salvage compose replaces filtered verify",
+        description="ask: retrieve fails → salvage compose for the remaining plan",
         intent="ask",
         original_steps=_make_steps_for_intent("ask"),
-        failed_step_id="ask-1",
+        failed_step_id="ask-retrieve",
         error="GraphitiError: timeout",
         expect_revised=True,
         expected_action_types=["compose"],
@@ -100,31 +94,10 @@ EVAL_CASES: list[ReplanEvalCase] = [
         description="ask: compose fails after successful retrieve → new salvage compose added",
         intent="ask",
         original_steps=_make_steps_for_intent("ask"),
-        failed_step_id="ask-2",
+        failed_step_id="ask-compose",
         error="OpenAIError: rate limit",
         expect_revised=True,
         expected_action_types=["compose"],
-    ),
-    # --- capture ---
-    ReplanEvalCase(
-        id="replan-cap-tool-fails",
-        description="capture: tool_call (cap-1) fails → cap-3 verify kept (indirect dep) + salvage compose",
-        intent="capture_text",
-        original_steps=_make_steps_for_intent("capture_text"),
-        failed_step_id="cap-1",
-        error="CaptureTextTool: empty content",
-        expect_revised=True,
-        expected_action_types=["verify", "compose"],
-    ),
-    # --- unknown (generic fallback) ---
-    ReplanEvalCase(
-        id="replan-unknown-fallback",
-        description="unknown intent: any step fails → generic salvage",
-        intent="unknown",
-        original_steps=_make_steps_for_intent("unknown"),
-        failed_step_id="unk-1",
-        error="Exception: unknown error",
-        expect_revised=False,
     ),
 ]
 
@@ -136,64 +109,30 @@ def test_replan_delete_knowledge_retrieve_fails() -> None:
 
 
 def test_replan_delete_knowledge_delete_fails() -> None:
-    """delete_knowledge: delete failure still produces compose."""
-    case = EVAL_CASES[1]
-    _eval_case(case)
-
-
-def test_replan_solidify_retrieve_fails() -> None:
-    """solidify_conversation: retrieve failure produces compose."""
-    case = EVAL_CASES[2]
-    _eval_case(case)
+    """delete_knowledge: delete (tool_call) failure still produces compose."""
+    _eval_case(_case("replan-del-delete-fails"))
 
 
 def test_replan_solidify_compose_fails() -> None:
-    """solidify_conversation: compose failure keeps remaining steps."""
-    case = EVAL_CASES[3]
-    _eval_case(case)
+    """solidify_conversation: compose failure keeps remaining tool_call."""
+    _eval_case(_case("replan-sol-compose-fails"))
 
 
 def test_replan_ask_retrieve_fails() -> None:
     """ask: retrieve failure adds salvage compose."""
-    case = EVAL_CASES[4]
-    _eval_case(case)
+    _eval_case(_case("replan-ask-retrieve-fails"))
 
 
 def test_replan_ask_compose_fails() -> None:
     """ask: compose failure adds new compose."""
-    case = EVAL_CASES[5]
-    _eval_case(case)
+    _eval_case(_case("replan-ask-compose-fails"))
 
 
-def test_replan_capture_tool_fails() -> None:
-    """capture: tool_call failure adds salvage compose."""
-    case = EVAL_CASES[6]
-    _eval_case(case)
-
-
-def test_replan_unknown_fallback() -> None:
-    """unknown intent: no recovery possible."""
-    case = EVAL_CASES[7]
-    _eval_case(case)
-
-
-def test_planner_heuristic_covers_all_replan_intents() -> None:
-    """All intents that enter replanner should have heuristic fallback plans."""
-    intents = [
-        "delete_knowledge",
-        "solidify_conversation",
-        "ask",
-        "capture_text",
-        "capture_link",
-        "capture_file",
-        "summarize_thread",
-        "direct_answer",
-        "unknown",
-    ]
-    planner = DefaultTaskPlanner(Settings())
-    for intent in intents:
-        steps = planner.fallback_plan(intent)
-        assert len(steps) > 0, f"intent={intent!r} has no heuristic plan"
+def test_projected_intents_have_steps() -> None:
+    """Intents that enter the step-projection replanner must project steps."""
+    for intent in ("delete_knowledge", "solidify_conversation", "ask"):
+        steps = WORKFLOW_REGISTRY.project(intent)
+        assert len(steps) > 0, f"intent={intent!r} projects no steps"
         for s in steps:
             assert s.step_id, f"intent={intent!r} step missing step_id"
             assert s.action_type in (
@@ -201,19 +140,19 @@ def test_planner_heuristic_covers_all_replan_intents() -> None:
             ), f"intent={intent!r} step {s.step_id} has invalid action_type={s.action_type!r}"
 
 
-def test_heuristic_plans_no_duplicate_ids() -> None:
-    """Heuristic plans should never have duplicate step_ids."""
-    planner = DefaultTaskPlanner(Settings())
-    for intent in (
-        "delete_knowledge", "solidify_conversation", "ask",
-        "capture_text", "summarize_thread", "direct_answer",
-    ):
-        steps = planner.fallback_plan(intent)
+def test_projected_plans_no_duplicate_ids() -> None:
+    """Projected plans should never have duplicate step_ids."""
+    for intent in ("delete_knowledge", "solidify_conversation", "ask"):
+        steps = WORKFLOW_REGISTRY.project(intent)
         ids = [s.step_id for s in steps]
         assert len(ids) == len(set(ids)), f"intent={intent!r} has duplicate step_ids: {ids}"
 
 
 # ---- helpers ----
+
+def _case(case_id: str) -> ReplanEvalCase:
+    return next(c for c in EVAL_CASES if c.id == case_id)
+
 
 def _eval_case(case: ReplanEvalCase) -> None:
     replanner = _make_replanner()

@@ -75,6 +75,7 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
             route=intent,
             confidence=0.85,
             requires_retrieval=True,
+            requires_step_projection=True,
             risk_level="low",
             candidate_tools=["graph_search", "web_search"],
             user_visible_message=reason or "检索知识库并生成回答。",
@@ -296,7 +297,12 @@ class DefaultIntentRouter:
                 prompt_version=system_prompt.version,
                 messages=messages,
                 temperature=0,
-                max_tokens=500,
+                # Reasoning models (gpt-5*) count reasoning tokens against this
+                # same budget via ``max_completion_tokens``. 500 gets exhausted
+                # by reasoning, leaving empty content -> JSON EOF -> ``unknown``.
+                # Keep ample headroom; pair with ``reasoning_effort: minimal`` in
+                # ROUTER_EXTRA_BODY to cap reasoning spend.
+                max_tokens=2000,
                 response_format=structured_response_format(
                     "router_decision",
                     _ROUTER_RESPONSE_SCHEMA,

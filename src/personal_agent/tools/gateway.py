@@ -108,6 +108,7 @@ class ToolGatewayContext:
     tool_call_id: str
     step_id: str | None = None
     thread_id: str | None = None
+    run_id: str | None = None
     user_id: str | None = None
     session_id: str | None = None
     source_platform: str | None = None
@@ -428,6 +429,7 @@ class ToolGateway:
             source_platform=context.source_platform,
             execution_mode=context.execution_mode,
             thread_id=context.thread_id,
+            run_id=context.run_id,
             audit_required=governance.audit_required,
         )
 
@@ -485,6 +487,7 @@ class ToolGateway:
             execution_mode=context.execution_mode,
             step_id=context.step_id,
             thread_id=context.thread_id,
+            run_id=context.run_id,
             user_id=context.user_id,
             latency_ms=latency_ms,
             langsmith_run_id=_current_langsmith_run_id(),
@@ -509,6 +512,7 @@ class ToolGateway:
             tool_call_id=call_id,
             step_id=getattr(tracking, "pending_step_id", None),
             thread_id=getattr(state, "thread_id", None),
+            run_id=getattr(state, "run_id", None),
             user_id=getattr(state, "user_id", None),
             session_id=getattr(state, "session_id", None),
             source_platform=source_platform,

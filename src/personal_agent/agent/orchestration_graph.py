@@ -23,7 +23,6 @@ from .orchestration_nodes import (
     _dispatch_step as _dispatch_step,
     _format_react_tools as _format_react_tools,
     _is_react_tool_blocked as _is_react_tool_blocked,
-    _node_ask_branch as _node_ask_branch,
     _node_capture_branch as _node_capture_branch,
     _after_interrupt_clarify as _after_interrupt_clarify,
     _after_prepare_clarify as _after_prepare_clarify,
@@ -78,8 +77,6 @@ def _route_by_intent(state: AgentGraphState) -> str:
     intent = state.router_decision.route if state.router_decision else "unknown"
     if intent in ("capture_text", "capture_link", "capture_file"):
         return "capture_branch"
-    if intent == "ask":
-        return "ask_branch"
     if intent == "summarize_thread":
         return "summarize_branch"
     if intent == "direct_answer":
@@ -288,10 +285,6 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         lambda state: _node_capture_branch(state, deps=deps),
     )
     builder.add_node(
-        "ask_branch",
-        lambda state: _node_ask_branch(state, deps=deps),
-    )
-    builder.add_node(
         "summarize_branch",
         lambda state: _node_summarize_branch(state, deps=deps),
     )
@@ -314,13 +307,11 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
             "finalize_entry_result": "finalize_entry_result",
             "step_execution_graph": "step_execution_graph",
             "capture_branch": "capture_branch",
-            "ask_branch": "ask_branch",
             "summarize_branch": "summarize_branch",
             "direct_answer_branch": "direct_answer_branch",
         },
     )
     builder.add_edge("capture_branch", "finalize_entry_result")
-    builder.add_edge("ask_branch", "finalize_entry_result")
     builder.add_edge("summarize_branch", "finalize_entry_result")
     builder.add_edge("direct_answer_branch", "finalize_entry_result")
     builder.add_conditional_edges(

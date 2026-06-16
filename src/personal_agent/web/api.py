@@ -32,6 +32,23 @@ def _get_user_id(request: Request, settings: Settings) -> str:
     return getattr(request.state, "user_id", settings.default_user)
 
 
+def _is_admin(request: Request) -> bool:
+    """Whether the caller authenticated with an admin-scoped API key."""
+    return bool(getattr(request.state, "is_admin", False))
+
+
+def _parse_iso(value: str | None):
+    """Parse an optional ISO-8601 timestamp query param, else None."""
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"无效的时间格式：{value}（应为 ISO-8601）。")
+
+
 class DigestResponse(BaseModel):
     message: str
     recent_notes: list[KnowledgeNote] = Field(default_factory=list)
@@ -120,13 +137,22 @@ def create_app() -> FastAPI:
 
     # Auth + rate limiting (applied before CORS)
     api_keys = settings.web.api_keys
-    if api_keys:
+    admin_api_keys = settings.web.admin_api_keys
+    if api_keys or admin_api_keys:
         rate_limiter = RateLimiter(
             max_requests=settings.web.rate_limit_requests,
             window_seconds=settings.web.rate_limit_window_seconds,
         )
-        app.add_middleware(AuthMiddleware, api_keys=api_keys, rate_limiter=rate_limiter)
-        logger.info("Auth enabled with %d API keys and rate limiting", len(api_keys))
+        app.add_middleware(
+            AuthMiddleware,
+            api_keys=api_keys,
+            rate_limiter=rate_limiter,
+            admin_api_keys=admin_api_keys,
+        )
+        logger.info(
+            "Auth enabled with %d API keys (%d admin) and rate limiting",
+            len(api_keys), len(admin_api_keys),
+        )
     else:
         logger.info("Auth disabled — no API keys configured")
 
@@ -242,6 +268,107 @@ def create_app() -> FastAPI:
         if not result.get("ok"):
             raise HTTPException(status_code=404, detail=result.get("error") or "Restore failed.")
         return {"ok": True, "data": result.get("data")}
+
+    # ---- Tool audit query API (P1) ----
+
+    @app.get("/api/audit/events")
+    def query_audit_events(
+        request: Request,
+        user_id: str | None = None,
+        tool_name: str | None = None,
+        thread_id: str | None = None,
+        run_id: str | None = None,
+        risk_level: str | None = None,
+        execution_mode: str | None = None,
+        side_effect_id: str | None = None,
+        artifact_ok: bool | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        reveal: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        """Query tool audit events.
+
+        Non-admin callers are scoped to their own ``user_id`` and always get
+        redacted payloads. Admins may query across users and pass ``reveal=true``
+        to see un-redacted payloads.
+        """
+        admin = _is_admin(request)
+        caller = _get_user_id(request, settings)
+        resolved_user = user_id if admin else caller
+        allow_reveal = reveal and admin
+        events = service.query_tool_audit(
+            user_id=resolved_user,
+            tool_name=tool_name,
+            thread_id=thread_id,
+            run_id=run_id,
+            risk_level=risk_level,
+            execution_mode=execution_mode,
+            side_effect_id=side_effect_id,
+            artifact_ok=artifact_ok,
+            since=_parse_iso(since),
+            until=_parse_iso(until),
+            reveal=allow_reveal,
+            limit=limit,
+            offset=offset,
+        )
+        return {"items": events, "redacted": not allow_reveal}
+
+    @app.get("/api/audit/events/by-idempotency/{idempotency_key}")
+    def trace_tool_call(
+        idempotency_key: str, request: Request, reveal: bool = False,
+    ) -> dict[str, object]:
+        """Return the full lifecycle of one confirmed high-risk tool call."""
+        if not _is_admin(request):
+            raise HTTPException(status_code=403, detail="需要管理员权限。")
+        trace = service.trace_tool_call(idempotency_key, reveal=reveal)
+        if trace is None:
+            raise HTTPException(status_code=404, detail="未找到该 idempotency_key 的调用记录。")
+        return trace
+
+    @app.get("/api/audit/policy-decisions")
+    def query_policy_decisions(
+        request: Request,
+        user_id: str | None = None,
+        tool_name: str | None = None,
+        effect: str | None = None,
+        action: str | None = None,
+        thread_id: str | None = None,
+        run_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        if not _is_admin(request):
+            raise HTTPException(status_code=403, detail="需要管理员权限。")
+        items = service.query_policy_decisions(
+            user_id=user_id,
+            tool_name=tool_name,
+            effect=effect,
+            action=action,
+            thread_id=thread_id,
+            run_id=run_id,
+            since=_parse_iso(since),
+            until=_parse_iso(until),
+            limit=limit,
+            offset=offset,
+        )
+        return {"items": items}
+
+    @app.get("/api/audit/metrics")
+    def audit_metrics(request: Request, window_hours: int = 24) -> dict[str, object]:
+        """Aggregate audit metrics with threshold-based alerts."""
+        if not _is_admin(request):
+            raise HTTPException(status_code=403, detail="需要管理员权限。")
+        metrics = service.audit_metrics(window_hours=window_hours)
+        alerts = _audit_alerts(metrics)
+        if alerts:
+            from ..core.observability import record_metric
+            for alert in alerts:
+                record_metric("audit.alert", dimensions={"kind": alert["kind"]})
+        return {"metrics": metrics, "alerts": alerts}
 
     @app.get("/api/notes/{note_id}/chunks", response_model=list[KnowledgeNote])
     def get_note_chunks(note_id: str, request: Request) -> list[KnowledgeNote]:
@@ -698,6 +825,25 @@ def _frontend_dist_dir() -> Path:
 
 def _sse_event(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+# 审计指标阈值。超过即产生告警，由 /api/audit/metrics 返回并打点。
+_AUDIT_ALERT_THRESHOLDS: dict[str, float] = {
+    "delete_failure_rate": 0.2,
+    "failure_rate": 0.3,
+    "duplicate_side_effects": 3,
+    "policy_denials": 10,
+}
+
+
+def _audit_alerts(metrics: dict[str, object]) -> list[dict[str, object]]:
+    """Derive threshold-breach alerts from aggregated audit metrics."""
+    alerts: list[dict[str, object]] = []
+    for kind, threshold in _AUDIT_ALERT_THRESHOLDS.items():
+        value = metrics.get(kind)
+        if isinstance(value, (int, float)) and value > threshold:
+            alerts.append({"kind": kind, "value": value, "threshold": threshold})
+    return alerts
 
 
 app = create_app()

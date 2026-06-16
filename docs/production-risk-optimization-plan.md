@@ -71,28 +71,29 @@
 
 ### 优化方案
 
-1. 增加审计查询 API。
-   - 按 `user_id`、`run_id`、`thread_id`、`tool_name`、`risk_level`、时间范围查询。
-   - 支持按 idempotency key 追踪一次工具调用生命周期。
+1. 增加审计查询 API。**已落地**
+   - 按 `user_id`、`run_id`、`thread_id`、`tool_name`、`risk_level`、`execution_mode`、`side_effect_id`、`artifact_ok`、时间范围查询：`GET /api/audit/events`。
+   - 按 idempotency key 追踪一次工具调用生命周期（账本 + 审计事件）：`GET /api/audit/events/by-idempotency/{key}`。
+   - 策略决策查询：`GET /api/audit/policy-decisions`（gateway 与 facade 两条路径的决策都经 `set_policy_decision_sink` 落到 `tool_policy_decisions` 表）。
 
-2. 增加审计脱敏策略。
-   - prompt、工具参数、知识内容、用户标识分字段脱敏。
-   - 高权限用户才允许查看原始 payload。
+2. 增加审计脱敏策略。**已落地**
+   - `storage/audit_redaction.py` 按字段脱敏：`input` 内容字段（text/content/title/url/note_id 等）、`output.data`、`evidence` 默认掩码为 `<redacted:N chars>`，治理结构字段（tool_name/risk_level/side_effects/artifact_ok 等）保留。
+   - 仅管理员 API key 可传 `reveal=true` 查看原始 payload；普通用户查询强制限定到自身 `user_id` 且恒定脱敏。
 
-3. 增加高风险确认记录。
-   - 记录确认人、确认时间、确认来源、确认摘要、候选对象 hash。
-   - 删除、外部写入、批量修改等操作必须带确认上下文。
+3. 增加高风险确认记录。**已落地**
+   - `tool_audit_events` 提升一等列：`run_id`、`confirmed`、`requires_confirmation`、`risk_level`、`side_effect_id`、`error`、`latency_ms`、`attempts`。
+   - 配合幂等账本（confirmer=user_id、committed_at）与删除快照（deleted_by/delete_reason/run_id），可回答“谁在什么时候确认了什么”。
 
-4. 增加指标和告警。
-   - 删除失败率、重复 idempotency key、策略拒绝次数、高风险工具调用次数。
-   - 对短时间内大量删除、异常恢复、重复 replay 触发告警。
+4. 增加指标和告警。**已落地**
+   - `GET /api/audit/metrics` 聚合：删除失败率、失败率、高风险调用数、重复 idempotency（幂等拦截特征）、策略拒绝数。
+   - 超阈值产生 `alerts` 并打点 `audit.alert` 指标。
 
 ### 验收标准
 
-- 能通过 API 查询某次高风险工具调用的完整链路。
-- 审计查询默认脱敏。
-- 高风险操作能明确回答“谁在什么时候确认了什么”。
-- 异常删除或重复调用能触发指标或告警。
+- 能通过 API 查询某次高风险工具调用的完整链路。**已满足**
+- 审计查询默认脱敏。**已满足**
+- 高风险操作能明确回答“谁在什么时候确认了什么”。**已满足**
+- 异常删除或重复调用能触发指标或告警。**已满足**
 
 ## P2：生产权限模型
 

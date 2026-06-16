@@ -137,6 +137,8 @@ class FeishuConfig(_StrictBase):
 
 class WebApiConfig(_StrictBase):
     api_keys: dict[str, str] = Field(default_factory=dict)
+    # API keys granted admin scope: cross-user audit queries and un-redacted payloads.
+    admin_api_keys: dict[str, str] = Field(default_factory=dict)
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
@@ -438,6 +440,7 @@ class Settings(_StrictBase):
             ),
             web=WebApiConfig(
                 api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),
+                admin_api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_ADMIN_API_KEYS", "")),
                 rate_limit_requests=int(
                     os.getenv("PERSONAL_AGENT_RATE_LIMIT_REQUESTS", "60")
                 ),

@@ -126,7 +126,61 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS tool_idempotency_ledger (
+                    idempotency_key TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    thread_id TEXT,
+                    step_id TEXT,
+                    tool_call_id TEXT,
+                    user_id TEXT,
+                    reserved_at TIMESTAMPTZ NOT NULL,
+                    committed_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                );
+                CREATE TABLE IF NOT EXISTS tool_audit_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    tool_call_id TEXT NOT NULL,
+                    thread_id TEXT,
+                    step_id TEXT,
+                    run_id TEXT,
+                    user_id TEXT,
+                    execution_mode TEXT NOT NULL,
+                    risk_level TEXT,
+                    requires_confirmation BOOLEAN,
+                    confirmed BOOLEAN,
+                    artifact_ok BOOLEAN,
+                    error_kind TEXT,
+                    error TEXT,
+                    latency_ms DOUBLE PRECISION,
+                    attempts INTEGER,
+                    side_effect_id TEXT,
+                    payload JSONB NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS tool_policy_decisions (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    action TEXT NOT NULL,
+                    effect TEXT NOT NULL,
+                    rule TEXT NOT NULL,
+                    reason TEXT,
+                    tool_name TEXT,
+                    permission_scope TEXT,
+                    resource TEXT,
+                    risk_level TEXT,
+                    user_id TEXT,
+                    session_id TEXT,
+                    source_platform TEXT,
+                    execution_mode TEXT,
+                    thread_id TEXT,
+                    run_id TEXT,
+                    langsmith_run_id TEXT
+                );
                 TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
+                TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

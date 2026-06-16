@@ -13,7 +13,6 @@ from ._helpers import _build_react_context as _build_react_context  # noqa: F401
 from ._steps import _dispatch_step as _dispatch_step  # noqa: F401
 from ._helpers import _format_react_tools as _format_react_tools  # noqa: F401
 from ._deps import _is_react_tool_blocked as _is_react_tool_blocked  # noqa: F401
-from ._entry import _node_ask_branch as _node_ask_branch  # noqa: F401
 from ._entry import _node_capture_branch as _node_capture_branch  # noqa: F401
 from ._entry import _after_interrupt_clarify as _after_interrupt_clarify  # noqa: F401
 from ._entry import _after_prepare_clarify as _after_prepare_clarify  # noqa: F401

@@ -461,36 +461,6 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
     }
 
 
-def _node_ask_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Execute ask branch — already classified, no duplicate routing."""
-    entry_input = state.entry_input
-    if entry_input is None or not entry_input.text.strip():
-        state.answer = "未收到可提问内容。"
-        return {"answer": state.answer}
-
-    logger.debug("Executing ask branch user=%s question=%s", state.user_id, entry_input.text[:80])
-    conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    result = deps.execute_ask(
-        entry_input.text,
-        entry_input.user_id,
-        entry_input.session_id,
-        conversation_messages=conversation_messages,
-    )
-    state.answer = result.answer
-    state.citations = result.citations
-    state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
-    state.matches = [
-        {"id": m.id, "title": m.body.title, "summary": m.body.summary}
-        for m in (result.matches or [])
-    ]
-    return {
-        "answer": state.answer,
-        "citations": state.citations,
-        "matches": state.matches,
-        "execution_trace": state.execution_trace,
-    }
-
-
 def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
     """Execute summarize_thread branch — already classified, no duplicate routing."""
     entry_input = state.entry_input

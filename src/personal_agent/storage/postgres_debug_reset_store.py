@@ -16,6 +16,7 @@ _NAMED_TABLES = {
     "checkpoint_migrations": "checkpoint_migrations",
     "tool_idempotency_ledger": "tool_idempotency_ledger",
     "tool_audit_events": "tool_audit_events",
+    "tool_policy_decisions": "tool_policy_decisions",
 }
 
 
