@@ -204,7 +204,10 @@ def build_step_execution_graph(deps: OrchestrationDeps):
         lambda state: _node_consume_step_tool_result(state, deps=deps),
     )
     builder.add_node("react_graph", build_react_graph(deps))
-    builder.add_node("finalize_step_execution", _node_finalize_step_execution)
+    builder.add_node(
+        "finalize_step_execution",
+        lambda state: _node_finalize_step_execution(state, deps=deps),
+    )
 
     builder.add_edge(START, "project_workflow_steps")
     builder.add_edge("project_workflow_steps", "validate_projected_steps")

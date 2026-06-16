@@ -72,28 +72,14 @@ def _retrieve_reflections(
             state.applied_reflection_ids.append(it.id)
     return items
 
-# Run-scoped cache for staged ask execution. The ask flow is split across
-# retrieve→compose→verify step nodes, but the underlying retrieval is an
-# expensive single pass (~18s) that must not run more than once. The retrieve
-# step executes the full ask pipeline once and stashes the AskResult here keyed
-# by run_id; compose/verify read it back. This is intentionally process-local
-# and NOT checkpointed (only summary counts go into AgentGraphState), matching
-# the "large payloads by reference, not value" state design. An ask run does
-# not interrupt for HITL, so the in-memory entry survives the whole run.
-_ASK_RUN_CACHE: dict[str, "AskResult"] = {}
-
-
-def _ask_cache_put(run_id: str, result: "AskResult") -> None:
-    if run_id:
-        _ASK_RUN_CACHE[run_id] = result
-
-
-def _ask_cache_get(run_id: str) -> "AskResult | None":
-    return _ASK_RUN_CACHE.get(run_id)
-
-
-def _ask_cache_clear(run_id: str) -> None:
-    _ASK_RUN_CACHE.pop(run_id, None)
+# Staged ask execution. The ask flow is split across retrieve→compose→verify
+# step nodes that now do real, bounded work: retrieve runs query understanding +
+# multi-source recall + context assembly (the ~18s pass), compose generates from
+# the assembled ContextPack, verify runs verification + web fallback + annotate.
+# The run-scoped AskRunContext threads the large payload (evidence/context_pack)
+# between them by reference, via deps.ask_run_context_store, instead of a
+# module-global dict; it is cleared in finalize. Only summary counts go into
+# AgentGraphState, matching the "large payloads by reference, not value" design.
 
 
 _DELETE_CANDIDATE_SCHEMA = {
@@ -778,12 +764,17 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     }
 
 
-def _node_finalize_step_execution(state: AgentGraphState) -> dict:
+def _node_finalize_step_execution(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
     """Compose default answer if none was set, mark execution complete."""
     if not state.answer:
         state.answer = _default_step_answer(state.step_execution.steps)
 
     state.answer_completed = True
+
+    # Release the run-scoped ask context (evidence/context_pack) now that the
+    # run is done, so the store does not leak across runs.
+    if deps is not None:
+        deps.ask_run_context_store.clear(state.run_id)
 
     # Phase 5: derive execution_trace from structured events
     from ..orchestration_models import execution_trace_from_events
@@ -851,27 +842,29 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps
     question = step.tool_input.get("question") if step.tool_input else step.description
     question = str(question or state.entry_text or "")
 
-    # For the ask flow, the retrieve step owns the single expensive retrieval
-    # pass: run the full ask pipeline once and cache the AskResult for the
-    # downstream compose/verify steps. This is where the ~18s actually happens,
-    # so the running "retrieve" step honestly reflects that latency to the user.
+    # For the ask flow, the retrieve step runs query understanding +
+    # multi-source recall + context assembly — the ~18s pass — and stashes the
+    # run-scoped AskRunContext for the downstream compose/verify steps. The
+    # running "retrieve" step honestly reflects that latency to the user.
     if state.router_decision and state.router_decision.route == "ask":
         from ._entry import _entry_conversation_messages
 
         conversation = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-        ask_result = deps.execute_ask(
+        ask_service = deps.ask_service_factory()
+        ctx = ask_service.build_run_context(
             question,
             state.user_id,
             state.session_id,
             conversation_messages=conversation,
         )
-        _ask_cache_put(state.run_id, ask_result)
+        ask_service.run_retrieval_stage(ctx)
+        deps.ask_run_context_store.put(state.run_id, ctx)
         return {
-            "answer": ask_result.answer,
-            "evidence_count": len(ask_result.evidence or []),
-            "citation_count": len(ask_result.citations or []),
-            "match_count": len(ask_result.matches or []),
-            "ask_cached": True,
+            "answer": "",
+            "evidence_count": len(ctx.context_pack.evidence if ctx.context_pack else []),
+            "citation_count": len(ctx.selected_citations or []),
+            "match_count": len(ctx.selected_matches or []),
+            "ask_staged": True,
         }
 
     result = deps.graph_store.ask(question, state.user_id)
@@ -1027,17 +1020,19 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
             raise RuntimeError("模型未生成符合本次固化范围的知识草稿，未写入知识库。")
         return answer
 
-    # ask flow: the retrieve step already ran the full pipeline and cached the
-    # result. Read it back, backfill citations/matches onto the state, and reuse
-    # the composed answer — no second retrieval.
-    cached = _ask_cache_get(state.run_id)
-    if cached is not None:
-        state.citations = list(cached.citations or [])
+    # ask flow: the retrieve step assembled the ContextPack onto the run-scoped
+    # AskRunContext. Compose runs pure generation from it, then backfills
+    # citations/matches onto the state. No second retrieval.
+    ctx = deps.ask_run_context_store.get(state.run_id)
+    if ctx is not None:
+        ask_service = deps.ask_service_factory()
+        ask_service.run_generation_stage(ctx)
+        state.citations = list(ctx.selected_citations or [])
         state.matches = [
             {"id": m.id, "title": m.body.title, "summary": m.body.summary}
-            for m in (cached.matches or [])
+            for m in (ctx.selected_matches or [])
         ]
-        return cached.answer
+        return ctx.answer
 
     try:
         ask_result = deps.execute_ask(
@@ -1057,12 +1052,26 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
 
 
 def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> None:
+    # ask flow: run the real verification stage on the run-scoped context —
+    # verify + retry + web fallback (re-assemble/re-compose/re-verify) + annotate.
+    # The final answer and citations/matches are written back onto the state.
+    if state.router_decision and state.router_decision.route == "ask":
+        ctx = deps.ask_run_context_store.get(state.run_id)
+        if ctx is not None:
+            try:
+                ask_service = deps.ask_service_factory()
+                ask_service.run_verification_stage(ctx)
+                state.answer = ctx.answer
+                state.citations = list(ctx.selected_citations or [])
+                state.matches = [
+                    {"id": m.id, "title": m.body.title, "summary": m.body.summary}
+                    for m in (ctx.selected_matches or [])
+                ]
+            except Exception:
+                logger.exception("Ask verify stage %s error", step.step_id)
+            return
+
     if not state.answer:
-        return
-    # ask flow: the answer was already verified (and retried/annotated) inside
-    # the cached ask pipeline during the retrieve step. Skip a duplicate
-    # verification pass; the cached result is authoritative.
-    if state.router_decision and state.router_decision.route == "ask" and _ask_cache_get(state.run_id) is not None:
         return
     try:
         verifier = deps.verifier

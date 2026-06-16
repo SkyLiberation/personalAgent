@@ -18,6 +18,51 @@ POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_tes
 ADMIN_POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
 
 
+# LLM-provider env vars that, if populated from a developer's .env, cause tests
+# to make live network calls (with multi-second timeouts + retries). The planner
+# endpoint is the worst offender: a single ask/solidify-routed test pays a ~15s
+# live SSL round-trip. Cleared session-wide so the suite is hermetic and fast —
+# components fall back to offline defaults (planner → default plan, rerank →
+# heuristic, etc.). Individual tests still inject stubs/mocks as needed.
+_LLM_PROVIDER_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "STRUCTURED_API_KEY",
+    "STRUCTURED_BASE_URL",
+    "ROUTER_API_KEY",
+    "ROUTER_BASE_URL",
+    "PERSONAL_AGENT_PLANNER_API_KEY",
+    "PERSONAL_AGENT_PLANNER_BASE_URL",
+    "PERSONAL_AGENT_EXTRACT_API_KEY",
+    "PERSONAL_AGENT_EXTRACT_BASE_URL",
+    "PERSONAL_AGENT_GRAPHITI_LLM_API_KEY",
+    "PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL",
+    "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY",
+    "PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_API_KEY",
+    "PERSONAL_AGENT_WEB_SEARCH_API_KEY",
+    "PERSONAL_AGENT_WEB_SEARCH_BASE_URL",
+    "PERSONAL_AGENT_EMBEDDING_API_KEY",
+    "PERSONAL_AGENT_EMBEDDING_BASE_URL",
+)
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite hermetic: no test should hit a real LLM/embedding endpoint.
+
+    ``.env`` is loaded into ``os.environ`` by ``Settings.from_env`` (via
+    ``load_dotenv(override=True)``); once a real key lands in the process
+    environment it leaks across tests. This autouse fixture removes those keys
+    before every test and neutralizes ``load_dotenv`` so ``from_env`` cannot
+    re-import them. Tests that need a configured provider set it explicitly.
+    """
+    for name in _LLM_PROVIDER_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    from personal_agent.core import config as _config_module
+
+    monkeypatch.setattr(_config_module, "load_dotenv", lambda override=True: False)
+
+
 def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = None) -> RouterDecision:
     """Deterministic LLM stand-in for integration tests exercising routed branches."""
     stripped = text.strip()

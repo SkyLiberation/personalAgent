@@ -881,6 +881,18 @@ button:disabled {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.review-actions .mini-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .citation-item {
   display: grid;
   gap: 4px;

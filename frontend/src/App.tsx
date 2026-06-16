@@ -13,6 +13,7 @@ import {
   resumeEntryRun,
   retryGraphSync,
   setApiKey,
+  submitReviewFeedback,
   uploadEntryFile,
   type AskHistoryItem,
   type Citation,
@@ -122,6 +123,7 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isResettingData, setIsResettingData] = useState(false);
   const [isRetryingGraphSync, setIsRetryingGraphSync] = useState(false);
+  const [reviewFeedbackPending, setReviewFeedbackPending] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey() || "");
   const [userId, setUserId] = useState(() => loadUserId());
   const [showSettings, setShowSettings] = useState(false);
@@ -195,6 +197,21 @@ export default function App() {
       if (!options?.silent) {
         setStatus("暂时无法连接后端，请启动 FastAPI 后刷新页面。");
       }
+    }
+  }
+
+  async function handleReviewFeedback(reviewCardId: string, outcome: "remembered" | "forgotten" | "later") {
+    setReviewFeedbackPending(`${reviewCardId}:${outcome}`);
+    try {
+      const result = await submitReviewFeedback(reviewCardId, outcome, userId);
+      setStatus(result.message || "复习反馈已记录。");
+      const digestResult = await fetchDigest(userId);
+      setDigest(digestResult);
+    } catch (error) {
+      console.error(error);
+      setStatus("复习反馈提交失败，请稍后再试。");
+    } finally {
+      setReviewFeedbackPending(null);
     }
   }
 
@@ -1475,6 +1492,32 @@ export default function App() {
                   <article key={review.id} className="review-card">
                     <p>{review.prompt}</p>
                     <span>到期时间：{new Date(review.due_at).toLocaleString()}</span>
+                    <div className="review-actions">
+                      <button
+                        type="button"
+                        className="mini-chip"
+                        disabled={reviewFeedbackPending !== null}
+                        onClick={() => void handleReviewFeedback(review.id, "remembered")}
+                      >
+                        记得
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-chip"
+                        disabled={reviewFeedbackPending !== null}
+                        onClick={() => void handleReviewFeedback(review.id, "forgotten")}
+                      >
+                        忘了
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-chip"
+                        disabled={reviewFeedbackPending !== null}
+                        onClick={() => void handleReviewFeedback(review.id, "later")}
+                      >
+                        稍后
+                      </button>
+                    </div>
                   </article>
                 ))}
               </div>

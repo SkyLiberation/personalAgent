@@ -11,7 +11,13 @@ from ..core.config import Settings
 from ..core.logging_utils import setup_logging
 from ..core.models import EntryInput
 from ..feishu import FeishuService
-from ..review import DigestSubscription, ReviewDigestJob, ReviewDigestUseCase, subscriptions_from_settings
+from ..review import (
+    DigestSubscription,
+    ReviewDigestJob,
+    ReviewDigestScheduler,
+    ReviewDigestUseCase,
+    subscriptions_from_settings,
+)
 from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
 
@@ -100,14 +106,19 @@ def review_digest(
                 enabled=True,
             )
         ]
+        results = [job.run(subscription) for subscription in subscriptions]
     elif user_id:
         subscriptions = [
             subscription
             for subscription in subscriptions
             if subscription.user_id == user_id
         ]
+        scheduler = ReviewDigestScheduler(digest_store, job)
+        due_ids = {subscription.id for subscription in scheduler.due_subscriptions()}
+        results = [job.run(subscription) for subscription in subscriptions if subscription.id in due_ids]
+    else:
+        results = ReviewDigestScheduler(digest_store, job).run_due()
 
-    results = [job.run(subscription) for subscription in subscriptions]
     typer.echo(json.dumps([r.model_dump(mode="json") for r in results], ensure_ascii=False, indent=2))
 
 

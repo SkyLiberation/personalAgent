@@ -424,6 +424,7 @@ class ReviewCard(BaseModel):
     answer_hint: str
     interval_days: int = 1
     due_at: datetime = Field(default_factory=lambda: local_now() + timedelta(days=1))
+    last_reviewed_at: datetime | None = None
 
 
 class AgentState(BaseModel):

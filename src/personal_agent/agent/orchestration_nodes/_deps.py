@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from ...memory import MemoryFacade
     from ...policy import PolicyEngine
     from ...tools import ToolExecutor
+    from ..ask import AskRunContextStore
+    from ..runtime_ask import AskService
     from ..step_projection_validator import StepProjectionValidator
     from ..step_projector import ExecutionStep
     from ..replanner import Replanner
@@ -42,6 +44,8 @@ class OrchestrationDeps:
     tool_executor: "ToolExecutor"
     graph_store: "GraphitiStore"
     execute_ask: Callable[..., "AskResult"]
+    ask_service_factory: Callable[[], "AskService"]
+    ask_run_context_store: "AskRunContextStore"
     policy_engine: "PolicyEngine | None" = None
     execute_capture: Callable[..., "CaptureResult"] | None = None
     capture_service: "CaptureService | None" = None
@@ -51,6 +55,8 @@ class OrchestrationDeps:
 
     @classmethod
     def from_runtime(cls, runtime) -> "OrchestrationDeps":
+        from ..ask import AskRunContextStore
+
         return cls(
             settings=runtime.settings,
             memory=runtime.memory,
@@ -62,6 +68,8 @@ class OrchestrationDeps:
             tool_executor=runtime.tool_executor,
             graph_store=runtime.graph_store,
             execute_ask=runtime.execute_ask,
+            ask_service_factory=runtime._ask_service,
+            ask_run_context_store=AskRunContextStore(),
             policy_engine=getattr(runtime, "_policy_engine", None),
             execute_capture=runtime.execute_capture,
             capture_service=runtime.capture_service,

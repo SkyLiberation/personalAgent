@@ -51,6 +51,7 @@ def test_replanner_prompt_escapes_json_literal() -> None:
         failed_action_type="retrieve",
         error="timeout",
         obs_summary="无",
+        reflections="无",
     )
 
     assert '{"steps": []}' in rendered

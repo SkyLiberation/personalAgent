@@ -55,6 +55,19 @@ export type ReviewCard = {
   answer_hint: string;
   interval_days: number;
   due_at: string;
+  last_reviewed_at?: string | null;
+};
+
+export type ReviewFeedbackOutcome = "remembered" | "forgotten" | "later";
+
+export type ReviewFeedbackResponse = {
+  ok: boolean;
+  short_id: string;
+  outcome: ReviewFeedbackOutcome;
+  review_card_id?: string | null;
+  delivery_id?: string | null;
+  message: string;
+  error?: string | null;
 };
 
 export type Citation = {
@@ -173,6 +186,20 @@ export function fetchNotes(userId = "default"): Promise<Note[]> {
 
 export function fetchDigest(userId = "default"): Promise<DigestResponse> {
   return requestJson<DigestResponse>(`/api/digest?user_id=${encodeURIComponent(userId)}`);
+}
+
+export function submitReviewFeedback(
+  reviewCardId: string,
+  outcome: ReviewFeedbackOutcome,
+  userId = "default",
+): Promise<ReviewFeedbackResponse> {
+  return requestJson<ReviewFeedbackResponse>(
+    `/api/review/cards/${encodeURIComponent(reviewCardId)}/feedback`,
+    {
+      method: "POST",
+      body: JSON.stringify({ outcome, user_id: userId }),
+    },
+  );
 }
 
 export type GraphTopologyNode = {

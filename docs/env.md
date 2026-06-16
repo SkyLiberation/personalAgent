@@ -55,12 +55,16 @@ PERSONAL_AGENT_REVIEW_DIGEST_USER_ID=default
 PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS=oc_xxx,oc_yyy
 PERSONAL_AGENT_REVIEW_DIGEST_TIME=09:00
 PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE=Asia/Shanghai
+PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED=false
+PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_TICK_SECONDS=60
 ```
 
 - `PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=true` 后，`review-digest` job 会从配置生成飞书订阅目标。
 - `PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS` 是飞书会话 ID 列表，多个用逗号分隔。
 - `PERSONAL_AGENT_REVIEW_DIGEST_USER_ID` 决定读取哪个用户的长期知识和复习卡。
 - `PERSONAL_AGENT_REVIEW_DIGEST_TIME` / `TIMEZONE` 描述订阅调度语义；当前 CLI job 不自行常驻调度，应用内 scheduler 或外部触发器都应调用内部 job 入口。
+- `PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED=true` 时，FastAPI 进程启动应用内 scheduler，按订阅时间 tick 并调用内部 job。
+- `PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_TICK_SECONDS` 控制应用内 scheduler tick 间隔，最小按 10 秒处理。
 
 手动触发一次内部 job：
 
@@ -73,6 +77,18 @@ uv run personal-agent review-digest
 ```bash
 uv run personal-agent review-digest --user-id default --chat-id oc_xxx
 ```
+
+cron / systemd timer / K8s CronJob 可以周期性调用同一个内部 job，例如每分钟唤醒一次；业务幂等由 `digest_deliveries` 的 `subscription_id + digest_date` 保证：
+
+```cron
+* * * * * cd /path/to/personalAgent && uv run personal-agent review-digest
+```
+
+飞书内也可以直接管理当前会话订阅：
+
+- `订阅简报`
+- `取消订阅简报`
+- `简报时间 08:30`
 
 ## LLM 配置
 

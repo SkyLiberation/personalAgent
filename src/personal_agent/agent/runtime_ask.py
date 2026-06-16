@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import logging
-import re
-from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 from ..core.evidence import (
     ContextPack,
     EvidenceItem,
-    episodes_to_evidence,
-    graph_result_to_evidence,
-    memory_items_to_evidence,
     notes_to_evidence,
-    web_results_to_evidence,
 )
 from ..core.models import AgentState, Citation, KnowledgeNote
 from ..core.prompts import get_prompt, render_prompt
-from ..core.projections import MatchRef, match_ref_from_note
-from ..core.query_understanding import RetrievalFilters
+from ..core.projections import MatchRef
+from ..core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from ..graphiti.store import GraphAskResult
-from .ask_pipeline_factory import AskPipelineFactory
+from .ask import AskRunContext, AskRunContextStore
+from .ask.evidence_ops import (
+    dedupe_evidence as _dedupe_evidence,
+    graph_matches_to_evidence as _graph_matches_to_evidence,
+    match_refs as _match_refs,
+    note_term_overlap as _note_term_overlap,
+    order_matches_by_evidence as _order_matches_by_evidence,
+    selected_citations as _selected_citations,
+    selected_matches as _selected_matches,
+)
+from .ask.stages import GenerationStage, RetrievalStage, VerificationStage
+from .ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
 from .query_planner import plan_retrieval
 from .runtime_helpers import (
     _annotate_answer,
@@ -46,149 +51,6 @@ def _conversation_messages_text(messages: list[dict[str, str]]) -> str:
     from .short_term_context import render_as_text
 
     return render_as_text(messages)
-
-
-def _dedupe_evidence(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
-    deduped: list[EvidenceItem] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for item in evidence:
-        key = (
-            item.source_type,
-            item.source_id or item.url or "",
-            item.fact or "",
-            item.snippet[:160],
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
-
-
-def _order_matches_by_evidence(
-    matches: list[KnowledgeNote],
-    evidence: list[EvidenceItem],
-) -> list[KnowledgeNote]:
-    by_id = {note.id: note for note in matches}
-    ordered: list[KnowledgeNote] = []
-    seen: set[str] = set()
-    for item in evidence:
-        note = by_id.get(item.source_id)
-        if note is None or note.id in seen:
-            continue
-        ordered.append(note)
-        seen.add(note.id)
-    ordered.extend(note for note in matches if note.id not in seen)
-    return ordered
-
-
-def _selected_matches(
-    matches: list[KnowledgeNote],
-    evidence: list[EvidenceItem],
-) -> list[KnowledgeNote]:
-    selected_ids = {
-        item.source_id
-        for item in evidence
-        if item.source_id and item.source_type in {"note", "chunk"}
-    }
-    return [note for note in _order_matches_by_evidence(matches, evidence) if note.id in selected_ids]
-
-
-def _selected_citations(
-    citations: list[Citation],
-    evidence: list[EvidenceItem],
-) -> list[Citation]:
-    selected_note_ids = {
-        item.source_id
-        for item in evidence
-        if item.source_id and item.source_type in {"note", "chunk"}
-    }
-    selected_web_urls = {
-        item.url or item.source_id
-        for item in evidence
-        if item.source_type == "web" and (item.url or item.source_id)
-    }
-    selected: list[Citation] = []
-    seen: set[tuple[str, str, str | None]] = set()
-    for citation in citations:
-        keep = (
-            citation.source_type == "web"
-            and citation.url is not None
-            and citation.url in selected_web_urls
-        ) or (
-            citation.source_type != "web"
-            and citation.note_id in selected_note_ids
-        )
-        if not keep:
-            continue
-        key = (citation.note_id, citation.url or "", citation.relation_fact)
-        if key in seen:
-            continue
-        seen.add(key)
-        selected.append(citation)
-    return selected
-
-
-def _match_refs(matches: list[KnowledgeNote]) -> list[MatchRef]:
-    return [match_ref_from_note(note) for note in matches]
-
-
-def _graph_matches_to_evidence(
-    question: str,
-    matches: list[KnowledgeNote],
-    citations: list[Citation],
-    *,
-    mode: str = "all",
-    min_overlap: int = 2,
-) -> list[EvidenceItem]:
-    normalized_mode = mode.strip().lower()
-    if normalized_mode in {"none", "off", "disabled"}:
-        return []
-    cited_note_ids = {citation.note_id for citation in citations if citation.note_id}
-    if normalized_mode == "all":
-        selected_notes = list(matches)
-    else:
-        selected_notes = [
-            note for note in matches
-            if note.id in cited_note_ids or _note_term_overlap(question, note) >= min_overlap
-        ]
-    items = notes_to_evidence(selected_notes)
-    return [
-        item.model_copy(
-            update={
-                "score": max(item.score, 0.55),
-                "metadata": {
-                    **item.metadata,
-                    "retrieved_by": "graphiti",
-                },
-            }
-        )
-        for item in items
-    ]
-
-
-def _note_term_overlap(question: str, note: KnowledgeNote) -> int:
-    question_terms = _terms(question)
-    note_terms = _terms(" ".join([
-        note.body.title,
-        note.body.summary,
-        note.preextract.topic or "",
-        note.body.content,
-    ]))
-    return len(question_terms & note_terms)
-
-
-def _terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    lowered = text.lower()
-    for token in re.findall(r"[a-z0-9_+-]{2,}", lowered):
-        terms.add(token)
-    for run in re.findall(r"[\u3400-\u9fff]{2,}", text):
-        terms.add(run)
-        for size in (2, 3):
-            for index in range(0, max(0, len(run) - size + 1)):
-                terms.add(run[index:index + size])
-    return terms
 
 
 class AskService:
@@ -225,13 +87,31 @@ class AskService:
     def _web_search_available(self) -> bool:
         return bool(self.settings.web_search.api_key)
 
-    def execute_ask(
+    @staticmethod
+    def _match_refs(matches: list[KnowledgeNote]) -> list[MatchRef]:
+        return _match_refs(matches)
+
+    @property
+    def _ask_components(self) -> "AskPipelineComponents":
+        """Assembled enricher + reranker + budget for this run.
+
+        Built per access (cheap) so settings swapped on the service after
+        construction take effect, matching the runtime's per-call build style.
+        """
+        return AskPipelineFactory(self.settings).create()
+
+    def _plan_retrieval(self, question: str, structured_context: str):
+        """Indirection so tests monkeypatching ``runtime_ask.plan_retrieval``
+        still take effect when the stage calls through the service."""
+        return plan_retrieval(question, structured_context, self.settings)
+
+    def build_run_context(
         self,
         question: str,
         user_id: str | None = None,
         session_id: str | None = None,
         conversation_messages: list[dict[str, str]] | None = None,
-    ) -> AskResult:
+    ) -> AskRunContext:
         normalized_user = user_id or self.settings.default_user
         normalized_session = session_id or "default"
         logger.info("Starting ask user=%s question=%s", normalized_user, question[:120])
@@ -244,355 +124,71 @@ class AskService:
                 "当前会话对话线索（仅用于理解追问和更正，不作为事实证据）：\n"
                 f"{structured_context}"
             )
-        working_context = "\n\n".join(context_parts)
-        trace_steps: list[str] = []
-
-        def add_trace_step(message: str) -> None:
-            trace_steps.append(message)
-            logger.debug("ask trace user=%s session=%s %s", normalized_user, normalized_session, message)
-        trace_id = uuid4().hex[:12]
-        all_evidence: list[EvidenceItem] = []
-        ask_components = AskPipelineFactory(self.settings).create()
-
-        def build_enriched_context_pack(evidence: list[EvidenceItem]) -> ContextPack:
-            nonlocal combined_matches, combined_citations
-            enriched = ask_components.candidate_enricher.enrich(
-                effective_query,
-                evidence=evidence,
-                matches=combined_matches,
-                citations=combined_citations,
-                store=self.memory,
-                filters=retrieval_plan.filters,
-            )
-            combined_matches = enriched.matches
-            combined_citations = enriched.citations
-            if enriched.added_note_ids:
-                add_trace_step(
-                    f"CandidateEnricher({ask_components.candidate_enricher.name}): "
-                    f"added={len(enriched.added_note_ids)}"
-                )
-            return ask_components.reranker.rerank(
-                effective_query,
-                enriched.evidence,
-                max_items=ask_components.context_max_items,
-                char_budget=ask_components.context_char_budget,
-            )
-
-        # --- P2: Query Understanding + Retrieval Plan ---
-        understanding, retrieval_plan = plan_retrieval(question, structured_context, self.settings)
-        effective_query = retrieval_plan.query or question
-        add_trace_step(
-            f"QueryPlan: sources={retrieval_plan.sources} parallel={retrieval_plan.parallel} "
-            f"rewrite={effective_query[:60]} freshness={understanding.needs_freshness} "
-            f"graph_reasoning={understanding.needs_graph_reasoning} "
-            f"episodic={understanding.needs_episodic_context} "
-            f"filters={retrieval_plan.filters.model_dump(exclude_defaults=True)}"
-        )
-
-        use_graph = "graph" in retrieval_plan.sources
-        use_local = "local" in retrieval_plan.sources
-        use_web_proactive = "web" in retrieval_plan.sources
-        graph_provider = self.settings.ask.graph_provider.strip().lower()
-
-        # --- Parallel or serial retrieval based on plan ---
-        graph_result = None
-        local_state_result = None
-
-        if retrieval_plan.parallel and use_graph and use_local:
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                graph_future = pool.submit(
-                    self._run_graph_retrieval,
-                    graph_provider,
-                    effective_query,
-                    normalized_user,
-                    trace_id,
-                    retrieval_plan.filters,
-                ) if use_graph else None
-                local_future = pool.submit(
-                    self._run_local_retrieval, effective_query, normalized_user, retrieval_plan.filters
-                )
-                if graph_future:
-                    graph_result = graph_future.result(timeout=60)
-                local_state_result = local_future.result(timeout=30)
-            add_trace_step("并行检索完成 (graph + local)")
-        else:
-            if use_graph:
-                graph_result = self._run_graph_retrieval(
-                    graph_provider,
-                    effective_query,
-                    normalized_user,
-                    trace_id,
-                    retrieval_plan.filters,
-                )
-            if use_local:
-                local_state_result = self._run_local_retrieval(
-                    effective_query, normalized_user, retrieval_plan.filters
-                )
-
-        combined_matches: list[KnowledgeNote] = []
-        combined_citations: list[Citation] = []
-
-        # --- Process graph results into the unified evidence pool ---
-        if isinstance(graph_result, AgentState):
-            combined_matches = _merge_notes(combined_matches, graph_result.matches)
-            combined_citations = _merge_citations(combined_citations, graph_result.citations)
-            all_evidence.extend(graph_result.evidence)
-            retrieved_by = sorted({
-                item.metadata.get("retrieved_by")
-                for item in graph_result.evidence
-                if item.metadata.get("retrieved_by")
-            })
-            provider_label = "+".join(retrieved_by) if retrieved_by else graph_provider
-            add_trace_step(
-                f"{provider_label} 候选已进入统一证据池 matches={len(graph_result.matches)} "
-                f"citations={len(graph_result.citations)} evidence={len(graph_result.evidence)}"
-            )
-        elif graph_result and graph_result.enabled is True:
-            matches, citations = self._graph_matches_and_citations(
-                normalized_user, question, graph_result, retrieval_plan.filters
-            )
-            notes_by_episode = {n.graph.episode_uuid: n for n in matches if n.graph.episode_uuid is not None}
-            if retrieval_plan.filters.active() and not matches and not citations:
-                add_trace_step("图谱结果未通过 metadata filters，已跳过")
-            elif self._graph_has_evidence(graph_result, matches, citations):
-                combined_matches = _merge_notes(combined_matches, matches)
-                combined_citations = _merge_citations(combined_citations, citations)
-                all_evidence.extend(graph_result_to_evidence(graph_result, notes_by_episode, question))
-                graph_note_evidence = _graph_matches_to_evidence(
-                    question,
-                    matches,
-                    citations,
-                    mode=self.settings.ask.graph_note_evidence_mode,
-                    min_overlap=self.settings.ask.graph_note_evidence_min_overlap,
-                )
-                all_evidence.extend(graph_note_evidence)
-                add_trace_step(
-                    f"图谱候选已进入统一证据池 matches={len(matches)} citations={len(citations)} "
-                    f"evidence={len(graph_note_evidence)}"
-                )
-            else:
-                add_trace_step("图谱未返回可回答证据")
-
-        # --- Sub-query expansion for multi-hop into the same evidence pool ---
-        for sub_q in retrieval_plan.sub_queries:
-            if use_graph:
-                sub_graph = self._run_graph_retrieval(
-                    graph_provider,
-                    sub_q,
-                    normalized_user,
-                    trace_id,
-                    retrieval_plan.filters,
-                )
-                if isinstance(sub_graph, AgentState):
-                    combined_matches = _merge_notes(combined_matches, sub_graph.matches)
-                    combined_citations = _merge_citations(combined_citations, sub_graph.citations)
-                    all_evidence.extend(sub_graph.evidence)
-                elif sub_graph and sub_graph.enabled:
-                    sub_matches, sub_citations = self._graph_matches_and_citations(
-                        normalized_user, sub_q, sub_graph, retrieval_plan.filters
-                    )
-                    notes_by_ep = {n.graph.episode_uuid: n for n in sub_matches if n.graph.episode_uuid}
-                    if not (retrieval_plan.filters.active() and not sub_matches and not sub_citations):
-                        combined_matches = _merge_notes(combined_matches, sub_matches)
-                        combined_citations = _merge_citations(combined_citations, sub_citations)
-                        all_evidence.extend(graph_result_to_evidence(sub_graph, notes_by_ep, sub_q))
-                        all_evidence.extend(_graph_matches_to_evidence(
-                            sub_q,
-                            sub_matches,
-                            sub_citations,
-                            mode=self.settings.ask.graph_note_evidence_mode,
-                            min_overlap=self.settings.ask.graph_note_evidence_min_overlap,
-                        ))
-            add_trace_step(f"子查询检索已进入统一证据池: {sub_q[:40]}")
-
-        # --- Process local results (from parallel or serial) ---
-        if use_local and local_state_result is None:
-            local_state_result = self._run_local_retrieval(
-                effective_query, normalized_user, retrieval_plan.filters
-            )
-
-        if local_state_result:
-            combined_matches = _merge_notes(combined_matches, local_state_result.matches)
-            combined_citations = _merge_citations(combined_citations, local_state_result.citations)
-            all_evidence.extend(notes_to_evidence(local_state_result.matches))
-            add_trace_step(
-                f"本地候选已进入统一证据池 matches={len(local_state_result.matches)} "
-                f"citations={len(local_state_result.citations)}"
-            )
-        elif use_local:
-            add_trace_step("本地检索未返回可回答证据")
-
-        if understanding.needs_episodic_context:
-            episodes = self.memory.search_episodes(
-                normalized_user,
-                effective_query,
-                limit=5,
-                session_id=normalized_session,
-            )
-            if not episodes:
-                episodes = self.memory.search_episodes(
-                    normalized_user,
-                    effective_query,
-                    limit=5,
-                )
-            if episodes:
-                all_evidence.extend(episodes_to_evidence(episodes))
-                add_trace_step(f"历史执行记录已进入统一证据池 episodes={len(episodes)}")
-            else:
-                add_trace_step("历史执行记录未返回可回答证据")
-
-        # --- Past-failure reflections join the same pool (Reflexion loop) ---
-        reflection_cfg = self.settings.reflection_replay
-        if reflection_cfg.enabled:
-            try:
-                reflections = self.memory.search_memory_items(
-                    normalized_user,
-                    effective_query,
-                    memory_type="reflection",
-                    status=["candidate", "confirmed"],
-                    limit=reflection_cfg.max_items,
-                )
-            except Exception:
-                reflections = []
-            reflections = [
-                item for item in reflections
-                if item.confidence >= reflection_cfg.min_confidence
-            ]
-            if reflections:
-                all_evidence.extend(memory_items_to_evidence(reflections))
-                add_trace_step(f"历史反思已进入统一证据池 reflections={len(reflections)}")
-
-        # --- Proactive web retrieval joins the same pool before generation ---
-        web_tried = False
-        if use_web_proactive and self._web_search_available:
-            web_tried = True
-            web_results, web_citations = self._execute_web_search(question)
-            if web_citations:
-                combined_citations = _merge_citations(combined_citations, web_citations)
-                all_evidence.extend(web_results_to_evidence(web_results))
-                add_trace_step(f"主动网络搜索候选已进入统一证据池 citations={len(web_citations)}")
-
-        all_evidence = _dedupe_evidence(all_evidence)
-        context_pack = build_enriched_context_pack(all_evidence)
-        selected_graph_items = [
-            item for item in context_pack.evidence
-            if item.source_type == "graph_fact" or item.metadata.get("retrieved_by") in {"graphiti", "structural"}
-        ]
-        add_trace_step(
-            f"ContextPack({ask_components.reranker.name}): "
-            f"selected={len(context_pack.selected)} dropped={len(context_pack.dropped)} "
-            f"graph_selected={len(selected_graph_items)} "
-            f"chars={context_pack.used_chars}/{context_pack.char_budget}"
-        )
-        selected_matches = _selected_matches(combined_matches, context_pack.evidence)
-        selected_citations = _selected_citations(combined_citations, context_pack.evidence)
-
-        # --- Single generation from the unified evidence pool ---
-        final_answer = self._compose_unified_answer(
-            question,
-            context_pack,
-            selected_matches,
-            selected_citations,
-            working_context,
-        )
-        verification = self._verifier.verify(
-            question,
-            final_answer,
-            selected_citations,
-            _match_refs(selected_matches),
-            web_enabled=any(c.source_type == "web" for c in selected_citations),
-            evidence=context_pack.evidence,
-            thread_id=f"{normalized_user}:{normalized_session}",
+        return AskRunContext(
+            question=question,
             user_id=normalized_user,
+            session_id=normalized_session,
+            working_context="\n\n".join(context_parts),
+            structured_context=structured_context,
+            has_dialogue_context=has_dialogue_context,
+            trace_id=uuid4().hex[:12],
         )
-        if selected_matches or selected_citations:
-            retry_result = self._retry_if_needed(
-                question,
-                final_answer,
-                selected_citations,
-                selected_matches,
-                verification,
-                web_enabled=any(c.source_type == "web" for c in selected_citations),
-                evidence=context_pack.evidence,
-            )
-            final_answer = retry_result.answer
-            verification = retry_result.verification
-        add_trace_step(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
 
-        # --- Web fallback also joins the unified pool, then regenerates once ---
-        if not verification.sufficient and not web_tried and self._web_search_available:
-            web_tried = True
-            web_results, web_citations = self._execute_web_search(question)
-            if web_citations:
-                combined_citations = _merge_citations(combined_citations, web_citations)
-                all_evidence.extend(web_results_to_evidence(web_results))
-                all_evidence = _dedupe_evidence(all_evidence)
-                context_pack = build_enriched_context_pack(all_evidence)
-                selected_graph_items = [
-                    item for item in context_pack.evidence
-                    if item.source_type == "graph_fact" or item.metadata.get("retrieved_by") in {"graphiti", "structural"}
-                ]
-                add_trace_step(f"知识库证据不足，网络搜索候选已进入统一证据池 citations={len(web_citations)}")
-                add_trace_step(
-                    f"ContextPack({ask_components.reranker.name}): "
-                    f"selected={len(context_pack.selected)} dropped={len(context_pack.dropped)} "
-                    f"graph_selected={len(selected_graph_items)} "
-                    f"chars={context_pack.used_chars}/{context_pack.char_budget}"
-                )
-                selected_matches = _selected_matches(combined_matches, context_pack.evidence)
-                selected_citations = _selected_citations(combined_citations, context_pack.evidence)
-                final_answer = self._compose_unified_answer(
-                    question,
-                    context_pack,
-                    selected_matches,
-                    selected_citations,
-                    working_context,
-                )
-                verification = self._verifier.verify(
-                    question,
-                    final_answer,
-                    selected_citations,
-                    _match_refs(selected_matches),
-                    web_enabled=True,
-                    evidence=context_pack.evidence,
-                    thread_id=f"{normalized_user}:{normalized_session}",
-                    user_id=normalized_user,
-                )
-                retry_result = self._retry_if_needed(
-                    question,
-                    final_answer,
-                    selected_citations,
-                    selected_matches,
-                    verification,
-                    web_enabled=True,
-                    evidence=context_pack.evidence,
-                )
-                final_answer = retry_result.answer
-                verification = retry_result.verification
-                add_trace_step(f"网络补充后 Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
+    # --- Staged entrypoints (one per ask-* workflow step) ---
 
-        if not verification.ok or not verification.sufficient:
-            final_answer = _annotate_answer(final_answer, verification)
+    def run_retrieval_stage(self, ctx: AskRunContext) -> None:
+        """ask-retrieve: query understanding + multi-source recall + assembly."""
+        RetrievalStage(self).run(ctx)
 
-        ordered_matches = _selected_matches(combined_matches, context_pack.evidence)
-        result_citations = _selected_citations(combined_citations, context_pack.evidence)
+    def run_generation_stage(self, ctx: AskRunContext) -> None:
+        """ask-compose: pure generation from the assembled ContextPack."""
+        GenerationStage(self).run(ctx)
+
+    def run_verification_stage(self, ctx: AskRunContext) -> None:
+        """ask-verify: verify + retry + web fallback + annotate."""
+        VerificationStage(self, RetrievalStage(self)).run(ctx)
+
+    def context_to_result(self, ctx: AskRunContext) -> AskResult:
+        ordered_matches = _selected_matches(ctx.combined_matches, ctx.context_pack.evidence)
+        result_citations = _selected_citations(ctx.combined_citations, ctx.context_pack.evidence)
         ask_result = AskResult(
-            answer=final_answer,
+            answer=ctx.answer,
             citations=result_citations,
             matches=ordered_matches,
             match_refs=_match_refs(ordered_matches),
-            evidence=context_pack.evidence,
-            session_id=normalized_session,
+            evidence=ctx.context_pack.evidence,
+            session_id=ctx.session_id,
         )
+        verification = ctx.verification
         logger.info(
             "Ask resolved from unified evidence user=%s matches=%s citations=%s evidence=%s verify=%.2f",
-            normalized_user,
+            ctx.user_id,
             len(ordered_matches),
             len(result_citations),
-            len(context_pack.evidence),
-            verification.evidence_score,
+            len(ctx.context_pack.evidence),
+            verification.evidence_score if verification else 0.0,
         )
         return ask_result
+
+    def execute_ask(
+        self,
+        question: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_messages: list[dict[str, str]] | None = None,
+    ) -> AskResult:
+        """Thin orchestration over the three stages.
+
+        Kept as the whole-pipeline entrypoint for evals (``current_runtime_ask``)
+        and unit tests. The orchestration graph instead drives the three stages
+        individually via the ask-retrieve / ask-compose / ask-verify steps so the
+        step panel reflects each phase honestly.
+        """
+        ctx = self.build_run_context(question, user_id, session_id, conversation_messages)
+        self.run_retrieval_stage(ctx)
+        self.run_generation_stage(ctx)
+        self.run_verification_stage(ctx)
+        return self.context_to_result(ctx)
 
     @staticmethod
     def _graph_has_evidence(

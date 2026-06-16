@@ -6,7 +6,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from ..core.models import local_now
-from ..review import DigestSubscription
+from ..review import DigestSubscription, ReviewDigest, ReviewFeedbackOutcome
 from .postgres_common import PostgresStoreBase
 
 
@@ -76,6 +76,12 @@ class PostgresReviewDigestStore(PostgresStoreBase):
                         prompt_snapshot TEXT NOT NULL DEFAULT '',
                         created_at TIMESTAMPTZ NOT NULL
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS digest_delivery_items_delivery_short_idx
+                    ON digest_delivery_items (delivery_id, short_id)
                     """
                 )
                 cur.execute(
@@ -237,6 +243,36 @@ class PostgresReviewDigestStore(PostgresStoreBase):
                 )
             conn.commit()
 
+    def add_delivery_items(self, delivery_id: str, digest: ReviewDigest) -> None:
+        self.ensure_schema()
+        now = local_now()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for index, card in enumerate(digest.due_cards, start=1):
+                    cur.execute(
+                        """
+                        INSERT INTO digest_delivery_items (
+                            id, delivery_id, short_id, review_card_id, note_id,
+                            prompt_snapshot, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (delivery_id, short_id) DO UPDATE SET
+                            review_card_id = EXCLUDED.review_card_id,
+                            note_id = EXCLUDED.note_id,
+                            prompt_snapshot = EXCLUDED.prompt_snapshot
+                        """,
+                        (
+                            uuid4().hex,
+                            delivery_id,
+                            f"R{index}",
+                            card.id,
+                            card.note_id,
+                            card.prompt,
+                            now,
+                        ),
+                    )
+            conn.commit()
+
     def list_deliveries(
         self,
         *,
@@ -261,6 +297,107 @@ class PostgresReviewDigestStore(PostgresStoreBase):
                     f"""
                     SELECT *
                     FROM digest_deliveries
+                    {where}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def list_delivery_items(self, delivery_id: str) -> list[dict]:
+        self.ensure_schema()
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM digest_delivery_items
+                    WHERE delivery_id = %s
+                    ORDER BY short_id ASC
+                    """,
+                    (delivery_id,),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def find_latest_delivery_item(
+        self,
+        *,
+        user_id: str,
+        target_id: str,
+        short_id: str,
+    ) -> dict | None:
+        self.ensure_schema()
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT i.*, d.user_id, d.target_id
+                    FROM digest_delivery_items i
+                    JOIN digest_deliveries d ON d.id = i.delivery_id
+                    WHERE d.user_id = %s
+                      AND d.target_id = %s
+                      AND UPPER(i.short_id) = UPPER(%s)
+                      AND d.status = 'sent'
+                    ORDER BY d.created_at DESC, i.created_at DESC
+                    LIMIT 1
+                    """,
+                    (user_id, target_id, short_id),
+                )
+                row = cur.fetchone()
+        return dict(row) if row else None
+
+    def record_feedback_event(
+        self,
+        *,
+        review_card_id: str,
+        user_id: str,
+        delivery_id: str | None,
+        outcome: ReviewFeedbackOutcome,
+        source_channel: str,
+        source_message_id: str | None = None,
+    ) -> str:
+        self.ensure_schema()
+        event_id = uuid4().hex
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO review_feedback_events (
+                        id, review_card_id, user_id, delivery_id, outcome,
+                        source_channel, source_message_id, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        event_id,
+                        review_card_id,
+                        user_id,
+                        delivery_id,
+                        outcome,
+                        source_channel,
+                        source_message_id,
+                        local_now(),
+                    ),
+                )
+            conn.commit()
+        return event_id
+
+    def list_feedback_events(self, *, user_id: str | None = None, limit: int = 50) -> list[dict]:
+        self.ensure_schema()
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(limit, 200)))
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM review_feedback_events
                     {where}
                     ORDER BY created_at DESC
                     LIMIT %s

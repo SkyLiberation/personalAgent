@@ -39,9 +39,15 @@ class TestStepProjectorEnrichedSteps:
         assert steps[1].requires_confirmation is False
         assert steps[1].risk_level == "low"
 
-    def test_project_ask_is_ordinary_workflow(self, projector):
+    def test_project_ask_is_step_projection_workflow(self, projector):
+        # ask was migrated from an ordinary branch workflow to a step-projection
+        # workflow: retrieve → compose → verify map onto bounded ask stages.
         steps = projector.project("ask", "什么是服务降级？")
-        assert steps == []
+        assert [s.action_type for s in steps] == ["retrieve", "compose", "verify"]
+        assert [s.step_id for s in steps] == ["ask-retrieve", "ask-compose", "ask-verify"]
+        for s in steps:
+            assert s.step_id
+            assert s.status == "planned"
 
     def test_project_unknown_intent_has_no_projection(self, projector):
         steps = projector.project("unknown", "随便说点什么")
@@ -222,7 +228,8 @@ class TestStepProjectorValidatorRoundtrip:
             assert len(steps) > 0
 
     def test_ordinary_workflows_do_not_enter_step_projection_validation_path(self, projector):
-        for intent in ("ask", "capture_text", "capture_link", "capture_file", "unknown"):
+        # ask is a step-projection workflow now, so it is excluded here.
+        for intent in ("capture_text", "capture_link", "capture_file", "unknown"):
             assert projector.project(intent, "测试输入") == []
 
     def test_delete_note_id_may_be_supplied_by_transitive_resolve_step(self):
@@ -322,7 +329,8 @@ class TestWorkflowRegistry:
     def test_branch_workflows_do_not_require_projection(self):
         from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-        for intent in ("ask", "capture_text", "summarize_thread", "direct_answer"):
+        # ask is a step-projection workflow now and is intentionally excluded.
+        for intent in ("capture_text", "summarize_thread", "direct_answer"):
             assert WORKFLOW_REGISTRY.select(intent).requires_projection is False
             assert WORKFLOW_REGISTRY.project(intent) == []
 
@@ -337,7 +345,7 @@ class TestWorkflowRegistry:
         assert delete_spec.recovery_policy == "checkpoint_step"
 
         ask_spec = WORKFLOW_REGISTRY.select("ask")
-        assert ask_spec.requires_projection is False
+        assert ask_spec.requires_projection is True
         assert ask_spec.allows_llm_decision_node is True
         assert ask_spec.recovery_policy == "branch"
 
@@ -347,9 +355,10 @@ class TestWorkflowRegistry:
         ask_spec = WORKFLOW_REGISTRY.select("ask")
         assert ask_spec.steps
         assert all(isinstance(step, WorkflowStepSpec) for step in ask_spec.steps)
-        assert any(step.llm_decision_node == "query_understanding" for step in ask_spec.steps)
-        assert any(step.allowed_tools == ("graph_search", "web_search") for step in ask_spec.steps)
-        assert WORKFLOW_REGISTRY.project("ask") == []
+        assert [step.step_id for step in ask_spec.steps] == ["ask-retrieve", "ask-compose", "ask-verify"]
+        assert any(step.llm_decision_node == "answer_compose" for step in ask_spec.steps)
+        assert [step.action_type for step in ask_spec.steps] == ["retrieve", "compose", "verify"]
+        assert len(WORKFLOW_REGISTRY.project("ask")) == 3
 
         delete_spec = WORKFLOW_REGISTRY.select("delete_knowledge")
         delete_step = next(step for step in delete_spec.steps if step.step_id == "del-3")

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from ..core.models import KnowledgeNote, ReviewCard, local_now
+
+ReviewFeedbackOutcome = Literal["remembered", "forgotten", "later"]
 
 
 class ReviewDigestSection(BaseModel):
@@ -69,4 +72,14 @@ class ReviewDigestJobResult(BaseModel):
     skipped: bool = False
     delivery_id: str | None = None
     idempotency_key: str | None = None
+    error: str | None = None
+
+
+class ReviewFeedbackResult(BaseModel):
+    ok: bool
+    short_id: str
+    outcome: ReviewFeedbackOutcome
+    review_card_id: str | None = None
+    delivery_id: str | None = None
+    message: str = ""
     error: str | None = None

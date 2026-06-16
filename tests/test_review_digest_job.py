@@ -129,6 +129,7 @@ def test_review_digest_job_uses_delivery_ledger_for_idempotency():
         def __init__(self) -> None:
             self.reserved: dict[str, str] = {}
             self.completed: list[tuple[str, str]] = []
+            self.items: list[tuple[str, list[str]]] = []
 
         def reserve_delivery(self, subscription: DigestSubscription, digest_date: str):
             key = f"digest:{subscription.id}:{digest_date}"
@@ -140,10 +141,14 @@ def test_review_digest_job_uses_delivery_ledger_for_idempotency():
         def complete_delivery(self, delivery_id: str, *, status: str, provider_message_id=None, error=None):
             self.completed.append((delivery_id, status))
 
+        def add_delivery_items(self, delivery_id: str, digest):
+            self.items.append((delivery_id, [card.id for card in digest.due_cards]))
+
+    memory = FakeMemory()
     provider = RecordingProvider()
     ledger = MemoryLedger()
     job = ReviewDigestJob(
-        ReviewDigestUseCase(FakeMemory()),
+        ReviewDigestUseCase(memory),
         DeliveryRouter({"feishu": provider}),
         ledger=ledger,
     )
@@ -160,3 +165,4 @@ def test_review_digest_job_uses_delivery_ledger_for_idempotency():
     assert second.skipped is True
     assert len(provider.calls) == 1
     assert ledger.completed == [("delivery-1", "sent")]
+    assert ledger.items == [("delivery-1", [memory.review.id])]

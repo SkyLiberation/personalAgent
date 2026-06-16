@@ -130,6 +130,31 @@
 - `user_id`（仅 admin 可指定）
 - `limit`（默认 50）
 
+### `GET /api/review/cards`
+
+查询复习卡。
+
+查询参数：
+
+- `user_id`（仅 admin 可指定）
+- `due_only`（bool，默认 false）：只返回已到期复习卡
+
+### `POST /api/review/cards/{review_card_id}/feedback`
+
+提交复习反馈，并更新该卡片的下一次复习时间。请求体：
+
+```json
+{
+  "outcome": "remembered"
+}
+```
+
+`outcome` 可为：
+
+- `remembered`：记得，扩大复习间隔
+- `forgotten`：忘了，明天再复习
+- `later`：稍后，明天重新提醒
+
 ## `POST /api/notes/{note_id}/graph-sync`
 
 手动重试某条笔记的图谱同步。

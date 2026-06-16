@@ -613,6 +613,53 @@ class PostgresMemoryStore(PostgresStoreBase):
                 )
             conn.commit()
 
+    def get_review(self, review_id: str, user_id: str) -> ReviewCard | None:
+        self.ensure_schema()
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT r.payload
+                    FROM review_cards r
+                    JOIN knowledge_notes n ON n.id = r.note_id
+                    WHERE r.id = %s AND n.user_id = %s AND n.deleted_at IS NULL
+                    """,
+                    (review_id, user_id),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return ReviewCard.model_validate(row["payload"])
+
+    def update_review(self, review: ReviewCard, user_id: str) -> ReviewCard | None:
+        self.ensure_schema()
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE review_cards r
+                    SET payload = %s,
+                        due_at = %s
+                    FROM knowledge_notes n
+                    WHERE r.note_id = n.id
+                      AND r.id = %s
+                      AND n.user_id = %s
+                      AND n.deleted_at IS NULL
+                    RETURNING r.payload
+                    """,
+                    (
+                        Jsonb(review.model_dump(mode="json")),
+                        review.due_at,
+                        review.id,
+                        user_id,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            return None
+        return ReviewCard.model_validate(row["payload"])
+
     def add_episode(self, episode: MemoryEpisode) -> None:
         self.ensure_schema()
         search_text = _search_text_for_episode(episode)

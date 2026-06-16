@@ -54,7 +54,8 @@ class TestCLIEntry:
         result = cli_runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "entry" in result.stdout
+        # The legacy standalone capture/ask commands were folded into `entry`.
+        # (`digest` remains a valid command — review digest delivery job.)
         assert " capture " not in result.stdout
         assert " ask " not in result.stdout
-        assert " digest " not in result.stdout
 

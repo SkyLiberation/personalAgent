@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
+from datetime import timedelta
 from fastapi.testclient import TestClient
 from psycopg import connect
 from unittest.mock import MagicMock
 
+from personal_agent.core.models import ReviewCard, local_now
 from personal_agent.core.models import EntryInput
 from personal_agent.review.delivery import DeliveryRouter
 from personal_agent.review.models import DeliveryResult
@@ -253,6 +255,34 @@ class TestReviewDigestManagementEndpoints:
         )
 
         assert response.status_code == 404
+
+    def test_list_review_cards_and_submit_feedback(self, api_client: TestClient):
+        service = api_client.app.state.service
+        capture = service.execute_capture("复习卡 API 反馈", source_type="text", user_id="default")
+        card = ReviewCard(
+            id="card-api-1",
+            note_id=capture.note.id,
+            prompt="复习卡 API 的反馈入口是什么？",
+            answer_hint="/api/review/cards/{id}/feedback",
+            interval_days=1,
+            due_at=local_now() - timedelta(minutes=1),
+        )
+        service.memory.add_review(card)
+
+        listed = api_client.get("/api/review/cards", params={"due_only": True})
+        assert listed.status_code == 200
+        assert "card-api-1" in {item["id"] for item in listed.json()["items"]}
+
+        feedback = api_client.post(
+            "/api/review/cards/card-api-1/feedback",
+            json={"outcome": "remembered"},
+        )
+
+        assert feedback.status_code == 200
+        assert feedback.json()["ok"] is True
+        updated = service.memory.get_review("card-api-1", "default")
+        assert updated is not None
+        assert updated.interval_days == 2
 
 
 class TestNotesEndpoint:

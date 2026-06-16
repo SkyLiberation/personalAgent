@@ -263,6 +263,12 @@ class MemoryFacade:
     def add_review(self, review: ReviewCard) -> None:
         self.local.add_review(review)
 
+    def get_review(self, review_id: str, user_id: str) -> ReviewCard | None:
+        return self.local.get_review(review_id, user_id)
+
+    def update_review(self, review: ReviewCard, user_id: str) -> ReviewCard | None:
+        return self.local.update_review(review, user_id)
+
     # -- writes -------------------------------------------------------------
 
     def add_note(self, note: KnowledgeNote, *, user_id: str | None = None) -> KnowledgeNote:

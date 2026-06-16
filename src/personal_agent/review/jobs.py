@@ -11,6 +11,7 @@ from .models import (
     DeliveryMessage,
     DeliveryTarget,
     DigestSubscription,
+    ReviewDigest,
     ReviewDigestJobResult,
 )
 from .service import ReviewDigestUseCase
@@ -30,6 +31,9 @@ class DigestDeliveryLedger(Protocol):
         provider_message_id: str | None = None,
         error: str | None = None,
     ) -> None:
+        ...
+
+    def add_delivery_items(self, delivery_id: str, digest: ReviewDigest) -> None:
         ...
 
 
@@ -82,6 +86,8 @@ class ReviewDigestJob:
                 )
 
         digest = self.digest_use_case.generate(subscription.user_id)
+        if self.ledger is not None and delivery_id is not None and hasattr(self.ledger, "add_delivery_items"):
+            self.ledger.add_delivery_items(delivery_id, digest)
         text = self.formatter.to_feishu_text(digest) if subscription.channel == "feishu" else self.formatter.to_text(digest)
         result = self.delivery_router.send(
             DeliveryTarget(

@@ -342,10 +342,22 @@ class EntryOrchestrator:
                     capture_result = CaptureResult.model_validate(capture_payload)
                     break
         elif result_state.router_decision and result_state.router_decision.route == "ask":
+            # Full KnowledgeNote matches are not checkpointed onto the state
+            # (only summary dicts, to avoid checkpoint bloat). Surface them as
+            # lightweight MatchRefs so result matching / citation validation see
+            # the matches instead of an empty list.
+            from ..core.projections import MatchRef
+
+            match_refs = [
+                MatchRef(id=str(m.get("id", "")), title=str(m.get("title", "")))
+                for m in (result_state.matches or [])
+                if isinstance(m, dict) and m.get("id")
+            ]
             ask_result = AskResult(
                 answer=reply_text,
                 citations=result_state.citations,
                 matches=[],
+                match_refs=match_refs,
                 session_id=normalized_session,
             )
 

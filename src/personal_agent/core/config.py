@@ -141,6 +141,8 @@ class ReviewDigestConfig(_StrictBase):
     feishu_chat_ids: tuple[str, ...] = ()
     schedule_time: str = "09:00"
     timezone: str = "Asia/Shanghai"
+    scheduler_enabled: bool = False
+    scheduler_tick_seconds: int = 60
 
 
 class WebApiConfig(_StrictBase):
@@ -476,6 +478,12 @@ class Settings(_StrictBase):
                 ),
                 schedule_time=os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_TIME", "09:00"),
                 timezone=os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE", "Asia/Shanghai"),
+                scheduler_enabled=_as_bool(
+                    os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED", "false")
+                ),
+                scheduler_tick_seconds=int(
+                    os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_TICK_SECONDS", "60")
+                ),
             ),
             web=WebApiConfig(
                 api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),

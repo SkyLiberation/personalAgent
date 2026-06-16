@@ -19,8 +19,17 @@ from ..core.config import Settings
 from ..core.logging_utils import setup_logging
 from ..core.models import EntryInput, KnowledgeNote, ReviewCard
 from ..feishu import FeishuService
-from ..review import DigestSubscription, ReviewDigestJob, ReviewDigestUseCase
+from ..review import (
+    DigestSubscription,
+    ReviewDigestJob,
+    ReviewDigestJobRunner,
+    ReviewDigestScheduler,
+    ReviewDigestUseCase,
+    ReviewFeedbackUseCase,
+    subscriptions_from_settings,
+)
 from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from ..review.models import ReviewFeedbackOutcome
 from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
 from .auth import AuthMiddleware, RateLimiter
 logger = logging.getLogger(__name__)
@@ -154,14 +163,38 @@ class DigestDeliveryListResponse(BaseModel):
     items: list[dict[str, object]] = Field(default_factory=list)
 
 
+class ReviewCardListResponse(BaseModel):
+    items: list[ReviewCard] = Field(default_factory=list)
+
+
+class ReviewFeedbackRequest(BaseModel):
+    user_id: str | None = None
+    outcome: ReviewFeedbackOutcome
+
+
 def create_app() -> FastAPI:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
     capture_service = CaptureService(settings, logger)
     service = AgentService(settings, capture_service=capture_service)
-    feishu_service = FeishuService(settings, service)
     review_digest_store = PostgresReviewDigestStore(settings.postgres_url or "")
+    review_feedback_use_case = ReviewFeedbackUseCase(service.memory, review_digest_store)
+    feishu_service = FeishuService(
+        settings,
+        service,
+        review_feedback_use_case=review_feedback_use_case,
+        review_digest_store=review_digest_store,
+    )
     review_digest_delivery_router = DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
+    review_digest_job = ReviewDigestJob(
+        ReviewDigestUseCase(service.memory),
+        review_digest_delivery_router,
+        ledger=review_digest_store,
+    )
+    review_digest_runner = ReviewDigestJobRunner(
+        ReviewDigestScheduler(review_digest_store, review_digest_job),
+        tick_seconds=settings.review_digest.scheduler_tick_seconds,
+    )
     logger.info("Logging initialized at %s", log_file)
     app = FastAPI(
         title="Personal Agent API",
@@ -171,6 +204,7 @@ def create_app() -> FastAPI:
     app.state.service = service
     app.state.review_digest_store = review_digest_store
     app.state.review_digest_delivery_router = review_digest_delivery_router
+    app.state.review_digest_runner = review_digest_runner
 
     # Auth + rate limiting (applied before CORS)
     api_keys = settings.web.api_keys
@@ -203,7 +237,15 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup_feishu_listener() -> None:
+        for subscription in subscriptions_from_settings(settings):
+            review_digest_store.upsert_subscription(subscription)
         feishu_service.start_event_listener()
+        if settings.review_digest.scheduler_enabled:
+            review_digest_runner.start()
+
+    @app.on_event("shutdown")
+    async def shutdown_review_digest_runner() -> None:
+        review_digest_runner.stop()
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
@@ -327,6 +369,36 @@ def create_app() -> FastAPI:
             limit=limit,
         )
         return DigestDeliveryListResponse(items=[_jsonable_row(item) for item in items])
+
+    @app.get("/api/review/cards", response_model=ReviewCardListResponse)
+    def list_review_cards(
+        request: Request,
+        user_id: str | None = None,
+        due_only: bool = False,
+    ) -> ReviewCardListResponse:
+        resolved_user = user_id if _is_admin(request) and user_id else _get_user_id(request, settings)
+        cards = (
+            service.memory.due_reviews(resolved_user)
+            if due_only else service.memory.list_reviews(resolved_user)
+        )
+        return ReviewCardListResponse(items=cards)
+
+    @app.post("/api/review/cards/{review_card_id}/feedback")
+    def submit_review_card_feedback(
+        review_card_id: str,
+        body: ReviewFeedbackRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        resolved_user = body.user_id if _is_admin(request) and body.user_id else _get_user_id(request, settings)
+        result = review_feedback_use_case.apply_to_review_card(
+            user_id=resolved_user,
+            review_card_id=review_card_id,
+            outcome=body.outcome,
+            source_channel="web",
+        )
+        if not result.ok:
+            raise HTTPException(status_code=404, detail=result.error or "Review card not found.")
+        return result.model_dump(mode="json")
 
     @app.delete("/api/notes/{note_id}")
     def delete_note(
