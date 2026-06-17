@@ -1,6 +1,6 @@
 # 后端接口
 
-主要接口定义位于 [api.py](../src/personal_agent/web/api.py)。
+主要接口定义位于 [web/routes/](../src/personal_agent/web/routes)，应用装配位于 [api.py](../src/personal_agent/web/api.py)。
 
 ## `GET /api/health`
 

@@ -23,12 +23,12 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("OPENAI_BASE_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    from personal_agent.core import config as config_module
-    monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
+    from personal_agent.core import config_env as config_env_module
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
     from personal_agent.web.api import create_app
     app = create_app()
-    app.state.service._intent_router._classify_with_llm = stub_router_decision
+    app.state.service.intent_router._classify_with_llm = stub_router_decision
     app.state.review_digest_delivery_router = DeliveryRouter({"feishu": _FakeDigestProvider()})
     return TestClient(app)
 
@@ -288,7 +288,7 @@ class TestReviewDigestManagementEndpoints:
 class TestNotesEndpoint:
     def test_list_notes(self, api_client: TestClient):
         service = api_client.app.state.service
-        service._runtime.execute_capture("测试笔记1", source_type="text", user_id="test-user")
+        service.execute_capture("测试笔记1", source_type="text", user_id="test-user")
         response = api_client.get("/api/notes", params={"user_id": "test-user"})
         assert response.status_code == 200
         data = response.json()
@@ -297,8 +297,8 @@ class TestNotesEndpoint:
 
     def test_list_notes_isolated_by_user(self, api_client: TestClient):
         service = api_client.app.state.service
-        service._runtime.execute_capture("Alice的笔记", source_type="text", user_id="alice")
-        service._runtime.execute_capture("Bob的笔记", source_type="text", user_id="bob")
+        service.execute_capture("Alice的笔记", source_type="text", user_id="alice")
+        service.execute_capture("Bob的笔记", source_type="text", user_id="bob")
         alice_notes = api_client.get("/api/notes", params={"user_id": "alice"}).json()
         bob_notes = api_client.get("/api/notes", params={"user_id": "bob"}).json()
         alice_titles = {n["title"] for n in alice_notes}
@@ -308,7 +308,7 @@ class TestNotesEndpoint:
 
     def test_restore_deleted_note_from_snapshot(self, api_client: TestClient):
         service = api_client.app.state.service
-        captured = service._runtime.execute_capture("DNS 是域名系统", source_type="text", user_id="restore-user")
+        captured = service.execute_capture("DNS 是域名系统", source_type="text", user_id="restore-user")
         note_id = captured.note.id
 
         deleted = api_client.delete("/api/notes/{note_id}".format(note_id=note_id), params={"user_id": "restore-user"})
@@ -339,8 +339,8 @@ class TestDebugEndpoints:
     def test_reset_database_clears_all_persisted_debug_data(self, api_client: TestClient, temp_dir: Path):
         service = api_client.app.state.service
         service.graph_store.clear_all_data = MagicMock(return_value=7)
-        service._runtime.execute_capture("用户A笔记", source_type="text", user_id="reset-a")
-        service._runtime.execute_capture("用户B笔记", source_type="text", user_id="reset-b")
+        service.execute_capture("用户A笔记", source_type="text", user_id="reset-a")
+        service.execute_capture("用户B笔记", source_type="text", user_id="reset-b")
         service.execute_entry(EntryInput(text="你好", user_id="reset-a", session_id="checkpoint"))
         uploads_dir = temp_dir / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)

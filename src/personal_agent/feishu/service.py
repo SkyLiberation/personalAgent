@@ -1,34 +1,27 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import re
 import threading
-import time
 
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import (
-    CreateMessageRequest,
-    CreateMessageRequestBody,
-    GetMessageResourceRequest,
-    ListMessageRequest,
-    P2ImMessageReceiveV1,
-    ReplyMessageRequest,
-    ReplyMessageRequestBody,
-)
 
 from ..agent.service import AgentService
 from ..core.config import Settings
 from ..core.models import EntryInput
-from ..review import DigestSubscription, ReviewFeedbackUseCase
-from ..review.models import ReviewFeedbackOutcome
+from ..review import ReviewFeedbackUseCase
+from .client import FeishuClientMixin
 from .models import FeishuIncomingMessage
+from .review_commands import (
+    handle_digest_subscription_command,
+    is_digest_command,
+    parse_digest_subscription_command,
+    parse_review_feedback,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class FeishuService:
+class FeishuService(FeishuClientMixin):
     def __init__(
         self,
         settings: Settings,
@@ -58,18 +51,54 @@ class FeishuService:
         )
         metadata = dict(incoming_message.metadata)
 
-        subscription_command = _parse_digest_subscription_command(incoming_message.text) if incoming_message.message_type == "text" else None
+        if incoming_message.message_type == "text":
+            command_reply = self._try_handle_text_command(incoming_message, metadata)
+            if command_reply is not None:
+                return command_reply
+
+        if incoming_message.message_type == "file":
+            self._attach_downloaded_file(incoming_message, metadata)
+
+        entry_result = self.agent_service.entry(
+            EntryInput(
+                text=incoming_message.text,
+                user_id=incoming_message.user_id,
+                session_id=incoming_message.session_id,
+                source_platform="feishu",
+                source_type=incoming_message.message_type,
+                source_ref=incoming_message.message_id,
+                metadata=metadata,
+            )
+        )
+        reply_text = entry_result.reply_text
+        self._reply_to_message(incoming_message, reply_text)
+        logger.info(
+            "Feishu message processed event_id=%s message_id=%s reply_length=%s",
+            incoming_message.event_id,
+            incoming_message.message_id,
+            len(reply_text),
+        )
+        return reply_text
+
+    def _try_handle_text_command(
+        self,
+        incoming_message: FeishuIncomingMessage,
+        metadata: dict[str, str],
+    ) -> str | None:
+        subscription_command = parse_digest_subscription_command(incoming_message.text)
         if subscription_command is not None and self.review_digest_store is not None:
             action, schedule_time = subscription_command
-            reply_text = self._handle_digest_subscription_command(
+            reply_text = handle_digest_subscription_command(
                 incoming_message,
                 action=action,
                 schedule_time=schedule_time,
+                settings=self.settings,
+                store=self.review_digest_store,
             )
             self._reply_to_message(incoming_message, reply_text)
             return reply_text
 
-        if incoming_message.message_type == "text" and _is_digest_command(incoming_message.text):
+        if is_digest_command(incoming_message.text):
             digest_result = self.agent_service.digest(incoming_message.user_id)
             reply_text = digest_result.message
             self._reply_to_message(incoming_message, reply_text)
@@ -82,7 +111,7 @@ class FeishuService:
             )
             return reply_text
 
-        feedback = _parse_review_feedback(incoming_message.text) if incoming_message.message_type == "text" else None
+        feedback = parse_review_feedback(incoming_message.text)
         if feedback is not None and self.review_feedback_use_case is not None:
             short_id, outcome = feedback
             target_id = incoming_message.chat_id or metadata.get("chat_id") or ""
@@ -106,43 +135,32 @@ class FeishuService:
             )
             return reply_text
 
-        if incoming_message.message_type == "file":
-            file_key = metadata.get("file_key", "")
-            if file_key and incoming_message.message_id:
-                downloaded = self.download_file(incoming_message.message_id, file_key)
-                if downloaded:
-                    file_bytes, filename = downloaded
-                    upload_dir = self.settings.data_dir / "uploads"
-                    upload_dir.mkdir(parents=True, exist_ok=True)
-                    file_path = upload_dir / f"feishu_{incoming_message.message_id}_{filename}"
-                    file_path.write_bytes(file_bytes)
-                    metadata["file_path"] = str(file_path)
-                    metadata["original_filename"] = filename
-                    logger.info(
-                        "Feishu file downloaded event_id=%s file_key=%s path=%s",
-                        incoming_message.event_id, file_key, file_path,
-                    )
+        return None
 
-        entry_result = self.agent_service.entry(
-            EntryInput(
-                text=incoming_message.text,
-                user_id=incoming_message.user_id,
-                session_id=incoming_message.session_id,
-                source_platform="feishu",
-                source_type=incoming_message.message_type,
-                source_ref=incoming_message.message_id,
-                metadata=metadata,
-            )
-        )
-        reply_text = entry_result.reply_text
-        self._reply_to_message(incoming_message, reply_text)
+    def _attach_downloaded_file(
+        self,
+        incoming_message: FeishuIncomingMessage,
+        metadata: dict[str, str],
+    ) -> None:
+        file_key = metadata.get("file_key", "")
+        if not (file_key and incoming_message.message_id):
+            return
+        downloaded = self.download_file(incoming_message.message_id, file_key)
+        if not downloaded:
+            return
+        file_bytes, filename = downloaded
+        upload_dir = self.settings.data_dir / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_path = upload_dir / f"feishu_{incoming_message.message_id}_{filename}"
+        file_path.write_bytes(file_bytes)
+        metadata["file_path"] = str(file_path)
+        metadata["original_filename"] = filename
         logger.info(
-            "Feishu message processed event_id=%s message_id=%s reply_length=%s",
+            "Feishu file downloaded event_id=%s file_key=%s path=%s",
             incoming_message.event_id,
-            incoming_message.message_id,
-            len(reply_text),
+            file_key,
+            file_path,
         )
-        return reply_text
 
     def _load_thread_messages_for_entry(
         self, entry_input: EntryInput, limit: int = 20
@@ -162,460 +180,3 @@ class FeishuService:
                 len(messages),
             )
         return messages
-
-    def start_event_listener(self) -> None:
-        if not self.settings.feishu.enabled:
-            logger.info("Skip Feishu long connection because integration is disabled")
-            return
-        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
-            logger.info("Skip Feishu long connection because app credentials are not configured")
-            return
-
-        with self._ws_lock:
-            if self._ws_started:
-                logger.info("Feishu long connection already started")
-                return
-
-            self._ws_client = lark.ws.Client(
-                self.settings.feishu.app_id,
-                self.settings.feishu.app_secret,
-                event_handler=self._event_handler(),
-                log_level=lark.LogLevel.INFO,
-                domain=self.settings.feishu.base_url.rstrip("/"),
-            )
-            self._ws_thread = threading.Thread(
-                target=self._run_event_listener,
-                name="feishu-ws-listener",
-                daemon=True,
-            )
-            self._ws_thread.start()
-            self._ws_started = True
-            logger.info("Feishu long connection startup requested")
-
-    def _run_event_listener(self) -> None:
-        logger.info("Feishu long connection thread started")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        lark.ws.client.loop = loop
-        try:
-            self._ws_client.start()
-        except Exception:
-            logger.exception("Feishu long connection stopped unexpectedly")
-            with self._ws_lock:
-                self._ws_started = False
-        finally:
-            loop.close()
-
-    def _event_handler(self) -> lark.EventDispatcherHandler:
-        return (
-            lark.EventDispatcherHandler.builder("", "", lark.LogLevel.INFO)
-            .register_p2_im_message_receive_v1(self._handle_p2_im_message_receive_v1)
-            .build()
-        )
-
-    def _handle_p2_im_message_receive_v1(self, data: P2ImMessageReceiveV1) -> None:
-        incoming_message = self._from_p2_message_event(data)
-        if incoming_message is None:
-            logger.info("Feishu long connection ignored empty message event")
-            return
-        if self._is_duplicate_event(incoming_message.event_id):
-            logger.info(
-                "Feishu long connection duplicate event ignored event_id=%s message_id=%s",
-                incoming_message.event_id,
-                incoming_message.message_id,
-            )
-            return
-        logger.info(
-            "Feishu long connection event accepted event_id=%s event_type=%s message_id=%s message_type=%s chat_id=%s",
-            incoming_message.event_id,
-            incoming_message.event_type,
-            incoming_message.message_id,
-            incoming_message.message_type,
-            incoming_message.chat_id,
-        )
-        threading.Thread(
-            target=self._process_long_connection_message,
-            args=(incoming_message,),
-            name=f"feishu-event-{incoming_message.message_id or 'unknown'}",
-            daemon=True,
-        ).start()
-
-    def _process_long_connection_message(self, incoming_message: FeishuIncomingMessage) -> None:
-        try:
-            self.process_incoming_message(incoming_message)
-        except Exception:
-            logger.exception(
-                "Feishu long connection background processing failed event_id=%s message_id=%s",
-                incoming_message.event_id,
-                incoming_message.message_id,
-            )
-
-    def _from_p2_message_event(self, data: P2ImMessageReceiveV1) -> FeishuIncomingMessage | None:
-        event = data.event
-        if event is None or event.message is None:
-            return None
-
-        message = event.message
-        sender = event.sender
-        sender_id = sender.sender_id if sender is not None else None
-        header = data.header
-        content = _safe_json_loads(message.content or "{}")
-        metadata: dict[str, str] = {}
-
-        if message.message_type == "text":
-            text = str(content.get("text") or "").strip()
-        elif message.message_type == "file":
-            metadata["file_key"] = str(content.get("file_key") or "")
-            text = str(content.get("file_name") or "飞书文件").strip()
-        elif message.message_type == "post":
-            text = _extract_post_text(content)
-        else:
-            text = str(content.get("text") or message.message_type or "").strip()
-
-        chat_id = str(message.chat_id or "")
-        open_id = str(sender_id.open_id or "") if sender_id is not None else ""
-        sender_user_id = str(sender_id.user_id or "") if sender_id is not None else ""
-        user_id = self._resolve_user_id(open_id, sender_user_id)
-        metadata["chat_id"] = chat_id
-        metadata["open_id"] = open_id
-        if sender_user_id:
-            metadata["feishu_user_id"] = sender_user_id
-
-        return FeishuIncomingMessage(
-            event_id=str(header.event_id or "") if header is not None else "",
-            event_type=str(header.event_type or "") if header is not None else "im.message.receive_v1",
-            chat_id=chat_id or None,
-            open_id=open_id or None,
-            user_id=user_id,
-            session_id=chat_id or open_id or "default",
-            message_id=str(message.message_id or ""),
-            message_type=str(message.message_type or "text"),
-            text=text,
-            metadata=metadata,
-        )
-
-    def _is_duplicate_event(self, event_id: str | None, ttl_seconds: int = 300) -> bool:
-        if not event_id:
-            return False
-
-        now = time.time()
-        with self._processed_lock:
-            expired = [key for key, ts in self._processed_event_ids.items() if now - ts > ttl_seconds]
-            for key in expired:
-                self._processed_event_ids.pop(key, None)
-
-            if event_id in self._processed_event_ids:
-                return True
-
-            self._processed_event_ids[event_id] = now
-            return False
-
-    def _reply_to_message(self, incoming_message: FeishuIncomingMessage, reply_text: str) -> None:
-        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
-            logger.info("Skip Feishu reply because app credentials are not configured event_id=%s", incoming_message.event_id)
-            return
-
-        if incoming_message.message_id:
-            self._reply_via_message_id(incoming_message, reply_text)
-            return
-
-        chat_id = incoming_message.chat_id or incoming_message.metadata.get("chat_id")
-        if not chat_id:
-            logger.warning("Skip Feishu reply because both message_id and chat_id are missing event_id=%s", incoming_message.event_id)
-            return
-        self._send_via_chat_id(incoming_message, reply_text, chat_id)
-
-    def send_text_to_chat(self, chat_id: str, text: str) -> None:
-        """Send a proactive text message to a Feishu chat."""
-        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
-            logger.info("Skip Feishu proactive send because app credentials are not configured chat_id=%s", chat_id)
-            return
-        self._create_chat_message(chat_id=chat_id, text=text)
-
-    def send_digest(self, chat_id: str, digest_text: str) -> None:
-        """Send a review digest to a Feishu chat."""
-        self.send_text_to_chat(chat_id, digest_text)
-
-    def _reply_via_message_id(self, incoming_message: FeishuIncomingMessage, reply_text: str) -> None:
-        request = ReplyMessageRequest.builder() \
-            .message_id(incoming_message.message_id or "") \
-            .request_body(
-                ReplyMessageRequestBody.builder()
-                .content(json.dumps({"text": reply_text}, ensure_ascii=False))
-                .msg_type("text")
-                .build()
-            ) \
-            .build()
-
-        response = self._client_value().im.v1.message.reply(request)
-        self._ensure_success(
-            response=response,
-            action="reply message",
-            event_id=incoming_message.event_id,
-            message_id=incoming_message.message_id,
-        )
-        logger.info(
-            "Feishu reply sent event_id=%s message_id=%s mode=reply",
-            incoming_message.event_id,
-            incoming_message.message_id,
-        )
-
-    def _send_via_chat_id(self, incoming_message: FeishuIncomingMessage, reply_text: str, chat_id: str) -> None:
-        self._create_chat_message(
-            chat_id=chat_id,
-            text=reply_text,
-            event_id=incoming_message.event_id,
-            message_id=incoming_message.message_id,
-        )
-        logger.info(
-            "Feishu reply sent event_id=%s message_id=%s chat_id=%s mode=create",
-            incoming_message.event_id,
-            incoming_message.message_id,
-            chat_id,
-        )
-
-    def _create_chat_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        event_id: str | None = None,
-        message_id: str | None = None,
-    ) -> None:
-        request = CreateMessageRequest.builder() \
-            .receive_id_type("chat_id") \
-            .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(chat_id)
-                .content(json.dumps({"text": text}, ensure_ascii=False))
-                .msg_type("text")
-                .build()
-            ) \
-            .build()
-
-        response = self._client_value().im.v1.message.create(request)
-        self._ensure_success(
-            response=response,
-            action="create message",
-            event_id=event_id,
-            message_id=message_id,
-            chat_id=chat_id,
-        )
-        logger.info("Feishu proactive message sent chat_id=%s", chat_id)
-
-    def _client_value(self) -> lark.Client:
-        if self._client is None:
-            self._client = lark.Client.builder() \
-                .app_id(self.settings.feishu.app_id or "") \
-                .app_secret(self.settings.feishu.app_secret or "") \
-                .domain(self.settings.feishu.base_url.rstrip("/")) \
-                .log_level(lark.LogLevel.INFO) \
-                .build()
-        return self._client
-
-    def _ensure_success(
-        self,
-        response: object,
-        action: str,
-        event_id: str | None,
-        message_id: str | None,
-        chat_id: str | None = None,
-    ) -> None:
-        if response.success():
-            return
-
-        detail = {
-            "code": response.code,
-            "msg": response.msg,
-            "log_id": response.get_log_id(),
-            "event_id": event_id,
-            "message_id": message_id,
-            "chat_id": chat_id,
-        }
-        logger.error("Feishu SDK %s failed detail=%s", action, detail)
-        raise RuntimeError(f"Feishu SDK {action} failed: {detail}")
-
-    def download_file(self, message_id: str, file_key: str) -> tuple[bytes, str] | None:
-        """Download file binary from Feishu. Returns (file_bytes, filename) or None."""
-        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
-            logger.warning("Skip Feishu file download because app credentials are not configured")
-            return None
-        try:
-            request = GetMessageResourceRequest.builder() \
-                .message_id(message_id) \
-                .file_key(file_key) \
-                .type("file") \
-                .build()
-            response = self._client_value().im.v1.message_resource.get(request)
-            if not response.success():
-                logger.error(
-                    "Feishu file download failed code=%s msg=%s message_id=%s file_key=%s",
-                    response.code, response.msg, message_id, file_key,
-                )
-                return None
-            filename = response.file_name or file_key
-            return response.file, filename
-        except Exception:
-            logger.exception(
-                "Feishu file download exception message_id=%s file_key=%s", message_id, file_key
-            )
-            return None
-
-    def fetch_recent_messages(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
-        """Fetch recent messages from a Feishu chat. Returns list of {role, content} dicts."""
-        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
-            logger.warning("Skip Feishu message fetch because app credentials are not configured")
-            return []
-        try:
-            request = ListMessageRequest.builder() \
-                .receive_id_type("chat_id") \
-                .receive_id(chat_id) \
-                .page_size(min(limit, 50)) \
-                .sort_type("ByCreateTimeDesc") \
-                .build()
-            response = self._client_value().im.v1.message.list(request)
-            if not response.success():
-                logger.error(
-                    "Feishu message list failed code=%s msg=%s chat_id=%s",
-                    response.code, response.msg, chat_id,
-                )
-                return []
-            messages: list[dict[str, str]] = []
-            items = response.data.items if response.data else []
-            for item in reversed(items):
-                if item.msg_type == "text":
-                    content = _safe_json_loads(item.body.content if item.body else "{}")
-                    text = str(content.get("text") or "").strip()
-                    if text:
-                        role = "user" if item.sender.id != "bot" else "assistant"
-                        messages.append({"role": role, "content": text})
-            return messages
-        except Exception:
-            logger.exception("Feishu message fetch exception chat_id=%s", chat_id)
-            return []
-
-    def _resolve_user_id(self, open_id: str, sender_user_id: str) -> str:
-        if self.settings.feishu.use_default_user:
-            return self.settings.default_user
-        return open_id or sender_user_id or self.settings.default_user
-
-    def _handle_digest_subscription_command(
-        self,
-        incoming_message: FeishuIncomingMessage,
-        *,
-        action: str,
-        schedule_time: str | None,
-    ) -> str:
-        chat_id = incoming_message.chat_id or incoming_message.metadata.get("chat_id") or ""
-        if not chat_id:
-            return "当前消息缺少飞书会话 ID，暂时无法管理简报订阅。"
-        subscription_id = f"feishu:{incoming_message.user_id}:{chat_id}"
-        existing = self.review_digest_store.get_subscription(subscription_id)
-        if action == "unsubscribe":
-            if existing is None:
-                existing = DigestSubscription(
-                    id=subscription_id,
-                    user_id=incoming_message.user_id,
-                    target_id=chat_id,
-                    enabled=False,
-                )
-            self.review_digest_store.upsert_subscription(existing.model_copy(update={"enabled": False}))
-            return "已取消当前会话的复习 Digest 订阅。"
-
-        updates = {
-            "user_id": incoming_message.user_id,
-            "channel": "feishu",
-            "target_type": "chat_id",
-            "target_id": chat_id,
-            "enabled": True,
-        }
-        if schedule_time:
-            updates["schedule_time"] = schedule_time
-        if existing:
-            subscription = existing.model_copy(update=updates)
-        else:
-            subscription = DigestSubscription(
-                id=subscription_id,
-                schedule_time=str(updates.pop("schedule_time", self.settings.review_digest.schedule_time)),
-                timezone=self.settings.review_digest.timezone,
-                **updates,
-            )
-        saved = self.review_digest_store.upsert_subscription(subscription)
-        return f"已订阅当前会话的复习 Digest，发送时间 {saved.schedule_time}（{saved.timezone}）。"
-
-
-def _as_dict(value: object) -> dict[str, object]:
-    return value if isinstance(value, dict) else {}
-
-
-def _safe_json_loads(value: str) -> dict[str, object]:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _extract_post_text(content: dict[str, object]) -> str:
-    lines: list[str] = []
-    zh_cn = _as_dict(content.get("zh_cn"))
-    content_blocks = zh_cn.get("content")
-    if isinstance(content_blocks, list):
-        for block in content_blocks:
-            if not isinstance(block, list):
-                continue
-            for item in block:
-                if not isinstance(item, dict):
-                    continue
-                text = str(item.get("text") or "").strip()
-                if text:
-                    lines.append(text)
-    return "\n".join(lines)
-
-
-def _is_digest_command(text: str) -> bool:
-    normalized = text.strip().lower()
-    return normalized in {
-        "digest",
-        "/digest",
-        "今日简报",
-        "今天简报",
-        "知识简报",
-        "复习一下",
-        "今日复习",
-        "今天复习",
-    }
-
-
-def _parse_review_feedback(text: str) -> tuple[str, ReviewFeedbackOutcome] | None:
-    normalized = text.strip().lower()
-    match = re.match(r"^(r\d+)\s*[:：,，.。-]?\s*(.+)$", normalized)
-    if not match:
-        return None
-    short_id = match.group(1).upper()
-    outcome_text = match.group(2).strip()
-    remembered = {"记得", "会了", "掌握", "remembered", "remember", "ok", "yes", "y"}
-    forgotten = {"忘了", "不会", "没记住", "forgotten", "forgot", "no", "n"}
-    later = {"稍后", "晚点", "later", "skip"}
-    if outcome_text in remembered:
-        return short_id, "remembered"
-    if outcome_text in forgotten:
-        return short_id, "forgotten"
-    if outcome_text in later:
-        return short_id, "later"
-    return None
-
-
-def _parse_digest_subscription_command(text: str) -> tuple[str, str | None] | None:
-    normalized = text.strip().lower()
-    if normalized in {"订阅简报", "订阅复习", "订阅digest", "/digest subscribe", "digest subscribe"}:
-        return "subscribe", None
-    if normalized in {"取消订阅简报", "取消订阅复习", "取消订阅digest", "/digest unsubscribe", "digest unsubscribe"}:
-        return "unsubscribe", None
-    match = re.match(r"^(?:简报时间|复习时间|digest time)\s+([0-2]?\d:[0-5]\d)$", normalized)
-    if match:
-        hour_text, minute_text = match.group(1).split(":", 1)
-        hour = int(hour_text)
-        if 0 <= hour <= 23:
-            return "subscribe", f"{hour:02d}:{minute_text}"
-    return None

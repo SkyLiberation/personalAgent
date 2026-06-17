@@ -32,7 +32,7 @@ dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "huggingface_hub>=0.28.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 # magic_stub: on environments where the only resolvable libmagic is the MSYS
 # build (Git-for-Windows), importing python-magic crashes the interpreter. The
 # plugin installs a no-op stub only in that case; it is inert everywhere else.

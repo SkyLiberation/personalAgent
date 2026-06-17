@@ -32,7 +32,7 @@ def service(test_settings: Settings) -> AgentService:
     svc = AgentService(test_settings)
     svc.graph_store = MagicMock()
     svc.graph_store.configured.return_value = False
-    svc._intent_router._classify_with_llm = stub_router_decision
+    svc.intent_router._classify_with_llm = stub_router_decision
     return svc
 
 

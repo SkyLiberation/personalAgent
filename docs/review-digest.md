@@ -26,7 +26,7 @@ Review Digest 被拆在几个层次里：
 | Delivery | `review.delivery`、`FeishuDeliveryProvider` | 把消息投递到目标 channel |
 | Delivery Ledger | `PostgresReviewDigestStore` | 订阅、投递幂等、投递 item 映射、反馈事件 |
 | Feishu Inbound | `FeishuService` | 飞书命令、订阅命令、反馈命令优先分流 |
-| Web API | `web/api.py` | 管理订阅、手动发送、查询记录、提交 Web 反馈 |
+| Web API | `web/routes/review.py` | 管理订阅、手动发送、查询记录、提交 Web 反馈 |
 | Frontend | `frontend/src/App.tsx` | Digest 页展示与辅助反馈操作 |
 
 前端是配置和辅助入口，不是复习触达主路径。主路径应优先走飞书或其他主动推送渠道。
@@ -250,7 +250,7 @@ R1 稍后
 
 ## Web API
 
-管理 API 位于 `src/personal_agent/web/api.py`。
+管理 API 位于 `src/personal_agent/web/routes/review.py`，Web 运行期依赖由 `src/personal_agent/web/context.py` 装配。
 
 订阅管理：
 

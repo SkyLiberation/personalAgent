@@ -43,7 +43,7 @@ def _bypass_validator(svc: AgentService) -> MagicMock:
     mock_validator.validate.return_value = StepProjectionValidationResult(
         valid=True, issues=[], warnings=[], corrected_steps=None,
     )
-    svc._runtime._step_projection_validator = mock_validator
+    svc.runtime._step_projection_validator = mock_validator
     return mock_validator
 
 
@@ -67,7 +67,7 @@ class TestCrossLayerRegression:
         )
         mock_router = MagicMock()
         mock_router.classify.return_value = decision
-        svc._runtime._intent_router = mock_router
+        svc.runtime._intent_router = mock_router
         return mock_router
 
     def test_delete_knowledge_triggers_step_execution_graph(self, svc: AgentService):
@@ -83,7 +83,7 @@ class TestCrossLayerRegression:
             "enabled": False, "answer": "",
             "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
         })()
-        svc._runtime.execute_ask = MagicMock(return_value=MagicMock(answer="部分回答"))
+        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="部分回答"))
 
         entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
         result = svc.entry(entry)
@@ -100,7 +100,7 @@ class TestCrossLayerRegression:
             "enabled": False, "answer": "",
             "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
         })()
-        svc._runtime.execute_ask = MagicMock(return_value=MagicMock(answer="固化的草稿内容"))
+        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="固化的草稿内容"))
 
         entry = EntryInput(text="把关于缓存一致性的结论固化下来", user_id="bob")
         result = svc.entry(entry)
@@ -131,7 +131,7 @@ class TestCrossLayerRegression:
             "relation_facts": [],
             "related_episode_uuids": ["ep-uuid-deploy"],
         })()
-        svc._runtime.execute_ask = MagicMock(return_value=MagicMock(answer="找到笔记"))
+        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="找到笔记"))
 
         entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
         result = svc.entry(entry)
@@ -151,7 +151,7 @@ class TestCrossLayerRegression:
             "relation_facts": ["缓存一致性需要分布式锁"],
             "related_episode_uuids": ["ep-cache"],
         })()
-        svc._runtime.execute_ask = MagicMock(
+        svc.runtime.execute_ask = MagicMock(
             return_value=MagicMock(answer="结论：缓存一致性需要分布式锁和版本号机制。")
         )
 
@@ -174,7 +174,7 @@ class TestCrossLayerRegression:
             "enabled": False, "answer": "",
             "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
         })()
-        svc._runtime.execute_ask = MagicMock(return_value=MagicMock(answer="无法完成"))
+        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="无法完成"))
 
         entry = EntryInput(text="删除那条关于测试笔记的内容", user_id="alice")
         result = svc.entry(entry)

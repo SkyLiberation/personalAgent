@@ -1,6 +1,6 @@
 # 入口层说明
 
-本文汇总当前项目入口层的职责划分、已有入口、统一调用路径、现有能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/web/api.py](../../src/personal_agent/web/api.py)、[src/personal_agent/feishu/service.py](../../src/personal_agent/feishu/service.py)、[src/personal_agent/cli/main.py](../../src/personal_agent/cli/main.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
+本文汇总当前项目入口层的职责划分、已有入口、统一调用路径、现有能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/web/api.py](../../src/personal_agent/web/api.py)、[src/personal_agent/web/routes/](../../src/personal_agent/web/routes)、[src/personal_agent/web/context.py](../../src/personal_agent/web/context.py)、[src/personal_agent/feishu/service.py](../../src/personal_agent/feishu/service.py)、[src/personal_agent/cli/main.py](../../src/personal_agent/cli/main.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
 
 ## 设计目标
 
@@ -14,18 +14,19 @@
 
 ## 组件分层
 
-### 1. `web/api.py`
+### 1. Web API
 
-代码位置：[api.py](../../src/personal_agent/web/api.py)
+代码位置：[api.py](../../src/personal_agent/web/api.py)、[routes/](../../src/personal_agent/web/routes)、[context.py](../../src/personal_agent/web/context.py)
 
 作用：
 
 - 创建 FastAPI 应用
-- 初始化 settings、logging、`CaptureService`、`AgentService` 和 `FeishuService`
-- 注册 API 路由
+- 初始化 settings 和 logging
+- 通过 `WebAppContext` 装配 `CaptureService`、`AgentService`、`FeishuService` 和 Review Digest 运行依赖
+- 通过 `routes.register_api_routes()` 注册分组 API 路由
 - 启用可选 API Key 鉴权和限流
 - 配置 CORS
-- 在启动时拉起飞书长连接监听
+- 通过 FastAPI lifespan 拉起飞书长连接监听和 Review Digest scheduler
 - 托管构建后的前端静态资源
 
 ### 2. `AgentService`
@@ -105,7 +106,7 @@
 
 ```text
 HTTP request
-  -> web/api.py
+  -> web/routes/entry.py
   -> EntryInput
   -> AgentService.entry()
   -> AgentRuntime.execute_entry()

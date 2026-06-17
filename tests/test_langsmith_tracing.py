@@ -13,9 +13,9 @@ from personal_agent.core.llm_trace import LlmTraceResult, traced_chat_completion
 
 
 def test_langsmith_config_reads_env(monkeypatch):
-    from personal_agent.core import config as config_module
+    from personal_agent.core import config_env as config_env_module
 
-    monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "postgresql://example")
     monkeypatch.setenv("PERSONAL_AGENT_LANGSMITH_ENABLED", "true")
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")

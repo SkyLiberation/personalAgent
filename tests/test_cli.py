@@ -22,9 +22,9 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_URI", "")
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    from personal_agent.core import config as config_module
+    from personal_agent.core import config_env as config_env_module
 
-    monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
     monkeypatch.setattr(
         DefaultIntentRouter,
         "_classify_with_llm",
@@ -58,4 +58,3 @@ class TestCLIEntry:
         # (`digest` remains a valid command — review digest delivery job.)
         assert " capture " not in result.stdout
         assert " ask " not in result.stdout
-

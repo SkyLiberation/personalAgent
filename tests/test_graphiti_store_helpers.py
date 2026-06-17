@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import personal_agent.core.config as config_module
+import personal_agent.core.config_env as config_env_module
 from personal_agent.core.config import Settings
 from personal_agent.core.projections import graph_ingest_document_from_note
 from tests.note_factory import make_note
@@ -35,7 +35,7 @@ def test_settings_reads_graphiti_timeout_env(monkeypatch):
 
 
 def test_settings_reads_openai_request_limits(monkeypatch):
-    monkeypatch.setattr(config_module, "load_dotenv", lambda override: None)
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
     monkeypatch.setenv("PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS", "9.5")
     monkeypatch.setenv("PERSONAL_AGENT_OPENAI_MAX_RETRIES", "1")
 
@@ -46,7 +46,7 @@ def test_settings_reads_openai_request_limits(monkeypatch):
 
 
 def test_settings_reads_graphiti_llm_override_env(monkeypatch):
-    monkeypatch.setattr(config_module, "load_dotenv", lambda override: None)
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY", "graph-key")
     monkeypatch.setenv(
         "PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL", "https://graph.example/v1"

@@ -50,17 +50,17 @@ _LLM_PROVIDER_ENV_VARS = (
 def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite hermetic: no test should hit a real LLM/embedding endpoint.
 
-    ``.env`` is loaded into ``os.environ`` by ``Settings.from_env`` (via
-    ``load_dotenv(override=True)``); once a real key lands in the process
+    ``.env`` is loaded into ``os.environ`` by ``Settings.from_env`` through
+    ``core.config_env``; once a real key lands in the process
     environment it leaks across tests. This autouse fixture removes those keys
     before every test and neutralizes ``load_dotenv`` so ``from_env`` cannot
     re-import them. Tests that need a configured provider set it explicitly.
     """
     for name in _LLM_PROVIDER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    from personal_agent.core import config as _config_module
+    from personal_agent.core import config_env as _config_env_module
 
-    monkeypatch.setattr(_config_module, "load_dotenv", lambda override=True: False)
+    monkeypatch.setattr(_config_env_module, "load_dotenv", lambda override=True: False)
 
 
 def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = None) -> RouterDecision:

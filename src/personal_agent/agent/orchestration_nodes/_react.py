@@ -12,7 +12,7 @@ from ._deps import (
     _resolve_allowed_tools_for_step,
 )
 from . import _helpers
-from ._steps import (
+from ._tooling import (
     _begin_tool_call,
     _clear_pending_tool_call,
     _latest_tool_artifact,
