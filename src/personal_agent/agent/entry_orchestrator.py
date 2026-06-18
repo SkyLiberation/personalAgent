@@ -17,8 +17,9 @@ from ..core.models import EntryInput
 from ..core.observability import RunMetrics
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from .orchestration_nodes import OrchestrationDeps
-from .orchestration_models import AgentGraphState, AgentRunSnapshot, StepRunState
+from .orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
 from .runtime_results import AskResult, CaptureResult, EntryResult
+from .workflow_state_migration import reset_step_and_dependents
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,14 @@ LEGACY_REPLAY_UPDATE_KEYS = {
     "plan" + "_validated",
 }
 ALLOWED_REPLAY_UPDATE_KEYS = {
+    "run_id",
     "entry_input",
     "entry_text",
     "messages",
     "thread_summary",
     "router_decision",
+    "workflow_id",
+    "workflow_version",
     "react",
     "step_execution",
     "tool_tracking",
@@ -181,6 +185,8 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "session_id": state.session_id,
         "status": state.to_run_snapshot().status.value,
         "intent": state.router_decision.route if state.router_decision else "unknown",
+        "workflow_id": state.workflow_id,
+        "workflow_version": state.workflow_version,
         "next": list(getattr(snapshot, "next", ()) or ()),
         "metadata": metadata if isinstance(metadata, dict) else {},
         "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else None,
@@ -246,6 +252,18 @@ class EntryOrchestrator:
             self._orch_graph = build_entry_orchestration_graph(deps, checkpointer=checkpointer)
             logger.info("Entry orchestration graph built with Postgres checkpoints")
         return self._orch_graph
+
+    def _record_workflow_events(self, events: list[AgentEvent] | list[object]) -> None:
+        if not events:
+            return
+        try:
+            parsed = [
+                event if isinstance(event, AgentEvent) else AgentEvent.model_validate(event)
+                for event in events
+            ]
+            self._runtime.workflow_event_store.record_agent_events(parsed)
+        except Exception:
+            logger.exception("Failed to persist workflow events")
 
     def execute_entry(
         self, entry_input: EntryInput, on_progress=None
@@ -316,7 +334,7 @@ class EntryOrchestrator:
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
             run_metrics.complete(status="waiting_confirmation", interrupt_kind=interrupt_data.get("kind"))
-            return self._entry_result_from_interrupt(
+            result = self._entry_result_from_interrupt(
                 _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
                 run_id=run_id,
@@ -327,8 +345,11 @@ class EntryOrchestrator:
                     else initial_state.events
                 ),
             )
+            self._record_workflow_events(result.events)
+            return result
 
         result_state = AgentGraphState.model_validate(invoke_result)
+        self._record_workflow_events(result_state.events)
 
         # Map graph state back to EntryResult for API compatibility
         reply_text = result_state.answer or "暂时没有可执行的结果。"
@@ -418,6 +439,7 @@ class EntryOrchestrator:
                         continue
                     emitted_event_ids.add(event.event_id)
                     observed_events.append(event)
+                    self._record_workflow_events([event])
                     for event_type, payload in events_to_sse_tuples([event]):
                         # The HTTP layer emits one terminal result with complete
                         # answer/citation metadata after graph completion.
@@ -544,14 +566,17 @@ class EntryOrchestrator:
                 resume_decision=decision,
                 interrupt_kind=interrupt_data.get("kind"),
             )
-            return self._entry_result_from_interrupt(
+            result = self._entry_result_from_interrupt(
                 _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
                 run_id=run_id,
                 thread_id=thread_id,
             )
+            self._record_workflow_events(result.events)
+            return result
 
         result_state = AgentGraphState.model_validate(invoke_result)
+        self._record_workflow_events(result_state.events)
 
         reply_text = result_state.answer or "操作已完成。"
         intent = result_state.router_decision.route if result_state.router_decision else "unknown"
@@ -580,6 +605,11 @@ class EntryOrchestrator:
 
     def get_run_snapshot(self, run_id: str) -> AgentRunSnapshot | None:
         """Return a read-only snapshot for the most recent checkpoint of a run."""
+        state = self.get_run_state(run_id)
+        return state.to_run_snapshot() if state is not None else None
+
+    def get_run_state(self, run_id: str) -> AgentGraphState | None:
+        """Return the newest full checkpoint state for internal platform APIs."""
         try:
             checkpointer = self._get_orch_graph().checkpointer
             for ct in checkpointer.list(None, limit=500):
@@ -587,9 +617,9 @@ class EntryOrchestrator:
                     cv = ct.checkpoint["channel_values"]
                     state = AgentGraphState.model_validate(cv)
                     if state.run_id == run_id:
-                        return state.to_run_snapshot()
+                        return state
         except Exception:
-            logger.debug("Could not retrieve run snapshot for run_id=%s", run_id, exc_info=True)
+            logger.debug("Could not retrieve run state for run_id=%s", run_id, exc_info=True)
         return None
 
     def list_run_snapshots(
@@ -646,6 +676,7 @@ class EntryOrchestrator:
         thread_id: str,
         checkpoint_id: str,
         updates: dict[str, object],
+        checkpoint_ns: str | None = None,
         as_node: str | None = None,
     ) -> EntryResult:
         """Fork a historical checkpoint, apply state updates, and continue execution."""
@@ -664,28 +695,82 @@ class EntryOrchestrator:
             },
             "tags": ["entry", "replay"],
         }
+        if checkpoint_ns:
+            config["configurable"]["checkpoint_ns"] = checkpoint_ns
         _validate_replay_updates(updates)
         source_state = graph.get_state(config)
         source_values = getattr(source_state, "values", None)
         if not isinstance(source_values, dict):
             raise ValueError(f"Checkpoint {checkpoint_id} could not be read for replay.")
         _ensure_checkpoint_schema_supported(source_values, checkpoint_id)
+        source_run_id = str(source_values.get("run_id") or "")
+        replay_record = self._runtime.workflow_replay_store.create_replay_run(
+            source_run_id=source_run_id or "unknown",
+            source_thread_id=thread_id,
+            source_checkpoint_id=checkpoint_id,
+            mode="replay-checkpoint",
+            payload={
+                "updates": sorted(updates.keys()),
+                "as_node": as_node,
+                "checkpoint_ns": checkpoint_ns,
+            },
+        )
         update_kwargs = {"as_node": as_node} if as_node else {}
-        fork_config = graph.update_state(config, updates, **update_kwargs)
-        invoke_result = graph.invoke(None, fork_config)
+        try:
+            fork_config = graph.update_state(config, updates, **update_kwargs)
+            invoke_result = graph.invoke(None, fork_config)
+        except Exception as exc:
+            self._runtime.workflow_replay_store.finish_replay_run(
+                replay_record.replay_id,
+                status="failed",
+                payload_update={"error": f"{type(exc).__name__}: {exc}"},
+            )
+            raise
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
             values = _checkpoint_values_after_interrupt(graph, fork_config, invoke_result)
             run_id = str(values.get("run_id") or "")
-            return self._entry_result_from_interrupt(
+            result = self._entry_result_from_interrupt(
                 values,
                 interrupt_data,
                 run_id=run_id,
                 thread_id=thread_id,
             )
+            self._record_workflow_events(result.events)
+            self._runtime.workflow_replay_store.finish_replay_run(
+                replay_record.replay_id,
+                status="waiting_confirmation",
+                new_run_id=run_id or None,
+            )
+            return result
 
         result_state = AgentGraphState.model_validate(invoke_result)
+        requested_run_id = str(updates.get("run_id") or "")
+        if requested_run_id and result_state.run_id != requested_run_id:
+            # Nested subgraphs can return the parent checkpoint identity even
+            # though their resumed execution used the forked run identity.
+            result_state.run_id = requested_run_id
+            for event in result_state.events:
+                event.run_id = requested_run_id
+        self._record_workflow_events(result_state.events)
         intent = result_state.router_decision.route if result_state.router_decision else "unknown"
+        replay_event = AgentEvent(
+            run_id=result_state.run_id,
+            thread_id=result_state.thread_id,
+            type="workflow_replayed",
+            payload={
+                "replay_id": replay_record.replay_id,
+                "source_run_id": source_run_id,
+                "source_checkpoint_id": checkpoint_id,
+                "mode": "replay-checkpoint",
+            },
+        )
+        self._record_workflow_events([replay_event])
+        self._runtime.workflow_replay_store.finish_replay_run(
+            replay_record.replay_id,
+            status="completed",
+            new_run_id=result_state.run_id,
+        )
         return EntryResult(
             intent=intent,
             reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
@@ -696,5 +781,168 @@ class EntryOrchestrator:
             run_id=result_state.run_id,
             thread_id=result_state.thread_id,
             run_status="completed",
-            events=[e.model_dump(mode="json") for e in result_state.events],
+            events=[
+                *[e.model_dump(mode="json") for e in result_state.events],
+                replay_event.model_dump(mode="json"),
+            ],
         )
+
+    def fork_from_checkpoint(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_id: str,
+        updates: dict[str, object] | None = None,
+        checkpoint_ns: str | None = None,
+        as_node: str | None = None,
+    ) -> EntryResult:
+        """Create a new run_id from a historical checkpoint and continue."""
+        from .orchestration_models import _new_run_id
+
+        fork_updates = dict(updates or {})
+        new_run_id = _new_run_id()
+        fork_updates.update({
+            "run_id": new_run_id,
+            "events": [],
+            "answer_completed": False,
+        })
+        result = self.replay_from_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            updates=fork_updates,
+            checkpoint_ns=checkpoint_ns,
+            as_node=as_node,
+        )
+        fork_event = AgentEvent(
+            run_id=result.run_id or new_run_id,
+            thread_id=result.thread_id or thread_id,
+            type="workflow_forked",
+            payload={
+                "source_checkpoint_id": checkpoint_id,
+                "new_run_id": result.run_id or new_run_id,
+            },
+        )
+        self._record_workflow_events([fork_event])
+        result.events.append(fork_event.model_dump(mode="json"))
+        return result
+
+    def fork_from_step(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        updates: dict[str, object] | None = None,
+    ) -> EntryResult:
+        """Fork a run from the checkpoint immediately before a selected step."""
+        latest = self.get_run_snapshot(run_id)
+        if latest is None:
+            raise ValueError(f"Workflow run not found: {run_id}")
+
+        selected_checkpoint_id: str | None = None
+        selected_checkpoint_ns: str | None = None
+        selected_state: AgentGraphState | None = None
+        fallback: tuple[str, str | None, AgentGraphState] | None = None
+
+        checkpointer = self._get_orch_graph().checkpointer
+        for checkpoint_tuple in checkpointer.list(None, limit=2000):
+            checkpoint = getattr(checkpoint_tuple, "checkpoint", None)
+            values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+            if not isinstance(values, dict):
+                continue
+            try:
+                state = AgentGraphState.model_validate(values)
+            except Exception:
+                continue
+            if state.run_id != run_id:
+                continue
+            checkpoint_config = getattr(checkpoint_tuple, "config", None)
+            checkpoint_id = _checkpoint_id_from_config(checkpoint_config)
+            configurable = (
+                checkpoint_config.get("configurable")
+                if isinstance(checkpoint_config, dict)
+                else {}
+            )
+            checkpoint_ns = (
+                str(configurable.get("checkpoint_ns") or "")
+                if isinstance(configurable, dict)
+                else ""
+            )
+            target = next(
+                (step for step in state.step_execution.steps if step.step_id == step_id),
+                None,
+            )
+            if not checkpoint_id or target is None:
+                continue
+            if fallback is None:
+                fallback = (checkpoint_id, checkpoint_ns or None, state)
+            if target.status == "running":
+                selected_checkpoint_id = checkpoint_id
+                selected_checkpoint_ns = checkpoint_ns or None
+                selected_state = state
+                break
+
+        if selected_state is None and fallback is not None:
+            selected_checkpoint_id, selected_checkpoint_ns, selected_state = fallback
+        if selected_state is None or selected_checkpoint_id is None:
+            raise ValueError(f"Step {step_id} was not found in run {run_id}")
+
+        step_execution = reset_step_and_dependents(
+            selected_state.step_execution,
+            step_id,
+        )
+        fork_updates: dict[str, object] = {
+            "step_execution": step_execution,
+            "react": selected_state.react.model_copy(
+                update={
+                    "iterations": [],
+                    "step_id": "",
+                    "iteration_index": 0,
+                    "done": False,
+                    "result": {},
+                    "status": "idle",
+                    "stop_reason": "",
+                    "pending_thought": "",
+                    "pending_tool": "",
+                    "pending_input": {},
+                }
+            ),
+            "tool_tracking": selected_state.tool_tracking.model_copy(
+                update={
+                    "active_context": None,
+                    "pending_step_id": "",
+                    "pending_call_id": "",
+                    "pending_tool_name": "",
+                    "pending_tool_input": {},
+                    "pending_react_iteration": None,
+                }
+            ),
+            "tool_messages": [],
+            "pending_confirmation": None,
+            "confirmation_decision": None,
+            "answer": None,
+            "answer_completed": False,
+            "errors": [],
+        }
+        fork_updates.update(updates or {})
+        result = self.fork_from_checkpoint(
+            thread_id=latest.thread_id,
+            checkpoint_id=selected_checkpoint_id,
+            updates=fork_updates,
+            checkpoint_ns=selected_checkpoint_ns,
+        )
+        step_fork_event = AgentEvent(
+            run_id=result.run_id or "",
+            thread_id=result.thread_id or latest.thread_id,
+            type="workflow_forked",
+            payload={
+                "source_run_id": run_id,
+                "source_checkpoint_id": selected_checkpoint_id,
+                "source_checkpoint_ns": selected_checkpoint_ns,
+                "source_step_id": step_id,
+                "mode": "fork-step",
+                "new_run_id": result.run_id,
+            },
+        )
+        self._record_workflow_events([step_fork_event])
+        result.events.append(step_fork_event.model_dump(mode="json"))
+        return result

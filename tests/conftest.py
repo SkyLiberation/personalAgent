@@ -270,9 +270,118 @@ def clean_postgres_business_tables():
                     source_message_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS workflow_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    expires_at TIMESTAMPTZ,
+                    redacted_at TIMESTAMPTZ
+                );
+                CREATE TABLE IF NOT EXISTS workflow_events (
+                    event_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS workflow_definitions (
+                    workflow_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    intent TEXT NOT NULL,
+                    spec JSONB NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'registered',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (workflow_id, version)
+                );
+                CREATE TABLE IF NOT EXISTS workflow_deployments (
+                    workflow_id TEXT NOT NULL,
+                    environment TEXT NOT NULL DEFAULT 'default',
+                    stable_version TEXT NOT NULL,
+                    canary_version TEXT,
+                    canary_percent INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'stable',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (workflow_id, environment)
+                );
+                CREATE TABLE IF NOT EXISTS workflow_replay_runs (
+                    replay_id TEXT PRIMARY KEY,
+                    source_run_id TEXT NOT NULL,
+                    source_thread_id TEXT NOT NULL,
+                    source_checkpoint_id TEXT,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    new_run_id TEXT,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS workflow_eval_runs (
+                    eval_run_id TEXT PRIMARY KEY,
+                    workflow_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    suite TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    passed BOOLEAN NOT NULL,
+                    score DOUBLE PRECISION,
+                    metrics JSONB NOT NULL,
+                    report JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS workflow_eval_policies (
+                    workflow_id TEXT NOT NULL,
+                    environment TEXT NOT NULL DEFAULT 'default',
+                    policy JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (workflow_id, environment)
+                );
+                CREATE TABLE IF NOT EXISTS workflow_state_migrations (
+                    workflow_id TEXT NOT NULL,
+                    from_version TEXT NOT NULL,
+                    to_version TEXT NOT NULL,
+                    step_mapping JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (workflow_id, from_version, to_version)
+                );
+                CREATE TABLE IF NOT EXISTS worker_queue_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    queue TEXT NOT NULL,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    leased_by TEXT,
+                    leased_until TIMESTAMPTZ,
+                    due_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_error TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
                 TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
+                TRUNCATE workflow_artifacts;
+                TRUNCATE workflow_events;
+                TRUNCATE workflow_definitions;
+                TRUNCATE workflow_deployments;
+                TRUNCATE workflow_replay_runs;
+                TRUNCATE workflow_eval_runs;
+                TRUNCATE workflow_eval_policies;
+                TRUNCATE workflow_state_migrations;
+                TRUNCATE worker_queue_tasks;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

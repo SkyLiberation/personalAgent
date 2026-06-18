@@ -1,10 +1,10 @@
 """Workflow specifications and registry: the source of truth for fixed flows.
 
 ``WorkflowSpec`` describes business workflows. Ordinary workflows such as
-``ask`` and ``capture_*`` are selected and then executed by their graph branch.
-Step-executed workflows such as ``delete_knowledge`` and
-``solidify_conversation`` additionally expose selected nodes as ``ExecutionStep``
-projections for checkpointing, HITL, audit, and the frontend step panel.
+``ask`` / ``capture_*`` / ``summarize_thread`` / ``direct_answer`` are selected
+from the same registry as operational workflows. Step-executed workflows expose
+selected nodes as ``ExecutionStep`` projections for checkpointing, HITL, audit,
+and the frontend step panel.
 
 The important boundary is:
 
@@ -16,7 +16,7 @@ The important boundary is:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from ..core.models import EntryIntent
@@ -161,6 +161,72 @@ class WorkflowSpec:
             if step.project_to_plan
         ]
 
+    def to_definition_payload(self) -> dict[str, object]:
+        """Serialize the workflow contract for deployment/version storage."""
+        return {
+            "workflow_id": self.workflow_id,
+            "version": self.version,
+            "intent": self.intent,
+            "projection_policy": self.projection_policy,
+            "hitl_policy": self.hitl_policy,
+            "recovery_policy": self.recovery_policy,
+            "steps": [asdict(step) for step in self.steps],
+        }
+
+    @classmethod
+    def from_definition_payload(cls, payload: dict[str, object]) -> "WorkflowSpec":
+        """Restore a workflow contract from the deployment store payload."""
+        steps: list[WorkflowStepSpec] = []
+        for raw in payload.get("steps") or []:
+            if not isinstance(raw, dict):
+                continue
+            conditional_edges = tuple(
+                WorkflowConditionalEdge(
+                    condition=str(edge.get("condition", "")),
+                    target=str(edge.get("target", "")),
+                )
+                for edge in (raw.get("conditional_edges") or [])
+                if isinstance(edge, dict)
+            )
+            steps.append(
+                WorkflowStepSpec(
+                    step_id=str(raw.get("step_id", "")),
+                    action_type=str(raw.get("action_type", "")),
+                    description=str(raw.get("description", "")),
+                    tool_name=raw.get("tool_name") if raw.get("tool_name") is not None else None,
+                    tool_input=dict(raw.get("tool_input") or {}),
+                    depends_on=tuple(str(item) for item in (raw.get("depends_on") or ())),
+                    expected_output=str(raw.get("expected_output", "")),
+                    success_criteria=str(raw.get("success_criteria", "")),
+                    risk_level=str(raw.get("risk_level", "low")),
+                    requires_confirmation=bool(raw.get("requires_confirmation", False)),
+                    on_failure=str(raw.get("on_failure", "skip")),
+                    execution_mode=str(raw.get("execution_mode", "deterministic")),
+                    allowed_tools=tuple(str(item) for item in (raw.get("allowed_tools") or ())),
+                    max_iterations=int(raw.get("max_iterations", 3)),
+                    llm_decision_node=(
+                        str(raw["llm_decision_node"])
+                        if raw.get("llm_decision_node") is not None
+                        else None
+                    ),
+                    side_effects=tuple(str(item) for item in (raw.get("side_effects") or ())),
+                    hitl_policy=str(raw.get("hitl_policy", "none")),
+                    recovery_policy=str(raw.get("recovery_policy", "skip")),
+                    branch_policy=str(raw.get("branch_policy", "continue")),
+                    conditional_edges=conditional_edges,
+                    project_to_plan=bool(raw.get("project_to_plan", True)),
+                )
+            )
+        return cls(
+            workflow_id=str(payload.get("workflow_id", "")),
+            version=str(payload.get("version", "v1")),
+            intent=str(payload.get("intent", "unknown")),
+            steps=tuple(steps),
+            projection_policy=str(payload.get("projection_policy", "none")),
+            hitl_policy=str(payload.get("hitl_policy", "none")),
+            recovery_policy=str(payload.get("recovery_policy", "branch")),
+        )
+
 
 class WorkflowRegistry:
     """Maps an intent to its ``WorkflowSpec`` and projects step workflows."""
@@ -222,9 +288,9 @@ def _build_registry() -> WorkflowRegistry:
                     tool_name="capture_text",
                     side_effects=("write_longterm",),
                     recovery_policy="branch",
-                    project_to_plan=False,
                 ),
             ),
+            projection_policy="step_projection",
         ),
         _workflow(
             "capture_link",
@@ -233,13 +299,22 @@ def _build_registry() -> WorkflowRegistry:
                 WorkflowStepSpec(
                     "cap-link-fetch",
                     "tool_call",
-                    "抓取链接内容并进入 capture 链路",
+                    "抓取链接正文",
                     tool_name="capture_url",
-                    side_effects=("external_network", "write_longterm"),
+                    side_effects=("external_network",),
                     recovery_policy="branch",
-                    project_to_plan=False,
+                ),
+                WorkflowStepSpec(
+                    "cap-link-store",
+                    "tool_call",
+                    "将链接正文写入知识库",
+                    tool_name="capture_text",
+                    depends_on=("cap-link-fetch",),
+                    side_effects=("write_longterm",),
+                    recovery_policy="branch",
                 ),
             ),
+            projection_policy="step_projection",
         ),
         _workflow(
             "capture_file",
@@ -248,13 +323,22 @@ def _build_registry() -> WorkflowRegistry:
                 WorkflowStepSpec(
                     "cap-file-read",
                     "tool_call",
-                    "读取上传文件并进入 capture 链路",
+                    "读取上传文件正文",
                     tool_name="capture_upload",
+                    side_effects=(),
+                    recovery_policy="branch",
+                ),
+                WorkflowStepSpec(
+                    "cap-file-store",
+                    "tool_call",
+                    "将文件正文写入知识库",
+                    tool_name="capture_text",
+                    depends_on=("cap-file-read",),
                     side_effects=("write_longterm",),
                     recovery_policy="branch",
-                    project_to_plan=False,
                 ),
             ),
+            projection_policy="step_projection",
         ),
         _workflow(
             "ask",
@@ -297,9 +381,9 @@ def _build_registry() -> WorkflowRegistry:
                     "总结当前线程中的主题、结论和待办",
                     llm_decision_node="thread_summary",
                     recovery_policy="branch",
-                    project_to_plan=False,
                 ),
             ),
+            projection_policy="step_projection",
         ),
         _workflow(
             "delete_knowledge",
@@ -412,9 +496,9 @@ def _build_registry() -> WorkflowRegistry:
                     "生成直接回答",
                     llm_decision_node="direct_answer",
                     recovery_policy="branch",
-                    project_to_plan=False,
                 ),
             ),
+            projection_policy="step_projection",
         ),
         _workflow("unknown", "unknown", ()),
     ])

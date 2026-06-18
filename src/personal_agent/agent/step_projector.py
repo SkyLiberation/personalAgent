@@ -59,6 +59,7 @@ class StepProjector(Protocol):
         intent: EntryIntent,
         context: str,
         conversation_messages: list[ConversationMessage] | None = None,
+        routing_key: str = "",
     ) -> list[ExecutionStep]:
         ...
 
@@ -71,30 +72,53 @@ class WorkflowStepProjector:
     objects. There is no LLM call in this path.
     """
 
-    def __init__(self, settings: Settings, tool_executor: ToolExecutor | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        tool_executor: ToolExecutor | None = None,
+        workflow_definition_store: object | None = None,
+    ) -> None:
         self._settings = settings
         self._tool_executor = tool_executor
+        self._workflow_definition_store = workflow_definition_store
 
     def project(
         self,
         intent: EntryIntent,
         context: str = "",
         conversation_messages: list[ConversationMessage] | None = None,
+        routing_key: str = "",
     ) -> list[ExecutionStep]:
         # ``context`` / ``conversation_messages`` no longer shape the topology;
         # they remain in the signature so callers can pass the same entry context
         # shape. Per-request semantics are resolved at execution time.
         from .workflow import WORKFLOW_REGISTRY
 
-        steps = WORKFLOW_REGISTRY.project(intent)
         spec = WORKFLOW_REGISTRY.select(intent)
+        if self._workflow_definition_store is not None:
+            selected = self._workflow_definition_store.select_active_spec(
+                intent,
+                registry=WORKFLOW_REGISTRY,
+                routing_key=routing_key,
+            )
+            if selected is not None:
+                spec = selected
+            else:
+                logger.warning("workflow deployment disabled intent=%s", intent)
+                return []
+        steps = spec.project()
         logger.info(
-            "step_projector selected workflow intent=%s workflow=%s requires_projection=%s steps=%d",
-            intent, spec.workflow_id, spec.requires_projection, len(steps),
+            "step_projector selected workflow intent=%s workflow=%s version=%s requires_projection=%s steps=%d",
+            intent, spec.workflow_id, spec.version, spec.requires_projection, len(steps),
         )
         return steps
 
-    def fallback_projection(self, intent: EntryIntent) -> list[ExecutionStep]:
+    def fallback_projection(
+        self,
+        intent: EntryIntent,
+        *,
+        routing_key: str = "",
+    ) -> list[ExecutionStep]:
         """Return the deterministic step projection for ``intent``.
 
         Kept as a distinct method for validator fallback call sites. Ordinary
@@ -102,4 +126,13 @@ class WorkflowStepProjector:
         """
         from .workflow import WORKFLOW_REGISTRY
 
-        return WORKFLOW_REGISTRY.project(intent)
+        spec = WORKFLOW_REGISTRY.select(intent)
+        if self._workflow_definition_store is not None:
+            selected = self._workflow_definition_store.select_active_spec(
+                intent,
+                registry=WORKFLOW_REGISTRY,
+                routing_key=routing_key,
+            )
+            if selected is not None:
+                spec = selected
+        return spec.project()

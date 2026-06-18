@@ -45,7 +45,7 @@ class TestDefaultIntentRouter:
         assert "路由模型当前不可用" in decision.user_visible_message
 
     def test_llm_current_weather_ask_decision_enables_retrieval(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
         monkeypatch.setattr(
@@ -66,7 +66,7 @@ class TestDefaultIntentRouter:
         assert "web_search" in decision.candidate_tools
 
     def test_llm_router_receives_thread_conversation_messages(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
         captured: dict[str, str] = {}
@@ -115,7 +115,7 @@ class TestDefaultIntentRouter:
         )
 
         assert decision.route == "capture_text"
-        assert decision.requires_step_projection is False
+        assert decision.requires_step_projection is True
 
     def test_configured_llm_failure_reports_router_unavailable(self, monkeypatch):
         from personal_agent.core.config import OpenAIConfig, Settings
@@ -138,7 +138,7 @@ class TestDefaultIntentRouter:
         assert "路由模型当前不可用" in decision.user_visible_message
 
     def test_explicit_note_content_remains_plain_capture(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
         monkeypatch.setattr(
@@ -158,7 +158,7 @@ class TestDefaultIntentRouter:
         assert decision.route == "capture_text"
 
     def test_llm_delete_decision_applies_high_risk_defaults(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
         monkeypatch.setattr(
@@ -179,7 +179,7 @@ class TestDefaultIntentRouter:
         assert decision.requires_step_projection is True
 
     def test_delete_defaults_remain_safe_when_llm_omits_risk_fields(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
         monkeypatch.setattr(
@@ -215,7 +215,7 @@ class TestDefaultIntentRouter:
         assert hasattr(decision, "user_visible_message")
 
     def test_llm_may_request_clarification_for_incomplete_fragment(self, monkeypatch):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.core.config import Settings
 
         router = DefaultIntentRouter(Settings())
         monkeypatch.setattr(

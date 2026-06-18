@@ -120,6 +120,18 @@ class AgentService:
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self.runtime.sync_note_to_graph(note_id)
 
+    def enqueue_graph_sync(self, note_id: str, *, user_id: str | None = None) -> str | None:
+        return self.runtime.enqueue_graph_sync(note_id, user_id=user_id)
+
+    def drain_worker_queue(self, *args, **kwargs):
+        return self.runtime.drain_worker_queue(*args, **kwargs)
+
+    def worker_queue_stats(self, queue: str | None = None):
+        return self.runtime.worker_queue_stats(queue)
+
+    def retry_dead_worker_task(self, task_id: str) -> bool:
+        return self.runtime.retry_dead_worker_task(task_id)
+
     def sync_notes_to_graph(self, note_ids: list[str]) -> dict[str, bool]:
         return self.runtime.sync_notes_to_graph(note_ids)
 
@@ -156,8 +168,69 @@ class AgentService:
     def list_run_history(self, run_id: str, limit: int = 100):
         return self.runtime.list_run_history(run_id, limit=limit)
 
+    def list_workflow_definitions(self):
+        return self.runtime.list_workflow_definitions()
+
+    def set_workflow_deployment(self, workflow_id: str, **kwargs):
+        return self.runtime.set_workflow_deployment(workflow_id, **kwargs)
+
+    def get_workflow_deployment(self, workflow_id: str, environment: str = "default"):
+        return self.runtime.get_workflow_deployment(workflow_id, environment=environment)
+
+    def record_workflow_eval_run(self, workflow_id: str, version: str, **kwargs):
+        return self.runtime.record_workflow_eval_run(workflow_id, version, **kwargs)
+
+    def get_workflow_eval_gate_status(self, workflow_id: str, version: str, **kwargs):
+        return self.runtime.get_workflow_eval_gate_status(workflow_id, version, **kwargs)
+
+    def set_workflow_eval_policy(self, workflow_id: str, **kwargs):
+        return self.runtime.set_workflow_eval_policy(workflow_id, **kwargs)
+
+    def evaluate_workflow_deployment_gate(self, workflow_id: str, version: str, **kwargs):
+        return self.runtime.evaluate_workflow_deployment_gate(
+            workflow_id,
+            version,
+            **kwargs,
+        )
+
+    def dry_run_workflow(self, **kwargs):
+        return self.runtime.dry_run_workflow(**kwargs)
+
+    def list_workflow_artifacts(self, run_id: str, **kwargs):
+        return self.runtime.list_workflow_artifacts(run_id, **kwargs)
+
+    def get_workflow_artifact(self, artifact_id: str):
+        return self.runtime.get_workflow_artifact(artifact_id)
+
+    def redact_workflow_artifact(self, artifact_id: str, **kwargs):
+        return self.runtime.redact_workflow_artifact(artifact_id, **kwargs)
+
+    def purge_expired_workflow_artifacts(self, **kwargs):
+        return self.runtime.purge_expired_workflow_artifacts(**kwargs)
+
+    def rebuild_workflow_projection(self, run_id: str):
+        return self.runtime.rebuild_workflow_projection(run_id)
+
+    def list_replay_runs(self, run_id: str, limit: int = 50):
+        return self.runtime.list_replay_runs(run_id, limit=limit)
+
+    def build_workflow_debug_bundle(self, run_id: str):
+        return self.runtime.build_workflow_debug_bundle(run_id)
+
     def replay_from_checkpoint(self, **kwargs):
         return self.runtime.replay_from_checkpoint(**kwargs)
+
+    def fork_from_checkpoint(self, **kwargs):
+        return self.runtime.fork_from_checkpoint(**kwargs)
+
+    def fork_from_step(self, **kwargs):
+        return self.runtime.fork_from_step(**kwargs)
+
+    def set_workflow_state_migration(self, workflow_id: str, **kwargs):
+        return self.runtime.set_workflow_state_migration(workflow_id, **kwargs)
+
+    def preview_workflow_state_migration(self, **kwargs):
+        return self.runtime.preview_workflow_state_migration(**kwargs)
 
     def execute_digest(self, user_id: str | None = None):
         return self.runtime.execute_digest(user_id=user_id)

@@ -7,6 +7,6 @@ steps. See :mod:`personal_agent.agent.ask.context` for the run-scoped carrier.
 
 from __future__ import annotations
 
-from .context import AskRunContext, AskRunContextStore
+from .context import AskRunContext, AskRunContextStore, PostgresAskRunContextStore
 
-__all__ = ["AskRunContext", "AskRunContextStore"]
+__all__ = ["AskRunContext", "AskRunContextStore", "PostgresAskRunContextStore"]

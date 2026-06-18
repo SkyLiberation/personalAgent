@@ -5,20 +5,18 @@ from uuid import uuid4
 
 from ..core.evidence import (
     EvidenceItem,
+    graph_result_to_evidence,
     notes_to_evidence,
 )
 from ..core.models import AgentState, Citation, KnowledgeNote
 from ..core.prompts import get_prompt, render_prompt
 from ..core.projections import MatchRef
-from ..core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+from ..core.query_understanding import RetrievalFilters
 from ..graphiti.store import GraphAskResult
-from .ask import AskRunContext, AskRunContextStore
+from .ask import AskRunContext
 from .ask.evidence_ops import (
-    dedupe_evidence as _dedupe_evidence,
     graph_matches_to_evidence as _graph_matches_to_evidence,
     match_refs as _match_refs,
-    note_term_overlap as _note_term_overlap,
-    order_matches_by_evidence as _order_matches_by_evidence,
     selected_citations as _selected_citations,
     selected_matches as _selected_matches,
 )
@@ -27,7 +25,6 @@ from .ask.stages import GenerationStage, RetrievalStage, VerificationStage
 from .ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
 from .query_planner import plan_retrieval
 from .runtime_helpers import (
-    _annotate_answer,
     _best_snippet,
     _graph_episode_uuids,
     _graph_fact_lines,

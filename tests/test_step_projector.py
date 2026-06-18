@@ -227,10 +227,17 @@ class TestStepProjectorValidatorRoundtrip:
             assert result.valid, f"Intent {intent} projection failed: {result.issues}"
             assert len(steps) > 0
 
-    def test_ordinary_workflows_do_not_enter_step_projection_validation_path(self, projector):
-        # ask is a step-projection workflow now, so it is excluded here.
-        for intent in ("capture_text", "capture_link", "capture_file", "unknown"):
-            assert projector.project(intent, "测试输入") == []
+    def test_phase4_workflows_enter_step_projection_validation_path(self, projector):
+        expected = {
+            "capture_text": ["cap-structure"],
+            "capture_link": ["cap-link-fetch", "cap-link-store"],
+            "capture_file": ["cap-file-read", "cap-file-store"],
+            "summarize_thread": ["sum-compose"],
+            "direct_answer": ["direct-compose"],
+        }
+        for intent, step_ids in expected.items():
+            assert [s.step_id for s in projector.project(intent, "测试输入")] == step_ids
+        assert projector.project("unknown", "测试输入") == []
 
     def test_delete_note_id_may_be_supplied_by_transitive_resolve_step(self):
         from personal_agent.agent.step_projection_validator import StepProjectionValidator
@@ -326,13 +333,18 @@ class TestWorkflowRegistry:
         spec = WORKFLOW_REGISTRY.select("solidify_conversation")
         assert spec.requires_projection is True
 
-    def test_branch_workflows_do_not_require_projection(self):
+    def test_phase4_workflows_require_projection(self):
         from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
-        # ask is a step-projection workflow now and is intentionally excluded.
-        for intent in ("capture_text", "summarize_thread", "direct_answer"):
-            assert WORKFLOW_REGISTRY.select(intent).requires_projection is False
-            assert WORKFLOW_REGISTRY.project(intent) == []
+        for intent in (
+            "capture_text",
+            "capture_link",
+            "capture_file",
+            "summarize_thread",
+            "direct_answer",
+        ):
+            assert WORKFLOW_REGISTRY.select(intent).requires_projection is True
+            assert WORKFLOW_REGISTRY.project(intent) != []
 
     def test_workflow_specs_expose_governance_metadata(self):
         from personal_agent.agent.workflow import WORKFLOW_REGISTRY

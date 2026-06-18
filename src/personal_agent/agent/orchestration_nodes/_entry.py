@@ -44,6 +44,8 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.thread_id = thread_id
     state.entry_text = text
     state.router_decision = None
+    state.workflow_id = ""
+    state.workflow_version = ""
     state.react = ReactSubState()
     state.step_execution = StepExecutionState()
     state.tool_tracking = ToolTrackingSubState()
@@ -71,6 +73,8 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
         "router_decision": None,
+        "workflow_id": "",
+        "workflow_version": "",
         "react": state.react,
         "step_execution": state.step_execution,
         "tool_tracking": state.tool_tracking,
@@ -275,17 +279,34 @@ def _node_project_workflow_steps(state: AgentGraphState, *, deps: OrchestrationD
     route = state.router_decision.route if state.router_decision else "unknown"
     entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
     projection_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    steps = deps.step_projector.project(route, entry_text, conversation_messages=projection_messages)
+    steps = deps.step_projector.project(
+        route,
+        entry_text,
+        conversation_messages=projection_messages,
+        routing_key=f"{state.user_id}:{state.session_id}",
+    )
     step_states = [StepRunState.from_execution_step(s) for s in steps]
 
     state.step_execution.steps = step_states
-    state.add_event("steps_projected", {"steps": [pss.model_dump(mode="json") for pss in step_states]})
+    if step_states:
+        state.workflow_id = step_states[0].workflow_id
+        state.workflow_version = step_states[0].workflow_version
+    state.add_event("steps_projected", {
+        "workflow_id": state.workflow_id,
+        "workflow_version": state.workflow_version,
+        "steps": [pss.model_dump(mode="json") for pss in step_states],
+    })
 
     logger.info(
         "project_workflow_steps run_id=%s route=%s steps=%d",
         state.run_id, route, len(step_states),
     )
-    return {"step_execution": state.step_execution, "events": state.events}
+    return {
+        "workflow_id": state.workflow_id,
+        "workflow_version": state.workflow_version,
+        "step_execution": state.step_execution,
+        "events": state.events,
+    }
 
 
 def _node_validate_projected_steps(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:

@@ -547,7 +547,7 @@ class TestOrchestrationGraphIntegration:
         monkeypatch.setattr(
             runtime._step_projector,
             "project",
-            lambda _intent, _context, conversation_messages=None: [
+            lambda _intent, _context, conversation_messages=None, routing_key="": [
                 ExecutionStep(step_id="bad-1", action_type="retrieve", description="获取上下文"),
                 ExecutionStep(
                     step_id="bad-2",

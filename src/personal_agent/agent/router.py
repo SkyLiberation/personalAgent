@@ -63,11 +63,18 @@ class IntentRouter(Protocol):
 def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDecision:
     """Populate sensible defaults for each intent type."""
     if intent in ("capture_text", "capture_link", "capture_file"):
+        candidate_tools = {
+            "capture_text": ["capture_text"],
+            "capture_link": ["capture_url", "capture_text"],
+            "capture_file": ["capture_upload", "capture_text"],
+        }[intent]
         return RouterDecision(
             route=intent,
             confidence=0.9,
-            requires_tools=intent == "capture_link",
+            requires_tools=True,
+            requires_step_projection=True,
             risk_level="low",
+            candidate_tools=candidate_tools,
             user_visible_message=reason or "将内容采集进知识库。",
         )
     if intent == "ask":
@@ -85,6 +92,7 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
             route=intent,
             confidence=0.8,
             requires_retrieval=True,
+            requires_step_projection=True,
             risk_level="low",
             user_visible_message=reason or "总结群聊内容。",
         )
@@ -112,6 +120,7 @@ def _default_router_decision(intent: EntryIntent, reason: str = "") -> RouterDec
         return RouterDecision(
             route=intent,
             confidence=0.85,
+            requires_step_projection=True,
             risk_level="low",
             user_visible_message=reason or "直接回复，无需检索或工具。",
         )

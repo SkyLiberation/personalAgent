@@ -10,6 +10,7 @@ from ..core.logging_utils import log_event, trace_span
 from ..core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
 from ..graphiti.store import GraphCaptureResult, GraphitiStore
 from ..memory import MemoryFacade
+from ..storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from .nodes import (
     capture_node,
     chunk_reconcile_node,
@@ -42,10 +43,12 @@ class IngestionPipeline:
         settings: Settings,
         memory: MemoryFacade,
         graph_store: GraphitiStore,
+        worker_queue: PostgresWorkerQueueStore | None = None,
     ) -> None:
         self.settings = settings
         self.memory = memory
         self.graph_store = graph_store
+        self.worker_queue = worker_queue
 
     # ------------------------------------------------------------------
     # Foreground ingestion entry
@@ -192,6 +195,27 @@ class IngestionPipeline:
                 chunk.graph_sync.status = "pending"
                 chunk.graph_sync.error = None
             self.memory.update_note(chunk)
+            if chunk.graph_sync.status == "pending":
+                self._enqueue_graph_sync(chunk)
+
+    def _enqueue_graph_sync(self, note: KnowledgeNote) -> None:
+        if self.worker_queue is None:
+            return
+        try:
+            self.worker_queue.enqueue(
+                queue="graph",
+                task_type="graph_sync_note",
+                payload={
+                    "note_id": note.id,
+                    "user_id": note.user_id,
+                    "title": note.body.title,
+                },
+                idempotency_key=f"graph_sync_note:{note.id}",
+                priority=0,
+                max_attempts=1,
+            )
+        except Exception:
+            logger.exception("Failed to enqueue graph sync note_id=%s", note.id)
 
     # ------------------------------------------------------------------
     # Background sync entries

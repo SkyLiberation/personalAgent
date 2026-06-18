@@ -46,6 +46,7 @@ class OrchestrationDeps:
     execute_ask: Callable[..., "AskResult"]
     ask_service_factory: Callable[[], "AskService"]
     ask_run_context_store: "AskRunContextStore"
+    workflow_artifact_store: object
     policy_engine: "PolicyEngine | None" = None
     execute_capture: Callable[..., "CaptureResult"] | None = None
     capture_service: "CaptureService | None" = None
@@ -55,7 +56,13 @@ class OrchestrationDeps:
 
     @classmethod
     def from_runtime(cls, runtime) -> "OrchestrationDeps":
-        from ..ask import AskRunContextStore
+        from ..ask import AskRunContextStore, PostgresAskRunContextStore
+
+        try:
+            ask_context_store = PostgresAskRunContextStore(runtime.settings.postgres_url)
+        except Exception:
+            logger.exception("Falling back to in-memory ask context artifacts")
+            ask_context_store = AskRunContextStore()
 
         return cls(
             settings=runtime.settings,
@@ -69,7 +76,8 @@ class OrchestrationDeps:
             graph_store=runtime.graph_store,
             execute_ask=runtime.execute_ask,
             ask_service_factory=runtime._ask_service,
-            ask_run_context_store=AskRunContextStore(),
+            ask_run_context_store=ask_context_store,
+            workflow_artifact_store=runtime.workflow_replay_store,
             policy_engine=getattr(runtime, "_policy_engine", None),
             execute_capture=runtime.execute_capture,
             capture_service=runtime.capture_service,

@@ -13,6 +13,10 @@ from ..ms_graphrag import MicrosoftGraphRagStore
 from ..policy import PolicyEngine, PolicyRules
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..storage.postgres_tool_governance_store import PostgresToolGovernanceStore
+from ..storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from ..storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
+from ..storage.postgres_workflow_event_store import PostgresWorkflowEventStore
+from ..storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
 from ..structural_retriever import StructuralRetrieverStore
 from ..tools import (
     ToolExecutor,
@@ -109,6 +113,10 @@ class AgentRuntime:
         self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
         self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
+        self.workflow_definition_store = PostgresWorkflowDefinitionStore(settings.postgres_url)
+        self.workflow_event_store = PostgresWorkflowEventStore(settings.postgres_url)
+        self.workflow_replay_store = PostgresWorkflowReplayStore(settings.postgres_url)
+        self.worker_queue_store = PostgresWorkerQueueStore(settings.postgres_url)
         # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
         set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
@@ -121,7 +129,12 @@ class AgentRuntime:
             policy_engine=self._policy_engine,
         )
         self._register_tools()
-        self._step_projector = WorkflowStepProjector(settings, tool_executor=self._tool_executor)
+        self._sync_workflow_definitions()
+        self._step_projector = WorkflowStepProjector(
+            settings,
+            tool_executor=self._tool_executor,
+            workflow_definition_store=self.workflow_definition_store,
+        )
         self._verifier = AnswerVerifier()
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
@@ -133,6 +146,14 @@ class AgentRuntime:
         self._thread_message_loader: (
             Callable[[EntryInput, int], list[dict[str, str]]] | None
         ) = None
+
+    def _sync_workflow_definitions(self) -> None:
+        try:
+            from .workflow import WORKFLOW_REGISTRY
+
+            self.workflow_definition_store.sync_registry(WORKFLOW_REGISTRY)
+        except Exception:
+            logger.exception("Failed to sync workflow definitions")
 
     # ---- tool registry (capture / search / delete tools) ----
 
@@ -228,6 +249,7 @@ class AgentRuntime:
             settings=self.settings,
             memory=self.memory,
             graph_store=self._active_graph_store(),
+            worker_queue=self.worker_queue_store,
         )
 
     def _active_graph_store(self):
@@ -257,6 +279,61 @@ class AgentRuntime:
 
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self._ingestion().sync_note_to_graph(note_id)
+
+    def enqueue_graph_sync(self, note_id: str, *, user_id: str | None = None) -> str | None:
+        note = self.memory.get_note(note_id)
+        if note is None:
+            return None
+        if user_id is not None and note.user_id != user_id:
+            return None
+        task = self.worker_queue_store.enqueue(
+            queue="graph",
+            task_type="graph_sync_note",
+            payload={
+                "note_id": note.id,
+                "user_id": note.user_id,
+                "title": note.body.title,
+            },
+            idempotency_key=f"graph_sync_note:{note.id}",
+            max_attempts=1,
+        )
+        return task.task_id
+
+    def drain_worker_queue(
+        self,
+        queue: str = "graph",
+        *,
+        limit: int = 10,
+        worker_id: str = "runtime-worker",
+    ) -> dict[str, int]:
+        """Synchronously drain queued worker tasks.
+
+        This is the Phase 3 bridge before a separate worker process exists.
+        It exercises the same durable queue/lease/complete/fail path that a
+        future background worker will use.
+        """
+        from .worker import WorkflowWorker
+
+        worker = WorkflowWorker(
+            self,
+            queue=queue,
+            worker_id=worker_id,
+            max_running_per_user=1,
+        )
+        total = {"leased": 0, "completed": 0, "failed": 0, "unsupported": 0}
+        for _ in range(max(0, limit)):
+            current = worker.run_once()
+            for key in total:
+                total[key] += getattr(current, key)
+            if current.leased == 0:
+                break
+        return total
+
+    def worker_queue_stats(self, queue: str | None = None) -> dict[str, int]:
+        return self.worker_queue_store.queue_stats(queue)
+
+    def retry_dead_worker_task(self, task_id: str) -> bool:
+        return self.worker_queue_store.retry_dead(task_id)
 
     def sync_notes_to_graph(self, note_ids: list[str]) -> dict[str, bool]:
         return self._ingestion().sync_notes_to_graph(note_ids)
@@ -335,22 +412,230 @@ class AgentRuntime:
     def list_run_history(self, run_id: str, limit: int = 100):
         return self._entry.list_run_history(run_id, limit=limit)
 
+    def list_workflow_definitions(self):
+        return self.workflow_definition_store.list_definitions()
+
+    def set_workflow_deployment(self, workflow_id: str, **kwargs):
+        return self.workflow_definition_store.set_deployment(workflow_id, **kwargs)
+
+    def get_workflow_deployment(self, workflow_id: str, environment: str = "default"):
+        return self.workflow_definition_store.get_deployment(
+            workflow_id,
+            environment=environment,
+        )
+
+    def record_workflow_eval_run(self, workflow_id: str, version: str, **kwargs):
+        return self.workflow_definition_store.record_eval_run(
+            workflow_id=workflow_id,
+            version=version,
+            **kwargs,
+        )
+
+    def get_workflow_eval_gate_status(
+        self,
+        workflow_id: str,
+        version: str,
+        *,
+        suite: str = "default",
+    ) -> dict[str, object]:
+        return self.workflow_definition_store.get_eval_gate_status(
+            workflow_id,
+            version,
+            suite=suite,
+        )
+
+    def set_workflow_eval_policy(self, workflow_id: str, **kwargs):
+        return self.workflow_definition_store.set_eval_policy(workflow_id, **kwargs)
+
+    def evaluate_workflow_deployment_gate(
+        self,
+        workflow_id: str,
+        version: str,
+        **kwargs,
+    ) -> dict[str, object]:
+        return self.workflow_definition_store.evaluate_deployment_gate(
+            workflow_id,
+            version,
+            **kwargs,
+        )
+
+    def dry_run_workflow(
+        self,
+        *,
+        intent: str,
+        routing_key: str = "dry-run",
+        spec_payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Validate and project a workflow definition without executing effects."""
+        from dataclasses import asdict
+
+        from .router import _default_router_decision
+        from .workflow import WORKFLOW_REGISTRY, WorkflowSpec
+        from .workflow_validator import WorkflowSpecValidator
+
+        spec = (
+            WorkflowSpec.from_definition_payload(spec_payload)
+            if spec_payload is not None
+            else self.workflow_definition_store.select_active_spec(
+                intent,
+                registry=WORKFLOW_REGISTRY,
+                routing_key=routing_key,
+            )
+        )
+        if spec is None:
+            return {"valid": False, "issues": ["workflow deployment is disabled"], "steps": []}
+        spec_validation = WorkflowSpecValidator().validate_spec(spec)
+        steps = spec.project()
+        step_validation = self.step_projection_validator.validate(
+            steps,
+            _default_router_decision(spec.intent),
+        ) if steps else None
+        return {
+            "valid": spec_validation.valid and (step_validation is None or step_validation.valid),
+            "workflow_id": spec.workflow_id,
+            "workflow_version": spec.version,
+            "issues": [
+                *spec_validation.issues,
+                *(step_validation.issues if step_validation else []),
+            ],
+            "warnings": [
+                *spec_validation.warnings,
+                *(step_validation.warnings if step_validation else []),
+            ],
+            "steps": [asdict(step) for step in steps],
+            "eval_gate": self.workflow_definition_store.evaluate_deployment_gate(
+                spec.workflow_id,
+                spec.version,
+            ),
+        }
+
+    def list_workflow_artifacts(
+        self,
+        run_id: str,
+        *,
+        kind: str | None = None,
+        limit: int = 50,
+    ):
+        return self.workflow_replay_store.list_artifacts(run_id, kind=kind, limit=limit)
+
+    def get_workflow_artifact(self, artifact_id: str):
+        return self.workflow_replay_store.get_artifact(artifact_id)
+
+    def redact_workflow_artifact(self, artifact_id: str, *, keys: set[str] | None = None):
+        return self.workflow_replay_store.redact_artifact(artifact_id, keys=keys)
+
+    def purge_expired_workflow_artifacts(self, *, limit: int = 1000) -> int:
+        return self.workflow_replay_store.purge_expired_artifacts(limit=limit)
+
+    def list_replay_runs(self, run_id: str, limit: int = 50):
+        return self.workflow_replay_store.list_replay_runs(run_id, limit=limit)
+
+    def rebuild_workflow_projection(self, run_id: str):
+        from .workflow_event_projection import project_workflow_events
+
+        return project_workflow_events(
+            run_id,
+            self.workflow_event_store.list_events(run_id),
+        )
+
+    def build_workflow_debug_bundle(self, run_id: str) -> dict[str, object]:
+        events = [
+            event.model_dump(mode="json")
+            for event in self.workflow_event_store.list_events(run_id)
+        ]
+        history = self.list_run_history(run_id, limit=100)
+        return self.workflow_replay_store.build_debug_bundle(
+            run_id=run_id,
+            events=events,
+            history=history,
+            projection=self.rebuild_workflow_projection(run_id).model_dump(mode="json"),
+        )
+
     def replay_from_checkpoint(
         self,
         *,
         thread_id: str,
         checkpoint_id: str,
         updates: dict[str, object],
+        checkpoint_ns: str | None = None,
         as_node: str | None = None,
     ) -> EntryResult:
         result = self._entry.replay_from_checkpoint(
             thread_id=thread_id,
             checkpoint_id=checkpoint_id,
             updates=updates,
+            checkpoint_ns=checkpoint_ns,
             as_node=as_node,
         )
         record_entry_episode(self.memory, result, settings=self.settings)
         return result
+
+    def fork_from_checkpoint(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_id: str,
+        updates: dict[str, object] | None = None,
+        checkpoint_ns: str | None = None,
+        as_node: str | None = None,
+    ) -> EntryResult:
+        result = self._entry.fork_from_checkpoint(
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            updates=updates or {},
+            checkpoint_ns=checkpoint_ns,
+            as_node=as_node,
+        )
+        record_entry_episode(self.memory, result, settings=self.settings)
+        return result
+
+    def fork_from_step(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        updates: dict[str, object] | None = None,
+    ) -> EntryResult:
+        result = self._entry.fork_from_step(
+            run_id=run_id,
+            step_id=step_id,
+            updates=updates,
+        )
+        record_entry_episode(self.memory, result, settings=self.settings)
+        return result
+
+    def set_workflow_state_migration(self, workflow_id: str, **kwargs):
+        return self.workflow_definition_store.set_state_migration(workflow_id, **kwargs)
+
+    def preview_workflow_state_migration(
+        self,
+        *,
+        run_id: str,
+        to_version: str,
+    ):
+        from .workflow_state_migration import migrate_step_execution
+
+        source_state = self._entry.get_run_state(run_id)
+        if source_state is None:
+            raise ValueError(f"Workflow run not found: {run_id}")
+        target = self.workflow_definition_store.get_definition(
+            source_state.workflow_id,
+            to_version,
+        )
+        if target is None:
+            raise ValueError(
+                f"Workflow definition not found: {source_state.workflow_id}@{to_version}"
+            )
+        migration = self.workflow_definition_store.get_state_migration(
+            source_state.workflow_id,
+            from_version=source_state.workflow_version,
+            to_version=to_version,
+        )
+        return migrate_step_execution(
+            source_state.step_execution,
+            target,
+            step_mapping=dict((migration or {}).get("step_mapping") or {}),
+        )
 
     # ---- digest / intent (formerly RuntimeEntryMixin) ----
 

@@ -88,6 +88,27 @@ def _has_upstream_action_type(
     return False
 
 
+def _has_upstream_tool(
+    steps: list[ExecutionStep], step: ExecutionStep, tool_names: set[str],
+) -> bool:
+    """Return whether a step transitively depends on one of the given tools."""
+    by_id = {candidate.step_id: candidate for candidate in steps}
+    pending = list(step.depends_on)
+    visited: set[str] = set()
+    while pending:
+        step_id = pending.pop()
+        if step_id in visited:
+            continue
+        visited.add(step_id)
+        candidate = by_id.get(step_id)
+        if candidate is None:
+            continue
+        if candidate.action_type == "tool_call" and candidate.tool_name in tool_names:
+            return True
+        pending.extend(candidate.depends_on)
+    return False
+
+
 class StepProjectionValidator:
     """Pre-execution workflow step projection validation.
 
@@ -171,11 +192,39 @@ class StepProjectionValidator:
                             for err in exc.errors()
                         ]
                     for err in schema_errors:
-                        deferred_draft_text = (
+                        deferred_capture_text = (
                             s.tool_name == "capture_text"
                             and "text" not in s.tool_input
                             and "text" in err
-                            and _has_upstream_action_type(steps, s, "compose")
+                            and (
+                                (
+                                    decision.route == "solidify_conversation"
+                                    and _has_upstream_action_type(steps, s, "compose")
+                                )
+                                or decision.route == "capture_text"
+                                or (
+                                    decision.route in {"capture_link", "capture_file"}
+                                    and _has_upstream_tool(
+                                        steps,
+                                        s,
+                                        {"capture_url", "capture_upload"},
+                                    )
+                                )
+                            )
+                        )
+                        deferred_capture_url = (
+                            s.tool_name == "capture_url"
+                            and "url" not in s.tool_input
+                            and "url" in err
+                            and decision.route == "capture_link"
+                        )
+                        deferred_capture_upload = (
+                            s.tool_name == "capture_upload"
+                            and (
+                                ("file_path" not in s.tool_input and "file_path" in err)
+                                or ("filename" not in s.tool_input and "filename" in err)
+                            )
+                            and decision.route == "capture_file"
                         )
                         deferred_delete_note_id = (
                             s.tool_name == "delete_note"
@@ -183,7 +232,12 @@ class StepProjectionValidator:
                             and "note_id" in err
                             and _has_upstream_action_type(steps, s, "resolve")
                         )
-                        if deferred_draft_text or deferred_delete_note_id:
+                        if (
+                            deferred_capture_text
+                            or deferred_capture_url
+                            or deferred_capture_upload
+                            or deferred_delete_note_id
+                        ):
                             continue
                         issues.append(f"{prefix} tool_input 参数校验失败: {err}")
 
@@ -198,7 +252,12 @@ class StepProjectionValidator:
                         )
                     # Tool writes longterm but step has no confirmation
                     explicit_solidify_write = (
-                        decision.route == "solidify_conversation"
+                        decision.route in {
+                            "solidify_conversation",
+                            "capture_text",
+                            "capture_link",
+                            "capture_file",
+                        }
                         and s.tool_name == "capture_text"
                     )
                     if (
@@ -421,7 +480,12 @@ class StepProjectionValidator:
 
             last_step = steps[-1]
             valid_terminal_action = last_step.action_type in ("compose", "verify") or (
-                decision.route == "solidify_conversation"
+                decision.route in {
+                    "solidify_conversation",
+                    "capture_text",
+                    "capture_link",
+                    "capture_file",
+                }
                 and last_step.action_type == "tool_call"
                 and last_step.tool_name == "capture_text"
             )
@@ -454,4 +518,3 @@ class StepProjectionValidator:
             logger.info("Step projection validation passed cleanly.")
 
         return result
-

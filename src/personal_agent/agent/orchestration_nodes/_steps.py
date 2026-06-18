@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import time
@@ -40,7 +41,6 @@ from ._tooling import (
 
 if TYPE_CHECKING:
     from ._deps import ExecutionStep
-    from ..runtime_results import AskResult
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,9 @@ def _retrieve_reflections(
 # multi-source recall + context assembly (the ~18s pass), compose generates from
 # the assembled ContextPack, verify runs verification + web fallback + annotate.
 # The run-scoped AskRunContext threads the large payload (evidence/context_pack)
-# between them by reference, via deps.ask_run_context_store, instead of a
-# module-global dict; it is cleared in finalize. Only summary counts go into
-# AgentGraphState, matching the "large payloads by reference, not value" design.
+# between ask steps via deps.ask_run_context_store. The store persists a durable
+# artifact payload, so only summary counts go into AgentGraphState and compose /
+# verify can recover without bloating LangGraph checkpoints.
 
 
 _DELETE_CANDIDATE_SCHEMA = {
@@ -192,6 +192,22 @@ def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
 
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     step = sd.to_execution_step()
+    _prepare_entry_tool_input(sd, step, state)
+    _persist_step_artifact(
+        state,
+        sd,
+        deps,
+        phase="input",
+        payload={
+            "workflow_id": step.workflow_id,
+            "workflow_version": step.workflow_version,
+            "step_id": step.step_id,
+            "action_type": step.action_type,
+            "tool_name": step.tool_name,
+            "tool_input": step.tool_input,
+            "entry_text": state.entry_text,
+        },
+    )
 
     # Idempotency: skip side-effect steps that already ran
     if step.action_type == "tool_call" and step.tool_name:
@@ -231,7 +247,12 @@ def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
 
     if step.action_type == "tool_call":
         if not step.tool_name:
-            return _fail_current_step(state, step, ValueError("tool_call step missing tool_name"))
+            return _fail_current_step(
+                state,
+                step,
+                ValueError("tool_call step missing tool_name"),
+                deps=deps,
+            )
         return {
             "tool_messages": [_begin_tool_call(
                 state,
@@ -249,9 +270,9 @@ def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     try:
         _dispatch_step(step, sd, state, deps)
     except Exception as exc:
-        return _fail_current_step(state, step, exc)
+        return _fail_current_step(state, step, exc, deps=deps)
 
-    return _complete_current_step(state, step)
+    return _complete_current_step(state, step, deps=deps)
 
 
 def _node_consume_step_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
@@ -267,6 +288,7 @@ def _node_consume_step_tool_result(state: AgentGraphState, *, deps: Orchestratio
             state,
             step,
             RuntimeError("工具返回上下文与当前计划步骤不匹配。"),
+            deps=deps,
         )
     artifact = _latest_tool_artifact(state)
     tool_call_id = state.tool_tracking.pending_call_id
@@ -287,10 +309,12 @@ def _node_consume_step_tool_result(state: AgentGraphState, *, deps: Orchestratio
             state,
             step,
             RuntimeError(artifact.get("error") or f"Tool {step.tool_name} returned failure"),
+            deps=deps,
         )
 
     result_data = artifact.get("data") if artifact.get("data") is not None else {"ok": True}
     state.step_execution.results[step.step_id] = result_data
+    _apply_tool_result_to_state(step, result_data, state)
     if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
         state.pending_confirmation = {
             "step_id": step.step_id,
@@ -302,10 +326,16 @@ def _node_consume_step_tool_result(state: AgentGraphState, *, deps: Orchestratio
         }
     else:
         state.pending_confirmation = None
-    return _complete_current_step(state, step)
+    return _complete_current_step(state, step, deps=deps)
 
 
-def _fail_current_step(state: AgentGraphState, step: "ExecutionStep", exc: Exception) -> dict:
+def _fail_current_step(
+    state: AgentGraphState,
+    step: "ExecutionStep",
+    exc: Exception,
+    *,
+    deps: OrchestrationDeps | None = None,
+) -> dict:
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     err_msg = f"{type(exc).__name__}: {exc}"
     logger.warning("execution step %s failed: %s", step.step_id, err_msg)
@@ -321,6 +351,18 @@ def _fail_current_step(state: AgentGraphState, step: "ExecutionStep", exc: Excep
         "on_failure": step.on_failure,
         "retry_count": sd.retry_count,
     })
+    if deps is not None:
+        _persist_step_artifact(
+            state,
+            sd,
+            deps,
+            phase="error",
+            payload={
+                "step_id": step.step_id,
+                "error": err_msg,
+                "retry_count": sd.retry_count,
+            },
+        )
     result = {
         "step_execution": state.step_execution,
         "errors": state.errors,
@@ -330,7 +372,12 @@ def _fail_current_step(state: AgentGraphState, step: "ExecutionStep", exc: Excep
     return result
 
 
-def _complete_current_step(state: AgentGraphState, step: "ExecutionStep") -> dict:
+def _complete_current_step(
+    state: AgentGraphState,
+    step: "ExecutionStep",
+    *,
+    deps: OrchestrationDeps | None = None,
+) -> dict:
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     if state.pending_confirmation is not None:
         sd.status = "awaiting_confirmation"
@@ -350,6 +397,25 @@ def _complete_current_step(state: AgentGraphState, step: "ExecutionStep") -> dic
     sd.output_label = display_output.get("output_label", "")
     sd.output_title = display_output.get("output_title", "")
     sd.output_preview = display_output.get("output_preview", "")
+    if deps is not None:
+        _persist_step_artifact(
+            state,
+            sd,
+            deps,
+            phase="output",
+            payload={
+                "step_id": step.step_id,
+                "status": "completed",
+                "result": state.step_execution.results.get(step.step_id),
+                "answer": state.answer,
+                "citations": [
+                    citation.model_dump(mode="json")
+                    if hasattr(citation, "model_dump")
+                    else citation
+                    for citation in state.citations
+                ],
+            },
+        )
     completion_payload = {
         "step_id": step.step_id,
         "description": step.description,
@@ -365,6 +431,46 @@ def _complete_current_step(state: AgentGraphState, step: "ExecutionStep") -> dic
     }
     result.update(_pending_tool_updates(state))
     return result
+
+
+def _persist_step_artifact(
+    state: AgentGraphState,
+    sd: StepRunState,
+    deps: OrchestrationDeps,
+    *,
+    phase: str,
+    payload: dict,
+) -> None:
+    artifact_id = f"step:{state.run_id}:{sd.step_id}:{phase}"
+    try:
+        deps.workflow_artifact_store.put_artifact(
+            artifact_id=artifact_id,
+            run_id=state.run_id,
+            kind=f"step_{phase}",
+            payload=payload,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist step artifact run_id=%s step=%s phase=%s",
+            state.run_id,
+            sd.step_id,
+            phase,
+        )
+        return
+    if phase == "input":
+        sd.input_artifact_id = artifact_id
+    elif phase == "output":
+        sd.output_artifact_id = artifact_id
+    elif phase == "error":
+        sd.error_artifact_id = artifact_id
+    state.add_event(
+        "artifact_written",
+        {
+            "artifact_id": artifact_id,
+            "kind": f"step_{phase}",
+            "step_id": sd.step_id,
+        },
+    )
 
 
 def _step_display_output(step, result_data: object) -> dict[str, str]:
@@ -408,6 +514,19 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps
         if isinstance(result_data, dict) and result_data.get("answer"):
             _inject_draft_text_into_steps(
                 step.step_id, str(result_data["answer"]), state.user_id, state.step_execution.steps,
+            )
+
+    # Inject fetched/extracted text into dependent capture_text steps.
+    if step.action_type == "tool_call" and step.tool_name in {"capture_url", "capture_upload"}:
+        result_data = state.step_execution.results.get(step.step_id)
+        if isinstance(result_data, dict) and result_data.get("text"):
+            source_type = "link" if step.tool_name == "capture_url" else str(result_data.get("source_type") or "file")
+            _inject_capture_text_from_tool_result(
+                step.step_id,
+                str(result_data["text"]),
+                state.user_id,
+                source_type,
+                state.step_execution.steps,
             )
 
     logger.info(
@@ -634,11 +753,6 @@ def _node_finalize_step_execution(state: AgentGraphState, *, deps: Orchestration
 
     state.answer_completed = True
 
-    # Release the run-scoped ask context (evidence/context_pack) now that the
-    # run is done, so the store does not leak across runs.
-    if deps is not None:
-        deps.ask_run_context_store.clear(state.run_id)
-
     # Phase 5: derive execution_trace from structured events
     from ..orchestration_models import execution_trace_from_events
     state.execution_trace = execution_trace_from_events(state.events)
@@ -655,6 +769,105 @@ def _node_finalize_step_execution(state: AgentGraphState, *, deps: Orchestration
         "events": state.events,
         "updated_at": state.updated_at,
     }
+
+
+def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: AgentGraphState) -> None:
+    """Fill deterministic workflow tool arguments from the entry/checkpoint state."""
+    if step.action_type != "tool_call" or not step.tool_name:
+        return
+    entry_input = state.entry_input
+    metadata = dict(entry_input.metadata) if entry_input is not None else {}
+    tool_input = dict(step.tool_input or {})
+    route = state.router_decision.route if state.router_decision else ""
+
+    if step.tool_name == "capture_text":
+        tool_input.setdefault("user_id", state.user_id)
+        if route == "capture_link":
+            tool_input.setdefault("source_type", "link")
+        elif route == "capture_file":
+            tool_input.setdefault("source_type", "file")
+        else:
+            tool_input.setdefault("source_type", "text")
+        if "text" not in tool_input and route == "capture_text":
+            text = (entry_input.text if entry_input is not None else state.entry_text) or ""
+            if text.strip():
+                tool_input["text"] = text
+
+    elif step.tool_name == "capture_url":
+        if "url" not in tool_input:
+            from ._entry import _first_url
+
+            url = metadata.get("url") or _first_url(
+                (entry_input.text if entry_input is not None else state.entry_text) or ""
+            )
+            if url:
+                tool_input["url"] = str(url)
+
+    elif step.tool_name == "capture_upload":
+        file_path = str(metadata.get("file_path") or "")
+        if file_path:
+            tool_input.setdefault("file_path", file_path)
+            tool_input.setdefault(
+                "filename",
+                str(metadata.get("original_filename") or metadata.get("filename") or Path(file_path).name),
+            )
+            if "content_type" not in tool_input:
+                content_type = metadata.get("content_type")
+                if content_type:
+                    tool_input["content_type"] = str(content_type)
+
+    sd.tool_input = tool_input
+    step.tool_input = tool_input
+
+
+def _apply_tool_result_to_state(step: "ExecutionStep", result_data: object, state: AgentGraphState) -> None:
+    if step.tool_name != "capture_text" or not isinstance(result_data, dict):
+        return
+    route = state.router_decision.route if state.router_decision else ""
+    if route not in {"capture_text", "capture_link", "capture_file"}:
+        return
+    title = str(result_data.get("title") or "").strip()
+    if title:
+        state.answer = f"已收进知识库：{title}"
+
+
+def _inject_capture_text_from_tool_result(
+    source_step_id: str,
+    text: str,
+    user_id: str,
+    source_type: str,
+    steps: list,
+) -> None:
+    by_id = {s.step_id: s for s in steps}
+
+    def depends_on_source(step) -> bool:
+        pending = list(step.depends_on)
+        visited: set[str] = set()
+        while pending:
+            step_id = pending.pop()
+            if step_id == source_step_id:
+                return True
+            if step_id in visited:
+                continue
+            visited.add(step_id)
+            parent = by_id.get(step_id)
+            if parent is not None:
+                pending.extend(parent.depends_on)
+        return False
+
+    for s in steps:
+        if s.status != "planned":
+            continue
+        if (
+            depends_on_source(s)
+            and s.action_type == "tool_call"
+            and s.tool_name == "capture_text"
+        ):
+            if not s.tool_input:
+                s.tool_input = {}
+            s.tool_input["text"] = text
+            s.tool_input["user_id"] = user_id
+            s.tool_input["source_type"] = source_type
 
 # ---------------------------------------------------------------------------
 # Step dispatch
@@ -850,6 +1063,19 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
     else:
         question = step.description or "根据已有信息生成回答"
 
+    route = state.router_decision.route if state.router_decision else "unknown"
+    if route == "summarize_thread":
+        from ._entry import _node_summarize_branch
+
+        _node_summarize_branch(state, deps=deps)
+        return state.answer or ""
+
+    if route == "direct_answer":
+        from ._entry import _node_direct_answer_branch
+
+        _node_direct_answer_branch(state, deps=deps)
+        return state.answer or ""
+
     if state.router_decision and state.router_decision.route == "solidify_conversation":
         dialogue = _helpers._format_solidify_candidate_context(state.messages)
         if not dialogue:
@@ -890,6 +1116,7 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
     if ctx is not None:
         ask_service = deps.ask_service_factory()
         ask_service.run_generation_stage(ctx)
+        deps.ask_run_context_store.put(state.run_id, ctx)
         state.citations = list(ctx.selected_citations or [])
         state.matches = [
             {"id": m.id, "title": m.body.title, "summary": m.body.summary}
@@ -924,6 +1151,7 @@ def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) 
             try:
                 ask_service = deps.ask_service_factory()
                 ask_service.run_verification_stage(ctx)
+                deps.ask_run_context_store.put(state.run_id, ctx)
                 state.answer = ctx.answer
                 state.citations = list(ctx.selected_citations or [])
                 state.matches = [

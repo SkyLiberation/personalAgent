@@ -29,7 +29,6 @@ from ...core.evidence import (
 )
 from ...core.models import AgentState, Citation, KnowledgeNote
 from ...core.query_understanding import RetrievalFilters
-from ...graphiti.store import GraphAskResult
 from ..runtime_helpers import _merge_citations, _merge_notes
 from .evidence_ops import graph_matches_to_evidence
 

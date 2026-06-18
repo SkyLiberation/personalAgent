@@ -25,18 +25,17 @@ Web / Feishu / CLI
   -> EntryOrchestrator.execute_entry()
   -> LangGraph Entry Orchestration Graph
      -> EntryGraph: normalize_entry -> route_intent -> optional clarification interrupt/resume
-     -> branch workflow: capture / ask / summarize / direct_answer
-        or step workflow: project_workflow_steps -> validate_projected_steps -> step loop -> ReAct / ToolGateway / HITL
+     -> step workflow: project_workflow_steps -> validate_projected_steps -> step loop -> ReAct / ToolGateway / HITL
+        or fallback branch
      -> finalize_entry_result
   -> EntryResult / SSE / run snapshot
 ```
 
 关键边界：
 
-- Router 是所有 entry 的共同入口；步骤投影不是所有 entry 都会用。
+- Router 是所有 entry 的共同入口；除 `unknown` / fallback 外，业务 workflow 统一进入步骤投影。
 - `WorkflowStepProjector` 从 `WorkflowRegistry` 确定性投影 `ExecutionStep`，不是 LLM planner。
-- `ask / capture / summarize / direct_answer` 是普通 branch workflow，不生成伪 plan，只返回 `execution_trace`。
-- `delete_knowledge / solidify_conversation` 是 step projection workflow，会生成真实 `steps`，进入 checkpoint-safe 的步骤执行。
+- `capture / ask / summarize / delete_knowledge / solidify_conversation / direct_answer` 都是 step projection workflow，会生成真实 `steps`，进入 checkpoint-safe 的步骤执行。
 - ReAct 只嵌在某个 step 内，用于受控检索探索，不是全局自主 agent loop。
 - checkpoint 是短期执行现场和恢复机制，不是长期事实库；长期知识仍在 `knowledge_notes`。
 
@@ -64,11 +63,8 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 START
   -> entry_graph
   -> route by RouterDecision
-     -> capture_branch
-     -> ask_branch
-     -> summarize_branch
-     -> direct_answer_branch
      -> step_execution_graph
+     -> direct_answer_branch fallback
   -> finalize_entry_result
   -> END
 ```
@@ -97,20 +93,13 @@ thread_id = f"{user_id}:{session_id}"
 
 因此同一用户会话的多次 entry 会共享 checkpoint thread，而每次 entry 有独立 `run_id`。
 
-### Branch Workflows
+### Fallback Branch
 
-普通分支不投影成 `ExecutionStep`，只通过 `execution_trace` 和事件解释执行路径。
-
-| 分支 | 触发 intent | 行为 |
-| --- | --- | --- |
-| `capture_branch` | `capture_text / capture_link / capture_file` | 调用 capture 服务，进入结构化 chunk / local store / graph sync 链路 |
-| `ask_branch` | `ask` | 调用 `execute_ask()`，执行 query understanding、检索、ContextPack、回答和 verifier |
-| `summarize_branch` | `summarize_thread` | 路由确认后加载 thread messages，再调用总结模型 |
-| `direct_answer_branch` | `direct_answer / unknown / fallback` | 用小模型生成低风险短答或澄清提示 |
+普通分支现在主要承担 `unknown`、clarification、step projection 校验失败后的兜底路径。业务 workflow 的常规路径都先进入 `StepExecutionGraph`。
 
 ### StepExecutionGraph
 
-`delete_knowledge` 和 `solidify_conversation` 会进入步骤执行图，执行由固定 `WorkflowSpec` 投影出的 steps：
+业务 workflow 会进入步骤执行图，执行由固定 `WorkflowSpec` 投影出的 steps：
 
 ```text
 START
@@ -132,7 +121,7 @@ START
 - `prepare_step_execution`：拓扑排序，初始化 `StepExecutionState`。
 - `select_next_step`：选择第一个 `planned` step，标记为 `running`。
 - `execute_step`：按 `action_type` 分发。
-- `handle_step_success`：注入动态依赖结果，例如把 resolve 得到的 `note_id` 注入 `delete_note`，把 solidify 草稿注入 `capture_text`。
+- `handle_step_success`：注入动态依赖结果，例如把 resolve 得到的 `note_id` 注入 `delete_note`，把 solidify 草稿或 URL/file 提取正文注入 `capture_text`。
 - `handle_step_failure`：按 `retry / skip / abort` 处理，可调用 `Replanner` 追加替代步骤。
 - `finalize_step_execution`：生成默认回答、派生 `execution_trace`、标记 `answer_completed=True`。
 
@@ -218,9 +207,11 @@ event_id / run_id / thread_id / type / timestamp / payload
 默认控制语义：
 
 - `ask`：需要检索，候选工具是 `graph_search / web_search`。
+- `capture_text / capture_link / capture_file`：需要 step projection，候选工具是 capture 系列工具。
+- `summarize_thread`：需要 step projection，通过 compose step 加载会话消息并总结。
 - `delete_knowledge`：需要工具、检索、step projection，高风险，需要确认。
 - `solidify_conversation`：需要 step projection，低风险写入。
-- `direct_answer`：不检索、不调用工具。
+- `direct_answer`：需要 step projection，不检索、不调用工具。
 
 ## Workflow Step Projection
 
@@ -233,14 +224,18 @@ WorkflowStepProjector.plan(intent)
   -> list[ExecutionStep]
 ```
 
-只有以下 workflow 会投影成步骤：
+当前以下 workflow 会投影成步骤：
 
 | Workflow | Steps | 说明 |
 | --- | --- | --- |
+| `capture_text` | `tool_call(capture_text)` | 将入口文本写入长期知识 |
+| `capture_link` | `tool_call(capture_url) -> tool_call(capture_text)` | 抓取 URL 正文后写入长期知识 |
+| `capture_file` | `tool_call(capture_upload) -> tool_call(capture_text)` | 解析上传文件后写入长期知识 |
+| `ask` | `retrieve -> compose -> verify` | 检索、生成、校验三段式 RAG |
+| `summarize_thread` | `compose` | 加载 thread messages 并总结 |
 | [`delete_knowledge`](delete-knowledge-workflow.md) | `retrieve -> resolve -> tool_call(delete_note) -> compose` | 高风险删除，必须候选解析 + HITL |
 | [`solidify_conversation`](solidify-conversation-workflow.md) | `compose -> tool_call(capture_text)` | 从 checkpoint 对话生成草稿，再写入长期知识 |
-
-普通 `ask / capture / summarize / direct_answer` 也是 workflow，但不投影成 `ExecutionStep`。
+| `direct_answer` | `compose` | 低风险直接回复 |
 
 `ExecutionStep` 是 runtime projection，关键字段包括：
 
@@ -362,13 +357,11 @@ checkpoint 保存的是完整 graph 现场：`thread_id`、`run_id`、`step_exec
 EntryInput("xxx 是什么？")
   -> entry_graph
   -> route_intent: ask
-  -> ask_branch
-  -> execute_ask()
-     -> query understanding
-     -> graph / structural / local / web retrieval
-     -> EvidenceItem / ContextPack
-     -> answer generation
-     -> verifier / retry
+  -> project_workflow_steps: ask-retrieve -> ask-compose -> ask-verify
+  -> step_execution_graph
+     -> ask-retrieve: query understanding / retrieval / ContextPack artifact
+     -> ask-compose: answer generation
+     -> ask-verify: verifier / retry / web fallback
   -> finalize_entry_result
 ```
 

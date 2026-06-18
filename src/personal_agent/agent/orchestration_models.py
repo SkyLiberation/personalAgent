@@ -61,6 +61,9 @@ AgentEventType = Literal[
     "step_failed",
     "replan_attempted",
     "replan_completed",
+    "workflow_forked",
+    "workflow_replayed",
+    "artifact_written",
     "run_completed",
     "run_failed",
 ]
@@ -99,6 +102,8 @@ class AgentRunSnapshot(BaseModel):
     session_id: str
     status: AgentRunStatus = AgentRunStatus.pending
     intent: EntryIntent = "unknown"
+    workflow_id: str = ""
+    workflow_version: str = ""
     entry_text: str = ""
     steps: list[dict[str, Any]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
@@ -146,6 +151,9 @@ class StepRunState(BaseModel):
     workflow_version: str = ""
     workflow_step_id: str = ""
     projection_kind: str = "workflow_step"
+    input_artifact_id: str = ""
+    output_artifact_id: str = ""
+    error_artifact_id: str = ""
     output_label: str = ""
     output_title: str = ""
     output_preview: str = ""
@@ -282,6 +290,8 @@ class AgentGraphState(BaseModel):
 
     # Routing
     router_decision: RouterDecision | None = None
+    workflow_id: str = ""
+    workflow_version: str = ""
 
     # Sub-models (grouped private state)
     react: ReactSubState = Field(default_factory=ReactSubState)
@@ -350,6 +360,8 @@ class AgentGraphState(BaseModel):
             session_id=self.session_id,
             status=resolved_status,
             intent=self.router_decision.route if self.router_decision else "unknown",
+            workflow_id=self.workflow_id,
+            workflow_version=self.workflow_version,
             entry_text=self.entry_text,
             steps=[s.model_dump(mode="json") for s in self.step_execution.steps],
             execution_trace=self.execution_trace,

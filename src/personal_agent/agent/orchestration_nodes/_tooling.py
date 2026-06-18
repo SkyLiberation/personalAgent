@@ -34,6 +34,11 @@ def _tool_result_event_payload(
         "evidence": artifact.get("evidence", []),
     }
     payload["context"] = context
+    data = artifact.get("data")
+    if isinstance(data, dict):
+        for key in ("note_id", "title", "summary", "content_preview", "url", "filename", "source_type"):
+            if key in data:
+                payload[key] = data[key]
     spec = _lookup_tool_spec(deps, state.tool_tracking.pending_tool_name)
     if spec is not None:
         from ...tools import tool_invocation_event
