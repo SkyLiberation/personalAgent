@@ -13,6 +13,8 @@ class AskPipelineComponents:
     reranker: EvidenceReranker
     context_max_items: int
     context_char_budget: int
+    context_mmr_lambda: float
+    context_compress_max_sentences: int
 
 
 class AskPipelineFactory:
@@ -31,4 +33,6 @@ class AskPipelineFactory:
             reranker=create_evidence_reranker(self.settings),
             context_max_items=self.settings.ask.context_max_items,
             context_char_budget=self.settings.ask.context_char_budget,
+            context_mmr_lambda=self.settings.ask.context_mmr_lambda,
+            context_compress_max_sentences=self.settings.ask.context_compress_max_sentences,
         )

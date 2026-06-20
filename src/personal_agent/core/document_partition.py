@@ -151,6 +151,7 @@ def _draft_from_chunk(chunk: Any, *, index: int) -> ChunkDraft:
     categories = [_category(element) for element in orig_elements] or [_category(chunk)]
     page_number = _page_number(metadata, orig_elements)
     title_path = _title_path(metadata, orig_elements)
+    coordinates = _coordinates(metadata, orig_elements)
     source_span = _source_span(index, page_number, title_path, element_ids, categories)
     title = _chunk_title(text, title_path, metadata)
     draft_metadata = {
@@ -162,6 +163,8 @@ def _draft_from_chunk(chunk: Any, *, index: int) -> ChunkDraft:
     }
     if page_number is not None:
         draft_metadata["page_number"] = page_number
+    if coordinates is not None:
+        draft_metadata["coordinates"] = coordinates
     return ChunkDraft(
         title=title,
         content=text,
@@ -169,6 +172,7 @@ def _draft_from_chunk(chunk: Any, *, index: int) -> ChunkDraft:
         title_path=title_path,
         page_number=page_number,
         element_ids=element_ids,
+        coordinates=coordinates,
         category=_category(chunk),
         metadata=_jsonable(draft_metadata),
     )
@@ -218,6 +222,34 @@ def _page_number(metadata: dict[str, Any], elements: list[Any]) -> int | None:
         element_value = _metadata_dict(element).get("page_number")
         if isinstance(element_value, int):
             return element_value
+    return None
+
+
+def _coordinates(metadata: dict[str, Any], elements: list[Any]) -> dict[str, Any] | None:
+    """First available bounding box across the chunk's elements.
+
+    Unstructured exposes ``metadata.coordinates`` with ``points`` and a
+    ``system`` for layout-aware sources (PDF/image). Kept so a citation can
+    point at the exact region of the source page, not just the page number.
+    """
+    def _extract(meta: dict[str, Any]) -> dict[str, Any] | None:
+        coords = meta.get("coordinates")
+        if isinstance(coords, dict) and coords.get("points"):
+            return {
+                "points": _jsonable(coords.get("points")),
+                "system": coords.get("system"),
+                "layout_width": coords.get("layout_width"),
+                "layout_height": coords.get("layout_height"),
+            }
+        return None
+
+    direct = _extract(metadata)
+    if direct is not None:
+        return direct
+    for element in elements:
+        found = _extract(_metadata_dict(element))
+        if found is not None:
+            return found
     return None
 
 

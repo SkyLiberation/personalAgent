@@ -204,7 +204,13 @@ class MemoryFacade:
         limit: int = 8,
         filters: RetrievalFilters | None = None,
     ) -> list[KnowledgeNote]:
-        return self.local.find_similar_notes(user_id, query, limit=limit, filters=filters)
+        # Over-fetch then drop non-retrievable chunks (noise: headers, footers,
+        # page numbers) so the quality gate set at capture time keeps them out
+        # of retrieval units while leaving parent notes (retrievable=True) and
+        # their evidence intact.
+        raw = self.local.find_similar_notes(user_id, query, limit=limit * 2, filters=filters)
+        retrievable = [note for note in raw if note.chunk.retrievable]
+        return retrievable[:limit]
 
     def find_similar_notes(
         self,

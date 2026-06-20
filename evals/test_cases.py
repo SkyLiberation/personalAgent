@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.models import Citation, KnowledgeNote, NoteBody
 
 
 @dataclass
@@ -29,9 +29,7 @@ class AskEvalCase:
 def _note(note_id: str, title: str, content: str, summary: str = "") -> KnowledgeNote:
     return KnowledgeNote(
         id=note_id,
-        title=title,
-        content=content,
-        summary=summary or title,
+        body=NoteBody(title=title, content=content, summary=summary or title),
     )
 
 

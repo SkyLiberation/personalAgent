@@ -83,40 +83,84 @@ def select_ranked_evidence(
     *,
     max_items: int = 12,
     char_budget: int = 5000,
+    mmr_lambda: float = 0.7,
 ) -> ContextPack:
-    """Select ranked evidence with diversity and prompt budget constraints."""
+    """Select ranked evidence under MMR diversity + prompt budget constraints.
+
+    Greedy-by-score selection lets several near-identical snippets (same opinion
+    restated by different sources) fill the budget. MMR instead picks, at each
+    step, the candidate maximizing ``λ·relevance − (1−λ)·max_similarity`` against
+    what's already selected, so the pack covers more distinct points within the
+    same budget. ``mmr_lambda`` leans toward relevance (0.7) by default; lower
+    values diversify harder. Similarity is lexical Jaccard over content terms —
+    cheap, deterministic, no embeddings.
+    """
     ranked = [
         item.model_copy(update={"selected_for_prompt": False})
         for item in ranked
     ]
 
-    selected: list[RankedEvidence] = []
+    # Hard filter: stale versions never enter the pack regardless of score.
+    candidates: list[RankedEvidence] = []
     dropped: list[RankedEvidence] = []
-    used_chars = 0
-    seen_sources: set[tuple[str, str]] = set()
-
     for item in ranked:
         version_status = str(item.evidence.metadata.get("version_status") or "current")
         superseded = bool(item.evidence.metadata.get("superseded_by_note_id"))
         if item.evidence.source_type in {"note", "chunk"} and (
             version_status in {"superseded", "deprecated"} or superseded
         ):
-            item.selected_for_prompt = False
             dropped.append(item)
-            continue
-        diversity_key = (item.evidence.source_type, item.evidence.source_id or item.evidence.url or item.evidence.title)
-        duplicate_source = diversity_key in seen_sources and item.evidence.source_type in {"note", "chunk", "web", "episode"}
-        would_fit = used_chars + item.estimated_chars <= char_budget
-        must_select_first = not selected
-        if len(selected) < max_items and (would_fit or must_select_first) and not duplicate_source:
-            item.selected_for_prompt = True
-            selected.append(item)
-            used_chars += item.estimated_chars
-            if diversity_key[1]:
-                seen_sources.add(diversity_key)
         else:
-            item.selected_for_prompt = False
-            dropped.append(item)
+            candidates.append(item)
+
+    # Precompute content term sets once for the similarity matrix.
+    term_cache: dict[str, set[str]] = {}
+
+    def _content_terms(item: RankedEvidence) -> set[str]:
+        key = item.evidence.evidence_id
+        cached = term_cache.get(key)
+        if cached is None:
+            ev = item.evidence
+            text = " ".join(part for part in [ev.title, ev.fact or "", ev.snippet] if part)
+            cached = _terms(text)
+            term_cache[key] = cached
+        return cached
+
+    max_score = max((c.score for c in candidates), default=0.0) or 1.0
+    selected: list[RankedEvidence] = []
+    used_chars = 0
+    remaining = list(candidates)
+
+    while remaining and len(selected) < max_items:
+        best: RankedEvidence | None = None
+        best_mmr = float("-inf")
+        for cand in remaining:
+            would_fit = used_chars + cand.estimated_chars <= char_budget
+            if selected and not would_fit:
+                continue
+            relevance = cand.score / max_score
+            if selected:
+                cand_terms = _content_terms(cand)
+                similarity = max(
+                    _jaccard(cand_terms, _content_terms(sel)) for sel in selected
+                )
+            else:
+                similarity = 0.0
+            mmr = mmr_lambda * relevance - (1.0 - mmr_lambda) * similarity
+            if mmr > best_mmr:
+                best_mmr = mmr
+                best = cand
+
+        if best is None:
+            break
+        best.selected_for_prompt = True
+        selected.append(best)
+        used_chars += best.estimated_chars
+        remaining.remove(best)
+
+    for item in remaining:
+        item.selected_for_prompt = False
+        dropped.append(item)
 
     return ContextPack(
         question=question,
@@ -127,21 +171,160 @@ def select_ranked_evidence(
     )
 
 
-def _dedupe_evidence_items(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
-    deduped: list[EvidenceItem] = []
-    seen: set[tuple[str, str, str, str]] = set()
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    intersection = len(a & b)
+    if not intersection:
+        return 0.0
+    return intersection / len(a | b)
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split into sentences on CJK + ASCII terminators and newlines."""
+    normalized = text.replace("\r", "\n")
+    parts: list[str] = []
+    current = ""
+    for char in normalized:
+        current += char
+        if char in {"。", "！", "？", ".", "!", "?", "\n"}:
+            stripped = current.strip()
+            if stripped:
+                parts.append(stripped)
+            current = ""
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
+def compress_evidence(
+    question: str,
+    evidence: list[EvidenceItem],
+    *,
+    max_sentences: int = 3,
+    min_chars: int = 240,
+) -> list[EvidenceItem]:
+    """Extractive sentence-level compression of evidence snippets.
+
+    For each long ``note``/``chunk`` snippet, keep only the top sentences by
+    question-term overlap (in original order, so reading flow and citation
+    anchors survive). Extractive — never rewrites text, so no hallucination —
+    and skips short snippets and atomic facts (``graph_fact``/``web``) where
+    there is nothing to trim. Run before rank/select so the freed character
+    budget admits more *distinct* evidence rather than fewer long blocks.
+    """
+    q_terms = _terms(question)
+    compressed: list[EvidenceItem] = []
     for item in evidence:
-        key = (
-            item.source_type,
-            item.source_id or item.url or "",
-            (item.fact or "").strip(),
-            (item.snippet or "").strip()[:180],
-        )
-        if key in seen:
+        snippet = item.snippet or ""
+        if item.source_type not in {"note", "chunk"} or len(snippet) <= min_chars:
+            compressed.append(item)
             continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
+        sentences = _split_sentences(snippet)
+        if len(sentences) <= max_sentences:
+            compressed.append(item)
+            continue
+        scored = [
+            (len(_terms(sentence) & q_terms), index, sentence)
+            for index, sentence in enumerate(sentences)
+        ]
+        # Keep the highest-overlap sentences, then restore original order.
+        top = sorted(scored, key=lambda triple: (-triple[0], triple[1]))[:max_sentences]
+        if not any(score > 0 for score, _, _ in top):
+            compressed.append(item)
+            continue
+        kept = [sentence for _, _, sentence in sorted(top, key=lambda triple: triple[1])]
+        new_snippet = " ".join(kept)
+        if len(new_snippet) >= len(snippet):
+            compressed.append(item)
+            continue
+        meta = dict(item.metadata)
+        meta["compressed_from_chars"] = len(snippet)
+        compressed.append(item.model_copy(update={"snippet": new_snippet, "metadata": meta}))
+    return compressed
+
+
+def canonical_evidence_key(item: EvidenceItem) -> tuple[str, str]:
+    """Identity of the *thing* an evidence item points at.
+
+    Dedup must key on the underlying entity, not on volatile fields like
+    ``source_type`` / ``snippet`` / ``score``. The same note reached via the
+    graph path (``retrieved_by="graphiti"``, score floored to 0.55) and via the
+    local path is one entity; keying on entity identity collapses them into a
+    single consensus-bearing item instead of two near-duplicate candidates.
+    """
+    if item.source_type in {"note", "chunk"}:
+        return ("note_entity", item.source_id)
+    if item.source_type == "graph_fact":
+        return ("fact", item.source_id or (item.fact or "").strip())
+    if item.source_type == "web":
+        return ("web", (item.url or item.source_id or "").strip())
+    return (item.source_type, item.source_id or (item.snippet or "").strip()[:180])
+
+
+def _merge_evidence_group(items: list[EvidenceItem]) -> EvidenceItem:
+    """Collapse same-entity items into one, keeping the highest-scored as the
+    representative and recording which retrieval paths reached it (consensus).
+
+    ``source_ranks`` from every member is merged (min rank per source) so the
+    downstream RRF fusion can reward an entity that ranked highly across several
+    independent retrieval paths instead of treating the overlap as waste."""
+    merged_ranks: dict[str, int] = {}
+    for it in items:
+        for source, rank in (it.metadata.get("source_ranks") or {}).items():
+            if source not in merged_ranks or rank < merged_ranks[source]:
+                merged_ranks[source] = rank
+    if len(items) == 1 and not merged_ranks:
+        return items[0]
+    best = max(items, key=lambda it: it.score)
+    retrieved_by_all: list[str] = []
+    for it in items:
+        rb = it.metadata.get("retrieved_by")
+        if rb and rb not in retrieved_by_all:
+            retrieved_by_all.append(rb)
+    merged_metadata = dict(best.metadata)
+    if retrieved_by_all:
+        merged_metadata["retrieved_by_all"] = retrieved_by_all
+    if merged_ranks:
+        merged_metadata["source_ranks"] = merged_ranks
+        merged_metadata["consensus_count"] = len(merged_ranks)
+    else:
+        merged_metadata["consensus_count"] = len(items)
+    return best.model_copy(update={"metadata": merged_metadata})
+
+
+def apply_rrf_fusion(evidence: list[EvidenceItem], *, k: int = 60) -> list[EvidenceItem]:
+    """Reciprocal Rank Fusion over per-source ranks recorded during retrieval.
+
+    Each item carries ``metadata["source_ranks"]`` = {source: rank} populated
+    when the coordinator absorbed each source's ranked contribution. RRF score
+    is ``Σ 1/(k + rank)`` over those sources: an item ranked highly by several
+    independent paths sums several terms and rises, so multi-path overlap (e.g.
+    a note hit by both graph and local recall) becomes a consensus signal rather
+    than duplicate candidates. Rank-based, so incomparable per-source scores
+    (graph 0.55 floor vs local cosine) never need to be normalized.
+
+    Mutates and returns ``evidence`` in place; sets ``metadata["fusion_score"]``.
+    """
+    for item in evidence:
+        ranks = item.metadata.get("source_ranks") or {}
+        if not ranks:
+            continue
+        rrf = sum(1.0 / (k + int(rank)) for rank in ranks.values())
+        item.metadata["fusion_score"] = round(rrf, 6)
+    return evidence
+
+
+def _dedupe_evidence_items(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
+    groups: dict[tuple[str, str], list[EvidenceItem]] = {}
+    order: list[tuple[str, str]] = []
+    for item in evidence:
+        key = canonical_evidence_key(item)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(item)
+    return [_merge_evidence_group(groups[key]) for key in order]
 
 
 def _rank_evidence_item(question: str, item: EvidenceItem) -> RankedEvidence:
@@ -202,6 +385,19 @@ def _rank_evidence_item(question: str, item: EvidenceItem) -> RankedEvidence:
     if item.metadata.get("published_at"):
         score += 0.04
         reasons.append("freshness_metadata")
+
+    # RRF consensus: an entity ranked highly by several independent retrieval
+    # paths sums several 1/(k+rank) terms. Scaled into the same band as the
+    # other heuristic signals and capped so consensus informs but never
+    # dominates lexical/version relevance.
+    fusion_score = item.metadata.get("fusion_score")
+    if isinstance(fusion_score, int | float) and fusion_score > 0:
+        boost = min(float(fusion_score) * 3.0, 0.15)
+        score += boost
+        consensus = item.metadata.get("consensus_count")
+        reasons.append(
+            f"rrf_consensus={consensus}" if consensus else f"rrf={float(fusion_score):.4f}"
+        )
 
     estimated_chars = min(max(len(content), 80), 900)
     return RankedEvidence(

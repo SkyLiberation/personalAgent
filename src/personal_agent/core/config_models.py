@@ -210,6 +210,16 @@ class PlannerConfig(_StrictBase):
 class AskConfig(_StrictBase):
     graph_provider: str = "graphiti"
     reranker: str = "heuristic"
+    # Answer grounding verifier. "heuristic" = lexical overlap + negation flip
+    # (default, unchanged behavior); "entailment" = three-way per-claim
+    # entailment judge (entailed/contradicted/not_enough_info). See
+    # agent/verifier.create_answer_verifier and agent/entailment.py.
+    verifier: str = "heuristic"
+    # Contrastive retrieval: when verification flags contradicted / unsupported
+    # claims, actively recall opposing evidence and re-verify (reactive hook in
+    # the verification stage). Off by default — it adds a retrieval round-trip.
+    # See agent/ask/retrievers.ContrastiveRetriever.
+    contrastive_retrieval: bool = False
     candidate_enricher: str = "parent_child"
     parent_child_top_n: int = 3
     parent_child_min_overlap: int = 2
@@ -218,6 +228,13 @@ class AskConfig(_StrictBase):
     graph_note_evidence_min_overlap: int = 2
     context_max_items: int = 12
     context_char_budget: int = 5000
+    # MMR diversity weight for prompt selection: 1.0 = pure relevance (greedy),
+    # lower diversifies harder against near-duplicate content. See
+    # core/evidence.select_ranked_evidence.
+    context_mmr_lambda: float = 0.7
+    # Extractive sentence-level compression of long note/chunk snippets before
+    # selection. 0 disables; otherwise the max sentences kept per snippet.
+    context_compress_max_sentences: int = 3
     llm_rerank_top_n: int = 20
     llm_rerank_timeout_seconds: float = 20.0
     llm_rerank_model: str | None = None

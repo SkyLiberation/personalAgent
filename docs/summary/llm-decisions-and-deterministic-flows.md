@@ -1,0 +1,327 @@
+# 当前工程的 LLM 决策与确定性流程总结
+
+> 依据当前工作区源码整理，更新时间：2026-06-20。
+>
+> 本文描述的是“实际代码边界”，包括默认启用能力、配置后启用能力，以及保留但未接入生产主链路的能力。
+
+## 1. 总体结论
+
+当前工程不是“所有流程都交给 LLM”的自主 Agent，而是一个 **workflow-first、LLM 处理语义不确定性、代码控制执行与副作用** 的系统。
+
+可以概括为：
+
+> LLM 负责理解、生成候选和处理开放语义；确定性代码负责授权、编排、校验、执行、持久化与审计。
+
+整体控制关系如下：
+
+```text
+用户输入
+  ↓
+确定性入口治理（鉴权、限流、身份绑定、输入规范化）
+  ↓
+LLM 意图识别
+  ↓
+确定性默认值合并、Workflow 选择、步骤投影与结构校验
+  ↓
+┌──────────────────────────────┐
+│ LLM 语义节点                 │
+│ 查询理解 / 生成 / 摘要 /     │
+│ 候选解析 / 受限 ReAct        │
+└──────────────────────────────┘
+  ↓ 只产生结构化结果或工具提议
+确定性策略、工具网关、HITL、幂等与参数校验
+  ↓
+真实工具 / 文件解析 / 检索 / 数据库 / 图谱
+  ↓
+确定性验证、日志、审计、checkpoint 与结构化输出
+```
+
+关键边界：
+
+- LLM 不能修改 Workflow 真源。
+- LLM 返回的风险等级、工具需求等控制字段不能直接获得最终控制权。
+- ReAct 只能调用步骤允许列表内的工具，并被禁止执行长期写入、删除、外部发送等高风险副作用。
+- 删除必须经过用户确认，确认后的真实执行还必须通过权限和幂等校验。
+- 文件解析、分块、入库、日志、审计、权限、状态迁移均不依赖 LLM 自由决策。
+
+## 2. LLM 决策点清单
+
+| LLM 决策点 | 作用 | 输出边界 | 失败或降级策略 | 当前状态 |
+| --- | --- | --- | --- | --- |
+| 入口意图识别 | 将输入分类为 capture、ask、summary、delete、solidify、direct answer 等 | `RouterDecision` JSON Schema | 模型不可用时返回 `unknown` 和明确错误，不用关键词猜测 | 默认主链路 |
+| Ask 查询理解 | 判断新鲜度、个人记忆、图谱、多跳/子查询、过滤条件和回答策略 | `QueryUnderstanding` 结构化结果，再由代码生成 `RetrievalPlan` | 回退到默认检索计划和启发式 filters | 默认主链路 |
+| Ask 答案生成 | 基于选中的 `ContextPack` 生成回答 | 只能消费已组装证据，不直接访问存储或工具 | 空结果或失败时走固定兜底 | 默认主链路 |
+| Ask 纠错生成 | 根据验证问题和证据重写答案 | 只改写答案，不改验证规则或引用真源 | 达到重试上限后停止 | 默认主链路 |
+| Direct Answer | 对无需检索的低风险输入生成简短回复 | 无工具、无长期副作用 | 模型不可用时返回明确不可用提示 | 默认主链路 |
+| 显式会话总结 | 将线程消息总结为主题、结论和待办 | 只生成文本 | 无内容或失败时返回固定提示 | 默认主链路 |
+| 滚动上下文压缩 | 将超出窗口的旧对话压缩成结构化会话线索 | 摘要只辅助指代和目标理解，不作为事实证据 | 失败时直接截断，不注入误导摘要 | 按阈值触发 |
+| 删除目标解析 | 从候选笔记中判断唯一目标 | 严格 JSON，仅能选择已有候选 `note_id` | 无候选或歧义时澄清/人工选择 | 删除 Workflow |
+| 对话固化草稿 | 从已有会话选择内容，生成知识草稿 | 严格结构化字段；正文随后由代码注入 `capture_text` | 无草稿时终止，不写库 | 固化 Workflow |
+| 受限 ReAct | 在单个步骤内判断调用哪个允许工具，或结束当前步骤 | 严格工具 Schema；有轮数和工具白名单 | 解析失败重试，超限或失败进入步骤恢复 | 局部启用 |
+| 失败后重规划 | 在步骤失败后生成剩余步骤替代方案 | 不能重跑已完成步骤，结果再次经过步骤校验 | 可回退到确定性 salvage/原失败策略 | 异常路径 |
+| 图谱实体关系抽取 | Graphiti 在写入图谱时抽取实体、关系、事实和摘要 | Graphiti 数据模型及兼容层校正 | 图谱失败不阻断本地笔记入库，记录同步失败 | 图谱配置后启用 |
+| Evidence LLM rerank | 对候选证据 ID 排序 | 只能返回已有 `evidence_id`，后续仍做预算和 MMR 选择 | 自动回退启发式排序 | 可配置，默认关闭 |
+
+主要代码：
+
+- 入口路由：[router.py](../../src/personal_agent/agent/router.py)
+- 查询理解：[query_planner.py](../../src/personal_agent/agent/query_planner.py)
+- 生成与总结：[runtime_llm.py](../../src/personal_agent/agent/runtime_llm.py)、[thread_summarizer.py](../../src/personal_agent/agent/thread_summarizer.py)
+- 结构化语义节点与 ReAct：[orchestration_nodes/_helpers.py](../../src/personal_agent/agent/orchestration_nodes/_helpers.py)、[orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py)
+- 重规划：[replanner.py](../../src/personal_agent/agent/replanner.py)
+- 图谱 LLM：[graphiti/llm_strategies.py](../../src/personal_agent/graphiti/llm_strategies.py)
+- 可选 LLM reranker：[core/rerankers.py](../../src/personal_agent/core/rerankers.py)
+
+## 3. 确定性流程清单
+
+| 确定性流程 | 当前职责 |
+| --- | --- |
+| API 鉴权与身份绑定 | 校验 API Key，将请求绑定到 `user_id`，区分管理员权限 |
+| 限流 | 按 API Key 或工具调用主体执行固定窗口/速率规则 |
+| 输入规范化 | 统一 Entry、用户、会话、来源和 metadata |
+| Workflow 注册与选择 | 根据已分类意图选择固定 `WorkflowSpec` |
+| 步骤投影 | 将 Workflow 节点确定性转换为 `ExecutionStep` |
+| Workflow / Step 校验 | 校验步骤 ID、依赖、环、工具、风险、确认策略及意图约束 |
+| LangGraph 编排 | 按固定边和条件函数推进 route、step、ReAct、HITL、finalize |
+| 文件与网页解析 | URL 校验、HTML 正文提取、PDF 文本提取、上传类型处理 |
+| 文档分区与分块 | 使用 Unstructured 按结构分区并按标题边界分块 |
+| Chunk 质量判断 | 默认以启发式规则判断噪声、密度和可检索性 |
+| 本地 Capture | 指纹去重、Note/Chunk 构造、标签/摘要截断、关联、复习卡创建、入库 |
+| 检索执行 | 图谱、本地、episode、reflection、web 等 Retriever 的调用与并发调度 |
+| Evidence 归一与去重 | 不同来源统一成 `EvidenceItem`，执行去重、RRF、压缩和预算选择 |
+| 默认 rerank | 启发式打分与 MMR 多样性选择 |
+| 默认回答验证 | 引用存在性、证据数量、关键结论词项覆盖、否定/数字/极性冲突检查 |
+| Policy Engine | allow / deny / require confirmation / escalation 的固定规则判断 |
+| Tool Gateway | 工具存在性、允许列表、权限域、URL 域名、超时、重试、速率、错误分类 |
+| HITL | 使用 LangGraph interrupt/resume 暂停并接收 confirm/reject/clarify |
+| 幂等 | 高风险确认动作要求 `idempotency_key`，执行前原子预留，成功后提交 |
+| 数据持久化 | Postgres note、chunk、review、history、workflow artifact、event、audit 等读写 |
+| Checkpoint | 保存线程消息、步骤状态、待确认状态及恢复现场 |
+| 日志与审计 | 记录 LLM trace、工具调用、策略决策、验证结果、性能和错误 |
+| 审计脱敏与查询 | 按普通用户/管理员权限返回脱敏或可揭示数据 |
+| Worker Queue | 图谱同步等任务的幂等入队、租约、重试和状态维护 |
+
+主要代码：
+
+- Workflow 真源：[workflow.py](../../src/personal_agent/agent/workflow.py)
+- Workflow 校验：[workflow_validator.py](../../src/personal_agent/agent/workflow_validator.py)
+- 步骤投影与校验：[step_projector.py](../../src/personal_agent/agent/step_projector.py)、[step_projection_validator.py](../../src/personal_agent/agent/step_projection_validator.py)
+- 总编排：[orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)
+- 策略与工具边界：[policy/engine.py](../../src/personal_agent/policy/engine.py)、[tools/gateway.py](../../src/personal_agent/tools/gateway.py)
+- Capture：[ingestion_pipeline.py](../../src/personal_agent/agent/ingestion_pipeline.py)、[nodes.py](../../src/personal_agent/agent/nodes.py)
+- 文档解析：[document_partition.py](../../src/personal_agent/core/document_partition.py)、[capture/utils.py](../../src/personal_agent/capture/utils.py)
+- Ask 分阶段执行：[ask/stages.py](../../src/personal_agent/agent/ask/stages.py)、[ask/retrievers.py](../../src/personal_agent/agent/ask/retrievers.py)
+- 验证：[verifier.py](../../src/personal_agent/agent/verifier.py)、[entailment.py](../../src/personal_agent/agent/entailment.py)
+- Web 治理：[web/auth.py](../../src/personal_agent/web/auth.py)、[web/routes/audit.py](../../src/personal_agent/web/routes/audit.py)
+
+## 4. 各业务流程的边界
+
+### 4.1 Entry 路由
+
+```text
+请求
+→ [代码] 鉴权、限流、身份绑定、输入规范化
+→ [LLM] 意图分类与澄清信息生成
+→ [代码] 合并意图默认控制字段
+→ [代码] 选择固定 Workflow
+→ [代码] 投影并校验步骤
+→ [代码] 进入固定 LangGraph 分支
+```
+
+重要约束：
+
+- 文件来源直接确定为 `capture_file`，不需要 LLM 猜测。
+- `requires_tools`、`requires_retrieval`、`requires_step_projection` 和候选工具由代码根据意图覆盖。
+- 删除风险始终由代码保持为 high，不能被 LLM 降级。
+- `solidify_conversation` 不会因为 LLM 输出而被强制增加二次确认。
+
+### 4.2 Capture
+
+本地入库主链路是确定性的：
+
+```text
+来源校验/正文解析
+→ source fingerprint 去重
+→ 构造 parent note
+→ Unstructured 分区与 chunk
+→ chunk 质量评分
+→ 摘要/标签启发式生成
+→ 相似笔记关联
+→ 写入 note/chunk
+→ 创建 review card
+```
+
+LLM 只出现在可选的图谱增强阶段：
+
+```text
+本地入库成功
+→ Graphiti LLM 抽取实体、关系和事实
+→ 写入 Neo4j
+→ 回写 graph refs 与同步状态
+```
+
+因此，图谱 LLM 失败不会回滚已经成功的本地知识入库，只会将图谱同步标记为失败或待重试。
+
+当前 `extract/PreExtractService` 虽然包含模型抽取能力，但源码已明确说明它没有接入当前生产 Capture 主链路，仅保留给实验和未来复用。
+
+### 4.3 Ask
+
+Ask 是典型的混合流程：
+
+```text
+[LLM] Query Understanding
+→ [代码] 推导 RetrievalPlan
+→ [代码] 并行/串行执行 graph、local、episode、reflection、web 检索
+→ [代码] Evidence 归一、去重、RRF、压缩
+→ [代码或可选 LLM] rerank
+→ [代码] ContextPack 字符预算与 MMR 选择
+→ [LLM] 基于入选证据生成答案
+→ [代码] 引用和 claim grounding 验证
+→ [代码] 决定是否网络兜底、反证检索或重试
+→ [LLM] 必要时按验证反馈重写
+→ [代码] 最终标注、引用和历史持久化
+```
+
+默认设置下：
+
+- reranker 是启发式，不调用 LLM；
+- verifier 是启发式或确定性 entailment judge；
+- LLM 不决定检索结果是否可以越权访问，也不决定字符预算；
+- citations 由入选 evidence 派生，模型不能凭空创建有效引用。
+
+### 4.4 Delete Knowledge
+
+删除是约束最强的高风险流程：
+
+```text
+[代码固定 Workflow] retrieve
+→ [受限 ReAct] 只能用 graph_search 检索候选
+→ [LLM] 从候选中解析目标
+→ [代码] 验证 note_id 必须属于候选和当前用户
+→ [工具] confirmed=false，只生成确认预览
+→ [LangGraph] interrupt 等待用户
+→ [用户] confirm / reject / clarify
+→ [代码] confirmed=true + idempotency_key
+→ [Policy/Gateway] 权限、风险、幂等再次校验
+→ [工具] 软删除 note、chunk、review，并处理图谱 episode
+→ [代码] 审计和结果持久化
+```
+
+LLM 只参与“候选中哪一个更符合用户语义”。它不能：
+
+- 绕过确认；
+- 在 ReAct 中直接调用删除工具；
+- 自己生成一个候选集合之外的有效 `note_id`；
+- 设置真实执行所需的确认状态和幂等凭证；
+- 绕过用户所有权校验。
+
+### 4.5 Solidify Conversation
+
+```text
+[LLM] 从会话中选择相关轮次并生成结构化草稿
+→ [代码] 解析和校验草稿
+→ [代码] 将草稿注入固定 capture_text 步骤
+→ [Tool Gateway] 执行入库
+→ [确定性 Capture] 分块、持久化、审计
+```
+
+LLM 决定“沉淀什么内容和如何组织”，代码决定“是否为合法结构、调用哪个固定工具、如何写入和记录”。
+
+### 4.6 Summary 与短期记忆
+
+显式会话总结和滚动上下文压缩都使用 LLM，但用途不同：
+
+- 显式总结是用户可见内容。
+- 滚动摘要是 prompt 上下文线索。
+
+滚动摘要被明确降权：
+
+- 只用于理解用户目标、指代、已确认选择和待办；
+- 助手推测和未验证声明需要单独标记；
+- 不能代替当前检索到的 evidence；
+- 压缩失败时回退到确定性窗口裁剪。
+
+## 5. LLM 输出如何被限制
+
+当前工程采用多层约束，而不是信任模型文本：
+
+1. **Schema 约束**
+   - Router、Query Planner、删除解析、固化草稿、rerank 等使用 JSON Schema。
+   - Pydantic 或显式 JSON 解析负责类型和必填字段校验。
+
+2. **默认控制字段覆盖**
+   - 路由模型可以表达语义判断，但工具、检索、投影、删除风险等字段由代码按意图重新合并。
+
+3. **Workflow 白名单**
+   - 可执行步骤来自固定 `WorkflowSpec`，不是由模型任意发明完整业务流程。
+
+4. **步骤投影校验**
+   - 验证依赖、动作类型、工具名、风险、确认、动态参数注入和意图约束。
+
+5. **工具 Schema 与允许列表**
+   - ReAct 工具调用必须符合工具参数 Schema，并且工具必须属于当前步骤白名单。
+
+6. **Policy Engine**
+   - 在真实执行前重新判断用户、来源、工具、权限域、风险和执行模式。
+
+7. **HITL 与幂等**
+   - 高风险操作必须由用户恢复流程确认，并用幂等键避免重放副作用。
+
+8. **结果验证**
+   - Ask 结果经过引用、证据充分性和 claim grounding 验证；不通过时只能进入受控重试或降级。
+
+## 6. 当前值得注意的工程边界
+
+### 6.1 意图路由是较强的单点 LLM 依赖
+
+文本 Entry 默认采用 LLM-only 路由。模型不可用时系统不会猜测业务意图，而是返回 `unknown`。这保证了安全，但也意味着普通文本入口的可用性依赖 Router 模型。
+
+适合保留的原则是：
+
+- 高风险意图宁可不路由，也不要启发式误执行；
+- 对明显、无副作用的输入，可以考虑增加少量确定性 fast path，但不能覆盖删除、发送、写入等风险操作。
+
+### 6.2 图谱“写入动作”是确定性的，但“抽取内容”不是
+
+Graphiti 的调用、超时、重试、状态回写和 Neo4j 写入边界由代码控制；实体、关系和事实内容由 LLM 抽取。因此图谱数据应被视为语义索引和推理材料，而不是不可质疑的原始事实真源。
+
+当前工程通过 note/chunk 原文、citation 和 evidence anchor 保留了回查边界，这是正确方向。
+
+### 6.3 Replanner 仍允许 LLM 修改剩余执行步骤
+
+重规划只发生在失败路径，且结果会经过验证，但它比固定 Workflow 拥有更高的动态性。建议持续保持：
+
+- 不重跑已完成步骤；
+- 不引入 Workflow 未授权的高风险工具；
+- 不改变已确认/未确认状态；
+- 任何修订计划再次通过 `StepProjectionValidator`；
+- 能用确定性 retry、skip、abort、fallback 表达的失败，不优先使用 LLM 重规划。
+
+### 6.4 默认验证仍属于工程启发式，不等于形式化事实证明
+
+引用存在性、词项覆盖、否定、数字和极性检查是可复现的确定性验证，但仍可能出现语义漏判。它适合做运行时质量门，不应被表述为严格证明。
+
+### 6.5 外部工具权限治理还有扩展空间
+
+当前已有工具白名单、权限域、域名限制、速率限制、风险确认和审计。后续如果增加发消息、付款、系统命令或第三方写操作，应继续在 Tool Gateway/Policy 层扩展能力令牌和细粒度资源权限，而不是把授权逻辑写进 prompt。
+
+## 7. 推荐继续坚持的分工原则
+
+| 问题类型 | 推荐归属 |
+| --- | --- |
+| 需要理解语义、歧义、指代、开放式表达 | LLM |
+| 需要生成摘要、草稿、回答或候选排序 | LLM，但必须受输入证据和输出 Schema 约束 |
+| 相同输入应得到可复现结果 | 确定性代码 |
+| 涉及权限、用户隔离、风险等级 | 确定性代码 |
+| 涉及写库、删除、发送和不可逆副作用 | 固定 Workflow + Policy + HITL + 幂等 |
+| 涉及文件格式、解析、分块和数据映射 | 确定性库与代码 |
+| 涉及状态机、重试、超时、恢复和事务 | 确定性编排 |
+| 涉及日志、审计、指标和追踪 | 确定性基础设施 |
+| 涉及输出是否满足机器契约 | Schema/Pydantic/Validator |
+| 涉及答案是否被证据支撑 | 确定性验证为主，模型判断只能作为可插拔增强 |
+
+最终可以把当前工程的设计原则表达为：
+
+> LLM 可以决定“这句话是什么意思、候选中哪个更相关、如何组织自然语言”；  
+> 系统代码必须决定“允许做什么、按什么流程做、是否真的执行、结果如何验证和追责”。
+

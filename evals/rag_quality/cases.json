@@ -1,0 +1,47 @@
+[
+  {
+    "id": "rq-001",
+    "description": "single-note perfect match — high recall + faithful",
+    "question": "什么是服务降级？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "服务降级是在系统压力过大时主动关闭非核心功能以保障核心链路可用性的策略。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-002",
+    "description": "multi-note recall — should surface all gold sources",
+    "question": "Python 有哪些测试框架？",
+    "gold_evidence_ids": ["n1", "n2", "n3"],
+    "reference_answer": "Python 常见测试框架包括 pytest、unittest 和 nose2。",
+    "gold_claim_verdicts": ["supported", "supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-003",
+    "description": "graph-augmented QA — concepts grounded in evidence",
+    "question": "LangGraph 的核心概念是什么？",
+    "gold_evidence_ids": ["n1", "n2"],
+    "reference_answer": "LangGraph 以 StateGraph 为核心编排抽象，节点是其中的处理单元。",
+    "gold_claim_verdicts": ["supported", "supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-004",
+    "description": "contradiction present — answer disagrees with evidence",
+    "question": "Redis 缓存能降低数据库负载吗？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "证据显示 Redis 缓存在该场景下不能降低数据库负载，反而增加复杂度。",
+    "gold_claim_verdicts": ["contradicted"],
+    "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-005",
+    "description": "answer asserts what evidence opposes — contrastive evidence flips it to contradicted",
+    "question": "量子计算的影响？",
+    "gold_evidence_ids": [],
+    "reference_answer": "现有证据不足以支撑量子计算颠覆密码学的结论。",
+    "gold_claim_verdicts": ["contradicted"],
+    "claims_needing_contrast": 1
+  }
+]

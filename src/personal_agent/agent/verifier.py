@@ -173,7 +173,7 @@ class AnswerVerifier:
         # 4. Claim-level grounding against the selected evidence.
         claim_checks: list[ClaimVerification] = []
         if evidence and not answer_empty:
-            claim_checks = _verify_claims(answer, evidence)
+            claim_checks = self._grounding_checks(answer, evidence)
             if claim_checks:
                 supported = [item for item in claim_checks if item.status == "supported"]
                 contradicted = [item for item in claim_checks if item.status == "contradicted"]
@@ -222,6 +222,11 @@ class AnswerVerifier:
         )
 
         return result
+
+    def _grounding_checks(self, answer: str, evidence: list) -> list[ClaimVerification]:
+        """Claim-level grounding hook. Subclasses may override the judgment
+        strategy (e.g. entailment) while reusing all surrounding scoring."""
+        return _verify_claims(answer, evidence)
 
 
 def _verify_claims(answer: str, evidence: list) -> list[ClaimVerification]:
@@ -324,3 +329,76 @@ def _negation_mismatch(claim: str, evidence_text: str) -> bool:
 
 def _has_negation(text: str) -> bool:
     return any(marker in text for marker in ("不", "没有", "未", "不能", "无法", "不会", "不是", "no ", "not "))
+
+
+class EntailmentAnswerVerifier(AnswerVerifier):
+    """Verifier whose claim grounding uses a three-way entailment judge.
+
+    Reuses every citation / evidence-sufficiency / fallback-phrase check from
+    :class:`AnswerVerifier` (via ``super().verify``) and only swaps the
+    claim-grounding step: each claim is aligned to its best evidence by lexical
+    overlap, then an :class:`~.entailment.EntailmentJudge` renders a three-way
+    verdict. ``entailed`` -> supported, ``contradicted`` -> contradicted,
+    ``not_enough_info`` -> not_found, so the downstream aggregation in
+    ``AnswerVerifier.verify`` (which keys off those status strings) is
+    unchanged. The richer signal is the contradiction precision: polarity /
+    numeric / negation conflicts on *aligned* evidence, not just lexical miss.
+    """
+
+    _VERDICT_TO_STATUS = {
+        "entailed": "supported",
+        "contradicted": "contradicted",
+        "not_enough_info": "not_found",
+    }
+
+    def __init__(self, judge=None) -> None:
+        from .entailment import HeuristicEntailmentJudge
+
+        self._judge = judge or HeuristicEntailmentJudge()
+
+    def _grounding_checks(self, answer: str, evidence: list) -> list[ClaimVerification]:
+        claims = _extract_claims(answer)
+        records = [_evidence_record(item) for item in evidence]
+        checks: list[ClaimVerification] = []
+        for claim in claims:
+            claim_terms = _terms(claim)
+            if not claim_terms:
+                continue
+            best_overlap = 0
+            best_ids: list[str] = []
+            best_text = ""
+            best_source = ""
+            for evidence_id, text, source_type in records:
+                overlap = len(claim_terms & _terms(text))
+                if overlap > best_overlap:
+                    best_overlap, best_ids = overlap, [evidence_id]
+                    best_text, best_source = text, source_type
+                elif overlap == best_overlap and overlap > 0:
+                    best_ids.append(evidence_id)
+            coverage = best_overlap / max(len(claim_terms), 1)
+            verdict = self._judge.judge(
+                claim, best_text,
+                overlap=best_overlap,
+                claim_term_count=len(claim_terms),
+                coverage=coverage,
+                source_type=best_source,
+            )
+            status = self._VERDICT_TO_STATUS.get(verdict.verdict, "not_found")
+            checks.append(ClaimVerification(
+                claim=claim,
+                status=status,
+                supporting_evidence_ids=best_ids[:3] if status != "not_found" else [],
+                reason=f"{verdict.verdict}: {verdict.reason}",
+            ))
+        return checks
+
+
+def create_answer_verifier(settings) -> AnswerVerifier:
+    name = (getattr(settings.ask, "verifier", "heuristic") or "heuristic").strip().lower()
+    if name in {"heuristic", "default"}:
+        return AnswerVerifier()
+    if name == "entailment":
+        return EntailmentAnswerVerifier()
+    raise ValueError(
+        "Unknown ask verifier '%s'. Available: heuristic, entailment" % name
+    )

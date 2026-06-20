@@ -10,26 +10,25 @@ from __future__ import annotations
 
 import re
 
-from ...core.evidence import EvidenceItem, notes_to_evidence
+from ...core.evidence import (
+    EvidenceItem,
+    _dedupe_evidence_items,
+    notes_to_evidence,
+)
 from ...core.models import Citation, KnowledgeNote
 from ...core.projections import MatchRef, match_ref_from_note
 
 
 def dedupe_evidence(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
-    deduped: list[EvidenceItem] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for item in evidence:
-        key = (
-            item.source_type,
-            item.source_id or item.url or "",
-            item.fact or "",
-            item.snippet[:160],
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
+    """Collapse evidence by the entity it points at, not by source_type/snippet.
+
+    Delegates to the shared canonical-identity merge in ``core.evidence`` so the
+    pool-level dedup (here) and the rerank-time dedup use one definition. The
+    same note reached via graph + local is merged into a single item that
+    records both retrieval paths (``retrieved_by_all`` / ``consensus_count``),
+    turning multi-path overlap from wasted candidates into a consensus signal.
+    """
+    return _dedupe_evidence_items(evidence)
 
 
 def order_matches_by_evidence(

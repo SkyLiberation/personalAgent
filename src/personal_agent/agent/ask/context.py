@@ -45,6 +45,7 @@ class AskRunContext:
     combined_matches: list[KnowledgeNote] = field(default_factory=list)
     combined_citations: list[Citation] = field(default_factory=list)
     web_tried: bool = False
+    contrastive_tried: bool = False
 
     # Context assembly output
     context_pack: ContextPack | None = None
@@ -87,6 +88,7 @@ class AskRunContext:
             "combined_matches": [_dump_model(item) for item in self.combined_matches],
             "combined_citations": [_dump_model(item) for item in self.combined_citations],
             "web_tried": self.web_tried,
+            "contrastive_tried": self.contrastive_tried,
             "context_pack": _dump_model(self.context_pack),
             "selected_matches": [_dump_model(item) for item in self.selected_matches],
             "selected_citations": [_dump_model(item) for item in self.selected_citations],
@@ -114,6 +116,7 @@ class AskRunContext:
         ctx.combined_matches = _load_model_list(KnowledgeNote, payload.get("combined_matches"))
         ctx.combined_citations = _load_model_list(Citation, payload.get("combined_citations"))
         ctx.web_tried = bool(payload.get("web_tried"))
+        ctx.contrastive_tried = bool(payload.get("contrastive_tried"))
         ctx.context_pack = _load_model(ContextPack, payload.get("context_pack"))
         ctx.selected_matches = _load_model_list(KnowledgeNote, payload.get("selected_matches"))
         ctx.selected_citations = _load_model_list(Citation, payload.get("selected_citations"))

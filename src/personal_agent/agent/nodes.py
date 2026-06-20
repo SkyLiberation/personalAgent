@@ -31,12 +31,17 @@ def capture_node(state: AgentState, store: MemoryFacade) -> AgentState:
     summary = content[:120]
     tags = _extract_tags(content)
 
+    from .provenance import HeuristicProvenanceExtractor
+
+    provenance = HeuristicProvenanceExtractor().extract(state.raw_item)
+
     state.note = KnowledgeNote(
         user_id=state.raw_item.user_id,
         source=NoteSource(
             type=state.raw_item.source_type,
             ref=state.raw_item.source_ref,
             fingerprint=state.raw_item.source_fingerprint,
+            provenance=provenance,
             metadata=metadata,
         ),
         body=NoteBody(title=title or "Untitled note", content=content, summary=summary),
@@ -102,8 +107,11 @@ def _chunk_notes_from_drafts(
     raw_item,
     drafts: list[ChunkDraft],
 ) -> list[KnowledgeNote]:
+    from .chunk_quality import score_drafts
+
     chunks: list[KnowledgeNote] = []
-    for i, draft in enumerate(drafts, 1):
+    scored = score_drafts(drafts)
+    for i, (draft, quality_score, retrievable) in enumerate(scored, 1):
         metadata = {
             **dict(raw_item.metadata or {}),
             "chunking": {
@@ -122,6 +130,7 @@ def _chunk_notes_from_drafts(
                     type=raw_item.source_type,
                     ref=raw_item.source_ref,
                     fingerprint=raw_item.source_fingerprint,
+                    provenance=parent.source.provenance,
                     metadata=metadata,
                 ),
                 body=NoteBody(
@@ -137,6 +146,9 @@ def _chunk_notes_from_drafts(
                     title_path=list(draft.title_path),
                     page_number=draft.page_number,
                     element_ids=list(draft.element_ids),
+                    coordinates=draft.coordinates,
+                    retrievable=retrievable,
+                    quality_score=round(quality_score, 4),
                 ),
                 preextract=NotePreExtract(
                     graph_worthy=None,

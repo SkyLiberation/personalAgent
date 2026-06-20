@@ -1,0 +1,10 @@
+{
+  "_comment": "Aggregate-mean regression floors for the RAG-quality gate. Lower a floor only with a deliberate, reviewed reason; raising one ratchets quality up. claim_accuracy floor sits below the observed 0.80 because the heuristic verifier merges/splits some multi-sentence claims differently than the annotation (rq-002/003), a known verifier limitation, not a harness bug.",
+  "recall_5": 0.7,
+  "ndcg_5": 0.7,
+  "context_precision": 0.6,
+  "answer_relevance": 0.3,
+  "faithfulness": 0.5,
+  "claim_accuracy": 0.75,
+  "contrastive_coverage": 0.9
+}

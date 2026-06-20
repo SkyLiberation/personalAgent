@@ -117,10 +117,26 @@ class GraphFactRef(BaseModel):
     episode_uuids: list[str] = Field(default_factory=list)
 
 
+class NoteProvenance(BaseModel):
+    """Source provenance extracted at capture time.
+
+    Drives ask-side metadata filtering and freshness judgement: ``published_at``
+    lets recency no longer depend on capture time, ``doc_type`` lets filters
+    distinguish a formal document from a chat fragment. All fields optional —
+    the heuristic extractor fills what it can confidently derive.
+    """
+
+    author: str | None = None
+    published_at: str | None = None
+    doc_type: str | None = None
+    language: str | None = None
+
+
 class NoteSource(BaseModel):
     type: str = "text"
     ref: str | None = None
     fingerprint: str | None = None
+    provenance: NoteProvenance = Field(default_factory=NoteProvenance)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -137,6 +153,14 @@ class NoteChunk(BaseModel):
     title_path: list[str] = Field(default_factory=list)
     page_number: int | None = None
     element_ids: list[str] = Field(default_factory=list)
+    # Structure-faithful locator: bounding box of the chunk in the source page
+    # (Unstructured coordinates), kept so citations can highlight the origin.
+    coordinates: dict[str, Any] | None = None
+    # Quality gate: low-information / noise chunks (headers, footers, nav, TOC)
+    # stay retrievable=False so they never enter retrieval units but remain
+    # recoverable via the parent note. Score is the heuristic density signal.
+    retrievable: bool = True
+    quality_score: float = 1.0
 
 
 class ChunkDraft(BaseModel):
@@ -146,6 +170,7 @@ class ChunkDraft(BaseModel):
     title_path: list[str] = Field(default_factory=list)
     page_number: int | None = None
     element_ids: list[str] = Field(default_factory=list)
+    coordinates: dict[str, Any] | None = None
     category: str = "CompositeElement"
     metadata: dict[str, Any] = Field(default_factory=dict)
 

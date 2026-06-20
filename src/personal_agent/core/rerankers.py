@@ -9,7 +9,6 @@ from .evidence import (
     ContextPack,
     EvidenceItem,
     RankedEvidence,
-    build_context_pack,
     rank_evidence_items,
     select_ranked_evidence,
 )
@@ -29,6 +28,7 @@ class EvidenceReranker(Protocol):
         *,
         max_items: int,
         char_budget: int,
+        mmr_lambda: float = 0.7,
     ) -> ContextPack:
         ...
 
@@ -43,12 +43,14 @@ class HeuristicEvidenceReranker:
         *,
         max_items: int,
         char_budget: int,
+        mmr_lambda: float = 0.7,
     ) -> ContextPack:
-        return build_context_pack(
+        return select_ranked_evidence(
             question,
-            evidence,
+            rank_evidence_items(question, evidence),
             max_items=max_items,
             char_budget=char_budget,
+            mmr_lambda=mmr_lambda,
         )
 
 
@@ -65,6 +67,7 @@ class LlmEvidenceReranker:
         *,
         max_items: int,
         char_budget: int,
+        mmr_lambda: float = 0.7,
     ) -> ContextPack:
         heuristic_ranked = rank_evidence_items(question, evidence)
         top_n = max(max_items, self.settings.ask.llm_rerank_top_n)
@@ -75,6 +78,7 @@ class LlmEvidenceReranker:
                 heuristic_ranked,
                 max_items=max_items,
                 char_budget=char_budget,
+                mmr_lambda=mmr_lambda,
             )
 
         try:
@@ -86,6 +90,7 @@ class LlmEvidenceReranker:
                 heuristic_ranked,
                 max_items=max_items,
                 char_budget=char_budget,
+                mmr_lambda=mmr_lambda,
             )
 
         reordered = _apply_llm_order(heuristic_ranked, ranked_ids)
@@ -94,6 +99,7 @@ class LlmEvidenceReranker:
             reordered,
             max_items=max_items,
             char_budget=char_budget,
+            mmr_lambda=mmr_lambda,
         )
 
     def _rank_ids(self, question: str, candidates: list[RankedEvidence]) -> list[str]:
@@ -169,6 +175,7 @@ def build_context_pack_with_settings(
         evidence,
         max_items=settings.ask.context_max_items,
         char_budget=settings.ask.context_char_budget,
+        mmr_lambda=settings.ask.context_mmr_lambda,
     )
 
 

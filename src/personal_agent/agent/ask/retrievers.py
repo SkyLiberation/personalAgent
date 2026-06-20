@@ -47,6 +47,9 @@ class RetrievalContribution:
     matches: list[KnowledgeNote] = field(default_factory=list)
     citations: list[Citation] = field(default_factory=list)
     trace: list[str] = field(default_factory=list)
+    # Name of the retrieval path; used as the RRF source key when an evidence
+    # item carries no finer-grained ``retrieved_by`` (e.g. local/episodic).
+    source: str = ""
 
 
 class Retriever(Protocol):
@@ -80,7 +83,7 @@ class GraphRetriever:
 
     def _process(self, query, user_id, graph_result, filters, provider, gate_evidence) -> RetrievalContribution:
         svc = self._service
-        out = RetrievalContribution()
+        out = RetrievalContribution(source=self.name)
         if isinstance(graph_result, AgentState):
             out.matches = _merge_notes([], graph_result.matches)
             out.citations = _merge_citations([], graph_result.citations)
@@ -137,7 +140,7 @@ class LocalRetriever:
 
     def retrieve(self, query, filters, ctx) -> RetrievalContribution:
         state = self._service._run_local_retrieval(query, ctx.user_id, filters)
-        out = RetrievalContribution()
+        out = RetrievalContribution(source=self.name)
         if state:
             out.matches = _merge_notes([], state.matches)
             out.citations = _merge_citations([], state.citations)
@@ -159,7 +162,7 @@ class EpisodicRetriever:
 
     def retrieve(self, query, filters, ctx) -> RetrievalContribution:
         svc = self._service
-        out = RetrievalContribution()
+        out = RetrievalContribution(source=self.name)
         episodes = svc.memory.search_episodes(
             ctx.user_id, query, limit=5, session_id=ctx.session_id,
         )
@@ -181,7 +184,7 @@ class ReflectionRetriever:
 
     def retrieve(self, query, filters, ctx) -> RetrievalContribution:
         svc = self._service
-        out = RetrievalContribution()
+        out = RetrievalContribution(source=self.name)
         cfg = svc.settings.reflection_replay
         if not cfg.enabled:
             return out
@@ -215,13 +218,93 @@ class WebRetriever:
         return self._service._web_search_available
 
     def retrieve(self, query, filters, ctx) -> RetrievalContribution:
-        out = RetrievalContribution()
+        out = RetrievalContribution(source=self.name)
         if not self.available:
             return out
         web_results, web_citations = self._service._execute_web_search(ctx.question)
         if web_citations:
             out.citations = _merge_citations([], web_citations)
             out.evidence.extend(web_results_to_evidence(web_results))
+        return out
+
+
+# Opposition cues appended to a claim to bias recall toward counter-evidence.
+_CONTRAST_CUES = ("反对", "缺点", "风险", "局限", "例外", "争议", "失败", "问题")
+
+# Strip leading verbs / fillers that add no recall signal but dilute the query.
+_CLAIM_STOP = ("因此", "所以", "因为", "这", "那", "我们", "可以", "应该", "需要")
+
+
+def _claim_core_terms(claim: str, limit: int = 40) -> str:
+    """Reduce a claim sentence to a compact query string for counter-recall.
+
+    Cheap and deterministic: drop citation markers and a few leading discourse
+    fillers, then truncate. Good enough to seed an opposition query without a
+    tokenizer dependency."""
+    import re as _re
+
+    text = _re.sub(r"\[[Ee]?\d+\]", "", claim).strip(" -:：\t\r")
+    for stop in _CLAIM_STOP:
+        if text.startswith(stop):
+            text = text[len(stop):].strip()
+    return text[:limit]
+
+
+class ContrastiveRetriever:
+    """Actively recall *opposing* evidence for the claims an answer makes.
+
+    Standard retrieval is relevance-driven and tends to return evidence that
+    agrees with the query, so a one-sided answer looks well-grounded. This
+    retriever rewrites each flagged claim into opposition-biased sub-queries
+    (claim core terms + contrast cues like 反对/风险/例外) and pulls whatever
+    local — and optionally web — notes come back, tagging them
+    ``retrieved_by="contrastive"`` so the verifier sees both sides.
+
+    It does NOT implement the bare ``retrieve(query, filters, ctx)`` contract —
+    it needs the claim list — so the coordinator drives it via
+    :meth:`retrieve_for_claims` rather than the generic dispatch loop.
+    """
+
+    name = "contrastive"
+
+    def __init__(self, service: "AskService") -> None:
+        self._service = service
+
+    def _queries(self, claims: list[str], max_claims: int) -> list[str]:
+        queries: list[str] = []
+        for claim in claims[:max_claims]:
+            core = _claim_core_terms(claim)
+            for cue in _CONTRAST_CUES[:2]:
+                queries.append(f"{core} {cue}".strip())
+        return queries
+
+    def retrieve_for_claims(
+        self, claims: list[str], filters, ctx: "AskRunContext", *, max_claims: int = 3,
+    ) -> RetrievalContribution:
+        out = RetrievalContribution(source=self.name)
+        if not claims:
+            return out
+        seen_ids = {item.source_id for item in ctx.evidence_pool}
+        for query in self._queries(claims, max_claims):
+            state = self._service._run_local_retrieval(query, ctx.user_id, filters)
+            if not state or not state.matches:
+                continue
+            fresh = [note for note in state.matches if note.id not in seen_ids]
+            if not fresh:
+                continue
+            for note in fresh:
+                seen_ids.add(note.id)
+            evidence = notes_to_evidence(fresh)
+            for item in evidence:
+                item.metadata["retrieved_by"] = "contrastive"
+                item.metadata["contrastive_query"] = query
+            out.evidence.extend(evidence)
+            out.matches = _merge_notes(out.matches, fresh)
+        if out.evidence:
+            out.trace.append(
+                f"反证检索候选已进入统一证据池 queries={len(self._queries(claims, max_claims))} "
+                f"counter_evidence={len(out.evidence)}"
+            )
         return out
 
 
@@ -236,8 +319,18 @@ class RetrievalCoordinator:
         self.episodic = EpisodicRetriever(service)
         self.reflection = ReflectionRetriever(service)
         self.web = WebRetriever(service)
+        self.contrastive = ContrastiveRetriever(service)
 
     def _absorb(self, ctx: "AskRunContext", contrib: RetrievalContribution) -> None:
+        # Tag each evidence item with its rank *within this source's* ranked
+        # contribution, keyed by the source that produced it. Dedup later merges
+        # these per-source ranks so apply_rrf_fusion can reward cross-source
+        # consensus. Rank is 1-based; contributions arrive already ordered.
+        for rank, item in enumerate(contrib.evidence, start=1):
+            source = item.metadata.get("retrieved_by") or contrib.source or "unknown"
+            source_ranks = dict(item.metadata.get("source_ranks") or {})
+            source_ranks.setdefault(source, rank)
+            item.metadata["source_ranks"] = source_ranks
         ctx.combined_matches = _merge_notes(ctx.combined_matches, contrib.matches)
         ctx.combined_citations = _merge_citations(ctx.combined_citations, contrib.citations)
         ctx.evidence_pool.extend(contrib.evidence)
@@ -314,4 +407,16 @@ class RetrievalCoordinator:
         ctx.add_trace(
             f"知识库证据不足，网络搜索候选已进入统一证据池 citations={len(contrib.citations)}"
         )
+        return True
+
+    def add_contrastive_evidence(self, ctx: "AskRunContext", claims: list[str]) -> bool:
+        """Append opposing evidence for ``claims`` to the pool (reactive hook
+        for the verification stage). Returns True when counter-evidence landed."""
+        ctx.contrastive_tried = True
+        contrib = self.contrastive.retrieve_for_claims(
+            claims, ctx.retrieval_plan.filters, ctx,
+        )
+        if not contrib.evidence:
+            return False
+        self._absorb(ctx, contrib)
         return True

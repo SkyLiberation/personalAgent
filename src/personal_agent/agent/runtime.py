@@ -64,7 +64,7 @@ from .runtime_results import (
 )
 from ..review import DigestFormatter, ReviewDigestUseCase
 from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
-from .verifier import AnswerVerifier
+from .verifier import create_answer_verifier
 
 if TYPE_CHECKING:
     from ..capture import CaptureService
@@ -135,7 +135,7 @@ class AgentRuntime:
             tool_executor=self._tool_executor,
             workflow_definition_store=self.workflow_definition_store,
         )
-        self._verifier = AnswerVerifier()
+        self._verifier = create_answer_verifier(settings)
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
         self._replanner = Replanner(settings)
         self._digest_formatter = DigestFormatter()
