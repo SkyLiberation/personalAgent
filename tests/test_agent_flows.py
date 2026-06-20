@@ -297,6 +297,50 @@ class TestCaptureFlow:
         matches = service.memory.search_memory("default", "部署流程 使用 Jenkins GitHub", limit=10)
         assert [note.id for note in matches] == ["new-deploy"]
 
+    def test_consolidate_notes_supersedes_sources_into_summary(self, service: AgentService):
+        first = make_note(
+            id="topic-a",
+            title="向量检索 基础",
+            content="向量检索把文本编码成向量做相似度匹配。",
+            summary="向量检索基础",
+            user_id="default",
+        )
+        second = make_note(
+            id="topic-b",
+            title="向量检索 重排序",
+            content="重排序在向量召回后用更强模型精排。",
+            summary="重排序",
+            user_id="default",
+        )
+        service.store.add_note(first)
+        service.store.add_note(second)
+
+        result = service.execute_consolidate(
+            note_ids=["topic-a", "topic-b"],
+            topic="向量检索",
+            user_id="default",
+        )
+
+        assert result["ok"] is True
+        assert set(result["superseded"]) == {"topic-a", "topic-b"}
+        assert result["failed"] == []
+        summary_id = result["note_id"]
+        old_a = service.memory.get_note("topic-a", user_id="default")
+        assert old_a.version.status == "superseded"
+        assert old_a.version.superseded_by_note_id == summary_id
+
+    def test_consolidate_notes_requires_two_valid_sources(self, service: AgentService):
+        only = make_note(id="solo", title="孤立笔记", content="只有一条。", summary="孤立", user_id="default")
+        service.store.add_note(only)
+
+        result = service.execute_consolidate(
+            note_ids=["solo", "does-not-exist"],
+            topic="X",
+            user_id="default",
+        )
+
+        assert result["ok"] is False
+
     def test_conflicted_notes_are_marked_for_evidence_layer(self, service: AgentService):
         first = make_note(id="conflict-a", title="缓存", content="缓存使用 Redis。", summary="Redis", user_id="default")
         second = make_note(id="conflict-b", title="缓存", content="缓存使用 Dragonfly。", summary="Dragonfly", user_id="default")

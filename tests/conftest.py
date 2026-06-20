@@ -270,6 +270,12 @@ def clean_postgres_business_tables():
                     source_message_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS knowledge_gap_deliveries (
+                    idempotency_key TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    gap_date TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS workflow_artifacts (
                     artifact_id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
@@ -373,6 +379,7 @@ def clean_postgres_business_tables():
                 TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
+                TRUNCATE knowledge_gap_deliveries;
                 TRUNCATE workflow_artifacts;
                 TRUNCATE workflow_events;
                 TRUNCATE workflow_definitions;

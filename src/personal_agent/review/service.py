@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ..core.models import ReviewCard, local_now
 from ..memory import MemoryFacade
 from .formatter import DigestFormatter
 from .models import ReviewDigest, ReviewDigestSection, ReviewFeedbackOutcome, ReviewFeedbackResult
+
+if TYPE_CHECKING:
+    from ..graphiti.store import GraphitiStore
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewFeedbackStore(Protocol):
@@ -35,9 +41,15 @@ class ReviewFeedbackStore(Protocol):
 class ReviewDigestUseCase:
     """Generate review digests from long-term memory."""
 
-    def __init__(self, memory: MemoryFacade, formatter: DigestFormatter | None = None) -> None:
+    def __init__(
+        self,
+        memory: MemoryFacade,
+        formatter: DigestFormatter | None = None,
+        graph_store: "GraphitiStore | None" = None,
+    ) -> None:
         self.memory = memory
         self.formatter = formatter or DigestFormatter()
+        self.graph_store = graph_store
 
     def generate(self, user_id: str, *, recent_limit: int = 5) -> ReviewDigest:
         recent_notes = self.memory.list_recent_notes(user_id, limit=recent_limit)
@@ -62,6 +74,10 @@ class ReviewDigestUseCase:
                 ],
             ))
 
+        growth = self._knowledge_growth_section(user_id)
+        if growth is not None:
+            sections.append(growth)
+
         empty_reason = ""
         if not recent_notes and not due_cards:
             empty_reason = "当前还没有知识记录。"
@@ -73,6 +89,89 @@ class ReviewDigestUseCase:
             sections=sections,
             empty_reason=empty_reason,
         )
+
+    def _knowledge_growth_section(self, user_id: str) -> ReviewDigestSection | None:
+        """Summarize knowledge growth: a note-count trend plus graph topology.
+
+        The trend line (this week vs last week) is computed from local note
+        timestamps and is always available. Graph stats are appended only when
+        the graph is configured/reachable. The whole section is skipped only
+        when there is neither growth nor a graph — so the digest still delivers.
+        Follows the project rule that graph failures never block the local path.
+        """
+        items: list[str] = []
+
+        trend = self._note_trend_line(user_id)
+        if trend:
+            items.append(trend)
+
+        graph_items = self._graph_growth_items(user_id)
+        items.extend(graph_items)
+
+        if not items:
+            return None
+        return ReviewDigestSection(title="知识增长：", items=items)
+
+    def _note_trend_line(self, user_id: str) -> str | None:
+        """This-week vs last-week note counts from local note timestamps."""
+        try:
+            notes = self.memory.list_notes(user_id, include_chunks=False)
+        except Exception:
+            logger.warning("Knowledge growth trend skipped: list_notes failed", exc_info=True)
+            return None
+        if not notes:
+            return None
+        now = local_now()
+        week = timedelta(days=7)
+        this_week = sum(1 for n in notes if n.created_at and now - n.created_at <= week)
+        last_week = sum(
+            1 for n in notes
+            if n.created_at and week < now - n.created_at <= 2 * week
+        )
+        if this_week == 0 and last_week == 0:
+            return None
+        delta = this_week - last_week
+        if delta > 0:
+            arrow = f"↑{delta}"
+        elif delta < 0:
+            arrow = f"↓{abs(delta)}"
+        else:
+            arrow = "持平"
+        return f"本周新增 {this_week} 条笔记（上周 {last_week} 条，{arrow}）。"
+
+    def _graph_growth_items(self, user_id: str) -> list[str]:
+        if self.graph_store is None:
+            return []
+        try:
+            topology = self.graph_store.get_topology(user_id)
+        except Exception:
+            logger.warning("Knowledge growth graph items skipped: get_topology failed", exc_info=True)
+            return []
+        if topology.get("error"):
+            return []
+
+        nodes = topology.get("nodes") or []
+        links = topology.get("links") or []
+        if not nodes:
+            return []
+
+        # Surface the most-connected entities (knowledge hubs) and a couple of
+        # sample facts so the digest shows what the graph actually learned.
+        degree: dict[str, int] = {}
+        for link in links:
+            for endpoint in (link.get("source"), link.get("target")):
+                if endpoint:
+                    degree[endpoint] = degree.get(endpoint, 0) + 1
+        name_by_id = {node.get("id"): node.get("name") or "" for node in nodes}
+        ranked = sorted(degree.items(), key=lambda kv: kv[1], reverse=True)
+        top_names = [name_by_id.get(node_id, "") for node_id, _ in ranked if name_by_id.get(node_id)]
+
+        items = [f"知识图谱已有 {len(nodes)} 个实体、{len(links)} 条关联。"]
+        if top_names:
+            items.append("连接最密集的概念：" + "、".join(top_names[:5]))
+        sample_facts = [link.get("fact") for link in links if link.get("fact")][:3]
+        items.extend(f"关联：{fact}" for fact in sample_facts)
+        return items
 
     def generate_text(self, user_id: str, *, recent_limit: int = 5) -> str:
         return self.formatter.to_text(self.generate(user_id, recent_limit=recent_limit))

@@ -23,6 +23,7 @@ from ..tools import (
     build_capture_text_tool,
     build_capture_upload_tool,
     build_capture_url_tool,
+    build_consolidate_notes_tool,
     build_delete_note_tool,
     build_restore_note_tool,
     build_graph_search_tool,
@@ -171,6 +172,11 @@ class AgentRuntime:
         ))
         self._tool_executor.register(build_delete_note_tool(self.memory))
         self._tool_executor.register(build_restore_note_tool(self.memory))
+        self._tool_executor.register(build_consolidate_notes_tool(
+            lambda note_ids, topic, user_id="default": self.execute_consolidate(
+                note_ids=note_ids, topic=topic, user_id=user_id,
+            )
+        ))
         if self.settings.web_search.api_key:
             from ..capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
@@ -276,6 +282,82 @@ class AgentRuntime:
             source_ref=source_ref,
             metadata=metadata,
         )
+
+    def execute_consolidate(
+        self,
+        *,
+        note_ids: list[str],
+        topic: str,
+        user_id: str = "default",
+    ) -> dict:
+        """Synthesize several notes into one review note, then supersede sources.
+
+        Deterministic flow with a single LLM step (draft generation):
+          1. Load each source note (ownership-checked via the facade).
+          2. Generate a structured synthesis draft from their bodies.
+          3. Capture the draft as a new note (full capture pipeline).
+          4. Mark each source note superseded by the new note. A single source
+             failing to supersede is recorded in ``failed`` and does NOT roll
+             back the synthesis — the new note already exists and is the
+             current source of truth.
+        """
+        sources = []
+        for note_id in dict.fromkeys(note_ids):
+            note = self.memory.get_note(note_id, user_id=user_id)
+            if note is not None:
+                sources.append(note)
+        if len(sources) < 2:
+            return {"ok": False, "error": "至少需要两条属于当前用户的有效笔记才能整理。"}
+
+        draft = self._consolidation_draft(topic, sources)
+        if not draft:
+            return {"ok": False, "error": "未能生成综述草稿。"}
+
+        captured = self.execute_capture(text=draft, source_type="note", user_id=user_id)
+        new_note_id = captured.note.id
+
+        superseded: list[str] = []
+        failed: list[str] = []
+        for note in sources:
+            try:
+                self.memory.supersede_note(
+                    note.id,
+                    new_note_id,
+                    user_id=user_id,
+                    reason=f"整理进主题综述「{topic}」",
+                )
+                superseded.append(note.id)
+            except Exception:
+                logger.exception("Supersede failed during consolidation note_id=%s", note.id)
+                failed.append(note.id)
+
+        return {
+            "ok": True,
+            "note_id": new_note_id,
+            "title": captured.note.body.title,
+            "summary": captured.note.body.summary,
+            "superseded": superseded,
+            "failed": failed,
+        }
+
+    def _consolidation_draft(self, topic: str, sources: list) -> str | None:
+        """Produce the synthesis body; fall back to a deterministic concatenation."""
+        blocks = []
+        for index, note in enumerate(sources, start=1):
+            body = note.body
+            blocks.append(f"【来源{index}】{body.title}\n{body.content}")
+        joined = "\n\n".join(blocks)
+
+        prompt = (
+            f"请把下面关于「{topic}」的多条笔记整理成一篇结构化的知识综述。"
+            "要求：合并重复内容、保留关键事实、用清晰的小标题组织，开头一句话概述主题。\n\n"
+            f"{joined}"
+        )
+        generated = self._llm.generate_answer(prompt, prompt_name="note_consolidation")
+        if generated:
+            return generated
+        # Deterministic fallback so the feature still works without an LLM.
+        return f"# {topic}（综述）\n\n" + joined
 
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self._ingestion().sync_note_to_graph(note_id)

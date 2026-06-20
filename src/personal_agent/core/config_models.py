@@ -144,6 +144,23 @@ class ReviewDigestConfig(_StrictBase):
     scheduler_tick_seconds: int = 60
 
 
+class KnowledgeGapConfig(_StrictBase):
+    """Proactive knowledge-gap follow-up.
+
+    Reuses the review-digest subscriptions (same chat targets) but runs on its
+    own schedule/cadence. ``max_gaps_per_run`` bounds how many questions a
+    single delivery may contain so the agent never floods the user.
+    """
+
+    enabled: bool = False
+    schedule_time: str = "20:00"
+    scheduler_enabled: bool = False
+    scheduler_tick_seconds: int = 300
+    max_gaps_per_run: int = 3
+    min_entity_degree: int = 1
+    recent_note_limit: int = 30
+
+
 class WebApiConfig(_StrictBase):
     api_keys: dict[str, str] = Field(default_factory=dict)
     # API keys granted admin scope: cross-user audit queries and un-redacted payloads.

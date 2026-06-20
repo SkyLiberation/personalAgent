@@ -12,6 +12,7 @@ from .config_models import (
     GraphitiConfig,
     LangExtractConfig,
     LangSmithConfig,
+    KnowledgeGapConfig,
     MicrosoftGraphRagConfig,
     OpenAIConfig,
     PlannerConfig,
@@ -44,6 +45,7 @@ class Settings(_StrictBase):
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     review_digest: ReviewDigestConfig = Field(default_factory=ReviewDigestConfig)
+    knowledge_gap: KnowledgeGapConfig = Field(default_factory=KnowledgeGapConfig)
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)

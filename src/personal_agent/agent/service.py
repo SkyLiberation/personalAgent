@@ -117,6 +117,9 @@ class AgentService:
     def execute_capture(self, *args, **kwargs):
         return self.runtime.execute_capture(*args, **kwargs)
 
+    def execute_consolidate(self, *args, **kwargs):
+        return self.runtime.execute_consolidate(*args, **kwargs)
+
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self.runtime.sync_note_to_graph(note_id)
 

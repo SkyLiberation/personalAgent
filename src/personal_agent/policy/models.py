@@ -10,9 +10,16 @@ must honor.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from ..tools.base import RiskLevel, SideEffectType
+if TYPE_CHECKING:
+    from ..tools.base import RiskLevel, SideEffectType
+else:
+    # Runtime aliases kept local so importing ``policy`` never pulls in the
+    # ``tools`` package (which imports ``policy`` back — see the historical
+    # memory→policy→tools cycle). These mirror ``tools.base`` exactly.
+    RiskLevel = str
+    SideEffectType = str
 
 # allow                 执行放行
 # deny                  拒绝执行（权限/前置条件不满足）

@@ -11,6 +11,20 @@ from tests.conftest import POSTGRES_URL
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
+def test_claim_gap_delivery_is_idempotent_per_day():
+    store = PostgresReviewDigestStore(POSTGRES_URL)
+
+    first = store.claim_gap_delivery("sub-1", "2026-06-20")
+    second = store.claim_gap_delivery("sub-1", "2026-06-20")
+    next_day = store.claim_gap_delivery("sub-1", "2026-06-21")
+    other_sub = store.claim_gap_delivery("sub-2", "2026-06-20")
+
+    assert first is True       # first claim wins
+    assert second is False     # same (sub, day) blocked
+    assert next_day is True    # new day is a fresh slot
+    assert other_sub is True   # different subscription is independent
+
+
 def test_review_digest_store_upserts_and_lists_subscriptions():
     store = PostgresReviewDigestStore(POSTGRES_URL)
     subscription = DigestSubscription(

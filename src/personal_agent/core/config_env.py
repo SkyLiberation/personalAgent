@@ -12,6 +12,7 @@ from .config_models import (
     GraphitiConfig,
     LangExtractConfig,
     LangSmithConfig,
+    KnowledgeGapConfig,
     MicrosoftGraphRagConfig,
     OpenAIConfig,
     PlannerConfig,
@@ -208,6 +209,25 @@ def settings_from_env(settings_cls: type):
             ),
             scheduler_tick_seconds=int(
                 os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_TICK_SECONDS", "60")
+            ),
+        ),
+        knowledge_gap=KnowledgeGapConfig(
+            enabled=_as_bool(os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_ENABLED", "false")),
+            schedule_time=os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_TIME", "20:00"),
+            scheduler_enabled=_as_bool(
+                os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_SCHEDULER_ENABLED", "false")
+            ),
+            scheduler_tick_seconds=int(
+                os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_SCHEDULER_TICK_SECONDS", "300")
+            ),
+            max_gaps_per_run=int(
+                os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_MAX_GAPS", "3")
+            ),
+            min_entity_degree=int(
+                os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_MIN_DEGREE", "1")
+            ),
+            recent_note_limit=int(
+                os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT", "30")
             ),
         ),
         web=WebApiConfig(

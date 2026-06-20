@@ -35,6 +35,9 @@ class FakeMemory:
     def list_recent_notes(self, user_id: str, *, limit: int = 5, include_chunks: bool = True):
         return [self.note] if user_id == "alice" else []
 
+    def list_notes(self, user_id: str, *, include_chunks: bool = True):
+        return [self.note] if user_id == "alice" else []
+
     def due_reviews(self, user_id: str):
         return [self.review] if user_id == "alice" else []
 
@@ -103,6 +106,109 @@ def test_review_digest_job_generates_and_delivers_digest():
     assert target.target_id == "chat-1"
     assert "今日知识简报" in message.text
     assert "请回忆 Digest 的主触达入口" in message.text
+
+
+class FakeGraphStore:
+    def __init__(self, topology: dict) -> None:
+        self.topology = topology
+        self.calls: list[str] = []
+
+    def get_topology(self, user_id: str) -> dict:
+        self.calls.append(user_id)
+        return self.topology
+
+
+def test_digest_includes_knowledge_growth_section_when_graph_available():
+    graph = FakeGraphStore({
+        "nodes": [
+            {"id": "n1", "name": "向量检索"},
+            {"id": "n2", "name": "重排序"},
+            {"id": "n3", "name": "图谱"},
+        ],
+        "links": [
+            {"source": "n1", "target": "n2", "fact": "向量检索 配合 重排序"},
+            {"source": "n1", "target": "n3", "fact": "向量检索 写入 图谱"},
+        ],
+    })
+    use_case = ReviewDigestUseCase(FakeMemory(), graph_store=graph)
+
+    digest = use_case.generate("alice")
+
+    assert graph.calls == ["alice"]
+    growth = next((s for s in digest.sections if s.title == "知识增长："), None)
+    assert growth is not None
+    assert any("3 个实体" in item and "2 条关联" in item for item in growth.items)
+    assert any("向量检索" in item for item in growth.items)
+
+
+def test_digest_omits_graph_items_when_graph_unavailable():
+    class FailingGraph:
+        def get_topology(self, user_id: str) -> dict:
+            raise RuntimeError("neo4j down")
+
+    use_case = ReviewDigestUseCase(FakeMemory(), graph_store=FailingGraph())
+
+    digest = use_case.generate("alice")
+
+    # Graph failure must not surface any graph-derived items; a trend line may
+    # still appear from local note timestamps.
+    growth = next((s for s in digest.sections if s.title == "知识增长："), None)
+    if growth is not None:
+        assert not any("知识图谱" in item for item in growth.items)
+
+
+def test_digest_omits_graph_items_when_topology_reports_error():
+    graph = FakeGraphStore({"nodes": [], "links": [], "error": "Neo4j is not reachable."})
+    use_case = ReviewDigestUseCase(FakeMemory(), graph_store=graph)
+
+    digest = use_case.generate("alice")
+
+    growth = next((s for s in digest.sections if s.title == "知识增长："), None)
+    if growth is not None:
+        assert not any("知识图谱" in item for item in growth.items)
+
+
+class TrendMemory:
+    """Memory whose notes have controlled created_at for trend assertions."""
+
+    def __init__(self, notes) -> None:
+        self._notes = notes
+
+    def list_recent_notes(self, user_id, *, limit=5, include_chunks=True):
+        return list(self._notes)[:limit]
+
+    def list_notes(self, user_id, *, include_chunks=True):
+        return list(self._notes)
+
+    def due_reviews(self, user_id):
+        return []
+
+
+def test_growth_section_shows_week_over_week_trend_without_graph():
+    now = local_now()
+    notes = [
+        make_note(title="n1", created_at=now - timedelta(days=1)),   # this week
+        make_note(title="n2", created_at=now - timedelta(days=3)),   # this week
+        make_note(title="n3", created_at=now - timedelta(days=10)),  # last week
+    ]
+    # No graph store at all — trend should still render.
+    use_case = ReviewDigestUseCase(TrendMemory(notes))
+
+    digest = use_case.generate("alice")
+
+    growth = next((s for s in digest.sections if s.title == "知识增长："), None)
+    assert growth is not None
+    assert any("本周新增 2 条" in item and "上周 1 条" in item and "↑1" in item for item in growth.items)
+
+
+def test_growth_section_absent_when_no_recent_notes_and_no_graph():
+    now = local_now()
+    notes = [make_note(title="old", created_at=now - timedelta(days=30))]
+    use_case = ReviewDigestUseCase(TrendMemory(notes))
+
+    digest = use_case.generate("alice")
+
+    assert all(s.title != "知识增长：" for s in digest.sections)
 
 
 def test_review_digest_job_skips_disabled_subscription():

@@ -662,15 +662,26 @@ class GraphitiStore:
             logger.warning("get_topology failed: %s", exc)
             return {"nodes": [], "links": [], "error": str(exc)[:200]}
 
-    async def _get_topology(self, user_id: str | None = None) -> dict:  # noqa: ARG002
+    async def _get_topology(self, user_id: str | None = None) -> dict:
         driver = AsyncGraphDatabase.driver(
             self.settings.graphiti.uri,
             auth=(self.settings.graphiti.user, self.settings.graphiti.password),
         )
+        # Scope to a single user's group when a user_id is given, otherwise
+        # return the whole graph (admin/topology view). Graphiti stamps every
+        # node and edge with the same group_id used at ingest time.
+        group_id = self._group_id(user_id) if user_id else None
         try:
             async with driver.session() as session:
-                node_query = "MATCH (n:Entity) RETURN n.uuid AS id, n.name AS name, labels(n) AS labels, n.summary AS summary"
-                result = await session.run(node_query)
+                if group_id is not None:
+                    node_query = (
+                        "MATCH (n:Entity) WHERE n.group_id = $group_id "
+                        "RETURN n.uuid AS id, n.name AS name, labels(n) AS labels, n.summary AS summary"
+                    )
+                    result = await session.run(node_query, group_id=group_id)
+                else:
+                    node_query = "MATCH (n:Entity) RETURN n.uuid AS id, n.name AS name, labels(n) AS labels, n.summary AS summary"
+                    result = await session.run(node_query)
                 records = await result.data()
                 nodes = [
                     {
@@ -685,12 +696,21 @@ class GraphitiStore:
                     if r.get("id")
                 ]
 
-                edge_query = (
-                    "MATCH (a:Entity)-[r]->(b:Entity) "
-                    "RETURN a.uuid AS source, b.uuid AS target, "
-                    "r.fact AS fact, r.uuid AS uuid"
-                )
-                result = await session.run(edge_query)
+                if group_id is not None:
+                    edge_query = (
+                        "MATCH (a:Entity)-[r]->(b:Entity) "
+                        "WHERE a.group_id = $group_id AND b.group_id = $group_id "
+                        "RETURN a.uuid AS source, b.uuid AS target, "
+                        "r.fact AS fact, r.uuid AS uuid"
+                    )
+                    result = await session.run(edge_query, group_id=group_id)
+                else:
+                    edge_query = (
+                        "MATCH (a:Entity)-[r]->(b:Entity) "
+                        "RETURN a.uuid AS source, b.uuid AS target, "
+                        "r.fact AS fact, r.uuid AS uuid"
+                    )
+                    result = await session.run(edge_query)
                 records = await result.data()
                 links = [
                     {

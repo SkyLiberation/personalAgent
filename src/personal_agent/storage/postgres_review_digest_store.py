@@ -98,6 +98,16 @@ class PostgresReviewDigestStore(PostgresStoreBase):
                     )
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS knowledge_gap_deliveries (
+                        idempotency_key TEXT PRIMARY KEY,
+                        subscription_id TEXT NOT NULL,
+                        gap_date TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
             conn.commit()
         self._initialized = True
 
@@ -173,6 +183,32 @@ class PostgresReviewDigestStore(PostgresStoreBase):
         if row is None:
             return None
         return DigestSubscription.model_validate(row["payload"])
+
+    def claim_gap_delivery(self, subscription_id: str, gap_date: str) -> bool:
+        """Atomically claim one knowledge-gap delivery per (subscription, day).
+
+        Returns True if this caller won the claim (should deliver), False if a
+        delivery was already recorded for that day — including across process
+        restarts. Mirrors the digest ledger's INSERT ... ON CONFLICT pattern.
+        """
+        self.ensure_schema()
+        idempotency_key = f"gap:{subscription_id}:{gap_date}"
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO knowledge_gap_deliveries (
+                        idempotency_key, subscription_id, gap_date, created_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    RETURNING idempotency_key
+                    """,
+                    (idempotency_key, subscription_id, gap_date, local_now()),
+                )
+                claimed = cur.fetchone()
+            conn.commit()
+        return claimed is not None
 
     def reserve_delivery(self, subscription: DigestSubscription, digest_date: str) -> tuple[bool, str, str]:
         self.ensure_schema()

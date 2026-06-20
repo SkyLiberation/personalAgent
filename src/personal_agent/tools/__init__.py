@@ -14,6 +14,7 @@ from .base import (
 from .capture_text import build_capture_text_tool
 from .capture_upload import build_capture_upload_tool
 from .capture_url import build_capture_url_tool
+from .consolidate_notes import build_consolidate_notes_tool
 from .delete_note import build_delete_note_tool
 from .restore_note import build_restore_note_tool
 from .gateway import (
@@ -39,6 +40,7 @@ __all__ = [
     "build_capture_text_tool",
     "build_capture_upload_tool",
     "build_capture_url_tool",
+    "build_consolidate_notes_tool",
     "build_delete_note_tool",
     "build_restore_note_tool",
     "build_graph_search_tool",
