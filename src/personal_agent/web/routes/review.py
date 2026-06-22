@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from ...agent.service import AgentService
 from ...core.config import Settings
 from ...core.models import ReviewCard
-from ...review import DigestSubscription, ReviewDigestJob, ReviewDigestUseCase, ReviewFeedbackUseCase
+from ...review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
 from ...review.models import ReviewFeedbackOutcome
 from ...storage.postgres_review_digest_store import PostgresReviewDigestStore
 from ._shared import is_admin, resolve_user_id
@@ -127,7 +127,7 @@ def register_review_routes(
             settings,
         )
         job = ReviewDigestJob(
-            ReviewDigestUseCase(service.memory),
+            service.review_digest_use_case,
             app.state.review_digest_delivery_router,
             ledger=review_digest_store,
         )

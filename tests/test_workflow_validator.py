@@ -229,8 +229,38 @@ class TestRegistryCapabilityConsistency:
         def delete_note(note_id: str):
             return tool_response(tool_success(note_id))
 
+        @tool(
+            "review_digest",
+            description="digest",
+            response_format="content_and_artifact",
+            extras=governance_extras(risk_level="low", side_effects=("read_longterm",)),
+        )
+        def review_digest(user_id: str = "default"):
+            return tool_response(tool_success(user_id))
+
+        @tool(
+            "consolidate_knowledge",
+            description="consolidate",
+            response_format="content_and_artifact",
+            extras=governance_extras(risk_level="low", side_effects=("write_longterm",)),
+        )
+        def consolidate_knowledge(topic: str, user_id: str = "default"):
+            return tool_response(tool_success(topic))
+
+        @tool(
+            "inspect_knowledge_gaps",
+            description="gaps",
+            response_format="content_and_artifact",
+            extras=governance_extras(risk_level="low", side_effects=("read_longterm",)),
+        )
+        def inspect_knowledge_gaps(user_id: str = "default"):
+            return tool_response(tool_success(user_id))
+
         ex = ToolExecutor()
-        for t in (graph_search, web_search, capture_text, capture_url, capture_upload, delete_note):
+        for t in (
+            graph_search, web_search, capture_text, capture_url, capture_upload,
+            delete_note, review_digest, consolidate_knowledge, inspect_knowledge_gaps,
+        ):
             ex.register(t)
         return ex
 

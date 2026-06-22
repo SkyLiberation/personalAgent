@@ -24,6 +24,7 @@ EntryIntent = Literal[
     "capture_text", "capture_link", "capture_file",
     "ask", "summarize_thread",
     "delete_knowledge", "solidify_conversation",
+    "review_digest", "consolidate_knowledge", "inspect_knowledge_gaps",
     "direct_answer",
     "unknown",
 ]

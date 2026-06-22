@@ -10,7 +10,6 @@ from ..capture import CaptureService
 from ..core.config import Settings
 from ..feishu import FeishuService
 from ..insight import (
-    KnowledgeGapAnalyzer,
     KnowledgeGapJob,
     KnowledgeGapJobRunner,
     KnowledgeGapScheduler,
@@ -19,7 +18,6 @@ from ..review import (
     ReviewDigestJob,
     ReviewDigestJobRunner,
     ReviewDigestScheduler,
-    ReviewDigestUseCase,
     ReviewFeedbackUseCase,
     subscriptions_from_settings,
 )
@@ -79,31 +77,6 @@ class _GapSubscriptionStore:
         ]
 
 
-def _build_gap_question_rewriter(settings: Settings):
-    """Return an LLM-backed gap question rewriter, or None if no LLM is configured.
-
-    Detection stays deterministic; this only improves the user-facing phrasing.
-    Returns None when the small model is unconfigured so the analyzer keeps its
-    deterministic template questions instead of silently degrading.
-    """
-    from ..agent.runtime_llm import LlmClient
-
-    llm = LlmClient(settings)
-    if not settings.openai.api_key or not settings.openai.base_url:
-        return None
-
-    def _rewrite(gap) -> str | None:
-        prompt = (
-            "下面是系统检测到的一个个人知识库缺口，请把它改写成一句自然、友好、"
-            "不啰嗦的中文提问，引导用户补充知识。只输出问题本身，不要解释。\n\n"
-            f"缺口类型：{gap.gap_type}\n相关实体：{', '.join(gap.entities) or '无'}\n"
-            f"默认问法：{gap.question}"
-        )
-        return llm.generate_answer(prompt, prompt_name="knowledge_gap_question")
-
-    return _rewrite
-
-
 def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
     capture_service = CaptureService(settings, logger)
     service = AgentService(settings, capture_service=capture_service)
@@ -117,7 +90,7 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
     )
     review_digest_delivery_router = DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
     review_digest_job = ReviewDigestJob(
-        ReviewDigestUseCase(service.memory, graph_store=service.graph_store),
+        service.review_digest_use_case,
         review_digest_delivery_router,
         ledger=review_digest_store,
     )
@@ -126,14 +99,7 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         tick_seconds=settings.review_digest.scheduler_tick_seconds,
     )
     knowledge_gap_job = KnowledgeGapJob(
-        KnowledgeGapAnalyzer(
-            service.memory,
-            graph_store=service.graph_store,
-            min_degree=settings.knowledge_gap.min_entity_degree,
-            max_gaps=settings.knowledge_gap.max_gaps_per_run,
-            recent_note_limit=settings.knowledge_gap.recent_note_limit,
-            question_llm=_build_gap_question_rewriter(settings),
-        ),
+        service.knowledge_gap_use_case,
         review_digest_delivery_router,
         ledger=review_digest_store,
     )

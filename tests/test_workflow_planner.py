@@ -62,6 +62,27 @@ def test_planner_derives_dependencies_from_goal_order():
     assert third_root.depends_on == ["second::ask-verify"]
 
 
+@pytest.mark.parametrize(
+    ("intent", "tool_name"),
+    [
+        ("review_digest", "review_digest"),
+        ("consolidate_knowledge", "consolidate_knowledge"),
+        ("inspect_knowledge_gaps", "inspect_knowledge_gaps"),
+    ],
+)
+def test_planner_compiles_proactive_knowledge_intents(intent, tool_name):
+    planner = WorkflowPlanner(Settings())
+
+    plan, steps = planner.plan(
+        RouterDecision(goals=[Goal(goal_id="knowledge", intent=intent, input="缓存")]),
+        entry_text="knowledge request",
+    )
+
+    assert plan.tasks[0].workflow_id == intent
+    assert steps[0].tool_name == tool_name
+    assert steps[-1].action_type == "compose"
+
+
 def test_planner_rejects_duplicate_goal_ids():
     planner = WorkflowPlanner(Settings())
     decision = RouterDecision(goals=[

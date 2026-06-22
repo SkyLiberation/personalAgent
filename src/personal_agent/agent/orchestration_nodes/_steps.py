@@ -821,6 +821,17 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
                 if content_type:
                     tool_input["content_type"] = str(content_type)
 
+    elif step.tool_name in {"review_digest", "inspect_knowledge_gaps"}:
+        tool_input.setdefault("user_id", state.user_id)
+
+    elif step.tool_name == "consolidate_knowledge":
+        tool_input.setdefault("user_id", state.user_id)
+        topic = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if topic.strip():
+            tool_input.setdefault("topic", topic.strip())
+
     sd.tool_input = tool_input
     step.tool_input = tool_input
 
@@ -1073,6 +1084,23 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
         question = step.task_input or step.description or "根据已有信息生成回答"
 
     route = step.task_intent
+    if route in {
+        "review_digest",
+        "consolidate_knowledge",
+        "inspect_knowledge_gaps",
+    }:
+        for data in reversed(list(state.step_execution.results.values())):
+            if not isinstance(data, dict):
+                continue
+            text = str(data.get("text") or "").strip()
+            if text:
+                return text
+            if route == "consolidate_knowledge" and data.get("note_id"):
+                title = str(data.get("title") or step.task_input or "主题综述")
+                source_count = len(data.get("source_note_ids") or data.get("superseded") or [])
+                return f"已将 {source_count} 条相关笔记整理为《{title}》。"
+        raise RuntimeError("工作流未产生可呈现的结果。")
+
     if route == "summarize_thread":
         return _summarize_thread(state, deps)
 

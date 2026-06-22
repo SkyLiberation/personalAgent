@@ -13,6 +13,7 @@ boundary intact.
 """
 
 from .analyzer import KnowledgeGap, KnowledgeGapAnalyzer
+from .service import KnowledgeGapReport, KnowledgeGapUseCase
 from .job import (
     KnowledgeGapJob,
     KnowledgeGapJobResult,
@@ -23,6 +24,8 @@ from .job import (
 __all__ = [
     "KnowledgeGap",
     "KnowledgeGapAnalyzer",
+    "KnowledgeGapReport",
+    "KnowledgeGapUseCase",
     "KnowledgeGapJob",
     "KnowledgeGapJobResult",
     "KnowledgeGapJobRunner",

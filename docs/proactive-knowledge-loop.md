@@ -2,10 +2,15 @@
 
 本文档描述在 Review Digest 复习触达之上扩展出的一组**主动知识能力**。它们的共同目标是让系统不只是被动回答问题，而是能「回看自己懂了什么、漏了什么」并主动行动——这是 Agent 区别于单次 RAG 问答的核心。
 
-三项能力全部复用既有的调度 / 投递 / 反馈设施（`ReviewDigestScheduler`、`DeliveryRouter`、`FeishuDeliveryProvider`、Postgres ledger），**没有引入新的编排框架**：
+三项能力共享同一应用层，并从两类入口进入：
+
+- 用户请求：`Router -> WorkflowPlanner -> StepExecutionGraph -> tool adapter -> use case`
+- 定时或管理入口：`Scheduler / CLI / API -> use case -> delivery`
+
+Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报生成逻辑；意图入口也不会触发订阅投递。
 
 1. **知识缺口主动追问**（`insight/`）——后台发现知识孤岛和潜在矛盾，主动向用户提问。
-2. **自动主题整理**（`tools/consolidate_notes`）——把同主题的多条笔记整理成一篇综述，原笔记标记为已被取代。
+2. **自动主题整理**（`consolidate_knowledge`）——按主题选择多条笔记并整理成综述，原笔记标记为已被取代。
 3. **简报知识增长 section**（`review/service`）——日报中展示笔记增长趋势与图谱概览。
 
 > 与本文相关的基础设施见 [review-digest.md](review-digest.md)；系统整体的 LLM/确定性分工见 [summary/llm-decisions-and-deterministic-flows.md](summary/llm-decisions-and-deterministic-flows.md)。
@@ -18,6 +23,7 @@
 
 ```text
 知识图谱拓扑 + 本地笔记
+  -> KnowledgeGapUseCase
   -> KnowledgeGapAnalyzer 确定性检测缺口（孤岛 / 矛盾）
   -> (可选) LLM 改写提问措辞
   -> KnowledgeGapScheduler 按 schedule_time 判断到期
@@ -42,7 +48,7 @@
 
 `KnowledgeGapAnalyzer` 接受一个可选的 `question_llm: Callable[[KnowledgeGap], str | None]`：
 
-- 装配处 `web/context.py:_build_gap_question_rewriter` 用 `LlmClient.generate_answer` 实现它。
+- 装配处 `AgentRuntime` 用共享的 `LlmClient.generate_answer` 实现它。
 - LLM 未配置时返回 `None`，analyzer 保留确定性模板问题，不静默降级。
 - 任何异常或空结果都回退模板。
 
@@ -68,15 +74,15 @@
 
 ---
 
-## 2. 自动主题整理（consolidate_notes 工具）
+## 2. 自动主题整理（consolidate_knowledge 意图）
 
 ### 能力
 
 把同一主题下的多条笔记整理成一篇结构化综述，原笔记保留但标记为 `superseded`（可恢复、默认退出检索）。
 
 ```text
-note_ids + topic
-  -> 加载各源笔记（所有权校验）
+topic
+  -> 在应用用例中检索并选择当前版本的相关笔记（所有权校验）
   -> LLM 生成结构化综述草稿（失败回退确定性拼接）
   -> capture_text 链路写入新笔记
   -> 对每条源笔记 supersede_note(old, new)
@@ -87,8 +93,8 @@ note_ids + topic
 
 | 组件 | 位置 | 职责 |
 | --- | --- | --- |
-| 工具定义 | `src/personal_agent/tools/consolidate_notes.py` | args schema、governance、结果归一 |
-| 执行器 | `AgentRuntime.execute_consolidate`（`agent/runtime.py`） | 加载 / 生成 / 入库 / supersede 编排 |
+| 应用用例 | `src/personal_agent/knowledge/consolidation.py` | 主题检索 / 生成 / 入库 / supersede 编排 |
+| 工具适配 | `src/personal_agent/tools/consolidate_knowledge.py` | topic-only args schema、governance、结果归一 |
 | 服务委托 | `AgentService.execute_consolidate` | 对外暴露入口 |
 
 工具治理：`risk_level=low`、`side_effects=("write_longterm",)`、`permission_scope="memory:write"`，无需 confirm（综述是新增笔记，原笔记走 supersede 标记而非删除，可恢复）。仍走 Gateway/Policy。
@@ -99,9 +105,11 @@ note_ids + topic
 
 `artifact.data` 包含：`note_id`（综述）、`title`、`summary`、`superseded`（成功取代的原笔记 ID）、`failed`（处理失败的原笔记 ID）。
 
-### 当前触发方式
+### 入口边界
 
-第一版通过 `AgentService.execute_consolidate` 直接调用或后台 job 触发。**尚未接入用户自然语言主动触发**（「把关于 X 的笔记整理成一篇」）——这需要新增 `EntryIntent` + 注册 workflow + 多 note_id 解析与注入逻辑，会触动 router 这个强单点 LLM 依赖，按计划留作独立任务。
+当前已接入 `EntryIntent` 与 `WorkflowSpec`。Router 只提取主题，不输出 note_id 或执行步骤；相关笔记选择由 `KnowledgeConsolidationUseCase` 完成。
+
+`review_digest` 与 `inspect_knowledge_gaps` 同样是正式意图：前者只即时生成简报，后者只返回缺口分析；二者都不执行 scheduler 的投递和按日幂等逻辑。
 
 ---
 
@@ -146,13 +154,13 @@ PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
 - `tests/test_knowledge_gap_job.py`——有缺口才投递、按天去重、ledger 跨重启幂等、空跑不烧名额
 - `tests/test_review_digest_store.py::test_claim_gap_delivery_is_idempotent_per_day`——store 层原子幂等
 - `tests/test_review_digest_job.py`——知识增长 section（趋势 + 图谱、降级）
-- `tests/test_consolidate_notes_tool.py`——工具 governance 与结果契约
-- `tests/test_agent_flows.py::TestCaptureFlow::test_consolidate_notes_*`——端到端 supersede（真实 Postgres）
+- `tests/test_consolidate_knowledge_tool.py`——工具 governance 与结果契约
+- `tests/test_agent_flows.py::TestCaptureFlow::test_consolidate_knowledge_*`——端到端 supersede（真实 Postgres）
 
 常用命令：
 
 ```bash
-uv run pytest tests/test_knowledge_gap_analyzer.py tests/test_knowledge_gap_job.py tests/test_consolidate_notes_tool.py tests/test_review_digest_job.py -q
+uv run pytest tests/test_knowledge_gap_analyzer.py tests/test_knowledge_gap_job.py tests/test_consolidate_knowledge_tool.py tests/test_review_digest_job.py -q
 ```
 
 ---

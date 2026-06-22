@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from ..core.models import local_now
 from ..review.models import DeliveryMessage, DeliveryTarget, DigestSubscription
 from ..review.scheduler import is_subscription_due
-from .analyzer import KnowledgeGap, KnowledgeGapAnalyzer
+from .service import KnowledgeGapUseCase
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +54,11 @@ class KnowledgeGapJob:
 
     def __init__(
         self,
-        analyzer: KnowledgeGapAnalyzer,
+        use_case: KnowledgeGapUseCase,
         delivery_router: KnowledgeGapDeliveryProvider,
         ledger: KnowledgeGapLedger | None = None,
     ) -> None:
-        self.analyzer = analyzer
+        self.use_case = use_case
         self.delivery_router = delivery_router
         # Durable per-(subscription, day) claim store. When absent, fall back to
         # an in-process guard — both stop the scheduler's tick loop from
@@ -94,7 +94,8 @@ class KnowledgeGapJob:
         today = local_now().date().isoformat()
 
         try:
-            gaps = self.analyzer.detect(subscription.user_id)
+            report = self.use_case.inspect(subscription.user_id)
+            gaps = report.gaps
         except Exception as exc:
             logger.exception("Knowledge gap detection failed user_id=%s", subscription.user_id)
             return KnowledgeGapJobResult(
@@ -130,7 +131,6 @@ class KnowledgeGapJob:
                 skipped=True,
             )
 
-        text = _format_gaps(gaps)
         result = self.delivery_router.send(
             DeliveryTarget(
                 channel=subscription.channel,
@@ -139,7 +139,7 @@ class KnowledgeGapJob:
             ),
             DeliveryMessage(
                 title="知识缺口提醒",
-                text=text,
+                text=report.text,
                 metadata={"user_id": subscription.user_id, "kind": "knowledge_gap"},
             ),
         )
@@ -165,14 +165,6 @@ class KnowledgeGapJob:
             gaps_found=len(gaps),
             error=result.error,
         )
-
-
-def _format_gaps(gaps: list[KnowledgeGap]) -> str:
-    lines = ["我在整理你的知识库时发现几个可以补充的地方："]
-    for index, gap in enumerate(gaps, start=1):
-        lines.append(f"{index}. {gap.question}")
-    return "\n".join(lines)
-
 
 class KnowledgeGapScheduler:
     """Select due subscriptions and run the gap job for each."""

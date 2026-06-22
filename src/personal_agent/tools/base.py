@@ -12,6 +12,7 @@ RiskLevel = Literal["low", "medium", "high"]
 SideEffectType = Literal[
     "none",
     "read_local",
+    "read_longterm",
     "external_network",
     "write_longterm",
     "delete_longterm",

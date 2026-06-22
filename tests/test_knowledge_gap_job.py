@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from personal_agent.insight.analyzer import KnowledgeGap
 from personal_agent.insight.job import KnowledgeGapJob, KnowledgeGapScheduler
+from personal_agent.insight.service import KnowledgeGapReport, format_knowledge_gaps
 from personal_agent.review.models import (
     DeliveryMessage,
     DeliveryResult,
@@ -11,12 +12,23 @@ from personal_agent.review.models import (
 from personal_agent.review.delivery import DeliveryRouter
 
 
-class StubAnalyzer:
+class StubUseCase:
     def __init__(self, gaps) -> None:
         self._gaps = gaps
 
-    def detect(self, user_id):
-        return list(self._gaps)
+    def inspect(self, user_id):
+        gaps = list(self._gaps)
+        return KnowledgeGapReport(
+            user_id=user_id,
+            gaps=[{
+                "gap_type": gap.gap_type,
+                "key": gap.key,
+                "question": gap.question,
+                "entities": gap.entities,
+                "note_ids": gap.note_ids,
+            } for gap in gaps],
+            text=format_knowledge_gaps(gaps),
+        )
 
 
 class RecordingProvider:
@@ -37,7 +49,7 @@ def _subscription(**overrides):
 def test_job_delivers_question_when_gaps_exist():
     provider = RecordingProvider()
     gap = KnowledgeGap(gap_type="isolated_entity", key="isolated:n1", question="补充一下 X 吧？", entities=["X"])
-    job = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}))
+    job = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}))
 
     result = job.run(_subscription())
 
@@ -51,7 +63,7 @@ def test_job_delivers_question_when_gaps_exist():
 
 def test_job_skips_delivery_when_no_gaps():
     provider = RecordingProvider()
-    job = KnowledgeGapJob(StubAnalyzer([]), DeliveryRouter({"feishu": provider}))
+    job = KnowledgeGapJob(StubUseCase([]), DeliveryRouter({"feishu": provider}))
 
     result = job.run(_subscription())
 
@@ -63,7 +75,7 @@ def test_job_skips_delivery_when_no_gaps():
 def test_job_skips_disabled_subscription():
     provider = RecordingProvider()
     gap = KnowledgeGap(gap_type="isolated_entity", key="k", question="q")
-    job = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}))
+    job = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}))
 
     result = job.run(_subscription(enabled=False))
 
@@ -74,7 +86,7 @@ def test_job_skips_disabled_subscription():
 def test_job_delivers_at_most_once_per_day():
     provider = RecordingProvider()
     gap = KnowledgeGap(gap_type="isolated_entity", key="k", question="q")
-    job = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}))
+    job = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}))
     subscription = _subscription()
 
     first = job.run(subscription)
@@ -106,12 +118,12 @@ def test_ledger_blocks_redelivery_across_restart():
     ledger = FakeGapLedger()
     subscription = _subscription()
 
-    job1 = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}), ledger=ledger)
+    job1 = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}), ledger=ledger)
     first = job1.run(subscription)
 
     # New job instance = process restart; in-memory guard would be empty, but
     # the durable ledger still blocks a second delivery.
-    job2 = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}), ledger=ledger)
+    job2 = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}), ledger=ledger)
     second = job2.run(subscription)
 
     assert first.delivered is True
@@ -125,13 +137,13 @@ def test_gap_free_run_does_not_burn_daily_claim():
     subscription = _subscription()
 
     # Morning run finds nothing -> must not claim the day's slot.
-    empty_job = KnowledgeGapJob(StubAnalyzer([]), DeliveryRouter({"feishu": provider}), ledger=ledger)
+    empty_job = KnowledgeGapJob(StubUseCase([]), DeliveryRouter({"feishu": provider}), ledger=ledger)
     empty_job.run(subscription)
     assert ledger.claimed == set()
 
     # Later run finds a gap -> should still be able to deliver.
     gap = KnowledgeGap(gap_type="isolated_entity", key="k", question="q")
-    real_job = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}), ledger=ledger)
+    real_job = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}), ledger=ledger)
     result = real_job.run(subscription)
 
     assert result.delivered is True
@@ -141,7 +153,7 @@ def test_gap_free_run_does_not_burn_daily_claim():
 def test_scheduler_runs_due_subscriptions():
     provider = RecordingProvider()
     gap = KnowledgeGap(gap_type="isolated_entity", key="k", question="q")
-    job = KnowledgeGapJob(StubAnalyzer([gap]), DeliveryRouter({"feishu": provider}))
+    job = KnowledgeGapJob(StubUseCase([gap]), DeliveryRouter({"feishu": provider}))
 
     class Store:
         def list_subscriptions(self, *, enabled_only=True):

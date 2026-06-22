@@ -120,6 +120,17 @@ class AgentService:
     def execute_consolidate(self, *args, **kwargs):
         return self.runtime.execute_consolidate(*args, **kwargs)
 
+    @property
+    def review_digest_use_case(self):
+        return self.runtime.review_digest_use_case
+
+    @property
+    def knowledge_gap_use_case(self):
+        return self.runtime.knowledge_gap_use_case
+
+    def inspect_knowledge_gaps(self, user_id: str):
+        return self.runtime.inspect_knowledge_gaps(user_id)
+
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self.runtime.sync_note_to_graph(note_id)
 

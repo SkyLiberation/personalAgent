@@ -487,6 +487,72 @@ def _build_registry() -> WorkflowRegistry:
             recovery_policy="checkpoint_step",
         ),
         _workflow(
+            "review_digest",
+            "review_digest",
+            (
+                WorkflowStepSpec(
+                    "digest-generate",
+                    "tool_call",
+                    "生成当前用户的知识简报",
+                    tool_name="review_digest",
+                    side_effects=("read_longterm",),
+                    recovery_policy="abort",
+                ),
+                WorkflowStepSpec(
+                    "digest-compose",
+                    "compose",
+                    "呈现知识简报",
+                    depends_on=("digest-generate",),
+                    recovery_policy="abort",
+                ),
+            ),
+            projection_policy="step_projection",
+        ),
+        _workflow(
+            "consolidate_knowledge",
+            "consolidate_knowledge",
+            (
+                WorkflowStepSpec(
+                    "consolidate-run",
+                    "tool_call",
+                    "按主题选择并整理相关知识",
+                    tool_name="consolidate_knowledge",
+                    side_effects=("write_longterm",),
+                    recovery_policy="abort",
+                ),
+                WorkflowStepSpec(
+                    "consolidate-compose",
+                    "compose",
+                    "呈现知识整理结果",
+                    depends_on=("consolidate-run",),
+                    recovery_policy="abort",
+                ),
+            ),
+            projection_policy="step_projection",
+        ),
+        _workflow(
+            "inspect_knowledge_gaps",
+            "inspect_knowledge_gaps",
+            (
+                WorkflowStepSpec(
+                    "gap-inspect",
+                    "tool_call",
+                    "分析知识孤岛、薄弱连接和潜在冲突",
+                    tool_name="inspect_knowledge_gaps",
+                    side_effects=("read_longterm",),
+                    recovery_policy="abort",
+                ),
+                WorkflowStepSpec(
+                    "gap-compose",
+                    "compose",
+                    "呈现知识缺口分析",
+                    depends_on=("gap-inspect",),
+                    recovery_policy="abort",
+                ),
+            ),
+            projection_policy="step_projection",
+        ),
+        _workflow(
             "direct_answer",
             "direct_answer",
             (

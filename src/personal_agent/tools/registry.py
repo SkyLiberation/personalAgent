@@ -19,6 +19,9 @@ _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
     "ask": "graph_search",
     "delete_knowledge": "delete_note",
     "solidify_conversation": "capture_text",
+    "review_digest": "review_digest",
+    "consolidate_knowledge": "consolidate_knowledge",
+    "inspect_knowledge_gaps": "inspect_knowledge_gaps",
 }
 
 

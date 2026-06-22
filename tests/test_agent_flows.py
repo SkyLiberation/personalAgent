@@ -334,7 +334,7 @@ class TestCaptureFlow:
         matches = service.memory.search_memory("default", "部署流程 使用 Jenkins GitHub", limit=10)
         assert [note.id for note in matches] == ["new-deploy"]
 
-    def test_consolidate_notes_supersedes_sources_into_summary(self, service: AgentService):
+    def test_consolidate_knowledge_selects_topic_sources_and_supersedes_them(self, service: AgentService):
         first = make_note(
             id="topic-a",
             title="向量检索 基础",
@@ -353,7 +353,6 @@ class TestCaptureFlow:
         service.store.add_note(second)
 
         result = service.execute_consolidate(
-            note_ids=["topic-a", "topic-b"],
             topic="向量检索",
             user_id="default",
         )
@@ -366,13 +365,12 @@ class TestCaptureFlow:
         assert old_a.version.status == "superseded"
         assert old_a.version.superseded_by_note_id == summary_id
 
-    def test_consolidate_notes_requires_two_valid_sources(self, service: AgentService):
+    def test_consolidate_knowledge_requires_two_related_sources(self, service: AgentService):
         only = make_note(id="solo", title="孤立笔记", content="只有一条。", summary="孤立", user_id="default")
         service.store.add_note(only)
 
         result = service.execute_consolidate(
-            note_ids=["solo", "does-not-exist"],
-            topic="X",
+            topic="孤立笔记",
             user_id="default",
         )
 

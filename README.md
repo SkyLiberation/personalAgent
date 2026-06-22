@@ -43,7 +43,7 @@ Capture / Conversation
 | `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、delete/restore、consolidate 等知识操作 | [docs/topics/tools.md](docs/topics/tools.md) |
 | `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有受限会话线索、Postgres 长期记忆/问答历史、LangGraph checkpoint 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
 | `检索与推理层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持三层检索回退（图谱 → 本地 → 网络搜索）、Graphiti `node / edge / fact` 优先的语义推理、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；多跳推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
-| `主动知识循环` | [review/](src/personal_agent/review), [insight/](src/personal_agent/insight), [tools/consolidate_notes.py](src/personal_agent/tools/consolidate_notes.py) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
+| `主动知识循环` | [review/](src/personal_agent/review), [insight/](src/personal_agent/insight), [knowledge/](src/personal_agent/knowledge) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
 | `执行与反馈层` | [web/routes/](src/personal_agent/web/routes), [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、图谱失败降级、异步图谱同步、问答历史记录和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测与治理层` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests) | 具备日志、health、reset、API Key 鉴权、限流、用户隔离和基础测试；外部工具权限仍可补充 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
@@ -138,13 +138,13 @@ README 只保留最短路径：
 
 ### 7. Automatic Knowledge Consolidation
 
-- `consolidate_notes` 工具可以读取多条同主题笔记并生成一篇新的综合笔记
+- `consolidate_knowledge` 意图按主题选择相关笔记并生成一篇新的综合笔记
 - 新综述进入标准 capture/ingestion 链路，继续获得 chunk、review card 和 graph sync 能力
 - 原笔记会通过版本关系标记为被新综述 supersede，保留知识演进轨迹
-- 当前可通过 `AgentService.execute_consolidate`、内部任务或工具调用触发
+- Review Digest、知识整理、知识缺口检查均可通过自然语言意图触发；scheduler、CLI 与意图入口复用同一应用用例
 - 当前尚未增加“把关于 X 的笔记整理成一篇”自然语言 Intent；该入口需独立增加 Goal/Workflow
 
-详见 [主动知识循环](docs/proactive-knowledge-loop.md#2-自动主题整理consolidate_notes-工具)。
+详见 [主动知识循环](docs/proactive-knowledge-loop.md)。
 
 ### 8. Proactive Knowledge-gap Questions
 

@@ -113,6 +113,12 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
         )
     if "总结" in stripped:
         return decision("summarize_thread", "总结内容。")
+    if "知识简报" in stripped or "复习简报" in stripped:
+        return decision("review_digest", "生成知识简报。")
+    if any(word in stripped for word in ("整理成综述", "合并笔记", "整理知识")):
+        return decision("consolidate_knowledge", "按主题整理知识。")
+    if any(word in stripped for word in ("知识缺口", "知识孤岛", "检查缺口")):
+        return decision("inspect_knowledge_gaps", "检查知识缺口。")
     if stripped.startswith(("http://", "https://")):
         return decision("capture_link", "采集链接。")
     if any(word in stripped for word in ("记一下", "记住")):

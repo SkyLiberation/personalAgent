@@ -234,11 +234,18 @@ class StepProjectionValidator:
                             and "note_id" in err
                             and _has_upstream_action_type(steps, s, "resolve")
                         )
+                        deferred_consolidation_topic = (
+                            s.tool_name == "consolidate_knowledge"
+                            and "topic" not in s.tool_input
+                            and "topic" in err
+                            and intent == "consolidate_knowledge"
+                        )
                         if (
                             deferred_capture_text
                             or deferred_capture_url
                             or deferred_capture_upload
                             or deferred_delete_note_id
+                            or deferred_consolidation_topic
                         ):
                             continue
                         issues.append(f"{prefix} tool_input 参数校验失败: {err}")
@@ -259,8 +266,9 @@ class StepProjectionValidator:
                             "capture_text",
                             "capture_link",
                             "capture_file",
+                            "consolidate_knowledge",
                         }
-                        and s.tool_name == "capture_text"
+                        and s.tool_name in {"capture_text", "consolidate_knowledge"}
                     )
                     if (
                         any(effect in governance.side_effects for effect in ("write_longterm", "delete_longterm"))

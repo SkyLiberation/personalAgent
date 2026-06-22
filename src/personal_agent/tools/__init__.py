@@ -14,7 +14,7 @@ from .base import (
 from .capture_text import build_capture_text_tool
 from .capture_upload import build_capture_upload_tool
 from .capture_url import build_capture_url_tool
-from .consolidate_notes import build_consolidate_notes_tool
+from .consolidate_knowledge import build_consolidate_knowledge_tool
 from .delete_note import build_delete_note_tool
 from .restore_note import build_restore_note_tool
 from .gateway import (
@@ -25,6 +25,8 @@ from .gateway import (
     ToolGatewayContext,
 )
 from .graph_search import build_graph_search_tool
+from .inspect_knowledge_gaps import build_inspect_knowledge_gaps_tool
+from .review_digest import build_review_digest_tool
 from .registry import ToolExecutor
 from .web_search import build_web_search_tool
 
@@ -40,10 +42,12 @@ __all__ = [
     "build_capture_text_tool",
     "build_capture_upload_tool",
     "build_capture_url_tool",
-    "build_consolidate_notes_tool",
+    "build_consolidate_knowledge_tool",
     "build_delete_note_tool",
     "build_restore_note_tool",
     "build_graph_search_tool",
+    "build_inspect_knowledge_gaps_tool",
+    "build_review_digest_tool",
     "build_web_search_tool",
     "governance_extras",
     "ToolGovernance",

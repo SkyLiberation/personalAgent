@@ -15,7 +15,6 @@ from ..review import (
     DigestSubscription,
     ReviewDigestJob,
     ReviewDigestScheduler,
-    ReviewDigestUseCase,
     subscriptions_from_settings,
 )
 from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
@@ -198,7 +197,7 @@ def review_digest(
     for subscription in subscriptions_from_settings(service.settings):
         digest_store.upsert_subscription(subscription)
     job = ReviewDigestJob(
-        ReviewDigestUseCase(service.memory, graph_store=service.graph_store),
+        service.review_digest_use_case,
         DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)}),
         ledger=digest_store,
     )

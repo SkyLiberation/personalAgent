@@ -626,7 +626,9 @@ class EntryOrchestrator:
         """Return the newest full checkpoint state for internal platform APIs."""
         try:
             checkpointer = self._get_orch_graph().checkpointer
-            for ct in checkpointer.list(None, limit=500):
+            # run_id is persisted in checkpoint metadata, so filter in the DB
+            # rather than validating every checkpoint to find a match.
+            for ct in checkpointer.list(None, filter={"run_id": run_id}, limit=500):
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
                     state = AgentGraphState.model_validate(cv)
@@ -646,8 +648,14 @@ class EntryOrchestrator:
         """
         try:
             checkpointer = self._get_orch_graph().checkpointer
+            # Push the user filter into the DB query (metadata @> filter) so
+            # Postgres only returns this user's checkpoints instead of scanning
+            # every user's. Checkpoints come back newest-first, so the first
+            # `limit` distinct runs are the most recent ones and we can stop
+            # early — avoiding a full validation of hundreds of stale rows.
+            metadata_filter = {"user_id": user_id} if user_id else None
             newest_by_run: dict[str, AgentRunSnapshot] = {}
-            for ct in checkpointer.list(None, limit=500):
+            for ct in checkpointer.list(None, filter=metadata_filter, limit=500):
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
                     state = AgentGraphState.model_validate(cv)
@@ -656,6 +664,8 @@ class EntryOrchestrator:
                     if state.run_id in newest_by_run:
                         continue
                     newest_by_run[state.run_id] = state.to_run_snapshot()
+                    if len(newest_by_run) >= limit:
+                        break
             snapshots = list(newest_by_run.values())
             snapshots.sort(key=lambda s: s.updated_at, reverse=True)
             return snapshots[:limit]
