@@ -20,6 +20,7 @@ src/personal_agent/agent/execution_models.py
 src/personal_agent/agent/ingestion_pipeline.py
 src/personal_agent/agent/nodes.py
 src/personal_agent/agent/orchestration_graph.py
+src/personal_agent/agent/orchestration_contexts.py
 src/personal_agent/agent/orchestration_models.py
 src/personal_agent/agent/provenance.py
 src/personal_agent/agent/query_planner.py
@@ -49,8 +50,8 @@ src/personal_agent/agent/ask/prompts.py
 src/personal_agent/agent/ask/retrievers.py
 src/personal_agent/agent/ask/stages.py
 src/personal_agent/agent/orchestration_nodes/__init__.py
-src/personal_agent/agent/orchestration_nodes/_deps.py
 src/personal_agent/agent/orchestration_nodes/_entry.py
+src/personal_agent/agent/orchestration_nodes/_graph_helpers.py
 src/personal_agent/agent/orchestration_nodes/_helpers.py
 src/personal_agent/agent/orchestration_nodes/_react.py
 src/personal_agent/agent/orchestration_nodes/_steps.py
@@ -79,6 +80,7 @@ src/personal_agent/core/graph_results.py
 src/personal_agent/core/langsmith_tracing.py
 src/personal_agent/core/llm_schemas.py
 src/personal_agent/core/llm_trace.py
+src/personal_agent/core/structured_model.py
 src/personal_agent/core/logging_utils.py
 src/personal_agent/core/models.py
 src/personal_agent/core/observability.py

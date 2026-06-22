@@ -3,7 +3,7 @@
 Extracted from ``AgentRuntime`` so the runtime is a thin composition root and
 the LangGraph entry-graph wiring lives in one focused place. ``EntryOrchestrator``
 holds a back-reference to the runtime (the composition root) purely to build
-``OrchestrationDeps`` from its collaborators.
+the graph from contexts assembled by the runtime composition root.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from ..core.langsmith_tracing import langsmith_trace_context
 from ..core.models import EntryInput
 from ..core.observability import RunMetrics
 from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
-from .orchestration_nodes import OrchestrationDeps
 from .orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
 from .runtime_results import AskResult, CaptureResult, EntryResult
 from .router import describe_router_decision
@@ -234,8 +233,7 @@ def _graph_checkpointer_closed(graph) -> bool:
 class EntryOrchestrator:
     """Owns the LangGraph entry graph and the execute / resume / snapshot flow.
 
-    Holds a back-reference to the runtime composition root so it can build
-    ``OrchestrationDeps`` from the runtime's collaborators, and caches the
+    Holds a back-reference to the runtime composition root and caches the
     compiled graph (rebuilding if the checkpointer connection drops).
     """
 
@@ -254,8 +252,10 @@ class EntryOrchestrator:
             self._orch_graph = None
         if self._orch_graph is None:
             checkpointer = _build_checkpointer(self.settings)
-            deps = OrchestrationDeps.from_runtime(self._runtime)
-            self._orch_graph = build_entry_orchestration_graph(deps, checkpointer=checkpointer)
+            self._orch_graph = build_entry_orchestration_graph(
+                self._runtime.graph_contexts,
+                checkpointer=checkpointer,
+            )
             logger.info("Entry orchestration graph built with Postgres checkpoints")
         return self._orch_graph
 

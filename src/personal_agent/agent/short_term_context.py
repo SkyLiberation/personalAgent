@@ -347,7 +347,7 @@ def build_dialogue_context(
     """构造最终进 prompt 的对话上下文，溢出部分可选滚动摘要。
 
     ``summarizer`` 接受渲染后的溢出文本、返回摘要字符串；通常由
-    ``OrchestrationDeps.compress_context`` 适配而来。摘要失败或未配置时静默降级为纯截断。
+    由 graph context 的 ``compress_context`` capability 适配而来。摘要失败或未配置时静默降级为纯截断。
     """
     return build_dialogue_context_result(
         messages,

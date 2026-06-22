@@ -32,6 +32,15 @@ from ..tools import (
 )
 from .entry_orchestrator import EntryOrchestrator
 from .episodic_memory import record_entry_episode
+from .orchestration_contexts import (
+    DirectAnswerContext,
+    GraphContexts,
+    PlanningContext,
+    ReactContext,
+    RoutingContext,
+    SummaryContext,
+    StepExecutionContext,
+)
 from .workflow_planner import WorkflowPlanner
 from .step_projection_validator import StepProjectionValidator
 from .replanner import Replanner
@@ -146,10 +155,62 @@ class AgentRuntime:
         # Explicit collaborators.
         self._llm = LlmClient(settings)
         self._summarizer = ThreadSummarizer(self._llm)
+        from .ask import PostgresAskRunContextStore
+
+        direct_answer_context = DirectAnswerContext(
+            settings=self.settings,
+            compress_context=lambda text, user_id: self.compress_context(text, user_id),
+        )
+        summary_context = SummaryContext(
+            summarize_chat=lambda text, user_id: self.summarize_chat(text, user_id),
+            load_thread_messages=lambda entry_input, limit: self.load_thread_messages(
+                entry_input,
+                limit,
+            ),
+        )
+        self._graph_contexts = GraphContexts(
+            routing=RoutingContext(
+                settings=self.settings,
+                memory=self.memory,
+                intent_router=self._intent_router,
+                compress_context=lambda text, user_id: self.compress_context(text, user_id),
+            ),
+            planning=PlanningContext(
+                workflow_planner=self._workflow_planner,
+                step_projection_validator=self._step_projection_validator,
+            ),
+            direct_answer=direct_answer_context,
+            steps=StepExecutionContext(
+                settings=self.settings,
+                memory=self.memory,
+                replanner=self._replanner,
+                verifier=self._verifier,
+                step_projection_validator=self._step_projection_validator,
+                tool_executor=self._tool_executor,
+                graph_store=self.graph_store,
+                execute_ask=lambda *args, **kwargs: self.execute_ask(*args, **kwargs),
+                ask_service_factory=lambda: self._ask_service(),
+                ask_run_context_store=PostgresAskRunContextStore(
+                    self.settings.postgres_url
+                ),
+                workflow_artifact_store=self.workflow_replay_store,
+                summary=summary_context,
+                direct_answer=direct_answer_context,
+            ),
+            react=ReactContext(
+                settings=self.settings,
+                tool_executor=self._tool_executor,
+                policy_engine=self._policy_engine,
+            ),
+        )
         self._entry = EntryOrchestrator(self)
         self._thread_message_loader: (
             Callable[[EntryInput, int], list[dict[str, str]]] | None
         ) = None
+
+    @property
+    def graph_contexts(self) -> GraphContexts:
+        return self._graph_contexts
 
     def _sync_workflow_definitions(self) -> None:
         try:

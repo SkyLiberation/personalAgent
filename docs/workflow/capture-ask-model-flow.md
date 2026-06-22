@@ -88,7 +88,7 @@ entry_input.text
 
 ```text
 entry_input.text / metadata.url
-  -> _first_url(...)
+  -> prepare_entry_tool_input / _first_url(...)
   -> cap-link-fetch tool_call(capture_url)
        CaptureService.capture_text_from_url(url)
        FirecrawlUrlCaptureProvider

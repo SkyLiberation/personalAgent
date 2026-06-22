@@ -20,7 +20,6 @@ from personal_agent.agent.orchestration_models import (
     execution_trace_to_events,
     steps_to_steps_projected_events,
 )
-from personal_agent.agent.orchestration_nodes import OrchestrationDeps
 from personal_agent.agent.orchestration_nodes._helpers import _dialogue_prompt_messages
 from personal_agent.agent.router import (
     Goal,
@@ -302,11 +301,10 @@ class TestOrchestrationGraphIntegration:
         assert "step_execution_graph" in graph.get_graph().nodes
         assert "route_intent" not in graph.get_graph().nodes
 
-        deps = OrchestrationDeps.from_runtime(runtime)
-        step_graph = build_step_execution_graph(deps)
+        step_graph = build_step_execution_graph(runtime.graph_contexts)
         assert "step_tool_node" in step_graph.get_graph().nodes
         assert "react_graph" in step_graph.get_graph().nodes
-        react_graph = build_react_graph(deps)
+        react_graph = build_react_graph(runtime.graph_contexts)
         assert "react_tool_node" in react_graph.get_graph().nodes
 
     def test_route_intent_does_not_use_ask_history_when_thread_is_empty(self, runtime, monkeypatch):
@@ -371,7 +369,10 @@ class TestOrchestrationGraphIntegration:
             ],
         )
 
-        result = _node_direct_answer_branch(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_direct_answer_branch(
+            state,
+            deps=runtime.graph_contexts.direct_answer,
+        )
         system_content = captured_messages[0][0]["content"]
         user_contents = [item["content"] for item in captured_messages[0][1:]]
 
@@ -912,7 +913,9 @@ class TestPhase3RoutingFunctions:
         assert _after_confirm_step(state) == "handle_failure"
 
     def test_resolved_note_id_is_injected_through_verify_dependency(self):
-        from personal_agent.agent.orchestration_nodes._deps import _inject_note_id_into_steps
+        from personal_agent.agent.orchestration_nodes._graph_helpers import (
+            _inject_note_id_into_steps,
+        )
 
         steps = [
             StepRunState(step_id="del-1", action_type="resolve", status="completed"),
@@ -1006,7 +1009,7 @@ class TestPhase3ExecuteExecutionStep:
                 ),
             ],
         )
-        result = _node_consume_step_tool_result(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_consume_step_tool_result(state, deps=runtime.graph_contexts.steps)
         assert result["step_execution"].steps[0].status == "awaiting_confirmation"
         assert state.events[-1].type == "confirmation_required"
         tool_result_event = next(event for event in state.events if event.type == "tool_result")
@@ -1063,7 +1066,7 @@ class TestPhase3ExecuteExecutionStep:
             entry_text="test",
         )
 
-        result = _node_execute_step(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_execute_step(state, deps=runtime.graph_contexts.steps)
         assert result["step_execution"].steps[0].status == "completed"
 
     def test_failure_records_step_retry_budget_and_reason(self, runtime):
@@ -1084,7 +1087,7 @@ class TestPhase3ExecuteExecutionStep:
             ),
         )
 
-        _node_execute_step(state, deps=OrchestrationDeps.from_runtime(runtime))
+        _node_execute_step(state, deps=runtime.graph_contexts.steps)
 
         step = state.step_execution.steps[0]
         assert step.status == "failed"
@@ -1118,7 +1121,7 @@ class TestPhase3ExecuteExecutionStep:
         result = _execute_resolve_step(
             StepRunState(step_id="resolve-1", action_type="resolve").to_execution_step(),
             state,
-            OrchestrationDeps.from_runtime(runtime),
+            runtime.graph_contexts.steps,
         )
 
         assert result["note_id"] == "note-dns"
@@ -1168,7 +1171,7 @@ class TestPhase3ExecuteExecutionStep:
                 current_step_index=0,
             ),
         )
-        deps = OrchestrationDeps.from_runtime(runtime)
+        deps = runtime.graph_contexts.steps
 
         _node_execute_step(state, deps=deps)
         _node_handle_step_failure(state, deps=deps)
@@ -1311,20 +1314,20 @@ class TestPhase4ReActHelpers:
             allowed_tools=["graph_search", "nonexistent_tool"],
             execution_mode="react",
         )
-        resolved = _resolve_allowed_tools_for_step(step, OrchestrationDeps.from_runtime(runtime))
+        resolved = _resolve_allowed_tools_for_step(step, runtime.graph_contexts.react)
         assert "graph_search" in resolved
         assert "nonexistent_tool" not in resolved
 
     def test_is_react_tool_blocked_high_risk(self, runtime):
         from personal_agent.agent.orchestration_graph import _is_react_tool_blocked
 
-        assert _is_react_tool_blocked("delete_note", OrchestrationDeps.from_runtime(runtime))
-        assert _is_react_tool_blocked("capture_text", OrchestrationDeps.from_runtime(runtime))
+        assert _is_react_tool_blocked("delete_note", runtime.graph_contexts.react)
+        assert _is_react_tool_blocked("capture_text", runtime.graph_contexts.react)
 
     def test_is_react_tool_blocked_allows_safe_tools(self, runtime):
         from personal_agent.agent.orchestration_graph import _is_react_tool_blocked
 
-        assert not _is_react_tool_blocked("graph_search", OrchestrationDeps.from_runtime(runtime))
+        assert not _is_react_tool_blocked("graph_search", runtime.graph_contexts.react)
 
     def test_build_react_context(self):
         from personal_agent.agent.orchestration_graph import _build_react_context
@@ -1341,7 +1344,7 @@ class TestPhase4ReActHelpers:
     def test_format_react_tools(self, runtime):
         from personal_agent.agent.orchestration_graph import _format_react_tools
 
-        text = _format_react_tools({"graph_search"}, OrchestrationDeps.from_runtime(runtime))
+        text = _format_react_tools({"graph_search"}, runtime.graph_contexts.react)
         assert "graph_search" in text
 
     def test_summarize_react_tool_result(self):
@@ -1395,7 +1398,7 @@ class TestPhase4ReActNodes:
                 current_step_index=0,
             ),
         )
-        result = _node_react_init(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_init(state, deps=runtime.graph_contexts.react)
         assert result["react"].step_id == "ask-1"
         assert result["react"].max_iterations == 3
         assert result["react"].allowed_tools == ["graph_search"]
@@ -1538,7 +1541,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
         assert result["react"].done is True
         assert result["react"].result["answer"] == "X是一种技术"
         assert len(result["react"].iterations) >= 1
@@ -1572,7 +1575,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
         # Parse failure: index increments, not done yet
         assert result["react"].iteration_index == 1
         assert result["react"].done is not True
@@ -1604,7 +1607,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
         assert result["react"].done is True
         assert result["react"].status == "exhausted"
         assert result["react"].stop_reason == "parse_failures_exhausted"
@@ -1636,7 +1639,7 @@ class TestPhase4ReActIterateNode:
             _mock_llm,
         )
 
-        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
         # Tool is blocked — observation should indicate error
         assert len(result["react"].iterations) >= 1
         obs = result["react"].iterations[-1].get("observation", "")
@@ -1667,7 +1670,7 @@ class TestPhase4ReActIterateNode:
             lambda prompt, rt: None,
         )
 
-        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
         assert result["react"].done is True
         assert "react_iterations" in result["react"].result
         assert result["react"].status == "failed"
@@ -1718,7 +1721,7 @@ class TestPhase4ReActMainGraphIntegration:
             step_execution=StepExecutionState(steps=[{"step_id": "ask-1", "status": "running"}]),
         )
 
-        result = _node_react_iterate(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
 
         assert result["tool_tracking"].active_context == "react"
         assert result["tool_messages"][0].tool_calls[0]["name"] == "graph_search"
@@ -1755,7 +1758,7 @@ class TestPhase4ReActMainGraphIntegration:
             )],
         )
 
-        result = _node_consume_react_tool_result(state, deps=OrchestrationDeps.from_runtime(runtime))
+        result = _node_consume_react_tool_result(state, deps=runtime.graph_contexts.react)
 
         assert result["tool_tracking"].active_context is None
         assert result["tool_tracking"].pending_call_id == ""
@@ -1779,7 +1782,7 @@ class TestPhase4ReActMainGraphIntegration:
         )
 
         checkpointer = _build_checkpointer(runtime.settings)
-        graph = build_entry_orchestration_graph(OrchestrationDeps.from_runtime(runtime), checkpointer=checkpointer)
+        graph = build_entry_orchestration_graph(runtime.graph_contexts, checkpointer=checkpointer)
 
         state = AgentGraphState(
             run_id="r-ask",

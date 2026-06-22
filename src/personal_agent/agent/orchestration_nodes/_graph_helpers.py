@@ -1,90 +1,16 @@
-"""Orchestration graph dependencies and step execution utility helpers."""
+"""Pure helpers and constants shared by orchestration graph nodes."""
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from collections import deque
-from dataclasses import dataclass
-from typing import Callable
 
 from ...core.prompts import get_prompt
+from ..orchestration_contexts import ReactContext
 
 if TYPE_CHECKING:
-    from ...capture import CaptureService
-    from ...core.config import Settings
-    from ...core.models import EntryInput
-    from ...graphiti.store import GraphitiStore
-    from ...memory import MemoryFacade
-    from ...policy import PolicyEngine
-    from ...tools import ToolExecutor
-    from ..ask import AskRunContextStore
-    from ..runtime_ask import AskService
-    from ..step_projection_validator import StepProjectionValidator
     from ..execution_models import ExecutionStep
-    from ..replanner import Replanner
-    from ..router import DefaultIntentRouter
-    from ..runtime_results import AskResult, CaptureResult
-    from ..verifier import AnswerVerifier
-
-logger = logging.getLogger(__name__)
-
-@dataclass(slots=True)
-class OrchestrationDeps:
-    """Explicit dependencies used by the entry orchestration graph."""
-
-    settings: "Settings"
-    memory: "MemoryFacade"
-    intent_router: "DefaultIntentRouter"
-    workflow_planner: object
-    step_projection_validator: "StepProjectionValidator"
-    replanner: "Replanner | None"
-    verifier: "AnswerVerifier | None"
-    tool_executor: "ToolExecutor"
-    graph_store: "GraphitiStore"
-    execute_ask: Callable[..., "AskResult"]
-    ask_service_factory: Callable[[], "AskService"]
-    ask_run_context_store: "AskRunContextStore"
-    workflow_artifact_store: object
-    policy_engine: "PolicyEngine | None" = None
-    execute_capture: Callable[..., "CaptureResult"] | None = None
-    capture_service: "CaptureService | None" = None
-    summarize_chat: Callable[[str, str], str] | None = None
-    compress_context: Callable[[str, str], str] | None = None
-    load_thread_messages: Callable[["EntryInput", int], list[dict[str, str]]] | None = None
-
-    @classmethod
-    def from_runtime(cls, runtime) -> "OrchestrationDeps":
-        from ..ask import AskRunContextStore, PostgresAskRunContextStore
-
-        try:
-            ask_context_store = PostgresAskRunContextStore(runtime.settings.postgres_url)
-        except Exception:
-            logger.exception("Falling back to in-memory ask context artifacts")
-            ask_context_store = AskRunContextStore()
-
-        return cls(
-            settings=runtime.settings,
-            memory=runtime.memory,
-            intent_router=runtime.intent_router,
-            workflow_planner=runtime.workflow_planner,
-            step_projection_validator=runtime.step_projection_validator,
-            replanner=getattr(runtime, "_replanner", None),
-            verifier=getattr(runtime, "_verifier", None),
-            tool_executor=runtime.tool_executor,
-            graph_store=runtime.graph_store,
-            execute_ask=runtime.execute_ask,
-            ask_service_factory=runtime._ask_service,
-            ask_run_context_store=ask_context_store,
-            workflow_artifact_store=runtime.workflow_replay_store,
-            policy_engine=getattr(runtime, "_policy_engine", None),
-            execute_capture=runtime.execute_capture,
-            capture_service=runtime.capture_service,
-            summarize_chat=runtime.summarize_chat,
-            compress_context=runtime.compress_context,
-            load_thread_messages=runtime.load_thread_messages,
-        )
 
 # ---------------------------------------------------------------------------
 # Constants for checkpointed orchestration behavior
@@ -222,13 +148,13 @@ def _default_step_answer(steps: list) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_allowed_tools_for_step(step: "ExecutionStep", deps: OrchestrationDeps) -> set[str]:
+def _resolve_allowed_tools_for_step(step: "ExecutionStep", deps: ReactContext) -> set[str]:
     allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
     registered = {t.name for t in deps.tool_executor.list_tools()}
     return allowed & registered
 
 
-def _is_react_tool_blocked(tool_name: str, deps: OrchestrationDeps) -> bool:
+def _is_react_tool_blocked(tool_name: str, deps: ReactContext) -> bool:
     """Whether a tool may not run in ReAct autonomous mode, per the policy engine.
 
     The tool's governance snapshot is fed to the shared ``PolicyEngine`` so the
@@ -241,8 +167,7 @@ def _is_react_tool_blocked(tool_name: str, deps: OrchestrationDeps) -> bool:
     if spec is None:
         return True
     governance = tool_governance(spec)
-    engine = deps.policy_engine or PolicyEngine()
-    decision = engine.evaluate(
+    decision = deps.policy_engine.evaluate(
         PolicyInput(
             action="tool_call",
             execution_mode="react",

@@ -1,6 +1,9 @@
 # Workflow / Step Projection 层
 
-当前项目采用 workflow-first 架构。`ask_branch`、`capture_branch`、`summarize_branch`、`direct_answer_branch`、`delete_knowledge` 和 `solidify_conversation` 都是 workflow；区别只在于是否需要投影成可恢复、可展示、可校验的执行步骤。
+当前项目采用 workflow-first 架构。所有已识别 Goal（ask、capture、summarize、delete、
+solidify、direct_answer）都由 `WorkflowPlanner` 编译后进入 `StepExecutionGraph`。
+`direct_answer_branch` 仅承担无 Goal、Router 不可用或 step projection 校验失败后的 fallback，
+不再是正常业务 workflow 的第二条执行路径。
 
 固定业务流程的真源是 `WorkflowSpec / WorkflowRegistry`。`WorkflowPlanner` 选择 active spec，并把一个或多个 Goal 确定性编译为跨 workflow 的 `ExecutionPlan` 与 `ExecutionStep` DAG，再进入 `StepExecutionGraph`。开放式动态规划不是当前生产主路径，边界见 [Dynamic Planning](dynamic-planning.md)。
 
@@ -20,9 +23,7 @@
 ```text
 EntryInput
   -> route_intent
-  -> branch workflow
-       ask / capture / summarize / direct_answer
-  -> step projection workflow
+  -> workflow planning
        project_workflow_steps
        validate_projected_steps
        prepare_step_execution
@@ -34,9 +35,11 @@ EntryInput
        consume_step_tool_result
        handle_step_success / handle_step_failure
        finalize_step_execution
+  -> direct_answer_branch（仅 fallback）
 ```
 
-普通 branch workflow 不生成 `steps`，只返回 `execution_trace` 和事件。`delete_knowledge / solidify_conversation` 需要候选解析、草稿展示、HITL、checkpoint 恢复和前端步骤面板，所以会生成 `steps`。
+正常业务 workflow 统一生成 `steps`。父图不再维护 ask、capture、summarize 的直连 branch，
+从而避免 WorkflowSpec 与 branch 函数成为两个行为事实源。
 
 ## 核心模型
 

@@ -18,8 +18,8 @@ from ..orchestration_models import (
     StepExecutionState,
     ReactSubState,
 )
-from ._deps import (
-    OrchestrationDeps,
+from ..orchestration_contexts import StepExecutionContext
+from ._graph_helpers import (
     _RETRY_DELAY_SECONDS,
     _REACT_MAX_ITERATIONS_CAP,
     _default_step_answer,
@@ -40,14 +40,14 @@ from ._tooling import (
 )
 
 if TYPE_CHECKING:
-    from ._deps import ExecutionStep
+    from ._graph_helpers import ExecutionStep
 
 logger = logging.getLogger(__name__)
 
 
 def _retrieve_reflections(
     state: AgentGraphState,
-    deps: OrchestrationDeps,
+    deps: StepExecutionContext,
     intent: str,
     error: str,
 ):
@@ -176,7 +176,7 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
     return {}
 
 
-def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
     """Dispatch a single execution step.  Raises on failure; retry/replan handled
     by the handle_step_result node.
 
@@ -277,7 +277,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     return _complete_current_step(state, step, deps=deps)
 
 
-def _node_consume_step_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
+def _node_consume_step_tool_result(state: AgentGraphState, *, deps: StepExecutionContext | None = None) -> dict:
     """Consume the latest ToolGateway artifact for a deterministic execution step."""
     if state.step_execution.current_step_index >= len(state.step_execution.steps):
         _clear_pending_tool_call(state)
@@ -336,7 +336,7 @@ def _fail_current_step(
     step: "ExecutionStep",
     exc: Exception,
     *,
-    deps: OrchestrationDeps | None = None,
+    deps: StepExecutionContext | None = None,
 ) -> dict:
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     err_msg = f"{type(exc).__name__}: {exc}"
@@ -378,7 +378,7 @@ def _complete_current_step(
     state: AgentGraphState,
     step: "ExecutionStep",
     *,
-    deps: OrchestrationDeps | None = None,
+    deps: StepExecutionContext | None = None,
 ) -> dict:
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     if state.pending_confirmation is not None:
@@ -438,7 +438,7 @@ def _complete_current_step(
 def _persist_step_artifact(
     state: AgentGraphState,
     sd: StepRunState,
-    deps: OrchestrationDeps,
+    deps: StepExecutionContext,
     *,
     phase: str,
     payload: dict,
@@ -494,7 +494,7 @@ def _step_display_output(step, result_data: object) -> dict[str, str]:
     return {}
 
 
-def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_handle_step_success(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
     """Post-success: inject dependency outputs into downstream planned steps."""
     if state.step_execution.current_step_index >= len(state.step_execution.steps):
         return {}
@@ -538,7 +538,7 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: OrchestrationDeps
     return {"step_execution": state.step_execution, "events": state.events}
 
 
-def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_handle_step_failure(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
     """Handle a failed step: retry, replan, skip, or abort."""
     if state.step_execution.current_step_index >= len(state.step_execution.steps):
         return {}
@@ -660,7 +660,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
     return {"step_execution": state.step_execution}
 
 
-def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
     """Pause the graph for human confirmation via ``interrupt()``.
 
     First invocation: ``interrupt()`` pauses the graph and returns an
@@ -749,7 +749,7 @@ def _node_confirm_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     }
 
 
-def _node_finalize_step_execution(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
+def _node_finalize_step_execution(state: AgentGraphState, *, deps: StepExecutionContext | None = None) -> dict:
     """Compose default answer if none was set, mark execution complete."""
     if not state.answer:
         state.answer = _default_step_answer(state.step_execution.steps)
@@ -800,9 +800,7 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
 
     elif step.tool_name == "capture_url":
         if "url" not in tool_input:
-            from ._entry import _first_url
-
-            url = metadata.get("url") or _first_url(
+            url = metadata.get("url") or _helpers._first_url(
                 step.task_input or (
                     (entry_input.text if entry_input is not None else state.entry_text) or ""
                 )
@@ -884,7 +882,7 @@ def _dispatch_step(
     step: "ExecutionStep",
     sd: StepRunState,
     state: AgentGraphState,
-    deps: OrchestrationDeps,
+    deps: StepExecutionContext,
 ) -> None:
     """Execute a single step by action_type. Raises on failure.
 
@@ -921,7 +919,7 @@ def _dispatch_step(
         raise ValueError(f"未知的 action_type: {step.action_type}")
 
 
-def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
+def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
     question = step.tool_input.get("question") if step.tool_input else None
     question = str(question or step.task_input or state.entry_text or step.description or "")
 
@@ -932,7 +930,11 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps
     if step.task_intent == "ask":
         from ._entry import _entry_conversation_messages
 
-        conversation = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
+        conversation = _entry_conversation_messages(
+            state,
+            exclude_latest=True,
+            deps=deps.direct_answer,
+        )
         ask_service = deps.ask_service_factory()
         ctx = ask_service.build_run_context(
             question,
@@ -961,7 +963,7 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps
     return {"answer": "", "entity_names": [], "relation_facts": [], "hint": "graph disabled or empty"}
 
 
-def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
+def _execute_resolve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
     user_id = state.user_id
     original_query = step.task_input or state.entry_text or ""
 
@@ -1006,7 +1008,7 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps)
 
 
 def _select_local_delete_candidate_with_llm(
-    delete_request: str, user_id: str, deps: OrchestrationDeps,
+    delete_request: str, user_id: str, deps: StepExecutionContext,
 ) -> list[dict]:
     try:
         notes = deps.memory.list_notes(user_id, include_chunks=False)
@@ -1054,7 +1056,7 @@ def _select_local_delete_candidate_with_llm(
     return []
 
 
-def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> str:
+def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionContext) -> str:
     context_parts: list[str] = []
     for sid, data in state.step_execution.results.items():
         if isinstance(data, dict):
@@ -1072,16 +1074,7 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
 
     route = step.task_intent
     if route == "summarize_thread":
-        from ._entry import _node_summarize_branch
-
-        original_entry = state.entry_input
-        if original_entry is not None and step.task_input:
-            state.entry_input = original_entry.model_copy(update={"text": step.task_input})
-        try:
-            _node_summarize_branch(state, deps=deps)
-        finally:
-            state.entry_input = original_entry
-        return state.answer or ""
+        return _summarize_thread(state, deps)
 
     if route == "direct_answer":
         from ._entry import _node_direct_answer_branch
@@ -1090,7 +1083,7 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
         if original_entry is not None and step.task_input:
             state.entry_input = original_entry.model_copy(update={"text": step.task_input})
         try:
-            _node_direct_answer_branch(state, deps=deps)
+            _node_direct_answer_branch(state, deps=deps.direct_answer)
         finally:
             state.entry_input = original_entry
         return state.answer or ""
@@ -1160,7 +1153,59 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
         return f"根据已有信息：{context[:500]}"
 
 
-def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> None:
+def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str:
+    """Execute the summarize workflow's compose operation."""
+    entry_input = state.entry_input
+    if entry_input is None:
+        return "未收到可总结的内容。"
+
+    messages: list[dict[str, str]] = []
+    thread_messages_raw = entry_input.metadata.get("thread_messages", "")
+    if thread_messages_raw:
+        try:
+            parsed_messages = json.loads(thread_messages_raw)
+            if isinstance(parsed_messages, list):
+                messages = [item for item in parsed_messages if isinstance(item, dict)]
+        except json.JSONDecodeError:
+            logger.warning(
+                "Invalid preloaded thread messages for session=%s",
+                entry_input.session_id,
+            )
+
+    if not messages:
+        try:
+            messages = deps.summary.load_thread_messages(entry_input, 20)
+        except Exception:
+            logger.exception(
+                "Unable to load thread messages for summarize workflow session=%s",
+                entry_input.session_id,
+            )
+
+    if not messages:
+        messages = _helpers._dialogue_prompt_messages(
+            state.messages,
+            exclude_latest=True,
+        )
+
+    if messages:
+        messages_text = "\n".join(
+            f"[{item.get('role', 'unknown')}]: {item.get('content', '')}"
+            for item in messages
+        )
+        return deps.summary.summarize_chat(
+            messages_text,
+            entry_input.user_id or "default",
+        )
+
+    if entry_input.metadata.get("chat_id", ""):
+        return (
+            "已识别为群聊总结诉求。当前暂时无法获取会话消息，请稍后重试，"
+            "或直接粘贴需要总结的聊天内容。"
+        )
+    return "已识别为总结诉求。请直接发送需要总结的文本内容，或在群聊中使用此功能。"
+
+
+def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
     # ask flow: run the real verification stage on the run-scoped context —
     # verify + retry + web fallback (re-assemble/re-compose/re-verify) + annotate.
     # The final answer and citations/matches are written back onto the state.

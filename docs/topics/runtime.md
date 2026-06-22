@@ -112,7 +112,9 @@ EntryInput
 
 ### `workflow_planner / step_projection_validator`
 
-运行时通过只读属性暴露 `WorkflowPlanner` 和 `StepProjectionValidator` 给 orchestration deps。Router 产出的 Goal 会统一进入 WorkflowPlanner；Planner 选择 WorkflowSpec 并编译 ExecutionPlan，Validator 只校验 workflow 编译结果，不读取 Router 执行策略。
+运行时在 composition root 中把 `WorkflowPlanner` 和 `StepProjectionValidator` 注入
+`PlanningContext`。Router 产出的 Goal 会统一进入 WorkflowPlanner；Planner 选择 WorkflowSpec
+并编译 ExecutionPlan，Validator 只校验 workflow 编译结果，不读取 Router 执行策略。
 
 ### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
 
@@ -203,7 +205,9 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 
 这会带来几个问题：
 
-- ~~orchestration nodes 仍依赖 `OrchestrationDeps.from_runtime()` 从 runtime 抽取大量私有字段。~~ **已修复**：`OrchestrationDeps.from_runtime()` 现在通过 `@property` 公开属性访问（`runtime.intent_router`、`runtime.planner` 等），不再直接访问私有字段。
+- LangGraph 依赖已拆分为 `RoutingContext / PlanningContext / DirectAnswerContext /
+  SummaryContext / StepExecutionContext / ReactContext`。`GraphContexts` 只在 Graph Builder 装配边界出现，节点仅接收
+  对应阶段的窄 Context。
 - 工具由 `build_capture_text_tool(capture_executor)` 创建，通过注入 callable 调用采集能力，并由 `ToolNode` 执行。
 - Runtime 修改容易影响多个入口和测试面，局部能力难以单独替换或复用。
 - LangGraph 已经表达流程，但业务执行边界还没有完全下沉到 node/service 层。
@@ -254,7 +258,7 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 
 ### 分阶段迁移
 
-1. 定义 `EntryOrchestrationDeps` 的最终形态：只包含 node 需要的显式 service/callable，不再从 runtime 私有字段直接读。
+1. 继续将 `StepExecutionContext` 中复合 use case 拆成更窄的 step handler，避免步骤分发器长期增长。
 2. 抽出 `AskService`：先迁移 `execute_ask()` 的主体逻辑，runtime 只保留转发方法。
 3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture flow、store、Graphiti sync 的编排移出 runtime。
 4. 工具对 runtime 的依赖已通过 `build_capture_text_tool(capture_executor)` 的依赖注入消除。
@@ -263,7 +267,8 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 
 ### 验收标准
 
-- ~~orchestration nodes 不访问 runtime 私有字段。~~ **已完成**：`OrchestrationDeps.from_runtime()` 使用公开属性。
+- orchestration nodes 不访问 runtime，也不存在 `from_runtime()` service locator；所有 Context 在
+  `AgentRuntime` composition root 中显式构造。
 - 工具不持有 `AgentRuntime` 实例；LangChain 工具工厂接收所需 callable。
 - runtime public 方法仍兼容现有 Web/CLI/飞书调用。
 - 所有核心回归测试通过。

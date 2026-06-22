@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage
 
-from ._deps import OrchestrationDeps, _REACT_SYSTEM_PROMPT
+from ..orchestration_contexts import ReactContext
+from ._graph_helpers import _REACT_SYSTEM_PROMPT
 from ...core.llm_schemas import structured_response_format, strict_tool_definition, strip_json_fence
 from ...core.prompts import get_prompt
 
@@ -31,7 +32,7 @@ def _build_react_context(step: "ExecutionStep", results: dict) -> str:
     return "\n".join(parts) if parts else "无"
 
 
-def _format_react_tools(allowed: set[str], deps: OrchestrationDeps) -> str:
+def _format_react_tools(allowed: set[str], deps: ReactContext) -> str:
     lines: list[str] = []
     from ...tools import tool_schema
     for spec in deps.tool_executor.list_tools():
@@ -82,7 +83,7 @@ _FINISH_REACT_TOOL = {
 
 def _react_llm_respond(
     user_prompt: str,
-    deps: OrchestrationDeps,
+    deps: ReactContext,
     allowed_tools: set[str] | None = None,
 ) -> str | None:
     from ...core.llm_trace import traced_chat_completion
@@ -145,7 +146,7 @@ def _react_llm_respond(
 def _structured_llm_respond(
     prompt_name: str,
     user_prompt: str,
-    deps: OrchestrationDeps,
+    deps: ReactContext,
     schema: dict,
     *,
     max_tokens: int = 500,

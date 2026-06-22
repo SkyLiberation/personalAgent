@@ -8,26 +8,17 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	entry_graph(entry_graph)
-	capture_branch(capture_branch)
-	ask_branch(ask_branch)
-	summarize_branch(summarize_branch)
 	direct_answer_branch(direct_answer_branch)
 	finalize_entry_result(finalize_entry_result)
 	step_execution_graph(step_execution_graph)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> entry_graph;
-	ask_branch --> finalize_entry_result;
-	capture_branch --> finalize_entry_result;
 	direct_answer_branch --> finalize_entry_result;
-	entry_graph -.-> ask_branch;
-	entry_graph -.-> capture_branch;
 	entry_graph -.-> direct_answer_branch;
 	entry_graph -.-> finalize_entry_result;
 	entry_graph -.-> step_execution_graph;
-	entry_graph -.-> summarize_branch;
 	step_execution_graph -.-> direct_answer_branch;
 	step_execution_graph -.-> finalize_entry_result;
-	summarize_branch --> finalize_entry_result;
 	finalize_entry_result --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
@@ -158,25 +149,16 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
-	capture_branch(capture_branch)
-	ask_branch(ask_branch)
-	summarize_branch(summarize_branch)
 	direct_answer_branch(direct_answer_branch)
 	finalize_entry_result(finalize_entry_result)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> entry_graph\3anormalize_entry;
-	ask_branch --> finalize_entry_result;
-	capture_branch --> finalize_entry_result;
 	direct_answer_branch --> finalize_entry_result;
-	entry_graph\3a__end__ -.-> ask_branch;
-	entry_graph\3a__end__ -.-> capture_branch;
 	entry_graph\3a__end__ -.-> direct_answer_branch;
 	entry_graph\3a__end__ -.-> finalize_entry_result;
 	entry_graph\3a__end__ -.-> step_execution_graph\3aproject_workflow_steps;
-	entry_graph\3a__end__ -.-> summarize_branch;
 	step_execution_graph\3a__end__ -.-> direct_answer_branch;
 	step_execution_graph\3a__end__ -.-> finalize_entry_result;
-	summarize_branch --> finalize_entry_result;
 	finalize_entry_result --> __end__;
 	subgraph entry_graph
 	entry_graph\3anormalize_entry(normalize_entry)

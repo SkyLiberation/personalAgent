@@ -18,11 +18,10 @@ from ..orchestration_models import (
     _new_run_id,
     _new_thread_id,
 )
-from ._deps import OrchestrationDeps
+from ..orchestration_contexts import DirectAnswerContext, PlanningContext, RoutingContext
 from ._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
-    _first_url,
     _merge_clarification_text,
     _resume_value_get,
 )
@@ -213,7 +212,7 @@ def _after_interrupt_clarify(state: AgentGraphState) -> str:
 # ============================================================================
 
 
-def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     """Session binding + intent classification (no planning yet).
 
     Checkpoint boundary: after this node the intent is known and can be
@@ -272,7 +271,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     }
 
 
-def _node_project_workflow_steps(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_project_workflow_steps(state: AgentGraphState, *, deps: PlanningContext) -> dict:
     """Project structured execution steps from the selected workflow.
 
     Checkpoint boundary: after this node the projected steps exist and can be
@@ -316,7 +315,7 @@ def _node_project_workflow_steps(state: AgentGraphState, *, deps: OrchestrationD
     }
 
 
-def _node_validate_projected_steps(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_validate_projected_steps(state: AgentGraphState, *, deps: PlanningContext) -> dict:
     """Validate compiled workflow tasks before execution."""
     steps = [sd.to_execution_step() for sd in (state.step_execution.steps or [])]
     validated_steps = list(steps)
@@ -374,169 +373,7 @@ def _after_validate_projected_steps(state: AgentGraphState) -> str:
     return "direct_answer_branch"
 
 
-def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Execute capture branch for capture_text / capture_link / capture_file intents.
-
-    Uses the already-classified intent from ``state.router_decision`` — no duplicate routing.
-    """
-    entry_input = state.entry_input
-    if entry_input is None:
-        state.answer = "未收到可采集内容。"
-        state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
-        return {"answer": state.answer, "execution_trace": state.execution_trace}
-
-    intent = state.router_decision.primary_intent if state.router_decision else "unknown"
-    logger.debug("Executing capture branch intent=%s user=%s", intent, state.user_id)
-
-    if intent == "capture_file":
-        file_path = entry_input.metadata.get("file_path", "")
-        if file_path:
-            from pathlib import Path
-
-            path = Path(file_path)
-            if path.exists() and deps.capture_service is not None:
-                original_filename = entry_input.metadata.get("original_filename", path.name)
-                file_bytes = path.read_bytes()
-                capture_text = deps.capture_service.capture_text_from_upload(
-                    filename=original_filename,
-                    content_type=None,
-                    file_bytes=file_bytes,
-                    source_type="file",
-                )
-                capture_metadata = {
-                    **entry_input.metadata,
-                    "original_filename": original_filename,
-                    "captured_at": local_now().isoformat(),
-                }
-                result = deps.execute_capture(
-                    text=capture_text,
-                    source_type="file",
-                    user_id=entry_input.user_id,
-                    source_ref=entry_input.source_ref or file_path,
-                    metadata=capture_metadata,
-                )
-                state.answer = f"已收进知识库：{result.note.body.title}"
-                state.execution_trace = _execution_trace_for_intent(intent)
-                state.add_event("tool_result", {
-                    "tool_name": "capture_file",
-                    "title": result.note.body.title,
-                    "content_preview": result.note.body.content[:800],
-                })
-                return {
-                    "answer": state.answer,
-                    "execution_trace": state.execution_trace,
-                    "tool_results": [{"capture_result": result.model_dump(mode="json")}],
-                    "events": state.events,
-                }
-        state.answer = "文件消息已识别，但文件内容暂未获取到。请通过 Web 端上传文件，或稍后重试。"
-        state.execution_trace = _execution_trace_for_intent(intent)
-        return {"answer": state.answer, "execution_trace": state.execution_trace}
-
-    capture_text = entry_input.text
-    source_type = "text"
-    source_ref = entry_input.source_ref
-    capture_metadata = {**entry_input.metadata, "captured_at": local_now().isoformat()}
-    if intent == "capture_link":
-        source_type = "link"
-        url = entry_input.metadata.get("url") or _first_url(entry_input.text)
-        if not url:
-            state.answer = "识别成了链接采集，但消息里没有找到可用链接。"
-            state.execution_trace = _execution_trace_for_intent(intent)
-            return {"answer": state.answer, "execution_trace": state.execution_trace}
-        source_ref = url
-        if deps.capture_service is None:
-            state.answer = "当前没有可用的采集服务，暂时无法抓取链接正文。"
-            state.execution_trace = _execution_trace_for_intent(intent)
-            return {"answer": state.answer, "execution_trace": state.execution_trace}
-        capture_text = deps.capture_service.capture_text_from_url(url)
-        capture_metadata["url"] = url
-
-    result = deps.execute_capture(
-        text=capture_text,
-        source_type=source_type,
-        user_id=entry_input.user_id,
-        source_ref=source_ref,
-        metadata=capture_metadata,
-    )
-    state.answer = f"已收进知识库：{result.note.body.title}"
-    state.execution_trace = _execution_trace_for_intent(intent)
-    state.add_event("tool_result", {
-        "tool_name": "capture_text" if intent == "capture_text" else "capture_link",
-        "title": result.note.body.title,
-        "content_preview": result.note.body.content[:800],
-    })
-    return {
-        "answer": state.answer,
-        "execution_trace": state.execution_trace,
-        "tool_results": [{"capture_result": result.model_dump(mode="json")}],
-        "events": state.events,
-    }
-
-
-def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Execute summarize_thread branch — already classified, no duplicate routing."""
-    entry_input = state.entry_input
-    if entry_input is None:
-        state.answer = "未收到可总结的内容。"
-        return {"answer": state.answer}
-
-    logger.debug("Executing summarize branch user=%s", state.user_id)
-
-    import json as _json
-
-    messages: list[dict[str, str]] = []
-    thread_messages_raw = entry_input.metadata.get("thread_messages", "")
-    if thread_messages_raw:
-        try:
-            parsed_messages = _json.loads(thread_messages_raw)
-            if isinstance(parsed_messages, list):
-                messages = [m for m in parsed_messages if isinstance(m, dict)]
-        except _json.JSONDecodeError:
-            logger.warning("Invalid preloaded thread messages for session=%s", entry_input.session_id)
-
-    if not messages and deps.load_thread_messages is not None:
-        try:
-            messages = deps.load_thread_messages(entry_input, 20)
-        except Exception:
-            logger.exception(
-                "Unable to load thread messages after summarize routing session=%s",
-                entry_input.session_id,
-            )
-
-    if messages and deps.summarize_chat is not None:
-        messages_text = "\n".join(
-            f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
-            for m in messages
-        )
-        summary = deps.summarize_chat(messages_text, entry_input.user_id or "default")
-        state.answer = summary
-        state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
-        return {"answer": state.answer, "execution_trace": state.execution_trace}
-
-    dialogue_messages = _entry_conversation_messages(state, exclude_latest=True)
-    if dialogue_messages and deps.summarize_chat is not None:
-        messages_text = "\n".join(
-            f"[{m.get('role', 'unknown')}]: {m.get('content', '')}"
-            for m in dialogue_messages
-        )
-        summary = deps.summarize_chat(messages_text, entry_input.user_id or "default")
-        state.answer = summary
-        state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
-        return {"answer": state.answer, "execution_trace": state.execution_trace}
-
-    chat_id = entry_input.metadata.get("chat_id", "")
-    if chat_id:
-        state.answer = (
-            "已识别为群聊总结诉求。当前暂时无法获取会话消息，请稍后重试，"
-            "或直接粘贴需要总结的聊天内容。"
-        )
-    else:
-        state.answer = "已识别为总结诉求。请直接发送需要总结的文本内容，或在群聊中使用此功能。"
-    state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
-    return {"answer": state.answer, "execution_trace": state.execution_trace}
-
-
-def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerContext) -> dict:
     """Execute direct answer or classification-driven clarification."""
     entry_input = state.entry_input
     if entry_input is None or not entry_input.text.strip():
@@ -600,7 +437,7 @@ def _entry_conversation_messages(
     state: AgentGraphState,
     *,
     exclude_latest: bool = True,
-    deps: "OrchestrationDeps | None" = None,
+    deps: "RoutingContext | DirectAnswerContext | None" = None,
 ) -> list[dict[str, str]]:
     """Return structured thread dialogue from checkpoint messages.
 
@@ -729,9 +566,7 @@ def _execution_trace_for_intent(intent: str) -> list[str]:
     return trace_map.get(intent, ["生成通用回复"])
 
 
-def _node_finalize_entry_result(
-    state: AgentGraphState, *, deps: OrchestrationDeps | None = None
-) -> dict:
+def _node_finalize_entry_result(state: AgentGraphState) -> dict:
     if state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:

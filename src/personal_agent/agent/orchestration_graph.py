@@ -11,9 +11,9 @@ from psycopg.rows import dict_row
 
 from ..core.config import Settings
 from ..storage.postgres_common import normalize_postgres_url
+from .orchestration_contexts import GraphContexts
 from .orchestration_models import AgentGraphState
 from .orchestration_nodes import (
-    OrchestrationDeps,
     _after_confirm_step as _after_confirm_step,
     _after_step_execution as _after_step_execution,
     _after_step_failure as _after_step_failure,
@@ -23,7 +23,6 @@ from .orchestration_nodes import (
     _dispatch_step as _dispatch_step,
     _format_react_tools as _format_react_tools,
     _is_react_tool_blocked as _is_react_tool_blocked,
-    _node_capture_branch as _node_capture_branch,
     _after_interrupt_clarify as _after_interrupt_clarify,
     _after_prepare_clarify as _after_prepare_clarify,
     _node_interrupt_clarify as _node_interrupt_clarify,
@@ -45,7 +44,6 @@ from .orchestration_nodes import (
     _node_consume_react_tool_result as _node_consume_react_tool_result,
     _node_route_intent as _node_route_intent,
     _node_select_next_step as _node_select_next_step,
-    _node_summarize_branch as _node_summarize_branch,
     _node_validate_projected_steps as _node_validate_projected_steps,
     _react_llm_respond as _react_llm_respond,
     _resolve_allowed_tools_for_step as _resolve_allowed_tools_for_step,
@@ -97,13 +95,13 @@ def _after_react_graph(state: AgentGraphState) -> str:
     return "handle_failure"
 
 
-def build_entry_graph(deps: OrchestrationDeps):
+def build_entry_graph(contexts: GraphContexts):
     """Build entry classification and clarification as an isolated subgraph."""
     builder = StateGraph(AgentGraphState)
     builder.add_node("normalize_entry", _node_normalize_entry)
     builder.add_node(
         "route_intent",
-        lambda state: _node_route_intent(state, deps=deps),
+        lambda state: _node_route_intent(state, deps=contexts.routing),
     )
     builder.add_node("prepare_clarify_entry", _node_prepare_clarify)
     builder.add_node("interrupt_clarify_entry", _node_interrupt_clarify)
@@ -137,18 +135,18 @@ def build_entry_graph(deps: OrchestrationDeps):
     return builder.compile()
 
 
-def build_react_graph(deps: OrchestrationDeps):
+def build_react_graph(contexts: GraphContexts):
     """Build the bounded ReAct loop with its own tool execution boundary."""
     builder = StateGraph(AgentGraphState)
-    builder.add_node("react_init", lambda state: _node_react_init(state, deps=deps))
-    builder.add_node("react_iterate", lambda state: _node_react_iterate(state, deps=deps))
+    builder.add_node("react_init", lambda state: _node_react_init(state, deps=contexts.react))
+    builder.add_node("react_iterate", lambda state: _node_react_iterate(state, deps=contexts.react))
     builder.add_node(
         "react_tool_node",
-        deps.tool_executor.graph_node(),
+        contexts.react.tool_executor.graph_node(),
     )
     builder.add_node(
         "consume_react_tool_result",
-        lambda state: _node_consume_react_tool_result(state, deps=deps),
+        lambda state: _node_consume_react_tool_result(state, deps=contexts.react),
     )
     builder.add_node("react_finalize", _node_react_finalize)
 
@@ -177,29 +175,29 @@ def build_react_graph(deps: OrchestrationDeps):
     return builder.compile()
 
 
-def build_step_execution_graph(deps: OrchestrationDeps):
+def build_step_execution_graph(contexts: GraphContexts):
     """Build step projection validation, deterministic execution, HITL, and ReAct dispatch."""
     builder = StateGraph(AgentGraphState)
-    builder.add_node("project_workflow_steps", lambda state: _node_project_workflow_steps(state, deps=deps))
-    builder.add_node("validate_projected_steps", lambda state: _node_validate_projected_steps(state, deps=deps))
+    builder.add_node("project_workflow_steps", lambda state: _node_project_workflow_steps(state, deps=contexts.planning))
+    builder.add_node("validate_projected_steps", lambda state: _node_validate_projected_steps(state, deps=contexts.planning))
     builder.add_node("prepare_step_execution", _node_prepare_step_execution)
     builder.add_node("select_next_step", _node_select_next_step)
-    builder.add_node("execute_step", lambda state: _node_execute_step(state, deps=deps))
-    builder.add_node("handle_step_success", lambda state: _node_handle_step_success(state, deps=deps))
-    builder.add_node("handle_step_failure", lambda state: _node_handle_step_failure(state, deps=deps))
-    builder.add_node("confirm_step", lambda state: _node_confirm_step(state, deps=deps))
+    builder.add_node("execute_step", lambda state: _node_execute_step(state, deps=contexts.steps))
+    builder.add_node("handle_step_success", lambda state: _node_handle_step_success(state, deps=contexts.steps))
+    builder.add_node("handle_step_failure", lambda state: _node_handle_step_failure(state, deps=contexts.steps))
+    builder.add_node("confirm_step", lambda state: _node_confirm_step(state, deps=contexts.steps))
     builder.add_node(
         "step_tool_node",
-        deps.tool_executor.graph_node(),
+        contexts.steps.tool_executor.graph_node(),
     )
     builder.add_node(
         "consume_step_tool_result",
-        lambda state: _node_consume_step_tool_result(state, deps=deps),
+        lambda state: _node_consume_step_tool_result(state, deps=contexts.steps),
     )
-    builder.add_node("react_graph", build_react_graph(deps))
+    builder.add_node("react_graph", build_react_graph(contexts))
     builder.add_node(
         "finalize_step_execution",
-        lambda state: _node_finalize_step_execution(state, deps=deps),
+        lambda state: _node_finalize_step_execution(state, deps=contexts.steps),
     )
 
     builder.add_edge(START, "project_workflow_steps")
@@ -268,31 +266,23 @@ def build_step_execution_graph(deps: OrchestrationDeps):
     return builder.compile()
 
 
-def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
+def build_entry_orchestration_graph(contexts: GraphContexts, checkpointer=None):
     """Build the small parent graph that composes the three workflow layers."""
     if checkpointer is None:
         raise ValueError("A persistent Postgres checkpointer is required.")
 
     builder = StateGraph(AgentGraphState)
 
-    builder.add_node("entry_graph", build_entry_graph(deps))
-    builder.add_node(
-        "capture_branch",
-        lambda state: _node_capture_branch(state, deps=deps),
-    )
-    builder.add_node(
-        "summarize_branch",
-        lambda state: _node_summarize_branch(state, deps=deps),
-    )
+    builder.add_node("entry_graph", build_entry_graph(contexts))
     builder.add_node(
         "direct_answer_branch",
-        lambda state: _node_direct_answer_branch(state, deps=deps),
+        lambda state: _node_direct_answer_branch(state, deps=contexts.direct_answer),
     )
     builder.add_node(
         "finalize_entry_result",
-        lambda state: _node_finalize_entry_result(state, deps=deps),
+        _node_finalize_entry_result,
     )
-    builder.add_node("step_execution_graph", build_step_execution_graph(deps))
+    builder.add_node("step_execution_graph", build_step_execution_graph(contexts))
 
     # ---- Edges ----
     builder.add_edge(START, "entry_graph")
@@ -302,13 +292,9 @@ def build_entry_orchestration_graph(deps: OrchestrationDeps, checkpointer=None):
         {
             "finalize_entry_result": "finalize_entry_result",
             "step_execution_graph": "step_execution_graph",
-            "capture_branch": "capture_branch",
-            "summarize_branch": "summarize_branch",
             "direct_answer_branch": "direct_answer_branch",
         },
     )
-    builder.add_edge("capture_branch", "finalize_entry_result")
-    builder.add_edge("summarize_branch", "finalize_entry_result")
     builder.add_edge("direct_answer_branch", "finalize_entry_result")
     builder.add_conditional_edges(
         "step_execution_graph",

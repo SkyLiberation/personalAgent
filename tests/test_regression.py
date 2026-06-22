@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
@@ -44,6 +45,17 @@ def _bypass_validator(svc: AgentService) -> MagicMock:
         valid=True, issues=[], warnings=[], corrected_steps=None,
     )
     svc.runtime._step_projection_validator = mock_validator
+    svc.runtime._graph_contexts = replace(
+        svc.runtime.graph_contexts,
+        planning=replace(
+            svc.runtime.graph_contexts.planning,
+            step_projection_validator=mock_validator,
+        ),
+        steps=replace(
+            svc.runtime.graph_contexts.steps,
+            step_projection_validator=mock_validator,
+        ),
+    )
     return mock_validator
 
 
@@ -67,6 +79,13 @@ class TestCrossLayerRegression:
         mock_router = MagicMock()
         mock_router.classify.return_value = decision
         svc.runtime._intent_router = mock_router
+        svc.runtime._graph_contexts = replace(
+            svc.runtime.graph_contexts,
+            routing=replace(
+                svc.runtime.graph_contexts.routing,
+                intent_router=mock_router,
+            ),
+        )
         return mock_router
 
     def test_delete_knowledge_triggers_step_execution_graph(self, svc: AgentService):

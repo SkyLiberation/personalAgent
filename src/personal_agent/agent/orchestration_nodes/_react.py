@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 
 from ..orchestration_models import AgentGraphState, ReactSubState
-from ._deps import (
-    OrchestrationDeps,
+from ..orchestration_contexts import ReactContext
+from ._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
     _is_react_tool_blocked,
     _resolve_allowed_tools_for_step,
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ===================================================================
 
 
-def _node_react_init(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_react_init(state: AgentGraphState, *, deps: ReactContext) -> dict:
     """Seed ReAct iteration state from the current execution step.
 
     Reads the step at ``current_step_index``, resolves allowed tools, and
@@ -62,7 +62,7 @@ def _node_react_init(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict
     return {"react": state.react}
 
 
-def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
+def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
     """Execute one ReAct iteration: LLM think -> parse -> tool act -> observe.
 
     On first call the prompt is built from ``react.step_id`` / step context;
@@ -184,7 +184,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: OrchestrationDeps) -> d
     return _record_react_observation(state, thought, tool_name, tool_input, observation)
 
 
-def _node_consume_react_tool_result(state: AgentGraphState, *, deps: OrchestrationDeps | None = None) -> dict:
+def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContext | None = None) -> dict:
     """Turn the shared ToolGateway result into a ReAct observation."""
     matches_iteration = state.tool_tracking.pending_react_iteration == state.react.iteration_index
     matches_step = state.tool_tracking.pending_step_id == state.react.step_id
@@ -359,7 +359,7 @@ def _json_dumps_safe(obj: object) -> str:
     return str(obj)
 
 
-def _call_react_llm(prompt: str, deps: OrchestrationDeps, allowed_tools: set[str]):
+def _call_react_llm(prompt: str, deps: ReactContext, allowed_tools: set[str]):
     try:
         return _helpers._react_llm_respond(prompt, deps, allowed_tools=allowed_tools)
     except TypeError as exc:

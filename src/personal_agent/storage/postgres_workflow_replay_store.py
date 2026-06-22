@@ -108,11 +108,13 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
         retention_days: int | None = None,
     ) -> WorkflowArtifactRecord:
         self.ensure_schema()
-        expires_at = (
-            datetime.now(UTC) + timedelta(days=max(0, retention_days))
-            if retention_days is not None
-            else None
-        )
+        expires_at = None
+        if retention_days is not None:
+            expires_at = (
+                datetime.now(UTC) - timedelta(seconds=1)
+                if retention_days <= 0
+                else datetime.now(UTC) + timedelta(days=retention_days)
+            )
         canonical = json.dumps(
             payload,
             ensure_ascii=False,
@@ -238,7 +240,7 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                     WHERE artifact_id IN (
                         SELECT artifact_id
                         FROM workflow_artifacts
-                        WHERE expires_at IS NOT NULL AND expires_at <= now()
+                        WHERE expires_at IS NOT NULL AND expires_at <= clock_timestamp()
                         ORDER BY expires_at
                         LIMIT %s
                     )

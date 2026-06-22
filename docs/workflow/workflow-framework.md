@@ -76,6 +76,16 @@ react_init
 | `ReactSubState` | `orchestration_models.py` | ReAct 子图的私有状态，包含 iterations、allowed_tools、pending tool、result |
 | `WorkflowExecutionProjection` | `workflow_event_projection.py` | 从 append-only `workflow_events` 重建执行读模型 |
 | `WorkflowStateMigration` | `workflow_state_migration.py` | workflow 版本间 step 状态映射和 step/dependent reset |
+| `GraphContexts` | `orchestration_contexts.py` | Graph Builder 的装配边界，聚合各阶段窄 Context |
+| `RoutingContext` | `orchestration_contexts.py` | 只向入口路由节点暴露会话绑定、上下文压缩和 Router |
+| `PlanningContext` | `orchestration_contexts.py` | 只向 workflow 编译节点暴露 Planner 与 Validator |
+| `DirectAnswerContext` | `orchestration_contexts.py` | 仅供 unknown fallback 与 direct-answer compose 使用 |
+| `SummaryContext` | `orchestration_contexts.py` | summarize compose 所需消息加载与总结能力 |
+| `StepExecutionContext` | `orchestration_contexts.py` | step 执行、恢复、ask/summary context 与 artifact 能力 |
+| `ReactContext` | `orchestration_contexts.py` | ReAct 所需工具、策略和模型配置 |
+
+Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，也不通过 `from_runtime()` 动态
+抽取依赖；因此新增能力必须先选择明确的阶段边界，而不能继续追加到全局依赖袋。
 
 ## Workflow 类型
 

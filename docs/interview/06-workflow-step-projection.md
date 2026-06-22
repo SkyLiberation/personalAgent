@@ -2,9 +2,12 @@
 
 ### 1. 当前所谓 planning 是怎么落地的？
 
-当前所谓 planning 已经收敛为 **Workflow / Step Projection Layer**，不是开放式自主 planner。`ask_branch / capture_branch / delete_knowledge / solidify_conversation` 本质上都是 workflow；固定拓扑已下沉为声明式 `WorkflowSpec / WorkflowStepSpec`，由 `WorkflowRegistry` 按 intent 选择；只有 `delete_knowledge`、`solidify_conversation` 这类需要步骤状态、HITL 或 checkpoint 恢复的 workflow，才由 `WorkflowStepProjector` 确定性投影成 `ExecutionStep`。
+当前所谓 planning 已经收敛为 **Workflow / Step Projection Layer**，不是开放式自主 planner。
+ask、capture、summarize、direct answer、delete 和 solidify 的固定拓扑都下沉为声明式
+`WorkflowSpec / WorkflowStepSpec`，由 `WorkflowPlanner` 确定性编译成 `ExecutionStep`。
 
-其中 ask、capture、direct answer、summarize 有自己的普通 workflow 分支，不需要进入步骤执行图；delete 和 solidify 会额外投影成 `ExecutionStep / StepRunState / step_execution.results / step events`，再接入 PolicyEngine、ToolGateway、LangGraph checkpoint、HITL 和前端步骤面板。
+所有已识别 Goal 都进入同一个步骤执行图。父图只保留 `direct_answer_branch` 作为 Router 不可用、
+无 Goal 或投影校验失败时的 fallback，不再为 capture、ask、summarize 维护平行执行路径。
 
 这个判断很重要：如果面试官追问“这些步骤不都是固定的吗”，应该坦诚回答“是的，固定流程就是系统维护的 WorkflowSpec，不让 LLM 自由发明控制流”。这样比强行包装成通用 planner 更可信。
 

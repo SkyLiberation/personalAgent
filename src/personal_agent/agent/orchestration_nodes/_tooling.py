@@ -5,7 +5,7 @@ import logging
 from langchain_core.messages import AIMessage, ToolMessage
 
 from ..orchestration_models import AgentGraphState, ToolTrackingSubState
-from ._deps import OrchestrationDeps
+from ..orchestration_contexts import ToolingContext
 from . import _helpers
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def _tool_result_event_payload(
     state: AgentGraphState,
     *,
-    deps: OrchestrationDeps | None,
+    deps: ToolingContext | None,
     context: str,
     step_id: str,
     tool_call_id: str | None,
@@ -55,7 +55,7 @@ def _tool_result_event_payload(
     return payload
 
 
-def _lookup_tool_spec(deps: OrchestrationDeps | None, tool_name: str):
+def _lookup_tool_spec(deps: ToolingContext | None, tool_name: str):
     if deps is None or not tool_name:
         return None
     return deps.tool_executor.get(tool_name)
@@ -63,7 +63,7 @@ def _lookup_tool_spec(deps: OrchestrationDeps | None, tool_name: str):
 
 def _log_tool_invocation_event(
     state: AgentGraphState,
-    deps: OrchestrationDeps,
+    deps: ToolingContext,
     artifact: dict,
     *,
     execution_mode: str,
