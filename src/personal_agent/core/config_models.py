@@ -74,14 +74,13 @@ class OpenAIConfig(_StrictBase):
 class RouterConfig(_StrictBase):
     """Dedicated LLM config for the intent router (``agent/router.py``).
 
-    The router uses OpenAI-style strict ``json_schema`` structured outputs, so
-    it needs an endpoint that supports them (e.g. gpt-5.4-mini). This is kept
+    The router uses the OpenAI Responses API with Pydantic parsing, so it needs
+    an endpoint that supports ``responses.parse`` (e.g. gpt-5.4-mini). This is kept
     separate from ``OpenAIConfig`` (which may point at an endpoint without
     json_schema support, such as DeepSeek) so the router can target a
     compatible model without disturbing the other LLM paths.
 
-    ``model`` is exposed as ``small_model`` too, because ``traced_chat_completion``
-    falls back to ``config.small_model`` when no explicit model is passed.
+    ``model`` is exposed as ``small_model`` too for the shared LLM adapters.
     """
 
     api_key: str | None = None
@@ -90,8 +89,6 @@ class RouterConfig(_StrictBase):
     timeout_seconds: float = 30.0
     max_retries: int = 2
     extra_body: dict[str, Any] = Field(default_factory=dict)
-    # Structured-output mode: "json_schema" (strict) or "json_object" (valid JSON only).
-    structured_output: str = "json_schema"
 
     @property
     def small_model(self) -> str:

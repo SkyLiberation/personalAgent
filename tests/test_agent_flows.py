@@ -9,12 +9,49 @@ from personal_agent.agent.service import AgentService
 from personal_agent.core.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.core.models import Citation, EntryInput, ReviewCard, local_now
 from personal_agent.agent.runtime_ask import _graph_matches_to_evidence
+from personal_agent.agent.router import GoalDraft, RouterOutput
 from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.graphiti.store import GraphAskResult, GraphCaptureResult
 from tests.conftest import POSTGRES_URL, stub_router_decision
 from tests.note_factory import make_note
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
+
+
+def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentService):
+    service.intent_router._classify_with_llm = lambda _text, _messages=None: RouterOutput(
+        outcome="ready",
+        goals=[
+            GoalDraft(
+                intent="capture_text",
+                input="DNS 将域名解析为 IP 地址。",
+            ),
+            GoalDraft(
+                intent="ask",
+                input="DNS 的作用是什么？",
+            ),
+        ],
+        clarification=None,
+    )
+
+    result = service.entry(EntryInput(
+        text="记住 DNS 将域名解析为 IP 地址，然后回答 DNS 的作用是什么？",
+        user_id="default",
+        session_id="compound-capture-ask",
+    ))
+
+    assert result.intents == ["capture_text", "ask"]
+    assert result.plan is not None
+    assert [task["task_id"] for task in result.plan["tasks"]] == ["goal_1", "goal_2"]
+    assert [step["step_id"] for step in result.steps] == [
+        "goal_1::cap-structure",
+        "goal_2::ask-retrieve",
+        "goal_2::ask-compose",
+        "goal_2::ask-verify",
+    ]
+    assert all(step["status"] == "completed" for step in result.steps)
+    assert any("DNS 将域名解析为 IP 地址" in note.content for note in service.store.list_notes("default"))
+    assert result.reply_text
 
 
 @pytest.fixture
@@ -649,16 +686,16 @@ class TestEntryFlow:
     def test_entry_capture_text(self, service: AgentService):
         entry = EntryInput(text="记一下：服务降级是重要的系统设计模式", source_platform="test")
         result = service.entry(entry)
-        assert result.intent in ("capture_text", "unknown")
+        assert result.intents[-1] in ("capture_text", "unknown")
         assert result.reply_text
-        if result.intent == "capture_text":
+        if result.intents[-1] == "capture_text":
             assert service.memory.list_notes()
 
     def test_entry_ask(self, service: AgentService):
         service.execute_capture(text="服务降级是系统设计中的常见模式", source_type="text")
         entry = EntryInput(text="什么是服务降级？", source_platform="test")
         result = service.entry(entry)
-        assert result.intent == "ask"
+        assert result.intents == ["ask"]
         assert result.reply_text
         snapshot = service.get_run_snapshot(result.run_id or "")
         assert snapshot is not None
@@ -667,7 +704,7 @@ class TestEntryFlow:
     def test_entry_empty_text(self, service: AgentService):
         entry = EntryInput(text="", source_platform="test")
         result = service.entry(entry)
-        assert result.intent == "unknown"
+        assert result.intents == []
 
     def test_entry_capture_link(self, service: AgentService):
         entry = EntryInput(
@@ -676,6 +713,6 @@ class TestEntryFlow:
             metadata={"url": "https://example.com/article"},
         )
         result = service.entry(entry)
-        assert result.intent in ("capture_link", "capture_text", "unknown")
+        assert result.intents[-1] in ("capture_link", "capture_text", "unknown")
         assert result.reply_text
 

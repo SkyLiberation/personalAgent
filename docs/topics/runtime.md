@@ -110,9 +110,9 @@ EntryInput
 
 意图分类的公开封装，供入口层在不需要完整 `execute_entry()` 时快速获得路由决策。
 
-### `step_projector / step_projection_validator`
+### `workflow_planner / step_projection_validator`
 
-运行时通过只读属性暴露 `WorkflowStepProjector` 和 `StepProjectionValidator` 给 orchestration deps。只有 `RouterDecision.requires_step_projection=True` 时，entry graph 才会继续做 workflow step projection 和校验，并写入 checkpoint 中的 `AgentGraphState.step_execution`；普通意图返回空步骤，由执行阶段生成 `execution_trace`。旧版路由字段和 checkpoint 主状态不再作为兼容入口保留。
+运行时通过只读属性暴露 `WorkflowPlanner` 和 `StepProjectionValidator` 给 orchestration deps。Router 产出的 Goal 会统一进入 WorkflowPlanner；Planner 选择 WorkflowSpec 并编译 ExecutionPlan，Validator 只校验 workflow 编译结果，不读取 Router 执行策略。
 
 ### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
 

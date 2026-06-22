@@ -142,25 +142,6 @@ def _react_llm_respond(
         return None
 
 
-def _describe_schema_fields(schema: dict) -> str:
-    """Render a JSON-schema's properties as a compact field contract for prompts.
-
-    Used in json_object mode where the schema is not enforced server-side, so
-    field names/types must be described to the model. Example output:
-    ``thought(string), selected_turn_ids(array), title(string), content(string)``.
-    """
-    props = schema.get("properties", {})
-    if not isinstance(props, dict) or not props:
-        return "一个 JSON 对象"
-    required = set(schema.get("required", []))
-    parts = []
-    for name, spec in props.items():
-        typ = spec.get("type", "any") if isinstance(spec, dict) else "any"
-        flag = "" if name in required else "（可选）"
-        parts.append(f"{name}({typ}){flag}")
-    return "、".join(parts)
-
-
 def _structured_llm_respond(
     prompt_name: str,
     user_prompt: str,
@@ -181,24 +162,17 @@ def _structured_llm_respond(
             prompt_version = get_prompt(f"{prompt_name}.user").version
         except KeyError:
             prompt_version = system_prompt.version
-        system_content = system_prompt.template
-        # In json_object mode the schema is not enforced server-side, so the
-        # field contract must be conveyed via the prompt.
-        if structured.structured_output == "json_object":
-            system_content += "\n\n输出 JSON 必须且只能包含以下字段：" + _describe_schema_fields(schema)
         result = traced_chat_completion(
             structured,
             prompt_name=prompt_name,
             prompt_version=prompt_version,
             messages=[
-                {"role": "system", "content": system_content},
+                {"role": "system", "content": system_prompt.template},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0,
             max_tokens=max_tokens,
-            response_format=structured_response_format(
-                prompt_name, schema, structured.structured_output
-            ),
+            response_format=structured_response_format(prompt_name, schema),
             metadata={"component": prompt_name},
             upload_inputs_outputs=settings.langsmith.upload_inputs,
             extra_body=structured.extra_body or None,

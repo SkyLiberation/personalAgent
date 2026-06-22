@@ -18,10 +18,11 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from ..core.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
+from .execution_models import ExecutionPlan
 from .router import RouterDecision
 
 if TYPE_CHECKING:
-    from .step_projector import ExecutionStep
+    from .execution_models import ExecutionStep
 
 
 def _new_run_id() -> str:
@@ -101,7 +102,7 @@ class AgentRunSnapshot(BaseModel):
     user_id: str
     session_id: str
     status: AgentRunStatus = AgentRunStatus.pending
-    intent: EntryIntent = "unknown"
+    intents: list[EntryIntent] = Field(default_factory=list)
     workflow_id: str = ""
     workflow_version: str = ""
     entry_text: str = ""
@@ -151,6 +152,9 @@ class StepRunState(BaseModel):
     workflow_version: str = ""
     workflow_step_id: str = ""
     projection_kind: str = "workflow_step"
+    task_id: str = ""
+    task_intent: EntryIntent = "unknown"
+    task_input: str = ""
     input_artifact_id: str = ""
     output_artifact_id: str = ""
     error_artifact_id: str = ""
@@ -182,11 +186,14 @@ class StepRunState(BaseModel):
             workflow_version=s.workflow_version,
             workflow_step_id=s.workflow_step_id,
             projection_kind=s.projection_kind,
+            task_id=s.task_id,
+            task_intent=s.task_intent,
+            task_input=s.task_input,
         )
 
     def to_execution_step(self) -> "ExecutionStep":
         """Convert back to a step projection for validator / executor consumption."""
-        from .step_projector import ExecutionStep
+        from .execution_models import ExecutionStep
 
         return ExecutionStep(
             step_id=self.step_id,
@@ -209,6 +216,9 @@ class StepRunState(BaseModel):
             workflow_version=self.workflow_version,
             workflow_step_id=self.workflow_step_id,
             projection_kind=self.projection_kind,
+            task_id=self.task_id,
+            task_intent=self.task_intent,
+            task_input=self.task_input,
         )
 
 
@@ -290,6 +300,7 @@ class AgentGraphState(BaseModel):
 
     # Routing
     router_decision: RouterDecision | None = None
+    execution_plan: ExecutionPlan | None = None
     workflow_id: str = ""
     workflow_version: str = ""
 
@@ -359,7 +370,10 @@ class AgentGraphState(BaseModel):
             user_id=self.user_id,
             session_id=self.session_id,
             status=resolved_status,
-            intent=self.router_decision.route if self.router_decision else "unknown",
+            intents=(
+                [goal.intent for goal in self.router_decision.goals]
+                if self.router_decision else []
+            ),
             workflow_id=self.workflow_id,
             workflow_version=self.workflow_version,
             entry_text=self.entry_text,

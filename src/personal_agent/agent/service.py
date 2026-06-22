@@ -86,8 +86,8 @@ class AgentService:
         return self.runtime.tool_executor
 
     @property
-    def step_projector(self):
-        return self.runtime.step_projector
+    def workflow_planner(self):
+        return self.runtime.workflow_planner
 
     @property
     def step_projection_validator(self):

@@ -112,7 +112,56 @@ LangGraph checkpoint 保存可恢复执行现场：
 - 本地检索：记录 `retrieval.local`，包含 query 长度、lexical/vector 候选数、合并候选数、结果数、过滤器状态、embedding 是否参与和总耗时。
 - verifier：记录 `verifier.result / verifier.run`，包含 evidence score、citation/claim 状态、issue/warning 数量、输入输出长度和耗时，不上传原始回答正文。
 - 基础 metrics：记录 `agent.run`、`tool.invocation`、`verifier.run`，可由结构化日志聚合运行耗时、工具成功率和校验结果分布。
-- `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，统一 wrapper 默认不走会上传完整 prompt/output 的 traceable runner，仅保留本地结构化日志和非敏感 metadata；显式开启后才上传完整输入输出。
+- `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，统一 wrapper 会向 LangSmith 上传脱敏后的调用摘要，
+  不上传 prompt、模型输出和工具参数正文；显式开启后才上传 wrapper 接收到的完整输入输出。
+
+### 7. LLM Trace 脱敏策略
+
+结构化模型调用采用装饰器架构：
+
+```text
+业务组件 → StructuredModelClient
+              ↑
+        ObservedStructuredModelClient
+          ├─ TracePayloadPolicy
+          └─ OpenAIResponsesModelClient
+```
+
+业务组件不读取 LangSmith 配置，也不传递 `upload_inputs` 或脱敏参数。composition root 根据
+`LangSmithConfig` 决定是否添加观测装饰器，并选择 `RedactedTracePayloadPolicy` 或
+`FullTracePayloadPolicy`。LangSmith 关闭时，不创建观测装饰器。
+
+默认模式是脱敏追踪。`PERSONAL_AGENT_TRACE_UPLOAD_INPUTS` 只控制 LLM 子 run 是否
+上传完整输入输出，不控制顶层 trace 是否启用，也不替代 `PERSONAL_AGENT_TRACE_SAMPLE_RATE`。
+
+当 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，LangSmith LLM 子 run 保留：
+
+| 分类 | 保留字段 |
+| --- | --- |
+| Prompt 标识 | `prompt_name`、`prompt_version` |
+| 模型参数 | `model`、`temperature`、`max_tokens`、`response_format`、`tool_choice` |
+| 输入摘要 | `message_count`、`message_roles`、`message_chars`、工具名称列表 |
+| 输出摘要 | `latency_ms`、`response_chars`、`tool_call_count` |
+| 用量 | `input_tokens`、`output_tokens`、`total_tokens` |
+
+默认不会上传：
+
+- system、user、assistant 消息正文
+- 模型输出正文或结构化结果内容
+- 工具调用参数和工具结果正文
+- API key 等客户端认证配置
+
+当 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=true` 时，trace wrapper 会允许 LangSmith 记录完整函数输入
+与输出，其中可能包含 prompt、用户原文、检索上下文、模型输出和工具参数。该模式只适合经过授权的
+开发环境或使用非敏感测试数据的环境。
+
+这里的“脱敏”是调用边界上的内容剔除，不是对正文做字符级替换。类型化模型请求不提供自由
+trace metadata 通道，避免业务代码把敏感上下文旁路写入模型子 run。顶层 LangGraph trace 和其他
+旧调用路径的 metadata 仍只能放稳定、低敏、可索引的标识和统计值。
+
+注意：LangGraph/LangChain 自身自动生成的节点 trace，以及尚未迁移到
+`StructuredModelClient` 的旧 LLM 路径，不一定经过 `TracePayloadPolicy`。敏感数据不得仅依赖此
+开关保护；生产环境还应结合采样、最小化 graph state、LangSmith 项目权限和数据保留策略。
 
 ## 当前弱点
 
@@ -198,7 +247,7 @@ LangSmith 接入的第一目标不是替代现有 `AgentEvent`，而是补齐 LL
 1. LangSmith 用于调试、分析和评测，不作为唯一审计源。
 2. `AgentEvent` 继续服务前端、SSE、checkpoint 和业务状态。
 3. 工具副作用仍以本地审计表为准，LangSmith 只保存可观测副本。
-4. 默认不上传敏感原文；需要脱敏策略后再开启完整 prompt trace。
+4. 默认使用已落地的 LLM wrapper 脱敏策略；只有明确授权后才开启完整 prompt trace。
 5. trace metadata 只放稳定、低敏、可索引字段。
 
 ## 推荐环境变量
@@ -239,11 +288,11 @@ PERSONAL_AGENT_TRACE_SAMPLE_RATE=1.0
   "thread_id": "user:session",
   "user_id": "user id",
   "session_id": "session id",
-  "intent": "ask | capture_text | delete_knowledge | ...",
+  "intents": ["capture_text", "ask"],
+  "plan_id": "execution plan id",
+  "workflow_ids": ["capture_text", "ask"],
   "source_platform": "web | cli | feishu",
-  "requires_step_projection": true,
-  "requires_confirmation": false,
-  "risk_level": "low"
+  "step_count": 4
 }
 ```
 
@@ -323,7 +372,7 @@ LLM 子 run 建议携带：
 - embedding 与数据库向量入口记录外部调用、本地 embedding 和失败降级。（已完成）
 - 本地 Postgres 检索记录 `retrieval.local` 聚合指标。（已完成）
 - verifier 规则校验事件已接入；后续继续接入数据库向量相似度 SQL 分段 latency、结构化检索 cache 命中率。
-- 对 raw input/output 增加脱敏开关。
+- 持续审计未经过统一 wrapper 的第三方或框架自动 trace。
 
 验收：
 

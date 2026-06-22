@@ -44,7 +44,7 @@ class TestEntryPipeline:
     def test_entry_capture_text(self, service: AgentService):
         entry = EntryInput(text="记一下：支付系统重构项目第一阶段主要是拆分核心链路", user_id="alice")
         result = service.entry(entry)
-        assert result.intent in ("capture_text", "direct_answer")
+        assert result.intents[-1] in ("capture_text", "direct_answer")
         assert result.reply_text
         # Capture should produce a note
         if result.capture_result:
@@ -57,14 +57,14 @@ class TestEntryPipeline:
         service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
         entry = EntryInput(text="什么是服务降级？", user_id="default")
         result = service.entry(entry)
-        assert result.intent in ("ask", "direct_answer")
+        assert result.intents[-1] in ("ask", "direct_answer")
         assert result.reply_text
 
     def test_entry_direct_answer_routing(self, service: AgentService):
         entry = EntryInput(text="你好", user_id="default")
         result = service.entry(entry)
         # Should route to direct_answer for greetings
-        assert result.intent in ("direct_answer", "capture_text")
+        assert result.intents[-1] in ("direct_answer", "capture_text")
         assert result.reply_text
 
     def test_entry_has_execution_trace(self, service: AgentService):
@@ -79,7 +79,7 @@ class TestEntryPipeline:
     def test_entry_unknown_intent(self, service: AgentService):
         entry = EntryInput(text="", user_id="default")
         result = service.entry(entry)
-        assert result.intent == "unknown"
+        assert result.intents == []
         assert result.reply_text
 
 

@@ -38,7 +38,7 @@ class TestCLIEntry:
         result = cli_runner.invoke(app, ["entry", "记一下：测试采集JSON输出"])
         assert result.exit_code == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
-        assert data["intent"] == "capture_text"
+        assert data["intents"] == ["capture_text"]
         assert data["reply"]
         assert data["run_id"]
 
@@ -46,7 +46,7 @@ class TestCLIEntry:
         result = cli_runner.invoke(app, ["entry", "什么是测试？", "--session-id", "cli-question"])
         assert result.exit_code == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
-        assert data["intent"] == "ask"
+        assert data["intents"] == ["ask"]
         assert data["reply"]
         assert data["run_id"]
 

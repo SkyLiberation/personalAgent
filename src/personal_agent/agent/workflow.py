@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from ..core.models import EntryIntent
-from .step_projector import ExecutionStep
+from .execution_models import ExecutionStep
 
 ProjectionPolicy = Literal["none", "step_projection"]
 

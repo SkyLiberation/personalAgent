@@ -72,15 +72,8 @@ def _route_by_intent(state: AgentGraphState) -> str:
         return "finalize_entry_result"
     if state.router_decision and state.router_decision.requires_clarification:
         return "finalize_entry_result"
-    if state.router_decision and state.router_decision.requires_step_projection:
+    if state.router_decision and state.router_decision.goals:
         return "step_execution_graph"
-    intent = state.router_decision.route if state.router_decision else "unknown"
-    if intent in ("capture_text", "capture_link", "capture_file"):
-        return "capture_branch"
-    if intent == "summarize_thread":
-        return "summarize_branch"
-    if intent == "direct_answer":
-        return "direct_answer_branch"
     return "direct_answer_branch"
 
 
@@ -93,7 +86,7 @@ def _after_entry_route(state: AgentGraphState) -> str:
 
 def _after_step_execution_graph(state: AgentGraphState) -> str:
     """A rejected step projection returns to the parent for a user-visible answer."""
-    if state.router_decision and not state.router_decision.requires_step_projection and not state.answer_completed:
+    if state.step_execution.aborted and not state.answer_completed:
         return "direct_answer_branch"
     return "finalize_entry_result"
 

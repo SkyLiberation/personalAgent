@@ -205,7 +205,9 @@ def _node_execute_step(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
             "action_type": step.action_type,
             "tool_name": step.tool_name,
             "tool_input": step.tool_input,
-            "entry_text": state.entry_text,
+            "task_id": step.task_id,
+            "task_intent": step.task_intent,
+            "task_input": step.task_input,
         },
     )
 
@@ -571,7 +573,7 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
                 "reason": "重试耗尽，尝试重新规划",
             })
             try:
-                intent = state.router_decision.route if state.router_decision else "unknown"
+                intent = step.task_intent
                 err_msg = state.errors[-1] if state.errors else "未知错误"
                 # Reconstruct execution step objects for replanner
                 step_objs = [s.to_execution_step() for s in state.step_execution.steps]
@@ -585,9 +587,10 @@ def _node_handle_step_failure(state: AgentGraphState, *, deps: OrchestrationDeps
                     # Validate revised steps
                     step_projection_validator = deps.step_projection_validator
                     if step_projection_validator is not None:
-                        from ..router import RouterDecision
-                        decision = state.router_decision or RouterDecision(route="unknown")
-                        validation = step_projection_validator.validate(revised, decision)
+                        validation = step_projection_validator.validate(
+                            revised,
+                            step.task_intent,
+                        )
                         if validation.blocking:
                             logger.warning(
                                 "ReStep projection validation blocked for step %s: %s",
@@ -778,7 +781,7 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
     entry_input = state.entry_input
     metadata = dict(entry_input.metadata) if entry_input is not None else {}
     tool_input = dict(step.tool_input or {})
-    route = state.router_decision.route if state.router_decision else ""
+    route = step.task_intent
 
     if step.tool_name == "capture_text":
         tool_input.setdefault("user_id", state.user_id)
@@ -789,7 +792,9 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
         else:
             tool_input.setdefault("source_type", "text")
         if "text" not in tool_input and route == "capture_text":
-            text = (entry_input.text if entry_input is not None else state.entry_text) or ""
+            text = step.task_input or (
+                (entry_input.text if entry_input is not None else state.entry_text) or ""
+            )
             if text.strip():
                 tool_input["text"] = text
 
@@ -798,7 +803,9 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
             from ._entry import _first_url
 
             url = metadata.get("url") or _first_url(
-                (entry_input.text if entry_input is not None else state.entry_text) or ""
+                step.task_input or (
+                    (entry_input.text if entry_input is not None else state.entry_text) or ""
+                )
             )
             if url:
                 tool_input["url"] = str(url)
@@ -823,7 +830,7 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
 def _apply_tool_result_to_state(step: "ExecutionStep", result_data: object, state: AgentGraphState) -> None:
     if step.tool_name != "capture_text" or not isinstance(result_data, dict):
         return
-    route = state.router_decision.route if state.router_decision else ""
+    route = step.task_intent
     if route not in {"capture_text", "capture_link", "capture_file"}:
         return
     title = str(result_data.get("title") or "").strip()
@@ -915,14 +922,14 @@ def _dispatch_step(
 
 
 def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
-    question = step.tool_input.get("question") if step.tool_input else step.description
-    question = str(question or state.entry_text or "")
+    question = step.tool_input.get("question") if step.tool_input else None
+    question = str(question or step.task_input or state.entry_text or step.description or "")
 
     # For the ask flow, the retrieve step runs query understanding +
     # multi-source recall + context assembly — the ~18s pass — and stashes the
     # run-scoped AskRunContext for the downstream compose/verify steps. The
     # running "retrieve" step honestly reflects that latency to the user.
-    if state.router_decision and state.router_decision.route == "ask":
+    if step.task_intent == "ask":
         from ._entry import _entry_conversation_messages
 
         conversation = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
@@ -956,7 +963,7 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: OrchestrationDeps
 
 def _execute_resolve_step(step, state: AgentGraphState, deps: OrchestrationDeps) -> object:
     user_id = state.user_id
-    original_query = state.entry_text or ""
+    original_query = step.task_input or state.entry_text or ""
 
     candidates: list[dict] = []
 
@@ -1061,28 +1068,40 @@ def _execute_compose_step(step, state: AgentGraphState, deps: OrchestrationDeps)
     if step.tool_input and step.tool_input.get("question"):
         question = str(step.tool_input["question"])
     else:
-        question = step.description or "根据已有信息生成回答"
+        question = step.task_input or step.description or "根据已有信息生成回答"
 
-    route = state.router_decision.route if state.router_decision else "unknown"
+    route = step.task_intent
     if route == "summarize_thread":
         from ._entry import _node_summarize_branch
 
-        _node_summarize_branch(state, deps=deps)
+        original_entry = state.entry_input
+        if original_entry is not None and step.task_input:
+            state.entry_input = original_entry.model_copy(update={"text": step.task_input})
+        try:
+            _node_summarize_branch(state, deps=deps)
+        finally:
+            state.entry_input = original_entry
         return state.answer or ""
 
     if route == "direct_answer":
         from ._entry import _node_direct_answer_branch
 
-        _node_direct_answer_branch(state, deps=deps)
+        original_entry = state.entry_input
+        if original_entry is not None and step.task_input:
+            state.entry_input = original_entry.model_copy(update={"text": step.task_input})
+        try:
+            _node_direct_answer_branch(state, deps=deps)
+        finally:
+            state.entry_input = original_entry
         return state.answer or ""
 
-    if state.router_decision and state.router_decision.route == "solidify_conversation":
+    if step.task_intent == "solidify_conversation":
         dialogue = _helpers._format_solidify_candidate_context(state.messages)
         if not dialogue:
             dialogue = context
         solidify_prompt = render_prompt(
             "solidify_draft.user",
-            entry_text=state.entry_text,
+            entry_text=step.task_input or state.entry_text,
             dialogue=dialogue,
         )
         try:
@@ -1145,7 +1164,7 @@ def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) 
     # ask flow: run the real verification stage on the run-scoped context —
     # verify + retry + web fallback (re-assemble/re-compose/re-verify) + annotate.
     # The final answer and citations/matches are written back onto the state.
-    if state.router_decision and state.router_decision.route == "ask":
+    if step.task_intent == "ask":
         ctx = deps.ask_run_context_store.get(state.run_id)
         if ctx is not None:
             try:
@@ -1168,7 +1187,7 @@ def _execute_verify_step(step, state: AgentGraphState, deps: OrchestrationDeps) 
         verifier = deps.verifier
         if verifier:
             verifier.verify(
-                question=state.entry_text or "",
+                question=step.task_input or state.entry_text or "",
                 answer=state.answer,
                 citations=state.citations,
                 matches=[],

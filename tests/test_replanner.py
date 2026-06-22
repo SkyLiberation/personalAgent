@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.step_projector import ExecutionStep
+from personal_agent.agent.execution_models import ExecutionStep
 from personal_agent.agent.replanner import Replanner
 
 

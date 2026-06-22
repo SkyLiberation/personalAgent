@@ -43,14 +43,16 @@ def _extract_usage(response: Any) -> dict[str, int]:
     if usage is None:
         return {}
     counts: dict[str, int] = {}
-    for key, attr in (
-        ("input_tokens", "prompt_tokens"),
-        ("output_tokens", "completion_tokens"),
-        ("total_tokens", "total_tokens"),
+    for key, attrs in (
+        ("input_tokens", ("input_tokens", "prompt_tokens")),
+        ("output_tokens", ("output_tokens", "completion_tokens")),
+        ("total_tokens", ("total_tokens",)),
     ):
-        value = getattr(usage, attr, None)
-        if isinstance(value, int):
-            counts[key] = value
+        for attr in attrs:
+            value = getattr(usage, attr, None)
+            if isinstance(value, int):
+                counts[key] = value
+                break
     return counts
 
 

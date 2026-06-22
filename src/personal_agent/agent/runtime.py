@@ -7,6 +7,7 @@ from ..core.config import Settings
 from ..core.langsmith_tracing import configure_langsmith_environment
 from ..core.models import EntryInput
 from ..core.observability import set_policy_decision_sink
+from ..core.structured_model import build_structured_model_client
 from ..graphiti.store import GraphitiStore
 from ..memory import MemoryFacade
 from ..ms_graphrag import MicrosoftGraphRagStore
@@ -31,7 +32,7 @@ from ..tools import (
 )
 from .entry_orchestrator import EntryOrchestrator
 from .episodic_memory import record_entry_episode
-from .step_projector import WorkflowStepProjector
+from .workflow_planner import WorkflowPlanner
 from .step_projection_validator import StepProjectionValidator
 from .replanner import Replanner
 from .router import DefaultIntentRouter
@@ -123,7 +124,10 @@ class AgentRuntime:
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
-        self._intent_router = DefaultIntentRouter(settings)
+        self._intent_router = DefaultIntentRouter(build_structured_model_client(
+            settings.router,
+            settings.langsmith,
+        ))
         self._tool_executor = ToolExecutor(
             audit_sink=self.tool_governance_store,
             idempotency_store=self.tool_governance_store,
@@ -131,9 +135,8 @@ class AgentRuntime:
         )
         self._register_tools()
         self._sync_workflow_definitions()
-        self._step_projector = WorkflowStepProjector(
+        self._workflow_planner = WorkflowPlanner(
             settings,
-            tool_executor=self._tool_executor,
             workflow_definition_store=self.workflow_definition_store,
         )
         self._verifier = create_answer_verifier(settings)
@@ -448,8 +451,8 @@ class AgentRuntime:
         return self._tool_executor
 
     @property
-    def step_projector(self):
-        return self._step_projector
+    def workflow_planner(self):
+        return self._workflow_planner
 
     @property
     def step_projection_validator(self):
@@ -551,7 +554,6 @@ class AgentRuntime:
         """Validate and project a workflow definition without executing effects."""
         from dataclasses import asdict
 
-        from .router import _default_router_decision
         from .workflow import WORKFLOW_REGISTRY, WorkflowSpec
         from .workflow_validator import WorkflowSpecValidator
 
@@ -570,7 +572,7 @@ class AgentRuntime:
         steps = spec.project()
         step_validation = self.step_projection_validator.validate(
             steps,
-            _default_router_decision(spec.intent),
+            spec.intent,
         ) if steps else None
         return {
             "valid": spec_validation.valid and (step_validation is None or step_validation.valid),

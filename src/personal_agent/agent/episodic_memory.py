@@ -55,7 +55,8 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
     session_id = entry_input.session_id if entry_input is not None else _event_session_id(events)
     entry_text = entry_input.text if entry_input is not None else _entry_text_from_events(events)
     outcome = _episode_outcome(result)
-    intent = result.intent or "unknown"
+    intent = result.intents[-1] if result.intents else "unknown"
+    intent_chain = list(result.intents)
     now = local_now()
 
     decisions = _decisions_from_events(events)
@@ -81,7 +82,8 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
         tool_refs=tool_refs,
         note_refs=note_refs,
         metadata={
-            "reason": result.reason,
+                "reason": result.reason,
+                "intents": intent_chain,
             "step_count": len(result.steps),
             "execution_trace": result.execution_trace,
         },

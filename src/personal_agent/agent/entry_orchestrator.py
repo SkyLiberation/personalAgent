@@ -19,6 +19,7 @@ from .orchestration_graph import _build_checkpointer, build_entry_orchestration_
 from .orchestration_nodes import OrchestrationDeps
 from .orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
 from .runtime_results import AskResult, CaptureResult, EntryResult
+from .router import describe_router_decision
 from .workflow_state_migration import reset_step_and_dependents
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ ALLOWED_REPLAY_UPDATE_KEYS = {
     "messages",
     "thread_summary",
     "router_decision",
+    "execution_plan",
     "workflow_id",
     "workflow_version",
     "react",
@@ -82,18 +84,22 @@ def _steps_from_snapshot(snapshot: dict) -> list:
     return []
 
 
-def _snapshot_intent(snapshot: dict) -> str:
-    """Extract intent string from a raw state snapshot dict.
+def _snapshot_intents(snapshot: dict) -> list[str]:
+    """Extract routed intents from a raw state snapshot dict.
 
     Handles three forms of ``router_decision`` in the snapshot:
     None (before routing), a dict (legacy checkpoints), or a RouterDecision instance.
     """
     rd = snapshot.get("router_decision")
     if rd is None:
-        return "unknown"
+        return []
     if isinstance(rd, dict):
-        return str(rd.get("route", "unknown"))
-    return str(getattr(rd, "route", "unknown"))
+        return [
+            str(item.get("intent", "unknown"))
+            for item in rd.get("goals", [])
+            if isinstance(item, dict)
+        ]
+    return [goal.intent for goal in getattr(rd, "goals", [])]
 
 
 def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) -> dict:
@@ -184,7 +190,7 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "user_id": state.user_id,
         "session_id": state.session_id,
         "status": state.to_run_snapshot().status.value,
-        "intent": state.router_decision.route if state.router_decision else "unknown",
+        "intents": [goal.intent for goal in state.router_decision.goals] if state.router_decision else [],
         "workflow_id": state.workflow_id,
         "workflow_version": state.workflow_version,
         "next": list(getattr(snapshot, "next", ()) or ()),
@@ -351,18 +357,22 @@ class EntryOrchestrator:
         result_state = AgentGraphState.model_validate(invoke_result)
         self._record_workflow_events(result_state.events)
 
-        # Map graph state back to EntryResult for API compatibility
+        # Map graph state back to the multi-intent entry result.
         reply_text = result_state.answer or "暂时没有可执行的结果。"
+        intents = (
+            [goal.intent for goal in result_state.router_decision.goals]
+            if result_state.router_decision else []
+        )
 
         capture_result = None
         ask_result = None
-        if result_state.router_decision and result_state.router_decision.route in ("capture_text", "capture_link", "capture_file"):
+        if any(intent in ("capture_text", "capture_link", "capture_file") for intent in intents):
             for item in reversed(result_state.tool_results):
                 capture_payload = item.get("capture_result") if isinstance(item, dict) else None
                 if isinstance(capture_payload, dict):
                     capture_result = CaptureResult.model_validate(capture_payload)
                     break
-        elif result_state.router_decision and result_state.router_decision.route == "ask":
+        if "ask" in intents:
             # Full KnowledgeNote matches are not checkpointed onto the state
             # (only summary dicts, to avoid checkpoint bloat). Surface them as
             # lightweight MatchRefs so result matching / citation validation see
@@ -382,8 +392,7 @@ class EntryOrchestrator:
                 session_id=normalized_session,
             )
 
-        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
-        run_metrics.intent = intent
+        run_metrics.intent = ",".join(intents) or "unknown"
         run_metrics.complete(
             status="completed",
             step_count=len(result_state.step_execution.steps),
@@ -391,11 +400,12 @@ class EntryOrchestrator:
             event_count=len(result_state.events),
         )
         return EntryResult(
-            intent=intent,
-            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "未提供路由说明。",
+            intents=intents,
+            reason=describe_router_decision(result_state.router_decision),
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
+            plan=result_state.execution_plan.model_dump(mode="json") if result_state.execution_plan else None,
             steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
@@ -473,7 +483,7 @@ class EntryOrchestrator:
             run_id, thread_id, kind or "confirmation", interrupt_data.get("step_id", "?"),
         )
         return EntryResult(
-            intent=_snapshot_intent(state_snapshot),
+            intents=_snapshot_intents(state_snapshot),
             reason=reason,
             reply_text=str(interrupt_data.get("message", default_message)),
             steps=[
@@ -579,8 +589,11 @@ class EntryOrchestrator:
         self._record_workflow_events(result_state.events)
 
         reply_text = result_state.answer or "操作已完成。"
-        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
-        run_metrics.intent = intent
+        intents = (
+            [goal.intent for goal in result_state.router_decision.goals]
+            if result_state.router_decision else []
+        )
+        run_metrics.intent = ",".join(intents) or "unknown"
         run_metrics.session_id = result_state.session_id
         run_metrics.complete(
             status="completed",
@@ -591,9 +604,10 @@ class EntryOrchestrator:
         )
 
         return EntryResult(
-            intent=intent,
-            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
+            intents=intents,
+            reason=describe_router_decision(result_state.router_decision),
             reply_text=reply_text,
+            plan=result_state.execution_plan.model_dump(mode="json") if result_state.execution_plan else None,
             steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
@@ -753,7 +767,10 @@ class EntryOrchestrator:
             for event in result_state.events:
                 event.run_id = requested_run_id
         self._record_workflow_events(result_state.events)
-        intent = result_state.router_decision.route if result_state.router_decision else "unknown"
+        intents = (
+            [goal.intent for goal in result_state.router_decision.goals]
+            if result_state.router_decision else []
+        )
         replay_event = AgentEvent(
             run_id=result_state.run_id,
             thread_id=result_state.thread_id,
@@ -772,9 +789,10 @@ class EntryOrchestrator:
             new_run_id=result_state.run_id,
         )
         return EntryResult(
-            intent=intent,
-            reason=result_state.router_decision.user_visible_message if result_state.router_decision else "",
+            intents=intents,
+            reason=describe_router_decision(result_state.router_decision),
             reply_text=result_state.answer or "回放已完成。",
+            plan=result_state.execution_plan.model_dump(mode="json") if result_state.execution_plan else None,
             steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),

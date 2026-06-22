@@ -138,7 +138,7 @@ class TestReplanReflectionInjection:
         assert "教训" in prompt  # the reflection guidance line is present
 
     def test_replan_accepts_reflections_arg(self, replanner):
-        from personal_agent.agent.step_projector import ExecutionStep
+        from personal_agent.agent.execution_models import ExecutionStep
 
         steps = [
             ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="failed"),
@@ -188,4 +188,3 @@ class TestPromotionTrigger:
         # unchanged
         assert store.items["r1"].confidence == pytest.approx(0.7)
         assert store.items["r1"].status == "candidate"
-

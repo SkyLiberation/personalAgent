@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from personal_agent.agent.step_projection_validator import StepProjectionValidationResult
-from personal_agent.agent.router import RouterDecision
+from personal_agent.agent.router import Goal, RouterDecision
 from personal_agent.agent.service import AgentService
 from personal_agent.core.config import OpenAIConfig, Settings
 from personal_agent.core.models import EntryInput
@@ -57,13 +57,12 @@ class TestCrossLayerRegression:
     def _mock_router(self, svc: AgentService, route: str) -> MagicMock:
         """Replace the runtime's intent router with a mock returning a forced decision."""
         decision = RouterDecision(
-            route=route,
-            confidence=0.9,
-            requires_step_projection=True,
-            requires_retrieval=True,
-            risk_level="high" if route == "delete_knowledge" else "low",
-            requires_confirmation=route == "delete_knowledge",
-            user_visible_message=f"Mock forced {route}",
+            goals=[Goal(
+                goal_id="goal_1",
+                intent=route,
+                input=f"Mock input for {route}",
+                confidence=0.9,
+            )],
         )
         mock_router = MagicMock()
         mock_router.classify.return_value = decision
@@ -71,7 +70,7 @@ class TestCrossLayerRegression:
         return mock_router
 
     def test_delete_knowledge_triggers_step_execution_graph(self, svc: AgentService):
-        """delete_knowledge with requires_step_projection=True takes graph step execution path."""
+        """delete_knowledge is compiled and enters graph step execution."""
         self._mock_router(svc, "delete_knowledge")
         _bypass_validator(svc)
         # Prime knowledge base with a note to resolve
@@ -94,7 +93,7 @@ class TestCrossLayerRegression:
         assert "completed" in statuses or "failed" in statuses
 
     def test_solidify_conversation_triggers_step_execution_graph(self, svc: AgentService):
-        """solidify_conversation with requires_step_projection=True takes graph step execution path."""
+        """solidify_conversation is compiled and enters graph step execution."""
         self._mock_router(svc, "solidify_conversation")
         svc.graph_store.ask.return_value = type("R", (), {
             "enabled": False, "answer": "",

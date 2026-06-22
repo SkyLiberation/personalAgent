@@ -5,8 +5,6 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from ..tools.base import tool_schema
-
 _SYSTEM_TOOL_ARGS = {"user_id"}
 
 
@@ -22,18 +20,8 @@ def strict_json_schema_response(name: str, schema: dict[str, Any]) -> dict[str, 
     }
 
 
-def structured_response_format(
-    name: str, schema: dict[str, Any], mode: str = "json_schema"
-) -> dict[str, Any]:
-    """Build a response_format for the given structured-output mode.
-
-    ``json_schema`` (default) uses OpenAI strict schema enforcement. ``json_object``
-    only guarantees syntactically valid JSON — used for endpoints that reject
-    ``json_schema`` (e.g. DashScope's OpenAI-compatible qwen models). For
-    ``json_object`` the field contract must be described in the prompt instead.
-    """
-    if mode == "json_object":
-        return {"type": "json_object"}
+def structured_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Build a strict JSON Schema response format."""
     return strict_json_schema_response(name, schema)
 
 
@@ -70,7 +58,13 @@ def strict_tool_definition(tool: BaseTool) -> dict[str, Any]:
 
 
 def _model_visible_tool_schema(tool: BaseTool) -> dict[str, Any]:
-    schema = deepcopy(tool_schema(tool) or {"type": "object"})
+    if tool.args_schema is None:
+        raw_schema: dict[str, Any] = {}
+    elif isinstance(tool.args_schema, dict):
+        raw_schema = tool.args_schema
+    else:
+        raw_schema = tool.args_schema.model_json_schema()
+    schema = deepcopy(raw_schema or {"type": "object"})
     props = schema.get("properties")
     if isinstance(props, dict):
         for arg_name in _SYSTEM_TOOL_ARGS:

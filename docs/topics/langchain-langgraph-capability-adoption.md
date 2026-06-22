@@ -53,7 +53,7 @@
 | embedding 直连 OpenAI SDK + 本地哈希 fallback | `Embeddings` 抽象 | `core/embedding_trace.py:120-125`、`storage/postgres_memory_store.py:164-167` |
 | Postgres 工具幂等账本 / 审计表（`tool_idempotency_ledger` / `tool_audit_events`） | langgraph `BaseStore` | `storage/postgres_tool_governance_store.py`、`tools/gateway.py` |
 | `PromptSpec` registry（version / output_contract / owner + `template.format()`） | `PromptTemplate` | `core/prompts.py:7-16` |
-| strict `json_schema` + `strictify_schema` + Pydantic + fence 剥离 + json_object 降级 | `with_structured_output` | `core/llm_schemas.py:13-124` |
+| `responses.parse` + Pydantic，或 strict `json_schema` | `with_structured_output` | `core/llm_trace.py`、`core/llm_schemas.py` |
 | ToolGateway error-kind 分类重试 + 线性 backoff | langgraph `RetryPolicy` | `tools/gateway.py:149,189-224` |
 | SSE：`StreamingResponse` + graph updates 流 + answer 直连 OpenAI token 流 | `stream_mode="messages"` | `web/api.py:218-371`、`runtime_llm.py:78-170` |
 
@@ -76,7 +76,9 @@ answer token 流目前绕过 LangGraph、直连 OpenAI（`runtime_llm.generate_a
 这些"没用"是正确的取舍：
 
 - **`RetryPolicy` / `CachePolicy`（节点级）**：自研重试在 ToolGateway 里，绑定 error_kind 分类 + 幂等 + 审计。节点级 RetryPolicy 颗粒更粗、不懂幂等，对写副作用的工具反而危险。
-- **`with_structured_output`**：项目用 strict json_schema 是为了兼容 DashScope 等非 OpenAI 端点的降级（`llm_schemas.py` 有 json_object fallback）。langchain 抽象会拿走这层控制权。
+- **`with_structured_output`**：项目统一使用 OpenAI 原生 `responses.parse` 或 strict
+  `json_schema`，由基础设施层直接管理 Pydantic 类型、调用追踪和错误语义；不再维护
+  `json_object` 兼容降级。
 - **`BaseRetriever` / `EnsembleRetriever` / `Embeddings` 抽象**：检索融合是跨 provider 进同一个 ContextPack，融合逻辑（去重、按 source_type 打分、预算裁剪）是核心竞争力，套抽象只会加适配层、降控制力。
 - **`PromptTemplate`**：PromptSpec 带 `version` / `output_contract` / `owner` 治理字段，比 PromptTemplate 更强，刚重构完，没理由退回。
 - **`AgentExecutor` / LCEL**：架构立场的核心红线，接入等于推翻整个设计。

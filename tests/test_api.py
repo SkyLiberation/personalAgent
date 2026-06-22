@@ -85,7 +85,7 @@ class TestEntryStreamEndpoint:
 
         assert matching
         assert matching[0]["thread_id"] == "test-user:entry-stream-ask"
-        assert matching[0]["intent"] == "ask"
+        assert matching[0]["intents"] == ["ask"]
 
     def test_solidify_stream_emits_steps_only_once(self, api_client: TestClient):
         api_client.get(

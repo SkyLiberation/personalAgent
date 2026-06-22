@@ -3,11 +3,14 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.agent.step_projection_validator import StepProjectionValidationResult, StepProjectionValidator
-from personal_agent.agent.step_projector import ExecutionStep
-from personal_agent.agent.router import RouterDecision
+from personal_agent.agent.execution_models import ExecutionStep
 from langchain_core.tools import tool
 
 from personal_agent.tools import ToolExecutor, governance_extras, tool_response, tool_success
+
+
+def RouterDecision(route="unknown", **_kwargs):
+    return route
 
 
 class TestStepProjectionValidationResult:
@@ -199,66 +202,6 @@ class TestStepProjectionValidatorDependency:
         assert any("depends_on 为空" in w for w in result.warnings)
 
 
-class TestStepProjectionValidatorCrossValidation:
-    @pytest.fixture
-    def validator(self):
-        return StepProjectionValidator()
-
-    def test_router_requires_tools_but_no_tool_call(self, validator):
-        decision = RouterDecision(route="ask", requires_tools=True)
-        steps = [
-            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
-            ExecutionStep(step_id="s2", action_type="compose", description="生成"),
-        ]
-        result = validator.validate(steps, decision)
-        assert any("requires_tools" in w for w in result.warnings)
-
-    def test_router_requires_retrieval_but_no_retrieve(self, validator):
-        decision = RouterDecision(route="ask", requires_retrieval=True)
-        steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="调用工具",
-                     tool_name="graph_search"),
-        ]
-        result = validator.validate(steps, decision)
-        assert any("requires_retrieval" in w for w in result.warnings)
-
-    def test_router_requires_confirmation_but_none_in_steps(self, validator):
-        decision = RouterDecision(route="delete_knowledge", requires_confirmation=True)
-        steps = [
-            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
-        ]
-        result = validator.validate(steps, decision)
-        assert any("requires_confirmation" in i for i in result.issues)
-
-    def test_router_requires_confirmation_satisfied(self, validator):
-        decision = RouterDecision(route="delete_knowledge", requires_confirmation=True)
-        steps = [
-            ExecutionStep(step_id="s1", action_type="retrieve", description="检索"),
-            ExecutionStep(step_id="s2", action_type="verify", description="校验",
-                     requires_confirmation=True, risk_level="high"),
-        ]
-        result = validator.validate(steps, decision)
-        assert not any("requires_confirmation" in i for i in result.issues)
-
-    def test_risk_escalation_warning(self, validator):
-        decision = RouterDecision(route="ask", risk_level="low")
-        steps = [
-            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
-                     risk_level="high"),
-        ]
-        result = validator.validate(steps, decision)
-        assert any("高于" in w for w in result.warnings)
-
-    def test_risk_not_escalated_when_same_level(self, validator):
-        decision = RouterDecision(route="ask", risk_level="high")
-        steps = [
-            ExecutionStep(step_id="s1", action_type="retrieve", description="检索",
-                     risk_level="high"),
-        ]
-        result = validator.validate(steps, decision)
-        assert not any("高于" in w for w in result.warnings)
-
-
 class TestStepProjectionValidatorProjectionLevel:
     @pytest.fixture
     def validator(self):
@@ -294,8 +237,7 @@ class TestStepProjectionValidatorProjectionLevel:
         assert any("都是 verify" in w for w in result.warnings)
 
     def test_delete_knowledge_heuristic_projection_passes(self, validator):
-        decision = RouterDecision(route="delete_knowledge", risk_level="high",
-                                  requires_confirmation=True, requires_step_projection=True)
+        decision = RouterDecision(route="delete_knowledge")
         steps = [
             ExecutionStep(step_id="del-1", action_type="retrieve", description="检索待删除的候选笔记",
                      tool_name="graph_search", expected_output="匹配的候选笔记列表",
@@ -312,8 +254,7 @@ class TestStepProjectionValidatorProjectionLevel:
         assert result.valid
 
     def test_solidify_conversation_heuristic_projection_passes(self, validator):
-        decision = RouterDecision(route="solidify_conversation", risk_level="low",
-                                  requires_step_projection=True)
+        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="compose", description="提取候选事实和结论"),
             ExecutionStep(step_id="sol-2", action_type="tool_call", description="写入知识库",
@@ -462,7 +403,7 @@ class TestStepProjectionValidatorGovernance:
         assert not any("tool_input 参数校验失败" in i for i in result.issues)
 
     def test_capture_text_may_receive_text_from_upstream_compose(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
+        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
             ExecutionStep(
@@ -477,7 +418,7 @@ class TestStepProjectionValidatorGovernance:
         assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
 
     def test_solidify_rejects_capture_without_composed_draft(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
+        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="retrieve", description="获取上下文"),
             ExecutionStep(
@@ -496,7 +437,7 @@ class TestStepProjectionValidatorGovernance:
         assert any("必须依赖 compose" in issue for issue in result.issues)
 
     def test_solidify_rejects_placeholder_even_with_compose_dependency(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
+        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
             ExecutionStep(
@@ -513,7 +454,7 @@ class TestStepProjectionValidatorGovernance:
         assert any("计划阶段不得提供正文或占位符" in issue for issue in result.issues)
 
     def test_solidify_rejects_unexecutable_verify_step(self, validator):
-        decision = RouterDecision(route="solidify_conversation", requires_step_projection=True)
+        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
             ExecutionStep(step_id="sol-2", action_type="verify", description="校验是否已写入",

@@ -144,7 +144,6 @@ def settings_from_env(settings_cls: type):
             ),
             max_retries=int(os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")),
             extra_body=_parse_json_env("ROUTER_EXTRA_BODY"),
-            structured_output=os.getenv("ROUTER_STRUCTURED_OUTPUT", "json_schema"),
         ),
         structured=StructuredConfig(
             api_key=os.getenv("STRUCTURED_API_KEY")
@@ -163,8 +162,6 @@ def settings_from_env(settings_cls: type):
             ),
             extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
             or _parse_json_env("ROUTER_EXTRA_BODY"),
-            structured_output=os.getenv("STRUCTURED_STRUCTURED_OUTPUT")
-            or os.getenv("ROUTER_STRUCTURED_OUTPUT", "json_schema"),
         ),
         firecrawl=FirecrawlConfig(
             api_key=os.getenv("FIRECRAWL_API_KEY"),

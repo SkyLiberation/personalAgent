@@ -12,41 +12,32 @@ PROMPTS: dict[str, PromptSpec] = {
     ),
     "router.classify.system": PromptSpec(
         name="router.classify.system",
-        version="v2",
-        output_contract="RouterDecision",
+        version="v5",
+        output_contract="RouterOutput",
         template=(
-            "你是一个严谨的入口路由分类器，只返回符合 schema 的 JSON。"
-            "请把用户输入分类到以下意图之一：capture_text, capture_link, capture_file, ask, "
-            "summarize_thread, delete_knowledge, solidify_conversation, direct_answer, unknown。"
-            "capture_text: 用户想记录文字内容。capture_link: 用户发来链接想收录。"
-            "ask: 任何知识型、定义型、解释型问题（如“什么是X”“X的原理/作用/区别”“为什么……”），"
-            "以及需要检索个人知识库、公共网络或最新外部事实才能可靠回答的问题。"
-            "用户的知识库可能已沉淀相关笔记，因此这类问题必须走 ask 检索，不得因为看起来是常识就直接回答。"
-            "summarize_thread: 需要总结群聊/会话。delete_knowledge: 删除过时或错误的知识笔记。"
-            "solidify_conversation: 把对话结论沉淀为知识。"
-            "例如已有对话在讨论 DNS，用户再说“将DNS相关知识存储至知识库”，是在要求整理已有会话知识，"
-            "必须归为 solidify_conversation，不能把这条操作指令本身按 capture_text 存储。"
-            "只有用户输入本身提供了需要原样记录的实质正文时，才归为 capture_text。"
-            "direct_answer: 仅限闲聊、问候、感谢、对你自身身份/能力的询问等无信息需求的对话。"
-            "注意：知识型或定义型问题（哪怕看起来是常识）不属于此类，应归为 ask。"
-            "请重点判断信息是否具有时效性：当前天气、实时价格、最新新闻、航班状态等依赖最新外部事实的问题应归为 ask，"
-            "不得仅因问题简单而归为 direct_answer。"
-            "当输入不足以安全确定或执行意图时设置 requires_clarification=true，并提供 missing_information 和 clarification_prompt；"
-            "例如仅说“帮我”或“删除”需要澄清，而“删除关于 DNS 的知识”已提供检索范围，"
-            "应归为 delete_knowledge 且 requires_clarification=false，后续会检索候选并要求用户确认。"
-            "“你是谁”“你好”是完整的 direct_answer，不需要澄清。"
-            "route 是最终意图；user_visible_message 是简短分类理由。"
-            "requires_tools/requires_retrieval/requires_step_projection/candidate_tools 可以按你的判断填写，系统会再合并默认控制字段。"
-            "risk_level: 删除类操作应为 high，一般操作为 low。"
-            "requires_confirmation: 删除操作应为 true。"
-            "历史 chat messages 只用于理解指代和已有讨论主题；"
-            "请分类最后一条当前用户输入，不要把历史助手回复当作事实证据。"
+            "任务：识别当前用户请求中的语义目标，并按 schema 返回结果。\n"
+            "意图：capture_text=记录当前输入中的实质正文；capture_link=收录链接；"
+            "capture_file=收录文件；ask=知识、解释、实时事实或检索问题；"
+            "summarize_thread=总结会话；delete_knowledge=删除知识；"
+            "solidify_conversation=提炼历史对话中的结论并入库；"
+            "direct_answer=问候、感谢、身份或能力闲聊；unknown=无法判断。\n"
+            "拆分规则：\n"
+            "1. 一个请求可以产生一个或多个 goals；按用户表达的处理顺序排列。\n"
+            "2. 每个 goal.input 只保留该目标实际处理的内容，不混入其他目标的指令。\n"
+            "3. 只判断用户要完成什么，不决定如何执行。\n"
+            "4. 历史消息只用于理解指代；不要把历史助手回复当事实证据。\n"
+            "澄清规则：只有缺失信息会导致目标无法确定或无法执行时才返回 outcome=clarify。"
+            "此时 clarification 必须包含缺失信息和一个直接的追问；否则返回 outcome=ready 且 clarification=null。\n"
+            "边界示例：用户提供待保存正文时用 capture_text；用户说“把刚才结论记下来”时用 solidify_conversation；"
+            "知识问题即使看似常识也用 ask；“删除关于 DNS 的知识”信息足够，不需要入口澄清。\n"
+            "复合示例：“记住：DNS 把域名解析为 IP，然后回答 DNS 为什么需要缓存”应产生两个 goals："
+            "先 capture_text，再 ask。"
         ),
     ),
     "router.classify.user": PromptSpec(
         name="router.classify.user",
         version="v1",
-        output_contract="RouterDecision",
+        output_contract="RouterOutput",
         template="当前用户输入：{text}",
     ),
     "replanner.system": PromptSpec(

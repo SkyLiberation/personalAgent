@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class EntryResponse(BaseModel):
-    intent: str
+    intents: list[str] = Field(default_factory=list)
     reason: str
     reply_text: str
     capture_result: dict | None = None
     ask_result: dict | None = None
+    plan: dict[str, object] | None = None
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     run_id: str | None = None
@@ -36,7 +37,7 @@ class RunSnapshotResponse(BaseModel):
     user_id: str
     session_id: str
     status: str
-    intent: str
+    intents: list[str] = Field(default_factory=list)
     entry_text: str
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
@@ -72,11 +73,12 @@ def entry_response(result) -> EntryResponse:
 
 def entry_response_dict(result) -> dict[str, object]:
     return {
-        "intent": result.intent,
+        "intents": result.intents,
         "reason": result.reason,
         "reply_text": result.reply_text,
         "capture_result": result.capture_result.model_dump(mode="json") if result.capture_result else None,
         "ask_result": result.ask_result.model_dump(mode="json") if result.ask_result else None,
+        "plan": result.plan,
         "steps": result.steps,
         "execution_trace": result.execution_trace,
         "run_id": result.run_id,
@@ -95,7 +97,7 @@ def run_snapshot_to_response(snapshot) -> RunSnapshotResponse:
         user_id=snapshot.user_id,
         session_id=snapshot.session_id,
         status=snapshot.status.value,
-        intent=snapshot.intent,
+        intents=snapshot.intents,
         entry_text=snapshot.entry_text,
         steps=snapshot.steps,
         execution_trace=snapshot.execution_trace,

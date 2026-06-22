@@ -7,7 +7,7 @@ from personal_agent.core.models import EntryInput
 
 def test_build_entry_episode_from_completed_run():
     result = EntryResult(
-        intent="delete_knowledge",
+        intents=["delete_knowledge"],
         reason="删除知识。",
         reply_text="已删除笔记「Graphiti」。",
         run_id="run-123",
@@ -52,7 +52,7 @@ def test_build_entry_episode_from_completed_run():
 
 def test_build_entry_episode_records_open_item_for_confirmation():
     result = EntryResult(
-        intent="delete_knowledge",
+        intents=["delete_knowledge"],
         reason="操作需要用户确认",
         reply_text="确认删除笔记「Graphiti」？",
         run_id="run-456",
@@ -80,7 +80,7 @@ def test_build_entry_episode_records_open_item_for_confirmation():
 
 def test_failed_entry_builds_reflection_candidate():
     result = EntryResult(
-        intent="delete_knowledge",
+        intents=["delete_knowledge"],
         reason="计划执行失败",
         reply_text="删除失败",
         run_id="run-failed",

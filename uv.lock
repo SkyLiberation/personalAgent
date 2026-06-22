@@ -2167,7 +2167,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
     { name = "lark-oapi", specifier = ">=1.6.2" },
     { name = "neo4j", specifier = ">=6.0.0" },
-    { name = "openai", specifier = ">=1.0.0" },
+    { name = "openai", specifier = ">=2.36.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.12" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "pypdf", specifier = ">=5.9.0" },

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from ..ask import AskRunContextStore
     from ..runtime_ask import AskService
     from ..step_projection_validator import StepProjectionValidator
-    from ..step_projector import ExecutionStep
+    from ..execution_models import ExecutionStep
     from ..replanner import Replanner
     from ..router import DefaultIntentRouter
     from ..runtime_results import AskResult, CaptureResult
@@ -37,7 +37,7 @@ class OrchestrationDeps:
     settings: "Settings"
     memory: "MemoryFacade"
     intent_router: "DefaultIntentRouter"
-    step_projector: object
+    workflow_planner: object
     step_projection_validator: "StepProjectionValidator"
     replanner: "Replanner | None"
     verifier: "AnswerVerifier | None"
@@ -68,7 +68,7 @@ class OrchestrationDeps:
             settings=runtime.settings,
             memory=runtime.memory,
             intent_router=runtime.intent_router,
-            step_projector=runtime.step_projector,
+            workflow_planner=runtime.workflow_planner,
             step_projection_validator=runtime.step_projection_validator,
             replanner=getattr(runtime, "_replanner", None),
             verifier=getattr(runtime, "_verifier", None),

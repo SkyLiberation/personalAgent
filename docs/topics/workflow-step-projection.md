@@ -2,13 +2,14 @@
 
 当前项目采用 workflow-first 架构。`ask_branch`、`capture_branch`、`summarize_branch`、`direct_answer_branch`、`delete_knowledge` 和 `solidify_conversation` 都是 workflow；区别只在于是否需要投影成可恢复、可展示、可校验的执行步骤。
 
-固定业务流程的真源是 `WorkflowSpec / WorkflowRegistry`。只有 `projection_policy="step_projection"` 的 workflow 才会由 `WorkflowStepProjector` 确定性投影成 `ExecutionStep`，再进入 `StepExecutionGraph`。开放式动态规划不是当前生产主路径，边界见 [Dynamic Planning](dynamic-planning.md)。
+固定业务流程的真源是 `WorkflowSpec / WorkflowRegistry`。`WorkflowPlanner` 选择 active spec，并把一个或多个 Goal 确定性编译为跨 workflow 的 `ExecutionPlan` 与 `ExecutionStep` DAG，再进入 `StepExecutionGraph`。开放式动态规划不是当前生产主路径，边界见 [Dynamic Planning](dynamic-planning.md)。
 
 对应代码主要位于：
 
 - [workflow.py](../../src/personal_agent/agent/workflow.py)
 - [workflow_validator.py](../../src/personal_agent/agent/workflow_validator.py)
-- [step_projector.py](../../src/personal_agent/agent/step_projector.py)
+- [workflow_planner.py](../../src/personal_agent/agent/workflow_planner.py)
+- [execution_models.py](../../src/personal_agent/agent/execution_models.py)
 - [step_projection_validator.py](../../src/personal_agent/agent/step_projection_validator.py)
 - [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)
 - [orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py)

@@ -85,7 +85,7 @@ type AskHistoryView = AskHistoryItem & {
   run_id?: string | null;
   pending_confirmation?: EntryPendingConfirmation | null;
   confirmation_decision?: "confirmed" | "rejected" | null;
-  intent?: string;
+  intents?: string[];
   intent_reason?: string;
   captured_title?: string;
   captured_preview?: string;
@@ -440,14 +440,14 @@ export default function App() {
     let entryIntent = "";
 
     source.addEventListener("intent", (streamEvent) => {
-      const payload = parseSsePayload<{ intent?: string; reason?: string }>(streamEvent);
-      entryIntent = payload.intent ?? "";
+      const payload = parseSsePayload<{ intents?: string[]; reason?: string }>(streamEvent);
+      entryIntent = payload.intents?.join(" → ") ?? "";
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id
             ? {
                 ...item,
-                intent: payload.intent ?? item.intent,
+                intents: payload.intents ?? item.intents,
                 intent_reason: payload.reason ?? item.intent_reason,
               }
             : item
@@ -1201,7 +1201,7 @@ export default function App() {
                           {item.intent_reason ? (
                             <div className="route-progress">
                               <span>路由判断</span>
-                              <strong>{translateIntent(item.intent ?? "unknown")}</strong>
+                              <strong>{(item.intents ?? ["unknown"]).map(translateIntent).join(" → ")}</strong>
                               <p>{item.intent_reason}</p>
                             </div>
                           ) : null}

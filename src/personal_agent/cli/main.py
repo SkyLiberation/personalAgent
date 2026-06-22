@@ -40,7 +40,7 @@ def _build_service() -> AgentService:
 def _format_entry_result(result: EntryResult) -> str:
     """Format an EntryResult as JSON for CLI output."""
     output: dict = {
-        "intent": result.intent,
+        "intents": result.intents,
         "reason": result.reason,
         "reply": result.reply_text,
         "run_id": result.run_id,

@@ -9,7 +9,7 @@ from ..core.llm_schemas import strict_json_schema_response
 from ..core.llm_trace import log_llm_parse, traced_chat_completion
 from ..core.models import MemoryItem
 from ..core.prompts import get_prompt, render_prompt
-from .step_projector import ExecutionStep
+from .execution_models import ExecutionStep
 
 logger = logging.getLogger(__name__)
 

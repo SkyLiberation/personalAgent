@@ -11,7 +11,11 @@ from psycopg import sql
 
 from personal_agent.core.config import OpenAIConfig, Settings
 from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.agent.router import RouterDecision
+from personal_agent.agent.router import (
+    ClarificationDraft,
+    GoalDraft,
+    RouterOutput,
+)
 from tests.note_factory import make_note
 
 POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_test?sslmode=disable"
@@ -63,41 +67,59 @@ def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_config_env_module, "load_dotenv", lambda override=True: False)
 
 
-def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = None) -> RouterDecision:
+def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = None) -> RouterOutput:
     """Deterministic LLM stand-in for integration tests exercising routed branches."""
     stripped = text.strip()
+    def decision(intent: str, message: str, **kwargs) -> RouterOutput:
+        clarify = bool(kwargs.get("requires_clarification", False))
+        return RouterOutput(
+            outcome="clarify" if clarify else "ready",
+            goals=[] if clarify else [GoalDraft(intent=intent, input=stripped)],
+            clarification=(
+                ClarificationDraft(
+                    missing_information=list(
+                        kwargs.get(
+                            "missing_information",
+                            ["明确的目标、问题或操作对象"],
+                        )
+                    ),
+                    prompt=str(kwargs.get("clarification_prompt", message)),
+                )
+                if clarify else None
+            ),
+        )
     if not stripped:
-        return RouterDecision(
-            route="unknown",
+        return decision(
+            "unknown",
+            "消息内容为空。",
             requires_clarification=True,
-            user_visible_message="消息内容为空。",
         )
     if stripped == "帮我":
-        return RouterDecision(
-            route="unknown",
+        return decision(
+            "unknown",
+            "需要补充信息。",
             requires_clarification=True,
             missing_information=["具体目标或待处理内容"],
             clarification_prompt="请补充具体内容。",
-            user_visible_message="需要补充信息。",
         )
     if any(word in stripped for word in ("固化下来", "沉淀下来", "沉淀成", "记下来")):
-        return RouterDecision(route="solidify_conversation", user_visible_message="沉淀会话结论。")
+        return decision("solidify_conversation", "沉淀会话结论。")
     if "删除" in stripped:
-        return RouterDecision(
-            route="delete_knowledge",
+        return decision(
+            "delete_knowledge",
+            "删除知识。",
             risk_level="high",
             requires_confirmation=True,
-            user_visible_message="删除知识。",
         )
     if "总结" in stripped:
-        return RouterDecision(route="summarize_thread", user_visible_message="总结内容。")
+        return decision("summarize_thread", "总结内容。")
     if stripped.startswith(("http://", "https://")):
-        return RouterDecision(route="capture_link", user_visible_message="采集链接。")
+        return decision("capture_link", "采集链接。")
     if any(word in stripped for word in ("记一下", "记住")):
-        return RouterDecision(route="capture_text", user_visible_message="记录内容。")
+        return decision("capture_text", "记录内容。")
     if any(word in stripped for word in ("你好", "谢谢", "你是谁")):
-        return RouterDecision(route="direct_answer", user_visible_message="直接回答。")
-    return RouterDecision(route="ask", user_visible_message="回答问题。")
+        return decision("direct_answer", "直接回答。")
+    return decision("ask", "回答问题。")
 
 
 def _ensure_test_database() -> None:

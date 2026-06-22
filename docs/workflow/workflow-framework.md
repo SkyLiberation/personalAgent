@@ -5,7 +5,8 @@
 对应核心代码：
 
 - `src/personal_agent/agent/workflow.py`
-- `src/personal_agent/agent/step_projector.py`
+- `src/personal_agent/agent/workflow_planner.py`
+- `src/personal_agent/agent/execution_models.py`
 - `src/personal_agent/agent/workflow_validator.py`
 - `src/personal_agent/agent/step_projection_validator.py`
 - `src/personal_agent/agent/orchestration_graph.py`
@@ -66,8 +67,8 @@ react_init
 | `WorkflowStepSpec` | `workflow.py` | workflow 内部节点契约，声明 action、依赖、工具、副作用、风险、失败策略 |
 | `WorkflowRegistry` | `workflow.py` | 按 intent 选择固定 workflow，并在需要时投影步骤 |
 | `PostgresWorkflowDefinitionStore` | `storage/postgres_workflow_definition_store.py` | 持久化 versioned workflow definitions、deployment pin 和 eval gate |
-| `ExecutionStep` | `step_projector.py` | workflow step 的运行时投影视图 |
-| `WorkflowStepProjector` | `step_projector.py` | 从 active deployment / `WorkflowRegistry` 确定性生成 `ExecutionStep`，不调用 LLM |
+| `ExecutionStep` | `execution_models.py` | workflow step 的运行时编译结果 |
+| `WorkflowPlanner` | `workflow_planner.py` | 将有序 Goals 与 active WorkflowSpec 编译为 ExecutionPlan，不调用 LLM 生成拓扑 |
 | `WorkflowSpecValidator` | `workflow_validator.py` | 校验 workflow 声明本身是否自洽 |
 | `StepProjectionValidator` | `step_projection_validator.py` | 校验运行时 step 是否可执行、安全、符合 intent 规则 |
 | `StepRunState` | `orchestration_models.py` | checkpoint-safe 的单步骤运行态 |
@@ -135,8 +136,7 @@ route_intent
 
 ```text
 requires_retrieval=True
-requires_step_projection=True
-candidate_tools=["graph_search", "web_search"]
+Goal(intent="ask", input="...")
 ```
 
 投影出的步骤：
@@ -295,7 +295,7 @@ capture chunk graph_sync=pending
 
 ## 和 Dynamic Planning 的区别
 
-当前生产主路径不是开放式 dynamic planning。固定业务流程由 `WorkflowSpec` 声明，启动时同步到 `workflow_definitions`，deployment pin 决定 active version，`WorkflowStepProjector` 再确定性投影。LLM 参与的是局部语义任务，例如：
+当前生产主路径不是开放式 dynamic planning。固定业务流程由 `WorkflowSpec` 声明，启动时同步到 `workflow_definitions`，deployment pin 决定 active version，`WorkflowPlanner` 再确定性编译。LLM 参与的是局部语义任务，例如：
 
 - router intent 分类；
 - query understanding；
@@ -311,7 +311,7 @@ capture chunk graph_sync=pending
 
 可以这样总结：
 
-> 我们的 workflow 框架是 workflow-first + LangGraph orchestration。固定业务流程由 `WorkflowSpec / WorkflowRegistry` 维护，再由 `WorkflowStepProjector` 确定性投影成 `ExecutionStep`，进入 LangGraph 的 step execution graph。capture、ask、summary、delete knowledge、solidify conversation、direct answer 都统一走 step projection；`unknown` 和校验失败才进入 fallback branch。这样既保留了业务流程的确定性，又能用 LangGraph 获得 checkpoint、HITL、工具治理、ReAct 子图、事件观测和失败恢复能力。
+> 我们的 workflow 框架是 workflow-first + LangGraph orchestration。Router 只输出有序 Goal；固定业务流程由 `WorkflowSpec / WorkflowRegistry` 维护，再由 `WorkflowPlanner` 生成任务依赖并确定性编译成 `ExecutionPlan / ExecutionStep`，进入 LangGraph step execution graph。工具、风险和确认策略以 WorkflowSpec 与 Tool Governance 为真源。
 
 Phase5/6 后可以补充一句：
 

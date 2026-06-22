@@ -22,9 +22,31 @@ from personal_agent.agent.orchestration_models import (
 )
 from personal_agent.agent.orchestration_nodes import OrchestrationDeps
 from personal_agent.agent.orchestration_nodes._helpers import _dialogue_prompt_messages
-from personal_agent.agent.router import RouterDecision
+from personal_agent.agent.router import (
+    Goal,
+    RouterDecision as RouterDecisionModel,
+    describe_router_decision,
+)
 from personal_agent.core.config import Settings
 from personal_agent.core.models import EntryInput
+
+
+def RouterDecision(route="unknown", user_visible_message="", **kwargs):
+    item_fields = {
+        key: value for key, value in kwargs.items()
+        if key in Goal.model_fields
+    }
+    item = Goal(
+        goal_id="goal_1",
+        intent=route,
+        **item_fields,
+    )
+    return RouterDecisionModel(
+        goals=[item],
+        requires_clarification=bool(kwargs.get("requires_clarification", False)),
+        missing_information=list(kwargs.get("missing_information", [])),
+        clarification_prompt=str(kwargs.get("clarification_prompt", "")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +148,7 @@ class TestAgentRunSnapshot:
     def test_snapshot_defaults(self):
         snap = AgentRunSnapshot(run_id="r1", thread_id="t1", user_id="u1", session_id="s1")
         assert snap.status == AgentRunStatus.pending
-        assert snap.intent == "unknown"
+        assert snap.intents == []
         assert snap.steps == []
 
 
@@ -365,7 +387,7 @@ class TestOrchestrationGraphIntegration:
             session_id="orch-test",
         )
         result = runtime.execute_entry(entry)
-        assert result.intent in ("direct_answer", "unknown", "capture_text")
+        assert result.intents[-1] in ("direct_answer", "unknown", "capture_text")
         assert result.reply_text
         latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
@@ -382,7 +404,7 @@ class TestOrchestrationGraphIntegration:
             session_id="orch-test-ask",
         )
         result = runtime.execute_entry(entry)
-        assert result.intent == "ask"
+        assert result.intents == ["ask"]
         assert result.reply_text
         latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
@@ -417,9 +439,9 @@ class TestOrchestrationGraphIntegration:
             session_id="orch-test-cap",
         )
         result = runtime.execute_entry(entry)
-        assert result.intent in ("capture_text", "unknown")
+        assert result.intents[-1] in ("capture_text", "unknown")
         assert result.reply_text
-        if result.intent == "capture_text":
+        if result.intents[-1] == "capture_text":
             tool_results = [
                 event for event in result.events
                 if event["type"] == "tool_result"
@@ -451,7 +473,7 @@ class TestOrchestrationGraphIntegration:
             )
         )
 
-        assert result.intent == "summarize_thread"
+        assert result.intents == ["summarize_thread"]
         assert loaded == [("feishu-summary", 20)]
         assert "项目今天完成发布" in result.reply_text
 
@@ -493,7 +515,7 @@ class TestOrchestrationGraphIntegration:
             )
         )
 
-        assert result.intent == "solidify_conversation"
+        assert result.intents == ["solidify_conversation"]
         assert "DNS 是域名系统" in result.reply_text
         assert any("DNS 是域名系统" in note.content for note in runtime.store.list_notes("test-user"))
         capture_step = next(
@@ -526,52 +548,10 @@ class TestOrchestrationGraphIntegration:
         )
         notes = runtime.store.list_notes("test-user")
 
-        assert result.intent == "solidify_conversation"
+        assert result.intents == ["solidify_conversation"]
         assert result.reply_text == "DNS（域名系统）\n\nDNS 用于将域名转换为 IP 地址。"
         assert any(note.content == result.reply_text for note in notes)
         assert not any(note.content == "把DNS相关知识固化下来" for note in notes)
-
-    def test_solidify_rejects_placeholder_write_steps_and_uses_composed_draft(self, runtime, monkeypatch):
-        from personal_agent.agent.step_projector import ExecutionStep
-
-        monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
-            lambda prompt, deps: (
-                '{"done":true,"result":{"title":"DNS","content":'
-                '"DNS 是将域名转换为 IP 地址的系统。"}}'
-            ),
-        )
-        runtime.execute_entry(
-            EntryInput(text="什么是DNS", user_id="test-user", session_id="placeholder-solidify")
-        )
-        monkeypatch.setattr(
-            runtime._step_projector,
-            "project",
-            lambda _intent, _context, conversation_messages=None, routing_key="": [
-                ExecutionStep(step_id="bad-1", action_type="retrieve", description="获取上下文"),
-                ExecutionStep(
-                    step_id="bad-2",
-                    action_type="tool_call",
-                    description="错误写入",
-                    tool_name="capture_text",
-                    tool_input={"text": "{{bad-1.expected_output}}"},
-                    depends_on=["bad-1"],
-                ),
-            ],
-        )
-
-        result = runtime.execute_entry(
-            EntryInput(
-                text="将该知识固化下来",
-                user_id="test-user",
-                session_id="placeholder-solidify",
-            )
-        )
-        notes = runtime.store.list_notes("test-user")
-
-        assert result.intent == "solidify_conversation"
-        assert any("DNS 是将域名转换为 IP 地址" in note.content for note in notes)
-        assert not any("{{" in note.content for note in notes)
 
     def test_solidify_delegates_topic_selection_to_llm(self, runtime, monkeypatch):
         prompts: list[str] = []
@@ -634,7 +614,7 @@ class TestOrchestrationGraphIntegration:
             on_progress=lambda event, payload: events.append(event),
         )
 
-        assert result.intent == "solidify_conversation"
+        assert result.intents == ["solidify_conversation"]
         assert "steps_projected" in events
         assert "step_started" in events
         assert "step_completed" in events
@@ -664,7 +644,7 @@ class TestOrchestrationGraphIntegration:
             option_id="capture",
         )
         assert resumed.run_status == "completed"
-        assert resumed.intent == "capture_text"
+        assert resumed.intents == ["capture_text"]
         assert resumed.reply_text
 
     def test_short_question_does_not_trigger_clarify(self, runtime):
@@ -677,7 +657,7 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.run_status == "completed"
         assert result.pending_confirmation is None
-        assert result.intent == "direct_answer"
+        assert result.intents == ["direct_answer"]
         assert result.reply_text
         snapshot = runtime.get_run_snapshot(result.run_id or "")
         assert snapshot is not None
@@ -864,7 +844,7 @@ class TestOrchestrationGraphIntegration:
         snapshots = runtime.list_run_snapshots(user_id="test-user", limit=10)
         relevant = [s for s in snapshots if s.session_id == "state-test"]
         assert len(relevant) >= 1
-        assert relevant[0].intent in ("direct_answer", "unknown", "capture_text")
+        assert relevant[0].intents[-1] in ("direct_answer", "unknown", "capture_text")
 
 
 # ---------------------------------------------------------------------------
@@ -1241,7 +1221,7 @@ class TestPhase3InterruptResumeIntegration:
             decision="confirm",
             user_id="u1",
         )
-        assert isinstance(result.intent, str)
+        assert isinstance(result.intents, list)
         assert result.run_id is not None
         assert result.run_status in ("completed", "waiting_confirmation")
         if result.run_status == "waiting_confirmation":
@@ -1323,7 +1303,7 @@ class TestPhase4ReActHelpers:
 
     def test_resolve_allowed_tools_for_step(self, runtime):
         from personal_agent.agent.orchestration_graph import _resolve_allowed_tools_for_step
-        from personal_agent.agent.step_projector import ExecutionStep
+        from personal_agent.agent.execution_models import ExecutionStep
 
         step = ExecutionStep(
             step_id="s1",
@@ -1348,7 +1328,7 @@ class TestPhase4ReActHelpers:
 
     def test_build_react_context(self):
         from personal_agent.agent.orchestration_graph import _build_react_context
-        from personal_agent.agent.step_projector import ExecutionStep
+        from personal_agent.agent.execution_models import ExecutionStep
 
         step = ExecutionStep(step_id="s1", tool_input={"question": "什么是X？"})
         results = {
@@ -1805,7 +1785,7 @@ class TestPhase4ReActMainGraphIntegration:
             run_id="r-ask",
             user_id="u1",
             entry_text="什么是服务降级？",
-            router_decision=RouterDecision(route="ask", requires_step_projection=True),
+            router_decision=RouterDecision(route="ask"),
             step_execution=StepExecutionState(
                 steps=[
                     {
@@ -1955,7 +1935,7 @@ class TestPhase5EntryResultEvents:
         from personal_agent.agent.runtime_results import EntryResult
 
         result = EntryResult(
-            intent="ask",
+            intents=["ask"],
             reason="测试",
             reply_text="答案",
             events=[{"type": "entry_started", "payload": {}}],
@@ -1966,7 +1946,7 @@ class TestPhase5EntryResultEvents:
     def test_entry_result_events_default_empty(self):
         from personal_agent.agent.runtime_results import EntryResult
 
-        result = EntryResult(intent="direct_answer", reason="测试", reply_text="你好")
+        result = EntryResult(intents=["direct_answer"], reason="测试", reply_text="你好")
         assert result.events == []
 
     def test_entry_result_events_serialization_roundtrip(self):
@@ -1974,7 +1954,7 @@ class TestPhase5EntryResultEvents:
         from personal_agent.agent.runtime_results import EntryResult
 
         result = EntryResult(
-            intent="ask",
+            intents=["ask"],
             reason="测试",
             reply_text="答案",
             events=[
@@ -2096,8 +2076,8 @@ class TestPhase5GraphToEntryResultEvents:
         state.add_event("run_completed", {})
 
         result = EntryResult(
-            intent=state.router_decision.route if state.router_decision else "unknown",
-            reason=state.router_decision.user_visible_message if state.router_decision else "",
+            intents=[goal.intent for goal in state.router_decision.goals] if state.router_decision else [],
+            reason=describe_router_decision(state.router_decision),
             reply_text=state.answer or "",
             execution_trace=state.execution_trace,
             run_id=state.run_id,
@@ -2117,7 +2097,7 @@ class TestPhase5GraphToEntryResultEvents:
         from personal_agent.agent.runtime_results import EntryResult
 
         result = EntryResult(
-            intent="unknown",
+            intents=["unknown"],
             reason="操作需要用户确认",
             reply_text="确认删除？",
             run_id="r1",

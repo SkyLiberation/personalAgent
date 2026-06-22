@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from ..core.models import EntryIntent
 from ..tools import tool_governance
-from .step_projector import ExecutionStep
-from .router import RiskLevel, RouterDecision
+from .execution_models import ExecutionStep
 
 if TYPE_CHECKING:
     from ..tools import ToolExecutor
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 VALID_ACTION_TYPES = {"retrieve", "tool_call", "compose", "verify", "resolve"}
-VALID_RISK_LEVELS: set[RiskLevel | str] = {"low", "medium", "high"}
+VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_ON_FAILURE = {"skip", "retry", "abort"}
 VALID_EXECUTION_MODES = {"deterministic", "react"}
 MAX_REACT_ITERATIONS = 5
@@ -64,6 +64,9 @@ def _clone_step(s: ExecutionStep) -> ExecutionStep:
         workflow_version=getattr(s, "workflow_version", ""),
         workflow_step_id=getattr(s, "workflow_step_id", ""),
         projection_kind=getattr(s, "projection_kind", "workflow_step"),
+        task_id=getattr(s, "task_id", ""),
+        task_intent=getattr(s, "task_intent", "unknown"),
+        task_input=getattr(s, "task_input", ""),
     )
 
 
@@ -112,9 +115,8 @@ def _has_upstream_tool(
 class StepProjectionValidator:
     """Pre-execution workflow step projection validation.
 
-    Validates projection structure, dependency graph integrity, and cross-checks
-    against the RouterDecision. Dynamically resolves known tool names from
-    ToolExecutor so the allowlist never drifts from registered tools.
+    Validates compiled workflow structure and governance. Router output is not
+    accepted here: execution policy comes from WorkflowSpec and tools.
     """
 
     def __init__(self, tool_executor: "ToolExecutor | None" = None) -> None:
@@ -135,7 +137,7 @@ class StepProjectionValidator:
     def validate(
         self,
         steps: list[ExecutionStep],
-        decision: RouterDecision,
+        intent: EntryIntent,
     ) -> StepProjectionValidationResult:
         issues: list[str] = []
         warnings: list[str] = []
@@ -198,12 +200,12 @@ class StepProjectionValidator:
                             and "text" in err
                             and (
                                 (
-                                    decision.route == "solidify_conversation"
+                                    intent == "solidify_conversation"
                                     and _has_upstream_action_type(steps, s, "compose")
                                 )
-                                or decision.route == "capture_text"
+                                or intent == "capture_text"
                                 or (
-                                    decision.route in {"capture_link", "capture_file"}
+                                    intent in {"capture_link", "capture_file"}
                                     and _has_upstream_tool(
                                         steps,
                                         s,
@@ -216,7 +218,7 @@ class StepProjectionValidator:
                             s.tool_name == "capture_url"
                             and "url" not in s.tool_input
                             and "url" in err
-                            and decision.route == "capture_link"
+                            and intent == "capture_link"
                         )
                         deferred_capture_upload = (
                             s.tool_name == "capture_upload"
@@ -224,7 +226,7 @@ class StepProjectionValidator:
                                 ("file_path" not in s.tool_input and "file_path" in err)
                                 or ("filename" not in s.tool_input and "filename" in err)
                             )
-                            and decision.route == "capture_file"
+                            and intent == "capture_file"
                         )
                         deferred_delete_note_id = (
                             s.tool_name == "delete_note"
@@ -252,7 +254,7 @@ class StepProjectionValidator:
                         )
                     # Tool writes longterm but step has no confirmation
                     explicit_solidify_write = (
-                        decision.route in {
+                        intent in {
                             "solidify_conversation",
                             "capture_text",
                             "capture_link",
@@ -309,7 +311,7 @@ class StepProjectionValidator:
                     f"建议将 risk_level 至少设为 'medium'。"
                 )
 
-            if decision.route == "delete_knowledge":
+            if intent == "delete_knowledge":
                 if s.action_type == "verify":
                     issues.append(
                         f"{prefix} 删除确认由 delete_note 工具执行，"
@@ -331,7 +333,7 @@ class StepProjectionValidator:
                             "且 requires_confirmation=True。"
                         )
 
-            if decision.route == "solidify_conversation":
+            if intent == "solidify_conversation":
                 if s.action_type in {"retrieve", "resolve", "verify"}:
                     issues.append(
                         f"{prefix} 固化计划只允许 compose 生成草稿后调用 capture_text；"
@@ -429,47 +431,17 @@ class StepProjectionValidator:
                     f"缺少校验目标。"
                 )
 
-        # --- C. Cross-validation against RouterDecision ---
-        action_types = {s.action_type for s in steps}
-        step_risk_levels = {s.risk_level for s in steps}
-        has_confirm_step = any(s.requires_confirmation for s in steps)
-
-        if decision.requires_tools and "tool_call" not in action_types:
-            warnings.append(
-                "RouterDecision.requires_tools=True，"
-                "但计划中没有 tool_call 步骤。"
-            )
-        if decision.requires_retrieval and "retrieve" not in action_types:
-            warnings.append(
-                "RouterDecision.requires_retrieval=True，"
-                "但计划中没有 retrieve 步骤。"
-            )
-        if decision.requires_confirmation and not has_confirm_step:
-            issues.append(
-                "RouterDecision.requires_confirmation=True，"
-                "但计划中没有 requires_confirmation=True 的步骤。"
-            )
+        # --- C. Intent workflow invariants ---
         if (
-            decision.route == "delete_knowledge"
+            intent == "delete_knowledge"
             and not any(s.action_type == "tool_call" and s.tool_name == "delete_note" for s in steps)
         ):
             issues.append("delete_knowledge 计划必须包含 tool_call(delete_note) 步骤。")
         if (
-            decision.route == "solidify_conversation"
+            intent == "solidify_conversation"
             and not any(s.action_type == "tool_call" and s.tool_name == "capture_text" for s in steps)
         ):
             issues.append("solidify_conversation 计划必须包含 tool_call(capture_text) 步骤。")
-
-        # Risk escalation warning
-        risk_order = {"low": 0, "medium": 1, "high": 2}
-        max_step_risk_num = max((risk_order.get(r, 0) for r in step_risk_levels), default=0)
-        decision_risk_num = risk_order.get(decision.risk_level, 0)
-        if max_step_risk_num > decision_risk_num:
-            max_risk_label = max(step_risk_levels, key=lambda r: risk_order.get(r, 0))
-            warnings.append(
-                f"计划中最高风险等级（{max_risk_label}）"
-                f"高于路由决策的风险等级（{decision.risk_level}），建议确认。"
-            )
 
         # --- D. Plan-level checks ---
         if len(steps) == 0:
@@ -480,7 +452,7 @@ class StepProjectionValidator:
 
             last_step = steps[-1]
             valid_terminal_action = last_step.action_type in ("compose", "verify") or (
-                decision.route in {
+                intent in {
                     "solidify_conversation",
                     "capture_text",
                     "capture_link",

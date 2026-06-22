@@ -9,7 +9,10 @@ from personal_agent.core.langsmith_tracing import (
     configure_langsmith_environment,
     langsmith_trace_context,
 )
-from personal_agent.core.llm_trace import LlmTraceResult, traced_chat_completion
+from personal_agent.core.llm_trace import (
+    LlmTraceResult,
+    traced_chat_completion,
+)
 
 
 def test_langsmith_config_reads_env(monkeypatch):

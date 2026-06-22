@@ -64,7 +64,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
 
             if result.pending_confirmation:
                 yield sse_event("intent", {
-                    "intent": result.intent,
+                    "intents": result.intents,
                     "reason": result.reason,
                 })
                 yield sse_event("confirmation_required", {
@@ -106,7 +106,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
             if streamed_graph_events and result.execution_trace:
                 yield sse_event("execution_trace", {"execution_trace": result.execution_trace})
 
-            if result.intent in ("capture_text", "capture_link", "capture_file"):
+            if any(intent in ("capture_text", "capture_link", "capture_file") for intent in result.intents):
                 capture_data = result.capture_result.model_dump(mode="json") if result.capture_result else None
                 yield sse_event("capture_result", {
                     "note": capture_data.get("note") if capture_data else None,
@@ -117,7 +117,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                     "run_id": result.run_id,
                 })
 
-            elif result.intent == "ask":
+            if "ask" in result.intents:
                 ask_data = result.ask_result.model_dump(mode="json") if result.ask_result else {}
                 yield sse_event("status", {"message": "正在检索你的个人记忆..."})
                 yield sse_event("metadata", {

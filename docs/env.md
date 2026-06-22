@@ -308,9 +308,21 @@ LANGSMITH_WORKSPACE_ID=
 - `LANGSMITH_ENDPOINT` 默认使用 LangSmith SaaS endpoint。
 - `LANGSMITH_WORKSPACE_ID` 仅在 API key 关联多个 workspace 时需要。
 - `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 控制 entry trace 采样率，`1.0` 表示全量，`0` 表示不上传。
-- `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS` 是隐私策略开关，当前先进入配置层，后续 LLM wrapper 接入脱敏/上传策略时使用。
+- `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，LLM wrapper 只向 LangSmith 上传脱敏摘要：
+  prompt 名称和版本、模型参数、消息数量/角色/字符数、工具名称、延迟、输出长度和 token usage；
+  不上传消息正文、模型输出正文或工具参数。
+- `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=true` 时，允许上传 wrapper 的完整输入输出，可能包含用户原文、
+  prompt、检索上下文和模型输出，仅建议用于经过授权的开发环境或非敏感测试数据。
 
-生产环境建议先只上传 metadata 和摘要，确认脱敏策略后再允许完整 prompt / tool input trace。
+该开关不等于关闭 tracing，也不控制采样。是否启用 LangSmith 由
+`PERSONAL_AGENT_LANGSMITH_ENABLED` 决定，采样比例由 `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 决定。
+生产环境建议保持 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false`。
+
+结构化模型调用通过 composition root 注入观测装饰器，Router 等业务组件不读取该开关。
+该策略不能保证覆盖 LangGraph/LangChain 自动产生的所有节点 trace，也不能覆盖尚未迁移到统一
+Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
+文件内容或密钥。
+完整边界见 [观测与治理层](topics/observability-governance.md#7-llm-trace-脱敏策略)。
 
 ## LangGraph 总编排与 Checkpoint 配置
 

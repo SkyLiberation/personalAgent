@@ -30,11 +30,12 @@ class DigestResult(BaseModel):
 
 
 class EntryResult(BaseModel):
-    intent: EntryIntent
+    intents: list[EntryIntent] = Field(default_factory=list)
     reason: str
     reply_text: str
     capture_result: CaptureResult | None = None
     ask_result: AskResult | None = None
+    plan: dict[str, object] | None = None
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     applied_reflection_ids: list[str] = Field(default_factory=list)

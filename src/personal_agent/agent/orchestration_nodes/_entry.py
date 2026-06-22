@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
@@ -44,6 +45,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.thread_id = thread_id
     state.entry_text = text
     state.router_decision = None
+    state.execution_plan = None
     state.workflow_id = ""
     state.workflow_version = ""
     state.react = ReactSubState()
@@ -73,6 +75,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
         "router_decision": None,
+        "execution_plan": None,
         "workflow_id": "",
         "workflow_version": "",
         "react": state.react,
@@ -107,7 +110,7 @@ def _node_prepare_clarify(state: AgentGraphState) -> dict:
     issue = _clarification_payload_parts(
         decision.clarification_prompt
         or "请补充你想记录、查询、总结或执行的具体内容。",
-        decision.user_visible_message or "入口信息不足，需要用户补充。",
+        "入口信息不足，需要用户补充。",
     )
     payload = {
         "kind": "clarification_required",
@@ -233,15 +236,14 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
     )
 
     state.router_decision = decision
+    state.execution_plan = None
     state.step_execution.steps = []
     state.execution_trace = []
 
     state.add_event("intent_classified", {
-        "intent": decision.route,
-        "reason": decision.user_visible_message,
-        "confidence": decision.confidence,
-        "risk_level": decision.risk_level,
-        "requires_step_projection": decision.requires_step_projection,
+        "intents": [goal.intent for goal in decision.goals],
+        "goals": [goal.model_dump(mode="json") for goal in decision.goals],
+        "reason": _router_reason(decision),
         "requires_clarification": decision.requires_clarification,
     })
 
@@ -251,19 +253,19 @@ def _node_route_intent(state: AgentGraphState, *, deps: OrchestrationDeps) -> di
         "entry.route.decision",
         user_id=state.user_id,
         session_id=state.session_id,
-        route=decision.route,
-        requires_step_projection=decision.requires_step_projection,
+        intents=[goal.intent for goal in decision.goals],
         requires_clarification=decision.requires_clarification,
-        reason=decision.user_visible_message,
+        reason=_router_reason(decision),
     )
 
     logger.info(
-        "route_intent run_id=%s intent=%s requires_step_projection=%s requires_clarification=%s",
-        state.run_id, decision.route, decision.requires_step_projection, decision.requires_clarification,
+        "route_intent run_id=%s intents=%s requires_clarification=%s",
+        state.run_id, [goal.intent for goal in decision.goals], decision.requires_clarification,
     )
 
     return {
         "router_decision": state.router_decision,
+        "execution_plan": None,
         "step_execution": state.step_execution,
         "execution_trace": [],
         "events": state.events,
@@ -276,98 +278,82 @@ def _node_project_workflow_steps(state: AgentGraphState, *, deps: OrchestrationD
     Checkpoint boundary: after this node the projected steps exist and can be
     inspected before validation.
     """
-    route = state.router_decision.route if state.router_decision else "unknown"
     entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
-    projection_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    steps = deps.step_projector.project(
-        route,
-        entry_text,
-        conversation_messages=projection_messages,
+    if state.router_decision is None:
+        return {}
+    plan, steps = deps.workflow_planner.plan(
+        state.router_decision,
+        entry_text=entry_text,
         routing_key=f"{state.user_id}:{state.session_id}",
     )
+    state.execution_plan = plan
     step_states = [StepRunState.from_execution_step(s) for s in steps]
 
     state.step_execution.steps = step_states
-    if step_states:
+    if len(plan.tasks) == 1 and step_states:
         state.workflow_id = step_states[0].workflow_id
         state.workflow_version = step_states[0].workflow_version
+    else:
+        state.workflow_id = "multi_intent_plan"
+        state.workflow_version = "v1"
     state.add_event("steps_projected", {
         "workflow_id": state.workflow_id,
         "workflow_version": state.workflow_version,
+        "tasks": [task.model_dump(mode="json") for task in plan.tasks],
         "steps": [pss.model_dump(mode="json") for pss in step_states],
     })
 
     logger.info(
-        "project_workflow_steps run_id=%s route=%s steps=%d",
-        state.run_id, route, len(step_states),
+        "project_workflow_steps run_id=%s tasks=%d steps=%d",
+        state.run_id, len(plan.tasks), len(step_states),
     )
     return {
         "workflow_id": state.workflow_id,
         "workflow_version": state.workflow_version,
+        "execution_plan": state.execution_plan,
         "step_execution": state.step_execution,
         "events": state.events,
     }
 
 
 def _node_validate_projected_steps(state: AgentGraphState, *, deps: OrchestrationDeps) -> dict:
-    """Validate execution steps and handle blocking / fallback / reversion.
-
-    Checkpoint boundary: after this node the projected steps are either confirmed valid
-    or the intent has been reverted to a clarification fallback (unknown).
-
-    If validation completely fails (blocking after retry), the intent is
-    reverted to ``unknown`` and ``requires_step_projection`` is set to ``False`` so
-    the routing layer sends the entry to the clarification/direct-answer path.
-    """
-    from ..router import RouterDecision
-
-    decision = state.router_decision or RouterDecision(route="unknown")
-
+    """Validate compiled workflow tasks before execution."""
     steps = [sd.to_execution_step() for sd in (state.step_execution.steps or [])]
-    validation = deps.step_projection_validator.validate(steps, decision)
-
-    if validation.blocking:
-        logger.warning(
-            "Step projection validation blocked: %d issues, %d warnings. Issues: %s",
-            len(validation.issues), len(validation.warnings), validation.issues,
-        )
-        if validation.corrected_steps:
-            validated_steps = validation.corrected_steps
-        else:
-            validated_steps = deps.step_projector.fallback_projection(decision.route)
-            revalidation = deps.step_projection_validator.validate(validated_steps, decision)
-            if revalidation.blocking:
-                logger.error(
-                    "Fallback step projection also blocked: %s. Reverting to unknown.",
-                    revalidation.issues,
-                )
-                decision = RouterDecision(
-                    route="unknown",
-                    confidence=0.1,
-                    risk_level="low",
-                    user_visible_message=f"步骤投影校验失败: {'; '.join(revalidation.issues[:3])}",
-                )
-                validated_steps = deps.step_projector.fallback_projection("unknown")
-                # Revert intent so the routing layer skips step execution
-                state.router_decision = decision
-                state.add_event("steps_validated", {
-                    "outcome": "reverted_to_unknown",
-                    "issues": validation.issues,
-                })
+    validated_steps = list(steps)
+    issues: list[str] = []
+    warnings: list[str] = []
+    for task in (state.execution_plan.tasks if state.execution_plan else []):
+        task_id = task.task_id
+        task_steps = [deepcopy(step) for step in validated_steps if step.task_id == task_id]
+        task_step_ids = {step.step_id for step in task_steps}
+        for step in task_steps:
+            step.depends_on = [
+                dependency for dependency in step.depends_on
+                if dependency in task_step_ids
+            ]
+        validation = deps.step_projection_validator.validate(task_steps, task.intent)
+        issues.extend(f"[{task_id}] {issue}" for issue in validation.issues)
+        warnings.extend(f"[{task_id}] {warning}" for warning in validation.warnings)
+    if issues:
+        state.errors.extend(issues)
+        state.add_event("steps_validated", {
+            "outcome": "blocked",
+            "issues": issues,
+            "warnings": warnings,
+        })
+        state.step_execution.aborted = True
     else:
-        validated_steps = validation.corrected_steps or steps
-        if not validation.ok:
-            logger.warning(
-                "Step projection validation found %d non-blocking issues: %s",
-                len(validation.issues), validation.warnings,
-            )
+        state.add_event("steps_validated", {
+            "outcome": "valid",
+            "warnings": warnings,
+        })
 
     step_states = [StepRunState.from_execution_step(s) for s in validated_steps]
     state.step_execution.steps = step_states
 
     logger.info(
-        "validate_projected_steps run_id=%s steps=%d blocked=%s requires_step_projection=%s",
-        state.run_id, len(step_states), validation.blocking, state.router_decision.requires_step_projection if state.router_decision else False,
+        "validate_projected_steps run_id=%s steps=%d blocked=%s executable=%s",
+        state.run_id, len(step_states), bool(issues), not bool(issues),
     )
     return {
         "step_execution": state.step_execution,
@@ -378,7 +364,12 @@ def _node_validate_projected_steps(state: AgentGraphState, *, deps: Orchestratio
 
 def _after_validate_projected_steps(state: AgentGraphState) -> str:
     """After validation: enter step execution or ask the user to clarify."""
-    if (state.router_decision and state.router_decision.requires_step_projection) and state.step_execution.steps:
+    if (
+        state.router_decision
+        and state.router_decision.goals
+        and state.step_execution.steps
+        and not state.step_execution.aborted
+    ):
         return "prepare_step_execution"
     return "direct_answer_branch"
 
@@ -391,10 +382,10 @@ def _node_capture_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -> 
     entry_input = state.entry_input
     if entry_input is None:
         state.answer = "未收到可采集内容。"
-        state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
+        state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
-    intent = state.router_decision.route if state.router_decision else "unknown"
+    intent = state.router_decision.primary_intent if state.router_decision else "unknown"
     logger.debug("Executing capture branch intent=%s user=%s", intent, state.user_id)
 
     if intent == "capture_file":
@@ -519,7 +510,7 @@ def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -
         )
         summary = deps.summarize_chat(messages_text, entry_input.user_id or "default")
         state.answer = summary
-        state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
+        state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
     dialogue_messages = _entry_conversation_messages(state, exclude_latest=True)
@@ -530,7 +521,7 @@ def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -
         )
         summary = deps.summarize_chat(messages_text, entry_input.user_id or "default")
         state.answer = summary
-        state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
+        state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
     chat_id = entry_input.metadata.get("chat_id", "")
@@ -541,7 +532,7 @@ def _node_summarize_branch(state: AgentGraphState, *, deps: OrchestrationDeps) -
         )
     else:
         state.answer = "已识别为总结诉求。请直接发送需要总结的文本内容，或在群聊中使用此功能。"
-    state.execution_trace = _execution_trace_for_intent(state.router_decision.route if state.router_decision else "unknown")
+    state.execution_trace = _execution_trace_for_intent(state.router_decision.primary_intent if state.router_decision else "unknown")
     return {"answer": state.answer, "execution_trace": state.execution_trace}
 
 
@@ -554,9 +545,9 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
 
     logger.debug("Executing direct_answer branch user=%s", state.user_id)
 
-    if not state.router_decision or state.router_decision.route == "unknown":
+    if not state.router_decision or state.router_decision.primary_intent == "unknown":
         state.answer = _build_clarification_answer(state)
-        route = state.router_decision.route if state.router_decision else "unknown"
+        route = state.router_decision.primary_intent if state.router_decision else "unknown"
         state.execution_trace = _execution_trace_for_intent(route)
         return {"answer": state.answer, "execution_trace": state.execution_trace}
 
@@ -587,20 +578,20 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: OrchestrationDep
                 ],
                 model=deps.settings.openai.small_model,
                 max_tokens=300,
-                metadata={"component": "orchestration", "route": state.router_decision.route},
+                metadata={"component": "orchestration", "intents": [goal.intent for goal in state.router_decision.goals]},
                 upload_inputs_outputs=deps.settings.langsmith.upload_inputs,
             )
             generated = result.content.strip()
             if generated:
                 state.answer = generated
-                route = state.router_decision.route if state.router_decision else "unknown"
+                route = state.router_decision.primary_intent if state.router_decision else "unknown"
                 state.execution_trace = _execution_trace_for_intent(route)
                 return {"answer": state.answer, "execution_trace": state.execution_trace}
         except Exception:
             logger.exception("Direct answer LLM call failed")
 
     state.answer = "回答模型当前不可用，请检查 LLM 配置或稍后重试。"
-    route = state.router_decision.route if state.router_decision else "unknown"
+    route = state.router_decision.primary_intent if state.router_decision else "unknown"
     state.execution_trace = _execution_trace_for_intent(route)
     return {"answer": state.answer, "execution_trace": state.execution_trace}
 
@@ -656,15 +647,18 @@ def _build_clarification_answer(state: AgentGraphState) -> str:
         for item in decision.missing_information
         if str(item).strip()
     ]
-    reason = (decision.user_visible_message or "").strip()
-    if reason.startswith("入口路由模型当前不可用"):
-        return reason
+    if decision.error == "router_unavailable":
+        return _router_reason(decision)
     if missing:
         details = "、".join(missing[:3])
         return f"我还需要你补充：{details}。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
-    if reason and "步骤投影校验失败" in reason:
-        return f"{reason}。请补充更明确的目标或操作范围后我再继续。"
     return "我暂时没判断出你的意图。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
+
+
+def _router_reason(decision) -> str:
+    from ..router import describe_router_decision
+
+    return describe_router_decision(decision)
 
 
 _EXECUTION_TRACE_MAP: dict[str, list[str]] = {
@@ -746,17 +740,17 @@ def _node_finalize_entry_result(
             state.add_event("answer_completed", {"answer": state.answer})
         state.add_event("run_completed", {
             "answer": state.answer,
-            "intent": state.router_decision.route if state.router_decision else "unknown",
+            "intents": [goal.intent for goal in state.router_decision.goals] if state.router_decision else [],
         })
         logger.info(
             "finalize_entry_result relies on checkpoint messages run_id=%s intent=%s answer_len=%d",
             state.run_id,
-            state.router_decision.route if state.router_decision else "unknown",
+            state.router_decision.primary_intent if state.router_decision else "unknown",
             len(state.answer or ""),
         )
     logger.info(
         "finalize_entry_result run_id=%s intent=%s errors=%d",
-        state.run_id, state.router_decision.route if state.router_decision else "unknown", len(state.errors),
+        state.run_id, state.router_decision.primary_intent if state.router_decision else "unknown", len(state.errors),
     )
     result = {
         "answer_completed": state.answer_completed,

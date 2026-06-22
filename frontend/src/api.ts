@@ -262,9 +262,10 @@ export type EntryPendingConfirmation = {
 };
 
 export type EntryResponse = {
-  intent: string;
+  intents: string[];
   reason: string;
   reply_text: string;
+  plan?: { tasks?: unknown[]; steps?: ExecutionStep[] } | null;
   steps?: ExecutionStep[];
   execution_trace?: string[];
   run_id?: string | null;
@@ -291,7 +292,7 @@ export type EntryRunSnapshot = {
   user_id: string;
   session_id: string;
   status: string;
-  intent: string;
+  intents: string[];
   entry_text: string;
   steps: ExecutionStep[];
   execution_trace: string[];
