@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from ..core.config import Settings
 from ..core.langsmith_tracing import langsmith_llm_span, report_usage_metadata
+from ..core.llm_telemetry import record_llm_usage
 from ..core.llm_trace import traced_chat_completion
 from ..core.logging_utils import log_event
 from ..core.prompts import get_prompt
@@ -138,6 +139,12 @@ class LlmClient:
                         yield ("answer_delta", {"delta": delta, "answer": full_text})
                 report_usage_metadata(run, usage)
                 latency_ms = round((time.monotonic() - start) * 1000, 2)
+                record_llm_usage(
+                    latency_ms=latency_ms,
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    total_tokens=usage.get("total_tokens"),
+                )
                 if full_text.strip():
                     self._mark_success()
                     log_event(

@@ -1,0 +1,142 @@
+"""Scoring for the orchestration-quality harness. Mirrors the rag/router scorers.
+
+Consumes only :class:`OrchestrationRunOutput`, so it is reproducible from a
+serialized run projection and unit-testable with hand-built fixtures.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+
+from .dataset import OrchestrationEvalCase, OrchestrationRunOutput
+from .metrics import (
+    event_subsequence_match,
+    forbidden_events_absent,
+    outcome_correct,
+    primary_intent_correct,
+    reached_terminal,
+)
+
+
+@dataclass(frozen=True)
+class OrchestrationCaseScore:
+    case_id: str
+    outcome_accuracy: float
+    primary_intent_accuracy: float
+    event_sequence_match: float
+    forbidden_events_absent: float
+    reached_terminal: float
+    latency_ms: float
+    llm_call_count: float
+    input_tokens: float
+    output_tokens: float
+    total_tokens: float
+
+    def as_dict(self) -> dict[str, float | str]:
+        return asdict(self)
+
+
+def score_case(
+    case: OrchestrationEvalCase, run: OrchestrationRunOutput,
+) -> OrchestrationCaseScore:
+    return OrchestrationCaseScore(
+        case_id=case.id,
+        outcome_accuracy=outcome_correct(run.outcome, case.expected_outcome),
+        primary_intent_accuracy=primary_intent_correct(
+            run.primary_intent, case.expected_primary_intent,
+        ),
+        event_sequence_match=event_subsequence_match(
+            run.event_types, case.expected_event_subsequence,
+        ),
+        forbidden_events_absent=forbidden_events_absent(
+            run.event_types, case.forbidden_events,
+        ),
+        reached_terminal=reached_terminal(
+            run.event_types,
+            # Require termination only when the run actually proceeded: a run
+            # that paused for clarification is correctly exempt, even if the
+            # gold annotation expected it to proceed (a live router may route a
+            # gold-ready case to clarify — defensible, not a hang).
+            case.must_reach_terminal and not run.paused_for_clarification,
+        ),
+        latency_ms=run.latency_ms,
+        llm_call_count=float(run.llm_call_count),
+        input_tokens=float(run.input_tokens),
+        output_tokens=float(run.output_tokens),
+        total_tokens=float(run.total_tokens),
+    )
+
+
+_METRIC_NAMES = (
+    "outcome_accuracy", "primary_intent_accuracy",
+    "event_sequence_match", "forbidden_events_absent", "reached_terminal",
+    "latency_ms", "llm_call_count", "input_tokens", "output_tokens", "total_tokens",
+    "latency_p95_ms", "total_tokens_p95",
+)
+
+
+@dataclass(frozen=True)
+class OrchestrationQualityReport:
+    num_cases: int
+    means: dict[str, float] = field(default_factory=dict)
+    per_case: list[OrchestrationCaseScore] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return {
+            "num_cases": self.num_cases,
+            "means": self.means,
+            "per_case": [c.as_dict() for c in self.per_case],
+        }
+
+    def summary(self) -> str:
+        lines = [f"Orchestration Quality Report ({self.num_cases} cases)"]
+        for name in _METRIC_NAMES:
+            lines.append(f"  {name:<26} {self.means.get(name, 0.0):.4f}")
+        return "\n".join(lines)
+
+    def check_thresholds(self, thresholds: dict[str, float]) -> list[str]:
+        failures: list[str] = []
+        for name, floor in thresholds.items():
+            if name.endswith("_max"):
+                metric = name[:-4]
+                actual = self.means.get(metric, 0.0)
+                if actual > floor:
+                    failures.append(f"{metric}={actual:.4f} > ceiling {floor:.4f}")
+                continue
+            actual = self.means.get(name, 0.0)
+            if actual < floor:
+                failures.append(f"{name}={actual:.4f} < threshold {floor:.4f}")
+        return failures
+
+
+def aggregate(scores: list[OrchestrationCaseScore]) -> OrchestrationQualityReport:
+    n = len(scores)
+    if n == 0:
+        return OrchestrationQualityReport(
+            num_cases=0, means=dict.fromkeys(_METRIC_NAMES, 0.0),
+        )
+    base_names = tuple(name for name in _METRIC_NAMES if name not in {
+        "latency_p95_ms", "total_tokens_p95",
+    })
+    means = {
+        name: round(sum(getattr(s, name) for s in scores) / n, 4)
+        for name in base_names
+    }
+    means["latency_p95_ms"] = _percentile([s.latency_ms for s in scores], 0.95)
+    means["total_tokens_p95"] = _percentile([s.total_tokens for s in scores], 0.95)
+    return OrchestrationQualityReport(num_cases=n, means=means, per_case=scores)
+
+
+def _percentile(values: list[float], quantile: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * quantile + 0.999999)))
+    return round(ordered[index], 4)
+
+
+def score_all(
+    cases: list[OrchestrationEvalCase], runs: dict[str, OrchestrationRunOutput],
+) -> OrchestrationQualityReport:
+    scores = [score_case(case, runs[case.id]) for case in cases if case.id in runs]
+    return aggregate(scores)

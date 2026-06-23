@@ -1,0 +1,7 @@
+{
+  "_comment": "Aggregate-mean regression floors for the router-quality gate (24 hand-annotated real-scenario inputs, scored against the deterministic stub_router_decision). Observed means are all 1.0; floors sit just below to absorb future case additions that probe harder boundaries. outcome_accuracy and intent_sequence_exact are the hard gates — a drop means the router mis-decided ready/clarify or mis-routed an intent. Lower a floor only with a reviewed reason; raising one ratchets quality up. NOTE: every case is single-goal by construction (the stub router never decomposes); multi-goal ordered-sequence eval needs a real LLM router and lives in a separate nightly run, not this offline gate.",
+  "outcome_accuracy": 1.0,
+  "intent_f1": 0.95,
+  "intent_sequence_exact": 0.95,
+  "clarify_field_precision": 0.9
+}

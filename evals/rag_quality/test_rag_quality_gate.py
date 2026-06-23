@@ -25,60 +25,37 @@ from .runner import run_output_from_result
 from .scorer import score_all, score_case
 
 
-def _ev(source_id: str, title: str, snippet: str, retrieved_by: str = "") -> EvidenceItem:
+def _ev(entry: dict) -> EvidenceItem:
+    retrieved_by = entry.get("retrieved_by", "")
     meta = {"retrieved_by": retrieved_by} if retrieved_by else {}
     return EvidenceItem(
-        source_type="note", source_id=source_id, title=title, snippet=snippet, metadata=meta,
+        source_type=entry.get("source_type", "note"),
+        source_id=entry["source_id"],
+        title=entry.get("title", ""),
+        snippet=entry.get("snippet", ""),
+        metadata=meta,
     )
 
 
-# Reference evidence pools + answers per case — a stand-in for a healthy
-# pipeline run. The verifier scores the answer against this evidence to produce
-# real claim verdicts.
-_REFERENCE = {
-    "rq-001": {
-        "evidence": [_ev("n1", "服务降级", "服务降级是在系统压力过大时主动关闭非核心功能以保障核心链路可用性的策略。")],
-        "answer": "服务降级是在系统压力过大时主动关闭非核心功能以保障核心链路可用性的策略。",
-    },
-    "rq-002": {
-        "evidence": [
-            _ev("n1", "pytest入门", "pytest 是 Python 最流行的测试框架，支持 fixture 和参数化。"),
-            _ev("n2", "unittest基础", "unittest 是 Python 标准库自带的测试框架。"),
-            _ev("n3", "nose2简介", "nose2 是 unittest 的扩展，提供更灵活的测试发现。"),
-        ],
-        "answer": "Python 常见测试框架包括 pytest、unittest 和 nose2。pytest 支持 fixture 与参数化。",
-    },
-    "rq-003": {
-        "evidence": [
-            _ev("n1", "LangGraph StateGraph", "StateGraph 是 LangGraph 的核心编排抽象。"),
-            _ev("n2", "LangGraph节点", "节点是 StateGraph 中的处理单元。"),
-        ],
-        "answer": "LangGraph 以 StateGraph 为核心编排抽象，节点是 StateGraph 中的处理单元。",
-    },
-    "rq-004": {
-        "evidence": [
-            _ev("n1", "Redis 缓存实测", "实测表明 Redis 缓存不能降低数据库负载，反而增加了运维复杂度。"),
-            _ev("c1", "缓存风险", "缓存一致性与运维复杂度是引入 Redis 的主要风险。", retrieved_by="contrastive"),
-        ],
-        "answer": "Redis 缓存能降低数据库负载。",
-    },
-    "rq-005": {
-        "evidence": [
-            _ev("x9", "天气", "今天的天气晴朗，适合户外活动。"),
-            _ev("c2", "量子计算局限", "当前量子计算尚未具备颠覆现代密码学的工程能力，存在争议。", retrieved_by="contrastive"),
-        ],
-        "answer": "量子计算将彻底颠覆现代密码学体系。",
-    },
-}
+def default_reference_runs_path() -> Path:
+    return Path(__file__).parent / "reference_runs.json"
+
+
+def load_reference_runs(path: Path) -> dict[str, dict]:
+    """Load the {case_id: {answer, evidence[]}} reference scenarios — a stand-in
+    for healthy pipeline runs. Underscore-prefixed keys are human notes."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return {k: v for k, v in raw.items() if not k.startswith("_")}
 
 
 def _build_runs() -> dict[str, RunOutput]:
     """Project each reference scenario into a RunOutput, deriving claim verdicts
     from the real EntailmentAnswerVerifier."""
     verifier = EntailmentAnswerVerifier()
+    references = load_reference_runs(default_reference_runs_path())
     runs: dict[str, RunOutput] = {}
-    for case_id, ref in _REFERENCE.items():
-        evidence = ref["evidence"]
+    for case_id, ref in references.items():
+        evidence = [_ev(e) for e in ref["evidence"]]
         result = verifier.verify(
             question=case_id, answer=ref["answer"],
             citations=[], matches=[], evidence=evidence,
@@ -127,13 +104,20 @@ class TestRagQualityGate:
                 score = score_case(case, runs[case.id])
                 assert score.recall_5 > 0.0, f"{case.id} recalled no gold evidence"
 
-    def test_contradiction_case_detected(self, cases, runs):
-        # rq-004's answer disagrees with its evidence -> verifier must flag it.
-        run = runs["rq-004"]
-        assert "contradicted" in run.claim_verdicts
+    def test_contradiction_cases_detected(self, cases, runs):
+        # Any case whose gold marks a contradicted claim must surface one.
+        for case in cases:
+            if "contradicted" in case.gold_claim_verdicts:
+                run = runs[case.id]
+                assert "contradicted" in run.claim_verdicts, (
+                    f"{case.id}: expected a contradicted verdict, got {run.claim_verdicts}"
+                )
 
-    def test_unsupported_case_not_grounded(self, cases, runs):
-        # rq-005 asserts what the evidence opposes; the contrastive counter-
-        # evidence flips the verdict to contradicted (not silently not_found).
-        run = runs["rq-005"]
-        assert all(v == "contradicted" for v in run.claim_verdicts)
+    def test_contrastive_cases_have_counter_evidence(self, cases, runs):
+        # Cases that need counter-evidence must actually carry some in the pool.
+        for case in cases:
+            if case.claims_needing_contrast > 0:
+                run = runs[case.id]
+                assert run.counter_evidence_found > 0, (
+                    f"{case.id}: needs contrastive evidence but none found"
+                )

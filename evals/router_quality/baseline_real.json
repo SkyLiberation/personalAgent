@@ -1,0 +1,9 @@
+{
+  "_comment": "Regression floors for the real-environment Router Golden Test. A live 24-case run is NON-DETERMINISTIC: the model can flip on genuinely ambiguous inputs. The aggregate floors are a coarse collapse net with headroom for run-to-run noise, while exact incidents use dedicated regression cases and per-case mismatch reports. The test runs whenever the router LLM is configured and skips only when the required real environment is unavailable.",
+  "outcome_accuracy": 0.75,
+  "intent_f1": 0.7,
+  "intent_sequence_exact": 0.6,
+  "clarify_field_precision": 0.0,
+  "latency_p95_ms_max": 10000,
+  "total_tokens_p95_max": 5000
+}

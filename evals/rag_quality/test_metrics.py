@@ -7,6 +7,9 @@ from evals.rag_quality.metrics import (
     context_precision,
     contrastive_coverage,
     faithfulness,
+    graph_contribution_rate,
+    graph_hit_rate,
+    graph_requirement_met,
     precision_at_k,
 )
 from evals.rag_quality.scorer import aggregate, score_all
@@ -67,6 +70,20 @@ class TestGroundingMetrics:
         assert contrastive_coverage(1, 5) == 1.0
 
 
+class TestGraphMetrics:
+    def test_graph_contribution_rate(self):
+        assert graph_contribution_rate(["graphiti", "local", "structural"]) == 0.6667
+
+    def test_graph_hit_rate(self):
+        assert graph_hit_rate(["local", "graphiti"]) == 1.0
+        assert graph_hit_rate(["local"]) == 0.0
+
+    def test_graph_requirement_is_strict_only_when_annotated(self):
+        assert graph_requirement_met(["local"], False) == 1.0
+        assert graph_requirement_met(["local"], True) == 0.0
+        assert graph_requirement_met(["graphiti"], True) == 1.0
+
+
 class TestDatasetAndAggregate:
     def test_bundled_cases_load(self):
         cases = load_cases(default_cases_path())
@@ -106,3 +123,10 @@ class TestDatasetAndAggregate:
         report = score_all(cases, runs)
         failures = report.check_thresholds({"recall_5": 0.5})
         assert failures and "recall_5" in failures[0]
+
+    def test_ceiling_failures_reported(self):
+        cases = [RagEvalCase(id="a", question="q")]
+        runs = {"a": RunOutput(latency_ms=1500, total_tokens=300)}
+        report = score_all(cases, runs)
+        failures = report.check_thresholds({"latency_ms_max": 1000})
+        assert failures and "ceiling" in failures[0]

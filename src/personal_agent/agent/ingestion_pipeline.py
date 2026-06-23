@@ -154,6 +154,21 @@ class IngestionPipeline:
             note.graph_sync.error = "Graph sync delegated to graph-worthy chunks."
             note.updated_at = local_now()
             self.memory.update_note(note)
+        elif (
+            self.graph_store.configured()
+            and not self.settings.graphiti.parent_note_sync_foreground
+            and self.worker_queue is not None
+        ):
+            # Background path (default): mark the note pending and hand graph
+            # ingestion to the worker queue. Foreground Graphiti add_episode can
+            # block for up to add_episode_timeout_seconds per note (Neo4j), which
+            # is what hung the solidify→capture SSE stream — so capture returns
+            # immediately and the worker syncs the note out of band.
+            note.graph_sync.status = "pending"
+            note.graph_sync.error = None
+            note.updated_at = local_now()
+            self.memory.update_note(note)
+            self._enqueue_graph_sync(note)
         else:
             graph_result = self.graph_store.ingest_note(note)
             if graph_result.enabled is True:

@@ -7,6 +7,7 @@ from personal_agent.core.config import Settings
 from personal_agent.core.projections import graph_ingest_document_from_note
 from tests.note_factory import make_note
 from personal_agent.graphiti.store import (
+    GraphitiStore,
     _graphiti_episode_body,
     _graphiti_safe_episode_body,
     _looks_like_content_filter_error,
@@ -99,3 +100,25 @@ def test_episode_uuids_from_search_result_dedupes_raw_episodes():
     )
 
     assert _episode_uuids_from_search_result(result) == ["ep-1", "ep-2"]
+
+
+def test_close_client_closes_http_clients_and_driver():
+    import asyncio
+
+    closed: list[str] = []
+
+    class AsyncClient:
+        async def close(self):
+            closed.append("http")
+
+    class Graphiti:
+        llm_client = SimpleNamespace(client=AsyncClient())
+        embedder = SimpleNamespace(client=AsyncClient())
+        cross_encoder = None
+
+        async def close(self):
+            closed.append("driver")
+
+    asyncio.run(GraphitiStore._close_client(Graphiti()))
+
+    assert closed == ["http", "http", "driver"]

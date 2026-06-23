@@ -20,7 +20,7 @@ from ..core.models import (
     GraphEdgeRef,
     GraphFactRef,
 )
-from ..core.projections import GraphIngestDocument, graph_ingest_document_from_note
+from ..core.projections import graph_ingest_document_from_note
 from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from .documents import (
     dedupe as _dedupe,
@@ -369,7 +369,7 @@ class GraphitiStore:
                     fact_refs=fact_refs,
                 )
             finally:
-                await graphiti.close()
+                await self._close_client(graphiti)
 
     async def _ingest_notes(
         self,
@@ -378,8 +378,6 @@ class GraphitiStore:
         trace_id: str | None,
         max_workers: int,
     ) -> dict[str, GraphCaptureResult]:
-        bootstrap = await self._build_client(trace_id=trace_id)
-        await bootstrap.close()
         semaphore = asyncio.Semaphore(max(1, max_workers))
 
         async def _limited(note: KnowledgeNote, index: int) -> tuple[str, GraphCaptureResult]:
@@ -509,7 +507,7 @@ class GraphitiStore:
                     fact_refs=ask_fact_refs,
                 )
             finally:
-                await graphiti.close()
+                await self._close_client(graphiti)
 
     async def _clear_user_group(self, user_id: str) -> int:
         graphiti = await self._build_client()
@@ -533,7 +531,7 @@ class GraphitiStore:
             )
             return deleted_count
         finally:
-            await graphiti.close()
+            await self._close_client(graphiti)
 
     async def _clear_all_data(self, preserve_group_ids: list[str] | None = None) -> int:
         driver = AsyncGraphDatabase.driver(
@@ -600,7 +598,7 @@ class GraphitiStore:
             logger.info("Deleted graph episode episode_uuid=%s", episode_uuid)
             return True
         finally:
-            await graphiti.close()
+            await self._close_client(graphiti)
 
     async def _build_client(self, trace_id: str | None = None) -> Graphiti:
         llm_client = build_graphiti_llm_client(self.settings)
@@ -638,6 +636,31 @@ class GraphitiStore:
                 graphiti_uri=self.settings.graphiti.uri,
             )
         return graphiti
+
+    @staticmethod
+    async def _close_client(graphiti: Graphiti) -> None:
+        """Close Graphiti plus its OpenAI-compatible async HTTP clients.
+
+        graphiti-core currently closes only the graph driver. Its LLM/embedder
+        clients otherwise reach garbage collection after ``asyncio.run`` has
+        closed the loop, producing ``Event loop is closed`` warnings.
+        """
+        for component in (
+            getattr(graphiti, "llm_client", None),
+            getattr(graphiti, "embedder", None),
+            getattr(graphiti, "cross_encoder", None),
+        ):
+            client = getattr(component, "client", None)
+            close = getattr(client, "close", None)
+            if close is None:
+                continue
+            try:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.debug("Could not close Graphiti HTTP client", exc_info=True)
+        await graphiti.close()
 
     def _group_id(self, user_id: str) -> str:
         raw = f"{self.settings.graphiti.group_prefix}-{user_id}"

@@ -125,3 +125,23 @@ def contrastive_coverage(
     return round(min(counter_evidence_found, contradicted_or_missing_claims)
                  / contradicted_or_missing_claims, 4)
 
+
+def graph_contribution_rate(retrieval_sources: list[str]) -> float:
+    """Fraction of retrieved evidence contributed by a graph retriever."""
+    if not retrieval_sources:
+        return 0.0
+    graph_labels = {"graph", "graphiti", "graphrag", "ms_graphrag", "structural"}
+    graph_items = sum(source.lower() in graph_labels for source in retrieval_sources)
+    return round(graph_items / len(retrieval_sources), 4)
+
+
+def graph_hit_rate(retrieval_sources: list[str]) -> float:
+    """1.0 when at least one graph-derived evidence item was retrieved."""
+    return 1.0 if graph_contribution_rate(retrieval_sources) > 0 else 0.0
+
+
+def graph_requirement_met(retrieval_sources: list[str], required: bool) -> float:
+    """Strict case-level graph coverage contract."""
+    if not required:
+        return 1.0
+    return graph_hit_rate(retrieval_sources)

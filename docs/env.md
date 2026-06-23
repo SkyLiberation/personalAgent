@@ -183,12 +183,13 @@ PERSONAL_AGENT_MS_GRAPHRAG_COMMAND_TIMEOUT_SECONDS=600
 ## Embedding 配置
 
 ```env
-EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
 EMBEDDING_API_KEY=your_embedding_key
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_EMBEDDING_MODEL=BAAI/bge-m3
 ```
 
-默认值：`OPENAI_EMBEDDING_MODEL` 默认为 `text-embedding-3-small`。
+推荐使用 SiliconFlow 的 `BAAI/bge-m3`。`EMBEDDING_BASE_URL` 填 API
+根路径 `/v1`，OpenAI-compatible 客户端会自动追加 `/embeddings`。
 
 可选：
 

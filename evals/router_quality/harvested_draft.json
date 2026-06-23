@@ -1,0 +1,44 @@
+[
+  {
+    "id": "harvested-001",
+    "text": "帮我",
+    "source_type": "text",
+    "observed_outcome": "clarify",
+    "observed_intents": [],
+    "observed_missing_information": [
+      "具体目标或待处理内容"
+    ],
+    "expected_outcome": "",
+    "expected_intents": [],
+    "expected_missing_info": [],
+    "_review": "confirm or correct expected_* vs observed_*; delete if model was wrong (after fixing the bug)"
+  },
+  {
+    "id": "harvested-002",
+    "text": "什么是DNS",
+    "source_type": "text",
+    "observed_outcome": "ready",
+    "observed_intents": [
+      "solidify_conversation"
+    ],
+    "observed_missing_information": [],
+    "expected_outcome": "",
+    "expected_intents": [],
+    "expected_missing_info": [],
+    "_review": "confirm or correct expected_* vs observed_*; delete if model was wrong (after fixing the bug)"
+  },
+  {
+    "id": "harvested-003",
+    "text": "把这个知识固化下来",
+    "source_type": "text",
+    "observed_outcome": "ready",
+    "observed_intents": [
+      "solidify_conversation"
+    ],
+    "observed_missing_information": [],
+    "expected_outcome": "",
+    "expected_intents": [],
+    "expected_missing_info": [],
+    "_review": "confirm or correct expected_* vs observed_*; delete if model was wrong (after fixing the bug)"
+  }
+]

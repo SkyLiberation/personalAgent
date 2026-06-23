@@ -8,6 +8,7 @@ from typing import Any
 from openai import OpenAI
 
 from .config import OpenAIConfig
+from .llm_telemetry import record_llm_usage
 from .logging_utils import log_event
 
 logger = logging.getLogger(__name__)
@@ -338,6 +339,12 @@ def _chat_completion_impl(
     content = (message.content or "").strip()
     tool_calls = _extract_tool_calls(message)
     usage = _extract_usage(response)
+    record_llm_usage(
+        latency_ms=latency_ms,
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        total_tokens=usage.get("total_tokens"),
+    )
     _report_usage_to_run_tree(usage)
     log_event(
         logger,

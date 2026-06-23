@@ -1,7 +1,7 @@
 [
   {
     "id": "rq-001",
-    "description": "single-note perfect match — high recall + faithful",
+    "description": "单跳精确命中 — 高召回 + 忠实",
     "question": "什么是服务降级？",
     "gold_evidence_ids": ["n1"],
     "reference_answer": "服务降级是在系统压力过大时主动关闭非核心功能以保障核心链路可用性的策略。",
@@ -10,7 +10,7 @@
   },
   {
     "id": "rq-002",
-    "description": "multi-note recall — should surface all gold sources",
+    "description": "多跳召回 — 应召回全部 gold 来源",
     "question": "Python 有哪些测试框架？",
     "gold_evidence_ids": ["n1", "n2", "n3"],
     "reference_answer": "Python 常见测试框架包括 pytest、unittest 和 nose2。",
@@ -19,16 +19,17 @@
   },
   {
     "id": "rq-003",
-    "description": "graph-augmented QA — concepts grounded in evidence",
+    "description": "图谱增强 QA — 概念落到证据上",
     "question": "LangGraph 的核心概念是什么？",
     "gold_evidence_ids": ["n1", "n2"],
     "reference_answer": "LangGraph 以 StateGraph 为核心编排抽象，节点是其中的处理单元。",
     "gold_claim_verdicts": ["supported", "supported"],
-    "claims_needing_contrast": 0
+    "claims_needing_contrast": 0,
+    "requires_graph_evidence": true
   },
   {
     "id": "rq-004",
-    "description": "contradiction present — answer disagrees with evidence",
+    "description": "存在矛盾 — 答案与证据相悖",
     "question": "Redis 缓存能降低数据库负载吗？",
     "gold_evidence_ids": ["n1"],
     "reference_answer": "证据显示 Redis 缓存在该场景下不能降低数据库负载，反而增加复杂度。",
@@ -37,11 +38,191 @@
   },
   {
     "id": "rq-005",
-    "description": "answer asserts what evidence opposes — contrastive evidence flips it to contradicted",
+    "description": "答案断言与证据相悖 — 对比证据将其翻转为 contradicted",
     "question": "量子计算的影响？",
     "gold_evidence_ids": [],
     "reference_answer": "现有证据不足以支撑量子计算颠覆密码学的结论。",
     "gold_claim_verdicts": ["contradicted"],
     "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-006",
+    "description": "单跳支持 — 熔断机制定义",
+    "question": "什么是熔断机制？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "熔断机制在错误率达到阈值时自动切断对故障服务的请求，避免雪崩。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-007",
+    "description": "单跳支持 — 幂等性定义",
+    "question": "什么是幂等性？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "幂等性指同一请求执行一次和多次产生的结果相同。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-008",
+    "description": "单跳支持 — 一致性哈希作用",
+    "question": "一致性哈希解决什么问题？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "一致性哈希在节点增减时只迁移少量数据，减少缓存大规模失效。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-009",
+    "description": "单跳支持 — 预写日志作用",
+    "question": "预写日志的作用是什么？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "预写日志在数据落盘前先记录变更，保证崩溃后可以恢复。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-010",
+    "description": "同义改写 — 问题措辞与证据术语不同仍命中",
+    "question": "怎样防止重复扣款？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "通过幂等性设计为支付请求分配唯一令牌，重复请求直接返回首次结果可防止重复扣款。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-011",
+    "description": "多跳召回 — 三条证据各支撑一个并列项",
+    "question": "常见的消息队列有哪些？",
+    "gold_evidence_ids": ["n1", "n2", "n3"],
+    "reference_answer": "Kafka 是分布式消息队列。RabbitMQ 是消息队列。RocketMQ 是消息队列。",
+    "gold_claim_verdicts": ["supported", "supported", "supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-012",
+    "description": "跨 note 概念聚合 — 4xx 与 5xx 区别",
+    "question": "4xx 和 5xx 状态码有什么区别？",
+    "gold_evidence_ids": ["n1", "n2"],
+    "reference_answer": "4xx 状态码表示客户端错误。5xx 状态码表示服务端错误。",
+    "gold_claim_verdicts": ["supported", "supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-013",
+    "description": "多跳支持 — 含 negation 的定义双方一致不应误判矛盾",
+    "question": "CAP 定理是什么？",
+    "gold_evidence_ids": ["n1", "n2"],
+    "reference_answer": "CAP 定理指分布式系统无法同时满足一致性、可用性和分区容错性。分区发生时通常在一致性和可用性之间取舍。",
+    "gold_claim_verdicts": ["supported", "supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-014",
+    "description": "跨 note 聚合 — 索引优缺点两面",
+    "question": "数据库索引的优缺点？",
+    "gold_evidence_ids": ["n1", "n2"],
+    "reference_answer": "数据库索引能加速查询。索引会降低写入性能并占用额外存储。",
+    "gold_claim_verdicts": ["supported", "supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-015",
+    "description": "矛盾-否定 — 答案正向断言与含否定的证据相悖",
+    "question": "Redis 主从复制是同步的吗？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "证据显示 Redis 主从复制默认是异步的，不保证强一致。",
+    "gold_claim_verdicts": ["contradicted"],
+    "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-016",
+    "description": "矛盾-极性 — 提高 vs 降低 反义对",
+    "question": "增加线程数一定能提高吞吐量吗？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "证据显示线程数过多时上下文切换反而降低吞吐量。",
+    "gold_claim_verdicts": ["contradicted"],
+    "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-017",
+    "description": "矛盾-数值 — 答案数字与证据数字冲突",
+    "question": "该优化把响应时间降低了多少？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "证据表明该优化将平均响应时间降低了 20%。",
+    "gold_claim_verdicts": ["contradicted"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-018",
+    "description": "矛盾-极性 — 有效 vs 无效 反义对",
+    "question": "这种缓存策略有效吗？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "压测显示该缓存策略在高并发下无效，命中率几乎为零。",
+    "gold_claim_verdicts": ["contradicted"],
+    "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-019",
+    "description": "诚实弃答 — 无证据时不应编造,答案不产生 claim",
+    "question": "这个季度的销售额是多少？",
+    "gold_evidence_ids": [],
+    "reference_answer": "现有证据不足，无法回答该问题。",
+    "gold_claim_verdicts": [],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-020",
+    "description": "离题证据 — 答案断言无证据支撑应判 not_found",
+    "question": "公司的远程办公政策是什么？",
+    "gold_evidence_ids": [],
+    "reference_answer": "公司允许员工每周远程办公两天。",
+    "gold_claim_verdicts": ["not_found"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-021",
+    "description": "混合多 claim — 一支持一矛盾(否定)",
+    "question": "Redis 适合做缓存和持久化主存储吗？",
+    "gold_evidence_ids": ["n1", "n2"],
+    "reference_answer": "Redis 非常适合作为缓存。Redis 适合作为唯一的持久化主存储。",
+    "gold_claim_verdicts": ["supported", "contradicted"],
+    "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-022",
+    "description": "混合多 claim — 一支持一矛盾(极性)",
+    "question": "微服务架构有哪些影响？",
+    "gold_evidence_ids": ["n1", "n2"],
+    "reference_answer": "微服务提高了系统的可扩展性。微服务提高了部署的简单性。",
+    "gold_claim_verdicts": ["supported", "contradicted"],
+    "claims_needing_contrast": 1
+  },
+  {
+    "id": "rq-023",
+    "description": "同义改写支持 — 缓存击穿应对",
+    "question": "怎么避免缓存击穿？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "针对热点 key 失效瞬间大量请求打到数据库的缓存击穿，可使用互斥锁或逻辑过期来避免。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-024",
+    "description": "单跳支持 — 向量数据库定义",
+    "question": "什么是向量数据库？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "向量数据库用于存储和检索高维向量，支持近似最近邻搜索。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
+  },
+  {
+    "id": "rq-025",
+    "description": "单跳支持 — RAG 基本流程",
+    "question": "RAG 的基本流程是什么？",
+    "gold_evidence_ids": ["n1"],
+    "reference_answer": "RAG 先检索相关文档，再将文档作为上下文交给大模型生成答案。",
+    "gold_claim_verdicts": ["supported"],
+    "claims_needing_contrast": 0
   }
 ]

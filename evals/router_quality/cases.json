@@ -1,0 +1,172 @@
+[
+  {
+    "id": "router-001",
+    "description": "空输入 — 缺一切执行信息,应 clarify",
+    "text": "",
+    "expected_outcome": "clarify",
+    "expected_intents": [],
+    "expected_missing_info": ["明确的目标"]
+  },
+  {
+    "id": "router-002",
+    "description": "意图模糊 — '帮我' 无对象,应 clarify",
+    "text": "帮我",
+    "expected_outcome": "clarify",
+    "expected_intents": [],
+    "expected_missing_info": ["具体目标"]
+  },
+  {
+    "id": "router-003",
+    "description": "沉淀会话 — solidify_conversation",
+    "text": "把刚才聊的结论固化下来",
+    "expected_outcome": "ready",
+    "expected_intents": ["solidify_conversation"]
+  },
+  {
+    "id": "router-004",
+    "description": "沉淀会话 — '沉淀成' 同义触发",
+    "text": "帮我沉淀成一篇笔记",
+    "expected_outcome": "ready",
+    "expected_intents": ["solidify_conversation"]
+  },
+  {
+    "id": "router-005",
+    "description": "删除知识 — 高风险意图",
+    "text": "删除关于旧项目的那条笔记",
+    "expected_outcome": "ready",
+    "expected_intents": ["delete_knowledge"]
+  },
+  {
+    "id": "router-006",
+    "description": "总结线程 — summarize_thread",
+    "text": "总结一下这段对话",
+    "expected_outcome": "ready",
+    "expected_intents": ["summarize_thread"]
+  },
+  {
+    "id": "router-007",
+    "description": "知识简报 — review_digest",
+    "text": "生成本周的知识简报",
+    "expected_outcome": "ready",
+    "expected_intents": ["review_digest"]
+  },
+  {
+    "id": "router-008",
+    "description": "复习简报 — review_digest 同义",
+    "text": "给我一份复习简报",
+    "expected_outcome": "ready",
+    "expected_intents": ["review_digest"]
+  },
+  {
+    "id": "router-009",
+    "description": "整理知识 — consolidate_knowledge",
+    "text": "把这些笔记整理成综述",
+    "expected_outcome": "ready",
+    "expected_intents": ["consolidate_knowledge"]
+  },
+  {
+    "id": "router-010",
+    "description": "合并笔记 — consolidate_knowledge 同义",
+    "text": "帮我合并笔记里重复的部分",
+    "expected_outcome": "ready",
+    "expected_intents": ["consolidate_knowledge"]
+  },
+  {
+    "id": "router-011",
+    "description": "知识缺口 — inspect_knowledge_gaps",
+    "text": "检查一下我的知识缺口",
+    "expected_outcome": "ready",
+    "expected_intents": ["inspect_knowledge_gaps"]
+  },
+  {
+    "id": "router-012",
+    "description": "知识孤岛 — inspect_knowledge_gaps 同义",
+    "text": "看看有没有知识孤岛",
+    "expected_outcome": "ready",
+    "expected_intents": ["inspect_knowledge_gaps"]
+  },
+  {
+    "id": "router-013",
+    "description": "采集链接 — http 开头识别为 capture_link",
+    "text": "https://example.com/some-article",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_link"]
+  },
+  {
+    "id": "router-014",
+    "description": "采集文本 — '记一下' 触发 capture_text",
+    "text": "记一下：明天上线前要回滚预案",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_text"]
+  },
+  {
+    "id": "router-015",
+    "description": "采集文本 — '记住' 同义",
+    "text": "记住这个配置：超时设为 30 秒",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_text"]
+  },
+  {
+    "id": "router-016",
+    "description": "闲聊问候 — direct_answer 而非检索",
+    "text": "你好",
+    "expected_outcome": "ready",
+    "expected_intents": ["direct_answer"]
+  },
+  {
+    "id": "router-017",
+    "description": "身份询问 — direct_answer",
+    "text": "你是谁",
+    "expected_outcome": "ready",
+    "expected_intents": ["direct_answer"]
+  },
+  {
+    "id": "router-018",
+    "description": "致谢 — direct_answer",
+    "text": "谢谢你的帮助",
+    "expected_outcome": "ready",
+    "expected_intents": ["direct_answer"]
+  },
+  {
+    "id": "router-019",
+    "description": "知识问答兜底 — 无关键词落到 ask",
+    "text": "什么是向量数据库的近似最近邻搜索？",
+    "expected_outcome": "ready",
+    "expected_intents": ["ask"]
+  },
+  {
+    "id": "router-020",
+    "description": "知识问答兜底 — 检索型提问落到 ask",
+    "text": "我之前记过的限流方案是怎么设计的？",
+    "expected_outcome": "ready",
+    "expected_intents": ["ask"]
+  },
+  {
+    "id": "router-021",
+    "description": "ask 兜底 — 普通陈述也归 ask(非 capture)",
+    "text": "解释一下一致性哈希和普通哈希的区别",
+    "expected_outcome": "ready",
+    "expected_intents": ["ask"]
+  },
+  {
+    "id": "router-022",
+    "description": "删除-边界 — 含'删除'优先于问句形态",
+    "text": "能不能删除我上周记的会议纪要",
+    "expected_outcome": "ready",
+    "expected_intents": ["delete_knowledge"]
+  },
+  {
+    "id": "router-023",
+    "description": "总结-边界 — '总结' 关键词触发,即便像提问",
+    "text": "能帮我总结这周的工作进展吗",
+    "expected_outcome": "ready",
+    "expected_intents": ["summarize_thread"]
+  },
+  {
+    "id": "router-024",
+    "description": "采集文本-边界 — '记一下' 优先于内容里的问号",
+    "text": "记一下：为什么这个接口偶尔超时？需要排查",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_text"]
+  }
+]

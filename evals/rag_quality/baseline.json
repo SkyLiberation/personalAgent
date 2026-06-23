@@ -1,10 +1,10 @@
 {
-  "_comment": "Aggregate-mean regression floors for the RAG-quality gate. Lower a floor only with a deliberate, reviewed reason; raising one ratchets quality up. claim_accuracy floor sits below the observed 0.80 because the heuristic verifier merges/splits some multi-sentence claims differently than the annotation (rq-002/003), a known verifier limitation, not a harness bug.",
-  "recall_5": 0.7,
-  "ndcg_5": 0.7,
-  "context_precision": 0.6,
-  "answer_relevance": 0.3,
-  "faithfulness": 0.5,
-  "claim_accuracy": 0.75,
+  "_comment": "Aggregate-mean regression floors for the RAG-quality gate (25 hand-annotated cases). Lower a floor only with a deliberate, reviewed reason; raising one ratchets quality up. Floors sit a small margin below observed means (recall 1.00, ndcg 0.88, ctx_prec 0.77, ans_rel 0.86, faith 0.80, claim_acc 0.96, contrast 1.00) to absorb verifier claim-segmentation non-determinism. claim_accuracy stays below 1.0 because the heuristic verifier merges/splits some multi-sentence claims differently than the annotation (rq-002/rq-003), a known verifier limitation, not a harness bug. ndcg floor accounts for empty-gold no-answer cases (rq-005/019/020) which score ndcg=0 by metric definition while recall=1.0.",
+  "recall_5": 0.95,
+  "ndcg_5": 0.82,
+  "context_precision": 0.7,
+  "answer_relevance": 0.6,
+  "faithfulness": 0.7,
+  "claim_accuracy": 0.85,
   "contrastive_coverage": 0.9
 }

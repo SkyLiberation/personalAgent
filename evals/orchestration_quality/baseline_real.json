@@ -1,0 +1,8 @@
+{
+  "_comment": "Regression floors for the real end-to-end Orchestration Golden Test: real router LLM + real planning + real execution, no stubs. Only metrics meaningful under a non-deterministic live router are gated here; reached_terminal stays strict at 1.0. The test runs whenever the required real environment is configured and skips only when unavailable.",
+  "outcome_accuracy": 0.6,
+  "primary_intent_accuracy": 0.6,
+  "reached_terminal": 1.0,
+  "latency_p95_ms_max": 60000,
+  "total_tokens_p95_max": 20000
+}

@@ -66,6 +66,31 @@ async def test_graphiti_client_uses_json_schema_and_disables_thinking(monkeypatc
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
+@pytest.mark.asyncio
+async def test_graphiti_reasoning_model_omits_sampling_parameters(monkeypatch):
+    api_client = FakeOpenAIClient()
+    llm_client = GraphitiOpenAIClient(
+        config=LLMConfig(model="gpt-5-mini"),
+        client=api_client,
+    )
+
+    async def no_wait() -> None:
+        return None
+
+    monkeypatch.setattr(llm_client, "_respect_min_interval", no_wait)
+
+    await llm_client._generate_response(
+        [Message(role="user", content="Return JSON.")],
+        response_model=StructuredResponse,
+    )
+
+    request = api_client.chat.completions.kwargs
+    assert request["max_completion_tokens"] == llm_client.max_tokens
+    assert "temperature" not in request
+    assert "max_tokens" not in request
+    assert "extra_body" not in request
+
+
 def test_graphiti_client_prefers_llm_override_settings():
     settings = Settings(
         openai=OpenAIConfig(

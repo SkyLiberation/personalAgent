@@ -1119,7 +1119,14 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
     if step.task_intent == "solidify_conversation":
         dialogue = _helpers._format_solidify_candidate_context(state.messages)
         if not dialogue:
-            dialogue = context
+            # No prior conversation to distill — solidify is only meaningful over
+            # existing dialogue. Don't fall back to the bare request (that would
+            # fabricate a note from the instruction itself). Fail fast with an
+            # actionable message; the run still reaches a terminal event.
+            raise RuntimeError(
+                "没有可固化的历史对话内容。固化需要先有对话结论，"
+                "请先提问或记录内容，再要求固化。"
+            )
         solidify_prompt = render_prompt(
             "solidify_draft.user",
             entry_text=step.task_input or state.entry_text,

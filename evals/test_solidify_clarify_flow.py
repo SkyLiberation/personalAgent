@@ -54,7 +54,7 @@ class TestClarifyInterruptContract:
                 session_id="eval-solidify-direct",
             )
         )
-        assert result.intent == "solidify_conversation"
+        assert result.intents and result.intents[-1] == "solidify_conversation"
         # A clear solidify request must not stall on clarification.
         assert result.pending_confirmation is None
 
@@ -99,7 +99,7 @@ class TestClarifyInterruptContract:
             text="",
         )
         # A rejected run terminates; it must not have routed into capture_text.
-        assert resumed.intent != "capture_text"
+        assert "capture_text" not in resumed.intents
 
 
 class TestClarifyInterruptContractHttp:
@@ -181,7 +181,7 @@ class TestClarifyResumeCompletion:
             option_id="capture",
         )
         assert resumed.run_status == "completed"
-        assert resumed.intent == "capture_text"
+        assert resumed.intents and resumed.intents[-1] == "capture_text"
         assert resumed.reply_text
 
     def test_clarify_stream_resume_completes_http(self, api_client):

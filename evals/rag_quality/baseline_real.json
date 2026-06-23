@@ -1,0 +1,11 @@
+{
+  "_comment": "Regression floors for the real-pipeline RAG Golden Test. The cases seed a controlled corpus and run the real retriever, generator and verifier. Retrieval floors are strict; lexical generation floors remain coarse because paraphrases score poorly under term-overlap proxies. claim_accuracy is currently reported but not gated, which is a known quality-gap exposed by the 2026-06-23 run. The test runs whenever LLM/Postgres are configured and skips only when the required real environment is unavailable.",
+  "recall_5": 0.9,
+  "ndcg_5": 0.9,
+  "context_precision": 0.7,
+  "answer_relevance": 0.2,
+  "faithfulness": 0.3,
+  "graph_requirement_met": 1.0,
+  "latency_p95_ms_max": 60000,
+  "total_tokens_p95_max": 20000
+}

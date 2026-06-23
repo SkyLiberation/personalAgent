@@ -12,7 +12,7 @@ PROMPTS: dict[str, PromptSpec] = {
     ),
     "router.classify.system": PromptSpec(
         name="router.classify.system",
-        version="v5",
+        version="v6",
         output_contract="RouterOutput",
         template=(
             "任务：识别当前用户请求中的语义目标，并按 schema 返回结果。\n"
@@ -29,10 +29,15 @@ PROMPTS: dict[str, PromptSpec] = {
             "2. 每个 goal.input 只保留该目标实际处理的内容，不混入其他目标的指令。\n"
             "3. 只判断用户要完成什么，不决定如何执行。\n"
             "4. 历史消息只用于理解指代；不要把历史助手回复当事实证据。\n"
+            "5. 疑问句（“什么是…”“…是什么”“为什么…”“如何…”“怎么…”等）一律是 ask，"
+            "绝不路由到 capture_text 或 solidify_conversation。\n"
+            "6. solidify_conversation 只在用户明确要求把【历史对话】中的结论保存/固化/记下来时使用，"
+            "且必须已存在可提炼的历史对话；没有历史对话时不得选 solidify_conversation。\n"
             "澄清规则：只有缺失信息会导致目标无法确定或无法执行时才返回 outcome=clarify。"
             "此时 clarification 必须包含缺失信息和一个直接的追问；否则返回 outcome=ready 且 clarification=null。\n"
             "边界示例：用户提供待保存正文时用 capture_text；用户说“把刚才结论记下来”时用 solidify_conversation；"
-            "知识问题即使看似常识也用 ask；“删除关于 DNS 的知识”信息足够，不需要入口澄清；"
+            "知识问题即使看似常识也用 ask（如“什么是DNS”“什么是服务降级”都是 ask，不是 capture 也不是 solidify）；"
+            "“删除关于 DNS 的知识”信息足够，不需要入口澄清；"
             "“生成今天的知识简报”用 review_digest；"
             "“把关于缓存的笔记整理成一篇综述”用 consolidate_knowledge，input 只保留“缓存”；"
             "“检查我的知识库还有哪些缺口”用 inspect_knowledge_gaps。\n"

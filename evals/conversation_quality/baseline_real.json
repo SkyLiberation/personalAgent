@@ -1,0 +1,12 @@
+{
+  "_comment": "Real-environment Golden Test floors. Context/thread/resume are structural and strict; routing and semantic response metrics retain model-noise headroom. Side effects are exact because each case uses an isolated user.",
+  "turn_outcome_accuracy": 0.75,
+  "turn_intent_accuracy": 0.65,
+  "context_retention": 1.0,
+  "resume_success_rate": 1.0,
+  "thread_continuity": 1.0,
+  "side_effect_accuracy": 1.0,
+  "final_task_success": 0.5,
+  "latency_p95_ms_max": 120000,
+  "total_tokens_p95_max": 50000
+}

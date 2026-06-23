@@ -11,6 +11,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from .config_models import LangSmithConfig, RouterConfig
+from .llm_telemetry import record_llm_usage
 from .logging_utils import log_event
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,12 @@ class OpenAIResponsesModelClient:
         latency_ms = round((perf_counter() - start) * 1000, 2)
         content = (getattr(response, "output_text", "") or "").strip()
         usage = _usage(response)
+        record_llm_usage(
+            latency_ms=latency_ms,
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
         log_event(
             logger,
             logging.INFO,

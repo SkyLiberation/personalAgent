@@ -1,0 +1,8 @@
+{
+  "_comment": "Aggregate-mean regression floors for the orchestration-quality gate (9 hand-annotated cases driven end-to-end through a real AgentRuntime + Postgres with a stubbed router LLM). outcome_accuracy and primary_intent_accuracy are the hard gates — a drop means the flow mis-decided clarify/ready or mis-routed. event_sequence_match pins milestone ordering as an ordered subsequence (tolerates env-dependent tails). forbidden_events_absent guards the clarify-before-planning invariant. reached_terminal guards the production '卡住' bug: a run that proceeds past planning must end on run_completed/run_failed and never hang (orch-009 replays the solidify→capture→Graphiti-ingest stall). Lower a floor only with a reviewed reason. Cases assert subsequences reachable without live extraction, keeping this in the fast tier.",
+  "outcome_accuracy": 1.0,
+  "primary_intent_accuracy": 1.0,
+  "event_sequence_match": 1.0,
+  "forbidden_events_absent": 1.0,
+  "reached_terminal": 1.0
+}

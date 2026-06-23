@@ -1,0 +1,90 @@
+[
+  {
+    "id": "orch-001",
+    "description": "语气模糊 — 应在规划前暂停于澄清中断",
+    "text": "帮我",
+    "expected_outcome": "clarify",
+    "expected_primary_intent": "",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "clarification_required"],
+    "forbidden_events": ["steps_projected"]
+  },
+  {
+    "id": "orch-002",
+    "description": "空输入 — 暂停于澄清中断",
+    "text": "",
+    "expected_outcome": "clarify",
+    "expected_primary_intent": "",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "clarification_required"],
+    "forbidden_events": ["steps_projected"]
+  },
+  {
+    "id": "orch-003",
+    "description": "明确沉淀 — 直接路由 solidify,不卡澄清,进入规划",
+    "text": "把这个知识固化下来",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "solidify_conversation",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected", "steps_validated"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  },
+  {
+    "id": "orch-004",
+    "description": "闲聊问候 — direct_answer 全程跑通到 run_completed",
+    "text": "你好",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "direct_answer",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected", "steps_validated", "step_started", "answer_completed", "run_completed"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  },
+  {
+    "id": "orch-005",
+    "description": "总结线程 — summarize_thread 跑通到 run_completed",
+    "text": "总结一下这段对话",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "summarize_thread",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected", "steps_validated", "answer_completed", "run_completed"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  },
+  {
+    "id": "orch-006",
+    "description": "身份询问 — direct_answer",
+    "text": "你是谁",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "direct_answer",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected", "steps_validated"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  },
+  {
+    "id": "orch-007",
+    "description": "知识问答兜底 — 无关键词落到 ask 并进入规划",
+    "text": "什么是向量数据库的近似最近邻搜索？",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "ask",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected", "steps_validated"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  },
+  {
+    "id": "orch-008",
+    "description": "删除知识 — 路由到 delete_knowledge 并进入规划(高风险意图)",
+    "text": "删除关于旧项目的那条笔记",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "delete_knowledge",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  },
+  {
+    "id": "orch-009",
+    "description": "回归网:solidify 路由后必须抵达终态,绝不能挂死(复刻生产 SSE 卡住:solidify→capture→Graphiti 同步摄取阻塞,流永不收尾)",
+    "text": "把这个知识固化下来",
+    "expected_outcome": "ready",
+    "expected_primary_intent": "solidify_conversation",
+    "expected_event_subsequence": ["entry_started", "intent_classified", "steps_projected"],
+    "forbidden_events": ["clarification_required"],
+    "must_reach_terminal": true
+  }
+]

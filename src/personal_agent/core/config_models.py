@@ -38,6 +38,13 @@ class GraphitiConfig(_StrictBase):
     search_timeout_seconds: float = 45.0
     episode_max_chars: int = 8000
     content_filter_fallback: bool = True
+    # When False (default), a parent note with no graph-worthy chunks is synced
+    # to the graph in the background via the worker queue instead of blocking
+    # the capture call. Set True only for CLI/tests that need the note in the
+    # graph synchronously on return. Foreground sync can block for up to
+    # add_episode_timeout_seconds per note (Graphiti add_episode over Neo4j),
+    # which is what hung the solidify→capture SSE stream in production.
+    parent_note_sync_foreground: bool = False
 
 
 class MicrosoftGraphRagConfig(_StrictBase):

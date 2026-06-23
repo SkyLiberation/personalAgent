@@ -70,12 +70,12 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
 
-    from personal_agent.core import config as config_module
+    from personal_agent.core import config_env as config_env_module
 
-    monkeypatch.setattr(config_module, "load_dotenv", lambda override=True: False)
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
     from personal_agent.web.api import create_app
 
     app = create_app()
-    app.state.service._intent_router._classify_with_llm = stub_router_decision
+    app.state.service.runtime._intent_router._classify_with_llm = stub_router_decision
     return TestClient(app)

@@ -36,6 +36,11 @@ def _evidence_id(item) -> str:
     return str(getattr(item, "source_id", "") or getattr(item, "evidence_id", "") or "")
 
 
+def _retrieval_source(item) -> str:
+    metadata = getattr(item, "metadata", {}) or {}
+    return str(metadata.get("retrieved_by") or getattr(item, "source_type", "") or "")
+
+
 def run_output_from_context(ctx) -> RunOutput:
     """Project a live or replayed AskRunContext into a RunOutput."""
     pool = list(getattr(ctx, "evidence_pool", []) or [])
@@ -54,6 +59,7 @@ def run_output_from_context(ctx) -> RunOutput:
         answer=str(getattr(ctx, "answer", "") or ""),
         claim_verdicts=[c.status for c in checks],
         counter_evidence_found=counter,
+        retrieval_sources=[_retrieval_source(e) for e in pool],
     )
 
 
@@ -72,6 +78,7 @@ def run_output_from_result(result, verification=None) -> RunOutput:
         answer=str(getattr(result, "answer", "") or ""),
         claim_verdicts=[c.status for c in checks],
         counter_evidence_found=counter,
+        retrieval_sources=[_retrieval_source(e) for e in evidence],
     )
 
 

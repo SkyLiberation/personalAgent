@@ -22,6 +22,16 @@ from .ontology import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 
+
+def _is_reasoning_model(model: str | None) -> bool:
+    name = (model or "").lower()
+    return name.startswith(("gpt-5", "o1", "o3"))
+
+
+def _supports_thinking_control(model: str | None) -> bool:
+    name = (model or "").lower()
+    return name.startswith(("kimi", "moonshot", "qwen"))
+
 ENTITY_TYPE_IDS: dict[str, int] = {name: idx for idx, name in enumerate(ENTITY_TYPES)}
 ENTITY_TYPE_NAME_LOOKUP: dict[str, int] = {
     name.lower(): idx for name, idx in ENTITY_TYPE_IDS.items()
@@ -384,7 +394,11 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
                 temperature=0.6,
                 max_tokens=self.max_tokens,
                 response_format=response_format,
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body=(
+                    {"thinking": {"type": "disabled"}}
+                    if _supports_thinking_control(model)
+                    else {}
+                ),
                 response_model_name=response_model_name,
             )
         except openai.RateLimitError as exc:
@@ -396,6 +410,18 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
 
         raw = response.choices[0].message.content or "{}"
         latency_ms = round((time.monotonic() - start) * 1000, 2)
+        from ..core.llm_telemetry import record_llm_usage
+
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+        output_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        total_tokens = getattr(usage, "total_tokens", None) if usage else None
+        record_llm_usage(
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
         log_event(
             logger,
             logging.INFO,
@@ -500,13 +526,22 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
         extra_body: dict[str, Any],
         response_model_name: str,
     ):
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        if _is_reasoning_model(model):
+            # GPT-5-compatible gateways fix sampling parameters at their
+            # defaults and use max_completion_tokens.
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["temperature"] = temperature
+            kwargs["max_tokens"] = max_tokens
         return await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=response_format,
-            extra_body=extra_body,
+            **kwargs,
         )
 
     async def _respect_min_interval(self) -> None:

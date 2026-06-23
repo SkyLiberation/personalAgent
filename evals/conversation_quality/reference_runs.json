@@ -1,0 +1,56 @@
+{
+  "_comment": "Reviewed deterministic projections used to test the conversation scorer without DB or LLM.",
+  "conv-001": {
+    "turns": [
+      {"kind":"entry","outcome":"ready","intents":["direct_answer"],"event_types":["entry_started","intent_classified","steps_projected","run_completed"],"reply_text":"你好！","run_id":"c1-r1","thread_id":"c1","retained_context_refs":[],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["direct_answer"],"event_types":["entry_started","intent_classified","steps_projected","run_completed"],"reply_text":"我是你的个人知识助手。","run_id":"c1-r2","thread_id":"c1","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  },
+  "conv-002": {
+    "turns": [
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["entry_started","intent_classified","run_completed"],"reply_text":"DNS 是域名系统。","run_id":"c2-r1","thread_id":"c2","retained_context_refs":[],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["entry_started","intent_classified","run_completed"],"reply_text":"hosts 是本地静态映射，DNS 是分布式解析系统。","run_id":"c2-r2","thread_id":"c2","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  },
+  "conv-003": {
+    "turns": [
+      {"kind":"entry","outcome":"clarify","intents":[],"event_types":["entry_started","intent_classified","clarification_required"],"reply_text":"请补充具体内容。","run_id":"c3-r1","thread_id":"c3","retained_context_refs":[],"reached_terminal":false},
+      {"kind":"resume","outcome":"ready","intents":["ask"],"event_types":["clarification_resumed","intent_classified","steps_projected","run_completed"],"reply_text":"熔断器用于阻止故障持续扩散。","run_id":"c3-r1","thread_id":"c3","resumed_from_run_id":"c3-r1","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  },
+  "conv-004": {
+    "turns": [
+      {"kind":"entry","outcome":"clarify","intents":[],"event_types":["clarification_required"],"reply_text":"请补充具体内容。","run_id":"c4-r1","thread_id":"c4","retained_context_refs":[],"reached_terminal":false},
+      {"kind":"resume","outcome":"ready","intents":[],"event_types":["clarification_resumed","run_completed"],"reply_text":"已取消。","run_id":"c4-r1","thread_id":"c4","resumed_from_run_id":"c4-r1","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  },
+  "conv-005": {
+    "turns": [
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["run_completed"],"reply_text":"收到。","run_id":"c5-r1","thread_id":"c5","retained_context_refs":[],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["summarize_thread"],"event_types":["run_completed"],"reply_text":"上线前需要检查回滚预案和监控告警。","run_id":"c5-r2","thread_id":"c5","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  },
+  "conv-006": {
+    "turns": [
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["run_completed"],"reply_text":"DNS 是域名系统。","run_id":"c6-r1","thread_id":"c6","retained_context_refs":[],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["run_completed"],"reply_text":"JSON Schema 描述 JSON 结构。","run_id":"c6-r2","thread_id":"c6","retained_context_refs":[0],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["run_completed"],"reply_text":"DNS 缓存减少查询延迟和上游负载。","run_id":"c6-r3","thread_id":"c6","retained_context_refs":[0,1],"reached_terminal":true}
+    ]
+  },
+  "conv-007": {
+    "initial_note_count": 0,
+    "final_note_count": 1,
+    "turns": [
+      {"kind":"entry","outcome":"ready","intents":["capture_text"],"event_types":["run_completed"],"reply_text":"已记录。","run_id":"c7-r1","thread_id":"c7","retained_context_refs":[],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["run_completed"],"reply_text":"项目在周五晚上十点发布。","run_id":"c7-r2","thread_id":"c7","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  },
+  "conv-008": {
+    "initial_note_count": 0,
+    "final_note_count": 1,
+    "turns": [
+      {"kind":"entry","outcome":"ready","intents":["ask"],"event_types":["run_completed"],"reply_text":"DNS 是域名系统。","run_id":"c8-r1","thread_id":"c8","retained_context_refs":[],"reached_terminal":true},
+      {"kind":"entry","outcome":"ready","intents":["solidify_conversation"],"event_types":["run_completed"],"reply_text":"DNS 是域名系统，用于把域名解析为 IP 地址。","run_id":"c8-r2","thread_id":"c8","retained_context_refs":[0],"reached_terminal":true}
+    ]
+  }
+}

@@ -30,6 +30,7 @@ class RagEvalCase:
     # How many of this case's claims genuinely need counter-evidence (for
     # contrastive coverage). 0 means the answer is one-sided-by-design.
     claims_needing_contrast: int = 0
+    requires_graph_evidence: bool = False
     description: str = ""
 
 
@@ -48,6 +49,14 @@ class RunOutput:
     claim_verdicts: list[str] = field(default_factory=list)
     # Counter-evidence items found for contradicted/missing claims.
     counter_evidence_found: int = 0
+    # Retrieval source label aligned with ranked_evidence_ids (e.g. graphiti/local).
+    retrieval_sources: list[str] = field(default_factory=list)
+    # End-to-end and LLM efficiency telemetry for the case.
+    latency_ms: float = 0.0
+    llm_call_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
 
 
 def load_cases(path: str | Path) -> list[RagEvalCase]:

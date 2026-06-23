@@ -1,0 +1,12 @@
+{
+  "_comment": "Offline reviewed-trace floor. All projections are deterministic and should remain exact.",
+  "turn_outcome_accuracy": 1.0,
+  "turn_intent_accuracy": 1.0,
+  "event_sequence_match": 1.0,
+  "context_retention": 1.0,
+  "response_grounding": 1.0,
+  "resume_success_rate": 1.0,
+  "thread_continuity": 1.0,
+  "side_effect_accuracy": 1.0,
+  "final_task_success": 1.0
+}

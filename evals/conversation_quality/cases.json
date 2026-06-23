@@ -1,0 +1,191 @@
+[
+  {
+    "id": "conv-001",
+    "description": "基础双轮对话复用同一 thread",
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "你好",
+        "expected_outcome": "ready",
+        "expected_intents": ["direct_answer"],
+        "expected_event_subsequence": ["entry_started", "intent_classified", "run_completed"],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "你是谁",
+        "expected_outcome": "ready",
+        "expected_intents": ["direct_answer"],
+        "expected_event_subsequence": ["entry_started", "intent_classified", "run_completed"],
+        "expected_context_refs": [0],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-002",
+    "description": "知识问答后的代词追问保留上一轮上下文",
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "什么是 DNS？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "expected_event_subsequence": ["entry_started", "intent_classified", "run_completed"],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "它和 hosts 文件有什么区别？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "expected_event_subsequence": ["entry_started", "intent_classified", "run_completed"],
+        "expected_context_refs": [0],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-003",
+    "description": "clarify 后补充目标并沿原 checkpoint resume",
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "帮我",
+        "expected_outcome": "clarify",
+        "expected_intents": [],
+        "expected_event_subsequence": ["entry_started", "intent_classified", "clarification_required"]
+      },
+      {
+        "kind": "resume",
+        "decision": "clarify",
+        "user_input": "解释一下什么是熔断器",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "expected_event_subsequence": ["clarification_resumed", "intent_classified", "run_completed"],
+        "expected_context_refs": [0],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-004",
+    "description": "clarify 被拒绝后原 run 干净终止且不执行工具",
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "帮我",
+        "expected_outcome": "clarify",
+        "expected_intents": [],
+        "expected_event_subsequence": ["clarification_required"]
+      },
+      {
+        "kind": "resume",
+        "decision": "reject",
+        "user_input": "",
+        "expected_outcome": "ready",
+        "expected_intents": [],
+        "expected_event_subsequence": ["clarification_resumed", "run_completed"],
+        "expected_context_refs": [0],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-005",
+    "description": "真实历史存在时总结当前会话",
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "项目上线前要检查回滚预案和监控告警。",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "总结一下刚才的讨论",
+        "expected_outcome": "ready",
+        "expected_intents": ["summarize_thread"],
+        "expected_context_refs": [0],
+        "expected_response_contains": ["回滚", "监控"],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-006",
+    "description": "话题切换后旧话题与新话题均保留在 thread",
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "什么是 DNS？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "什么是 JSON Schema？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "expected_context_refs": [0],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "回到第一个问题，它的缓存为什么重要？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "expected_context_refs": [0, 1],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-007",
+    "description": "会话内写入知识后继续追问，副作用只发生一次",
+    "expected_final_note_delta": 1,
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "记一下：项目 Phoenix 的发布窗口是周五晚上十点。",
+        "expected_outcome": "ready",
+        "expected_intents": ["capture_text"],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "刚才记录的项目什么时候发布？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "expected_context_refs": [0],
+        "expected_response_contains": ["周五", "十点"],
+        "must_reach_terminal": true
+      }
+    ]
+  },
+  {
+    "id": "conv-008",
+    "description": "DNS 问答后固化真实历史，创建且只创建一条笔记",
+    "expected_final_note_delta": 1,
+    "turns": [
+      {
+        "kind": "entry",
+        "user_input": "什么是 DNS？",
+        "expected_outcome": "ready",
+        "expected_intents": ["ask"],
+        "must_reach_terminal": true
+      },
+      {
+        "kind": "entry",
+        "user_input": "把刚才关于 DNS 的结论固化下来",
+        "expected_outcome": "ready",
+        "expected_intents": ["solidify_conversation"],
+        "expected_context_refs": [0],
+        "expected_response_contains": ["DNS"],
+        "must_reach_terminal": true
+      }
+    ]
+  }
+]
