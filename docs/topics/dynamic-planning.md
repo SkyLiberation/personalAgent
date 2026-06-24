@@ -1,6 +1,6 @@
 # Dynamic Planning
 
-本文说明未来真正 dynamic planning 能力的边界。当前生产主路径没有默认启用 autonomous planner；固定业务流程仍由 `WorkflowSpec / WorkflowRegistry` 声明，并通过 `WorkflowStepProjector` 投影为 `ExecutionStep`，详见 [Workflow / Step Projection](workflow-step-projection.md)。
+本文说明未来真正 dynamic planning 能力的边界。当前生产主路径没有默认启用 autonomous planner；固定业务流程仍由 `WorkflowSpec / WorkflowRegistry` 声明，并通过 `WorkflowStepProjector` 投影为 `ExecutionStep`，详见 [当前 Workflow 框架总览](../workflow/workflow-framework.md)。
 
 Dynamic planning 只用于系统没有固定 workflow、风险较低、工具范围明确、且配置显式启用的开放式任务。它不是 `delete_knowledge`、`solidify_conversation` 等已知高风险流程的替代品。
 

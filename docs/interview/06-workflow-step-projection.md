@@ -53,20 +53,20 @@ Router 识别 intent
 
 ### 4. 哪些任务会进入 step projection？哪些不会？
 
-当前真正进入 step projection 的主要是 `delete_knowledge` 和 `solidify_conversation`。
+当前所有已识别 intent 都进入 step projection。`WorkflowSpec` 里 `capture_text / capture_link / capture_file`、`ask`、`summarize_thread`、`direct_answer`、`delete_knowledge`、`solidify_conversation` 全部声明 `projection_policy="step_projection"`，由 deterministic projector 投影成 `ExecutionStep` 进入同一个步骤执行图。只有 `unknown`（`projection_policy="none"`）以及投影/校验失败的场景才落到 fallback branch。
 
-普通 ask、capture、direct answer、summarize 不投影成 `ExecutionStep`，因为它们有直接 Graph 分支和 `execution_trace`，不需要额外步骤状态。这样可以避免所有请求都被过度步骤化。
+这样做的目的是让所有业务流程共用同一套执行壳：`ExecutionStep / StepRunState / StepProjectionValidator / step_execution.results / HITL / step events / checkpoint resume`，避免 WorkflowSpec 和并行 branch 函数成为两个行为事实源。轻量流程（如 `capture_text` 的单步、`summarize_thread` 的 `sum-compose`）步骤数少，UI 可折叠展示，并不会因为统一投影而被过度步骤化。
 
-需要注意的是，当前这里不是完全开放式的自主规划，而是已经落地的 **intent-specific workflow step projection**。`delete_knowledge` 和 `solidify_conversation` 的主干由 `WorkflowSpec` 固定声明：
+不同 intent 的差异在于步骤数量和风险，而不是“走不走 step projection”。`delete_knowledge` 和 `solidify_conversation` 是其中“多步、含高风险副作用、需要 HITL”的代表，主干由 `WorkflowSpec` 固定声明：
 
 ```text
 delete_knowledge: retrieve -> resolve -> delete_note -> compose
 solidify_conversation: compose -> capture_text
 ```
 
-它们进入 step projection 的原因不是“需要 LLM 自由编排步骤”，而是需要复用统一的 `ExecutionStep / StepRunState / StepProjectionValidator / step_execution.results / HITL / step events / checkpoint resume` 这一套执行壳。也就是说，当前 projection 的价值是“把固定 workflow 表达成可校验、可观察、可恢复的步骤图”，而不是让模型随意设计流程。
+需要注意的是，这里不是完全开放式的自主规划，而是已经落地的 **intent-specific workflow step projection**：固定 workflow 已经下沉为 `WorkflowSpec`，由 deterministic projector 投影成可执行步骤，而不是让模型随意设计流程。
 
-面试里可以坦诚讲：这不是“通用自主 planner 已经成熟”，而是“固定 workflow 已经下沉为 WorkflowSpec，只有需要步骤执行的 workflow 才通过 deterministic projector 投影成可执行步骤”。如果继续生产化，可以进一步扩展到选择 workflow、填充目标、解释步骤，或在有 eval 和 guardrail 的低风险场景生成局部检索子步骤。
+面试里可以坦诚讲：这不是“通用自主 planner 已经成熟”，而是“固定 workflow 已经下沉为 WorkflowSpec，统一通过 deterministic projector 投影成可校验、可观察、可恢复的步骤图”。如果继续生产化，可以进一步扩展到选择 workflow、填充目标、解释步骤，或在有 eval 和 guardrail 的低风险场景生成局部检索子步骤。
 
 ### 5. `delete_knowledge` 为什么是 `retrieve -> resolve -> delete_note -> compose`？
 

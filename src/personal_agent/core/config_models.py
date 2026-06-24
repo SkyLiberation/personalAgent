@@ -302,6 +302,19 @@ class PolicyConfig(_StrictBase):
     require_confirmation_for_high_risk: bool = True
 
 
+class GuardrailsConfig(_StrictBase):
+    """Content guardrails: prompt-injection / PII / sensitive-output handling.
+
+    Default ``mode='sanitize'`` neutralizes/redacts and lets content through;
+    only ``mode='block'`` rejects high-confidence malicious input. ``log_only``
+    records verdicts without changing content (rollout/observation phase).
+    """
+
+    enabled: bool = True
+    mode: str = "sanitize"  # sanitize | block | log_only
+    redact_pii: bool = True
+
+
 class ReflectionReplaySettings(_StrictBase):
     """跨 run 反思回注闭环（Reflexion）的开关与把关参数。
 

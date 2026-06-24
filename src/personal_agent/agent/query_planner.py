@@ -7,16 +7,16 @@ the capture-time LangExtract layer.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from datetime import timedelta
 
 from ..core.config import OpenAIConfig, Settings
-from ..core.llm_trace import log_llm_parse, traced_chat_completion
+from ..core.llm_trace import traced_chat_completion
 from ..core.models import local_now
 from ..core.prompts import get_prompt, render_prompt
 from ..core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+from ..core.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
 
@@ -145,32 +145,17 @@ def _call_planner_llm(
     )
     logger.info("Query planner completed in %.0fms model=%s", result.latency_ms, model)
 
-    raw = result.content or "{}"
-    if raw.rstrip()[-1:] not in ("}", "]"):
-        raw = _repair_truncated_json(raw)
-    try:
-        data = json.loads(raw)
-        understanding = QueryUnderstanding(**data)
-    except Exception as exc:
-        log_llm_parse(
-            prompt_name="query_planner",
-            prompt_version=system_prompt.version,
-            model=model,
-            parse_schema="QueryUnderstanding",
-            parse_ok=False,
-            parse_error=str(exc),
-            latency_ms=result.latency_ms,
-        )
-        raise
-    log_llm_parse(
-        prompt_name="query_planner",
-        prompt_version=system_prompt.version,
-        model=model,
-        parse_schema="QueryUnderstanding",
-        parse_ok=True,
+    parsed = parse_structured(
+        result.content or "{}",
+        QueryUnderstanding,
+        operation="query_planner",
+        version=system_prompt.version,
+        model_name=model,
         latency_ms=result.latency_ms,
     )
-    return understanding
+    if not parsed.ok:
+        raise ValueError(f"query_planner structured parse failed: {parsed.error}")
+    return parsed.value
 
 
 def _planner_llm_config(settings: Settings) -> tuple[str | None, str | None, str]:
@@ -198,28 +183,6 @@ def _planner_response_format() -> dict:
         },
     }
 
-
-def _repair_truncated_json(raw: str) -> str:
-    """Attempt to repair JSON truncated by max_tokens."""
-    stripped = raw.rstrip()
-    open_braces = stripped.count("{") - stripped.count("}")
-    open_brackets = stripped.count("[") - stripped.count("]")
-    in_string = False
-    escape_next = False
-    for ch in stripped:
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\":
-            escape_next = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-    if in_string:
-        stripped += '"'
-    stripped += "]" * open_brackets
-    stripped += "}" * open_braces
-    return stripped
 
 
 def _derive_plan(question: str, understanding: QueryUnderstanding) -> RetrievalPlan:

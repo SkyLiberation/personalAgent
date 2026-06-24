@@ -164,7 +164,7 @@ def build_research_compose_digest_tool(service) -> BaseTool:
     )
     def research_compose_digest(run_id: str, user_id: str = "default", max_items: int | None = None):
         run = service.compose_digest(run_id, max_items=max_items)
-        digest = service.store.get_digest(run.digest_id) if run.digest_id else None
+        digest = service.get_digest(run.digest_id) if run.digest_id else None
         return tool_response(tool_success({
             "run_id": run_id,
             "run": run.model_dump(mode="json"),

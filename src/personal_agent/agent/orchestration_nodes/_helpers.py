@@ -185,20 +185,18 @@ def _structured_llm_respond(
 
 
 def _react_parse_response(raw: str) -> dict | None:
-    import json as _json
+    """Unwrap a ReAct / structured-node JSON envelope into a dict (or None).
+
+    Shape varies (react action, finish, or a structured draft), so this stays a
+    permissive dict rather than a fixed schema; it shares the fence/truncation
+    unwrap and parse telemetry with every other structured site.
+    """
     from ...core.llm_trace import log_llm_parse
+    from ...core.structured_parse import load_json_lenient
 
     try:
-        parsed = _json.loads(raw)
-        log_llm_parse(
-            prompt_name="react",
-            model="unknown",
-            parse_ok=isinstance(parsed, dict),
-            parse_schema="ReactAction",
-            parse_error="" if isinstance(parsed, dict) else "parsed value is not object",
-        )
-        return parsed
-    except (_json.JSONDecodeError, TypeError) as exc:
+        parsed = load_json_lenient(raw)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
         log_llm_parse(
             prompt_name="react",
             model="unknown",
@@ -207,6 +205,15 @@ def _react_parse_response(raw: str) -> dict | None:
             parse_error=str(exc),
         )
         return None
+    ok = isinstance(parsed, dict)
+    log_llm_parse(
+        prompt_name="react",
+        model="unknown",
+        parse_ok=ok,
+        parse_schema="ReactAction",
+        parse_error="" if ok else "parsed value is not object",
+    )
+    return parsed if ok else None
 
 
 def _solidify_note_text(raw: str) -> str:

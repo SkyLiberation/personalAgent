@@ -93,15 +93,13 @@ Ask 路径不会直接把所有 note 塞进 prompt，而是先从本地长期知
 
 - `PostgresMemoryStore.search_notes()`：基于 `search_text`、`search_vector`、embedding 和 filters 做本地 note/chunk 检索。
 - `GraphitiStore.ask()`：基于图谱 episode、edge、fact 做语义检索。
-- `EvidenceItem`：把 graph fact、note、chunk、web、tool 结果统一成证据项。
-- `ContextPack`：对 evidence 去重、排序、按字符预算选择进入 prompt 的证据。
-- `Citation`：从 selected evidence 派生用户可见引用。
+- 多源结果随后收敛为统一证据模型 `EvidenceItem`，经 `ContextPack` 去重/排序/字符预算选择，并派生 `Citation`。该证据模型及来源转换器的字段定义见 [retrieval-reasoning.md 的统一证据模型](retrieval-reasoning.md)。
 
 这层的价值是把“模型看到的上下文”从存储结构中解耦出来。存储可以是 note、chunk、Graphiti fact 或 web hit，但进入 prompt 前都必须变成统一 evidence，并经过预算和引用边界控制。
 
 ### HITL 与删除恢复
 
-高风险删除不是直接物理删除长期存储。`delete_note` 首次执行只返回确认 payload，Graph 将其写入 `AgentGraphState.pending_confirmation` 并中断。用户确认后，Graph 从 checkpoint 恢复，给同一步骤补上 `confirmed=True` 和 `idempotency_key`，再次调用工具才执行软删除。
+高风险删除不是直接物理删除长期存储，而是软删除。`delete_note` 的两阶段确认执行（首次返回确认 payload、interrupt 暂停、确认后带 `confirmed=True` 和 `idempotency_key` 重新调度）属工具层契约，见 [tools.md 的 PendingConfirmation / IdempotencyKey 契约](tools.md#pendingconfirmation--idempotencykey-hitl-契约)；整条删除 workflow 见 [delete_knowledge Workflow](../workflow/delete-knowledge-workflow.md)。本节聚焦确认通过后对长期记忆的影响。
 
 确认删除时，Postgres 会在 `knowledge_delete_snapshots` 写入删除前快照，保存目标 note、子 chunk 和关联 review card payload；随后给 `knowledge_notes` 写入 `deleted_at / deleted_by / delete_reason / delete_snapshot_id` 等删除元数据。默认列表、检索、chunk 查询和复习卡查询都会排除 `deleted_at IS NOT NULL` 的记录。
 

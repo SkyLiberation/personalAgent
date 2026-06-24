@@ -68,7 +68,7 @@ def build_list_research_subscriptions_tool(service) -> BaseTool:
         extras=governance_extras(side_effects=("read_longterm",), permission_scope="research:read"),
     )
     def list_research_subscriptions(user_id: str = "default", enabled_only: bool = True):
-        subscriptions = service.store.list_subscriptions(user_id=user_id, enabled_only=enabled_only)
+        subscriptions = service.list_subscriptions(user_id=user_id, enabled_only=enabled_only)
         return tool_response(tool_success({
             "subscriptions": [_subscription_summary(item) for item in subscriptions]
         }))
@@ -99,7 +99,7 @@ def build_update_research_subscription_tool(service) -> BaseTool:
         max_items: int | None = None,
         enabled: bool | None = None,
     ):
-        subscription = service.store.get_subscription(subscription_id)
+        subscription = service.get_subscription(subscription_id)
         if subscription is None or subscription.user_id != user_id:
             return tool_response(tool_failure("未找到该用户的订阅。", error_kind="invalid_param"))
         update = {}
@@ -170,7 +170,7 @@ def build_run_research_subscription_now_tool(service) -> BaseTool:
         ),
     )
     def run_research_subscription_now(subscription_id: str, user_id: str = "default"):
-        subscription = service.store.get_subscription(subscription_id)
+        subscription = service.get_subscription(subscription_id)
         if subscription is None or subscription.user_id != user_id:
             return tool_response(tool_failure("未找到该用户的订阅。", error_kind="invalid_param"))
         run = service.enqueue_subscription_run(subscription, trigger_type="manual")
@@ -188,7 +188,7 @@ def build_list_research_runs_tool(service) -> BaseTool:
         extras=governance_extras(side_effects=("read_longterm",), permission_scope="research:read"),
     )
     def list_research_runs(user_id: str = "default", limit: int = 20):
-        runs = service.store.list_runs(user_id=user_id, limit=limit)
+        runs = service.list_runs(user_id=user_id, limit=limit)
         return tool_response(tool_success({"runs": [_run_summary(run) for run in runs]}))
 
     return list_research_runs
@@ -203,10 +203,10 @@ def build_get_research_digest_tool(service) -> BaseTool:
         extras=governance_extras(side_effects=("read_longterm",), permission_scope="research:read"),
     )
     def get_research_digest(run_id: str, user_id: str = "default"):
-        run = service.store.get_run(run_id)
+        run = service.get_run(run_id)
         if run is None or run.user_id != user_id:
             return tool_response(tool_failure("未找到该用户的 Research run。", error_kind="invalid_param"))
-        digest = service.store.get_digest(run.digest_id) if run.digest_id else None
+        digest = service.get_digest(run.digest_id) if run.digest_id else None
         return tool_response(tool_success({
             "run": _run_summary(run),
             "digest": digest.model_dump(mode="json") if digest else None,
@@ -268,7 +268,7 @@ def build_save_research_event_tool(service) -> BaseTool:
 
 
 def _set_enabled(service, subscription_id: str, user_id: str, enabled: bool):
-    subscription = service.store.get_subscription(subscription_id)
+    subscription = service.get_subscription(subscription_id)
     if subscription is None or subscription.user_id != user_id:
         return tool_response(tool_failure("未找到该用户的订阅。", error_kind="invalid_param"))
     saved = service.update_subscription(subscription.model_copy(update={"enabled": enabled}))

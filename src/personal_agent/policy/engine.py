@@ -15,17 +15,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from .models import PolicyAction, PolicyDecision, PolicyInput
+from .invariants import (
+    is_high_risk_side_effect_action,
+    react_autonomy_blocked,
+)
+from .models import PolicyDecision, PolicyInput
 
 logger = logging.getLogger(__name__)
-
-# 在 ReAct 自主执行中一律禁止的副作用：删除长期记忆、对外发送、不可逆。
-# 普通写入不再一刀切禁止：它必须同时满足 scoped allowed_tools、非 high risk、
-# 非 requires_confirmation，并经过 ToolGateway 审计/幂等/限流。这允许业务管理类
-# workflow 在局部工具箱内做受治理的写入决策，而不是退回黑盒 service。
-_REACT_BLOCKED_EFFECTS = frozenset(
-    {"delete_longterm", "send_external", "irreversible"}
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +138,10 @@ class PolicyEngine:
                 f"工具 {request.tool_name} 不在当前 ReAct 允许列表中。",
                 rule="react.not_allowed",
             )
-        if (
-            request.risk_level == "high"
-            or request.requires_confirmation
-            or _REACT_BLOCKED_EFFECTS.intersection(request.side_effects)
+        if react_autonomy_blocked(
+            risk_level=request.risk_level,
+            requires_confirmation=request.requires_confirmation,
+            side_effects=request.side_effects,
         ):
             return PolicyDecision.deny(
                 f"工具 {request.tool_name} 不允许在 ReAct 自主执行中调用。",
@@ -156,10 +152,10 @@ class PolicyEngine:
     def _is_high_risk_side_effect(self, request: PolicyInput) -> bool:
         if not self._rules.require_confirmation_for_high_risk:
             return False
-        return bool(
-            request.requires_confirmation
-            and request.risk_level == "high"
-            and _REACT_BLOCKED_EFFECTS.intersection(request.side_effects)
+        return is_high_risk_side_effect_action(
+            risk_level=request.risk_level,
+            requires_confirmation=request.requires_confirmation,
+            side_effects=request.side_effects,
         )
 
     # -- memory decisions ---------------------------------------------------

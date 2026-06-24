@@ -586,7 +586,15 @@ def notes_to_evidence(matches: list[KnowledgeNote | EvidenceSource]) -> list[Evi
 
 
 def web_results_to_evidence(results: list[dict]) -> list[EvidenceItem]:
-    """Convert raw web search result dicts to ``EvidenceItem``."""
+    """Convert raw web search result dicts to ``EvidenceItem``.
+
+    Web text is untrusted: it can carry indirect prompt injection. The content
+    guard neutralizes injection markers in ``title``/``snippet`` before they
+    cross into the trusted evidence/context boundary.
+    """
+    from ..guardrails import get_content_guard
+
+    guard = get_content_guard()
     items: list[EvidenceItem] = []
     for r in results:
         if not isinstance(r, dict):
@@ -595,8 +603,8 @@ def web_results_to_evidence(results: list[dict]) -> list[EvidenceItem]:
         items.append(EvidenceItem(
             source_type="web",
             source_id=url,
-            title=str(r.get("title", "")),
-            snippet=str(r.get("snippet", "")),
+            title=guard.sanitize_untrusted(str(r.get("title", ""))).text,
+            snippet=guard.sanitize_untrusted(str(r.get("snippet", ""))).text,
             url=url,
             metadata={
                 "source": r.get("source", ""),

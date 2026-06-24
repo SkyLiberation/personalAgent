@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from ...core.models import EntryInput, local_now
+from ...guardrails import get_content_guard
 from ..orchestration_models import (
     AgentGraphState,
     StepRunState,
@@ -37,6 +38,9 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     session_id = entry.session_id if entry else state.session_id
     text = entry.text if entry else state.entry_text
 
+    input_guard = get_content_guard().check_input(text or "")
+    text = input_guard.text
+
     thread_id = _new_thread_id(user_id, session_id)
 
     state.user_id = user_id
@@ -64,6 +68,15 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.created_at = local_now()
     state.updated_at = state.created_at
 
+    if input_guard.changed:
+        state.add_event(
+            "guardrail_blocked" if input_guard.blocked else "guardrail_sanitized",
+            {
+                "stage": "input",
+                "categories": list(input_guard.categories),
+                "reason": input_guard.reason,
+            },
+        )
     state.add_event("entry_started", {"text_preview": text[:120] if text else ""})
     logger.info("normalize_entry run_id=%s thread_id=%s", state.run_id, thread_id)
     return {
@@ -582,6 +595,18 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
     if state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:
+        if state.answer:
+            output_guard = get_content_guard().check_output(state.answer)
+            if output_guard.changed:
+                state.answer = output_guard.text
+                state.add_event(
+                    "guardrail_sanitized",
+                    {
+                        "stage": "output",
+                        "categories": list(output_guard.categories),
+                        "reason": output_guard.reason,
+                    },
+                )
         state.answer_completed = True
         if not any(event.type == "answer_completed" for event in state.events):
             state.add_event("answer_completed", {"answer": state.answer})

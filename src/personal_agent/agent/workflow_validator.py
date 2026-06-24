@@ -20,6 +20,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..policy.invariants import (
+    delete_longterm_violations,
+    high_risk_requires_confirmation,
+)
 from ..tools import tool_governance
 from .workflow import (
     EDGE_SENTINELS,
@@ -164,22 +168,21 @@ class WorkflowSpecValidator:
                 if step.max_iterations < 1:
                     issues.append(f"{prefix} max_iterations 必须为正整数。")
 
-            # --- Semantic invariants ---
-            if "delete_longterm" in step.side_effects:
-                if step.risk_level != "high":
-                    issues.append(
-                        f"{prefix} 含 delete_longterm 副作用，必须声明 risk_level='high'。"
-                    )
-                if not step.requires_confirmation:
-                    issues.append(
-                        f"{prefix} 含 delete_longterm 副作用，必须 requires_confirmation=True。"
-                    )
-                if step.hitl_policy == "none":
-                    issues.append(
-                        f"{prefix} 含 delete_longterm 副作用，必须声明非 none 的 hitl_policy。"
-                    )
+            # --- Semantic invariants (shared definitions: policy/invariants.py) ---
+            _delete_messages = {
+                "risk": f"{prefix} 含 delete_longterm 副作用，必须声明 risk_level='high'。",
+                "confirmation": f"{prefix} 含 delete_longterm 副作用，必须 requires_confirmation=True。",
+                "hitl": f"{prefix} 含 delete_longterm 副作用，必须声明非 none 的 hitl_policy。",
+            }
+            for code in delete_longterm_violations(
+                side_effects=step.side_effects,
+                risk_level=step.risk_level,
+                requires_confirmation=step.requires_confirmation,
+                hitl_policy=step.hitl_policy,
+            ):
+                issues.append(_delete_messages[code])
 
-            if step.risk_level == "high" and not step.requires_confirmation:
+            if high_risk_requires_confirmation(step.risk_level, step.requires_confirmation):
                 issues.append(
                     f"{prefix} risk_level='high' 必须 requires_confirmation=True。"
                 )

@@ -1,15 +1,47 @@
 from __future__ import annotations
 
-import json
 import logging
 from uuid import uuid4
 
+from pydantic import BaseModel, Field, field_validator
+
 from ..core.config import Settings
 from ..core.llm_schemas import strict_json_schema_response
-from ..core.llm_trace import log_llm_parse, traced_chat_completion
+from ..core.llm_trace import traced_chat_completion
 from ..core.models import MemoryItem
 from ..core.prompts import get_prompt, render_prompt
+from ..core.structured_parse import parse_structured
 from .execution_models import ExecutionStep
+
+
+class _RevisedStep(BaseModel):
+    """Lenient view of one model-proposed revised step (coerced, then mapped)."""
+
+    step_id: str = ""
+    action_type: str = ""
+    description: str = ""
+    tool_name: str | None = None
+    tool_input: dict = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+    expected_output: str = ""
+    success_criteria: str = ""
+    risk_level: str = "low"
+    requires_confirmation: bool = False
+    on_failure: str = "skip"
+
+    @field_validator("tool_input", mode="before")
+    @classmethod
+    def _coerce_tool_input(cls, v: object) -> dict:
+        return v if isinstance(v, dict) else {}
+
+    @field_validator("depends_on", mode="before")
+    @classmethod
+    def _coerce_depends_on(cls, v: object) -> list:
+        return v if isinstance(v, list) else []
+
+
+class _RevisedPlan(BaseModel):
+    steps: list[_RevisedStep] = Field(default_factory=list)
 
 logger = logging.getLogger(__name__)
 
@@ -175,71 +207,37 @@ class Replanner:
             content = llm_result.content
             model = llm_result.model
             latency_ms = llm_result.latency_ms
-            payload = json.loads(content)
-            steps_data = payload.get("steps", [])
-            if not isinstance(steps_data, list) or not steps_data:
-                log_llm_parse(
-                    prompt_name="replanner",
-                    prompt_version=system_prompt.version,
-                    model=model,
-                    parse_ok=False,
-                    parse_schema="ExecutionStep[]",
-                    parse_error="steps missing or empty",
-                    latency_ms=latency_ms,
-                )
+            parsed = parse_structured(
+                content,
+                _RevisedPlan,
+                operation="replanner",
+                version=system_prompt.version,
+                model_name=model,
+                latency_ms=latency_ms,
+            )
+            if not parsed.ok:
                 return None
 
             valid_actions = {"retrieve", "tool_call", "compose", "verify"}
             revised: list[ExecutionStep] = []
-            for item in steps_data:
-                if not isinstance(item, dict):
+            for item in parsed.value.steps:
+                if item.action_type not in valid_actions:
                     continue
-                action = str(item.get("action_type") or "")
-                if action not in valid_actions:
-                    continue
-                tool = item.get("tool_name")
-                tool_input = item.get("tool_input") or {}
-                if not isinstance(tool_input, dict):
-                    tool_input = {}
-                depends_on = item.get("depends_on", [])
-                if not isinstance(depends_on, list):
-                    depends_on = []
-                risk = str(item.get("risk_level", "low"))
+                risk = item.risk_level if item.risk_level in ("low", "medium", "high") else "low"
                 revised.append(ExecutionStep(
-                    step_id=str(item.get("step_id") or uuid4().hex[:8]),
-                    action_type=action,
-                    description=str(item.get("description") or f"重新执行: {failed_step.description}"),
-                    tool_name=str(tool) if tool else None,
-                    tool_input=tool_input,
-                    depends_on=depends_on,
-                    expected_output=str(item.get("expected_output") or ""),
-                    success_criteria=str(item.get("success_criteria") or ""),
-                    risk_level=risk if risk in ("low", "medium", "high") else "low",
-                    requires_confirmation=bool(item.get("requires_confirmation", False)),
-                    on_failure=str(item.get("on_failure") or "skip"),
+                    step_id=item.step_id or uuid4().hex[:8],
+                    action_type=item.action_type,
+                    description=item.description or f"重新执行: {failed_step.description}",
+                    tool_name=item.tool_name or None,
+                    tool_input=item.tool_input,
+                    depends_on=item.depends_on,
+                    expected_output=item.expected_output,
+                    success_criteria=item.success_criteria,
+                    risk_level=risk,
+                    requires_confirmation=item.requires_confirmation,
+                    on_failure=item.on_failure or "skip",
                 ))
-            log_llm_parse(
-                prompt_name="replanner",
-                prompt_version=system_prompt.version,
-                model=model,
-                parse_ok=bool(revised),
-                parse_schema="ExecutionStep[]",
-                parse_error="" if revised else "no valid revised steps",
-                latency_ms=latency_ms,
-            )
             return revised if revised else None
-        except json.JSONDecodeError as exc:
-            log_llm_parse(
-                prompt_name="replanner",
-                prompt_version=system_prompt.version,
-                model=model,
-                parse_ok=False,
-                parse_schema="ExecutionStep[]",
-                parse_error=str(exc),
-                latency_ms=latency_ms,
-            )
-            logger.exception("Replanner LLM JSON decode failed, falling back to heuristic")
-            return None
         except Exception:
             logger.exception("Replanner LLM call failed, falling back to heuristic")
             return None

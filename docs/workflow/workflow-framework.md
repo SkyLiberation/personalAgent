@@ -303,7 +303,13 @@ capture chunk graph_sync=pending
   -> worker task completed / dead
 ```
 
+## Model / Layer 图
+
+Workflow / Step Projection 的 Model / Layer 依赖类图见 [Workflow / Step Projection Model / Layer 依赖类图](../mermaid/workflow-step-projection-model-layer-dependencies.md)。
+
 ## 和 Dynamic Planning 的区别
+
+步骤来源（workflow 投影 vs dynamic planning）的对照表见 [Dynamic Planning](../topics/dynamic-planning.md)。
 
 当前生产主路径不是开放式 dynamic planning。固定业务流程由 `WorkflowSpec` 声明，启动时同步到 `workflow_definitions`，deployment pin 决定 active version，`WorkflowPlanner` 再确定性编译。LLM 参与的是局部语义任务，例如：
 
