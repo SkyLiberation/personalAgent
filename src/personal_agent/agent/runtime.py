@@ -9,11 +9,11 @@ from personal_agent.kernel.langsmith_tracing import configure_langsmith_environm
 from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.observability import set_policy_decision_sink
 from personal_agent.infra.structured_model import build_structured_model_client
-from personal_agent.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.knowledge import KnowledgeConsolidationUseCase
 from personal_agent.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.guardrails import configure_guardrails
 from personal_agent.policy import PolicyEngine, PolicyRules
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
@@ -23,7 +23,7 @@ from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWor
 from personal_agent.infra.storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
 from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
 from personal_agent.infra.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
-from personal_agent.structural_retriever import StructuralRetrieverStore
+from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from personal_agent.tools import (
     ToolExecutor,
     build_capture_text_tool,
@@ -97,7 +97,7 @@ from personal_agent.agent.runtime_helpers import (
     _top_sentences,
 )
 from personal_agent.infra.runtime_llm import LlmClient
-from personal_agent.agent.thread_summarizer import ThreadSummarizer
+from personal_agent.memory.thread_summarizer import ThreadSummarizer
 from personal_agent.agent.runtime_results import (
     AskResult,
     CaptureResult,

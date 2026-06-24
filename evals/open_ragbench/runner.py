@@ -12,9 +12,9 @@ from typing import Protocol
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import KnowledgeNote
-from personal_agent.graphiti.store import GraphAskResult, GraphitiStore
-from personal_agent.graphiti.search_strategies import STRATEGIES
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.memory.graphiti.store import GraphAskResult, GraphitiStore
+from personal_agent.memory.graphiti.search_strategies import STRATEGIES
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 from .adapter import CorpusNoteMode, corpus_to_edges, corpus_to_notes, expected_episode, expected_note_ids
 from .loader import CorpusMode, RAGBenchDoc, RAGBenchQuery, load_benchmark
@@ -159,7 +159,7 @@ class CitationRerankStrategy:
     ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
         edges, node_names = corpus_to_edges(docs)
         if self.graph_strategy_name is None:
-            from personal_agent.graphiti.reranker import rank_graph_citation_hits
+            from personal_agent.memory.graphiti.reranker import rank_graph_citation_hits
 
             def citation_hits(question: str):
                 return rank_graph_citation_hits(

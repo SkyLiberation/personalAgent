@@ -10,8 +10,8 @@ from personal_agent.kernel.evidence import (
     web_results_to_evidence,
 )
 from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryItem
-from personal_agent.graphiti.reranker import GraphCitationHit
-from personal_agent.graphiti.store import (
+from personal_agent.memory.graphiti.reranker import GraphCitationHit
+from personal_agent.memory.graphiti.store import (
     GraphAskResult,
     GraphEdgeRef,
     GraphFactRef,

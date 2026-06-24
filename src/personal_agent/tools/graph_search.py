@@ -6,7 +6,7 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.evidence import EvidenceItem
-from personal_agent.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.tools.base import ToolError, governance_extras, tool_response, tool_success
 
 logger = logging.getLogger(__name__)

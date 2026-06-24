@@ -21,8 +21,8 @@ from personal_agent.kernel.models import (
     GraphFactRef,
 )
 from personal_agent.kernel.projections import graph_ingest_document_from_note
-from personal_agent.graphiti.dashscope_compatible_embedder import DashScopeCompatibleEmbedder
-from personal_agent.graphiti.documents import (
+from personal_agent.memory.graphiti.dashscope_compatible_embedder import DashScopeCompatibleEmbedder
+from personal_agent.memory.graphiti.documents import (
     dedupe as _dedupe,
     episode_uuids_from_search_result as _episode_uuids_from_search_result,
     graphiti_episode_body as _graphiti_episode_body,
@@ -30,9 +30,9 @@ from personal_agent.graphiti.documents import (
     looks_like_content_filter_error as _looks_like_content_filter_error,
     related_episode_ids_from_edges as _related_episode_ids_from_edges,
 )
-from personal_agent.graphiti.llm_strategies import build_graphiti_llm_client
-from personal_agent.graphiti.ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
-from personal_agent.graphiti.search_strategies import (
+from personal_agent.memory.graphiti.llm_strategies import build_graphiti_llm_client
+from personal_agent.memory.graphiti.ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
+from personal_agent.memory.graphiti.search_strategies import (
     GraphSearchStrategy,
     apply_search_config_overrides,
     get_graph_search_strategy,

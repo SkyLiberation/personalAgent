@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
-from personal_agent.graphiti.store import GraphitiStore
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.memory.graphiti.store import GraphitiStore
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.agent.runtime import AgentRuntime
 

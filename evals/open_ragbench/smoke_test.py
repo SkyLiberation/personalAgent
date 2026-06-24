@@ -11,7 +11,7 @@ from evals.open_ragbench.adapter import corpus_to_notes, expected_note_ids
 from evals.open_ragbench.loader import load_benchmark
 from evals.open_ragbench.metrics import compute_report
 from personal_agent.kernel.config import Settings
-from personal_agent.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.store import GraphitiStore
 
 load_dotenv(override=True)
 

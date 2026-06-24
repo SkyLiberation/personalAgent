@@ -8,7 +8,7 @@ from uuid import uuid4
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import log_event, trace_span
 from personal_agent.kernel.models import AgentState, KnowledgeNote, RawIngestItem, local_now
-from personal_agent.graphiti.store import GraphCaptureResult, GraphitiStore
+from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from personal_agent.agent.nodes import (
@@ -480,7 +480,7 @@ class IngestionPipeline:
         note.graph_sync.last_synced_at = local_now()
         note.updated_at = local_now()
 
-        from personal_agent.graphiti.quality_vocab import all_relations_weak
+        from personal_agent.memory.graphiti.quality_vocab import all_relations_weak
 
         entity_count = len(graph_result.entity_names)
         relation_count = len(graph_result.relation_facts)

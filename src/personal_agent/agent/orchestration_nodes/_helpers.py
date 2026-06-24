@@ -314,7 +314,7 @@ def _dialogue_prompt_messages(
 ) -> list[dict[str, str]]:
     """Token-budgeted, single-message-truncated dialogue window for prompts."""
     from personal_agent.kernel.config import ShortTermMemoryConfig
-    from personal_agent.agent.short_term_context import apply_window
+    from personal_agent.memory.short_term_context import apply_window
 
     window = apply_window(
         messages, cfg or ShortTermMemoryConfig(), exclude_latest=exclude_latest

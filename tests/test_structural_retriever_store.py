@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from personal_agent.kernel.models import KnowledgeNote, local_now
-from personal_agent.structural_retriever import StructuralRetrieverStore
+from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from tests.note_factory import make_note
 
 

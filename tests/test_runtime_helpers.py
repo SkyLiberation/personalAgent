@@ -16,8 +16,8 @@ from personal_agent.kernel.models import (
     GraphEdgeRef,
     GraphFactRef,
 )
-from personal_agent.graphiti.store import GraphCaptureResult
-from personal_agent.graphiti.store import GraphAskResult
+from personal_agent.memory.graphiti.store import GraphCaptureResult
+from personal_agent.memory.graphiti.store import GraphAskResult
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
@@ -77,7 +77,7 @@ class TestBestSnippet:
             content="Redis 使用内存存储数据。缓存失效策略包括 TTL 和 LRU。",
             summary="关于 Redis 缓存的笔记",
         )
-        from personal_agent.graphiti.reranker import GraphCitationHit
+        from personal_agent.memory.graphiti.reranker import GraphCitationHit
 
         hit = GraphCitationHit(
             episode_uuid="ep1",
@@ -96,7 +96,7 @@ class TestBestSnippet:
             content="一些无关的内容。",
             summary="这是关于缓存策略的摘要说明，包含重要信息。",
         )
-        from personal_agent.graphiti.reranker import GraphCitationHit
+        from personal_agent.memory.graphiti.reranker import GraphCitationHit
 
         hit = GraphCitationHit(
             episode_uuid="ep2",

@@ -10,7 +10,7 @@ from personal_agent.review.formatter import DigestFormatter
 from personal_agent.review.models import ReviewDigest, ReviewDigestSection, ReviewFeedbackOutcome, ReviewFeedbackResult
 
 if TYPE_CHECKING:
-    from personal_agent.graphiti.store import GraphitiStore
+    from personal_agent.memory.graphiti.store import GraphitiStore
 
 logger = logging.getLogger(__name__)
 

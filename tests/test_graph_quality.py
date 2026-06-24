@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from tests.note_factory import make_note
-from personal_agent.graphiti.quality_vocab import (
+from personal_agent.memory.graphiti.quality_vocab import (
     all_relations_weak,
     is_weak_relation,
 )

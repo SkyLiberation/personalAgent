@@ -18,7 +18,7 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_schemas import strictify_schema
 from personal_agent.kernel.llm_trace import log_llm_parse
 from personal_agent.kernel.logging_utils import log_event
-from personal_agent.graphiti.ontology import ENTITY_TYPES
+from personal_agent.memory.graphiti.ontology import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 

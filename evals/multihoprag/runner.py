@@ -21,9 +21,9 @@ from typing import Protocol
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import KnowledgeNote
-from personal_agent.graphiti.store import GraphitiStore
-from personal_agent.graphiti.search_strategies import STRATEGIES
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.memory.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.search_strategies import STRATEGIES
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 # Reuse dataset-agnostic Graphiti ingest + manifest plumbing from open_ragbench.
 from evals.open_ragbench.runner import (
@@ -228,7 +228,7 @@ class CitationRerankStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> list[tuple[str, list[str]]]:
-        from personal_agent.graphiti.reranker import rank_graph_citation_hits
+        from personal_agent.memory.graphiti.reranker import rank_graph_citation_hits
 
         edges, node_names = corpus_to_edges(docs)
         # episode "ep_{pid}_{idx}" -> parent note id "{pid}"

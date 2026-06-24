@@ -470,7 +470,7 @@ def _entry_conversation_messages(
     单条截断 + 溢出滚动摘要)；否则回退到默认窗口（无摘要）。
     """
     from personal_agent.kernel.config import ShortTermMemoryConfig
-    from personal_agent.agent.short_term_context import build_dialogue_context_result
+    from personal_agent.memory.short_term_context import build_dialogue_context_result
 
     if deps is None:
         return _dialogue_prompt_messages(state.messages, exclude_latest=exclude_latest)

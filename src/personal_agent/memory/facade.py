@@ -25,7 +25,7 @@ from personal_agent.kernel.contracts.policy import (
 )
 
 if TYPE_CHECKING:
-    from personal_agent.graphiti.store import GraphitiStore
+    from personal_agent.memory.graphiti.store import GraphitiStore
     from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Literal
 
 if TYPE_CHECKING:
-    from personal_agent.graphiti.store import GraphitiStore
+    from personal_agent.memory.graphiti.store import GraphitiStore
     from personal_agent.memory import MemoryFacade
 
 logger = logging.getLogger(__name__)

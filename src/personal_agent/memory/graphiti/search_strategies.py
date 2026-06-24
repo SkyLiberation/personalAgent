@@ -12,7 +12,7 @@ from graphiti_core.search.search_config_recipes import (
     EDGE_HYBRID_SEARCH_RRF,
 )
 
-from personal_agent.graphiti.reranker import GraphCitationHit, rank_graph_citation_hits
+from personal_agent.memory.graphiti.reranker import GraphCitationHit, rank_graph_citation_hits
 
 
 class GraphSearchStrategy(Protocol):

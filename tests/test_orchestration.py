@@ -275,7 +275,7 @@ class TestOrchestrationGraphIntegration:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
@@ -730,7 +730,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_persisted_snapshots_are_visible_before_new_execution(self, temp_dir):
         from personal_agent.agent.runtime import AgentRuntime
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
         settings = Settings(
@@ -765,7 +765,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_cached_orchestration_graph_rebuilds_when_checkpointer_connection_closed(self, temp_dir):
         from personal_agent.agent.runtime import AgentRuntime
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
         settings = Settings(
@@ -953,7 +953,7 @@ class TestPhase3ExecuteExecutionStep:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
@@ -1194,7 +1194,7 @@ class TestPhase3InterruptResumeIntegration:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
@@ -1294,7 +1294,7 @@ class TestPhase4ReActHelpers:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
@@ -1368,7 +1368,7 @@ class TestPhase4ReActNodes:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
@@ -1504,7 +1504,7 @@ class TestPhase4ReActIterateNode:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
@@ -1690,7 +1690,7 @@ class TestPhase4ReActMainGraphIntegration:
     @pytest.fixture
     def runtime(self, stub_settings):
         from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
         from personal_agent.agent.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)

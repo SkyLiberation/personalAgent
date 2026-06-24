@@ -12,7 +12,7 @@ from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.projections import MatchRef
 from personal_agent.kernel.query_understanding import RetrievalFilters
-from personal_agent.graphiti.store import GraphAskResult
+from personal_agent.memory.graphiti.store import GraphAskResult
 from personal_agent.agent.ask import AskRunContext
 from personal_agent.agent.ask.evidence_ops import (
     graph_matches_to_evidence as _graph_matches_to_evidence,
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 def _conversation_messages_text(messages: list[dict[str, str]]) -> str:
     # 入参通常已由短期记忆策略窗口化；此处统一渲染为「用户/助手」文本。
-    from personal_agent.agent.short_term_context import render_as_text
+    from personal_agent.memory.short_term_context import render_as_text
 
     return render_as_text(messages)
 

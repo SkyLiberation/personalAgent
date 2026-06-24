@@ -6,7 +6,7 @@ import personal_agent.kernel.config_env as config_env_module
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.projections import graph_ingest_document_from_note
 from tests.note_factory import make_note
-from personal_agent.graphiti.store import (
+from personal_agent.memory.graphiti.store import (
     GraphitiStore,
     _graphiti_episode_body,
     _graphiti_safe_episode_body,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from personal_agent.graphiti.reranker import rank_graph_citation_hits
+from personal_agent.memory.graphiti.reranker import rank_graph_citation_hits
 
 
 @dataclass

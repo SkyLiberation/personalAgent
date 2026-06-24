@@ -3,7 +3,7 @@ from __future__ import annotations
 from personal_agent.agent.orchestration_models import AgentEvent
 from personal_agent.agent.runtime import AgentRuntime
 from personal_agent.kernel.models import EntryInput
-from personal_agent.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
 from tests.conftest import stub_router_decision

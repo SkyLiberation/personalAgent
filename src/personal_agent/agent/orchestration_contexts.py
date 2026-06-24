@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, Protocol
 if TYPE_CHECKING:
     from personal_agent.kernel.config import Settings
     from personal_agent.kernel.models import EntryInput
-    from personal_agent.graphiti.store import GraphitiStore
+    from personal_agent.memory.graphiti.store import GraphitiStore
     from personal_agent.memory import MemoryFacade
     from personal_agent.policy import PolicyEngine
     from personal_agent.tools import ToolExecutor
