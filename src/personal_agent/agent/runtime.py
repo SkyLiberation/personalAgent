@@ -11,8 +11,8 @@ from personal_agent.kernel.observability import set_policy_decision_sink
 from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
-from personal_agent.knowledge import KnowledgeConsolidationUseCase
-from personal_agent.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
+from personal_agent.application.knowledge import KnowledgeConsolidationUseCase
+from personal_agent.application.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
 from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.guardrails import configure_guardrails
 from personal_agent.policy import PolicyEngine, PolicyRules
@@ -64,7 +64,7 @@ from personal_agent.tools import (
     build_web_search_tool,
 )
 from personal_agent.agent.entry_orchestrator import EntryOrchestrator
-from personal_agent.agent.episodic_memory import record_entry_episode
+from personal_agent.application.episodic_memory import record_entry_episode
 from personal_agent.agent.orchestration_contexts import (
     DirectAnswerContext,
     GraphContexts,
@@ -98,7 +98,7 @@ from personal_agent.agent.runtime_helpers import (
 )
 from personal_agent.infra.runtime_llm import LlmClient
 from personal_agent.memory.thread_summarizer import ThreadSummarizer
-from personal_agent.agent.runtime_results import (
+from personal_agent.application.runtime_results import (
     AskResult,
     CaptureResult,
     DigestResult,
@@ -106,13 +106,13 @@ from personal_agent.agent.runtime_results import (
     ResetResult,
     RetryResult,
 )
-from personal_agent.review import DigestFormatter, ReviewDigestUseCase
-from personal_agent.research import ResearchFeedback, ResearchService, ResearchSubscription
+from personal_agent.application.review import DigestFormatter, ReviewDigestUseCase
+from personal_agent.application.research import ResearchFeedback, ResearchService, ResearchSubscription
 from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
-from personal_agent.agent.verifier import create_answer_verifier
+from personal_agent.application.verifier import create_answer_verifier
 
 if TYPE_CHECKING:
-    from personal_agent.capture import CaptureService
+    from personal_agent.application.capture import CaptureService
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +421,7 @@ class AgentRuntime:
         self._tool_executor.register(build_retry_worker_task_tool(self))
         self._tool_executor.register(build_inspect_workflow_run_tool(self))
         if self.settings.web_search.api_key:
-            from personal_agent.capture.providers.web_search import build_web_search_provider
+            from personal_agent.application.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
 
@@ -590,7 +590,7 @@ class AgentRuntime:
         It exercises the same durable queue/lease/complete/fail path that a
         future background worker will use.
         """
-        from personal_agent.agent.worker import WorkflowWorker
+        from personal_agent.application.worker import WorkflowWorker
 
         worker = WorkflowWorker(
             self,

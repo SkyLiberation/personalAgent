@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from personal_agent.research import (
+from personal_agent.application.research import (
     DeliveryTarget,
     ResearchFeedback,
     ResearchScheduler,
@@ -16,7 +16,7 @@ from personal_agent.research import (
 )
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.agent.worker import WorkflowWorker
+from personal_agent.application.worker import WorkflowWorker
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -201,7 +201,7 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
         sent = []
 
         def send(self, target, message):
-            from personal_agent.review.models import DeliveryResult
+            from personal_agent.application.review.models import DeliveryResult
             self.sent.append((target, message))
             return DeliveryResult(ok=True, provider_message_id="m1")
 

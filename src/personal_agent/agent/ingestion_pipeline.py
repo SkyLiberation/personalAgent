@@ -20,7 +20,7 @@ from personal_agent.agent.nodes import (
     structural_chunk_node,
 )
 from personal_agent.agent.runtime_helpers import _merge_notes
-from personal_agent.agent.runtime_results import CaptureResult
+from personal_agent.application.runtime_results import CaptureResult
 
 logger = logging.getLogger(__name__)
 

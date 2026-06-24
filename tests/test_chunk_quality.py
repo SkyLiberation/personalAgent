@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.chunk_quality import (
+from personal_agent.application.chunk_quality import (
     RETRIEVABLE_THRESHOLD,
     HeuristicChunkQualityScorer,
     score_drafts,

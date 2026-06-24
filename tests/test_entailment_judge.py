@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.entailment import (
+from personal_agent.application.entailment import (
     CONTRADICTED,
     ENTAILED,
     NOT_ENOUGH_INFO,

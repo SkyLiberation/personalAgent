@@ -151,7 +151,7 @@ class TestReplanReflectionInjection:
 
 class TestPromotionTrigger:
     def test_record_entry_episode_promotes_applied_reflections(self):
-        from personal_agent.agent.episodic_memory import _promote_applied_reflections
+        from personal_agent.application.episodic_memory import _promote_applied_reflections
         from personal_agent.kernel.models import MemoryEpisode
 
         store = FakeLocalStore()
@@ -170,7 +170,7 @@ class TestPromotionTrigger:
         assert store.items["r1"].status == "confirmed"
 
     def test_disabled_flag_skips_promotion(self):
-        from personal_agent.agent.episodic_memory import _promote_applied_reflections
+        from personal_agent.application.episodic_memory import _promote_applied_reflections
         from personal_agent.kernel.models import MemoryEpisode
 
         store = FakeLocalStore()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from personal_agent.agent.episodic_memory import build_entry_episode, build_reflection_candidate
-from personal_agent.agent.runtime_results import EntryResult
+from personal_agent.application.episodic_memory import build_entry_episode, build_reflection_candidate
+from personal_agent.application.runtime_results import EntryResult
 from personal_agent.kernel.models import EntryInput
 
 

@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from personal_agent.capture.providers.web_search import WebSearchProvider
+from personal_agent.application.capture.providers.web_search import WebSearchProvider
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.evidence import EvidenceItem
 from personal_agent.tools.base import governance_extras, tool_response, tool_success, url_allowed
 
 if TYPE_CHECKING:
-    from personal_agent.capture import CaptureService
+    from personal_agent.application.capture import CaptureService
 
 logger = logging.getLogger(__name__)
 

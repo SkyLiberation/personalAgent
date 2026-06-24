@@ -5,7 +5,7 @@ from personal_agent.kernel.models import Citation, KnowledgeNote
 # in the evidence module so it no longer creates a core -> agent dependency.
 from personal_agent.kernel.evidence import _best_snippet  # noqa: F401
 from personal_agent.memory.graphiti.store import GraphAskResult
-from personal_agent.agent.verifier import VerificationResult
+from personal_agent.application.verifier import VerificationResult
 
 def _annotate_answer(answer: str, verification: VerificationResult) -> str:
     if verification.ok and verification.sufficient:

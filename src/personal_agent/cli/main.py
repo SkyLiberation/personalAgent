@@ -5,21 +5,21 @@ import logging
 
 import typer
 
-from personal_agent.agent.runtime_results import EntryResult
+from personal_agent.application.runtime_results import EntryResult
 from personal_agent.agent.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import setup_logging
 from personal_agent.kernel.models import EntryInput
 from personal_agent.feishu import FeishuService
-from personal_agent.review import (
+from personal_agent.application.review import (
     DigestSubscription,
     ReviewDigestJob,
     ReviewDigestScheduler,
     subscriptions_from_settings,
 )
-from personal_agent.review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
-from personal_agent.research import DeliveryTarget, ResearchSubscription, SchedulePolicy
+from personal_agent.application.research import DeliveryTarget, ResearchSubscription, SchedulePolicy
 
 app = typer.Typer(help="Personal knowledge agent CLI")
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def worker(
     max_tasks: int = typer.Option(0, min=0, help="Stop after N tasks; 0 runs forever."),
 ) -> None:
     """Run a durable workflow activity worker."""
-    from personal_agent.agent.worker import WorkflowWorker
+    from personal_agent.application.worker import WorkflowWorker
 
     service = _build_service()
     if queue == "research":
@@ -293,7 +293,7 @@ def research_subscribe(
 @app.command("research-schedule")
 def research_schedule() -> None:
     """Enqueue all due research subscriptions."""
-    from personal_agent.research import ResearchScheduler
+    from personal_agent.application.research import ResearchScheduler
 
     service = _build_service()
     runs = ResearchScheduler(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.core.document_partition import _coordinates
+from personal_agent.application.document_partition import _coordinates
 
 
 class TestCoordinatesExtraction:

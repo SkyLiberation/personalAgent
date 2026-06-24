@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from personal_agent.agent.ask_pipeline_factory import AskPipelineFactory
-from personal_agent.core.candidate_enrichers import ParentChildCandidateEnricher
+from personal_agent.application.ask_pipeline_factory import AskPipelineFactory
+from personal_agent.application.candidate_enrichers import ParentChildCandidateEnricher
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.evidence import (
     EvidenceItem,
@@ -12,7 +12,7 @@ from personal_agent.kernel.evidence import (
     rank_evidence_items,
     select_ranked_evidence,
 )
-from personal_agent.core.rerankers import LlmEvidenceReranker
+from personal_agent.application.rerankers import LlmEvidenceReranker
 from personal_agent.kernel.models import Citation
 from tests.note_factory import make_note
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.verifier import AnswerVerifier, VerificationResult
+from personal_agent.application.verifier import AnswerVerifier, VerificationResult
 from personal_agent.kernel.evidence import EvidenceItem
 from personal_agent.kernel.models import Citation, KnowledgeNote
 from tests.note_factory import make_note

@@ -3,7 +3,7 @@
 Key differences from the Open RAGBench adapter:
 
 - Documents have no section split, so chunk notes are produced by running the
-  *production* chunker (``personal_agent.core.chunking.chunk_content``) over the
+  *production* chunker (``personal_agent.application.chunking.chunk_content``) over the
   article body.
 - A query's relevance is a *set* of parent note ids (one per evidence URL),
   because MultiHopRAG evidence is distributed across 2-4 documents.
@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from personal_agent.core.chunking import chunk_content
+from personal_agent.application.chunking import chunk_content
 from personal_agent.kernel.models import KnowledgeNote, NoteBody, NoteChunk, NoteSource
 
 from .loader import MHRDoc, MHRQuery

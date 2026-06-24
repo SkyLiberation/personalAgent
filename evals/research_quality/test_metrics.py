@@ -1,5 +1,5 @@
-from personal_agent.research import ResearchEvent
-from personal_agent.research.models import ResearchSource
+from personal_agent.application.research import ResearchEvent
+from personal_agent.application.research.models import ResearchSource
 
 from .metrics import score_research_events
 

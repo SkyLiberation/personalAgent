@@ -31,7 +31,7 @@ def capture_node(state: AgentState, store: MemoryFacade) -> AgentState:
     summary = content[:120]
     tags = _extract_tags(content)
 
-    from personal_agent.agent.provenance import HeuristicProvenanceExtractor
+    from personal_agent.application.provenance import HeuristicProvenanceExtractor
 
     provenance = HeuristicProvenanceExtractor().extract(state.raw_item)
 
@@ -58,7 +58,7 @@ def structural_chunk_node(state: AgentState, store: MemoryFacade) -> AgentState:
     if state.note is None or state.raw_item is None:
         return state
 
-    from personal_agent.core.document_partition import partition_to_chunk_drafts
+    from personal_agent.application.document_partition import partition_to_chunk_drafts
 
     drafts = partition_to_chunk_drafts(
         state.note.body.content,
@@ -107,7 +107,7 @@ def _chunk_notes_from_drafts(
     raw_item,
     drafts: list[ChunkDraft],
 ) -> list[KnowledgeNote]:
-    from personal_agent.agent.chunk_quality import score_drafts
+    from personal_agent.application.chunk_quality import score_drafts
 
     chunks: list[KnowledgeNote] = []
     scored = score_drafts(drafts)

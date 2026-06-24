@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.agent.provenance import HeuristicProvenanceExtractor
+from personal_agent.application.provenance import HeuristicProvenanceExtractor
 from personal_agent.kernel.models import RawIngestItem
 
 

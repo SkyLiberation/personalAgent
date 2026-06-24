@@ -1935,7 +1935,7 @@ class TestPhase5EntryResultEvents:
     """Tests for EntryResult.events passthrough from graph state."""
 
     def test_entry_result_accepts_events(self):
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
             intents=["ask"],
@@ -1947,14 +1947,14 @@ class TestPhase5EntryResultEvents:
         assert result.events[0]["type"] == "entry_started"
 
     def test_entry_result_events_default_empty(self):
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(intents=["direct_answer"], reason="测试", reply_text="你好")
         assert result.events == []
 
     def test_entry_result_events_serialization_roundtrip(self):
         from personal_agent.agent.orchestration_models import AgentEvent
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
             intents=["ask"],
@@ -2063,7 +2063,7 @@ class TestPhase5GraphToEntryResultEvents:
     def test_graph_entry_result_has_events(self, monkeypatch):
         """Verify that execute_entry returns events when graph is enabled."""
         from personal_agent.agent.orchestration_models import AgentGraphState
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         # Simulate what happens in execute_entry after graph.invoke()
         state = AgentGraphState(
@@ -2097,7 +2097,7 @@ class TestPhase5GraphToEntryResultEvents:
 
     def test_interrupted_result_has_events(self):
         """Verify that interrupted (waiting_confirmation) results carry accumulated events."""
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
             intents=["unknown"],

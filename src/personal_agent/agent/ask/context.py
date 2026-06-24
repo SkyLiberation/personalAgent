@@ -297,7 +297,7 @@ def _dump_verification(value: Any) -> dict[str, Any] | None:
 def _load_verification(value: Any):
     if not isinstance(value, dict):
         return None
-    from personal_agent.agent.verifier import ClaimVerification, VerificationResult
+    from personal_agent.application.verifier import ClaimVerification, VerificationResult
 
     checks = value.get("claim_checks")
     claim_checks = [

@@ -6,23 +6,23 @@ from logging import Logger
 from fastapi import FastAPI
 
 from personal_agent.agent.service import AgentService
-from personal_agent.capture import CaptureService
+from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.config import Settings
 from personal_agent.feishu import FeishuService
-from personal_agent.insight import (
+from personal_agent.application.insight import (
     KnowledgeGapJob,
     KnowledgeGapJobRunner,
     KnowledgeGapScheduler,
 )
-from personal_agent.review import (
+from personal_agent.application.review import (
     ReviewDigestJob,
     ReviewDigestJobRunner,
     ReviewDigestScheduler,
     ReviewFeedbackUseCase,
     subscriptions_from_settings,
 )
-from personal_agent.review.delivery import DeliveryRouter, FeishuDeliveryProvider
-from personal_agent.research import ResearchScheduler, ResearchSchedulerRunner
+from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from personal_agent.application.research import ResearchScheduler, ResearchSchedulerRunner
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 
 

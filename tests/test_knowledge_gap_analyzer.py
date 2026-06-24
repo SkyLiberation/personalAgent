@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.insight import KnowledgeGap, KnowledgeGapAnalyzer
+from personal_agent.application.insight import KnowledgeGap, KnowledgeGapAnalyzer
 from tests.note_factory import make_note
 
 

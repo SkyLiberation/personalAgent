@@ -78,7 +78,7 @@ def test_unstructured_chunks_materialize_child_notes(monkeypatch) -> None:
     ]
 
     monkeypatch.setattr(
-        "personal_agent.core.document_partition.partition_to_chunk_drafts",
+        "personal_agent.application.document_partition.partition_to_chunk_drafts",
         lambda *args, **kwargs: drafts,
     )
 
@@ -108,7 +108,7 @@ def test_single_unstructured_chunk_keeps_parent_only(monkeypatch) -> None:
         )
     ]
     monkeypatch.setattr(
-        "personal_agent.core.document_partition.partition_to_chunk_drafts",
+        "personal_agent.application.document_partition.partition_to_chunk_drafts",
         lambda *args, **kwargs: drafts,
     )
 

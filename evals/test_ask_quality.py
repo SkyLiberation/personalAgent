@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.verifier import AnswerVerifier
+from personal_agent.application.verifier import AnswerVerifier
 
 from .test_cases import ALL_ASK_CASES, DEGRADED, WELL_SUPPORTED
 

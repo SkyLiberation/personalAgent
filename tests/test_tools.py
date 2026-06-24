@@ -332,7 +332,7 @@ class TestToolExecutor:
             WebSearchArgs.model_validate({"query": "agent tools", "limit": 99})
 
     def test_web_search_provider_factory_uses_configured_provider(self):
-        from personal_agent.capture.providers.web_search import (
+        from personal_agent.application.capture.providers.web_search import (
             TavilyWebSearchProvider,
             build_web_search_provider,
         )
@@ -345,8 +345,8 @@ class TestToolExecutor:
         assert isinstance(build_web_search_provider(settings), TavilyWebSearchProvider)
 
     def test_tavily_provider_uses_generic_web_search_config(self, monkeypatch: pytest.MonkeyPatch):
-        from personal_agent.capture.providers import web_search as web_search_module
-        from personal_agent.capture.providers.web_search import TavilyWebSearchProvider
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import TavilyWebSearchProvider
         from personal_agent.kernel.config import Settings, WebSearchConfig
 
         captured = {}
@@ -396,7 +396,7 @@ class TestToolExecutor:
         assert results[0].source == "tavily"
 
     def test_web_search_scrape_respects_allowed_domains(self):
-        from personal_agent.capture.providers.web_search import WebSearchResult
+        from personal_agent.application.capture.providers.web_search import WebSearchResult
         from personal_agent.kernel.config import Settings, WebSearchConfig
         from personal_agent.tools.web_search import build_web_search_tool
 

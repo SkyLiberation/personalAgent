@@ -311,7 +311,7 @@ class _GraphRagIndex:
 
 def _build_graphrag_index(docs: dict[str, MHRDoc]) -> _GraphRagIndex:
     from .adapter import parent_note_id
-    from personal_agent.core.chunking import chunk_content
+    from personal_agent.application.chunking import chunk_content
 
     graph_docs: list[_GraphRagDoc] = []
     sections: list[_GraphRagSection] = []

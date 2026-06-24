@@ -17,7 +17,7 @@ from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.observability import RunMetrics
 from personal_agent.agent.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from personal_agent.agent.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
-from personal_agent.agent.runtime_results import AskResult, CaptureResult, EntryResult
+from personal_agent.application.runtime_results import AskResult, CaptureResult, EntryResult
 from personal_agent.agent.router import describe_router_decision
 from personal_agent.agent.workflow_state_migration import reset_step_and_dependents
 

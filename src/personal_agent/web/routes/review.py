@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from personal_agent.agent.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import ReviewCard
-from personal_agent.review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
-from personal_agent.review.models import ReviewFeedbackOutcome
+from personal_agent.application.review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
+from personal_agent.application.review.models import ReviewFeedbackOutcome
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from personal_agent.web.routes._shared import is_admin, resolve_user_id
 

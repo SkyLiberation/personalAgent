@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.agent.service import AgentService
 from personal_agent.kernel.config import Settings
-from personal_agent.research import (
+from personal_agent.application.research import (
     ContentPreferences,
     DeliveryTarget,
     ResearchFeedback,

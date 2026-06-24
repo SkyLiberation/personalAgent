@@ -9,7 +9,7 @@ from personal_agent.infra.storage.postgres_memory_store import PostgresMemorySto
 from personal_agent.agent.runtime import AgentRuntime
 
 if TYPE_CHECKING:
-    from personal_agent.capture import CaptureService
+    from personal_agent.application.capture import CaptureService
 
 
 class AgentService:

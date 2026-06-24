@@ -87,7 +87,7 @@ def main() -> int:
     install_interceptor(live=live)
 
     from personal_agent.kernel.config import LangExtractConfig
-    from personal_agent.extract.service import PreExtractService
+    from personal_agent.application.extract.service import PreExtractService
 
     cfg = LangExtractConfig(
         api_key=api_key,
