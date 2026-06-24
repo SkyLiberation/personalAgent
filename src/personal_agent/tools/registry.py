@@ -7,7 +7,7 @@ from langchain_core.tools import BaseTool
 
 from ..core.models import EntryIntent
 from ..policy import PolicyEngine
-from .base import tool_failure
+from .base import ToolExposure, tool_failure, tool_governance
 from .gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,6 @@ _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
     "review_digest": "review_digest",
     "consolidate_knowledge": "consolidate_knowledge",
     "inspect_knowledge_gaps": "inspect_knowledge_gaps",
-    "research_once": "research_once",
     "create_research_subscription": "create_research_subscription",
     "manage_research": "list_research_subscriptions",
     "maintain_knowledge": "find_similar_notes",
@@ -57,8 +56,14 @@ class ToolExecutor:
             logger.warning("Tool %s is already registered, overwriting.", tool.name)
         self._gateway.register(tool)
 
-    def list_tools(self) -> list[BaseTool]:
-        return self._gateway.list_tools()
+    def list_tools(self, *, exposures: set[ToolExposure] | None = None) -> list[BaseTool]:
+        tools = self._gateway.list_tools()
+        if exposures is None:
+            return tools
+        return [
+            tool for tool in tools
+            if tool_governance(tool).exposure in exposures
+        ]
 
     def get(self, name: str) -> BaseTool | None:
         return self._gateway.get(name)

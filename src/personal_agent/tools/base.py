@@ -9,6 +9,12 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 RiskLevel = Literal["low", "medium", "high"]
+ToolExposure = Literal[
+    "public_agent",
+    "scoped_agent",
+    "workflow_activity",
+    "admin",
+]
 SideEffectType = Literal[
     "none",
     "read_local",
@@ -66,6 +72,7 @@ def url_allowed(url: str, allowed_domains: tuple[str, ...]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class ToolGovernance:
+    exposure: ToolExposure = "public_agent"
     risk_level: RiskLevel = "low"
     requires_confirmation: bool = False
     side_effects: tuple[SideEffectType, ...] = ("none",)
@@ -110,6 +117,7 @@ class ToolInvocationEvent(BaseModel):
     timed_out: bool = False
     rate_limited: bool = False
     risk_level: RiskLevel
+    exposure: ToolExposure = "public_agent"
     requires_confirmation: bool
     side_effects: list[SideEffectType]
     permission_scope: str
@@ -124,6 +132,7 @@ class ToolInvocationEvent(BaseModel):
 
 def governance_extras(
     *,
+    exposure: ToolExposure = "public_agent",
     risk_level: RiskLevel = "low",
     requires_confirmation: bool = False,
     side_effects: tuple[SideEffectType, ...] = ("none",),
@@ -138,6 +147,7 @@ def governance_extras(
     allowed_domains: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     governance = ToolGovernance(
+        exposure=exposure,
         risk_level=risk_level,
         requires_confirmation=requires_confirmation,
         side_effects=side_effects,
@@ -200,6 +210,7 @@ def tool_governance(tool: BaseTool) -> ToolGovernance:
     if isinstance(allowed_domains, list):
         allowed_domains = tuple(allowed_domains)
     return ToolGovernance(
+        exposure=payload.get("exposure", "public_agent"),
         risk_level=payload.get("risk_level", "low"),
         requires_confirmation=bool(payload.get("requires_confirmation", False)),
         side_effects=side_effects,
@@ -254,6 +265,7 @@ def tool_invocation_event(
         timed_out=timed_out,
         rate_limited=rate_limited,
         risk_level=governance.risk_level,
+        exposure=governance.exposure,
         requires_confirmation=governance.requires_confirmation,
         side_effects=list(governance.side_effects),
         permission_scope=governance.permission_scope,

@@ -18,6 +18,7 @@ def build_review_digest_tool(use_case: ReviewDigestUseCase) -> BaseTool:
         args_schema=ReviewDigestArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="low",
             side_effects=("read_longterm",),
             permission_scope="memory:read",

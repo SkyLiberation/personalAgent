@@ -39,6 +39,7 @@ def build_delete_note_tool(
         args_schema=DeleteNoteArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="high",
             requires_confirmation=True,
             side_effects=("delete_longterm",),

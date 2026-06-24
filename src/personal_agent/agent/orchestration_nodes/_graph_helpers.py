@@ -150,7 +150,11 @@ def _default_step_answer(steps: list) -> str:
 
 def _resolve_allowed_tools_for_step(step: "ExecutionStep", deps: ReactContext) -> set[str]:
     allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
-    registered = {t.name for t in deps.tool_executor.list_tools()}
+    registered = {
+        t.name for t in deps.tool_executor.list_tools(
+            exposures={"public_agent", "scoped_agent", "admin"}
+        )
+    }
     return allowed & registered
 
 

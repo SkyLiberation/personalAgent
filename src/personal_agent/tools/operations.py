@@ -28,7 +28,7 @@ def build_inspect_worker_queue_tool(runtime) -> BaseTool:
         description="查看 durable worker 队列状态和最近任务，用于诊断后台任务是否堆积、失败或死亡。",
         args_schema=InspectWorkerQueueArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("none",), permission_scope="ops:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("none",), permission_scope="ops:read"),
     )
     def inspect_worker_queue(
         queue: str | None = None,
@@ -52,6 +52,7 @@ def build_retry_worker_task_tool(runtime) -> BaseTool:
         args_schema=RetryWorkerTaskArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="ops:worker",
@@ -72,7 +73,7 @@ def build_inspect_workflow_run_tool(runtime) -> BaseTool:
         description="查看一个 Agent workflow run 的快照、步骤状态和可选历史，用于解释执行过程或失败原因。",
         args_schema=InspectWorkflowRunArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("none",), permission_scope="workflow:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("none",), permission_scope="workflow:read"),
     )
     def inspect_workflow_run(
         run_id: str,

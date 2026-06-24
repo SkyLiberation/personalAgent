@@ -31,6 +31,7 @@ def build_capture_upload_tool(capture_service: CaptureService, uploads_dir: Path
         args_schema=CaptureUploadArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="low",
             side_effects=("write_longterm",),
             permission_scope="memory:write",

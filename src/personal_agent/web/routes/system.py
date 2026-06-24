@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from ...agent.service import AgentService
+from ...tools import tool_governance
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class ResetDebugDataResponse(BaseModel):
 class ToolDescriptionResponse(BaseModel):
     name: str
     description: str
+    exposure: str = "public_agent"
 
 
 class ToolExecuteRequest(BaseModel):
@@ -48,7 +50,14 @@ def register_system_routes(app: FastAPI, *, service: AgentService) -> None:
     @app.get("/api/tools", response_model=list[ToolDescriptionResponse])
     def list_tools() -> list[dict[str, object]]:
         specs = service.list_tools()
-        return [{"name": s.name, "description": s.description} for s in specs]
+        return [
+            {
+                "name": s.name,
+                "description": s.description,
+                "exposure": tool_governance(s).exposure,
+            }
+            for s in specs
+        ]
 
     @app.post("/api/tools/{name}/execute", response_model=ToolExecuteResponse)
     def execute_tool(name: str, body: ToolExecuteRequest) -> dict[str, object]:

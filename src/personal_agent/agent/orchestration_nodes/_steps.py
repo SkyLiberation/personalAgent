@@ -844,14 +844,6 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
         if topic.strip():
             tool_input.setdefault("topic", topic.strip())
 
-    elif step.tool_name == "research_once":
-        tool_input.setdefault("user_id", state.user_id)
-        topic = step.task_input or (
-            (entry_input.text if entry_input is not None else state.entry_text) or ""
-        )
-        if topic.strip():
-            tool_input.setdefault("topic", topic.strip())
-
     elif step.tool_name == "research_prepare_run":
         tool_input.setdefault("user_id", state.user_id)
         topic = step.task_input or (
@@ -859,6 +851,21 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
         )
         if topic.strip():
             tool_input.setdefault("topic", topic.strip())
+        instructions = metadata.get("instructions")
+        if instructions:
+            tool_input.setdefault("instructions", str(instructions))
+        max_items = metadata.get("max_items")
+        if max_items:
+            try:
+                tool_input.setdefault("max_items", int(max_items))
+            except (TypeError, ValueError):
+                pass
+        lookback_hours = metadata.get("lookback_hours")
+        if lookback_hours:
+            try:
+                tool_input.setdefault("lookback_hours", int(lookback_hours))
+            except (TypeError, ValueError):
+                pass
 
     elif step.tool_name in {
         "research_plan_queries",

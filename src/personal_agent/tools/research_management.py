@@ -65,7 +65,7 @@ def build_list_research_subscriptions_tool(service) -> BaseTool:
         description="列出用户的周期性情报订阅，供 Agent 判断是否需要新增、暂停或调整。",
         args_schema=ListResearchSubscriptionsArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("read_longterm",), permission_scope="research:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="research:read"),
     )
     def list_research_subscriptions(user_id: str = "default", enabled_only: bool = True):
         subscriptions = service.list_subscriptions(user_id=user_id, enabled_only=enabled_only)
@@ -83,6 +83,7 @@ def build_update_research_subscription_tool(service) -> BaseTool:
         args_schema=UpdateResearchSubscriptionArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="research:subscribe",
@@ -128,6 +129,7 @@ def build_pause_research_subscription_tool(service) -> BaseTool:
         args_schema=SubscriptionActionArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="research:subscribe",
@@ -146,6 +148,7 @@ def build_resume_research_subscription_tool(service) -> BaseTool:
         args_schema=SubscriptionActionArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="research:subscribe",
@@ -164,6 +167,7 @@ def build_run_research_subscription_now_tool(service) -> BaseTool:
         args_schema=SubscriptionActionArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="research:run",
@@ -185,7 +189,7 @@ def build_list_research_runs_tool(service) -> BaseTool:
         description="列出用户最近的 Research 执行记录，用于诊断简报是否运行、失败或投递。",
         args_schema=ListResearchRunsArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("read_longterm",), permission_scope="research:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="research:read"),
     )
     def list_research_runs(user_id: str = "default", limit: int = 20):
         runs = service.list_runs(user_id=user_id, limit=limit)
@@ -200,7 +204,7 @@ def build_get_research_digest_tool(service) -> BaseTool:
         description="读取某次 Research run 的简报内容。",
         args_schema=GetResearchDigestArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("read_longterm",), permission_scope="research:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="research:read"),
     )
     def get_research_digest(run_id: str, user_id: str = "default"):
         run = service.get_run(run_id)
@@ -223,6 +227,7 @@ def build_submit_research_feedback_tool(service) -> BaseTool:
         args_schema=SubmitResearchFeedbackArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             side_effects=("write_longterm",),
             permission_scope="research:feedback",
             timeout_seconds=20,
@@ -254,6 +259,7 @@ def build_save_research_event_tool(service) -> BaseTool:
         args_schema=SaveResearchEventArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="research:save",

@@ -41,7 +41,7 @@ from .operations import (
     build_retry_worker_task_tool,
 )
 from .review_digest import build_review_digest_tool
-from .research import build_create_research_subscription_tool, build_research_once_tool
+from .research import build_create_research_subscription_tool
 from .research_management import (
     build_get_research_digest_tool,
     build_list_research_runs_tool,
@@ -90,7 +90,6 @@ __all__ = [
     "build_mark_notes_conflicted_tool",
     "build_review_digest_tool",
     "build_create_research_subscription_tool",
-    "build_research_once_tool",
     "build_research_prepare_run_tool",
     "build_research_plan_queries_tool",
     "build_research_collect_sources_tool",

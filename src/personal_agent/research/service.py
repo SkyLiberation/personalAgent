@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
@@ -20,7 +19,6 @@ from .models import (
     ResearchSubscription,
 )
 
-logger = logging.getLogger(__name__)
 _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref"}
 _TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 
@@ -76,28 +74,6 @@ class ResearchService:
     def get_digest(self, digest_id: str) -> IntelligenceDigest | None:
         return self.store.get_digest(digest_id)
 
-    def run_once(
-        self,
-        *,
-        user_id: str,
-        topic: str,
-        instructions: str = "",
-        max_items: int = 5,
-        lookback_hours: int = 24,
-        budget: ResearchBudget | None = None,
-    ) -> ResearchRun:
-        end = datetime.now(UTC)
-        run = ResearchRun(
-            user_id=user_id,
-            topic=topic,
-            instructions=instructions,
-            window_start=end - timedelta(hours=lookback_hours),
-            window_end=end,
-            budget=budget or ResearchBudget(),
-        )
-        self.store.create_run(run)
-        return self.execute_run(run.id, max_items=max_items)
-
     def prepare_run(
         self,
         *,
@@ -136,27 +112,6 @@ class ResearchService:
         created = self.store.create_run(run)
         self.store.enqueue_run(created)
         return created
-
-    def execute_run(self, run_id: str, *, max_items: int | None = None) -> ResearchRun:
-        run = self.store.get_run(run_id)
-        if run is None:
-            raise ValueError(f"Research run not found: {run_id}")
-        self.store.update_run(run.model_copy(update={"status": "running"}))
-        try:
-            self.plan_queries(run_id)
-            self.collect_sources(run_id)
-            self.cluster_events(run_id)
-            self.rank_events(run_id, max_items=max_items)
-            return self.compose_digest(run_id, max_items=max_items)
-        except Exception as exc:
-            logger.exception("Research run failed run_id=%s", run_id)
-            failed = run.model_copy(update={
-                "status": "failed",
-                "failure_reason": f"{type(exc).__name__}: {exc}"[:1000],
-                "completed_at": datetime.now(UTC),
-            })
-            self.store.update_run(failed)
-            return failed
 
     def plan_queries(self, run_id: str) -> list[str]:
         run, subscription = self._load_run_context(run_id)

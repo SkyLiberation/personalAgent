@@ -9,53 +9,10 @@ from ..research import DeliveryTarget, ResearchSubscription, SchedulePolicy
 from .base import governance_extras, tool_response, tool_success
 
 
-class ResearchOnceArgs(BaseModel):
-    topic: str = Field(min_length=1, description="要研究或收集信息的主题及要求。")
-    user_id: str = "default"
-    max_items: int = Field(default=5, ge=1, le=20)
-    lookback_hours: int = Field(default=24, ge=1, le=720)
-
-
 class CreateResearchSubscriptionArgs(BaseModel):
     request: str = Field(min_length=1, description="用户对周期、主题、筛选要求的完整自然语言描述。")
     user_id: str = "default"
     target_id: str = Field(default="", description="投递目标，例如当前飞书 chat_id。")
-
-
-def build_research_once_tool(service) -> BaseTool:
-    @tool(
-        "research_once",
-        description="对指定主题执行一次多来源外部研究，完成搜索、去重、验证、个人知识关联并生成简报。",
-        args_schema=ResearchOnceArgs,
-        response_format="content_and_artifact",
-        extras=governance_extras(
-            side_effects=("external_network", "read_longterm"),
-            permission_scope="research:run",
-            timeout_seconds=180,
-            max_retries=0,
-            rate_limit_per_minute=5,
-        ),
-    )
-    def research_once(
-        topic: str,
-        user_id: str = "default",
-        max_items: int = 5,
-        lookback_hours: int = 24,
-    ):
-        run = service.run_once(
-            user_id=user_id,
-            topic=topic,
-            max_items=max_items,
-            lookback_hours=lookback_hours,
-        )
-        digest = service.get_digest(run.digest_id) if run.digest_id else None
-        return tool_response(tool_success({
-            "run": run.model_dump(mode="json"),
-            "digest": digest.model_dump(mode="json") if digest else None,
-            "answer": digest.to_text() if digest else run.failure_reason or "研究未生成简报。",
-        }))
-
-    return research_once
 
 
 def build_create_research_subscription_tool(service) -> BaseTool:
@@ -65,6 +22,7 @@ def build_create_research_subscription_tool(service) -> BaseTool:
         args_schema=CreateResearchSubscriptionArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="research:subscribe",

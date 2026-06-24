@@ -32,6 +32,7 @@ def build_capture_text_tool(capture_executor: Callable) -> BaseTool:
         args_schema=CaptureTextArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="low",
             side_effects=("write_longterm",),
             permission_scope="memory:write",

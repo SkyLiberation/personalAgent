@@ -96,8 +96,8 @@ class AgentService:
     def health(self):
         return self.runtime.health()
 
-    def list_tools(self):
-        return self.runtime.list_tools()
+    def list_tools(self, *, include_internal: bool = False):
+        return self.runtime.list_tools(include_internal=include_internal)
 
     def execute_tool(self, name: str, **kwargs: object):
         return self.runtime.execute_tool(name, **kwargs)

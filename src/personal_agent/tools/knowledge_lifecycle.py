@@ -73,7 +73,7 @@ def build_list_recent_notes_tool(memory) -> BaseTool:
         description="列出用户最近写入或更新的知识笔记，用于判断当前知识状态。",
         args_schema=ListRecentNotesArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("read_longterm",), permission_scope="memory:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
     )
     def list_recent_notes(user_id: str = "default", limit: int = 10):
         notes = memory.list_recent_notes(user_id, limit=limit, include_chunks=False)
@@ -88,7 +88,7 @@ def build_get_note_tool(memory) -> BaseTool:
         description="读取一条知识笔记的详情，用于更新、替换、冲突判断或回答前核实。",
         args_schema=GetNoteArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("read_longterm",), permission_scope="memory:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
     )
     def get_note(note_id: str, user_id: str = "default", include_content: bool = True):
         note = memory.get_note(note_id, user_id=user_id)
@@ -108,7 +108,7 @@ def build_find_similar_notes_tool(memory) -> BaseTool:
         description="按语义搜索相似知识笔记，用于查重、冲突发现、更新前定位对象。",
         args_schema=FindSimilarNotesArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(side_effects=("read_longterm",), permission_scope="memory:read"),
+        extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
     )
     def find_similar_notes(query: str, user_id: str = "default", limit: int = 8):
         notes = memory.find_similar_notes(user_id, query, limit=limit)
@@ -124,6 +124,7 @@ def build_update_note_tool(memory) -> BaseTool:
         args_schema=UpdateNoteArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="memory:write",
@@ -163,6 +164,7 @@ def build_supersede_note_tool(memory) -> BaseTool:
         args_schema=SupersedeNoteArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="memory:version",
@@ -193,6 +195,7 @@ def build_mark_note_deprecated_tool(memory) -> BaseTool:
         args_schema=MarkNoteDeprecatedArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="memory:version",
@@ -213,6 +216,7 @@ def build_mark_notes_conflicted_tool(memory) -> BaseTool:
         args_schema=MarkNotesConflictedArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="scoped_agent",
             risk_level="medium",
             side_effects=("write_longterm",),
             permission_scope="memory:version",

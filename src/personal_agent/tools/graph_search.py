@@ -32,6 +32,7 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
         args_schema=GraphSearchArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="public_agent",
             risk_level="low",
             side_effects=("read_local",),
             permission_scope="memory:read",

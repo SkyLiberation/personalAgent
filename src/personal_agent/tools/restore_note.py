@@ -41,6 +41,7 @@ def build_restore_note_tool(memory: MemoryFacade) -> BaseTool:
         args_schema=RestoreNoteArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="high",
             requires_confirmation=True,
             side_effects=("write_longterm",),

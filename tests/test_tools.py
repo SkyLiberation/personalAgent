@@ -114,6 +114,20 @@ def slow():
     return tool_response(tool_success("too late"))
 
 
+@tool(
+    "workflow_only",
+    description="仅 workflow activity 调用",
+    response_format="content_and_artifact",
+    extras=governance_extras(
+        exposure="workflow_activity",
+        side_effects=("write_longterm",),
+        permission_scope="test:workflow",
+    ),
+)
+def workflow_only():
+    return tool_response(tool_success("workflow"))
+
+
 class TestToolExecutor:
     @pytest.fixture
     def executor(self):
@@ -132,6 +146,7 @@ class TestToolExecutor:
 
     def test_tool_metadata_carries_governance(self):
         governance = tool_governance(dangerous)
+        assert governance.exposure == "public_agent"
         assert governance.risk_level == "high"
         assert governance.requires_confirmation is True
         assert governance.side_effects == ("irreversible",)
@@ -159,6 +174,7 @@ class TestToolExecutor:
 
         assert event.tool_name == "dangerous"
         assert event.artifact_ok is True
+        assert event.exposure == "public_agent"
         assert event.risk_level == "high"
         assert event.requires_confirmation is True
         assert event.side_effects == ["irreversible"]
@@ -197,6 +213,16 @@ class TestToolExecutor:
         executor.register(echo)
         executor.register(echo)
         assert len(executor) == 1
+
+    def test_list_tools_can_filter_by_exposure(self, executor):
+        executor.register(echo)
+        executor.register(workflow_only)
+
+        public = executor.list_tools(exposures={"public_agent"})
+        workflow = executor.list_tools(exposures={"workflow_activity"})
+
+        assert [tool.name for tool in public] == ["echo"]
+        assert [tool.name for tool in workflow] == ["workflow_only"]
 
     def test_direct_invocation_records_gateway_audit(self):
         sink = InMemoryToolAuditSink()

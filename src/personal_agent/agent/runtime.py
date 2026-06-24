@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Callable, TYPE_CHECKING
+from uuid import uuid4
 
 from ..core.config import Settings
 from ..core.langsmith_tracing import configure_langsmith_environment
@@ -45,7 +46,6 @@ from ..tools import (
     build_retry_worker_task_tool,
     build_review_digest_tool,
     build_create_research_subscription_tool,
-    build_research_once_tool,
     build_research_prepare_run_tool,
     build_research_plan_queries_tool,
     build_research_collect_sources_tool,
@@ -107,7 +107,7 @@ from .runtime_results import (
     RetryResult,
 )
 from ..review import DigestFormatter, ReviewDigestUseCase
-from ..research import ResearchBudget, ResearchFeedback, ResearchService, ResearchSubscription
+from ..research import ResearchFeedback, ResearchService, ResearchSubscription
 from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from .verifier import create_answer_verifier
 
@@ -217,7 +217,6 @@ class AgentRuntime:
             ),
             save_note=lambda **kwargs: self.execute_capture(**kwargs),
         )
-        self._tool_executor.register(build_research_once_tool(self._research_service))
         self._tool_executor.register(
             build_create_research_subscription_tool(self._research_service)
         )
@@ -312,14 +311,49 @@ class AgentRuntime:
     ) -> ResearchSubscription:
         return self._research_service.create_subscription(subscription)
 
-    def run_research_once(self, **kwargs):
-        budget = kwargs.pop("budget", None) or ResearchBudget(
-            max_queries=self.settings.research.max_queries,
-            max_search_results=self.settings.research.max_search_results,
-            max_fulltext_fetches=self.settings.research.max_fulltext_fetches,
-            max_tool_calls=self.settings.research.max_tool_calls,
-        )
-        return self._research_service.run_once(budget=budget, **kwargs)
+    def run_research_once(
+        self,
+        *,
+        user_id: str,
+        topic: str,
+        instructions: str = "",
+        max_items: int = 5,
+        lookback_hours: int = 24,
+        **_: object,
+    ):
+        """Execute one-shot research through the workflow graph, not a black-box tool."""
+        result = self.execute_entry(EntryInput(
+            text=topic,
+            user_id=user_id,
+            session_id=f"research-once:{uuid4().hex}",
+            source_platform="api",
+            metadata={
+                "intent_override": "research_once",
+                "instructions": instructions,
+                "max_items": str(max_items),
+                "lookback_hours": str(lookback_hours),
+            },
+        ))
+        run_id: str | None = None
+        if result.run_id:
+            state = self._entry.get_run_state(result.run_id)
+            if state is not None:
+                for step_id in ("research-compose-digest", "research-prepare"):
+                    data = state.step_execution.results.get(step_id)
+                    if isinstance(data, dict):
+                        candidate = data.get("run_id")
+                        if isinstance(candidate, str) and candidate:
+                            run_id = candidate
+                            break
+                        run_data = data.get("run")
+                        if isinstance(run_data, dict) and isinstance(run_data.get("id"), str):
+                            run_id = run_data["id"]
+                            break
+        if run_id:
+            run = self.research_store.get_run(run_id)
+            if run is not None:
+                return run
+        raise RuntimeError("Research workflow completed without a persisted ResearchRun")
 
     def enqueue_research_subscription(self, subscription_id: str):
         subscription = self.research_store.get_subscription(subscription_id)
@@ -395,8 +429,12 @@ class AgentRuntime:
     def _web_search_available(self) -> bool:
         return bool(self.settings.web_search.api_key)
 
-    def list_tools(self) -> list:
-        return self._tool_executor.list_tools()
+    def list_tools(self, *, include_internal: bool = False) -> list:
+        if include_internal:
+            return self._tool_executor.list_tools()
+        return self._tool_executor.list_tools(
+            exposures={"public_agent", "scoped_agent", "admin"}
+        )
 
     def execute_tool(self, name: str, **kwargs: object):
         return self._tool_executor.invoke_direct(name, **kwargs)

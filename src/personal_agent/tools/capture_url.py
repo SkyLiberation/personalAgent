@@ -30,6 +30,7 @@ def build_capture_url_tool(capture_service: CaptureService) -> BaseTool:
         args_schema=CaptureUrlArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="low",
             side_effects=("external_network",),
             permission_scope="network:read",

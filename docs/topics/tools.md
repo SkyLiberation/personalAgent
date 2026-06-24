@@ -6,6 +6,17 @@
 
 一个重要边界是：**能作为 tool 的能力必须先是 service 能力**。Service 承担业务语义、状态变更、数据归属和领域不变量；Tool 只是在 service 外包一层 Agent 可调用的 schema、governance、artifact 和审计边界。不能为了让 Agent 调用而绕过 service 直接包 repository、store 或算法函数。
 
+另一个重要边界是：**“走 ToolGateway 治理”不等于“允许 Agent 动态选择”**。当前工具通过 `ToolGovernance.exposure` 明确暴露范围：
+
+| Exposure | 含义 | 是否可被 Agent 动态选择 | 典型例子 |
+| --- | --- | --- | --- |
+| `public_agent` | 公共 Agent 工具，可出现在默认动态工具面 | 是 | `graph_search`, `web_search`, `find_similar_notes`, `list_research_runs` |
+| `scoped_agent` | 只在特定 workflow 的 scoped allowed tools 内动态选择 | 局部是 | `update_note`, `pause_research_subscription`, `retry_worker_task` |
+| `workflow_activity` | 只由确定性 workflow step 调用，仍经过 ToolGateway 治理 | 否 | `delete_note`, `capture_text`, `research_collect_sources` |
+| `admin` | 管理 / 运维工具，需要管理入口或更高权限 | 受限 | 预留 |
+
+因此 `delete_note` 仍然是 tool，不是因为 Agent 需要动态选择它，而是因为删除长期知识必须经过统一治理边界：HITL、幂等、审计、策略拦截和恢复路径。但它的 exposure 是 `workflow_activity`，不会出现在 ReAct 默认/局部动态工具空间中。
+
 ## 设计目标
 
 工具层需要同时满足两类要求：
@@ -103,6 +114,8 @@ inspect_workflow
 
 因此 Agent 的决策空间是分层的：全局路由选择业务 workflow，workflow 内部 ReAct 在局部工具箱里选择具体动作，真实执行仍统一经过 ToolGateway。
 
+实现上，ReAct 的可用工具集合会先取 workflow step 的 `allowed_tools`，再与注册工具中 exposure 属于 `public_agent / scoped_agent / admin` 的集合求交集。`workflow_activity` 即使被误写进 `allowed_tools`，也不会进入 ReAct 可选集合。
+
 ### Research workflow pipeline
 
 `research_once` 已不再是一个大号黑盒工具。当前主链路是：
@@ -173,6 +186,7 @@ Agent 决策层会使用 workflow step projection 或进入 ReAct，选择工具
 
 | 能力 | 字段 | 当前用途 |
 | --- | --- | --- |
+| 暴露范围 | `exposure` | 区分 `public_agent / scoped_agent / workflow_activity / admin`；ReAct 动态工具选择会过滤掉 workflow-only 工具，确定性 workflow 仍可调用 activity 工具 |
 | 风险分级 | `risk_level` | 区分 `low / medium / high` 工具；`StepProjectionValidator` 用它发现计划风险不一致，`ToolGateway` 用它阻止高风险工具进入 ReAct 自主执行 |
 | 人工确认 | `requires_confirmation` | 标记工具是否必须走 HITL；`delete_note` 首次调用只返回确认 payload，确认后才允许真实执行 |
 | 副作用建模 | `side_effects` | 标记 `read_local`、`external_network`、`write_longterm`、`delete_longterm`、`send_external`、`irreversible` 等副作用；ReAct 会阻断删除、外发、不可逆、高风险和需确认动作，scoped allowed tools 内的中风险写入可执行并被审计 |

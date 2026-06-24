@@ -118,24 +118,21 @@ class WorkflowWorker:
         run = self.runtime.research_store.get_run(run_id)
         if run is None:
             return False
-        if hasattr(self.runtime, "execute_entry"):
-            result = self.runtime.execute_entry(EntryInput(
-                text=f"执行 Research run {run_id}: {run.topic}",
-                user_id=run.user_id,
-                session_id=f"research:{run_id}",
-                source_platform="worker",
-                metadata={
-                    "intent_override": "execute_research_run",
-                    "research_run_id": run_id,
-                },
-            ))
-            if getattr(result, "run_status", "") not in {"completed", ""}:
-                return False
-            run = self.runtime.research_store.get_run(run_id)
-            if run is None:
-                return False
-        else:
-            run = self.runtime.research_service.execute_run(run_id)
+        result = self.runtime.execute_entry(EntryInput(
+            text=f"执行 Research run {run_id}: {run.topic}",
+            user_id=run.user_id,
+            session_id=f"research:{run_id}",
+            source_platform="worker",
+            metadata={
+                "intent_override": "execute_research_run",
+                "research_run_id": run_id,
+            },
+        ))
+        if getattr(result, "run_status", "") not in {"completed", ""}:
+            return False
+        run = self.runtime.research_store.get_run(run_id)
+        if run is None:
+            return False
         if run.status not in {"completed", "partial"}:
             return False
         if run.subscription_id and run.digest_id:

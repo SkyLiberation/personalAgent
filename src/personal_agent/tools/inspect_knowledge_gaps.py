@@ -18,6 +18,7 @@ def build_inspect_knowledge_gaps_tool(use_case: KnowledgeGapUseCase) -> BaseTool
         args_schema=InspectKnowledgeGapsArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             risk_level="low",
             side_effects=("read_longterm",),
             permission_scope="memory:read",

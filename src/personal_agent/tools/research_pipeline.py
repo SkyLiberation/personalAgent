@@ -32,6 +32,7 @@ def build_research_prepare_run_tool(service) -> BaseTool:
         args_schema=ResearchPrepareRunArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             side_effects=("write_longterm",),
             permission_scope="research:run",
             timeout_seconds=20,
@@ -67,6 +68,7 @@ def build_research_plan_queries_tool(service) -> BaseTool:
         args_schema=ResearchRunIdArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             side_effects=("write_longterm",),
             permission_scope="research:run",
             timeout_seconds=30,
@@ -86,6 +88,7 @@ def build_research_collect_sources_tool(service) -> BaseTool:
         args_schema=ResearchRunIdArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             side_effects=("external_network", "write_longterm"),
             permission_scope="research:collect",
             timeout_seconds=180,
@@ -110,6 +113,7 @@ def build_research_cluster_events_tool(service) -> BaseTool:
         args_schema=ResearchRunIdArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             side_effects=("write_longterm",),
             permission_scope="research:evaluate",
             timeout_seconds=60,
@@ -133,6 +137,7 @@ def build_research_rank_events_tool(service) -> BaseTool:
         args_schema=ResearchRankEventsArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             side_effects=("read_longterm", "write_longterm"),
             permission_scope="research:rank",
             timeout_seconds=120,
@@ -157,6 +162,7 @@ def build_research_compose_digest_tool(service) -> BaseTool:
         args_schema=ResearchRankEventsArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="workflow_activity",
             side_effects=("write_longterm",),
             permission_scope="research:compose",
             timeout_seconds=60,

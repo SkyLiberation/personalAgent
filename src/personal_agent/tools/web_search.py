@@ -43,6 +43,7 @@ def build_web_search_tool(
         args_schema=WebSearchArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure="public_agent",
             risk_level="low",
             side_effects=("external_network",),
             permission_scope="network:read",

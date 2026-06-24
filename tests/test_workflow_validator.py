@@ -257,18 +257,6 @@ class TestRegistryCapabilityConsistency:
             return tool_response(tool_success(user_id))
 
         @tool(
-            "research_once",
-            description="research",
-            response_format="content_and_artifact",
-            extras=governance_extras(
-                risk_level="low",
-                side_effects=("external_network", "read_longterm"),
-            ),
-        )
-        def research_once(topic: str, user_id: str = "default"):
-            return tool_response(tool_success(topic))
-
-        @tool(
             "create_research_subscription",
             description="subscribe",
             response_format="content_and_artifact",
@@ -336,7 +324,7 @@ class TestRegistryCapabilityConsistency:
         for t in (
             graph_search, web_search, capture_text, capture_url, capture_upload,
             delete_note, review_digest, consolidate_knowledge, inspect_knowledge_gaps,
-            research_once, create_research_subscription,
+            create_research_subscription,
             *management_tools,
         ):
             ex.register(t)

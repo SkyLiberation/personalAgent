@@ -64,10 +64,29 @@ def _service(postgres_url):
     return ResearchService(store, FakeTools()), store, queue
 
 
-def test_research_once_persists_events_and_digest(postgres_url):
+def _execute_pipeline(service: ResearchService, **kwargs):
+    run = service.prepare_run(**kwargs)
+    return _execute_existing_pipeline(service, run.id, max_items=kwargs.get("max_items"))
+
+
+def _execute_existing_pipeline(
+    service: ResearchService,
+    run_id: str,
+    *,
+    max_items: int | None = None,
+):
+    service.plan_queries(run_id)
+    service.collect_sources(run_id)
+    service.cluster_events(run_id)
+    service.rank_events(run_id, max_items=max_items)
+    return service.compose_digest(run_id, max_items=max_items)
+
+
+def test_research_pipeline_persists_events_and_digest(postgres_url):
     service, store, _ = _service(postgres_url)
 
-    run = service.run_once(
+    run = _execute_pipeline(
+        service,
         user_id="alice",
         topic="AI Agent",
         instructions="只看重要技术发布",
@@ -125,7 +144,7 @@ def test_scheduler_respects_timezone_and_last_window(postgres_url):
 
 def test_research_feedback_is_persisted(postgres_url):
     service, store, _ = _service(postgres_url)
-    run = service.run_once(user_id="alice", topic="AI")
+    run = _execute_pipeline(service, user_id="alice", topic="AI")
     digest = store.get_digest(run.digest_id)
     event_id = digest.items[0].event_id
 
@@ -150,7 +169,7 @@ def test_feedback_updates_subscription_preferences(postgres_url):
         subscription,
         window_end=datetime(2026, 6, 23, 1, 0, tzinfo=UTC),
     )
-    completed = service.execute_run(run.id)
+    completed = _execute_existing_pipeline(service, run.id)
     digest = store.get_digest(completed.digest_id)
 
     service.feedback(ResearchFeedback(
@@ -188,10 +207,15 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
 
     router = Router()
     service.set_delivery_router(router)
+    def execute_entry(entry_input):
+        _execute_existing_pipeline(service, entry_input.metadata["research_run_id"])
+        return SimpleNamespace(run_status="completed")
+
     runtime = SimpleNamespace(
         research_service=service,
         research_store=store,
         worker_queue_store=queue,
+        execute_entry=execute_entry,
     )
     worker = WorkflowWorker(runtime, queue="research", worker_id="research-test")
 
