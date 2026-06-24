@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import logging
 import json
-import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from ..core.config import ShortTermMemoryConfig
 from ..core.models import ThreadSummary, local_now
+from ..core.structured_parse import load_json_lenient
 
 logger = logging.getLogger(__name__)
 
@@ -230,27 +232,18 @@ def parse_thread_summary(value: Any) -> ThreadSummary | None:
     text = str(value).strip()
     if not text:
         return None
-    text = _extract_json_object(text) or text
     try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
+        parsed = load_json_lenient(text)
+    except (json.JSONDecodeError, ValueError):
         return ThreadSummary(context_notes=[text], updated_at=local_now())
     if isinstance(parsed, dict):
-        return ThreadSummary.model_validate(parsed)
+        try:
+            return ThreadSummary.model_validate(parsed)
+        except ValidationError:
+            return ThreadSummary(context_notes=[text], updated_at=local_now())
     if isinstance(parsed, list):
         return ThreadSummary(context_notes=_clean_items(parsed), updated_at=local_now())
     return ThreadSummary(context_notes=[text], updated_at=local_now())
-
-
-def _extract_json_object(text: str) -> str | None:
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        return fenced.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        return text[start : end + 1].strip()
-    return None
 
 
 def render_thread_summary(summary: ThreadSummary | None) -> str:

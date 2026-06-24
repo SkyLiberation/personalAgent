@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from ..core.models import EntryIntent
+from ..policy.invariants import is_high_risk
 from ..tools import tool_governance
 from .execution_models import ExecutionStep
 
@@ -335,7 +336,7 @@ class StepProjectionValidator:
                             f"{prefix} delete_note.note_id 必须由 resolve 执行结果动态注入，"
                             "不得在计划阶段提供。"
                         )
-                    if s.risk_level != "high" or not s.requires_confirmation:
+                    if not is_high_risk(s.risk_level) or not s.requires_confirmation:
                         issues.append(
                             f"{prefix} delete_note 必须声明 risk_level='high' "
                             "且 requires_confirmation=True。"

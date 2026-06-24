@@ -8,6 +8,7 @@ from ...agent.service import AgentService
 from ...capture import CaptureService
 from ...core.config import Settings
 from ...core.models import EntryInput
+from ..input_normalization import normalize_entry_text
 from ._shared import resolve_user_id
 from .entry_serializers import entry_response_dict
 
@@ -51,7 +52,7 @@ def register_entry_upload_route(
             "file_path": str(stored_path),
             "original_filename": original_name,
         }
-        entry_text = text.strip() or original_name
+        entry_text = normalize_entry_text(text) or original_name
 
         entry_input = EntryInput(
             text=entry_text,

@@ -46,7 +46,7 @@ EntryInput
   -> finalize_entry_result
 ```
 
-`route_intent` 产出 `RouterDecision`。当前默认控制语义里：
+`route_intent` 产出 `RouterDecision`（完整控制字段及合并策略见 [entry-router 的 Router 小节](entry-router-plan-react-output-flow.md#router)）。与 capture / ask 相关的默认控制语义：
 
 - `capture_text / capture_link / capture_file`：低风险，`requires_step_projection=True`。
 - `ask`：`requires_retrieval=True`，`requires_step_projection=True`。

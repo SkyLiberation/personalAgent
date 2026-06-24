@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from ...agent.orchestration_models import AgentRunStatus
 from ...agent.service import AgentService
 from ...core.config import Settings
+from ..input_normalization import normalize_entry_text
 from ._shared import resolve_user_id
 from .entry_serializers import (
     EntryResponse,
@@ -42,7 +43,8 @@ def register_entry_run_routes(app: FastAPI, *, settings: Settings, service: Agen
                 status_code=400,
                 detail="decision must be 'confirm', 'reject' or 'clarify'.",
             )
-        if body.decision == "clarify" and not body.text.strip():
+        normalized_text = normalize_entry_text(body.text)
+        if body.decision == "clarify" and not normalized_text:
             raise HTTPException(
                 status_code=400,
                 detail="text is required when decision is 'clarify'.",
@@ -58,7 +60,7 @@ def register_entry_run_routes(app: FastAPI, *, settings: Settings, service: Agen
             thread_id=thread_id,
             decision=body.decision,
             user_id=resolved_user,
-            text=body.text,
+            text=normalized_text,
             option_id=body.option_id,
         )
 

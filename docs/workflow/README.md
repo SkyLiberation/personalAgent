@@ -1,5 +1,7 @@
 # Workflow 文档索引
 
+> 顶层文档总入口见 [docs/README.md](../README.md)。
+
 本目录集中保存流程级文档。`topics/` 目录讲分层设计，`workflow/` 目录讲一次请求或一个业务 workflow 的实际执行链路。
 
 ## 总览流程

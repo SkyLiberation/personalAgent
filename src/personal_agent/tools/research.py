@@ -48,7 +48,7 @@ def build_research_once_tool(service) -> BaseTool:
             max_items=max_items,
             lookback_hours=lookback_hours,
         )
-        digest = service.store.get_digest(run.digest_id) if run.digest_id else None
+        digest = service.get_digest(run.digest_id) if run.digest_id else None
         return tool_response(tool_success({
             "run": run.model_dump(mode="json"),
             "digest": digest.model_dump(mode="json") if digest else None,
@@ -126,4 +126,3 @@ def _extract_topic(text: str) -> str:
         if candidate.lower() in text.lower():
             return candidate
     return text[:40].strip()
-

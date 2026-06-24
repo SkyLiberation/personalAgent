@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -16,6 +15,7 @@ from ..core.observability import (
     record_policy_decision,
     record_tool_audit,
 )
+from ..core.rate_limit import InMemoryRateLimiter
 from ..policy import PolicyDecision, PolicyEngine, PolicyInput
 from .base import (
     ToolArtifact,
@@ -143,7 +143,7 @@ class ToolGateway:
         self.audit_sink = audit_sink
         self._idempotency = idempotency_store or InMemoryIdempotencyStore()
         self._policy = policy_engine or PolicyEngine()
-        self._rate_windows: dict[tuple[str, str], deque[float]] = {}
+        self._rate_limiter = InMemoryRateLimiter()
         self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-gateway")
 
     def register(self, tool: BaseTool) -> None:
@@ -294,15 +294,8 @@ class ToolGateway:
         if limit is None or limit <= 0:
             return False
         subject = context.user_id or context.thread_id or "anonymous"
-        key = (tool.name, subject)
-        now = time.monotonic()
-        window = self._rate_windows.setdefault(key, deque())
-        while window and now - window[0] >= 60.0:
-            window.popleft()
-        if len(window) >= limit:
-            return True
-        window.append(now)
-        return False
+        key = f"{tool.name}:{subject}"
+        return not self._rate_limiter.allow(key, limit=limit, window_seconds=60.0)
 
     def invoke_graph(self, state: Any) -> dict[str, list[ToolMessage]]:
         call = self._latest_tool_call(state)

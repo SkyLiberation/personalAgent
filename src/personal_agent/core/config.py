@@ -10,6 +10,7 @@ from .config_models import (
     FeishuConfig,
     FirecrawlConfig,
     GraphitiConfig,
+    GuardrailsConfig,
     LangExtractConfig,
     LangSmithConfig,
     KnowledgeGapConfig,
@@ -55,6 +56,7 @@ class Settings(_StrictBase):
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     reflection_replay: ReflectionReplaySettings = Field(default_factory=ReflectionReplaySettings)
 
     @classmethod

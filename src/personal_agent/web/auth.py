@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-import time
-from collections import defaultdict
 from typing import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
+from ..core.rate_limit import InMemoryRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -15,28 +15,24 @@ _PUBLIC_PATHS = {"/api/health"}
 
 
 class RateLimiter:
-    """Simple token-bucket per key, in-memory."""
+    """Per-API-key transport rate limiter with a fixed limit/window.
+
+    Thin adapter over the shared :class:`~personal_agent.core.rate_limit.InMemoryRateLimiter`
+    so the transport edge and the tool gateway share one sliding-window engine.
+    """
 
     def __init__(self, max_requests: int = 60, window_seconds: int = 60) -> None:
         self._max_requests = max_requests
         self._window_seconds = window_seconds
-        self._buckets: dict[str, list[float]] = defaultdict(list)
+        self._limiter = InMemoryRateLimiter()
 
     def is_allowed(self, key: str) -> bool:
-        now = time.time()
-        cutoff = now - self._window_seconds
-        # Remove expired entries
-        self._buckets[key] = [t for t in self._buckets[key] if t > cutoff]
-        if len(self._buckets[key]) >= self._max_requests:
-            return False
-        self._buckets[key].append(now)
-        return True
+        return self._limiter.allow(
+            key, limit=self._max_requests, window_seconds=self._window_seconds
+        )
 
     def retry_after_seconds(self, key: str) -> int:
-        if not self._buckets[key]:
-            return 1
-        oldest = min(self._buckets[key])
-        return max(1, int(oldest + self._window_seconds - time.time()) + 1)
+        return self._limiter.retry_after(key, window_seconds=self._window_seconds)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

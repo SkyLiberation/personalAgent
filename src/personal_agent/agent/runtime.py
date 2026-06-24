@@ -13,6 +13,7 @@ from ..memory import MemoryFacade
 from ..knowledge import KnowledgeConsolidationUseCase
 from ..insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
 from ..ms_graphrag import MicrosoftGraphRagStore
+from ..guardrails import configure_guardrails
 from ..policy import PolicyEngine, PolicyRules
 from ..storage.postgres_memory_store import PostgresMemoryStore
 from ..storage.postgres_research_store import PostgresResearchStore
@@ -156,6 +157,9 @@ class AgentRuntime:
         self.graph_store = graph_store
         self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
         self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
+        # Install the process-wide content guard so the entry/finalize/web seams
+        # (nodes without a context param) share one configured instance.
+        self._content_guard = configure_guardrails(settings.guardrails)
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
         self.workflow_definition_store = PostgresWorkflowDefinitionStore(settings.postgres_url)
         self.workflow_event_store = PostgresWorkflowEventStore(settings.postgres_url)

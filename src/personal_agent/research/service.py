@@ -56,6 +56,26 @@ class ResearchService:
     def update_subscription(self, subscription: ResearchSubscription) -> ResearchSubscription:
         return self.store.upsert_subscription(subscription.model_copy(update={"updated_at": datetime.now(UTC)}))
 
+    def get_subscription(self, subscription_id: str) -> ResearchSubscription | None:
+        return self.store.get_subscription(subscription_id)
+
+    def list_subscriptions(
+        self,
+        *,
+        user_id: str,
+        enabled_only: bool = True,
+    ) -> list[ResearchSubscription]:
+        return self.store.list_subscriptions(user_id=user_id, enabled_only=enabled_only)
+
+    def list_runs(self, *, user_id: str, limit: int = 50) -> list[ResearchRun]:
+        return self.store.list_runs(user_id=user_id, limit=limit)
+
+    def get_run(self, run_id: str) -> ResearchRun | None:
+        return self.store.get_run(run_id)
+
+    def get_digest(self, digest_id: str) -> IntelligenceDigest | None:
+        return self.store.get_digest(digest_id)
+
     def run_once(
         self,
         *,

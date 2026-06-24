@@ -10,6 +10,7 @@ from ...agent.orchestration_models import _new_thread_id
 from ...agent.service import AgentService
 from ...core.config import Settings
 from ...core.models import EntryInput
+from ..input_normalization import normalize_entry_text
 from ._shared import resolve_user_id
 from .entry_serializers import chunk_answer, sse_event
 
@@ -24,7 +25,8 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
         user_id: str = "default",
         session_id: str = "default",
     ) -> StreamingResponse:
-        if not text.strip():
+        normalized_text = normalize_entry_text(text)
+        if not normalized_text:
             raise HTTPException(status_code=400, detail="Text is required.")
 
         resolved_user = user_id if user_id != "default" else resolve_user_id(request, settings)
@@ -36,7 +38,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
 
         async def event_generator():
             entry_input = EntryInput(
-                text=text.strip(),
+                text=normalized_text,
                 user_id=resolved_user,
                 session_id=session_id,
                 source_platform="web",

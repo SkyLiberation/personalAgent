@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
 from typing import Protocol
+
+from pydantic import BaseModel, Field, model_validator
 
 from .config import OpenAIConfig, Settings
 from .evidence import (
@@ -12,10 +13,27 @@ from .evidence import (
     rank_evidence_items,
     select_ranked_evidence,
 )
-from .llm_trace import log_llm_parse, traced_chat_completion
+from .llm_trace import traced_chat_completion
 from .prompts import get_prompt, render_prompt
+from .structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
+
+
+class _RerankResult(BaseModel):
+    """LLM rerank output: an ordered list of evidence ids.
+
+    Accepts both ``{"ranked_ids": [...]}`` and a bare ``[...]`` top-level list.
+    """
+
+    ranked_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_bare_list(cls, data: object) -> object:
+        if isinstance(data, list):
+            return {"ranked_ids": data}
+        return data
 
 
 class EvidenceReranker(Protocol):
@@ -136,32 +154,18 @@ class LlmEvidenceReranker:
             metadata={"component": "evidence_reranker", "candidate_count": len(candidates)},
             upload_inputs_outputs=self.settings.langsmith.upload_inputs,
         )
-        try:
-            parsed = json.loads(result.content or "{}")
-        except Exception as exc:
-            log_llm_parse(
-                prompt_name="evidence_rerank",
-                prompt_version=system_prompt.version,
-                model=model,
-                parse_schema="EvidenceRerank",
-                parse_ok=False,
-                parse_error=str(exc),
-                latency_ms=result.latency_ms,
-            )
-            raise
-        log_llm_parse(
-            prompt_name="evidence_rerank",
-            prompt_version=system_prompt.version,
-            model=model,
-            parse_schema="EvidenceRerank",
-            parse_ok=True,
+        parsed = parse_structured(
+            result.content or "{}",
+            _RerankResult,
+            operation="evidence_rerank",
+            version=system_prompt.version,
+            model_name=model,
             latency_ms=result.latency_ms,
         )
-        ranked_ids = parsed if isinstance(parsed, list) else parsed.get("ranked_ids", [])
-        if not isinstance(ranked_ids, list):
-            return []
+        if not parsed.ok:
+            raise ValueError(f"evidence_rerank structured parse failed: {parsed.error}")
         valid_ids = {item.evidence.evidence_id for item in candidates}
-        return [str(item_id) for item_id in ranked_ids if str(item_id) in valid_ids]
+        return [item_id for item_id in parsed.value.ranked_ids if item_id in valid_ids]
 
 
 def build_context_pack_with_settings(
