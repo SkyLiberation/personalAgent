@@ -11,7 +11,7 @@ import time
 
 from langgraph.types import interrupt
 
-from personal_agent.core.prompts import render_prompt
+from personal_agent.kernel.prompts import render_prompt
 from personal_agent.agent.orchestration_models import (
     AgentGraphState,
     StepRunState,

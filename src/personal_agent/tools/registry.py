@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from personal_agent.core.models import EntryIntent
+from personal_agent.kernel.models import EntryIntent
 from personal_agent.policy import PolicyEngine
 from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance
 from personal_agent.tools.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext

@@ -22,7 +22,7 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_URI", "")
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
     monkeypatch.setattr(

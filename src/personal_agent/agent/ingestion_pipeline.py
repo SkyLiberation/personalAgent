@@ -5,9 +5,9 @@ import time
 from hashlib import sha256
 from uuid import uuid4
 
-from personal_agent.core.config import Settings
-from personal_agent.core.logging_utils import log_event, trace_span
-from personal_agent.core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.logging_utils import log_event, trace_span
+from personal_agent.kernel.models import AgentState, KnowledgeNote, RawIngestItem, local_now
 from personal_agent.graphiti.store import GraphCaptureResult, GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore

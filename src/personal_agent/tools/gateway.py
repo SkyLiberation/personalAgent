@@ -10,12 +10,12 @@ from typing import Any
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from personal_agent.core.observability import (
+from personal_agent.kernel.observability import (
     _current_langsmith_run_id,
     record_policy_decision,
     record_tool_audit,
 )
-from personal_agent.core.rate_limit import InMemoryRateLimiter
+from personal_agent.kernel.rate_limit import InMemoryRateLimiter
 from personal_agent.kernel.contracts.tool_runtime import (
     IdempotencyStore,
     ToolAuditSink,

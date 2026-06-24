@@ -9,10 +9,10 @@ from pathlib import Path
 
 import yaml
 
-from personal_agent.core.config import Settings
-from personal_agent.core.graph_results import GraphAskResult, GraphCaptureResult
-from personal_agent.core.models import KnowledgeNote
-from personal_agent.core.projections import GraphIngestDocument, graph_ingest_document_from_note
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.graph_results import GraphAskResult, GraphCaptureResult
+from personal_agent.kernel.models import KnowledgeNote
+from personal_agent.kernel.projections import GraphIngestDocument, graph_ingest_document_from_note
 
 logger = logging.getLogger(__name__)
 

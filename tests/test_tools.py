@@ -336,7 +336,7 @@ class TestToolExecutor:
             TavilyWebSearchProvider,
             build_web_search_provider,
         )
-        from personal_agent.core.config import Settings, WebSearchConfig
+        from personal_agent.kernel.config import Settings, WebSearchConfig
 
         settings = Settings(
             web_search=WebSearchConfig(provider="tavily", api_key="test-key")
@@ -347,7 +347,7 @@ class TestToolExecutor:
     def test_tavily_provider_uses_generic_web_search_config(self, monkeypatch: pytest.MonkeyPatch):
         from personal_agent.capture.providers import web_search as web_search_module
         from personal_agent.capture.providers.web_search import TavilyWebSearchProvider
-        from personal_agent.core.config import Settings, WebSearchConfig
+        from personal_agent.kernel.config import Settings, WebSearchConfig
 
         captured = {}
 
@@ -397,7 +397,7 @@ class TestToolExecutor:
 
     def test_web_search_scrape_respects_allowed_domains(self):
         from personal_agent.capture.providers.web_search import WebSearchResult
-        from personal_agent.core.config import Settings, WebSearchConfig
+        from personal_agent.kernel.config import Settings, WebSearchConfig
         from personal_agent.tools.web_search import build_web_search_tool
 
         captured_urls: list[str] = []

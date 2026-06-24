@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.web.routes._shared import is_admin, resolve_user_id
 
 
@@ -101,7 +101,7 @@ def register_audit_routes(
         metrics = service.audit_metrics(window_hours=window_hours)
         alerts = _audit_alerts(metrics)
         if alerts:
-            from personal_agent.core.observability import record_metric
+            from personal_agent.kernel.observability import record_metric
             for alert in alerts:
                 record_metric("audit.alert", dimensions={"kind": alert["kind"]})
         return {"metrics": metrics, "alerts": alerts}

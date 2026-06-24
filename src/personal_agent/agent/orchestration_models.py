@@ -17,7 +17,7 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
+from personal_agent.kernel.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
 from personal_agent.agent.execution_models import ExecutionPlan
 from personal_agent.agent.router import RouterDecision
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType

@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from psycopg import connect
 from psycopg.rows import dict_row
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.storage.postgres_common import normalize_postgres_url
 from personal_agent.agent.orchestration_contexts import GraphContexts
 from personal_agent.agent.orchestration_models import AgentGraphState

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from personal_agent.agent.verifier import EntailmentAnswerVerifier
-from personal_agent.core.evidence import EvidenceItem
+from personal_agent.kernel.evidence import EvidenceItem
 
 from .dataset import RunOutput, default_cases_path, load_cases
 from .runner import run_output_from_result

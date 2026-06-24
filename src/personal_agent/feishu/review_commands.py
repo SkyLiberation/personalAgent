@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.review import DigestSubscription
 from personal_agent.review.models import ReviewFeedbackOutcome
 from personal_agent.feishu.models import FeishuIncomingMessage

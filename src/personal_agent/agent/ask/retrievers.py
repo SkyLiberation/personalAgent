@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from personal_agent.core.evidence import (
+from personal_agent.kernel.evidence import (
     EvidenceItem,
     episodes_to_evidence,
     graph_result_to_evidence,
@@ -27,8 +27,8 @@ from personal_agent.core.evidence import (
     notes_to_evidence,
     web_results_to_evidence,
 )
-from personal_agent.core.models import AgentState, Citation, KnowledgeNote
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
+from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.guardrails import get_content_guard
 from personal_agent.agent.runtime_helpers import _merge_citations, _merge_notes
 from personal_agent.agent.ask.evidence_ops import graph_matches_to_evidence

@@ -7,8 +7,8 @@ import threading
 import lark_oapi as lark
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import EntryInput
 from personal_agent.review import ReviewFeedbackUseCase
 from personal_agent.research import ResearchFeedback
 from personal_agent.feishu.client import FeishuClientMixin

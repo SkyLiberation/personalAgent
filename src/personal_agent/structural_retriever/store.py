@@ -5,9 +5,9 @@ import re
 from dataclasses import dataclass
 from threading import Lock
 
-from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.core.projections import RetrievalDocument, retrieval_document_from_note
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.kernel.projections import RetrievalDocument, retrieval_document_from_note
+from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.memory import MemoryFacade
 
 

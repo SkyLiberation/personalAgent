@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable
 
-from personal_agent.core.logging_utils import log_event
+from personal_agent.kernel.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
 

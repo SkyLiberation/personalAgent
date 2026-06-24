@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import KnowledgeNote, ReviewCard, local_now
+from personal_agent.kernel.models import KnowledgeNote, ReviewCard, local_now
 
 ReviewFeedbackOutcome = Literal["remembered", "forgotten", "later"]
 

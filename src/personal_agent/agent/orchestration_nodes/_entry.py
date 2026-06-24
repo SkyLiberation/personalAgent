@@ -8,7 +8,7 @@ from copy import deepcopy
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
-from personal_agent.core.models import EntryInput, local_now
+from personal_agent.kernel.models import EntryInput, local_now
 from personal_agent.guardrails import get_content_guard
 from personal_agent.agent.orchestration_models import (
     AgentGraphState,
@@ -231,7 +231,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     Checkpoint boundary: after this node the intent is known and can be
     inspected / resumed without re-running classification.
     """
-    from personal_agent.core.logging_utils import log_event as _log_event
+    from personal_agent.kernel.logging_utils import log_event as _log_event
 
     if state.entry_input is None:
         state.entry_input = EntryInput(
@@ -418,8 +418,8 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerCont
         and deps.settings.openai.base_url
         and deps.settings.openai.small_model
     ):
-        from personal_agent.core.llm_trace import traced_chat_completion
-        from personal_agent.core.prompts import get_prompt
+        from personal_agent.kernel.llm_trace import traced_chat_completion
+        from personal_agent.kernel.prompts import get_prompt
 
         try:
             dialogue_messages = _entry_conversation_messages(
@@ -469,7 +469,7 @@ def _entry_conversation_messages(
     When ``deps`` is provided, applies the unified short-term策略 (token 预算 +
     单条截断 + 溢出滚动摘要)；否则回退到默认窗口（无摘要）。
     """
-    from personal_agent.core.config import ShortTermMemoryConfig
+    from personal_agent.kernel.config import ShortTermMemoryConfig
     from personal_agent.agent.short_term_context import build_dialogue_context_result
 
     if deps is None:

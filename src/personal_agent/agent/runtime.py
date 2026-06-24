@@ -4,10 +4,10 @@ import logging
 from typing import Callable, TYPE_CHECKING
 from uuid import uuid4
 
-from personal_agent.core.config import Settings
-from personal_agent.core.langsmith_tracing import configure_langsmith_environment
-from personal_agent.core.models import EntryInput
-from personal_agent.core.observability import set_policy_decision_sink
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
+from personal_agent.kernel.models import EntryInput
+from personal_agent.kernel.observability import set_policy_decision_sink
 from personal_agent.core.structured_model import build_structured_model_client
 from personal_agent.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade

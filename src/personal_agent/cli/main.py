@@ -7,9 +7,9 @@ import typer
 
 from personal_agent.agent.runtime_results import EntryResult
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
-from personal_agent.core.logging_utils import setup_logging
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.logging_utils import setup_logging
+from personal_agent.kernel.models import EntryInput
 from personal_agent.feishu import FeishuService
 from personal_agent.review import (
     DigestSubscription,

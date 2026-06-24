@@ -11,16 +11,16 @@ from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
 from neo4j import AsyncGraphDatabase
 
-from personal_agent.core.config import Settings
-from personal_agent.core.graph_results import GraphAskResult, GraphCaptureResult
-from personal_agent.core.logging_utils import log_event, trace_span
-from personal_agent.core.models import (
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.graph_results import GraphAskResult, GraphCaptureResult
+from personal_agent.kernel.logging_utils import log_event, trace_span
+from personal_agent.kernel.models import (
     KnowledgeNote,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
 )
-from personal_agent.core.projections import graph_ingest_document_from_note
+from personal_agent.kernel.projections import graph_ingest_document_from_note
 from personal_agent.graphiti.dashscope_compatible_embedder import DashScopeCompatibleEmbedder
 from personal_agent.graphiti.documents import (
     dedupe as _dedupe,

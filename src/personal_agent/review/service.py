@@ -4,7 +4,7 @@ import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, Protocol
 
-from personal_agent.core.models import ReviewCard, local_now
+from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.memory import MemoryFacade
 from personal_agent.review.formatter import DigestFormatter
 from personal_agent.review.models import ReviewDigest, ReviewDigestSection, ReviewFeedbackOutcome, ReviewFeedbackResult

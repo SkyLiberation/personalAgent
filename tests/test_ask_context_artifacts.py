@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from personal_agent.agent.ask import AskRunContext, AskRunContextStore, PostgresAskRunContextStore
 from personal_agent.agent.verifier import ClaimVerification, VerificationResult
-from personal_agent.core.evidence import EvidenceItem, build_context_pack
-from personal_agent.core.models import Citation
-from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalPlan
+from personal_agent.kernel.evidence import EvidenceItem, build_context_pack
+from personal_agent.kernel.models import Citation
+from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalPlan
 
 
 def _sample_context(sample_note) -> AskRunContext:

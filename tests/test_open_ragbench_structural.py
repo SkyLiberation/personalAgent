@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from tests.note_factory import make_note
-from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
 from evals.open_ragbench.loader import RAGBenchDoc, RAGBenchQuery
 from evals.open_ragbench.runner import (

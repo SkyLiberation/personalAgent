@@ -9,8 +9,8 @@ import pytest
 from personal_agent.agent.step_projection_validator import StepProjectionValidationResult
 from personal_agent.agent.router import Goal, RouterDecision
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import OpenAIConfig, Settings
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import OpenAIConfig, Settings
+from personal_agent.kernel.models import EntryInput
 from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")

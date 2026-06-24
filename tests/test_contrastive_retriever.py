@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from personal_agent.agent.ask.retrievers import ContrastiveRetriever, _claim_core_terms
-from personal_agent.core.models import AgentState
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.models import AgentState
+from personal_agent.kernel.query_understanding import RetrievalFilters
 
 from .note_factory import make_note
 
@@ -69,7 +69,7 @@ class TestContrastiveRetriever:
                                ContrastiveRetriever(svc)._queries(["缓存降低负载"], 3)}
         ctx = _FakeCtx()
         # pre-seed the pool with an evidence item carrying the same source_id
-        from personal_agent.core.evidence import notes_to_evidence
+        from personal_agent.kernel.evidence import notes_to_evidence
         ctx.evidence_pool = notes_to_evidence([note])
         retr = ContrastiveRetriever(svc)
         contrib = retr.retrieve_for_claims(["缓存降低负载"], RetrievalFilters(), ctx)

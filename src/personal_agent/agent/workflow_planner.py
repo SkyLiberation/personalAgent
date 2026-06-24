@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.agent.execution_models import ExecutionPlan, ExecutionStep, WorkflowTask
 
 if TYPE_CHECKING:

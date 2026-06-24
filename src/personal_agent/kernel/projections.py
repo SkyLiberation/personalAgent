@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import KnowledgeNote
+from personal_agent.kernel.models import KnowledgeNote
 
 
 class EvidenceSource(BaseModel):

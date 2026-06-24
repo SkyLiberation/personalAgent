@@ -36,7 +36,7 @@ from uuid import uuid4
 
 import pytest
 
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 from tests.note_factory import make_note
 
 from .orchestration_quality.real_runner import build_real_service

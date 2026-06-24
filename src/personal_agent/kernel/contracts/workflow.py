@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Literal, Protocol
 
-from personal_agent.core.models import EntryIntent
+from personal_agent.kernel.models import EntryIntent
 from personal_agent.kernel.contracts.execution import ExecutionStep
 
 ProjectionPolicy = Literal["none", "step_projection"]

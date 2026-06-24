@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from personal_agent.core.embedding_trace import EmbeddingTraceResult, traced_embedding
+from personal_agent.kernel.embedding_trace import EmbeddingTraceResult, traced_embedding
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 
 
@@ -20,7 +20,7 @@ def test_traced_embedding_returns_vector_and_metadata(monkeypatch):
                 data=[SimpleNamespace(embedding=[0.1, 0.2, 0.3])]
             )
 
-    monkeypatch.setattr("personal_agent.core.embedding_trace.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.kernel.embedding_trace.OpenAI", FakeOpenAI)
 
     result = traced_embedding(
         api_key="key",
@@ -51,7 +51,7 @@ def test_postgres_store_embedding_falls_back_to_local_on_external_failure_with_p
         def _create(self, **_kwargs):
             raise RuntimeError("down")
 
-    monkeypatch.setattr("personal_agent.core.embedding_trace.OpenAI", BrokenOpenAI)
+    monkeypatch.setattr("personal_agent.kernel.embedding_trace.OpenAI", BrokenOpenAI)
     store = PostgresMemoryStore(
         temp_dir,
         "postgresql://example.invalid/db",

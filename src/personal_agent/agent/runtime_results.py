@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import Citation, EntryIntent, KnowledgeNote, ReviewCard
-from personal_agent.core.projections import MatchRef
+from personal_agent.kernel.models import Citation, EntryIntent, KnowledgeNote, ReviewCard
+from personal_agent.kernel.projections import MatchRef
 from personal_agent.agent.verifier import VerificationResult
 
 

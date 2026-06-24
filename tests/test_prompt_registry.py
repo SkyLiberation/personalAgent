@@ -1,4 +1,4 @@
-from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.kernel.prompts import get_prompt, render_prompt
 
 
 def test_core_prompts_are_registered_with_versions() -> None:

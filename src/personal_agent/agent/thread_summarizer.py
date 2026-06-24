@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from personal_agent.agent.runtime_llm import LlmClient
-from personal_agent.core.prompts import get_prompt
+from personal_agent.kernel.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
 

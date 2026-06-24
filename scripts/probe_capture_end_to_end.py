@@ -84,7 +84,7 @@ def main() -> int:
     print(f"[probe] doc={doc_path} chars={len(text)}")
 
     from personal_agent.agent.service import AgentService
-    from personal_agent.core.config import LangExtractConfig, Settings
+    from personal_agent.kernel.config import LangExtractConfig, Settings
 
     settings = Settings.from_env()
     # Top up min_doc_chars from CLI override; everything else stays as configured.

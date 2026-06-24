@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from personal_agent.core.config import Settings
-from personal_agent.core.models import local_now
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import local_now
 from personal_agent.review.delivery import DeliveryRouter
 from personal_agent.review.formatter import DigestFormatter
 from personal_agent.review.models import (

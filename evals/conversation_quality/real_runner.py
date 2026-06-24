@@ -6,8 +6,8 @@ from time import perf_counter
 from uuid import uuid4
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
-from personal_agent.core.llm_telemetry import collect_llm_usage
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.llm_telemetry import collect_llm_usage
 from personal_agent.core.structured_model import build_structured_model_client
 
 from .dataset import ConversationEvalCase, ConversationRunOutput

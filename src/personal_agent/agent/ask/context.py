@@ -18,9 +18,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from personal_agent.core.evidence import ContextPack, EvidenceItem
-from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalPlan
+from personal_agent.kernel.evidence import ContextPack, EvidenceItem
+from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalPlan
 
 
 @dataclass

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.core.evidence import (
+from personal_agent.kernel.evidence import (
     EvidenceItem,
     evidence_to_citations,
     episodes_to_evidence,
@@ -9,7 +9,7 @@ from personal_agent.core.evidence import (
     notes_to_evidence,
     web_results_to_evidence,
 )
-from personal_agent.core.models import KnowledgeNote, MemoryEpisode, MemoryItem
+from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryItem
 from personal_agent.graphiti.reranker import GraphCitationHit
 from personal_agent.graphiti.store import (
     GraphAskResult,

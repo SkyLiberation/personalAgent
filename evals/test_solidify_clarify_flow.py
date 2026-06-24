@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 
 # These flows require a running Postgres; reuse the shared cleanup fixture.
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")

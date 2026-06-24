@@ -5,16 +5,16 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field, model_validator
 
-from personal_agent.core.config import OpenAIConfig, Settings
-from personal_agent.core.evidence import (
+from personal_agent.kernel.config import OpenAIConfig, Settings
+from personal_agent.kernel.evidence import (
     ContextPack,
     EvidenceItem,
     RankedEvidence,
     rank_evidence_items,
     select_ranked_evidence,
 )
-from personal_agent.core.llm_trace import traced_chat_completion
-from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.kernel.llm_trace import traced_chat_completion
+from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.core.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)

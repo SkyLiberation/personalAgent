@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tests.note_factory import make_note
-from personal_agent.core.projections import (
+from personal_agent.kernel.projections import (
     evidence_source_from_note,
     graph_ingest_document_from_note,
     match_ref_from_note,

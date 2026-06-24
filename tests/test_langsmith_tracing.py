@@ -4,19 +4,19 @@ import os
 from contextlib import nullcontext
 from types import SimpleNamespace
 
-from personal_agent.core.config import LangSmithConfig, OpenAIConfig, Settings
-from personal_agent.core.langsmith_tracing import (
+from personal_agent.kernel.config import LangSmithConfig, OpenAIConfig, Settings
+from personal_agent.kernel.langsmith_tracing import (
     configure_langsmith_environment,
     langsmith_trace_context,
 )
-from personal_agent.core.llm_trace import (
+from personal_agent.kernel.llm_trace import (
     LlmTraceResult,
     traced_chat_completion,
 )
 
 
 def test_langsmith_config_reads_env(monkeypatch):
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "postgresql://example")
@@ -109,7 +109,7 @@ def test_unsampled_trace_context_disables_global_tracer(monkeypatch):
 
 
 def test_langsmith_llm_span_disabled_is_noop():
-    from personal_agent.core.langsmith_tracing import langsmith_llm_span
+    from personal_agent.kernel.langsmith_tracing import langsmith_llm_span
 
     ctx = langsmith_llm_span(
         LangSmithConfig(enabled=False),
@@ -146,7 +146,7 @@ def test_traced_chat_completion_returns_content_and_metadata(monkeypatch):
                 ),
             )
 
-    monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
 
     result = traced_chat_completion(
         OpenAIConfig(api_key="key", base_url="https://llm.invalid", small_model="small"),
@@ -187,9 +187,9 @@ def test_traced_chat_completion_honors_upload_switch(monkeypatch):
             prompt_version=kwargs["prompt_version"],
         )
 
-    monkeypatch.setattr("personal_agent.core.llm_trace._chat_completion_impl", fake_impl)
-    monkeypatch.setattr("personal_agent.core.llm_trace._traced_chat_completion", fake_traced)
-    monkeypatch.setattr("personal_agent.core.llm_trace._redacted_traced_chat_completion", fake_impl)
+    monkeypatch.setattr("personal_agent.kernel.llm_trace._chat_completion_impl", fake_impl)
+    monkeypatch.setattr("personal_agent.kernel.llm_trace._traced_chat_completion", fake_traced)
+    monkeypatch.setattr("personal_agent.kernel.llm_trace._redacted_traced_chat_completion", fake_impl)
     config = OpenAIConfig(api_key="key", base_url="https://llm.invalid", small_model="small")
 
     traced_chat_completion(
@@ -208,7 +208,7 @@ def test_traced_chat_completion_honors_upload_switch(monkeypatch):
 
 
 def test_redacted_trace_processors_hide_prompt_content():
-    from personal_agent.core.llm_trace import (
+    from personal_agent.kernel.llm_trace import (
         LlmTraceResult,
         _redacted_inputs,
         _redacted_outputs,

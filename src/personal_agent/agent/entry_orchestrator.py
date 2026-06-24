@@ -12,9 +12,9 @@ import logging
 
 from langgraph.types import Command
 
-from personal_agent.core.langsmith_tracing import langsmith_trace_context
-from personal_agent.core.models import EntryInput
-from personal_agent.core.observability import RunMetrics
+from personal_agent.kernel.langsmith_tracing import langsmith_trace_context
+from personal_agent.kernel.models import EntryInput
+from personal_agent.kernel.observability import RunMetrics
 from personal_agent.agent.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from personal_agent.agent.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
 from personal_agent.agent.runtime_results import AskResult, CaptureResult, EntryResult
@@ -377,7 +377,7 @@ class EntryOrchestrator:
             # (only summary dicts, to avoid checkpoint bloat). Surface them as
             # lightweight MatchRefs so result matching / citation validation see
             # the matches instead of an empty list.
-            from personal_agent.core.projections import MatchRef
+            from personal_agent.kernel.projections import MatchRef
 
             match_refs = [
                 MatchRef(id=str(m.get("id", "")), title=str(m.get("title", "")))

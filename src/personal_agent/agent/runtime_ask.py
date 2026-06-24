@@ -3,15 +3,15 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from personal_agent.core.evidence import (
+from personal_agent.kernel.evidence import (
     EvidenceItem,
     graph_result_to_evidence,
     notes_to_evidence,
 )
-from personal_agent.core.models import AgentState, Citation, KnowledgeNote
-from personal_agent.core.prompts import get_prompt, render_prompt
-from personal_agent.core.projections import MatchRef
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
+from personal_agent.kernel.prompts import get_prompt, render_prompt
+from personal_agent.kernel.projections import MatchRef
+from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.graphiti.store import GraphAskResult
 from personal_agent.agent.ask import AskRunContext
 from personal_agent.agent.ask.evidence_ops import (

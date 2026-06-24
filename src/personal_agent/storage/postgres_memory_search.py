@@ -5,9 +5,9 @@ from datetime import datetime
 from hashlib import blake2b
 from math import sqrt
 
-from personal_agent.core.models import KnowledgeNote, MemoryEpisode, MemoryItem
-from personal_agent.core.projections import retrieval_document_from_note
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryItem
+from personal_agent.kernel.projections import retrieval_document_from_note
+from personal_agent.kernel.query_understanding import RetrievalFilters
 
 EMBEDDING_DIMENSIONS = 128
 BM25_TOKENIZER = "chinese_compatible"

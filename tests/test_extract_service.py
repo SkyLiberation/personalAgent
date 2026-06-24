@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from personal_agent.core.config import LangExtractConfig
+from personal_agent.kernel.config import LangExtractConfig
 from personal_agent.extract.schemas import SectionMap, SectionRecord
 from personal_agent.extract.service import PreExtractError, PreExtractService
 

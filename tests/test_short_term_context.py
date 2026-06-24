@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from personal_agent.agent.orchestration_models import AgentGraphState
 from personal_agent.agent.orchestration_nodes._entry import _entry_conversation_messages
-from personal_agent.core.config import ShortTermMemoryConfig
+from personal_agent.kernel.config import ShortTermMemoryConfig
 from personal_agent.agent.short_term_context import (
     apply_window,
     build_dialogue_context,
@@ -20,7 +20,7 @@ from personal_agent.agent.short_term_context import (
     render_with_budget,
     truncate_message_content,
 )
-from personal_agent.core.models import ThreadSummary
+from personal_agent.kernel.models import ThreadSummary
 
 
 def _cfg(**overrides) -> ShortTermMemoryConfig:

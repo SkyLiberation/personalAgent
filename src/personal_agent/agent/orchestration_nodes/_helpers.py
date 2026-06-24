@@ -10,12 +10,12 @@ from langchain_core.messages import BaseMessage
 
 from personal_agent.agent.orchestration_contexts import ReactContext
 from personal_agent.agent.orchestration_nodes._graph_helpers import _REACT_SYSTEM_PROMPT
-from personal_agent.core.llm_schemas import structured_response_format, strict_tool_definition, strip_json_fence
-from personal_agent.core.prompts import get_prompt
+from personal_agent.kernel.llm_schemas import structured_response_format, strict_tool_definition, strip_json_fence
+from personal_agent.kernel.prompts import get_prompt
 
 if TYPE_CHECKING:
     from personal_agent.agent.orchestration_nodes._deps import ExecutionStep
-    from personal_agent.core.config import ShortTermMemoryConfig
+    from personal_agent.kernel.config import ShortTermMemoryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def _react_llm_respond(
     deps: ReactContext,
     allowed_tools: set[str] | None = None,
 ) -> str | None:
-    from personal_agent.core.llm_trace import traced_chat_completion
+    from personal_agent.kernel.llm_trace import traced_chat_completion
 
     settings = deps.settings
     if not (settings.openai.api_key and settings.openai.base_url):
@@ -151,7 +151,7 @@ def _structured_llm_respond(
     *,
     max_tokens: int = 500,
 ) -> str | None:
-    from personal_agent.core.llm_trace import traced_chat_completion
+    from personal_agent.kernel.llm_trace import traced_chat_completion
 
     settings = deps.settings
     structured = settings.structured
@@ -191,7 +191,7 @@ def _react_parse_response(raw: str) -> dict | None:
     permissive dict rather than a fixed schema; it shares the fence/truncation
     unwrap and parse telemetry with every other structured site.
     """
-    from personal_agent.core.llm_trace import log_llm_parse
+    from personal_agent.kernel.llm_trace import log_llm_parse
     from personal_agent.core.structured_parse import load_json_lenient
 
     try:
@@ -295,7 +295,7 @@ def _dialogue_history(
     cfg: "ShortTermMemoryConfig | None" = None,
 ) -> list[BaseMessage]:
     """Return recent user-visible dialogue messages for prompt context."""
-    from personal_agent.core.config import ShortTermMemoryConfig
+    from personal_agent.kernel.config import ShortTermMemoryConfig
 
     max_messages = (cfg or ShortTermMemoryConfig()).max_messages
     history = messages[:-1] if exclude_latest and messages else messages
@@ -313,7 +313,7 @@ def _dialogue_prompt_messages(
     cfg: "ShortTermMemoryConfig | None" = None,
 ) -> list[dict[str, str]]:
     """Token-budgeted, single-message-truncated dialogue window for prompts."""
-    from personal_agent.core.config import ShortTermMemoryConfig
+    from personal_agent.kernel.config import ShortTermMemoryConfig
     from personal_agent.agent.short_term_context import apply_window
 
     window = apply_window(

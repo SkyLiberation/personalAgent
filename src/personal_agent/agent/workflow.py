@@ -16,7 +16,7 @@ The important boundary is:
 
 from __future__ import annotations
 
-from personal_agent.core.models import EntryIntent
+from personal_agent.kernel.models import EntryIntent
 from personal_agent.kernel.contracts.execution import ExecutionStep
 # Durable workflow contracts (data + serialization) now live in the kernel so the
 # infra workflow store can persist them without importing this planning module.

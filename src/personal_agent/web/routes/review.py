@@ -6,8 +6,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
-from personal_agent.core.models import ReviewCard
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import ReviewCard
 from personal_agent.review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
 from personal_agent.review.models import ReviewFeedbackOutcome
 from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore

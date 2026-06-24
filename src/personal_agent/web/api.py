@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from personal_agent.core.config import Settings
-from personal_agent.core.logging_utils import setup_logging
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.logging_utils import setup_logging
 from personal_agent.web.auth import AuthMiddleware, RateLimiter
 from personal_agent.web.context import WebAppContext, build_web_app_context
 from personal_agent.web.routes import register_api_routes

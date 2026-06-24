@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from personal_agent.core.models import EntryInput, MemoryEpisode, MemoryItem, local_now
+from personal_agent.kernel.models import EntryInput, MemoryEpisode, MemoryItem, local_now
 from personal_agent.agent.runtime_results import EntryResult
 
 logger = logging.getLogger(__name__)

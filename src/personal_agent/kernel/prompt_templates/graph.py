@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.core.prompt_registry import PromptSpec
+from personal_agent.kernel.prompt_registry import PromptSpec
 
 
 PROMPTS: dict[str, PromptSpec] = {

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from collections import deque
 
-from personal_agent.core.prompts import get_prompt
+from personal_agent.kernel.prompts import get_prompt
 from personal_agent.agent.orchestration_contexts import ReactContext
 
 if TYPE_CHECKING:

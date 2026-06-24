@@ -12,7 +12,7 @@ term space the retriever/verifier use.
 
 from __future__ import annotations
 
-from personal_agent.core.evidence import _jaccard, _terms
+from personal_agent.kernel.evidence import _jaccard, _terms
 
 # Re-export the IR primitives so callers import everything from one place.
 from ..open_ragbench.metrics import (  # noqa: F401

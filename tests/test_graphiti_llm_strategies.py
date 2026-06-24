@@ -5,8 +5,8 @@ from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.prompts.models import Message
 from pydantic import BaseModel
 
-from personal_agent.core.config import GraphitiConfig, LangSmithConfig, OpenAIConfig, Settings
-from personal_agent.core.llm_schemas import strictify_schema
+from personal_agent.kernel.config import GraphitiConfig, LangSmithConfig, OpenAIConfig, Settings
+from personal_agent.kernel.llm_schemas import strictify_schema
 from personal_agent.graphiti.llm_strategies import (
     GraphitiOpenAIClient,
     build_graphiti_llm_client,

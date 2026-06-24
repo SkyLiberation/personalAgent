@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from personal_agent.core.config_models import LangSmithConfig, RouterConfig
+from personal_agent.kernel.config_models import LangSmithConfig, RouterConfig
 from personal_agent.core.structured_model import (
     FullTracePayloadPolicy,
     ObservedStructuredModelClient,

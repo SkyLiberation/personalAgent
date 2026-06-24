@@ -25,7 +25,7 @@ def main() -> int:
     parser.add_argument("--neo4j", action="store_true", help="Include Neo4j graph-level metrics")
     args = parser.parse_args()
 
-    from personal_agent.core.config import Settings
+    from personal_agent.kernel.config import Settings
     from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 
     settings = Settings.from_env()

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import EntryIntent
+from personal_agent.kernel.models import EntryIntent
 
 
 @dataclass(slots=True)

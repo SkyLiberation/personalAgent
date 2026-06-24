@@ -18,7 +18,7 @@ from personal_agent.guardrails.engine import ContentGuard, HeuristicContentGuard
 from personal_agent.guardrails.models import GuardAction, GuardVerdict
 
 if TYPE_CHECKING:
-    from personal_agent.core.config_models import GuardrailsConfig
+    from personal_agent.kernel.config_models import GuardrailsConfig
 
 _DEFAULT_GUARD: ContentGuard = HeuristicContentGuard()
 _GUARD: ContentGuard = _DEFAULT_GUARD

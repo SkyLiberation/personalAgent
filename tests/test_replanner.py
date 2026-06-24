@@ -9,7 +9,7 @@ from personal_agent.agent.replanner import Replanner
 class TestReplannerHeuristic:
     @pytest.fixture
     def settings(self):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.kernel.config import OpenAIConfig, Settings
 
         return Settings(
             openai=OpenAIConfig(
@@ -96,7 +96,7 @@ class TestReplannerIntentSpecific:
 
     @pytest.fixture
     def settings(self):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.kernel.config import OpenAIConfig, Settings
 
         return Settings(
             openai=OpenAIConfig(

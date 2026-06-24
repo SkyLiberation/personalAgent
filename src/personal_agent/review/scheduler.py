@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from personal_agent.core.models import local_now
+from personal_agent.kernel.models import local_now
 from personal_agent.review.jobs import ReviewDigestJob
 from personal_agent.review.models import DigestSubscription, ReviewDigestJobResult
 

@@ -5,12 +5,12 @@ import time
 
 from openai import OpenAI
 
-from personal_agent.core.config import Settings
-from personal_agent.core.langsmith_tracing import langsmith_llm_span, report_usage_metadata
-from personal_agent.core.llm_telemetry import record_llm_usage
-from personal_agent.core.llm_trace import traced_chat_completion
-from personal_agent.core.logging_utils import log_event
-from personal_agent.core.prompts import get_prompt
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.langsmith_tracing import langsmith_llm_span, report_usage_metadata
+from personal_agent.kernel.llm_telemetry import record_llm_usage
+from personal_agent.kernel.llm_trace import traced_chat_completion
+from personal_agent.kernel.logging_utils import log_event
+from personal_agent.kernel.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
 _LLM_FAILURE_COOLDOWN_SECONDS = 30.0

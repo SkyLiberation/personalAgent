@@ -3,8 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from personal_agent.agent.runtime_results import DigestResult
-from personal_agent.core.config import Settings
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import EntryInput
 from personal_agent.feishu.models import FeishuIncomingMessage
 from personal_agent.feishu.service import FeishuService
 from personal_agent.review import DigestSubscription

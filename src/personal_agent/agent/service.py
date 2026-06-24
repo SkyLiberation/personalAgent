@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.graphiti.store import GraphitiStore
 from personal_agent.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore

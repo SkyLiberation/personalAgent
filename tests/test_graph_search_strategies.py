@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.config import GraphitiConfig, Settings
+from personal_agent.kernel.config import GraphitiConfig, Settings
 from personal_agent.graphiti.search_strategies import (
     STRATEGIES,
     apply_search_config_overrides,

@@ -26,8 +26,8 @@ from personal_agent.agent.router import (
     RouterDecision as RouterDecisionModel,
     describe_router_decision,
 )
-from personal_agent.core.config import Settings
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import EntryInput
 
 
 def RouterDecision(route="unknown", user_visible_message="", **kwargs):
@@ -349,7 +349,7 @@ class TestOrchestrationGraphIntegration:
             def __init__(self, **_kwargs):
                 self.chat = FakeChat()
 
-        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
         monkeypatch.setattr(runtime.settings.openai, "api_key", "test-key")
         monkeypatch.setattr(runtime.settings.openai, "base_url", "http://llm.test")
         monkeypatch.setattr(runtime.settings.openai, "small_model", "small")

@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.research import (
     ContentPreferences,
     DeliveryTarget,

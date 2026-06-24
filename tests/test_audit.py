@@ -172,7 +172,7 @@ def admin_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
     monkeypatch.setenv("PERSONAL_AGENT_API_KEYS", "user-key:alice")
     monkeypatch.setenv("PERSONAL_AGENT_ADMIN_API_KEYS", "admin-key:root")
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
     from personal_agent.web.api import create_app

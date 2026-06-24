@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.core.models import ReviewCard, local_now
+from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.memory.facade import MemoryFacade
 from personal_agent.policy import PolicyEngine
 from personal_agent.review import DigestSubscription, ReviewDigest

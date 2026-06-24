@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from personal_agent.agent.episodic_memory import build_entry_episode, build_reflection_candidate
 from personal_agent.agent.runtime_results import EntryResult
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 
 
 def test_build_entry_episode_from_completed_run():

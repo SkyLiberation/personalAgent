@@ -16,7 +16,7 @@ import hashlib
 from dataclasses import dataclass
 
 from personal_agent.core.chunking import chunk_content
-from personal_agent.core.models import KnowledgeNote, NoteBody, NoteChunk, NoteSource
+from personal_agent.kernel.models import KnowledgeNote, NoteBody, NoteChunk, NoteSource
 
 from .loader import MHRDoc, MHRQuery
 

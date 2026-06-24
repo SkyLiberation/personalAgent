@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from personal_agent.agent.workflow import WORKFLOW_REGISTRY
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 from tests.conftest import stub_router_decision
 
 

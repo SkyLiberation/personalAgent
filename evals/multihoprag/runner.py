@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import KnowledgeNote
 from personal_agent.graphiti.store import GraphitiStore
 from personal_agent.graphiti.search_strategies import STRATEGIES
 from personal_agent.ms_graphrag import MicrosoftGraphRagStore

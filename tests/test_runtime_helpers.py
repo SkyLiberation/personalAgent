@@ -10,7 +10,7 @@ from personal_agent.agent.runtime import (
     _split_sentences,
     _tokenize_for_overlap,
 )
-from personal_agent.core.models import (
+from personal_agent.kernel.models import (
     Citation,
     GraphNodeRef,
     GraphEdgeRef,

@@ -11,7 +11,7 @@ from personal_agent.capture.providers import (
     UrlCaptureProvider,
 )
 from personal_agent.capture.utils import normalize_upload_filename, source_type_from_upload, validate_capture_url
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 
 
 class CaptureService:

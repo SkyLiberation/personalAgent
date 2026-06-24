@@ -3,7 +3,7 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import local_now
+from personal_agent.kernel.models import local_now
 from personal_agent.tools.base import governance_extras, tool_failure, tool_response, tool_success
 
 

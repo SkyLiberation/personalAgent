@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from personal_agent.core.evidence import ContextPack
-from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.kernel.evidence import ContextPack
+from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.graphiti.store import GraphAskResult
 from personal_agent.agent.runtime_helpers import (
     _evidence_content,

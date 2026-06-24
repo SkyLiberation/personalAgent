@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import KnowledgeNote
 from personal_agent.graphiti.store import GraphAskResult, GraphitiStore
 from personal_agent.graphiti.search_strategies import STRATEGIES
 from personal_agent.ms_graphrag import MicrosoftGraphRagStore
@@ -699,7 +699,7 @@ class AskPipelineStrategy:
             )
             _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
 
-        from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+        from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}

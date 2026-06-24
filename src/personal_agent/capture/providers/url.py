@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 
 from fastapi import HTTPException
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.capture.models import UrlCaptureResult
 from personal_agent.capture.utils import extract_html_text
 from personal_agent.capture.providers.base import UrlCaptureProvider

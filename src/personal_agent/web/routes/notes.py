@@ -6,8 +6,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from personal_agent.agent.service import AgentService
-from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import KnowledgeNote
 from personal_agent.web.routes._shared import resolve_user_id
 
 logger = logging.getLogger(__name__)

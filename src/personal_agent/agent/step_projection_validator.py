@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from personal_agent.core.models import EntryIntent
+from personal_agent.kernel.models import EntryIntent
 from personal_agent.policy.invariants import is_high_risk
 from personal_agent.tools import tool_governance
 from personal_agent.agent.execution_models import ExecutionStep

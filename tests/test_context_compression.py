@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.core.evidence import EvidenceItem, compress_evidence
+from personal_agent.kernel.evidence import EvidenceItem, compress_evidence
 
 
 def _note(snippet: str, source_type: str = "note") -> EvidenceItem:

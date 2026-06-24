@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from personal_agent.agent.ingestion_pipeline import IngestionPipeline
-from personal_agent.core.models import AgentState, ChunkDraft, RawIngestItem
+from personal_agent.kernel.models import AgentState, ChunkDraft, RawIngestItem
 
 
 def _run_local_pipeline(state: AgentState, store) -> AgentState:

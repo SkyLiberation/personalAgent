@@ -13,9 +13,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import Citation, KnowledgeNote, MemoryEpisode, MemoryItem
-from personal_agent.core.projections import EvidenceSource, evidence_source_from_note
-from personal_agent.core.graph_results import GraphAskResult, GraphCitationHit
+from personal_agent.kernel.models import Citation, KnowledgeNote, MemoryEpisode, MemoryItem
+from personal_agent.kernel.projections import EvidenceSource, evidence_source_from_note
+from personal_agent.kernel.graph_results import GraphAskResult, GraphCitationHit
 
 
 class EvidenceItem(BaseModel):

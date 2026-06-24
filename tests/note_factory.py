@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from personal_agent.core.models import (
+from personal_agent.kernel.models import (
     KnowledgeNote,
     NoteBody,
     NoteChunk,

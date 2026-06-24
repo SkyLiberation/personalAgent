@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from tests.conftest import (  # reuse the canonical test infrastructure
     POSTGRES_URL,
     clean_postgres_business_tables,  # noqa: F401 — re-exported fixture
@@ -70,7 +70,7 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
 
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 

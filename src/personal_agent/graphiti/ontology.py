@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from personal_agent.core.prompts import get_prompt
+from personal_agent.kernel.prompts import get_prompt
 
 
 class PersonEntity(BaseModel):

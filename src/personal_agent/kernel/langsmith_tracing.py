@@ -5,7 +5,7 @@ import random
 from contextlib import nullcontext
 from typing import Any
 
-from personal_agent.core.config import LangSmithConfig
+from personal_agent.kernel.config import LangSmithConfig
 
 
 def configure_langsmith_environment(config: LangSmithConfig) -> None:

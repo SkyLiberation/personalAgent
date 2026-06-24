@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from personal_agent.core.models import MemoryEpisode, MemoryItem, ReviewCard
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.models import MemoryEpisode, MemoryItem, ReviewCard
+from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note

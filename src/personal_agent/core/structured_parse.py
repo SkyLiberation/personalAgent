@@ -27,8 +27,8 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from personal_agent.core.llm_schemas import strip_json_fence
-from personal_agent.core.llm_trace import log_llm_parse
+from personal_agent.kernel.llm_schemas import strip_json_fence
+from personal_agent.kernel.llm_trace import log_llm_parse
 
 logger = logging.getLogger(__name__)
 

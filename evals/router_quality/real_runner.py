@@ -22,9 +22,9 @@ from __future__ import annotations
 from time import perf_counter
 
 from personal_agent.agent.router import DefaultIntentRouter
-from personal_agent.core.config import Settings
-from personal_agent.core.llm_telemetry import collect_llm_usage
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.llm_telemetry import collect_llm_usage
+from personal_agent.kernel.models import EntryInput
 from personal_agent.core.structured_model import build_structured_model_client
 
 from .dataset import RouterEvalCase, RouterRunOutput

@@ -12,7 +12,7 @@ from personal_agent.agent.router import (
     RouterOutput,
     describe_router_decision,
 )
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 from personal_agent.core.structured_model import StructuredModelResponse
 
 

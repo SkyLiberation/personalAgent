@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from psycopg import connect
 from unittest.mock import MagicMock
 
-from personal_agent.core.models import ReviewCard, local_now
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import ReviewCard, local_now
+from personal_agent.kernel.models import EntryInput
 from personal_agent.review.delivery import DeliveryRouter
 from personal_agent.review.models import DeliveryResult
 from tests.conftest import POSTGRES_URL, stub_router_decision
@@ -23,7 +23,7 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("OPENAI_BASE_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
     from personal_agent.web.api import create_app

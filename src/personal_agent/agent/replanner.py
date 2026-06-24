@@ -5,11 +5,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from personal_agent.core.config import Settings
-from personal_agent.core.llm_schemas import strict_json_schema_response
-from personal_agent.core.llm_trace import traced_chat_completion
-from personal_agent.core.models import MemoryItem
-from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.llm_schemas import strict_json_schema_response
+from personal_agent.kernel.llm_trace import traced_chat_completion
+from personal_agent.kernel.models import MemoryItem
+from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.core.structured_parse import parse_structured
 from personal_agent.agent.execution_models import ExecutionStep
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from personal_agent.core.models import (
+from personal_agent.kernel.models import (
     AgentState,
     Citation,
     ChunkDraft,

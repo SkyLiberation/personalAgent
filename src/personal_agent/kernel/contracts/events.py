@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from personal_agent.core.models import local_now
+from personal_agent.kernel.models import local_now
 
 AgentEventType = Literal[
     "entry_started",

@@ -20,7 +20,7 @@ from typing import Any
 import langextract as lx
 from langextract.providers.openai import OpenAILanguageModel
 
-from personal_agent.core.config import LangExtractConfig
+from personal_agent.kernel.config import LangExtractConfig
 from personal_agent.extract.openai_schema import build_section_openai_schema
 
 logger = logging.getLogger(__name__)

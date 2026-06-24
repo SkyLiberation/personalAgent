@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.config import OpenAIConfig, ReflectionReplaySettings, Settings
-from personal_agent.core.models import MemoryItem
+from personal_agent.kernel.config import OpenAIConfig, ReflectionReplaySettings, Settings
+from personal_agent.kernel.models import MemoryItem
 from personal_agent.memory.facade import MemoryFacade
 from personal_agent.policy import PolicyEngine
 
@@ -124,7 +124,7 @@ class TestReplanReflectionInjection:
         return Replanner(Settings(openai=OpenAIConfig(api_key="", base_url="", model="", small_model="")))
 
     def test_reflections_render_into_replanner_prompt(self):
-        from personal_agent.core.prompts import render_prompt
+        from personal_agent.kernel.prompts import render_prompt
         from personal_agent.agent.replanner import _clip_reflection
 
         item = _reflection("r1", confidence=0.6)
@@ -152,7 +152,7 @@ class TestReplanReflectionInjection:
 class TestPromotionTrigger:
     def test_record_entry_episode_promotes_applied_reflections(self):
         from personal_agent.agent.episodic_memory import _promote_applied_reflections
-        from personal_agent.core.models import MemoryEpisode
+        from personal_agent.kernel.models import MemoryEpisode
 
         store = FakeLocalStore()
         fac = MemoryFacade(store, policy_engine=PolicyEngine())
@@ -171,7 +171,7 @@ class TestPromotionTrigger:
 
     def test_disabled_flag_skips_promotion(self):
         from personal_agent.agent.episodic_memory import _promote_applied_reflections
-        from personal_agent.core.models import MemoryEpisode
+        from personal_agent.kernel.models import MemoryEpisode
 
         store = FakeLocalStore()
         fac = MemoryFacade(store, policy_engine=PolicyEngine())

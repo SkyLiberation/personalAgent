@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
-from personal_agent.core.models import (
+from personal_agent.kernel.models import (
     GraphReconcileIssue,
     GraphReconcileReport,
     GraphSyncTask,
@@ -14,9 +14,9 @@ from personal_agent.core.models import (
     ReviewCard,
     local_now,
 )
-from personal_agent.core.observability import record_policy_decision
-from personal_agent.core.logging_utils import log_event
-from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.observability import record_policy_decision
+from personal_agent.kernel.logging_utils import log_event
+from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.kernel.contracts.policy import (
     PolicyAction,
     PolicyDecision,

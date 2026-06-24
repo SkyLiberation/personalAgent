@@ -5,9 +5,9 @@ import re
 from dataclasses import dataclass, field
 from time import perf_counter
 
-from personal_agent.core.observability import record_verification_result
-from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.core.projections import MatchRef, match_ref_from_note
+from personal_agent.kernel.observability import record_verification_result
+from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.kernel.projections import MatchRef, match_ref_from_note
 
 logger = logging.getLogger(__name__)
 

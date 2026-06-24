@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.models import ReviewCard
+from personal_agent.kernel.models import ReviewCard
 from personal_agent.review import DigestSubscription, ReviewDigest
 from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from tests.conftest import POSTGRES_URL

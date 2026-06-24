@@ -54,7 +54,7 @@ def main() -> int:
         print("[sweep] missing api_key — abort")
         return 2
 
-    from personal_agent.core.config import LangExtractConfig
+    from personal_agent.kernel.config import LangExtractConfig
     from personal_agent.extract.service import PreExtractService
 
     print(f"[sweep] model={model_id}")

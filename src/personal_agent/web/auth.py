@@ -7,7 +7,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from personal_agent.core.rate_limit import InMemoryRateLimiter
+from personal_agent.kernel.rate_limit import InMemoryRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ _PUBLIC_PATHS = {"/api/health"}
 class RateLimiter:
     """Per-API-key transport rate limiter with a fixed limit/window.
 
-    Thin adapter over the shared :class:`~personal_agent.core.rate_limit.InMemoryRateLimiter`
+    Thin adapter over the shared :class:`~personal_agent.kernel.rate_limit.InMemoryRateLimiter`
     so the transport edge and the tool gateway share one sliding-window engine.
     """
 

@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import re
 
-from personal_agent.core.evidence import (
+from personal_agent.kernel.evidence import (
     EvidenceItem,
     _dedupe_evidence_items,
     notes_to_evidence,
 )
-from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.core.projections import MatchRef, match_ref_from_note
+from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.kernel.projections import MatchRef, match_ref_from_note
 
 
 def dedupe_evidence(evidence: list[EvidenceItem]) -> list[EvidenceItem]:

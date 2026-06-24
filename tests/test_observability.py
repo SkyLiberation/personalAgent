@@ -11,7 +11,7 @@ from tests.test_tools import echo
 def test_verifier_emits_structured_observability(caplog):
     verifier = AnswerVerifier()
 
-    with caplog.at_level(logging.INFO, logger="personal_agent.core.observability"):
+    with caplog.at_level(logging.INFO, logger="personal_agent.kernel.observability"):
         result = verifier.verify(
             "问题",
             "一个没有证据的答案",
@@ -38,7 +38,7 @@ def test_tool_gateway_emits_audit_event(caplog):
     executor = ToolExecutor(audit_sink=sink)
     executor.register(echo)
 
-    with caplog.at_level(logging.INFO, logger="personal_agent.core.observability"):
+    with caplog.at_level(logging.INFO, logger="personal_agent.kernel.observability"):
         result = executor.invoke_direct("echo", message="hello", user_id="u1")
 
     assert result["ok"] is True

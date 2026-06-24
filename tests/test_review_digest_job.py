@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from personal_agent.core.config import ReviewDigestConfig, Settings
-from personal_agent.core.models import ReviewCard, local_now
+from personal_agent.kernel.config import ReviewDigestConfig, Settings
+from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.review import (
     DeliveryMessage,
     DeliveryResult,
