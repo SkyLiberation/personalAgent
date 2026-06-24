@@ -1,17 +1,30 @@
-"""Metric primitives for the orchestration-quality harness.
+"""Orchestration-specific metric primitives.
 
-Pure, deterministic, LLM-free — mirrors the rag/router harnesses.
-  - outcome:  ready/clarify decision accuracy
-  - intent:   primary-intent match
-  - sequence: ordered-subsequence containment of expected event milestones
-  - safety:   forbidden events stayed absent
+Cross-harness primitives are re-exported from :mod:`evals._metrics_core`:
+  - ``outcome_correct``  -> ``exact_match`` (ready/clarify decision)
+  - ``event_subsequence_match`` -> ``ordered_subsequence`` (event milestones)
+  - ``reached_terminal`` / ``TERMINAL_EVENTS`` (run must not hang)
+
+Unique to orchestration are the primary-intent match (which treats an empty
+gold as "no goal expected") and the negative ``forbidden_events`` invariant —
+a clarify run must never emit ``steps_projected``.
 """
 
 from __future__ import annotations
 
+from .._metrics_core import TERMINAL_EVENTS  # noqa: F401 — re-exported for runner
+from .._metrics_core import exact_match as outcome_correct
+from .._metrics_core import ordered_subsequence as event_subsequence_match
+from .._metrics_core import reached_terminal
 
-def outcome_correct(predicted: str, gold: str) -> float:
-    return 1.0 if predicted == gold else 0.0
+__all__ = [
+    "TERMINAL_EVENTS",
+    "outcome_correct",
+    "event_subsequence_match",
+    "reached_terminal",
+    "primary_intent_correct",
+    "forbidden_events_absent",
+]
 
 
 def primary_intent_correct(predicted: str, gold: str) -> float:
@@ -22,40 +35,9 @@ def primary_intent_correct(predicted: str, gold: str) -> float:
     return 1.0 if predicted == gold else 0.0
 
 
-def event_subsequence_match(event_types: list[str], expected: list[str]) -> float:
-    """1.0 when every expected event appears in ``event_types`` IN ORDER (not
-    necessarily contiguous). Returns 1.0 when nothing is expected.
-
-    This is ordered-subsequence containment: it pins milestone ordering while
-    tolerating extra events between milestones and an environment-dependent tail.
-    """
-    if not expected:
-        return 1.0
-    it = iter(event_types)
-    return 1.0 if all(any(e == want for e in it) for want in expected) else 0.0
-
-
 def forbidden_events_absent(event_types: list[str], forbidden: list[str]) -> float:
     """1.0 when none of the forbidden event types appear. 1.0 when none listed."""
     if not forbidden:
         return 1.0
     seen = set(event_types)
     return 1.0 if not (seen & set(forbidden)) else 0.0
-
-
-# Terminal events: a run that proceeds past planning MUST end on one of these.
-# A run that hangs (e.g. blocked in synchronous Graphiti ingest) emits neither
-# and leaves the SSE stream open forever — the production "卡住" failure.
-TERMINAL_EVENTS = ("run_completed", "run_failed")
-
-
-def reached_terminal(event_types: list[str], require: bool) -> float:
-    """1.0 when the run ended on a terminal event (run_completed / run_failed).
-
-    ``require=False`` opts a case out (e.g. a clarify run pauses mid-flight and
-    is *expected* not to terminate), scoring 1.0. When ``require=True``, a run
-    that emitted neither terminal event scores 0.0 — it hung or was cut off.
-    """
-    if not require:
-        return 1.0
-    return 1.0 if any(e in TERMINAL_EVENTS for e in event_types) else 0.0

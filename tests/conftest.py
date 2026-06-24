@@ -11,6 +11,7 @@ from psycopg import sql
 
 from personal_agent.core.config import OpenAIConfig, Settings
 from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.agent.router import (
     ClarificationDraft,
     GoalDraft,
@@ -119,6 +120,20 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
         return decision("consolidate_knowledge", "按主题整理知识。")
     if any(word in stripped for word in ("知识缺口", "知识孤岛", "检查缺口")):
         return decision("inspect_knowledge_gaps", "检查知识缺口。")
+    if any(word in stripped for word in ("暂停订阅", "恢复订阅", "修改订阅", "改成每天", "马上跑一次", "最近几次简报")):
+        return decision("manage_research", "管理研究订阅。")
+    if any(word in stripped for word in ("知识过期", "替换这条", "冲突", "修正笔记", "更新笔记")):
+        return decision("maintain_knowledge", "维护已有知识。")
+    if any(word in stripped for word in ("worker", "队列", "失败任务", "没发", "重试任务")):
+        return decision("inspect_operations", "诊断后台任务。")
+    if any(word in stripped for word in ("run_id", "执行历史", "哪一步失败", "workflow")):
+        return decision("inspect_workflow", "诊断 workflow。")
+    if any(word in stripped for word in ("每天", "每周", "工作日")) and any(
+        word in stripped for word in ("新闻", "资讯", "动态", "简报", "跟踪")
+    ):
+        return decision("create_research_subscription", "创建研究订阅。")
+    if any(word in stripped for word in ("调研", "研究一下", "搜集最新")):
+        return decision("research_once", "执行一次研究。")
     if stripped.startswith(("http://", "https://")):
         return decision("capture_link", "采集链接。")
     if any(word in stripped for word in ("记一下", "记住")):
@@ -146,6 +161,7 @@ def clean_postgres_business_tables():
     _ensure_test_database()
     with PostgresSaver.from_conn_string(POSTGRES_URL) as checkpointer:
         checkpointer.setup()
+    PostgresResearchStore(POSTGRES_URL).ensure_schema()
     with connect(POSTGRES_URL) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -417,6 +433,8 @@ def clean_postgres_business_tables():
                 TRUNCATE workflow_eval_policies;
                 TRUNCATE workflow_state_migrations;
                 TRUNCATE worker_queue_tasks;
+                TRUNCATE research_feedback_events, research_deliveries, intelligence_digests,
+                    research_events, research_sources, research_runs, research_subscriptions;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;
                 """
             )

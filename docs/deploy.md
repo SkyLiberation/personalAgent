@@ -206,15 +206,52 @@ npm run build
 当前 `docker-compose.yml` 包含：
 
 - `backend`
+- `research-worker`
+- `research-scheduler`（一次性 job，由外部 cron 调用）
 - `frontend`
 - `neo4j`
 - `postgres`
 
-直接启动：
+先从样例生成真实环境文件并填写密钥：
 
 ```bash
-docker compose up --build
+cp .env.example .env
 ```
+
+启动常驻服务：
+
+```bash
+docker compose up -d backend frontend neo4j postgres research-worker
+```
+
+### Research 生产调度
+
+生产环境不在 FastAPI 内启动 Research Scheduler。宿主机 cron 每分钟执行一次。仓库提供
+[`deploy/cron/personal-agent-research.cron.example`](../deploy/cron/personal-agent-research.cron.example)
+作为安装模板：
+
+```cron
+* * * * * cd /path/to/personalAgent && /usr/bin/flock -n /tmp/personal-agent-research-scheduler.lock /usr/bin/docker compose --profile jobs run --rm research-scheduler >> /var/log/personal-agent-research-scheduler.log 2>&1
+```
+
+`research-scheduler` 只扫描到期订阅、创建幂等 `ResearchRun` 并写入 Postgres 队列，正常情况下会快速退出。耗时的搜索、聚类、验证和投递由常驻 `research-worker` 完成。
+
+`flock` 防止上一次 scheduler 尚未退出时又启动一个容器；数据库幂等仍是最终兜底。三个 Python 服务使用根目录 `Dockerfile` 构建统一镜像，因此 cron 每次启动 job 时不会重新安装依赖。
+
+手动验证：
+
+```bash
+docker compose --profile jobs run --rm research-scheduler
+docker compose logs -f research-worker
+```
+
+生产 `.env` 必须保持：
+
+```env
+PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false
+```
+
+即使 cron 被重复触发，ResearchRun、worker task 和 delivery ledger 的数据库唯一键仍会阻止同一时间窗口重复执行或投递。
 
 `Ask History` 不再单独存档 — 同一会话的问答以 LangGraph checkpoint 中的 `state.messages` 为唯一真源，前端历史列表通过 `/api/entry/runs` 渲染最近 run snapshot。
 

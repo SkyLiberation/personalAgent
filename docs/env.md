@@ -337,3 +337,26 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 - 不提供内存或 SQLite fallback，也不读取原有 SQLite checkpoint 文件
 - entry 请求默认走统一的 `orchestration_graph`，并在图节点后写入 checkpoint
 - 运行 `uv run python scripts/export_thread_checkpoints.py <thread_id>` 会将该线程所有持久化 checkpoint 导出到 `scripts/assets/`
+## Research / 定时情报简报
+
+```env
+PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false
+PERSONAL_AGENT_RESEARCH_SCHEDULER_TICK_SECONDS=60
+PERSONAL_AGENT_RESEARCH_MAX_QUERIES=5
+PERSONAL_AGENT_RESEARCH_MAX_SEARCH_RESULTS=30
+PERSONAL_AGENT_RESEARCH_MAX_FULLTEXT_FETCHES=5
+PERSONAL_AGENT_RESEARCH_MAX_TOOL_CALLS=15
+```
+
+Research 使用 `PERSONAL_AGENT_WEB_SEARCH_*` 配置的搜索 provider。
+
+生产环境固定使用：
+
+```text
+外部 cron
+  -> personal-agent research-schedule
+  -> Postgres worker_queue_tasks
+  -> personal-agent worker --queue research
+```
+
+生产环境必须保持 `PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false`，避免多个 FastAPI 实例重复扫描。应用内 scheduler 仅用于单机开发。

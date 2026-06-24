@@ -22,6 +22,7 @@ from ..review import (
     subscriptions_from_settings,
 )
 from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from ..research import ResearchScheduler, ResearchSchedulerRunner
 from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
 
 
@@ -36,6 +37,7 @@ class WebAppContext:
     review_digest_runner: ReviewDigestJobRunner
     review_feedback_use_case: ReviewFeedbackUseCase
     knowledge_gap_runner: KnowledgeGapJobRunner
+    research_runner: ResearchSchedulerRunner
 
     def attach_to(self, app: FastAPI) -> None:
         app.state.context = self
@@ -43,6 +45,7 @@ class WebAppContext:
         app.state.review_digest_store = self.review_digest_store
         app.state.review_digest_delivery_router = self.review_digest_delivery_router
         app.state.review_digest_runner = self.review_digest_runner
+        app.state.research_runner = self.research_runner
 
     def startup(self) -> None:
         for subscription in subscriptions_from_settings(self.settings):
@@ -52,10 +55,13 @@ class WebAppContext:
             self.review_digest_runner.start()
         if self.settings.knowledge_gap.scheduler_enabled:
             self.knowledge_gap_runner.start()
+        if self.settings.research.scheduler_enabled:
+            self.research_runner.start()
 
     def shutdown(self) -> None:
         self.review_digest_runner.stop()
         self.knowledge_gap_runner.stop()
+        self.research_runner.stop()
 
 
 class _GapSubscriptionStore:
@@ -89,6 +95,7 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         review_digest_store=review_digest_store,
     )
     review_digest_delivery_router = DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
+    service.research_service.set_delivery_router(review_digest_delivery_router)
     review_digest_job = ReviewDigestJob(
         service.review_digest_use_case,
         review_digest_delivery_router,
@@ -110,6 +117,10 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         ),
         tick_seconds=settings.knowledge_gap.scheduler_tick_seconds,
     )
+    research_runner = ResearchSchedulerRunner(
+        ResearchScheduler(service.research_store, service.research_service),
+        tick_seconds=settings.research.scheduler_tick_seconds,
+    )
     return WebAppContext(
         settings=settings,
         capture_service=capture_service,
@@ -120,4 +131,5 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         review_digest_runner=review_digest_runner,
         review_feedback_use_case=review_feedback_use_case,
         knowledge_gap_runner=knowledge_gap_runner,
+        research_runner=research_runner,
     )

@@ -256,10 +256,88 @@ class TestRegistryCapabilityConsistency:
         def inspect_knowledge_gaps(user_id: str = "default"):
             return tool_response(tool_success(user_id))
 
+        @tool(
+            "research_once",
+            description="research",
+            response_format="content_and_artifact",
+            extras=governance_extras(
+                risk_level="low",
+                side_effects=("external_network", "read_longterm"),
+            ),
+        )
+        def research_once(topic: str, user_id: str = "default"):
+            return tool_response(tool_success(topic))
+
+        @tool(
+            "create_research_subscription",
+            description="subscribe",
+            response_format="content_and_artifact",
+            extras=governance_extras(
+                risk_level="medium",
+                side_effects=("write_longterm",),
+            ),
+        )
+        def create_research_subscription(request: str, user_id: str = "default"):
+            return tool_response(tool_success(request))
+
+        def _low_risk_tool(name: str):
+            @tool(
+                name,
+                description=name,
+                response_format="content_and_artifact",
+                extras=governance_extras(risk_level="low", side_effects=("read_longterm",)),
+            )
+            def generic_tool(value: str = "", user_id: str = "default"):
+                return tool_response(tool_success({"value": value, "user_id": user_id}))
+
+            return generic_tool
+
+        def _medium_risk_tool(name: str):
+            @tool(
+                name,
+                description=name,
+                response_format="content_and_artifact",
+                extras=governance_extras(risk_level="medium", side_effects=("write_longterm",)),
+            )
+            def generic_tool(value: str = "", user_id: str = "default"):
+                return tool_response(tool_success({"value": value, "user_id": user_id}))
+
+            return generic_tool
+
+        management_tools = [
+            _medium_risk_tool("research_prepare_run"),
+            _medium_risk_tool("research_plan_queries"),
+            _medium_risk_tool("research_collect_sources"),
+            _medium_risk_tool("research_cluster_events"),
+            _medium_risk_tool("research_rank_events"),
+            _medium_risk_tool("research_compose_digest"),
+            _low_risk_tool("list_research_subscriptions"),
+            _medium_risk_tool("update_research_subscription"),
+            _medium_risk_tool("pause_research_subscription"),
+            _medium_risk_tool("resume_research_subscription"),
+            _medium_risk_tool("run_research_subscription_now"),
+            _low_risk_tool("list_research_runs"),
+            _low_risk_tool("get_research_digest"),
+            _medium_risk_tool("submit_research_feedback"),
+            _medium_risk_tool("save_research_event"),
+            _low_risk_tool("list_recent_notes"),
+            _low_risk_tool("get_note"),
+            _low_risk_tool("find_similar_notes"),
+            _medium_risk_tool("update_note"),
+            _medium_risk_tool("supersede_note"),
+            _medium_risk_tool("mark_note_deprecated"),
+            _medium_risk_tool("mark_notes_conflicted"),
+            _low_risk_tool("inspect_worker_queue"),
+            _medium_risk_tool("retry_worker_task"),
+            _low_risk_tool("inspect_workflow_run"),
+        ]
+
         ex = ToolExecutor()
         for t in (
             graph_search, web_search, capture_text, capture_url, capture_upload,
             delete_note, review_digest, consolidate_knowledge, inspect_knowledge_gaps,
+            research_once, create_research_subscription,
+            *management_tools,
         ):
             ex.register(t)
         return ex

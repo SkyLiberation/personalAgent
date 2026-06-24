@@ -15,6 +15,7 @@ from ..insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
 from ..ms_graphrag import MicrosoftGraphRagStore
 from ..policy import PolicyEngine, PolicyRules
 from ..storage.postgres_memory_store import PostgresMemoryStore
+from ..storage.postgres_research_store import PostgresResearchStore
 from ..storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from ..storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from ..storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
@@ -31,7 +32,34 @@ from ..tools import (
     build_restore_note_tool,
     build_graph_search_tool,
     build_inspect_knowledge_gaps_tool,
+    build_list_recent_notes_tool,
+    build_get_note_tool,
+    build_find_similar_notes_tool,
+    build_update_note_tool,
+    build_supersede_note_tool,
+    build_mark_note_deprecated_tool,
+    build_mark_notes_conflicted_tool,
+    build_inspect_worker_queue_tool,
+    build_inspect_workflow_run_tool,
+    build_retry_worker_task_tool,
     build_review_digest_tool,
+    build_create_research_subscription_tool,
+    build_research_once_tool,
+    build_research_prepare_run_tool,
+    build_research_plan_queries_tool,
+    build_research_collect_sources_tool,
+    build_research_cluster_events_tool,
+    build_research_rank_events_tool,
+    build_research_compose_digest_tool,
+    build_list_research_subscriptions_tool,
+    build_update_research_subscription_tool,
+    build_pause_research_subscription_tool,
+    build_resume_research_subscription_tool,
+    build_run_research_subscription_now_tool,
+    build_list_research_runs_tool,
+    build_get_research_digest_tool,
+    build_submit_research_feedback_tool,
+    build_save_research_event_tool,
     build_web_search_tool,
 )
 from .entry_orchestrator import EntryOrchestrator
@@ -78,6 +106,7 @@ from .runtime_results import (
     RetryResult,
 )
 from ..review import DigestFormatter, ReviewDigestUseCase
+from ..research import ResearchBudget, ResearchFeedback, ResearchService, ResearchSubscription
 from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from .verifier import create_answer_verifier
 
@@ -132,6 +161,10 @@ class AgentRuntime:
         self.workflow_event_store = PostgresWorkflowEventStore(settings.postgres_url)
         self.workflow_replay_store = PostgresWorkflowReplayStore(settings.postgres_url)
         self.worker_queue_store = PostgresWorkerQueueStore(settings.postgres_url)
+        self.research_store = PostgresResearchStore(
+            settings.postgres_url,
+            worker_queue=self.worker_queue_store,
+        )
         # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
         set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
@@ -171,6 +204,25 @@ class AgentRuntime:
                 prompt_name="note_consolidation",
             ),
         )
+        self._research_service = ResearchService(
+            self.research_store,
+            self._tool_executor,
+            generate_text=lambda prompt, name: self._llm.generate_answer(
+                prompt,
+                prompt_name=name,
+            ),
+            save_note=lambda **kwargs: self.execute_capture(**kwargs),
+        )
+        self._tool_executor.register(build_research_once_tool(self._research_service))
+        self._tool_executor.register(
+            build_create_research_subscription_tool(self._research_service)
+        )
+        self._tool_executor.register(build_research_prepare_run_tool(self._research_service))
+        self._tool_executor.register(build_research_plan_queries_tool(self._research_service))
+        self._tool_executor.register(build_research_collect_sources_tool(self._research_service))
+        self._tool_executor.register(build_research_cluster_events_tool(self._research_service))
+        self._tool_executor.register(build_research_rank_events_tool(self._research_service))
+        self._tool_executor.register(build_research_compose_digest_tool(self._research_service))
         self._register_tools()
         self._sync_workflow_definitions()
         self._workflow_planner = WorkflowPlanner(
@@ -247,6 +299,39 @@ class AgentRuntime:
     def knowledge_gap_use_case(self) -> KnowledgeGapUseCase:
         return self._knowledge_gap_use_case
 
+    @property
+    def research_service(self) -> ResearchService:
+        return self._research_service
+
+    def create_research_subscription(
+        self, subscription: ResearchSubscription
+    ) -> ResearchSubscription:
+        return self._research_service.create_subscription(subscription)
+
+    def run_research_once(self, **kwargs):
+        budget = kwargs.pop("budget", None) or ResearchBudget(
+            max_queries=self.settings.research.max_queries,
+            max_search_results=self.settings.research.max_search_results,
+            max_fulltext_fetches=self.settings.research.max_fulltext_fetches,
+            max_tool_calls=self.settings.research.max_tool_calls,
+        )
+        return self._research_service.run_once(budget=budget, **kwargs)
+
+    def enqueue_research_subscription(self, subscription_id: str):
+        subscription = self.research_store.get_subscription(subscription_id)
+        if subscription is None:
+            return None
+        return self._research_service.enqueue_subscription_run(
+            subscription,
+            trigger_type="manual",
+        )
+
+    def submit_research_feedback(self, feedback: ResearchFeedback):
+        return self._research_service.feedback(feedback)
+
+    def save_research_event(self, event_id: str, *, user_id: str):
+        return self._research_service.save_event(event_id, user_id=user_id)
+
     def _sync_workflow_definitions(self) -> None:
         try:
             from .workflow import WORKFLOW_REGISTRY
@@ -271,6 +356,13 @@ class AgentRuntime:
         ))
         self._tool_executor.register(build_delete_note_tool(self.memory))
         self._tool_executor.register(build_restore_note_tool(self.memory))
+        self._tool_executor.register(build_list_recent_notes_tool(self.memory))
+        self._tool_executor.register(build_get_note_tool(self.memory))
+        self._tool_executor.register(build_find_similar_notes_tool(self.memory))
+        self._tool_executor.register(build_update_note_tool(self.memory))
+        self._tool_executor.register(build_supersede_note_tool(self.memory))
+        self._tool_executor.register(build_mark_note_deprecated_tool(self.memory))
+        self._tool_executor.register(build_mark_notes_conflicted_tool(self.memory))
         self._tool_executor.register(
             build_consolidate_knowledge_tool(self._knowledge_consolidation_use_case)
         )
@@ -278,6 +370,18 @@ class AgentRuntime:
         self._tool_executor.register(
             build_inspect_knowledge_gaps_tool(self._knowledge_gap_use_case)
         )
+        self._tool_executor.register(build_list_research_subscriptions_tool(self._research_service))
+        self._tool_executor.register(build_update_research_subscription_tool(self._research_service))
+        self._tool_executor.register(build_pause_research_subscription_tool(self._research_service))
+        self._tool_executor.register(build_resume_research_subscription_tool(self._research_service))
+        self._tool_executor.register(build_run_research_subscription_now_tool(self._research_service))
+        self._tool_executor.register(build_list_research_runs_tool(self._research_service))
+        self._tool_executor.register(build_get_research_digest_tool(self._research_service))
+        self._tool_executor.register(build_submit_research_feedback_tool(self._research_service))
+        self._tool_executor.register(build_save_research_event_tool(self._research_service))
+        self._tool_executor.register(build_inspect_worker_queue_tool(self))
+        self._tool_executor.register(build_retry_worker_task_tool(self))
+        self._tool_executor.register(build_inspect_workflow_run_tool(self))
         if self.settings.web_search.api_key:
             from ..capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)

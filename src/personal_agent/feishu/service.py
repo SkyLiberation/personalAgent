@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 
 import lark_oapi as lark
@@ -9,6 +10,7 @@ from ..agent.service import AgentService
 from ..core.config import Settings
 from ..core.models import EntryInput
 from ..review import ReviewFeedbackUseCase
+from ..research import ResearchFeedback
 from .client import FeishuClientMixin
 from .models import FeishuIncomingMessage
 from .review_commands import (
@@ -85,6 +87,46 @@ class FeishuService(FeishuClientMixin):
         incoming_message: FeishuIncomingMessage,
         metadata: dict[str, str],
     ) -> str | None:
+        research_feedback = _parse_research_feedback(incoming_message.text)
+        if research_feedback is not None:
+            short_id, action = research_feedback
+            target_id = incoming_message.chat_id or metadata.get("chat_id") or ""
+            found = self.agent_service.research_store.find_latest_delivered_item(
+                user_id=incoming_message.user_id,
+                target_id=target_id,
+                short_id=short_id,
+            )
+            if found is not None:
+                digest, run, event = found
+                if action == "expand":
+                    reply_text = (
+                        f"{event.title}\n\n{event.summary}\n\n"
+                        + "\n".join(source.url for source in event.sources[:5])
+                    )
+                elif action == "save":
+                    self.agent_service.save_research_event(
+                        event.id,
+                        user_id=incoming_message.user_id,
+                    )
+                    reply_text = f"已将 {short_id} 保存到知识库。"
+                else:
+                    self.agent_service.submit_research_feedback(ResearchFeedback(
+                        user_id=incoming_message.user_id,
+                        subscription_id=run.subscription_id,
+                        run_id=run.id,
+                        event_id=event.id,
+                        action=action,
+                        source_channel="feishu",
+                        source_message_id=incoming_message.message_id,
+                    ))
+                    reply_text = {
+                        "useful": "已记录为有用，会提高相关内容权重。",
+                        "not_interested": "已记录为不感兴趣，会减少相关内容。",
+                        "bookmark": "已收藏该条情报。",
+                    }[action]
+                self._reply_to_message(incoming_message, reply_text)
+                return reply_text
+
         subscription_command = parse_digest_subscription_command(incoming_message.text)
         if subscription_command is not None and self.review_digest_store is not None:
             action, schedule_time = subscription_command
@@ -180,3 +222,21 @@ class FeishuService(FeishuClientMixin):
                 len(messages),
             )
         return messages
+
+
+def _parse_research_feedback(text: str):
+    match = re.fullmatch(
+        r"\s*(N\d+)\s*(展开|有用|不感兴趣|收藏|入库)\s*",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    action = {
+        "展开": "expand",
+        "有用": "useful",
+        "不感兴趣": "not_interested",
+        "收藏": "bookmark",
+        "入库": "save",
+    }[match.group(2)]
+    return match.group(1).upper(), action

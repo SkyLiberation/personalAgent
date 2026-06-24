@@ -1,18 +1,60 @@
 services:
   backend:
-    image: python:3.11-slim
-    working_dir: /app
+    build: .
+    image: personal-agent:latest
     volumes:
-      - ./:/app
+      - app-data:/app/data
     env_file:
-      - .env.example
+      - .env
+    environment:
+      PERSONAL_AGENT_POSTGRES_URL: postgresql://postgres:postgres@postgres:5432/personal_agent?sslmode=disable
+      PERSONAL_AGENT_GRAPHITI_URI: bolt://neo4j:7687
+      PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED: "false"
     ports:
       - "8000:8000"
     depends_on:
-      - neo4j
-      - postgres
-    command: >
-      bash -lc "pip install -e . && uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000"
+      neo4j:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["uvicorn", "personal_agent.web.api:app", "--host", "0.0.0.0", "--port", "8000"]
+  research-worker:
+    build: .
+    image: personal-agent:latest
+    volumes:
+      - app-data:/app/data
+    env_file:
+      - .env
+    environment:
+      PERSONAL_AGENT_POSTGRES_URL: postgresql://postgres:postgres@postgres:5432/personal_agent?sslmode=disable
+      PERSONAL_AGENT_GRAPHITI_URI: bolt://neo4j:7687
+      PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED: "false"
+    depends_on:
+      neo4j:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["personal-agent", "worker", "--queue", "research", "--poll-seconds", "1", "--lease-seconds", "300", "--max-running-per-user", "1"]
+  research-scheduler:
+    build: .
+    image: personal-agent:latest
+    volumes:
+      - app-data:/app/data
+    env_file:
+      - .env
+    environment:
+      PERSONAL_AGENT_POSTGRES_URL: postgresql://postgres:postgres@postgres:5432/personal_agent?sslmode=disable
+      PERSONAL_AGENT_GRAPHITI_URI: bolt://neo4j:7687
+      PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - jobs
+    restart: "no"
+    command: ["personal-agent", "research-schedule"]
   frontend:
     image: node:22-alpine
     working_dir: /app/frontend
@@ -44,8 +86,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d personal_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
+  app-data:
   neo4j-data:
   neo4j-logs:
   postgres-data:

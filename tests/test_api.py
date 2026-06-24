@@ -61,6 +61,43 @@ class TestHealthEndpoint:
         assert _frontend_dist_dir() == project_root / "frontend" / "dist"
 
 
+class TestResearchEndpoints:
+    def test_subscription_crud_and_run_now(self, api_client: TestClient):
+        created = api_client.post("/api/research/subscriptions", json={
+            "name": "AI 日报",
+            "topic": "AI",
+            "instructions": "优先 Agent 和开源模型",
+            "schedule": {
+                "frequency": "daily",
+                "schedule_time": "09:00",
+                "timezone": "Asia/Shanghai",
+                "weekdays": [0],
+            },
+            "delivery": {
+                "channel": "feishu",
+                "target_type": "chat_id",
+                "target_id": "chat-1",
+            },
+        })
+        assert created.status_code == 200
+        subscription_id = created.json()["id"]
+
+        listed = api_client.get("/api/research/subscriptions")
+        assert listed.status_code == 200
+        assert listed.json()["items"][0]["id"] == subscription_id
+
+        run = api_client.post(
+            f"/api/research/subscriptions/{subscription_id}/run-now"
+        )
+        assert run.status_code == 200
+        assert run.json()["status"] == "queued"
+
+        deleted = api_client.delete(
+            f"/api/research/subscriptions/{subscription_id}"
+        )
+        assert deleted.json() == {"ok": True}
+
+
 class TestEntryStreamEndpoint:
     def test_ask_stream_entry_creates_langgraph_run_snapshot(self, api_client: TestClient):
         response = api_client.get(

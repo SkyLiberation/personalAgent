@@ -1,0 +1,3 @@
+# Replace /opt/personalAgent with the absolute deployment directory.
+# Install with: crontab deploy/cron/personal-agent-research.cron.example
+* * * * * cd /opt/personalAgent && /usr/bin/flock -n /tmp/personal-agent-research-scheduler.lock /usr/bin/docker compose --profile jobs run --rm research-scheduler >> /var/log/personal-agent-research-scheduler.log 2>&1

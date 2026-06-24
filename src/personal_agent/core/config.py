@@ -18,6 +18,7 @@ from .config_models import (
     PlannerConfig,
     PolicyConfig,
     ReflectionReplaySettings,
+    ResearchConfig,
     ReviewDigestConfig,
     RouterConfig,
     ShortTermMemoryConfig,
@@ -46,6 +47,7 @@ class Settings(_StrictBase):
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     review_digest: ReviewDigestConfig = Field(default_factory=ReviewDigestConfig)
     knowledge_gap: KnowledgeGapConfig = Field(default_factory=KnowledgeGapConfig)
+    research: ResearchConfig = Field(default_factory=ResearchConfig)
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)

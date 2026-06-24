@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 from uuid import uuid4
 
+from ..core.models import EntryInput
 from ..storage.postgres_worker_queue_store import WorkerTask
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ class WorkflowWorker:
         self.max_running_per_user = max(0, max_running_per_user)
         self._handlers: dict[str, Callable[[WorkerTask], bool]] = {
             "graph_sync_note": self._handle_graph_sync_note,
+            "research_run": self._handle_research_run,
+            "research_delivery": self._handle_research_delivery,
         }
 
     def run_once(self) -> WorkerRunStats:
@@ -107,3 +110,38 @@ class WorkflowWorker:
     def _handle_graph_sync_note(self, task: WorkerTask) -> bool:
         note_id = str(task.payload.get("note_id") or "")
         return bool(note_id) and self.runtime.sync_note_to_graph(note_id)
+
+    def _handle_research_run(self, task: WorkerTask) -> bool:
+        run_id = str(task.payload.get("run_id") or "")
+        if not run_id:
+            return False
+        run = self.runtime.research_store.get_run(run_id)
+        if run is None:
+            return False
+        if hasattr(self.runtime, "execute_entry"):
+            result = self.runtime.execute_entry(EntryInput(
+                text=f"执行 Research run {run_id}: {run.topic}",
+                user_id=run.user_id,
+                session_id=f"research:{run_id}",
+                source_platform="worker",
+                metadata={
+                    "intent_override": "execute_research_run",
+                    "research_run_id": run_id,
+                },
+            ))
+            if getattr(result, "run_status", "") not in {"completed", ""}:
+                return False
+            run = self.runtime.research_store.get_run(run_id)
+            if run is None:
+                return False
+        else:
+            run = self.runtime.research_service.execute_run(run_id)
+        if run.status not in {"completed", "partial"}:
+            return False
+        if run.subscription_id and run.digest_id:
+            self.runtime.research_store.enqueue_delivery(run)
+        return True
+
+    def _handle_research_delivery(self, task: WorkerTask) -> bool:
+        run_id = str(task.payload.get("run_id") or "")
+        return bool(run_id) and self.runtime.research_service.deliver_run(run_id)

@@ -12,7 +12,7 @@ PROMPTS: dict[str, PromptSpec] = {
     ),
     "router.classify.system": PromptSpec(
         name="router.classify.system",
-        version="v6",
+        version="v7",
         output_contract="RouterOutput",
         template=(
             "任务：识别当前用户请求中的语义目标，并按 schema 返回结果。\n"
@@ -23,6 +23,12 @@ PROMPTS: dict[str, PromptSpec] = {
             "review_digest=立即生成当前用户的知识简报；"
             "consolidate_knowledge=按主题整理并合并已有知识；"
             "inspect_knowledge_gaps=分析知识孤岛、薄弱连接或潜在冲突；"
+            "research_once=对外部最新信息执行一次性多来源研究；"
+            "create_research_subscription=创建每天/每周定时运行的外部信息收集简报；"
+            "manage_research=查看、暂停、恢复、修改、立即运行 Research 订阅，或查看简报、反馈、入库；"
+            "maintain_knowledge=查看、修正、替换、标记过期或标记冲突的已有知识；"
+            "inspect_operations=诊断后台 worker、队列、失败任务或重试 dead 任务；"
+            "inspect_workflow=查看或解释某个 workflow run 的步骤、状态、历史与失败原因；"
             "direct_answer=问候、感谢、身份或能力闲聊；unknown=无法判断。\n"
             "拆分规则：\n"
             "1. 一个请求可以产生一个或多个 goals；按用户表达的处理顺序排列。\n"
@@ -40,7 +46,13 @@ PROMPTS: dict[str, PromptSpec] = {
             "“删除关于 DNS 的知识”信息足够，不需要入口澄清；"
             "“生成今天的知识简报”用 review_digest；"
             "“把关于缓存的笔记整理成一篇综述”用 consolidate_knowledge，input 只保留“缓存”；"
-            "“检查我的知识库还有哪些缺口”用 inspect_knowledge_gaps。\n"
+            "“检查我的知识库还有哪些缺口”用 inspect_knowledge_gaps；"
+            "“调研最近一个月 Agent 工具调用的发展”用 research_once；"
+            "“每天9点收集AI新闻简报”用 create_research_subscription；"
+            "“把 AI 简报改成每天8点/暂停这个订阅/马上跑一次”用 manage_research；"
+            "“这条知识过期了/用新版替换这条笔记/这两条知识冲突”用 maintain_knowledge；"
+            "“为什么昨天简报没发/worker 是否堆积/重试失败任务”用 inspect_operations；"
+            "“这个 run 哪一步失败了/查看 run_id 的执行历史”用 inspect_workflow。\n"
             "复合示例：“记住：DNS 把域名解析为 IP，然后回答 DNS 为什么需要缓存”应产生两个 goals："
             "先 capture_text，再 ask。"
         ),

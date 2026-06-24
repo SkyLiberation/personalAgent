@@ -1,19 +1,21 @@
-"""Metric primitives for the router-quality harness.
+"""Router-specific metric primitives.
 
-Three families, mirroring the RAG harness's pure/LLM-free style:
-  - outcome:  ready/clarify decision accuracy
-  - intent:   set-F1 + ordered exact-match over the goal sequence
-  - clarify:  precision that the right fields were flagged as missing
-
-All functions are pure and deterministic.
+The ready/clarify decision (``outcome_correct``) is the cross-harness
+``exact_match`` re-exported from :mod:`evals._metrics_core`. Unique to routing
+are the intent set-F1, ordered exact-match over the goal sequence, and clarify
+field precision. All functions are pure and deterministic.
 """
 
 from __future__ import annotations
 
+from .._metrics_core import exact_match as outcome_correct
 
-def outcome_correct(predicted: str, gold: str) -> float:
-    """1.0 when the ready/clarify decision matches, else 0.0."""
-    return 1.0 if predicted == gold else 0.0
+__all__ = [
+    "outcome_correct",
+    "intent_set_f1",
+    "intent_sequence_exact",
+    "clarify_field_precision",
+]
 
 
 def intent_set_f1(predicted: list[str], gold: list[str]) -> float:

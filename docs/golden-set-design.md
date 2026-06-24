@@ -26,6 +26,34 @@
 
 需要先明确当前评测边界:RAG、Router、Orchestration 的 case 都以**一条独立用户输入或一次运行**为评测单元。即使输入文本包含“刚才”“这段对话”等字样,若 runner 没有注入真实历史消息,它仍然是单轮样本;单次输入被拆成多个有序 intent,也只是**单轮多目标**,不等于多轮对话。跨 turn 的上下文继承、状态演化与 HITL resume 由 §3.4 单独覆盖。
 
+### 3.0 能力边界与互补关系(职责矩阵)
+
+四套金标**职责互斥、不可相互替代**。每套只对自己评测单元内的一类质量负责,并显式声明"不覆盖什么、交给谁"。这张矩阵是判断"某能力该进哪套金标"以及"两套是否冗余"的唯一依据。
+
+| 金标 | 评测单元 | 专属能力(仅此处覆盖) | 明确不覆盖(交给谁) |
+| --- | --- | --- | --- |
+| RAG (§3.1) | 单次"检索 → 生成"运行 | 检索 IR(recall/ndcg/precision)、答案相关性与忠实度、claim 判定、对比证据、图证据覆盖 | 意图路由、步骤编排、多轮状态 |
+| Router (§3.2) | 单轮路由决策 | ready/clarify 判定、意图集合 F1、有序意图、clarify 字段精度 | 步骤是否真正执行、终态、副作用(→ Orchestration) |
+| Orchestration (§3.3) | **单次** entry → router → steps → terminal | 事件子序列里程碑、`forbidden_events` 负向不变式、**不挂死**终态、单点事故回归网(如 SSE 卡死) | 任何跨 turn 的状态继承与 resume(→ Conversation) |
+| Conversation (§3.4) | **整段会话**的多轮轨迹与状态演化 | thread 连续性、HITL resume 闭环、跨轮上下文保留、副作用 delta、整段任务成功 | 单点编排契约与孤立事故回归(→ Orchestration) |
+
+**为什么 Orchestration 与 Conversation 不冗余(常见疑问)**:一个 Conversation case 的每个 turn 内部确实复用与 Orchestration 相同的 entry→steps→terminal 流程,二者在"单轮编排"这段存在**实现重叠**(见下方共享指标核心)。但它们的**评测语义不可互换**:
+
+- Orchestration 要的是**孤立、可精确归因、单点**的回归信号——`forbidden_events` 这类负向不变式、以及 orch-009 那种"复刻生产事故"的回归网,必须保持单轮纯净,不能被卷进多轮判定。
+- Conversation 的 `final_task_success` 是**全有或全无的合取门**(任一 turn 任一指标非满分即归零)。把单点编排 case 塞进来会让单点失败的归因被多轮合取淹没,违反 §6.1.2"专项事故应另设精确回归 case,不能只依赖宽松平均分"。
+- Conversation 的 `thread_continuity` / `resume_success` / `context_retention` / `side_effect_delta` 在单轮里**不存在对应物**——没有"前一轮"。
+
+因此正确的去冗余方式不是合并金标,而是**抽取共享的纯函数指标**(见 §4 共享指标核心),消除代码重复的同时保留两套各自的评测边界。新增能力(如 `consolidate_knowledge` 自动主题整理)按本矩阵归位:其端到端"选源 → supersede"副作用应进 Orchestration(单次运行),"先写多条笔记 → 再整理"的跨轮依赖应进 Conversation。
+
+**自包含 vs 有状态(Phase 1 / Phase 2)**:Orchestration 的 case 进一步分两类。**自包含**(如 orch-001~009:你好 / 删除 / 总结)的正确性只取决于输入本身,无需预置数据。**有状态**的正确性*定义在库里已存在的数据上*——`consolidate_knowledge` 与 `inspect_knowledge_gaps` 是典型:前者不先 seed ≥ 2 条同主题笔记只会命中"至少两条"拒绝分支;后者不先 seed 出冲突/孤岛,检测永远返回"无缺口"。二者都测不到真正语义。有状态流程**必须先 seed DB 再跑完整 `execute_entry`**,且按 §6.2 用独立 `user_id` 隔离。
+
+按 §6,只有真实 LLM + 真实管线才算 Golden Test,因此这两个有状态流程都用真实 router LLM(`build_real_service` 从环境装配,未配置则 skip),**不使用 stub 路由**;seed 走 store(属基础设施,非 stub),每次用唯一 `user_id` 保证隔离与确定性:
+
+- [evals/test_consolidate_knowledge_flow.py](../evals/test_consolidate_knowledge_flow.py):seed 后走完整 router→planning→step→tool,断言路由到 `consolidate_knowledge`、抵达终态(不挂死)、源笔记被 supersede 且回链综述;含"仅一条来源 → 优雅拒绝、不挂死、不误改"反例。
+- [evals/test_inspect_knowledge_gaps_flow.py](../evals/test_inspect_knowledge_gaps_flow.py):seed 两条同主题、极性相反的笔记造出 `potential_conflict`,断言路由到 `inspect_knowledge_gaps`、抵达终态、报告含确定性表头(per-gap 措辞可能经 LLM 改写,表头不会);含"同极性 → 无冲突、报告干净"反例。
+
+二者覆盖了 use-case 层测试(`tests/test_agent_flows.py` / `tests/test_knowledge_gap_analyzer.py`,直调用例、用假依赖)与 Orchestration thin 投影(无 seed、无副作用维度)都触及不到的整条**真实有状态编排路径**。
+
 ### 3.1 RAG 质量金标
 
 - **口径**:`{question → gold_evidence_ids, reference_answer, gold_claim_verdicts, claims_needing_contrast}`,即现有 [dataset.py](../evals/rag_quality/dataset.py) 的 `RagEvalCase`。
@@ -120,6 +148,8 @@
 
 ```
 evals/
+  _metrics_core.py    # 共享指标核心(见下)
+  test_metrics_core.py
   rag_quality/        # §3.1
     cases.json        # 金标
     dataset.py        # Case / RunOutput 模型
@@ -153,6 +183,16 @@ evals/
 ```
 
 **约定**:`cases.json` 一律 UTF-8;loader 用 `Path(...).read_text(encoding="utf-8")`(注意 Windows 默认 GBK,直接 `open()` 会炸中文)。
+
+**共享指标核心(`evals/_metrics_core.py`)**:跨金标真正重复的纯函数只有三个,统一收在此模块,各能力 `metrics.py` 按自己的惯用名 re-export,保证 scorer/runner/test 的 `.metrics` 导入面不变:
+
+| 核心函数 | 语义 | 被谁以何名复用 |
+| --- | --- | --- |
+| `exact_match(predicted, expected)` | 标量/列表相等判定 | Router & Orchestration 的 `outcome_correct`;Conversation 的 `exact_match`(逐轮 outcome/intent) |
+| `ordered_subsequence(actual, expected)` | 有序子序列里程碑命中 | Orchestration 的 `event_subsequence_match`;Conversation 的 `ordered_subsequence` |
+| `reached_terminal` / `TERMINAL_EVENTS` | 运行是否抵达终态(不挂死) | Orchestration 与 Conversation 的 runner/scorer |
+
+边界原则:**只有"任何金标都会用到且逻辑完全一致"的指标才进核心**。带领域语义的指标(RAG 的 IR/忠实度、Router 的 intent F1、Conversation 的 thread/resume/side-effect、Orchestration 的 `forbidden_events`/`primary_intent_correct`)一律留在各自 `metrics.py`,不上提——避免核心沦为大杂烩。
 
 ## 5. 标注规范(手工标注)
 

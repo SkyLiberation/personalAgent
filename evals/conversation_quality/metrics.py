@@ -1,20 +1,26 @@
-"""Pure metric primitives for conversation-level evaluation."""
+"""Conversation-specific metric primitives.
+
+Cross-harness primitives (``exact_match`` for per-turn outcome/intent,
+``ordered_subsequence`` for per-turn event milestones, ``TERMINAL_EVENTS``)
+are re-exported from :mod:`evals._metrics_core`. Everything below is unique to
+multi-turn evaluation: history retention, grounding, thread continuity, HITL
+resume and side-effect deltas.
+"""
 
 from __future__ import annotations
 
+from .._metrics_core import TERMINAL_EVENTS, exact_match, ordered_subsequence
 
-TERMINAL_EVENTS = ("run_completed", "run_failed")
-
-
-def exact_match(predicted, expected) -> float:
-    return 1.0 if predicted == expected else 0.0
-
-
-def ordered_subsequence(actual: list[str], expected: list[str]) -> float:
-    if not expected:
-        return 1.0
-    iterator = iter(actual)
-    return 1.0 if all(any(item == wanted for item in iterator) for wanted in expected) else 0.0
+__all__ = [
+    "TERMINAL_EVENTS",
+    "exact_match",
+    "ordered_subsequence",
+    "reference_recall",
+    "response_contains",
+    "thread_continuity",
+    "resume_success",
+    "side_effect_accuracy",
+]
 
 
 def reference_recall(observed: list[int], expected: list[int]) -> float:

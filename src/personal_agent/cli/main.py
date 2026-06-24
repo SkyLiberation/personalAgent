@@ -19,6 +19,7 @@ from ..review import (
 )
 from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
+from ..research import DeliveryTarget, ResearchSubscription, SchedulePolicy
 
 app = typer.Typer(help="Personal knowledge agent CLI")
 logger = logging.getLogger(__name__)
@@ -89,6 +90,11 @@ def worker(
     from ..agent.worker import WorkflowWorker
 
     service = _build_service()
+    if queue == "research":
+        feishu_service = FeishuService(service.settings, service)
+        service.research_service.set_delivery_router(
+            DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
+        )
     runner = WorkflowWorker(
         service.runtime,
         queue=queue,
@@ -228,6 +234,77 @@ def review_digest(
         results = ReviewDigestScheduler(digest_store, job).run_due()
 
     typer.echo(json.dumps([r.model_dump(mode="json") for r in results], ensure_ascii=False, indent=2))
+
+
+@app.command("research-once")
+def research_once(
+    topic: str = typer.Argument(...),
+    user_id: str = typer.Option("default"),
+    instructions: str = typer.Option(""),
+    max_items: int = typer.Option(5, min=1, max=20),
+    lookback_hours: int = typer.Option(24, min=1, max=720),
+) -> None:
+    """Run a one-shot external research workflow."""
+    service = _build_service()
+    run = service.run_research_once(
+        user_id=user_id,
+        topic=topic,
+        instructions=instructions,
+        max_items=max_items,
+        lookback_hours=lookback_hours,
+    )
+    digest = service.research_store.get_digest(run.digest_id) if run.digest_id else None
+    typer.echo(json.dumps({
+        "run": run.model_dump(mode="json"),
+        "digest": digest.model_dump(mode="json") if digest else None,
+    }, ensure_ascii=False, indent=2))
+
+
+@app.command("research-subscribe")
+def research_subscribe(
+    topic: str = typer.Argument(...),
+    name: str | None = typer.Option(None),
+    user_id: str = typer.Option("default"),
+    schedule_time: str = typer.Option("09:00"),
+    timezone: str = typer.Option("Asia/Shanghai"),
+    frequency: str = typer.Option("daily"),
+    chat_id: str = typer.Option(""),
+    instructions: str = typer.Option(""),
+    max_items: int = typer.Option(5, min=1, max=20),
+) -> None:
+    """Create a durable scheduled research subscription."""
+    service = _build_service()
+    subscription = service.create_research_subscription(ResearchSubscription(
+        user_id=user_id,
+        name=name or f"{topic} 情报简报",
+        topic=topic,
+        instructions=instructions,
+        max_items=max_items,
+        schedule=SchedulePolicy(
+            frequency=frequency,
+            schedule_time=schedule_time,
+            timezone=timezone,
+        ),
+        delivery=DeliveryTarget(target_id=chat_id),
+    ))
+    typer.echo(subscription.model_dump_json(indent=2))
+
+
+@app.command("research-schedule")
+def research_schedule() -> None:
+    """Enqueue all due research subscriptions."""
+    from ..research import ResearchScheduler
+
+    service = _build_service()
+    runs = ResearchScheduler(
+        service.research_store,
+        service.research_service,
+    ).enqueue_due()
+    typer.echo(json.dumps(
+        [run.model_dump(mode="json") for run in runs],
+        ensure_ascii=False,
+        indent=2,
+    ))
 
 
 if __name__ == "__main__":

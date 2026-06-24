@@ -776,6 +776,18 @@ def _node_finalize_step_execution(state: AgentGraphState, *, deps: StepExecution
 
 def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: AgentGraphState) -> None:
     """Fill deterministic workflow tool arguments from the entry/checkpoint state."""
+    if getattr(step, "execution_mode", "deterministic") == "react":
+        entry_input = state.entry_input
+        tool_input = dict(step.tool_input or {})
+        tool_input.setdefault("user_id", state.user_id)
+        request = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if request.strip():
+            tool_input.setdefault("request", request.strip())
+        sd.tool_input = tool_input
+        step.tool_input = tool_input
+        return
     if step.action_type != "tool_call" or not step.tool_name:
         return
     entry_input = state.entry_input
@@ -832,11 +844,79 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
         if topic.strip():
             tool_input.setdefault("topic", topic.strip())
 
+    elif step.tool_name == "research_once":
+        tool_input.setdefault("user_id", state.user_id)
+        topic = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if topic.strip():
+            tool_input.setdefault("topic", topic.strip())
+
+    elif step.tool_name == "research_prepare_run":
+        tool_input.setdefault("user_id", state.user_id)
+        topic = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if topic.strip():
+            tool_input.setdefault("topic", topic.strip())
+
+    elif step.tool_name in {
+        "research_plan_queries",
+        "research_collect_sources",
+        "research_cluster_events",
+        "research_rank_events",
+        "research_compose_digest",
+    }:
+        tool_input.setdefault("user_id", state.user_id)
+        _inject_research_pipeline_inputs(tool_input, state, metadata)
+
+    elif step.tool_name == "create_research_subscription":
+        tool_input.setdefault("user_id", state.user_id)
+        request = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if request.strip():
+            tool_input.setdefault("request", request.strip())
+        target_id = metadata.get("chat_id") or metadata.get("target_id")
+        if target_id:
+            tool_input.setdefault("target_id", str(target_id))
+
     sd.tool_input = tool_input
     step.tool_input = tool_input
 
 
+def _inject_research_pipeline_inputs(
+    tool_input: dict,
+    state: AgentGraphState,
+    metadata: dict,
+) -> None:
+    if "run_id" not in tool_input:
+        run_id = metadata.get("research_run_id") or metadata.get("run_id")
+        if run_id:
+            tool_input["run_id"] = str(run_id)
+        else:
+            for result in reversed(list(state.step_execution.results.values())):
+                if not isinstance(result, dict):
+                    continue
+                run_id = result.get("run_id")
+                if not run_id and isinstance(result.get("run"), dict):
+                    run_id = result["run"].get("id")
+                if run_id:
+                    tool_input["run_id"] = str(run_id)
+                    break
+    if "max_items" not in tool_input:
+        for result in reversed(list(state.step_execution.results.values())):
+            if isinstance(result, dict) and result.get("max_items"):
+                tool_input["max_items"] = int(result["max_items"])
+                break
+
+
 def _apply_tool_result_to_state(step: "ExecutionStep", result_data: object, state: AgentGraphState) -> None:
+    if step.tool_name == "research_compose_digest" and isinstance(result_data, dict):
+        answer = str(result_data.get("answer") or "").strip()
+        if answer:
+            state.answer = answer
+        return
     if step.tool_name != "capture_text" or not isinstance(result_data, dict):
         return
     route = step.task_intent

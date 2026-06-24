@@ -3,33 +3,44 @@
 一个面向个人知识生命周期管理的主动式 AI Agent。
 
 它不是单纯的笔记应用或 RAG 问答 Demo，而是一个让个人知识持续完成“采集、连接、检索、验证、
-复习、整理、发现缺口、主动触达”的长期记忆系统。工程同时覆盖 Agent runtime、工作流编排、
-知识存储、图谱推理、主动任务、治理审计和多端交互。
+复习、整理、研究、发现缺口、主动触达”的长期认知系统。工程同时覆盖 Agent runtime、工作流编排、
+知识存储、图谱推理、外部情报研究、主动任务、治理审计和多端交互。
 
 ## 项目目标
 
-这个项目的目标是构建一套可持续演进的“个人知识闭环”，而不只是完成一次采集或回答：
+这个项目的目标是构建一套可持续演进的“个人知识与外部情报闭环”，让 Agent 不只回答一次问题，
+还能够长期积累知识、维护知识质量、跟踪外部变化并主动行动。当前目标能力包括：
 
-1. **沉淀知识**：把文本、链接、文件和对话结论转成结构化、可分块、可追溯的长期知识。
-2. **连接知识**：同时维护原文证据、向量/关键词索引和实体关系图谱，让知识形成可导航网络。
-3. **使用知识**：通过本地检索、图谱推理、网络补充和回答校验，生成有证据的回答。
-4. **巩固知识**：自动生成复习卡，按订阅产出知识简报，接收反馈并调整后续复习时间。
-5. **整理知识**：发现同主题笔记后生成综述，用版本关系标记原知识已被新综述取代。
-6. **发现缺口**：识别知识孤岛与潜在矛盾，主动向用户提出少量、可回答的知识缺口问题。
-7. **管理生命周期**：支持固化、冲突标记、软删除、确认、快照恢复、审计和幂等执行。
-8. **提供 Agent 框架能力**：用 Goal Router、WorkflowPlanner、LangGraph、PolicyEngine 和 ToolGateway
-   支撑复合请求、可恢复执行、HITL 和主动后台任务。
+1. **统一多端入口**：Web、CLI、飞书文本/文件和 SSE 请求进入同一 Agent 入口；Router 支持语义目标拆分、复合请求、澄清和会话指代理解。
+2. **多来源知识采集**：接收文本、网页链接、PDF/上传文件和对话结论，完成正文提取、结构化分块、来源指纹、重复检测、摘要、标签和引用定位。
+3. **长期记忆与知识连接**：以 Postgres 保存笔记、chunk、复习卡、版本关系、运行历史和 checkpoint，以 Graphiti/Neo4j 保存实体、关系、事实和 episode 映射。
+4. **多源检索与证据问答**：组合图谱、本地语义/关键词、结构化文档、情景记忆、反思记忆和公网搜索，经过融合、去冗余、上下文压缩、生成与事实校验后输出可追溯回答。
+5. **知识生命周期管理**：支持会话固化、同主题知识整理、supersede、冲突标记、软删除、删除快照、人工确认、幂等执行和恢复。
+6. **复习与知识巩固**：采集时生成复习卡，按用户时区生成和投递知识简报，通过 Web/飞书接收“记得、忘了、稍后”反馈并调整复习计划。
+7. **主动知识维护**：检测知识孤岛、薄弱连接和潜在矛盾，主动提出少量问题；按主题生成综合笔记，并保留知识演进与来源关系。
+8. **一次性外部研究**：围绕指定主题规划多个查询，调用公网搜索和网页抓取，进行来源归一、事件聚类、重复消除、可信度判断和个人知识关联，生成结构化研究简报。
+9. **周期性情报订阅**：支持“每天 9 点收集 AI 新闻”等订阅；外部 cron 负责到期扫描和入队，Postgres durable worker 负责研究与独立投递任务。
+10. **个性化情报反馈**：简报条目支持展开、有用、不感兴趣、收藏和确认入库；反馈会更新订阅偏好，外部事件可带来源和可信度保存为长期知识。
+11. **可恢复 Workflow 执行**：WorkflowSpec 定义拓扑、工具、风险和确认策略；LangGraph 提供 checkpoint、interrupt/resume、step retry/replan、事件流、回放和 fork。
+12. **受治理的工具行动**：ToolGateway 统一执行参数校验、权限策略、ReAct allowlist、超时、瞬时重试、限流、外部域名约束、HITL、幂等和结构化审计；管理类 workflow 可在局部工具箱内做受治理的工具决策。
+13. **后台任务与主动触达**：具备 Postgres durable queue、lease、heartbeat、重试和 dead-letter；支持图谱异步同步、研究任务、研究投递、复习简报与知识缺口提醒，并可通过工具诊断队列与重试失败任务。
+14. **多用户安全与可观测性**：提供 API Key、管理员范围、用户数据隔离、日志、health、LangSmith 脱敏 trace、工具/策略审计、run snapshot 和调试重放。
+15. **持续质量评测**：测试和 eval 覆盖 Router、Workflow、工具治理、对话、RAG、编排、知识整理、知识缺口和 Research 事件质量，并支持 Workflow 发布门禁。
 
 整体闭环可以概括为：
 
 ```text
 Capture / Conversation
   → Notes / Chunks / Review Cards / Knowledge Graph
-  → Ask / Evidence / Verification
-  → Digest / Review Feedback
-  → Consolidation / Supersede
+  → Retrieval / Evidence Fusion / Grounded Answer / Verification
+  → Review Digest / Feedback / Consolidation / Supersede
   → Knowledge-gap Detection / Proactive Questions
-  → New Knowledge
+
+External Cron / Manual Research
+  → Web Search / Source Fetch
+  → Event Clustering / Verification / Personal Relevance
+  → Intelligence Digest / Feedback / Approved Save
+  → New or Updated Knowledge
 ```
 
 ## 当前工程的 Agent 结构
@@ -40,12 +51,14 @@ Capture / Conversation
 | `目标路由 / Workflow 规划层` | [agent/router.py](src/personal_agent/agent/router.py), [agent/workflow_planner.py](src/personal_agent/agent/workflow_planner.py), [agent/execution_models.py](src/personal_agent/agent/execution_models.py) | Router 只拆分语义 Goal；WorkflowPlanner 从 WorkflowSpec 编译跨 workflow 任务 DAG，支持 `ingest → ask` 等复合请求 | [docs/topics/routing.md](docs/topics/routing.md) |
 | `Workflow / 执行校验层` | [agent/workflow.py](src/personal_agent/agent/workflow.py), [agent/workflow_validator.py](src/personal_agent/agent/workflow_validator.py), [agent/step_projection_validator.py](src/personal_agent/agent/step_projection_validator.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/) | workflow-first：`WorkflowSpec` 是工具、风险、确认和拓扑的流程真源；Orchestrator 只消费编译后的 ExecutionPlan | [docs/topics/workflow-step-projection.md](docs/topics/workflow-step-projection.md) |
 | `运行时 / 编排层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_contexts.py](src/personal_agent/agent/orchestration_contexts.py), [agent/orchestration_graph.py](src/personal_agent/agent/orchestration_graph.py), [agent/orchestration_nodes/](src/personal_agent/agent/orchestration_nodes/), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py) | `AgentRuntime` 作为 composition root 显式装配窄 Graph Context；LangGraph 总编排支持 route/workflow projection/step/ReAct/HITL/checkpoint；`AgentService` 是应用 facade | [docs/topics/runtime.md](docs/topics/runtime.md)、[docs/workflow/entry-router-plan-react-output-flow.md](docs/workflow/entry-router-plan-react-output-flow.md) |
-| `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、delete/restore、consolidate 等知识操作 | [docs/topics/tools.md](docs/topics/tools.md) |
-| `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有受限会话线索、Postgres 长期记忆/问答历史、LangGraph checkpoint 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
-| `检索与推理层` | [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持三层检索回退（图谱 → 本地 → 网络搜索）、Graphiti `node / edge / fact` 优先的语义推理、回答校验、低置信度自修正和 `relation_fact + snippet` 证据锚点；多跳推理、锚点可视化和评测仍可增强 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
+| `工具层` | [tools/](src/personal_agent/tools), [capture/service.py](src/personal_agent/capture/service.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、研究/订阅管理、知识生命周期、worker 诊断、workflow 诊断、delete/restore、consolidate 等动作 | [docs/topics/tools.md](docs/topics/tools.md) |
+| `记忆层` | [memory/](src/personal_agent/memory), [storage/](src/personal_agent/storage), [core/models.py](src/personal_agent/core/models.py) | 有受限会话线索、Postgres 长期记忆、Research 数据、LangGraph checkpoint、run snapshot 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
+| `检索与推理层` | [agent/ask/](src/personal_agent/agent/ask), [agent/verifier.py](src/personal_agent/agent/verifier.py), [graphiti/store.py](src/personal_agent/graphiti/store.py) | 支持图谱、结构、本地、网络、情景和反思多路召回，RRF/MMR、上下文压缩、反证检索、引用生成和蕴含级校验 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
 | `主动知识循环` | [review/](src/personal_agent/review), [insight/](src/personal_agent/insight), [knowledge/](src/personal_agent/knowledge) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
-| `执行与反馈层` | [web/routes/](src/personal_agent/web/routes), [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、图谱失败降级、异步图谱同步、问答历史记录和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
-| `观测与治理层` | [core/logging_utils.py](src/personal_agent/core/logging_utils.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests) | 具备日志、health、reset、API Key 鉴权、限流、用户隔离和基础测试；外部工具权限仍可补充 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
+| `持续研究层` | [research/](src/personal_agent/research), [storage/postgres_research_store.py](src/personal_agent/storage/postgres_research_store.py), [web/routes/research.py](src/personal_agent/web/routes/research.py) | 支持一次性研究、定时订阅、来源归一、事件聚类、可信度、个人关联、情报简报、反馈偏好和确认入库 | [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) |
+| `后台任务 / 调度层` | [agent/worker.py](src/personal_agent/agent/worker.py), [storage/postgres_worker_queue_store.py](src/personal_agent/storage/postgres_worker_queue_store.py), [deploy/cron/](deploy/cron) | Postgres durable queue 提供 lease、heartbeat、重试、dead-letter 和用户并发限制；生产 Research 使用外部 cron 入队、独立 worker 执行 | [docs/deploy.md](docs/deploy.md) |
+| `执行与反馈层` | [web/routes/](src/personal_agent/web/routes), [agent/runtime.py](src/personal_agent/agent/runtime.py), [agent/orchestration_models.py](src/personal_agent/agent/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、失败降级、异步任务和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
+| `观测、治理与评测层` | [core/observability.py](src/personal_agent/core/observability.py), [web/auth.py](src/personal_agent/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、Workflow 回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
 ## Entry 编排图
 
@@ -103,10 +116,10 @@ README 只保留最短路径：
 - 提供本地检索问答链路
 - 图谱可用时，问答流程会优先使用 Graphiti 抽取的 `node / edge / fact` 构造图谱事实网络，再回查 note/chunk 生成可追溯引用
 - 图谱不可用或图谱证据不足时，问答会回退并合并本地链路；本地检索证据不足时，自动触发网络搜索作为第三层兜底
-- 问答支持 `session_id` 会话上下文和服务端问答历史持久化
+- 问答支持 `session_id` 会话上下文；对话与运行历史以 LangGraph checkpoint、run snapshot 和事件历史为真源
 - Web 侧提供同步问答和 `SSE` 返回方式；`ask_stream` 已升级为模型 token 流，边生成边推送
 - 图谱问答会构造 `relation_fact + snippet` 证据锚点，前端支持点击 citation 自动定位并高亮回答中的对应证据片段
-- 问答历史支持关键词搜索、单条删除和按会话删除
+- 前端可按会话查看最近运行、执行步骤、引用、事件和 checkpoint 恢复结果
 
 ### 4. Direct Answer
 
@@ -142,7 +155,6 @@ README 只保留最短路径：
 - 新综述进入标准 capture/ingestion 链路，继续获得 chunk、review card 和 graph sync 能力
 - 原笔记会通过版本关系标记为被新综述 supersede，保留知识演进轨迹
 - Review Digest、知识整理、知识缺口检查均可通过自然语言意图触发；scheduler、CLI 与意图入口复用同一应用用例
-- 当前尚未增加“把关于 X 的笔记整理成一篇”自然语言 Intent；该入口需独立增加 Goal/Workflow
 
 详见 [主动知识循环](docs/proactive-knowledge-loop.md)。
 
@@ -157,18 +169,55 @@ README 只保留最短路径：
 
 详见 [知识缺口主动追问](docs/proactive-knowledge-loop.md#1-知识缺口主动追问)。
 
-### 9. Web UI
+### 9. Research & Scheduled Intelligence
+
+- `research_once` 已拆为 workflow-native pipeline：prepare run、plan queries、collect sources、cluster events、rank events、compose digest 和最终呈现
+- 查询计划会驱动 `web_search` 和 `capture_url`，并通过 `graph_search` 对照个人已有知识
+- 搜索结果按 canonical URL、内容指纹、标题语义、实体和时间窗口归一为事件，减少转载和重复新闻
+- 事件区分 `verified / reported / uncertain / conflicted`，简报保留来源链接、可信度和个人知识关联
+- `create_research_subscription` 支持“每天 9 点收集 AI 新闻”等自然语言订阅
+- 订阅、运行、来源、事件、简报、投递和反馈均持久化到 Postgres
+- 生产环境使用外部 cron 调用一次性 scheduler 入队，独立 durable worker 通过 `execute_research_run` workflow 执行研究，再独立投递
+- 研究任务和投递任务解耦；投递失败可独立重试，不重复执行搜索
+- 飞书条目支持 `N1 展开 / 有用 / 不感兴趣 / 收藏 / 入库`
+- 用户反馈会更新订阅内容偏好；“入库”会保存事件摘要、可信度与来源
+
+详见 [持续研究与定时情报简报](docs/future/scheduled-intelligence-research.md)。
+
+### 10. Workflow, Tools & Durable Execution
+
+- Router 可以把一个请求拆分为按顺序执行的多个 Goal
+- WorkflowPlanner 从固定 `WorkflowSpec` 编译跨 workflow 任务 DAG
+- LangGraph 支持 step projection、ReAct 子图、checkpoint、interrupt/resume、失败重试、replan、replay 和 fork
+- ToolGateway 统一治理 deterministic、ReAct 和 direct 三类工具调用
+- `manage_research`、`maintain_knowledge`、`inspect_operations`、`inspect_workflow` 等管理类 workflow 在 scoped allowed tools 内做局部工具决策
+- 工具面补齐 Research 订阅管理、知识生命周期维护、worker 队列诊断和 workflow run 诊断
+- 工具契约包含 Pydantic schema、风险、副作用、权限域、确认、幂等、超时、重试、限流和域名白名单
+- Postgres worker queue 提供 durable enqueue、lease、heartbeat、优先级、重试和 dead-letter
+- Workflow 定义、部署、版本、eval gate、事件和调试 artifact 均可查询
+
+### 11. Observability, Governance & Evaluation
+
+- API Key 与管理员 Key 提供用户身份和跨用户管理边界
+- 工具调用和策略决策写入独立 Postgres 审计表
+- LangSmith trace 默认脱敏，不上传用户正文和工具参数
+- run snapshot、workflow event、checkpoint export、replay/fork 支持问题定位
+- `tests/` 覆盖单元、集成、Postgres、API 和完整 Agent flow
+- `evals/` 覆盖 Router、RAG、对话、编排、知识整理、知识缺口和 Research 质量
+- Research 评测包含事件召回/精度、去重质量、一手来源率和不确定性校准
+
+### 12. Web UI
 
 - 提供基于 `FastAPI + React` 的前后端分离结构
 - 前端工作台覆盖 `Capture / Ask / Entity Graph / Relation Graph / Digest / Timeline / Memory` 等视图
 - 前端主要围绕采集、问答、历史查看和调试数据管理几个场景展开
 - 构建后的 `frontend/dist` 可以由 FastAPI 托管
 
-### 10. Feishu
+### 13. Feishu
 
 - 当前以 `官方 Python SDK + 长连接接收事件` 为主
 - 文本、文件、群聊总结和简单直接回复可以进入统一 `entry` 路由
-- 同时作为知识简报、复习反馈和知识缺口主动提问的主要推送渠道
+- 同时作为知识简报、复习反馈、知识缺口主动提问、Research 情报简报和情报反馈的主要推送渠道
 - 详细配置见 [docs/deploy.md](docs/deploy.md)，入口设计见 [docs/topics/entry.md](docs/topics/entry.md)
 
 ## 项目结构
@@ -198,23 +247,27 @@ personalAgent/                  # 项目根目录
       ├─ feishu/                # 飞书接入（service / SDK client / 消息解析 / Review Digest 命令）
       ├─ graphiti/              # Graphiti、Neo4j、LLM、Embedding、文档 episode 规范化接入
       ├─ insight/               # 知识孤岛/矛盾检测、主动缺口问题 Job 与 Scheduler
+      ├─ knowledge/             # 同主题知识整理、综合笔记与 supersede 编排
       ├─ memory/                # 工作记忆与受限会话线索（MemoryFacade / WorkingMemory）
+      ├─ research/              # 一次性研究、定时订阅、事件聚类、情报简报与反馈
       ├─ review/                # 知识简报、订阅、投递、调度与复习反馈
       ├─ storage/               # Postgres 业务存储层（schema / search / repository 分层）
       ├─ tools/                 # 统一 Tool 抽象与注册中心
       ├─ web/                   # FastAPI Web 接口层
       │  ├─ api.py              # FastAPI app factory、生命周期与静态前端挂载
-      │  ├─ context.py          # Web 运行期依赖装配（Agent / Feishu / Review Digest）
-      │  ├─ routes/             # 分组路由（system / entry stream-upload-runs / digest / notes / review / audit / graph）
+      │  ├─ context.py          # Web 运行期依赖装配（Agent / Feishu / Digest / Research）
+      │  ├─ routes/             # 分组路由（entry / notes / review / research / audit / graph）
       │  └─ auth.py             # AuthMiddleware + RateLimiter
-├─ tests/                       # 单元 + 集成测试（router / workflow / orchestration / proactive loop / tools / memory / API）
-└─ evals/                       # ask 质量评测用例
+├─ deploy/                      # 外部 cron 等生产部署模板
+├─ tests/                       # 单元 + 集成测试（router / workflow / tools / research / memory / API）
+└─ evals/                       # Router / RAG / 对话 / 编排 / Research 等质量评测
 ```
 
 ## 关键落点
 
-- 业务持久化：`knowledge_notes`、`review_cards`、`ask_history`、`digest_*`、
-  `knowledge_gap_deliveries`、workflow/artifact/audit 相关 Postgres 表
+- 业务持久化：`knowledge_notes`、`review_cards`、`digest_*`、`research_*`、
+  `intelligence_digests`、`worker_queue_tasks`、`knowledge_gap_deliveries`、
+  workflow/checkpoint/artifact/audit 相关 Postgres 表
 - 上传源文件：`data/uploads/`
 - 运行日志：`log/run.log`
 
@@ -227,6 +280,8 @@ personalAgent/                  # 项目根目录
 - [docs/topics/memory.md](docs/topics/memory.md) - 记忆层存储职责与读写路径
 - [docs/review-digest.md](docs/review-digest.md) - 知识简报、订阅投递和复习反馈
 - [docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) - 自动整理与知识缺口主动追问
+- [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 一次性研究、定时情报、durable worker 和反馈闭环
+- [docs/future/agent-tool-workflow-redesign.md](docs/future/agent-tool-workflow-redesign.md) - 跨 workflow 的工具决策、局部工具箱和治理边界
 
 ## 文档导航
 
@@ -243,4 +298,8 @@ personalAgent/                  # 项目根目录
 uv run python -m personal_agent.main entry "记一下：服务降级是在系统压力过大时，主动关闭非核心能力"
 uv run python -m personal_agent.main entry "什么是服务降级？"
 uv run python -m personal_agent.main entry "总结一下当前会话内容"
+uv run personal-agent research-once "AI Agent" --max-items 5
+uv run personal-agent research-subscribe "AI" --schedule-time 09:00 --chat-id oc_xxx
+uv run personal-agent research-schedule
+uv run personal-agent worker --queue research
 ```

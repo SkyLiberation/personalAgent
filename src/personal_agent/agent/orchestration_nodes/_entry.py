@@ -229,10 +229,22 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
 
     deps.memory.bind_session(state.user_id, state.session_id)
     conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    decision = deps.intent_router.classify(
-        state.entry_input,
-        conversation_messages=conversation_messages,
-    )
+    override_intent = (state.entry_input.metadata or {}).get("intent_override")
+    if override_intent:
+        from ..router import Goal, RouterDecision
+
+        decision = RouterDecision(
+            goals=[Goal(
+                goal_id="goal_1",
+                intent=str(override_intent),
+                input=state.entry_input.text or state.entry_text or str(override_intent),
+            )]
+        )
+    else:
+        decision = deps.intent_router.classify(
+            state.entry_input,
+            conversation_messages=conversation_messages,
+        )
 
     state.router_decision = decision
     state.execution_plan = None

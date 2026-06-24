@@ -165,6 +165,15 @@ class KnowledgeGapConfig(_StrictBase):
     recent_note_limit: int = 30
 
 
+class ResearchConfig(_StrictBase):
+    scheduler_enabled: bool = False
+    scheduler_tick_seconds: int = 60
+    max_queries: int = 5
+    max_search_results: int = 30
+    max_fulltext_fetches: int = 5
+    max_tool_calls: int = 15
+
+
 class WebApiConfig(_StrictBase):
     api_keys: dict[str, str] = Field(default_factory=dict)
     # API keys granted admin scope: cross-user audit queries and un-redacted payloads.

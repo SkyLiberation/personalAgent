@@ -19,9 +19,12 @@ from .models import PolicyAction, PolicyDecision, PolicyInput
 
 logger = logging.getLogger(__name__)
 
-# 在 ReAct 自主执行中一律禁止的副作用：写入/删除长期记忆、对外发送、不可逆。
+# 在 ReAct 自主执行中一律禁止的副作用：删除长期记忆、对外发送、不可逆。
+# 普通写入不再一刀切禁止：它必须同时满足 scoped allowed_tools、非 high risk、
+# 非 requires_confirmation，并经过 ToolGateway 审计/幂等/限流。这允许业务管理类
+# workflow 在局部工具箱内做受治理的写入决策，而不是退回黑盒 service。
 _REACT_BLOCKED_EFFECTS = frozenset(
-    {"write_longterm", "delete_longterm", "send_external", "irreversible"}
+    {"delete_longterm", "send_external", "irreversible"}
 )
 
 

@@ -22,6 +22,12 @@ _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
     "review_digest": "review_digest",
     "consolidate_knowledge": "consolidate_knowledge",
     "inspect_knowledge_gaps": "inspect_knowledge_gaps",
+    "research_once": "research_once",
+    "create_research_subscription": "create_research_subscription",
+    "manage_research": "list_research_subscriptions",
+    "maintain_knowledge": "find_similar_notes",
+    "inspect_operations": "inspect_worker_queue",
+    "inspect_workflow": "inspect_workflow_run",
 }
 
 

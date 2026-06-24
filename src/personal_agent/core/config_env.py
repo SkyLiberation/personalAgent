@@ -18,6 +18,7 @@ from .config_models import (
     PlannerConfig,
     PolicyConfig,
     ReflectionReplaySettings,
+    ResearchConfig,
     ReviewDigestConfig,
     RouterConfig,
     ShortTermMemoryConfig,
@@ -225,6 +226,24 @@ def settings_from_env(settings_cls: type):
             ),
             recent_note_limit=int(
                 os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT", "30")
+            ),
+        ),
+        research=ResearchConfig(
+            scheduler_enabled=_as_bool(
+                os.getenv("PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED", "false")
+            ),
+            scheduler_tick_seconds=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_SCHEDULER_TICK_SECONDS", "60")
+            ),
+            max_queries=int(os.getenv("PERSONAL_AGENT_RESEARCH_MAX_QUERIES", "5")),
+            max_search_results=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_MAX_SEARCH_RESULTS", "30")
+            ),
+            max_fulltext_fetches=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_MAX_FULLTEXT_FETCHES", "5")
+            ),
+            max_tool_calls=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_MAX_TOOL_CALLS", "15")
             ),
         ),
         web=WebApiConfig(

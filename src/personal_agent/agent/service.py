@@ -128,6 +128,29 @@ class AgentService:
     def knowledge_gap_use_case(self):
         return self.runtime.knowledge_gap_use_case
 
+    @property
+    def research_service(self):
+        return self.runtime.research_service
+
+    @property
+    def research_store(self):
+        return self.runtime.research_store
+
+    def create_research_subscription(self, subscription):
+        return self.runtime.create_research_subscription(subscription)
+
+    def run_research_once(self, **kwargs):
+        return self.runtime.run_research_once(**kwargs)
+
+    def enqueue_research_subscription(self, subscription_id: str):
+        return self.runtime.enqueue_research_subscription(subscription_id)
+
+    def submit_research_feedback(self, feedback):
+        return self.runtime.submit_research_feedback(feedback)
+
+    def save_research_event(self, event_id: str, *, user_id: str):
+        return self.runtime.save_research_event(event_id, user_id=user_id)
+
     def inspect_knowledge_gaps(self, user_id: str):
         return self.runtime.inspect_knowledge_gaps(user_id)
 

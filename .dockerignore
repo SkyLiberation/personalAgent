@@ -1,0 +1,14 @@
+.git
+.venv
+.uv-cache
+.pytest_cache
+.ruff_cache
+.env
+data
+log
+frontend/node_modules
+frontend/dist
+tests
+evals
+docs
+scripts/assets
