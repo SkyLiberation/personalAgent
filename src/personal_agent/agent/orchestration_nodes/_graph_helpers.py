@@ -10,7 +10,7 @@ from personal_agent.kernel.prompts import get_prompt
 from personal_agent.agent.orchestration_contexts import ReactContext
 
 if TYPE_CHECKING:
-    from personal_agent.agent.execution_models import ExecutionStep
+    from personal_agent.kernel.contracts.execution import ExecutionStep
 
 # ---------------------------------------------------------------------------
 # Constants for checkpointed orchestration behavior

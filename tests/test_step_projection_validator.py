@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.step_projection_validator import StepProjectionValidationResult, StepProjectionValidator
-from personal_agent.agent.execution_models import ExecutionStep
+from personal_agent.planning.step_projection_validator import StepProjectionValidationResult, StepProjectionValidator
+from personal_agent.kernel.contracts.execution import ExecutionStep
 from langchain_core.tools import tool
 
 from personal_agent.governance import ToolExecutor

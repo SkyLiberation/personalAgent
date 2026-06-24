@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.execution_models import ExecutionStep
-from personal_agent.agent.replanner import Replanner
+from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.planning.replanner import Replanner
 
 
 class TestReplannerHeuristic:

@@ -118,14 +118,14 @@ class TestSearchMultiStatus:
 class TestReplanReflectionInjection:
     @pytest.fixture
     def replanner(self):
-        from personal_agent.agent.replanner import Replanner
+        from personal_agent.planning.replanner import Replanner
 
         # No LLM configured -> _replan_with_llm short-circuits; we test prompt build instead.
         return Replanner(Settings(openai=OpenAIConfig(api_key="", base_url="", model="", small_model="")))
 
     def test_reflections_render_into_replanner_prompt(self):
         from personal_agent.kernel.prompts import render_prompt
-        from personal_agent.agent.replanner import _clip_reflection
+        from personal_agent.planning.replanner import _clip_reflection
 
         item = _reflection("r1", confidence=0.6)
         summary = _clip_reflection(item)
@@ -139,7 +139,7 @@ class TestReplanReflectionInjection:
         assert "教训" in prompt  # the reflection guidance line is present
 
     def test_replan_accepts_reflections_arg(self, replanner):
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         steps = [
             ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="failed"),

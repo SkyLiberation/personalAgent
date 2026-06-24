@@ -13,13 +13,13 @@ if TYPE_CHECKING:
     from personal_agent.governance.policy import PolicyEngine
     from personal_agent.governance import ToolExecutor
     from personal_agent.agent.ask import AskRunContextStore
-    from personal_agent.agent.replanner import Replanner
-    from personal_agent.agent.router import IntentRouter
+    from personal_agent.planning.replanner import Replanner
+    from personal_agent.planning.router import IntentRouter
     from personal_agent.agent.runtime_ask import AskService
     from personal_agent.application.runtime_results import AskResult
-    from personal_agent.agent.step_projection_validator import StepProjectionValidator
+    from personal_agent.planning.step_projection_validator import StepProjectionValidator
     from personal_agent.application.verifier import AnswerVerifier
-    from personal_agent.agent.workflow_planner import WorkflowPlanner
+    from personal_agent.planning.workflow_planner import WorkflowPlanner
 
 
 class ToolingContext(Protocol):

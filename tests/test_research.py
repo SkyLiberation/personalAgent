@@ -229,7 +229,7 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
 
 
 def test_subscription_parser_workflow_intents_are_registered():
-    from personal_agent.agent.workflow import WORKFLOW_REGISTRY
+    from personal_agent.planning.workflow import WORKFLOW_REGISTRY
 
     research_steps = WORKFLOW_REGISTRY.select("research_once").steps
     assert [step.tool_name for step in research_steps[:6]] == [

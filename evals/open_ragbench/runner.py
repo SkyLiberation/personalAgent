@@ -454,7 +454,7 @@ def _record_eval_snapshot(context: BenchmarkContext, strategy_name: str, snapsho
 
 
 def _get_eval_plan(query: RAGBenchQuery, settings: Settings, context: BenchmarkContext):
-    from personal_agent.agent.query_planner import plan_retrieval
+    from personal_agent.planning.query_planner import plan_retrieval
 
     if context.planner_cache is None:
         return plan_retrieval(query.query_text, "", settings), False

@@ -74,10 +74,10 @@ from personal_agent.agent.orchestration_contexts import (
     SummaryContext,
     StepExecutionContext,
 )
-from personal_agent.agent.workflow_planner import WorkflowPlanner
-from personal_agent.agent.step_projection_validator import StepProjectionValidator
-from personal_agent.agent.replanner import Replanner
-from personal_agent.agent.router import DefaultIntentRouter
+from personal_agent.planning.workflow_planner import WorkflowPlanner
+from personal_agent.planning.step_projection_validator import StepProjectionValidator
+from personal_agent.planning.replanner import Replanner
+from personal_agent.planning.router import DefaultIntentRouter
 from personal_agent.agent.ingestion_pipeline import IngestionPipeline
 from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.agent.runtime_ask import AskService
@@ -372,7 +372,7 @@ class AgentRuntime:
 
     def _sync_workflow_definitions(self) -> None:
         try:
-            from personal_agent.agent.workflow import WORKFLOW_REGISTRY
+            from personal_agent.planning.workflow import WORKFLOW_REGISTRY
 
             self.workflow_definition_store.sync_registry(WORKFLOW_REGISTRY)
         except Exception:
@@ -747,8 +747,8 @@ class AgentRuntime:
         """Validate and project a workflow definition without executing effects."""
         from dataclasses import asdict
 
-        from personal_agent.agent.workflow import WORKFLOW_REGISTRY, WorkflowSpec
-        from personal_agent.agent.workflow_validator import WorkflowSpecValidator
+        from personal_agent.planning.workflow import WORKFLOW_REGISTRY, WorkflowSpec
+        from personal_agent.planning.workflow_validator import WorkflowSpecValidator
 
         spec = (
             WorkflowSpec.from_definition_payload(spec_payload)

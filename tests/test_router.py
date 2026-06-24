@@ -4,7 +4,7 @@ import logging
 import pytest
 from pydantic import ValidationError
 
-from personal_agent.agent.router import (
+from personal_agent.planning.router import (
     ClarificationDraft,
     DefaultIntentRouter,
     Goal,

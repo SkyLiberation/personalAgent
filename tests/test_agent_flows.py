@@ -9,7 +9,7 @@ from personal_agent.agent.service import AgentService
 from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, EntryInput, ReviewCard, local_now
 from personal_agent.agent.runtime_ask import _graph_matches_to_evidence
-from personal_agent.agent.router import GoalDraft, RouterOutput
+from personal_agent.planning.router import GoalDraft, RouterOutput
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.memory.graphiti.store import GraphAskResult, GraphCaptureResult
 from tests.conftest import POSTGRES_URL, stub_router_decision

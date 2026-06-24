@@ -141,7 +141,7 @@ def test_ask_pipeline_ablation_reuses_planner_cache(monkeypatch):
         return FakeStore(), []
 
     monkeypatch.setattr("evals.open_ragbench.runner.load_benchmark", fake_load_benchmark)
-    monkeypatch.setattr("personal_agent.agent.query_planner.plan_retrieval", fake_plan_retrieval)
+    monkeypatch.setattr("personal_agent.planning.query_planner.plan_retrieval", fake_plan_retrieval)
     monkeypatch.setattr("evals.open_ragbench.runner._new_eval_store", fake_new_eval_store)
 
     results = run_open_ragbench(

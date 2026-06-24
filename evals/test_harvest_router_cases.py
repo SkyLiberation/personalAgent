@@ -8,10 +8,10 @@ from evals.harvest_router_cases import (
 )
 
 _SAMPLE = """
-2026-06-23 00:39:42,856 | INFO | personal_agent.agent.router | router.decision | {"goal_count": 1, "goals": ["ask"], "requires_clarification": false, "source_type": "text", "text_preview": "什么是DNS", "user_id": "default"}
-2026-06-22 23:49:35,009 | INFO | personal_agent.agent.router | router.decision | {"goal_count": 0, "goals": [], "missing_information": ["具体目标或待处理内容"], "requires_clarification": true, "source_type": "text", "text_preview": "帮我", "user_id": "eval-user"}
+2026-06-23 00:39:42,856 | INFO | personal_agent.planning.router | router.decision | {"goal_count": 1, "goals": ["ask"], "requires_clarification": false, "source_type": "text", "text_preview": "什么是DNS", "user_id": "default"}
+2026-06-22 23:49:35,009 | INFO | personal_agent.planning.router | router.decision | {"goal_count": 0, "goals": [], "missing_information": ["具体目标或待处理内容"], "requires_clarification": true, "source_type": "text", "text_preview": "帮我", "user_id": "eval-user"}
 2026-06-23 00:39:47,849 | INFO | personal_agent.kernel.llm_trace | llm.call | {"component": "solidify_draft", "model": "gpt-5-mini"}
-2026-06-23 00:40:57,293 | INFO | personal_agent.agent.router | router.decision | {"goal_count": 1, "goals": ["ask"], "requires_clarification": false, "source_type": "text", "text_preview": "什么是DNS", "user_id": "default"}
+2026-06-23 00:40:57,293 | INFO | personal_agent.planning.router | router.decision | {"goal_count": 1, "goals": ["ask"], "requires_clarification": false, "source_type": "text", "text_preview": "什么是DNS", "user_id": "default"}
 """
 
 

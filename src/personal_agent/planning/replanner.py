@@ -11,7 +11,7 @@ from personal_agent.kernel.llm_trace import traced_chat_completion
 from personal_agent.kernel.models import MemoryItem
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.infra.structured_parse import parse_structured
-from personal_agent.agent.execution_models import ExecutionStep
+from personal_agent.kernel.contracts.execution import ExecutionStep
 
 
 class _RevisedStep(BaseModel):

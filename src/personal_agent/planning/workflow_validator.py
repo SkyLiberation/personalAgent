@@ -1,7 +1,7 @@
 """Workflow spec validation: keep the declarative source of truth self-consistent.
 
 ``WorkflowSpecValidator`` validates a :class:`WorkflowSpec` *as a contract*,
-which is distinct from :class:`~personal_agent.agent.step_projection_validator.StepProjectionValidator`
+which is distinct from :class:`~personal_agent.planning.step_projection_validator.StepProjectionValidator`
 that validates a runtime ``ExecutionStep`` projection right before execution. The spec
 validator answers a different question: is the declared workflow internally
 coherent (unique step ids, resolvable dependencies and edges, enum-valid policy
@@ -25,7 +25,7 @@ from personal_agent.governance.policy.invariants import (
     high_risk_requires_confirmation,
 )
 from personal_agent.tools import tool_governance
-from personal_agent.agent.workflow import (
+from personal_agent.planning.workflow import (
     EDGE_SENTINELS,
     WorkflowRegistry,
     WorkflowSpec,

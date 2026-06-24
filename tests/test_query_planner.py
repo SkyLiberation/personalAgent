@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from personal_agent.kernel.config import OpenAIConfig, PlannerConfig, Settings
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-from personal_agent.agent.query_planner import _call_planner_llm, _derive_plan, _heuristic_filters
+from personal_agent.planning.query_planner import _call_planner_llm, _derive_plan, _heuristic_filters
 
 
 class TestQueryUnderstandingModel:

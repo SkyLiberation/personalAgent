@@ -23,7 +23,7 @@ from personal_agent.agent.ask.evidence_ops import (
 from personal_agent.agent.ask.prompts import AskPromptMixin
 from personal_agent.agent.ask.stages import GenerationStage, RetrievalStage, VerificationStage
 from personal_agent.application.ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
-from personal_agent.agent.query_planner import plan_retrieval
+from personal_agent.planning.query_planner import plan_retrieval
 from personal_agent.agent.runtime_helpers import (
     _best_snippet,
     _graph_episode_uuids,

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from time import perf_counter
 
-from personal_agent.agent.router import DefaultIntentRouter
+from personal_agent.planning.router import DefaultIntentRouter
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_telemetry import collect_llm_usage
 from personal_agent.kernel.models import EntryInput

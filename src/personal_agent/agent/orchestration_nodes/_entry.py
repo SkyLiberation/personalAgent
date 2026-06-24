@@ -244,7 +244,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
     override_intent = (state.entry_input.metadata or {}).get("intent_override")
     if override_intent:
-        from personal_agent.agent.router import Goal, RouterDecision
+        from personal_agent.planning.router import Goal, RouterDecision
 
         decision = RouterDecision(
             goals=[Goal(
@@ -518,7 +518,7 @@ def _build_clarification_answer(state: AgentGraphState) -> str:
 
 
 def _router_reason(decision) -> str:
-    from personal_agent.agent.router import describe_router_decision
+    from personal_agent.planning.router import describe_router_decision
 
     return describe_router_decision(decision)
 

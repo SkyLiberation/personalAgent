@@ -12,7 +12,7 @@ from psycopg import sql
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.agent.router import (
+from personal_agent.planning.router import (
     ClarificationDraft,
     GoalDraft,
     RouterOutput,

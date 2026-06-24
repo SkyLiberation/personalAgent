@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from personal_agent.agent.workflow import WORKFLOW_REGISTRY
+from personal_agent.planning.workflow import WORKFLOW_REGISTRY
 from personal_agent.infra.storage.postgres_workflow_definition_store import (
     PostgresWorkflowDefinitionStore,
 )

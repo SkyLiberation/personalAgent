@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from personal_agent.agent.step_projection_validator import StepProjectionValidationResult
-from personal_agent.agent.router import Goal, RouterDecision
+from personal_agent.planning.step_projection_validator import StepProjectionValidationResult
+from personal_agent.planning.router import Goal, RouterDecision
 from personal_agent.agent.service import AgentService
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import EntryInput

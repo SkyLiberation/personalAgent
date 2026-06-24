@@ -18,12 +18,12 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
-from personal_agent.agent.execution_models import ExecutionPlan
-from personal_agent.agent.router import RouterDecision
+from personal_agent.kernel.contracts.execution import ExecutionPlan
+from personal_agent.planning.router import RouterDecision
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
 
 if TYPE_CHECKING:
-    from personal_agent.agent.execution_models import ExecutionStep
+    from personal_agent.kernel.contracts.execution import ExecutionStep
 
 
 def _new_run_id() -> str:
@@ -151,7 +151,7 @@ class StepRunState(BaseModel):
 
     def to_execution_step(self) -> "ExecutionStep":
         """Convert back to a step projection for validator / executor consumption."""
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         return ExecutionStep(
             step_id=self.step_id,

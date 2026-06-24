@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from typer.testing import CliRunner
 
-from personal_agent.agent.router import DefaultIntentRouter
+from personal_agent.planning.router import DefaultIntentRouter
 from personal_agent.cli.main import app
 from tests.conftest import POSTGRES_URL, stub_router_decision
 

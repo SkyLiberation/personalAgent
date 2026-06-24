@@ -21,7 +21,7 @@ from personal_agent.agent.orchestration_models import (
     steps_to_steps_projected_events,
 )
 from personal_agent.agent.orchestration_nodes._helpers import _dialogue_prompt_messages
-from personal_agent.agent.router import (
+from personal_agent.planning.router import (
     Goal,
     RouterDecision as RouterDecisionModel,
     describe_router_decision,
@@ -1306,7 +1306,7 @@ class TestPhase4ReActHelpers:
 
     def test_resolve_allowed_tools_for_step(self, runtime):
         from personal_agent.agent.orchestration_graph import _resolve_allowed_tools_for_step
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         step = ExecutionStep(
             step_id="s1",
@@ -1331,7 +1331,7 @@ class TestPhase4ReActHelpers:
 
     def test_build_react_context(self):
         from personal_agent.agent.orchestration_graph import _build_react_context
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         step = ExecutionStep(step_id="s1", tool_input={"question": "什么是X？"})
         results = {
