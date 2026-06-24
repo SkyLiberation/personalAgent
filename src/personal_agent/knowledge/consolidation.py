@@ -7,8 +7,8 @@ from typing import Callable
 
 from pydantic import BaseModel, Field
 
-from ..core.models import KnowledgeNote
-from ..memory import MemoryFacade
+from personal_agent.core.models import KnowledgeNote
+from personal_agent.memory import MemoryFacade
 
 logger = logging.getLogger(__name__)
 

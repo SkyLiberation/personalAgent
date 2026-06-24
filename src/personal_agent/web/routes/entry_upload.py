@@ -4,13 +4,13 @@ import logging
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 
-from ...agent.service import AgentService
-from ...capture import CaptureService
-from ...core.config import Settings
-from ...core.models import EntryInput
-from ..input_normalization import normalize_entry_text
-from ._shared import resolve_user_id
-from .entry_serializers import entry_response_dict
+from personal_agent.agent.service import AgentService
+from personal_agent.capture import CaptureService
+from personal_agent.core.config import Settings
+from personal_agent.core.models import EntryInput
+from personal_agent.web.input_normalization import normalize_entry_text
+from personal_agent.web.routes._shared import resolve_user_id
+from personal_agent.web.routes.entry_serializers import entry_response_dict
 
 logger = logging.getLogger(__name__)
 

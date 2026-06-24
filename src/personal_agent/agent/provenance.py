@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any, Protocol
 
-from ..core.models import NoteProvenance, RawIngestItem
+from personal_agent.core.models import NoteProvenance, RawIngestItem
 
 # Maps file extension / source_type to a coarse doc_type.
 _EXT_DOC_TYPE = {

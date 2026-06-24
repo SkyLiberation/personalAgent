@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import Protocol
 
-from ..core.models import ChunkDraft
+from personal_agent.core.models import ChunkDraft
 
 # Categories Unstructured assigns to non-content structural elements.
 _NOISE_CATEGORIES = frozenset({

@@ -5,13 +5,13 @@ import time
 from hashlib import sha256
 from uuid import uuid4
 
-from ..core.config import Settings
-from ..core.logging_utils import log_event, trace_span
-from ..core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
-from ..graphiti.store import GraphCaptureResult, GraphitiStore
-from ..memory import MemoryFacade
-from ..storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from .nodes import (
+from personal_agent.core.config import Settings
+from personal_agent.core.logging_utils import log_event, trace_span
+from personal_agent.core.models import AgentState, KnowledgeNote, RawIngestItem, local_now
+from personal_agent.graphiti.store import GraphCaptureResult, GraphitiStore
+from personal_agent.memory import MemoryFacade
+from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.agent.nodes import (
     capture_node,
     chunk_reconcile_node,
     enrich_node,
@@ -19,8 +19,8 @@ from .nodes import (
     schedule_review_node,
     structural_chunk_node,
 )
-from .runtime_helpers import _merge_notes
-from .runtime_results import CaptureResult
+from personal_agent.agent.runtime_helpers import _merge_notes
+from personal_agent.agent.runtime_results import CaptureResult
 
 logger = logging.getLogger(__name__)
 
@@ -480,7 +480,7 @@ class IngestionPipeline:
         note.graph_sync.last_synced_at = local_now()
         note.updated_at = local_now()
 
-        from ..graphiti.quality_vocab import all_relations_weak
+        from personal_agent.graphiti.quality_vocab import all_relations_weak
 
         entity_count = len(graph_result.entity_names)
         relation_count = len(graph_result.relation_facts)

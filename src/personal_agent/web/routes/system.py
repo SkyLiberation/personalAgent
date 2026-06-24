@@ -5,8 +5,8 @@ import logging
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from ...agent.service import AgentService
-from ...tools import tool_governance
+from personal_agent.agent.service import AgentService
+from personal_agent.tools import tool_governance
 
 logger = logging.getLogger(__name__)
 

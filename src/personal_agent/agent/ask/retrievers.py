@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from ...core.evidence import (
+from personal_agent.core.evidence import (
     EvidenceItem,
     episodes_to_evidence,
     graph_result_to_evidence,
@@ -27,14 +27,15 @@ from ...core.evidence import (
     notes_to_evidence,
     web_results_to_evidence,
 )
-from ...core.models import AgentState, Citation, KnowledgeNote
-from ...core.query_understanding import RetrievalFilters
-from ..runtime_helpers import _merge_citations, _merge_notes
-from .evidence_ops import graph_matches_to_evidence
+from personal_agent.core.models import AgentState, Citation, KnowledgeNote
+from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.guardrails import get_content_guard
+from personal_agent.agent.runtime_helpers import _merge_citations, _merge_notes
+from personal_agent.agent.ask.evidence_ops import graph_matches_to_evidence
 
 if TYPE_CHECKING:
-    from ..runtime_ask import AskService
-    from .context import AskRunContext
+    from personal_agent.agent.runtime_ask import AskService
+    from personal_agent.agent.ask.context import AskRunContext
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,13 @@ class WebRetriever:
         web_results, web_citations = self._service._execute_web_search(ctx.question)
         if web_citations:
             out.citations = _merge_citations([], web_citations)
-            out.evidence.extend(web_results_to_evidence(web_results))
+            guard = get_content_guard()
+            out.evidence.extend(
+                web_results_to_evidence(
+                    web_results,
+                    sanitize=lambda text: guard.sanitize_untrusted(text).text,
+                )
+            )
         return out
 
 

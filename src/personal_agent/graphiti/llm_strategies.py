@@ -14,11 +14,11 @@ from graphiti_core.llm_client.openai_generic_client import (
 )
 from graphiti_core.prompts.models import Message
 
-from ..core.config import Settings
-from ..core.llm_schemas import strictify_schema
-from ..core.llm_trace import log_llm_parse
-from ..core.logging_utils import log_event
-from .ontology import ENTITY_TYPES
+from personal_agent.core.config import Settings
+from personal_agent.core.llm_schemas import strictify_schema
+from personal_agent.core.llm_trace import log_llm_parse
+from personal_agent.core.logging_utils import log_event
+from personal_agent.graphiti.ontology import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +410,7 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
 
         raw = response.choices[0].message.content or "{}"
         latency_ms = round((time.monotonic() - start) * 1000, 2)
-        from ..core.llm_telemetry import record_llm_usage
+        from personal_agent.core.llm_telemetry import record_llm_usage
 
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "prompt_tokens", None) if usage else None

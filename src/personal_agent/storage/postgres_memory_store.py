@@ -11,18 +11,18 @@ from uuid import uuid4
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..core.config import LangSmithConfig
-from ..core.embedding_trace import (
+from personal_agent.core.config import LangSmithConfig
+from personal_agent.core.embedding_trace import (
     log_embedding_fallback,
     log_local_embedding,
     traced_embedding,
 )
-from ..core.logging_utils import log_event
-from ..core.models import KnowledgeNote, MemoryEpisode, MemoryItem, ReviewCard, local_now
-from ..core.query_understanding import RetrievalFilters
-from .postgres_common import PostgresStoreBase
-from .postgres_memory_schema import ensure_memory_schema
-from .postgres_memory_search import (
+from personal_agent.core.logging_utils import log_event
+from personal_agent.core.models import KnowledgeNote, MemoryEpisode, MemoryItem, ReviewCard, local_now
+from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.storage.postgres_common import PostgresStoreBase
+from personal_agent.storage.postgres_memory_schema import ensure_memory_schema
+from personal_agent.storage.postgres_memory_search import (
     active_version_sql as _active_version_sql,
     bm25_bonus as _bm25_bonus,
     compact_whitespace as _compact_whitespace,

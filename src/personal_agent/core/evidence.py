@@ -7,14 +7,15 @@ remains as a lightweight display type derived from ``EvidenceItem``.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .models import Citation, KnowledgeNote, MemoryEpisode, MemoryItem
-from .projections import EvidenceSource, evidence_source_from_note
-from .graph_results import GraphAskResult
+from personal_agent.core.models import Citation, KnowledgeNote, MemoryEpisode, MemoryItem
+from personal_agent.core.projections import EvidenceSource, evidence_source_from_note
+from personal_agent.core.graph_results import GraphAskResult, GraphCitationHit
 
 
 class EvidenceItem(BaseModel):
@@ -195,6 +196,80 @@ def _split_sentences(text: str) -> list[str]:
     if current.strip():
         parts.append(current.strip())
     return parts
+
+
+def _tokenize_for_overlap(text: str) -> set[str]:
+    """Tokenize text into lowercased meaningful words for overlap scoring."""
+    if not text:
+        return set()
+    tokens: set[str] = set()
+    for token in text.lower().split():
+        cleaned = "".join(c for c in token if c.isalnum())
+        if len(cleaned) >= 2:
+            tokens.add(cleaned)
+    return tokens
+
+
+def _extract_question_keywords(question: str) -> list[str]:
+    keywords: list[str] = []
+    buffer = ""
+    for char in question:
+        if char.isascii() and (char.isalnum() or char in {"_", "-"}):
+            buffer += char.lower()
+            continue
+        if buffer:
+            if len(buffer) >= 2 and buffer not in keywords:
+                keywords.append(buffer)
+            buffer = ""
+    if buffer and len(buffer) >= 2 and buffer not in keywords:
+        keywords.append(buffer)
+    compact = question.replace("？", " ").replace("。", " ").replace("，", " ").replace(",", " ")
+    for chunk in compact.split():
+        normalized = chunk.strip()
+        if len(normalized) >= 2 and not normalized.isascii() and normalized not in keywords:
+            keywords.append(normalized)
+    return keywords[:8]
+
+
+def _best_snippet(note: KnowledgeNote, hit: GraphCitationHit, question: str) -> str:
+    """Select the sentence from note content that best anchors the graph relation_fact.
+
+    Uses word-overlap scoring between the relation_fact and each sentence,
+    weighted by entity name matches and question keyword relevance.
+    Falls back to note summary when no sentence reaches the minimum score.
+    """
+    best_part = ""
+    best_score = -1
+    question_keywords = _extract_question_keywords(question)
+    fact_tokens = _tokenize_for_overlap(hit.relation_fact)
+    entity_names = [n for n in (hit.endpoint_names or note.graph.entity_names or []) if len(n) >= 2]
+
+    for part in _split_sentences(note.body.content):
+        if len(part) < 10:
+            continue
+        score = 0
+        if fact_tokens:
+            part_tokens = _tokenize_for_overlap(part)
+            if part_tokens:
+                overlap = len(fact_tokens & part_tokens)
+                score += min(overlap * 5, 30)
+        if hit.relation_fact and hit.relation_fact in part:
+            score += 10
+        for entity_name in entity_names:
+            if entity_name in part:
+                score += 5
+        for keyword in question_keywords:
+            if keyword in part:
+                score += 2
+        if score > best_score:
+            best_part = part
+            best_score = score
+
+    if best_part and best_score >= 3:
+        return best_part[:160]
+    if best_part:
+        return best_part[:160]
+    return note.body.summary[:160]
 
 
 def compress_evidence(
@@ -443,9 +518,6 @@ def graph_result_to_evidence(
     - ``citation_hits`` with episode -> note lookup -> ``source_type="note"`` / ``"chunk"``
     - ``citation_hits`` without episode match -> ``source_type="graph_fact"``, ``orphan=True``
     """
-    # Lazy import avoids a circular dependency with the ask runtime helpers.
-    from ..agent.runtime_helpers import _best_snippet
-
     items: list[EvidenceItem] = []
     seen_facts: set[str] = set()
 
@@ -585,16 +657,21 @@ def notes_to_evidence(matches: list[KnowledgeNote | EvidenceSource]) -> list[Evi
     return items
 
 
-def web_results_to_evidence(results: list[dict]) -> list[EvidenceItem]:
+def web_results_to_evidence(
+    results: list[dict],
+    *,
+    sanitize: Callable[[str], str] | None = None,
+) -> list[EvidenceItem]:
     """Convert raw web search result dicts to ``EvidenceItem``.
 
-    Web text is untrusted: it can carry indirect prompt injection. The content
-    guard neutralizes injection markers in ``title``/``snippet`` before they
-    cross into the trusted evidence/context boundary.
+    Web text is untrusted: it can carry indirect prompt injection. Callers pass a
+    ``sanitize`` function (backed by the content guard) to neutralize injection
+    markers in ``title``/``snippet`` before they cross into the trusted
+    evidence/context boundary. The guard lives in a higher layer, so it is
+    injected here rather than imported — keeping the kernel free of an upward
+    dependency. When omitted, text passes through unchanged.
     """
-    from ..guardrails import get_content_guard
-
-    guard = get_content_guard()
+    clean = sanitize or (lambda text: text)
     items: list[EvidenceItem] = []
     for r in results:
         if not isinstance(r, dict):
@@ -603,8 +680,8 @@ def web_results_to_evidence(results: list[dict]) -> list[EvidenceItem]:
         items.append(EvidenceItem(
             source_type="web",
             source_id=url,
-            title=guard.sanitize_untrusted(str(r.get("title", ""))).text,
-            snippet=guard.sanitize_untrusted(str(r.get("snippet", ""))).text,
+            title=clean(str(r.get("title", ""))),
+            snippet=clean(str(r.get("snippet", ""))),
             url=url,
             metadata={
                 "source": r.get("source", ""),

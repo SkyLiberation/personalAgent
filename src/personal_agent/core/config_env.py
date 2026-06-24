@@ -5,7 +5,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from .config_models import (
+from personal_agent.core.config_models import (
     AskConfig,
     FeishuConfig,
     FirecrawlConfig,

@@ -7,9 +7,9 @@ from datetime import datetime
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..core.models import local_now
-from .jobs import ReviewDigestJob
-from .models import DigestSubscription, ReviewDigestJobResult
+from personal_agent.core.models import local_now
+from personal_agent.review.jobs import ReviewDigestJob
+from personal_agent.review.models import DigestSubscription, ReviewDigestJobResult
 
 logger = logging.getLogger(__name__)
 

@@ -4,11 +4,11 @@ from dataclasses import dataclass, field
 import re
 from typing import Protocol
 
-from .config import Settings
-from .evidence import EvidenceItem, notes_to_evidence, rank_evidence_items
-from .models import Citation, KnowledgeNote
-from .projections import EvidenceSource, evidence_source_from_note
-from .query_understanding import RetrievalFilters
+from personal_agent.core.config import Settings
+from personal_agent.core.evidence import EvidenceItem, notes_to_evidence, rank_evidence_items
+from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.projections import EvidenceSource, evidence_source_from_note
+from personal_agent.core.query_understanding import RetrievalFilters
 
 
 class NoteStoreForEnrichment(Protocol):

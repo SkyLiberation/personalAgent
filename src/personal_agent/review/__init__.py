@@ -1,8 +1,8 @@
 """Review digest domain services."""
 
-from .formatter import DigestFormatter
-from .jobs import ReviewDigestJob, subscriptions_from_settings
-from .models import (
+from personal_agent.review.formatter import DigestFormatter
+from personal_agent.review.jobs import ReviewDigestJob, subscriptions_from_settings
+from personal_agent.review.models import (
     DeliveryMessage,
     DeliveryResult,
     DeliveryTarget,
@@ -13,8 +13,8 @@ from .models import (
     ReviewFeedbackOutcome,
     ReviewFeedbackResult,
 )
-from .scheduler import ReviewDigestJobRunner, ReviewDigestScheduler
-from .service import ReviewDigestUseCase, ReviewFeedbackUseCase
+from personal_agent.review.scheduler import ReviewDigestJobRunner, ReviewDigestScheduler
+from personal_agent.review.service import ReviewDigestUseCase, ReviewFeedbackUseCase
 
 __all__ = [
     "DeliveryMessage",

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
-from ..core.models import (
+from personal_agent.core.models import (
     GraphReconcileIssue,
     GraphReconcileReport,
     GraphSyncTask,
@@ -14,14 +14,19 @@ from ..core.models import (
     ReviewCard,
     local_now,
 )
-from ..core.observability import record_policy_decision
-from ..core.logging_utils import log_event
-from ..core.query_understanding import RetrievalFilters
-from ..policy import PolicyAction, PolicyDecision, PolicyEngine, PolicyInput
+from personal_agent.core.observability import record_policy_decision
+from personal_agent.core.logging_utils import log_event
+from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.kernel.contracts.policy import (
+    PolicyAction,
+    PolicyDecision,
+    PolicyEvaluator,
+    PolicyInput,
+)
 
 if TYPE_CHECKING:
-    from ..graphiti.store import GraphitiStore
-    from ..storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.graphiti.store import GraphitiStore
+    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +101,14 @@ class MemoryFacade:
         local_store: "PostgresMemoryStore",
         graph_store: "GraphitiStore | None" = None,
         *,
-        policy_engine: PolicyEngine | None = None,
+        policy_engine: PolicyEvaluator,
     ) -> None:
         self.local = local_store
         self.graph = graph_store
-        self._policy = policy_engine or PolicyEngine()
+        # The concrete policy engine lives in the governance layer; the facade
+        # depends only on the ``PolicyEvaluator`` capability and the composition
+        # root injects the real engine. Keeps memory free of an upward dependency.
+        self._policy = policy_engine
         self._session_key: str | None = None
 
     # -- policy enforcement -------------------------------------------------

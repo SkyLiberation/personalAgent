@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .models import ChunkDraft
+from personal_agent.core.models import ChunkDraft
 
 MAX_CHUNK_CHARS = 4000
 SOFT_CHUNK_CHARS = 3000

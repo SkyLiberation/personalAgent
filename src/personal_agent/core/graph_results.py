@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .models import Citation, GraphEdgeRef, GraphFactRef, GraphNodeRef
+from personal_agent.core.models import Citation, GraphEdgeRef, GraphFactRef, GraphNodeRef
 
 
 class GraphCitationHit(BaseModel):

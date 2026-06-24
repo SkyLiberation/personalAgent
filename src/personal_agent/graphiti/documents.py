@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..core.projections import GraphIngestDocument
+from personal_agent.core.projections import GraphIngestDocument
 
 CONTENT_FILTER_ERROR_MARKERS = (
     "content filter",

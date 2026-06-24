@@ -7,7 +7,7 @@ from uuid import uuid4
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..research.models import (
+from personal_agent.kernel.contracts.research import (
     IntelligenceDigest,
     ResearchEvent,
     ResearchFeedback,
@@ -16,7 +16,7 @@ from ..research.models import (
     ResearchSubscription,
     utc_now,
 )
-from .postgres_common import PostgresStoreBase
+from personal_agent.storage.postgres_common import PostgresStoreBase
 
 
 class PostgresResearchStore(PostgresStoreBase):

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from ..core.models import Citation, KnowledgeNote
-from ..graphiti.reranker import GraphCitationHit
-from ..graphiti.store import GraphAskResult
-from .verifier import VerificationResult
+from personal_agent.core.models import Citation, KnowledgeNote
+# Re-exported for ask runtime callers (runtime.py / runtime_ask.py); now defined
+# in the evidence module so it no longer creates a core -> agent dependency.
+from personal_agent.core.evidence import _best_snippet  # noqa: F401
+from personal_agent.graphiti.store import GraphAskResult
+from personal_agent.agent.verifier import VerificationResult
 
 def _annotate_answer(answer: str, verification: VerificationResult) -> str:
     if verification.ok and verification.sufficient:
@@ -112,52 +114,6 @@ def _format_graph_relation(fact: str, source: str = "", target: str = "", snippe
     if snippet:
         line += f" [原文: {snippet[:100]}]"
     return line
-
-
-def _best_snippet(note: KnowledgeNote, hit: GraphCitationHit, question: str) -> str:
-    """Select the sentence from note content that best anchors the graph relation_fact.
-
-    Uses word-overlap scoring between the relation_fact and each sentence,
-    weighted by entity name matches and question keyword relevance.
-    Falls back to note summary when no sentence reaches the minimum score.
-    """
-    best_part = ""
-    best_score = -1
-    question_keywords = _extract_question_keywords(question)
-    fact_tokens = _tokenize_for_overlap(hit.relation_fact)
-    entity_names = [n for n in (hit.endpoint_names or note.graph.entity_names or []) if len(n) >= 2]
-
-    for part in _split_sentences(note.body.content):
-        if len(part) < 10:
-            continue
-        score = 0
-        # Word overlap between relation_fact and this sentence (primary anchor)
-        if fact_tokens:
-            part_tokens = _tokenize_for_overlap(part)
-            if part_tokens:
-                overlap = len(fact_tokens & part_tokens)
-                score += min(overlap * 5, 30)  # cap at 30 points for overlap
-        # Legacy exact match bonus
-        if hit.relation_fact and hit.relation_fact in part:
-            score += 10
-        # Entity name matches (strong signal)
-        for entity_name in entity_names:
-            if entity_name in part:
-                score += 5
-        # Question keyword relevance
-        for keyword in question_keywords:
-            if keyword in part:
-                score += 2
-        if score > best_score:
-            best_part = part
-            best_score = score
-
-    if best_part and best_score >= 3:
-        return best_part[:160]
-    # Weak anchoring: return summary with a marker
-    if best_part:
-        return best_part[:160]
-    return note.body.summary[:160]
 
 
 def _tokenize_for_overlap(text: str) -> set[str]:

@@ -1,4 +1,4 @@
-from .models import (
+from personal_agent.research.models import (
     ContentPreferences,
     DeliveryTarget,
     IntelligenceDigest,
@@ -10,13 +10,13 @@ from .models import (
     SchedulePolicy,
     SourcePreferences,
 )
-from .scheduler import (
+from personal_agent.research.scheduler import (
     ResearchScheduler,
     ResearchSchedulerRunner,
     scheduled_window_end,
     subscription_due,
 )
-from .service import ResearchService
+from personal_agent.research.service import ResearchService
 
 __all__ = [
     "ContentPreferences",

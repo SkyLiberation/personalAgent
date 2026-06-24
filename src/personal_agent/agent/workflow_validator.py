@@ -20,12 +20,12 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ..policy.invariants import (
+from personal_agent.policy.invariants import (
     delete_longterm_violations,
     high_risk_requires_confirmation,
 )
-from ..tools import tool_governance
-from .workflow import (
+from personal_agent.tools import tool_governance
+from personal_agent.agent.workflow import (
     EDGE_SENTINELS,
     WorkflowRegistry,
     WorkflowSpec,
@@ -33,7 +33,7 @@ from .workflow import (
 )
 
 if TYPE_CHECKING:
-    from ..tools import ToolExecutor
+    from personal_agent.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from .models import (
+from personal_agent.research.models import (
     IntelligenceDigest,
     IntelligenceDigestItem,
     PersonalRelevance,
@@ -220,7 +220,7 @@ class ResearchService:
         reserved, delivery_id = self.store.reserve_delivery(digest, subscription)
         if not reserved:
             return True
-        from ..review.models import DeliveryMessage, DeliveryTarget
+        from personal_agent.review.models import DeliveryMessage, DeliveryTarget
         result = self.delivery_router.send(
             DeliveryTarget(**subscription.delivery.model_dump()),
             DeliveryMessage(

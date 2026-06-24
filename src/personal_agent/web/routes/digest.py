@@ -5,10 +5,10 @@ import logging
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 
-from ...agent.service import AgentService
-from ...core.config import Settings
-from ...core.models import KnowledgeNote, ReviewCard
-from ._shared import resolve_user_id
+from personal_agent.agent.service import AgentService
+from personal_agent.core.config import Settings
+from personal_agent.core.models import KnowledgeNote, ReviewCard
+from personal_agent.web.routes._shared import resolve_user_id
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .analyzer import KnowledgeGap, KnowledgeGapAnalyzer
+from personal_agent.insight.analyzer import KnowledgeGap, KnowledgeGapAnalyzer
 
 
 class KnowledgeGapReport(BaseModel):

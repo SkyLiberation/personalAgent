@@ -1,7 +1,7 @@
-from .base import UploadCaptureProvider, UrlCaptureProvider
-from .upload import DefaultUploadCaptureProvider
-from .url import BuiltinUrlCaptureProvider, FirecrawlUrlCaptureProvider
-from .web_search import TavilyWebSearchProvider, WebSearchProvider, build_web_search_provider
+from personal_agent.capture.providers.base import UploadCaptureProvider, UrlCaptureProvider
+from personal_agent.capture.providers.upload import DefaultUploadCaptureProvider
+from personal_agent.capture.providers.url import BuiltinUrlCaptureProvider, FirecrawlUrlCaptureProvider
+from personal_agent.capture.providers.web_search import TavilyWebSearchProvider, WebSearchProvider, build_web_search_provider
 
 __all__ = [
     "BuiltinUrlCaptureProvider",

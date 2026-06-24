@@ -5,6 +5,7 @@ import pytest
 from personal_agent.core.config import OpenAIConfig, ReflectionReplaySettings, Settings
 from personal_agent.core.models import MemoryItem
 from personal_agent.memory.facade import MemoryFacade
+from personal_agent.policy import PolicyEngine
 
 
 class FakeLocalStore:
@@ -63,7 +64,7 @@ def _reflection(item_id: str, *, confidence: float = 0.5, status: str = "candida
 @pytest.fixture
 def facade() -> tuple[MemoryFacade, FakeLocalStore]:
     store = FakeLocalStore()
-    return MemoryFacade(store), store
+    return MemoryFacade(store, policy_engine=PolicyEngine()), store
 
 
 class TestPromoteReflection:
@@ -154,7 +155,7 @@ class TestPromotionTrigger:
         from personal_agent.core.models import MemoryEpisode
 
         store = FakeLocalStore()
-        fac = MemoryFacade(store)
+        fac = MemoryFacade(store, policy_engine=PolicyEngine())
         store.add_memory_item(_reflection("r1", confidence=0.7))
 
         class _Result:
@@ -173,7 +174,7 @@ class TestPromotionTrigger:
         from personal_agent.core.models import MemoryEpisode
 
         store = FakeLocalStore()
-        fac = MemoryFacade(store)
+        fac = MemoryFacade(store, policy_engine=PolicyEngine())
         store.add_memory_item(_reflection("r1", confidence=0.7))
 
         class _Result:

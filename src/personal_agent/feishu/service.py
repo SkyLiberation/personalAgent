@@ -6,14 +6,14 @@ import threading
 
 import lark_oapi as lark
 
-from ..agent.service import AgentService
-from ..core.config import Settings
-from ..core.models import EntryInput
-from ..review import ReviewFeedbackUseCase
-from ..research import ResearchFeedback
-from .client import FeishuClientMixin
-from .models import FeishuIncomingMessage
-from .review_commands import (
+from personal_agent.agent.service import AgentService
+from personal_agent.core.config import Settings
+from personal_agent.core.models import EntryInput
+from personal_agent.review import ReviewFeedbackUseCase
+from personal_agent.research import ResearchFeedback
+from personal_agent.feishu.client import FeishuClientMixin
+from personal_agent.feishu.models import FeishuIncomingMessage
+from personal_agent.feishu.review_commands import (
     handle_digest_subscription_command,
     is_digest_command,
     parse_digest_subscription_command,

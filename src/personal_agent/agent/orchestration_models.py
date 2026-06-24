@@ -17,12 +17,13 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-from ..core.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
-from .execution_models import ExecutionPlan
-from .router import RouterDecision
+from personal_agent.core.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
+from personal_agent.agent.execution_models import ExecutionPlan
+from personal_agent.agent.router import RouterDecision
+from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
 
 if TYPE_CHECKING:
-    from .execution_models import ExecutionStep
+    from personal_agent.agent.execution_models import ExecutionStep
 
 
 def _new_run_id() -> str:
@@ -36,49 +37,6 @@ def _new_thread_id(user_id: str, session_id: str, run_id: str | None = None) -> 
     per-run thread format, but runs in one session share one thread.
     """
     return f"{user_id}:{session_id}"
-
-
-# ---------------------------------------------------------------------------
-# Event model
-# ---------------------------------------------------------------------------
-
-AgentEventType = Literal[
-    "entry_started",
-    "clarification_required",
-    "clarification_resumed",
-    "intent_classified",
-    "steps_projected",
-    "steps_validated",
-    "step_started",
-    "react_iteration",
-    "tool_called",
-    "tool_result",
-    "confirmation_required",
-    "confirmation_resumed",
-    "draft_ready",
-    "answer_delta",
-    "answer_completed",
-    "step_completed",
-    "step_failed",
-    "replan_attempted",
-    "replan_completed",
-    "workflow_forked",
-    "workflow_replayed",
-    "artifact_written",
-    "run_completed",
-    "run_failed",
-]
-
-
-class AgentEvent(BaseModel):
-    """A structured, serialisable event emitted during a graph run."""
-
-    event_id: str = Field(default_factory=lambda: uuid4().hex[:12])
-    run_id: str = ""
-    thread_id: str = ""
-    type: AgentEventType
-    timestamp: datetime = Field(default_factory=local_now)
-    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +151,7 @@ class StepRunState(BaseModel):
 
     def to_execution_step(self) -> "ExecutionStep":
         """Convert back to a step projection for validator / executor consumption."""
-        from .execution_models import ExecutionStep
+        from personal_agent.agent.execution_models import ExecutionStep
 
         return ExecutionStep(
             step_id=self.step_id,

@@ -6,10 +6,14 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..tools.base import ToolInvocationEvent
-from ..tools.gateway import ToolAuditSink, ToolGatewayContext, IdempotencyStore
-from .audit_redaction import redact_audit_payload
-from .postgres_common import PostgresStoreBase
+from personal_agent.kernel.contracts.tool import ToolInvocationEvent
+from personal_agent.kernel.contracts.tool_runtime import (
+    IdempotencyStore,
+    ToolAuditSink,
+    ToolGatewayContext,
+)
+from personal_agent.storage.audit_redaction import redact_audit_payload
+from personal_agent.storage.postgres_common import PostgresStoreBase
 
 # 表示一次确认动作被幂等机制拦截（重复副作用）的审计错误特征。
 _DUPLICATE_SIDE_EFFECT_MARKER = "已执行过或正在执行"

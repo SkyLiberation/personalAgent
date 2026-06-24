@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .prompt_registry import PromptSpec
-from .prompt_templates.ask import PROMPTS as ASK_PROMPTS
-from .prompt_templates.graph import PROMPTS as GRAPH_PROMPTS
-from .prompt_templates.router import PROMPTS as ROUTER_PROMPTS
-from .prompt_templates.thread import PROMPTS as THREAD_PROMPTS
+from personal_agent.core.prompt_registry import PromptSpec
+from personal_agent.core.prompt_templates.ask import PROMPTS as ASK_PROMPTS
+from personal_agent.core.prompt_templates.graph import PROMPTS as GRAPH_PROMPTS
+from personal_agent.core.prompt_templates.router import PROMPTS as ROUTER_PROMPTS
+from personal_agent.core.prompt_templates.thread import PROMPTS as THREAD_PROMPTS
 
 
 _PROMPTS: dict[str, PromptSpec] = {

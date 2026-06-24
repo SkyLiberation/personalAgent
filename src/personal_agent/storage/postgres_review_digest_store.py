@@ -5,9 +5,9 @@ from uuid import uuid4
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..core.models import local_now
-from ..review import DigestSubscription, ReviewDigest, ReviewFeedbackOutcome
-from .postgres_common import PostgresStoreBase
+from personal_agent.core.models import local_now
+from personal_agent.kernel.contracts.review import DigestSubscription, ReviewDigest, ReviewFeedbackOutcome
+from personal_agent.storage.postgres_common import PostgresStoreBase
 
 
 class PostgresReviewDigestStore(PostgresStoreBase):

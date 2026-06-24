@@ -5,25 +5,25 @@ from logging import Logger
 
 from fastapi import FastAPI
 
-from ..agent.service import AgentService
-from ..capture import CaptureService
-from ..core.config import Settings
-from ..feishu import FeishuService
-from ..insight import (
+from personal_agent.agent.service import AgentService
+from personal_agent.capture import CaptureService
+from personal_agent.core.config import Settings
+from personal_agent.feishu import FeishuService
+from personal_agent.insight import (
     KnowledgeGapJob,
     KnowledgeGapJobRunner,
     KnowledgeGapScheduler,
 )
-from ..review import (
+from personal_agent.review import (
     ReviewDigestJob,
     ReviewDigestJobRunner,
     ReviewDigestScheduler,
     ReviewFeedbackUseCase,
     subscriptions_from_settings,
 )
-from ..review.delivery import DeliveryRouter, FeishuDeliveryProvider
-from ..research import ResearchScheduler, ResearchSchedulerRunner
-from ..storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from personal_agent.research import ResearchScheduler, ResearchSchedulerRunner
+from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
 
 
 @dataclass(slots=True)

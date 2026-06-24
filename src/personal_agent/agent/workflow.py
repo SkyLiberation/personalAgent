@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-from ..core.models import EntryIntent
-from .execution_models import ExecutionStep
+from personal_agent.core.models import EntryIntent
+from personal_agent.agent.execution_models import ExecutionStep
 
 ProjectionPolicy = Literal["none", "step_projection"]
 

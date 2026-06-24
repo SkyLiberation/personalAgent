@@ -7,8 +7,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ...core.config import Settings
-from ...core.models import WebSearchResult
+from personal_agent.core.config import Settings
+from personal_agent.core.models import WebSearchResult
 
 logger = logging.getLogger(__name__)
 

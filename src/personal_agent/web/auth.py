@@ -7,7 +7,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from ..core.rate_limit import InMemoryRateLimiter
+from personal_agent.core.rate_limit import InMemoryRateLimiter
 
 logger = logging.getLogger(__name__)
 

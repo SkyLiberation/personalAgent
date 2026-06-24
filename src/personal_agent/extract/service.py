@@ -16,10 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..core.config import LangExtractConfig
-from .langextract_client import run_extract
-from .prompts import EXAMPLES, PROMPT_DESCRIPTION
-from .schemas import SectionMap, SectionRecord
+from personal_agent.core.config import LangExtractConfig
+from personal_agent.extract.langextract_client import run_extract
+from personal_agent.extract.prompts import EXAMPLES, PROMPT_DESCRIPTION
+from personal_agent.extract.schemas import SectionMap, SectionRecord
 
 logger = logging.getLogger(__name__)
 

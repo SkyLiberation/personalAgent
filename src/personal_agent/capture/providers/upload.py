@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ..models import UploadCaptureRequest
-from ..utils import TEXT_FILE_EXTENSIONS, extract_pdf_text, preprocess_uploaded_text
-from .base import UploadCaptureProvider
+from personal_agent.capture.models import UploadCaptureRequest
+from personal_agent.capture.utils import TEXT_FILE_EXTENSIONS, extract_pdf_text, preprocess_uploaded_text
+from personal_agent.capture.providers.base import UploadCaptureProvider
 
 
 class DefaultUploadCaptureProvider(UploadCaptureProvider):

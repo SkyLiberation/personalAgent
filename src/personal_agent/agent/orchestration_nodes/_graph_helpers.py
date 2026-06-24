@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING
 
 from collections import deque
 
-from ...core.prompts import get_prompt
-from ..orchestration_contexts import ReactContext
+from personal_agent.core.prompts import get_prompt
+from personal_agent.agent.orchestration_contexts import ReactContext
 
 if TYPE_CHECKING:
-    from ..execution_models import ExecutionStep
+    from personal_agent.agent.execution_models import ExecutionStep
 
 # ---------------------------------------------------------------------------
 # Constants for checkpointed orchestration behavior
@@ -164,8 +164,8 @@ def _is_react_tool_blocked(tool_name: str, deps: ReactContext) -> bool:
     The tool's governance snapshot is fed to the shared ``PolicyEngine`` so the
     block decision matches what the ToolGateway would enforce at execution time.
     """
-    from ...policy import PolicyEngine, PolicyInput
-    from ...tools import tool_governance
+    from personal_agent.policy import PolicyEngine, PolicyInput
+    from personal_agent.tools import tool_governance
 
     spec = next((t for t in deps.tool_executor.list_tools() if t.name == tool_name), None)
     if spec is None:

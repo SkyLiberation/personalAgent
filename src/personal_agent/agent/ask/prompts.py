@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from ...core.evidence import ContextPack
-from ...core.models import Citation, KnowledgeNote
-from ...core.prompts import get_prompt, render_prompt
-from ...graphiti.store import GraphAskResult
-from ..runtime_helpers import (
+from personal_agent.core.evidence import ContextPack
+from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.graphiti.store import GraphAskResult
+from personal_agent.agent.runtime_helpers import (
     _evidence_content,
     _format_graph_relation,
     _top_sentences,

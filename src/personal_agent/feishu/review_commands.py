@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 
-from ..core.config import Settings
-from ..review import DigestSubscription
-from ..review.models import ReviewFeedbackOutcome
-from .models import FeishuIncomingMessage
+from personal_agent.core.config import Settings
+from personal_agent.review import DigestSubscription
+from personal_agent.review.models import ReviewFeedbackOutcome
+from personal_agent.feishu.models import FeishuIncomingMessage
 
 
 def is_digest_command(text: str) -> bool:

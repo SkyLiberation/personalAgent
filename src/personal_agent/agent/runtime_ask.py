@@ -3,28 +3,28 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from ..core.evidence import (
+from personal_agent.core.evidence import (
     EvidenceItem,
     graph_result_to_evidence,
     notes_to_evidence,
 )
-from ..core.models import AgentState, Citation, KnowledgeNote
-from ..core.prompts import get_prompt, render_prompt
-from ..core.projections import MatchRef
-from ..core.query_understanding import RetrievalFilters
-from ..graphiti.store import GraphAskResult
-from .ask import AskRunContext
-from .ask.evidence_ops import (
+from personal_agent.core.models import AgentState, Citation, KnowledgeNote
+from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.core.projections import MatchRef
+from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.graphiti.store import GraphAskResult
+from personal_agent.agent.ask import AskRunContext
+from personal_agent.agent.ask.evidence_ops import (
     graph_matches_to_evidence as _graph_matches_to_evidence,
     match_refs as _match_refs,
     selected_citations as _selected_citations,
     selected_matches as _selected_matches,
 )
-from .ask.prompts import AskPromptMixin
-from .ask.stages import GenerationStage, RetrievalStage, VerificationStage
-from .ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
-from .query_planner import plan_retrieval
-from .runtime_helpers import (
+from personal_agent.agent.ask.prompts import AskPromptMixin
+from personal_agent.agent.ask.stages import GenerationStage, RetrievalStage, VerificationStage
+from personal_agent.agent.ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
+from personal_agent.agent.query_planner import plan_retrieval
+from personal_agent.agent.runtime_helpers import (
     _best_snippet,
     _graph_episode_uuids,
     _graph_fact_lines,
@@ -32,14 +32,14 @@ from .runtime_helpers import (
     _merge_citations,
     _merge_notes,
 )
-from .runtime_results import AskResult, RetryResult
-from .verifier import VerificationResult
+from personal_agent.agent.runtime_results import AskResult, RetryResult
+from personal_agent.agent.verifier import VerificationResult
 
 logger = logging.getLogger(__name__)
 
 def _conversation_messages_text(messages: list[dict[str, str]]) -> str:
     # 入参通常已由短期记忆策略窗口化；此处统一渲染为「用户/助手」文本。
-    from .short_term_context import render_as_text
+    from personal_agent.agent.short_term_context import render_as_text
 
     return render_as_text(messages)
 

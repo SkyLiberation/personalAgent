@@ -5,10 +5,10 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, model_validator
 
-from ..core.logging_utils import log_event
-from ..core.models import EntryInput, EntryIntent
-from ..core.prompts import get_prompt, render_prompt
-from ..core.structured_model import StructuredModelClient, StructuredModelRequest
+from personal_agent.core.logging_utils import log_event
+from personal_agent.core.models import EntryInput, EntryIntent
+from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.core.structured_model import StructuredModelClient, StructuredModelRequest
 
 logger = logging.getLogger(__name__)
 ConversationMessage = dict[str, str]

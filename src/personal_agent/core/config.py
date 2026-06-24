@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pydantic import Field
 
-from .config_models import (
+from personal_agent.core.config_models import (
     _StrictBase,
     AskConfig,
     FeishuConfig,
@@ -61,6 +61,6 @@ class Settings(_StrictBase):
 
     @classmethod
     def from_env(cls) -> "Settings":
-        from .config_env import settings_from_env
+        from personal_agent.core.config_env import settings_from_env
 
         return settings_from_env(cls)

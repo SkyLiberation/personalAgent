@@ -5,13 +5,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..core.config import Settings
-from ..core.llm_schemas import strict_json_schema_response
-from ..core.llm_trace import traced_chat_completion
-from ..core.models import MemoryItem
-from ..core.prompts import get_prompt, render_prompt
-from ..core.structured_parse import parse_structured
-from .execution_models import ExecutionStep
+from personal_agent.core.config import Settings
+from personal_agent.core.llm_schemas import strict_json_schema_response
+from personal_agent.core.llm_trace import traced_chat_completion
+from personal_agent.core.models import MemoryItem
+from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.core.structured_parse import parse_structured
+from personal_agent.agent.execution_models import ExecutionStep
 
 
 class _RevisedStep(BaseModel):

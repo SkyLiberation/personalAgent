@@ -11,18 +11,18 @@ from graphiti_core.nodes import EpisodeType, EpisodicNode
 from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
 from neo4j import AsyncGraphDatabase
 
-from ..core.config import Settings
-from ..core.graph_results import GraphAskResult, GraphCaptureResult
-from ..core.logging_utils import log_event, trace_span
-from ..core.models import (
+from personal_agent.core.config import Settings
+from personal_agent.core.graph_results import GraphAskResult, GraphCaptureResult
+from personal_agent.core.logging_utils import log_event, trace_span
+from personal_agent.core.models import (
     KnowledgeNote,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
 )
-from ..core.projections import graph_ingest_document_from_note
-from .dashscope_compatible_embedder import DashScopeCompatibleEmbedder
-from .documents import (
+from personal_agent.core.projections import graph_ingest_document_from_note
+from personal_agent.graphiti.dashscope_compatible_embedder import DashScopeCompatibleEmbedder
+from personal_agent.graphiti.documents import (
     dedupe as _dedupe,
     episode_uuids_from_search_result as _episode_uuids_from_search_result,
     graphiti_episode_body as _graphiti_episode_body,
@@ -30,9 +30,9 @@ from .documents import (
     looks_like_content_filter_error as _looks_like_content_filter_error,
     related_episode_ids_from_edges as _related_episode_ids_from_edges,
 )
-from .llm_strategies import build_graphiti_llm_client
-from .ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
-from .search_strategies import (
+from personal_agent.graphiti.llm_strategies import build_graphiti_llm_client
+from personal_agent.graphiti.ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
+from personal_agent.graphiti.search_strategies import (
     GraphSearchStrategy,
     apply_search_config_overrides,
     get_graph_search_strategy,

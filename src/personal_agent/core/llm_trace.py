@@ -7,9 +7,9 @@ from typing import Any
 
 from openai import OpenAI
 
-from .config import OpenAIConfig
-from .llm_telemetry import record_llm_usage
-from .logging_utils import log_event
+from personal_agent.core.config import OpenAIConfig
+from personal_agent.core.llm_telemetry import record_llm_usage
+from personal_agent.core.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
 

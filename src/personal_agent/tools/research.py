@@ -5,8 +5,8 @@ import re
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from ..research import DeliveryTarget, ResearchSubscription, SchedulePolicy
-from .base import governance_extras, tool_response, tool_success
+from personal_agent.research import DeliveryTarget, ResearchSubscription, SchedulePolicy
+from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
 class CreateResearchSubscriptionArgs(BaseModel):

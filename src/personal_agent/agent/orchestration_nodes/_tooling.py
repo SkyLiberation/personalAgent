@@ -4,9 +4,9 @@ import logging
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from ..orchestration_models import AgentGraphState, ToolTrackingSubState
-from ..orchestration_contexts import ToolingContext
-from . import _helpers
+from personal_agent.agent.orchestration_models import AgentGraphState, ToolTrackingSubState
+from personal_agent.agent.orchestration_contexts import ToolingContext
+from personal_agent.agent.orchestration_nodes import _helpers
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _tool_result_event_payload(
                 payload[key] = data[key]
     spec = _lookup_tool_spec(deps, state.tool_tracking.pending_tool_name)
     if spec is not None:
-        from ...tools import tool_invocation_event
+        from personal_agent.tools import tool_invocation_event
         payload["invocation"] = tool_invocation_event(
             spec,
             tool_call_id=tool_call_id or "",
@@ -71,7 +71,7 @@ def _log_tool_invocation_event(
     spec = _lookup_tool_spec(deps, state.tool_tracking.pending_tool_name)
     if spec is None:
         return
-    from ...tools import tool_invocation_event
+    from personal_agent.tools import tool_invocation_event
     logger.info(
         "Graph tool invocation completed",
         extra={"tool_invocation": tool_invocation_event(

@@ -10,7 +10,7 @@ role in the live system is query understanding (see ``agent/query_planner.py``),
 not Graphiti pre-extraction. This package is retained for tests/experiments.
 """
 
-from .schemas import SectionMap, SectionRecord
-from .service import PreExtractService
+from personal_agent.extract.schemas import SectionMap, SectionRecord
+from personal_agent.extract.service import PreExtractService
 
 __all__ = ["SectionMap", "SectionRecord", "PreExtractService"]

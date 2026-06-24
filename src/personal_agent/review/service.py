@@ -4,13 +4,13 @@ import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING, Protocol
 
-from ..core.models import ReviewCard, local_now
-from ..memory import MemoryFacade
-from .formatter import DigestFormatter
-from .models import ReviewDigest, ReviewDigestSection, ReviewFeedbackOutcome, ReviewFeedbackResult
+from personal_agent.core.models import ReviewCard, local_now
+from personal_agent.memory import MemoryFacade
+from personal_agent.review.formatter import DigestFormatter
+from personal_agent.review.models import ReviewDigest, ReviewDigestSection, ReviewFeedbackOutcome, ReviewFeedbackResult
 
 if TYPE_CHECKING:
-    from ..graphiti.store import GraphitiStore
+    from personal_agent.graphiti.store import GraphitiStore
 
 logger = logging.getLogger(__name__)
 

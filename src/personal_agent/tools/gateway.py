@@ -5,19 +5,24 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from ..core.observability import (
+from personal_agent.core.observability import (
     _current_langsmith_run_id,
     record_policy_decision,
     record_tool_audit,
 )
-from ..core.rate_limit import InMemoryRateLimiter
-from ..policy import PolicyDecision, PolicyEngine, PolicyInput
-from .base import (
+from personal_agent.core.rate_limit import InMemoryRateLimiter
+from personal_agent.kernel.contracts.tool_runtime import (
+    IdempotencyStore,
+    ToolAuditSink,
+    ToolGatewayContext,
+)
+from personal_agent.policy import PolicyDecision, PolicyEngine, PolicyInput
+from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
     ToolGovernance,
@@ -48,31 +53,12 @@ def _classify_exception(exc: BaseException) -> str:
     return "unrecoverable"
 
 
-class ToolAuditSink(Protocol):
-    def record(self, event: ToolInvocationEvent) -> None:
-        """Persist or forward a normalized tool invocation event."""
-
-
 @dataclass(slots=True)
 class InMemoryToolAuditSink:
     events: list[ToolInvocationEvent] = field(default_factory=list)
 
     def record(self, event: ToolInvocationEvent) -> None:
         self.events.append(event)
-
-
-class IdempotencyStore(Protocol):
-    def seen(self, key: str) -> bool:
-        """Return True if this idempotency key was already committed."""
-
-    def reserve(self, key: str, *, context: ToolGatewayContext, tool_name: str) -> bool:
-        """Atomically reserve a key before executing a side effect."""
-
-    def commit(self, key: str) -> None:
-        """Mark an idempotency key as committed so replays are rejected."""
-
-    def release(self, key: str) -> None:
-        """Release a reserved key when execution did not complete."""
 
 
 @dataclass(slots=True)
@@ -100,19 +86,6 @@ class InMemoryIdempotencyStore:
 
     def release(self, key: str) -> None:
         self._committed.discard(key)
-
-
-@dataclass(frozen=True, slots=True)
-class ToolGatewayContext:
-    execution_mode: str
-    tool_call_id: str
-    step_id: str | None = None
-    thread_id: str | None = None
-    run_id: str | None = None
-    user_id: str | None = None
-    session_id: str | None = None
-    source_platform: str | None = None
-    react_allowed_tools: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)

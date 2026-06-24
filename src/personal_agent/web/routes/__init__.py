@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from ..context import WebAppContext
-from .audit import register_audit_routes
-from .digest import register_digest_routes
-from .entry import register_entry_routes
-from .graph import register_graph_routes
-from .notes import register_note_routes
-from .review import register_review_routes
-from .research import register_research_routes
-from .system import register_system_routes
+from personal_agent.web.context import WebAppContext
+from personal_agent.web.routes.audit import register_audit_routes
+from personal_agent.web.routes.digest import register_digest_routes
+from personal_agent.web.routes.entry import register_entry_routes
+from personal_agent.web.routes.graph import register_graph_routes
+from personal_agent.web.routes.notes import register_note_routes
+from personal_agent.web.routes.review import register_review_routes
+from personal_agent.web.routes.research import register_research_routes
+from personal_agent.web.routes.system import register_system_routes
 
 
 def register_api_routes(app: FastAPI, context: WebAppContext) -> None:

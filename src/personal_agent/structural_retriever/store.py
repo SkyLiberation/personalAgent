@@ -5,10 +5,10 @@ import re
 from dataclasses import dataclass
 from threading import Lock
 
-from ..core.models import Citation, KnowledgeNote
-from ..core.projections import RetrievalDocument, retrieval_document_from_note
-from ..core.query_understanding import RetrievalFilters
-from ..memory import MemoryFacade
+from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.projections import RetrievalDocument, retrieval_document_from_note
+from personal_agent.core.query_understanding import RetrievalFilters
+from personal_agent.memory import MemoryFacade
 
 
 @dataclass(frozen=True)

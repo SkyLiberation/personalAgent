@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .orchestration_models import StepExecutionState, StepRunState
-from .workflow import WorkflowSpec
+from personal_agent.agent.orchestration_models import StepExecutionState, StepRunState
+from personal_agent.agent.workflow import WorkflowSpec
 
 
 @dataclass(frozen=True, slots=True)

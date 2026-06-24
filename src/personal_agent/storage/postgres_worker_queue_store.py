@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
-from .postgres_common import PostgresStoreBase
+from personal_agent.storage.postgres_common import PostgresStoreBase
 
 WorkerTaskStatus = Literal["queued", "running", "completed", "failed", "dead"]
 

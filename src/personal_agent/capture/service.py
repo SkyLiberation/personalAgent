@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import logging
 
-from .models import UploadCaptureRequest
-from .providers import (
+from personal_agent.capture.models import UploadCaptureRequest
+from personal_agent.capture.providers import (
     BuiltinUrlCaptureProvider,
     DefaultUploadCaptureProvider,
     FirecrawlUrlCaptureProvider,
     UploadCaptureProvider,
     UrlCaptureProvider,
 )
-from .utils import normalize_upload_filename, source_type_from_upload, validate_capture_url
-from ..core.config import Settings
+from personal_agent.capture.utils import normalize_upload_filename, source_type_from_upload, validate_capture_url
+from personal_agent.core.config import Settings
 
 
 class CaptureService:

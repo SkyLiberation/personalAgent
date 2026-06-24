@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..core.models import Citation, EntryIntent, KnowledgeNote, ReviewCard
-from ..core.projections import MatchRef
-from .verifier import VerificationResult
+from personal_agent.core.models import Citation, EntryIntent, KnowledgeNote, ReviewCard
+from personal_agent.core.projections import MatchRef
+from personal_agent.agent.verifier import VerificationResult
 
 
 class CaptureResult(BaseModel):

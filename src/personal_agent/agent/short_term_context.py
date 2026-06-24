@@ -18,9 +18,9 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from ..core.config import ShortTermMemoryConfig
-from ..core.models import ThreadSummary, local_now
-from ..core.structured_parse import load_json_lenient
+from personal_agent.core.config import ShortTermMemoryConfig
+from personal_agent.core.models import ThreadSummary, local_now
+from personal_agent.core.structured_parse import load_json_lenient
 
 logger = logging.getLogger(__name__)
 

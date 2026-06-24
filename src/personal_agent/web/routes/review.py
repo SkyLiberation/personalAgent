@@ -5,13 +5,13 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ...agent.service import AgentService
-from ...core.config import Settings
-from ...core.models import ReviewCard
-from ...review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
-from ...review.models import ReviewFeedbackOutcome
-from ...storage.postgres_review_digest_store import PostgresReviewDigestStore
-from ._shared import is_admin, resolve_user_id
+from personal_agent.agent.service import AgentService
+from personal_agent.core.config import Settings
+from personal_agent.core.models import ReviewCard
+from personal_agent.review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
+from personal_agent.review.models import ReviewFeedbackOutcome
+from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.web.routes._shared import is_admin, resolve_user_id
 
 
 class DigestSubscriptionRequest(BaseModel):

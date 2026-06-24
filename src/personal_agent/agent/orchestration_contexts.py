@@ -6,20 +6,20 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Protocol
 
 if TYPE_CHECKING:
-    from ..core.config import Settings
-    from ..core.models import EntryInput
-    from ..graphiti.store import GraphitiStore
-    from ..memory import MemoryFacade
-    from ..policy import PolicyEngine
-    from ..tools import ToolExecutor
-    from .ask import AskRunContextStore
-    from .replanner import Replanner
-    from .router import IntentRouter
-    from .runtime_ask import AskService
-    from .runtime_results import AskResult
-    from .step_projection_validator import StepProjectionValidator
-    from .verifier import AnswerVerifier
-    from .workflow_planner import WorkflowPlanner
+    from personal_agent.core.config import Settings
+    from personal_agent.core.models import EntryInput
+    from personal_agent.graphiti.store import GraphitiStore
+    from personal_agent.memory import MemoryFacade
+    from personal_agent.policy import PolicyEngine
+    from personal_agent.tools import ToolExecutor
+    from personal_agent.agent.ask import AskRunContextStore
+    from personal_agent.agent.replanner import Replanner
+    from personal_agent.agent.router import IntentRouter
+    from personal_agent.agent.runtime_ask import AskService
+    from personal_agent.agent.runtime_results import AskResult
+    from personal_agent.agent.step_projection_validator import StepProjectionValidator
+    from personal_agent.agent.verifier import AnswerVerifier
+    from personal_agent.agent.workflow_planner import WorkflowPlanner
 
 
 class ToolingContext(Protocol):

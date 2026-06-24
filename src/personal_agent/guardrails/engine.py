@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import GuardVerdict
-from .patterns import (
+from personal_agent.guardrails.models import GuardVerdict
+from personal_agent.guardrails.patterns import (
     INJECTION_PATTERNS,
     INJECTION_PLACEHOLDER,
     PII_PATTERNS,

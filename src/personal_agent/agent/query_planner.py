@@ -11,12 +11,12 @@ import logging
 import re
 from datetime import timedelta
 
-from ..core.config import OpenAIConfig, Settings
-from ..core.llm_trace import traced_chat_completion
-from ..core.models import local_now
-from ..core.prompts import get_prompt, render_prompt
-from ..core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-from ..core.structured_parse import parse_structured
+from personal_agent.core.config import OpenAIConfig, Settings
+from personal_agent.core.llm_trace import traced_chat_completion
+from personal_agent.core.models import local_now
+from personal_agent.core.prompts import get_prompt, render_prompt
+from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+from personal_agent.core.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
 

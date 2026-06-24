@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import DeliveryMessage, DeliveryResult, DeliveryTarget
+from personal_agent.review.models import DeliveryMessage, DeliveryResult, DeliveryTarget
 
 
 class DeliveryProvider(Protocol):

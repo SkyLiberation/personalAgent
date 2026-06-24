@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ...agent.service import AgentService
-from ...core.config import Settings
-from ...research import (
+from personal_agent.agent.service import AgentService
+from personal_agent.core.config import Settings
+from personal_agent.research import (
     ContentPreferences,
     DeliveryTarget,
     ResearchFeedback,
@@ -13,7 +13,7 @@ from ...research import (
     SchedulePolicy,
     SourcePreferences,
 )
-from ._shared import is_admin, resolve_user_id
+from personal_agent.web.routes._shared import is_admin, resolve_user_id
 
 
 class ResearchSubscriptionRequest(BaseModel):

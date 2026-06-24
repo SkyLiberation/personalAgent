@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import ReviewDigest
+from personal_agent.review.models import ReviewDigest
 
 
 class DigestFormatter:

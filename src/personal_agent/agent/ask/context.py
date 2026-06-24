@@ -18,9 +18,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...core.evidence import ContextPack, EvidenceItem
-from ...core.models import Citation, KnowledgeNote
-from ...core.query_understanding import QueryUnderstanding, RetrievalPlan
+from personal_agent.core.evidence import ContextPack, EvidenceItem
+from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalPlan
 
 
 @dataclass
@@ -221,7 +221,7 @@ class PostgresAskRunContextStore(AskRunContextStore):
     def _connect(self, *, row_factory: bool = False):
         from psycopg import connect
         from psycopg.rows import dict_row
-        from ...storage.postgres_common import normalize_postgres_url
+        from personal_agent.storage.postgres_common import normalize_postgres_url
 
         if row_factory:
             return connect(normalize_postgres_url(self.postgres_url), row_factory=dict_row)
@@ -297,7 +297,7 @@ def _dump_verification(value: Any) -> dict[str, Any] | None:
 def _load_verification(value: Any):
     if not isinstance(value, dict):
         return None
-    from ..verifier import ClaimVerification, VerificationResult
+    from personal_agent.agent.verifier import ClaimVerification, VerificationResult
 
     checks = value.get("claim_checks")
     claim_checks = [

@@ -5,9 +5,9 @@ import re
 from dataclasses import dataclass, field
 from time import perf_counter
 
-from ..core.observability import record_verification_result
-from ..core.models import Citation, KnowledgeNote
-from ..core.projections import MatchRef, match_ref_from_note
+from personal_agent.core.observability import record_verification_result
+from personal_agent.core.models import Citation, KnowledgeNote
+from personal_agent.core.projections import MatchRef, match_ref_from_note
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,7 @@ class EntailmentAnswerVerifier(AnswerVerifier):
     }
 
     def __init__(self, judge=None) -> None:
-        from .entailment import HeuristicEntailmentJudge
+        from personal_agent.agent.entailment import HeuristicEntailmentJudge
 
         self._judge = judge or HeuristicEntailmentJudge()
 

@@ -3,18 +3,18 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from ..core.config import Settings
-from ..core.models import local_now
-from .delivery import DeliveryRouter
-from .formatter import DigestFormatter
-from .models import (
+from personal_agent.core.config import Settings
+from personal_agent.core.models import local_now
+from personal_agent.review.delivery import DeliveryRouter
+from personal_agent.review.formatter import DigestFormatter
+from personal_agent.review.models import (
     DeliveryMessage,
     DeliveryTarget,
     DigestSubscription,
     ReviewDigest,
     ReviewDigestJobResult,
 )
-from .service import ReviewDigestUseCase
+from personal_agent.review.service import ReviewDigestUseCase
 
 logger = logging.getLogger(__name__)
 

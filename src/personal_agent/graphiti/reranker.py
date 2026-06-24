@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from ..core.graph_results import GraphCitationHit
+from personal_agent.core.graph_results import GraphCitationHit
 
 __all__ = ["GraphCitationHit", "rank_graph_citation_hits"]
 

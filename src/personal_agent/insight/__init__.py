@@ -12,9 +12,9 @@ keeps the project's "code controls execution, LLM handles open semantics"
 boundary intact.
 """
 
-from .analyzer import KnowledgeGap, KnowledgeGapAnalyzer
-from .service import KnowledgeGapReport, KnowledgeGapUseCase
-from .job import (
+from personal_agent.insight.analyzer import KnowledgeGap, KnowledgeGapAnalyzer
+from personal_agent.insight.service import KnowledgeGapReport, KnowledgeGapUseCase
+from personal_agent.insight.job import (
     KnowledgeGapJob,
     KnowledgeGapJobResult,
     KnowledgeGapJobRunner,

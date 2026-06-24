@@ -4,7 +4,7 @@ from pathlib import Path
 
 from psycopg import sql
 
-from .postgres_common import PostgresStoreBase
+from personal_agent.storage.postgres_common import PostgresStoreBase
 
 _NAMED_TABLES = {
     "knowledge_notes": "notes",

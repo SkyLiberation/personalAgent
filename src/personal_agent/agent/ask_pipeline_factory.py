@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.config import Settings
-from ..core.candidate_enrichers import CandidateEnricher, create_candidate_enricher
-from ..core.rerankers import EvidenceReranker, create_evidence_reranker
+from personal_agent.core.config import Settings
+from personal_agent.core.candidate_enrichers import CandidateEnricher, create_candidate_enricher
+from personal_agent.core.rerankers import EvidenceReranker, create_evidence_reranker
 
 
 @dataclass(frozen=True)

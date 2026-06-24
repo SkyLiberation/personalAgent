@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..models import UploadCaptureRequest, UrlCaptureResult
+from personal_agent.capture.models import UploadCaptureRequest, UrlCaptureResult
 
 
 class UploadCaptureProvider:

@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .engine import ContentGuard, HeuristicContentGuard, NoopContentGuard
-from .models import GuardAction, GuardVerdict
+from personal_agent.guardrails.engine import ContentGuard, HeuristicContentGuard, NoopContentGuard
+from personal_agent.guardrails.models import GuardAction, GuardVerdict
 
 if TYPE_CHECKING:
-    from ..core.config_models import GuardrailsConfig
+    from personal_agent.core.config_models import GuardrailsConfig
 
 _DEFAULT_GUARD: ContentGuard = HeuristicContentGuard()
 _GUARD: ContentGuard = _DEFAULT_GUARD

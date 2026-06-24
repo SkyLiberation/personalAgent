@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from ..core.models import EntryIntent
-from ..policy.invariants import is_high_risk
-from ..tools import tool_governance
-from .execution_models import ExecutionStep
+from personal_agent.core.models import EntryIntent
+from personal_agent.policy.invariants import is_high_risk
+from personal_agent.tools import tool_governance
+from personal_agent.agent.execution_models import ExecutionStep
 
 if TYPE_CHECKING:
-    from ..tools import ToolExecutor
+    from personal_agent.tools import ToolExecutor
     from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)

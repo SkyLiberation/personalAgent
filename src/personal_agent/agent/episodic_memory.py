@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..core.models import EntryInput, MemoryEpisode, MemoryItem, local_now
-from .runtime_results import EntryResult
+from personal_agent.core.models import EntryInput, MemoryEpisode, MemoryItem, local_now
+from personal_agent.agent.runtime_results import EntryResult
 
 logger = logging.getLogger(__name__)
 

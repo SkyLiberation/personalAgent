@@ -12,14 +12,14 @@ import logging
 
 from langgraph.types import Command
 
-from ..core.langsmith_tracing import langsmith_trace_context
-from ..core.models import EntryInput
-from ..core.observability import RunMetrics
-from .orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
-from .orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
-from .runtime_results import AskResult, CaptureResult, EntryResult
-from .router import describe_router_decision
-from .workflow_state_migration import reset_step_and_dependents
+from personal_agent.core.langsmith_tracing import langsmith_trace_context
+from personal_agent.core.models import EntryInput
+from personal_agent.core.observability import RunMetrics
+from personal_agent.agent.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
+from personal_agent.agent.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
+from personal_agent.agent.runtime_results import AskResult, CaptureResult, EntryResult
+from personal_agent.agent.router import describe_router_decision
+from personal_agent.agent.workflow_state_migration import reset_step_and_dependents
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,7 @@ class EntryOrchestrator:
     ) -> EntryResult:
         """Execute an entry through the LangGraph orchestration graph."""
         graph = self._get_orch_graph()
-        from .orchestration_models import AgentGraphState, _new_run_id, _new_thread_id
+        from personal_agent.agent.orchestration_models import AgentGraphState, _new_run_id, _new_thread_id
 
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
@@ -377,7 +377,7 @@ class EntryOrchestrator:
             # (only summary dicts, to avoid checkpoint bloat). Surface them as
             # lightweight MatchRefs so result matching / citation validation see
             # the matches instead of an empty list.
-            from ..core.projections import MatchRef
+            from personal_agent.core.projections import MatchRef
 
             match_refs = [
                 MatchRef(id=str(m.get("id", "")), title=str(m.get("title", "")))
@@ -417,7 +417,7 @@ class EntryOrchestrator:
 
     def _stream_entry_graph(self, graph, initial_state: dict, config: dict, on_progress):
         """Run graph nodes while forwarding newly persisted events to a caller."""
-        from .orchestration_models import AgentEvent, events_to_sse_tuples
+        from personal_agent.agent.orchestration_models import AgentEvent, events_to_sse_tuples
 
         emitted_event_ids: set[str] = set()
         observed_events: list[AgentEvent] = []
@@ -825,7 +825,7 @@ class EntryOrchestrator:
         as_node: str | None = None,
     ) -> EntryResult:
         """Create a new run_id from a historical checkpoint and continue."""
-        from .orchestration_models import _new_run_id
+        from personal_agent.agent.orchestration_models import _new_run_id
 
         fork_updates = dict(updates or {})
         new_run_id = _new_run_id()

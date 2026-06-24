@@ -14,10 +14,10 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from ..core.models import local_now
-from ..review.models import DeliveryMessage, DeliveryTarget, DigestSubscription
-from ..review.scheduler import is_subscription_due
-from .service import KnowledgeGapUseCase
+from personal_agent.core.models import local_now
+from personal_agent.review.models import DeliveryMessage, DeliveryTarget, DigestSubscription
+from personal_agent.review.scheduler import is_subscription_due
+from personal_agent.insight.service import KnowledgeGapUseCase
 
 logger = logging.getLogger(__name__)
 

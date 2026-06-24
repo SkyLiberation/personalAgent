@@ -6,8 +6,8 @@ the governance logic previously hardcoded inside the tool gateway, the
 ``delete_note`` tool, and the memory facade.
 """
 
-from .engine import PolicyEngine, PolicyRules
-from .models import PolicyAction, PolicyDecision, PolicyEffect, PolicyInput
+from personal_agent.policy.engine import PolicyEngine, PolicyRules
+from personal_agent.policy.models import PolicyAction, PolicyDecision, PolicyEffect, PolicyInput
 
 __all__ = [
     "PolicyAction",

@@ -8,9 +8,9 @@ from copy import deepcopy
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
-from ...core.models import EntryInput, local_now
-from ...guardrails import get_content_guard
-from ..orchestration_models import (
+from personal_agent.core.models import EntryInput, local_now
+from personal_agent.guardrails import get_content_guard
+from personal_agent.agent.orchestration_models import (
     AgentGraphState,
     StepRunState,
     StepExecutionState,
@@ -19,8 +19,8 @@ from ..orchestration_models import (
     _new_run_id,
     _new_thread_id,
 )
-from ..orchestration_contexts import DirectAnswerContext, PlanningContext, RoutingContext
-from ._helpers import (
+from personal_agent.agent.orchestration_contexts import DirectAnswerContext, PlanningContext, RoutingContext
+from personal_agent.agent.orchestration_nodes._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
     _merge_clarification_text,
@@ -231,7 +231,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     Checkpoint boundary: after this node the intent is known and can be
     inspected / resumed without re-running classification.
     """
-    from ...core.logging_utils import log_event as _log_event
+    from personal_agent.core.logging_utils import log_event as _log_event
 
     if state.entry_input is None:
         state.entry_input = EntryInput(
@@ -244,7 +244,7 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
     override_intent = (state.entry_input.metadata or {}).get("intent_override")
     if override_intent:
-        from ..router import Goal, RouterDecision
+        from personal_agent.agent.router import Goal, RouterDecision
 
         decision = RouterDecision(
             goals=[Goal(
@@ -418,8 +418,8 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerCont
         and deps.settings.openai.base_url
         and deps.settings.openai.small_model
     ):
-        from ...core.llm_trace import traced_chat_completion
-        from ...core.prompts import get_prompt
+        from personal_agent.core.llm_trace import traced_chat_completion
+        from personal_agent.core.prompts import get_prompt
 
         try:
             dialogue_messages = _entry_conversation_messages(
@@ -469,8 +469,8 @@ def _entry_conversation_messages(
     When ``deps`` is provided, applies the unified short-term策略 (token 预算 +
     单条截断 + 溢出滚动摘要)；否则回退到默认窗口（无摘要）。
     """
-    from ...core.config import ShortTermMemoryConfig
-    from ..short_term_context import build_dialogue_context_result
+    from personal_agent.core.config import ShortTermMemoryConfig
+    from personal_agent.agent.short_term_context import build_dialogue_context_result
 
     if deps is None:
         return _dialogue_prompt_messages(state.messages, exclude_latest=exclude_latest)
@@ -518,7 +518,7 @@ def _build_clarification_answer(state: AgentGraphState) -> str:
 
 
 def _router_reason(decision) -> str:
-    from ..router import describe_router_decision
+    from personal_agent.agent.router import describe_router_decision
 
     return describe_router_decision(decision)
 

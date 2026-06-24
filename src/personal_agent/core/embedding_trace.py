@@ -7,7 +7,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from .logging_utils import log_event
+from personal_agent.core.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
 

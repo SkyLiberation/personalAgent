@@ -4,27 +4,27 @@ import logging
 from typing import Callable, TYPE_CHECKING
 from uuid import uuid4
 
-from ..core.config import Settings
-from ..core.langsmith_tracing import configure_langsmith_environment
-from ..core.models import EntryInput
-from ..core.observability import set_policy_decision_sink
-from ..core.structured_model import build_structured_model_client
-from ..graphiti.store import GraphitiStore
-from ..memory import MemoryFacade
-from ..knowledge import KnowledgeConsolidationUseCase
-from ..insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
-from ..ms_graphrag import MicrosoftGraphRagStore
-from ..guardrails import configure_guardrails
-from ..policy import PolicyEngine, PolicyRules
-from ..storage.postgres_memory_store import PostgresMemoryStore
-from ..storage.postgres_research_store import PostgresResearchStore
-from ..storage.postgres_tool_governance_store import PostgresToolGovernanceStore
-from ..storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from ..storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
-from ..storage.postgres_workflow_event_store import PostgresWorkflowEventStore
-from ..storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
-from ..structural_retriever import StructuralRetrieverStore
-from ..tools import (
+from personal_agent.core.config import Settings
+from personal_agent.core.langsmith_tracing import configure_langsmith_environment
+from personal_agent.core.models import EntryInput
+from personal_agent.core.observability import set_policy_decision_sink
+from personal_agent.core.structured_model import build_structured_model_client
+from personal_agent.graphiti.store import GraphitiStore
+from personal_agent.memory import MemoryFacade
+from personal_agent.knowledge import KnowledgeConsolidationUseCase
+from personal_agent.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
+from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.guardrails import configure_guardrails
+from personal_agent.policy import PolicyEngine, PolicyRules
+from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.storage.postgres_research_store import PostgresResearchStore
+from personal_agent.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
+from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
+from personal_agent.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
+from personal_agent.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
+from personal_agent.structural_retriever import StructuralRetrieverStore
+from personal_agent.tools import (
     ToolExecutor,
     build_capture_text_tool,
     build_capture_upload_tool,
@@ -63,9 +63,9 @@ from ..tools import (
     build_save_research_event_tool,
     build_web_search_tool,
 )
-from .entry_orchestrator import EntryOrchestrator
-from .episodic_memory import record_entry_episode
-from .orchestration_contexts import (
+from personal_agent.agent.entry_orchestrator import EntryOrchestrator
+from personal_agent.agent.episodic_memory import record_entry_episode
+from personal_agent.agent.orchestration_contexts import (
     DirectAnswerContext,
     GraphContexts,
     PlanningContext,
@@ -74,14 +74,14 @@ from .orchestration_contexts import (
     SummaryContext,
     StepExecutionContext,
 )
-from .workflow_planner import WorkflowPlanner
-from .step_projection_validator import StepProjectionValidator
-from .replanner import Replanner
-from .router import DefaultIntentRouter
-from .ingestion_pipeline import IngestionPipeline
-from .runtime_admin import _protected_eval_graph_group_ids
-from .runtime_ask import AskService
-from .runtime_helpers import (
+from personal_agent.agent.workflow_planner import WorkflowPlanner
+from personal_agent.agent.step_projection_validator import StepProjectionValidator
+from personal_agent.agent.replanner import Replanner
+from personal_agent.agent.router import DefaultIntentRouter
+from personal_agent.agent.ingestion_pipeline import IngestionPipeline
+from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids
+from personal_agent.agent.runtime_ask import AskService
+from personal_agent.agent.runtime_helpers import (
     _annotate_answer,
     _best_snippet,
     _evidence_content,
@@ -96,9 +96,9 @@ from .runtime_helpers import (
     _tokenize_for_overlap,
     _top_sentences,
 )
-from .runtime_llm import LlmClient
-from .thread_summarizer import ThreadSummarizer
-from .runtime_results import (
+from personal_agent.agent.runtime_llm import LlmClient
+from personal_agent.agent.thread_summarizer import ThreadSummarizer
+from personal_agent.agent.runtime_results import (
     AskResult,
     CaptureResult,
     DigestResult,
@@ -106,13 +106,13 @@ from .runtime_results import (
     ResetResult,
     RetryResult,
 )
-from ..review import DigestFormatter, ReviewDigestUseCase
-from ..research import ResearchFeedback, ResearchService, ResearchSubscription
-from ..storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
-from .verifier import create_answer_verifier
+from personal_agent.review import DigestFormatter, ReviewDigestUseCase
+from personal_agent.research import ResearchFeedback, ResearchService, ResearchSubscription
+from personal_agent.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
+from personal_agent.agent.verifier import create_answer_verifier
 
 if TYPE_CHECKING:
-    from ..capture import CaptureService
+    from personal_agent.capture import CaptureService
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ class AgentRuntime:
         self._replanner = Replanner(settings)
         # Explicit collaborators.
         self._summarizer = ThreadSummarizer(self._llm)
-        from .ask import PostgresAskRunContextStore
+        from personal_agent.agent.ask import PostgresAskRunContextStore
 
         direct_answer_context = DirectAnswerContext(
             settings=self.settings,
@@ -372,7 +372,7 @@ class AgentRuntime:
 
     def _sync_workflow_definitions(self) -> None:
         try:
-            from .workflow import WORKFLOW_REGISTRY
+            from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
             self.workflow_definition_store.sync_registry(WORKFLOW_REGISTRY)
         except Exception:
@@ -421,7 +421,7 @@ class AgentRuntime:
         self._tool_executor.register(build_retry_worker_task_tool(self))
         self._tool_executor.register(build_inspect_workflow_run_tool(self))
         if self.settings.web_search.api_key:
-            from ..capture.providers.web_search import build_web_search_provider
+            from personal_agent.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
 
@@ -590,7 +590,7 @@ class AgentRuntime:
         It exercises the same durable queue/lease/complete/fail path that a
         future background worker will use.
         """
-        from .worker import WorkflowWorker
+        from personal_agent.agent.worker import WorkflowWorker
 
         worker = WorkflowWorker(
             self,
@@ -747,8 +747,8 @@ class AgentRuntime:
         """Validate and project a workflow definition without executing effects."""
         from dataclasses import asdict
 
-        from .workflow import WORKFLOW_REGISTRY, WorkflowSpec
-        from .workflow_validator import WorkflowSpecValidator
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY, WorkflowSpec
+        from personal_agent.agent.workflow_validator import WorkflowSpecValidator
 
         spec = (
             WorkflowSpec.from_definition_payload(spec_payload)
@@ -808,7 +808,7 @@ class AgentRuntime:
         return self.workflow_replay_store.list_replay_runs(run_id, limit=limit)
 
     def rebuild_workflow_projection(self, run_id: str):
-        from .workflow_event_projection import project_workflow_events
+        from personal_agent.agent.workflow_event_projection import project_workflow_events
 
         return project_workflow_events(
             run_id,
@@ -890,7 +890,7 @@ class AgentRuntime:
         run_id: str,
         to_version: str,
     ):
-        from .workflow_state_migration import migrate_step_execution
+        from personal_agent.agent.workflow_state_migration import migrate_step_execution
 
         source_state = self._entry.get_run_state(run_id)
         if source_state is None:

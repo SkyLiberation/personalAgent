@@ -3,8 +3,8 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from ..knowledge import KnowledgeConsolidationUseCase
-from .base import governance_extras, tool_failure, tool_response, tool_success
+from personal_agent.knowledge import KnowledgeConsolidationUseCase
+from personal_agent.tools.base import governance_extras, tool_failure, tool_response, tool_success
 
 
 class ConsolidateKnowledgeArgs(BaseModel):

@@ -7,8 +7,8 @@ from typing import Iterable
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ..agent.workflow import WorkflowRegistry, WorkflowSpec
-from .postgres_common import PostgresStoreBase
+from personal_agent.agent.workflow import WorkflowRegistry, WorkflowSpec
+from personal_agent.storage.postgres_common import PostgresStoreBase
 
 
 @dataclass(frozen=True, slots=True)

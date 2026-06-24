@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..core.config import Settings
-from .execution_models import ExecutionPlan, ExecutionStep, WorkflowTask
+from personal_agent.core.config import Settings
+from personal_agent.agent.execution_models import ExecutionPlan, ExecutionStep, WorkflowTask
 
 if TYPE_CHECKING:
-    from .router import Goal, RouterDecision
+    from personal_agent.agent.router import Goal, RouterDecision
 
 
 class WorkflowPlanner:
@@ -106,7 +106,7 @@ class WorkflowPlanner:
         return self._select_workflow(intent, routing_key=routing_key).project()
 
     def _select_workflow(self, intent, *, routing_key: str):
-        from .workflow import WORKFLOW_REGISTRY
+        from personal_agent.agent.workflow import WORKFLOW_REGISTRY
 
         spec = WORKFLOW_REGISTRY.select(intent)
         if self._workflow_definition_store is None:

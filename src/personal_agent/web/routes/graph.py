@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request
 
-from ...agent.service import AgentService
-from ...core.config import Settings
-from ._shared import resolve_user_id
+from personal_agent.agent.service import AgentService
+from personal_agent.core.config import Settings
+from personal_agent.web.routes._shared import resolve_user_id
 
 
 def register_graph_routes(app: FastAPI, *, settings: Settings, service: AgentService) -> None:

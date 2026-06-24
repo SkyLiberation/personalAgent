@@ -10,9 +10,9 @@ from typing import Any, Generic, Protocol, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel
 
-from .config_models import LangSmithConfig, RouterConfig
-from .llm_telemetry import record_llm_usage
-from .logging_utils import log_event
+from personal_agent.core.config_models import LangSmithConfig, RouterConfig
+from personal_agent.core.llm_telemetry import record_llm_usage
+from personal_agent.core.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
