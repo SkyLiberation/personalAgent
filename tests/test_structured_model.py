@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 
 from personal_agent.kernel.config_models import LangSmithConfig, RouterConfig
-from personal_agent.core.structured_model import (
+from personal_agent.infra.structured_model import (
     FullTracePayloadPolicy,
     ObservedStructuredModelClient,
     OpenAIResponsesModelClient,
@@ -51,7 +51,7 @@ def test_openai_adapter_uses_responses_parse(monkeypatch):
                 ),
             )
 
-    monkeypatch.setattr("personal_agent.core.structured_model.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     client = OpenAIResponsesModelClient(RouterConfig(
         api_key="key",
         base_url="https://llm.invalid",

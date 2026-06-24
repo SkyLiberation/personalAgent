@@ -13,7 +13,7 @@ from personal_agent.agent.router import (
     describe_router_decision,
 )
 from personal_agent.kernel.models import EntryInput
-from personal_agent.core.structured_model import StructuredModelResponse
+from personal_agent.infra.structured_model import StructuredModelResponse
 
 
 class TestRouterOutputContract:

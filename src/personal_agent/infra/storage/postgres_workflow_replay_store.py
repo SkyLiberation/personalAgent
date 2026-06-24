@@ -9,7 +9,7 @@ from uuid import uuid4
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from personal_agent.storage.postgres_common import PostgresStoreBase
+from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 
 
 @dataclass(frozen=True, slots=True)

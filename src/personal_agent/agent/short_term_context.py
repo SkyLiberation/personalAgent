@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from personal_agent.kernel.config import ShortTermMemoryConfig
 from personal_agent.kernel.models import ThreadSummary, local_now
-from personal_agent.core.structured_parse import load_json_lenient
+from personal_agent.infra.structured_parse import load_json_lenient
 
 logger = logging.getLogger(__name__)
 

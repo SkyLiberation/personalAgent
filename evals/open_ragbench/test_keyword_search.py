@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.storage.memory_store import LocalMemoryStore
+from personal_agent.infra.storage.memory_store import LocalMemoryStore
 
 from .adapter import corpus_to_notes, expected_note_ids
 from .metrics import RetrievalReport, compute_report

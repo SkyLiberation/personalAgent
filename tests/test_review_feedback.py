@@ -10,8 +10,8 @@ from personal_agent.memory.facade import MemoryFacade
 from personal_agent.policy import PolicyEngine
 from personal_agent.review import DigestSubscription, ReviewDigest
 from personal_agent.review.service import ReviewFeedbackUseCase
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 

@@ -473,7 +473,7 @@ def _new_eval_store(
 ):
     from pathlib import Path
     import tempfile
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="ragbench_eval_"))
     store = PostgresMemoryStore(

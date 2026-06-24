@@ -26,7 +26,7 @@ def main() -> int:
     args = parser.parse_args()
 
     from personal_agent.kernel.config import Settings
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     settings = Settings.from_env()
     if not settings.postgres_url:

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from personal_agent.kernel.logging_utils import log_event
 from personal_agent.kernel.models import EntryInput, EntryIntent
 from personal_agent.kernel.prompts import get_prompt, render_prompt
-from personal_agent.core.structured_model import StructuredModelClient, StructuredModelRequest
+from personal_agent.infra.structured_model import StructuredModelClient, StructuredModelRequest
 
 logger = logging.getLogger(__name__)
 ConversationMessage = dict[str, str]

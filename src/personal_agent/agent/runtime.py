@@ -8,7 +8,7 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
 from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.observability import set_policy_decision_sink
-from personal_agent.core.structured_model import build_structured_model_client
+from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.knowledge import KnowledgeConsolidationUseCase
@@ -16,13 +16,13 @@ from personal_agent.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
 from personal_agent.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.guardrails import configure_guardrails
 from personal_agent.policy import PolicyEngine, PolicyRules
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-from personal_agent.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
-from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
-from personal_agent.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
-from personal_agent.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
+from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
+from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.infra.storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
+from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
+from personal_agent.infra.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
 from personal_agent.structural_retriever import StructuralRetrieverStore
 from personal_agent.tools import (
     ToolExecutor,
@@ -96,7 +96,7 @@ from personal_agent.agent.runtime_helpers import (
     _tokenize_for_overlap,
     _top_sentences,
 )
-from personal_agent.agent.runtime_llm import LlmClient
+from personal_agent.infra.runtime_llm import LlmClient
 from personal_agent.agent.thread_summarizer import ThreadSummarizer
 from personal_agent.agent.runtime_results import (
     AskResult,
@@ -108,7 +108,7 @@ from personal_agent.agent.runtime_results import (
 )
 from personal_agent.review import DigestFormatter, ReviewDigestUseCase
 from personal_agent.research import ResearchFeedback, ResearchService, ResearchSubscription
-from personal_agent.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
+from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from personal_agent.agent.verifier import create_answer_verifier
 
 if TYPE_CHECKING:

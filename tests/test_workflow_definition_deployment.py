@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from personal_agent.agent.workflow import WORKFLOW_REGISTRY
-from personal_agent.storage.postgres_workflow_definition_store import (
+from personal_agent.infra.storage.postgres_workflow_definition_store import (
     PostgresWorkflowDefinitionStore,
 )
 from tests.conftest import stub_router_decision
@@ -15,7 +15,7 @@ from tests.conftest import stub_router_decision
 def runtime(settings, clean_postgres_business_tables):
     from personal_agent.agent.runtime import AgentRuntime
     from personal_agent.graphiti.store import GraphitiStore
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     runtime = AgentRuntime(
         settings=settings,

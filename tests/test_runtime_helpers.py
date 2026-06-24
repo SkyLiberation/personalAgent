@@ -18,7 +18,7 @@ from personal_agent.kernel.models import (
 )
 from personal_agent.graphiti.store import GraphCaptureResult
 from personal_agent.graphiti.store import GraphAskResult
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 

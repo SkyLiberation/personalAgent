@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from personal_agent.kernel.embedding_trace import EmbeddingTraceResult, traced_embedding
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
 
 def test_traced_embedding_returns_vector_and_metadata(monkeypatch):

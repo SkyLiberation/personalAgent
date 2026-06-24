@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from personal_agent.kernel.config_models import GuardrailsConfig
 from personal_agent.kernel.rate_limit import InMemoryRateLimiter
-from personal_agent.core.structured_parse import (
+from personal_agent.infra.structured_parse import (
     extract_json_object,
     load_json_lenient,
     parse_structured,

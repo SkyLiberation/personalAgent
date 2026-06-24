@@ -7,7 +7,7 @@ from psycopg.types.json import Jsonb
 
 from personal_agent.kernel.models import local_now
 from personal_agent.kernel.contracts.review import DigestSubscription, ReviewDigest, ReviewFeedbackOutcome
-from personal_agent.storage.postgres_common import PostgresStoreBase
+from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 
 
 class PostgresReviewDigestStore(PostgresStoreBase):

@@ -35,10 +35,14 @@ ROOT_PKG = "personal_agent"
 LAYER: dict[str, int] = {
     # ----- kernel (0) -----
     "kernel": 0,
-    "core": 0,  # legacy: split into kernel (+ infra/application leftovers) over stages
     # ----- infra (1) -----
     "infra": 1,
     "storage": 1,  # legacy -> infra/storage
+    # ----- application (3) -----
+    # ``core`` now holds only application-tier leftovers (chunking, rerankers,
+    # document_partition, candidate_enrichers) after its kernel modules moved to
+    # kernel/ in stage 3; it dissolves into application/ in stage 5.
+    "core": 3,
     # ----- memory (2) -----
     "memory": 2,
     "graphiti": 2,

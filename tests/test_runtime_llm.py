@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from personal_agent.agent.runtime_llm import LlmClient
+from personal_agent.infra.runtime_llm import LlmClient
 from personal_agent.kernel.config import OpenAIConfig, Settings
 
 

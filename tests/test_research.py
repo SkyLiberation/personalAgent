@@ -14,8 +14,8 @@ from personal_agent.research import (
     SchedulePolicy,
     subscription_due,
 )
-from personal_agent.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
+from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from personal_agent.agent.worker import WorkflowWorker
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")

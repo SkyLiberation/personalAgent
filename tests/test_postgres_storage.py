@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from personal_agent.kernel.models import MemoryEpisode, MemoryItem, ReviewCard
 from personal_agent.kernel.query_understanding import RetrievalFilters
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 
@@ -309,7 +309,7 @@ def test_find_similar_notes_emits_retrieval_metrics(temp_dir: Path, monkeypatch)
         events.append({"event": event_name, **payload})
 
     monkeypatch.setattr(
-        "personal_agent.storage.postgres_memory_store.log_event",
+        "personal_agent.infra.storage.postgres_memory_store.log_event",
         capture_event,
     )
     store.add_note(

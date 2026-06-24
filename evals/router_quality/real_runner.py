@@ -25,7 +25,7 @@ from personal_agent.agent.router import DefaultIntentRouter
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_telemetry import collect_llm_usage
 from personal_agent.kernel.models import EntryInput
-from personal_agent.core.structured_model import build_structured_model_client
+from personal_agent.infra.structured_model import build_structured_model_client
 
 from .dataset import RouterEvalCase, RouterRunOutput
 from .runner import run_output_from_decision

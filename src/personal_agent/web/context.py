@@ -23,7 +23,7 @@ from personal_agent.review import (
 )
 from personal_agent.review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from personal_agent.research import ResearchScheduler, ResearchSchedulerRunner
-from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 
 
 @dataclass(slots=True)

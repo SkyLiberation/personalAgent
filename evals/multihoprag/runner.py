@@ -124,7 +124,7 @@ def _new_eval_store(
     note_mode: CorpusNoteMode,
 ):
     import tempfile
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="multihoprag_eval_"))
     store = PostgresMemoryStore(

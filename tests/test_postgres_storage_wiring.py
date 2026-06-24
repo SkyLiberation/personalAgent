@@ -2,7 +2,7 @@ from pathlib import Path
 
 from personal_agent.agent.service import AgentService
 from personal_agent.kernel.config import Settings
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 import pytest
 from tests.conftest import POSTGRES_URL
 

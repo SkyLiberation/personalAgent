@@ -192,7 +192,7 @@ def _react_parse_response(raw: str) -> dict | None:
     unwrap and parse telemetry with every other structured site.
     """
     from personal_agent.kernel.llm_trace import log_llm_parse
-    from personal_agent.core.structured_parse import load_json_lenient
+    from personal_agent.infra.structured_parse import load_json_lenient
 
     try:
         parsed = load_json_lenient(raw)

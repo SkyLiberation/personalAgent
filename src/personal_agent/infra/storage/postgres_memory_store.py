@@ -20,9 +20,9 @@ from personal_agent.kernel.embedding_trace import (
 from personal_agent.kernel.logging_utils import log_event
 from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryItem, ReviewCard, local_now
 from personal_agent.kernel.query_understanding import RetrievalFilters
-from personal_agent.storage.postgres_common import PostgresStoreBase
-from personal_agent.storage.postgres_memory_schema import ensure_memory_schema
-from personal_agent.storage.postgres_memory_search import (
+from personal_agent.infra.storage.postgres_common import PostgresStoreBase
+from personal_agent.infra.storage.postgres_memory_schema import ensure_memory_schema
+from personal_agent.infra.storage.postgres_memory_search import (
     active_version_sql as _active_version_sql,
     bm25_bonus as _bm25_bonus,
     compact_whitespace as _compact_whitespace,

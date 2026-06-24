@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.storage.postgres_memory_search import BM25_KEY_FIELD, bm25_text_fields_json
+from personal_agent.infra.storage.postgres_memory_search import BM25_KEY_FIELD, bm25_text_fields_json
 
 
 def ensure_memory_schema(store) -> None:

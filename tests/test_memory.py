@@ -7,7 +7,7 @@ import pytest
 from personal_agent.kernel.models import ReviewCard
 from personal_agent.memory.facade import MemoryFacade
 from personal_agent.policy import PolicyEngine
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 

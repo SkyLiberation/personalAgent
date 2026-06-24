@@ -7,7 +7,7 @@ from typing import Callable
 from uuid import uuid4
 
 from personal_agent.kernel.models import EntryInput
-from personal_agent.storage.postgres_worker_queue_store import WorkerTask
+from personal_agent.infra.storage.postgres_worker_queue_store import WorkerTask
 
 logger = logging.getLogger(__name__)
 

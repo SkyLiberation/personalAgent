@@ -16,7 +16,7 @@ from personal_agent.kernel.llm_trace import traced_chat_completion
 from personal_agent.kernel.models import local_now
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-from personal_agent.core.structured_parse import parse_structured
+from personal_agent.infra.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
 

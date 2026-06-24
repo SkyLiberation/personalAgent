@@ -18,7 +18,7 @@ from personal_agent.review import (
     subscriptions_from_settings,
 )
 from personal_agent.review.delivery import DeliveryRouter, FeishuDeliveryProvider
-from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from personal_agent.research import DeliveryTarget, ResearchSubscription, SchedulePolicy
 
 app = typer.Typer(help="Personal knowledge agent CLI")

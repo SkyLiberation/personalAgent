@@ -11,7 +11,7 @@ from personal_agent.kernel.contracts.workflow import (
     WorkflowRegistryProtocol,
     WorkflowSpec,
 )
-from personal_agent.storage.postgres_common import PostgresStoreBase
+from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 
 
 @dataclass(frozen=True, slots=True)
