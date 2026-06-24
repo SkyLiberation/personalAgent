@@ -7,7 +7,10 @@ from typing import Iterable
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from personal_agent.agent.workflow import WorkflowRegistry, WorkflowSpec
+from personal_agent.kernel.contracts.workflow import (
+    WorkflowRegistryProtocol,
+    WorkflowSpec,
+)
 from personal_agent.storage.postgres_common import PostgresStoreBase
 
 
@@ -134,7 +137,7 @@ class PostgresWorkflowDefinitionStore(PostgresStoreBase):
 
     def sync_registry(
         self,
-        registry: WorkflowRegistry,
+        registry: WorkflowRegistryProtocol,
         *,
         environment: str = "default",
     ) -> int:
@@ -546,7 +549,7 @@ class PostgresWorkflowDefinitionStore(PostgresStoreBase):
         self,
         intent: str,
         *,
-        registry: WorkflowRegistry,
+        registry: WorkflowRegistryProtocol,
         environment: str = "default",
         routing_key: str = "",
     ) -> WorkflowSpec | None:
