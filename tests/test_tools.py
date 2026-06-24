@@ -9,10 +9,9 @@ from langchain_core.tools import tool
 from pydantic import ValidationError
 
 from personal_agent.agent.orchestration_models import AgentGraphState, ReactSubState, ToolTrackingSubState
+from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.tools import (
-    InMemoryToolAuditSink,
     ToolError,
-    ToolExecutor,
     governance_extras,
     tool_failure,
     tool_governance,
@@ -288,7 +287,7 @@ class TestToolExecutor:
         assert sink.events[1].rate_limited is True
 
     def test_gateway_denies_tool_blocked_by_policy_override(self):
-        from personal_agent.policy import PolicyEngine, PolicyRules
+        from personal_agent.governance.policy import PolicyEngine, PolicyRules
 
         sink = InMemoryToolAuditSink()
         engine = PolicyEngine(PolicyRules(deny_tools=frozenset({"echo"})))

@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import EntryInput, local_now
-from personal_agent.guardrails import get_content_guard
+from personal_agent.governance.guardrails import get_content_guard
 from personal_agent.agent.orchestration_models import (
     AgentGraphState,
     StepRunState,

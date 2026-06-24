@@ -10,8 +10,8 @@ if TYPE_CHECKING:
     from personal_agent.kernel.models import EntryInput
     from personal_agent.memory.graphiti.store import GraphitiStore
     from personal_agent.memory import MemoryFacade
-    from personal_agent.policy import PolicyEngine
-    from personal_agent.tools import ToolExecutor
+    from personal_agent.governance.policy import PolicyEngine
+    from personal_agent.governance import ToolExecutor
     from personal_agent.agent.ask import AskRunContextStore
     from personal_agent.agent.replanner import Replanner
     from personal_agent.agent.router import IntentRouter

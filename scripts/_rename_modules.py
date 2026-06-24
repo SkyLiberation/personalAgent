@@ -45,13 +45,36 @@ def rewrite_text(text: str, old: str, new: str, modules: set[str], rules) -> tup
     for pat, repl in rules:
         text, n = pat.subn(repl, text)
         count += n
-    # Rule B: `from <old> import a, b` where some names are moved modules.
+    # Rule B (multi-line): `from <old> import (\n  a,\n  b,\n)` — split moved names.
+    paren_re = re.compile(
+        rf"^(?P<indent>[ \t]*)from {re.escape(old)} import \((?P<body>[^)]*)\)",
+        re.M,
+    )
+
+    def _split_paren(m: re.Match) -> str:
+        nonlocal count
+        indent, body = m.group("indent"), m.group("body")
+        names = [n.strip() for n in body.replace("\n", " ").split(",") if n.strip()]
+        moved = [n for n in names if n.split(" as ")[0].strip() in modules]
+        stayed = [n for n in names if n.split(" as ")[0].strip() not in modules]
+        if not moved:
+            return m.group(0)
+        count += len(moved)
+        out_lines = [f"{indent}from {new} import {', '.join(moved)}"]
+        if stayed:
+            inner = "".join(f"{indent}    {n},\n" for n in stayed)
+            out_lines.append(f"{indent}from {old} import (\n{inner}{indent})")
+        return "\n".join(out_lines)
+
+    text = paren_re.sub(_split_paren, text)
+
+    # Rule B (single-line): `from <old> import a, b` where some names moved.
     line_re = re.compile(rf"^(\s*)from {re.escape(old)} import (.+)$", re.M)
 
     def _split_import(m: re.Match) -> str:
         nonlocal count
         indent, names_part = m.group(1), m.group(2)
-        # Don't touch parenthesised multi-line imports here (rare; none in repo).
+        # Parenthesised imports are handled by paren_re above.
         if "(" in names_part:
             return m.group(0)
         names = [n.strip() for n in names_part.split(",")]

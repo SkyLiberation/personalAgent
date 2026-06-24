@@ -14,8 +14,8 @@ from personal_agent.memory import MemoryFacade
 from personal_agent.application.knowledge import KnowledgeConsolidationUseCase
 from personal_agent.application.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
 from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
-from personal_agent.guardrails import configure_guardrails
-from personal_agent.policy import PolicyEngine, PolicyRules
+from personal_agent.governance.guardrails import configure_guardrails
+from personal_agent.governance.policy import PolicyEngine, PolicyRules
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
@@ -24,8 +24,8 @@ from personal_agent.infra.storage.postgres_workflow_definition_store import Post
 from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
 from personal_agent.infra.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
+from personal_agent.governance import ToolExecutor
 from personal_agent.tools import (
-    ToolExecutor,
     build_capture_text_tool,
     build_capture_upload_tool,
     build_capture_url_tool,

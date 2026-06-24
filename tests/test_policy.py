@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.policy import (
+from personal_agent.governance.policy import (
     PolicyDecision,
     PolicyEngine,
     PolicyInput,

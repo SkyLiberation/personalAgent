@@ -17,13 +17,6 @@ from personal_agent.tools.capture_url import build_capture_url_tool
 from personal_agent.tools.consolidate_knowledge import build_consolidate_knowledge_tool
 from personal_agent.tools.delete_note import build_delete_note_tool
 from personal_agent.tools.restore_note import build_restore_note_tool
-from personal_agent.tools.gateway import (
-    IdempotencyStore,
-    InMemoryToolAuditSink,
-    ToolAuditSink,
-    ToolGateway,
-    ToolGatewayContext,
-)
 from personal_agent.tools.graph_search import build_graph_search_tool
 from personal_agent.tools.inspect_knowledge_gaps import build_inspect_knowledge_gaps_tool
 from personal_agent.tools.knowledge_lifecycle import (
@@ -61,16 +54,9 @@ from personal_agent.tools.research_pipeline import (
     build_research_prepare_run_tool,
     build_research_rank_events_tool,
 )
-from personal_agent.tools.registry import ToolExecutor
 from personal_agent.tools.web_search import build_web_search_tool
 
 __all__ = [
-    "ToolExecutor",
-    "ToolAuditSink",
-    "IdempotencyStore",
-    "ToolGateway",
-    "ToolGatewayContext",
-    "InMemoryToolAuditSink",
     "ToolArtifact",
     "ToolError",
     "build_capture_text_tool",

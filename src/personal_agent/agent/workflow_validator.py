@@ -20,7 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from personal_agent.policy.invariants import (
+from personal_agent.governance.policy.invariants import (
     delete_longterm_violations,
     high_risk_requires_confirmation,
 )
@@ -33,7 +33,7 @@ from personal_agent.agent.workflow import (
 )
 
 if TYPE_CHECKING:
-    from personal_agent.tools import ToolExecutor
+    from personal_agent.governance import ToolExecutor
 
 logger = logging.getLogger(__name__)
 

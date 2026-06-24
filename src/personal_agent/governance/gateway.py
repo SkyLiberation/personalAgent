@@ -21,7 +21,7 @@ from personal_agent.kernel.contracts.tool_runtime import (
     ToolAuditSink,
     ToolGatewayContext,
 )
-from personal_agent.policy import PolicyDecision, PolicyEngine, PolicyInput
+from personal_agent.governance.policy import PolicyDecision, PolicyEngine, PolicyInput
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,

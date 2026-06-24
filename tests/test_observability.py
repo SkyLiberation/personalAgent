@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from personal_agent.application.verifier import AnswerVerifier
-from personal_agent.tools import InMemoryToolAuditSink, ToolExecutor
+from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 
 from tests.test_tools import echo
 

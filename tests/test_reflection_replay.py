@@ -5,7 +5,7 @@ import pytest
 from personal_agent.kernel.config import OpenAIConfig, ReflectionReplaySettings, Settings
 from personal_agent.kernel.models import MemoryItem
 from personal_agent.memory.facade import MemoryFacade
-from personal_agent.policy import PolicyEngine
+from personal_agent.governance.policy import PolicyEngine
 
 
 class FakeLocalStore:

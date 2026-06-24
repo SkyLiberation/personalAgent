@@ -162,8 +162,8 @@ class TestRegistryCapabilityConsistency:
     @pytest.fixture
     def executor(self):
         from langchain_core.tools import tool
+        from personal_agent.governance import ToolExecutor
         from personal_agent.tools import (
-            ToolExecutor,
             governance_extras,
             tool_response,
             tool_success,

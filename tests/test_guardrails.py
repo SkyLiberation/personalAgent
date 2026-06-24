@@ -11,9 +11,9 @@ from personal_agent.infra.structured_parse import (
     parse_structured,
     repair_truncated_json,
 )
-from personal_agent.guardrails import build_content_guard
-from personal_agent.guardrails.engine import HeuristicContentGuard, NoopContentGuard
-from personal_agent.policy import invariants as inv
+from personal_agent.governance.guardrails import build_content_guard
+from personal_agent.governance.guardrails.engine import HeuristicContentGuard, NoopContentGuard
+from personal_agent.governance.policy import invariants as inv
 from pydantic import BaseModel
 
 

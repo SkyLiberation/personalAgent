@@ -15,11 +15,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from personal_agent.policy.invariants import (
+from personal_agent.governance.policy.invariants import (
     is_high_risk_side_effect_action,
     react_autonomy_blocked,
 )
-from personal_agent.policy.models import PolicyDecision, PolicyInput
+from personal_agent.governance.policy.models import PolicyDecision, PolicyInput
 
 logger = logging.getLogger(__name__)
 

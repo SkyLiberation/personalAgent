@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from personal_agent.guardrails.engine import ContentGuard, HeuristicContentGuard, NoopContentGuard
-from personal_agent.guardrails.models import GuardAction, GuardVerdict
+from personal_agent.governance.guardrails.engine import ContentGuard, HeuristicContentGuard, NoopContentGuard
+from personal_agent.governance.guardrails.models import GuardAction, GuardVerdict
 
 if TYPE_CHECKING:
     from personal_agent.kernel.config_models import GuardrailsConfig

@@ -29,7 +29,7 @@ from personal_agent.kernel.evidence import (
 )
 from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
 from personal_agent.kernel.query_understanding import RetrievalFilters
-from personal_agent.guardrails import get_content_guard
+from personal_agent.governance.guardrails import get_content_guard
 from personal_agent.agent.runtime_helpers import _merge_citations, _merge_notes
 from personal_agent.agent.ask.evidence_ops import graph_matches_to_evidence
 

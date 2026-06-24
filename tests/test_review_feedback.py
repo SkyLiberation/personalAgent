@@ -7,7 +7,7 @@ import pytest
 
 from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.memory.facade import MemoryFacade
-from personal_agent.policy import PolicyEngine
+from personal_agent.governance.policy import PolicyEngine
 from personal_agent.application.review import DigestSubscription, ReviewDigest
 from personal_agent.application.review.service import ReviewFeedbackUseCase
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from personal_agent.infra.storage.audit_redaction import redact_audit_payload
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.tools.base import ToolArtifact, ToolInvocationEvent
-from personal_agent.tools.gateway import ToolGatewayContext
+from personal_agent.governance.gateway import ToolGatewayContext
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
