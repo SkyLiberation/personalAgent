@@ -1,0 +1,39 @@
+name: Architecture & Imports
+
+# Enforces the layered architecture established in the refactor:
+# a strict 8-layer + kernel DAG with no import cycles and no upward edges.
+# The layer gate is pure-stdlib and needs no dependencies, so it always runs fast.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  layers:
+    name: Layer / cycle gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Enforce layered DAG (no cycles, no upward edges)
+        run: python scripts/check_layers.py
+
+  lint-imports:
+    name: Ruff + import health
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies (pytest extra + ruff group)
+        run: uv sync --extra dev --dev
+      - name: Ruff (unused imports / undefined names)
+        run: uv run ruff check --select F401,F811,F821 src scripts
+      - name: Import health (collect full test suite)
+        run: uv run pytest --collect-only -q
