@@ -24,10 +24,10 @@ from __future__ import annotations
 
 from time import perf_counter
 
-from personal_agent.agent.service import AgentService
-from personal_agent.agent.runtime_llm import LlmClient
-from personal_agent.core.config import Settings
-from personal_agent.core.llm_telemetry import collect_llm_usage
+from personal_agent.orchestration.service import AgentService
+from personal_agent.infra.runtime_llm import LlmClient
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.llm_telemetry import collect_llm_usage
 
 from .dataset import RagEvalCase, RunOutput
 from .runner import run_output_from_result

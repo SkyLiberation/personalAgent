@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field, model_validator
 
-from .base import governance_extras, tool_failure, tool_response, tool_success
+from personal_agent.tools.base import governance_extras, tool_failure, tool_response, tool_success
 
 if TYPE_CHECKING:
-    from ..memory import MemoryFacade
+    from personal_agent.memory import MemoryFacade
 
 logger = logging.getLogger(__name__)
 

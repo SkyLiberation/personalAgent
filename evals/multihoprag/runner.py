@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
-from personal_agent.graphiti.store import GraphitiStore
-from personal_agent.graphiti.search_strategies import STRATEGIES
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import KnowledgeNote
+from personal_agent.memory.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.search_strategies import STRATEGIES
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 # Reuse dataset-agnostic Graphiti ingest + manifest plumbing from open_ragbench.
 from evals.open_ragbench.runner import (
@@ -124,7 +124,7 @@ def _new_eval_store(
     note_mode: CorpusNoteMode,
 ):
     import tempfile
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="multihoprag_eval_"))
     store = PostgresMemoryStore(
@@ -228,7 +228,7 @@ class CitationRerankStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> list[tuple[str, list[str]]]:
-        from personal_agent.graphiti.reranker import rank_graph_citation_hits
+        from personal_agent.memory.graphiti.reranker import rank_graph_citation_hits
 
         edges, node_names = corpus_to_edges(docs)
         # episode "ep_{pid}_{idx}" -> parent note id "{pid}"
@@ -311,7 +311,7 @@ class _GraphRagIndex:
 
 def _build_graphrag_index(docs: dict[str, MHRDoc]) -> _GraphRagIndex:
     from .adapter import parent_note_id
-    from personal_agent.core.chunking import chunk_content
+    from personal_agent.application.chunking import chunk_content
 
     graph_docs: list[_GraphRagDoc] = []
     sections: list[_GraphRagSection] = []
@@ -494,7 +494,7 @@ class RuntimeAskStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> list[tuple[str, list[str]]]:
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         settings = context.settings
         eval_user_id = context.graphiti_user_id

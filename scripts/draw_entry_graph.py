@@ -18,8 +18,8 @@ def _ensure_src_on_path() -> None:
 def _get_orch_graph():
     _ensure_src_on_path()
 
-    from personal_agent.agent.service import AgentService
-    from personal_agent.core.config import Settings
+    from personal_agent.orchestration.service import AgentService
+    from personal_agent.kernel.config import Settings
 
     settings = Settings.from_env()
     service = AgentService(settings=settings)

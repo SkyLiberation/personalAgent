@@ -86,7 +86,7 @@ def replay_contexts(payloads_path: str | Path) -> dict[str, RunOutput]:
     """Load a JSON map ``{case_id: ask_run_context_payload}`` and project each
     into a RunOutput via ``AskRunContext.from_artifact_payload`` — fully offline,
     no DB, no LLM."""
-    from personal_agent.agent.ask.context import AskRunContext
+    from personal_agent.orchestration.ask.context import AskRunContext
 
     raw = json.loads(Path(payloads_path).read_text(encoding="utf-8"))
     runs: dict[str, RunOutput] = {}

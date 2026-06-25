@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from personal_agent.review import DigestSubscription, ReviewDigestScheduler
-from personal_agent.review.models import ReviewDigestJobResult
-from personal_agent.review.scheduler import is_subscription_due
+from personal_agent.application.review import DigestSubscription, ReviewDigestScheduler
+from personal_agent.application.review.models import ReviewDigestJobResult
+from personal_agent.application.review.scheduler import is_subscription_due
 
 
 def test_subscription_due_respects_timezone_and_schedule_time():

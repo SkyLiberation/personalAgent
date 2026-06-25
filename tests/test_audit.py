@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from personal_agent.storage.audit_redaction import redact_audit_payload
-from personal_agent.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
+from personal_agent.infra.storage.audit_redaction import redact_audit_payload
+from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.tools.base import ToolArtifact, ToolInvocationEvent
-from personal_agent.tools.gateway import ToolGatewayContext
+from personal_agent.governance.gateway import ToolGatewayContext
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -172,10 +172,10 @@ def admin_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
     monkeypatch.setenv("PERSONAL_AGENT_API_KEYS", "user-key:alice")
     monkeypatch.setenv("PERSONAL_AGENT_ADMIN_API_KEYS", "admin-key:root")
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
-    from personal_agent.web.api import create_app
+    from personal_agent.adapters.web.api import create_app
     app = create_app()
     app.state.service.intent_router._classify_with_llm = stub_router_decision
     return TestClient(app)

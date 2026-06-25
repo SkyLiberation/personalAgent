@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from personal_agent.knowledge import ConsolidationResult
+from personal_agent.application.knowledge import ConsolidationResult
+from personal_agent.governance import ToolExecutor
 from personal_agent.tools import (
-    ToolExecutor,
     build_consolidate_knowledge_tool,
     tool_governance,
 )

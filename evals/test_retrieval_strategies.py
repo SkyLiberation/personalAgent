@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from personal_agent.graphiti.search_strategies import STRATEGIES
+from personal_agent.memory.graphiti.search_strategies import STRATEGIES
 
 
 @dataclass(frozen=True)

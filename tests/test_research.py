@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from personal_agent.research import (
+from personal_agent.application.research import (
     DeliveryTarget,
     ResearchFeedback,
     ResearchScheduler,
@@ -14,9 +14,9 @@ from personal_agent.research import (
     SchedulePolicy,
     subscription_due,
 )
-from personal_agent.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.agent.worker import WorkflowWorker
+from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
+from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.application.worker import WorkflowWorker
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -201,7 +201,7 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
         sent = []
 
         def send(self, target, message):
-            from personal_agent.review.models import DeliveryResult
+            from personal_agent.application.review.models import DeliveryResult
             self.sent.append((target, message))
             return DeliveryResult(ok=True, provider_message_id="m1")
 
@@ -229,7 +229,7 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
 
 
 def test_subscription_parser_workflow_intents_are_registered():
-    from personal_agent.agent.workflow import WORKFLOW_REGISTRY
+    from personal_agent.planning.workflow import WORKFLOW_REGISTRY
 
     research_steps = WORKFLOW_REGISTRY.select("research_once").steps
     assert [step.tool_name for step in research_steps[:6]] == [
@@ -247,7 +247,7 @@ def test_subscription_parser_workflow_intents_are_registered():
 
 
 def test_feishu_research_feedback_parser():
-    from personal_agent.feishu.service import _parse_research_feedback
+    from personal_agent.adapters.feishu.service import _parse_research_feedback
 
     assert _parse_research_feedback("N2 不感兴趣") == ("N2", "not_interested")
     assert _parse_research_feedback("n1 入库") == ("N1", "save")

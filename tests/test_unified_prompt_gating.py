@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from personal_agent.agent.runtime_ask import AskService, _selected_citations, _selected_matches
-from personal_agent.core.evidence import ContextPack, EvidenceItem, RankedEvidence
-from personal_agent.core.models import Citation
+from personal_agent.orchestration.runtime_ask import AskService, _selected_citations, _selected_matches
+from personal_agent.kernel.evidence import ContextPack, EvidenceItem, RankedEvidence
+from personal_agent.kernel.models import Citation
 from tests.note_factory import make_note
 
 

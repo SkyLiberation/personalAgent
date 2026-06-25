@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.core.models import ReviewCard
+from personal_agent.kernel.models import ReviewCard
 from personal_agent.memory.facade import MemoryFacade
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.governance.policy import PolicyEngine
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 
@@ -20,7 +21,7 @@ class TestMemoryFacade:
 
     @pytest.fixture
     def facade(self, store):
-        return MemoryFacade(local_store=store)
+        return MemoryFacade(local_store=store, policy_engine=PolicyEngine())
 
     def test_bind_session_tracks_current_key(self, facade):
         facade.bind_session("user1", "session1")

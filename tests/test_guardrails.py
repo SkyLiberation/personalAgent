@@ -3,17 +3,17 @@ content guard, and the shared rate limiter."""
 
 from __future__ import annotations
 
-from personal_agent.core.config_models import GuardrailsConfig
-from personal_agent.core.rate_limit import InMemoryRateLimiter
-from personal_agent.core.structured_parse import (
+from personal_agent.kernel.config_models import GuardrailsConfig
+from personal_agent.kernel.rate_limit import InMemoryRateLimiter
+from personal_agent.infra.structured_parse import (
     extract_json_object,
     load_json_lenient,
     parse_structured,
     repair_truncated_json,
 )
-from personal_agent.guardrails import build_content_guard
-from personal_agent.guardrails.engine import HeuristicContentGuard, NoopContentGuard
-from personal_agent.policy import invariants as inv
+from personal_agent.governance.guardrails import build_content_guard
+from personal_agent.governance.guardrails.engine import HeuristicContentGuard, NoopContentGuard
+from personal_agent.governance.policy import invariants as inv
 from pydantic import BaseModel
 
 

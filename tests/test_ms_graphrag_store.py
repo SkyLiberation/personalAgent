@@ -5,8 +5,8 @@ import shutil
 from uuid import uuid4
 from pathlib import Path
 
-from personal_agent.core.config import MicrosoftGraphRagConfig, Settings
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.kernel.config import MicrosoftGraphRagConfig, Settings
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 
 def _workspace_tmp() -> Path:

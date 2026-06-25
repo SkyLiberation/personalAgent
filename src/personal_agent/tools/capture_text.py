@@ -6,7 +6,7 @@ from typing import Callable
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from .base import governance_extras, tool_response, tool_success
+from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 

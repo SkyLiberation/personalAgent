@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.execution_models import ExecutionStep
-from personal_agent.agent.replanner import Replanner
+from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.planning.replanner import Replanner
 
 
 class TestReplannerHeuristic:
     @pytest.fixture
     def settings(self):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.kernel.config import OpenAIConfig, Settings
 
         return Settings(
             openai=OpenAIConfig(
@@ -96,7 +96,7 @@ class TestReplannerIntentSpecific:
 
     @pytest.fixture
     def settings(self):
-        from personal_agent.core.config import OpenAIConfig, Settings
+        from personal_agent.kernel.config import OpenAIConfig, Settings
 
         return Settings(
             openai=OpenAIConfig(

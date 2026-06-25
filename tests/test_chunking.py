@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.chunking import (
+from personal_agent.application.chunking import (
     chunk_content,
     _split_by_headings,
     _split_by_paragraphs,

@@ -12,4 +12,4 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --retries 10 .
 
-CMD ["uvicorn", "personal_agent.web.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "personal_agent.adapters.web.api:app", "--host", "0.0.0.0", "--port", "8000"]

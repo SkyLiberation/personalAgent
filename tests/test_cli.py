@@ -6,8 +6,8 @@ import pytest
 from pathlib import Path
 from typer.testing import CliRunner
 
-from personal_agent.agent.router import DefaultIntentRouter
-from personal_agent.cli.main import app
+from personal_agent.planning.router import DefaultIntentRouter
+from personal_agent.adapters.cli.main import app
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -22,7 +22,7 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_URI", "")
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
     monkeypatch.setattr(

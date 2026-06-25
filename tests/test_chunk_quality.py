@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from personal_agent.agent.chunk_quality import (
+from personal_agent.application.chunk_quality import (
     RETRIEVABLE_THRESHOLD,
     HeuristicChunkQualityScorer,
     score_drafts,
 )
-from personal_agent.core.models import ChunkDraft
+from personal_agent.kernel.models import ChunkDraft
 
 
 def _draft(content: str, *, category: str = "NarrativeText") -> ChunkDraft:

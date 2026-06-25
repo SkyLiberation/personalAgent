@@ -10,11 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from personal_agent.core.config import Settings
-from personal_agent.core.models import KnowledgeNote
-from personal_agent.graphiti.store import GraphAskResult, GraphitiStore
-from personal_agent.graphiti.search_strategies import STRATEGIES
-from personal_agent.ms_graphrag import MicrosoftGraphRagStore
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import KnowledgeNote
+from personal_agent.memory.graphiti.store import GraphAskResult, GraphitiStore
+from personal_agent.memory.graphiti.search_strategies import STRATEGIES
+from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 from .adapter import CorpusNoteMode, corpus_to_edges, corpus_to_notes, expected_episode, expected_note_ids
 from .loader import CorpusMode, RAGBenchDoc, RAGBenchQuery, load_benchmark
@@ -159,7 +159,7 @@ class CitationRerankStrategy:
     ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
         edges, node_names = corpus_to_edges(docs)
         if self.graph_strategy_name is None:
-            from personal_agent.graphiti.reranker import rank_graph_citation_hits
+            from personal_agent.memory.graphiti.reranker import rank_graph_citation_hits
 
             def citation_hits(question: str):
                 return rank_graph_citation_hits(
@@ -454,7 +454,7 @@ def _record_eval_snapshot(context: BenchmarkContext, strategy_name: str, snapsho
 
 
 def _get_eval_plan(query: RAGBenchQuery, settings: Settings, context: BenchmarkContext):
-    from personal_agent.agent.query_planner import plan_retrieval
+    from personal_agent.planning.query_planner import plan_retrieval
 
     if context.planner_cache is None:
         return plan_retrieval(query.query_text, "", settings), False
@@ -473,7 +473,7 @@ def _new_eval_store(
 ):
     from pathlib import Path
     import tempfile
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="ragbench_eval_"))
     store = PostgresMemoryStore(
@@ -699,7 +699,7 @@ class AskPipelineStrategy:
             )
             _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
 
-        from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+        from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}
@@ -827,7 +827,7 @@ class RuntimeAskStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         settings = context.settings
         eval_user_id = context.graphiti_user_id

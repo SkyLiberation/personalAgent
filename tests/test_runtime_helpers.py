@@ -3,22 +3,22 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from personal_agent.agent.runtime import (
+from personal_agent.orchestration.runtime import (
     _best_snippet,
     _extract_question_keywords,
     _graph_episode_uuids,
     _split_sentences,
     _tokenize_for_overlap,
 )
-from personal_agent.core.models import (
+from personal_agent.kernel.models import (
     Citation,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
 )
-from personal_agent.graphiti.store import GraphCaptureResult
-from personal_agent.graphiti.store import GraphAskResult
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.memory.graphiti.store import GraphCaptureResult
+from personal_agent.memory.graphiti.store import GraphAskResult
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 
@@ -77,7 +77,7 @@ class TestBestSnippet:
             content="Redis 使用内存存储数据。缓存失效策略包括 TTL 和 LRU。",
             summary="关于 Redis 缓存的笔记",
         )
-        from personal_agent.graphiti.reranker import GraphCitationHit
+        from personal_agent.memory.graphiti.reranker import GraphCitationHit
 
         hit = GraphCitationHit(
             episode_uuid="ep1",
@@ -96,7 +96,7 @@ class TestBestSnippet:
             content="一些无关的内容。",
             summary="这是关于缓存策略的摘要说明，包含重要信息。",
         )
-        from personal_agent.graphiti.reranker import GraphCitationHit
+        from personal_agent.memory.graphiti.reranker import GraphCitationHit
 
         hit = GraphCitationHit(
             episode_uuid="ep2",
@@ -174,7 +174,7 @@ class TestMergeGraphCaptureRefs:
             edge_refs=[GraphEdgeRef(uuid="e1", fact="Redis supports caching", source_node_name="Redis")],
             fact_refs=[GraphFactRef(fact="Redis supports caching", edge_uuid="e1", source_node_name="Redis")],
         )
-        from personal_agent.agent.ingestion_pipeline import IngestionPipeline
+        from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
         pipeline = object.__new__(IngestionPipeline)
         pipeline._merge_graph_capture(note, graph_result)
         assert note.graph.episode_uuid == "ep-1"
@@ -212,7 +212,7 @@ class TestGraphAskSemanticEvidence:
         assert _graph_episode_uuids(graph_result) == ["ep-fact", "ep-edge", "ep-related"]
 
     def test_graph_prompt_prioritizes_fact_network(self):
-        from personal_agent.agent.runtime_ask import AskService
+        from personal_agent.orchestration.runtime_ask import AskService
 
         graph_result = GraphAskResult(
             enabled=True,

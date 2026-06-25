@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.config import OpenAIConfig, ReflectionReplaySettings, Settings
-from personal_agent.core.models import MemoryItem
+from personal_agent.kernel.config import OpenAIConfig, ReflectionReplaySettings, Settings
+from personal_agent.kernel.models import MemoryItem
 from personal_agent.memory.facade import MemoryFacade
+from personal_agent.governance.policy import PolicyEngine
 
 
 class FakeLocalStore:
@@ -63,7 +64,7 @@ def _reflection(item_id: str, *, confidence: float = 0.5, status: str = "candida
 @pytest.fixture
 def facade() -> tuple[MemoryFacade, FakeLocalStore]:
     store = FakeLocalStore()
-    return MemoryFacade(store), store
+    return MemoryFacade(store, policy_engine=PolicyEngine()), store
 
 
 class TestPromoteReflection:
@@ -117,14 +118,14 @@ class TestSearchMultiStatus:
 class TestReplanReflectionInjection:
     @pytest.fixture
     def replanner(self):
-        from personal_agent.agent.replanner import Replanner
+        from personal_agent.planning.replanner import Replanner
 
         # No LLM configured -> _replan_with_llm short-circuits; we test prompt build instead.
         return Replanner(Settings(openai=OpenAIConfig(api_key="", base_url="", model="", small_model="")))
 
     def test_reflections_render_into_replanner_prompt(self):
-        from personal_agent.core.prompts import render_prompt
-        from personal_agent.agent.replanner import _clip_reflection
+        from personal_agent.kernel.prompts import render_prompt
+        from personal_agent.planning.replanner import _clip_reflection
 
         item = _reflection("r1", confidence=0.6)
         summary = _clip_reflection(item)
@@ -138,7 +139,7 @@ class TestReplanReflectionInjection:
         assert "教训" in prompt  # the reflection guidance line is present
 
     def test_replan_accepts_reflections_arg(self, replanner):
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         steps = [
             ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="failed"),
@@ -150,11 +151,11 @@ class TestReplanReflectionInjection:
 
 class TestPromotionTrigger:
     def test_record_entry_episode_promotes_applied_reflections(self):
-        from personal_agent.agent.episodic_memory import _promote_applied_reflections
-        from personal_agent.core.models import MemoryEpisode
+        from personal_agent.application.episodic_memory import _promote_applied_reflections
+        from personal_agent.kernel.models import MemoryEpisode
 
         store = FakeLocalStore()
-        fac = MemoryFacade(store)
+        fac = MemoryFacade(store, policy_engine=PolicyEngine())
         store.add_memory_item(_reflection("r1", confidence=0.7))
 
         class _Result:
@@ -169,11 +170,11 @@ class TestPromotionTrigger:
         assert store.items["r1"].status == "confirmed"
 
     def test_disabled_flag_skips_promotion(self):
-        from personal_agent.agent.episodic_memory import _promote_applied_reflections
-        from personal_agent.core.models import MemoryEpisode
+        from personal_agent.application.episodic_memory import _promote_applied_reflections
+        from personal_agent.kernel.models import MemoryEpisode
 
         store = FakeLocalStore()
-        fac = MemoryFacade(store)
+        fac = MemoryFacade(store, policy_engine=PolicyEngine())
         store.add_memory_item(_reflection("r1", confidence=0.7))
 
         class _Result:

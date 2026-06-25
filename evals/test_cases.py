@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from personal_agent.core.models import Citation, KnowledgeNote, NoteBody
+from personal_agent.kernel.models import Citation, KnowledgeNote, NoteBody
 
 
 @dataclass

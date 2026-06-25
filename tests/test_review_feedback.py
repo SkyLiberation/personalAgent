@@ -5,12 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.core.models import ReviewCard, local_now
+from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.memory.facade import MemoryFacade
-from personal_agent.review import DigestSubscription, ReviewDigest
-from personal_agent.review.service import ReviewFeedbackUseCase
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-from personal_agent.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.governance.policy import PolicyEngine
+from personal_agent.application.review import DigestSubscription, ReviewDigest
+from personal_agent.application.review.service import ReviewFeedbackUseCase
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
 
@@ -19,7 +20,7 @@ pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 def test_review_feedback_updates_card_from_delivery_short_id(temp_dir: Path):
-    memory = MemoryFacade(PostgresMemoryStore(temp_dir, POSTGRES_URL))
+    memory = MemoryFacade(PostgresMemoryStore(temp_dir, POSTGRES_URL), policy_engine=PolicyEngine())
     digest_store = PostgresReviewDigestStore(POSTGRES_URL)
     note = make_note(id="note-1", user_id="alice", title="Digest", content="Digest 通过飞书触达")
     card = ReviewCard(

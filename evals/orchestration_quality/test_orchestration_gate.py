@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 
 from .dataset import OrchestrationRunOutput, default_cases_path, load_cases
 from .runner import run_output_from_entry_result

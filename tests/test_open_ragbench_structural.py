@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from tests.note_factory import make_note
-from personal_agent.core.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
+from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
 from evals.open_ragbench.loader import RAGBenchDoc, RAGBenchQuery
 from evals.open_ragbench.runner import (
@@ -141,7 +141,7 @@ def test_ask_pipeline_ablation_reuses_planner_cache(monkeypatch):
         return FakeStore(), []
 
     monkeypatch.setattr("evals.open_ragbench.runner.load_benchmark", fake_load_benchmark)
-    monkeypatch.setattr("personal_agent.agent.query_planner.plan_retrieval", fake_plan_retrieval)
+    monkeypatch.setattr("personal_agent.planning.query_planner.plan_retrieval", fake_plan_retrieval)
     monkeypatch.setattr("evals.open_ragbench.runner._new_eval_store", fake_new_eval_store)
 
     results = run_open_ragbench(

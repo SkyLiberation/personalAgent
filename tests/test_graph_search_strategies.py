@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.core.config import GraphitiConfig, Settings
-from personal_agent.graphiti.search_strategies import (
+from personal_agent.kernel.config import GraphitiConfig, Settings
+from personal_agent.memory.graphiti.search_strategies import (
     STRATEGIES,
     apply_search_config_overrides,
     get_graph_search_strategy,
     list_graph_search_strategies,
 )
-from personal_agent.graphiti.store import GraphitiStore
+from personal_agent.memory.graphiti.store import GraphitiStore
 
 
 class TestGraphSearchStrategies:

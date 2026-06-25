@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from personal_agent.agent.ask_pipeline_factory import AskPipelineFactory
-from personal_agent.core.candidate_enrichers import ParentChildCandidateEnricher
-from personal_agent.core.config import Settings
-from personal_agent.core.evidence import (
+from personal_agent.application.ask_pipeline_factory import AskPipelineFactory
+from personal_agent.application.candidate_enrichers import ParentChildCandidateEnricher
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.evidence import (
     EvidenceItem,
     build_context_pack,
     notes_to_evidence,
     rank_evidence_items,
     select_ranked_evidence,
 )
-from personal_agent.core.rerankers import LlmEvidenceReranker
-from personal_agent.core.models import Citation
+from personal_agent.application.rerankers import LlmEvidenceReranker
+from personal_agent.kernel.models import Citation
 from tests.note_factory import make_note
 
 
@@ -195,7 +195,7 @@ class TestEvidenceRerankers:
                 assert kwargs["api_key"] == "test-key"
                 self.chat = SimpleNamespace(completions=FakeCompletions())
 
-        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
 
         pack = LlmEvidenceReranker(settings).rerank(
             "服务降级是什么",

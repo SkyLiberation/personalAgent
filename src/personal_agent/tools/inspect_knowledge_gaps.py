@@ -3,8 +3,8 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from ..insight import KnowledgeGapUseCase
-from .base import governance_extras, tool_response, tool_success
+from personal_agent.application.insight import KnowledgeGapUseCase
+from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
 class InspectKnowledgeGapsArgs(BaseModel):

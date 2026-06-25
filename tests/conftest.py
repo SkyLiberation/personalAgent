@@ -9,10 +9,10 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import connect
 from psycopg import sql
 
-from personal_agent.core.config import OpenAIConfig, Settings
-from personal_agent.core.models import Citation, KnowledgeNote
-from personal_agent.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.agent.router import (
+from personal_agent.kernel.config import OpenAIConfig, Settings
+from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
+from personal_agent.planning.router import (
     ClarificationDraft,
     GoalDraft,
     RouterOutput,
@@ -63,7 +63,7 @@ def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in _LLM_PROVIDER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    from personal_agent.core import config_env as _config_env_module
+    from personal_agent.kernel import config_env as _config_env_module
 
     monkeypatch.setattr(_config_env_module, "load_dotenv", lambda override=True: False)
 

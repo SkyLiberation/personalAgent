@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from personal_agent.core.models import KnowledgeNote, NoteBody, NoteChunk, NoteSource
+from personal_agent.kernel.models import KnowledgeNote, NoteBody, NoteChunk, NoteSource
 
 from .loader import RAGBenchDoc, RAGBenchQuery
 

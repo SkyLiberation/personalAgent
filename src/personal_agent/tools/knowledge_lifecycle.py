@@ -3,8 +3,8 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from ..core.models import local_now
-from .base import governance_extras, tool_failure, tool_response, tool_success
+from personal_agent.kernel.models import local_now
+from personal_agent.tools.base import governance_extras, tool_failure, tool_response, tool_success
 
 
 def _note_summary(note) -> dict:

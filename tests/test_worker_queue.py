@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from personal_agent.agent.runtime import AgentRuntime
-from personal_agent.core.models import local_now
-from personal_agent.graphiti.store import GraphCaptureResult, GraphitiStore
-from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-from personal_agent.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.orchestration.runtime import AgentRuntime
+from personal_agent.kernel.models import local_now
+from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
+from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from tests.note_factory import make_note
 
 

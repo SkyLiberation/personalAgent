@@ -6,7 +6,7 @@ import pytest
 from tests.conftest import POSTGRES_URL, stub_router_decision
 from langchain_core.messages import AIMessage, HumanMessage
 
-from personal_agent.agent.orchestration_models import (
+from personal_agent.orchestration.orchestration_models import (
     AgentEvent,
     AgentGraphState,
     AgentRunSnapshot,
@@ -20,14 +20,14 @@ from personal_agent.agent.orchestration_models import (
     execution_trace_to_events,
     steps_to_steps_projected_events,
 )
-from personal_agent.agent.orchestration_nodes._helpers import _dialogue_prompt_messages
-from personal_agent.agent.router import (
+from personal_agent.orchestration.orchestration_nodes._helpers import _dialogue_prompt_messages
+from personal_agent.planning.router import (
     Goal,
     RouterDecision as RouterDecisionModel,
     describe_router_decision,
 )
-from personal_agent.core.config import Settings
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.models import EntryInput
 
 
 def RouterDecision(route="unknown", user_visible_message="", **kwargs):
@@ -190,7 +190,7 @@ class TestDialogueMessageRendering:
 
 class TestNormalizeEntry:
     def test_new_run_clears_previous_thread_progress(self):
-        from personal_agent.agent.orchestration_graph import _node_normalize_entry
+        from personal_agent.orchestration.orchestration_graph import _node_normalize_entry
 
         state = AgentGraphState(
             run_id="new-run",
@@ -274,9 +274,9 @@ class TestOrchestrationGraphIntegration:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         runtime = AgentRuntime(
@@ -288,7 +288,7 @@ class TestOrchestrationGraphIntegration:
         return runtime
 
     def test_graph_builds_and_compiles(self, runtime):
-        from personal_agent.agent.orchestration_graph import (
+        from personal_agent.orchestration.orchestration_graph import (
             build_step_execution_graph,
             build_react_graph,
         )
@@ -323,7 +323,7 @@ class TestOrchestrationGraphIntegration:
         assert captured_messages == [[]]
 
     def test_direct_answer_does_not_duplicate_thread_dialogue_in_system_context(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_nodes._entry import _node_direct_answer_branch
+        from personal_agent.orchestration.orchestration_nodes._entry import _node_direct_answer_branch
 
         captured_messages: list[list[dict]] = []
 
@@ -349,7 +349,7 @@ class TestOrchestrationGraphIntegration:
             def __init__(self, **_kwargs):
                 self.chat = FakeChat()
 
-        monkeypatch.setattr("personal_agent.core.llm_trace.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
         monkeypatch.setattr(runtime.settings.openai, "api_key", "test-key")
         monkeypatch.setattr(runtime.settings.openai, "base_url", "http://llm.test")
         monkeypatch.setattr(runtime.settings.openai, "small_model", "small")
@@ -498,7 +498,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_executes_steps_and_stores_composed_note(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, deps: (
                 '{"done":true,"result":{"title":"DNS","content":'
                 '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
@@ -530,7 +530,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_extracts_structured_note_body_before_capture(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, deps: (
                 '{"thought":"整理正文","result":{"标题":"DNS（域名系统）",'
                 '"正文":"DNS 用于将域名转换为 IP 地址。"}}'
@@ -566,7 +566,7 @@ class TestOrchestrationGraphIntegration:
             )
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             reply,
         )
         for text in ("今天西安天气怎么样", "什么是DNS", "什么是JSON Schema"):
@@ -595,7 +595,7 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_streams_step_progress_during_graph_execution(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, deps: (
                 '{"done":true,"result":{"title":"DNS","content":'
                 '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
@@ -720,7 +720,7 @@ class TestOrchestrationGraphIntegration:
             )
 
     def test_legacy_plan_checkpoint_schema_is_not_replayable(self):
-        from personal_agent.agent.entry_orchestrator import _ensure_checkpoint_schema_supported
+        from personal_agent.orchestration.entry_orchestrator import _ensure_checkpoint_schema_supported
 
         with pytest.raises(ValueError, match="legacy plan schema"):
             _ensure_checkpoint_schema_supported({"plan": {"steps": []}}, "old-ckpt")
@@ -729,9 +729,9 @@ class TestOrchestrationGraphIntegration:
             _ensure_checkpoint_schema_supported({"run_id": "abc"}, "partial-ckpt")
 
     def test_persisted_snapshots_are_visible_before_new_execution(self, temp_dir):
-        from personal_agent.agent.runtime import AgentRuntime
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.orchestration.runtime import AgentRuntime
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
         settings = Settings(
             data_dir=temp_dir,
@@ -764,9 +764,9 @@ class TestOrchestrationGraphIntegration:
             restarted._entry._get_orch_graph().checkpointer.conn.close()
 
     def test_cached_orchestration_graph_rebuilds_when_checkpointer_connection_closed(self, temp_dir):
-        from personal_agent.agent.runtime import AgentRuntime
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.orchestration.runtime import AgentRuntime
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
         settings = Settings(
             data_dir=temp_dir,
@@ -856,7 +856,7 @@ class TestPhase3RoutingFunctions:
     """Unit tests for the Phase 3 conditional edge functions."""
 
     def test_after_step_execution_routes_to_confirm_step(self):
-        from personal_agent.agent.orchestration_graph import _after_step_execution
+        from personal_agent.orchestration.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
             step_execution=StepExecutionState(
@@ -869,7 +869,7 @@ class TestPhase3RoutingFunctions:
         assert _after_step_execution(state) == "confirm_step"
 
     def test_after_step_execution_routes_to_handle_failure(self):
-        from personal_agent.agent.orchestration_graph import _after_step_execution
+        from personal_agent.orchestration.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
             step_execution=StepExecutionState(
@@ -882,7 +882,7 @@ class TestPhase3RoutingFunctions:
         assert _after_step_execution(state) == "handle_failure"
 
     def test_after_step_execution_routes_to_handle_success(self):
-        from personal_agent.agent.orchestration_graph import _after_step_execution
+        from personal_agent.orchestration.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
             step_execution=StepExecutionState(
@@ -895,25 +895,25 @@ class TestPhase3RoutingFunctions:
         assert _after_step_execution(state) == "handle_success"
 
     def test_after_confirm_step_confirmed(self):
-        from personal_agent.agent.orchestration_graph import _after_confirm_step
+        from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
         state = AgentGraphState(confirmation_decision="confirmed")
         assert _after_confirm_step(state) == "tool_node"
 
     def test_after_confirm_step_rejected(self):
-        from personal_agent.agent.orchestration_graph import _after_confirm_step
+        from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
         state = AgentGraphState(confirmation_decision="rejected")
         assert _after_confirm_step(state) == "handle_failure"
 
     def test_after_confirm_step_none_defaults_to_failure(self):
-        from personal_agent.agent.orchestration_graph import _after_confirm_step
+        from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
         state = AgentGraphState()
         assert _after_confirm_step(state) == "handle_failure"
 
     def test_resolved_note_id_is_injected_through_verify_dependency(self):
-        from personal_agent.agent.orchestration_nodes._graph_helpers import (
+        from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
             _inject_note_id_into_steps,
         )
 
@@ -952,9 +952,9 @@ class TestPhase3ExecuteExecutionStep:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
@@ -966,7 +966,7 @@ class TestPhase3ExecuteExecutionStep:
     def test_tool_node_result_sets_awaiting_confirmation(self, runtime):
         """A ToolGateway artifact requesting confirmation pauses the current step."""
         from langchain_core.messages import ToolMessage
-        from personal_agent.agent.orchestration_graph import _node_consume_step_tool_result
+        from personal_agent.orchestration.orchestration_graph import _node_consume_step_tool_result
 
         state = AgentGraphState(
             run_id="r1",
@@ -1021,7 +1021,7 @@ class TestPhase3ExecuteExecutionStep:
 
     def test_step_tool_result_rejects_stale_call_id(self, runtime):
         from langchain_core.messages import ToolMessage
-        from personal_agent.agent.orchestration_graph import _node_consume_step_tool_result
+        from personal_agent.orchestration.orchestration_graph import _node_consume_step_tool_result
 
         state = AgentGraphState(
             run_id="r1",
@@ -1047,7 +1047,7 @@ class TestPhase3ExecuteExecutionStep:
 
     def test_node_completes_normally_when_no_pending_confirmation(self, runtime):
         """Without pending_confirmation, the step should complete normally."""
-        from personal_agent.agent.orchestration_graph import _node_execute_step
+        from personal_agent.orchestration.orchestration_graph import _node_execute_step
 
         state = AgentGraphState(
             run_id="r1",
@@ -1070,7 +1070,7 @@ class TestPhase3ExecuteExecutionStep:
         assert result["step_execution"].steps[0].status == "completed"
 
     def test_failure_records_step_retry_budget_and_reason(self, runtime):
-        from personal_agent.agent.orchestration_graph import _node_execute_step
+        from personal_agent.orchestration.orchestration_graph import _node_execute_step
 
         state = AgentGraphState(
             step_execution=StepExecutionState(
@@ -1097,7 +1097,7 @@ class TestPhase3ExecuteExecutionStep:
         assert step.recoverable is False
 
     def test_resolve_uses_llm_to_select_local_delete_candidate(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_nodes._steps import _execute_resolve_step
+        from personal_agent.orchestration.orchestration_nodes._steps import _execute_resolve_step
         from tests.note_factory import make_note
 
         runtime.store.add_note(
@@ -1110,7 +1110,7 @@ class TestPhase3ExecuteExecutionStep:
             )
         )
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda _prompt, _deps: (
                 '{"thought":"匹配 DNS 主题","done":true,'
                 '"result":{"note_id":"note-dns"}}'
@@ -1128,7 +1128,7 @@ class TestPhase3ExecuteExecutionStep:
         assert result["source"] == "llm_candidate_selection"
 
     def test_unresolved_delete_target_fails_before_tool_call(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import (
+        from personal_agent.orchestration.orchestration_graph import (
             _node_execute_step,
             _node_handle_step_failure,
         )
@@ -1144,7 +1144,7 @@ class TestPhase3ExecuteExecutionStep:
             )
         )
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda _prompt, _deps: (
                 '{"thought":"无明显匹配","done":true,'
                 '"result":{"note_id":null}}'
@@ -1193,9 +1193,9 @@ class TestPhase3InterruptResumeIntegration:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
@@ -1266,7 +1266,7 @@ class TestPhase3InterruptResumeIntegration:
 
     def test_interrupt_payload_is_read_from_invoke_result(self):
         """LangGraph exposes interrupt payloads through the invoke result."""
-        from personal_agent.agent.entry_orchestrator import _interrupt_payload_from_result
+        from personal_agent.orchestration.entry_orchestrator import _interrupt_payload_from_result
 
         class _Interrupt:
             value = {"step_id": "s1", "message": "确认？"}
@@ -1293,9 +1293,9 @@ class TestPhase4ReActHelpers:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
@@ -1305,8 +1305,8 @@ class TestPhase4ReActHelpers:
         )
 
     def test_resolve_allowed_tools_for_step(self, runtime):
-        from personal_agent.agent.orchestration_graph import _resolve_allowed_tools_for_step
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.orchestration.orchestration_graph import _resolve_allowed_tools_for_step
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         step = ExecutionStep(
             step_id="s1",
@@ -1319,19 +1319,19 @@ class TestPhase4ReActHelpers:
         assert "nonexistent_tool" not in resolved
 
     def test_is_react_tool_blocked_high_risk(self, runtime):
-        from personal_agent.agent.orchestration_graph import _is_react_tool_blocked
+        from personal_agent.orchestration.orchestration_graph import _is_react_tool_blocked
 
         assert _is_react_tool_blocked("delete_note", runtime.graph_contexts.react)
         assert _is_react_tool_blocked("capture_text", runtime.graph_contexts.react)
 
     def test_is_react_tool_blocked_allows_safe_tools(self, runtime):
-        from personal_agent.agent.orchestration_graph import _is_react_tool_blocked
+        from personal_agent.orchestration.orchestration_graph import _is_react_tool_blocked
 
         assert not _is_react_tool_blocked("graph_search", runtime.graph_contexts.react)
 
     def test_build_react_context(self):
-        from personal_agent.agent.orchestration_graph import _build_react_context
-        from personal_agent.agent.execution_models import ExecutionStep
+        from personal_agent.orchestration.orchestration_graph import _build_react_context
+        from personal_agent.kernel.contracts.execution import ExecutionStep
 
         step = ExecutionStep(step_id="s1", tool_input={"question": "什么是X？"})
         results = {
@@ -1342,13 +1342,13 @@ class TestPhase4ReActHelpers:
         assert "X是一种技术" in ctx
 
     def test_format_react_tools(self, runtime):
-        from personal_agent.agent.orchestration_graph import _format_react_tools
+        from personal_agent.orchestration.orchestration_graph import _format_react_tools
 
         text = _format_react_tools({"graph_search"}, runtime.graph_contexts.react)
         assert "graph_search" in text
 
     def test_summarize_react_tool_result(self):
-        from personal_agent.agent.orchestration_graph import _summarize_react_tool_result
+        from personal_agent.orchestration.orchestration_graph import _summarize_react_tool_result
 
         assert "hello" in _summarize_react_tool_result({"answer": "hello world"})
         assert "无返回数据" in _summarize_react_tool_result(None)
@@ -1367,9 +1367,9 @@ class TestPhase4ReActNodes:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
@@ -1379,7 +1379,7 @@ class TestPhase4ReActNodes:
         )
 
     def test_react_init_seeds_state(self, runtime):
-        from personal_agent.agent.orchestration_graph import _node_react_init
+        from personal_agent.orchestration.orchestration_graph import _node_react_init
 
         state = AgentGraphState(
             run_id="r1",
@@ -1408,25 +1408,25 @@ class TestPhase4ReActNodes:
         assert result["react"].status == "running"
 
     def test_should_continue_react_when_not_done(self):
-        from personal_agent.agent.orchestration_graph import _should_continue_react
+        from personal_agent.orchestration.orchestration_graph import _should_continue_react
 
         state = AgentGraphState(react=ReactSubState(done=False, iteration_index=0, max_iterations=3))
         assert _should_continue_react(state) == "iterate"
 
     def test_should_continue_react_when_done(self):
-        from personal_agent.agent.orchestration_graph import _should_continue_react
+        from personal_agent.orchestration.orchestration_graph import _should_continue_react
 
         state = AgentGraphState(react=ReactSubState(done=True, iteration_index=0, max_iterations=3))
         assert _should_continue_react(state) == "finalize"
 
     def test_should_continue_react_when_exhausted(self):
-        from personal_agent.agent.orchestration_graph import _should_continue_react
+        from personal_agent.orchestration.orchestration_graph import _should_continue_react
 
         state = AgentGraphState(react=ReactSubState(done=False, iteration_index=3, max_iterations=3))
         assert _should_continue_react(state) == "finalize"
 
     def test_react_finalize_writes_result_and_clears_state(self):
-        from personal_agent.agent.orchestration_graph import _node_react_finalize
+        from personal_agent.orchestration.orchestration_graph import _node_react_finalize
 
         state = AgentGraphState(
             run_id="r1",
@@ -1458,7 +1458,7 @@ class TestPhase4ReActNodes:
         assert result["react"].stop_reason == "llm_completed"
 
     def test_react_failed_outcome_is_a_failed_execution_step(self):
-        from personal_agent.agent.orchestration_graph import (
+        from personal_agent.orchestration.orchestration_graph import (
             _after_react_graph,
             _node_react_finalize,
         )
@@ -1503,9 +1503,9 @@ class TestPhase4ReActIterateNode:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
@@ -1515,7 +1515,7 @@ class TestPhase4ReActIterateNode:
         )
 
     def test_react_iterate_done_sets_flag(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
@@ -1537,7 +1537,7 @@ class TestPhase4ReActIterateNode:
             return '{"thought": "已经找到答案","done": true,"result": {"answer": "X是一种技术"}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1549,7 +1549,7 @@ class TestPhase4ReActIterateNode:
         assert result["react"].status == "completed"
 
     def test_react_iterate_parse_failure_increments_index(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
@@ -1571,7 +1571,7 @@ class TestPhase4ReActIterateNode:
             return "not valid json {{{"
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1581,7 +1581,7 @@ class TestPhase4ReActIterateNode:
         assert result["react"].done is not True
 
     def test_react_iterate_parse_failure_exhausts(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
@@ -1603,7 +1603,7 @@ class TestPhase4ReActIterateNode:
             return "bad json"
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1613,7 +1613,7 @@ class TestPhase4ReActIterateNode:
         assert result["react"].stop_reason == "parse_failures_exhausted"
 
     def test_react_iterate_blocked_tool(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
@@ -1635,7 +1635,7 @@ class TestPhase4ReActIterateNode:
             return '{"thought": "需要删除","tool": "delete_note","input": {"note_id": "n1"}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1647,7 +1647,7 @@ class TestPhase4ReActIterateNode:
         assert result["react"].iteration_index == 1
 
     def test_react_iterate_llm_returns_none(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
 
         state = AgentGraphState(
             run_id="r1",
@@ -1666,7 +1666,7 @@ class TestPhase4ReActIterateNode:
         )
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda prompt, rt: None,
         )
 
@@ -1689,9 +1689,9 @@ class TestPhase4ReActMainGraphIntegration:
 
     @pytest.fixture
     def runtime(self, stub_settings):
-        from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
-        from personal_agent.graphiti.store import GraphitiStore
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+        from personal_agent.memory.graphiti.store import GraphitiStore
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
         return AgentRuntime(
@@ -1701,13 +1701,13 @@ class TestPhase4ReActMainGraphIntegration:
         )
 
     def test_react_action_routes_to_shared_tool_node(self, runtime, monkeypatch):
-        from personal_agent.agent.orchestration_graph import (
+        from personal_agent.orchestration.orchestration_graph import (
             _node_react_iterate,
             _should_continue_react,
         )
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda _prompt, _deps: '{"thought":"检索","tool":"graph_search","input":{"query":"X"}}',
         )
         state = AgentGraphState(
@@ -1733,7 +1733,7 @@ class TestPhase4ReActMainGraphIntegration:
 
     def test_react_consumes_shared_tool_node_observation(self, runtime):
         from langchain_core.messages import ToolMessage
-        from personal_agent.agent.orchestration_graph import _node_consume_react_tool_result
+        from personal_agent.orchestration.orchestration_graph import _node_consume_react_tool_result
 
         state = AgentGraphState(
             react=ReactSubState(
@@ -1771,13 +1771,13 @@ class TestPhase4ReActMainGraphIntegration:
 
     def test_main_graph_routes_react_through_main_nodes(self, runtime, monkeypatch):
         """An ask entry with execution steps routes ReAct through main graph nodes."""
-        from personal_agent.agent.orchestration_graph import build_entry_orchestration_graph, _build_checkpointer
+        from personal_agent.orchestration.orchestration_graph import build_entry_orchestration_graph, _build_checkpointer
 
         def _mock_llm(prompt, rt):
             return '{"thought": "已检索","done": true,"result": {"answer": "服务降级是指在系统压力过大时主动关闭非核心能力"}}'
 
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             _mock_llm,
         )
 
@@ -1819,7 +1819,7 @@ class TestPhase4ReActMainGraphIntegration:
         assert result.answer or result.step_execution.steps[0].status == "completed"
 
     def test_after_step_execution_routes_to_react_step(self):
-        from personal_agent.agent.orchestration_graph import _after_step_execution
+        from personal_agent.orchestration.orchestration_graph import _after_step_execution
 
         state = AgentGraphState(
             step_execution=StepExecutionState(
@@ -1871,7 +1871,7 @@ class TestPhase5EventHelpers:
     """Unit tests for execution_trace_from_events and events_to_sse_tuples."""
 
     def test_execution_trace_from_step_started_events(self):
-        from personal_agent.agent.orchestration_models import (
+        from personal_agent.orchestration.orchestration_models import (
             AgentEvent,
             execution_trace_from_events,
         )
@@ -1887,7 +1887,7 @@ class TestPhase5EventHelpers:
         assert len(trace) == 2
 
     def test_execution_trace_deduplicates(self):
-        from personal_agent.agent.orchestration_models import (
+        from personal_agent.orchestration.orchestration_models import (
             AgentEvent,
             execution_trace_from_events,
         )
@@ -1900,12 +1900,12 @@ class TestPhase5EventHelpers:
         assert trace == ["检索"]
 
     def test_execution_trace_empty_for_no_events(self):
-        from personal_agent.agent.orchestration_models import execution_trace_from_events
+        from personal_agent.orchestration.orchestration_models import execution_trace_from_events
 
         assert execution_trace_from_events([]) == []
 
     def test_events_to_sse_tuples_maps_types(self):
-        from personal_agent.agent.orchestration_models import (
+        from personal_agent.orchestration.orchestration_models import (
             AgentEvent,
             events_to_sse_tuples,
         )
@@ -1926,7 +1926,7 @@ class TestPhase5EventHelpers:
             assert "_event_type" in payload
 
     def test_events_to_sse_tuples_empty(self):
-        from personal_agent.agent.orchestration_models import events_to_sse_tuples
+        from personal_agent.orchestration.orchestration_models import events_to_sse_tuples
 
         assert events_to_sse_tuples([]) == []
 
@@ -1935,7 +1935,7 @@ class TestPhase5EntryResultEvents:
     """Tests for EntryResult.events passthrough from graph state."""
 
     def test_entry_result_accepts_events(self):
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
             intents=["ask"],
@@ -1947,14 +1947,14 @@ class TestPhase5EntryResultEvents:
         assert result.events[0]["type"] == "entry_started"
 
     def test_entry_result_events_default_empty(self):
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(intents=["direct_answer"], reason="测试", reply_text="你好")
         assert result.events == []
 
     def test_entry_result_events_serialization_roundtrip(self):
-        from personal_agent.agent.orchestration_models import AgentEvent
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.orchestration.orchestration_models import AgentEvent
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
             intents=["ask"],
@@ -1975,10 +1975,10 @@ class TestPhase5ExecutionTraceDerivation:
     """Integration tests verifying execution_trace is derived from events."""
 
     def test_finalize_step_execution_derives_trace(self, monkeypatch):
-        from personal_agent.agent.orchestration_graph import (
+        from personal_agent.orchestration.orchestration_graph import (
             _node_finalize_step_execution,
         )
-        from personal_agent.agent.orchestration_models import AgentGraphState
+        from personal_agent.orchestration.orchestration_models import AgentGraphState
 
         state = AgentGraphState(
             run_id="test-trace",
@@ -2000,10 +2000,10 @@ class TestPhase5ExecutionTraceDerivation:
         assert result["events"][-1].type == "answer_completed"
 
     def test_finalize_steps_no_events_produces_empty_trace(self):
-        from personal_agent.agent.orchestration_graph import (
+        from personal_agent.orchestration.orchestration_graph import (
             _node_finalize_step_execution,
         )
-        from personal_agent.agent.orchestration_models import AgentGraphState
+        from personal_agent.orchestration.orchestration_models import AgentGraphState
 
         state = AgentGraphState(
             run_id="test-empty",
@@ -2021,7 +2021,7 @@ class TestPhase5FinalizeEntryState:
     """Final result nodes must persist their status markers to checkpoints."""
 
     def test_successful_finalize_persists_completion_events(self):
-        from personal_agent.agent.orchestration_graph import _node_finalize_entry_result
+        from personal_agent.orchestration.orchestration_graph import _node_finalize_entry_result
 
         state = AgentGraphState(
             run_id="test-finalize",
@@ -2040,7 +2040,7 @@ class TestPhase5FinalizeEntryState:
         assert result["messages"][0].content == "你好"
 
     def test_finalize_does_not_duplicate_existing_answer_completed_event(self):
-        from personal_agent.agent.orchestration_graph import _node_finalize_entry_result
+        from personal_agent.orchestration.orchestration_graph import _node_finalize_entry_result
 
         state = AgentGraphState(
             run_id="test-step-finalize",
@@ -2062,8 +2062,8 @@ class TestPhase5GraphToEntryResultEvents:
 
     def test_graph_entry_result_has_events(self, monkeypatch):
         """Verify that execute_entry returns events when graph is enabled."""
-        from personal_agent.agent.orchestration_models import AgentGraphState
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.orchestration.orchestration_models import AgentGraphState
+        from personal_agent.application.runtime_results import EntryResult
 
         # Simulate what happens in execute_entry after graph.invoke()
         state = AgentGraphState(
@@ -2097,7 +2097,7 @@ class TestPhase5GraphToEntryResultEvents:
 
     def test_interrupted_result_has_events(self):
         """Verify that interrupted (waiting_confirmation) results carry accumulated events."""
-        from personal_agent.agent.runtime_results import EntryResult
+        from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
             intents=["unknown"],

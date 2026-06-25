@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.workflow import (
+from personal_agent.planning.workflow import (
     EDGE_ABORT,
     EDGE_CLARIFY,
     WORKFLOW_REGISTRY,
@@ -11,7 +11,7 @@ from personal_agent.agent.workflow import (
     WorkflowStepSpec,
     WorkflowRegistry,
 )
-from personal_agent.agent.workflow_validator import (
+from personal_agent.planning.workflow_validator import (
     WorkflowSpecValidator,
     validate_registry_against_capabilities,
 )
@@ -162,8 +162,8 @@ class TestRegistryCapabilityConsistency:
     @pytest.fixture
     def executor(self):
         from langchain_core.tools import tool
+        from personal_agent.governance import ToolExecutor
         from personal_agent.tools import (
-            ToolExecutor,
             governance_extras,
             tool_response,
             tool_success,

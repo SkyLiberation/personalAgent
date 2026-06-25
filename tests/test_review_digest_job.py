@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from personal_agent.core.config import ReviewDigestConfig, Settings
-from personal_agent.core.models import ReviewCard, local_now
-from personal_agent.review import (
+from personal_agent.kernel.config import ReviewDigestConfig, Settings
+from personal_agent.kernel.models import ReviewCard, local_now
+from personal_agent.application.review import (
     DeliveryMessage,
     DeliveryResult,
     DeliveryTarget,
@@ -13,7 +13,7 @@ from personal_agent.review import (
     ReviewDigestUseCase,
     subscriptions_from_settings,
 )
-from personal_agent.review.delivery import DeliveryRouter
+from personal_agent.application.review.delivery import DeliveryRouter
 from tests.note_factory import make_note
 
 

@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from personal_agent.agent.replanner import Replanner
-from personal_agent.agent.step_projector import ExecutionStep
-from personal_agent.agent.workflow import WORKFLOW_REGISTRY
-from personal_agent.core.config import Settings
+from personal_agent.planning.replanner import Replanner
+from personal_agent.orchestration.step_projector import ExecutionStep
+from personal_agent.planning.workflow import WORKFLOW_REGISTRY
+from personal_agent.kernel.config import Settings
 
 
 @dataclass

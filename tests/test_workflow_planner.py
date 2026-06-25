@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.agent.router import Goal, RouterDecision
-from personal_agent.agent.workflow_planner import WorkflowPlanner
-from personal_agent.core.config import Settings
+from personal_agent.planning.router import Goal, RouterDecision
+from personal_agent.planning.workflow_planner import WorkflowPlanner
+from personal_agent.kernel.config import Settings
 
 
 def test_planner_compiles_ingest_then_ask_workflows():

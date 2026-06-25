@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.core.config import Settings
+from personal_agent.kernel.config import Settings
 from tests.conftest import (  # reuse the canonical test infrastructure
     POSTGRES_URL,
     clean_postgres_business_tables,  # noqa: F401 — re-exported fixture
@@ -45,9 +45,9 @@ def stub_settings(temp_dir: Path) -> Settings:
 @pytest.fixture
 def runtime(stub_settings: Settings):
     """A real AgentRuntime with the router LLM replaced by a deterministic stub."""
-    from personal_agent.agent.runtime import AgentRuntime
-    from personal_agent.graphiti.store import GraphitiStore
-    from personal_agent.storage.postgres_memory_store import PostgresMemoryStore
+    from personal_agent.orchestration.runtime import AgentRuntime
+    from personal_agent.memory.graphiti.store import GraphitiStore
+    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
     store = PostgresMemoryStore(stub_settings.data_dir, stub_settings.postgres_url)
     runtime = AgentRuntime(
@@ -70,11 +70,11 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
 
-    from personal_agent.core import config_env as config_env_module
+    from personal_agent.kernel import config_env as config_env_module
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
-    from personal_agent.web.api import create_app
+    from personal_agent.adapters.web.api import create_app
 
     app = create_app()
     app.state.service.runtime._intent_router._classify_with_llm = stub_router_decision

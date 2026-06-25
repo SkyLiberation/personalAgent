@@ -1,4 +1,4 @@
-from personal_agent.core.llm_telemetry import collect_llm_usage, record_llm_usage
+from personal_agent.kernel.llm_telemetry import collect_llm_usage, record_llm_usage
 
 
 def test_collect_llm_usage_accumulates_calls_and_tokens():

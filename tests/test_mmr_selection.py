@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.core.evidence import (
+from personal_agent.kernel.evidence import (
     EvidenceItem,
     rank_evidence_items,
     select_ranked_evidence,

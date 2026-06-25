@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from personal_agent.agent.ingestion_pipeline import IngestionPipeline
-from personal_agent.core.models import AgentState, ChunkDraft, RawIngestItem
+from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
+from personal_agent.kernel.models import AgentState, ChunkDraft, RawIngestItem
 
 
 def _run_local_pipeline(state: AgentState, store) -> AgentState:
@@ -78,7 +78,7 @@ def test_unstructured_chunks_materialize_child_notes(monkeypatch) -> None:
     ]
 
     monkeypatch.setattr(
-        "personal_agent.core.document_partition.partition_to_chunk_drafts",
+        "personal_agent.application.document_partition.partition_to_chunk_drafts",
         lambda *args, **kwargs: drafts,
     )
 
@@ -108,7 +108,7 @@ def test_single_unstructured_chunk_keeps_parent_only(monkeypatch) -> None:
         )
     ]
     monkeypatch.setattr(
-        "personal_agent.core.document_partition.partition_to_chunk_drafts",
+        "personal_agent.application.document_partition.partition_to_chunk_drafts",
         lambda *args, **kwargs: drafts,
     )
 

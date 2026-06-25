@@ -146,8 +146,8 @@ def main() -> int:
     _ensure_src_on_path()
 
     from langgraph.checkpoint.postgres import PostgresSaver
-    from personal_agent.core.config import Settings
-    from personal_agent.storage.postgres_common import normalize_postgres_url
+    from personal_agent.kernel.config import Settings
+    from personal_agent.infra.storage.postgres_common import normalize_postgres_url
 
     settings = Settings.from_env()
     parser = argparse.ArgumentParser(

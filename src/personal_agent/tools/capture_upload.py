@@ -6,8 +6,8 @@ from pathlib import Path
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from ..capture import CaptureService
-from .base import ToolError, governance_extras, tool_response, tool_success
+from personal_agent.application.capture import CaptureService
+from personal_agent.tools.base import ToolError, governance_extras, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 

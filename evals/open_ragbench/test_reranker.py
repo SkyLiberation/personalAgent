@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.graphiti.reranker import rank_graph_citation_hits
+from personal_agent.memory.graphiti.reranker import rank_graph_citation_hits
 
 from .adapter import corpus_to_edges, expected_episode
 from .metrics import RetrievalReport, compute_report

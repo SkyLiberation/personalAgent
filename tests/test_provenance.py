@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from personal_agent.agent.provenance import HeuristicProvenanceExtractor
-from personal_agent.core.models import RawIngestItem
+from personal_agent.application.provenance import HeuristicProvenanceExtractor
+from personal_agent.kernel.models import RawIngestItem
 
 
 def _item(content="", source_type="text", source_ref=None, metadata=None) -> RawIngestItem:

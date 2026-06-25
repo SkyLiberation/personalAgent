@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from personal_agent.core.config import LangExtractConfig
-from personal_agent.extract.schemas import SectionMap, SectionRecord
-from personal_agent.extract.service import PreExtractError, PreExtractService
+from personal_agent.kernel.config import LangExtractConfig
+from personal_agent.application.extract.schemas import SectionMap, SectionRecord
+from personal_agent.application.extract.service import PreExtractError, PreExtractService
 
 
 def _annotated(extractions: list[SimpleNamespace]) -> SimpleNamespace:
@@ -103,7 +103,7 @@ def test_extract_falls_back_on_runtime_error(monkeypatch: pytest.MonkeyPatch) ->
     def _boom(*_a: Any, **_k: Any) -> None:
         raise RuntimeError("simulated provider failure")
 
-    monkeypatch.setattr("personal_agent.extract.service.run_extract", _boom)
+    monkeypatch.setattr("personal_agent.application.extract.service.run_extract", _boom)
 
     out = svc.extract("x" * 100)
     assert isinstance(out, SectionMap)
@@ -121,7 +121,7 @@ def test_extract_raises_when_fallback_disabled(
     def _boom(*_a: Any, **_k: Any) -> None:
         raise RuntimeError("simulated provider failure")
 
-    monkeypatch.setattr("personal_agent.extract.service.run_extract", _boom)
+    monkeypatch.setattr("personal_agent.application.extract.service.run_extract", _boom)
 
     with pytest.raises(PreExtractError):
         svc.extract("x" * 100)
@@ -157,7 +157,7 @@ def test_extract_calls_run_extract_with_config(
             ]
         )
 
-    monkeypatch.setattr("personal_agent.extract.service.run_extract", _fake_run)
+    monkeypatch.setattr("personal_agent.application.extract.service.run_extract", _fake_run)
 
     out = svc.extract("hello world")
     assert out.sections[0].topic == "Hi"

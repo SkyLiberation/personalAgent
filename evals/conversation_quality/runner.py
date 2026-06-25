@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from personal_agent.core.models import EntryInput
+from personal_agent.kernel.models import EntryInput
 
 from .dataset import (
     ConversationEvalCase,
