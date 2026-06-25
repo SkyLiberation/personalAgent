@@ -33,46 +33,15 @@ ROOT_PKG = "personal_agent"
 # Covers both legacy package names and the target layer package names so the gate
 # works at every stage of the migration.
 LAYER: dict[str, int] = {
-    # ----- kernel (0) -----
     "kernel": 0,
-    # ----- infra (1) -----
     "infra": 1,
-    "storage": 1,  # legacy -> infra/storage
-    # ----- application (3) -----
-    # ``core`` now holds only application-tier leftovers (chunking, rerankers,
-    # document_partition, candidate_enrichers) after its kernel modules moved to
-    # kernel/ in stage 3; it dissolves into application/ in stage 5.
-    "core": 3,
-    # ----- memory (2) -----
     "memory": 2,
-    "graphiti": 2,
-    "ms_graphrag": 2,
-    "structural_retriever": 2,
-    "graphrag": 2,
-    # ----- application (3) -----
     "application": 3,
-    "capture": 3,
-    "research": 3,
-    "review": 3,
-    "insight": 3,
-    "knowledge": 3,
-    "extract": 3,
-    # ----- tools (4) -----
     "tools": 4,
-    # ----- governance (5) -----
     "governance": 5,
-    "policy": 5,
-    "guardrails": 5,
-    # ----- planning (6) -----
     "planning": 6,
-    # ----- orchestration (7) -----
     "orchestration": 7,
-    "agent": 7,  # legacy: splits into planning/orchestration/memory/application over stages
-    # ----- adapters (8) -----
     "adapters": 8,
-    "web": 8,
-    "cli": 8,
-    "feishu": 8,
 }
 
 LAYER_NAME = {

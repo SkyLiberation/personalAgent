@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
-from personal_agent.feishu.models import FeishuIncomingMessage
+from personal_agent.adapters.feishu.models import FeishuIncomingMessage
 
 
 def parse_p2_message_event(

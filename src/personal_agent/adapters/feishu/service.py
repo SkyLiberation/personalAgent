@@ -11,9 +11,9 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
 from personal_agent.application.review import ReviewFeedbackUseCase
 from personal_agent.application.research import ResearchFeedback
-from personal_agent.feishu.client import FeishuClientMixin
-from personal_agent.feishu.models import FeishuIncomingMessage
-from personal_agent.feishu.review_commands import (
+from personal_agent.adapters.feishu.client import FeishuClientMixin
+from personal_agent.adapters.feishu.models import FeishuIncomingMessage
+from personal_agent.adapters.feishu.review_commands import (
     handle_digest_subscription_command,
     is_digest_command,
     parse_digest_subscription_command,

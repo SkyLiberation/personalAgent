@@ -10,7 +10,7 @@ from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import setup_logging
 from personal_agent.kernel.models import EntryInput
-from personal_agent.feishu import FeishuService
+from personal_agent.adapters.feishu import FeishuService
 from personal_agent.application.review import (
     DigestSubscription,
     ReviewDigestJob,

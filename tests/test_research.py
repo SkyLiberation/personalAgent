@@ -247,7 +247,7 @@ def test_subscription_parser_workflow_intents_are_registered():
 
 
 def test_feishu_research_feedback_parser():
-    from personal_agent.feishu.service import _parse_research_feedback
+    from personal_agent.adapters.feishu.service import _parse_research_feedback
 
     assert _parse_research_feedback("N2 不感兴趣") == ("N2", "not_interested")
     assert _parse_research_feedback("n1 入库") == ("N1", "save")

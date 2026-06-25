@@ -8,9 +8,9 @@ from personal_agent.orchestration.service import AgentService
 from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
-from personal_agent.web.input_normalization import normalize_entry_text
-from personal_agent.web.routes._shared import resolve_user_id
-from personal_agent.web.routes.entry_serializers import entry_response_dict
+from personal_agent.adapters.web.input_normalization import normalize_entry_text
+from personal_agent.adapters.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes.entry_serializers import entry_response_dict
 
 logger = logging.getLogger(__name__)
 

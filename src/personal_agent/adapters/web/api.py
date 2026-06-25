@@ -12,9 +12,9 @@ from fastapi.staticfiles import StaticFiles
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import setup_logging
-from personal_agent.web.auth import AuthMiddleware, RateLimiter
-from personal_agent.web.context import WebAppContext, build_web_app_context
-from personal_agent.web.routes import register_api_routes
+from personal_agent.adapters.web.auth import AuthMiddleware, RateLimiter
+from personal_agent.adapters.web.context import WebAppContext, build_web_app_context
+from personal_agent.adapters.web.routes import register_api_routes
 logger = logging.getLogger(__name__)
 
 

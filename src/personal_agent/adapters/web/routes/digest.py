@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import KnowledgeNote, ReviewCard
-from personal_agent.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes._shared import resolve_user_id
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from personal_agent.orchestration.service import AgentService
 from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.config import Settings
-from personal_agent.feishu import FeishuService
+from personal_agent.adapters.feishu import FeishuService
 from personal_agent.application.insight import (
     KnowledgeGapJob,
     KnowledgeGapJobRunner,

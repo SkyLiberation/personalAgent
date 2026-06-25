@@ -74,7 +74,7 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
-    from personal_agent.web.api import create_app
+    from personal_agent.adapters.web.api import create_app
 
     app = create_app()
     app.state.service.runtime._intent_router._classify_with_llm = stub_router_decision

@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
-from personal_agent.web.routes._shared import is_admin, resolve_user_id
+from personal_agent.adapters.web.routes._shared import is_admin, resolve_user_id
 
 
 def register_audit_routes(

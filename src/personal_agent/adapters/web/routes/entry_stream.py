@@ -10,9 +10,9 @@ from personal_agent.orchestration.orchestration_models import _new_thread_id
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
-from personal_agent.web.input_normalization import normalize_entry_text
-from personal_agent.web.routes._shared import resolve_user_id
-from personal_agent.web.routes.entry_serializers import chunk_answer, sse_event
+from personal_agent.adapters.web.input_normalization import normalize_entry_text
+from personal_agent.adapters.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, sse_event
 
 logger = logging.getLogger(__name__)
 

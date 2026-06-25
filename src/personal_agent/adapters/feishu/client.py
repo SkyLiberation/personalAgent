@@ -17,8 +17,8 @@ from lark_oapi.api.im.v1 import (
     ReplyMessageRequestBody,
 )
 
-from personal_agent.feishu.message_parser import parse_p2_message_event, safe_json_loads
-from personal_agent.feishu.models import FeishuIncomingMessage
+from personal_agent.adapters.feishu.message_parser import parse_p2_message_event, safe_json_loads
+from personal_agent.adapters.feishu.models import FeishuIncomingMessage
 
 logger = logging.getLogger(__name__)
 

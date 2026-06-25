@@ -13,7 +13,7 @@ from personal_agent.application.research import (
     SchedulePolicy,
     SourcePreferences,
 )
-from personal_agent.web.routes._shared import is_admin, resolve_user_id
+from personal_agent.adapters.web.routes._shared import is_admin, resolve_user_id
 
 
 class ResearchSubscriptionRequest(BaseModel):

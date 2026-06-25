@@ -7,7 +7,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from personal_agent.planning.router import DefaultIntentRouter
-from personal_agent.cli.main import app
+from personal_agent.adapters.cli.main import app
 from tests.conftest import POSTGRES_URL, stub_router_decision
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")

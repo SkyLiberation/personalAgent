@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 from personal_agent.application.runtime_results import DigestResult
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
-from personal_agent.feishu.models import FeishuIncomingMessage
-from personal_agent.feishu.service import FeishuService
+from personal_agent.adapters.feishu.models import FeishuIncomingMessage
+from personal_agent.adapters.feishu.service import FeishuService
 from personal_agent.application.review import DigestSubscription
 from personal_agent.application.review.models import ReviewFeedbackResult
 

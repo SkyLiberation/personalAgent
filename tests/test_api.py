@@ -26,7 +26,7 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from personal_agent.kernel import config_env as config_env_module
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
-    from personal_agent.web.api import create_app
+    from personal_agent.adapters.web.api import create_app
     app = create_app()
     app.state.service.intent_router._classify_with_llm = stub_router_decision
     app.state.review_digest_delivery_router = DeliveryRouter({"feishu": _FakeDigestProvider()})
@@ -55,7 +55,7 @@ class TestHealthEndpoint:
         assert "graphiti" in data
 
     def test_frontend_dist_is_resolved_from_project_root(self):
-        from personal_agent.web.api import _frontend_dist_dir
+        from personal_agent.adapters.web.api import _frontend_dist_dir
 
         project_root = Path(__file__).resolve().parents[1]
         assert _frontend_dist_dir() == project_root / "frontend" / "dist"
