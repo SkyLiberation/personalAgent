@@ -164,7 +164,7 @@ def _is_react_tool_blocked(tool_name: str, deps: ReactContext) -> bool:
     The tool's governance snapshot is fed to the shared ``PolicyEngine`` so the
     block decision matches what the ToolGateway would enforce at execution time.
     """
-    from personal_agent.governance.policy import PolicyEngine, PolicyInput
+    from personal_agent.governance.policy import PolicyInput
     from personal_agent.tools import tool_governance
 
     spec = next((t for t in deps.tool_executor.list_tools() if t.name == tool_name), None)

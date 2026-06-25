@@ -8,7 +8,7 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.execution import ExecutionPlan, ExecutionStep, WorkflowTask
 
 if TYPE_CHECKING:
-    from personal_agent.planning.router import Goal, RouterDecision
+    from personal_agent.planning.router import RouterDecision
 
 
 class WorkflowPlanner:
