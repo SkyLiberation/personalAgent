@@ -11,7 +11,7 @@ from personal_agent.kernel.models import AgentState, KnowledgeNote, RawIngestIte
 from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.agent.nodes import (
+from personal_agent.orchestration.nodes import (
     capture_node,
     chunk_reconcile_node,
     enrich_node,
@@ -19,7 +19,7 @@ from personal_agent.agent.nodes import (
     schedule_review_node,
     structural_chunk_node,
 )
-from personal_agent.agent.runtime_helpers import _merge_notes
+from personal_agent.orchestration.runtime_helpers import _merge_notes
 from personal_agent.application.runtime_results import CaptureResult
 
 logger = logging.getLogger(__name__)

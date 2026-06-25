@@ -6,8 +6,8 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from personal_agent.agent.orchestration_models import _new_thread_id
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.orchestration_models import _new_thread_id
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
 from personal_agent.web.input_normalization import normalize_entry_text
@@ -81,7 +81,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                 return
 
             if result.events and not streamed_graph_events:
-                from personal_agent.agent.orchestration_models import (
+                from personal_agent.orchestration.orchestration_models import (
                     AgentEvent,
                     events_to_sse_tuples,
                     execution_trace_from_events,

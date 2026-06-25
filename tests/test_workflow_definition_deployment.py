@@ -13,7 +13,7 @@ from tests.conftest import stub_router_decision
 
 @pytest.fixture
 def runtime(settings, clean_postgres_business_tables):
-    from personal_agent.agent.runtime import AgentRuntime
+    from personal_agent.orchestration.runtime import AgentRuntime
     from personal_agent.memory.graphiti.store import GraphitiStore
     from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from personal_agent.agent.runtime import AgentRuntime
+from personal_agent.orchestration.runtime import AgentRuntime
 from personal_agent.kernel.models import local_now
 from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore

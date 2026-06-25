@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import EntryInput
 from tests.conftest import POSTGRES_URL, stub_router_decision

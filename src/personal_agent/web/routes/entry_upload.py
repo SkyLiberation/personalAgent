@@ -4,7 +4,7 @@ import logging
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput

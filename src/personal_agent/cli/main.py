@@ -6,7 +6,7 @@ import logging
 import typer
 
 from personal_agent.application.runtime_results import EntryResult
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import setup_logging
 from personal_agent.kernel.models import EntryInput

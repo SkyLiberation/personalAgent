@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.config import Settings
 from personal_agent.web.routes.entry_runs import register_entry_run_routes

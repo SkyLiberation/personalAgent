@@ -63,9 +63,9 @@ from personal_agent.tools import (
     build_save_research_event_tool,
     build_web_search_tool,
 )
-from personal_agent.agent.entry_orchestrator import EntryOrchestrator
+from personal_agent.orchestration.entry_orchestrator import EntryOrchestrator
 from personal_agent.application.episodic_memory import record_entry_episode
-from personal_agent.agent.orchestration_contexts import (
+from personal_agent.orchestration.orchestration_contexts import (
     DirectAnswerContext,
     GraphContexts,
     PlanningContext,
@@ -78,10 +78,10 @@ from personal_agent.planning.workflow_planner import WorkflowPlanner
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
 from personal_agent.planning.replanner import Replanner
 from personal_agent.planning.router import DefaultIntentRouter
-from personal_agent.agent.ingestion_pipeline import IngestionPipeline
-from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids
-from personal_agent.agent.runtime_ask import AskService
-from personal_agent.agent.runtime_helpers import (
+from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
+from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
+from personal_agent.orchestration.runtime_ask import AskService
+from personal_agent.orchestration.runtime_helpers import (
     _annotate_answer,
     _best_snippet,
     _evidence_content,
@@ -237,7 +237,7 @@ class AgentRuntime:
         self._replanner = Replanner(settings)
         # Explicit collaborators.
         self._summarizer = ThreadSummarizer(self._llm)
-        from personal_agent.agent.ask import PostgresAskRunContextStore
+        from personal_agent.orchestration.ask import PostgresAskRunContextStore
 
         direct_answer_context = DirectAnswerContext(
             settings=self.settings,
@@ -808,7 +808,7 @@ class AgentRuntime:
         return self.workflow_replay_store.list_replay_runs(run_id, limit=limit)
 
     def rebuild_workflow_projection(self, run_id: str):
-        from personal_agent.agent.workflow_event_projection import project_workflow_events
+        from personal_agent.orchestration.workflow_event_projection import project_workflow_events
 
         return project_workflow_events(
             run_id,
@@ -890,7 +890,7 @@ class AgentRuntime:
         run_id: str,
         to_version: str,
     ):
-        from personal_agent.agent.workflow_state_migration import migrate_step_execution
+        from personal_agent.orchestration.workflow_state_migration import migrate_step_execution
 
         source_state = self._entry.get_run_state(run_id)
         if source_state is None:

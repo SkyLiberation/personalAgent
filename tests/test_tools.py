@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from pydantic import ValidationError
 
-from personal_agent.agent.orchestration_models import AgentGraphState, ReactSubState, ToolTrackingSubState
+from personal_agent.orchestration.orchestration_models import AgentGraphState, ReactSubState, ToolTrackingSubState
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.tools import (
     ToolError,

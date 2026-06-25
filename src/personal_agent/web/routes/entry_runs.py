@@ -4,8 +4,8 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request
 
-from personal_agent.agent.orchestration_models import AgentRunStatus
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.orchestration_models import AgentRunStatus
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.web.input_normalization import normalize_entry_text
 from personal_agent.web.routes._shared import resolve_user_id

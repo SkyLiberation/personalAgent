@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-from personal_agent.agent.orchestration_contexts import (
+from personal_agent.orchestration.orchestration_contexts import (
     DirectAnswerContext,
     GraphContexts,
     PlanningContext,

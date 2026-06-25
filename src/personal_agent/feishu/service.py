@@ -6,7 +6,7 @@ import threading
 
 import lark_oapi as lark
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
 from personal_agent.application.review import ReviewFeedbackUseCase

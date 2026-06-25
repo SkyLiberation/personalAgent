@@ -8,7 +8,7 @@ import pytest
 
 from personal_agent.planning.step_projection_validator import StepProjectionValidationResult
 from personal_agent.planning.router import Goal, RouterDecision
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import EntryInput
 from tests.conftest import POSTGRES_URL
@@ -135,7 +135,7 @@ class TestCrossLayerRegression:
             text="旧部署流程记录", source_type="text", user_id="alice",
         ).note
         monkeypatch.setattr(
-            "personal_agent.agent.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
             lambda _prompt, _deps: (
                 '{"thought":"定位已有笔记","done":true,'
                 f'"result":{{"note_id":"{note.id}"}}}}'

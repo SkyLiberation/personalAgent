@@ -10,7 +10,7 @@ from langgraph.types import interrupt
 
 from personal_agent.kernel.models import EntryInput, local_now
 from personal_agent.governance.guardrails import get_content_guard
-from personal_agent.agent.orchestration_models import (
+from personal_agent.orchestration.orchestration_models import (
     AgentGraphState,
     StepRunState,
     StepExecutionState,
@@ -19,8 +19,8 @@ from personal_agent.agent.orchestration_models import (
     _new_run_id,
     _new_thread_id,
 )
-from personal_agent.agent.orchestration_contexts import DirectAnswerContext, PlanningContext, RoutingContext
-from personal_agent.agent.orchestration_nodes._helpers import (
+from personal_agent.orchestration.orchestration_contexts import DirectAnswerContext, PlanningContext, RoutingContext
+from personal_agent.orchestration.orchestration_nodes._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
     _merge_clarification_text,

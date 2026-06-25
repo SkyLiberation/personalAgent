@@ -5,7 +5,7 @@ from __future__ import annotations
 from time import perf_counter
 from uuid import uuid4
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_telemetry import collect_llm_usage
 from personal_agent.infra.structured_model import build_structured_model_client

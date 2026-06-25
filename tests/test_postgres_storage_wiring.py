@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 import pytest

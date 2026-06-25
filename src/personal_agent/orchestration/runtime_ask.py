@@ -13,18 +13,18 @@ from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.projections import MatchRef
 from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.memory.graphiti.store import GraphAskResult
-from personal_agent.agent.ask import AskRunContext
-from personal_agent.agent.ask.evidence_ops import (
+from personal_agent.orchestration.ask import AskRunContext
+from personal_agent.orchestration.ask.evidence_ops import (
     graph_matches_to_evidence as _graph_matches_to_evidence,
     match_refs as _match_refs,
     selected_citations as _selected_citations,
     selected_matches as _selected_matches,
 )
-from personal_agent.agent.ask.prompts import AskPromptMixin
-from personal_agent.agent.ask.stages import GenerationStage, RetrievalStage, VerificationStage
+from personal_agent.orchestration.ask.prompts import AskPromptMixin
+from personal_agent.orchestration.ask.stages import GenerationStage, RetrievalStage, VerificationStage
 from personal_agent.application.ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
 from personal_agent.planning.query_planner import plan_retrieval
-from personal_agent.agent.runtime_helpers import (
+from personal_agent.orchestration.runtime_helpers import (
     _best_snippet,
     _graph_episode_uuids,
     _graph_fact_lines,

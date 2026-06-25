@@ -5,10 +5,10 @@ from pathlib import Path
 
 from unittest.mock import MagicMock
 
-from personal_agent.agent.service import AgentService
+from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, EntryInput, ReviewCard, local_now
-from personal_agent.agent.runtime_ask import _graph_matches_to_evidence
+from personal_agent.orchestration.runtime_ask import _graph_matches_to_evidence
 from personal_agent.planning.router import GoalDraft, RouterOutput
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.memory.graphiti.store import GraphAskResult, GraphCaptureResult
@@ -458,7 +458,7 @@ class TestAskFlow:
         assert result.session_id == "test-session-42"
 
     def test_ask_pushes_filters_into_local_retrieval(self, service: AgentService, monkeypatch):
-        from personal_agent.agent import runtime_ask
+        from personal_agent.orchestration import runtime_ask
 
         file_note = make_note(
             title="部署文件",
@@ -545,7 +545,7 @@ class TestAskFlow:
         service: AgentService,
         monkeypatch,
     ):
-        from personal_agent.agent import runtime_ask
+        from personal_agent.orchestration import runtime_ask
 
         service.settings = service.settings.model_copy(
             update={

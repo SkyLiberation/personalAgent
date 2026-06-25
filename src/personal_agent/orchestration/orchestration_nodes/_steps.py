@@ -12,14 +12,14 @@ import time
 from langgraph.types import interrupt
 
 from personal_agent.kernel.prompts import render_prompt
-from personal_agent.agent.orchestration_models import (
+from personal_agent.orchestration.orchestration_models import (
     AgentGraphState,
     StepRunState,
     StepExecutionState,
     ReactSubState,
 )
-from personal_agent.agent.orchestration_contexts import StepExecutionContext
-from personal_agent.agent.orchestration_nodes._graph_helpers import (
+from personal_agent.orchestration.orchestration_contexts import StepExecutionContext
+from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _RETRY_DELAY_SECONDS,
     _REACT_MAX_ITERATIONS_CAP,
     _default_step_answer,
@@ -29,8 +29,8 @@ from personal_agent.agent.orchestration_nodes._graph_helpers import (
     _skip_step_dependents,
     _topological_sort_steps,
 )
-from personal_agent.agent.orchestration_nodes import _helpers
-from personal_agent.agent.orchestration_nodes._tooling import (
+from personal_agent.orchestration.orchestration_nodes import _helpers
+from personal_agent.orchestration.orchestration_nodes._tooling import (
     _begin_tool_call,
     _clear_pending_tool_call,
     _latest_tool_artifact,
@@ -40,7 +40,7 @@ from personal_agent.agent.orchestration_nodes._tooling import (
 )
 
 if TYPE_CHECKING:
-    from personal_agent.agent.orchestration_nodes._graph_helpers import ExecutionStep
+    from personal_agent.orchestration.orchestration_nodes._graph_helpers import ExecutionStep
 
 logger = logging.getLogger(__name__)
 
@@ -757,7 +757,7 @@ def _node_finalize_step_execution(state: AgentGraphState, *, deps: StepExecution
     state.answer_completed = True
 
     # Phase 5: derive execution_trace from structured events
-    from personal_agent.agent.orchestration_models import execution_trace_from_events
+    from personal_agent.orchestration.orchestration_models import execution_trace_from_events
     state.execution_trace = execution_trace_from_events(state.events)
 
     state.add_event("answer_completed", {"answer": state.answer})
@@ -1026,7 +1026,7 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionCont
     # run-scoped AskRunContext for the downstream compose/verify steps. The
     # running "retrieve" step honestly reflects that latency to the user.
     if step.task_intent == "ask":
-        from personal_agent.agent.orchestration_nodes._entry import _entry_conversation_messages
+        from personal_agent.orchestration.orchestration_nodes._entry import _entry_conversation_messages
 
         conversation = _entry_conversation_messages(
             state,
@@ -1192,7 +1192,7 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
         return _summarize_thread(state, deps)
 
     if route == "direct_answer":
-        from personal_agent.agent.orchestration_nodes._entry import _node_direct_answer_branch
+        from personal_agent.orchestration.orchestration_nodes._entry import _node_direct_answer_branch
 
         original_entry = state.entry_input
         if original_entry is not None and step.task_input:

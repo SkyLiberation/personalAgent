@@ -494,7 +494,7 @@ class RuntimeAskStrategy:
         limit: int,
         context: BenchmarkContext,
     ) -> list[tuple[str, list[str]]]:
-        from personal_agent.agent.runtime import AgentRuntime
+        from personal_agent.orchestration.runtime import AgentRuntime
 
         settings = context.settings
         eval_user_id = context.graphiti_user_id

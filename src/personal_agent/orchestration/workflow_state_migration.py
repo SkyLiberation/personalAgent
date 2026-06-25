@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from personal_agent.agent.orchestration_models import StepExecutionState, StepRunState
+from personal_agent.orchestration.orchestration_models import StepExecutionState, StepRunState
 from personal_agent.planning.workflow import WorkflowSpec
 
 

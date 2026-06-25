@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage
 
-from personal_agent.agent.orchestration_contexts import ReactContext
-from personal_agent.agent.orchestration_nodes._graph_helpers import _REACT_SYSTEM_PROMPT
+from personal_agent.orchestration.orchestration_contexts import ReactContext
+from personal_agent.orchestration.orchestration_nodes._graph_helpers import _REACT_SYSTEM_PROMPT
 from personal_agent.kernel.llm_schemas import structured_response_format, strict_tool_definition, strip_json_fence
 from personal_agent.kernel.prompts import get_prompt
 
 if TYPE_CHECKING:
-    from personal_agent.agent.orchestration_nodes._deps import ExecutionStep
+    from personal_agent.orchestration.orchestration_nodes._deps import ExecutionStep
     from personal_agent.kernel.config import ShortTermMemoryConfig
 
 logger = logging.getLogger(__name__)

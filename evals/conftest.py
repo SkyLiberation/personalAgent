@@ -45,7 +45,7 @@ def stub_settings(temp_dir: Path) -> Settings:
 @pytest.fixture
 def runtime(stub_settings: Settings):
     """A real AgentRuntime with the router LLM replaced by a deterministic stub."""
-    from personal_agent.agent.runtime import AgentRuntime
+    from personal_agent.orchestration.runtime import AgentRuntime
     from personal_agent.memory.graphiti.store import GraphitiStore
     from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 

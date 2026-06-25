@@ -6,7 +6,7 @@ from personal_agent.kernel.config import Settings
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
-from personal_agent.agent.runtime import AgentRuntime
+from personal_agent.orchestration.runtime import AgentRuntime
 
 if TYPE_CHECKING:
     from personal_agent.application.capture import CaptureService

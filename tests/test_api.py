@@ -427,7 +427,7 @@ class TestDebugEndpoints:
         api_client: TestClient,
         temp_dir: Path,
     ):
-        from personal_agent.agent.runtime_admin import _protected_eval_graph_group_ids
+        from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 
         service = api_client.app.state.service
         manifest_dir = temp_dir / "evals" / "open_ragbench" / "results"

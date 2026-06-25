@@ -83,7 +83,7 @@ def main() -> int:
     text = doc_path.read_text(encoding="utf-8")
     print(f"[probe] doc={doc_path} chars={len(text)}")
 
-    from personal_agent.agent.service import AgentService
+    from personal_agent.orchestration.service import AgentService
     from personal_agent.kernel.config import LangExtractConfig, Settings
 
     settings = Settings.from_env()

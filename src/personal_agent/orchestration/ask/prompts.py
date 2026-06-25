@@ -4,7 +4,7 @@ from personal_agent.kernel.evidence import ContextPack
 from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.memory.graphiti.store import GraphAskResult
-from personal_agent.agent.runtime_helpers import (
+from personal_agent.orchestration.runtime_helpers import (
     _evidence_content,
     _format_graph_relation,
     _top_sentences,

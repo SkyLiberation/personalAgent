@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from personal_agent.agent.orchestration_models import AgentEvent, StepExecutionState, StepRunState
+from personal_agent.orchestration.orchestration_models import AgentEvent, StepExecutionState, StepRunState
 from personal_agent.planning.workflow import WorkflowSpec, WorkflowStepSpec
-from personal_agent.agent.workflow_event_projection import project_workflow_events
-from personal_agent.agent.workflow_state_migration import (
+from personal_agent.orchestration.workflow_event_projection import project_workflow_events
+from personal_agent.orchestration.workflow_state_migration import (
     migrate_step_execution,
     reset_step_and_dependents,
 )

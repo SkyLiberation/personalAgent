@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from personal_agent.agent.orchestration_models import AgentEvent, AgentRunStatus
+from personal_agent.orchestration.orchestration_models import AgentEvent, AgentRunStatus
 
 
 class WorkflowExecutionProjection(BaseModel):

@@ -15,13 +15,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from personal_agent.kernel.evidence import ContextPack, apply_rrf_fusion, compress_evidence
-from personal_agent.agent.runtime_helpers import _annotate_answer
-from personal_agent.agent.ask.evidence_ops import dedupe_evidence, selected_citations, selected_matches
-from personal_agent.agent.ask.retrievers import RetrievalCoordinator
+from personal_agent.orchestration.runtime_helpers import _annotate_answer
+from personal_agent.orchestration.ask.evidence_ops import dedupe_evidence, selected_citations, selected_matches
+from personal_agent.orchestration.ask.retrievers import RetrievalCoordinator
 
 if TYPE_CHECKING:
-    from personal_agent.agent.runtime_ask import AskService
-    from personal_agent.agent.ask.context import AskRunContext
+    from personal_agent.orchestration.runtime_ask import AskService
+    from personal_agent.orchestration.ask.context import AskRunContext
 
 
 class RetrievalStage:

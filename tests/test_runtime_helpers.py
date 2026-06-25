@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from personal_agent.agent.runtime import (
+from personal_agent.orchestration.runtime import (
     _best_snippet,
     _extract_question_keywords,
     _graph_episode_uuids,
@@ -174,7 +174,7 @@ class TestMergeGraphCaptureRefs:
             edge_refs=[GraphEdgeRef(uuid="e1", fact="Redis supports caching", source_node_name="Redis")],
             fact_refs=[GraphFactRef(fact="Redis supports caching", edge_uuid="e1", source_node_name="Redis")],
         )
-        from personal_agent.agent.ingestion_pipeline import IngestionPipeline
+        from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
         pipeline = object.__new__(IngestionPipeline)
         pipeline._merge_graph_capture(note, graph_result)
         assert note.graph.episode_uuid == "ep-1"
@@ -212,7 +212,7 @@ class TestGraphAskSemanticEvidence:
         assert _graph_episode_uuids(graph_result) == ["ep-fact", "ep-edge", "ep-related"]
 
     def test_graph_prompt_prioritizes_fact_network(self):
-        from personal_agent.agent.runtime_ask import AskService
+        from personal_agent.orchestration.runtime_ask import AskService
 
         graph_result = GraphAskResult(
             enabled=True,

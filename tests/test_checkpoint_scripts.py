@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import START, StateGraph
 
-from personal_agent.agent.orchestration_graph import _build_checkpointer
+from personal_agent.orchestration.orchestration_graph import _build_checkpointer
 from personal_agent.kernel.config import Settings
 from scripts.export_thread_checkpoints import (
     _asset_output_path,
