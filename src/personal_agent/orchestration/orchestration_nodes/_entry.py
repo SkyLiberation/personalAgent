@@ -417,9 +417,11 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerCont
         deps.settings.openai.api_key
         and deps.settings.openai.base_url
         and deps.settings.openai.small_model
+        and deps.model_client is not None
     ):
-        from personal_agent.kernel.llm_trace import traced_chat_completion
+        from personal_agent.infra.structured_model import StructuredModelRequest
         from personal_agent.kernel.prompts import get_prompt
+        from pydantic import BaseModel
 
         try:
             dialogue_messages = _entry_conversation_messages(
@@ -430,20 +432,20 @@ def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerCont
             if not dialogue_messages:
                 dialogue_messages = [{"role": "user", "content": entry_input.text}]
             direct_prompt = get_prompt("direct_answer.system")
-            result = traced_chat_completion(
-                deps.settings.openai,
-                prompt_name="direct_answer",
-                prompt_version=direct_prompt.version,
+            response = deps.model_client.generate(StructuredModelRequest(
+                operation="direct_answer",
+                version=direct_prompt.version,
                 messages=[
                     {"role": "system", "content": direct_prompt.template},
                     *dialogue_messages,
                 ],
-                model=deps.settings.openai.small_model,
+                output_type=BaseModel,
+                temperature=0.3,
                 max_tokens=300,
+                kind="text",
                 metadata={"component": "orchestration", "intents": [goal.intent for goal in state.router_decision.goals]},
-                upload_inputs_outputs=deps.settings.langsmith.upload_inputs,
-            )
-            generated = result.content.strip()
+            ))
+            generated = (response.content or "").strip()
             if generated:
                 state.answer = generated
                 route = state.router_decision.primary_intent if state.router_decision else "unknown"

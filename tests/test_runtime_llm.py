@@ -3,11 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from personal_agent.infra.runtime_llm import LlmClient
+from personal_agent.infra.structured_model import OpenAIModelClient
 from personal_agent.kernel.config import OpenAIConfig, Settings
+from personal_agent.kernel.config_models import LangSmithConfig
 
 
 def _make_client(settings: Settings) -> LlmClient:
-    return LlmClient(settings)
+    model_client = OpenAIModelClient(settings.openai)
+    return LlmClient(settings, model_client=model_client)
 
 
 def test_generate_answer_limits_sdk_waiting(monkeypatch):
@@ -24,7 +27,7 @@ def test_generate_answer_limits_sdk_waiting(monkeypatch):
                 )
             )
 
-    monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     runtime = _make_client(
         Settings(
             openai=OpenAIConfig(
@@ -53,7 +56,7 @@ def test_generate_answer_failure_opens_short_circuit(monkeypatch):
                 completions=SimpleNamespace(create=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
             )
 
-    monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     runtime = _make_client(
         Settings(
             openai=OpenAIConfig(

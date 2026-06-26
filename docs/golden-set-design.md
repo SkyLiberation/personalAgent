@@ -91,6 +91,27 @@
 - **依赖**:需运行 Postgres;scorer 可离线单测,Golden Test 必须运行真实全流程。
 - **评测边界**:case 只执行一次 `execute_entry`;clarify case 验证“正确暂停”,用户下一轮补充信息后的 resume 属于 §3.4。
 
+### 3.3.1 WorkflowPlanner 依赖规划金标
+
+- **为什么独立建集**:Router 只负责把用户输入拆成有序 Goal,不应该输出执行依赖;Orchestration 端到端金标又太重,不适合快速验证 task DAG / step DAG 的确定性编译。因此单独建立 `workflow_planner_quality` 金标,专门覆盖 `RouterDecision.goals -> ExecutionPlan / ExecutionStep`。离线 gate 使用 fake structured model 覆盖 LLM 依赖判断路径,真实运行时使用结构化模型判断语义依赖,确定性规则负责安全补强和兜底。
+- **口径**:`{goals → expected_task_dependencies, expected_step_dependencies}`。case 输入是已经人工评审过的 Goal 序列,输出断言 Planner 生成的 task-level 依赖和关键 step-level 依赖。
+- **当前覆盖**:
+  - 写入后追问同一知识:`capture_text -> ask` 必须依赖。
+  - 多个互不相关只读 ask 不应仅因同属一轮就强制依赖。
+  - 后续 goal 有“继续/上述/刚才”等指代线索时依赖前一个 task。
+  - 连续长期写入需要串行,避免副作用乱序。
+  - 只读 ask 与无关写入同属一轮时,写入不依赖先前只读 task。
+  - 当模型判断前序 Goal 依赖后序 Goal 时,Planner 需要通过 task DAG 拓扑排序生成正确执行顺序。
+- **指标**:
+  - `task_dependency_exact` —— task-level 依赖图完全匹配。
+  - `task_dependency_node_accuracy` —— 每个 task 的依赖列表逐点匹配率。
+  - `task_dependency_edge_f1` —— task 依赖边的 F1。
+  - `step_dependency_exact` —— 标注的关键 step 依赖完全匹配。
+  - `step_dependency_node_accuracy` —— 标注 step 的依赖列表逐点匹配率。
+  - `step_dependency_edge_f1` —— 标注 step 依赖边的 F1。
+  - `overall_exact` —— task 与 step 两层都完全匹配。
+- **门禁**:`evals/workflow_planner_quality/test_workflow_planner_gate.py`。该 gate 不调用 LLM、不依赖数据库,属于离线快测。
+
 ### 3.4 Conversation 多轮对话金标
 
 - **为什么独立建集**:多轮质量不是把若干单轮 case 拼在一起。后续 turn 的正确行为依赖前序用户输入、助手输出、HITL 状态、会话内短期记忆和已经产生的副作用,评测对象是**整段会话轨迹及状态演化**。

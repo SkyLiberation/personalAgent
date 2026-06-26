@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from personal_agent.memory import MemoryFacade
     from personal_agent.governance.policy import PolicyEngine
     from personal_agent.governance import ToolExecutor
+    from personal_agent.infra.structured_model import StructuredModelClient
     from personal_agent.orchestration.ask import AskRunContextStore
     from personal_agent.planning.replanner import Replanner
     from personal_agent.planning.router import IntentRouter
@@ -44,6 +45,7 @@ class PlanningContext:
 class DirectAnswerContext:
     settings: "Settings"
     compress_context: Callable[[str, str], str]
+    model_client: "StructuredModelClient | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +69,8 @@ class StepExecutionContext:
     workflow_artifact_store: object
     summary: SummaryContext
     direct_answer: DirectAnswerContext
+    model_client: "StructuredModelClient | None" = None
+    structured_client: "StructuredModelClient | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +78,8 @@ class ReactContext:
     settings: "Settings"
     tool_executor: "ToolExecutor"
     policy_engine: "PolicyEngine"
+    model_client: "StructuredModelClient | None" = None
+    structured_client: "StructuredModelClient | None" = None
 
 
 @dataclass(frozen=True, slots=True)

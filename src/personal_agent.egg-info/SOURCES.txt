@@ -17,8 +17,8 @@ src/personal_agent/agent/entailment.py
 src/personal_agent/agent/entry_orchestrator.py
 src/personal_agent/agent/episodic_memory.py
 src/personal_agent/agent/execution_models.py
-src/personal_agent/agent/ingestion_pipeline.py
-src/personal_agent/agent/nodes.py
+src/personal_agent/application/capture/ingestion_pipeline.py
+src/personal_agent/application/capture/nodes.py
 src/personal_agent/agent/orchestration_graph.py
 src/personal_agent/agent/orchestration_contexts.py
 src/personal_agent/agent/orchestration_models.py

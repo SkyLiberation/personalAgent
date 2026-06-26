@@ -1,6 +1,6 @@
 # 入口层说明
 
-本文汇总当前项目入口层的职责划分、已有入口、统一调用路径、现有能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/web/api.py](../../src/personal_agent/web/api.py)、[src/personal_agent/web/routes/](../../src/personal_agent/web/routes)、[src/personal_agent/web/context.py](../../src/personal_agent/web/context.py)、[src/personal_agent/feishu/service.py](../../src/personal_agent/feishu/service.py)、[src/personal_agent/cli/main.py](../../src/personal_agent/cli/main.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
+本文汇总当前项目入口层的职责划分、已有入口、统一调用路径、现有能力、已知限制和后续改进方向。
 
 ## 设计目标
 

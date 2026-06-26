@@ -2,14 +2,6 @@
 
 `solidify_conversation` 用于把当前 thread 中已经讨论出的结论沉淀为长期知识。它不是把用户的“保存一下”指令本身入库，而是先从 checkpoint 对话中选择本次请求指向的知识范围，再复用 capture 链路写入 `knowledge_notes`。
 
-对应代码：
-
-- [workflow.py](../../src/personal_agent/agent/workflow.py)：`SolidifyConversation WorkflowSpec`
-- [orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py)：草稿生成和工具输入注入
-- [orchestration_nodes/_helpers.py](../../src/personal_agent/agent/orchestration_nodes/_helpers.py)：候选对话 turn 渲染与草稿解析
-- [capture_text.py](../../src/personal_agent/tools/capture_text.py)：复用 capture 工具写入长期记忆
-- [ingestion_pipeline.py](../../src/personal_agent/agent/ingestion_pipeline.py)：Unstructured partition/chunk、local store、graph sync
-
 ## 固定拓扑
 
 ```text

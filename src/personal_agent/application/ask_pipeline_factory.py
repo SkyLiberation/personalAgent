@@ -24,13 +24,14 @@ class AskPipelineFactory:
     branching on individual config flags throughout the ask flow.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, planner_client: "object | None" = None) -> None:
         self.settings = settings
+        self._planner_client = planner_client
 
     def create(self) -> AskPipelineComponents:
         return AskPipelineComponents(
             candidate_enricher=create_candidate_enricher(self.settings),
-            reranker=create_evidence_reranker(self.settings),
+            reranker=create_evidence_reranker(self.settings, self._planner_client),
             context_max_items=self.settings.ask.context_max_items,
             context_char_budget=self.settings.ask.context_char_budget,
             context_mmr_lambda=self.settings.ask.context_mmr_lambda,

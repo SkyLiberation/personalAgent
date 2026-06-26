@@ -63,11 +63,13 @@ def _node_react_init(state: AgentGraphState, *, deps: ReactContext) -> dict:
 
 
 def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
-    """Execute one ReAct iteration: LLM think -> parse -> tool act -> observe.
+    """Execute one ReAct iteration by consuming the model's native tool_calls.
 
-    On first call the prompt is built from ``react.step_id`` / step context;
-    subsequent iterations append the previous thought/action/observation to
-    ``react.user_prompt`` so the LLM sees the full history.
+    Directly consumes ``_NativeReactOutcome`` from ``_helpers._react_llm_native``
+    to construct ``AIMessage``, avoiding the legacy ``json.dumps`` envelope and
+    ``_react_parse_response`` round-trip. Tool execution still flows through the
+    shared ``react_tool_node`` (``ToolGateway``), so governance, HITL,
+    idempotency and audit are unchanged.
     """
     if state.react.done:
         return {}
@@ -90,9 +92,9 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
             f"请开始推理（最多 {max_iter} 轮）。"
         )
 
-    # ---- Call LLM ----
-    raw = _call_react_llm(state.react.user_prompt, deps, allowed)
-    if raw is None:
+    # ---- Call LLM (native tool calling) ----
+    outcome = _helpers._react_llm_native(state.react.user_prompt, deps, allowed)
+    if outcome is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
         state.react.done = True
         state.react.status = "failed"
@@ -107,18 +109,38 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
         })
         return {"react": state.react}
 
-    parsed = _helpers._react_parse_response(raw)
-    if parsed is None:
-        # Parse failure — record and continue
-        state.react.user_prompt += "\n\n观察：LLM 输出无法解析，请重新输出 JSON。"
+    # ---- LLM declared done ----
+    if outcome.done:
+        result = outcome.result if isinstance(outcome.result, dict) else {"answer": str(outcome.result or "")}
+        state.react.done = True
+        state.react.status = "completed"
+        state.react.stop_reason = "llm_completed"
+        state.react.result = result
+        state.react.iterations.append({
+            "iteration": idx,
+            "thought": outcome.thought[:200],
+            "done": True,
+            "result": state.react.result,
+        })
+        state.add_event("react_iteration", {
+            "step_id": step_id,
+            "iteration": idx,
+            "thought": outcome.thought[:200],
+            "done": True,
+        })
+        return {"react": state.react}
+
+    # ---- No tool_calls produced: parse failure ----
+    if outcome.parse_failed or not outcome.tool_name:
+        state.react.user_prompt += "\n\n观察：LLM 输出未包含可执行的 tool_calls，请调用工具或 finish_react。"
         state.react.iteration_index = idx + 1
         state.add_event("react_iteration", {
             "step_id": step_id,
             "iteration": idx,
-            "thought": "",
+            "thought": outcome.thought[:200],
             "action_tool": "",
             "action_input": {},
-            "observation": "LLM 输出无法解析为 JSON，跳过此轮。",
+            "observation": "LLM 输出未包含 tool_calls，跳过此轮。",
         })
         if state.react.iteration_index >= max_iter:
             state.react.done = True
@@ -127,54 +149,31 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
             state.react.result = {"answer": "ReAct 循环未能产出结构化结果。", "react_iterations": len(state.react.iterations)}
         return {"react": state.react}
 
-    # ---- LLM declared done ----
-    if parsed.get("done"):
-        result = parsed.get("result", {})
-        state.react.done = True
-        state.react.status = "completed"
-        state.react.stop_reason = "llm_completed"
-        state.react.result = result if isinstance(result, dict) else {"answer": str(result)}
-        state.react.iterations.append({
-            "iteration": idx,
-            "thought": str(parsed.get("thought", ""))[:200],
-            "done": True,
-            "result": state.react.result,
-        })
-        state.add_event("react_iteration", {
-            "step_id": step_id,
-            "iteration": idx,
-            "thought": str(parsed.get("thought", ""))[:200],
-            "done": True,
-        })
-        return {"react": state.react}
-
     # ---- Tool call ----
-    tool_name = str(parsed.get("tool", ""))
-    tool_input = parsed.get("input", {})
-    thought = str(parsed.get("thought", ""))
+    tool_name = outcome.tool_name
+    tool_input = outcome.tool_input or {}
+    thought = outcome.thought
 
     observation: str
-    if not tool_name:
-        observation = "错误：未指定工具名。请输出合法 JSON。"
-    elif tool_name not in allowed:
+    if tool_name not in allowed:
         observation = f"错误：工具 '{tool_name}' 不在允许列表 {list(allowed)} 中。"
     elif _is_react_tool_blocked(tool_name, deps):
         observation = f"错误：工具 '{tool_name}' 是高风险/写操作工具，不允许在 ReAct 中调用。"
     else:
-        normalized_input = tool_input if isinstance(tool_input, dict) else {}
         state.react.pending_thought = thought
         state.react.pending_tool = tool_name
-        state.react.pending_input = normalized_input
+        state.react.pending_input = tool_input
         state.react.status = "waiting_tool"
         return {
             "tool_messages": [_begin_tool_call(
                 state,
                 context="react",
                 tool_name=tool_name,
-                tool_input=normalized_input,
+                tool_input=tool_input,
                 step_id=step_id,
                 suffix=f"react:{step_id}:{idx}",
                 iteration=idx,
+                call_id=outcome.native_call_id,
             )],
             "tool_tracking": state.tool_tracking,
             "react": state.react,
@@ -357,12 +356,3 @@ def _json_dumps_safe(obj: object) -> str:
     if isinstance(obj, dict):
         return _json.dumps(obj, ensure_ascii=False)
     return str(obj)
-
-
-def _call_react_llm(prompt: str, deps: ReactContext, allowed_tools: set[str]):
-    try:
-        return _helpers._react_llm_respond(prompt, deps, allowed_tools=allowed_tools)
-    except TypeError as exc:
-        if "allowed_tools" not in str(exc):
-            raise
-        return _helpers._react_llm_respond(prompt, deps)

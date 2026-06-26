@@ -2,8 +2,6 @@
 
 优秀 Agent 的记忆层不是把所有历史都塞进上下文，而是把不同生命周期、不同可信度的信息放到不同载体里，再按任务需要取回。当前项目的记忆层可以理解为“两条真源、一个证据出口”：短期执行现场由 LangGraph checkpoint 承载，长期知识由 Postgres note/chunk/review 承载，最终进入回答的是经过检索、归一、排序和预算筛选后的 evidence。
 
-对应代码主要位于 [src/personal_agent/agent/](../../src/personal_agent/agent/)、[src/personal_agent/memory/](../../src/personal_agent/memory/)、[src/personal_agent/storage/](../../src/personal_agent/storage/)、[src/personal_agent/graphiti/](../../src/personal_agent/graphiti/) 和 [src/personal_agent/core/evidence.py](../../src/personal_agent/core/evidence.py)。
-
 ## 设计目标
 
 记忆层需要同时满足两类要求：

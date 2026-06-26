@@ -1,6 +1,6 @@
 # 检索与推理层说明
 
-本文汇总当前项目检索与推理层的职责划分、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/verifier.py](../../src/personal_agent/agent/verifier.py) 和 [src/personal_agent/graphiti/store.py](../../src/personal_agent/graphiti/store.py)。
+本文汇总当前项目检索与推理层的职责划分、当前能力、已知限制和后续改进方向。
 
 ## 设计目标
 

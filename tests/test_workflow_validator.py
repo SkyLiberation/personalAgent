@@ -44,6 +44,24 @@ class TestWorkflowSpecValidatorRegistry:
         targets = {e.target for e in by_id["del-2"].conditional_edges}
         assert EDGE_CLARIFY in targets
 
+    def test_delete_workflow_topology_lives_in_spec(self):
+        spec = WORKFLOW_REGISTRY.select("delete_knowledge")
+        by_id = {s.step_id: s for s in spec.steps}
+        assert [s.step_id for s in spec.steps] == ["del-1", "del-2", "del-3", "del-4"]
+        assert by_id["del-2"].depends_on == ("del-1",)
+        assert by_id["del-3"].tool_name == "delete_note"
+        assert by_id["del-3"].depends_on == ("del-2",)
+        assert by_id["del-3"].risk_level == "high"
+        assert by_id["del-3"].requires_confirmation is True
+
+    def test_solidify_workflow_topology_lives_in_spec(self):
+        spec = WORKFLOW_REGISTRY.select("solidify_conversation")
+        by_id = {s.step_id: s for s in spec.steps}
+        assert [s.step_id for s in spec.steps] == ["sol-1", "sol-2"]
+        assert by_id["sol-1"].action_type == "compose"
+        assert by_id["sol-2"].tool_name == "capture_text"
+        assert by_id["sol-2"].depends_on == ("sol-1",)
+
 
 class TestWorkflowSpecValidatorStructural:
     def test_unknown_action_type_is_blocking(self):

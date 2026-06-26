@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_schemas import strict_json_schema_response
-from personal_agent.kernel.llm_trace import traced_chat_completion
 from personal_agent.kernel.models import MemoryItem
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.infra.structured_parse import parse_structured
 from personal_agent.kernel.contracts.execution import ExecutionStep
+
+if TYPE_CHECKING:
+    from personal_agent.infra.structured_model import StructuredModelClient
 
 
 class _RevisedStep(BaseModel):
@@ -114,8 +117,13 @@ class Replanner:
               Falls back to heuristic if LLM is unavailable or fails.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        model_client: "StructuredModelClient | None" = None,
+    ) -> None:
         self._settings = settings
+        self._model_client = model_client
 
     def replan(
         self,
@@ -187,26 +195,28 @@ class Replanner:
         model = self._settings.openai.small_model
         latency_ms = None
         try:
-            llm_result = traced_chat_completion(
-                self._settings.openai,
-                prompt_name="replanner",
-                prompt_version=system_prompt.version,
+            from personal_agent.infra.structured_model import StructuredModelRequest
+
+            response = self._model_client.generate(StructuredModelRequest(
+                operation="replanner",
+                version=system_prompt.version,
                 messages=[
                     {"role": "system", "content": system_prompt.template},
                     {"role": "user", "content": prompt},
                 ],
+                output_type=BaseModel,
                 temperature=0,
                 max_tokens=500,
+                kind="text",
                 response_format=strict_json_schema_response(
                     "revise_steps",
                     _REPLANNER_RESPONSE_SCHEMA,
                 ),
                 metadata={"intent": intent, "failed_step_id": failed_step.step_id},
-                upload_inputs_outputs=self._settings.langsmith.upload_inputs,
-            )
-            content = llm_result.content
-            model = llm_result.model
-            latency_ms = llm_result.latency_ms
+            ))
+            content = response.content
+            model = response.model
+            latency_ms = response.latency_ms
             parsed = parse_structured(
                 content,
                 _RevisedPlan,
@@ -317,8 +327,4 @@ class Replanner:
 
     @property
     def _llm_configured(self) -> bool:
-        return bool(
-            self._settings.openai.api_key
-            and self._settings.openai.base_url
-            and self._settings.openai.small_model
-        )
+        return self._model_client is not None

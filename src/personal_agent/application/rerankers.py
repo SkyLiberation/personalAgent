@@ -5,7 +5,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field, model_validator
 
-from personal_agent.kernel.config import OpenAIConfig, Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.kernel.evidence import (
     ContextPack,
     EvidenceItem,
@@ -13,7 +13,6 @@ from personal_agent.kernel.evidence import (
     rank_evidence_items,
     select_ranked_evidence,
 )
-from personal_agent.kernel.llm_trace import traced_chat_completion
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.infra.structured_parse import parse_structured
 
@@ -75,8 +74,9 @@ class HeuristicEvidenceReranker:
 class LlmEvidenceReranker:
     name = "llm"
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, model_client: "object | None" = None) -> None:
         self.settings = settings
+        self._model_client = model_client
 
     def rerank(
         self,
@@ -121,24 +121,19 @@ class LlmEvidenceReranker:
         )
 
     def _rank_ids(self, question: str, candidates: list[RankedEvidence]) -> list[str]:
-        api_key, base_url, model = _llm_config(self.settings)
-        if not api_key:
-            raise RuntimeError("LLM reranker requires PERSONAL_AGENT_EXTRACT_API_KEY or OPENAI_API_KEY")
+        if self._model_client is None:
+            raise RuntimeError("LLM reranker requires a configured model client")
 
-        llm_config = OpenAIConfig(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            timeout_seconds=self.settings.ask.llm_rerank_timeout_seconds,
-            max_retries=1,
-        )
+        from personal_agent.infra.structured_model import StructuredModelRequest
+        from pydantic import BaseModel
+
         system_prompt = get_prompt("evidence_rerank.system")
-        result = traced_chat_completion(
-            llm_config,
-            prompt_name="evidence_rerank",
-            prompt_version=system_prompt.version,
+        response = self._model_client.generate(StructuredModelRequest(
+            operation="evidence_rerank",
+            version=system_prompt.version,
             temperature=0,
             max_tokens=700,
+            kind="text",
             response_format=_rerank_response_format(),
             messages=[
                 {"role": "system", "content": system_prompt.template},
@@ -150,17 +145,16 @@ class LlmEvidenceReranker:
                     ),
                 },
             ],
-            model=model,
+            output_type=BaseModel,
             metadata={"component": "evidence_reranker", "candidate_count": len(candidates)},
-            upload_inputs_outputs=self.settings.langsmith.upload_inputs,
-        )
+        ))
         parsed = parse_structured(
-            result.content or "{}",
+            response.content or "{}",
             _RerankResult,
             operation="evidence_rerank",
             version=system_prompt.version,
-            model_name=model,
-            latency_ms=result.latency_ms,
+            model_name=response.model,
+            latency_ms=response.latency_ms,
         )
         if not parsed.ok:
             raise ValueError(f"evidence_rerank structured parse failed: {parsed.error}")
@@ -183,12 +177,15 @@ def build_context_pack_with_settings(
     )
 
 
-def create_evidence_reranker(settings: Settings) -> EvidenceReranker:
+def create_evidence_reranker(
+    settings: Settings,
+    model_client: "object | None" = None,
+) -> EvidenceReranker:
     name = settings.ask.reranker.strip().lower()
     if name in {"heuristic", "default"}:
         return HeuristicEvidenceReranker()
     if name == "llm":
-        return LlmEvidenceReranker(settings)
+        return LlmEvidenceReranker(settings, model_client=model_client)
     raise ValueError("Unknown ask reranker '%s'. Available: heuristic, llm" % settings.ask.reranker)
 
 
@@ -211,14 +208,6 @@ def _apply_llm_order(
         }))
     ordered.extend(item for item in heuristic_ranked if item.evidence.evidence_id not in seen)
     return ordered
-
-
-def _llm_config(settings: Settings) -> tuple[str | None, str | None, str]:
-    if settings.planner.api_key:
-        model = settings.ask.llm_rerank_model or settings.planner.model_id
-        return settings.planner.api_key, settings.planner.base_url, model
-    model = settings.ask.llm_rerank_model or settings.openai.small_model or settings.openai.model
-    return settings.openai.api_key, settings.openai.base_url, model
 
 
 def _rerank_response_format() -> dict:

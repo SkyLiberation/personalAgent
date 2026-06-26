@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
+from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.kernel.models import AgentState, ChunkDraft, RawIngestItem
 
 

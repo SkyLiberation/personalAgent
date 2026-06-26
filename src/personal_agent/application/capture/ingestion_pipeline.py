@@ -11,7 +11,7 @@ from personal_agent.kernel.models import AgentState, KnowledgeNote, RawIngestIte
 from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.orchestration.nodes import (
+from personal_agent.application.capture.nodes import (
     capture_node,
     chunk_reconcile_node,
     enrich_node,
@@ -19,10 +19,20 @@ from personal_agent.orchestration.nodes import (
     schedule_review_node,
     structural_chunk_node,
 )
-from personal_agent.orchestration.runtime_helpers import _merge_notes
 from personal_agent.application.runtime_results import CaptureResult
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_notes(primary: list[KnowledgeNote], secondary: list[KnowledgeNote]) -> list[KnowledgeNote]:
+    merged: list[KnowledgeNote] = []
+    seen: set[str] = set()
+    for note in [*primary, *secondary]:
+        if note.id in seen:
+            continue
+        seen.add(note.id)
+        merged.append(note)
+    return merged
 
 
 class IngestionPipeline:

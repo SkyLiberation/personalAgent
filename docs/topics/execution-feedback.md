@@ -1,6 +1,6 @@
 # 执行与反馈层说明
 
-本文汇总当前项目执行与反馈层的职责划分、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/web/routes/](../../src/personal_agent/web/routes)、[src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py) 和 [src/personal_agent/agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)。
+本文汇总当前项目执行与反馈层的职责划分、当前能力、已知限制和后续改进方向。
 
 ## 设计目标
 

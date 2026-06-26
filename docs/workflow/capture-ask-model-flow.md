@@ -2,21 +2,6 @@
 
 本文只描述当前工程里 `capture` 和 `ask` 两条主链路的真实实现。更宽泛的 workflow 框架见 [当前 Workflow 框架总览](workflow-framework.md)。
 
-对应核心代码：
-
-- `src/personal_agent/agent/orchestration_graph.py`
-- `src/personal_agent/agent/orchestration_nodes/_entry.py`
-- `src/personal_agent/agent/orchestration_nodes/_steps.py`
-- `src/personal_agent/agent/workflow.py`
-- `src/personal_agent/agent/runtime.py`
-- `src/personal_agent/agent/ingestion_pipeline.py`
-- `src/personal_agent/agent/nodes.py`
-- `src/personal_agent/agent/runtime_ask.py`
-- `src/personal_agent/agent/ask/context.py`
-- `src/personal_agent/agent/ask/stages.py`
-- `src/personal_agent/agent/ask/retrievers.py`
-- `src/personal_agent/capture/service.py`
-
 ## 当前结论
 
 `capture_*` 和 `ask` 都属于 step projection workflow：

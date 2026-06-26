@@ -169,7 +169,7 @@ def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
             request["client"] = kwargs
             self.chat = FakeChat()
 
-    monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     settings = Settings(
         openai=OpenAIConfig(api_key="openai-k", base_url="https://openai.invalid", small_model="deepseek"),
         planner=PlannerConfig(
@@ -178,8 +178,19 @@ def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
             model_id="qwen3-coder-flash",
         ),
     )
+    from personal_agent.infra.structured_model import OpenAIModelClient
+    from personal_agent.kernel.config_models import LangSmithConfig
 
-    understanding = _call_planner_llm("Redis 怎么缓存订单？", "", settings)
+    client = OpenAIModelClient(
+        OpenAIConfig(
+            api_key="planner-k",
+            base_url="https://dashscope.invalid/compatible-mode/v1",
+            model="qwen3-coder-flash",
+        ),
+        model_override="qwen3-coder-flash",
+    )
+
+    understanding = _call_planner_llm("Redis 怎么缓存订单？", "", settings, client)
 
     assert understanding.query_rewrite == "redis cache"
     assert request["client"]["api_key"] == "planner-k"

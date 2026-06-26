@@ -2,18 +2,6 @@
 
 本文说明一次 `entry` 请求如何从 Web / CLI / 飞书入口进入系统，经过 LangGraph 总编排、router、workflow projection、ReAct、HITL、工具、记忆、SSE / API 输出，并如何通过 Postgres checkpoint 支持跨 run 对话、暂停确认、恢复执行和 run snapshot 查询。
 
-对应代码主要位于：
-
-- [entry_orchestrator.py](../../src/personal_agent/agent/entry_orchestrator.py)
-- [orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)
-- [orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)
-- [orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)
-- [workflow.py](../../src/personal_agent/agent/workflow.py)
-- [step_projector.py](../../src/personal_agent/agent/step_projector.py)
-- [step_projection_validator.py](../../src/personal_agent/agent/step_projection_validator.py)
-- [router.py](../../src/personal_agent/agent/router.py)
-- [web/api.py](../../src/personal_agent/web/api.py)
-
 ## 核心结论
 
 当前后端以 `AgentRuntime` 为组合根，`EntryOrchestrator` 持有并缓存 LangGraph entry 总图。每次 `execute_entry()` 都生成新的 `run_id`，但同一 `user_id:session_id` 复用稳定 `thread_id`，因此同一 thread 的 `messages` 和 `thread_summary` 会通过 LangGraph checkpoint 延续，而单次 run 的 router、plan、tool、answer、events 等状态会在新入口初始化时重置。

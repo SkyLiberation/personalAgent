@@ -4,7 +4,7 @@ import logging
 from typing import Callable, TYPE_CHECKING
 from uuid import uuid4
 
-from personal_agent.kernel.config import Settings
+from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
 from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.observability import set_policy_decision_sink
@@ -78,7 +78,7 @@ from personal_agent.planning.workflow_planner import WorkflowPlanner
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
 from personal_agent.planning.replanner import Replanner
 from personal_agent.planning.router import DefaultIntentRouter
-from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
+from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.runtime_ask import AskService
 from personal_agent.orchestration.runtime_helpers import (
@@ -178,12 +178,53 @@ class AgentRuntime:
             settings.router,
             settings.langsmith,
         ))
+        # Unified LLM ports: every application caller depends on these instead of
+        # ``OpenAI`` / ``traced_chat_completion``. ``model_client`` serves
+        # tool_calling + text kinds (ReAct iterate, runtime answer); the router
+        # keeps its own ``build_structured_model_client`` (Responses API).
+        from personal_agent.infra.structured_model import (
+            build_chat_model_client,
+            build_streaming_model_client,
+        )
+        self._model_client = build_chat_model_client(
+            settings.openai, settings.langsmith,
+        )
+        self._structured_client = build_chat_model_client(
+            settings.structured, settings.langsmith,
+        ) if (settings.structured.api_key and settings.structured.base_url) else None
+        self._streaming_client = build_streaming_model_client(
+            settings.openai, settings.langsmith,
+        )
+        # Planner endpoint client for query understanding / rerank / replan.
+        # Falls back to the openai endpoint when the dedicated planner config is
+        # unset, mirroring the previous ``_planner_llm_config`` fallback logic.
+        if settings.planner.api_key and settings.planner.base_url:
+            planner_config = OpenAIConfig(
+                api_key=settings.planner.api_key,
+                base_url=settings.planner.base_url,
+                model=settings.planner.model_id,
+                timeout_seconds=settings.planner.timeout_seconds,
+                max_retries=settings.openai.max_retries,
+            )
+            self._planner_client = build_chat_model_client(
+                planner_config, settings.langsmith,
+                model_override=settings.planner.model_id,
+            )
+        else:
+            self._planner_client = build_chat_model_client(
+                settings.openai, settings.langsmith,
+                model_override=settings.openai.small_model or settings.openai.model,
+            )
         self._tool_executor = ToolExecutor(
             audit_sink=self.tool_governance_store,
             idempotency_store=self.tool_governance_store,
             policy_engine=self._policy_engine,
         )
-        self._llm = LlmClient(settings)
+        self._llm = LlmClient(
+            settings,
+            model_client=self._model_client,
+            streaming_client=self._streaming_client,
+        )
         self._digest_formatter = DigestFormatter()
         self._review_digest_use_case = ReviewDigestUseCase(
             self.memory,
@@ -231,10 +272,11 @@ class AgentRuntime:
         self._workflow_planner = WorkflowPlanner(
             settings,
             workflow_definition_store=self.workflow_definition_store,
+            dependency_model_client=self._planner_client,
         )
         self._verifier = create_answer_verifier(settings)
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
-        self._replanner = Replanner(settings)
+        self._replanner = Replanner(settings, model_client=self._planner_client)
         # Explicit collaborators.
         self._summarizer = ThreadSummarizer(self._llm)
         from personal_agent.orchestration.ask import PostgresAskRunContextStore
@@ -242,6 +284,7 @@ class AgentRuntime:
         direct_answer_context = DirectAnswerContext(
             settings=self.settings,
             compress_context=lambda text, user_id: self.compress_context(text, user_id),
+            model_client=self._model_client,
         )
         summary_context = SummaryContext(
             summarize_chat=lambda text, user_id: self.summarize_chat(text, user_id),
@@ -278,11 +321,15 @@ class AgentRuntime:
                 workflow_artifact_store=self.workflow_replay_store,
                 summary=summary_context,
                 direct_answer=direct_answer_context,
+                model_client=self._model_client,
+                structured_client=self._structured_client,
             ),
             react=ReactContext(
                 settings=self.settings,
                 tool_executor=self._tool_executor,
                 policy_engine=self._policy_engine,
+                model_client=self._model_client,
+                structured_client=self._structured_client,
             ),
         )
         self._entry = EntryOrchestrator(self)
@@ -473,6 +520,7 @@ class AgentRuntime:
             tool_executor=self._tool_executor,
             verifier=self._verifier,
             llm=self._llm,
+            planner_client=self._planner_client,
         )
 
     def execute_ask(self, *args, **kwargs) -> "AskResult":

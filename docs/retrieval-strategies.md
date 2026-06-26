@@ -1,16 +1,6 @@
 # 检索方案说明
 
-本文说明当前工程已有的检索方案、实现位置、排序逻辑、返回结果如何进入回答生成，以及如何用 eval 观测不同方案的效果。
-
-相关代码：
-
-- [src/personal_agent/agent/runtime_ask.py](../src/personal_agent/agent/runtime_ask.py)
-- [src/personal_agent/storage/postgres_memory_store.py](../src/personal_agent/storage/postgres_memory_store.py)
-- [src/personal_agent/graphiti/store.py](../src/personal_agent/graphiti/store.py)
-- [src/personal_agent/graphiti/search_strategies.py](../src/personal_agent/graphiti/search_strategies.py)
-- [src/personal_agent/graphiti/reranker.py](../src/personal_agent/graphiti/reranker.py)
-- [src/personal_agent/core/evidence.py](../src/personal_agent/core/evidence.py)
-- [evals/open_ragbench](../evals/open_ragbench)
+本文说明当前工程已有的检索方案、排序逻辑、返回结果如何进入回答生成，以及如何用 eval 观测不同方案的效果。
 
 ## 总体分层
 

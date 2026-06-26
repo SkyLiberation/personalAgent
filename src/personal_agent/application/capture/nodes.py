@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from personal_agent.kernel.models import (
     AgentState,
-    Citation,
     ChunkDraft,
     KnowledgeNote,
     NoteBody,
@@ -198,40 +197,6 @@ def schedule_review_node(state: AgentState, store: MemoryFacade) -> AgentState:
     state.review_card = review
     store.add_review(review)
     return state
-
-
-def answer_node(state: AgentState, store: MemoryFacade) -> AgentState:
-    if not state.question:
-        return state
-
-    matches = store.find_similar_notes(state.user_id, state.question)
-    state.matches = matches
-    if not matches:
-        state.answer = "我暂时无法从你的个人知识库中找到足够依据来回答这个问题。"
-        state.citations = []
-        return state
-
-    best = matches[0]
-    state.answer = f"根据你已有的笔记，最相关的结论是：{best.body.summary}"
-    state.citations = [
-        Citation(note_id=note.id, title=note.body.title, snippet=note.body.summary[:80]) for note in matches
-    ]
-    return state
-
-
-def digest_node(store: MemoryFacade, user_id: str) -> str:
-    due = store.due_reviews(user_id)
-    notes = store.list_notes(user_id)[-5:]
-    lines = ["今日知识简报"]
-    if notes:
-        lines.append("最近新增笔记：")
-        lines.extend(f"- {note.body.title}: {note.body.summary}" for note in notes)
-    if due:
-        lines.append("待复习内容：")
-        lines.extend(f"- {review.prompt}" for review in due)
-    if len(lines) == 1:
-        lines.append("当前还没有知识记录。")
-    return "\n".join(lines)
 
 
 def summarize_text(text: str) -> str:

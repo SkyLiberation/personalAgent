@@ -2,14 +2,6 @@
 
 `delete_knowledge` 是当前项目的高风险 step projection workflow。它的目标不是让模型直接删除知识，而是把“用户想删什么”拆成可审计的步骤：先召回候选，再解析目标，最后经 HITL 确认后调用删除工具。
 
-对应代码：
-
-- [workflow.py](../../src/personal_agent/agent/workflow.py)：`DeleteKnowledge WorkflowSpec`
-- [step_projector.py](../../src/personal_agent/agent/step_projector.py)：把 workflow 确定性投影成 `ExecutionStep`
-- [step_projection_validator.py](../../src/personal_agent/agent/step_projection_validator.py)：执行前校验步骤、工具、风险和确认要求
-- [orchestration_nodes/_steps.py](../../src/personal_agent/agent/orchestration_nodes/_steps.py)：步骤执行、确认暂停、工具结果消费
-- [delete_note.py](../../src/personal_agent/tools/delete_note.py)：真实删除工具入口
-
 ## 固定拓扑
 
 ```text

@@ -5,6 +5,7 @@ from typing import Any
 from personal_agent.kernel.prompt_registry import PromptSpec
 from personal_agent.kernel.prompt_templates.ask import PROMPTS as ASK_PROMPTS
 from personal_agent.kernel.prompt_templates.graph import PROMPTS as GRAPH_PROMPTS
+from personal_agent.kernel.prompt_templates.planning import PROMPTS as PLANNING_PROMPTS
 from personal_agent.kernel.prompt_templates.router import PROMPTS as ROUTER_PROMPTS
 from personal_agent.kernel.prompt_templates.thread import PROMPTS as THREAD_PROMPTS
 
@@ -12,6 +13,7 @@ from personal_agent.kernel.prompt_templates.thread import PROMPTS as THREAD_PROM
 _PROMPTS: dict[str, PromptSpec] = {
     **ASK_PROMPTS,
     **GRAPH_PROMPTS,
+    **PLANNING_PROMPTS,
     **ROUTER_PROMPTS,
     **THREAD_PROMPTS,
 }

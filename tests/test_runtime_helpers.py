@@ -174,7 +174,7 @@ class TestMergeGraphCaptureRefs:
             edge_refs=[GraphEdgeRef(uuid="e1", fact="Redis supports caching", source_node_name="Redis")],
             fact_refs=[GraphFactRef(fact="Redis supports caching", edge_uuid="e1", source_node_name="Redis")],
         )
-        from personal_agent.orchestration.ingestion_pipeline import IngestionPipeline
+        from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
         pipeline = object.__new__(IngestionPipeline)
         pipeline._merge_graph_capture(note, graph_result)
         assert note.graph.episode_uuid == "ep-1"

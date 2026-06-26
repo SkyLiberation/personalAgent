@@ -96,15 +96,16 @@ def _begin_tool_call(
     step_id: str,
     suffix: str,
     iteration: int | None = None,
+    call_id: str | None = None,
 ) -> AIMessage:
-    call_id = f"{state.run_id}:{suffix}:{len(state.tool_results)}"
+    resolved_call_id = call_id or f"{state.run_id}:{suffix}:{len(state.tool_results)}"
     normalized_input = dict(tool_input or {})
     if context == "step_execution" and tool_name == "graph_search" and "user_id" not in normalized_input:
         normalized_input["user_id"] = state.user_id
     state.tool_tracking = ToolTrackingSubState(
         active_context=context,
         pending_step_id=step_id,
-        pending_call_id=call_id,
+        pending_call_id=resolved_call_id,
         pending_tool_name=tool_name,
         pending_tool_input=normalized_input,
         pending_react_iteration=iteration,
@@ -113,7 +114,7 @@ def _begin_tool_call(
         "context": context,
         "step_id": step_id,
         "tool_name": tool_name,
-        "tool_call_id": call_id,
+        "tool_call_id": resolved_call_id,
         "iteration": iteration,
     })
     return AIMessage(
@@ -121,7 +122,7 @@ def _begin_tool_call(
         tool_calls=[{
             "name": tool_name,
             "args": normalized_input,
-            "id": call_id,
+            "id": resolved_call_id,
             "type": "tool_call",
         }],
     )

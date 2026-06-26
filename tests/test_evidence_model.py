@@ -195,9 +195,17 @@ class TestEvidenceRerankers:
                 assert kwargs["api_key"] == "test-key"
                 self.chat = SimpleNamespace(completions=FakeCompletions())
 
-        monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
 
-        pack = LlmEvidenceReranker(settings).rerank(
+        from personal_agent.infra.structured_model import OpenAIModelClient
+        from personal_agent.kernel.config import OpenAIConfig
+        from personal_agent.kernel.config_models import LangSmithConfig
+
+        client = OpenAIModelClient(
+            OpenAIConfig(api_key="test-key", base_url="https://u.invalid", model="m"),
+        )
+
+        pack = LlmEvidenceReranker(settings, model_client=client).rerank(
             "服务降级是什么",
             evidence,
             max_items=2,

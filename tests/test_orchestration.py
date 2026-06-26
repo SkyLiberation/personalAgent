@@ -349,10 +349,15 @@ class TestOrchestrationGraphIntegration:
             def __init__(self, **_kwargs):
                 self.chat = FakeChat()
 
-        monkeypatch.setattr("personal_agent.kernel.llm_trace.OpenAI", FakeOpenAI)
+        monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
         monkeypatch.setattr(runtime.settings.openai, "api_key", "test-key")
         monkeypatch.setattr(runtime.settings.openai, "base_url", "http://llm.test")
         monkeypatch.setattr(runtime.settings.openai, "small_model", "small")
+        # The DirectAnswerContext was built without credentials; inject a real
+        # model client now that the openai config has been monkeypatched.
+        import personal_agent.infra.structured_model as _sm
+        _da = runtime.graph_contexts.direct_answer
+        object.__setattr__(_da, "model_client", _sm.OpenAIModelClient(runtime.settings.openai))
         runtime.memory.bind_session("test-user", "direct-dup")
 
         state = AgentGraphState(
@@ -1516,6 +1521,7 @@ class TestPhase4ReActIterateNode:
 
     def test_react_iterate_done_sets_flag(self, runtime, monkeypatch):
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
         state = AgentGraphState(
             run_id="r1",
@@ -1533,12 +1539,16 @@ class TestPhase4ReActIterateNode:
             ),
         )
 
-        def _mock_llm(prompt, rt):
-            return '{"thought": "已经找到答案","done": true,"result": {"answer": "X是一种技术"}}'
+        def _mock_native(prompt, deps, allowed):
+            return _NativeReactOutcome(
+                done=True,
+                thought="已经找到答案",
+                result={"answer": "X是一种技术"},
+            )
 
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            _mock_llm,
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            _mock_native,
         )
 
         result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
@@ -1550,6 +1560,7 @@ class TestPhase4ReActIterateNode:
 
     def test_react_iterate_parse_failure_increments_index(self, runtime, monkeypatch):
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
         state = AgentGraphState(
             run_id="r1",
@@ -1567,12 +1578,10 @@ class TestPhase4ReActIterateNode:
             ),
         )
 
-        def _mock_llm(prompt, rt):
-            return "not valid json {{{"
-
+        # 模型未返回 tool_calls（解析失败）
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            _mock_llm,
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda prompt, deps, allowed: _NativeReactOutcome(parse_failed=True),
         )
 
         result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
@@ -1582,6 +1591,7 @@ class TestPhase4ReActIterateNode:
 
     def test_react_iterate_parse_failure_exhausts(self, runtime, monkeypatch):
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
         state = AgentGraphState(
             run_id="r1",
@@ -1599,12 +1609,9 @@ class TestPhase4ReActIterateNode:
             ),
         )
 
-        def _mock_llm(prompt, rt):
-            return "bad json"
-
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            _mock_llm,
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda prompt, deps, allowed: _NativeReactOutcome(parse_failed=True),
         )
 
         result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
@@ -1614,6 +1621,7 @@ class TestPhase4ReActIterateNode:
 
     def test_react_iterate_blocked_tool(self, runtime, monkeypatch):
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
         state = AgentGraphState(
             run_id="r1",
@@ -1631,12 +1639,14 @@ class TestPhase4ReActIterateNode:
             ),
         )
 
-        def _mock_llm(prompt, rt):
-            return '{"thought": "需要删除","tool": "delete_note","input": {"note_id": "n1"}}'
-
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            _mock_llm,
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda prompt, deps, allowed: _NativeReactOutcome(
+                thought="需要删除",
+                tool_name="delete_note",
+                tool_input={"note_id": "n1"},
+                native_call_id="c-del",
+            ),
         )
 
         result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
@@ -1666,8 +1676,8 @@ class TestPhase4ReActIterateNode:
         )
 
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda prompt, rt: None,
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda prompt, deps, allowed: None,
         )
 
         result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
@@ -1705,10 +1715,16 @@ class TestPhase4ReActMainGraphIntegration:
             _node_react_iterate,
             _should_continue_react,
         )
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda _prompt, _deps: '{"thought":"检索","tool":"graph_search","input":{"query":"X"}}',
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda _prompt, _deps, _allowed: _NativeReactOutcome(
+                thought="检索",
+                tool_name="graph_search",
+                tool_input={"query": "X"},
+                native_call_id="c-native-1",
+            ),
         )
         state = AgentGraphState(
             run_id="r1",
@@ -1725,6 +1741,7 @@ class TestPhase4ReActMainGraphIntegration:
 
         assert result["tool_tracking"].active_context == "react"
         assert result["tool_messages"][0].tool_calls[0]["name"] == "graph_search"
+        assert result["tool_messages"][0].tool_calls[0]["id"] == "c-native-1"
         assert result["tool_tracking"].pending_step_id == "ask-1"
         assert result["tool_tracking"].pending_tool_name == "graph_search"
         assert result["tool_tracking"].pending_tool_input == {"query": "X"}

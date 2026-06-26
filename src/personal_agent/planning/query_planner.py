@@ -10,13 +10,16 @@ from __future__ import annotations
 import logging
 import re
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
-from personal_agent.kernel.config import OpenAIConfig, Settings
-from personal_agent.kernel.llm_trace import traced_chat_completion
+from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import local_now
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.infra.structured_parse import parse_structured
+
+if TYPE_CHECKING:
+    from personal_agent.infra.structured_model import StructuredModelClient
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +77,14 @@ def plan_retrieval(
     question: str,
     conversation_context: str,
     settings: Settings,
+    model_client: "StructuredModelClient | None" = None,
 ) -> tuple[QueryUnderstanding, RetrievalPlan]:
     """Run LLM-based query understanding and produce a retrieval plan.
 
     Falls back to a sensible default plan if the LLM call fails.
     """
     try:
-        understanding = _call_planner_llm(question, conversation_context, settings)
+        understanding = _call_planner_llm(question, conversation_context, settings, model_client)
     except Exception as exc:
         logger.warning("Query planner failed, using default plan: %s", exc)
         understanding = QueryUnderstanding(
@@ -98,16 +102,11 @@ def _call_planner_llm(
     question: str,
     conversation_context: str,
     settings: Settings,
+    model_client: "StructuredModelClient | None",
 ) -> QueryUnderstanding:
-    """Call the planner model with strict structured output."""
-    api_key, base_url, model = _planner_llm_config(settings)
-    llm_config = OpenAIConfig(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        timeout_seconds=settings.planner.timeout_seconds,
-        max_retries=settings.openai.max_retries,
-    )
+    """Call the planner model with strict structured output via the model port."""
+    if model_client is None:
+        raise RuntimeError("Query planner requires a configured model client")
 
     conversation_context_block = ""
     if conversation_context:
@@ -125,52 +124,39 @@ def _call_planner_llm(
         conversation_context_block=conversation_context_block,
     )
 
-    result = traced_chat_completion(
-        llm_config,
-        prompt_name="query_planner",
-        prompt_version=system_prompt.version,
+    from personal_agent.infra.structured_model import StructuredModelRequest
+    from pydantic import BaseModel
+
+    response = model_client.generate(StructuredModelRequest(
+        operation="query_planner",
+        version=system_prompt.version,
         messages=[
             {"role": "system", "content": system_prompt.template},
             {"role": "user", "content": user_content},
         ],
-        model=model,
+        output_type=BaseModel,
         temperature=0.0,
         max_tokens=500,
+        kind="text",
         response_format=_planner_response_format(),
         metadata={
             "component": "query_planner",
             "has_conversation_context": bool(conversation_context),
         },
-        upload_inputs_outputs=settings.langsmith.upload_inputs,
-    )
-    logger.info("Query planner completed in %.0fms model=%s", result.latency_ms, model)
+    ))
+    logger.info("Query planner completed in %.0fms model=%s", response.latency_ms, response.model)
 
     parsed = parse_structured(
-        result.content or "{}",
+        response.content or "{}",
         QueryUnderstanding,
         operation="query_planner",
         version=system_prompt.version,
-        model_name=model,
-        latency_ms=result.latency_ms,
+        model_name=response.model,
+        latency_ms=response.latency_ms,
     )
     if not parsed.ok:
         raise ValueError(f"query_planner structured parse failed: {parsed.error}")
     return parsed.value
-
-
-def _planner_llm_config(settings: Settings) -> tuple[str | None, str | None, str]:
-    """Use the dedicated planner endpoint, else fall back to the openai small model."""
-    if settings.planner.api_key:
-        return (
-            settings.planner.api_key,
-            settings.planner.base_url,
-            settings.planner.model_id,
-        )
-    return (
-        settings.openai.api_key,
-        settings.openai.base_url,
-        settings.openai.small_model or settings.openai.model,
-    )
 
 
 def _planner_response_format() -> dict:

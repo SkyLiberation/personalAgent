@@ -8,7 +8,7 @@ from personal_agent.kernel.config_models import LangSmithConfig, RouterConfig
 from personal_agent.infra.structured_model import (
     FullTracePayloadPolicy,
     ObservedStructuredModelClient,
-    OpenAIResponsesModelClient,
+    OpenAIModelClient,
     RedactedTracePayloadPolicy,
     StructuredModelRequest,
     StructuredModelResponse,
@@ -52,7 +52,7 @@ def test_openai_adapter_uses_responses_parse(monkeypatch):
             )
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
-    client = OpenAIResponsesModelClient(RouterConfig(
+    client = OpenAIModelClient(RouterConfig(
         api_key="key",
         base_url="https://llm.invalid",
         model="structured-model",
@@ -160,7 +160,7 @@ def test_composition_omits_observer_when_tracing_is_disabled():
         LangSmithConfig(enabled=False),
     )
 
-    assert isinstance(client, OpenAIResponsesModelClient)
+    assert isinstance(client, OpenAIModelClient)
 
 
 def test_composition_returns_none_when_model_is_unconfigured():

@@ -134,9 +134,26 @@ class TestCrossLayerRegression:
         note = svc.execute_capture(
             text="旧部署流程记录", source_type="text", user_id="alice",
         ).note
+        # ReAct 检索步直接消费原生 tool-calling 结果
+        monkeypatch.setattr(
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda _prompt, _deps, _allowed: type(
+                "R", (), {
+                    "done": True,
+                    "thought": "定位已有笔记",
+                    "result": {"note_id": note.id},
+                    "tool_name": None,
+                    "tool_input": None,
+                    "native_call_id": None,
+                    "parse_failed": False,
+                },
+            )(),
+        )
+        # resolve 回退到本地候选选择器时，``_structured_llm_respond`` 经
+        # ``_react_llm_respond`` fallback 返回结构化 JSON 指明目标 note_id。
         monkeypatch.setattr(
             "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda _prompt, _deps: (
+            lambda _prompt, _deps, **_kw: (
                 '{"thought":"定位已有笔记","done":true,'
                 f'"result":{{"note_id":"{note.id}"}}}}'
             ),

@@ -47,7 +47,7 @@ def test_direct_answer_context_cannot_access_workflow_capabilities():
     assert "tool_executor" not in names
     assert "replanner" not in names
     assert "workflow_planner" not in names
-    assert names == {"settings", "compress_context"}
+    assert names == {"settings", "compress_context", "model_client"}
 
 
 def test_step_and_react_contexts_have_distinct_boundaries():
@@ -59,7 +59,10 @@ def test_step_and_react_contexts_have_distinct_boundaries():
     assert "summary" in step_names
     assert "direct_answer" in step_names
     assert "policy_engine" not in step_names
-    assert react_names == {"settings", "tool_executor", "policy_engine"}
+    assert react_names == {
+        "settings", "tool_executor", "policy_engine",
+        "model_client", "structured_client",
+    }
 
 
 def test_summary_context_contains_only_summary_capabilities():

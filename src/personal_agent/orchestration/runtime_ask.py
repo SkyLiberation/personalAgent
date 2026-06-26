@@ -64,6 +64,7 @@ class AskService(AskPromptMixin):
         tool_executor,
         verifier,
         llm,
+        planner_client=None,
     ) -> None:
         self.settings = settings
         self.graph_store = graph_store
@@ -73,6 +74,7 @@ class AskService(AskPromptMixin):
         self._tool_executor = tool_executor
         self._verifier = verifier
         self._llm = llm
+        self._planner_client = planner_client
         self.dialogue_context_policy = get_prompt("answer.dialogue_context_policy").template
 
     @property
@@ -90,12 +92,12 @@ class AskService(AskPromptMixin):
         Built per access (cheap) so settings swapped on the service after
         construction take effect, matching the runtime's per-call build style.
         """
-        return AskPipelineFactory(self.settings).create()
+        return AskPipelineFactory(self.settings, self._planner_client).create()
 
     def _plan_retrieval(self, question: str, structured_context: str):
         """Indirection so tests monkeypatching ``runtime_ask.plan_retrieval``
         still take effect when the stage calls through the service."""
-        return plan_retrieval(question, structured_context, self.settings)
+        return plan_retrieval(question, structured_context, self.settings, self._planner_client)
 
     def build_run_context(
         self,

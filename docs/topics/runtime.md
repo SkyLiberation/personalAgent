@@ -1,6 +1,6 @@
 # 运行时与编排层说明
 
-本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。对应代码主要位于 [src/personal_agent/agent/runtime.py](../../src/personal_agent/agent/runtime.py)、[src/personal_agent/agent/orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[src/personal_agent/agent/orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)、[src/personal_agent/agent/capture_flow.py](../../src/personal_agent/agent/capture_flow.py)、[src/personal_agent/agent/graph_capture_flow.py](../../src/personal_agent/agent/graph_capture_flow.py)、[src/personal_agent/agent/nodes.py](../../src/personal_agent/agent/nodes.py) 和 [src/personal_agent/agent/service.py](../../src/personal_agent/agent/service.py)。
+本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。
 
 ## 设计目标
 

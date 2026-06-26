@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import json
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import BaseMessage
 
@@ -81,11 +82,111 @@ _FINISH_REACT_TOOL = {
 }
 
 
+@dataclass(slots=True)
+class _NativeReactOutcome:
+    """模型原生 tool-calling 调用的结构化结果，不经过 JSON 信封字符串.
+
+    ReAct 迭代节点直接消费此结构构造 ``AIMessage``，消除 ``json.dumps`` 信封
+    与 ``_react_parse_response`` 的二次字符串解析。``native_call_id`` 直接用
+    作 ``tool_call_id`` 与 ``pending_call_id``，对齐模型视角。
+    """
+
+    done: bool = False
+    thought: str = ""
+    tool_name: str | None = None
+    tool_input: dict[str, Any] | None = None
+    native_call_id: str | None = None
+    result: dict[str, Any] | None = None
+    parse_failed: bool = False
+
+
+def _react_llm_native(
+    user_prompt: str,
+    deps: ReactContext,
+    allowed_tools: set[str],
+) -> _NativeReactOutcome | None:
+    """调用模型原生 tool-calling 接口并返回结构化 outcome.
+
+    通过 ``StructuredModelClient`` port 发起 ``tool_calling`` 请求，应用层不
+    依赖 ``OpenAI`` / ``traced_chat_completion``。与 ``_react_llm_respond`` 的
+    区别：返回 ``_NativeReactOutcome`` 而非 JSON 字符串，避免 ``json.dumps`` →
+    ``_react_parse_response`` 的有损往返。模型原生 ``tool_calls`` 的结构化保证
+    （schema 校验、call_id、parallel calls）被直接保留。
+    """
+    from personal_agent.infra.structured_model import StructuredModelRequest
+    from pydantic import BaseModel
+
+    if deps.model_client is None:
+        return None
+
+    tool_defs = [
+        strict_tool_definition(spec)
+        for spec in deps.tool_executor.list_tools()
+        if spec.name in allowed_tools
+    ]
+    tools = tool_defs + [_FINISH_REACT_TOOL]
+    try:
+        react_prompt = get_prompt("react.system")
+        response = deps.model_client.generate(StructuredModelRequest(
+            operation="react",
+            version=react_prompt.version,
+            messages=[
+                {"role": "system", "content": _REACT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            output_type=BaseModel,
+            temperature=0,
+            max_tokens=400,
+            kind="tool_calling",
+            tools=tools,
+            tool_choice="auto",
+            metadata={"component": "react"},
+        ))
+    except Exception:
+        logger.exception("Native ReAct LLM call failed")
+        return None
+
+    tool_calls = response.tool_calls or []
+    if tool_calls:
+        call = tool_calls[0]
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict):
+            return _NativeReactOutcome(parse_failed=True)
+        name = str(function.get("name") or "")
+        try:
+            arguments = json.loads(str(function.get("arguments") or "{}"))
+        except json.JSONDecodeError:
+            arguments = {}
+        native_id = str(call.get("id") or "")
+        if name == "finish_react":
+            return _NativeReactOutcome(
+                done=True,
+                thought=str(arguments.get("thought") or ""),
+                result={"answer": str(arguments.get("answer") or "")},
+            )
+        if not isinstance(arguments, dict):
+            arguments = {}
+        thought = str(arguments.pop("thought", ""))
+        return _NativeReactOutcome(
+            thought=thought,
+            tool_name=name,
+            tool_input=arguments,
+            native_call_id=native_id or None,
+        )
+
+    return _NativeReactOutcome(parse_failed=True)
+
+
 def _react_llm_respond(
     user_prompt: str,
     deps: ReactContext,
     allowed_tools: set[str] | None = None,
 ) -> str | None:
+    """Legacy JSON-envelope ReAct LLM call. Retained only as the structured-text
+    fallback for ``_structured_llm_respond`` (step decisions), which needs a str
+    return consumed by ``_react_parse_response``. The ReAct iterate node no
+    longer uses this — it calls ``_react_llm_native`` instead.
+    """
     from personal_agent.kernel.llm_trace import traced_chat_completion
 
     settings = deps.settings
@@ -151,37 +252,51 @@ def _structured_llm_respond(
     *,
     max_tokens: int = 500,
 ) -> str | None:
-    from personal_agent.kernel.llm_trace import traced_chat_completion
+    """Structured-output LLM call for step decisions (delete candidate resolve,
+    solidify draft, etc.).
 
-    settings = deps.settings
-    structured = settings.structured
-    if not (structured.api_key and structured.base_url):
-        return _react_llm_respond(user_prompt, deps)
+    Uses the ``structured_client`` port (Chat Completions with strict
+    ``response_format``). Falls back to ``model_client`` (text kind) when the
+    dedicated structured endpoint is unavailable, then to ``_react_llm_respond``
+    (legacy JSON-envelope path). Returns a JSON string consumed by
+    ``_react_parse_response`` — this is the one remaining str-returning path and
+    is kept because step decisions parse permissive JSON, not Pydantic.
+    """
+    from personal_agent.infra.structured_model import StructuredModelRequest
+    from pydantic import BaseModel
+
+    system_prompt = get_prompt("structured.system")
     try:
-        system_prompt = get_prompt("structured.system")
+        prompt_version = get_prompt(f"{prompt_name}.user").version
+    except KeyError:
+        prompt_version = system_prompt.version
+
+    request = StructuredModelRequest(
+        operation=prompt_name,
+        version=prompt_version,
+        messages=[
+            {"role": "system", "content": system_prompt.template},
+            {"role": "user", "content": user_prompt},
+        ],
+        output_type=BaseModel,
+        temperature=0,
+        max_tokens=max_tokens,
+        kind="text",
+        response_format=structured_response_format(prompt_name, schema),
+        metadata={"component": prompt_name},
+    )
+
+    client = deps.structured_client or deps.model_client
+    if client is not None:
         try:
-            prompt_version = get_prompt(f"{prompt_name}.user").version
-        except KeyError:
-            prompt_version = system_prompt.version
-        result = traced_chat_completion(
-            structured,
-            prompt_name=prompt_name,
-            prompt_version=prompt_version,
-            messages=[
-                {"role": "system", "content": system_prompt.template},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=max_tokens,
-            response_format=structured_response_format(prompt_name, schema),
-            metadata={"component": prompt_name},
-            upload_inputs_outputs=settings.langsmith.upload_inputs,
-            extra_body=structured.extra_body or None,
-        )
-        return strip_json_fence(result.content) if result.content else _react_llm_respond(user_prompt, deps)
-    except Exception:
-        logger.exception("Structured LLM call failed: %s", prompt_name)
-        return _react_llm_respond(user_prompt, deps)
+            response = client.generate(request)
+            content = (response.content or "").strip()
+            if content:
+                return strip_json_fence(content)
+        except Exception:
+            logger.exception("Structured LLM call failed: %s", prompt_name)
+    # Fallback to the legacy JSON-envelope path (text kind via model_client).
+    return _react_llm_respond(user_prompt, deps)
 
 
 def _react_parse_response(raw: str) -> dict | None:

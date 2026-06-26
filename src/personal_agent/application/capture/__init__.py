@@ -9,6 +9,7 @@ from personal_agent.application.capture.providers import (
     WebSearchProvider,
     build_web_search_provider,
 )
+from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.application.capture.service import CaptureService
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "CaptureService",
     "DefaultUploadCaptureProvider",
     "FirecrawlUrlCaptureProvider",
+    "IngestionPipeline",
     "TavilyWebSearchProvider",
     "UploadCaptureRequest",
     "UploadCaptureProvider",

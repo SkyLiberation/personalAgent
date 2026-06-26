@@ -1,0 +1,184 @@
+[
+  {
+    "id": "planner-001",
+    "description": "写入后追问同一知识，ask 必须依赖 capture 完成后再检索",
+    "entry_text": "把 DNS 会把域名解析为 IP 记下来，然后解释为什么 DNS 需要缓存",
+    "goals": [
+      {
+        "goal_id": "save",
+        "intent": "capture_text",
+        "input": "DNS 会把域名解析为 IP。"
+      },
+      {
+        "goal_id": "question",
+        "intent": "ask",
+        "input": "DNS 为什么需要缓存？"
+      }
+    ],
+    "expected_task_dependencies": {
+      "save": [],
+      "question": ["save"]
+    },
+    "expected_step_dependencies": {
+      "question::ask-retrieve": ["save::cap-structure"]
+    }
+  },
+  {
+    "id": "planner-002",
+    "description": "同一输入中的多个互不相关只读问题不应被强制串成 task 依赖",
+    "entry_text": "解释向量数据库的 ANN；再说说 TCP 三次握手",
+    "goals": [
+      {
+        "goal_id": "vector",
+        "intent": "ask",
+        "input": "什么是向量数据库的近似最近邻搜索？"
+      },
+      {
+        "goal_id": "tcp",
+        "intent": "ask",
+        "input": "TCP 为什么需要三次握手？"
+      }
+    ],
+    "expected_task_dependencies": {
+      "vector": [],
+      "tcp": []
+    },
+    "expected_step_dependencies": {
+      "vector::ask-retrieve": [],
+      "tcp::ask-retrieve": []
+    }
+  },
+  {
+    "id": "planner-003",
+    "description": "后一个 goal 明确指代上一个回答时，应依赖上一个 task",
+    "entry_text": "解释 DNS 缓存；继续说明这个问题的边界场景",
+    "goals": [
+      {
+        "goal_id": "first",
+        "intent": "ask",
+        "input": "DNS 为什么需要缓存？"
+      },
+      {
+        "goal_id": "followup",
+        "intent": "ask",
+        "input": "继续说明这个问题的边界场景"
+      }
+    ],
+    "expected_task_dependencies": {
+      "first": [],
+      "followup": ["first"]
+    },
+    "expected_step_dependencies": {
+      "followup::ask-retrieve": ["first::ask-verify"]
+    }
+  },
+  {
+    "id": "planner-004",
+    "description": "连续长期写入应串行，避免写入副作用乱序",
+    "entry_text": "记下第一条知识，再记下第二条知识",
+    "goals": [
+      {
+        "goal_id": "first",
+        "intent": "capture_text",
+        "input": "第一条知识。"
+      },
+      {
+        "goal_id": "second",
+        "intent": "capture_text",
+        "input": "第二条知识。"
+      }
+    ],
+    "expected_task_dependencies": {
+      "first": [],
+      "second": ["first"]
+    },
+    "expected_step_dependencies": {
+      "second::cap-structure": ["first::cap-structure"]
+    }
+  },
+  {
+    "id": "planner-005",
+    "description": "只读问答和无关写入同属一轮时，写入不应依赖先前只读 task",
+    "entry_text": "解释什么是 DNS；另外记下明天十点开会",
+    "goals": [
+      {
+        "goal_id": "question",
+        "intent": "ask",
+        "input": "什么是 DNS？"
+      },
+      {
+        "goal_id": "note",
+        "intent": "capture_text",
+        "input": "明天十点开会。"
+      }
+    ],
+    "expected_task_dependencies": {
+      "question": [],
+      "note": []
+    },
+    "expected_step_dependencies": {
+      "question::ask-retrieve": [],
+      "note::cap-structure": []
+    },
+    "model_task_dependencies": {
+      "question": [],
+      "note": []
+    }
+  },
+  {
+    "id": "planner-006",
+    "description": "语义延展但没有固定关键词时，由模型判断后续目标依赖前一个回答",
+    "entry_text": "解释数据库索引；围绕第一点展开它和缓存的区别",
+    "goals": [
+      {
+        "goal_id": "first",
+        "intent": "ask",
+        "input": "什么是数据库索引？"
+      },
+      {
+        "goal_id": "expand",
+        "intent": "ask",
+        "input": "围绕第一点展开它和缓存的区别"
+      }
+    ],
+    "expected_task_dependencies": {
+      "first": [],
+      "expand": ["first"]
+    },
+    "expected_step_dependencies": {
+      "expand::ask-retrieve": ["first::ask-verify"]
+    },
+    "model_task_dependencies": {
+      "first": [],
+      "expand": ["first"]
+    }
+  },
+  {
+    "id": "planner-007",
+    "description": "模型判断前序 Goal 依赖后序 Goal 时，Planner 应通过 task DAG 拓扑排序重排执行顺序",
+    "entry_text": "根据我刚才让你保存的 DNS 知识解释缓存；先把 DNS 会把域名解析为 IP 这句话保存下来",
+    "goals": [
+      {
+        "goal_id": "question",
+        "intent": "ask",
+        "input": "根据保存的 DNS 知识解释为什么需要缓存。"
+      },
+      {
+        "goal_id": "save",
+        "intent": "capture_text",
+        "input": "DNS 会把域名解析为 IP。"
+      }
+    ],
+    "expected_task_dependencies": {
+      "save": [],
+      "question": ["save"]
+    },
+    "expected_step_dependencies": {
+      "question::ask-retrieve": ["save::cap-structure"]
+    },
+    "model_task_dependencies": {
+      "question": ["save"],
+      "save": []
+    }
+  }
+]

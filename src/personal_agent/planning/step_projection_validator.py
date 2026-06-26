@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import logging
-from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
 from personal_agent.kernel.models import EntryIntent
-from personal_agent.governance.policy.invariants import is_high_risk
 from personal_agent.tools import tool_governance
 from personal_agent.kernel.contracts.execution import ExecutionStep
 
@@ -18,10 +16,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-VALID_ACTION_TYPES = {"retrieve", "tool_call", "compose", "verify", "resolve"}
-VALID_RISK_LEVELS = {"low", "medium", "high"}
-VALID_ON_FAILURE = {"skip", "retry", "abort"}
-VALID_EXECUTION_MODES = {"deterministic", "react"}
 MAX_REACT_ITERATIONS = 5
 
 
@@ -41,34 +35,6 @@ class StepProjectionValidationResult:
     def blocking(self) -> bool:
         """True if there are blocking (critical) issues that prevent safe execution."""
         return not self.ok or self.replanned
-
-
-def _clone_step(s: ExecutionStep) -> ExecutionStep:
-    return ExecutionStep(
-        step_id=s.step_id,
-        action_type=s.action_type,
-        description=s.description,
-        tool_name=s.tool_name,
-        tool_input=dict(s.tool_input),
-        depends_on=list(s.depends_on),
-        expected_output=s.expected_output,
-        success_criteria=s.success_criteria,
-        risk_level=s.risk_level,
-        requires_confirmation=s.requires_confirmation,
-        on_failure=s.on_failure,
-        status=s.status,
-        retry_count=s.retry_count,
-        execution_mode=getattr(s, "execution_mode", "deterministic"),
-        allowed_tools=list(getattr(s, "allowed_tools", [])),
-        max_iterations=getattr(s, "max_iterations", 3),
-        workflow_id=getattr(s, "workflow_id", ""),
-        workflow_version=getattr(s, "workflow_version", ""),
-        workflow_step_id=getattr(s, "workflow_step_id", ""),
-        projection_kind=getattr(s, "projection_kind", "workflow_step"),
-        task_id=getattr(s, "task_id", ""),
-        task_intent=getattr(s, "task_intent", "unknown"),
-        task_input=getattr(s, "task_input", ""),
-    )
 
 
 def _has_upstream_action_type(
@@ -114,10 +80,12 @@ def _has_upstream_tool(
 
 
 class StepProjectionValidator:
-    """Pre-execution workflow step projection validation.
+    """Pre-execution gate for runtime tool executability.
 
-    Validates compiled workflow structure and governance. Router output is not
-    accepted here: execution policy comes from WorkflowSpec and tools.
+    Workflow topology and step structure are gated by WorkflowSpecValidator in
+    CI / deployment checks. This runtime gate only checks facts that depend on
+    the currently wired ToolExecutor or dynamic execution-time parameter
+    injection.
     """
 
     def __init__(self, tool_executor: "ToolExecutor | None" = None) -> None:
@@ -142,32 +110,11 @@ class StepProjectionValidator:
     ) -> StepProjectionValidationResult:
         issues: list[str] = []
         warnings: list[str] = []
-        bad_status_indices: list[int] = []
         known_tools = self._get_known_tools()
 
-        # --- A. Structural checks ---
-        seen_ids: set[str] = set()
-        step_ids: set[str] = set()
-
+        # --- A. Tool executability checks ---
         for i, s in enumerate(steps):
             prefix = f"步骤[{i}] {s.step_id!r}:"
-
-            if not s.step_id or not s.step_id.strip():
-                issues.append(f"{prefix} step_id 为空。")
-            elif s.step_id in seen_ids:
-                issues.append(f"{prefix} step_id 重复。")
-            else:
-                seen_ids.add(s.step_id)
-            step_ids.add(s.step_id)
-
-            if s.action_type not in VALID_ACTION_TYPES:
-                issues.append(
-                    f"{prefix} action_type={s.action_type!r} 无效，"
-                    f"有效值：{sorted(VALID_ACTION_TYPES)}。"
-                )
-
-            if not s.description or not s.description.strip():
-                warnings.append(f"{prefix} description 为空。")
 
             if s.action_type == "tool_call" and not s.tool_name:
                 issues.append(f"{prefix} action_type=tool_call 但 tool_name 为空。")
@@ -296,91 +243,9 @@ class StepProjectionValidator:
                             f"{tool_risk!r}，高于步骤声明的 {s.risk_level!r}。"
                         )
 
-            if s.risk_level not in VALID_RISK_LEVELS:
-                issues.append(
-                    f"{prefix} risk_level={s.risk_level!r} 无效，"
-                    f"有效值：{sorted(VALID_RISK_LEVELS)}。"
-                )
-
-            if s.on_failure not in VALID_ON_FAILURE:
-                issues.append(
-                    f"{prefix} on_failure={s.on_failure!r} 无效，"
-                    f"有效值：{sorted(VALID_ON_FAILURE)}。"
-                )
-
-            if s.status != "planned":
-                warnings.append(
-                    f"{prefix} 初始 status={s.status!r}，已自动修正为 'planned'。"
-                )
-                bad_status_indices.append(i)
-
-            if s.requires_confirmation and s.risk_level == "low":
-                warnings.append(
-                    f"{prefix} requires_confirmation=True 但 risk_level='low'，"
-                    f"建议将 risk_level 至少设为 'medium'。"
-                )
-
-            if intent == "delete_knowledge":
-                if s.action_type == "verify":
-                    issues.append(
-                        f"{prefix} 删除确认由 delete_note 工具执行，"
-                        "当前 verify 步骤无法执行目标确认，不应加入删除计划。"
-                    )
-                if s.action_type == "tool_call" and s.tool_name == "delete_note":
-                    if not _has_upstream_action_type(steps, s, "resolve"):
-                        issues.append(
-                            f"{prefix} delete_note 必须依赖 resolve 动态解析目标 note_id。"
-                        )
-                    if "note_id" in s.tool_input:
-                        issues.append(
-                            f"{prefix} delete_note.note_id 必须由 resolve 执行结果动态注入，"
-                            "不得在计划阶段提供。"
-                        )
-                    if not is_high_risk(s.risk_level) or not s.requires_confirmation:
-                        issues.append(
-                            f"{prefix} delete_note 必须声明 risk_level='high' "
-                            "且 requires_confirmation=True。"
-                        )
-
-            if intent == "solidify_conversation":
-                if s.action_type in {"retrieve", "resolve", "verify"}:
-                    issues.append(
-                        f"{prefix} 固化计划只允许 compose 生成草稿后调用 capture_text；"
-                        f"当前 {s.action_type!r} 步骤没有可兑现的独立执行语义。"
-                    )
-                if s.action_type == "tool_call" and s.tool_name == "capture_text":
-                    if not _has_upstream_action_type(steps, s, "compose"):
-                        issues.append(
-                            f"{prefix} 固化写入必须依赖 compose 生成的真实知识草稿，"
-                            "不得直接写入检索结果或步骤占位符。"
-                        )
-                    if "text" in s.tool_input:
-                        issues.append(
-                            f"{prefix} capture_text.text 必须由 compose 执行结果动态注入，"
-                            "计划阶段不得提供正文或占位符。"
-                        )
-                    if s.risk_level != "low" or s.requires_confirmation:
-                        issues.append(
-                            f"{prefix} 用户已明确请求固化，capture_text 应声明 "
-                            "risk_level='low' 且 requires_confirmation=False。"
-                        )
-
             # ReAct execution mode checks
             exec_mode = getattr(s, "execution_mode", "deterministic")
-            if exec_mode not in VALID_EXECUTION_MODES:
-                issues.append(
-                    f"{prefix} execution_mode={exec_mode!r} 无效，"
-                    f"有效值：{sorted(VALID_EXECUTION_MODES)}。"
-                )
             if exec_mode == "react":
-                if s.risk_level == "high":
-                    issues.append(
-                        f"{prefix} execution_mode='react' 不允许 risk_level='high'。"
-                    )
-                if s.requires_confirmation:
-                    issues.append(
-                        f"{prefix} execution_mode='react' 不允许 requires_confirmation=True。"
-                    )
                 allowed = getattr(s, "allowed_tools", [])
                 if isinstance(allowed, (list, tuple)):
                     for tool_name in allowed:
@@ -396,99 +261,11 @@ class StepProjectionValidator:
                         f"{prefix} max_iterations={max_iter} 超过上限 {MAX_REACT_ITERATIONS}，已自动限制。"
                     )
 
-        # --- B. Dependency graph checks ---
-        for i, s in enumerate(steps):
-            prefix = f"步骤[{i}] {s.step_id!r}:"
-            for dep_id in s.depends_on:
-                if dep_id not in step_ids:
-                    issues.append(
-                        f"{prefix} depends_on={dep_id!r} 引用了不存在的 step_id。"
-                    )
-
-        # Topological sort to detect cycles
-        if step_ids:
-            has_bad_ref = any(
-                "引用不存在的" in issue or "step_id 为空" in issue
-                for issue in issues
-            )
-            if not has_bad_ref:
-                indeg: dict[str, int] = {sid: 0 for sid in step_ids}
-                adj: dict[str, list[str]] = {sid: [] for sid in step_ids}
-                for s in steps:
-                    if not s.step_id:
-                        continue
-                    for dep_id in s.depends_on:
-                        if dep_id in adj:
-                            indeg[s.step_id] += 1
-                            adj[dep_id].append(s.step_id)
-                queue: deque[str] = deque(sid for sid, d in indeg.items() if d == 0)
-                sorted_count = 0
-                while queue:
-                    node = queue.popleft()
-                    sorted_count += 1
-                    for neighbor in adj[node]:
-                        indeg[neighbor] -= 1
-                        if indeg[neighbor] == 0:
-                            queue.append(neighbor)
-                if sorted_count != len(step_ids):
-                    issues.append("计划中存在循环依赖。")
-
-        for i, s in enumerate(steps):
-            if s.action_type == "verify" and not s.depends_on:
-                warnings.append(
-                    f"步骤[{i}] {s.step_id!r}: action_type=verify 但 depends_on 为空，"
-                    f"缺少校验目标。"
-                )
-
-        # --- C. Intent workflow invariants ---
-        if (
-            intent == "delete_knowledge"
-            and not any(s.action_type == "tool_call" and s.tool_name == "delete_note" for s in steps)
-        ):
-            issues.append("delete_knowledge 计划必须包含 tool_call(delete_note) 步骤。")
-        if (
-            intent == "solidify_conversation"
-            and not any(s.action_type == "tool_call" and s.tool_name == "capture_text" for s in steps)
-        ):
-            issues.append("solidify_conversation 计划必须包含 tool_call(capture_text) 步骤。")
-
-        # --- D. Plan-level checks ---
-        if len(steps) == 0:
-            issues.append("计划为空，至少需要 1 个步骤。")
-        else:
-            if all(s.action_type == "verify" for s in steps):
-                warnings.append("计划中所有步骤都是 verify，缺少实际执行步骤。")
-
-            last_step = steps[-1]
-            valid_terminal_action = last_step.action_type in ("compose", "verify") or (
-                intent in {
-                    "solidify_conversation",
-                    "capture_text",
-                    "capture_link",
-                    "capture_file",
-                }
-                and last_step.action_type == "tool_call"
-                and last_step.tool_name == "capture_text"
-            )
-            if not valid_terminal_action:
-                warnings.append(
-                    f"步骤投影最后一步是 {last_step.action_type!r}，"
-                    f"建议以 compose 或 verify 结尾。"
-                )
-
-        # Build corrected steps if any status values were auto-fixed
-        corrected: list[ExecutionStep] | None = None
-        if bad_status_indices:
-            corrected = [_clone_step(s) for s in steps]
-            for i in bad_status_indices:
-                corrected[i].status = "planned"
-
         valid = len(issues) == 0
         result = StepProjectionValidationResult(
             valid=valid,
             issues=issues,
             warnings=warnings,
-            corrected_steps=corrected,
         )
 
         if issues:

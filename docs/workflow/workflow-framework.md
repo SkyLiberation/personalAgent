@@ -2,19 +2,6 @@
 
 本文总结当前工程的 workflow 框架：哪些对象是流程真源，哪些流程会进入 LangGraph step execution，以及一次请求如何从入口路由到具体业务链路。
 
-对应核心代码：
-
-- `src/personal_agent/agent/workflow.py`
-- `src/personal_agent/agent/workflow_planner.py`
-- `src/personal_agent/agent/execution_models.py`
-- `src/personal_agent/agent/workflow_validator.py`
-- `src/personal_agent/agent/step_projection_validator.py`
-- `src/personal_agent/agent/orchestration_graph.py`
-- `src/personal_agent/agent/orchestration_nodes/_entry.py`
-- `src/personal_agent/agent/orchestration_nodes/_steps.py`
-- `src/personal_agent/agent/orchestration_nodes/_react.py`
-- `src/personal_agent/agent/orchestration_models.py`
-
 ## 一句话结论
 
 当前项目采用 workflow-first 架构。`WorkflowSpec / WorkflowRegistry` 是固定业务流程的声明式真源；`WorkflowStepProjector` 只做确定性投影，不让 LLM 临场生成全局计划；LangGraph 负责把入口路由、step projection workflow、ReAct、ToolGateway、HITL 和 checkpoint 串成可恢复的执行图。
@@ -70,7 +57,7 @@ react_init
 | `ExecutionStep` | `execution_models.py` | workflow step 的运行时编译结果 |
 | `WorkflowPlanner` | `workflow_planner.py` | 将有序 Goals 与 active WorkflowSpec 编译为 ExecutionPlan，不调用 LLM 生成拓扑 |
 | `WorkflowSpecValidator` | `workflow_validator.py` | 校验 workflow 声明本身是否自洽 |
-| `StepProjectionValidator` | `step_projection_validator.py` | 校验运行时 step 是否可执行、安全、符合 intent 规则 |
+| `StepProjectionValidator` | `step_projection_validator.py` | 执行前工具门禁：校验当前 ToolExecutor、工具 schema、动态参数注入和 ReAct 工具可用性；不承载 workflow 拓扑或结构校验 |
 | `StepRunState` | `orchestration_models.py` | checkpoint-safe 的单步骤运行态 |
 | `StepExecutionState` | `orchestration_models.py` | checkpoint-safe 的步骤执行状态，包含 steps、current index、results |
 | `ReactSubState` | `orchestration_models.py` | ReAct 子图的私有状态，包含 iterations、allowed_tools、pending tool、result |
@@ -217,16 +204,31 @@ sol-1 compose
 
 ## Step Projection 的安全边界
 
-Step projection 不是“生成了步骤就可以执行”。执行前必须通过 `StepProjectionValidator`：
+Step projection 不是“生成了步骤就可以执行”。当前校验分为 CI / 部署前门禁和运行时工具门禁：
 
-- step id 唯一。
-- 依赖可解析且无环。
-- `action_type / risk_level / on_failure / execution_mode` 合法。
+- `WorkflowSpecValidator` 在声明期校验 workflow contract：step id、依赖、条件边、projection policy、risk/HITL
+  等 spec 自洽性，以及 registry 与真实工具能力是否匹配。
+- `.github/workflows/architecture.yml` 的 `Layer / cycle gate` 运行 `scripts/check_layers.py`，检查
+  `src/personal_agent` 顶层模块依赖无环、无 upward edge，保证 `kernel / infra / memory / application / tools /
+  governance / planning / orchestration / adapters` 的依赖方向不被破坏。
+- `.github/workflows/architecture.yml` 的 `Workflow registry gate` 运行 `tests/test_workflow_validator.py`，把错误的
+  `WorkflowRegistry` 写法挡在 PR / push 阶段。
+- `StepProjectionValidator` 在执行前只校验 runtime 工具可执行性：当前 `ToolExecutor` 是否有对应工具，工具输入是否
+  满足 schema，哪些字段允许由上游 step 在执行期注入，以及 ReAct 的 `allowed_tools` 是否可用。
+
+因此，workflow 拓扑只由 `WorkflowSpec / WorkflowRegistry` 承载。例如
+`delete_knowledge` 当前是 `del-1 -> del-2 -> del-3 -> del-4`，`solidify_conversation` 当前是
+`sol-1 -> sol-2`，这些流程事实在 `workflow.py` 和对应 spec 测试中维护；`StepProjectionValidator` 不再复制这些
+拓扑，也不再重复校验 step id 唯一、依赖 DAG、action/risk/on_failure/execution_mode 枚举等 registry 级契约。
+
+当前 `StepProjectionValidator` 校验项包括：
+
 - 工具存在于 `ToolExecutor`。
-- 工具输入满足 schema。
-- 高风险工具必须要求确认。
-- ReAct step 只能使用允许的低风险工具。
-- intent-specific 规则必须满足，例如删除必须包含 `delete_note` 且要求确认，固化必须最终调用 `capture_text`。
+- 工具输入满足 schema；允许由执行期注入的字段延后提供，例如 entry/capture 正文、上游 compose 生成的草稿、
+  上游 resolve 解析出的 note id。
+- 工具治理元数据与 step 声明不一致时给出 warning，例如工具要求确认但 step 未声明确认、工具风险高于 step 风险、
+  工具会访问外部网络或写长期记忆。
+- ReAct step 的 `allowed_tools` 必须已注册，`max_iterations` 不能超过运行时上限。
 
 通过校验后，工具调用仍统一走 ToolGateway。ToolGateway 继续负责 timeout、retry、权限、HITL、幂等、审计和工具结果归一化。
 

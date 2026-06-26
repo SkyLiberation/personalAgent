@@ -31,21 +31,26 @@ _REACT_SYSTEM_PROMPT = get_prompt("react.system").template
 
 def _topological_sort_steps(steps: list) -> list:
     """Sort execution steps so dependencies come before dependents."""
-    if len(steps) <= 1:
+    if not steps:
         return list(steps)
-    step_ids = {s.step_id for s in steps if s.step_id}
+    step_ids = [s.step_id for s in steps if s.step_id]
+    if len(set(step_ids)) != len(step_ids):
+        raise ValueError("Step DAG contains duplicate step_id values.")
+    step_id_set = set(step_ids)
+    id_to_index = {s.step_id: i for i, s in enumerate(steps) if s.step_id}
     indeg: dict[int, int] = {}
     adj: dict[int, list[int]] = {}
     for i, s in enumerate(steps):
         indeg[i] = 0
         adj[i] = []
         for dep_id in s.depends_on:
-            if dep_id in step_ids:
-                indeg[i] = indeg.get(i, 0) + 1
-                for j, other in enumerate(steps):
-                    if other.step_id == dep_id:
-                        adj.setdefault(j, []).append(i)
-                        break
+            if dep_id not in step_id_set:
+                raise ValueError(
+                    f"Step DAG dependency {s.step_id!r} -> {dep_id!r} "
+                    "references an unknown step."
+                )
+            indeg[i] = indeg.get(i, 0) + 1
+            adj.setdefault(id_to_index[dep_id], []).append(i)
     q: deque[int] = deque(i for i, d in indeg.items() if d == 0)
     result: list = []
     while q:
@@ -55,6 +60,12 @@ def _topological_sort_steps(steps: list) -> list:
             indeg[ni] -= 1
             if indeg[ni] == 0:
                 q.append(ni)
+    if len(result) != len(steps):
+        cyclic = [steps[i].step_id for i, d in indeg.items() if d > 0]
+        raise ValueError(
+            "Step DAG contains a dependency cycle involving "
+            f"{', '.join(cyclic)}."
+        )
     return result
 
 
