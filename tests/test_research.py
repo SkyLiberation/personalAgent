@@ -75,11 +75,11 @@ def _execute_existing_pipeline(
     *,
     max_items: int | None = None,
 ):
-    service.plan_queries(run_id)
-    service.collect_sources(run_id)
-    service.cluster_events(run_id)
-    service.rank_events(run_id, max_items=max_items)
-    return service.compose_digest(run_id, max_items=max_items)
+    service.initialize_state(run_id)
+    service.run_research_loop(run_id)
+    run = service.synthesize_digest(run_id, max_items=max_items)
+    service.verify_digest(run_id)
+    return run
 
 
 def test_research_pipeline_persists_events_and_digest(postgres_url):
@@ -232,17 +232,52 @@ def test_subscription_parser_workflow_intents_are_registered():
     from personal_agent.planning.workflow import WORKFLOW_REGISTRY
 
     research_steps = WORKFLOW_REGISTRY.select("research_once").steps
-    assert [step.tool_name for step in research_steps[:6]] == [
+    assert [step.tool_name for step in research_steps[:5]] == [
         "research_prepare_run",
-        "research_plan_queries",
-        "research_collect_sources",
-        "research_cluster_events",
-        "research_rank_events",
-        "research_compose_digest",
+        "research_initialize_state",
+        "research_run_loop",
+        "research_synthesize_digest",
+        "research_verify_digest",
     ]
     assert (
         WORKFLOW_REGISTRY.select("create_research_subscription").steps[0].tool_name
         == "create_research_subscription"
+    )
+
+
+def test_research_workflow_contracts_are_deterministic_unit_contracts():
+    from personal_agent.planning.workflow import WORKFLOW_REGISTRY
+
+    research_once = WORKFLOW_REGISTRY.select("research_once")
+    assert [(step.step_id, step.tool_name, step.depends_on) for step in research_once.steps] == [
+        ("research-prepare", "research_prepare_run", ()),
+        ("research-initialize", "research_initialize_state", ("research-prepare",)),
+        ("research-loop", "research_run_loop", ("research-initialize",)),
+        ("research-synthesize", "research_synthesize_digest", ("research-loop",)),
+        ("research-verify", "research_verify_digest", ("research-synthesize",)),
+        ("research-compose", None, ("research-verify",)),
+    ]
+    assert research_once.steps[2].side_effects == ("external_network", "write_longterm")
+
+    execute_run = WORKFLOW_REGISTRY.select("execute_research_run")
+    assert [(step.step_id, step.tool_name, step.depends_on) for step in execute_run.steps] == [
+        ("research-initialize", "research_initialize_state", ()),
+        ("research-loop", "research_run_loop", ("research-initialize",)),
+        ("research-synthesize", "research_synthesize_digest", ("research-loop",)),
+        ("research-verify", "research_verify_digest", ("research-synthesize",)),
+    ]
+
+    manage = WORKFLOW_REGISTRY.select("manage_research")
+    assert manage.steps[0].allowed_tools == (
+        "list_research_subscriptions",
+        "update_research_subscription",
+        "pause_research_subscription",
+        "resume_research_subscription",
+        "run_research_subscription_now",
+        "list_research_runs",
+        "get_research_digest",
+        "submit_research_feedback",
+        "save_research_event",
     )
 
 

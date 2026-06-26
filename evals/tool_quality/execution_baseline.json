@@ -1,0 +1,9 @@
+{
+  "outcome_exact": 1.0,
+  "error_kind_exact": 1.0,
+  "data_shape_match": 1.0,
+  "evidence_count_match": 1.0,
+  "repeat_exact": 1.0,
+  "call_count_exact": 1.0,
+  "overall_exact": 1.0
+}

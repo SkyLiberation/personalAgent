@@ -21,6 +21,8 @@ import langextract as lx
 from langextract.providers.openai import OpenAILanguageModel
 
 from personal_agent.kernel.config import LangExtractConfig
+from langextract.providers.schemas.openai import OpenAISchema
+
 from personal_agent.application.extract.openai_schema import build_section_openai_schema
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,11 @@ class LangExtractMisconfiguredError(RuntimeError):
     """Raised when LangExtractConfig is enabled but missing required fields."""
 
 
-def build_language_model(config: LangExtractConfig) -> OpenAILanguageModel:
+def build_language_model(
+    config: LangExtractConfig,
+    *,
+    openai_schema: OpenAISchema | None = None,
+) -> OpenAILanguageModel:
     """Construct an OpenAILanguageModel pre-bound to our custom strict schema."""
     if not config.api_key:
         raise LangExtractMisconfiguredError(
@@ -41,7 +47,7 @@ def build_language_model(config: LangExtractConfig) -> OpenAILanguageModel:
         model_id=config.model_id,
         api_key=config.api_key,
         base_url=config.base_url,
-        openai_schema=build_section_openai_schema(),
+        openai_schema=openai_schema or build_section_openai_schema(),
         max_workers=config.max_workers,
     )
 
@@ -52,13 +58,14 @@ def run_extract(
     prompt: str,
     examples: list[lx.data.ExampleData],
     config: LangExtractConfig,
+    openai_schema: OpenAISchema | None = None,
     **extra_kwargs: Any,
 ) -> lx.data.AnnotatedDocument:
     """Run a single LangExtract pass against the configured endpoint.
 
     Caller is expected to handle exceptions; this wrapper does not swallow.
     """
-    language_model = build_language_model(config)
+    language_model = build_language_model(config, openai_schema=openai_schema)
     logger.info(
         "langextract.run model=%s base_url=%s text_len=%d passes=%d max_workers=%d",
         config.model_id,

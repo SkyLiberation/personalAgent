@@ -3,9 +3,11 @@ from personal_agent.application.research.models import (
     DeliveryTarget,
     IntelligenceDigest,
     ResearchBudget,
+    ResearchDecision,
     ResearchEvent,
     ResearchFeedback,
     ResearchRun,
+    ResearchState,
     ResearchSubscription,
     SchedulePolicy,
     SourcePreferences,
@@ -17,15 +19,27 @@ from personal_agent.application.research.scheduler import (
     subscription_due,
 )
 from personal_agent.application.research.service import ResearchService
+from personal_agent.application.research.extraction import (
+    HeuristicResearchEventExtractor,
+    LangExtractResearchEventExtractor,
+    ResearchEventExtractor,
+    ResearchEventFrame,
+)
 
 __all__ = [
     "ContentPreferences",
     "DeliveryTarget",
     "IntelligenceDigest",
+    "HeuristicResearchEventExtractor",
+    "LangExtractResearchEventExtractor",
     "ResearchBudget",
+    "ResearchDecision",
     "ResearchEvent",
+    "ResearchEventExtractor",
+    "ResearchEventFrame",
     "ResearchFeedback",
     "ResearchRun",
+    "ResearchState",
     "ResearchScheduler",
     "ResearchSchedulerRunner",
     "ResearchService",

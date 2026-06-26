@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | `public_agent` | 公共 Agent 工具，可出现在默认动态工具面 | 是 | `graph_search`, `web_search`, `find_similar_notes`, `list_research_runs` |
 | `scoped_agent` | 只在特定 workflow 的 scoped allowed tools 内动态选择 | 局部是 | `update_note`, `pause_research_subscription`, `retry_worker_task` |
-| `workflow_activity` | 只由确定性 workflow step 调用，仍经过 ToolGateway 治理 | 否 | `delete_note`, `capture_text`, `research_collect_sources` |
+| `workflow_activity` | 只由确定性 workflow step 调用，仍经过 ToolGateway 治理 | 否 | `delete_note`, `capture_text`, `research_run_loop` |
 | `admin` | 管理 / 运维工具，需要管理入口或更高权限 | 受限 | 预留 |
 
 因此 `delete_note` 仍然是 tool，不是因为 Agent 需要动态选择它，而是因为删除长期知识必须经过统一治理边界：HITL、幂等、审计、策略拦截和恢复路径。但它的 exposure 是 `workflow_activity`，不会出现在 ReAct 默认/局部动态工具空间中。
@@ -76,7 +76,7 @@ Application Service: 业务规则、持久化、领域状态和协作对象
 
 | 工具组 | 工具 | 用途 | 主要治理边界 |
 | --- | --- | --- | --- |
-| Research pipeline | `research_prepare_run`, `research_plan_queries`, `research_collect_sources`, `research_cluster_events`, `research_rank_events`, `research_compose_digest` | 将 Research 主链路拆成可 checkpoint、可审计、可恢复的 workflow 阶段 | `research_collect_sources` 声明 `external_network`; `research_rank_events` 声明 `read_longterm`; 阶段状态写入 Postgres Research store |
+| Research pipeline | `research_prepare_run`, `research_initialize_state`, `research_run_loop`, `research_synthesize_digest`, `research_verify_digest` | 将 Research 主链路从固定流水线改为可 checkpoint、可审计、可恢复的 evidence-driven loop | `research_run_loop` 声明 `external_network`; loop 内动态搜索、抓取、聚类、个性化排序并更新 ResearchState；阶段状态写入 Postgres Research store |
 | Research 管理 | `list_research_subscriptions`, `update_research_subscription`, `pause_research_subscription`, `resume_research_subscription`, `run_research_subscription_now`, `list_research_runs`, `get_research_digest`, `submit_research_feedback`, `save_research_event` | 管理订阅、查看 run/digest、记录反馈、将事件入库 | 写入类为 `medium + write_longterm`; 查询类为 `read_longterm`; 入库走 `research:save` |
 | 知识生命周期 | `list_recent_notes`, `get_note`, `find_similar_notes`, `update_note`, `supersede_note`, `mark_note_deprecated`, `mark_notes_conflicted` | 查询、修正、替换、标记过期或冲突，维护知识生命周期 | 查询类低风险；更新/版本关系类为 `medium + write_longterm` |
 | 运行诊断 | `inspect_worker_queue`, `retry_worker_task` | 查看 durable worker 队列、重试 dead task | 查看为只读；重试为 `medium` |
@@ -123,20 +123,18 @@ inspect_workflow
 ```text
 research_prepare_run
     ↓
-research_plan_queries
+research_initialize_state
     ↓
-research_collect_sources
+research_run_loop
     ↓
-research_cluster_events
+research_synthesize_digest
     ↓
-research_rank_events
-    ↓
-research_compose_digest
+research_verify_digest
     ↓
 research-compose
 ```
 
-scheduled run 使用内部 `execute_research_run` workflow 复用已存在的 `ResearchRun.run_id`，所以外部 cron / durable worker 入队后也进入同一套阶段化 workflow。阶段之间只传 `run_id` / `max_items`，sources、events、digest 等大对象落在 Postgres Research store，避免 checkpoint 膨胀。
+scheduled run 使用内部 `execute_research_run` workflow 复用已存在的 `ResearchRun.run_id`，所以外部 cron / durable worker 入队后也进入同一套阶段化 workflow。阶段之间只传 `run_id` / `max_items`，sources、events、digest 和 `ResearchState` 等大对象落在 Postgres Research store，避免 checkpoint 膨胀。
 
 ### 步骤投影校验
 

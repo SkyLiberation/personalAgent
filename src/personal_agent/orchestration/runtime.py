@@ -46,12 +46,11 @@ from personal_agent.tools import (
     build_retry_worker_task_tool,
     build_review_digest_tool,
     build_create_research_subscription_tool,
+    build_research_initialize_state_tool,
     build_research_prepare_run_tool,
-    build_research_plan_queries_tool,
-    build_research_collect_sources_tool,
-    build_research_cluster_events_tool,
-    build_research_rank_events_tool,
-    build_research_compose_digest_tool,
+    build_research_run_loop_tool,
+    build_research_synthesize_digest_tool,
+    build_research_verify_digest_tool,
     build_list_research_subscriptions_tool,
     build_update_research_subscription_tool,
     build_pause_research_subscription_tool,
@@ -108,6 +107,7 @@ from personal_agent.application.runtime_results import (
 )
 from personal_agent.application.review import DigestFormatter, ReviewDigestUseCase
 from personal_agent.application.research import ResearchFeedback, ResearchService, ResearchSubscription
+from personal_agent.application.research.extraction import LangExtractResearchEventExtractor
 from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from personal_agent.application.verifier import create_answer_verifier
 
@@ -257,16 +257,16 @@ class AgentRuntime:
                 prompt_name=name,
             ),
             save_note=lambda **kwargs: self.execute_capture(**kwargs),
+            event_extractor=LangExtractResearchEventExtractor(settings.langextract),
         )
         self._tool_executor.register(
             build_create_research_subscription_tool(self._research_service)
         )
         self._tool_executor.register(build_research_prepare_run_tool(self._research_service))
-        self._tool_executor.register(build_research_plan_queries_tool(self._research_service))
-        self._tool_executor.register(build_research_collect_sources_tool(self._research_service))
-        self._tool_executor.register(build_research_cluster_events_tool(self._research_service))
-        self._tool_executor.register(build_research_rank_events_tool(self._research_service))
-        self._tool_executor.register(build_research_compose_digest_tool(self._research_service))
+        self._tool_executor.register(build_research_initialize_state_tool(self._research_service))
+        self._tool_executor.register(build_research_run_loop_tool(self._research_service))
+        self._tool_executor.register(build_research_synthesize_digest_tool(self._research_service))
+        self._tool_executor.register(build_research_verify_digest_tool(self._research_service))
         self._register_tools()
         self._sync_workflow_definitions()
         self._workflow_planner = WorkflowPlanner(
@@ -385,7 +385,7 @@ class AgentRuntime:
         if result.run_id:
             state = self._entry.get_run_state(result.run_id)
             if state is not None:
-                for step_id in ("research-compose-digest", "research-prepare"):
+                for step_id in ("research-synthesize", "research-prepare"):
                     data = state.step_execution.results.get(step_id)
                     if isinstance(data, dict):
                         candidate = data.get("run_id")

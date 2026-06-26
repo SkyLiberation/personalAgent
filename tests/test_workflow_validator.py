@@ -312,11 +312,10 @@ class TestRegistryCapabilityConsistency:
 
         management_tools = [
             _medium_risk_tool("research_prepare_run"),
-            _medium_risk_tool("research_plan_queries"),
-            _medium_risk_tool("research_collect_sources"),
-            _medium_risk_tool("research_cluster_events"),
-            _medium_risk_tool("research_rank_events"),
-            _medium_risk_tool("research_compose_digest"),
+            _medium_risk_tool("research_initialize_state"),
+            _medium_risk_tool("research_run_loop"),
+            _medium_risk_tool("research_synthesize_digest"),
+            _medium_risk_tool("research_verify_digest"),
             _low_risk_tool("list_research_subscriptions"),
             _medium_risk_tool("update_research_subscription"),
             _medium_risk_tool("pause_research_subscription"),

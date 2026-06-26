@@ -26,7 +26,61 @@ Executor 层用 LangGraph 做可恢复状态机。`StepRunState / StepExecutionS
 
 一句话总结：这个项目的核心不是“让模型更自由”，而是把 LLM 的不确定性放进确定性 workflow、工具治理、记忆分层、证据模型、checkpoint 和 CI/eval 门禁里。
 
-## 2. 当前工程的优秀分层架构
+## 2. 当前工程能力清单
+
+如果面试官问“这个工程现在到底有什么能力”，可以按“入口 -> workflow -> 记忆 -> 主动闭环 -> 治理观测”来讲，而不是只说它是一个 RAG 项目。
+
+| 能力 | 当前已落地的内容 |
+| --- | --- |
+| 多端统一入口 | Web API / SSE、CLI、飞书文本和文件入口都会归一成 `EntryInput`，进入同一套 `AgentService.entry()` / `AgentRuntime.entry()`。入口层负责 user/session/thread 绑定、文本和文件元数据归一、飞书消息去重和结果回传。 |
+| 语义路由与复合目标拆分 | `DefaultIntentRouter` 用结构化模型输出 `RouterDecision` 和有序 `Goal`，支持 `ask`、`capture_text`、`capture_link`、`capture_file`、`delete_knowledge`、`solidify_conversation`、`summarize_thread`、`direct_answer` 等意图，也支持需要澄清时 interrupt/resume。 |
+| Workflow-first 执行 | 固定业务流程由 `WorkflowSpec / WorkflowRegistry` 声明，`WorkflowPlanner` 编译成 task-level `ExecutionPlan` 和 step-level `ExecutionStep`。LLM 不生成任意执行拓扑，只在 task dependency、query understanding、answer compose、delete resolve、solidify draft、ReAct 单步选择等局部语义节点参与。 |
+| Step projection workflow | 当前已注册并进入 `StepExecutionGraph` 的主流程包括：`capture_text`、`capture_link`、`capture_file`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`direct_answer`。每个流程都有步骤状态、事件、checkpoint、失败处理和前端 steps 展示。 |
+| Ingest / Capture 入库 | 支持文本、URL、上传文件三种采集入口。URL / 文件先提取正文，再统一调用 `capture_text`；最终全部进入 `IngestionPipeline`，完成去重、parent note、结构化 chunk、child note、关联、复习卡和 graph sync 调度。 |
+| Ask / RAG 问答 | `ask` 固定拆成 `ask-retrieve -> ask-compose -> ask-verify`。retrieve 做 query understanding、retrieval plan、多源召回、证据归一、候选增强、rerank 和 ContextPack；compose 只基于 ContextPack 生成答案；verify 做校验、retry 和必要时 web fallback。 |
+| 多源检索与证据模型 | 长期知识来自 Postgres note/chunk，图谱索引用 Graphiti，另有 structural retriever、本地 lexical/vector、web search、episodic memory 等来源。不同来源统一成 `EvidenceItem / Citation / ContextPack`，保证模型输入证据和对外 citation 对齐。 |
+| 对话固化 | `solidify_conversation` 从 checkpoint 的历史消息中选择本次请求真正指向的知识，生成可独立入库的草稿，再复用 capture 链路写入长期记忆，避免把“帮我保存一下”这种操作指令本身入库。 |
+| 高风险删除与恢复 | `delete_knowledge` 固定为 `del-1 retrieve -> del-2 resolve -> del-3 delete_note + HITL -> del-4 compose`。删除前先检索候选、解析真实 `note_id`，再通过 ToolGateway、PolicyEngine、用户确认、幂等 key、软删除快照和审计执行；`restore_note` 可从删除快照恢复 note、chunk 和 review card。 |
+| 受控 ReAct | ReAct 不是全局自主循环，而是某个 step 的局部执行模式。默认只允许 `graph_search / web_search` 等只读工具；高风险、删除、外发、不可逆和 workflow-only 工具不能被 ReAct 自主调用。 |
+| 工具治理 | 工具不是裸函数，而是 `BaseTool + ArgsSchema + ToolGovernance + ToolGateway + ToolArtifact`。已覆盖 schema 校验、risk level、side effects、permission scope、timeout、retry、rate limit、allowed domains、HITL、幂等账本和结构化审计。 |
+| 复习与知识巩固 | capture 时生成 `ReviewCard`；`ReviewDigestUseCase` 可以生成每日知识简报，`ReviewDigestJob / Scheduler` 按订阅和用户时区投递到飞书；用户可通过 Web 或飞书提交“记得 / 忘了 / 稍后”反馈并更新复习间隔。 |
+| 主动知识闭环 | `KnowledgeGapUseCase` 能基于图谱拓扑和近期笔记检测知识孤岛、潜在矛盾并主动提问；`consolidate_knowledge` 能按主题整理多条笔记生成综述，并将原笔记标记为 superseded；Review Digest 里也有知识增长 section。 |
+| 持续研究 / 情报订阅 | 支持一次性研究和定时研究订阅。`research_once` 已从固定 pipeline 改成 evidence-driven loop：`research_prepare_run -> research_initialize_state -> research_run_loop -> research_synthesize_digest -> research_verify_digest -> research-compose`。定时研究由外部 cron 入队，durable worker 执行，再独立投递。 |
+| 后台任务与 durable queue | Postgres `worker_queue_tasks` 提供 enqueue、lease、heartbeat、优先级、重试、dead-letter 和 per-user concurrency。capture 后的 chunk-level graph sync、research run 等都可以通过 worker queue 后台执行。 |
+| Workflow 平台化能力 | workflow definition / deployment / eval gate 已持久化到 Postgres；active deployment 可以 pin stable/canary/disabled 版本。事件、artifact、checkpoint history、replay/fork 和 debug bundle 支持线上问题定位。 |
+| 观测、审计与 API | `AgentEvent` 暴露 step、tool、HITL、answer 等事件；Web SSE 可返回步骤进度、工具结果、确认 payload、答案和错误。工具审计进入 Postgres，可按 user/tool/thread/run/risk/mode 等维度查询，并支持字段脱敏和策略决策记录。 |
+| CI 与评测门禁 | `.github/workflows/architecture.yml` 有 layer/cycle gate 和 workflow registry gate；测试覆盖 workflow validator、projection、HITL、tool governance、policy、storage 等确定性边界；evals 覆盖 RAG、router、orchestration、tool quality、research quality、Open RAGBench、MultiHopRAG 等策略质量。 |
+
+其中 `IngestionPipeline` 可以单独展开，因为它是长期记忆质量的关键：
+
+```text
+capture_text / capture_url / capture_upload
+  -> AgentRuntime.execute_capture(...)
+  -> IngestionPipeline.ingest(...)
+     -> source fingerprint dedupe
+     -> capture_node
+     -> structural_chunk_node
+     -> chunk_reconcile_node
+     -> enrich_node
+     -> link_node
+     -> schedule_review_node
+     -> _ingest_to_graph
+```
+
+各子步骤的职责是：
+
+- `source fingerprint dedupe`：用 `text + source_type + source_ref` 计算 sha256，同一用户同一来源已入库时直接返回已有 parent note 和 chunks，避免重复写入。
+- `capture_node`：把 `RawIngestItem` 转成 parent `KnowledgeNote`，写入 source、fingerprint、metadata、title、content、summary、tags。parent note 是整篇内容的展示和来源回溯锚点。
+- `structural_chunk_node`：用 Unstructured-backed partition/chunk 生成 `ChunkDraft[]`，保留 `title_path / page_number / element_ids / source_span / category` 等结构信息，而不是简单固定长度切分。
+- `chunk_reconcile_node`：把 `ChunkDraft` materialize 成 child `KnowledgeNote`。child chunk 是检索和证据单元，parent note 是文档级聚合单元；如果只有一个 draft，则不额外生成 child chunks，只把结构元数据写回 parent。
+- `enrich_node`：更新摘要和标签，让 note 更适合后续检索、展示和复习。
+- `link_node`：调用相似笔记发现，把 parent 和 chunk 的 `related_note_ids` 写回，建立本地知识之间的关联线索。
+- `schedule_review_node`：为新知识生成 `ReviewCard`，纳入后续 Review Digest 和复习反馈闭环。
+- `_ingest_to_graph`：如果图谱可用且有 child chunks，parent note 标为 `skipped`，graph sync 委托给 chunk；chunk 按预算标为 `pending / skipped`，pending chunk 入 `worker_queue_tasks(queue="graph", task_type="graph_sync_note")`，后台 worker 再执行 `sync_note_to_graph(note_id)`。如果没有 child chunks，则按配置走 parent note 后台入队或前台 `graph_store.ingest_note()`，并把 episode、entity、relation 和质量指标回写到本地 note。
+
+这条 ingest workflow 的面试重点是：写入长期记忆不是“把文本塞进向量库”，而是先做来源去重，再形成 parent/chunk 双层知识实体，保留结构化来源元数据，生成复习卡，建立相关笔记关系，并把图谱同步变成可重试的后台任务。这样后续 ask、review、consolidate、delete/restore 都能共享同一套长期记忆真源。
+
+## 3. 当前工程的优秀分层架构
 
 面试里介绍这个项目时，建议主动强调它的分层架构。这个项目的亮点不是某一个 prompt 或某一个工具，而是每一层都有清楚职责，LLM 的不确定性只出现在被允许的局部节点里。
 
@@ -50,7 +104,7 @@ Executor 层用 LangGraph 做可恢复状态机。`StepRunState / StepExecutionS
 
 > 这个项目的优秀之处在于不是用一个大 Agent loop 包打天下，而是把 Agent 拆成 kernel、infra、memory、application、tools、governance、planning、orchestration、adapters 九层；工具定义和工具治理分离，workflow 真源和执行状态分离，LLM 只在局部语义判断里发挥作用，系统级安全和恢复由确定性工程保证。
 
-## 3. 最复杂的问题或架构挑战
+## 4. 最复杂的问题或架构挑战
 
 我会讲删除长期知识这条链路，因为它同时涉及 planner、executor、memory、tool gateway、HITL、checkpoint 和幂等。
 
@@ -71,7 +125,7 @@ del-1 retrieve/react
 
 如果线上用户反馈“删除卡住了”或“候选选错了”，也不是只拿用户原话重新问一遍，而是通过 thread_id、run_id、checkpoint history 定位当时的状态，从失败节点 replay / fork。这样能判断问题到底发生在 router、retrieve、resolve、confirmation payload、tool input 注入、ToolGateway 还是 resume 状态恢复。
 
-## 4. Agent 工程师和传统后端 / 算法工程师的区别
+## 5. Agent 工程师和传统后端 / 算法工程师的区别
 
 我理解 Agent 工程师最大的区别是：他要把非确定性的模型能力放进确定性的工程控制面里。
 
@@ -89,7 +143,7 @@ del-1 retrieve/react
 
 一句话收口：传统后端主要让确定性系统稳定运行，算法工程师主要提升模型效果，Agent 工程师则要设计“模型能参与但不能越界”的系统。他的价值不是让 Agent 看起来更聪明，而是让 Agent 在真实系统里做对事、做错可控、出问题可复现、改动能评测。
 
-## 5. 30 秒压缩版
+## 6. 30 秒压缩版
 
 这是一个 workflow-first 的个人知识 Agent。Router 只识别 intent 和 Goal，固定流程由 `WorkflowSpec / WorkflowRegistry` 维护，deterministic projection 编译成 `ExecutionStep`，LangGraph 负责 checkpoint、interrupt/resume 和步骤状态。记忆层区分短期 checkpoint、长期 note/chunk、Graphiti 语义索引和 episodic memory；回答前统一成 Evidence/ContextPack。工具层通过 ToolGateway、PolicyEngine、HITL、幂等和审计控制副作用。模块依赖是否无环由 `.github` 的 `Layer / cycle gate` 拦截，workflow 写错由 registry gate 和 `WorkflowSpecValidator` 在 PR 阶段拦截；运行时 `StepProjectionValidator` 只做工具可执行性门禁。这个项目最核心的工程价值，是把 LLM 的不确定性限制在局部语义判断里，把流程、安全、恢复和评测交给确定性系统。
 

@@ -47,12 +47,11 @@ from personal_agent.tools.research_management import (
     build_update_research_subscription_tool,
 )
 from personal_agent.tools.research_pipeline import (
-    build_research_cluster_events_tool,
-    build_research_collect_sources_tool,
-    build_research_compose_digest_tool,
-    build_research_plan_queries_tool,
+    build_research_initialize_state_tool,
     build_research_prepare_run_tool,
-    build_research_rank_events_tool,
+    build_research_run_loop_tool,
+    build_research_synthesize_digest_tool,
+    build_research_verify_digest_tool,
 )
 from personal_agent.tools.web_search import build_web_search_tool
 
@@ -77,11 +76,10 @@ __all__ = [
     "build_review_digest_tool",
     "build_create_research_subscription_tool",
     "build_research_prepare_run_tool",
-    "build_research_plan_queries_tool",
-    "build_research_collect_sources_tool",
-    "build_research_cluster_events_tool",
-    "build_research_rank_events_tool",
-    "build_research_compose_digest_tool",
+    "build_research_initialize_state_tool",
+    "build_research_run_loop_tool",
+    "build_research_synthesize_digest_tool",
+    "build_research_verify_digest_tool",
     "build_list_research_subscriptions_tool",
     "build_update_research_subscription_tool",
     "build_pause_research_subscription_tool",

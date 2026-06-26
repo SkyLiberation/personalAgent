@@ -1,6 +1,46 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+
+
+def scalar_exact(actual: object, expected: object) -> float:
+    return 1.0 if actual == expected else 0.0
+
+
+def ordered_sequence_exact(actual: Iterable[str], expected: Iterable[str]) -> float:
+    return 1.0 if list(actual) == list(expected) else 0.0
+
+
+def unordered_sequence_exact(actual: Iterable[str], expected: Iterable[str]) -> float:
+    return 1.0 if sorted(actual) == sorted(expected) else 0.0
+
+
+def keyed_list_map_exact(
+    actual: dict[str, list[str]],
+    expected: dict[str, list[str]],
+    *,
+    ordered: bool = True,
+) -> float:
+    for key, expected_values in expected.items():
+        actual_values = actual.get(key, [])
+        if ordered:
+            if actual_values != expected_values:
+                return 0.0
+        elif sorted(actual_values) != sorted(expected_values):
+            return 0.0
+    return 1.0
+
+
+def keyed_scalar_map_exact(
+    actual: dict[str, str],
+    expected: dict[str, str],
+) -> float:
+    return (
+        1.0
+        if all(actual.get(key) == value for key, value in expected.items())
+        else 0.0
+    )
 
 
 @dataclass(frozen=True)
@@ -62,4 +102,3 @@ def score_research_events(
         primary_source_rate=primary_rate,
         uncertainty_calibration=uncertainty,
     )
-

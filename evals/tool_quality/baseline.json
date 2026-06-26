@@ -1,0 +1,11 @@
+{
+  "exposure_exact": 1.0,
+  "risk_exact": 1.0,
+  "confirmation_exact": 1.0,
+  "side_effect_exact": 1.0,
+  "permission_scope_exact": 1.0,
+  "idempotency_exact": 1.0,
+  "audit_exact": 1.0,
+  "resource_policy_exact": 1.0,
+  "overall_exact": 1.0
+}

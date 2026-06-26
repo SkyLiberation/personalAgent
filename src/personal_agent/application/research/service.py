@@ -10,17 +10,43 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from personal_agent.application.research.models import (
     IntelligenceDigest,
     IntelligenceDigestItem,
+    EvidenceGap,
     PersonalRelevance,
     ResearchBudget,
+    ResearchDecision,
     ResearchEvent,
     ResearchFeedback,
     ResearchRun,
     ResearchSource,
+    ResearchState,
     ResearchSubscription,
+)
+from personal_agent.application.research.extraction import (
+    HeuristicResearchEventExtractor,
+    ResearchEventExtractor,
+    frames_describe_same_event,
 )
 
 _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref"}
 _TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
+_EVENT_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "new",
+    "of",
+    "on",
+    "the",
+    "to",
+    "with",
+}
 
 
 class ResearchService:
@@ -38,11 +64,13 @@ class ResearchService:
         *,
         generate_text: Callable[[str, str], str | None] | None = None,
         save_note: Callable[..., object] | None = None,
+        event_extractor: ResearchEventExtractor | None = None,
     ) -> None:
         self.store = store
         self.tools = tool_executor
         self.generate_text = generate_text
         self.save_note = save_note
+        self.event_extractor = event_extractor or HeuristicResearchEventExtractor()
         self.delivery_router = None
 
     def set_delivery_router(self, router) -> None:
@@ -73,6 +101,147 @@ class ResearchService:
 
     def get_digest(self, digest_id: str) -> IntelligenceDigest | None:
         return self.store.get_digest(digest_id)
+
+    def initialize_state(self, run_id: str) -> ResearchState:
+        run, subscription = self._load_run_context(run_id)
+        queries = self._plan_queries(run, subscription)
+        decisions = [
+            ResearchDecision(
+                iteration=index,
+                action="search_web",
+                query=query,
+                purpose=_query_purpose(query),
+                reason="initial strategy",
+            )
+            for index, query in enumerate(queries, 1)
+        ]
+        state = ResearchState(
+            run_id=run.id,
+            topic=run.topic,
+            instructions=run.instructions,
+            window_start=run.window_start,
+            window_end=run.window_end,
+            budget=run.budget,
+            decisions=decisions,
+        )
+        self.store.update_run(run.model_copy(update={
+            "status": "running",
+            "query_plan": queries,
+            "research_state": state,
+        }))
+        return state
+
+    def run_research_loop(self, run_id: str) -> ResearchState:
+        run, subscription = self._load_run_context(run_id)
+        state = run.research_state or self.initialize_state(run_id)
+        sources = self.store.list_run_sources(run.id)
+        events = self.store.list_run_events(run.id)
+
+        while not state.stop_reason:
+            if state.iteration_count >= state.budget.max_queries:
+                state.stop_reason = "query budget exhausted"
+                break
+            decision = self._next_research_decision(state, events)
+            if decision.action == "stop":
+                decision.status = "executed"
+                if decision not in state.decisions:
+                    state.decisions.append(decision)
+                state.stop_reason = decision.reason or "no useful next action"
+                break
+            if not self._decision_allowed(decision, state):
+                decision.status = "skipped"
+                if decision not in state.decisions:
+                    state.decisions.append(decision)
+                state.stop_reason = "no new allowed research action"
+                break
+
+            state.iteration_count += 1
+            new_sources = self._execute_research_decision(run, subscription, decision)
+            decision.status = "executed"
+            decision.result_count = len(new_sources)
+            state.query_history.append(decision.query)
+            if decision not in state.decisions:
+                state.decisions.append(decision)
+            state.low_yield_rounds = state.low_yield_rounds + 1 if not new_sources else 0
+
+            sources = _merge_sources(sources, new_sources)
+            self.store.replace_run_sources(run.id, sources)
+            events = self._cluster_sources(run, subscription, sources)
+            events = self._personalize_and_rank(run, subscription, events)
+            self.store.replace_run_events(run.id, events)
+            state.evidence_gaps = self._evidence_gaps(events)
+
+            run = run.model_copy(update={
+                "status": "running",
+                "source_count": len(sources),
+                "event_count": len(events),
+                "selected_count": min(len(events), subscription.max_items if subscription else 5),
+                "research_state": state,
+            })
+            self.store.update_run(run)
+            if self._should_stop_loop(state, events):
+                break
+
+        if not state.stop_reason:
+            state.stop_reason = "research loop completed"
+        self.store.update_run(run.model_copy(update={
+            "research_state": state,
+            "source_count": len(sources),
+            "event_count": len(events),
+        }))
+        return state
+
+    def synthesize_digest(
+        self,
+        run_id: str,
+        *,
+        max_items: int | None = None,
+    ) -> ResearchRun:
+        run, subscription = self._load_run_context(run_id)
+        events = self.store.list_run_events(run_id)
+        selected_limit = max_items or (subscription.max_items if subscription else 5)
+        digest = self._compose_digest(run, events[:selected_limit])
+        self.store.save_digest(digest)
+        sources = self.store.list_run_sources(run.id)
+        completed = run.model_copy(update={
+            "status": "completed" if sources else "partial",
+            "source_count": len(sources),
+            "event_count": len(events),
+            "selected_count": min(len(events), selected_limit),
+            "digest_id": digest.id,
+            "completed_at": datetime.now(UTC),
+        })
+        self.store.update_run(completed)
+        if subscription is not None:
+            self.store.upsert_subscription(subscription.model_copy(update={
+                "last_window_end": run.window_end,
+                "updated_at": datetime.now(UTC),
+            }))
+        return completed
+
+    def verify_digest(self, run_id: str) -> IntelligenceDigest | None:
+        run = self.store.get_run(run_id)
+        if run is None or not run.digest_id:
+            return None
+        digest = self.store.get_digest(run.digest_id)
+        if digest is None:
+            return None
+        verified_items: list[IntelligenceDigestItem] = []
+        for item in digest.items:
+            if not item.source_urls:
+                continue
+            verified_items.append(item)
+        if len(verified_items) != len(digest.items):
+            digest = digest.model_copy(update={
+                "items": verified_items,
+                "no_major_update": not verified_items,
+                "executive_summary": (
+                    digest.executive_summary
+                    if verified_items else "本次时间窗口内未发现有来源支撑的重大更新。"
+                ),
+            })
+            self.store.save_digest(digest)
+        return digest
 
     def prepare_run(
         self,
@@ -194,6 +363,104 @@ class ResearchService:
                 "updated_at": datetime.now(UTC),
             }))
         return completed
+
+    def _next_research_decision(
+        self,
+        state: ResearchState,
+        events: list[ResearchEvent],
+    ) -> ResearchDecision:
+        if not state.query_history:
+            for decision in state.decisions:
+                if decision.status == "planned":
+                    return decision
+        for gap in state.evidence_gaps:
+            if gap.status != "open":
+                continue
+            event = next((item for item in events if item.id == gap.event_id), None)
+            if gap.type == "no_official_source" and event is not None:
+                return ResearchDecision(
+                    iteration=state.iteration_count + 1,
+                    action="search_web",
+                    query=f"{event.title} official announcement",
+                    purpose="find official confirmation",
+                    event_id=event.id,
+                    reason="resolve no_official_source gap",
+                )
+        for decision in state.decisions:
+            if decision.status == "planned":
+                return decision
+        return ResearchDecision(
+            iteration=state.iteration_count + 1,
+            action="stop",
+            reason="no open research actions remain",
+        )
+
+    def _decision_allowed(
+        self,
+        decision: ResearchDecision,
+        state: ResearchState,
+    ) -> bool:
+        if decision.action != "search_web":
+            return True
+        normalized = decision.query.strip().lower()
+        if not normalized:
+            return False
+        return normalized not in {query.strip().lower() for query in state.query_history}
+
+    def _execute_research_decision(
+        self,
+        run: ResearchRun,
+        subscription: ResearchSubscription | None,
+        decision: ResearchDecision,
+    ) -> list[ResearchSource]:
+        if decision.action == "search_web":
+            remaining = max(1, min(10, run.budget.max_search_results))
+            return self._collect(run, subscription, [decision.query])[:remaining]
+        return []
+
+    def _evidence_gaps(self, events: list[ResearchEvent]) -> list[EvidenceGap]:
+        gaps: list[EvidenceGap] = []
+        for event in events:
+            independent_domains = {source.domain for source in event.sources}
+            has_official = any(source.source_type == "official" for source in event.sources)
+            if len(independent_domains) <= 1:
+                gaps.append(EvidenceGap(
+                    event_id=event.id,
+                    type="single_source",
+                    severity=0.7,
+                    suggested_action="find independent source",
+                    status="open" if event.status == "uncertain" else "accepted",
+                ))
+            if not has_official:
+                gaps.append(EvidenceGap(
+                    event_id=event.id,
+                    type="no_official_source",
+                    severity=0.6,
+                    suggested_action="search official announcement",
+                    status="open" if event.status != "verified" else "resolved",
+                ))
+            if event.personal_relevance.score <= 0:
+                gaps.append(EvidenceGap(
+                    event_id=event.id,
+                    type="missing_personal_context",
+                    severity=0.3,
+                    suggested_action="search personal graph",
+                    status="accepted",
+                ))
+        return gaps
+
+    def _should_stop_loop(self, state: ResearchState, events: list[ResearchEvent]) -> bool:
+        if state.low_yield_rounds >= 2:
+            state.stop_reason = "two consecutive low-yield rounds"
+            return True
+        verified = [event for event in events if event.status in {"verified", "reported"}]
+        if len(verified) >= 3:
+            state.stop_reason = "enough supported events found"
+            return True
+        if state.iteration_count >= state.budget.max_queries:
+            state.stop_reason = "query budget exhausted"
+            return True
+        return False
 
     def _load_run_context(
         self, run_id: str
@@ -379,25 +646,35 @@ class ResearchService:
         subscription: ResearchSubscription | None,
         sources: list[ResearchSource],
     ) -> list[ResearchEvent]:
+        frames = self.event_extractor.extract(
+            sources,
+            topic=run.topic,
+            instructions=run.instructions,
+        )
         clusters: list[list[ResearchSource]] = []
+        cluster_frames: list[object] = []
         for source in sources:
-            tokens = _tokens(source.title)
+            frame = frames.get(source.canonical_url)
             target = next(
                 (
-                    cluster for cluster in clusters
-                    if _jaccard(tokens, _tokens(cluster[0].title)) >= 0.45
+                    index for index, cluster in enumerate(clusters)
+                    if frame is not None
+                    and cluster_frames[index] is not None
+                    and frames_describe_same_event(frame, cluster_frames[index])
                 ),
                 None,
             )
             if target is None:
                 clusters.append([source])
+                cluster_frames.append(frame)
             else:
-                target.append(source)
+                clusters[target].append(source)
         events: list[ResearchEvent] = []
         previous_keys = self.store.list_recent_event_keys(run.user_id, run.window_start)
-        for cluster in clusters:
+        for index, cluster in enumerate(clusters):
             primary = max(cluster, key=_source_priority)
-            key = _fingerprint(" ".join(sorted(_tokens(primary.title))))
+            frame = cluster_frames[index]
+            key = _fingerprint(_event_key_material(frame, primary))
             independent_domains = {item.domain for item in cluster}
             official = any(item.source_type == "official" for item in cluster)
             if official and len(independent_domains) >= 2:
@@ -523,13 +800,71 @@ def canonicalize_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
+def _merge_sources(
+    existing: list[ResearchSource],
+    incoming: list[ResearchSource],
+) -> list[ResearchSource]:
+    merged: list[ResearchSource] = []
+    seen: set[str] = set()
+    for source in [*existing, *incoming]:
+        key = source.canonical_url
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(source)
+    return merged
+
+
+def _query_purpose(query: str) -> str:
+    lowered = query.lower()
+    if "official" in lowered:
+        return "find primary-source confirmation"
+    if "open source" in lowered or "github" in lowered:
+        return "find implementation or release evidence"
+    return "find recent public reports"
+
+
 def _tokens(text: str) -> set[str]:
-    return {token.lower() for token in _TOKEN_RE.findall(text) if len(token) > 1}
+    return {
+        normalized
+        for token in _TOKEN_RE.findall(text)
+        if (normalized := _normalize_event_token(token))
+    }
+
+
+def _normalize_event_token(token: str) -> str:
+    lowered = token.lower()
+    if len(lowered) <= 1 or lowered in _EVENT_STOPWORDS:
+        return ""
+    if len(lowered) > 5 and lowered.endswith("ies"):
+        lowered = lowered[:-3] + "y"
+    elif len(lowered) > 5 and lowered.endswith("ches"):
+        lowered = lowered[:-2]
+    elif len(lowered) > 5 and lowered.endswith("shes"):
+        lowered = lowered[:-2]
+    elif len(lowered) > 4 and lowered.endswith("ed"):
+        lowered = lowered[:-1] if lowered.endswith("eed") else lowered[:-2]
+    elif len(lowered) > 4 and lowered.endswith("s") and not lowered.endswith("ss"):
+        lowered = lowered[:-1]
+    return lowered
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:
     union = left | right
     return len(left & right) / len(union) if union else 0
+
+
+def _event_key_material(frame, fallback: ResearchSource) -> str:
+    if frame is None:
+        return " ".join(sorted(_tokens(fallback.title)))
+    parts = [
+        getattr(frame, "actor", ""),
+        getattr(frame, "action", ""),
+        getattr(frame, "object", ""),
+        getattr(frame, "event_type", ""),
+    ]
+    material = " ".join(sorted(_tokens(" ".join(parts))))
+    return material or " ".join(sorted(_tokens(fallback.title)))
 
 
 def _fingerprint(text: str) -> str:

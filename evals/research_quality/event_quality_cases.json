@@ -1,0 +1,337 @@
+[
+  {
+    "id": "research-event-001",
+    "description": "同一官方来源带 tracking 参数的重复链接应去重，多源事件应被聚类并标为 verified，digest 应优先选择该事件",
+    "topic": "AI Agent",
+    "instructions": "只看重要技术发布",
+    "max_items": 1,
+    "search_results": [
+      {
+        "title": "OpenAI releases Agent Model",
+        "url": "https://openai.com/news/agent?utm_source=test",
+        "snippet": "OpenAI released a new agent model.",
+        "source": "fixture",
+        "published_at": "2026-06-23T01:00:00Z"
+      },
+      {
+        "title": "OpenAI releases Agent Model",
+        "url": "https://openai.com/news/agent?utm_campaign=copy",
+        "snippet": "Duplicate official link with tracking params.",
+        "source": "fixture",
+        "published_at": "2026-06-23T01:10:00Z"
+      },
+      {
+        "title": "OpenAI releases Agent Model",
+        "url": "https://news.example/openai-agent",
+        "snippet": "Independent report about the same release.",
+        "source": "fixture",
+        "published_at": "2026-06-23T02:00:00Z"
+      },
+      {
+        "title": "Unverified social rumor about Agent Model",
+        "url": "https://x.com/rumor/agent-model",
+        "snippet": "A single social post claims a separate feature is coming.",
+        "source": "fixture",
+        "published_at": "2026-06-23T03:00:00Z"
+      }
+    ],
+    "fulltext_by_url": {
+      "https://openai.com/news/agent": "OpenAI official release notes for the Agent Model.",
+      "https://news.example/openai-agent": "Independent coverage of the same Agent Model release."
+    },
+    "graph_matches_by_title": {
+      "OpenAI releases Agent Model": [
+        {
+          "note_id": "agent-tool-use",
+          "fact": "用户已有 Agent tool use 知识"
+        }
+      ]
+    },
+    "expected_source_count": 3,
+    "expected_events": [
+      {
+        "title_terms": ["OpenAI", "Agent", "Model"],
+        "expected_status": "verified",
+        "min_sources": 2,
+        "requires_primary_source": true,
+        "min_personal_relevance": 0.45
+      },
+      {
+        "title_terms": ["rumor", "Agent", "Model"],
+        "expected_status": "uncertain",
+        "min_sources": 1
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["OpenAI", "Agent", "Model"]
+    ]
+  },
+  {
+    "id": "research-event-002",
+    "description": "只有单个官方来源时可以保留事件和 primary source，但不能被误判为 verified",
+    "topic": "Agent Benchmark",
+    "instructions": "关注 benchmark 发布",
+    "max_items": 1,
+    "search_results": [
+      {
+        "title": "GitHub releases Agent Benchmark Suite",
+        "url": "https://github.com/example/agent-benchmark?ref=newsletter",
+        "snippet": "A benchmark suite for evaluating agents is released.",
+        "source": "fixture",
+        "published_at": "2026-06-24T01:00:00Z"
+      },
+      {
+        "title": "GitHub releases Agent Benchmark Suite",
+        "url": "https://github.com/example/agent-benchmark?utm_source=copy",
+        "snippet": "Duplicate benchmark link from another tracking URL.",
+        "source": "fixture",
+        "published_at": "2026-06-24T01:10:00Z"
+      }
+    ],
+    "fulltext_by_url": {
+      "https://github.com/example/agent-benchmark": "Official README for Agent Benchmark Suite."
+    },
+    "expected_source_count": 1,
+    "expected_events": [
+      {
+        "title_terms": ["GitHub", "Agent", "Benchmark"],
+        "expected_status": "uncertain",
+        "min_sources": 1,
+        "requires_primary_source": true
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["GitHub", "Agent", "Benchmark"]
+    ]
+  },
+  {
+    "id": "research-event-003",
+    "description": "当多个事件都可入选时，和个人知识图谱相关的事件应优先进入 digest",
+    "topic": "Agent memory",
+    "instructions": "优先关注与个人知识库相关的 agent memory 变化",
+    "max_items": 1,
+    "search_results": [
+      {
+        "title": "Vendor releases unrelated model update",
+        "url": "https://openai.com/news/unrelated-model",
+        "snippet": "A broad model release unrelated to agent memory.",
+        "source": "fixture",
+        "published_at": "2026-06-25T01:00:00Z"
+      },
+      {
+        "title": "Agent memory adapter design improves recall",
+        "url": "https://engineering.example/agent-memory-adapter",
+        "snippet": "A design note about agent memory adapters.",
+        "source": "fixture",
+        "published_at": "2026-06-25T02:00:00Z"
+      }
+    ],
+    "graph_matches_by_title": {
+      "Agent memory adapter design": [
+        {
+          "note_id": "memory-layer",
+          "fact": "用户已有 Agent memory 分层和 recall 优化知识"
+        },
+        {
+          "note_id": "workflow-memory",
+          "fact": "用户关注 workflow 与 memory 的依赖关系"
+        }
+      ]
+    },
+    "expected_source_count": 2,
+    "expected_events": [
+      {
+        "title_terms": ["Vendor", "model", "update"],
+        "expected_status": "uncertain",
+        "min_sources": 1,
+        "requires_primary_source": true
+      },
+      {
+        "title_terms": ["Agent", "memory", "adapter"],
+        "expected_status": "uncertain",
+        "min_sources": 1,
+        "min_personal_relevance": 0.6
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["Agent", "memory", "adapter"]
+    ]
+  },
+  {
+    "id": "research-event-004",
+    "description": "语义相同但标题改写较大的多源事件，理想上应聚成一个 verified 事件；当前用于暴露标题 Jaccard 聚类的泛化边界",
+    "topic": "Agent Runtime",
+    "instructions": "关注 Agent runtime 和 SDK 发布",
+    "max_items": 1,
+    "search_results": [
+      {
+        "title": "OpenAI launches Agent Runtime SDK",
+        "url": "https://openai.com/news/agent-runtime-sdk",
+        "snippet": "OpenAI launches an SDK for agent runtime orchestration.",
+        "source": "fixture",
+        "published_at": "2026-06-26T01:00:00Z"
+      },
+      {
+        "title": "New runtime SDK for AI agents announced by OpenAI",
+        "url": "https://news.example/openai-runtime-sdk",
+        "snippet": "Independent coverage of the same OpenAI agent runtime SDK announcement.",
+        "source": "fixture",
+        "published_at": "2026-06-26T02:00:00Z"
+      }
+    ],
+    "event_frames_by_title": {
+      "OpenAI launches Agent Runtime SDK": {
+        "actor": "OpenAI",
+        "action": "release",
+        "object": "Agent Runtime SDK",
+        "event_type": "product_release",
+        "entities": ["OpenAI", "Agent Runtime SDK"],
+        "confidence": 0.9
+      },
+      "New runtime SDK for AI agents announced by OpenAI": {
+        "actor": "OpenAI",
+        "action": "release",
+        "object": "Agent Runtime SDK",
+        "event_type": "product_release",
+        "entities": ["OpenAI", "Agent Runtime SDK"],
+        "confidence": 0.9
+      }
+    },
+    "expected_source_count": 2,
+    "expected_events": [
+      {
+        "title_terms": ["OpenAI", "Runtime", "SDK"],
+        "expected_status": "verified",
+        "min_sources": 2,
+        "requires_primary_source": true
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["OpenAI", "Runtime", "SDK"]
+    ]
+  },
+  {
+    "id": "research-event-005",
+    "description": "标题相似但事件类型不同的来源不能因为共享 actor/object 被误合并",
+    "topic": "Agent Runtime",
+    "instructions": "区分 SDK 发布和安全修复",
+    "max_items": 2,
+    "search_results": [
+      {
+        "title": "OpenAI launches Agent Runtime SDK",
+        "url": "https://openai.com/news/agent-runtime-sdk",
+        "snippet": "OpenAI launches an SDK for agent runtime orchestration.",
+        "source": "fixture",
+        "published_at": "2026-06-26T01:00:00Z"
+      },
+      {
+        "title": "OpenAI patches Agent Runtime SDK security issue",
+        "url": "https://news.example/openai-runtime-sdk-security",
+        "snippet": "A security fix is released for the Agent Runtime SDK.",
+        "source": "fixture",
+        "published_at": "2026-06-26T04:00:00Z"
+      }
+    ],
+    "event_frames_by_title": {
+      "OpenAI launches Agent Runtime SDK": {
+        "actor": "OpenAI",
+        "action": "release",
+        "object": "Agent Runtime SDK",
+        "event_type": "product_release",
+        "entities": ["OpenAI", "Agent Runtime SDK"],
+        "confidence": 0.9
+      },
+      "OpenAI patches Agent Runtime SDK security issue": {
+        "actor": "OpenAI",
+        "action": "patch",
+        "object": "Agent Runtime SDK security issue",
+        "event_type": "security_update",
+        "entities": ["OpenAI", "Agent Runtime SDK"],
+        "confidence": 0.86
+      }
+    },
+    "expected_source_count": 2,
+    "expected_events": [
+      {
+        "title_terms": ["launches", "Agent", "Runtime", "SDK"],
+        "expected_status": "uncertain",
+        "min_sources": 1,
+        "requires_primary_source": true
+      },
+      {
+        "title_terms": ["patches", "security", "issue"],
+        "expected_status": "uncertain",
+        "min_sources": 1
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["launches", "Agent", "Runtime", "SDK"],
+      ["patches", "security", "issue"]
+    ]
+  },
+  {
+    "id": "research-loop-001",
+    "description": "单源媒体事件应生成 official confirmation 后续查询，并在找到官方来源后升级为 verified",
+    "topic": "Agent Runtime",
+    "instructions": "优先确认官方来源",
+    "max_items": 1,
+    "search_results_by_query": {
+      "media reports agent runtime sdk official announcement": [
+        {
+          "title": "OpenAI announces Agent Runtime SDK",
+          "url": "https://openai.com/news/agent-runtime-sdk",
+          "snippet": "OpenAI officially announces the Agent Runtime SDK.",
+          "source": "fixture",
+          "published_at": "2026-06-26T02:00:00Z"
+        }
+      ],
+      "latest news": [
+        {
+          "title": "Media reports Agent Runtime SDK",
+          "url": "https://news.example/agent-runtime-sdk",
+          "snippet": "A media report says an Agent Runtime SDK was announced.",
+          "source": "fixture",
+          "published_at": "2026-06-26T01:00:00Z"
+        }
+      ],
+      "official announcement": [],
+      "open source release": []
+    },
+    "event_frames_by_title": {
+      "Media reports Agent Runtime SDK": {
+        "actor": "OpenAI",
+        "action": "release",
+        "object": "Agent Runtime SDK",
+        "event_type": "product_release",
+        "entities": ["OpenAI", "Agent Runtime SDK"],
+        "confidence": 0.72
+      },
+      "OpenAI announces Agent Runtime SDK": {
+        "actor": "OpenAI",
+        "action": "release",
+        "object": "Agent Runtime SDK",
+        "event_type": "product_release",
+        "entities": ["OpenAI", "Agent Runtime SDK"],
+        "confidence": 0.92
+      }
+    },
+    "expected_source_count": 2,
+    "min_iterations": 2,
+    "expected_query_terms": [
+      ["Agent", "Runtime", "latest"],
+      ["Media", "Runtime", "official", "announcement"]
+    ],
+    "expected_stop_reason_terms": ["low-yield"],
+    "expected_events": [
+      {
+        "title_terms": ["OpenAI", "Agent", "Runtime", "SDK"],
+        "expected_status": "verified",
+        "min_sources": 2,
+        "requires_primary_source": true
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["OpenAI", "Agent", "Runtime", "SDK"]
+    ]
+  }
+]

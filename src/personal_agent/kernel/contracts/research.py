@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field, field_validator
 ResearchFrequency = Literal["daily", "weekdays", "weekly"]
 ResearchRunStatus = Literal["queued", "running", "completed", "partial", "failed", "skipped"]
 ResearchFeedbackAction = Literal["expand", "useful", "not_interested", "bookmark", "save"]
+ResearchAction = Literal["search_web", "fetch_source", "search_personal_graph", "stop"]
+ResearchDecisionStatus = Literal["planned", "executed", "skipped"]
+EvidenceGapType = Literal["no_official_source", "single_source", "missing_personal_context", "low_yield"]
+EvidenceGapStatus = Literal["open", "resolved", "accepted"]
 
 
 def utc_now() -> datetime:
@@ -83,6 +87,41 @@ class ResearchBudget(BaseModel):
     max_search_results: int = Field(default=30, ge=1, le=100)
     max_fulltext_fetches: int = Field(default=5, ge=0, le=20)
     max_tool_calls: int = Field(default=15, ge=1, le=100)
+
+
+class ResearchDecision(BaseModel):
+    iteration: int
+    action: ResearchAction
+    query: str = ""
+    purpose: str = ""
+    event_id: str | None = None
+    reason: str = ""
+    status: ResearchDecisionStatus = "planned"
+    result_count: int = 0
+
+
+class EvidenceGap(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    event_id: str | None = None
+    type: EvidenceGapType
+    severity: float = Field(default=0.5, ge=0, le=1)
+    suggested_action: str = ""
+    status: EvidenceGapStatus = "open"
+
+
+class ResearchState(BaseModel):
+    run_id: str
+    topic: str
+    instructions: str = ""
+    window_start: datetime
+    window_end: datetime
+    budget: ResearchBudget = Field(default_factory=ResearchBudget)
+    query_history: list[str] = Field(default_factory=list)
+    decisions: list[ResearchDecision] = Field(default_factory=list)
+    evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
+    iteration_count: int = 0
+    low_yield_rounds: int = 0
+    stop_reason: str = ""
 
 
 class ResearchSource(BaseModel):
@@ -177,6 +216,7 @@ class ResearchRun(BaseModel):
     selected_count: int = 0
     digest_id: str | None = None
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
+    research_state: ResearchState | None = None
     failure_reason: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None

@@ -1,0 +1,143 @@
+[
+  {
+    "id": "tool-exec-001",
+    "description": "图谱未配置时 graph_search 必须返回 permission 错误而不是伪造空成功",
+    "tool_name": "graph_search",
+    "args": {
+      "question": "DNS 缓存"
+    },
+    "expected_ok": false,
+    "expected_error_kind": "permission",
+    "expected_data_keys": [],
+    "expected_evidence_min_count": 0,
+    "expected_call_counts": {
+      "graph.ask": 0
+    }
+  },
+  {
+    "id": "tool-exec-002",
+    "description": "公网搜索成功时必须返回 results 数据和 web evidence",
+    "tool_name": "web_search",
+    "args": {
+      "query": "OpenAI latest model",
+      "limit": 1
+    },
+    "expected_ok": true,
+    "expected_error_kind": null,
+    "expected_data_keys": ["results"],
+    "expected_evidence_min_count": 1,
+    "expected_call_counts": {
+      "web.search": 1
+    }
+  },
+  {
+    "id": "tool-exec-003",
+    "description": "保存文本成功时必须返回可展示和可引用的 note artifact",
+    "tool_name": "capture_text",
+    "args": {
+      "text": "DNS 会把域名解析为 IP。",
+      "user_id": "alice"
+    },
+    "expected_ok": true,
+    "expected_error_kind": null,
+    "expected_data_keys": [
+      "note_id",
+      "title",
+      "summary",
+      "content_preview",
+      "graph_sync_status"
+    ],
+    "expected_evidence_min_count": 0,
+    "expected_call_counts": {
+      "capture.execute": 1
+    }
+  },
+  {
+    "id": "tool-exec-004",
+    "description": "未确认删除只能生成 pending confirmation,不能执行真实删除副作用",
+    "tool_name": "delete_note",
+    "args": {
+      "note_id": "note-1",
+      "user_id": "alice",
+      "confirmed": false
+    },
+    "expected_ok": true,
+    "expected_error_kind": null,
+    "expected_data_keys": [
+      "note_id",
+      "title",
+      "summary",
+      "description",
+      "pending_confirmation",
+      "message"
+    ],
+    "expected_evidence_min_count": 0,
+    "expected_call_counts": {
+      "memory.build_delete_confirmation": 1,
+      "memory.delete_note_confirmed": 0
+    }
+  },
+  {
+    "id": "tool-exec-005",
+    "description": "确认删除缺少 idempotency_key 时必须被 Gateway 拦截,不能进入真实删除",
+    "tool_name": "delete_note",
+    "args": {
+      "note_id": "note-1",
+      "user_id": "alice",
+      "confirmed": true
+    },
+    "expected_ok": false,
+    "expected_error_kind": "invalid_param",
+    "expected_data_keys": [],
+    "expected_evidence_min_count": 0,
+    "expected_call_counts": {
+      "memory.delete_note_confirmed": 0
+    }
+  },
+  {
+    "id": "tool-exec-006",
+    "description": "确认删除使用相同 idempotency_key replay 时只能执行一次真实副作用",
+    "tool_name": "delete_note",
+    "args": {
+      "note_id": "note-1",
+      "user_id": "alice",
+      "confirmed": true,
+      "idempotency_key": "delete-note-1",
+      "delete_reason": "用户确认删除"
+    },
+    "repeat_same_call": true,
+    "expected_ok": true,
+    "expected_error_kind": null,
+    "expected_data_keys": [
+      "deleted_note_id",
+      "snapshot_id",
+      "title",
+      "message",
+      "graph_cleaned",
+      "graph_failed"
+    ],
+    "expected_evidence_min_count": 0,
+    "expected_repeat_ok": false,
+    "expected_repeat_error_kind": "unrecoverable",
+    "expected_call_counts": {
+      "memory.delete_note_confirmed": 1
+    }
+  },
+  {
+    "id": "tool-exec-007",
+    "description": "未确认恢复必须返回 permission 错误且不能进入真实恢复",
+    "tool_name": "restore_note",
+    "args": {
+      "note_id": "note-1",
+      "user_id": "alice",
+      "confirmed": false
+    },
+    "expected_ok": false,
+    "expected_error_kind": "permission",
+    "expected_data_keys": [],
+    "expected_evidence_min_count": 0,
+    "expected_call_counts": {
+      "memory.restore_note_confirmed": 0
+    }
+  }
+]

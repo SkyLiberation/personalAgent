@@ -13,3 +13,4 @@ scripts/assets
 !scripts/assets/entry-orchestration.md
 evals/multihoprag/results/
 .claude/settings.json
+evals/research_quality/e2e_screenshots

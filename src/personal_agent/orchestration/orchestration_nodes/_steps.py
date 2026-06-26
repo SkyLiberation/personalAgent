@@ -868,11 +868,10 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
                 pass
 
     elif step.tool_name in {
-        "research_plan_queries",
-        "research_collect_sources",
-        "research_cluster_events",
-        "research_rank_events",
-        "research_compose_digest",
+        "research_initialize_state",
+        "research_run_loop",
+        "research_synthesize_digest",
+        "research_verify_digest",
     }:
         tool_input.setdefault("user_id", state.user_id)
         _inject_research_pipeline_inputs(tool_input, state, metadata)
@@ -919,7 +918,7 @@ def _inject_research_pipeline_inputs(
 
 
 def _apply_tool_result_to_state(step: "ExecutionStep", result_data: object, state: AgentGraphState) -> None:
-    if step.tool_name == "research_compose_digest" and isinstance(result_data, dict):
+    if step.tool_name in {"research_synthesize_digest", "research_verify_digest"} and isinstance(result_data, dict):
         answer = str(result_data.get("answer") or "").strip()
         if answer:
             state.answer = answer
