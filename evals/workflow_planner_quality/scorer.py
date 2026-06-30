@@ -21,6 +21,8 @@ class WorkflowPlannerCaseScore:
     step_dependency_exact: float
     step_dependency_node_accuracy: float
     step_dependency_edge_f1: float
+    tool_sequence_exact: float
+    forbidden_tool_absence: float
     overall_exact: float
 
     def as_dict(self) -> dict[str, float | str]:
@@ -44,6 +46,14 @@ def score_case(
         scored_step_dependencies,
         case.expected_step_dependencies,
     )
+    tool_sequence_exact = (
+        1.0
+        if not case.expected_tool_sequence
+        else float(run.tool_sequence == case.expected_tool_sequence)
+    )
+    forbidden_tool_absence = float(
+        not any(tool in run.tool_sequence for tool in case.forbidden_tools)
+    )
     return WorkflowPlannerCaseScore(
         case_id=case.id,
         task_dependency_exact=task_exact,
@@ -64,7 +74,14 @@ def score_case(
             scored_step_dependencies,
             case.expected_step_dependencies,
         ),
-        overall_exact=1.0 if task_exact and step_exact else 0.0,
+        tool_sequence_exact=tool_sequence_exact,
+        forbidden_tool_absence=forbidden_tool_absence,
+        overall_exact=1.0 if (
+            task_exact
+            and step_exact
+            and tool_sequence_exact
+            and forbidden_tool_absence
+        ) else 0.0,
     )
 
 
@@ -75,6 +92,8 @@ _METRIC_NAMES = (
     "step_dependency_exact",
     "step_dependency_node_accuracy",
     "step_dependency_edge_f1",
+    "tool_sequence_exact",
+    "forbidden_tool_absence",
     "overall_exact",
 )
 

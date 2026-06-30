@@ -1639,37 +1639,46 @@ class ResearchService:
                 event.final_score = breakdown.final_score
                 continue
             relevance = PersonalRelevance()
-            outcome = self._invoke_research_tool(
-                state,
-                "graph_search",
-                question=_personal_relevance_question(event),
-                structured_context=_personal_relevance_context(event),
-                user_id=run.user_id,
-                run_id=run.id,
-                _trace_decision_id=_event_decision_ids(event)[0] if _event_decision_ids(event) else None,
-            )
-            if outcome.get("ok"):
-                data = outcome.get("data") or {}
-                matches = (
-                    data.get("relation_facts")
-                    or data.get("fact_refs")
-                    or data.get("node_refs")
-                    or []
+            relevance_matches: list[object] = []
+            decision_id = _event_decision_ids(event)[0] if _event_decision_ids(event) else None
+            if "graph_search" in self.tools:
+                outcome = self._invoke_research_tool(
+                    state,
+                    "graph_search",
+                    question=_personal_relevance_question(event),
+                    structured_context=_personal_relevance_context(event),
+                    user_id=run.user_id,
+                    run_id=run.id,
+                    _trace_decision_id=decision_id,
                 )
-                if matches:
-                    relation, score, explanation = _personal_relevance_from_matches(
-                        event,
-                        matches,
-                    )
-                    relevance = PersonalRelevance(
-                        score=score,
-                        related_note_ids=[
-                            str(item.get("note_id") or item.get("id"))
-                            for item in matches if isinstance(item, dict)
-                        ],
-                        relation=relation,
-                        explanation=explanation,
-                    )
+                relevance_matches.extend(_personal_relevance_matches_from_tool_outcome(outcome))
+            if "enterprise_knowledge_search" in self.tools:
+                outcome = self._invoke_research_tool(
+                    state,
+                    "enterprise_knowledge_search",
+                    query=_personal_relevance_question(event),
+                    limit=5,
+                    user_id=run.user_id,
+                    run_id=run.id,
+                    _trace_decision_id=decision_id,
+                )
+                relevance_matches.extend(
+                    _enterprise_relevance_matches_from_tool_outcome(outcome)
+                )
+            if relevance_matches:
+                relation, score, explanation = _personal_relevance_from_matches(
+                    event,
+                    relevance_matches,
+                )
+                relevance = PersonalRelevance(
+                    score=score,
+                    related_note_ids=[
+                        str(item.get("note_id") or item.get("id") or item.get("artifact_id"))
+                        for item in relevance_matches if isinstance(item, dict)
+                    ],
+                    relation=relation,
+                    explanation=explanation,
+                )
             event.personal_relevance = relevance
             if state is not None:
                 state.personal_relevance_cache[relevance_cache_key] = relevance
@@ -1817,6 +1826,11 @@ def _tool_result_count(outcome: dict) -> int:
     results = data.get("results")
     if isinstance(results, list):
         return len(results)
+    structured = data.get("structured_content")
+    if isinstance(structured, dict):
+        structured_results = structured.get("results") or structured.get("items") or structured.get("matches")
+        if isinstance(structured_results, list):
+            return len(structured_results)
     for key in ("relation_facts", "fact_refs", "node_refs"):
         items = data.get(key)
         if isinstance(items, list):
@@ -1825,6 +1839,49 @@ def _tool_result_count(outcome: dict) -> int:
     if isinstance(text, str) and text:
         return 1
     return 0
+
+
+def _personal_relevance_matches_from_tool_outcome(outcome: dict) -> list[object]:
+    if not outcome.get("ok"):
+        return []
+    data = outcome.get("data") or {}
+    if not isinstance(data, dict):
+        return []
+    matches = (
+        data.get("relation_facts")
+        or data.get("fact_refs")
+        or data.get("node_refs")
+        or []
+    )
+    return matches if isinstance(matches, list) else []
+
+
+def _enterprise_relevance_matches_from_tool_outcome(outcome: dict) -> list[object]:
+    if not outcome.get("ok"):
+        return []
+    data = outcome.get("data") or {}
+    if not isinstance(data, dict):
+        return []
+    candidates: list[object] = []
+    for key in ("results", "items", "matches", "documents"):
+        value = data.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+            break
+    text = data.get("text")
+    if isinstance(text, str) and text.strip():
+        candidates.append({
+            "id": "enterprise_knowledge_search:text",
+            "source": "enterprise_knowledge_search",
+            "content": text[:2000],
+        })
+    normalized: list[object] = []
+    for item in candidates:
+        if isinstance(item, dict):
+            normalized.append({"source": "enterprise_knowledge_search", **item})
+        else:
+            normalized.append({"source": "enterprise_knowledge_search", "content": str(item)})
+    return normalized
 
 
 def _merge_sources(

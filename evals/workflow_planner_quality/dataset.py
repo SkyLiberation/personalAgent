@@ -28,6 +28,8 @@ class WorkflowPlannerEvalCase:
     goals: list[PlannerGoalCase] = field(default_factory=list)
     expected_task_dependencies: dict[str, list[str]] = field(default_factory=dict)
     expected_step_dependencies: dict[str, list[str]] = field(default_factory=dict)
+    expected_tool_sequence: list[str] = field(default_factory=list)
+    forbidden_tools: list[str] = field(default_factory=list)
     model_task_dependencies: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -37,6 +39,7 @@ class WorkflowPlannerRunOutput:
 
     task_dependencies: dict[str, list[str]] = field(default_factory=dict)
     step_dependencies: dict[str, list[str]] = field(default_factory=dict)
+    tool_sequence: list[str] = field(default_factory=list)
 
 
 def load_cases(path: str | Path) -> list[WorkflowPlannerEvalCase]:
@@ -65,6 +68,12 @@ def load_cases(path: str | Path) -> list[WorkflowPlannerEvalCase]:
                     str(k): [str(v) for v in values]
                     for k, values in (item.get("expected_step_dependencies") or {}).items()
                 },
+                expected_tool_sequence=[
+                    str(value) for value in item.get("expected_tool_sequence", [])
+                ],
+                forbidden_tools=[
+                    str(value) for value in item.get("forbidden_tools", [])
+                ],
                 model_task_dependencies={
                     str(k): [str(v) for v in values]
                     for k, values in (item.get("model_task_dependencies") or {}).items()

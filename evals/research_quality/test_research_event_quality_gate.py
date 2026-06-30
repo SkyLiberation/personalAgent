@@ -106,7 +106,12 @@ class FixtureResearchTools:
         self.case = case
 
     def __contains__(self, name: str) -> bool:
-        return name in {"web_search", "capture_url", "graph_search"}
+        if name in {"web_search", "capture_url", "graph_search"}:
+            return True
+        return (
+            name == "enterprise_knowledge_search"
+            and bool(self.case.enterprise_matches_by_title)
+        )
 
     def invoke_direct(self, name: str, **kwargs):
         if name == "web_search":
@@ -135,6 +140,13 @@ class FixtureResearchTools:
                 if title.lower() in question:
                     matches.extend(title_matches)
             return {"ok": True, "data": {"relation_facts": matches}}
+        if name == "enterprise_knowledge_search":
+            query = str(kwargs.get("query") or "").lower()
+            matches: list[dict[str, object]] = []
+            for title, title_matches in self.case.enterprise_matches_by_title.items():
+                if title.lower() in query:
+                    matches.extend(title_matches)
+            return {"ok": True, "data": {"results": matches}}
         return {"ok": False, "error": "unsupported"}
 
 

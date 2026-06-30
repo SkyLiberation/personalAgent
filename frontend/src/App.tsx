@@ -918,7 +918,7 @@ export default function App() {
       id: crypto.randomUUID(),
       user_id: userId,
       session_id: sessionId,
-      question: text || `采集文件：${file.name}`,
+      question: text || `处理附件：${file.name}`,
       answer: "",
       citations: [],
       graph_enabled: false,
@@ -927,7 +927,7 @@ export default function App() {
     };
     setAskHistory((current) => [historyItem, ...current].slice(0, 20));
     setSelectedAskId(historyItem.id);
-    setStatus(`正在上传 ${file.name} 并写入记忆...`);
+    setStatus(`正在上传 ${file.name} 并交给 Agent 处理...`);
     try {
       const entryResult = await uploadEntryFile(file, userId, sessionId, text);
       if (entryResult.pending_confirmation && entryResult.run_id) {
@@ -971,7 +971,7 @@ export default function App() {
         setStatus(confirmation.message || "有 LangGraph 任务需要你的确认。");
         return;
       }
-      const reply = entryResult.reply_text || "文件已采集完成。";
+      const reply = entryResult.reply_text || "附件已处理完成。";
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id
@@ -1849,6 +1849,7 @@ function translateIntent(intent: string): string {
     case "capture_text": return "记录文字";
     case "capture_link": return "采集链接";
     case "capture_file": return "采集文件";
+    case "analyze_artifact": return "理解附件";
     case "ask": return "检索问答";
     case "summarize_thread": return "总结会话";
     case "delete_knowledge": return "删除知识";

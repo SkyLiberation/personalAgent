@@ -33,7 +33,7 @@
 | 金标 | 评测单元 | 专属能力(仅此处覆盖) | 明确不覆盖(交给谁) |
 | --- | --- | --- | --- |
 | RAG (§3.1) | 单次"检索 → 生成"运行 | 检索 IR(recall/ndcg/precision)、答案相关性与忠实度、claim 判定、对比证据、图证据覆盖 | 意图路由、步骤编排、多轮状态 |
-| Router (§3.2) | 单轮路由决策 | ready/clarify 判定、意图集合 F1、有序意图、clarify 字段精度 | 步骤是否真正执行、终态、副作用(→ Orchestration) |
+| Router (§3.2) | 单轮路由决策 | ready/clarify/unsupported 判定、目标理解、route_type、能力覆盖度、matched capabilities、有序意图、clarify 字段精度 | 步骤是否真正执行、终态、副作用(→ Orchestration) |
 | Orchestration (§3.3) | **单次** entry → router → steps → terminal | 事件子序列里程碑、`forbidden_events` 负向不变式、**不挂死**终态、单点事故回归网(如 SSE 卡死) | 任何跨 turn 的状态继承与 resume(→ Conversation) |
 | Tool (§3.3.2) | 单个工具能力声明 / 工具调用投影 | 工具业务义务、risk、side effect、permission scope、confirmation、idempotency、timeout、retry、rate limit、artifact 契约 | workflow 是否选择该工具(→ WorkflowPlanner/Orchestration),工具底层业务算法质量(→ 对应用例或端到端 case) |
 | Research (§3.3.3) | 单个 Research 目标 / 固定研究语料 → 工作流契约与事件质量 | 一次性研究、订阅创建、已有 run 执行、订阅/简报管理如何被组织成固定工作流;固定语料下基于事件帧的来源去重、事件聚类、可信度、个人相关性排序与 digest 选择 | 单个研究工具的治理义务(→ Tool),真实外网/真实 LLM 质量(→ Research 真实 runner) |
@@ -73,15 +73,19 @@
   - 同义改写、跨 note 概念聚合
 - **reference run 来源**:离线层使用经评审的确定性投影;真实层回放真实管线输出。两类结果必须分开报告。
 
-### 3.2 Router 意图金标
+### 3.2 Router 目标与能力覆盖金标
 
-- **口径**:`{entry_input → expected_outcome ("ready"|"clarify"), expected_intents (有序), expected_clarification_fields?}`。对齐 [router.py](../src/personal_agent/agent/router.py) 的 `RouterOutput` 契约。
-- **评测边界**:单轮路由。`entry_input` 默认不携带历史消息;`expected_intents: [a, b]` 表示同一轮输入的多目标有序分解,不是两个对话轮次。
+- **口径**:`{entry_input → expected_outcome ("ready"|"clarify"|"unsupported"|"rejected"), expected_route_type, expected_coverage, expected_matched_capabilities, expected_intents (有序), expected_clarification_fields?, expected_missing_requirements?}`。对齐 [router.py](../src/personal_agent/planning/router.py) 的 `RouterOutput` 契约。
+- **评测边界**:单轮路由。Router 先识别 `user_goal`,再判断当前 capability 是否完整覆盖、部分覆盖、目标不清或不支持;`expected_intents: [a, b]` 表示同一轮输入的多目标有序分解,不是两个对话轮次。
+- **ask / research_once 标注边界**:二者都可以使用外部信息,不能用“是否联网”区分。`ask` 是回答型产物,适合概念解释、简单实时事实、怎么做、为什么、区别和面向已有知识的检索问答;`research_once` 是研究型产物,适合用户明确要求调研/收集/整理最新动态、发布、新闻、论文、财报、官方来源、高可信、多来源或最多 N 条 digest 的任务。典型反例:`查一下 Python 最新稳定版本是多少` 仍是 `ask`;`收集最近一周 Agent Runtime SDK 的官方发布和 GitHub 动态,最多 2 条` 是 `research_once`。
 - **指标**:
-  - `outcome_accuracy` —— ready/clarify 判定正确率
-  - `intent_set_f1` —— 多目标意图集合的 F1(顺序无关)/ 或有序 Kendall-tau(若顺序有语义)
+  - `outcome_accuracy` —— ready/clarify/unsupported/rejected 判定正确率
+  - `route_type_exact` / `coverage_exact` —— 路由类型和能力覆盖度是否命中
+  - `capability_f1` —— matched capabilities 是否覆盖正确能力
+  - `intent_set_f1` / `intent_sequence_exact` —— 多目标意图集合和顺序是否正确
+  - `missing_requirement_precision` —— unsupported 场景是否指出缺失能力
   - `clarify_precision` —— 该追问时确实追问、不该追问时不打扰
-- **标注难点**:意图边界主观,需在标注规范里固化"何时算 clarify"的判据(见 §5)。
+- **标注难点**:意图边界主观,需在标注规范里固化"何时算 clarify / unsupported"的判据(见 §5),避免 Router 退化成已有 intent 菜单选择器。
 
 ### 3.3 Orchestration 端到端金标
 
@@ -150,7 +154,7 @@
 - **为什么独立建集**:Research 不是单个工具,而是一组围绕外部信息收集、证据缺口追踪、事件聚类、可信度校准、个人相关性排序、简报生成和周期订阅的领域能力。Workflow 是否编译成固定步骤属于确定性 contract,应由普通单元测试和 `WorkflowSpecValidator` 覆盖,不放进 golden set。Research 金标不仅看最终 digest,还要检查中间节点是否正确:query plan、decision loop、source trace、event frame、gap/satisfaction、claim verification 和 latency trace 都必须能被打分。
 - **口径**:
   - Request understanding 真实层:`{raw_request, default_max_items → expected_topic_terms, forbidden_topic_terms, expected_instruction_terms, expected_max_items, expected_research_type, expected_evidence_requirement, expected_query_intents}`。gate 使用真实 LLM,只执行 `prepare_run → initialize_state`,专门评估自然语言研究请求是否被正确转成 topic、instructions、max_items、policy 和 query plan。
-  - Event/loop quality 契约:`{topic, mock_understanding, fixed_search_results_by_query, fixed_event_frames, fixed_graph_matches → expected_understanding_*, expected_query_plan_terms, expected_query_terms, expected_decision_phases, expected_stage_names, expected_tool_names, expected_gap_types, expected_source_count, expected_events, expected_digest_title_terms}`。gate 不访问真实外网/LLM,但会执行真实 `ResearchService.prepare_run → initialize_state → run_research_loop → synthesize_digest → verify_digest`;`mock_understanding` 只注入 `research_request_understanding` 这个 LLM 节点,固定 `event_frames_by_title` 相当于 replay 结构化事件帧输出。
+  - Event/loop quality 契约:`{topic, mock_understanding, fixed_search_results_by_query, fixed_event_frames, fixed_graph_matches, fixed_enterprise_matches → expected_understanding_*, expected_query_plan_terms, expected_query_terms, expected_decision_phases, expected_stage_names, expected_tool_names, expected_gap_types, expected_source_count, expected_events, expected_digest_title_terms}`。gate 不访问真实外网/LLM,但会执行真实 `ResearchService.prepare_run → initialize_state → run_research_loop → synthesize_digest → verify_digest`;`mock_understanding` 只注入 `research_request_understanding` 这个 LLM 节点,固定 `event_frames_by_title` 相当于 replay 结构化事件帧输出。`enterprise_matches_by_title` 用来模拟企业知识业务工具 `enterprise_knowledge_search` 的内部方案证据,测试的是 Research 能否完成“公开资料 + 企业内部方案对照”的业务闭环,不是 MCP 协议本身。
   - Event quality 真实层:`{topic, fixed_search_results, real_langextract_frames, fixed_graph_matches → expected_*}`。搜索结果和图谱匹配仍固定以保证可归因,但事件帧由当前 `.env` 中配置的真实 LangExtract API 生成;该层才用于评价 LangExtract 接入后的真实 Research 事件抽取质量。
   - Digest claim verification 契约:`{event, source content, draft digest claims → expected retained items, confidence labels, claim support levels, final run status}`。gate 直接执行真实 `verify_digest()`,专门防止“有 URL 但 claim 被夸大”“contradicted item 未删除”“reported 被写成 verified”等最终简报层错误。
   - Frontend E2E 真实层:`{prompt → expected_intents, expected_step_tools, expected_research_statuses, expected_topic_terms, min_digest_items, min_supported_claim_rate, max_latency_ms}`。gate 使用 Playwright 从前端对话框输入触发 `/api/entry/stream`,再通过 entry run 和 research run 查询真实产物,断言路由、workflow 步骤、digest、claim support 和端到端 latency。
@@ -164,6 +168,7 @@
   - 语义相同但标题改写较大的事件是否能通过 event frame 合并。
   - 标题相似但事件类型不同的来源是否避免误合并。
   - 与个人知识图谱相关的事件是否优先进入 digest。
+  - Agent Framework 研究是否调用 `enterprise_knowledge_search` 对照企业内部方案文档,并把内部证据命中的外部事件提升为高 personal relevance。
   - claim-level verification 是否删除 unsupported claim、移除 contradicted item,并保持 confidence label 与事件可信度一致。
   - 前端对话框触发的一次性研究是否真正走到 `research_prepare_run → research_initialize_state → research_run_loop → research_synthesize_digest → research_verify_digest`,并在 latency 预算内产出有来源支撑的 digest。
 - **指标**:
@@ -349,7 +354,7 @@ Research 前端 E2E 的 Playwright spec 和 config 不放在 `evals/` 下,而是
 3. **每条带 `description`**:一句话说明该 case 想测什么场景(loader 忽略未知键,可自由加人读注释)。
 4. **金标可判定**:
    - RAG:`gold_evidence_ids` 必须能在对应 corpus 中定位;`gold_claim_verdicts` 按答案中 claim 出现顺序对齐。
-   - Router:`expected_outcome` 二选一;clarify 判据固化为——"缺少执行目标所必需的信息(对象/范围/时间)"才标 clarify,语气模糊但意图明确不标。
+   - Router:`expected_outcome / expected_route_type / expected_coverage / expected_matched_capabilities` 必须描述目标是否被当前能力完整覆盖;clarify 判据固化为——"缺少执行目标所必需的信息(对象/范围/时间)"才标 clarify,语气模糊但意图明确不标;能力不足标 unsupported,不得硬塞进最相近 intent。
    - Orchestration:`expected_step_sequence` 标步骤**类型**而非具体文案,避免脆性。
    - Conversation:每轮必须标注期望 outcome;只在确有上下文依赖时填写 `expected_context_refs`;涉及副作用时必须标明最终数量/目标对象或幂等约束,不能只写“成功”。
 5. **覆盖矩阵**:每能力的金标必须覆盖正例 + 反例(矛盾/无答案/不该追问),不能全是 happy path。

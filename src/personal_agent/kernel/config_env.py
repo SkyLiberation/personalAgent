@@ -7,12 +7,16 @@ from dotenv import load_dotenv
 
 from personal_agent.kernel.config_models import (
     AskConfig,
+    EnterpriseKnowledgeConfig,
     FeishuConfig,
     FirecrawlConfig,
     GraphitiConfig,
     LangExtractConfig,
     LangSmithConfig,
     KnowledgeGapConfig,
+    MCPConfig,
+    MCPServerConfig,
+    MCPToolConfig,
     MicrosoftGraphRagConfig,
     OpenAIConfig,
     PlannerConfig,
@@ -126,6 +130,8 @@ def settings_from_env(settings_cls: type):
             base_url=os.getenv("OPENAI_BASE_URL"),
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
             small_model=os.getenv("OPENAI_SMALL_MODEL", "deepseek-v4-flash"),
+            vision_model=os.getenv("OPENAI_VISION_MODEL", ""),
+            transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1"),
             embedding_model=os.getenv(
                 "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
             ),
@@ -308,6 +314,22 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_EXTRACT_FALLBACK_ON_ERROR", "true")
             ),
         ),
+        mcp=_parse_mcp_config(os.getenv("PERSONAL_AGENT_MCP_SERVERS", "")),
+        enterprise_knowledge=EnterpriseKnowledgeConfig(
+            raw_roots=tuple(
+                Path(item)
+                for item in _parse_csv(os.getenv(
+                    "PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_ROOTS",
+                    "D:/mySoft/workspace/personalWiki/raw",
+                ))
+            ),
+            raw_file_globs=_parse_csv(
+                os.getenv("PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_GLOBS", "*.md")
+            ),
+            raw_max_file_bytes=int(
+                os.getenv("PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_MAX_FILE_BYTES", "2000000")
+            ),
+        ),
         planner=PlannerConfig(
             api_key=os.getenv("PERSONAL_AGENT_PLANNER_API_KEY"),
             base_url=os.getenv(
@@ -449,6 +471,59 @@ def _parse_json_env(name: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_mcp_config(raw: str) -> MCPConfig:
+    """Parse MCP server registrations from a JSON env var.
+
+    Expected shape:
+    {
+      "enabled": true,
+      "servers": [
+        {
+          "server_id": "confluence",
+          "endpoint": "https://mcp.example/rpc",
+          "authorization": "Bearer ...",
+          "tools": [
+            {"remote_name": "search_pages", "name": "enterprise.search_pages"}
+          ]
+        }
+      ]
+    }
+    """
+    if not raw.strip():
+        return MCPConfig()
+    import json
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return MCPConfig()
+    if not isinstance(parsed, dict):
+        return MCPConfig()
+    servers: list[MCPServerConfig] = []
+    for server in parsed.get("servers", []) or []:
+        if not isinstance(server, dict):
+            continue
+        tools: list[MCPToolConfig] = []
+        for item in server.get("tools", []) or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                tools.append(MCPToolConfig.model_validate(item))
+            except Exception:
+                continue
+        try:
+            servers.append(MCPServerConfig.model_validate({
+                **server,
+                "tools": tuple(tools),
+            }))
+        except Exception:
+            continue
+    return MCPConfig(
+        enabled=_as_bool(str(parsed.get("enabled", False))),
+        servers=tuple(servers),
+    )
 
 
 def _parse_api_keys(raw: str) -> dict[str, str]:

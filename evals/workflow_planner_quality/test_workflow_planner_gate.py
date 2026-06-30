@@ -84,6 +84,11 @@ def test_workflow_planner_meets_dependency_quality_baseline():
                 step.step_id: step.depends_on
                 for step in steps
             },
+            tool_sequence=[
+                str(step.tool_name)
+                for step in steps
+                if step.action_type == "tool_call" and step.tool_name
+            ],
         )
 
     report = score_all(cases, runs)

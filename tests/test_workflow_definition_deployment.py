@@ -224,3 +224,13 @@ def test_workflow_dry_run_projects_without_execution(runtime):
     assert result["workflow_id"] == "capture_text"
     assert result["workflow_version"] == "v1"
     assert result["steps"][0]["tool_name"] == "capture_text"
+
+
+def test_artifact_analysis_workflow_projects_without_execution(runtime):
+    result = runtime.dry_run_workflow(intent="analyze_artifact", routing_key="u1")
+
+    assert result["valid"] is True
+    assert result["workflow_id"] == "analyze_artifact"
+    assert [step["tool_name"] for step in result["steps"] if step["action_type"] == "tool_call"] == [
+        "inspect_artifact"
+    ]

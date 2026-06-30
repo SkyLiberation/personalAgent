@@ -1,16 +1,14 @@
 """Hermetic router-quality regression gate.
 
 Scores the bundled golden set against the project's deterministic router
-stand-in (``tests.conftest.stub_router_decision`` — the same keyword router the
-integration suite routes through) and asserts the aggregate means clear the
-frozen baseline. Fully offline: no Postgres, no LLM.
+stand-in for plain text cases and the real router's deterministic rule path for
+artifact cases. It asserts the aggregate means clear the frozen baseline. Fully
+offline: no Postgres, no LLM.
 
-Driving the *deterministic* router (not a live LLM) keeps the gate reproducible:
-it pins the router contract + the stub's routing table against real-scenario
-inputs, so a regression in either the RouterOutput contract or the stub's
-keyword logic surfaces here. Multi-goal decomposition (ordered ``a → b`` intent
-sequences) requires a real LLM router and is covered by the Golden Test,
-not this offline gate — every bundled case is single-goal by construction.
+Driving deterministic paths keeps the gate reproducible. Plain text cases pin
+the RouterOutput contract + stub routing table; artifact cases pin the
+Artifact-first boundary on ``DefaultIntentRouter`` itself, because the stub only
+accepts text and cannot model EntryInput.artifacts.
 
 Run explicitly (evals/ is outside the default testpaths):
     uv run pytest evals/router_quality/test_router_gate.py -v
@@ -25,20 +23,44 @@ import pytest
 
 from tests.conftest import stub_router_decision
 
+from personal_agent.kernel.models import ArtifactRef, EntryInput
+from personal_agent.planning.router import DefaultIntentRouter
+
 from .dataset import RouterRunOutput, default_cases_path, load_cases
-from .runner import run_output_from_router_output
+from .runner import run_output_from_decision, run_output_from_router_output
 from .scorer import score_all
 
 
 def _build_runs() -> dict[str, RouterRunOutput]:
-    """Route every case's text through the deterministic stub router and project
-    the transport output into a RouterRunOutput."""
+    """Route every case through a deterministic router path."""
     cases = load_cases(default_cases_path())
     runs: dict[str, RouterRunOutput] = {}
+    artifact_router = DefaultIntentRouter(None)
     for case in cases:
-        output = stub_router_decision(case.text)
-        runs[case.id] = run_output_from_router_output(output)
+        if case.artifacts:
+            decision = artifact_router.classify(EntryInput(
+                text=case.text,
+                source_type=case.source_type,
+                artifacts=[_artifact_ref(item) for item in case.artifacts],
+            ))
+            runs[case.id] = run_output_from_decision(decision)
+        else:
+            output = stub_router_decision(case.text)
+            runs[case.id] = run_output_from_router_output(output)
     return runs
+
+
+def _artifact_ref(data: dict) -> ArtifactRef:
+    filename = str(data.get("filename") or "artifact.bin")
+    source_type = str(data.get("source_type") or "file")
+    return ArtifactRef(
+        artifact_id=str(data.get("artifact_id") or f"art-golden-{filename}"),
+        filename=filename,
+        content_type=data.get("content_type"),
+        source_type=source_type,
+        file_path=str(data.get("file_path") or f"/tmp/{filename}"),
+        size_bytes=int(data.get("size_bytes") or 1),
+    )
 
 
 @pytest.fixture(scope="module")

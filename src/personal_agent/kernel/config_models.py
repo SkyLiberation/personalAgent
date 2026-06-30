@@ -71,6 +71,8 @@ class OpenAIConfig(_StrictBase):
     base_url: str | None = None
     model: str = "gpt-4.1-mini"
     small_model: str = "deepseek-v4-flash"
+    vision_model: str = ""
+    transcription_model: str = "whisper-1"
     embedding_model: str = "text-embedding-3-small"
     timeout_seconds: float = 30.0
     max_retries: int = 2
@@ -128,6 +130,53 @@ class WebSearchConfig(_StrictBase):
     timeout_ms: int = 60000
     # 外部访问来源白名单（域名后缀）。空表示不限制。
     allowed_domains: tuple[str, ...] = ()
+
+
+class MCPToolConfig(_StrictBase):
+    """Business-facing registration for one remote MCP tool.
+
+    MCP discovery tells us what a server can do. This config says which of those
+    raw capabilities become first-class governed tools in this agent runtime.
+    """
+
+    remote_name: str
+    name: str | None = None
+    description: str | None = None
+    business_role: str | None = None
+    exposure: str = "public_agent"
+    risk_level: str = "low"
+    requires_confirmation: bool = False
+    side_effects: tuple[str, ...] = ("none",)
+    permission_scope: str = "mcp:tool"
+    idempotency_key_required: bool = False
+    rollback_supported: bool = False
+    audit_required: bool = True
+    timeout_seconds: float | None = 30.0
+    max_retries: int = 0
+    retry_backoff_seconds: float = 0.2
+    rate_limit_per_minute: int | None = None
+    allowed_domains: tuple[str, ...] = ()
+
+
+class MCPServerConfig(_StrictBase):
+    server_id: str
+    endpoint: str
+    enabled: bool = True
+    protocol_version: str = "2024-11-05"
+    authorization: str | None = None
+    timeout_seconds: float = 15.0
+    tools: tuple[MCPToolConfig, ...] = ()
+
+
+class MCPConfig(_StrictBase):
+    enabled: bool = False
+    servers: tuple[MCPServerConfig, ...] = ()
+
+
+class EnterpriseKnowledgeConfig(_StrictBase):
+    raw_roots: tuple[Path, ...] = (Path("D:/mySoft/workspace/personalWiki/raw"),)
+    raw_file_globs: tuple[str, ...] = ("*.md",)
+    raw_max_file_bytes: int = 2_000_000
 
 
 class FeishuConfig(_StrictBase):

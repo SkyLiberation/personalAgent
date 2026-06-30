@@ -7,6 +7,7 @@ from pydantic import Field
 from personal_agent.kernel.config_models import (
     _StrictBase,
     AskConfig,
+    EnterpriseKnowledgeConfig,
     FeishuConfig,
     FirecrawlConfig,
     GraphitiConfig,
@@ -14,6 +15,7 @@ from personal_agent.kernel.config_models import (
     LangExtractConfig,
     LangSmithConfig,
     KnowledgeGapConfig,
+    MCPConfig,
     MicrosoftGraphRagConfig,
     OpenAIConfig,
     PlannerConfig,
@@ -52,6 +54,8 @@ class Settings(_StrictBase):
     web: WebApiConfig = Field(default_factory=WebApiConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+    enterprise_knowledge: EnterpriseKnowledgeConfig = Field(default_factory=EnterpriseKnowledgeConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)

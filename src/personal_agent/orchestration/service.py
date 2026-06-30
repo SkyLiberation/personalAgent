@@ -86,6 +86,10 @@ class AgentService:
         return self.runtime.tool_executor
 
     @property
+    def artifact_service(self):
+        return self.runtime.artifact_service
+
+    @property
     def workflow_planner(self):
         return self.runtime.workflow_planner
 

@@ -157,7 +157,7 @@ class StepProjectionValidator:
                                     and _has_upstream_tool(
                                         steps,
                                         s,
-                                        {"capture_url", "capture_upload"},
+                                        {"capture_url", "capture_upload", "inspect_artifact"},
                                     )
                                 )
                             )

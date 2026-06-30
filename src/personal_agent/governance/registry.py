@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
     "capture_text": "capture_text",
     "capture_link": "capture_url",
-    "capture_file": "capture_upload",
+    "capture_file": "inspect_artifact",
     "ask": "graph_search",
+    "analyze_artifact": "inspect_artifact",
     "delete_knowledge": "delete_note",
     "solidify_conversation": "capture_text",
     "review_digest": "review_digest",

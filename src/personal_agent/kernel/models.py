@@ -20,9 +20,26 @@ class RawIngestItem(BaseModel):
     source_fingerprint: str | None = None
 
 
+class ArtifactRef(BaseModel):
+    """A user-provided artifact available to the current agent run.
+
+    Artifacts are conversation evidence, not long-term knowledge by default.
+    A workflow must explicitly call a capture/write tool to persist their
+    interpreted content into the knowledge base.
+    """
+
+    artifact_id: str
+    filename: str
+    content_type: str | None = None
+    source_type: Literal["pdf", "audio", "image", "note", "file"] = "file"
+    file_path: str
+    size_bytes: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 EntryIntent = Literal[
     "capture_text", "capture_link", "capture_file",
-    "ask", "summarize_thread",
+    "ask", "analyze_artifact", "summarize_thread",
     "delete_knowledge", "solidify_conversation",
       "review_digest", "consolidate_knowledge", "inspect_knowledge_gaps",
       "research_once", "create_research_subscription",
@@ -41,6 +58,7 @@ class EntryInput(BaseModel):
     source_type: str = "text"
     source_ref: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+    artifacts: list[ArtifactRef] = Field(default_factory=list)
 
 
 class ThreadSummary(BaseModel):

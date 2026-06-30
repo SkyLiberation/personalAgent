@@ -10,45 +10,14 @@
 | --- | --- | --- | --- |
 | `capture_text` | step projection workflow | 是 | `cap-structure -> capture_text tool -> IngestionPipeline` |
 | `capture_link` | step projection workflow | 是 | `cap-link-fetch -> cap-link-store` |
-| `capture_file` | step projection workflow | 是 | `cap-file-read -> cap-file-store` |
+| `capture_file` | step projection workflow | 是 | `cap-file-inspect -> cap-file-store` |
 | `ask` | step projection workflow | 是 | `ask-retrieve -> ask-compose -> ask-verify` |
 
 也就是说，`capture` 与 `ask` 都进入 `StepExecutionGraph`，复用步骤状态、checkpoint、事件、失败处理、ToolGateway 和前端 steps 展示能力。
 
-## 入口路由
-
-所有入口先进入 LangGraph entry 总图：
-
-```text
-EntryInput
-  -> entry_graph
-       normalize_entry
-       route_intent
-       optional clarify interrupt/resume
-  -> by RouterDecision
-       step_execution_graph
-       or fallback branch
-  -> finalize_entry_result
-```
-
-`route_intent` 产出 `RouterDecision`（完整控制字段及合并策略见 [entry-router 的 Router 小节](entry-router-plan-react-output-flow.md#router)）。与 capture / ask 相关的默认控制语义：
-
-- `capture_text / capture_link / capture_file`：低风险，`requires_step_projection=True`。
-- `ask`：`requires_retrieval=True`，`requires_step_projection=True`。
-
-因此 capture 和 ask 都会进入：
-
-```text
-project_workflow_steps
-  -> validate_projected_steps
-  -> prepare_step_execution
-  -> select_next_step
-  -> execute_step ...
-```
-
 ## Capture Step Workflow
 
-capture 由固定 `WorkflowSpec` 投影为步骤。step executor 只负责编排不同来源的正文提取，并把正文交给统一的 capture pipeline。
+capture 由固定 `WorkflowSpec` 投影为步骤。step executor 只负责编排不同来源的正文提取或 artifact 理解，并把可入库文本交给统一的 capture pipeline。
 
 ```text
 step_execution_graph
@@ -88,15 +57,15 @@ entry_input.text / metadata.url
 ### capture_file
 
 ```text
-entry_input.metadata.file_path
-  -> cap-file-read tool_call(capture_upload)
-       CaptureService.capture_text_from_upload(...)
+entry_input.artifacts[0] / metadata.file_path
+  -> cap-file-inspect tool_call(inspect_artifact)
+       ArtifactService.inspect_upload(...)
   -> handle_step_success 注入 text/source_type
   -> cap-file-store tool_call(capture_text)
   -> AgentRuntime.execute_capture(...)
 ```
 
-当前文件入口会先把上传内容提取成文本，再进入统一 capture pipeline。
+当前文件入口会先把上传 artifact 理解成可回答/可入库的文本化上下文，再进入统一 capture pipeline。`capture_upload` 工具仍存在并可提取上传文件正文，但当前 `capture_file` 的 `WorkflowSpec` 主路径已经切到 `inspect_artifact -> capture_text`。
 
 ## IngestionPipeline
 
@@ -232,8 +201,7 @@ ask-retrieve
 入口执行路径：
 
 ```text
-route_intent: ask
-  -> project_workflow_steps
+project_workflow_steps
   -> validate_projected_steps
   -> prepare_step_execution
   -> select_next_step
@@ -272,12 +240,16 @@ ask 三个步骤之间共享一个 `AskRunContext`。
 AskRunContext
   question
   user_id / session_id
+  working_context
   structured_context
+  has_dialogue_context
   QueryUnderstanding
   RetrievalPlan
+  effective_query
   evidence_pool
   combined_matches
   combined_citations
+  web_tried / contrastive_tried
   ContextPack
   selected_matches
   selected_citations
@@ -330,7 +302,9 @@ question + dialogue context
   -> RetrievalCoordinator.run(ctx)
        graph / structural / local / web 按 plan 召回
   -> dedupe_evidence
+  -> apply_rrf_fusion
   -> candidate_enricher.enrich(...)
+  -> optional sentence-level compression
   -> reranker.rerank(...)
   -> ContextPack
   -> selected_matches / selected_citations
@@ -346,6 +320,16 @@ question + dialogue context
 - sub queries
 - metadata filters
 - sources / parallel 策略
+
+`RetrievalCoordinator` 的召回边界是：
+
+- `graph`：可走 Graphiti、structural 或 hybrid graph provider。
+- `local`：本地 note/chunk 检索。
+- `web`：按 retrieval plan 主动补充外部证据。
+- `sub_queries`：当前用于 graph 子查询扩展。
+- `episodic / reflection`：在需要时补充会话事件和反思类上下文。
+
+多路证据进入同一个 `evidence_pool` 后，会通过去重、RRF 融合、候选补全、可选句级压缩和 rerank 统一选择，而不是各来源分别生成答案。
 
 ## ask-compose
 
@@ -381,7 +365,7 @@ _compose_unified_answer(
 
 ## ask-verify
 
-`ask-verify` 负责事实校验、必要时 retry、必要时 web fallback。
+`ask-verify` 负责事实校验、必要时 retry、可选反证补充，以及必要时 web fallback。
 
 对应执行函数：`_execute_verify_step()`。
 
@@ -400,6 +384,11 @@ ask-verify
 AnswerVerifier.verify(...)
   -> if 有 selected evidence:
        _retry_if_needed(...)
+  -> if contrastive_retrieval enabled and claim contradicted/not_found:
+       add_contrastive_evidence(ctx)
+       re-assemble ContextPack
+       re-run generation
+       re-run verification
   -> if evidence insufficient and web available and not web_tried:
        add_web_fallback(ctx)
        re-assemble ContextPack
@@ -409,7 +398,7 @@ AnswerVerifier.verify(...)
        _annotate_answer(...)
 ```
 
-web fallback 不是一条独立复制出来的 ask 流程。它会把 web evidence 追加到同一个 `AskRunContext`，再复用 context assembly、generation 和 verification。
+反证补充和 web fallback 都不是独立复制出来的 ask 流程。它们会把新增 evidence 追加到同一个 `AskRunContext`，再复用 context assembly、generation 和 verification。
 
 ## AskResult 输出
 
@@ -463,17 +452,18 @@ ask
 当前 capture 已有：
 
 - 来源 fingerprint 去重。
-- text/link/file 三入口统一进入 `IngestionPipeline`。
+- text/link/file 三入口最终统一进入 `IngestionPipeline`。
 - parent note + child chunk note。
 - Unstructured-backed chunk drafts。
+- chunk quality score / retrievable 标记。
 - review card。
 - chunk-level graph sync 状态和 durable worker queue 入队。
 
 当前仍有限制：
 
-- 上传文件目前先被 provider 提取成文本，再进入 partition；PDF/Word/HTML 的原生页码、坐标、表格结构还没有完整贯穿。
+- 上传文件当前先经 `inspect_artifact` 变成文本化上下文，再进入 capture pipeline；PDF/Word/HTML 的原生页码、坐标、表格结构还没有完整贯穿到最终问答证据层。
 - graph sync 是 capture 后置环节，长文按 chunk budget 标记 pending/skipped 并入队；当前已有同步 drain 入口，但还没有独立 worker daemon。
-- chunk 质量评测、版本化更新、来源 metadata 自动抽取还不是主链路能力。
+- chunk 质量分已进入 chunk note，但版本化更新、复杂版面保真和来源 metadata 自动抽取还不是主链路能力。
 
 ### Ask 边界
 
@@ -484,14 +474,16 @@ ask
 - query understanding + retrieval plan。
 - graph / structural / local / web 多源召回。
 - EvidenceItem 归一。
+- RRF fusion。
 - candidate enrichment。
 - heuristic / LLM rerank 可插拔。
+- 可选句级 evidence compression。
 - ContextPack 预算控制。
-- verifier + retry + web fallback。
+- verifier + retry + optional contrastive retrieval + web fallback。
 
 当前仍有限制：
 
-- ask context artifact 目前只覆盖 ask 三阶段大对象，还没有扩展成通用 workflow artifact / event log。
+- ask context artifact 已落在通用 `workflow_artifacts` 表，但当前只把 ask 三阶段大对象作为 `kind="ask_run_context"` 使用；还没有把所有 workflow step I/O 全量纳入同一 artifact 规范。
 - rerank、MMR、多样性、压缩和反证检索仍有提升空间。
 - claim grounding 主要是启发式检查，复杂蕴含判断仍需要更强 verifier。
 
@@ -499,4 +491,4 @@ ask
 
 可以这样说：
 
-> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接/文件是“正文提取 -> capture_text 写入”两步，底层仍统一进入 `IngestionPipeline` 做去重、parent note、Unstructured chunk、child notes、review、worker queue graph sync。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding、多源召回、rerank 和 ContextPack artifact；compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验、retry 和必要时 web fallback。
+> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接是 `capture_url -> capture_text`，文件是 `inspect_artifact -> capture_text`，底层最终统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding、多源召回、证据归一、RRF/补全/压缩/rerank 和 ContextPack artifact；compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验、retry、可选反证补充和必要时 web fallback。

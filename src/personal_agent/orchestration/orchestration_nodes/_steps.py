@@ -519,8 +519,8 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: StepExecutionCont
                 step.step_id, str(result_data["answer"]), state.user_id, state.step_execution.steps,
             )
 
-    # Inject fetched/extracted text into dependent capture_text steps.
-    if step.action_type == "tool_call" and step.tool_name in {"capture_url", "capture_upload"}:
+    # Inject fetched/extracted artifact text into dependent capture_text steps.
+    if step.action_type == "tool_call" and step.tool_name in {"capture_url", "capture_upload", "inspect_artifact"}:
         result_data = state.step_execution.results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("text"):
             source_type = "link" if step.tool_name == "capture_url" else str(result_data.get("source_type") or "file")
@@ -833,6 +833,32 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
                 content_type = metadata.get("content_type")
                 if content_type:
                     tool_input["content_type"] = str(content_type)
+
+    elif step.tool_name == "inspect_artifact":
+        artifact = (entry_input.artifacts[0] if entry_input is not None and entry_input.artifacts else None)
+        if artifact is not None:
+            tool_input.setdefault("file_path", artifact.file_path)
+            tool_input.setdefault("filename", artifact.filename)
+            if artifact.content_type:
+                tool_input.setdefault("content_type", artifact.content_type)
+            tool_input.setdefault("source_type", artifact.source_type)
+        else:
+            file_path = str(metadata.get("file_path") or "")
+            if file_path:
+                tool_input.setdefault("file_path", file_path)
+                tool_input.setdefault(
+                    "filename",
+                    str(metadata.get("original_filename") or metadata.get("filename") or Path(file_path).name),
+                )
+                if metadata.get("content_type"):
+                    tool_input.setdefault("content_type", str(metadata["content_type"]))
+                if metadata.get("source_type"):
+                    tool_input.setdefault("source_type", str(metadata["source_type"]))
+        request = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if request.strip():
+            tool_input.setdefault("question", request.strip())
 
     elif step.tool_name in {"review_digest", "inspect_knowledge_gaps"}:
         tool_input.setdefault("user_id", state.user_id)
@@ -1193,6 +1219,8 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
     context_parts: list[str] = []
     for sid, data in state.step_execution.results.items():
         if isinstance(data, dict):
+            if data.get("text"):
+                context_parts.append(str(data["text"]))
             if data.get("answer"):
                 context_parts.append(str(data["answer"]))
             if data.get("entity_names"):
@@ -1225,6 +1253,13 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
 
     if route == "summarize_thread":
         return _summarize_thread(state, deps)
+
+    if route == "analyze_artifact":
+        return _answer_from_artifact_context(
+            question=question,
+            context=context,
+            deps=deps,
+        )
 
     if route == "direct_answer":
         from personal_agent.orchestration.orchestration_nodes._entry import _node_direct_answer_branch
@@ -1308,6 +1343,48 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
     except Exception:
         logger.exception("Compose step %s failed", step.step_id)
         return f"根据已有信息：{context[:500]}"
+
+
+def _answer_from_artifact_context(
+    *,
+    question: str,
+    context: str,
+    deps: StepExecutionContext,
+) -> str:
+    prompt = (
+        "你正在处理用户本轮上传的 artifact。请只基于 artifact 上下文和用户问题回答；"
+        "不要把内容写入长期知识库，不要声称已保存。"
+        "如果上下文说明无法自动理解内容，请如实说明需要可解析的文本、图片视觉模型或音频转写能力。\n\n"
+        f"用户请求：{question}\n\n"
+        f"artifact 上下文：\n{context[:16000]}"
+    )
+    if deps.model_client is None:
+        return f"根据 artifact 上下文：{context[:1000]}"
+    try:
+        from personal_agent.infra.structured_model import StructuredModelRequest
+        from personal_agent.kernel.prompts import get_prompt
+        from pydantic import BaseModel
+
+        answer_prompt = get_prompt("answer_generation.system")
+        response = deps.model_client.generate(StructuredModelRequest(
+            operation="artifact_answer",
+            version=answer_prompt.version,
+            messages=[
+                {"role": "system", "content": answer_prompt.template},
+                {"role": "user", "content": prompt},
+            ],
+            output_type=BaseModel,
+            temperature=0.2,
+            max_tokens=900,
+            kind="text",
+            metadata={"component": "orchestration", "intent": "analyze_artifact"},
+        ))
+        generated = (response.content or "").strip()
+        if generated:
+            return generated
+    except Exception:
+        logger.exception("Artifact compose failed")
+    return f"根据 artifact 上下文：{context[:1000]}"
 
 
 def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str:

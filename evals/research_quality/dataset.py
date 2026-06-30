@@ -28,6 +28,7 @@ class ResearchEventQualityEvalCase:
     search_results_by_query: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     fulltext_by_url: dict[str, str] = field(default_factory=dict)
     graph_matches_by_title: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    enterprise_matches_by_title: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     event_frames_by_title: dict[str, dict[str, Any]] = field(default_factory=dict)
     mock_understanding: dict[str, Any] = field(default_factory=dict)
     expected_understanding_topic: str = ""
@@ -279,6 +280,14 @@ def load_event_quality_cases(path: str | Path) -> list[ResearchEventQualityEvalC
                     ]
                     for key, matches in (
                         item.get("graph_matches_by_title") or {}
+                    ).items()
+                },
+                enterprise_matches_by_title={
+                    str(key): [
+                        dict(match) for match in matches
+                    ]
+                    for key, matches in (
+                        item.get("enterprise_matches_by_title") or {}
                     ).items()
                 },
                 event_frames_by_title={

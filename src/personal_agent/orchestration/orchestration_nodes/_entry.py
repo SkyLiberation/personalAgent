@@ -543,9 +543,13 @@ _EXECUTION_TRACE_MAP: dict[str, list[str]] = {
         "整理采集结果",
     ],
     "capture_file": [
-        "解析上传文件",
+        "理解上传 artifact",
         "采集内容并写入知识库",
         "整理采集结果",
+    ],
+    "analyze_artifact": [
+        "理解上传 artifact",
+        "基于 artifact 内容回答用户",
     ],
     "summarize_thread": [
         "获取群聊消息记录",
@@ -575,9 +579,13 @@ def _execution_trace_for_intent(intent: str) -> list[str]:
             "整理采集结果",
         ],
         "capture_file": [
-            "解析上传文件",
+            "理解上传 artifact",
             "采集内容并写入知识库",
             "整理采集结果",
+        ],
+        "analyze_artifact": [
+            "理解上传 artifact",
+            "基于 artifact 内容回答用户",
         ],
         "summarize_thread": [
             "获取群聊消息记录",

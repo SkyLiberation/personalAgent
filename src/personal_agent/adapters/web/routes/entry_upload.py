@@ -5,7 +5,6 @@ import logging
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 
 from personal_agent.orchestration.service import AgentService
-from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
 from personal_agent.adapters.web.input_normalization import normalize_entry_text
@@ -20,8 +19,10 @@ def register_entry_upload_route(
     *,
     settings: Settings,
     service: AgentService,
-    capture_service: CaptureService,
+    capture_service: object | None = None,
 ) -> None:
+    del capture_service
+
     @app.post("/api/entry/upload")
     async def entry_upload(
         request: Request,
@@ -38,30 +39,38 @@ def register_entry_upload_route(
         uploads_dir = settings.data_dir / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
 
-        original_name = capture_service.normalize_upload_filename(file.filename)
-        stored_path = uploads_dir / original_name
         file_bytes = file.file.read()
-        stored_path.write_bytes(file_bytes)
+        artifact = service.artifact_service.save_upload(
+            filename=file.filename,
+            content_type=file.content_type,
+            file_bytes=file_bytes,
+            uploads_dir=uploads_dir,
+        )
 
         logger.info(
-            "Entry upload user=%s filename=%s size_bytes=%s",
-            resolved_user, original_name, len(file_bytes),
+            "Entry artifact upload user=%s artifact_id=%s filename=%s size_bytes=%s",
+            resolved_user, artifact.artifact_id, artifact.filename, len(file_bytes),
         )
 
         metadata: dict[str, str] = {
-            "file_path": str(stored_path),
-            "original_filename": original_name,
+            "artifact_id": artifact.artifact_id,
+            "file_path": artifact.file_path,
+            "original_filename": artifact.filename,
+            "filename": artifact.filename,
+            "content_type": artifact.content_type or "",
+            "source_type": artifact.source_type,
         }
-        entry_text = normalize_entry_text(text) or original_name
+        entry_text = normalize_entry_text(text) or "请概述上传附件的内容"
 
         entry_input = EntryInput(
             text=entry_text,
             user_id=resolved_user,
             session_id=session_id,
             source_platform="web",
-            source_type="file",
-            source_ref=str(stored_path),
+            source_type="text",
+            source_ref=artifact.artifact_id,
             metadata=metadata,
+            artifacts=[artifact],
         )
         result = service.entry(entry_input)
 

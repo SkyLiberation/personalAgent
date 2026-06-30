@@ -175,5 +175,129 @@
     "text": "调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源",
     "expected_outcome": "ready",
     "expected_intents": ["research_once"]
+  },
+  {
+    "id": "router-026",
+    "description": "ask/research 边界 — 简单实时事实问答仍是 ask",
+    "text": "查一下 Python 最新稳定版本是多少",
+    "expected_outcome": "ready",
+    "expected_intents": ["ask"]
+  },
+  {
+    "id": "router-027",
+    "description": "ask/research 边界 — 概念和使用解释仍是 ask",
+    "text": "Agent Runtime SDK 是什么，怎么使用？",
+    "expected_outcome": "ready",
+    "expected_intents": ["ask"]
+  },
+  {
+    "id": "router-028",
+    "description": "ask/research 边界 — 官方发布和 GitHub 动态整理是 research_once",
+    "text": "帮我收集最近一周 Agent Runtime SDK 的官方发布和 GitHub 动态，最多 2 条",
+    "expected_outcome": "ready",
+    "expected_intents": ["research_once"]
+  },
+  {
+    "id": "router-029",
+    "description": "ask/research 边界 — 调研一段时间内的发展是 research_once",
+    "text": "调研最近一个月 Agent 工具调用的发展",
+    "expected_outcome": "ready",
+    "expected_intents": ["research_once"]
+  },
+  {
+    "id": "router-030",
+    "description": "Artifact-first — 上传图片仅要求总结,不得自动 capture_file",
+    "text": "总结这张图里的内容",
+    "expected_outcome": "ready",
+    "expected_intents": ["analyze_artifact"],
+    "artifacts": [
+      {
+        "artifact_id": "art-router-image-summary",
+        "filename": "diagram.png",
+        "content_type": "image/png",
+        "source_type": "image"
+      }
+    ]
+  },
+  {
+    "id": "router-031",
+    "description": "Artifact-first — 上传音频围绕内容问答,应 analyze_artifact 而非 capture_file",
+    "text": "这段录音里提到的截止日期是什么？",
+    "expected_outcome": "ready",
+    "expected_intents": ["analyze_artifact"],
+    "artifacts": [
+      {
+        "artifact_id": "art-router-audio-question",
+        "filename": "meeting.m4a",
+        "content_type": "audio/mp4",
+        "source_type": "audio"
+      }
+    ]
+  },
+  {
+    "id": "router-032",
+    "description": "Artifact-first — 只上传附件无文字时默认概述,仍不入库",
+    "text": "",
+    "expected_outcome": "ready",
+    "expected_intents": ["analyze_artifact"],
+    "artifacts": [
+      {
+        "artifact_id": "art-router-default-summary",
+        "filename": "notes.pdf",
+        "content_type": "application/pdf",
+        "source_type": "pdf"
+      }
+    ]
+  },
+  {
+    "id": "router-033",
+    "description": "Artifact-first — 明确收进知识库时才 capture_file",
+    "text": "把这个 PDF 收进知识库",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_file"],
+    "artifacts": [
+      {
+        "artifact_id": "art-router-pdf-capture",
+        "filename": "paper.pdf",
+        "content_type": "application/pdf",
+        "source_type": "pdf"
+      }
+    ]
+  },
+  {
+    "id": "router-034",
+    "description": "Artifact-first — 图片明确保存时才 capture_file",
+    "text": "保存这张图片里的内容，后面我要检索",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_file"],
+    "artifacts": [
+      {
+        "artifact_id": "art-router-image-capture",
+        "filename": "whiteboard.jpg",
+        "content_type": "image/jpeg",
+        "source_type": "image"
+      }
+    ]
+  },
+  {
+    "id": "router-035",
+    "description": "Goal-first — 复合目标应保留目标序列,不是硬选一个能力",
+    "text": "记住：DNS 把域名解析为 IP，然后回答 DNS 为什么需要缓存？",
+    "expected_outcome": "ready",
+    "expected_intents": ["capture_text", "ask"],
+    "expected_route_type": "composite_workflow",
+    "expected_coverage": "full",
+    "expected_matched_capabilities": ["capture_text", "ask"]
+  },
+  {
+    "id": "router-036",
+    "description": "Goal-first — 能力不足时 unsupported,不得退化成最相近能力菜单项",
+    "text": "把这段音频剪成 30 秒短视频并发到邮箱",
+    "expected_outcome": "unsupported",
+    "expected_intents": [],
+    "expected_route_type": "unsupported",
+    "expected_coverage": "partial",
+    "expected_matched_capabilities": ["analyze_artifact"],
+    "expected_missing_requirements": ["视频编辑", "邮件发送"]
   }
 ]

@@ -23,6 +23,10 @@ from .metrics import (
 class RouterCaseScore:
     case_id: str
     outcome_accuracy: float
+    route_type_exact: float
+    coverage_exact: float
+    capability_f1: float
+    missing_requirement_precision: float
     intent_f1: float
     intent_sequence_exact: float
     clarify_field_precision: float
@@ -40,6 +44,16 @@ def score_case(case: RouterEvalCase, run: RouterRunOutput) -> RouterCaseScore:
     return RouterCaseScore(
         case_id=case.id,
         outcome_accuracy=outcome_correct(run.outcome, case.expected_outcome),
+        route_type_exact=float(run.route_type == case.expected_route_type),
+        coverage_exact=float(run.coverage == case.expected_coverage),
+        capability_f1=intent_set_f1(
+            run.matched_capabilities,
+            case.expected_matched_capabilities,
+        ),
+        missing_requirement_precision=_expected_text_coverage(
+            run.missing_requirements,
+            case.expected_missing_requirements,
+        ),
         intent_f1=intent_set_f1(run.intents, case.expected_intents),
         intent_sequence_exact=intent_sequence_exact(run.intents, case.expected_intents),
         clarify_field_precision=clarify_field_precision(
@@ -54,7 +68,9 @@ def score_case(case: RouterEvalCase, run: RouterRunOutput) -> RouterCaseScore:
 
 
 _METRIC_NAMES = (
-    "outcome_accuracy", "intent_f1", "intent_sequence_exact", "clarify_field_precision",
+    "outcome_accuracy", "route_type_exact", "coverage_exact", "capability_f1",
+    "missing_requirement_precision",
+    "intent_f1", "intent_sequence_exact", "clarify_field_precision",
     "latency_ms", "llm_call_count", "input_tokens", "output_tokens", "total_tokens",
     "latency_p95_ms", "total_tokens_p95",
 )
@@ -127,3 +143,11 @@ def score_all(
     """Score every case that has a matching run output (keyed by case id)."""
     scores = [score_case(case, runs[case.id]) for case in cases if case.id in runs]
     return aggregate(scores)
+
+
+def _expected_text_coverage(actual: list[str], expected: list[str]) -> float:
+    if not expected:
+        return 1.0
+    actual_text = "\n".join(actual)
+    matched = sum(1 for term in expected if term in actual_text)
+    return round(matched / len(expected), 4)

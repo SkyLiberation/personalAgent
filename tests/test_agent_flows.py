@@ -20,6 +20,11 @@ pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentService):
     service.intent_router._classify_with_llm = lambda _text, _messages=None: RouterOutput(
+        user_goal="记录 DNS 事实并回答 DNS 的作用",
+        route_type="composite_workflow",
+        matched_capabilities=["capture_text", "ask"],
+        coverage="full",
+        missing_requirements=[],
         outcome="ready",
         goals=[
             GoalDraft(

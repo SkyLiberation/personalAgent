@@ -15,9 +15,19 @@ def run_output_from_decision(decision) -> RouterRunOutput:
     """Project a domain ``RouterDecision`` into a RouterRunOutput."""
     intents = [g.intent for g in getattr(decision, "goals", []) or []]
     clarify = bool(getattr(decision, "requires_clarification", False))
+    route_type = str(getattr(decision, "route_type", ""))
+    outcome = "clarify" if clarify else route_type if route_type in {"unsupported", "rejected"} else "ready"
     return RouterRunOutput(
-        outcome="clarify" if clarify else "ready",
+        outcome=outcome,
         intents=intents,
+        route_type=route_type,
+        coverage=str(getattr(decision, "coverage", "")),
+        matched_capabilities=[
+            str(value) for value in getattr(decision, "matched_capabilities", []) or []
+        ],
+        missing_requirements=[
+            str(value) for value in getattr(decision, "missing_requirements", []) or []
+        ],
         raised_clarification=clarify,
         missing_information=list(getattr(decision, "missing_information", []) or []),
     )
@@ -31,8 +41,16 @@ def run_output_from_router_output(output) -> RouterRunOutput:
     clarification = getattr(output, "clarification", None)
     missing = list(getattr(clarification, "missing_information", []) or []) if clarification else []
     return RouterRunOutput(
-        outcome="clarify" if clarify else "ready",
+        outcome=str(getattr(output, "outcome", "clarify" if clarify else "ready")),
         intents=intents,
+        route_type=str(getattr(output, "route_type", "")),
+        coverage=str(getattr(output, "coverage", "")),
+        matched_capabilities=[
+            str(value) for value in getattr(output, "matched_capabilities", []) or []
+        ],
+        missing_requirements=[
+            str(value) for value in getattr(output, "missing_requirements", []) or []
+        ],
         raised_clarification=clarify,
         missing_information=missing,
     )

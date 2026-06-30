@@ -33,8 +33,8 @@ def build_capture_upload_tool(capture_service: CaptureService, uploads_dir: Path
         extras=governance_extras(
             exposure="workflow_activity",
             risk_level="low",
-            side_effects=("write_longterm",),
-            permission_scope="memory:write",
+            side_effects=(),
+            permission_scope="artifact:read",
             timeout_seconds=45.0,
             max_retries=0,
             rate_limit_per_minute=20,

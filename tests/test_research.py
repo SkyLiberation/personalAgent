@@ -90,6 +90,34 @@ class CountingGraphTools:
         return {"ok": False}
 
 
+class EnterpriseKnowledgeTools:
+    def __init__(self):
+        self.graph_search_calls = 0
+        self.enterprise_search_calls = 0
+
+    def __contains__(self, name: str) -> bool:
+        return name in {"graph_search", "enterprise_knowledge_search"}
+
+    def invoke_direct(self, name: str, **kwargs):
+        if name == "graph_search":
+            self.graph_search_calls += 1
+            return {"ok": True, "data": {"relation_facts": []}}
+        if name == "enterprise_knowledge_search":
+            self.enterprise_search_calls += 1
+            assert "Agent memory adapter" in kwargs["query"]
+            return {
+                "ok": True,
+                "data": {
+                    "results": [{
+                        "id": "doc-1",
+                        "title": "Agent memory adapter internal design",
+                        "content": "Enterprise docs discuss Agent memory adapter rollout.",
+                    }]
+                },
+            }
+        return {"ok": False}
+
+
 def _service(postgres_url):
     queue = PostgresWorkerQueueStore(postgres_url)
     store = PostgresResearchStore(postgres_url, worker_queue=queue)
@@ -607,6 +635,53 @@ def test_personal_relevance_ranking_reuses_state_cache(postgres_url):
     assert tools.graph_search_calls == 1
     assert len(state.personal_relevance_cache) == 1
     assert first[0].personal_relevance.score == second[0].personal_relevance.score
+
+
+def test_research_personalization_uses_enterprise_mcp_knowledge(postgres_url):
+    tools = EnterpriseKnowledgeTools()
+    service, _, _ = _service(postgres_url)
+    service.tools = tools
+    run = ResearchRun(
+        id="run-1",
+        user_id="alice",
+        topic="Agent memory",
+        window_start=datetime(2026, 6, 23, 0, 0, tzinfo=UTC),
+        window_end=datetime(2026, 6, 24, 0, 0, tzinfo=UTC),
+    )
+    event = ResearchEvent(
+        canonical_key="agent-memory",
+        title="Agent memory adapter design improves recall",
+        summary="A design note about agent memory adapters.",
+        entities=["Agent memory"],
+        sources=[
+            ResearchSource(
+                id="source-1",
+                decision_id="decision-1",
+                url="https://engineering.example/agent-memory-adapter",
+                canonical_url="https://engineering.example/agent-memory-adapter",
+                domain="engineering.example",
+                title="Agent memory adapter design improves recall",
+                source_type="blog",
+            )
+        ],
+    )
+    state = ResearchState(
+        run_id=run.id,
+        topic=run.topic,
+        window_start=run.window_start,
+        window_end=run.window_end,
+    )
+
+    ranked = service._personalize_and_rank(run, None, [event], state)
+
+    assert tools.graph_search_calls == 1
+    assert tools.enterprise_search_calls == 1
+    assert ranked[0].personal_relevance.score > 0
+    assert ranked[0].personal_relevance.related_note_ids == ["doc-1"]
+    assert [trace.tool_name for trace in state.tool_call_traces] == [
+        "graph_search",
+        "enterprise_knowledge_search",
+    ]
 
 
 def test_research_pipeline_persists_events_and_digest(postgres_url):

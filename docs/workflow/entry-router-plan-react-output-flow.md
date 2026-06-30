@@ -170,6 +170,12 @@ event_id / run_id / thread_id / type / timestamp / payload
 
 `DefaultIntentRouter` 输入 `EntryInput`，输出 `RouterDecision`。
 
+`ask` 和 `research_once` 的边界按业务产物区分,不按信息来源区分:
+
+- `ask` 产出一个回答。它可以解释概念、回答简单实时事实、说明使用方法、比较区别,也可以在证据不足时通过 web fallback 补充外部证据。
+- `research_once` 产出一个可复查的研究对象。它会创建 `ResearchRun`,执行多来源搜索、来源去重、事件聚类、可信度/官方来源验证、条目化 digest 和 claim-level verification。
+- 因此,`查一下 Python 最新稳定版本是多少` 属于 `ask`;`收集最近一周 Agent Runtime SDK 的官方发布和 GitHub 动态,最多 2 条` 属于 `research_once`。
+
 关键字段：
 
 - `route`

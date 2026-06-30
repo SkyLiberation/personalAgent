@@ -203,6 +203,7 @@ def _episode_title(intent: str, entry_text: str, outcome: str) -> str:
         "capture_text": "采集文本",
         "capture_link": "采集链接",
         "capture_file": "采集文件",
+        "analyze_artifact": "理解附件",
         "delete_knowledge": "删除知识",
         "solidify_conversation": "固化对话",
         "summarize_thread": "总结会话",

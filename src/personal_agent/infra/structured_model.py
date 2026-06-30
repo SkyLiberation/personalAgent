@@ -51,7 +51,7 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
 
     operation: str
     version: str
-    messages: list[dict[str, str]]
+    messages: list[dict[str, Any]]
     output_type: type[StructuredOutputT]
     temperature: float = 0
     max_tokens: int = 500

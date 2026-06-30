@@ -180,5 +180,47 @@
       "question": ["save"],
       "save": []
     }
+  },
+  {
+    "id": "planner-008",
+    "description": "Artifact-first — 只分析附件时 workflow 必须只读 inspect_artifact,不能写入长期知识",
+    "entry_text": "总结这张图里的内容",
+    "goals": [
+      {
+        "goal_id": "artifact",
+        "intent": "analyze_artifact",
+        "input": "总结这张图里的内容"
+      }
+    ],
+    "expected_task_dependencies": {
+      "artifact": []
+    },
+    "expected_step_dependencies": {
+      "artifact-inspect": [],
+      "artifact-compose": ["artifact-inspect"]
+    },
+    "expected_tool_sequence": ["inspect_artifact"],
+    "forbidden_tools": ["capture_text", "capture_upload"]
+  },
+  {
+    "id": "planner-009",
+    "description": "Artifact-first — 明确保存附件时 workflow 必须先 inspect_artifact 再 capture_text",
+    "entry_text": "把这个 PDF 收进知识库",
+    "goals": [
+      {
+        "goal_id": "file",
+        "intent": "capture_file",
+        "input": "把这个 PDF 收进知识库"
+      }
+    ],
+    "expected_task_dependencies": {
+      "file": []
+    },
+    "expected_step_dependencies": {
+      "cap-file-inspect": [],
+      "cap-file-store": ["cap-file-inspect"]
+    },
+    "expected_tool_sequence": ["inspect_artifact", "capture_text"],
+    "forbidden_tools": ["capture_upload"]
   }
 ]

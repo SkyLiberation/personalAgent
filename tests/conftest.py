@@ -73,9 +73,28 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
     stripped = text.strip()
     def decision(intent: str, message: str, **kwargs) -> RouterOutput:
         clarify = bool(kwargs.get("requires_clarification", False))
+        unsupported = bool(kwargs.get("unsupported", False))
+        route_type = str(kwargs.get("route_type") or (
+            "clarify" if clarify
+            else "unsupported" if unsupported
+            else "direct_answer" if intent == "direct_answer"
+            else "single_workflow"
+        ))
+        outcome = "clarify" if clarify else "unsupported" if unsupported else "ready"
+        coverage = str(kwargs.get("coverage") or (
+            "ambiguous" if clarify else "unsupported" if unsupported else "full"
+        ))
         return RouterOutput(
-            outcome="clarify" if clarify else "ready",
-            goals=[] if clarify else [GoalDraft(intent=intent, input=stripped)],
+            user_goal=str(kwargs.get("user_goal") or message),
+            route_type=route_type,
+            matched_capabilities=list(kwargs.get(
+                "matched_capabilities",
+                [] if clarify or unsupported else [intent],
+            )),
+            coverage=coverage,
+            missing_requirements=list(kwargs.get("missing_requirements", [])),
+            outcome=outcome,
+            goals=[] if clarify or unsupported else [GoalDraft(intent=intent, input=stripped)],
             clarification=(
                 ClarificationDraft(
                     missing_information=list(
@@ -103,6 +122,22 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
             missing_information=["具体目标或待处理内容"],
             clarification_prompt="请补充具体内容。",
         )
+    if any(word in stripped for word in ("记住", "记一下")) and any(
+        word in stripped for word in ("然后回答", "再回答", "并回答")
+    ):
+        return RouterOutput(
+            user_goal="记录一条知识并基于该主题回答后续问题",
+            route_type="composite_workflow",
+            matched_capabilities=["capture_text", "ask"],
+            coverage="full",
+            missing_requirements=[],
+            outcome="ready",
+            goals=[
+                GoalDraft(intent="capture_text", input=stripped),
+                GoalDraft(intent="ask", input=stripped),
+            ],
+            clarification=None,
+        )
     if any(word in stripped for word in ("固化下来", "沉淀下来", "沉淀成", "记下来")):
         return decision("solidify_conversation", "沉淀会话结论。")
     if "删除" in stripped:
@@ -128,11 +163,37 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
         return decision("inspect_operations", "诊断后台任务。")
     if any(word in stripped for word in ("run_id", "执行历史", "哪一步失败", "workflow")):
         return decision("inspect_workflow", "诊断 workflow。")
+    if any(word in stripped for word in ("发到邮箱", "发送邮件", "剪成短视频", "生成PPT", "生成 PPT")):
+        return decision(
+            "unknown",
+            "当前能力无法完整覆盖该请求。",
+            unsupported=True,
+            coverage="partial",
+            matched_capabilities=["analyze_artifact"] if "音频" in stripped or "图片" in stripped else [],
+            missing_requirements=["缺少文件生成、视频编辑或邮件发送能力"],
+            user_goal="完成当前未注册能力覆盖的跨应用处理",
+        )
     if any(word in stripped for word in ("每天", "每周", "工作日")) and any(
         word in stripped for word in ("新闻", "资讯", "动态", "简报", "跟踪")
     ):
         return decision("create_research_subscription", "创建研究订阅。")
-    if any(word in stripped for word in ("调研", "研究一下", "搜集最新")):
+    research_cues = (
+        "最新", "最近", "多来源", "多源", "高可信", "官方", "整理", "最多",
+        "不超过", "简报", "动态", "发布", "趋势", "发展", "进展", "新闻",
+        "公告", "论文", "开源", "财报", "报告", "GitHub", "github",
+    )
+    simple_qa_cues = (
+        "什么是", "什么叫", "是什么", "是多少", "解释一下", "介绍一下",
+        "如何", "怎么", "为什么", "是否", "区别",
+    )
+    if (
+        any(word in stripped for word in ("调研", "研究一下", "研究最近", "搜集最新", "搜集最近", "收集最新", "收集最近", "关注"))
+        and any(word in stripped for word in research_cues)
+    ) or (
+        any(word in stripped for word in ("查一下", "帮我查", "查询"))
+        and any(word in stripped for word in research_cues)
+        and not any(word in stripped for word in simple_qa_cues)
+    ):
         return decision("research_once", "执行一次研究。")
     if stripped.startswith(("http://", "https://")):
         return decision("capture_link", "采集链接。")

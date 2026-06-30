@@ -476,5 +476,106 @@
     "min_satisfaction_confidence_score": 0.8,
     "max_satisfaction_marginal_gain": 0.1,
     "expected_claim_support_levels": ["supported", "supported"]
+  },
+  {
+    "id": "research-enterprise-mcp-001",
+    "description": "Agent Framework 研究应通过 enterprise_knowledge_search 对照企业内部方案文档，内部证据命中后提升 personal relevance 并进入 digest",
+    "topic": "Agent Framework 设计方案",
+    "instructions": "结合企业当前 workflow-first Agent 方案，整理差距分析",
+    "max_items": 1,
+    "search_results": [
+      {
+        "title": "LangGraph publishes durable agent workflow patterns",
+        "url": "https://langchain-ai.github.io/langgraph/docs/concepts/durable-execution/",
+        "snippet": "LangGraph documentation covers durable execution, checkpoints, interrupts, and stateful agent workflows.",
+        "source": "fixture",
+        "published_at": "2026-06-27T01:00:00Z"
+      },
+      {
+        "title": "Independent report on durable agent workflow patterns",
+        "url": "https://news.example/durable-agent-workflows",
+        "snippet": "A report summarizes why durable workflows are becoming important for enterprise agents.",
+        "source": "fixture",
+        "published_at": "2026-06-27T02:00:00Z"
+      },
+      {
+        "title": "Unrelated model UI release",
+        "url": "https://openai.com/news/model-ui-release",
+        "snippet": "An official model vendor note releases a new UI theme unrelated to agent framework architecture.",
+        "source": "fixture",
+        "published_at": "2026-06-27T03:00:00Z"
+      }
+    ],
+    "fulltext_by_url": {
+      "https://langchain-ai.github.io/langgraph/docs/concepts/durable-execution": "LangGraph durable execution uses checkpoints, interrupts, retries, and workflow state to make agent runs recoverable.",
+      "https://news.example/durable-agent-workflows": "Enterprise agent frameworks increasingly rely on durable workflow execution, tool governance, and state recovery."
+    },
+    "event_frames_by_title": {
+      "LangGraph publishes durable agent workflow patterns": {
+        "actor": "LangGraph",
+        "action": "publish",
+        "object": "durable agent workflow patterns",
+        "event_type": "documentation_update",
+        "entities": ["LangGraph", "Agent Framework", "durable workflow"],
+        "confidence": 0.9
+      },
+      "Independent report on durable agent workflow patterns": {
+        "actor": "LangGraph",
+        "action": "publish",
+        "object": "durable agent workflow patterns",
+        "event_type": "documentation_update",
+        "entities": ["LangGraph", "Agent Framework", "durable workflow"],
+        "confidence": 0.82
+      }
+    },
+    "enterprise_matches_by_title": {
+      "LangGraph publishes durable agent workflow patterns": [
+        {
+          "id": "internal-agent-framework-v1",
+          "title": "当前企业 Agent Framework 方案",
+          "content": "企业当前方案采用 workflow-first Agent Framework，包含 Router Goal 拆分、WorkflowSpec、ToolGateway、PolicyEngine、checkpoint recovery、HITL 和 verifier，但企业知识源仍需要通过 MCP 接入 research 业务形成内外部对照。"
+        }
+      ]
+    },
+    "expected_source_count": 3,
+    "expected_query_plan_terms": [
+      ["Agent", "Framework"]
+    ],
+    "expected_decision_phases": ["exploration"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": [
+      "web_search",
+      "capture_url",
+      "graph_search",
+      "enterprise_knowledge_search"
+    ],
+    "expected_events": [
+      {
+        "title_terms": ["LangGraph", "durable", "workflow"],
+        "expected_status": "verified",
+        "min_sources": 2,
+        "requires_primary_source": true,
+        "min_personal_relevance": 0.6
+      },
+      {
+        "title_terms": ["Unrelated", "UI", "release"],
+        "expected_status": "uncertain",
+        "min_sources": 1
+      }
+    ],
+    "expected_digest_title_terms": [
+      ["LangGraph", "durable", "workflow"]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.8,
+    "max_satisfaction_marginal_gain": 0.1,
+    "expected_claim_support_levels": ["supported", "supported"]
   }
 ]

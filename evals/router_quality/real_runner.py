@@ -24,7 +24,7 @@ from time import perf_counter
 from personal_agent.planning.router import DefaultIntentRouter
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_telemetry import collect_llm_usage
-from personal_agent.kernel.models import EntryInput
+from personal_agent.kernel.models import ArtifactRef, EntryInput
 from personal_agent.infra.structured_model import build_structured_model_client
 
 from .dataset import RouterEvalCase, RouterRunOutput
@@ -50,6 +50,7 @@ def classify_case(router: DefaultIntentRouter, case: RouterEvalCase) -> RouterRu
                 user_id="router-eval",
                 session_id=f"router-eval-{case.id}",
                 source_type=case.source_type,
+                artifacts=[_artifact_ref(item) for item in case.artifacts],
             )
         )
     output = run_output_from_decision(decision)
@@ -59,3 +60,16 @@ def classify_case(router: DefaultIntentRouter, case: RouterEvalCase) -> RouterRu
     output.output_tokens = usage.output_tokens
     output.total_tokens = usage.total_tokens
     return output
+
+
+def _artifact_ref(data: dict) -> ArtifactRef:
+    filename = str(data.get("filename") or "artifact.bin")
+    source_type = str(data.get("source_type") or "file")
+    return ArtifactRef(
+        artifact_id=str(data.get("artifact_id") or f"art-golden-{filename}"),
+        filename=filename,
+        content_type=data.get("content_type"),
+        source_type=source_type,
+        file_path=str(data.get("file_path") or f"/tmp/{filename}"),
+        size_bytes=int(data.get("size_bytes") or 1),
+    )

@@ -12,6 +12,15 @@ from personal_agent.infra.structured_model import StructuredModelClient, Structu
 
 logger = logging.getLogger(__name__)
 ConversationMessage = dict[str, str]
+RouteType = Literal[
+    "single_workflow",
+    "composite_workflow",
+    "clarify",
+    "unsupported",
+    "direct_answer",
+    "rejected",
+]
+CapabilityCoverage = Literal["full", "partial", "unsupported", "ambiguous"]
 
 
 class GoalDraft(BaseModel):
@@ -29,7 +38,12 @@ class ClarificationDraft(BaseModel):
 class RouterOutput(BaseModel):
     """Strict JSON-schema DTO; converted to domain goals after parsing."""
 
-    outcome: Literal["ready", "clarify"]
+    user_goal: str = Field(min_length=1)
+    route_type: RouteType
+    matched_capabilities: list[EntryIntent] = Field(default_factory=list)
+    coverage: CapabilityCoverage
+    missing_requirements: list[str] = Field(default_factory=list)
+    outcome: Literal["ready", "clarify", "unsupported", "rejected"]
     goals: list[GoalDraft]
     clarification: ClarificationDraft | None
 
@@ -40,11 +54,36 @@ class RouterOutput(BaseModel):
                 raise ValueError("ready output requires at least one goal")
             if self.clarification is not None:
                 raise ValueError("ready output cannot contain clarification")
+            if self.route_type in {"clarify", "unsupported", "rejected"}:
+                raise ValueError("ready output requires an executable route_type")
+            if self.coverage != "full":
+                raise ValueError("ready output requires full capability coverage")
+            if not self.matched_capabilities:
+                self.matched_capabilities = [goal.intent for goal in self.goals]
         else:
-            if self.clarification is None:
-                raise ValueError("clarify output requires clarification")
             if self.goals:
-                raise ValueError("clarify output cannot contain goals")
+                raise ValueError(f"{self.outcome} output cannot contain goals")
+            if self.outcome == "clarify":
+                if self.route_type != "clarify":
+                    raise ValueError("clarify output requires route_type=clarify")
+                if self.coverage != "ambiguous":
+                    raise ValueError("clarify output requires ambiguous coverage")
+            if self.outcome == "unsupported":
+                if self.route_type != "unsupported":
+                    raise ValueError("unsupported output requires route_type=unsupported")
+                if self.coverage not in {"partial", "unsupported"}:
+                    raise ValueError("unsupported output requires partial or unsupported coverage")
+            if self.outcome == "rejected":
+                if self.route_type != "rejected":
+                    raise ValueError("rejected output requires route_type=rejected")
+                if self.coverage != "unsupported":
+                    raise ValueError("rejected output requires unsupported coverage")
+            if self.outcome == "clarify" and self.clarification is None:
+                raise ValueError("clarify output requires clarification")
+            if self.outcome != "clarify" and self.clarification is not None:
+                raise ValueError(f"{self.outcome} output cannot contain clarification")
+            if self.outcome in {"unsupported", "rejected"} and not self.missing_requirements:
+                raise ValueError(f"{self.outcome} output requires missing_requirements")
 
         return self
 
@@ -58,8 +97,13 @@ class Goal(BaseModel):
 
 
 class RouterDecision(BaseModel):
-    """Semantic decomposition. Workflow policy is deliberately absent."""
+    """Goal understanding and capability coverage for the entry request."""
 
+    user_goal: str = ""
+    route_type: RouteType = "unsupported"
+    matched_capabilities: list[EntryIntent] = Field(default_factory=list)
+    coverage: CapabilityCoverage = "unsupported"
+    missing_requirements: list[str] = Field(default_factory=list)
     goals: list[Goal] = Field(default_factory=list)
     requires_clarification: bool = False
     missing_information: list[str] = Field(default_factory=list)
@@ -69,6 +113,29 @@ class RouterDecision(BaseModel):
     @property
     def primary_intent(self) -> EntryIntent:
         return self.goals[-1].intent if self.goals else "unknown"
+
+    @model_validator(mode="after")
+    def _normalize_domain_contract(self) -> "RouterDecision":
+        if self.requires_clarification:
+            self.route_type = "clarify"
+            self.coverage = "ambiguous"
+            self.matched_capabilities = []
+            if not self.missing_requirements:
+                self.missing_requirements = list(self.missing_information)
+            return self
+
+        if self.goals and self.route_type == "unsupported" and not self.missing_requirements:
+            intents = [goal.intent for goal in self.goals]
+            if intents == ["direct_answer"]:
+                self.route_type = "direct_answer"
+            elif len(intents) > 1:
+                self.route_type = "composite_workflow"
+            else:
+                self.route_type = "single_workflow"
+            self.coverage = "full"
+            if not self.matched_capabilities:
+                self.matched_capabilities = intents
+        return self
 
 
 class IntentRouter(Protocol):
@@ -83,16 +150,25 @@ def _single_goal_decision(
     intent: EntryIntent,
     *,
     input_text: str = "",
+    user_goal: str = "",
+    route_type: RouteType = "single_workflow",
+    coverage: CapabilityCoverage = "full",
+    matched_capabilities: list[EntryIntent] | None = None,
     requires_clarification: bool = False,
     missing_information: list[str] | None = None,
     clarification_prompt: str = "",
 ) -> RouterDecision:
     return RouterDecision(
+        user_goal=user_goal or input_text or intent,
+        route_type="clarify" if requires_clarification else route_type,
+        matched_capabilities=[] if requires_clarification else (matched_capabilities or [intent]),
+        coverage="ambiguous" if requires_clarification else coverage,
+        missing_requirements=missing_information or [],
         goals=[Goal(
             goal_id="goal_1",
             intent=intent,
             input=input_text,
-        )],
+        )] if not requires_clarification else [],
         requires_clarification=requires_clarification,
         missing_information=missing_information or [],
         clarification_prompt=clarification_prompt,
@@ -110,6 +186,11 @@ def _to_domain_decision(output: RouterOutput) -> RouterDecision:
     ]
     clarification = output.clarification
     return RouterDecision(
+        user_goal=output.user_goal,
+        route_type=output.route_type,
+        matched_capabilities=output.matched_capabilities,
+        coverage=output.coverage,
+        missing_requirements=output.missing_requirements,
         goals=goals,
         requires_clarification=output.outcome == "clarify",
         missing_information=(
@@ -120,7 +201,13 @@ def _to_domain_decision(output: RouterOutput) -> RouterDecision:
 
 
 def _router_unavailable_decision() -> RouterDecision:
-    return RouterDecision(error="router_unavailable")
+    return RouterDecision(
+        user_goal="无法完成入口路由",
+        route_type="unsupported",
+        coverage="unsupported",
+        missing_requirements=["router_model"],
+        error="router_unavailable",
+    )
 
 
 def describe_router_decision(decision: RouterDecision | None) -> str:
@@ -131,6 +218,10 @@ def describe_router_decision(decision: RouterDecision | None) -> str:
         return "入口路由模型当前不可用，请检查 LLM 配置或稍后重试。"
     if decision.requires_clarification:
         return decision.clarification_prompt or "入口信息不足，需要用户补充。"
+    if decision.route_type == "unsupported":
+        return "当前能力无法完整覆盖该请求。"
+    if decision.route_type == "rejected":
+        return "当前请求不能执行。"
     intents = [goal.intent for goal in decision.goals]
     if not intents:
         return "没有识别到可执行目标。"
@@ -148,20 +239,20 @@ class DefaultIntentRouter:
         entry_input: EntryInput,
         conversation_messages: list[ConversationMessage] | None = None,
     ) -> RouterDecision:
-        if entry_input.source_type == "file":
-            decision = _single_goal_decision(
-                "capture_file",
-                input_text=entry_input.text,
-            )
-            self._log_decision(entry_input, decision, strategy="source_type")
-            return decision
+        artifact_decision = _deterministic_artifact_decision(entry_input)
+        if artifact_decision is not None:
+            self._log_decision(entry_input, artifact_decision, strategy="artifact_rule")
+            return artifact_decision
 
         deterministic = _deterministic_research_decision(entry_input.text)
         if deterministic is not None:
             self._log_decision(entry_input, deterministic, strategy="rule")
             return deterministic
 
-        result = self._classify_with_llm(entry_input.text, conversation_messages or [])
+        result = self._classify_with_llm(
+            _router_text(entry_input),
+            conversation_messages or [],
+        )
         if result is not None:
             decision = _to_domain_decision(result)
             self._log_decision(
@@ -186,6 +277,11 @@ class DefaultIntentRouter:
     ) -> RouterOutput | None:
         if not text.strip():
             return RouterOutput(
+                user_goal="识别用户想完成的目标",
+                route_type="clarify",
+                matched_capabilities=[],
+                coverage="ambiguous",
+                missing_requirements=["明确的目标、问题或操作对象"],
                 outcome="clarify",
                 goals=[],
                 clarification=ClarificationDraft(
@@ -243,6 +339,11 @@ class DefaultIntentRouter:
             strategy=strategy,
             goals=[goal.intent for goal in decision.goals],
             goal_count=len(decision.goals),
+            user_goal=decision.user_goal,
+            route_type=decision.route_type,
+            matched_capabilities=decision.matched_capabilities,
+            coverage=decision.coverage,
+            missing_requirements=decision.missing_requirements,
             requires_clarification=decision.requires_clarification,
             missing_information=decision.missing_information,
             source_type=entry_input.source_type,
@@ -268,6 +369,112 @@ def _deterministic_research_decision(text: str) -> RouterDecision | None:
     )
 
 
+def _deterministic_artifact_decision(entry_input: EntryInput) -> RouterDecision | None:
+    if not entry_input.artifacts:
+        return None
+    text = entry_input.text.strip()
+    if _looks_like_artifact_capture(text):
+        return _single_goal_decision("capture_file", input_text=text or "保存上传附件")
+    if not text or _looks_like_artifact_analysis(text):
+        return _single_goal_decision(
+            "analyze_artifact",
+            input_text=text or "请概述上传附件的内容",
+        )
+    return None
+
+
+def _looks_like_artifact_capture(text: str) -> bool:
+    if not text:
+        return False
+    capture_terms = (
+        "保存",
+        "收录",
+        "收进",
+        "存进",
+        "存入",
+        "采集",
+        "入库",
+        "记录",
+        "记住",
+        "写入知识库",
+        "存到知识库",
+        "capture",
+        "save",
+    )
+    return any(term in text.lower() or term in text for term in capture_terms)
+
+
+def _looks_like_artifact_analysis(text: str) -> bool:
+    lowered = text.lower()
+    artifact_refs = (
+        "文件",
+        "附件",
+        "图片",
+        "图里",
+        "图中",
+        "照片",
+        "语音",
+        "音频",
+        "录音",
+        "这个",
+        "这张",
+        "这段",
+        "this file",
+        "image",
+        "audio",
+        "attachment",
+    )
+    analysis_terms = (
+        "总结",
+        "概述",
+        "解释",
+        "回答",
+        "分析",
+        "识别",
+        "提取",
+        "翻译",
+        "里面",
+        "内容",
+        "什么",
+        "多少",
+        "哪里",
+        "哪个",
+        "谁",
+        "吗",
+        "?",
+        "？",
+        "summary",
+        "summarize",
+        "answer",
+        "describe",
+        "what",
+        "when",
+        "where",
+        "who",
+        "which",
+        "how",
+    )
+    return (
+        any(term in text or term in lowered for term in artifact_refs)
+        and any(term in text or term in lowered for term in analysis_terms)
+    )
+
+
+def _router_text(entry_input: EntryInput) -> str:
+    text = entry_input.text.strip()
+    if not entry_input.artifacts:
+        return text
+    artifact_lines = [
+        f"- {artifact.filename} ({artifact.source_type}, {artifact.content_type or 'unknown'})"
+        for artifact in entry_input.artifacts
+    ]
+    return (
+        f"{text or '用户上传了附件，但没有额外文字说明。'}\n\n"
+        "当前请求附带 artifacts：\n"
+        + "\n".join(artifact_lines)
+    )
+
+
 def _looks_like_research_subscription(text: str, lowered: str) -> bool:
     schedule_terms = ("每天", "每周", "工作日", "定时", "周期", "订阅", "跟踪")
     subject_terms = ("新闻", "资讯", "动态", "简报", "公告", "发布")
@@ -278,36 +485,68 @@ def _looks_like_research_subscription(text: str, lowered: str) -> bool:
 
 
 def _looks_like_one_shot_research(text: str, lowered: str) -> bool:
-    research_verbs = (
+    explicit_research_verbs = (
         "调研",
         "研究一下",
         "研究最近",
-        "查一下",
         "搜集最新",
+        "搜集最近",
         "收集最新",
+        "收集最近",
         "关注",
     )
-    research_cues = (
+    weak_lookup_verbs = ("查一下", "帮我查", "查询")
+    research_deliverable_cues = (
         "最新",
         "最近",
-        "发布",
-        "动态",
-        "新闻",
-        "公告",
-        "官方",
+        "多来源",
+        "多源",
         "高可信",
+        "官方",
+        "整理",
         "最多",
         "不超过",
+        "简报",
+        "动态",
+        "发布",
+        "趋势",
+        "发展",
+        "进展",
+        "新闻",
+        "公告",
         "论文",
         "开源",
         "财报",
+        "报告",
         "github",
         "paper",
         "earnings",
         "release",
         "announcement",
     )
-    return (
-        any(verb in text for verb in research_verbs)
-        and any(cue in text or cue in lowered for cue in research_cues)
+    simple_qa_prefixes = (
+        "什么是",
+        "什么叫",
+        "解释一下",
+        "介绍一下",
+        "如何",
+        "怎么",
+        "为什么",
+        "是否",
     )
+    simple_qa_cues = ("是什么", "是多少", "怎么用", "如何使用", "区别")
+    has_research_cue = any(
+        cue in text or cue in lowered
+        for cue in research_deliverable_cues
+    )
+    has_explicit_research_verb = any(verb in text for verb in explicit_research_verbs)
+    has_weak_lookup_verb = any(verb in text for verb in weak_lookup_verbs)
+    looks_like_simple_qa = (
+        text.startswith(simple_qa_prefixes)
+        or any(cue in text for cue in simple_qa_cues)
+    )
+    if has_explicit_research_verb and has_research_cue:
+        return True
+    if has_weak_lookup_verb and has_research_cue and not looks_like_simple_qa:
+        return True
+    return False

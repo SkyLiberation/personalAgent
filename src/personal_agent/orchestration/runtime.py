@@ -31,8 +31,10 @@ from personal_agent.tools import (
     build_capture_url_tool,
     build_consolidate_knowledge_tool,
     build_delete_note_tool,
+    build_enterprise_knowledge_search_tool,
     build_restore_note_tool,
     build_graph_search_tool,
+    build_inspect_artifact_tool,
     build_inspect_knowledge_gaps_tool,
     build_list_recent_notes_tool,
     build_get_note_tool,
@@ -41,6 +43,8 @@ from personal_agent.tools import (
     build_supersede_note_tool,
     build_mark_note_deprecated_tool,
     build_mark_notes_conflicted_tool,
+    build_mcp_tools,
+    build_raw_wiki_search_tools,
     build_inspect_worker_queue_tool,
     build_inspect_workflow_run_tool,
     build_retry_worker_task_tool,
@@ -77,6 +81,7 @@ from personal_agent.planning.workflow_planner import WorkflowPlanner
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
 from personal_agent.planning.replanner import Replanner
 from personal_agent.planning.router import DefaultIntentRouter
+from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.runtime_ask import AskService
@@ -179,6 +184,7 @@ class AgentRuntime:
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
+        self.artifact_service = ArtifactService(settings, logger)
         self._intent_router = DefaultIntentRouter(build_structured_model_client(
             settings.router,
             settings.langsmith,
@@ -461,6 +467,7 @@ class AgentRuntime:
             self._tool_executor.register(
                 build_capture_upload_tool(self.capture_service, self.settings.data_dir / "uploads")
             )
+        self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service))
         self._tool_executor.register(build_graph_search_tool(self._active_graph_store()))
         self._tool_executor.register(build_capture_text_tool(
             lambda text, source_type="text", user_id="default": self.execute_capture(
@@ -499,6 +506,13 @@ class AgentRuntime:
             from personal_agent.application.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
+        for mcp_tool in build_mcp_tools(self.settings.mcp):
+            self._tool_executor.register(mcp_tool)
+        for raw_wiki_tool in build_raw_wiki_search_tools(self.settings.enterprise_knowledge):
+            self._tool_executor.register(raw_wiki_tool)
+        self._tool_executor.register(
+            build_enterprise_knowledge_search_tool(self._tool_executor)
+        )
 
     @property
     def _web_search_available(self) -> bool:
