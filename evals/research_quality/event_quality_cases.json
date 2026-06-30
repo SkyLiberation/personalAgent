@@ -48,6 +48,18 @@
       ]
     },
     "expected_source_count": 3,
+    "expected_query_plan_terms": [
+      ["AI", "Agent"]
+    ],
+    "expected_decision_phases": ["exploration"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
     "expected_events": [
       {
         "title_terms": ["OpenAI", "Agent", "Model"],
@@ -64,7 +76,12 @@
     ],
     "expected_digest_title_terms": [
       ["OpenAI", "Agent", "Model"]
-    ]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.8,
+    "max_satisfaction_marginal_gain": 0.1,
+    "expected_claim_support_levels": ["supported", "supported"]
   },
   {
     "id": "research-event-002",
@@ -92,6 +109,18 @@
       "https://github.com/example/agent-benchmark": "Official README for Agent Benchmark Suite."
     },
     "expected_source_count": 1,
+    "expected_query_plan_terms": [
+      ["Agent", "Benchmark"]
+    ],
+    "expected_decision_phases": ["exploration"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
     "expected_events": [
       {
         "title_terms": ["GitHub", "Agent", "Benchmark"],
@@ -102,7 +131,12 @@
     ],
     "expected_digest_title_terms": [
       ["GitHub", "Agent", "Benchmark"]
-    ]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.4,
+    "max_satisfaction_marginal_gain": 0.1,
+    "expected_claim_support_levels": ["supported", "supported"]
   },
   {
     "id": "research-event-003",
@@ -139,6 +173,18 @@
       ]
     },
     "expected_source_count": 2,
+    "expected_query_plan_terms": [
+      ["Agent", "memory"]
+    ],
+    "expected_decision_phases": ["exploration"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
     "expected_events": [
       {
         "title_terms": ["Vendor", "model", "update"],
@@ -155,7 +201,13 @@
     ],
     "expected_digest_title_terms": [
       ["Agent", "memory", "adapter"]
-    ]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.4,
+    "max_satisfaction_marginal_gain": 0.0,
+    "expected_satisfaction_gap_types": ["single_source", "missing_primary_source"],
+    "expected_claim_support_levels": ["supported", "supported"]
   },
   {
     "id": "research-event-004",
@@ -198,6 +250,18 @@
       }
     },
     "expected_source_count": 2,
+    "expected_query_plan_terms": [
+      ["Agent", "Runtime"]
+    ],
+    "expected_decision_phases": ["exploration"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
     "expected_events": [
       {
         "title_terms": ["OpenAI", "Runtime", "SDK"],
@@ -208,7 +272,12 @@
     ],
     "expected_digest_title_terms": [
       ["OpenAI", "Runtime", "SDK"]
-    ]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.8,
+    "max_satisfaction_marginal_gain": 0.1,
+    "expected_claim_support_levels": ["supported", "supported"]
   },
   {
     "id": "research-event-005",
@@ -251,6 +320,18 @@
       }
     },
     "expected_source_count": 2,
+    "expected_query_plan_terms": [
+      ["Agent", "Runtime"]
+    ],
+    "expected_decision_phases": ["exploration"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
     "expected_events": [
       {
         "title_terms": ["launches", "Agent", "Runtime", "SDK"],
@@ -267,14 +348,25 @@
     "expected_digest_title_terms": [
       ["launches", "Agent", "Runtime", "SDK"],
       ["patches", "security", "issue"]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.4,
+    "max_satisfaction_marginal_gain": 0.0,
+    "expected_satisfaction_gap_types": ["single_source", "missing_primary_source"],
+    "expected_claim_support_levels": [
+      "supported",
+      "supported",
+      "supported",
+      "supported"
     ]
   },
   {
     "id": "research-loop-001",
     "description": "单源媒体事件应生成 official confirmation 后续查询，并在找到官方来源后升级为 verified",
-    "topic": "Agent Runtime",
-    "instructions": "优先确认官方来源",
-    "max_items": 1,
+    "topic": "调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源",
+    "instructions": "",
+    "max_items": 5,
     "search_results_by_query": {
       "media reports agent runtime sdk official announcement": [
         {
@@ -315,13 +407,59 @@
         "confidence": 0.92
       }
     },
+    "mock_understanding": {
+      "topic": "Agent Runtime SDK",
+      "instructions": "高可信；优先确认官方来源",
+      "max_items": 1,
+      "lookback_hours": 168,
+      "policy": {
+        "research_type": "technical_product_update",
+        "source_preference": ["official", "docs", "github", "paper", "media"],
+        "evidence_requirement": "official_or_multi_source",
+        "ranking_objective": "confidence_first",
+        "verification_strictness": "medium_high"
+      },
+      "query_plan": [
+        {
+          "query": "Agent Runtime SDK latest news",
+          "intent": "latest",
+          "priority": 0.96
+        },
+        {
+          "query": "Agent Runtime SDK official announcement",
+          "intent": "official",
+          "priority": 0.9
+        },
+        {
+          "query": "Agent Runtime SDK documentation release notes",
+          "intent": "docs",
+          "priority": 0.86
+        }
+      ]
+    },
+    "expected_understanding_topic": "Agent Runtime SDK",
+    "expected_understanding_instruction_terms": ["高可信", "官方"],
+    "expected_understanding_max_items": 1,
+    "expected_policy_type": "technical_product_update",
     "expected_source_count": 2,
     "min_iterations": 2,
+    "expected_query_plan_terms": [
+      ["Agent", "Runtime", "latest"]
+    ],
+    "expected_decision_phases": ["exploration", "verification"],
+    "expected_stage_names": [
+      "next_research_decision",
+      "execute_research_decision",
+      "cluster_sources",
+      "personalize_and_rank",
+      "evaluate_research_satisfaction"
+    ],
+    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
     "expected_query_terms": [
       ["Agent", "Runtime", "latest"],
       ["Media", "Runtime", "official", "announcement"]
     ],
-    "expected_stop_reason_terms": ["low-yield"],
+    "expected_stop_reason_terms": ["satisfaction"],
     "expected_events": [
       {
         "title_terms": ["OpenAI", "Agent", "Runtime", "SDK"],
@@ -332,6 +470,11 @@
     ],
     "expected_digest_title_terms": [
       ["OpenAI", "Agent", "Runtime", "SDK"]
-    ]
+    ],
+    "expected_satisfaction_should_continue": false,
+    "min_satisfaction_coverage_score": 1.0,
+    "min_satisfaction_confidence_score": 0.8,
+    "max_satisfaction_marginal_gain": 0.1,
+    "expected_claim_support_levels": ["supported", "supported"]
   }
 ]

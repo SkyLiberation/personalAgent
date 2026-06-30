@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -860,6 +861,10 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
                 tool_input.setdefault("max_items", int(max_items))
             except (TypeError, ValueError):
                 pass
+        else:
+            inferred_max_items = _infer_research_max_items(topic)
+            if inferred_max_items is not None:
+                tool_input.setdefault("max_items", inferred_max_items)
         lookback_hours = metadata.get("lookback_hours")
         if lookback_hours:
             try:
@@ -889,6 +894,37 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
 
     sd.tool_input = tool_input
     step.tool_input = tool_input
+
+
+def _infer_research_max_items(text: str) -> int | None:
+    match = re.search(
+        r"(?:最多|至多|不超过)[^0-9一二两三四五六七八九十]{0,12}"
+        r"([0-9一二两三四五六七八九十]+)\s*(?:条|个|项)",
+        text,
+    )
+    if not match:
+        return None
+    raw = match.group(1)
+    chinese_digits = {
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+        "十": 10,
+    }
+    try:
+        value = int(raw)
+    except ValueError:
+        value = chinese_digits.get(raw)
+    if value is None:
+        return None
+    return min(max(value, 1), 20)
 
 
 def _inject_research_pipeline_inputs(

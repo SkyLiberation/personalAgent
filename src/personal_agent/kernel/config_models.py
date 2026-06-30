@@ -169,6 +169,9 @@ class ResearchConfig(_StrictBase):
     scheduler_enabled: bool = False
     scheduler_tick_seconds: int = 60
     max_queries: int = 5
+    max_exploration_queries: int = 3
+    max_verification_queries: int = 2
+    max_satisfaction_model_calls: int = 1
     max_search_results: int = 30
     max_fulltext_fetches: int = 5
     max_tool_calls: int = 15

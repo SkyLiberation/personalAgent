@@ -147,36 +147,62 @@
 
 ### 3.3.3 Research 能力金标
 
-- **为什么独立建集**:Research 不是单个工具,而是一组围绕外部信息收集、证据缺口追踪、事件聚类、可信度校准、个人相关性排序、简报生成和周期订阅的领域能力。Workflow 是否编译成固定步骤属于确定性 contract,应由普通单元测试和 `WorkflowSpecValidator` 覆盖,不放进 golden set。Research 金标只回答一个问题:固定研究语料进入真实 `ResearchService` 后,当前策略是否真的完成了来源去重、动态补证据、语义事件聚类、可信度校准、个人相关性排序和 digest 选择。
+- **为什么独立建集**:Research 不是单个工具,而是一组围绕外部信息收集、证据缺口追踪、事件聚类、可信度校准、个人相关性排序、简报生成和周期订阅的领域能力。Workflow 是否编译成固定步骤属于确定性 contract,应由普通单元测试和 `WorkflowSpecValidator` 覆盖,不放进 golden set。Research 金标不仅看最终 digest,还要检查中间节点是否正确:query plan、decision loop、source trace、event frame、gap/satisfaction、claim verification 和 latency trace 都必须能被打分。
 - **口径**:
-  - Event/loop quality 契约:`{topic, fixed_search_results_by_query, fixed_event_frames, fixed_graph_matches → expected_query_terms, expected_gap_types, expected_source_count, expected_events, expected_digest_title_terms}`。gate 不访问真实外网/LLM,但会执行真实 `ResearchService.prepare_run → initialize_state → run_research_loop → synthesize_digest → verify_digest`;固定 `event_frames_by_title` 相当于 replay LangExtract 的结构化事件帧输出。
+  - Request understanding 真实层:`{raw_request, default_max_items → expected_topic_terms, forbidden_topic_terms, expected_instruction_terms, expected_max_items, expected_research_type, expected_evidence_requirement, expected_query_intents}`。gate 使用真实 LLM,只执行 `prepare_run → initialize_state`,专门评估自然语言研究请求是否被正确转成 topic、instructions、max_items、policy 和 query plan。
+  - Event/loop quality 契约:`{topic, mock_understanding, fixed_search_results_by_query, fixed_event_frames, fixed_graph_matches → expected_understanding_*, expected_query_plan_terms, expected_query_terms, expected_decision_phases, expected_stage_names, expected_tool_names, expected_gap_types, expected_source_count, expected_events, expected_digest_title_terms}`。gate 不访问真实外网/LLM,但会执行真实 `ResearchService.prepare_run → initialize_state → run_research_loop → synthesize_digest → verify_digest`;`mock_understanding` 只注入 `research_request_understanding` 这个 LLM 节点,固定 `event_frames_by_title` 相当于 replay 结构化事件帧输出。
   - Event quality 真实层:`{topic, fixed_search_results, real_langextract_frames, fixed_graph_matches → expected_*}`。搜索结果和图谱匹配仍固定以保证可归因,但事件帧由当前 `.env` 中配置的真实 LangExtract API 生成;该层才用于评价 LangExtract 接入后的真实 Research 事件抽取质量。
+  - Digest claim verification 契约:`{event, source content, draft digest claims → expected retained items, confidence labels, claim support levels, final run status}`。gate 直接执行真实 `verify_digest()`,专门防止“有 URL 但 claim 被夸大”“contradicted item 未删除”“reported 被写成 verified”等最终简报层错误。
+  - Frontend E2E 真实层:`{prompt → expected_intents, expected_step_tools, expected_research_statuses, expected_topic_terms, min_digest_items, min_supported_claim_rate, max_latency_ms}`。gate 使用 Playwright 从前端对话框输入触发 `/api/entry/stream`,再通过 entry run 和 research run 查询真实产物,断言路由、workflow 步骤、digest、claim support 和端到端 latency。
 - **当前覆盖**:
-  - 初始 query 与 evidence gap 能否驱动 `research_run_loop` 继续搜索,例如单源媒体事件触发 official confirmation 查询。
+  - `initialize_state` 的 LLM request understanding: 是否把含控制语的原始中文请求规范化为 topic、instructions、max_items、research policy 和 query plan。
+  - 初始 query plan、decision phase 与 evidence gap 能否驱动 `research_run_loop` 继续搜索,例如单源媒体事件触发 verification phase 的 official confirmation 查询。
+  - `ResearchSatisfaction` 是否记录并满足 coverage、confidence、remaining critical gaps、marginal gain 与 should_continue 预期,避免只靠固定轮数或预算停止。
+  - stage timing、tool trace、source trace、event frame snapshot、claim support/evidence span/support level 是否都保留下来并被判分。
   - URL canonicalization 与去重是否正确。
   - 多源同事件是否聚合并标为 `verified`,单源事件是否保持 `uncertain`。
   - 语义相同但标题改写较大的事件是否能通过 event frame 合并。
   - 标题相似但事件类型不同的来源是否避免误合并。
   - 与个人知识图谱相关的事件是否优先进入 digest。
+  - claim-level verification 是否删除 unsupported claim、移除 contradicted item,并保持 confidence label 与事件可信度一致。
+  - 前端对话框触发的一次性研究是否真正走到 `research_prepare_run → research_initialize_state → research_run_loop → research_synthesize_digest → research_verify_digest`,并在 latency 预算内产出有来源支撑的 digest。
 - **指标**:
 
   | 层 | 指标 | 含义 |
   | --- | --- | --- |
+  | Request understanding | `understanding_topic_accuracy` / `understanding_instruction_coverage` | LLM understanding 是否把原始请求规范化成正确研究对象与约束 |
+  | Request understanding | `understanding_max_items_accuracy` / `understanding_policy_accuracy` | LLM understanding 是否正确解析条数和研究类型 policy |
   | Event quality | `source_count_exact` | URL 规范化与去重后的来源数量是否匹配 |
   | Event quality | `min_iterations_met` | evidence-driven loop 是否至少执行到期望轮次 |
+  | Intermediate plan | `query_plan_coverage` | `initialize_state` 生成的初始 query plan 是否覆盖主题/期望意图 |
   | Event quality | `query_coverage` | loop 是否执行了期望的初始查询或补证据查询 |
+  | Intermediate decision | `decision_execution_rate` / `decision_phase_coverage` | `_next_research_decision` 产生的已观察 decision 是否执行,且多轮场景是否进入 verification phase |
   | Event quality | `gap_coverage` | loop 是否产生期望的证据缺口类型 |
   | Event quality | `stop_reason_match` | 停止原因是否符合场景预期 |
+  | Intermediate stop | `satisfaction_recorded` | `_evaluate_research_satisfaction` 是否写入目标满足度判断 |
+  | Intermediate stop | `satisfaction_continue_match` / `satisfaction_coverage_met` / `satisfaction_confidence_met` | 满足度是否按 gold 判断继续/停止,且覆盖度与可信度达到预期 |
+  | Intermediate stop | `satisfaction_marginal_gain_met` / `satisfaction_gap_coverage` | 低边际收益或剩余关键 gap 是否被正确表达,避免静默耗尽预算 |
+  | Observability | `stage_trace_coverage` / `tool_trace_coverage` | 关键 stage timing 与工具调用 trace 是否存在 |
+  | Traceability | `source_trace_rate` / `decision_elapsed_rate` | sources 是否能追到 decision/query,decision 是否记录开始/结束时间 |
+  | Event frame | `event_frame_rate` / `event_source_trace_rate` | event 是否保留 frame 快照和 source_ids |
   | Event quality | `event_recall` / `event_precision` | 基于 actor/action/object/event_type 事件帧的聚类是否命中人工期望事件,且没有额外拆分/误聚类 |
   | Event quality | `status_accuracy` | 多源 verified、单源 uncertain 等可信度状态是否校准 |
   | Event quality | `source_support_accuracy` | 事件是否满足期望来源数量和 primary source 要求 |
   | Event quality | `personal_relevance_accuracy` | 图谱相关事件是否被赋予足够个人相关性 |
   | Event quality | `digest_coverage` | digest 是否选中期望的高价值事件 |
+  | Claim verification | `claim_support_rate` / `claim_evidence_span_rate` / `claim_support_level_accuracy` | digest claim 是否被 supported/partially_supported,有 evidence spans,且 support level 与 gold 匹配 |
+  | Claim verification | `item_count_accuracy` / `confidence_label_accuracy` / `absent_claim_term_accuracy` | claim verification 专项 gate 中,不支持/矛盾 claim 是否被删除,confidence label 是否未被错误升级 |
+  | Frontend E2E | `ui_completion_rate` / `intent_accuracy` / `step_tool_coverage` | 前端真实提交后是否完成,并触发期望 intent 与 Research workflow 步骤 |
+  | Frontend E2E | `research_run_created_rate` / `research_status_accuracy` / `topic_term_coverage` | 是否创建真实 ResearchRun,状态和 topic 是否符合 gold |
+  | Frontend E2E | `digest_item_rate` / `claim_support_rate` / `latency_within_budget_rate` | digest 数量、claim 支撑率和端到端耗时是否满足门禁 |
   | Event quality | `primary_source_rate` | 产出事件中含 official/paper 来源的比例 |
-  | Event quality | `overall_score` | 来源、事件、可信度、排序和 digest 选择的加权得分 |
+  | Event quality | `overall_score` | 上述分项的平均值,用于整体门禁,不再使用手工权重 |
 - **门禁**:
   - `evals/research_quality/test_research_event_quality_gate.py`:使用固定搜索结果、固定 event frame 和固定 graph matches 执行真实 `ResearchService` evidence loop,属于确定性 Research 行为质量快测,不作为真实 LangExtract 质量结论。
   - `evals/research_quality/test_research_event_quality_real_gate.py`:使用固定搜索结果和固定 graph matches,但事件帧来自真实 LangExtract API,并启用生产 fallback;provider 抖动会体现为质量分下降,而不是让报告在打分前中断。`research-event-004` 覆盖“语义相同但标题改写较大”的多源事件,期望合并成 verified;`research-event-005` 覆盖“标题相似但事件类型不同”的反例,期望保持拆分,防止过度合并。
+  - `evals/research_quality/test_research_understanding_real_gate.py`:使用真实 LLM 评估 `initialize_state` 的 request understanding 输出,不访问搜索或事件抽取层。
+  - `evals/research_quality/test_digest_claim_verification_gate.py`:使用固定事件和来源内容执行真实 `verify_digest()`,覆盖 unsupported/contradicted/reported-not-upgraded 三类 claim-level verification 事故。
+  - `testing/research-quality-frontend-e2e.playwright.spec.cjs`:使用真实前端、真实后端和真实外部检索链路,从对话框输入触发一次性 research,生成 `test-results/research-quality-frontend-e2e-report.json`。该 gate 不使用 API 直接启动 research,也不 mock 网络或 LLM。
 
 ### 3.4 Conversation 多轮对话金标
 
@@ -268,14 +294,26 @@ evals/
     test_tool_quality_gate.py
     test_tool_execution_contract_gate.py
   research_quality/        # §3.3.3;Research evidence loop 与事件质量
+    understanding_cases.json
+    understanding_dataset.py
+    understanding_scorer.py
+    understanding_baseline.json
     event_quality_cases.json
     dataset.py             # ResearchEventQualityEvalCase / ResearchEventQualityRunOutput
     metrics.py             # research event/loop 质量指标
     scorer.py
     event_quality_baseline.json
     event_quality_real_baseline.json
+    digest_verification_cases.json
+    digest_verification_dataset.py
+    digest_verification_scorer.py
+    digest_verification_baseline.json
+    frontend_e2e_cases.json
+    frontend_e2e_baseline.json
+    test_research_understanding_real_gate.py
     test_research_event_quality_gate.py
     test_research_event_quality_real_gate.py
+    test_digest_claim_verification_gate.py
   conversation_quality/    # §3.4;多轮会话轨迹与状态演化
     cases.json
     dataset.py             # ConversationEvalCase / TurnExpectation
@@ -287,6 +325,8 @@ evals/
     test_conversation_runtime_gate.py
     test_conversation_real_gate.py
 ```
+
+Research 前端 E2E 的 Playwright spec 和 config 不放在 `evals/` 下,而是复用根目录的 `testing/research-quality-frontend-e2e.playwright.spec.cjs` 与 `testing/playwright.research-quality.config.cjs`;case 和 baseline 仍在 `evals/research_quality/` 中维护。
 
 **约定**:`cases.json` 一律 UTF-8;loader 用 `Path(...).read_text(encoding="utf-8")`(注意 Windows 默认 GBK,直接 `open()` 会炸中文)。
 
@@ -353,7 +393,7 @@ evals/
 | RAG | 25(其中 22 条进入真实 seed-and-ask) | 单跳、多跳、图谱增强、同义改写、跨 note 聚合、矛盾、无答案 | 最近测量:recall@5 1.0000、ndcg@5 0.9964、图贡献率/命中率均为 0、平均 latency 16574.8ms、平均 token 3279.8。现已对 `rq-003` 增加严格图证据要求,当前 Graphiti 配置修复前 Golden 将失败 |
 | Router | 24 | 全意图词表、clarify、删除/总结/采集边界 | 2/2 通过;outcome 0.9167、intent F1 0.8194、latency p95 5423.4ms、token p95 1008;DNS 专项通过 |
 | Orchestration | 9 | clarify、步骤投影、事件顺序、高风险意图、终态不变式 | 终态 1.0000,但新增性能 Gate 失败:latency p95 69467.6ms > 60000ms;日志显示 Graphiti embedding 401 导致长尾 |
-| Research | 4 workflow + 5 event quality | 一次性研究、订阅创建、已有 run 执行、订阅/简报管理的工作流契约;固定语料下基于事件帧的来源去重、事件聚类、可信度、个人相关性排序、digest 选择 | Workflow 契约 Gate 通过;固定 event-frame 契约 overall 1.0000;真实 LangExtract event quality 最近测量 overall 1.0000,real baseline 地板上调到 0.9600;真实外网 runner 待接入 |
+| Research | 4 workflow + 4 understanding + 6 event quality + 3 digest verification + 1 frontend E2E | 一次性研究、订阅创建、已有 run 执行、订阅/简报管理的工作流契约;真实 LLM request understanding;固定语料下 query/decision/satisfaction/事件聚类/claim verification;前端对话框触发的真实端到端 research | Workflow 契约 Gate 通过;真实 request understanding Gate 通过;固定 event-frame 契约 overall 1.0000;digest claim verification Gate 通过;真实 LangExtract event quality 最近测量 overall 1.0000,real baseline 地板上调到 0.9600;Frontend E2E Golden 于 2026-06-30 通过,latency 252758ms,claim support 1.0000 |
 | Conversation | 8 | 同 thread、多轮追问、clarify→resume/reject、总结、话题切换、写后即查、solidify | 质量/结构结果见 §7.2;latency/token 已接入 scorer 与 `baseline_real.json`,待 Graphiti 配置修复后重新校准真实 p95 |
 
 ### 7.2 Conversation 指标结果

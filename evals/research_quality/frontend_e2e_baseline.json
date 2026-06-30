@@ -1,0 +1,11 @@
+{
+  "ui_completion_rate": 1.0,
+  "intent_accuracy": 1.0,
+  "step_tool_coverage": 1.0,
+  "research_run_created_rate": 1.0,
+  "research_status_accuracy": 1.0,
+  "topic_term_coverage": 1.0,
+  "digest_item_rate": 1.0,
+  "claim_support_rate": 0.8,
+  "latency_within_budget_rate": 1.0
+}

@@ -60,6 +60,7 @@
 | --- | --- |
 | delete_knowledge（高风险删除 + HITL） | [workflow/delete-knowledge-workflow.md](workflow/delete-knowledge-workflow.md) |
 | solidify_conversation（会话固化为长期知识） | [workflow/solidify-conversation-workflow.md](workflow/solidify-conversation-workflow.md) |
+| research_once（evidence-driven research loop） | [workflow/research-once-workflow.md](workflow/research-once-workflow.md) |
 | 主动知识闭环（gap 提问 / 巩固 / 简报） | [proactive-knowledge-loop.md](proactive-knowledge-loop.md) |
 
 ## 运维与参考

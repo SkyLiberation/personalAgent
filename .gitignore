@@ -8,6 +8,10 @@ frontend/node_modules/
 frontend/dist/
 log
 .playwright-mcp/
+test-results/
+playwright-report/
+frontend/test-results/
+frontend/playwright-report/
 evals/open_ragbench/results/
 scripts/assets
 !scripts/assets/entry-orchestration.md

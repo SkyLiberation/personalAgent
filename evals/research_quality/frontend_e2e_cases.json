@@ -1,0 +1,22 @@
+[
+  {
+    "id": "research-frontend-e2e-001",
+    "prompt": "调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源",
+    "expected_intents": ["research_once"],
+    "expected_step_tools": [
+      "research_prepare_run",
+      "research_initialize_state",
+      "research_run_loop",
+      "research_synthesize_digest",
+      "research_verify_digest"
+    ],
+    "expected_research_statuses": [
+      "completed_verified",
+      "completed_with_limitations"
+    ],
+    "expected_topic_terms": ["Agent", "Runtime", "SDK"],
+    "min_digest_items": 1,
+    "min_supported_claim_rate": 0.8,
+    "max_latency_ms": 360000
+  }
+]

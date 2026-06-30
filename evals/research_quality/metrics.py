@@ -80,9 +80,18 @@ def score_research_events(
         for source in event.sources
     ]
     deduplication = len(set(source_urls)) / len(source_urls) if source_urls else 1.0
+    primary_source_types = {
+        "official",
+        "docs",
+        "github",
+        "paper",
+        "filing",
+        "investor_relations",
+        "transcript",
+    }
     primary = sum(
         1 for event in events
-        if any(source.source_type in {"official", "paper"} for source in event.sources)
+        if any(source.source_type in primary_source_types for source in event.sources)
     )
     primary_rate = primary / len(events) if events else 1.0
 

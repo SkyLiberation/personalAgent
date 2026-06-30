@@ -156,6 +156,11 @@ class DefaultIntentRouter:
             self._log_decision(entry_input, decision, strategy="source_type")
             return decision
 
+        deterministic = _deterministic_research_decision(entry_input.text)
+        if deterministic is not None:
+            self._log_decision(entry_input, deterministic, strategy="rule")
+            return deterministic
+
         result = self._classify_with_llm(entry_input.text, conversation_messages or [])
         if result is not None:
             decision = _to_domain_decision(result)
@@ -246,3 +251,63 @@ class DefaultIntentRouter:
             session_id=entry_input.session_id,
             text_preview=entry_input.text[:120],
         )
+
+
+def _deterministic_research_decision(text: str) -> RouterDecision | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    if _looks_like_research_subscription(stripped, lowered):
+        return None
+    if not _looks_like_one_shot_research(stripped, lowered):
+        return None
+    return _single_goal_decision(
+        "research_once",
+        input_text=stripped,
+    )
+
+
+def _looks_like_research_subscription(text: str, lowered: str) -> bool:
+    schedule_terms = ("每天", "每周", "工作日", "定时", "周期", "订阅", "跟踪")
+    subject_terms = ("新闻", "资讯", "动态", "简报", "公告", "发布")
+    return (
+        any(term in text for term in schedule_terms)
+        and any(term in text for term in subject_terms)
+    ) or "subscription" in lowered
+
+
+def _looks_like_one_shot_research(text: str, lowered: str) -> bool:
+    research_verbs = (
+        "调研",
+        "研究一下",
+        "研究最近",
+        "查一下",
+        "搜集最新",
+        "收集最新",
+        "关注",
+    )
+    research_cues = (
+        "最新",
+        "最近",
+        "发布",
+        "动态",
+        "新闻",
+        "公告",
+        "官方",
+        "高可信",
+        "最多",
+        "不超过",
+        "论文",
+        "开源",
+        "财报",
+        "github",
+        "paper",
+        "earnings",
+        "release",
+        "announcement",
+    )
+    return (
+        any(verb in text for verb in research_verbs)
+        and any(cue in text or cue in lowered for cue in research_cues)
+    )

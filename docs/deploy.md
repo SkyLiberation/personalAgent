@@ -65,7 +65,7 @@ docker compose up -d postgres
 ## 6. 启动后端
 
 ```bash
-uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn personal_agent.adapters.web.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 默认地址：
@@ -107,7 +107,7 @@ function Stop-ProcessTree([int] $ProcessId) {
 $reloader = Get-CimInstance Win32_Process |
   Where-Object {
     $_.Name -eq "uvicorn.exe" -and
-    $_.CommandLine -match "personal_agent\.web\.api:app"
+    $_.CommandLine -match "personal_agent\.adapters\.web\.api:app"
   } |
   Select-Object -First 1
 
@@ -119,7 +119,7 @@ if ($reloader) {
 4. 重新启动后端：
 
 ```powershell
-uv run uvicorn personal_agent.web.api:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn personal_agent.adapters.web.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 不要在旧实例仍占用端口时重复启动后端。对于 LangGraph 这类会缓存已编译 graph 的代码，完整重启后，新请求才会确定使用最新编排定义。
@@ -184,6 +184,26 @@ npm run build
 ```
 
 构建完成后，FastAPI 会自动托管 `frontend/dist`。
+
+## 9. 运行 Research 前端 Golden E2E
+
+该门禁要求后端 `http://127.0.0.1:8000` 和前端 `http://127.0.0.1:3000` 已按上文启动。测试必须通过前端对话框输入触发 research,不能直接调用 research API 启动任务。
+
+首次运行先安装 Playwright 浏览器:
+
+```bash
+cd frontend
+npx playwright install chromium
+```
+
+运行 gate:
+
+```bash
+cd frontend
+npm run test:research-e2e
+```
+
+测试会写出 `test-results/research-quality-frontend-e2e-report.json`,其中包含 intent、Research workflow 步骤覆盖、ResearchRun 状态、digest claim 支撑率和端到端 latency。
 
 ## 日志位置
 
@@ -254,35 +274,3 @@ PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false
 即使 cron 被重复触发，ResearchRun、worker task 和 delivery ledger 的数据库唯一键仍会阻止同一时间窗口重复执行或投递。
 
 `Ask History` 不再单独存档 — 同一会话的问答以 LangGraph checkpoint 中的 `state.messages` 为唯一真源，前端历史列表通过 `/api/entry/runs` 渲染最近 run snapshot。
-
-## 常见排障
-
-### 1. 飞书能回复，但日志里报 Graphiti / Neo4j 错误
-
-典型表现：
-
-- `Couldn't connect to localhost:7687`
-- `Neo4j is unreachable`
-
-说明：
-
-- 飞书接入本身已经成功
-- 是图谱层依赖的 Neo4j 没有启动
-
-解决方式：
-
-```bash
-docker compose up -d neo4j
-```
-
-### 2. 飞书后台配置为长连接，但日志没有 `connected to wss://...`
-
-排查：
-
-- 检查 `FEISHU_APP_ID / FEISHU_APP_SECRET` 是否正确
-- 检查飞书后台是否确实选择了“使用长连接接收事件”
-- 检查当前应用是否已发布
-
-### 3. 收到同一条飞书消息两次
-
-飞书在超时场景下可能重推事件。当前代码已做短时去重，但如果处理链路仍然过慢，建议优先检查 Neo4j、LLM 和 Embedding 服务是否稳定。

@@ -13,7 +13,11 @@ from personal_agent.application.research import (
     SchedulePolicy,
     SourcePreferences,
 )
-from personal_agent.adapters.web.routes._shared import is_admin, resolve_user_id
+from personal_agent.adapters.web.routes._shared import (
+    is_admin,
+    resolve_query_user_id,
+    resolve_user_id,
+)
 
 
 class ResearchSubscriptionRequest(BaseModel):
@@ -123,19 +127,20 @@ def register_research_routes(
         return run.model_dump(mode="json")
 
     @app.get("/api/research/runs")
-    def list_runs(request: Request, limit: int = 50):
-        user_id = resolve_user_id(request, settings)
+    def list_runs(request: Request, user_id: str | None = None, limit: int = 50):
+        resolved_user = resolve_query_user_id(request, settings, user_id)
         return {
             "items": [
                 item.model_dump(mode="json")
-                for item in store.list_runs(user_id=user_id, limit=limit)
+                for item in store.list_runs(user_id=resolved_user, limit=limit)
             ]
         }
 
     @app.get("/api/research/runs/{run_id}")
-    def get_run(run_id: str, request: Request):
+    def get_run(run_id: str, request: Request, user_id: str | None = None):
         run = store.get_run(run_id)
-        _check_user(run.user_id if run else None, request, settings)
+        resolved_user = resolve_query_user_id(request, settings, user_id)
+        _check_user(run.user_id if run else None, request, settings, resolved_user)
         if run is None:
             raise HTTPException(status_code=404, detail="Research run not found.")
         digest = store.get_digest(run.digest_id) if run.digest_id else None
@@ -186,10 +191,14 @@ def _subscription_or_404(
 
 
 def _check_user(
-    owner: str | None, request: Request, settings: Settings
+    owner: str | None,
+    request: Request,
+    settings: Settings,
+    resolved_user_id: str | None = None,
 ) -> None:
     if owner is None:
         return
-    if not is_admin(request) and owner != resolve_user_id(request, settings):
+    caller = resolved_user_id or resolve_user_id(request, settings)
+    if not is_admin(request) and owner != caller:
         raise HTTPException(status_code=404, detail="Resource not found.")
 

@@ -55,7 +55,7 @@ def build_research_prepare_run_tool(service) -> BaseTool:
         return tool_response(tool_success({
             "run_id": run.id,
             "run": run.model_dump(mode="json"),
-            "max_items": max_items,
+            "max_items": run.max_items,
         }))
 
     return research_prepare_run
@@ -81,6 +81,7 @@ def build_research_initialize_state_tool(service) -> BaseTool:
             "state": state.model_dump(mode="json"),
             "planned_actions": len(state.decisions),
             "queries": [decision.query for decision in state.decisions if decision.query],
+            "max_items": state.max_items,
         }))
 
     return research_initialize_state
@@ -106,8 +107,11 @@ def build_research_run_loop_tool(service) -> BaseTool:
             "run_id": run_id,
             "state": state.model_dump(mode="json"),
             "iteration_count": state.iteration_count,
+            "exploration_query_count": state.exploration_query_count,
+            "verification_query_count": state.verification_query_count,
             "gap_count": len(state.evidence_gaps),
             "stop_reason": state.stop_reason,
+            "max_items": state.max_items,
         }))
 
     return research_run_loop

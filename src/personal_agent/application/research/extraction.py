@@ -7,17 +7,28 @@ generic LangExtract concern. ``ResearchService`` depends on the
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import json
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import langextract as lx
 from langextract.providers.schemas.openai import OpenAISchema
+from pydantic import BaseModel, Field
 
 from personal_agent.application.extract.langextract_client import run_extract
-from personal_agent.kernel.config import LangExtractConfig
+from personal_agent.infra.structured_model import (
+    OpenAIModelClient,
+    StructuredModelClient,
+    StructuredModelRequest,
+)
+from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig
 from personal_agent.kernel.contracts.research import ResearchSource
+from personal_agent.kernel.llm_schemas import strict_json_schema_response, strip_json_fence
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +120,13 @@ _GENERIC_EVENT_TYPES = {
     "reported_event",
     "unknown",
 }
+_GENERIC_ACTORS = {
+    "media",
+    "news",
+    "publisher",
+    "reporter",
+    "reporters",
+}
 
 
 @dataclass(frozen=True)
@@ -125,7 +143,10 @@ class ResearchEventFrame:
 
     @property
     def actor_tokens(self) -> set[str]:
-        return _tokens(self.actor)
+        return {
+            token for token in _tokens(self.actor)
+            if token not in _GENERIC_ACTORS
+        }
 
     @property
     def action_key(self) -> str:
@@ -170,6 +191,209 @@ class HeuristicResearchEventExtractor:
         }
 
 
+class StructuredEventFrameItem(BaseModel):
+    source_url: str = ""
+    actor: str = ""
+    action: str = ""
+    object: str = ""
+    event_type: str = "unknown"
+    occurred_at: str = ""
+    entities: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+
+
+class StructuredEventFrameBatch(BaseModel):
+    frames: list[StructuredEventFrameItem] = Field(default_factory=list)
+
+
+class StructuredResearchEventExtractor:
+    """Batch structured-LLM Research event-frame extractor."""
+
+    def __init__(
+        self,
+        config: LangExtractConfig,
+        *,
+        model_client: StructuredModelClient | None = None,
+        fallback: ResearchEventExtractor | None = None,
+        batch_size: int = 8,
+    ) -> None:
+        self.config = config
+        self.model_client = model_client or _build_structured_event_model_client(config)
+        self.fallback = fallback or HeuristicResearchEventExtractor()
+        self.batch_size = max(1, batch_size)
+        self._structured_frame_cache: dict[str, ResearchEventFrame] = {}
+
+    def extract(
+        self,
+        sources: list[ResearchSource],
+        *,
+        topic: str,
+        instructions: str = "",
+    ) -> dict[str, ResearchEventFrame]:
+        if not sources:
+            return {}
+        fallback_frames = self.fallback.extract(
+            sources,
+            topic=topic,
+            instructions=instructions,
+        )
+        if self.model_client is None:
+            return fallback_frames
+        cached_structured_frames = {
+            source.canonical_url: self._structured_frame_cache[cache_key]
+            for source in sources
+            if (cache_key := _structured_frame_cache_key(source, topic, instructions))
+            in self._structured_frame_cache
+        }
+        fallback_frames.update(cached_structured_frames)
+        structured_sources = _sources_requiring_structured_frames(
+            sources,
+            fallback_frames,
+        )
+        uncached_structured_sources = [
+            source for source in structured_sources
+            if _structured_frame_cache_key(source, topic, instructions)
+            not in self._structured_frame_cache
+        ]
+        if not structured_sources:
+            logger.info(
+                "structured_research_event_extract.skipped source_count=%d reason=heuristic_frames_sufficient",
+                len(sources),
+            )
+            return fallback_frames
+        if not uncached_structured_sources:
+            logger.info(
+                "structured_research_event_extract.cache_hit source_count=%d structured_source_count=%d",
+                len(sources),
+                len(structured_sources),
+            )
+            return fallback_frames
+
+        started = time.perf_counter()
+        frames = dict(fallback_frames)
+        try:
+            for batch in _chunks(uncached_structured_sources, self.batch_size):
+                for key, frame in self._extract_batch(
+                    batch,
+                    topic=topic,
+                    instructions=instructions,
+                ).items():
+                    frames[key] = frame
+                    source = next(
+                        (
+                            source for source in batch
+                            if source.canonical_url == key
+                        ),
+                        None,
+                    )
+                    if source is not None:
+                        self._structured_frame_cache[
+                            _structured_frame_cache_key(source, topic, instructions)
+                        ] = frame
+        except Exception as exc:  # noqa: BLE001 - provider boundary
+            logger.warning(
+                "structured_research_event_extract.failed error=%s",
+                exc,
+                exc_info=True,
+            )
+            if not self.config.fallback_on_error:
+                raise
+        logger.info(
+            "structured_research_event_extract.completed source_count=%d structured_source_count=%d uncached_source_count=%d duration_ms=%.2f model=%s",
+            len(sources),
+            len(structured_sources),
+            len(uncached_structured_sources),
+            (time.perf_counter() - started) * 1000,
+            self.config.model_id,
+        )
+        return frames
+
+    def _extract_batch(
+        self,
+        sources: list[ResearchSource],
+        *,
+        topic: str,
+        instructions: str,
+    ) -> dict[str, ResearchEventFrame]:
+        payload = [
+            {
+                "source_url": source.canonical_url,
+                "title": source.title,
+                "snippet": source.snippet,
+                "url": source.url,
+                "published_at": (
+                    source.published_at.isoformat() if source.published_at else ""
+                ),
+                "content": source.content[:1200],
+            }
+            for source in sources
+        ]
+        if self.model_client is None:
+            return {}
+        response = self.model_client.generate(
+            StructuredModelRequest(
+                operation="research_event_frame",
+                version="v1",
+                kind="text",
+                output_type=StructuredEventFrameBatch,
+                max_tokens=1600,
+                temperature=0,
+                response_format=strict_json_schema_response(
+                    "research_event_frames",
+                    StructuredEventFrameBatch.model_json_schema(),
+                ),
+                metadata={"model": self.config.model_id, "component": "research"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": STRUCTURED_RESEARCH_EVENT_SYSTEM_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "topic": topic,
+                                "instructions": instructions,
+                                "sources": payload,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+            )
+        )
+        content = strip_json_fence(response.content)
+        parsed = _parse_structured_event_batch(content)
+        by_url = {source.canonical_url: source for source in sources}
+        frames: dict[str, ResearchEventFrame] = {}
+        for item in parsed.frames:
+            source = by_url.get(item.source_url)
+            if source is None:
+                continue
+            action = _normalize_action(item.action) or _infer_action(source)
+            object_text = _normalize_object(item.object, action) or source.title
+            actor = item.actor.strip() or _infer_actor(source)
+            event_type = _canonical_event_type(item.event_type) or _infer_event_type(
+                f"{source.title} {source.snippet} {object_text}"
+            )
+            entities = _coerce_str_list(item.entities)
+            for entity in (actor, object_text):
+                if entity and entity not in entities:
+                    entities.append(entity)
+            frames[source.canonical_url] = ResearchEventFrame(
+                source_url=source.canonical_url,
+                title=source.title,
+                actor=actor,
+                action=action,
+                object=object_text,
+                event_type=event_type or "unknown",
+                occurred_at=item.occurred_at,
+                entities=entities,
+                confidence=_coerce_confidence(item.confidence),
+            )
+        return frames
+
+
 class LangExtractResearchEventExtractor:
     """LangExtract-backed Research event-frame extractor."""
 
@@ -190,7 +414,12 @@ class LangExtractResearchEventExtractor:
         instructions: str = "",
     ) -> dict[str, ResearchEventFrame]:
         frames: dict[str, ResearchEventFrame] = {}
-        for source in sources:
+        started = time.perf_counter()
+        if not sources:
+            return frames
+        worker_count = max(1, min(len(sources), self.config.max_workers))
+
+        def extract_one(source: ResearchSource) -> tuple[str, ResearchEventFrame]:
             text = _source_text(source, topic=topic, instructions=instructions)
             try:
                 annotated = run_extract(
@@ -211,7 +440,24 @@ class LangExtractResearchEventExtractor:
                 if not self.config.fallback_on_error:
                     raise
                 frame = heuristic_event_frame(source)
-            frames[source.canonical_url] = frame
+            return source.canonical_url, frame
+
+        if worker_count == 1:
+            for source in sources:
+                key, frame = extract_one(source)
+                frames[key] = frame
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [executor.submit(extract_one, source) for source in sources]
+                for future in as_completed(futures):
+                    key, frame = future.result()
+                    frames[key] = frame
+        logger.info(
+            "research_event_extract.completed source_count=%d duration_ms=%.2f workers=%d",
+            len(sources),
+            (time.perf_counter() - started) * 1000,
+            worker_count,
+        )
         return frames
 
     @staticmethod
@@ -390,6 +636,17 @@ RESEARCH_EVENT_EXAMPLES: list[lx.data.ExampleData] = [
     ),
 ]
 
+STRUCTURED_RESEARCH_EVENT_SYSTEM_PROMPT = (
+    "You normalize news/search sources into event identity frames for clustering. "
+    "Return exactly one frame for every input source_url. Use the source_url unchanged. "
+    "The frame must describe the real event, not publication coverage. "
+    "Prefer canonical actions: release, patch, update, improve, announce, report, other. "
+    "Prefer event_type values: product_release, security_update, benchmark_release, "
+    "research_publication, funding, policy, unknown. If no clear event exists, keep "
+    "object close to the title and use confidence <= 0.45. Make actor/object/entity "
+    "names stable across sources that describe the same event."
+)
+
 
 def _source_text(
     source: ResearchSource,
@@ -427,6 +684,34 @@ def _infer_event_type(text: str) -> str:
     if any(token in lowered for token in ("benchmark", "evaluation")):
         return "benchmark_release"
     return "unknown"
+
+
+def _infer_action(source: ResearchSource) -> str:
+    text = f"{source.title} {source.snippet}"
+    for token in _ordered_tokens(text):
+        action = _canonical_action(token)
+        if action != token:
+            return action
+    return ""
+
+
+def _normalize_action(value: str) -> str:
+    tokens = _ordered_tokens(value)
+    if not tokens:
+        return ""
+    return _canonical_action(tokens[0])
+
+
+def _normalize_object(value: str, action: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    tokens = _ordered_tokens(text)
+    if tokens and action and _canonical_action(tokens[0]) == action:
+        raw_parts = text.split(maxsplit=1)
+        if len(raw_parts) == 2:
+            text = raw_parts[1].strip()
+    return text
 
 
 def _tokens(text: str) -> set[str]:
@@ -496,11 +781,150 @@ def _coerce_confidence(value: Any) -> float:
         return 0.0
 
 
+def _structured_frame_cache_key(
+    source: ResearchSource,
+    topic: str,
+    instructions: str,
+) -> str:
+    material = json.dumps(
+        {
+            "topic": topic,
+            "instructions": instructions,
+            "canonical_url": source.canonical_url,
+            "title": source.title,
+            "snippet": source.snippet,
+            "content_fingerprint": source.content_fingerprint,
+            "content_preview": source.content[:1200] if source.content else "",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _sources_requiring_structured_frames(
+    sources: list[ResearchSource],
+    fallback_frames: dict[str, ResearchEventFrame],
+) -> list[ResearchSource]:
+    if len(sources) <= 1:
+        return []
+    required: dict[str, ResearchSource] = {}
+    for source in sources:
+        frame = fallback_frames.get(source.canonical_url)
+        if frame is None:
+            required[source.canonical_url] = source
+            continue
+        if _frame_is_underspecified(frame) and _has_related_source(source, sources):
+            required[source.canonical_url] = source
+    for left_index, left in enumerate(sources):
+        left_frame = fallback_frames.get(left.canonical_url)
+        if left_frame is None:
+            continue
+        for right in sources[left_index + 1:]:
+            right_frame = fallback_frames.get(right.canonical_url)
+            if right_frame is None:
+                continue
+            if _pair_needs_semantic_frame(left, right, left_frame, right_frame):
+                required[left.canonical_url] = left
+                required[right.canonical_url] = right
+    return list(required.values())
+
+
+def _frame_is_underspecified(frame: ResearchEventFrame) -> bool:
+    return not frame.action_key or not frame.event_type_key or len(frame.object_tokens) <= 1
+
+
+def _has_related_source(source: ResearchSource, sources: list[ResearchSource]) -> bool:
+    source_tokens = _tokens(source.title)
+    for other in sources:
+        if other.canonical_url == source.canonical_url:
+            continue
+        other_tokens = _tokens(other.title)
+        if _jaccard(source_tokens, other_tokens) >= 0.2:
+            return True
+    return False
+
+
+def _pair_needs_semantic_frame(
+    left: ResearchSource,
+    right: ResearchSource,
+    left_frame: ResearchEventFrame,
+    right_frame: ResearchEventFrame,
+) -> bool:
+    left_tokens = _tokens(left.title)
+    right_tokens = _tokens(right.title)
+    title_overlap = _jaccard(left_tokens, right_tokens)
+    if title_overlap >= 0.75 or title_overlap < 0.2:
+        return False
+    left_object = left_frame.object_tokens
+    right_object = right_frame.object_tokens
+    object_containment = (
+        len(left_object & right_object) / max(1, min(len(left_object), len(right_object)))
+    )
+    same_actor = bool(left_frame.actor_tokens & right_frame.actor_tokens)
+    if same_actor and object_containment >= 0.45:
+        return True
+    if title_overlap >= 0.35 and object_containment >= 0.35:
+        return True
+    return _frame_is_underspecified(left_frame) or _frame_is_underspecified(right_frame)
+
+
+def _chunks(values: list[ResearchSource], size: int) -> list[list[ResearchSource]]:
+    return [values[index:index + size] for index in range(0, len(values), size)]
+
+
+def _build_structured_event_model_client(
+    config: LangExtractConfig,
+) -> StructuredModelClient | None:
+    if not (config.api_key and config.base_url and config.model_id):
+        return None
+    return OpenAIModelClient(
+        OpenAIConfig(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            model=config.model_id,
+            timeout_seconds=60.0,
+            max_retries=1,
+        )
+    )
+
+
+def _parse_structured_event_batch(content: str) -> StructuredEventFrameBatch:
+    try:
+        return StructuredEventFrameBatch.model_validate_json(content)
+    except Exception:
+        data = _extract_json_value(content)
+        if isinstance(data, list):
+            data = {"frames": data}
+        return StructuredEventFrameBatch.model_validate(data)
+
+
+def _extract_json_value(content: str) -> Any:
+    text = strip_json_fence(content).strip()
+    decoder = json.JSONDecoder()
+    starts = [
+        index
+        for index, char in enumerate(text)
+        if char in ("{", "[")
+    ]
+    last_error: Exception | None = None
+    for start in starts:
+        try:
+            value, _ = decoder.raw_decode(text[start:])
+            return value
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return json.loads(text)
+
+
 __all__ = [
     "HeuristicResearchEventExtractor",
     "LangExtractResearchEventExtractor",
     "ResearchEventExtractor",
     "ResearchEventFrame",
+    "StructuredResearchEventExtractor",
     "build_research_event_openai_schema",
     "frames_describe_same_event",
     "heuristic_event_frame",

@@ -236,6 +236,15 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_RESEARCH_SCHEDULER_TICK_SECONDS", "60")
             ),
             max_queries=int(os.getenv("PERSONAL_AGENT_RESEARCH_MAX_QUERIES", "5")),
+            max_exploration_queries=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_MAX_EXPLORATION_QUERIES", "3")
+            ),
+            max_verification_queries=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_MAX_VERIFICATION_QUERIES", "2")
+            ),
+            max_satisfaction_model_calls=int(
+                os.getenv("PERSONAL_AGENT_RESEARCH_MAX_SATISFACTION_MODEL_CALLS", "1")
+            ),
             max_search_results=int(
                 os.getenv("PERSONAL_AGENT_RESEARCH_MAX_SEARCH_RESULTS", "30")
             ),

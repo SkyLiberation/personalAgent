@@ -64,7 +64,7 @@ ResearchDecision
 EvidenceGap
   id
   event_id
-  type: no_official_source | single_source | missing_personal_context | low_yield
+  type: missing_primary_source | single_source | missing_personal_context | low_yield
   severity
   suggested_action
   status
@@ -106,7 +106,7 @@ while budget remains:
 3. 每批来源入库后立即抽事件 frame、聚类为事件。
 4. 对新事件立即做个人图谱检索，而不是等最后 rank。
 5. 若事件只有单一来源，生成 `single_source` gap。
-6. 若事件没有官方来源，生成 `no_official_source` gap，并追加官方来源查询。
+6. 若事件缺少当前 policy 要求的一手来源，生成 `missing_primary_source` gap，并追加 primary-source 查询。
 7. 若连续低收益或预算耗尽，停止。
 
 这比旧 pipeline 智能的地方在于：事件聚类、个人相关性和证据缺口进入 loop 本身，会反向影响下一轮搜索。
@@ -172,4 +172,3 @@ research-initialize
 重构后的说法：
 
 > `research_once` 不再是固定 plan/collect/cluster/rank 流水线，而是 evidence-driven research loop。外层 workflow 保留确定性控制面，内层 `ResearchState` 记录来源、事件、证据缺口、个人相关性和停止原因；系统每轮根据证据是否足够、来源是否可信、是否和用户已有知识相关来决定继续搜索、抓取全文、查个人图谱或停止。这样智能性体现在研究路线会被中间证据动态改变，而不是固定跑完几个阶段。
-

@@ -1,0 +1,75 @@
+[
+  {
+    "id": "research-digest-verify-001",
+    "description": "有 URL 但来源不支持的夸大 supporting claim 应被删除，item 保留但降为信息不足",
+    "event_status": "verified",
+    "event_title": "OpenAI releases Agent Model",
+    "event_summary": "OpenAI released a new agent model for tool use.",
+    "source": {
+      "url": "https://openai.com/news/agent",
+      "domain": "openai.com",
+      "title": "OpenAI releases Agent Model",
+      "content": "OpenAI released a new agent model for tool use.",
+      "source_type": "official"
+    },
+    "input_claims": [
+      {"text": "OpenAI releases Agent Model", "claim_importance": "core"},
+      {
+        "text": "The model guarantees a 10x latency improvement",
+        "claim_importance": "supporting"
+      }
+    ],
+    "expected_item_count": 1,
+    "expected_no_major_update": false,
+    "expected_run_status": "completed_with_limitations",
+    "expected_confidence_labels": ["信息不足"],
+    "expected_claim_support_levels": ["supported"],
+    "expected_absent_claim_terms": ["10x latency"]
+  },
+  {
+    "id": "research-digest-verify-002",
+    "description": "与来源相反的 contradicted core claim 应导致 item 被移除",
+    "event_status": "verified",
+    "event_title": "OpenAI releases Agent Model",
+    "event_summary": "OpenAI released a new agent model for tool use.",
+    "source": {
+      "url": "https://openai.com/news/agent",
+      "domain": "openai.com",
+      "title": "OpenAI releases Agent Model",
+      "content": "OpenAI released a new agent model for tool use.",
+      "source_type": "official"
+    },
+    "input_claims": [
+      {"text": "OpenAI does not release Agent Model", "claim_importance": "core"}
+    ],
+    "expected_item_count": 0,
+    "expected_no_major_update": true,
+    "expected_run_status": "partial_no_supported_claims",
+    "expected_confidence_labels": [],
+    "expected_claim_support_levels": [],
+    "expected_absent_claim_terms": ["does not release"]
+  },
+  {
+    "id": "research-digest-verify-003",
+    "description": "reported 事件即使 claim 被支持，也不能被 verify_digest 升级成已验证",
+    "event_status": "reported",
+    "event_title": "OpenAI releases Agent Model",
+    "event_summary": "OpenAI released a new agent model for tool use.",
+    "source": {
+      "url": "https://openai.com/news/agent",
+      "domain": "openai.com",
+      "title": "OpenAI releases Agent Model",
+      "content": "OpenAI released a new agent model for tool use.",
+      "source_type": "official"
+    },
+    "input_claims": [
+      {"text": "OpenAI releases Agent Model", "claim_importance": "core"}
+    ],
+    "expected_item_count": 1,
+    "expected_no_major_update": false,
+    "expected_run_status": "completed_with_limitations",
+    "expected_confidence_labels": ["多方报道"],
+    "expected_claim_support_levels": ["supported"],
+    "expected_absent_claim_terms": []
+  }
+]

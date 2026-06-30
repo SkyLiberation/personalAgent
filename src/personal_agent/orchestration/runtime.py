@@ -106,8 +106,13 @@ from personal_agent.application.runtime_results import (
     RetryResult,
 )
 from personal_agent.application.review import DigestFormatter, ReviewDigestUseCase
-from personal_agent.application.research import ResearchFeedback, ResearchService, ResearchSubscription
-from personal_agent.application.research.extraction import LangExtractResearchEventExtractor
+from personal_agent.application.research import (
+    ResearchBudget,
+    ResearchFeedback,
+    ResearchService,
+    ResearchSubscription,
+)
+from personal_agent.application.research.extraction import StructuredResearchEventExtractor
 from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from personal_agent.application.verifier import create_answer_verifier
 
@@ -195,6 +200,17 @@ class AgentRuntime:
         self._streaming_client = build_streaming_model_client(
             settings.openai, settings.langsmith,
         )
+        self._research_event_client = build_chat_model_client(
+            OpenAIConfig(
+                api_key=settings.langextract.api_key,
+                base_url=settings.langextract.base_url,
+                model=settings.langextract.model_id,
+                timeout_seconds=60.0,
+                max_retries=settings.openai.max_retries,
+            ),
+            settings.langsmith,
+            model_override=settings.langextract.model_id,
+        ) if (settings.langextract.api_key and settings.langextract.base_url) else None
         # Planner endpoint client for query understanding / rerank / replan.
         # Falls back to the openai endpoint when the dedicated planner config is
         # unset, mirroring the previous ``_planner_llm_config`` fallback logic.
@@ -257,7 +273,19 @@ class AgentRuntime:
                 prompt_name=name,
             ),
             save_note=lambda **kwargs: self.execute_capture(**kwargs),
-            event_extractor=LangExtractResearchEventExtractor(settings.langextract),
+            event_extractor=StructuredResearchEventExtractor(
+                settings.langextract,
+                model_client=self._research_event_client,
+            ),
+            default_budget=ResearchBudget(
+                max_queries=settings.research.max_queries,
+                max_exploration_queries=settings.research.max_exploration_queries,
+                max_verification_queries=settings.research.max_verification_queries,
+                max_satisfaction_model_calls=settings.research.max_satisfaction_model_calls,
+                max_search_results=settings.research.max_search_results,
+                max_fulltext_fetches=settings.research.max_fulltext_fetches,
+                max_tool_calls=settings.research.max_tool_calls,
+            ),
         )
         self._tool_executor.register(
             build_create_research_subscription_tool(self._research_service)

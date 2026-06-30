@@ -19,4 +19,5 @@
 - summarize/direct workflow：`summarize_thread` 和 `direct_answer` 也通过 compose step 进入统一步骤执行。
 - [delete_knowledge workflow](delete-knowledge-workflow.md)：检索候选、解析目标、HITL 确认、执行删除、生成结果摘要。
 - [solidify_conversation workflow](solidify-conversation-workflow.md)：从 checkpoint 对话生成知识草稿，并复用 capture 链路写入长期记忆。
+- [research_once workflow](research-once-workflow.md)：从 `ResearchService` 视角说明 evidence-driven research loop 如何收集来源、聚类事件、结合个人知识图谱排序并生成 digest。
 - Workflow platform：definition/deployment/eval gate 已持久化到 Postgres，replay/fork/debug bundle 基于 `workflow_events / workflow_artifacts / workflow_replay_runs` 查询。

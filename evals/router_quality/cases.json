@@ -168,5 +168,12 @@
     "text": "记一下：为什么这个接口偶尔超时？需要排查",
     "expected_outcome": "ready",
     "expected_intents": ["capture_text"]
+  },
+  {
+    "id": "router-025",
+    "description": "一次性外部研究 — 调研最新发布应进入 research_once 而不是 ask",
+    "text": "调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源",
+    "expected_outcome": "ready",
+    "expected_intents": ["research_once"]
   }
 ]

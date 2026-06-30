@@ -71,6 +71,15 @@ class TestDefaultIntentRouter:
         assert decision.error == "router_unavailable"
         assert "路由模型当前不可用" in describe_router_decision(decision)
 
+    def test_research_request_uses_deterministic_research_once_rule(self):
+        router = DefaultIntentRouter(None)
+        decision = router.classify(EntryInput(
+            text="调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源"
+        ))
+
+        assert [item.intent for item in decision.goals] == ["research_once"]
+        assert decision.goals[0].input.startswith("调研 Agent Runtime SDK")
+
     def test_compound_output_is_normalized_to_stable_goal_ids(self, monkeypatch):
         router = DefaultIntentRouter(None)
         monkeypatch.setattr(

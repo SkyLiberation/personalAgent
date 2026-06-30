@@ -1,0 +1,9 @@
+{
+  "item_count_accuracy": 1.0,
+  "no_major_update_accuracy": 1.0,
+  "run_status_accuracy": 1.0,
+  "confidence_label_accuracy": 1.0,
+  "claim_support_level_accuracy": 1.0,
+  "absent_claim_term_accuracy": 1.0,
+  "overall_score": 1.0
+}

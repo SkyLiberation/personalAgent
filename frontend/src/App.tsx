@@ -136,6 +136,17 @@ export default function App() {
   const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Tracks the session the user is actually viewing, so a refresh that started
+  // before a session switch can't clobber the newly-opened session's thread.
+  const activeSessionRef = useRef(sessionId);
+  // The digest aggregates a slow graph query; keep at most one digest request
+  // in flight so the 8s poll can't pile up long-running requests and starve
+  // the browser connection pool (which previously stalled history loading).
+  const digestInFlightRef = useRef(false);
+
+  useEffect(() => {
+    activeSessionRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     if (activeCitationKey) {
@@ -166,21 +177,39 @@ export default function App() {
     };
   }, [sessionId]);
 
+  async function refreshDigest() {
+    // Single-flight: the digest can take many seconds (it aggregates a graph
+    // query). Skipping while one is pending stops the periodic poll from
+    // stacking slow requests.
+    if (digestInFlightRef.current) {
+      return;
+    }
+    digestInFlightRef.current = true;
+    try {
+      const digestResult = await fetchDigest(userId);
+      setDigest(digestResult);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      digestInFlightRef.current = false;
+    }
+  }
+
   async function refreshAll(options?: { silent?: boolean }) {
+    const requestedSession = sessionId;
     if (!options?.silent) {
       setStatus("正在刷新记忆视图...");
     }
+    // Load the digest out-of-band — it must never block the conversation
+    // history from rendering when the user opens a session.
+    void refreshDigest();
     try {
-      const [noteItems, digestResult, runResult] = await Promise.all([
+      const [noteItems, runResult] = await Promise.all([
         fetchNotes(userId),
-        fetchDigest(userId),
         fetchEntryRuns(userId, 100),
       ]);
       setNotes(noteItems);
-      setDigest(digestResult);
-      const historyItems = mergeRunBackedHistory([], runResult.items, sessionId);
       const allHistoryItems = mergeRunBackedHistory([], runResult.items);
-      setAskHistory((current) => mergeAskHistory(historyItems, current));
       setAllAskHistory((current) => {
         const merged = new Map<string, AskHistoryView>();
         for (const item of [...allHistoryItems, ...current]) {
@@ -188,7 +217,13 @@ export default function App() {
         }
         return [...merged.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
       });
-      setSelectedAskId((current) => current ?? historyItems[0]?.id ?? null);
+      // Only apply session-scoped state if the user is still on this session;
+      // a refresh started before a session switch must not overwrite the thread.
+      if (activeSessionRef.current === requestedSession) {
+        const historyItems = mergeRunBackedHistory([], runResult.items, requestedSession);
+        setAskHistory((current) => mergeAskHistory(historyItems, current));
+        setSelectedAskId((current) => current ?? historyItems[0]?.id ?? null);
+      }
       if (!options?.silent) {
         setStatus("知识库已就绪。");
       }

@@ -106,6 +106,8 @@ capture_text / capture_url / capture_upload
 
 ## 4. 最复杂的问题或架构挑战
 
+### 4.1 高风险长期知识删除：自然语言目标到确定性副作用
+
 我会讲删除长期知识这条链路，因为它同时涉及 planner、executor、memory、tool gateway、HITL、checkpoint 和幂等。
 
 用户常说的是“删掉之前那条 DNS 知识”这类自然语言目标，但真正可删除的是 Postgres 里的 `note_id`。中间可能经过图谱 episode、chunk、parent note、标题摘要等多个对象。如果让 LLM 直接生成 `note_id` 或直接调用删除工具，风险很高：可能删错、重复删、确认后状态丢失，或者图谱命中的对象和 Postgres 真源对不上。
@@ -124,6 +126,18 @@ del-1 retrieve/react
 这个问题里最重要的工程判断是：高风险动作不能靠 prompt 说“请谨慎”，必须靠系统边界约束。流程拓扑由 `WorkflowSpec` 固定；错误 registry 写法由 CI gate 提前拦截；运行时工具可用性由 `StepProjectionValidator` 检查；真实副作用由 ToolGateway / PolicyEngine / HITL / 幂等账本 / 审计接管；状态恢复由 LangGraph checkpoint 承担。
 
 如果线上用户反馈“删除卡住了”或“候选选错了”，也不是只拿用户原话重新问一遍，而是通过 thread_id、run_id、checkpoint history 定位当时的状态，从失败节点 replay / fork。这样能判断问题到底发生在 router、retrieve、resolve、confirmation payload、tool input 注入、ToolGateway 还是 resume 状态恢复。
+
+### 4.2 Research 端到端延迟：质量、成本和可评测性的冲突
+
+另一个更像真实 Agent 工程坑的案例，是 `research_once` 端到端链路的 latency 问题。
+
+一次前端对话框触发的研究任务表面上只是“调研 OpenAI GPT-5 mini 的最新公开动态，最多整理 1 条高可信事件”，但实际链路会经过 `research_prepare_run -> research_initialize_state -> research_run_loop -> research_synthesize_digest -> research_verify_digest`。其中 `research_run_loop` 又会动态执行 web search、URL 抓取、LangExtract 事件抽取、事件聚类、个人知识图谱检索和排序。最开始我看到的问题是：workflow 没有被校验阻断，工具也确实在跑，但前端等待很久后显示 research-loop 超时。
+
+这个问题的坑在于，不能简单把 timeout 加大。因为 latency 本身就是质量指标，golden test 如果只看最终有没有结果，不看耗时和工具调用数，就会把一个“能跑但不可用”的 Agent 误判成通过。定位时我按 run_id 拆了审计日志，发现显性耗时主要来自两块：`graph_search` 连续多次打满 15 秒超时，7 次就超过 100 秒；`capture_url` 结束到首个 `graph_search` 之间还有一段较长黑箱，大概率是 LangExtract 对多源全文逐条抽取。也就是说它不是 while 死循环，而是单轮研究内部候选太多、每个候选都做昂贵处理，导致一轮就吃满外层 240 秒。
+
+这个案例里我学到的工程判断是：Agent 的 eval 不能只评效果，还要评成本和延迟。`max_items=1` 这种用户约束不能只影响最终 digest 数量，还要传导到候选规模、抓取上限、抽取上限和排序上限；否则系统会为了产出 1 条结果处理几十个候选。另一方面，ToolGateway 的 timeout 如果只是 `future.result(timeout)`，底层线程并不会被真正取消，外层超时后后台工具还可能继续写日志，表现得像“死循环没拦住”。这类问题需要阶段级观测和可取消执行，而不是靠 prompt 或总 timeout 兜底。
+
+如果面试官追问“后来怎么改”，可以说我的思路不是降级跳过质量步骤，而是把 latency 变成一等指标：给 `plan / collect / capture / extract / personalize / rank` 加阶段级 metric；把 `ResearchBudget.max_tool_calls` 这种已有预算真正接到 direct tool 调用上；在 golden test 里加入总耗时、阶段耗时和工具调用数断言；同时优化图谱检索避免每个事件重复触发慢初始化。这个案例体现的是，Agent 工程里最难的不是让链路跑通，而是让它在质量、成本、延迟、可取消性和可评测性之间形成稳定契约。
 
 ## 5. Agent 工程师和传统后端 / 算法工程师的区别
 

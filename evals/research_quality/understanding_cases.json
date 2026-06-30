@@ -1,0 +1,53 @@
+[
+  {
+    "id": "research-understanding-001",
+    "raw_request": "调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源",
+    "default_max_items": 5,
+    "expected_topic_terms": ["Agent", "Runtime", "SDK"],
+    "forbidden_topic_terms": ["调研", "最多", "高可信"],
+    "expected_instruction_terms": ["高可信", "官方"],
+    "expected_max_items": 1,
+    "expected_research_type": "technical_product_update",
+    "expected_evidence_requirement": "official_or_multi_source",
+    "acceptable_evidence_requirements": ["official_required"],
+    "expected_query_intents": ["latest", "official"]
+  },
+  {
+    "id": "research-understanding-002",
+    "raw_request": "研究最近关于 multi-agent memory 的论文和开源实现，最多 3 条，优先 paper 和 GitHub",
+    "default_max_items": 5,
+    "expected_topic_terms": ["multi-agent", "memory"],
+    "forbidden_topic_terms": ["最多"],
+    "expected_instruction_terms": ["论文", "GitHub"],
+    "expected_max_items": 3,
+    "expected_research_type": "academic_research",
+    "expected_evidence_requirement": "paper_or_primary_source",
+    "expected_query_intents": ["paper", "repo"]
+  },
+  {
+    "id": "research-understanding-003",
+    "raw_request": "查一下 NVIDIA 最近一季财报和 earnings call，重点看营收、数据中心和官方披露，最多 2 条",
+    "default_max_items": 5,
+    "expected_topic_terms": ["NVIDIA"],
+    "forbidden_topic_terms": ["最多"],
+    "expected_instruction_terms": ["官方"],
+    "expected_max_items": 2,
+    "expected_research_type": "company_financials",
+    "expected_evidence_requirement": "primary_financial_source_required",
+    "expected_query_intents": ["financial_filing", "transcript", "official"]
+  },
+  {
+    "id": "research-understanding-004",
+    "raw_request": "关注 OpenAI Agent 产品相关的最新新闻，优先和我已有 agent tool use 知识相关，不要超过 4 条",
+    "default_max_items": 5,
+    "expected_topic_terms": ["OpenAI", "Agent"],
+    "forbidden_topic_terms": ["不要超过"],
+    "expected_instruction_terms": ["agent", "tool", "use", "相关"],
+    "expected_max_items": 4,
+    "expected_research_type": "technical_product_update",
+    "acceptable_research_types": ["general_news"],
+    "expected_evidence_requirement": "official_or_multi_source",
+    "acceptable_evidence_requirements": ["multi_source"],
+    "expected_query_intents": ["latest", "official"]
+  }
+]

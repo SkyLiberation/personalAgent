@@ -64,7 +64,7 @@ class LlmClient:
                 ],
                 output_type=BaseModel,
                 temperature=0.3,
-                max_tokens=600,
+                max_tokens=_max_tokens_for_prompt(prompt_name),
                 kind="text",
                 metadata={"component": "runtime_llm"},
             ))
@@ -102,7 +102,7 @@ class LlmClient:
                 ],
                 output_type=BaseModel,
                 temperature=0.3,
-                max_tokens=600,
+                max_tokens=_max_tokens_for_prompt("answer_generation_stream"),
                 kind="text",
                 metadata={"component": "runtime_llm"},
             )
@@ -119,3 +119,11 @@ class LlmClient:
             self._mark_failure()
             logger.exception("Failed to stream answer from LLM")
             yield ("answer_error", {"error": "LLM streaming failed"})
+
+
+def _max_tokens_for_prompt(prompt_name: str) -> int:
+    if prompt_name == "research_request_understanding":
+        return 1600
+    if prompt_name in {"research_policy_decision", "research_satisfaction", "research_next_action"}:
+        return 900
+    return 600

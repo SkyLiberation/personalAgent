@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 from personal_agent.governance import ToolExecutor
 
 from personal_agent.tools import governance_extras, tool_response, tool_success
+from personal_agent.orchestration.orchestration_nodes._steps import _infer_research_max_items
 
 
 def RouterDecision(route="unknown", **_kwargs):
@@ -84,6 +85,56 @@ def _governance_external(url: str):
 )
 def _read_only_graph_search(query: str = ""):
     return tool_response(tool_success({"results": []}))
+
+
+@tool(
+    "research_prepare_run",
+    description="创建 ResearchRun",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("write_longterm",)),
+)
+def _research_prepare_run(topic: str, user_id: str = "default"):
+    return tool_response(tool_success({"run_id": "research-run-1"}))
+
+
+@tool(
+    "research_initialize_state",
+    description="初始化 ResearchState",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("write_longterm",)),
+)
+def _research_initialize_state(run_id: str, user_id: str = "default"):
+    return tool_response(tool_success({"run_id": run_id}))
+
+
+@tool(
+    "research_run_loop",
+    description="运行 Research 循环",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("external_network", "write_longterm")),
+)
+def _research_run_loop(run_id: str, user_id: str = "default"):
+    return tool_response(tool_success({"run_id": run_id}))
+
+
+@tool(
+    "research_synthesize_digest",
+    description="生成 Research 简报",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("write_longterm",)),
+)
+def _research_synthesize_digest(run_id: str, user_id: str = "default"):
+    return tool_response(tool_success({"run_id": run_id, "answer": "ok"}))
+
+
+@tool(
+    "research_verify_digest",
+    description="校验 Research 简报",
+    response_format="content_and_artifact",
+    extras=governance_extras(side_effects=("write_longterm",)),
+)
+def _research_verify_digest(run_id: str, user_id: str = "default"):
+    return tool_response(tool_success({"run_id": run_id, "answer": "ok"}))
 
 
 class TestStepProjectionValidatorGovernance:
@@ -217,6 +268,82 @@ class TestStepProjectionValidatorGovernance:
         result = validator.validate(steps, decision)
 
         assert result.valid
+
+
+class TestStepProjectionValidatorResearch:
+    @pytest.fixture
+    def registry(self):
+        reg = ToolExecutor()
+        reg.register(_research_prepare_run)
+        reg.register(_research_initialize_state)
+        reg.register(_research_run_loop)
+        reg.register(_research_synthesize_digest)
+        reg.register(_research_verify_digest)
+        return reg
+
+    @pytest.fixture
+    def validator(self, registry):
+        return StepProjectionValidator(tool_executor=registry)
+
+    def test_research_once_allows_runtime_injected_topic_and_run_id(self, validator):
+        steps = [
+            ExecutionStep(
+                step_id="research-prepare",
+                action_type="tool_call",
+                description="创建 ResearchRun",
+                tool_name="research_prepare_run",
+                tool_input={},
+            ),
+            ExecutionStep(
+                step_id="research-initialize",
+                action_type="tool_call",
+                description="初始化 ResearchState",
+                tool_name="research_initialize_state",
+                depends_on=["research-prepare"],
+                tool_input={},
+            ),
+            ExecutionStep(
+                step_id="research-loop",
+                action_type="tool_call",
+                description="运行 Research 循环",
+                tool_name="research_run_loop",
+                depends_on=["research-initialize"],
+                tool_input={},
+            ),
+            ExecutionStep(
+                step_id="research-synthesize",
+                action_type="tool_call",
+                description="生成简报",
+                tool_name="research_synthesize_digest",
+                depends_on=["research-loop"],
+                tool_input={},
+            ),
+            ExecutionStep(
+                step_id="research-verify",
+                action_type="tool_call",
+                description="校验简报",
+                tool_name="research_verify_digest",
+                depends_on=["research-synthesize"],
+                tool_input={},
+            ),
+        ]
+
+        result = validator.validate(steps, "research_once")
+
+        assert result.valid
+        assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("最多整理 1 条高可信事件", 1),
+            ("至多两项更新", 2),
+            ("不超过3个来源", 3),
+            ("整理近期动态", None),
+        ],
+    )
+    def test_research_max_items_can_be_inferred_from_entry_text(self, text, expected):
+        assert _infer_research_max_items(text) == expected
 
 
 class TestReActValidation:

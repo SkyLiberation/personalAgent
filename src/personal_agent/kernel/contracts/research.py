@@ -8,12 +8,75 @@ from pydantic import BaseModel, Field, field_validator
 
 
 ResearchFrequency = Literal["daily", "weekdays", "weekly"]
-ResearchRunStatus = Literal["queued", "running", "completed", "partial", "failed", "skipped"]
+ResearchRunStatus = Literal[
+    "queued",
+    "running",
+    "completed_verified",
+    "completed_with_limitations",
+    "partial_no_supported_claims",
+    "partial_budget_exhausted",
+    "partial_low_yield",
+    "failed",
+    "skipped",
+]
 ResearchFeedbackAction = Literal["expand", "useful", "not_interested", "bookmark", "save"]
 ResearchAction = Literal["search_web", "fetch_source", "search_personal_graph", "stop"]
 ResearchDecisionStatus = Literal["planned", "executed", "skipped"]
-EvidenceGapType = Literal["no_official_source", "single_source", "missing_personal_context", "low_yield"]
+ResearchQueryPhase = Literal["exploration", "verification"]
+EvidenceGapType = Literal["missing_primary_source", "single_source", "missing_personal_context", "low_yield"]
 EvidenceGapStatus = Literal["open", "resolved", "accepted"]
+DigestClaimSupportLevel = Literal[
+    "supported",
+    "partially_supported",
+    "unsupported",
+    "contradicted",
+]
+DigestClaimImportance = Literal["core", "supporting", "context"]
+ResearchType = Literal[
+    "technical_product_update",
+    "academic_research",
+    "company_financials",
+    "general_news",
+]
+ResearchSourceType = Literal[
+    "official",
+    "docs",
+    "github",
+    "paper",
+    "filing",
+    "investor_relations",
+    "transcript",
+    "media",
+    "blog",
+    "social",
+    "unknown",
+]
+SourcePreference = ResearchSourceType
+EvidenceRequirement = Literal[
+    "official_or_multi_source",
+    "official_required",
+    "paper_or_primary_source",
+    "primary_financial_source_required",
+    "multi_source",
+]
+RankingObjective = Literal[
+    "confidence_first",
+    "personal_relevance_first",
+    "novelty_first",
+    "impact_first",
+]
+VerificationStrictness = Literal["low", "medium", "medium_high", "high"]
+ResearchQueryIntent = Literal[
+    "latest",
+    "official",
+    "docs",
+    "repo",
+    "paper",
+    "technical",
+    "media",
+    "financial_filing",
+    "transcript",
+]
 
 
 def utc_now() -> datetime:
@@ -84,20 +147,45 @@ class ResearchSubscription(BaseModel):
 
 class ResearchBudget(BaseModel):
     max_queries: int = Field(default=5, ge=1, le=20)
+    max_exploration_queries: int = Field(default=3, ge=1, le=20)
+    max_verification_queries: int = Field(default=2, ge=0, le=20)
+    max_satisfaction_model_calls: int = Field(default=1, ge=0, le=10)
     max_search_results: int = Field(default=30, ge=1, le=100)
     max_fulltext_fetches: int = Field(default=5, ge=0, le=20)
     max_tool_calls: int = Field(default=15, ge=1, le=100)
 
 
+class ResearchPolicy(BaseModel):
+    research_type: ResearchType = "general_news"
+    source_preference: list[SourcePreference] = Field(
+        default_factory=lambda: ["official", "paper", "media"]
+    )
+    evidence_requirement: EvidenceRequirement = "official_or_multi_source"
+    ranking_objective: RankingObjective = "confidence_first"
+    verification_strictness: VerificationStrictness = "medium_high"
+
+
+class ResearchQuery(BaseModel):
+    query: str
+    intent: ResearchQueryIntent = "latest"
+    priority: float = Field(default=0.5, ge=0, le=1)
+
+
 class ResearchDecision(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
     iteration: int
     action: ResearchAction
     query: str = ""
     purpose: str = ""
     event_id: str | None = None
+    gap_id: str | None = None
     reason: str = ""
     status: ResearchDecisionStatus = "planned"
     result_count: int = 0
+    query_phase: ResearchQueryPhase = "exploration"
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    elapsed_ms: int = 0
 
 
 class EvidenceGap(BaseModel):
@@ -109,30 +197,73 @@ class EvidenceGap(BaseModel):
     status: EvidenceGapStatus = "open"
 
 
+class ResearchSatisfaction(BaseModel):
+    coverage_score: float = Field(default=0, ge=0, le=1)
+    confidence_score: float = Field(default=0, ge=0, le=1)
+    remaining_critical_gaps: list[EvidenceGap] = Field(default_factory=list)
+    marginal_gain: float = Field(default=0, ge=0, le=1)
+    should_continue: bool = True
+    reason: str = ""
+
+
+class ResearchStageTiming(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    stage: str
+    decision_id: str | None = None
+    elapsed_ms: int = 0
+    item_count: int = 0
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
+class ResearchToolCallTrace(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    tool_name: str
+    decision_id: str | None = None
+    elapsed_ms: int = 0
+    ok: bool = False
+    result_count: int = 0
+    error_kind: str = ""
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
 class ResearchState(BaseModel):
     run_id: str
     topic: str
     instructions: str = ""
+    max_items: int = Field(default=5, ge=1, le=20)
     window_start: datetime
     window_end: datetime
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     query_history: list[str] = Field(default_factory=list)
     decisions: list[ResearchDecision] = Field(default_factory=list)
+    policy: ResearchPolicy = Field(default_factory=ResearchPolicy)
+    query_plan: list[ResearchQuery] = Field(default_factory=list)
     evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
     iteration_count: int = 0
+    exploration_query_count: int = 0
+    verification_query_count: int = 0
     low_yield_rounds: int = 0
+    tool_call_count: int = 0
+    satisfaction_model_call_count: int = 0
+    stage_timings: list[ResearchStageTiming] = Field(default_factory=list)
+    tool_call_traces: list[ResearchToolCallTrace] = Field(default_factory=list)
+    personal_relevance_cache: dict[str, PersonalRelevance] = Field(default_factory=dict)
+    satisfaction: ResearchSatisfaction | None = None
     stop_reason: str = ""
 
 
 class ResearchSource(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
+    decision_id: str | None = None
+    query: str = ""
+    query_phase: ResearchQueryPhase = "exploration"
     url: str
     canonical_url: str
     domain: str
     title: str
     snippet: str = ""
     published_at: datetime | None = None
-    source_type: Literal["official", "paper", "media", "blog", "social", "unknown"] = "unknown"
+    source_type: ResearchSourceType = "unknown"
     provider: str = ""
     content: str = ""
     content_fingerprint: str = ""
@@ -141,8 +272,39 @@ class ResearchSource(BaseModel):
 class PersonalRelevance(BaseModel):
     score: float = Field(default=0, ge=0, le=1)
     related_note_ids: list[str] = Field(default_factory=list)
-    relation: Literal["new", "update", "support", "conflict", "background"] = "new"
+    relation: Literal[
+        "not_relevant",
+        "weak_match",
+        "background_context",
+        "related_update",
+        "direct_update",
+        "support",
+        "conflict",
+    ] = "not_relevant"
     explanation: str = ""
+
+
+class EventScoreBreakdown(BaseModel):
+    source_quality: float = Field(default=0, ge=0, le=1)
+    evidence_support: float = Field(default=0, ge=0, le=1)
+    source_independence: float = Field(default=0, ge=0, le=1)
+    novelty: float = Field(default=0, ge=0, le=1)
+    impact: float = Field(default=0, ge=0, le=1)
+    personal_relevance: float = Field(default=0, ge=0, le=1)
+    uncertainty_penalty: float = Field(default=0, ge=0, le=1)
+    final_score: float = Field(default=0, ge=0, le=1)
+
+
+class ResearchEventFrameSnapshot(BaseModel):
+    source_url: str = ""
+    title: str = ""
+    actor: str = ""
+    action: str = ""
+    object: str = ""
+    event_type: str = "news"
+    occurred_at: str | None = None
+    entities: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0, ge=0, le=1)
 
 
 class ResearchEvent(BaseModel):
@@ -154,6 +316,8 @@ class ResearchEvent(BaseModel):
     entities: list[str] = Field(default_factory=list)
     topics: list[str] = Field(default_factory=list)
     event_type: str = "news"
+    source_ids: list[str] = Field(default_factory=list)
+    frame: ResearchEventFrameSnapshot | None = None
     sources: list[ResearchSource] = Field(default_factory=list)
     importance_score: float = Field(default=0.5, ge=0, le=1)
     novelty_score: float = Field(default=0.5, ge=0, le=1)
@@ -161,6 +325,17 @@ class ResearchEvent(BaseModel):
     personal_relevance: PersonalRelevance = Field(default_factory=PersonalRelevance)
     status: Literal["verified", "reported", "uncertain", "conflicted"] = "uncertain"
     final_score: float = 0
+    score_breakdown: EventScoreBreakdown = Field(default_factory=EventScoreBreakdown)
+
+
+class DigestClaim(BaseModel):
+    text: str
+    event_id: str | None = None
+    claim_importance: DigestClaimImportance = "core"
+    source_ids: list[str] = Field(default_factory=list)
+    decision_ids: list[str] = Field(default_factory=list)
+    evidence_spans: list[str] = Field(default_factory=list)
+    support_level: DigestClaimSupportLevel = "unsupported"
 
 
 class IntelligenceDigestItem(BaseModel):
@@ -172,6 +347,9 @@ class IntelligenceDigestItem(BaseModel):
     personal_relevance: str = ""
     confidence_label: str
     source_urls: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    decision_ids: list[str] = Field(default_factory=list)
+    claims: list[DigestClaim] = Field(default_factory=list)
 
 
 class IntelligenceDigest(BaseModel):
@@ -208,9 +386,12 @@ class ResearchRun(BaseModel):
     status: ResearchRunStatus = "queued"
     topic: str
     instructions: str = ""
+    max_items: int = Field(default=5, ge=1, le=20)
     window_start: datetime
     window_end: datetime
+    policy: ResearchPolicy = Field(default_factory=ResearchPolicy)
     query_plan: list[str] = Field(default_factory=list)
+    query_plan_details: list[ResearchQuery] = Field(default_factory=list)
     source_count: int = 0
     event_count: int = 0
     selected_count: int = 0
@@ -239,6 +420,7 @@ class ResearchRun(BaseModel):
             trigger_type=trigger_type,
             topic=subscription.topic,
             instructions=subscription.instructions,
+            max_items=subscription.max_items,
             window_start=start,
             window_end=window_end,
             budget=budget or ResearchBudget(),

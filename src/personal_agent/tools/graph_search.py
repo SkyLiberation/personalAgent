@@ -18,6 +18,10 @@ class GraphSearchArgs(BaseModel):
         min_length=1,
         description="要在个人知识图谱中检索的问题、实体、关系或候选对象描述。",
     )
+    structured_context: dict[str, object] = Field(
+        default_factory=dict,
+        description="可选结构化检索上下文，例如 title/entities/event_type/source_domains/summary。",
+    )
     user_id: str = Field(default="default", description="个人知识库归属用户 ID。")
 
 
@@ -41,10 +45,10 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
             rate_limit_per_minute=60,
         ),
     )
-    def graph_search(question: str, user_id: str = "default"):
+    def graph_search(question: str, user_id: str = "default", structured_context: dict[str, object] | None = None):
         if not graph_store.configured():
             raise ToolError("图谱未配置或未启用。", kind="permission")
-        result = graph_store.ask(question, user_id)
+        result = graph_store.ask(_graph_search_text(question, structured_context or {}), user_id)
         if not result.enabled:
             raise ToolError(result.error or "图谱检索不可用。", kind="permission")
         evidence: list[EvidenceItem] = []
@@ -81,3 +85,20 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
         }, evidence))
 
     return graph_search
+
+
+def _graph_search_text(question: str, structured_context: dict[str, object]) -> str:
+    if not structured_context:
+        return question
+    lines = [question]
+    for key in ("title", "actor", "object", "event_type", "entities", "source_domains", "summary"):
+        value = structured_context.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            rendered = ", ".join(str(item) for item in value if str(item).strip())
+        else:
+            rendered = str(value)
+        if rendered:
+            lines.append(f"{key}: {rendered}")
+    return "\n".join(lines)

@@ -27,10 +27,23 @@ from personal_agent.application.research.service import canonicalize_url
 
 from .dataset import (
     ResearchEventQualityRunOutput,
+    build_research_event_quality_run_output,
     default_event_quality_cases_path,
     load_event_quality_cases,
 )
 from .scorer import score_event_quality_all
+
+
+def fixture_generate_text(case):
+    if not case.mock_understanding:
+        return None
+
+    def generate_text(prompt: str, name: str) -> str | None:
+        if name == "research_request_understanding":
+            return json.dumps(case.mock_understanding, ensure_ascii=False)
+        return None
+
+    return generate_text
 
 
 class InMemoryResearchStore:
@@ -167,6 +180,7 @@ def test_research_event_quality_meets_baseline():
         service = ResearchService(
             store,
             FixtureResearchTools(case),
+            generate_text=fixture_generate_text(case),
             event_extractor=FixtureResearchEventExtractor(case),
         )
         run = service.prepare_run(
@@ -179,21 +193,16 @@ def test_research_event_quality_meets_baseline():
         state = service.run_research_loop(run.id)
         completed = service.synthesize_digest(run.id, max_items=case.max_items)
         digest = service.verify_digest(run.id)
+        sources = store.list_run_sources(run.id)
         events = store.list_run_events(run.id)
         digest = digest or store.get_digest(completed.digest_id or "")
 
-        runs[case.id] = ResearchEventQualityRunOutput(
-            source_count=completed.source_count,
-            iteration_count=state.iteration_count,
-            query_history=list(state.query_history),
-            gap_types=[gap.type for gap in state.evidence_gaps],
-            stop_reason=state.stop_reason,
-            event_titles=[event.title for event in events],
+        runs[case.id] = build_research_event_quality_run_output(
+            completed=completed,
+            state=state,
+            sources=sources,
             events=events,
-            digest_titles=[
-                item.title
-                for item in (digest.items if digest is not None else [])
-            ],
+            digest=digest,
         )
 
     report = score_event_quality_all(cases, runs)

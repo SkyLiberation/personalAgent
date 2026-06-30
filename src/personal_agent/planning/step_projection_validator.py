@@ -188,12 +188,37 @@ class StepProjectionValidator:
                             and "topic" in err
                             and intent == "consolidate_knowledge"
                         )
+                        deferred_research_topic = (
+                            s.tool_name == "research_prepare_run"
+                            and "topic" not in s.tool_input
+                            and "topic" in err
+                            and intent == "research_once"
+                        )
+                        deferred_research_run_id = (
+                            s.tool_name
+                            in {
+                                "research_initialize_state",
+                                "research_run_loop",
+                                "research_synthesize_digest",
+                                "research_verify_digest",
+                            }
+                            and "run_id" not in s.tool_input
+                            and "run_id" in err
+                            and (
+                                _has_upstream_tool(steps, s, {"research_prepare_run"})
+                                or _has_upstream_tool(steps, s, {"research_initialize_state"})
+                                or _has_upstream_tool(steps, s, {"research_run_loop"})
+                                or _has_upstream_tool(steps, s, {"research_synthesize_digest"})
+                            )
+                        )
                         if (
                             deferred_capture_text
                             or deferred_capture_url
                             or deferred_capture_upload
                             or deferred_delete_note_id
                             or deferred_consolidation_topic
+                            or deferred_research_topic
+                            or deferred_research_run_id
                         ):
                             continue
                         issues.append(f"{prefix} tool_input 参数校验失败: {err}")

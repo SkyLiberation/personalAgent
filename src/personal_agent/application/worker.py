@@ -133,7 +133,13 @@ class WorkflowWorker:
         run = self.runtime.research_store.get_run(run_id)
         if run is None:
             return False
-        if run.status not in {"completed", "partial"}:
+        if run.status not in {
+            "completed_verified",
+            "completed_with_limitations",
+            "partial_no_supported_claims",
+            "partial_budget_exhausted",
+            "partial_low_yield",
+        }:
             return False
         if run.subscription_id and run.digest_id:
             self.runtime.research_store.enqueue_delivery(run)
