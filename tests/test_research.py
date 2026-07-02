@@ -602,6 +602,7 @@ def test_personal_relevance_ranking_reuses_state_cache(postgres_url):
         id="run-1",
         user_id="alice",
         topic="Agent memory",
+        policy=ResearchPolicy(ranking_objective="personal_relevance_first"),
         window_start=datetime(2026, 6, 23, 0, 0, tzinfo=UTC),
         window_end=datetime(2026, 6, 24, 0, 0, tzinfo=UTC),
     )
@@ -633,6 +634,7 @@ def test_personal_relevance_ranking_reuses_state_cache(postgres_url):
     second = service._personalize_and_rank(run, None, [event.model_copy(deep=True)], state)
 
     assert tools.graph_search_calls == 1
+    assert state.tool_call_count == 0
     assert len(state.personal_relevance_cache) == 1
     assert first[0].personal_relevance.score == second[0].personal_relevance.score
 
@@ -645,6 +647,7 @@ def test_research_personalization_uses_enterprise_mcp_knowledge(postgres_url):
         id="run-1",
         user_id="alice",
         topic="Agent memory",
+        policy=ResearchPolicy(ranking_objective="personal_relevance_first"),
         window_start=datetime(2026, 6, 23, 0, 0, tzinfo=UTC),
         window_end=datetime(2026, 6, 24, 0, 0, tzinfo=UTC),
     )
@@ -682,6 +685,48 @@ def test_research_personalization_uses_enterprise_mcp_knowledge(postgres_url):
         "graph_search",
         "enterprise_knowledge_search",
     ]
+
+
+def test_research_personalization_skips_memory_tools_without_personal_intent(postgres_url):
+    tools = EnterpriseKnowledgeTools()
+    service, _, _ = _service(postgres_url)
+    service.tools = tools
+    run = ResearchRun(
+        id="run-1",
+        user_id="alice",
+        topic="Agent Runtime SDK",
+        window_start=datetime(2026, 6, 23, 0, 0, tzinfo=UTC),
+        window_end=datetime(2026, 6, 24, 0, 0, tzinfo=UTC),
+    )
+    event = ResearchEvent(
+        canonical_key="agent-runtime-sdk",
+        title="Agent Runtime SDK ships a new release",
+        summary="A public SDK release note.",
+        sources=[
+            ResearchSource(
+                id="source-1",
+                decision_id="decision-1",
+                url="https://example.com/agent-runtime-sdk",
+                canonical_url="https://example.com/agent-runtime-sdk",
+                domain="example.com",
+                title="Agent Runtime SDK ships a new release",
+            )
+        ],
+    )
+    state = ResearchState(
+        run_id=run.id,
+        topic=run.topic,
+        window_start=run.window_start,
+        window_end=run.window_end,
+    )
+
+    ranked = service._personalize_and_rank(run, None, [event], state)
+
+    assert tools.graph_search_calls == 0
+    assert tools.enterprise_search_calls == 0
+    assert ranked[0].personal_relevance.score == 0
+    assert state.tool_call_count == 0
+    assert state.tool_call_traces == []
 
 
 def test_research_pipeline_persists_events_and_digest(postgres_url):

@@ -48,6 +48,25 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
     def graph_search(question: str, user_id: str = "default", structured_context: dict[str, object] | None = None):
         if not graph_store.configured():
             raise ToolError("图谱未配置或未启用。", kind="permission")
+        has_user_data = getattr(graph_store, "has_user_data", None)
+        if callable(has_user_data):
+            try:
+                user_has_data = bool(has_user_data(user_id, fail_open=False))
+            except TypeError:
+                user_has_data = bool(has_user_data(user_id))
+        else:
+            user_has_data = True
+        if not user_has_data:
+            return tool_response(tool_success({
+                "answer": None,
+                "entity_names": [],
+                "relation_facts": [],
+                "related_episode_uuids": [],
+                "node_refs": [],
+                "edge_refs": [],
+                "fact_refs": [],
+                "skipped_reason": "no_user_graph_data",
+            }, []))
         result = graph_store.ask(_graph_search_text(question, structured_context or {}), user_id)
         if not result.enabled:
             raise ToolError(result.error or "图谱检索不可用。", kind="permission")

@@ -45,6 +45,7 @@ class GraphitiStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._indices_ready = False
+        self._user_data_probe_cache: dict[str, bool] = {}
         self.search_strategy: GraphSearchStrategy = apply_search_config_overrides(
             get_graph_search_strategy(settings.graphiti.search_strategy),
             max_hops=settings.graphiti.search_max_hops,
@@ -93,9 +94,12 @@ class GraphitiStore:
         if not self._neo4j_reachable():
             return GraphCaptureResult(enabled=False, error="Neo4j is not reachable.")
         try:
-            return asyncio.run(
+            result = asyncio.run(
                 self._ingest_note(note, trace_id=trace_id, attempt=attempt)
             )
+            if result.enabled:
+                self._user_data_probe_cache[self._group_id(note.user_id)] = True
+            return result
         except Exception as exc:
             logger.exception("Graphiti ingest failed for note %s", note.id)
             return GraphCaptureResult(
@@ -123,9 +127,14 @@ class GraphitiStore:
             }
         worker_count = max(1, max_workers or self.settings.graphiti.sync_max_workers)
         try:
-            return asyncio.run(
+            results = asyncio.run(
                 self._ingest_notes(notes, trace_id=trace_id, max_workers=worker_count)
             )
+            for note in notes:
+                result = results.get(note.id)
+                if result is not None and result.enabled:
+                    self._user_data_probe_cache[self._group_id(note.user_id)] = True
+            return results
         except Exception as exc:
             logger.exception("Graphiti batch ingest failed notes=%s", len(notes))
             return {
@@ -150,13 +159,37 @@ class GraphitiStore:
                 enabled=False, error=str(exc)[:500] or exc.__class__.__name__
             )
 
+    def has_user_data(self, user_id: str, *, fail_open: bool = True) -> bool:
+        cache_key = self._group_id(user_id)
+        if cache_key in self._user_data_probe_cache:
+            return self._user_data_probe_cache[cache_key]
+        if not self.configured():
+            return False
+        if not self._neo4j_reachable():
+            return False
+        try:
+            has_data = asyncio.run(self._has_user_data(user_id))
+            self._user_data_probe_cache[cache_key] = has_data
+            return has_data
+        except Exception as exc:
+            logger.warning(
+                "Graphiti user data probe failed for user %s: %s",
+                user_id,
+                exc.__class__.__name__,
+            )
+            if not fail_open:
+                self._user_data_probe_cache[cache_key] = False
+            return fail_open
+
     def clear_user_group(self, user_id: str) -> int:
         if not self.configured():
             return 0
         if not self._neo4j_reachable():
             return 0
         try:
-            return asyncio.run(self._clear_user_group(user_id))
+            deleted = asyncio.run(self._clear_user_group(user_id))
+            self._user_data_probe_cache[self._group_id(user_id)] = False
+            return deleted
         except Exception:
             logger.exception("Graphiti group reset failed for user %s", user_id)
             return 0
@@ -171,9 +204,11 @@ class GraphitiStore:
         if not self._neo4j_reachable():
             return 0
         try:
-            return asyncio.run(
+            deleted = asyncio.run(
                 self._clear_all_data(preserve_group_ids=preserve_group_ids)
             )
+            self._user_data_probe_cache.clear()
+            return deleted
         except Exception:
             logger.exception("Graphiti database reset failed")
             return 0
@@ -508,6 +543,30 @@ class GraphitiStore:
                 )
             finally:
                 await self._close_client(graphiti)
+
+    async def _has_user_data(self, user_id: str) -> bool:
+        driver = AsyncGraphDatabase.driver(
+            self.settings.graphiti.uri,
+            auth=(self.settings.graphiti.user, self.settings.graphiti.password),
+        )
+        try:
+            async with driver.session() as session:
+                result = await asyncio.wait_for(
+                    session.run(
+                        """
+                        MATCH (n)
+                        WHERE n.group_id = $group_id
+                        RETURN n.uuid AS uuid
+                        LIMIT 1
+                        """,
+                        group_id=self._group_id(user_id),
+                    ),
+                    timeout=2.0,
+                )
+                record = await asyncio.wait_for(result.single(), timeout=2.0)
+                return record is not None
+        finally:
+            await driver.close()
 
     async def _clear_user_group(self, user_id: str) -> int:
         graphiti = await self._build_client()

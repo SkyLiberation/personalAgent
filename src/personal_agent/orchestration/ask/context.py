@@ -1,8 +1,9 @@
 """Run-scoped context for the staged ask pipeline.
 
-The ask flow is split into three bounded stages (retrieval, generation,
-verification) that map 1:1 onto the ``ask-retrieve`` / ``ask-compose`` /
-``ask-verify`` workflow steps. ``AskRunContext`` is the mutable carrier that
+The ask flow is split into bounded stages (retrieval, generation,
+verification, repair) that map 1:1 onto the ``ask-retrieve`` /
+``ask-compose`` / ``ask-verify`` / ``ask-repair`` workflow steps.
+``AskRunContext`` is the mutable carrier that
 threads intermediate state between those stages within a single run.
 
 The large retrieval payload (evidence pool, context pack, scored matches) is
@@ -15,12 +16,69 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from personal_agent.kernel.evidence import ContextPack, EvidenceItem
 from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalPlan
+
+
+@dataclass
+class AskRepairEvent:
+    """One explicit repair action performed by ask-repair."""
+
+    source: str
+    reason: str
+    added_evidence_count: int = 0
+    flagged_claim_count: int = 0
+    retry_attempts: int = 0
+    verification_score_before: float = 0.0
+    verification_score_after: float = 0.0
+    ok_after: bool = False
+    sufficient_after: bool = False
+
+
+@dataclass
+class AskRepairTelemetry:
+    """Structured ask-repair loop telemetry.
+
+    This makes the repair stage observable as a first-class workflow step
+    instead of hiding contrastive/web fallbacks inside free-form trace text.
+    """
+
+    verification_attempt_count: int = 0
+    retry_attempt_count: int = 0
+    regeneration_count: int = 0
+    added_evidence_count: int = 0
+    repair_reasons: list[str] = field(default_factory=list)
+    fallback_sources: list[str] = field(default_factory=list)
+    final_grounding_status: str = "not_verified"
+    events: list[AskRepairEvent] = field(default_factory=list)
+
+    def mark_verification(self, verification: object | None) -> None:
+        self.verification_attempt_count += 1
+        self.final_grounding_status = _grounding_status(verification)
+
+    def record_retry(self, attempts: int) -> None:
+        if attempts <= 0:
+            return
+        self.retry_attempt_count += attempts
+        self.regeneration_count += attempts
+
+    def record_repair(self, event: AskRepairEvent) -> None:
+        self.events.append(event)
+        self.added_evidence_count += max(0, event.added_evidence_count)
+        if event.reason and event.reason not in self.repair_reasons:
+            self.repair_reasons.append(event.reason)
+        if event.source and event.source not in self.fallback_sources:
+            self.fallback_sources.append(event.source)
+        self.regeneration_count += 1
+        self.final_grounding_status = (
+            "supported"
+            if event.ok_after and event.sufficient_after
+            else "insufficient"
+        )
 
 
 @dataclass
@@ -46,6 +104,7 @@ class AskRunContext:
     combined_citations: list[Citation] = field(default_factory=list)
     web_tried: bool = False
     contrastive_tried: bool = False
+    retrieval_health: dict[str, Any] = field(default_factory=dict)
 
     # Context assembly output
     context_pack: ContextPack | None = None
@@ -55,12 +114,16 @@ class AskRunContext:
     # Generation + verification output
     answer: str = ""
     verification: object | None = None
+    repair: AskRepairTelemetry = field(default_factory=AskRepairTelemetry)
 
     # Human-readable trace breadcrumbs (parity with the old add_trace_step)
     trace_steps: list[str] = field(default_factory=list)
 
     def add_trace(self, message: str) -> None:
         self.trace_steps.append(message)
+
+    def repair_payload(self) -> dict[str, Any]:
+        return asdict(self.repair)
 
     @property
     def web_search_enabled_for_selected(self) -> bool:
@@ -73,7 +136,7 @@ class AskRunContext:
     def to_artifact_payload(self) -> dict[str, Any]:
         """Serialize the staged context into a JSON-compatible artifact payload."""
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "question": self.question,
             "user_id": self.user_id,
             "session_id": self.session_id,
@@ -89,11 +152,13 @@ class AskRunContext:
             "combined_citations": [_dump_model(item) for item in self.combined_citations],
             "web_tried": self.web_tried,
             "contrastive_tried": self.contrastive_tried,
+            "retrieval_health": dict(self.retrieval_health),
             "context_pack": _dump_model(self.context_pack),
             "selected_matches": [_dump_model(item) for item in self.selected_matches],
             "selected_citations": [_dump_model(item) for item in self.selected_citations],
             "answer": self.answer,
             "verification": _dump_verification(self.verification),
+            "repair": self.repair_payload(),
             "trace_steps": list(self.trace_steps),
         }
 
@@ -117,11 +182,14 @@ class AskRunContext:
         ctx.combined_citations = _load_model_list(Citation, payload.get("combined_citations"))
         ctx.web_tried = bool(payload.get("web_tried"))
         ctx.contrastive_tried = bool(payload.get("contrastive_tried"))
+        health = payload.get("retrieval_health")
+        ctx.retrieval_health = dict(health) if isinstance(health, dict) else {}
         ctx.context_pack = _load_model(ContextPack, payload.get("context_pack"))
         ctx.selected_matches = _load_model_list(KnowledgeNote, payload.get("selected_matches"))
         ctx.selected_citations = _load_model_list(Citation, payload.get("selected_citations"))
         ctx.answer = str(payload.get("answer") or "")
         ctx.verification = _load_verification(payload.get("verification"))
+        ctx.repair = _load_repair(payload.get("repair"))
         trace_steps = payload.get("trace_steps")
         ctx.trace_steps = [str(item) for item in trace_steps] if isinstance(trace_steps, list) else []
         return ctx
@@ -174,15 +242,36 @@ class PostgresAskRunContextStore(AskRunContextStore):
                 cur.execute(
                     """
                     INSERT INTO workflow_artifacts (
-                        artifact_id, run_id, kind, payload, content_hash, created_at, updated_at
+                        artifact_id, run_id, step_id, kind, schema_version,
+                        payload, summary, created_by_step, consumed_by_steps,
+                        user_id, content_hash, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, now(), now())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
                     ON CONFLICT (artifact_id) DO UPDATE
-                    SET payload = EXCLUDED.payload,
+                    SET step_id = EXCLUDED.step_id,
+                        kind = EXCLUDED.kind,
+                        schema_version = EXCLUDED.schema_version,
+                        payload = EXCLUDED.payload,
+                        summary = EXCLUDED.summary,
+                        created_by_step = EXCLUDED.created_by_step,
+                        consumed_by_steps = EXCLUDED.consumed_by_steps,
+                        user_id = EXCLUDED.user_id,
                         content_hash = EXCLUDED.content_hash,
                         updated_at = now()
                     """,
-                    (artifact_id, run_id, "ask_run_context", Jsonb(payload), content_hash),
+                    (
+                        artifact_id,
+                        run_id,
+                        "ask-run-context",
+                        "ask_run_context",
+                        int(payload.get("schema_version") or 1),
+                        Jsonb(payload),
+                        "Staged ask context",
+                        "ask-retrieve",
+                        Jsonb(["ask-compose", "ask-verify", "ask-repair"]),
+                        ctx.user_id,
+                        content_hash,
+                    ),
                 )
 
     def get(self, run_id: str) -> AskRunContext | None:
@@ -237,8 +326,14 @@ class PostgresAskRunContextStore(AskRunContextStore):
                     CREATE TABLE IF NOT EXISTS workflow_artifacts (
                         artifact_id TEXT PRIMARY KEY,
                         run_id TEXT NOT NULL,
+                        step_id TEXT NOT NULL DEFAULT '',
                         kind TEXT NOT NULL,
+                        schema_version INTEGER NOT NULL DEFAULT 1,
                         payload JSONB NOT NULL,
+                        summary TEXT NOT NULL DEFAULT '',
+                        created_by_step TEXT NOT NULL DEFAULT '',
+                        consumed_by_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        user_id TEXT NOT NULL DEFAULT '',
                         content_hash TEXT NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -249,6 +344,18 @@ class PostgresAskRunContextStore(AskRunContextStore):
                     """
                     CREATE INDEX IF NOT EXISTS workflow_artifacts_run_kind_idx
                     ON workflow_artifacts (run_id, kind, updated_at DESC)
+                    """
+                )
+                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS step_id TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1")
+                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS created_by_step TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS consumed_by_steps JSONB NOT NULL DEFAULT '[]'::jsonb")
+                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''")
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS workflow_artifacts_run_step_idx
+                    ON workflow_artifacts (run_id, step_id, kind, updated_at DESC)
                     """
                 )
         self._initialized = True
@@ -285,7 +392,7 @@ def _load_model_list(model_type, value: Any) -> list:
 def _dump_verification(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
-    from dataclasses import asdict, is_dataclass
+    from dataclasses import is_dataclass
 
     if is_dataclass(value):
         return asdict(value)
@@ -319,6 +426,53 @@ def _load_verification(value: Any):
         warnings=[str(item) for item in value.get("warnings", [])],
         claim_checks=claim_checks,
     )
+
+
+def _load_repair(value: Any) -> AskRepairTelemetry:
+    if not isinstance(value, dict):
+        return AskRepairTelemetry()
+    events_raw = value.get("events")
+    events = [
+        AskRepairEvent(
+            source=str(item.get("source") or ""),
+            reason=str(item.get("reason") or ""),
+            added_evidence_count=int(item.get("added_evidence_count") or 0),
+            flagged_claim_count=int(item.get("flagged_claim_count") or 0),
+            retry_attempts=int(item.get("retry_attempts") or 0),
+            verification_score_before=float(item.get("verification_score_before") or 0.0),
+            verification_score_after=float(item.get("verification_score_after") or 0.0),
+            ok_after=bool(item.get("ok_after")),
+            sufficient_after=bool(item.get("sufficient_after")),
+        )
+        for item in events_raw
+        if isinstance(item, dict)
+    ] if isinstance(events_raw, list) else []
+    return AskRepairTelemetry(
+        verification_attempt_count=int(value.get("verification_attempt_count") or 0),
+        retry_attempt_count=int(value.get("retry_attempt_count") or 0),
+        regeneration_count=int(value.get("regeneration_count") or 0),
+        added_evidence_count=int(value.get("added_evidence_count") or 0),
+        repair_reasons=[
+            str(item) for item in value.get("repair_reasons", [])
+        ] if isinstance(value.get("repair_reasons"), list) else [],
+        fallback_sources=[
+            str(item) for item in value.get("fallback_sources", [])
+        ] if isinstance(value.get("fallback_sources"), list) else [],
+        final_grounding_status=str(value.get("final_grounding_status") or "not_verified"),
+        events=events,
+    )
+
+
+def _grounding_status(verification: object | None) -> str:
+    if verification is None:
+        return "not_verified"
+    ok = bool(getattr(verification, "ok", False))
+    sufficient = bool(getattr(verification, "sufficient", False))
+    if ok and sufficient:
+        return "supported"
+    if ok:
+        return "weak_evidence"
+    return "failed"
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:

@@ -1,11 +1,11 @@
-"""The three bounded ask stages: retrieval, generation, verification.
+"""The bounded ask stages: retrieval, generation, verification, repair.
 
-These map 1:1 onto the ``ask-retrieve`` / ``ask-compose`` / ``ask-verify``
-workflow steps. Each stage reads from and writes to the shared
+These map 1:1 onto the ``ask-retrieve`` / ``ask-compose`` / ``ask-verify`` /
+``ask-repair`` workflow steps. Each stage reads from and writes to the shared
 :class:`AskRunContext`. Heavy collaborator logic (prompt building, the verifier,
 the retry loop) lives on :class:`AskService`; the stages orchestrate it.
 
-The web fallback is no longer a copy-paste of the main path: it appends web
+The repair stage is a first-class workflow step: it appends contrastive or web
 evidence to the pool, then re-runs context assembly + generation + one
 verify/retry pass by reusing the same stage objects.
 """
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from personal_agent.kernel.evidence import ContextPack, apply_rrf_fusion, compress_evidence
+from personal_agent.application.evidence_engine import EvidenceAssemblyRequest
 from personal_agent.orchestration.runtime_helpers import _annotate_answer
-from personal_agent.orchestration.ask.evidence_ops import dedupe_evidence, selected_citations, selected_matches
+from personal_agent.orchestration.ask.context import AskRepairEvent
 from personal_agent.orchestration.ask.retrievers import RetrievalCoordinator
 
 if TYPE_CHECKING:
@@ -55,66 +55,29 @@ class RetrievalStage:
         """Dedupe pool → enrich candidates → rerank into a ContextPack, then
         derive selected matches/citations. Reused by the web fallback."""
         svc = self._service
-        ctx.evidence_pool = dedupe_evidence(ctx.evidence_pool)
-        ctx.evidence_pool = apply_rrf_fusion(ctx.evidence_pool)
-        fused = sum(1 for it in ctx.evidence_pool if it.metadata.get("consensus_count", 1) > 1)
-        if fused:
-            ctx.add_trace(f"RRF 融合: 多路共识证据 consensus_items={fused}")
         components = svc._ask_components
-        enriched = components.candidate_enricher.enrich(
-            ctx.effective_query,
+        assembled = svc.evidence_engine.assemble_context(EvidenceAssemblyRequest(
+            question=ctx.effective_query,
             evidence=ctx.evidence_pool,
             matches=ctx.combined_matches,
             citations=ctx.combined_citations,
             store=svc.memory,
             filters=ctx.retrieval_plan.filters,
-        )
-        ctx.combined_matches = enriched.matches
-        ctx.combined_citations = enriched.citations
-        if enriched.added_note_ids:
-            ctx.add_trace(
-                f"CandidateEnricher({components.candidate_enricher.name}): "
-                f"added={len(enriched.added_note_ids)}"
-            )
-        context_pack: ContextPack = components.reranker.rerank(
-            ctx.effective_query,
-            _compressed_evidence(ctx, enriched.evidence, components),
+            candidate_enricher=components.candidate_enricher,
+            reranker=components.reranker,
             max_items=components.context_max_items,
             char_budget=components.context_char_budget,
             mmr_lambda=components.context_mmr_lambda,
-        )
-        ctx.context_pack = context_pack
-        selected_graph_items = [
-            item for item in context_pack.evidence
-            if item.source_type == "graph_fact"
-            or item.metadata.get("retrieved_by") in {"graphiti", "structural"}
-        ]
-        ctx.add_trace(
-            f"ContextPack({components.reranker.name}): "
-            f"selected={len(context_pack.selected)} dropped={len(context_pack.dropped)} "
-            f"graph_selected={len(selected_graph_items)} "
-            f"chars={context_pack.used_chars}/{context_pack.char_budget}"
-        )
-        ctx.selected_matches = selected_matches(ctx.combined_matches, context_pack.evidence)
-        ctx.selected_citations = selected_citations(ctx.combined_citations, context_pack.evidence)
-
-
-def _compressed_evidence(ctx, evidence, components):
-    """Extractive sentence-level compression before rerank.
-
-    Trims long note/chunk snippets to their most question-relevant sentences so
-    the char budget admits more distinct evidence. Disabled when
-    ``context_compress_max_sentences <= 0``."""
-    max_sentences = components.context_compress_max_sentences
-    if max_sentences <= 0:
-        return evidence
-    compressed = compress_evidence(
-        ctx.effective_query, evidence, max_sentences=max_sentences
-    )
-    trimmed = sum(1 for it in compressed if it.metadata.get("compressed_from_chars"))
-    if trimmed:
-        ctx.add_trace(f"ContextCompressor: 句级压缩 trimmed_snippets={trimmed}")
-    return compressed
+            compress_max_sentences=components.context_compress_max_sentences,
+        ))
+        ctx.evidence_pool = assembled.evidence
+        ctx.combined_matches = assembled.matches
+        ctx.combined_citations = assembled.citations
+        ctx.context_pack = assembled.context_pack
+        ctx.selected_matches = assembled.selected_matches
+        ctx.selected_citations = assembled.selected_citations
+        for line in assembled.trace:
+            ctx.add_trace(line)
 
 
 class GenerationStage:
@@ -134,13 +97,10 @@ class GenerationStage:
 
 
 class VerificationStage:
-    """ask-verify: verify + retry, optional web fallback (re-assemble + re-compose
-    + re-verify), then annotate the answer when still insufficient."""
+    """ask-verify: verify + bounded retry only."""
 
-    def __init__(self, service: "AskService", retrieval_stage: "RetrievalStage") -> None:
+    def __init__(self, service: "AskService") -> None:
         self._service = service
-        self._retrieval = retrieval_stage
-        self._generation = GenerationStage(service)
 
     def run(self, ctx: "AskRunContext") -> None:
         svc = self._service
@@ -154,6 +114,7 @@ class VerificationStage:
             thread_id=ctx.thread_key,
             user_id=ctx.user_id,
         )
+        ctx.repair.mark_verification(verification)
         if ctx.selected_matches or ctx.selected_citations:
             retry_result = svc._retry_if_needed(
                 ctx.question,
@@ -166,16 +127,37 @@ class VerificationStage:
             )
             ctx.answer = retry_result.answer
             verification = retry_result.verification
+            ctx.repair.record_retry(retry_result.attempts)
+            if retry_result.attempts:
+                ctx.repair.mark_verification(verification)
         ctx.verification = verification
         ctx.add_trace(f"Verifier: score={verification.evidence_score:.2f} ok={verification.ok}")
 
-        if self._should_seek_contrast(svc, ctx, verification):
+
+class RepairStage:
+    """ask-repair: explicit repair loop after ask-verify."""
+
+    def __init__(self, service: "AskService", retrieval_stage: "RetrievalStage") -> None:
+        self._service = service
+        self._retrieval = retrieval_stage
+        self._generation = GenerationStage(service)
+
+    def run(self, ctx: "AskRunContext") -> None:
+        verification = ctx.verification
+        if verification is None:
+            return
+        if self._should_seek_contrast(self._service, ctx, verification):
             verification = self._contrastive_pass(ctx, verification)
 
-        if not verification.sufficient and not ctx.web_tried and svc._web_search_available:
+        if (
+            not verification.sufficient
+            and not ctx.web_tried
+            and self._service._web_search_available
+            and self._should_use_web_fallback(ctx)
+        ):
             verification = self._web_fallback(ctx)
 
-        if not verification.ok or not verification.sufficient:
+        if verification is not None and (not verification.ok or not verification.sufficient):
             ctx.answer = _annotate_answer(ctx.answer, verification)
 
     @staticmethod
@@ -187,6 +169,31 @@ class VerificationStage:
         checks = getattr(verification, "claim_checks", None) or []
         return any(c.status in ("contradicted", "not_found") for c in checks)
 
+    @staticmethod
+    def _should_use_web_fallback(ctx: "AskRunContext") -> bool:
+        understanding = ctx.understanding
+        answer_policy = getattr(understanding, "answer_policy", "")
+        if answer_policy == "refuse_if_insufficient":
+            return False
+        needs_freshness = bool(getattr(understanding, "needs_freshness", False))
+        question = ctx.question.lower()
+        personal_markers = (
+            "我的",
+            "我上次",
+            "上次",
+            "之前",
+            "曾经",
+            "记过",
+            "保存",
+            "知识库",
+            "笔记",
+            "personal",
+            "my ",
+        )
+        if not needs_freshness and any(marker in question for marker in personal_markers):
+            return False
+        return True
+
     def _flagged_claims(self, verification) -> list[str]:
         checks = getattr(verification, "claim_checks", None) or []
         return [c.claim for c in checks if c.status in ("contradicted", "not_found")]
@@ -196,6 +203,8 @@ class VerificationStage:
         + re-verify so the answer accounts for both sides."""
         svc = self._service
         claims = self._flagged_claims(verification)
+        before_count = len(ctx.evidence_pool)
+        score_before = float(getattr(verification, "evidence_score", 0.0) or 0.0)
         if not self._retrieval._coordinator.add_contrastive_evidence(ctx, claims):
             return verification
         self._retrieval._assemble_context(ctx)
@@ -210,7 +219,18 @@ class VerificationStage:
             thread_id=ctx.thread_key,
             user_id=ctx.user_id,
         )
+        ctx.repair.mark_verification(verification)
         ctx.verification = verification
+        ctx.repair.record_repair(AskRepairEvent(
+            source="contrastive",
+            reason="claim_contradicted_or_not_found",
+            added_evidence_count=max(0, len(ctx.evidence_pool) - before_count),
+            flagged_claim_count=len(claims),
+            verification_score_before=score_before,
+            verification_score_after=float(verification.evidence_score),
+            ok_after=bool(verification.ok),
+            sufficient_after=bool(verification.sufficient),
+        ))
         ctx.add_trace(
             f"反证补充后 Verifier: score={verification.evidence_score:.2f} ok={verification.ok}"
         )
@@ -219,6 +239,8 @@ class VerificationStage:
     def _web_fallback(self, ctx: "AskRunContext"):
         """Append web evidence, then reuse assembly + generation + one verify/retry."""
         svc = self._service
+        before_count = len(ctx.evidence_pool)
+        score_before = float(getattr(ctx.verification, "evidence_score", 0.0) or 0.0)
         if not self._retrieval._coordinator.add_web_fallback(ctx):
             return ctx.verification
         self._retrieval._assemble_context(ctx)
@@ -233,6 +255,7 @@ class VerificationStage:
             thread_id=ctx.thread_key,
             user_id=ctx.user_id,
         )
+        ctx.repair.mark_verification(verification)
         retry_result = svc._retry_if_needed(
             ctx.question,
             ctx.answer,
@@ -244,7 +267,20 @@ class VerificationStage:
         )
         ctx.answer = retry_result.answer
         verification = retry_result.verification
+        ctx.repair.record_retry(retry_result.attempts)
+        if retry_result.attempts:
+            ctx.repair.mark_verification(verification)
         ctx.verification = verification
+        ctx.repair.record_repair(AskRepairEvent(
+            source="web",
+            reason="evidence_insufficient",
+            added_evidence_count=max(0, len(ctx.evidence_pool) - before_count),
+            retry_attempts=retry_result.attempts,
+            verification_score_before=score_before,
+            verification_score_after=float(verification.evidence_score),
+            ok_after=bool(verification.ok),
+            sufficient_after=bool(verification.sufficient),
+        ))
         ctx.add_trace(
             f"网络补充后 Verifier: score={verification.evidence_score:.2f} ok={verification.ok}"
         )

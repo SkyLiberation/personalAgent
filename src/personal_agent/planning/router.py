@@ -244,6 +244,11 @@ class DefaultIntentRouter:
             self._log_decision(entry_input, artifact_decision, strategy="artifact_rule")
             return artifact_decision
 
+        compound_decision = _deterministic_compound_capture_ask_decision(entry_input.text)
+        if compound_decision is not None:
+            self._log_decision(entry_input, compound_decision, strategy="compound_rule")
+            return compound_decision
+
         deterministic = _deterministic_research_decision(entry_input.text)
         if deterministic is not None:
             self._log_decision(entry_input, deterministic, strategy="rule")
@@ -261,6 +266,11 @@ class DefaultIntentRouter:
                 strategy="empty" if not entry_input.text.strip() else "llm",
             )
             return decision
+
+        deterministic_fallback = _deterministic_basic_decision(entry_input.text)
+        if deterministic_fallback is not None:
+            self._log_decision(entry_input, deterministic_fallback, strategy="offline_fallback")
+            return deterministic_fallback
 
         decision = _router_unavailable_decision()
         self._log_decision(
@@ -367,6 +377,130 @@ def _deterministic_research_decision(text: str) -> RouterDecision | None:
         "research_once",
         input_text=stripped,
     )
+
+
+def _deterministic_basic_decision(text: str) -> RouterDecision | None:
+    stripped = text.strip()
+    if not stripped:
+        return _single_goal_decision(
+            "unknown",
+            input_text="",
+            requires_clarification=True,
+            missing_information=["明确的目标、问题或操作对象"],
+            clarification_prompt="请补充你想记录、查询、总结或执行的具体内容。",
+        )
+    lowered = stripped.lower()
+    if _has_any(stripped, ("知识简报", "复习简报", "今日简报", "今天简报")):
+        return _single_goal_decision("review_digest", input_text=stripped)
+    if (
+        _has_any(stripped, ("知识缺口", "缺口", "知识孤岛", "薄弱连接"))
+        or ("知识库" in stripped and _has_any(stripped, ("冲突", "薄弱", "孤岛")))
+    ):
+        return _single_goal_decision("inspect_knowledge_gaps", input_text=stripped)
+    if _has_any(stripped, ("workflow", "run_id", "执行历史")) and _has_any(
+        stripped,
+        ("查看", "诊断", "步骤", "失败", "执行"),
+    ):
+        return _single_goal_decision("inspect_workflow", input_text=stripped)
+    if _has_any(stripped, ("worker", "队列", "后台任务", "失败任务", "dead 任务")) and _has_any(
+        stripped,
+        ("查看", "诊断", "堆积", "重试", "失败"),
+    ):
+        return _single_goal_decision("inspect_operations", input_text=stripped)
+    if _has_any(stripped, ("过期", "替换", "修正", "标记冲突")) and _has_any(
+        stripped,
+        ("知识", "笔记", "这条"),
+    ):
+        return _single_goal_decision("maintain_knowledge", input_text=stripped)
+    if _has_any(stripped, ("暂停", "恢复", "马上跑", "立即运行", "改成")) and _has_any(
+        stripped,
+        ("订阅", "简报", "research", "调研"),
+    ):
+        return _single_goal_decision("manage_research", input_text=stripped)
+    if _has_any(stripped, ("每天", "每周", "每日", "定时")) and _has_any(
+        stripped,
+        ("收集", "简报", "订阅", "调研"),
+    ):
+        return _single_goal_decision("create_research_subscription", input_text=stripped)
+    if _has_any(stripped, ("删除", "删掉", "移除")) and _has_any(
+        stripped,
+        ("知识", "笔记", "记录"),
+    ):
+        return _single_goal_decision("delete_knowledge", input_text=stripped)
+    if _has_any(stripped, ("固化", "沉淀")) or (
+        _has_any(stripped, ("刚才", "上述", "前面", "对话"))
+        and _has_any(stripped, ("记下来", "保存", "入库"))
+    ):
+        return _single_goal_decision("solidify_conversation", input_text=stripped)
+    if _has_any(stripped, ("总结", "概括")) and _has_any(
+        stripped,
+        ("线程", "会话", "群聊", "聊天", "对话"),
+    ):
+        return _single_goal_decision("summarize_thread", input_text=stripped)
+    if _has_any(stripped, ("整理成一篇综述", "整理相关笔记", "合并笔记", "巩固")):
+        return _single_goal_decision("consolidate_knowledge", input_text=stripped)
+    answer_markers = (
+        "然后回答",
+        "然后直接回答",
+        "再回答",
+        "再直接回答",
+        "并回答",
+        "并直接回答",
+    )
+    if any(word in stripped for word in ("记住", "记一下")) and any(
+        word in stripped for word in answer_markers
+    ):
+        return _compound_capture_ask_decision(stripped)
+    if stripped.startswith(("http://", "https://")):
+        return _single_goal_decision("capture_link", input_text=stripped)
+    if any(word in stripped for word in ("记一下", "记住", "记录", "保存这段")):
+        return _single_goal_decision("capture_text", input_text=stripped)
+    if any(word in stripped for word in ("你好", "谢谢", "你是谁")):
+        return _single_goal_decision(
+            "direct_answer",
+            input_text=stripped,
+            route_type="direct_answer",
+        )
+    if any(word in lowered for word in ("delete", "send email")):
+        return None
+    return _single_goal_decision("ask", input_text=stripped)
+
+
+def _deterministic_compound_capture_ask_decision(text: str) -> RouterDecision | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    answer_markers = (
+        "然后回答",
+        "然后直接回答",
+        "再回答",
+        "再直接回答",
+        "并回答",
+        "并直接回答",
+    )
+    if any(word in stripped for word in ("记住", "记一下")) and any(
+        word in stripped for word in answer_markers
+    ):
+        return _compound_capture_ask_decision(stripped)
+    return None
+
+
+def _compound_capture_ask_decision(stripped: str) -> RouterDecision:
+    return RouterDecision(
+        user_goal="记录一条知识并基于该主题回答后续问题",
+        route_type="composite_workflow",
+        matched_capabilities=["capture_text", "ask"],
+        coverage="full",
+        goals=[
+            Goal(goal_id="goal_1", intent="capture_text", input=stripped),
+            Goal(goal_id="goal_2", intent="ask", input=stripped),
+        ],
+    )
+
+
+def _has_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(term.lower() in lowered for term in terms)
 
 
 def _deterministic_artifact_decision(entry_input: EntryInput) -> RouterDecision | None:

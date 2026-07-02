@@ -29,6 +29,11 @@ class _GraphStore:
         )
 
 
+class _EmptyGraphStore(_GraphStore):
+    def has_user_data(self, user_id: str):
+        return False
+
+
 def test_graph_search_accepts_structured_context():
     graph = _GraphStore()
     executor = ToolExecutor()
@@ -50,3 +55,19 @@ def test_graph_search_accepts_structured_context():
     assert result["ok"]
     assert "event_type: product_release" in graph.questions[0]
     assert "entities: OpenAI, Agent Runtime SDK" in graph.questions[0]
+
+
+def test_graph_search_skips_empty_user_graph():
+    graph = _EmptyGraphStore()
+    executor = ToolExecutor()
+    executor.register(build_graph_search_tool(graph))
+
+    result = executor.invoke_direct(
+        "graph_search",
+        question="Agent Runtime SDK",
+        user_id="alice",
+    )
+
+    assert result["ok"]
+    assert result["data"]["skipped_reason"] == "no_user_graph_data"
+    assert graph.questions == []

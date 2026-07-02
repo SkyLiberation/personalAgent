@@ -55,6 +55,7 @@ def test_planner_compiles_ingest_then_ask_workflows():
         "question::ask-retrieve",
         "question::ask-compose",
         "question::ask-verify",
+        "question::ask-repair",
     ]
     assert steps[1].depends_on == ["save::cap-structure"]
     assert plan.tasks[1].depends_on == ["save"]
@@ -102,7 +103,7 @@ def test_planner_links_continuation_goal_to_previous_task():
 
     assert [task.depends_on for task in plan.tasks] == [[], ["first"]]
     second_root = next(step for step in steps if step.step_id == "second::ask-retrieve")
-    assert second_root.depends_on == ["first::ask-verify"]
+    assert second_root.depends_on == ["first::ask-repair"]
 
 
 def test_planner_uses_model_dependency_decision_for_semantic_followup():
@@ -118,7 +119,7 @@ def test_planner_uses_model_dependency_decision_for_semantic_followup():
     assert model_client.calls == 1
     assert [task.depends_on for task in plan.tasks] == [[], ["first"]]
     second_root = next(step for step in steps if step.step_id == "second::ask-retrieve")
-    assert second_root.depends_on == ["first::ask-verify"]
+    assert second_root.depends_on == ["first::ask-repair"]
 
 
 def test_planner_topologically_sorts_model_task_dag():
@@ -138,6 +139,7 @@ def test_planner_topologically_sorts_model_task_dag():
         "question::ask-retrieve",
         "question::ask-compose",
         "question::ask-verify",
+        "question::ask-repair",
     ]
     question_root = next(step for step in steps if step.step_id == "question::ask-retrieve")
     assert question_root.depends_on == ["save::cap-structure"]

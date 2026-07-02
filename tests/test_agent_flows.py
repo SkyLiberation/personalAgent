@@ -53,6 +53,7 @@ def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentSe
         "goal_2::ask-retrieve",
         "goal_2::ask-compose",
         "goal_2::ask-verify",
+        "goal_2::ask-repair",
     ]
     assert all(step["status"] == "completed" for step in result.steps)
     assert any("DNS 将域名解析为 IP 地址" in note.content for note in service.store.list_notes("default"))
@@ -96,6 +97,10 @@ class TestCaptureFlow:
         assert result.note.body.content
         assert result.note.body.summary
         assert result.note.source.type == "text"
+        assert result.note.version.content_hash
+        assert result.note.version.source_fingerprint == result.note.source.fingerprint
+        assert result.note.version.chunking_version == "unstructured:v1"
+        assert result.note.version.graph_extraction_version == "graphiti:v1"
         assert result.note.graph_sync.status in {"idle", "failed", "synced"}
 
     def test_capture_produces_review_card(self, service: AgentService):

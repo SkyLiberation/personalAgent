@@ -21,8 +21,14 @@ from personal_agent.orchestration.ask.evidence_ops import (
     selected_matches as _selected_matches,
 )
 from personal_agent.orchestration.ask.prompts import AskPromptMixin
-from personal_agent.orchestration.ask.stages import GenerationStage, RetrievalStage, VerificationStage
+from personal_agent.orchestration.ask.stages import (
+    GenerationStage,
+    RepairStage,
+    RetrievalStage,
+    VerificationStage,
+)
 from personal_agent.application.ask_pipeline_factory import AskPipelineComponents, AskPipelineFactory
+from personal_agent.application.evidence_engine import EvidenceEngine
 from personal_agent.planning.query_planner import plan_retrieval
 from personal_agent.orchestration.runtime_helpers import (
     _best_snippet,
@@ -75,6 +81,7 @@ class AskService(AskPromptMixin):
         self._verifier = verifier
         self._llm = llm
         self._planner_client = planner_client
+        self.evidence_engine = EvidenceEngine()
         self.dialogue_context_policy = get_prompt("answer.dialogue_context_policy").template
 
     @property
@@ -139,8 +146,12 @@ class AskService(AskPromptMixin):
         GenerationStage(self).run(ctx)
 
     def run_verification_stage(self, ctx: AskRunContext) -> None:
-        """ask-verify: verify + retry + web fallback + annotate."""
-        VerificationStage(self, RetrievalStage(self)).run(ctx)
+        """ask-verify: verify + bounded retry."""
+        VerificationStage(self).run(ctx)
+
+    def run_repair_stage(self, ctx: AskRunContext) -> None:
+        """ask-repair: contrastive/web repair + annotate."""
+        RepairStage(self, RetrievalStage(self)).run(ctx)
 
     def context_to_result(self, ctx: AskRunContext) -> AskResult:
         ordered_matches = _selected_matches(ctx.combined_matches, ctx.context_pack.evidence)
@@ -152,6 +163,7 @@ class AskService(AskPromptMixin):
             match_refs=_match_refs(ordered_matches),
             evidence=ctx.context_pack.evidence,
             session_id=ctx.session_id,
+            repair_telemetry=ctx.repair_payload(),
         )
         verification = ctx.verification
         logger.info(
@@ -175,13 +187,14 @@ class AskService(AskPromptMixin):
 
         Kept as the whole-pipeline entrypoint for evals (``current_runtime_ask``)
         and unit tests. The orchestration graph instead drives the three stages
-        individually via the ask-retrieve / ask-compose / ask-verify steps so the
-        step panel reflects each phase honestly.
+        individually via the ask-retrieve / ask-compose / ask-verify /
+        ask-repair steps so the step panel reflects each phase honestly.
         """
         ctx = self.build_run_context(question, user_id, session_id, conversation_messages)
         self.run_retrieval_stage(ctx)
         self.run_generation_stage(ctx)
         self.run_verification_stage(ctx)
+        self.run_repair_stage(ctx)
         return self.context_to_result(ctx)
 
     @staticmethod

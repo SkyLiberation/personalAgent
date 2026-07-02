@@ -69,7 +69,7 @@ _REPLANNER_RESPONSE_SCHEMA = {
                     "step_id": {"type": "string"},
                     "action_type": {
                         "type": "string",
-                        "enum": ["retrieve", "tool_call", "compose", "verify"],
+                        "enum": ["retrieve", "tool_call", "compose", "verify", "repair"],
                     },
                     "description": {"type": "string"},
                     "tool_name": {"type": ["string", "null"]},
@@ -228,7 +228,7 @@ class Replanner:
             if not parsed.ok:
                 return None
 
-            valid_actions = {"retrieve", "tool_call", "compose", "verify"}
+            valid_actions = {"retrieve", "tool_call", "compose", "verify", "repair"}
             revised: list[ExecutionStep] = []
             for item in parsed.value.steps:
                 if item.action_type not in valid_actions:

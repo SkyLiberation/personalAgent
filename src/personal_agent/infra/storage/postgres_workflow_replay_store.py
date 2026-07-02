@@ -16,8 +16,14 @@ from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 class WorkflowArtifactRecord:
     artifact_id: str
     run_id: str
+    step_id: str
     kind: str
+    schema_version: int
     payload: dict
+    summary: str
+    created_by_step: str
+    consumed_by_steps: list[str]
+    user_id: str
     content_hash: str
     created_at: datetime
     updated_at: datetime
@@ -52,8 +58,14 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                     CREATE TABLE IF NOT EXISTS workflow_artifacts (
                         artifact_id TEXT PRIMARY KEY,
                         run_id TEXT NOT NULL,
+                        step_id TEXT NOT NULL DEFAULT '',
                         kind TEXT NOT NULL,
+                        schema_version INTEGER NOT NULL DEFAULT 1,
                         payload JSONB NOT NULL,
+                        summary TEXT NOT NULL DEFAULT '',
+                        created_by_step TEXT NOT NULL DEFAULT '',
+                        consumed_by_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        user_id TEXT NOT NULL DEFAULT '',
                         content_hash TEXT NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -69,9 +81,33 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                     "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS redacted_at TIMESTAMPTZ"
                 )
                 cur.execute(
+                    "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS step_id TEXT NOT NULL DEFAULT ''"
+                )
+                cur.execute(
+                    "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1"
+                )
+                cur.execute(
+                    "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''"
+                )
+                cur.execute(
+                    "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS created_by_step TEXT NOT NULL DEFAULT ''"
+                )
+                cur.execute(
+                    "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS consumed_by_steps JSONB NOT NULL DEFAULT '[]'::jsonb"
+                )
+                cur.execute(
+                    "ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+                )
+                cur.execute(
                     """
                     CREATE INDEX IF NOT EXISTS workflow_artifacts_run_kind_idx
                     ON workflow_artifacts (run_id, kind, updated_at DESC)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS workflow_artifacts_run_step_idx
+                    ON workflow_artifacts (run_id, step_id, kind, updated_at DESC)
                     """
                 )
                 cur.execute(
@@ -105,6 +141,12 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
         run_id: str,
         kind: str,
         payload: dict,
+        step_id: str = "",
+        schema_version: int = 1,
+        summary: str = "",
+        created_by_step: str = "",
+        consumed_by_steps: list[str] | None = None,
+        user_id: str = "",
         retention_days: int | None = None,
     ) -> WorkflowArtifactRecord:
         self.ensure_schema()
@@ -128,19 +170,43 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                 cur.execute(
                     """
                     INSERT INTO workflow_artifacts (
-                        artifact_id, run_id, kind, payload, content_hash, expires_at
+                        artifact_id, run_id, step_id, kind, schema_version,
+                        payload, summary, created_by_step, consumed_by_steps,
+                        user_id, content_hash, expires_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (artifact_id) DO UPDATE
-                    SET payload = EXCLUDED.payload,
+                    SET step_id = EXCLUDED.step_id,
+                        kind = EXCLUDED.kind,
+                        schema_version = EXCLUDED.schema_version,
+                        payload = EXCLUDED.payload,
+                        summary = EXCLUDED.summary,
+                        created_by_step = EXCLUDED.created_by_step,
+                        consumed_by_steps = EXCLUDED.consumed_by_steps,
+                        user_id = EXCLUDED.user_id,
                         content_hash = EXCLUDED.content_hash,
                         expires_at = EXCLUDED.expires_at,
                         redacted_at = NULL,
                         updated_at = now()
-                    RETURNING artifact_id, run_id, kind, payload, content_hash,
+                    RETURNING artifact_id, run_id, step_id, kind, schema_version,
+                              payload, summary, created_by_step, consumed_by_steps,
+                              user_id, content_hash,
                               created_at, updated_at, expires_at, redacted_at
                     """,
-                    (artifact_id, run_id, kind, Jsonb(payload), content_hash, expires_at),
+                    (
+                        artifact_id,
+                        run_id,
+                        step_id,
+                        kind,
+                        max(1, int(schema_version)),
+                        Jsonb(payload),
+                        summary,
+                        created_by_step or step_id,
+                        Jsonb(consumed_by_steps or []),
+                        user_id,
+                        content_hash,
+                        expires_at,
+                    ),
                 )
                 row = cur.fetchone()
         return _artifact_from_row(row)
@@ -150,6 +216,7 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
         run_id: str,
         *,
         kind: str | None = None,
+        step_id: str | None = None,
         limit: int = 50,
     ) -> list[WorkflowArtifactRecord]:
         if not run_id.strip():
@@ -160,12 +227,17 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
         if kind:
             clauses.append("kind = %s")
             params.append(kind)
+        if step_id:
+            clauses.append("step_id = %s")
+            params.append(step_id)
         params.append(max(1, limit))
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT artifact_id, run_id, kind, payload, content_hash,
+                    SELECT artifact_id, run_id, step_id, kind, schema_version,
+                           payload, summary, created_by_step, consumed_by_steps,
+                           user_id, content_hash,
                            created_at, updated_at, expires_at, redacted_at
                     FROM workflow_artifacts
                     WHERE {' AND '.join(clauses)}
@@ -185,7 +257,9 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT artifact_id, run_id, kind, payload, content_hash,
+                    SELECT artifact_id, run_id, step_id, kind, schema_version,
+                           payload, summary, created_by_step, consumed_by_steps,
+                           user_id, content_hash,
                            created_at, updated_at, expires_at, redacted_at
                     FROM workflow_artifacts
                     WHERE artifact_id = %s
@@ -222,7 +296,9 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                     UPDATE workflow_artifacts
                     SET payload = %s, content_hash = %s, redacted_at = now(), updated_at = now()
                     WHERE artifact_id = %s
-                    RETURNING artifact_id, run_id, kind, payload, content_hash,
+                    RETURNING artifact_id, run_id, step_id, kind, schema_version,
+                              payload, summary, created_by_step, consumed_by_steps,
+                              user_id, content_hash,
                               created_at, updated_at, expires_at, redacted_at
                     """,
                     (Jsonb(payload), content_hash, artifact_id),
@@ -244,10 +320,11 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                         ORDER BY expires_at
                         LIMIT %s
                     )
+                    RETURNING artifact_id
                     """,
                     (max(1, limit),),
                 )
-                return cur.rowcount or 0
+                return len(cur.fetchall())
 
     def create_replay_run(
         self,
@@ -359,7 +436,13 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
         artifacts = [
             {
                 "artifact_id": item.artifact_id,
+                "step_id": item.step_id,
                 "kind": item.kind,
+                "schema_version": item.schema_version,
+                "summary": item.summary,
+                "created_by_step": item.created_by_step,
+                "consumed_by_steps": item.consumed_by_steps,
+                "user_id": item.user_id,
                 "content_hash": item.content_hash,
                 "updated_at": item.updated_at.isoformat(),
                 "expires_at": item.expires_at.isoformat() if item.expires_at else None,
@@ -393,8 +476,16 @@ def _artifact_from_row(row) -> WorkflowArtifactRecord:
     return WorkflowArtifactRecord(
         artifact_id=row["artifact_id"],
         run_id=row["run_id"],
+        step_id=row.get("step_id") or "",
         kind=row["kind"],
+        schema_version=int(row.get("schema_version") or 1),
         payload=row["payload"] or {},
+        summary=row.get("summary") or "",
+        created_by_step=row.get("created_by_step") or "",
+        consumed_by_steps=[
+            str(item) for item in (row.get("consumed_by_steps") or [])
+        ],
+        user_id=row.get("user_id") or "",
         content_hash=row["content_hash"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],

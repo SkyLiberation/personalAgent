@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from personal_agent.kernel.evidence import (
     EvidenceItem,
+    evidence_text_spans,
     evidence_to_citations,
     episodes_to_evidence,
     graph_result_to_evidence,
     memory_items_to_evidence,
     notes_to_evidence,
+    research_sources_to_evidence,
     web_results_to_evidence,
 )
+from personal_agent.kernel.contracts.research import ResearchSource
 from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryItem
 from personal_agent.memory.graphiti.reranker import GraphCitationHit
 from personal_agent.memory.graphiti.store import (
@@ -118,6 +121,8 @@ class TestNotesToEvidence:
         assert len(items) == 1
         assert items[0].source_type == "chunk"
         assert items[0].source_span == "p1-3"
+        assert items[0].parent_note_id == "p1"
+        assert items[0].lineage["source_span"] == "p1-3"
 
     def test_multiple_notes(self):
         notes = [_note("n1"), _note("c1", parent_note_id="n1")]
@@ -147,6 +152,37 @@ class TestWebResultsToEvidence:
         results = [{"title": "OK", "url": "https://x.com", "snippet": "s"}, "not a dict"]
         items = web_results_to_evidence(results)
         assert len(items) == 1
+
+
+class TestResearchSourcesToEvidence:
+    def test_preserves_research_lineage_and_fulltext_spans(self):
+        source = ResearchSource(
+            id="source-1",
+            decision_id="decision-1",
+            query="Agent Model official announcement",
+            query_phase="verification",
+            url="https://openai.com/news/agent?utm_source=x",
+            canonical_url="https://openai.com/news/agent",
+            domain="openai.com",
+            title="OpenAI releases Agent Model",
+            snippet="OpenAI released a new agent model for tool use.",
+            content="OpenAI released a new agent model for tool use. It supports durable workflows.",
+            source_type="official",
+            provider="web_search",
+            content_fingerprint="fp-1",
+        )
+
+        evidence = research_sources_to_evidence([source])
+        spans = evidence_text_spans(evidence[0])
+
+        assert len(evidence) == 1
+        assert evidence[0].source_type == "web"
+        assert evidence[0].source_id == "source-1"
+        assert evidence[0].source_ref == "https://openai.com/news/agent"
+        assert evidence[0].source_fingerprint == "fp-1"
+        assert evidence[0].metadata["decision_id"] == "decision-1"
+        assert evidence[0].metadata["source_document_type"] == "official"
+        assert any("durable workflows" in span for span in spans)
 
 
 class TestEpisodesToEvidence:

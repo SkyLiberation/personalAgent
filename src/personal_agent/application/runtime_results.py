@@ -21,6 +21,7 @@ class AskResult(BaseModel):
     match_refs: list[MatchRef] = Field(default_factory=list)
     evidence: list = Field(default_factory=list)
     session_id: str = "default"
+    repair_telemetry: dict[str, object] = Field(default_factory=dict)
 
 
 class DigestResult(BaseModel):

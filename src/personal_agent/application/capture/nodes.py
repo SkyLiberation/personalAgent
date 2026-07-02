@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from hashlib import sha256
 from datetime import timedelta
 
 from personal_agent.kernel.models import (
@@ -47,6 +48,11 @@ def capture_node(state: AgentState, store: MemoryFacade) -> AgentState:
         tags=tags,
         updated_at=local_now(),
     )
+    state.note.version.source_fingerprint = state.raw_item.source_fingerprint
+    state.note.version.content_hash = sha256(content.encode("utf-8")).hexdigest()
+    state.note.version.source_version = metadata.get("source_version") or state.raw_item.source_fingerprint or ""
+    state.note.version.chunking_version = "unstructured:v1"
+    state.note.version.graph_extraction_version = "graphiti:v1"
     state.chunk_drafts = []
     state.chunk_notes = []
     return state
@@ -157,6 +163,11 @@ def _chunk_notes_from_drafts(
                 updated_at=local_now(),
             )
         )
+        chunks[-1].version.source_fingerprint = raw_item.source_fingerprint
+        chunks[-1].version.content_hash = sha256(draft.content.encode("utf-8")).hexdigest()
+        chunks[-1].version.source_version = dict(raw_item.metadata or {}).get("source_version") or raw_item.source_fingerprint or ""
+        chunks[-1].version.chunking_version = "unstructured:v1"
+        chunks[-1].version.graph_extraction_version = "graphiti:v1"
     return chunks
 
 

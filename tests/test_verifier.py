@@ -137,7 +137,7 @@ class TestAnswerVerifier:
         )
 
         assert result.claim_checks
-        assert result.claim_checks[0].status == "not_found"
+        assert result.claim_checks[0].status == "unsupported"
         assert any("关键结论" in warning for warning in result.warnings)
 
     def test_claim_level_grounding_detects_negation_conflict(self):

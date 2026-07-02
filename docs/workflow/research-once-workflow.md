@@ -762,11 +762,12 @@ digest 保存后，run 会先被更新为待 verify 的阶段性状态：
 
 `verify_digest()` 是最后的 claim-level 证据过滤。
 
-它不再只检查 digest item 是否存在 `source_urls`，而是读取 item 对应的 `ResearchEvent`，用 event.sources 的 title/snippet/content 对每个 claim 做证据对齐：
+它不再只检查 digest item 是否存在 `source_urls`，而是读取 item 对应的 `ResearchEvent`，把 `ResearchSource` 投影成共享 `EvidenceItem`，再交给 `EvidenceEngine.verify_claims()` 做证据对齐：
 
-- 找到最佳 evidence span
+- 通过 `SourceDocument / EvidenceItem` 统一来源语义
+- 从 `evidence_text_spans` 找到最佳 evidence span
 - 计算 claim term coverage
-- 使用 entailment judge 判断 `supported / unsupported / contradicted`
+- 使用 EvidenceEngine 内部 entailment judge 判断 `supported / unsupported / contradicted`
 - coverage 足够但 entailment 不充分时标记为 `partially_supported`
 - 根据 claim support 和 event.status 重新校准 `confidence_label`
 - 将 claim 的 `source_ids/decision_ids` 收窄到真正支撑最佳 evidence span 的来源和决策

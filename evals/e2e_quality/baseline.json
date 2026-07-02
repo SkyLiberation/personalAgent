@@ -1,0 +1,21 @@
+{
+  "_comment": "Live E2E diagnostic floors. This suite runs real router/LLM/web/capture/graph/langextract; it is a release-confidence diagnostic, not a deterministic golden gate.",
+  "mode": "live_diagnostic",
+  "min_overall": 0.80,
+  "min_case_score": 0.0,
+  "case_pass_score": 1.0,
+  "min_case_pass_rate": 0.50,
+  "critical_case_min_score": 1.0,
+  "critical_cases": [
+    "E2E-ASK-002",
+    "E2E-ART-001",
+    "E2E-ART-002",
+    "E2E-RES-002",
+    "E2E-RES-008"
+  ],
+  "min_branch_scores": {
+    "artifact": 1.0,
+    "ask": 0.80,
+    "research": 0.75
+  }
+}

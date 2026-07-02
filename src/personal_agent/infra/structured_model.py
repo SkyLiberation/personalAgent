@@ -444,6 +444,26 @@ class FullTracePayloadPolicy:
         return out
 
 
+class UsageRecordingStructuredModelClient:
+    """Decorator that records run-scoped LLM usage without LangSmith coupling."""
+
+    def __init__(self, delegate: StructuredModelClient) -> None:
+        self._delegate = delegate
+
+    def generate(
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+    ) -> StructuredModelResponse[StructuredOutputT]:
+        response = self._delegate.generate(request)
+        record_llm_usage(
+            latency_ms=response.latency_ms,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            total_tokens=response.total_tokens,
+        )
+        return response
+
+
 class ObservedStructuredModelClient:
     """Decorator adding tracing without changing application callers."""
 
@@ -580,7 +600,9 @@ def build_structured_model_client(
     """Composition helper for the Responses API (``structured`` kind)."""
     if not (config.api_key and config.base_url and config.model):
         return None
-    client: StructuredModelClient = OpenAIModelClient(config)
+    client: StructuredModelClient = UsageRecordingStructuredModelClient(
+        OpenAIModelClient(config)
+    )
     if not observability.enabled:
         return client
     policy: TracePayloadPolicy = (
@@ -600,7 +622,9 @@ def build_chat_model_client(
     """Composition helper for Chat Completions (``tool_calling`` / ``text``)."""
     if not (config.api_key and config.base_url):
         return None
-    client: StructuredModelClient = OpenAIModelClient(config, model_override=model_override)
+    client: StructuredModelClient = UsageRecordingStructuredModelClient(
+        OpenAIModelClient(config, model_override=model_override)
+    )
     if not observability.enabled:
         return client
     policy: TracePayloadPolicy = (

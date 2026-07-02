@@ -103,6 +103,14 @@ class Citation(BaseModel):
     relation_fact: str | None = None
     url: str | None = None
     source_type: str = "note"  # "note" or "web"
+    evidence_id: str = ""
+    parent_note_id: str | None = None
+    source_ref: str | None = None
+    source_fingerprint: str | None = None
+    source_span: str | None = None
+    page_number: int | None = None
+    element_ids: list[str] = Field(default_factory=list)
+    coordinates: dict[str, Any] | None = None
 
 
 class WebSearchResult(BaseModel):
@@ -236,6 +244,11 @@ class NoteVersion(BaseModel):
     status: Literal["current", "superseded", "deprecated", "conflicted"] = "current"
     topic_key: str | None = None
     source_fingerprint: str | None = None
+    source_version: str = ""
+    content_hash: str = ""
+    chunking_version: str = ""
+    embedding_version: str = ""
+    graph_extraction_version: str = ""
     supersedes_note_ids: list[str] = Field(default_factory=list)
     superseded_by_note_id: str | None = None
     conflict_note_ids: list[str] = Field(default_factory=list)

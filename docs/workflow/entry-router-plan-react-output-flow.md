@@ -225,7 +225,7 @@ WorkflowStepProjector.plan(intent)
 | `capture_text` | `tool_call(capture_text)` | 将入口文本写入长期知识 |
 | `capture_link` | `tool_call(capture_url) -> tool_call(capture_text)` | 抓取 URL 正文后写入长期知识 |
 | `capture_file` | `tool_call(capture_upload) -> tool_call(capture_text)` | 解析上传文件后写入长期知识 |
-| `ask` | `retrieve -> compose -> verify` | 检索、生成、校验三段式 RAG |
+| `ask` | `retrieve -> compose -> verify -> repair` | 检索、生成、校验、补证修复的 RAG |
 | `summarize_thread` | `compose` | 加载 thread messages 并总结 |
 | [`delete_knowledge`](delete-knowledge-workflow.md) | `retrieve -> resolve -> tool_call(delete_note) -> compose` | 高风险删除，必须候选解析 + HITL |
 | [`solidify_conversation`](solidify-conversation-workflow.md) | `compose -> tool_call(capture_text)` | 从 checkpoint 对话生成草稿，再写入长期知识 |
@@ -351,11 +351,12 @@ checkpoint 保存的是完整 graph 现场：`thread_id`、`run_id`、`step_exec
 EntryInput("xxx 是什么？")
   -> entry_graph
   -> route_intent: ask
-  -> project_workflow_steps: ask-retrieve -> ask-compose -> ask-verify
+  -> project_workflow_steps: ask-retrieve -> ask-compose -> ask-verify -> ask-repair
   -> step_execution_graph
      -> ask-retrieve: query understanding / retrieval / ContextPack artifact
      -> ask-compose: answer generation
-     -> ask-verify: verifier / retry / web fallback
+     -> ask-verify: verifier / retry
+     -> ask-repair: contrastive retrieval / web fallback / final annotation
   -> finalize_entry_result
 ```
 

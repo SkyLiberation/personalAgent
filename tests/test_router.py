@@ -87,7 +87,7 @@ class TestDefaultIntentRouter:
 
     def test_file_source_type_no_longer_implies_capture(self, router):
         decision = router.classify(EntryInput(source_type="file", text="any.pdf"))
-        assert decision.error == "router_unavailable"
+        assert [item.intent for item in decision.goals] == ["ask"]
 
     def test_artifact_summary_routes_to_analyze_artifact(self, router):
         decision = router.classify(EntryInput(
@@ -119,11 +119,11 @@ class TestDefaultIntentRouter:
         assert "risk_level" not in fields
         assert "requires_confirmation" not in fields
 
-    def test_llm_not_configured_reports_router_unavailable(self):
+    def test_llm_not_configured_uses_offline_ask_fallback(self):
         router = DefaultIntentRouter(None)
         decision = router.classify(EntryInput(text="什么是服务降级？"))
-        assert decision.error == "router_unavailable"
-        assert "路由模型当前不可用" in describe_router_decision(decision)
+        assert [item.intent for item in decision.goals] == ["ask"]
+        assert "已识别目标：ask" in describe_router_decision(decision)
 
     def test_research_request_uses_deterministic_research_once_rule(self):
         router = DefaultIntentRouter(None)
@@ -138,7 +138,7 @@ class TestDefaultIntentRouter:
         router = DefaultIntentRouter(None)
         decision = router.classify(EntryInput(text="查一下 Python 最新稳定版本是多少"))
 
-        assert decision.error == "router_unavailable"
+        assert [item.intent for item in decision.goals] == ["ask"]
 
     def test_research_deliverable_lookup_uses_research_once_rule(self):
         router = DefaultIntentRouter(None)
@@ -147,6 +147,38 @@ class TestDefaultIntentRouter:
         ))
 
         assert [item.intent for item in decision.goals] == ["research_once"]
+
+    def test_compound_capture_then_ask_rule_wins_over_negative_research_phrase(self):
+        router = DefaultIntentRouter(None)
+        decision = router.classify(EntryInput(
+            text="先记一下：Gamma 发布窗口是周五 20:00；然后直接回答 Gamma 发布窗口是什么，不要发起调研。"
+        ))
+
+        assert decision.route_type == "composite_workflow"
+        assert [item.intent for item in decision.goals] == ["capture_text", "ask"]
+        assert [item.goal_id for item in decision.goals] == ["goal_1", "goal_2"]
+
+    @pytest.mark.parametrize(
+        ("text", "intent"),
+        [
+            ("生成今天的知识简报", "review_digest"),
+            ("检查我的知识库还有哪些缺口", "inspect_knowledge_gaps"),
+            ("查看 workflow run_id abc 的步骤执行情况", "inspect_workflow"),
+            ("worker 是否堆积，查看失败任务", "inspect_operations"),
+            ("这条知识过期了，帮我标记一下", "maintain_knowledge"),
+            ("把 AI 简报订阅暂停", "manage_research"),
+            ("每天9点收集AI新闻简报", "create_research_subscription"),
+            ("删除关于 DNS 的知识", "delete_knowledge"),
+            ("把刚才结论固化下来", "solidify_conversation"),
+            ("总结这个群聊线程", "summarize_thread"),
+            ("把 Redis 相关笔记整理成一篇综述", "consolidate_knowledge"),
+        ],
+    )
+    def test_offline_fallback_covers_explicit_workflow_intents(self, text, intent):
+        router = DefaultIntentRouter(None)
+        decision = router.classify(EntryInput(text=text))
+
+        assert [item.intent for item in decision.goals] == [intent]
 
     def test_compound_output_is_normalized_to_stable_goal_ids(self, monkeypatch):
         router = DefaultIntentRouter(None)
@@ -215,7 +247,8 @@ class TestDefaultIntentRouter:
         caplog.set_level(logging.INFO)
         router.classify(EntryInput(text="什么是服务降级？", user_id="alice"))
         assert "router.decision" in caplog.text
-        assert '"goals": []' in caplog.text
+        assert '"goals": ["ask"]' in caplog.text
+        assert '"strategy": "offline_fallback"' in caplog.text
 
 
 def _router_output(**overrides) -> RouterOutput:

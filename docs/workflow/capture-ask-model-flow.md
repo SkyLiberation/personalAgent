@@ -11,7 +11,7 @@
 | `capture_text` | step projection workflow | 是 | `cap-structure -> capture_text tool -> IngestionPipeline` |
 | `capture_link` | step projection workflow | 是 | `cap-link-fetch -> cap-link-store` |
 | `capture_file` | step projection workflow | 是 | `cap-file-inspect -> cap-file-store` |
-| `ask` | step projection workflow | 是 | `ask-retrieve -> ask-compose -> ask-verify` |
+| `ask` | step projection workflow | 是 | `ask-retrieve -> ask-compose -> ask-verify -> ask-repair` |
 
 也就是说，`capture` 与 `ask` 都进入 `StepExecutionGraph`，复用步骤状态、checkpoint、事件、失败处理、ToolGateway 和前端 steps 展示能力。
 
@@ -196,6 +196,7 @@ else:
 ask-retrieve
   -> ask-compose
   -> ask-verify
+  -> ask-repair
 ```
 
 入口执行路径：
@@ -212,6 +213,9 @@ project_workflow_steps
   -> handle_step_success
   -> select_next_step
   -> execute_step(ask-verify)
+  -> handle_step_success
+  -> select_next_step
+  -> execute_step(ask-repair)
   -> handle_step_success
   -> finalize_step_execution
   -> finalize_entry_result
@@ -234,7 +238,7 @@ ask 复用的是 plan/step execution 的运行结构，包括：
 
 ## AskRunContext
 
-ask 三个步骤之间共享一个 `AskRunContext`。
+ask 四个步骤之间共享一个 `AskRunContext`。
 
 ```text
 AskRunContext
@@ -250,11 +254,13 @@ AskRunContext
   combined_matches
   combined_citations
   web_tried / contrastive_tried
+  retrieval_health
   ContextPack
   selected_matches
   selected_citations
   answer
   verification
+  repair
   trace_steps
 ```
 
@@ -265,13 +271,13 @@ PostgresAskRunContextStore.put(run_id, ctx)
   -> workflow_artifacts(kind="ask_run_context")
 ```
 
-后续 `ask-compose / ask-verify` 通过 `run_id` 取回：
+后续 `ask-compose / ask-verify / ask-repair` 通过 `run_id` 取回：
 
 ```text
 PostgresAskRunContextStore.get(run_id)
 ```
 
-这样 checkpoint 中只保留步骤状态和摘要结果，避免把 evidence pool、ContextPack、完整候选集塞进 LangGraph state；进程重启后 compose / verify 仍可从 artifact 恢复。
+这样 checkpoint 中只保留步骤状态和摘要结果，避免把 evidence pool、ContextPack、完整候选集塞进 LangGraph state；进程重启后 compose / verify / repair 仍可从 artifact 恢复。
 
 ## ask-retrieve
 
@@ -301,11 +307,13 @@ question + dialogue context
        RetrievalPlan
   -> RetrievalCoordinator.run(ctx)
        graph / structural / local / web 按 plan 召回
-  -> dedupe_evidence
-  -> apply_rrf_fusion
-  -> candidate_enricher.enrich(...)
-  -> optional sentence-level compression
-  -> reranker.rerank(...)
+  -> EvidenceEngine.assemble_context(...)
+       dedupe
+       RRF fusion
+       candidate_enricher.enrich(...)
+       optional sentence-level compression
+       reranker.rerank(...)
+       selected citations / matches
   -> ContextPack
   -> selected_matches / selected_citations
 ```
@@ -329,7 +337,7 @@ question + dialogue context
 - `sub_queries`：当前用于 graph 子查询扩展。
 - `episodic / reflection`：在需要时补充会话事件和反思类上下文。
 
-多路证据进入同一个 `evidence_pool` 后，会通过去重、RRF 融合、候选补全、可选句级压缩和 rerank 统一选择，而不是各来源分别生成答案。
+多路证据进入同一个 `evidence_pool` 后，会交给 application 层 `EvidenceEngine` 做去重、RRF 融合、候选补全、可选句级压缩、rerank 和 selected citation/match 选择，而不是各来源分别生成答案。
 
 ## ask-compose
 
@@ -365,7 +373,7 @@ _compose_unified_answer(
 
 ## ask-verify
 
-`ask-verify` 负责事实校验、必要时 retry、可选反证补充，以及必要时 web fallback。
+`ask-verify` 负责事实校验和必要时 retry，不补充新证据。
 
 对应执行函数：`_execute_verify_step()`。
 
@@ -384,21 +392,41 @@ ask-verify
 AnswerVerifier.verify(...)
   -> if 有 selected evidence:
        _retry_if_needed(...)
-  -> if contrastive_retrieval enabled and claim contradicted/not_found:
-       add_contrastive_evidence(ctx)
-       re-assemble ContextPack
-       re-run generation
-       re-run verification
-  -> if evidence insufficient and web available and not web_tried:
-       add_web_fallback(ctx)
-       re-assemble ContextPack
-       re-run generation
-       re-run verification/retry
-  -> if still insufficient:
-       _annotate_answer(...)
 ```
 
-反证补充和 web fallback 都不是独立复制出来的 ask 流程。它们会把新增 evidence 追加到同一个 `AskRunContext`，再复用 context assembly、generation 和 verification。
+## ask-repair
+
+`ask-repair` 是显式修复步骤，负责反证补充、必要时 web fallback 和最终证据不足标注。
+
+对应执行函数：`_execute_repair_step()`。
+
+```text
+ask-repair
+  -> ctx = AskRunContextStore.get(run_id)
+  -> ask_service.run_repair_stage(ctx)
+  -> state.answer = ctx.answer
+  -> state.citations = ctx.selected_citations
+  -> state.matches = ctx.selected_matches
+```
+
+`RepairStage` 当前逻辑：
+
+```text
+if contrastive_retrieval enabled and claim contradicted/not_found:
+  add_contrastive_evidence(ctx)
+  re-assemble ContextPack
+  re-run generation
+  re-run verification
+if evidence insufficient and web available and not web_tried:
+  add_web_fallback(ctx)
+  re-assemble ContextPack
+  re-run generation
+  re-run verification/retry
+if still insufficient:
+  _annotate_answer(...)
+```
+
+反证补充和 web fallback 都不是独立复制出来的 ask 流程。它们会把新增 evidence 追加到同一个 `AskRunContext`，再复用 context assembly、generation 和 verification。`AskRunContext.repair` 会记录修复动作、最终状态和原因，最终通过 `AskResult.repair_telemetry` 对外暴露。
 
 ## AskResult 输出
 
@@ -412,6 +440,7 @@ AskResult
   match_refs
   evidence
   session_id
+  repair_telemetry
 ```
 
 在 entry workflow 中，最终 answer、citations、matches 会回填到 `AgentGraphState`，再由 `finalize_entry_result` 写入 assistant message 和事件。
@@ -469,26 +498,28 @@ ask
 
 当前 ask 已有：
 
-- workflow-step 化的 `retrieve / compose / verify`。
-- `AskRunContext` 承载三阶段中间状态。
+- workflow-step 化的 `retrieve / compose / verify / repair`。
+- `AskRunContext` 承载 retrieve / compose / verify / repair 四阶段中间状态。
 - query understanding + retrieval plan。
 - graph / structural / local / web 多源召回。
+- EvidenceEngine 统一 source/evidence assembly。
 - EvidenceItem 归一。
 - RRF fusion。
 - candidate enrichment。
 - heuristic / LLM rerank 可插拔。
 - 可选句级 evidence compression。
 - ContextPack 预算控制。
-- verifier + retry + optional contrastive retrieval + web fallback。
+- verifier + retry。
+- 显式 ask-repair，负责 optional contrastive retrieval、web fallback 和最终证据不足标注。
 
 当前仍有限制：
 
-- ask context artifact 已落在通用 `workflow_artifacts` 表，但当前只把 ask 三阶段大对象作为 `kind="ask_run_context"` 使用；还没有把所有 workflow step I/O 全量纳入同一 artifact 规范。
-- rerank、MMR、多样性、压缩和反证检索仍有提升空间。
+- ask context artifact 已落在通用 `workflow_artifacts` 表，带 `schema_version / created_by_step / consumed_by_steps / user_id` 等字段；所有 workflow step 的 input/output/error 也进入同一 artifact 规范，并可按 `step_id` 查询。
+- rerank、MMR、多样性和反证检索仍有提升空间。
 - claim grounding 主要是启发式检查，复杂蕴含判断仍需要更强 verifier。
 
 ## 面试表述
 
 可以这样说：
 
-> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接是 `capture_url -> capture_text`，文件是 `inspect_artifact -> capture_text`，底层最终统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding、多源召回、证据归一、RRF/补全/压缩/rerank 和 ContextPack artifact；compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验、retry、可选反证补充和必要时 web fallback。
+> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接是 `capture_url -> capture_text`，文件是 `inspect_artifact -> capture_text`，底层最终统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify -> ask-repair`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和多源召回，随后把候选交给 `EvidenceEngine` 做证据归一、RRF/补全/压缩/rerank、ContextPack 和 selected citation/match；compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验和有界 retry，claim grounding 复用 `EvidenceEngine.verify_claims()`；repair 阶段显式处理反证补充、web fallback 和最终证据不足标注，并把 repair telemetry 写回 ask context artifact。

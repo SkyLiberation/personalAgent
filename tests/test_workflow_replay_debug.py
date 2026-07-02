@@ -80,11 +80,31 @@ def test_step_execution_persists_input_and_output_artifacts(runtime):
     kinds = {artifact.kind for artifact in artifacts}
     assert "step_input" in kinds
     assert "step_output" in kinds
+    assert all(artifact.step_id for artifact in artifacts)
+    assert all(artifact.schema_version >= 1 for artifact in artifacts)
+    assert all(artifact.created_by_step == artifact.step_id for artifact in artifacts)
+    assert all(artifact.user_id == "test-user" for artifact in artifacts)
     assert snapshot is not None
     assert snapshot.workflow_id == "direct_answer"
     assert snapshot.workflow_version == "v1"
     assert snapshot.steps[0]["input_artifact_id"]
     assert snapshot.steps[0]["output_artifact_id"]
+
+
+def test_step_artifacts_can_be_filtered_by_step_id(runtime):
+    result = runtime.execute_entry(
+        EntryInput(text="你好", user_id="test-user", session_id="step-artifact-filter")
+    )
+    step_id = result.steps[0]["step_id"]
+
+    artifacts = runtime.list_workflow_artifacts(
+        result.run_id or "",
+        step_id=step_id,
+        limit=20,
+    )
+
+    assert artifacts
+    assert {artifact.step_id for artifact in artifacts} == {step_id}
 
 
 def test_debug_bundle_contains_event_sourced_projection(runtime):
@@ -105,8 +125,13 @@ def test_artifact_redaction_and_retention(runtime):
     record = runtime.workflow_replay_store.put_artifact(
         artifact_id="retention-artifact",
         run_id="retention-run",
+        step_id="retention-step",
         kind="test",
+        schema_version=1,
         payload={"answer": "secret", "nested": {"content": "private"}, "safe": "ok"},
+        summary="retention test",
+        created_by_step="retention-step",
+        user_id="test-user",
     )
 
     redacted = runtime.redact_workflow_artifact(record.artifact_id)
@@ -120,8 +145,11 @@ def test_artifact_redaction_and_retention(runtime):
     runtime.workflow_replay_store.put_artifact(
         artifact_id="expired-artifact",
         run_id="retention-run",
+        step_id="retention-step",
         kind="test",
         payload={"safe": "delete"},
+        created_by_step="retention-step",
+        user_id="test-user",
         retention_days=0,
     )
     assert runtime.purge_expired_workflow_artifacts() >= 1

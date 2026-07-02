@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Action types the orchestration graph's ``_dispatch_step`` can execute.
-EXECUTABLE_ACTION_TYPES = {"retrieve", "resolve", "tool_call", "compose", "verify"}
+EXECUTABLE_ACTION_TYPES = {"retrieve", "resolve", "tool_call", "compose", "verify", "repair"}
 VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_ON_FAILURE = {"skip", "retry", "abort"}
 VALID_EXECUTION_MODES = {"deterministic", "react"}

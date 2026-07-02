@@ -21,11 +21,11 @@ from typing import TYPE_CHECKING, Protocol
 
 from personal_agent.kernel.evidence import (
     EvidenceItem,
+    SourceDocument,
     episodes_to_evidence,
     graph_result_to_evidence,
     memory_items_to_evidence,
     notes_to_evidence,
-    web_results_to_evidence,
 )
 from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
 from personal_agent.kernel.query_understanding import RetrievalFilters
@@ -226,12 +226,22 @@ class WebRetriever:
         if web_citations:
             out.citations = _merge_citations([], web_citations)
             guard = get_content_guard()
-            out.evidence.extend(
-                web_results_to_evidence(
-                    web_results,
-                    sanitize=lambda text: guard.sanitize_untrusted(text).text,
+            documents = [
+                SourceDocument(
+                    source_id=str(item.get("url") or ""),
+                    source_type=str(item.get("source") or "web_search"),
+                    source_ref=str(item.get("url") or ""),
+                    url=str(item.get("url") or ""),
+                    canonical_url=str(item.get("url") or ""),
+                    title=guard.sanitize_untrusted(str(item.get("title") or "")).text,
+                    snippet=guard.sanitize_untrusted(str(item.get("snippet") or "")).text,
+                    provider=str(item.get("source") or ""),
+                    metadata={"published_at": item.get("published_at")},
                 )
-            )
+                for item in web_results
+                if isinstance(item, dict) and str(item.get("url") or "")
+            ]
+            out.evidence.extend(self._service.evidence_engine.sources_to_evidence(documents))
         return out
 
 
@@ -352,6 +362,7 @@ class RetrievalCoordinator:
         use_graph = "graph" in plan.sources
         use_local = "local" in plan.sources
         use_web_proactive = "web" in plan.sources
+        self._record_graph_freshness(ctx, use_graph=use_graph)
 
         # Fetch graph + local. When planned, fetch concurrently — but absorb in a
         # fixed order (graph → sub-query → local → ...) so the evidence pool order
@@ -401,6 +412,35 @@ class RetrievalCoordinator:
                 ctx.add_trace(
                     f"主动网络搜索候选已进入统一证据池 citations={len(contrib.citations)}"
                 )
+
+    def _record_graph_freshness(self, ctx: "AskRunContext", *, use_graph: bool) -> None:
+        try:
+            tasks = self._service.memory.list_graph_sync_tasks(
+                user_id=ctx.user_id,
+                statuses=["pending", "failed", "skipped"],
+            )
+        except Exception:
+            logger.exception("Failed to inspect graph sync freshness user=%s", ctx.user_id)
+            return
+        counts = {"pending": 0, "failed": 0, "skipped": 0}
+        for task in tasks:
+            if task.status in counts:
+                counts[task.status] += 1
+        stale_count = counts["pending"] + counts["failed"]
+        health = {
+            "graph_requested": use_graph,
+            "graph_sync_pending": counts["pending"],
+            "graph_sync_failed": counts["failed"],
+            "graph_sync_skipped": counts["skipped"],
+            "graph_may_be_stale": bool(use_graph and stale_count),
+            "fallback_to_local": bool(use_graph and stale_count),
+        }
+        ctx.retrieval_health.update(health)
+        if health["graph_may_be_stale"]:
+            ctx.add_trace(
+                "图谱同步未完全完成，已保留 local/structural 降级路径 "
+                f"pending={counts['pending']} failed={counts['failed']}"
+            )
 
     def add_web_fallback(self, ctx: "AskRunContext") -> bool:
         """Append web evidence to the pool for the verification-stage fallback.

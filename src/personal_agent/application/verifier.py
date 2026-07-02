@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from time import perf_counter
 
+from personal_agent.application.evidence_engine import EvidenceEngine
 from personal_agent.kernel.observability import record_verification_result
 from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.kernel.projections import MatchRef, match_ref_from_note
@@ -55,6 +55,9 @@ class AnswerVerifier:
         "网络搜索未返回足够信息",
         "无法从网络搜索中找到",
     )
+
+    def __init__(self, evidence_engine: EvidenceEngine | None = None) -> None:
+        self._evidence_engine = evidence_engine or EvidenceEngine()
 
     def verify(
         self,
@@ -176,10 +179,16 @@ class AnswerVerifier:
             claim_checks = self._grounding_checks(answer, evidence)
             if claim_checks:
                 supported = [item for item in claim_checks if item.status == "supported"]
+                partial = [item for item in claim_checks if item.status == "partially_supported"]
                 contradicted = [item for item in claim_checks if item.status == "contradicted"]
-                missing = [item for item in claim_checks if item.status == "not_found"]
-                support_ratio = len(supported) / len(claim_checks)
+                missing = [
+                    item for item in claim_checks
+                    if item.status in {"not_found", "unsupported"}
+                ]
+                support_ratio = (len(supported) + len(partial) * 0.5) / len(claim_checks)
                 score += min(support_ratio * 0.25, 0.25)
+                if partial:
+                    warnings.append(f"{len(partial)} 个关键结论只有部分证据支撑。")
                 if missing:
                     warnings.append(f"{len(missing)} 个关键结论未能在入选证据中找到直接支撑。")
                     if len(missing) == len(claim_checks):
@@ -226,109 +235,15 @@ class AnswerVerifier:
     def _grounding_checks(self, answer: str, evidence: list) -> list[ClaimVerification]:
         """Claim-level grounding hook. Subclasses may override the judgment
         strategy (e.g. entailment) while reusing all surrounding scoring."""
-        return _verify_claims(answer, evidence)
-
-
-def _verify_claims(answer: str, evidence: list) -> list[ClaimVerification]:
-    claims = _extract_claims(answer)
-    evidence_items = [_evidence_record(item) for item in evidence]
-    checks: list[ClaimVerification] = []
-    for claim in claims:
-        claim_terms = _terms(claim)
-        if not claim_terms:
-            continue
-        best_overlap = 0
-        best_ids: list[str] = []
-        best_text = ""
-        best_source_type = ""
-        for evidence_id, text, source_type in evidence_items:
-            evidence_terms = _terms(text)
-            overlap = len(claim_terms & evidence_terms)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_ids = [evidence_id]
-                best_text = text
-                best_source_type = source_type
-            elif overlap == best_overlap and overlap > 0:
-                best_ids.append(evidence_id)
-        support_threshold = max(2, min(5, len(claim_terms) // 3))
-        coverage = best_overlap / max(len(claim_terms), 1)
-        coverage_threshold = 0.35 if best_source_type == "episode" else 0.45
-        if best_overlap >= support_threshold and coverage >= coverage_threshold:
-            status = "supported"
-            reason = f"overlap={best_overlap}/{len(claim_terms)}, coverage={coverage:.2f}"
-            if _negation_mismatch(claim, best_text):
-                status = "contradicted"
-                reason += ", negation_mismatch"
-            checks.append(ClaimVerification(
-                claim=claim,
-                status=status,
-                supporting_evidence_ids=best_ids[:3],
-                reason=reason,
-            ))
-        else:
-            checks.append(ClaimVerification(
-                claim=claim,
-                status="not_found",
-                supporting_evidence_ids=[],
-                reason=f"best_overlap={best_overlap}/{len(claim_terms)}, coverage={coverage:.2f}",
-            ))
-    return checks
-
-
-def _extract_claims(answer: str, limit: int = 8) -> list[str]:
-    cleaned = re.sub(r"\[[Ee]?\d+\]", "", answer)
-    parts = re.split(r"[。！？!?；;\n]+", cleaned)
-    claims: list[str] = []
-    skip_markers = ("校验提示", "注意", "证据不足", "不确定", "无法回答")
-    for part in parts:
-        claim = part.strip(" -:：\t\r")
-        if len(claim) < 8:
-            continue
-        if any(marker in claim for marker in skip_markers):
-            continue
-        if claim not in claims:
-            claims.append(claim)
-        if len(claims) >= limit:
-            break
-    return claims
-
-
-def _evidence_record(item) -> tuple[str, str, str]:
-    evidence_id = str(getattr(item, "evidence_id", "") or getattr(item, "source_id", "") or "")
-    source_type = str(getattr(item, "source_type", "") or "")
-    parts = [
-        str(getattr(item, "title", "") or ""),
-        str(getattr(item, "fact", "") or ""),
-        str(getattr(item, "snippet", "") or ""),
-    ]
-    metadata = getattr(item, "metadata", {}) or {}
-    if isinstance(metadata, dict):
-        parts.extend(str(value) for value in metadata.values() if isinstance(value, str))
-    return evidence_id, " ".join(parts), source_type
-
-
-def _terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    lowered = text.lower()
-    for token in re.findall(r"[a-z0-9_+-]{2,}", lowered):
-        terms.add(token)
-    for run in re.findall(r"[\u3400-\u9fff]{2,}", text):
-        terms.add(run)
-        for size in (2, 3):
-            for index in range(0, max(0, len(run) - size + 1)):
-                terms.add(run[index:index + size])
-    return terms
-
-
-def _negation_mismatch(claim: str, evidence_text: str) -> bool:
-    claim_negated = _has_negation(claim)
-    evidence_negated = _has_negation(evidence_text)
-    return claim_negated != evidence_negated and bool(evidence_text)
-
-
-def _has_negation(text: str) -> bool:
-    return any(marker in text for marker in ("不", "没有", "未", "不能", "无法", "不会", "不是", "no ", "not "))
+        return [
+            ClaimVerification(
+                claim=item.claim,
+                status=item.status,
+                supporting_evidence_ids=item.supporting_evidence_ids,
+                reason=item.reason,
+            )
+            for item in self._evidence_engine.verify_claims(answer, evidence)
+        ]
 
 
 class EntailmentAnswerVerifier(AnswerVerifier):
@@ -354,43 +269,7 @@ class EntailmentAnswerVerifier(AnswerVerifier):
     def __init__(self, judge=None) -> None:
         from personal_agent.application.entailment import HeuristicEntailmentJudge
 
-        self._judge = judge or HeuristicEntailmentJudge()
-
-    def _grounding_checks(self, answer: str, evidence: list) -> list[ClaimVerification]:
-        claims = _extract_claims(answer)
-        records = [_evidence_record(item) for item in evidence]
-        checks: list[ClaimVerification] = []
-        for claim in claims:
-            claim_terms = _terms(claim)
-            if not claim_terms:
-                continue
-            best_overlap = 0
-            best_ids: list[str] = []
-            best_text = ""
-            best_source = ""
-            for evidence_id, text, source_type in records:
-                overlap = len(claim_terms & _terms(text))
-                if overlap > best_overlap:
-                    best_overlap, best_ids = overlap, [evidence_id]
-                    best_text, best_source = text, source_type
-                elif overlap == best_overlap and overlap > 0:
-                    best_ids.append(evidence_id)
-            coverage = best_overlap / max(len(claim_terms), 1)
-            verdict = self._judge.judge(
-                claim, best_text,
-                overlap=best_overlap,
-                claim_term_count=len(claim_terms),
-                coverage=coverage,
-                source_type=best_source,
-            )
-            status = self._VERDICT_TO_STATUS.get(verdict.verdict, "not_found")
-            checks.append(ClaimVerification(
-                claim=claim,
-                status=status,
-                supporting_evidence_ids=best_ids[:3] if status != "not_found" else [],
-                reason=f"{verdict.verdict}: {verdict.reason}",
-            ))
-        return checks
+        super().__init__(EvidenceEngine(entailment_judge=judge or HeuristicEntailmentJudge()))
 
 
 def create_answer_verifier(settings) -> AnswerVerifier:

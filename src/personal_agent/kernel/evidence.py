@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -18,17 +19,61 @@ from personal_agent.kernel.projections import EvidenceSource, evidence_source_fr
 from personal_agent.kernel.graph_results import GraphAskResult, GraphCitationHit
 
 
+class SourceDocument(BaseModel):
+    """Canonical source material before task-specific evidence selection."""
+
+    source_id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    source_type: str = "unknown"
+    source_ref: str | None = None
+    source_fingerprint: str | None = None
+    url: str | None = None
+    canonical_url: str | None = None
+    domain: str = ""
+    title: str = ""
+    snippet: str = ""
+    content: str = ""
+    published_at: datetime | None = None
+    provider: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def preferred_ref(self) -> str:
+        return self.canonical_url or self.url or self.source_ref or self.source_id
+
+
 class EvidenceItem(BaseModel):
     evidence_id: str = Field(default_factory=lambda: uuid4().hex[:12])
     source_type: Literal["graph_fact", "note", "chunk", "web", "tool", "episode", "procedural", "reflection"]
     source_id: str = ""
+    parent_note_id: str | None = None
     title: str = ""
     snippet: str = ""
     fact: str | None = None
     source_span: str | None = None
+    source_ref: str | None = None
+    source_fingerprint: str | None = None
+    page_number: int | None = None
+    element_ids: list[str] = Field(default_factory=list)
+    coordinates: dict[str, Any] | None = None
     url: str | None = None
     score: float = 0.0
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def lineage(self) -> dict[str, Any]:
+        return {
+            "evidence_id": self.evidence_id,
+            "source_type": self.source_type,
+            "source_id": self.source_id,
+            "parent_note_id": self.parent_note_id,
+            "source_ref": self.source_ref,
+            "source_fingerprint": self.source_fingerprint,
+            "source_span": self.source_span,
+            "page_number": self.page_number,
+            "element_ids": list(self.element_ids),
+            "coordinates": self.coordinates,
+            "url": self.url,
+        }
 
 
 class RankedEvidence(BaseModel):
@@ -564,9 +609,16 @@ def graph_result_to_evidence(
             items.append(EvidenceItem(
                 source_type=source_type,
                 source_id=note.id,
+                parent_note_id=note.chunk.parent_note_id,
                 title=note.body.title,
                 snippet=snippet,
                 fact=hit.relation_fact,
+                source_ref=note.source.ref,
+                source_fingerprint=note.source.fingerprint,
+                source_span=note.chunk.source_span,
+                page_number=note.chunk.page_number,
+                element_ids=list(note.chunk.element_ids),
+                coordinates=note.chunk.coordinates,
                 score=float(hit.score),
                 metadata={
                     "episode_uuid": hit.episode_uuid,
@@ -623,6 +675,110 @@ def graph_result_to_evidence(
     return items
 
 
+def source_documents_to_evidence(documents: list[SourceDocument]) -> list[EvidenceItem]:
+    """Convert canonical source documents to shared web/tool evidence."""
+    items: list[EvidenceItem] = []
+    for document in documents:
+        ref = document.preferred_ref
+        snippet = document.snippet or _first_text_span(document.content)
+        items.append(EvidenceItem(
+            source_type="web" if document.url else "tool",
+            source_id=document.source_id,
+            title=document.title or ref,
+            snippet=snippet,
+            source_ref=ref,
+            source_fingerprint=document.source_fingerprint,
+            url=document.url,
+            metadata={
+                "source_document_id": document.source_id,
+                "source_document_type": document.source_type,
+                "canonical_url": document.canonical_url,
+                "domain": document.domain,
+                "provider": document.provider,
+                "published_at": document.published_at.isoformat() if document.published_at else None,
+                "content": document.content,
+                **document.metadata,
+            },
+        ))
+    return items
+
+
+def research_sources_to_source_documents(sources: list[Any]) -> list[SourceDocument]:
+    """Project research sources into the shared source-document boundary."""
+    documents: list[SourceDocument] = []
+    for source in sources:
+        documents.append(SourceDocument(
+            source_id=str(getattr(source, "id", "") or uuid4().hex[:12]),
+            source_type=str(getattr(source, "source_type", "") or "unknown"),
+            source_ref=str(getattr(source, "canonical_url", "") or getattr(source, "url", "") or ""),
+            source_fingerprint=str(getattr(source, "content_fingerprint", "") or ""),
+            url=str(getattr(source, "url", "") or ""),
+            canonical_url=str(getattr(source, "canonical_url", "") or ""),
+            domain=str(getattr(source, "domain", "") or ""),
+            title=str(getattr(source, "title", "") or ""),
+            snippet=str(getattr(source, "snippet", "") or ""),
+            content=str(getattr(source, "content", "") or ""),
+            published_at=getattr(source, "published_at", None),
+            provider=str(getattr(source, "provider", "") or ""),
+            metadata={
+                "decision_id": getattr(source, "decision_id", None),
+                "query": getattr(source, "query", ""),
+                "query_phase": getattr(source, "query_phase", ""),
+            },
+        ))
+    return documents
+
+
+def research_sources_to_evidence(sources: list[Any]) -> list[EvidenceItem]:
+    """Convert research sources to the same ``EvidenceItem`` shape ask uses."""
+    return source_documents_to_evidence(research_sources_to_source_documents(sources))
+
+
+def evidence_text_spans(evidence: EvidenceItem, *, max_spans: int = 12) -> list[str]:
+    """Return compact source spans for claim grounding."""
+    candidates = [
+        evidence.fact or "",
+        evidence.title,
+        evidence.snippet,
+        str(evidence.metadata.get("content") or ""),
+    ]
+    spans: list[str] = []
+    for candidate in candidates:
+        for span in _compact_text_spans(candidate):
+            if span not in spans:
+                spans.append(span)
+            if len(spans) >= max_spans:
+                return spans
+    return spans
+
+
+def _first_text_span(text: str, *, limit: int = 500) -> str:
+    spans = _compact_text_spans(text, max_long_span_chars=limit)
+    return spans[0] if spans else ""
+
+
+def _compact_text_spans(
+    text: str,
+    *,
+    max_short_chars: int = 220,
+    max_long_span_chars: int = 320,
+) -> list[str]:
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned:
+        return []
+    if len(cleaned) <= max_short_chars:
+        return [cleaned]
+    spans: list[str] = []
+    for part in re.split(r"(?<=[。！？!?；;.\n])\s+", cleaned):
+        span = part.strip()
+        if len(span) < 8:
+            continue
+        spans.append(span[:max_long_span_chars])
+        if len(spans) >= 12:
+            break
+    return spans
+
+
 def notes_to_evidence(matches: list[KnowledgeNote | EvidenceSource]) -> list[EvidenceItem]:
     """Convert local note/chunk matches to ``EvidenceItem``."""
     items: list[EvidenceItem] = []
@@ -637,9 +793,15 @@ def notes_to_evidence(matches: list[KnowledgeNote | EvidenceSource]) -> list[Evi
         items.append(EvidenceItem(
             source_type=source_type,
             source_id=source.id,
+            parent_note_id=source.parent_note_id,
             title=source.title,
             snippet=snippet,
             source_span=source.source_span,
+            source_ref=source.source_ref,
+            source_fingerprint=source.source_fingerprint,
+            page_number=match.chunk.page_number if isinstance(match, KnowledgeNote) else None,
+            element_ids=list(match.chunk.element_ids) if isinstance(match, KnowledgeNote) else [],
+            coordinates=match.chunk.coordinates if isinstance(match, KnowledgeNote) else None,
             metadata={
                 "source_ref": source.source_ref,
                 "source_fingerprint": source.source_fingerprint,
@@ -683,6 +845,7 @@ def web_results_to_evidence(
             title=clean(str(r.get("title", ""))),
             snippet=clean(str(r.get("snippet", ""))),
             url=url,
+            source_ref=url,
             metadata={
                 "source": r.get("source", ""),
                 "published_at": r.get("published_at"),
@@ -758,6 +921,8 @@ def evidence_to_citations(evidence: list[EvidenceItem]) -> list[Citation]:
                 snippet=item.snippet,
                 url=item.url,
                 source_type="web",
+                evidence_id=item.evidence_id,
+                source_ref=item.source_ref,
             ))
         else:
             citations.append(Citation(
@@ -766,5 +931,13 @@ def evidence_to_citations(evidence: list[EvidenceItem]) -> list[Citation]:
                 snippet=item.snippet,
                 relation_fact=item.fact,
                 source_type="note",
+                evidence_id=item.evidence_id,
+                parent_note_id=item.parent_note_id,
+                source_ref=item.source_ref,
+                source_fingerprint=item.source_fingerprint,
+                source_span=item.source_span,
+                page_number=item.page_number,
+                element_ids=list(item.element_ids),
+                coordinates=item.coordinates,
             ))
     return citations

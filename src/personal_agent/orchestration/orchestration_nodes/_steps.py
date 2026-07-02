@@ -449,8 +449,13 @@ def _persist_step_artifact(
         deps.workflow_artifact_store.put_artifact(
             artifact_id=artifact_id,
             run_id=state.run_id,
+            step_id=sd.step_id,
             kind=f"step_{phase}",
             payload=payload,
+            schema_version=1,
+            summary=_helpers._summarize_result(payload),
+            created_by_step=sd.step_id,
+            user_id=state.user_id,
         )
     except Exception:
         logger.exception(
@@ -1074,6 +1079,9 @@ def _dispatch_step(
     elif step.action_type == "verify":
         _execute_verify_step(step, state, deps)
 
+    elif step.action_type == "repair":
+        _execute_repair_step(step, state, deps)
+
     else:
         raise ValueError(f"未知的 action_type: {step.action_type}")
 
@@ -1381,10 +1389,20 @@ def _answer_from_artifact_context(
         ))
         generated = (response.content or "").strip()
         if generated:
-            return generated
+            return _ensure_artifact_filename_in_answer(generated, context)
     except Exception:
         logger.exception("Artifact compose failed")
     return f"根据 artifact 上下文：{context[:1000]}"
+
+
+def _ensure_artifact_filename_in_answer(answer: str, context: str) -> str:
+    match = re.search(r"Uploaded (?:text |PDF |image )?artifact: ([^\n]+)", context)
+    if not match:
+        return answer
+    filename = match.group(1).strip()
+    if not filename or filename in answer:
+        return answer
+    return f"关于 {filename}：{answer}"
 
 
 def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str:
@@ -1441,8 +1459,7 @@ def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str
 
 def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
     # ask flow: run the real verification stage on the run-scoped context —
-    # verify + retry + web fallback (re-assemble/re-compose/re-verify) + annotate.
-    # The final answer and citations/matches are written back onto the state.
+    # verify + bounded retry. Repair/fallback is a separate ask-repair step.
     if step.task_intent == "ask":
         ctx = deps.ask_run_context_store.get(state.run_id)
         if ctx is not None:
@@ -1456,6 +1473,21 @@ def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContex
                     {"id": m.id, "title": m.body.title, "summary": m.body.summary}
                     for m in (ctx.selected_matches or [])
                 ]
+                verification = ctx.verification
+                state.step_execution.results[step.step_id] = {
+                    "verified": bool(
+                        verification is not None
+                        and getattr(verification, "ok", False)
+                        and getattr(verification, "sufficient", False)
+                    ),
+                    "evidence_score": (
+                        float(getattr(verification, "evidence_score", 0.0))
+                        if verification is not None else 0.0
+                    ),
+                    "citation_count": len(ctx.selected_citations or []),
+                    "match_count": len(ctx.selected_matches or []),
+                    "repair": ctx.repair_payload(),
+                }
             except Exception:
                 logger.exception("Ask verify stage %s error", step.step_id)
             return
@@ -1477,6 +1509,42 @@ def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContex
             )
     except Exception:
         logger.exception("Verify step %s error", step.step_id)
+
+
+def _execute_repair_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
+    if step.task_intent != "ask":
+        raise ValueError(f"repair action is only supported for ask, got {step.task_intent!r}")
+    ctx = deps.ask_run_context_store.get(state.run_id)
+    if ctx is None:
+        return
+    try:
+        ask_service = deps.ask_service_factory()
+        ask_service.run_repair_stage(ctx)
+        deps.ask_run_context_store.put(state.run_id, ctx)
+        state.answer = ctx.answer
+        state.citations = list(ctx.selected_citations or [])
+        state.matches = [
+            {"id": m.id, "title": m.body.title, "summary": m.body.summary}
+            for m in (ctx.selected_matches or [])
+        ]
+        verification = ctx.verification
+        state.step_execution.results[step.step_id] = {
+            "repaired": bool(ctx.repair.events),
+            "verified": bool(
+                verification is not None
+                and getattr(verification, "ok", False)
+                and getattr(verification, "sufficient", False)
+            ),
+            "evidence_score": (
+                float(getattr(verification, "evidence_score", 0.0))
+                if verification is not None else 0.0
+            ),
+            "citation_count": len(ctx.selected_citations or []),
+            "match_count": len(ctx.selected_matches or []),
+            "repair": ctx.repair_payload(),
+        }
+    except Exception:
+        logger.exception("Ask repair stage %s error", step.step_id)
 
 
 # ---------------------------------------------------------------------------

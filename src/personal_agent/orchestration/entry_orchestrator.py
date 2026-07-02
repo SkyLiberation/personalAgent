@@ -379,18 +379,46 @@ class EntryOrchestrator:
             # the matches instead of an empty list.
             from personal_agent.kernel.projections import MatchRef
 
-            match_refs = [
-                MatchRef(id=str(m.get("id", "")), title=str(m.get("title", "")))
-                for m in (result_state.matches or [])
-                if isinstance(m, dict) and m.get("id")
-            ]
-            ask_result = AskResult(
-                answer=reply_text,
-                citations=result_state.citations,
-                matches=[],
-                match_refs=match_refs,
-                session_id=normalized_session,
-            )
+            ask_ctx = None
+            try:
+                ask_ctx = self._runtime.graph_contexts.steps.ask_run_context_store.get(run_id)
+            except Exception:
+                logger.exception("Failed to load staged ask context for run_id=%s", run_id)
+
+            if ask_ctx is not None:
+                selected_matches = list(ask_ctx.selected_matches or [])
+                selected_citations = list(ask_ctx.selected_citations or [])
+                match_refs = [
+                    MatchRef(id=match.id, title=match.body.title)
+                    for match in selected_matches
+                ]
+                evidence = (
+                    list(ask_ctx.context_pack.evidence)
+                    if ask_ctx.context_pack is not None
+                    else list(ask_ctx.evidence_pool or [])
+                )
+                ask_result = AskResult(
+                    answer=reply_text,
+                    citations=selected_citations,
+                    matches=selected_matches,
+                    match_refs=match_refs,
+                    evidence=evidence,
+                    session_id=normalized_session,
+                    repair_telemetry=ask_ctx.repair_payload(),
+                )
+            else:
+                match_refs = [
+                    MatchRef(id=str(m.get("id", "")), title=str(m.get("title", "")))
+                    for m in (result_state.matches or [])
+                    if isinstance(m, dict) and m.get("id")
+                ]
+                ask_result = AskResult(
+                    answer=reply_text,
+                    citations=result_state.citations,
+                    matches=[],
+                    match_refs=match_refs,
+                    session_id=normalized_session,
+                )
 
         run_metrics.intent = ",".join(intents) or "unknown"
         run_metrics.complete(

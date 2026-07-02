@@ -235,6 +235,15 @@ class TestRegistryCapabilityConsistency:
             return tool_response(tool_success(path))
 
         @tool(
+            "inspect_artifact",
+            description="inspect artifact",
+            response_format="content_and_artifact",
+            extras=governance_extras(risk_level="low", side_effects=("none",)),
+        )
+        def inspect_artifact(file_path: str = "", filename: str = ""):
+            return tool_response(tool_success({"file_path": file_path, "filename": filename}))
+
+        @tool(
             "delete_note",
             description="delete",
             response_format="content_and_artifact",
@@ -340,6 +349,7 @@ class TestRegistryCapabilityConsistency:
         ex = ToolExecutor()
         for t in (
             graph_search, web_search, capture_text, capture_url, capture_upload,
+            inspect_artifact,
             delete_note, review_digest, consolidate_knowledge, inspect_knowledge_gaps,
             create_research_subscription,
             *management_tools,

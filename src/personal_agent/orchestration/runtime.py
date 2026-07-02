@@ -881,9 +881,15 @@ class AgentRuntime:
         run_id: str,
         *,
         kind: str | None = None,
+        step_id: str | None = None,
         limit: int = 50,
     ):
-        return self.workflow_replay_store.list_artifacts(run_id, kind=kind, limit=limit)
+        return self.workflow_replay_store.list_artifacts(
+            run_id,
+            kind=kind,
+            step_id=step_id,
+            limit=limit,
+        )
 
     def get_workflow_artifact(self, artifact_id: str):
         return self.workflow_replay_store.get_artifact(artifact_id)

@@ -36,11 +36,7 @@ from personal_agent.application.research.extraction import (
     ResearchEventExtractor,
     frames_describe_same_event,
 )
-from personal_agent.application.entailment import (
-    CONTRADICTED,
-    ENTAILED,
-    HeuristicEntailmentJudge,
-)
+from personal_agent.application.evidence_engine import EvidenceEngine
 from personal_agent.kernel.llm_schemas import strip_json_fence
 
 _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref"}
@@ -1625,6 +1621,7 @@ class ResearchService:
         events: list[ResearchEvent],
         state: ResearchState | None = None,
     ) -> list[ResearchEvent]:
+        enrich_personal_relevance = _should_enrich_personal_relevance(run)
         for event in events:
             relevance_cache_key = _personal_relevance_cache_key(event)
             if state is not None and relevance_cache_key in state.personal_relevance_cache:
@@ -1641,7 +1638,7 @@ class ResearchService:
             relevance = PersonalRelevance()
             relevance_matches: list[object] = []
             decision_id = _event_decision_ids(event)[0] if _event_decision_ids(event) else None
-            if "graph_search" in self.tools:
+            if enrich_personal_relevance and "graph_search" in self.tools:
                 outcome = self._invoke_research_tool(
                     state,
                     "graph_search",
@@ -1650,9 +1647,10 @@ class ResearchService:
                     user_id=run.user_id,
                     run_id=run.id,
                     _trace_decision_id=decision_id,
+                    _count_budget=False,
                 )
                 relevance_matches.extend(_personal_relevance_matches_from_tool_outcome(outcome))
-            if "enterprise_knowledge_search" in self.tools:
+            if enrich_personal_relevance and "enterprise_knowledge_search" in self.tools:
                 outcome = self._invoke_research_tool(
                     state,
                     "enterprise_knowledge_search",
@@ -1661,6 +1659,7 @@ class ResearchService:
                     user_id=run.user_id,
                     run_id=run.id,
                     _trace_decision_id=decision_id,
+                    _count_budget=False,
                 )
                 relevance_matches.extend(
                     _enterprise_relevance_matches_from_tool_outcome(outcome)
@@ -1706,7 +1705,14 @@ class ResearchService:
         **kwargs,
     ) -> dict:
         trace_decision_id = str(kwargs.pop("_trace_decision_id", "") or "") or None
-        if state is not None:
+        count_budget = bool(kwargs.pop("_count_budget", True))
+        if state is not None and not count_budget and state.stop_reason == "tool budget exhausted":
+            return {
+                "ok": False,
+                "error_kind": "budget_exhausted",
+                "error": "Research tool-call budget exhausted.",
+            }
+        if state is not None and count_budget:
             if state.tool_call_count >= state.budget.max_tool_calls:
                 state.stop_reason = "tool budget exhausted"
                 return {
@@ -2242,6 +2248,13 @@ def _personal_relevance_cache_key(event: ResearchEvent) -> str:
     ))
 
 
+def _should_enrich_personal_relevance(run: ResearchRun) -> bool:
+    if run.policy.ranking_objective == "personal_relevance_first":
+        return True
+    intent_text = f"{run.topic} {run.instructions}".lower()
+    return any(token in intent_text for token in ("personal", "个人", "知识库", "相关"))
+
+
 def _personal_relevance_context(event: ResearchEvent) -> dict[str, object]:
     domains = ", ".join(sorted({source.domain for source in event.sources})[:4])
     return {
@@ -2415,63 +2428,35 @@ def _verify_digest_claim(
     claim: DigestClaim,
     sources: list[ResearchSource],
 ) -> DigestClaim:
-    claim_terms = _claim_terms(claim.text)
-    if not claim_terms:
+    engine = EvidenceEngine()
+    checks = engine.verify_claims(
+        claim.text,
+        engine.research_sources_to_evidence(sources),
+        limit=1,
+    )
+    if not checks:
         return claim.model_copy(update={
             "source_ids": [],
             "evidence_spans": [],
             "support_level": "unsupported",
         })
-    best_overlap = 0
-    best_coverage = 0.0
-    best_spans: list[str] = []
-    best_source_ids: list[str] = []
-    best_decision_ids: list[str] = []
-    best_text = ""
-    best_source_type = ""
-    for source in sources:
-        for span in _source_evidence_spans(source):
-            span_terms = _claim_terms(span)
-            overlap = len(claim_terms & span_terms)
-            coverage = overlap / max(len(claim_terms), 1)
-            if overlap > best_overlap or (
-                overlap == best_overlap and coverage > best_coverage
-            ):
-                best_overlap = overlap
-                best_coverage = coverage
-                best_spans = [span]
-                best_source_ids = [source.id]
-                best_decision_ids = [source.decision_id] if source.decision_id else []
-                best_text = span
-                best_source_type = source.source_type
-            elif overlap == best_overlap and overlap > 0 and source.id not in best_source_ids:
-                best_spans.append(span)
-                best_source_ids.append(source.id)
-                if source.decision_id and source.decision_id not in best_decision_ids:
-                    best_decision_ids.append(source.decision_id)
-    verdict = HeuristicEntailmentJudge().judge(
-        claim.text,
-        best_text,
-        overlap=best_overlap,
-        claim_term_count=len(claim_terms),
-        coverage=best_coverage,
-        source_type=best_source_type,
-    )
-    if verdict.verdict == CONTRADICTED:
+    check = checks[0]
+    decision_ids = _decision_ids_for_evidence(check.supporting_evidence_ids, sources)
+    if check.status == "contradicted":
         support_level = "contradicted"
-    elif verdict.verdict == ENTAILED:
+    elif check.status == "supported":
         support_level = "supported"
-    elif best_overlap >= 2 and best_coverage >= 0.25:
+    elif check.status == "partially_supported":
         support_level = "partially_supported"
     else:
         support_level = "unsupported"
-        best_spans = []
-        best_source_ids = []
-        best_decision_ids = []
+        check.supporting_evidence_ids = []
+        check.evidence_spans = []
+        decision_ids = []
     return claim.model_copy(update={
-        "source_ids": best_source_ids[:3],
-        "decision_ids": best_decision_ids[:3],
-        "evidence_spans": best_spans[:3],
+        "source_ids": check.supporting_evidence_ids[:3],
+        "decision_ids": decision_ids[:3],
+        "evidence_spans": check.evidence_spans[:3],
         "support_level": support_level,
     })
 
@@ -2534,31 +2519,6 @@ def _verified_run_status(run: ResearchRun, digest: IntelligenceDigest) -> str:
     return "completed_with_limitations"
 
 
-def _source_evidence_spans(source: ResearchSource) -> list[str]:
-    candidates = [
-        source.title,
-        source.snippet,
-        source.content,
-    ]
-    spans: list[str] = []
-    for candidate in candidates:
-        text = " ".join(str(candidate or "").split())
-        if not text:
-            continue
-        if len(text) <= 220:
-            if text not in spans:
-                spans.append(text)
-            continue
-        for part in re.split(r"(?<=[。！？!?；;.\n])\s+", text):
-            span = part.strip()
-            if len(span) < 8:
-                continue
-            spans.append(span[:320])
-            if len(spans) >= 12:
-                break
-    return spans[:12]
-
-
 def _first_sentence(text: str) -> str:
     cleaned = " ".join(str(text or "").split())
     if not cleaned:
@@ -2567,23 +2527,11 @@ def _first_sentence(text: str) -> str:
     return parts[0][:240]
 
 
-def _claim_terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    lowered = text.lower()
-    for token in re.findall(r"[a-z0-9_+-]{2,}", lowered):
-        terms.add(token)
-    for run in re.findall(r"[\u3400-\u9fff]{2,}", text):
-        terms.add(run)
-        for size in (2, 3):
-            for index in range(0, max(0, len(run) - size + 1)):
-                terms.add(run[index:index + size])
-    return terms
-
-
-def _negation_mismatch(claim: str, evidence_text: str) -> bool:
-    return _has_negation(claim) != _has_negation(evidence_text) and bool(evidence_text)
-
-
-def _has_negation(text: str) -> bool:
-    lowered = f" {text.lower()} "
-    return any(marker in lowered for marker in (" 不", "没有", "未", "不能", "无法", "不会", "不是", " no ", " not "))
+def _decision_ids_for_evidence(evidence_ids: list[str], sources: list[ResearchSource]) -> list[str]:
+    by_source_id = {source.id: source for source in sources}
+    decision_ids: list[str] = []
+    for evidence_id in evidence_ids:
+        source = by_source_id.get(evidence_id)
+        if source is not None and source.decision_id and source.decision_id not in decision_ids:
+            decision_ids.append(source.decision_id)
+    return decision_ids

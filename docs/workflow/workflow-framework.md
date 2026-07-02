@@ -90,7 +90,7 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 | `capture_text` | `capture_text` | step projection | `cap-structure` |
 | `capture_link` | `capture_link` | step projection | `cap-link-fetch -> cap-link-store` |
 | `capture_file` | `capture_file` | step projection | `cap-file-read -> cap-file-store` |
-| `ask` | `ask` | step projection | `ask-retrieve -> ask-compose -> ask-verify` |
+| `ask` | `ask` | step projection | `ask-retrieve -> ask-compose -> ask-verify -> ask-repair` |
 | `summarize_thread` | `summarize_thread` | step projection | `sum-compose` |
 | `delete_knowledge` | `delete_knowledge` | step projection | `del-1 -> del-2 -> del-3 -> del-4` |
 | `solidify_conversation` | `solidify_conversation` | step projection | `sol-1 -> sol-2` |
@@ -142,6 +142,7 @@ Goal(intent="ask", input="...")
 ask-retrieve
   -> ask-compose
   -> ask-verify
+  -> ask-repair
 ```
 
 ### ask-retrieve
@@ -167,7 +168,11 @@ build AskRunContext
 
 ### ask-verify
 
-`ask-verify` 做 verifier 校验、必要时 retry、必要时 web fallback。web fallback 不是复制一条新链路，而是追加 web evidence 后复用 context assembly、generation 和 verification。
+`ask-verify` 做 verifier 校验和有界 retry，不负责补充新证据。
+
+### ask-repair
+
+`ask-repair` 在 verify 发现证据不足、冲突或未支撑 claim 时执行反证补充和必要的 web fallback。新增 evidence 会追加到同一个 ask context artifact，再复用 context assembly、generation 和 verification。
 
 ## Delete Knowledge Workflow
 
