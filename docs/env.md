@@ -119,7 +119,7 @@ OPENAI_MODEL=gpt-4.1-mini
 OPENAI_SMALL_MODEL=gpt-4.1-nano
 ```
 
-`OPENAI_*` 用于入口路由、任务规划、重规划、直接回答和 ReAct 等业务 LLM 调用。Graphiti 抽取模型使用下方独立的 `PERSONAL_AGENT_GRAPHITI_LLM_*` 配置，不受这组配置影响。Ask 前的 `query_step_projector.py` 优先复用 LangExtract 的 `PERSONAL_AGENT_EXTRACT_*` 配置，以便使用 `qwen3-coder-flash` 的 strict `json_schema` 输出；未配置 extract key 时才回退到 `OPENAI_SMALL_MODEL`。
+`OPENAI_*` 用于直接回答、ReAct/tool-calling、答案生成等自然语言/工具调用 LLM。入口路由、query planner、重规划、evidence rerank、workspace 语义抽取/裁决等 strict `json_schema` 调用统一走 `StructuredConfig`（`STRUCTURED_*`，兼容读取既有 `ROUTER_*` env 作为实际 endpoint 来源）。Graphiti 抽取模型使用下方独立的 `PERSONAL_AGENT_GRAPHITI_LLM_*` 配置，不受这组配置影响。
 
 默认值（不设环境变量时）：
 - `OPENAI_MODEL`：`gpt-4.1-mini`

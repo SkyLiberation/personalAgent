@@ -22,13 +22,12 @@ from pydantic import BaseModel, Field
 
 from personal_agent.application.extract.langextract_client import run_extract
 from personal_agent.infra.structured_model import (
-    OpenAIModelClient,
     StructuredModelClient,
     StructuredModelRequest,
 )
-from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig
+from personal_agent.kernel.config import LangExtractConfig
 from personal_agent.kernel.contracts.research import ResearchSource
-from personal_agent.kernel.llm_schemas import strict_json_schema_response, strip_json_fence
+from personal_agent.kernel.llm_schemas import strip_json_fence
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +217,7 @@ class StructuredResearchEventExtractor:
         batch_size: int = 8,
     ) -> None:
         self.config = config
-        self.model_client = model_client or _build_structured_event_model_client(config)
+        self.model_client = model_client
         self.fallback = fallback or HeuristicResearchEventExtractor()
         self.batch_size = max(1, batch_size)
         self._structured_frame_cache: dict[str, ResearchEventFrame] = {}
@@ -334,14 +333,10 @@ class StructuredResearchEventExtractor:
             StructuredModelRequest(
                 operation="research_event_frame",
                 version="v1",
-                kind="text",
+                kind="structured",
                 output_type=StructuredEventFrameBatch,
                 max_tokens=1600,
                 temperature=0,
-                response_format=strict_json_schema_response(
-                    "research_event_frames",
-                    StructuredEventFrameBatch.model_json_schema(),
-                ),
                 metadata={"model": self.config.model_id, "component": "research"},
                 messages=[
                     {
@@ -362,8 +357,7 @@ class StructuredResearchEventExtractor:
                 ],
             )
         )
-        content = strip_json_fence(response.content)
-        parsed = _parse_structured_event_batch(content)
+        parsed = response.value
         by_url = {source.canonical_url: source for source in sources}
         frames: dict[str, ResearchEventFrame] = {}
         for item in parsed.frames:
@@ -871,22 +865,6 @@ def _pair_needs_semantic_frame(
 
 def _chunks(values: list[ResearchSource], size: int) -> list[list[ResearchSource]]:
     return [values[index:index + size] for index in range(0, len(values), size)]
-
-
-def _build_structured_event_model_client(
-    config: LangExtractConfig,
-) -> StructuredModelClient | None:
-    if not (config.api_key and config.base_url and config.model_id):
-        return None
-    return OpenAIModelClient(
-        OpenAIConfig(
-            api_key=config.api_key,
-            base_url=config.base_url,
-            model=config.model_id,
-            timeout_seconds=60.0,
-            max_retries=1,
-        )
-    )
 
 
 def _parse_structured_event_batch(content: str) -> StructuredEventFrameBatch:

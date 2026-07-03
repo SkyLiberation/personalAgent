@@ -19,12 +19,10 @@ from personal_agent.kernel.config_models import (
     MCPToolConfig,
     MicrosoftGraphRagConfig,
     OpenAIConfig,
-    PlannerConfig,
     PolicyConfig,
     ReflectionReplaySettings,
     ResearchConfig,
     ReviewDigestConfig,
-    RouterConfig,
     ShortTermMemoryConfig,
     StructuredConfig,
     WebApiConfig,
@@ -142,30 +140,22 @@ def settings_from_env(settings_cls: type):
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
         ),
-        router=RouterConfig(
-            api_key=os.getenv("ROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("ROUTER_BASE_URL") or os.getenv("OPENAI_BASE_URL"),
-            model=os.getenv("ROUTER_MODEL", "gpt-5.4-mini"),
-            timeout_seconds=float(
-                os.getenv("PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS", "30")
-            ),
-            max_retries=int(os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")),
-            extra_body=_parse_json_env("ROUTER_EXTRA_BODY"),
-        ),
         structured=StructuredConfig(
             api_key=os.getenv("STRUCTURED_API_KEY")
             or os.getenv("ROUTER_API_KEY")
             or os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("STRUCTURED_BASE_URL")
-            or os.getenv("ROUTER_BASE_URL")
+            base_url=os.getenv("ROUTER_BASE_URL")
+            or os.getenv("STRUCTURED_BASE_URL")
             or os.getenv("OPENAI_BASE_URL"),
-            model=os.getenv("STRUCTURED_MODEL")
-            or os.getenv("ROUTER_MODEL", "gpt-5.4-mini"),
+            model=os.getenv("ROUTER_MODEL")
+            or os.getenv("STRUCTURED_MODEL", "gpt-5.4-mini"),
             timeout_seconds=float(
-                os.getenv("PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS", "30")
+                os.getenv("PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS")
+                or os.getenv("PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS", "30")
             ),
             max_retries=int(
-                os.getenv("PERSONAL_AGENT_STRUCTURED_MAX_RETRIES", "2")
+                os.getenv("PERSONAL_AGENT_STRUCTURED_MAX_RETRIES")
+                or os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")
             ),
             extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
             or _parse_json_env("ROUTER_EXTRA_BODY"),
@@ -328,19 +318,6 @@ def settings_from_env(settings_cls: type):
             ),
             raw_max_file_bytes=int(
                 os.getenv("PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_MAX_FILE_BYTES", "2000000")
-            ),
-        ),
-        planner=PlannerConfig(
-            api_key=os.getenv("PERSONAL_AGENT_PLANNER_API_KEY"),
-            base_url=os.getenv(
-                "PERSONAL_AGENT_PLANNER_BASE_URL",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            ),
-            model_id=os.getenv(
-                "PERSONAL_AGENT_PLANNER_MODEL", "qwen3-coder-flash"
-            ),
-            timeout_seconds=float(
-                os.getenv("PERSONAL_AGENT_PLANNER_TIMEOUT_SECONDS", "15.0")
             ),
         ),
         ask=AskConfig(

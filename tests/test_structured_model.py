@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from personal_agent.kernel.config_models import LangSmithConfig, RouterConfig
+from personal_agent.kernel.config_models import LangSmithConfig, StructuredConfig
 from personal_agent.infra.structured_model import (
     FullTracePayloadPolicy,
     ObservedStructuredModelClient,
@@ -12,6 +12,7 @@ from personal_agent.infra.structured_model import (
     RedactedTracePayloadPolicy,
     StructuredModelRequest,
     StructuredModelResponse,
+    UsageRecordingStructuredModelClient,
     build_structured_model_client,
 )
 
@@ -29,30 +30,30 @@ def _request(text: str = "secret") -> StructuredModelRequest[ExampleOutput]:
     )
 
 
-def test_openai_adapter_uses_responses_parse(monkeypatch):
+def test_openai_adapter_uses_chat_completions_json_schema(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeOpenAI:
         def __init__(self, **kwargs):
             captured["init"] = kwargs
-            self.responses = SimpleNamespace(parse=self._parse)
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
 
-        def _parse(self, **kwargs):
-            captured["parse"] = kwargs
+        def _create(self, **kwargs):
+            captured["create"] = kwargs
             return SimpleNamespace(
-                output_parsed=ExampleOutput(ok=True),
-                output_text='{"ok":true}',
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
                 model="structured-model",
-                status="completed",
                 usage=SimpleNamespace(
-                    input_tokens=5,
-                    output_tokens=3,
+                    prompt_tokens=5,
+                    completion_tokens=3,
                     total_tokens=8,
                 ),
             )
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
-    client = OpenAIModelClient(RouterConfig(
+    client = OpenAIModelClient(StructuredConfig(
         api_key="key",
         base_url="https://llm.invalid",
         model="structured-model",
@@ -63,8 +64,8 @@ def test_openai_adapter_uses_responses_parse(monkeypatch):
     assert result.value == ExampleOutput(ok=True)
     assert result.input_tokens == 5
     assert result.output_tokens == 3
-    assert captured["parse"]["text_format"] is ExampleOutput
-    assert "response_format" not in captured["parse"]
+    assert captured["create"]["response_format"]["type"] == "json_schema"
+    assert captured["create"]["response_format"]["json_schema"]["strict"] is True
 
 
 def test_redacted_policy_removes_message_and_response_bodies():
@@ -140,11 +141,11 @@ def test_observation_decorator_applies_policy_without_caller_flags(monkeypatch):
 
 def test_composition_selects_payload_policy():
     redacted = build_structured_model_client(
-        RouterConfig(api_key="key", base_url="https://llm.invalid"),
+        StructuredConfig(api_key="key", base_url="https://llm.invalid"),
         LangSmithConfig(enabled=True, upload_inputs=False),
     )
     full = build_structured_model_client(
-        RouterConfig(api_key="key", base_url="https://llm.invalid"),
+        StructuredConfig(api_key="key", base_url="https://llm.invalid"),
         LangSmithConfig(enabled=True, upload_inputs=True),
     )
 
@@ -156,15 +157,16 @@ def test_composition_selects_payload_policy():
 
 def test_composition_omits_observer_when_tracing_is_disabled():
     client = build_structured_model_client(
-        RouterConfig(api_key="key", base_url="https://llm.invalid"),
+        StructuredConfig(api_key="key", base_url="https://llm.invalid"),
         LangSmithConfig(enabled=False),
     )
 
-    assert isinstance(client, OpenAIModelClient)
+    assert isinstance(client, UsageRecordingStructuredModelClient)
+    assert isinstance(client._delegate, OpenAIModelClient)
 
 
 def test_composition_returns_none_when_model_is_unconfigured():
     assert build_structured_model_client(
-        RouterConfig(api_key=None, base_url=None),
+        StructuredConfig(api_key=None, base_url=None),
         LangSmithConfig(),
     ) is None

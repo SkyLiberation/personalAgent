@@ -1,6 +1,6 @@
 # 当前工程的 LLM 决策与确定性流程总结
 
-> 依据当前工作区源码整理，更新时间：2026-06-20。
+> 依据当前工作区源码整理，更新时间：2026-07-02。
 >
 > 本文描述的是“实际代码边界”，包括默认启用能力、配置后启用能力，以及保留但未接入生产主链路的能力。
 
@@ -61,6 +61,7 @@ LLM 意图识别
 | 失败后重规划 | 在步骤失败后生成剩余步骤替代方案 | 不能重跑已完成步骤，结果再次经过步骤校验 | 可回退到确定性 salvage/原失败策略 | 异常路径 |
 | 图谱实体关系抽取 | Graphiti 在写入图谱时抽取实体、关系、事实和摘要 | Graphiti 数据模型及兼容层校正 | 图谱失败不阻断本地笔记入库，记录同步失败 | 图谱配置后启用 |
 | Evidence LLM rerank | 对候选证据 ID 排序 | 只能返回已有 `evidence_id`，后续仍做预算和 MMR 选择 | 自动回退启发式排序 | 可配置，默认关闭 |
+| Claim 关系语义裁决 | 判断两个 Claim 是否真实重复、补充、替代或冲突 | `ClaimRelationAdjudication` 结构化结果；不能直接写状态 | 模型不可用或低置信时只保留 `potential_conflict`、DecisionCard 和 KnowledgeGap | structured client 配置后启用 |
 
 ## 3. 确定性流程清单
 
@@ -81,6 +82,8 @@ LLM 意图识别
 | Evidence 归一与去重 | 不同来源统一成 `EvidenceItem`，执行去重、RRF、压缩和预算选择 |
 | 默认 rerank | 启发式打分与 MMR 多样性选择 |
 | 默认回答验证 | 引用存在性、证据数量、关键结论词项覆盖、否定/数字/极性冲突检查 |
+| Claim 关系候选生成 | canonical key、词项重叠和极性标记只能生成 duplicate/supplement 或 `potential_conflict` 候选 |
+| KnowledgeState 迁移 | `active / conflicted / superseded / deleted` 等状态只能由状态机、策略、确认结果或语义裁决后的确定性代码写入 |
 | Policy Engine | allow / deny / require confirmation / escalation 的固定规则判断 |
 | Tool Gateway | 工具存在性、允许列表、权限域、URL 域名、超时、重试、速率、错误分类 |
 | HITL | 使用 LangGraph interrupt/resume 暂停并接收 confirm/reject/clarify |
@@ -278,7 +281,21 @@ Graphiti 的调用、超时、重试、状态回写和 Neo4j 写入边界由代�
 
 引用存在性、词项覆盖、否定、数字和极性检查是可复现的确定性验证，但仍可能出现语义漏判。它适合做运行时质量门，不应被表述为严格证明。
 
-### 6.5 外部工具权限治理还有扩展空间
+### 6.5 Claim 冲突不能由启发式直接落成业务状态
+
+本次审计发现 Workspace 关系链路曾存在一个边界问题：词项重叠和“开启/关闭、支持/不支持”等极性标记会直接生成 `conflict`，并立即把新旧 Claim 状态改成 `conflicted`。这违背了“LLM 处理语义不确定性、代码控制执行与副作用”的原则，因为它把开放语义判断直接变成了持久化副作用。
+
+修复后的边界是：
+
+- 启发式只能做候选生成：相同 canonical key / statement 可以确定性去重；词项重叠与极性相反只能生成 `potential_conflict`。
+- `potential_conflict` 不会触发 `active -> conflicted`，也不会进入最终 `conflicted_claim_ids`。
+- 系统会写入 `KnowledgeRelation(potential_conflict)`，同时生成 `DecisionCard(conflict_resolution)` 和 `KnowledgeGap(conflict)`，让用户或后续语义裁决流程可见。
+- 配置 structured client 后，`LLMClaimRelationJudge` 通过 `ClaimRelationAdjudication` 对候选关系做语义裁决；只有高置信 `conflict` 才由确定性代码写入 `KnowledgeRelation(conflict)` 并执行 `KnowledgeState` 迁移。
+- LLM 仍不能直接写库或改状态；它只返回结构化裁决，状态机、阈值、DecisionCard、审计和持久化仍由代码执行。
+
+因此，`conflict_detection_rate` 只能衡量候选发现或裁决发现，不能把启发式候选等同于真实冲突。`claim_conflict_precision` 应以用户确认或语义裁决后的 `conflict` 为口径，`potential_conflict` 应单独统计。
+
+### 6.6 外部工具权限治理还有扩展空间
 
 当前已有工具白名单、权限域、域名限制、速率限制、风险确认和审计。后续如果增加发消息、付款、系统命令或第三方写操作，应继续在 Tool Gateway/Policy 层扩展能力令牌和细粒度资源权限，而不是把授权逻辑写进 prompt。
 
@@ -296,6 +313,7 @@ Graphiti 的调用、超时、重试、状态回写和 Neo4j 写入边界由代�
 | 涉及日志、审计、指标和追踪 | 确定性基础设施 |
 | 涉及输出是否满足机器契约 | Schema/Pydantic/Validator |
 | 涉及答案是否被证据支撑 | 确定性验证为主，模型判断只能作为可插拔增强 |
+| 涉及 Claim 间真实冲突、替代或非字面重复 | LLM / NLI / 用户裁决，代码只生成候选和执行已裁决状态迁移 |
 
 最终可以把当前工程的设计原则表达为：
 

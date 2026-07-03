@@ -503,8 +503,8 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_executes_steps_and_stores_composed_note(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda prompt, deps: (
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+            lambda *_args, **_kwargs: (
                 '{"done":true,"result":{"title":"DNS","content":'
                 '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
             ),
@@ -535,8 +535,8 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_extracts_structured_note_body_before_capture(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda prompt, deps: (
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+            lambda *_args, **_kwargs: (
                 '{"thought":"整理正文","result":{"标题":"DNS（域名系统）",'
                 '"正文":"DNS 用于将域名转换为 IP 地址。"}}'
             ),
@@ -562,7 +562,7 @@ class TestOrchestrationGraphIntegration:
     def test_solidify_delegates_topic_selection_to_llm(self, runtime, monkeypatch):
         prompts: list[str] = []
 
-        def reply(prompt, deps):
+        def reply(_prompt_name, prompt, *_args, **_kwargs):
             prompts.append(prompt)
             return (
                 '{"thought":"只选择 DNS 轮次","done":true,"result":'
@@ -571,7 +571,7 @@ class TestOrchestrationGraphIntegration:
             )
 
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
             reply,
         )
         for text in ("今天西安天气怎么样", "什么是DNS", "什么是JSON Schema"):
@@ -600,8 +600,8 @@ class TestOrchestrationGraphIntegration:
 
     def test_solidify_streams_step_progress_during_graph_execution(self, runtime, monkeypatch):
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda prompt, deps: (
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+            lambda *_args, **_kwargs: (
                 '{"done":true,"result":{"title":"DNS","content":'
                 '"DNS 是域名系统，用于将域名解析为 IP 地址。"}}'
             ),
@@ -1115,8 +1115,8 @@ class TestPhase3ExecuteExecutionStep:
             )
         )
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda _prompt, _deps: (
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+            lambda *_args, **_kwargs: (
                 '{"thought":"匹配 DNS 主题","done":true,'
                 '"result":{"note_id":"note-dns"}}'
             ),
@@ -1149,8 +1149,8 @@ class TestPhase3ExecuteExecutionStep:
             )
         )
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda _prompt, _deps: (
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+            lambda *_args, **_kwargs: (
                 '{"thought":"无明显匹配","done":true,'
                 '"result":{"note_id":null}}'
             ),
@@ -1327,7 +1327,7 @@ class TestPhase4ReActHelpers:
         from personal_agent.orchestration.orchestration_graph import _is_react_tool_blocked
 
         assert _is_react_tool_blocked("delete_note", runtime.graph_contexts.react)
-        assert _is_react_tool_blocked("capture_text", runtime.graph_contexts.react)
+        assert not _is_react_tool_blocked("capture_text", runtime.graph_contexts.react)
 
     def test_is_react_tool_blocked_allows_safe_tools(self, runtime):
         from personal_agent.orchestration.orchestration_graph import _is_react_tool_blocked
@@ -1790,11 +1790,11 @@ class TestPhase4ReActMainGraphIntegration:
         """An ask entry with execution steps routes ReAct through main graph nodes."""
         from personal_agent.orchestration.orchestration_graph import build_entry_orchestration_graph, _build_checkpointer
 
-        def _mock_llm(prompt, rt):
+        def _mock_llm(*_args, **_kwargs):
             return '{"thought": "已检索","done": true,"result": {"answer": "服务降级是指在系统压力过大时主动关闭非核心能力"}}'
 
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
             _mock_llm,
         )
 

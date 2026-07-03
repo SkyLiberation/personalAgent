@@ -3,8 +3,9 @@
 The port (``StructuredModelClient`` / ``StreamingModelClient``) is the only LLM
 dependency application code is allowed to hold. ``OpenAIModelClient`` is the one
 adapter that maps the port to the OpenAI API — it handles all three request
-kinds (``structured`` via Responses API, ``tool_calling`` / ``text`` via Chat
-Completions) plus streaming, in a single high-cohesion class.
+kinds (``structured`` via Chat Completions strict ``json_schema``,
+``tool_calling`` / ``text`` via Chat Completions) plus streaming, in a single
+high-cohesion class.
 
 The adapter is **pure**: it only performs the API call and extracts
 content / tool_calls / usage / latency. No tracing (langsmith spans,
@@ -24,7 +25,9 @@ from typing import Any, Generic, Iterator, Literal, Protocol, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel
 
-from personal_agent.kernel.config_models import LangSmithConfig, OpenAIConfig, RouterConfig
+from personal_agent.infra.structured_parse import parse_structured
+from personal_agent.kernel.config_models import LangSmithConfig, OpenAIConfig, StructuredConfig
+from personal_agent.kernel.llm_schemas import structured_response_format
 from personal_agent.kernel.llm_telemetry import record_llm_usage
 from personal_agent.kernel.logging_utils import log_event
 
@@ -40,7 +43,8 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
 
     ``kind`` selects the transport:
 
-    - ``structured`` (default): provider parses ``output_type`` (Responses API).
+    - ``structured`` (default): Chat Completions strict ``json_schema`` parsed
+      into ``output_type``.
     - ``tool_calling``: Chat Completions with ``tools`` / ``tool_choice``;
       ``output_type`` may be ``BaseModel`` (unused, kept for typing).
     - ``text``: Chat Completions, optionally with ``response_format``.
@@ -177,7 +181,7 @@ class OpenAIModelClient:
 
     One high-cohesion class covers every request kind:
 
-    - ``structured``  → Responses API ``responses.parse`` with Pydantic ``output_type``.
+    - ``structured``  → Chat Completions with strict ``json_schema`` and Pydantic parse.
     - ``tool_calling`` → Chat Completions with ``tools`` / ``tool_choice``;
       response carries native ``tool_calls``.
     - ``text``        → Chat Completions, optional ``response_format`` JSON-schema.
@@ -191,14 +195,14 @@ class OpenAIModelClient:
     the call logic decoupled from observability and lets tracing evolve without
     touching the adapter.
 
-    ``config`` may be an ``OpenAIConfig`` or ``RouterConfig`` (both expose
+    ``config`` may be an ``OpenAIConfig`` or ``StructuredConfig`` (both expose
     ``api_key`` / ``base_url`` / ``timeout_seconds`` / ``max_retries``; the
     resolved model is ``model_override`` or ``config.model``).
     """
 
     def __init__(
         self,
-        config: OpenAIConfig | RouterConfig,
+        config: OpenAIConfig | StructuredConfig,
         *,
         model_override: str | None = None,
     ) -> None:
@@ -242,8 +246,10 @@ class OpenAIModelClient:
                 kwargs["tools"] = request.tools
             if request.tool_choice is not None:
                 kwargs["tool_choice"] = request.tool_choice
-        if request.extra_body:
-            kwargs["extra_body"] = request.extra_body
+        config_extra = getattr(self._config, "extra_body", None) or {}
+        merged_extra = {**config_extra, **(request.extra_body or {})}
+        if merged_extra:
+            kwargs["extra_body"] = merged_extra
         return kwargs
 
     @staticmethod
@@ -269,25 +275,40 @@ class OpenAIModelClient:
     ) -> StructuredModelResponse[StructuredOutputT]:
         start = perf_counter()
         client = self._client()
-        kwargs: dict[str, Any] = {
-            "model": self._resolved_model,
-            "input": request.messages,
-            "text_format": request.output_type,
-            "max_output_tokens": request.max_tokens,
-        }
-        if not _is_reasoning_model(self._resolved_model):
-            kwargs["temperature"] = request.temperature
-        if getattr(self._config, "extra_body", None):
-            kwargs["extra_body"] = self._config.extra_body
-        response = client.responses.parse(**kwargs)
-        parsed = response.output_parsed
-        if parsed is None:
-            raise ValueError(
-                f"Structured response did not contain {request.output_type.__name__}; "
-                f"status={getattr(response, 'status', None)!r}"
-            )
+        response_format = request.response_format or structured_response_format(
+            request.operation,
+            request.output_type.model_json_schema(),
+        )
+        chat_request = request.__class__(
+            operation=request.operation,
+            version=request.version,
+            messages=request.messages,
+            output_type=request.output_type,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            kind="text",
+            response_format=response_format,
+            extra_body=request.extra_body,
+            metadata=request.metadata,
+        )
+        response = client.chat.completions.create(**self._chat_kwargs(chat_request))
         latency_ms = round((perf_counter() - start) * 1000, 2)
-        content = (getattr(response, "output_text", "") or "").strip()
+        message = response.choices[0].message
+        content = (message.content or "").strip()
+        if request.output_type is BaseModel:
+            parsed = self._default_value(request)
+        else:
+            parse_result = parse_structured(
+                content or "{}",
+                request.output_type,
+                operation=request.operation,
+                version=request.version,
+                model_name=getattr(response, "model", None) or self._resolved_model,
+                latency_ms=latency_ms,
+            )
+            if not parse_result.ok:
+                raise ValueError(f"{request.operation} structured parse failed: {parse_result.error}")
+            parsed = parse_result.value
         usage = _usage(response)
         return StructuredModelResponse(
             value=parsed,
@@ -594,10 +615,10 @@ class ObservedStreamingModelClient:
 
 
 def build_structured_model_client(
-    config: RouterConfig,
+    config: StructuredConfig,
     observability: LangSmithConfig,
 ) -> StructuredModelClient | None:
-    """Composition helper for the Responses API (``structured`` kind)."""
+    """Composition helper for strict JSON-schema structured output."""
     if not (config.api_key and config.base_url and config.model):
         return None
     client: StructuredModelClient = UsageRecordingStructuredModelClient(
@@ -614,7 +635,7 @@ def build_structured_model_client(
 
 
 def build_chat_model_client(
-    config: OpenAIConfig | RouterConfig,
+    config: OpenAIConfig,
     observability: LangSmithConfig,
     *,
     model_override: str | None = None,

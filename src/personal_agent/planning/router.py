@@ -49,6 +49,20 @@ class RouterOutput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_contract(self) -> "RouterOutput":
+        if self.goals and self.outcome != "ready":
+            self.outcome = "ready"
+            self.clarification = None
+            self.missing_requirements = []
+            self.coverage = "full"
+            self.matched_capabilities = [goal.intent for goal in self.goals]
+            if self.route_type in {"clarify", "unsupported", "rejected"}:
+                self.route_type = (
+                    "direct_answer"
+                    if [goal.intent for goal in self.goals] == ["direct_answer"]
+                    else "composite_workflow"
+                    if len(self.goals) > 1
+                    else "single_workflow"
+                )
         if self.outcome == "ready":
             if not self.goals:
                 raise ValueError("ready output requires at least one goal")

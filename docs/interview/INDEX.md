@@ -4,7 +4,7 @@
 
 项目最核心的一句话：
 
-> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的记忆、行动和规划都放进可恢复、可校验、可审计、可评测的系统边界里：LangGraph checkpoint 管短期执行现场，Postgres note/chunk 管长期事实，MemoryEpisode 管情景记忆（过往任务的意图与结果）、MemoryItem 管反思 / 程序经验，独立 planner LLM 管查询理解、Unstructured 管文档结构化（LangExtract 作为休眠的可选抽取层保留），Graphiti 做语义索引，Evidence 管回答依据，WorkflowSpec/WorkflowRegistry 管固定流程拓扑，PolicyEngine 管策略决策，ToolGateway 管副作用，WorkflowSpecValidator/StepProjectionValidator 管 spec 与步骤投影安全，evals 模块验证检索、问答和规划策略是否真的有效。
+> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的记忆、行动和规划都放进可恢复、可校验、可审计、可评测的系统边界里：LangGraph checkpoint 管短期执行现场，Postgres note/chunk 管长期事实，MemoryEpisode 管情景记忆（过往任务的意图与结果）、MemoryItem 管反思 / 程序经验，统一 Structured LLM 管 router/query planner/replanner/reranker/workspace 语义裁决，Unstructured 管文档结构化（LangExtract 作为休眠的可选抽取层保留），Graphiti 做语义索引，Evidence 管回答依据，WorkflowSpec/WorkflowRegistry 管固定流程拓扑，PolicyEngine 管策略决策，ToolGateway 管副作用，WorkflowSpecValidator/StepProjectionValidator 管 spec 与步骤投影安全，evals 模块验证检索、问答和规划策略是否真的有效。
 
 
 本文档已按模块拆分。下面按顺序列出各模块及其覆盖的问题，点击模块标题进入对应文件。

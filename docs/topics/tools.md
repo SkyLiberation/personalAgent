@@ -461,18 +461,16 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 
 **已落地实现**：ReAct 迭代节点 `_node_react_iterate` 直接消费模型原生 `tool_calls`，是唯一路径（无兼容旗标、无并行旧路径）。关键点：
 
-1. 项目 LLM 层使用原生 OpenAI SDK（`traced_chat_completion`）而非 `ChatOpenAI`，因此没有字面意义上的 `llm.bind_tools()`。但 `LlmTraceResult.tool_calls` 已经携带模型原生结构化 tool call（`id / function.name / function.arguments`），等价于 `bind_tools` 的输出。新增 `_helpers._react_llm_native` 直接消费它，返回结构化 `_NativeReactOutcome`，构造 `AIMessage(tool_calls=[...])`，**消除了原 `_react_llm_respond` 的 `json.dumps` 信封字符串与 `_react_parse_response` 的二次字符串解析**，以及 `_begin_tool_call` 从 parsed dict 重新合成 `AIMessage` 的中转。
+1. 项目 LLM 层通过统一 model client 发起原生 OpenAI-compatible tool-calling，而非 `ChatOpenAI`，因此没有字面意义上的 `llm.bind_tools()`。但模型响应携带原生结构化 `tool_calls`（`id / function.name / function.arguments`），等价于 `bind_tools` 的输出。`_helpers._react_llm_native` 直接消费它，返回结构化 `_NativeReactOutcome`，构造 `AIMessage(tool_calls=[...])`，**消除了旧 JSON 信封字符串与 `_react_parse_response` 的二次字符串解析**，以及 `_begin_tool_call` 从 parsed dict 重新合成 `AIMessage` 的中转。
 2. 标准 langgraph `ToolNode(messages_key="tool_messages")` 经验证可消费原生 `AIMessage` 并**完整保留 `content_and_artifact` 协议下的 `artifact` 属性**（`{ok,data,error,evidence}`），与下游 `_node_consume_react_tool_result` 的 `getattr(message, "artifact")` 消费契约一致。`messages_key` 参数让标准 ToolNode 直接适配项目“工具消息隔离在 `tool_messages`、不污染用户会话”的设计，无需适配层。
 3. `ToolNode` 的 `wrap_tool_call` middleware 可作为治理接入点（P6 方向）：验证已用 audit-only wrapper 拦截每次调用并记录 `tool / id / ok`，证明权限、限流、审计可从 `ToolGateway` 内部逻辑迁移为 ToolNode 前后置 middleware。
 4. 工具执行仍经过 `ToolGateway.invoke_graph`（作为 `react_tool_node`）：原生 `AIMessage` 经网关消费后返回带 `artifact` 的 `ToolMessage`，治理、HITL、幂等与审计边界完全不变。`ToolNode` 替换网关属于 P6，留作下一步。
 5. `_begin_tool_call` 增加可选 `call_id` 入参，原生路径直传模型 `call_id` 作为 `tool_call_id` 与 `pending_call_id`，不再合成 `{run_id}:{suffix}:{idx}`，下游 checkpoint 恢复按 `tool_call_id` 匹配 `ToolMessage` 的逻辑更准确。
-6. 高风险/写操作（`delete_note`、`capture_text` 等 `workflow_activity` 或 high-risk 工具）仍由 `exposure` 过滤与 `_is_react_tool_blocked` 守卫保证不会在 ReAct 自主执行中被调用，治理边界不变。
-
-保留的旧函数：`_react_llm_respond` 与 `_react_parse_response` 仍保留在 `_helpers.py`，因为它们服务于**另一条路径**——`_structured_llm_respond` 的结构化文本 fallback（step 执行的结构化决策，如删除候选解析），那条路径返回 str 并由 `_react_parse_response` 解析，与 ReAct 工具调用无关。
+6. 高风险或需确认工具（如 `delete_note`、`restore_note`）仍由 `exposure` 过滤与 `_is_react_tool_blocked` 守卫保证不会在 ReAct 自主执行中被调用；低风险 capture 工具按治理元数据处理，治理边界不变。
 
 胶水代码差异（相对原 JSON 信封路径删除的拼接点）：
 
-- 删除 `_react_llm_respond` 中 `json.dumps({"thought":..,"tool":..,"input":..})` 信封构造（ReAct 路径不再调用）。
+- 删除旧 ReAct JSON 信封路径。
 - 删除 ReAct 迭代节点对 `_react_parse_response` 的回解析及其 `log_llm_parse` 兜底分支。
 - `_begin_tool_call` 直传模型 `call_id`，不再合成 `{run_id}:{suffix}:{idx}`。
 - `finish_react` 由原生 tool call 直接结束循环，不再经信封解析。

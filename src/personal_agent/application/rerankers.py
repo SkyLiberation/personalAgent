@@ -14,7 +14,6 @@ from personal_agent.kernel.evidence import (
     select_ranked_evidence,
 )
 from personal_agent.kernel.prompts import get_prompt, render_prompt
-from personal_agent.infra.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +124,6 @@ class LlmEvidenceReranker:
             raise RuntimeError("LLM reranker requires a configured model client")
 
         from personal_agent.infra.structured_model import StructuredModelRequest
-        from pydantic import BaseModel
 
         system_prompt = get_prompt("evidence_rerank.system")
         response = self._model_client.generate(StructuredModelRequest(
@@ -133,8 +131,7 @@ class LlmEvidenceReranker:
             version=system_prompt.version,
             temperature=0,
             max_tokens=700,
-            kind="text",
-            response_format=_rerank_response_format(),
+            kind="structured",
             messages=[
                 {"role": "system", "content": system_prompt.template},
                 {
@@ -145,21 +142,11 @@ class LlmEvidenceReranker:
                     ),
                 },
             ],
-            output_type=BaseModel,
+            output_type=_RerankResult,
             metadata={"component": "evidence_reranker", "candidate_count": len(candidates)},
         ))
-        parsed = parse_structured(
-            response.content or "{}",
-            _RerankResult,
-            operation="evidence_rerank",
-            version=system_prompt.version,
-            model_name=response.model,
-            latency_ms=response.latency_ms,
-        )
-        if not parsed.ok:
-            raise ValueError(f"evidence_rerank structured parse failed: {parsed.error}")
         valid_ids = {item.evidence.evidence_id for item in candidates}
-        return [item_id for item_id in parsed.value.ranked_ids if item_id in valid_ids]
+        return [item_id for item_id in response.value.ranked_ids if item_id in valid_ids]
 
 
 def build_context_pack_with_settings(
@@ -208,27 +195,6 @@ def _apply_llm_order(
         }))
     ordered.extend(item for item in heuristic_ranked if item.evidence.evidence_id not in seen)
     return ordered
-
-
-def _rerank_response_format() -> dict:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "evidence_rerank",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "ranked_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["ranked_ids"],
-                "additionalProperties": False,
-            },
-        },
-    }
 
 
 def _rerank_prompt(question: str, candidates: list[RankedEvidence]) -> str:

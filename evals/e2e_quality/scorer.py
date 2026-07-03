@@ -21,6 +21,11 @@ class E2EQualityCase:
     expected_task_dependency: tuple[str, str] | None = None
     expected_grounding_statuses: tuple[str, ...] = ()
     expected_claim_statuses: tuple[str, ...] = ()
+    expected_claim_states: tuple[str, ...] = ()
+    forbidden_claim_states: tuple[str, ...] = ()
+    expected_admission_results: tuple[str, ...] = ()
+    expected_relation_types: tuple[str, ...] = ()
+    forbidden_relation_types: tuple[str, ...] = ()
     expected_web_tried: bool | None = None
     expected_satisfaction_should_continue: bool | None = None
     expected_gap_types: tuple[str, ...] = ()
@@ -36,6 +41,21 @@ class E2EQualityCase:
     min_matches: int = 0
     min_citations: int = 0
     min_evidence: int = 0
+    min_evidence_blocks: int = 0
+    min_evidence_spans: int = 0
+    min_grounding_runs: int = 0
+    min_claim_admission_decisions: int = 0
+    min_knowledge_items: int = 0
+    min_decisions: int = 0
+    min_knowledge_relations: int = 0
+    min_user_claims: int = 0
+    min_research_events: int = 0
+    min_review_items: int = 0
+    min_knowledge_gaps: int = 0
+    min_graph_projections: int = 0
+    min_table_evidence_blocks: int = 0
+    min_deleted_claims: int = 0
+    min_replay_diff_count: int = 0
     min_verification_score: float | None = None
     max_matches: int | None = None
     max_citations: int | None = None
@@ -54,6 +74,23 @@ class E2EQualityCase:
     min_satisfaction_confidence_score: float | None = None
     max_satisfaction_marginal_gain: float | None = None
     require_unique_canonical_urls: bool = False
+    require_citation_resolves_to_artifact: bool = False
+    expected_evidence_coverages: tuple[str, ...] = ()
+    min_missing_sections: int = 0
+    max_projection_job_failed_count: int | None = None
+    max_partial_failure_count: int | None = None
+    max_answer_claim_saved_count: int | None = None
+    max_active_claim_count_delta: int | None = None
+    max_assistant_inference_active_count: int | None = None
+    max_pending_decision_count: int | None = None
+    require_graph_projection_backlinks: bool = False
+    min_claim_quality_passed_count: int = 0
+    max_claim_without_evidence_ref_count: int | None = None
+    min_coverage_manifest_omitted_count: int = 0
+    max_review_invalid_claim_count: int | None = None
+    max_projection_eligibility_violation_count: int | None = None
+    required_semantic_component_terms: tuple[str, ...] = ()
+    forbidden_grounding_verifiers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,10 +105,47 @@ class E2EQualityRun:
     matches_count: int = 0
     citations_count: int = 0
     evidence_count: int = 0
+    evidence_block_count: int = 0
+    evidence_span_count: int = 0
+    grounding_run_count: int = 0
+    claim_admission_decision_count: int = 0
+    knowledge_item_count: int = 0
+    decision_count: int = 0
+    pending_decision_count: int = 0
+    knowledge_relation_count: int = 0
+    user_claim_count: int = 0
+    research_event_count: int = 0
+    review_item_count: int = 0
+    knowledge_gap_count: int = 0
+    graph_projection_count: int = 0
     llm_call_count: int = 0
     verification_score: float = 0.0
     grounding_status: str = ""
     claim_statuses: tuple[str, ...] = ()
+    claim_states: tuple[str, ...] = ()
+    admission_results: tuple[str, ...] = ()
+    relation_types: tuple[str, ...] = ()
+    table_evidence_block_count: int = 0
+    deleted_claim_count: int = 0
+    replay_diff_count: int = 0
+    citation_evidence_span_ids: tuple[str, ...] = ()
+    citation_evidence_block_ids: tuple[str, ...] = ()
+    citation_artifact_ids: tuple[str, ...] = ()
+    evidence_coverage: str = ""
+    missing_section_count: int = 0
+    projection_job_failed_count: int = 0
+    partial_failure_count: int = 0
+    answer_claim_saved_count: int = 0
+    active_claim_count_delta: int = 0
+    assistant_inference_active_count: int = 0
+    graph_projection_backlink_ok: bool = False
+    claim_quality_passed_count: int = 0
+    claim_without_evidence_ref_count: int = 0
+    coverage_manifest_omitted_count: int = 0
+    review_invalid_claim_count: int = 0
+    projection_eligibility_violation_count: int = 0
+    semantic_component_names: tuple[str, ...] = ()
+    grounding_verifiers: tuple[str, ...] = ()
     web_tried: bool = False
     note_count: int = 0
     dependency_edges: tuple[tuple[str, str], ...] = ()
@@ -232,6 +306,40 @@ def _metrics(case: E2EQualityCase, run: E2EQualityRun) -> list[MetricScore]:
         metrics.append(_range("citations", run.citations_count, case.min_citations, case.max_citations))
     if case.min_evidence or case.max_evidence is not None:
         metrics.append(_range("evidence", run.evidence_count, case.min_evidence, case.max_evidence))
+    if case.min_evidence_blocks:
+        metrics.append(_min("evidence_blocks", run.evidence_block_count, case.min_evidence_blocks))
+    if case.min_evidence_spans:
+        metrics.append(_min("evidence_spans", run.evidence_span_count, case.min_evidence_spans))
+    if case.min_grounding_runs:
+        metrics.append(_min("grounding_runs", run.grounding_run_count, case.min_grounding_runs))
+    if case.min_claim_admission_decisions:
+        metrics.append(_min(
+            "claim_admission_decisions",
+            run.claim_admission_decision_count,
+            case.min_claim_admission_decisions,
+        ))
+    if case.min_knowledge_items:
+        metrics.append(_min("knowledge_items", run.knowledge_item_count, case.min_knowledge_items))
+    if case.min_decisions:
+        metrics.append(_min("decisions", run.decision_count, case.min_decisions))
+    if case.min_knowledge_relations:
+        metrics.append(_min("knowledge_relations", run.knowledge_relation_count, case.min_knowledge_relations))
+    if case.min_user_claims:
+        metrics.append(_min("user_claims", run.user_claim_count, case.min_user_claims))
+    if case.min_research_events:
+        metrics.append(_min("research_events", run.research_event_count, case.min_research_events))
+    if case.min_review_items:
+        metrics.append(_min("review_items", run.review_item_count, case.min_review_items))
+    if case.min_knowledge_gaps:
+        metrics.append(_min("knowledge_gaps", run.knowledge_gap_count, case.min_knowledge_gaps))
+    if case.min_graph_projections:
+        metrics.append(_min("graph_projections", run.graph_projection_count, case.min_graph_projections))
+    if case.min_table_evidence_blocks:
+        metrics.append(_min("table_evidence_blocks", run.table_evidence_block_count, case.min_table_evidence_blocks))
+    if case.min_deleted_claims:
+        metrics.append(_min("deleted_claims", run.deleted_claim_count, case.min_deleted_claims))
+    if case.min_replay_diff_count:
+        metrics.append(_min("replay_diff_count", run.replay_diff_count, case.min_replay_diff_count))
     if case.max_llm_calls is not None:
         metrics.append(_max("llm_calls", run.llm_call_count, case.max_llm_calls))
     if case.min_verification_score is not None:
@@ -251,6 +359,38 @@ def _metrics(case: E2EQualityCase, run: E2EQualityRun) -> list[MetricScore]:
             "claim_status",
             run.claim_statuses,
             case.expected_claim_statuses,
+        ))
+    if case.expected_claim_states:
+        metrics.append(_intersects(
+            "claim_state",
+            run.claim_states,
+            case.expected_claim_states,
+        ))
+    for state in case.forbidden_claim_states:
+        forbidden = state in run.claim_states
+        metrics.append(MetricScore(
+            f"claim_state_forbidden:{state}",
+            0.0 if forbidden else 1.0,
+            f"actual={run.claim_states!r}" if forbidden else "",
+        ))
+    if case.expected_admission_results:
+        metrics.append(_intersects(
+            "admission_result",
+            run.admission_results,
+            case.expected_admission_results,
+        ))
+    if case.expected_relation_types:
+        metrics.append(_intersects(
+            "relation_type",
+            run.relation_types,
+            case.expected_relation_types,
+        ))
+    for relation_type in case.forbidden_relation_types:
+        forbidden = relation_type in run.relation_types
+        metrics.append(MetricScore(
+            f"relation_type_forbidden:{relation_type}",
+            0.0 if forbidden else 1.0,
+            f"actual={run.relation_types!r}" if forbidden else "",
         ))
     if case.expected_web_tried is not None:
         metrics.append(_exact("web_tried", run.web_tried, case.expected_web_tried))
@@ -324,6 +464,102 @@ def _metrics(case: E2EQualityCase, run: E2EQualityRun) -> list[MetricScore]:
             "canonical_url_uniqueness",
             1.0 if unique else 0.0,
             "" if unique else f"canonical_urls={list(run.canonical_urls)}",
+        ))
+    if case.require_citation_resolves_to_artifact:
+        resolves = (
+            bool(run.citation_evidence_span_ids)
+            and len(run.citation_evidence_span_ids) == len(run.citation_evidence_block_ids)
+            and len(run.citation_evidence_span_ids) == len(run.citation_artifact_ids)
+            and all(run.citation_evidence_span_ids)
+            and all(run.citation_evidence_block_ids)
+            and all(run.citation_artifact_ids)
+        )
+        metrics.append(MetricScore(
+            "citation_resolves_to_artifact",
+            1.0 if resolves else 0.0,
+            "" if resolves else (
+                f"spans={run.citation_evidence_span_ids!r} "
+                f"blocks={run.citation_evidence_block_ids!r} "
+                f"artifacts={run.citation_artifact_ids!r}"
+            ),
+        ))
+    if case.expected_evidence_coverages:
+        metrics.append(_one_of(
+            "evidence_coverage",
+            run.evidence_coverage,
+            case.expected_evidence_coverages,
+        ))
+    if case.min_missing_sections:
+        metrics.append(_min("missing_sections", run.missing_section_count, case.min_missing_sections))
+    if case.max_projection_job_failed_count is not None:
+        metrics.append(_max(
+            "projection_job_failed_count",
+            run.projection_job_failed_count,
+            case.max_projection_job_failed_count,
+        ))
+    if case.max_partial_failure_count is not None:
+        metrics.append(_max(
+            "partial_failure_count",
+            run.partial_failure_count,
+            case.max_partial_failure_count,
+        ))
+    if case.max_answer_claim_saved_count is not None:
+        metrics.append(_max(
+            "answer_claim_saved_count",
+            run.answer_claim_saved_count,
+            case.max_answer_claim_saved_count,
+        ))
+    if case.max_active_claim_count_delta is not None:
+        metrics.append(_max(
+            "active_claim_count_delta",
+            run.active_claim_count_delta,
+            case.max_active_claim_count_delta,
+        ))
+    if case.max_assistant_inference_active_count is not None:
+        metrics.append(_max(
+            "assistant_inference_active_count",
+            run.assistant_inference_active_count,
+            case.max_assistant_inference_active_count,
+        ))
+    if case.max_pending_decision_count is not None:
+        metrics.append(_max(
+            "pending_decision_count",
+            run.pending_decision_count,
+            case.max_pending_decision_count,
+        ))
+    if case.require_graph_projection_backlinks:
+        metrics.append(_exact(
+            "graph_projection_backlink_ok",
+            run.graph_projection_backlink_ok,
+            True,
+        ))
+    if case.min_claim_quality_passed_count:
+        metrics.append(_min("claim_quality_passed_count", run.claim_quality_passed_count, case.min_claim_quality_passed_count))
+    if case.max_claim_without_evidence_ref_count is not None:
+        metrics.append(_max("claim_without_evidence_ref_count", run.claim_without_evidence_ref_count, case.max_claim_without_evidence_ref_count))
+    if case.min_coverage_manifest_omitted_count:
+        metrics.append(_min("coverage_manifest_omitted_count", run.coverage_manifest_omitted_count, case.min_coverage_manifest_omitted_count))
+    if case.max_review_invalid_claim_count is not None:
+        metrics.append(_max("review_invalid_claim_count", run.review_invalid_claim_count, case.max_review_invalid_claim_count))
+    if case.max_projection_eligibility_violation_count is not None:
+        metrics.append(_max(
+            "projection_eligibility_violation_count",
+            run.projection_eligibility_violation_count,
+            case.max_projection_eligibility_violation_count,
+        ))
+    for term in case.required_semantic_component_terms:
+        has_component = any(term.lower() in component.lower() for component in run.semantic_component_names)
+        metrics.append(MetricScore(
+            f"semantic_component_contains:{term}",
+            1.0 if has_component else 0.0,
+            "" if has_component else f"components={run.semantic_component_names!r}",
+        ))
+    for verifier in case.forbidden_grounding_verifiers:
+        forbidden = verifier in run.grounding_verifiers
+        metrics.append(MetricScore(
+            f"grounding_verifier_forbidden:{verifier}",
+            0.0 if forbidden else 1.0,
+            f"grounding_verifiers={run.grounding_verifiers!r}" if forbidden else "",
         ))
     if case.expected_satisfaction_should_continue is not None:
         metrics.append(_exact(

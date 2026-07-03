@@ -82,7 +82,7 @@ Graphiti 可以帮助找到语义关系，但回答需要引用原文或业务�
 
 ### 10. 情景记忆什么时候被检索？怎么判断一个问题需要它？
 
-ask 前的 query understanding 会判断 `needs_episodic_context`。除了 LLM 理解，`query_step_projector.py` 还内置 `_looks_like_episodic_query` 启发式作为兜底（命中"上次/之前/做过/继续/那个任务"等历史行为标记词时置真）。当问题指向用户自己的历史行为时，系统才会把 `MemoryEpisode` 转成 `episode` evidence 进入排序。
+ask 前的 query understanding 会判断 `needs_episodic_context`。除了 LLM 理解，`query_planner.py` 还内置 `_looks_like_episodic_query` 启发式作为兜底（命中"上次/之前/做过/继续/那个任务"等历史行为标记词时置真）。当问题指向用户自己的历史行为时，系统才会把 `MemoryEpisode` 转成 `episode` evidence 进入排序。
 
 这样设计是为了避免情景记忆污染事实类回答：问"光合作用原理"不应该把"上周你帮我整理过笔记"这种轨迹翻出来。情景记忆只在与历史行为相关时才作为证据，且在 evidence 排序里和 note/chunk 一起按相关度竞争预算。
 

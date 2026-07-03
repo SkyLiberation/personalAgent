@@ -27,7 +27,7 @@ from personal_agent.kernel.evidence import (
     memory_items_to_evidence,
     notes_to_evidence,
 )
-from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
+from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote, NoteBody, NoteSource
 from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.governance.guardrails import get_content_guard
 from personal_agent.orchestration.runtime_helpers import _merge_citations, _merge_notes
@@ -245,6 +245,110 @@ class WebRetriever:
         return out
 
 
+class WorkspaceRetriever:
+    """Workspace Claim/Evidence recall as a first-class ask evidence source.
+
+    Workspace owns knowledge lifecycle and provenance, but ask still owns query
+    planning, multi-source retrieval, generation, verification and repair. This
+    retriever converts Workspace evidence into the same unified evidence shapes
+    used by local/graph/web instead of short-circuiting the ask pipeline.
+    """
+
+    name = "workspace"
+
+    def __init__(self, service: "AskService") -> None:
+        self._service = service
+
+    def retrieve(self, query, filters, ctx) -> RetrievalContribution:
+        workspace_service = getattr(self._service, "workspace_service", None)
+        out = RetrievalContribution(source=self.name)
+        if workspace_service is None:
+            return out
+        try:
+            answer = workspace_service.answer_with_evidence(
+                query,
+                workspace_id=ctx.user_id or "default",
+            )
+        except Exception:
+            logger.exception("Workspace retrieval failed user=%s", ctx.user_id)
+            out.trace.append("Workspace 检索失败，已继续使用其他 Ask 证据源")
+            return out
+        if not answer.citations:
+            out.trace.append("Workspace 未返回可回答证据，继续使用其他 Ask 证据源")
+            return out
+
+        potential_conflicts = set(
+            str(item)
+            for item in answer.diagnostic_fields.get("potential_conflicted_claim_ids", [])
+            if item
+        )
+        conflicted = set(str(item) for item in answer.conflicted_claim_ids if item)
+        seen_notes: set[str] = set()
+        for index, citation in enumerate(answer.citations, 1):
+            match_id = (citation.claim_ids[0] if citation.claim_ids else citation.evidence_span_id)
+            title = f"Workspace evidence {index}"
+            metadata = {
+                "retrieved_by": self.name,
+                "workspace_id": ctx.user_id or "default",
+                "artifact_id": citation.artifact_id,
+                "evidence_block_id": citation.evidence_block_id,
+                "evidence_span_id": citation.evidence_span_id,
+                "claim_ids": list(citation.claim_ids),
+                "conflicted_claim_ids": sorted(conflicted),
+                "potential_conflicted_claim_ids": sorted(potential_conflicts),
+                "grounding_status": answer.grounding_status,
+            }
+            out.evidence.append(EvidenceItem(
+                evidence_id=citation.evidence_span_id,
+                source_type="note",
+                source_id=match_id,
+                title=title,
+                snippet=citation.quote,
+                source_ref=citation.artifact_id,
+                source_span=citation.locator,
+                element_ids=list(citation.claim_ids),
+                score=0.9,
+                metadata=metadata,
+            ))
+            out.citations.append(Citation(
+                note_id=match_id,
+                title=title,
+                snippet=citation.quote,
+                source_type="workspace",
+                evidence_id=citation.evidence_span_id,
+                source_ref=citation.artifact_id,
+                source_span=citation.locator,
+                element_ids=list(citation.claim_ids),
+            ))
+            if match_id in seen_notes:
+                continue
+            seen_notes.add(match_id)
+            out.matches.append(KnowledgeNote(
+                id=match_id,
+                user_id=ctx.user_id,
+                source=NoteSource(
+                    type="workspace_claim",
+                    ref=citation.artifact_id,
+                    metadata=metadata,
+                ),
+                body=NoteBody(
+                    title=title,
+                    content=citation.quote,
+                    summary=citation.quote,
+                ),
+            ))
+        conflict_hint = ""
+        if conflicted:
+            conflict_hint = f" conflicted={len(conflicted)}"
+        elif potential_conflicts:
+            conflict_hint = f" potential_conflict={len(potential_conflicts)}"
+        out.trace.append(
+            f"Workspace 候选已进入统一证据池 citations={len(out.citations)} "
+            f"evidence={len(out.evidence)}{conflict_hint}"
+        )
+        return out
+
+
 # Opposition cues appended to a claim to bias recall toward counter-evidence.
 _CONTRAST_CUES = ("反对", "缺点", "风险", "局限", "例外", "争议", "失败", "问题")
 
@@ -336,6 +440,7 @@ class RetrievalCoordinator:
         self.episodic = EpisodicRetriever(service)
         self.reflection = ReflectionRetriever(service)
         self.web = WebRetriever(service)
+        self.workspace = WorkspaceRetriever(service)
         self.contrastive = ContrastiveRetriever(service)
 
     def _absorb(self, ctx: "AskRunContext", contrib: RetrievalContribution) -> None:
@@ -363,6 +468,8 @@ class RetrievalCoordinator:
         use_local = "local" in plan.sources
         use_web_proactive = "web" in plan.sources
         self._record_graph_freshness(ctx, use_graph=use_graph)
+
+        self._absorb(ctx, self.workspace.retrieve(query, filters, ctx))
 
         # Fetch graph + local. When planned, fetch concurrently — but absorb in a
         # fixed order (graph → sub-query → local → ...) so the evidence pool order

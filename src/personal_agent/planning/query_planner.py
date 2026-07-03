@@ -1,10 +1,4 @@
-"""Query planner: produces a QueryUnderstanding + RetrievalPlan from LLM.
-
-Uses a dedicated structured-output model (``settings.planner``) by default.
-This keeps planner JSON parsing stable without changing the other small-model
-paths (router, task planner, replanner), and is intentionally independent from
-the capture-time LangExtract layer.
-"""
+"""Query planner: produces a QueryUnderstanding + RetrievalPlan from LLM."""
 from __future__ import annotations
 
 import logging
@@ -16,62 +10,11 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import local_now
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-from personal_agent.infra.structured_parse import parse_structured
 
 if TYPE_CHECKING:
     from personal_agent.infra.structured_model import StructuredModelClient
 
 logger = logging.getLogger(__name__)
-
-_PLANNER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "needs_freshness": {"type": "boolean"},
-        "needs_personal_memory": {"type": "boolean"},
-        "needs_graph_reasoning": {"type": "boolean"},
-        "needs_episodic_context": {"type": "boolean"},
-        "query_rewrite": {"type": "string"},
-        "sub_queries": {"type": "array", "items": {"type": "string"}},
-        "filters": {
-            "type": "object",
-            "properties": {
-                "source_types": {"type": "array", "items": {"type": "string"}},
-                "source_ref_contains": {"type": "string"},
-                "tags": {"type": "array", "items": {"type": "string"}},
-                "created_after": {"type": "string"},
-                "created_before": {"type": "string"},
-                "metadata_contains": {"type": "string"},
-                "parent_note_id": {"type": "string"},
-            },
-            "required": [
-                "source_types",
-                "source_ref_contains",
-                "tags",
-                "created_after",
-                "created_before",
-                "metadata_contains",
-                "parent_note_id",
-            ],
-            "additionalProperties": False,
-        },
-        "answer_policy": {
-            "type": "string",
-            "enum": ["must_cite", "allow_web", "refuse_if_insufficient"],
-        },
-    },
-    "required": [
-        "needs_freshness",
-        "needs_personal_memory",
-        "needs_graph_reasoning",
-        "needs_episodic_context",
-        "query_rewrite",
-        "sub_queries",
-        "filters",
-        "answer_policy",
-    ],
-    "additionalProperties": False,
-}
-
 
 def plan_retrieval(
     question: str,
@@ -125,7 +68,6 @@ def _call_planner_llm(
     )
 
     from personal_agent.infra.structured_model import StructuredModelRequest
-    from pydantic import BaseModel
 
     response = model_client.generate(StructuredModelRequest(
         operation="query_planner",
@@ -134,41 +76,17 @@ def _call_planner_llm(
             {"role": "system", "content": system_prompt.template},
             {"role": "user", "content": user_content},
         ],
-        output_type=BaseModel,
+        output_type=QueryUnderstanding,
         temperature=0.0,
         max_tokens=500,
-        kind="text",
-        response_format=_planner_response_format(),
+        kind="structured",
         metadata={
             "component": "query_planner",
             "has_conversation_context": bool(conversation_context),
         },
     ))
     logger.info("Query planner completed in %.0fms model=%s", response.latency_ms, response.model)
-
-    parsed = parse_structured(
-        response.content or "{}",
-        QueryUnderstanding,
-        operation="query_planner",
-        version=system_prompt.version,
-        model_name=response.model,
-        latency_ms=response.latency_ms,
-    )
-    if not parsed.ok:
-        raise ValueError(f"query_planner structured parse failed: {parsed.error}")
-    return parsed.value
-
-
-def _planner_response_format() -> dict:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "query_understanding",
-            "strict": True,
-            "schema": _PLANNER_SCHEMA,
-        },
-    }
-
+    return response.value
 
 
 def _derive_plan(question: str, understanding: QueryUnderstanding) -> RetrievalPlan:

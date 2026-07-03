@@ -82,7 +82,7 @@ def create_app() -> FastAPI:
 
 
 def _frontend_dist_dir() -> Path:
-    return Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    return Path(__file__).resolve().parents[4] / "frontend" / "dist"
 
 
 def _lifespan(context: WebAppContext):

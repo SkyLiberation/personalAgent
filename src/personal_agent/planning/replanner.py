@@ -7,10 +7,8 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.llm_schemas import strict_json_schema_response
 from personal_agent.kernel.models import MemoryItem
 from personal_agent.kernel.prompts import get_prompt, render_prompt
-from personal_agent.infra.structured_parse import parse_structured
 from personal_agent.kernel.contracts.execution import ExecutionStep
 
 if TYPE_CHECKING:
@@ -57,55 +55,6 @@ def _clip_reflection(item: MemoryItem, limit: int = 200) -> str:
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 0.5
-
-_REPLANNER_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "steps": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "step_id": {"type": "string"},
-                    "action_type": {
-                        "type": "string",
-                        "enum": ["retrieve", "tool_call", "compose", "verify", "repair"],
-                    },
-                    "description": {"type": "string"},
-                    "tool_name": {"type": ["string", "null"]},
-                    "tool_input": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                    },
-                    "depends_on": {"type": "array", "items": {"type": "string"}},
-                    "expected_output": {"type": "string"},
-                    "success_criteria": {"type": "string"},
-                    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "requires_confirmation": {"type": "boolean"},
-                    "on_failure": {"type": "string", "enum": ["skip", "abort"]},
-                },
-                "required": [
-                    "step_id",
-                    "action_type",
-                    "description",
-                    "tool_name",
-                    "tool_input",
-                    "depends_on",
-                    "expected_output",
-                    "success_criteria",
-                    "risk_level",
-                    "requires_confirmation",
-                    "on_failure",
-                ],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["steps"],
-    "additionalProperties": False,
-}
-
 
 class Replanner:
     """Generate revised execution steps when a step fails and retries are exhausted.
@@ -192,8 +141,6 @@ class Replanner:
             reflections=reflections_summary,
             obs_summary=obs_summary or "无",
         )
-        model = self._settings.openai.small_model
-        latency_ms = None
         try:
             from personal_agent.infra.structured_model import StructuredModelRequest
 
@@ -204,33 +151,15 @@ class Replanner:
                     {"role": "system", "content": system_prompt.template},
                     {"role": "user", "content": prompt},
                 ],
-                output_type=BaseModel,
+                output_type=_RevisedPlan,
                 temperature=0,
                 max_tokens=500,
-                kind="text",
-                response_format=strict_json_schema_response(
-                    "revise_steps",
-                    _REPLANNER_RESPONSE_SCHEMA,
-                ),
+                kind="structured",
                 metadata={"intent": intent, "failed_step_id": failed_step.step_id},
             ))
-            content = response.content
-            model = response.model
-            latency_ms = response.latency_ms
-            parsed = parse_structured(
-                content,
-                _RevisedPlan,
-                operation="replanner",
-                version=system_prompt.version,
-                model_name=model,
-                latency_ms=latency_ms,
-            )
-            if not parsed.ok:
-                return None
-
             valid_actions = {"retrieve", "tool_call", "compose", "verify", "repair"}
             revised: list[ExecutionStep] = []
-            for item in parsed.value.steps:
+            for item in response.value.steps:
                 if item.action_type not in valid_actions:
                     continue
                 risk = item.risk_level if item.risk_level in ("low", "medium", "high") else "low"

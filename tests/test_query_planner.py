@@ -1,7 +1,8 @@
 """Unit tests for query planner (P2 retrieval optimization)."""
 from __future__ import annotations
 
-from personal_agent.kernel.config import OpenAIConfig, PlannerConfig, Settings
+from personal_agent.kernel.config import Settings
+from personal_agent.kernel.config_models import StructuredConfig
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.planning.query_planner import _call_planner_llm, _derive_plan, _heuristic_filters
 
@@ -170,24 +171,15 @@ def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
             self.chat = FakeChat()
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
-    settings = Settings(
-        openai=OpenAIConfig(api_key="openai-k", base_url="https://openai.invalid", small_model="deepseek"),
-        planner=PlannerConfig(
-            api_key="planner-k",
-            base_url="https://dashscope.invalid/compatible-mode/v1",
-            model_id="qwen3-coder-flash",
-        ),
-    )
+    settings = Settings()
     from personal_agent.infra.structured_model import OpenAIModelClient
-    from personal_agent.kernel.config_models import LangSmithConfig
 
     client = OpenAIModelClient(
-        OpenAIConfig(
+        StructuredConfig(
             api_key="planner-k",
             base_url="https://dashscope.invalid/compatible-mode/v1",
             model="qwen3-coder-flash",
         ),
-        model_override="qwen3-coder-flash",
     )
 
     understanding = _call_planner_llm("Redis 怎么缓存订单？", "", settings, client)

@@ -1,4 +1,4 @@
-"""Fully real multi-turn runner (real router LLM, runtime, checkpoint and store)."""
+"""Fully real multi-turn runner (real structured LLM, runtime, checkpoint and store)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def build_real_service() -> AgentService | None:
         return None
     if not settings.postgres_url:
         return None
-    if build_structured_model_client(settings.router, settings.langsmith) is None:
+    if build_structured_model_client(settings.structured, settings.langsmith) is None:
         return None
     try:
         return AgentService(settings)

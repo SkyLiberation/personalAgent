@@ -4,9 +4,9 @@ import logging
 from typing import Callable, TYPE_CHECKING
 from uuid import uuid4
 
-from personal_agent.kernel.config import OpenAIConfig, Settings
+from personal_agent.kernel.config import Settings
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
-from personal_agent.kernel.models import EntryInput
+from personal_agent.kernel.models import Citation, EntryInput, KnowledgeNote, NoteBody, NoteSource, ReviewCard
 from personal_agent.kernel.observability import set_policy_decision_sink
 from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.memory.graphiti.store import GraphitiStore
@@ -20,6 +20,7 @@ from personal_agent.infra.storage.postgres_memory_store import PostgresMemorySto
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
 from personal_agent.infra.storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
 from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
 from personal_agent.infra.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
@@ -101,6 +102,7 @@ from personal_agent.orchestration.runtime_helpers import (
     _top_sentences,
 )
 from personal_agent.infra.runtime_llm import LlmClient
+from personal_agent.kernel.projections import MatchRef
 from personal_agent.memory.thread_summarizer import ThreadSummarizer
 from personal_agent.application.runtime_results import (
     AskResult,
@@ -117,6 +119,16 @@ from personal_agent.application.research import (
     ResearchService,
     ResearchSubscription,
 )
+from personal_agent.application.workspace import (
+    IngestKnowledgeResult,
+    LLMAnswerCoverageJudge,
+    LLMClaimGroundingJudge,
+    LLMClaimRelationJudge,
+    LLMSemanticClaimExtractor,
+    LLMSemanticEvidenceExtractor,
+    WorkspaceService,
+)
+from personal_agent.kernel.evidence import EvidenceItem
 from personal_agent.application.research.extraction import StructuredResearchEventExtractor
 from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from personal_agent.application.verifier import create_answer_verifier
@@ -125,6 +137,76 @@ if TYPE_CHECKING:
     from personal_agent.application.capture import CaptureService
 
 logger = logging.getLogger(__name__)
+
+
+class _WorkspaceJsonResult:
+    def __init__(self, payload: dict[str, object], *, ok: bool = True, error: str = "") -> None:
+        self.ok = ok
+        self.error = error
+        self._payload = payload
+
+    def model_dump(self, mode: str = "python") -> dict[str, object]:
+        return dict(self._payload)
+
+
+class _WorkspaceConsolidationAdapter:
+    def __init__(self, runtime: "AgentRuntime") -> None:
+        self._runtime = runtime
+
+    def execute(self, *, topic: str, user_id: str = "default") -> _WorkspaceJsonResult:
+        return _WorkspaceJsonResult(self._runtime.execute_consolidate(topic=topic, user_id=user_id))
+
+
+class _WorkspaceGapReport:
+    def __init__(self, *, text: str, gaps: list[dict[str, object]]) -> None:
+        self.text = text
+        self.gaps = gaps
+
+
+class _WorkspaceGapAdapter:
+    def __init__(self, runtime: "AgentRuntime") -> None:
+        self._runtime = runtime
+
+    def inspect(self, user_id: str) -> _WorkspaceGapReport:
+        result = self._runtime.workspace_service.plan_review_and_gaps(
+            workspace_id=self._runtime._workspace_id(user_id),
+            limit=self._runtime.settings.knowledge_gap.max_gaps_per_run,
+        )
+        gaps = [gap.model_dump(mode="json") for gap in result.knowledge_gaps]
+        if gaps:
+            text = "\n".join(f"- {gap['question']}" for gap in gaps)
+        else:
+            text = "当前 workspace 没有发现需要立即处理的知识缺口。"
+        return _WorkspaceGapReport(text=text, gaps=gaps)
+
+
+class _WorkspaceDigest:
+    def __init__(
+        self,
+        *,
+        text: str,
+        recent_notes: list[KnowledgeNote],
+        due_cards: list[ReviewCard],
+        sections: list[dict[str, object]],
+    ) -> None:
+        self.text = text
+        self.recent_notes = recent_notes
+        self.due_cards = due_cards
+        self.sections = sections
+
+
+class _WorkspaceReviewDigestAdapter:
+    formatter: "_WorkspaceReviewDigestAdapter"
+
+    def __init__(self, runtime: "AgentRuntime") -> None:
+        self._runtime = runtime
+        self.formatter = self
+
+    def generate(self, user_id: str) -> _WorkspaceDigest:
+        return self._runtime._workspace_digest(user_id)
+
+    def to_text(self, digest: _WorkspaceDigest) -> str:
+        return digest.text
 
 
 def _policy_rules_from_settings(settings: Settings) -> PolicyRules:
@@ -179,20 +261,24 @@ class AgentRuntime:
             settings.postgres_url,
             worker_queue=self.worker_queue_store,
         )
+        self.workspace_service = WorkspaceService(
+            PostgresWorkspaceStore(settings.postgres_url, settings.data_dir)
+        )
         # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
         set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
         self.artifact_service = ArtifactService(settings, logger)
-        self._intent_router = DefaultIntentRouter(build_structured_model_client(
-            settings.router,
+        self._structured_client = build_structured_model_client(
+            settings.structured,
             settings.langsmith,
-        ))
+        )
+        self._intent_router = DefaultIntentRouter(self._structured_client)
         # Unified LLM ports: every application caller depends on these instead of
         # ``OpenAI`` / ``traced_chat_completion``. ``model_client`` serves
-        # tool_calling + text kinds (ReAct iterate, runtime answer); the router
-        # keeps its own ``build_structured_model_client`` (Responses API).
+        # tool_calling + free-form text; ``structured_client`` serves every
+        # JSON-schema / Pydantic structured-output call.
         from personal_agent.infra.structured_model import (
             build_chat_model_client,
             build_streaming_model_client,
@@ -200,43 +286,17 @@ class AgentRuntime:
         self._model_client = build_chat_model_client(
             settings.openai, settings.langsmith,
         )
-        self._structured_client = build_chat_model_client(
-            settings.structured, settings.langsmith,
-        ) if (settings.structured.api_key and settings.structured.base_url) else None
+        if self._structured_client is not None:
+            self.workspace_service.relation_judge = LLMClaimRelationJudge(self._structured_client)
+            self.workspace_service.semantic_evidence_extractor = LLMSemanticEvidenceExtractor(self._structured_client)
+            self.workspace_service.semantic_claim_extractor = LLMSemanticClaimExtractor(self._structured_client)
+            self.workspace_service.claim_grounding_judge = LLMClaimGroundingJudge(self._structured_client)
+            self.workspace_service.answer_coverage_judge = LLMAnswerCoverageJudge(self._structured_client)
         self._streaming_client = build_streaming_model_client(
             settings.openai, settings.langsmith,
         )
-        self._research_event_client = build_chat_model_client(
-            OpenAIConfig(
-                api_key=settings.langextract.api_key,
-                base_url=settings.langextract.base_url,
-                model=settings.langextract.model_id,
-                timeout_seconds=60.0,
-                max_retries=settings.openai.max_retries,
-            ),
-            settings.langsmith,
-            model_override=settings.langextract.model_id,
-        ) if (settings.langextract.api_key and settings.langextract.base_url) else None
-        # Planner endpoint client for query understanding / rerank / replan.
-        # Falls back to the openai endpoint when the dedicated planner config is
-        # unset, mirroring the previous ``_planner_llm_config`` fallback logic.
-        if settings.planner.api_key and settings.planner.base_url:
-            planner_config = OpenAIConfig(
-                api_key=settings.planner.api_key,
-                base_url=settings.planner.base_url,
-                model=settings.planner.model_id,
-                timeout_seconds=settings.planner.timeout_seconds,
-                max_retries=settings.openai.max_retries,
-            )
-            self._planner_client = build_chat_model_client(
-                planner_config, settings.langsmith,
-                model_override=settings.planner.model_id,
-            )
-        else:
-            self._planner_client = build_chat_model_client(
-                settings.openai, settings.langsmith,
-                model_override=settings.openai.small_model or settings.openai.model,
-            )
+        self._research_event_client = self._structured_client
+        self._planner_client = self._structured_client
         self._tool_executor = ToolExecutor(
             audit_sink=self.tool_governance_store,
             idempotency_store=self.tool_governance_store,
@@ -353,6 +413,7 @@ class AgentRuntime:
                     self.settings.postgres_url
                 ),
                 workflow_artifact_store=self.workflow_replay_store,
+                workspace_service=self.workspace_service,
                 summary=summary_context,
                 direct_answer=direct_answer_context,
                 model_client=self._model_client,
@@ -563,6 +624,7 @@ class AgentRuntime:
             verifier=self._verifier,
             llm=self._llm,
             planner_client=self._planner_client,
+            workspace_service=self.workspace_service,
         )
 
     def execute_ask(self, *args, **kwargs) -> "AskResult":
@@ -612,13 +674,27 @@ class AgentRuntime:
         source_ref: str | None = None,
         metadata: dict[str, str] | None = None,
     ) -> "CaptureResult":
-        return self._ingestion().ingest(
+        result = self._ingestion().ingest(
             text=text,
             source_type=source_type,
             user_id=user_id,
             source_ref=source_ref,
             metadata=metadata,
         )
+        normalized_user = user_id or self.settings.default_user
+        try:
+            self.workspace_service.ingest_text(
+                text=text,
+                source_type=source_type,
+                user_id=normalized_user,
+                workspace_id=self._workspace_id(normalized_user),
+                source_ref=source_ref,
+                raw_location=source_ref or "",
+                created_by="user",
+            )
+        except Exception:
+            logger.exception("Workspace side-write failed during capture user=%s", normalized_user)
+        return result
 
     def execute_consolidate(
         self,
@@ -632,7 +708,247 @@ class AgentRuntime:
         ).model_dump(mode="json")
 
     def inspect_knowledge_gaps(self, user_id: str):
-        return self._knowledge_gap_use_case.inspect(user_id)
+        return self.workspace_service.plan_review_and_gaps(
+            workspace_id=self._workspace_id(user_id),
+            limit=self.settings.knowledge_gap.max_gaps_per_run,
+        )
+
+    def _workspace_digest(self, user_id: str) -> _WorkspaceDigest:
+        workspace_id = self._workspace_id(user_id)
+        plan = self.workspace_service.plan_review_and_gaps(
+            workspace_id=workspace_id,
+            limit=self.settings.knowledge_gap.max_gaps_per_run,
+        )
+        items = self.workspace_service.store.list_knowledge_items(
+            workspace_id,
+            state="active",
+            limit=20,
+        )
+        claims_by_id = {
+            claim.claim_id: claim
+            for claim in self.workspace_service.store.list_claims(workspace_id, limit=500)
+        }
+        recent_notes = [
+            KnowledgeNote(
+                id=item.knowledge_item_id,
+                user_id=item.user_id,
+                source=NoteSource(
+                    type="workspace_item",
+                    metadata={
+                        "workspace_id": workspace_id,
+                        "claim_ids": list(item.claim_ids),
+                        "evidence_span_ids": list(item.evidence_span_ids),
+                    },
+                ),
+                body=NoteBody(
+                    title=item.title,
+                    content=item.summary,
+                    summary=item.summary,
+                ),
+            )
+            for item in items
+        ]
+        due_cards = [
+            ReviewCard(
+                note_id=item.claim_id,
+                prompt=item.prompt,
+                answer_hint=claims_by_id.get(item.claim_id).statement
+                if item.claim_id in claims_by_id else item.prompt,
+                due_at=item.due_at,
+            )
+            for item in plan.review_items
+        ]
+        claim_lines = [f"- {item.summary}" for item in items[:8]]
+        gap_lines = [f"- {gap.question}" for gap in plan.knowledge_gaps[:8]]
+        text = "\n".join([
+            "Workspace 知识简报",
+            "",
+            "活跃知识：",
+            *(claim_lines or ["- 暂无 active claim。"]),
+            "",
+            "待处理缺口：",
+            *(gap_lines or ["- 暂无高优先级缺口。"]),
+        ])
+        return _WorkspaceDigest(
+            text=text,
+            recent_notes=recent_notes,
+            due_cards=due_cards,
+            sections=[
+                {"title": "active_claims", "count": len(items)},
+                {"title": "review_items", "count": len(plan.review_items)},
+                {"title": "knowledge_gaps", "count": len(plan.knowledge_gaps)},
+            ],
+        )
+
+    def _workspace_id(self, user_id: str | None) -> str:
+        return user_id or self.settings.default_user or "default"
+
+    def _workspace_capture_result(
+        self,
+        ingest: IngestKnowledgeResult,
+        *,
+        metadata: dict[str, str] | None = None,
+    ) -> CaptureResult:
+        artifact = ingest.artifact
+        active_claims = [
+            claim for claim in ingest.claims
+            if claim.state in {"active", "verified", "grounded", "conflicted"}
+        ]
+        title = (
+            ingest.knowledge_items[0].title
+            if ingest.knowledge_items else (active_claims[0].statement[:48] if active_claims else "Workspace artifact")
+        )
+        summary = (
+            ingest.knowledge_items[0].summary
+            if ingest.knowledge_items else (active_claims[0].statement if active_claims else artifact.text[:240])
+        )
+        note = KnowledgeNote(
+            id=ingest.knowledge_items[0].knowledge_item_id if ingest.knowledge_items else artifact.artifact_id,
+            user_id=artifact.user_id,
+            source=NoteSource(
+                type=artifact.source_type,
+                ref=artifact.source_ref,
+                fingerprint=artifact.content_hash,
+                metadata={
+                    **(metadata or {}),
+                    "workspace_id": artifact.workspace_id,
+                    "artifact_id": artifact.artifact_id,
+                    "extraction_run_id": ingest.extraction_run.extraction_run_id,
+                    "claim_ids": [claim.claim_id for claim in ingest.claims],
+                    "evidence_span_ids": [span.evidence_span_id for span in ingest.evidence_spans],
+                    "admission_results": [
+                        decision.admission_result for decision in ingest.admission_decisions
+                    ],
+                },
+            ),
+            body=NoteBody(
+                title=title,
+                content=artifact.text,
+                summary=summary,
+            ),
+        )
+        note.version.content_hash = artifact.content_hash
+        note.version.source_fingerprint = artifact.content_hash
+        note.version.chunking_version = "workspace:evidence-block-v1"
+        note.version.graph_extraction_version = "workspace:claim-v1"
+        chunk_notes = [
+            KnowledgeNote(
+                id=block.evidence_block_id,
+                user_id=artifact.user_id,
+                source=NoteSource(
+                    type=f"{artifact.source_type}_chunk",
+                    ref=artifact.source_ref,
+                    fingerprint=artifact.content_hash,
+                    metadata={
+                        "workspace_id": artifact.workspace_id,
+                        "artifact_id": artifact.artifact_id,
+                        "evidence_block_id": block.evidence_block_id,
+                    },
+                ),
+                body=NoteBody(
+                    title=f"{title} · {block.locator}",
+                    content=block.full_context,
+                    summary=block.full_context[:240],
+                ),
+            )
+            for block in ingest.evidence_blocks
+            if len(ingest.evidence_blocks) > 1
+        ]
+        for chunk in chunk_notes:
+            chunk.version.content_hash = artifact.content_hash
+            chunk.version.source_fingerprint = artifact.content_hash
+            chunk.version.chunking_version = "workspace:evidence-block-v1"
+            chunk.version.graph_extraction_version = "workspace:claim-v1"
+        review_card = None
+        if active_claims:
+            review_card = ReviewCard(
+                note_id=note.id,
+                prompt=f"复习：{active_claims[0].statement}",
+                answer_hint=active_claims[0].statement,
+            )
+        return CaptureResult(
+            note=note,
+            chunk_notes=chunk_notes,
+            related_notes=[],
+            review_card=review_card,
+        )
+
+    def _execute_workspace_ask(
+        self,
+        question: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_messages: list[dict[str, str]] | None = None,
+    ) -> AskResult:
+        normalized_user = user_id or self.settings.default_user
+        answer = self.workspace_service.answer_with_evidence(
+            question,
+            workspace_id=self._workspace_id(normalized_user),
+        )
+        citations = [
+            Citation(
+                note_id=citation.artifact_id,
+                title=f"Workspace evidence {index}",
+                snippet=citation.quote,
+                source_type="workspace",
+                evidence_id=citation.evidence_span_id,
+                source_ref=citation.artifact_id,
+                source_span=citation.locator,
+                element_ids=list(citation.claim_ids),
+            )
+            for index, citation in enumerate(answer.citations, 1)
+        ]
+        evidence = [
+            EvidenceItem(
+                evidence_id=citation.evidence_span_id,
+                source_type="note",
+                source_id=citation.artifact_id,
+                title=f"Workspace evidence {index}",
+                snippet=citation.quote,
+                source_span=citation.locator,
+                score=1.0,
+                metadata={
+                    "workspace_id": self._workspace_id(normalized_user),
+                    "evidence_block_id": citation.evidence_block_id,
+                    "claim_ids": list(citation.claim_ids),
+                },
+            )
+            for index, citation in enumerate(answer.citations, 1)
+        ]
+        matches = [
+            KnowledgeNote(
+                id=claim_id,
+                user_id=normalized_user,
+                source=NoteSource(
+                    type="workspace_claim",
+                    metadata={
+                        "workspace_id": self._workspace_id(normalized_user),
+                        "claim_id": claim_id,
+                    },
+                ),
+                body=NoteBody(
+                    title=summary[:48] or claim_id,
+                    content=summary,
+                    summary=summary,
+                ),
+            )
+            for claim_id, summary in zip(answer.selected_claim_ids, answer.claim_summaries)
+        ]
+        return AskResult(
+            answer=answer.answer,
+            citations=citations,
+            matches=matches,
+            match_refs=[MatchRef(id=match.id, title=match.body.title) for match in matches],
+            evidence=evidence,
+            session_id=session_id or "default",
+            repair_telemetry={
+                "workspace": True,
+                "grounding_status": answer.grounding_status,
+                "selected_claim_ids": list(answer.selected_claim_ids),
+                "conflicted_claim_ids": list(answer.conflicted_claim_ids),
+                "diagnostic_fields": answer.diagnostic_fields,
+            },
+        )
 
     def _rewrite_gap_question(self, gap) -> str | None:
         if not self.settings.openai.api_key or not self.settings.openai.base_url:

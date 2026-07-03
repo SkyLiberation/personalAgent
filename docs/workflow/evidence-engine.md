@@ -105,6 +105,17 @@ ResearchSource
 
 这样 web result、research source、note/chunk、graph fact、episode memory 最终都能进入同一套 `EvidenceItem` 语言。
 
+Workspace 侧在 Ask 中不是直接调用 `EvidenceEngine.sources_to_evidence()`，而是由 `WorkspaceRetriever` 将 EvidenceSpan / Claim / conflict diagnostics 转成同一组运行时对象：
+
+```text
+Workspace Artifact / EvidenceBlock / EvidenceSpan / Claim / KnowledgeRelation
+  -> EvidenceItem(source_type="note", metadata.workspace_id / artifact_id / evidence_span_id / claim_ids / conflict diagnostics)
+  -> Citation(source_type="workspace", metadata.evidence_ref)
+  -> KnowledgeNote(source.type="workspace_claim")
+```
+
+因此 Workspace 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 verifier，不会绕过 EvidenceEngine 直接生成最终回答。Workspace 自身的 `answer_with_evidence()` 也会返回 `EvidenceRef / evidence_coverage / missing_sections`，用于直接回答和 e2e 诊断；进入通用 Ask 时，这些信息以 evidence metadata / citation metadata 进入统一证据池。
+
 ### 2. Context Assembly
 
 ask retrieve 阶段完成多源召回后，不再自己散落执行 dedupe / rerank / selected citation 选择，而是调用：
@@ -232,6 +243,9 @@ RetrievalStage._assemble_context(...)
   -> EvidenceEngine.assemble_context(...)
 AnswerVerifier._grounding_checks(...)
   -> EvidenceEngine.verify_claims(...)
+WorkspaceRetriever
+  -> Workspace EvidenceSpan / Claim
+  -> EvidenceItem / Citation(EvidenceRef) / KnowledgeNote
 WebRetriever
   -> SourceDocument
   -> EvidenceEngine.sources_to_evidence(...)
@@ -239,11 +253,12 @@ WebRetriever
 
 职责边界：
 
-- `RetrievalCoordinator` 负责问答侧的多源召回控制流。
+- `RetrievalCoordinator` 负责问答侧的多源召回控制流，包括 workspace、graph、local、episodic、reflection、web。
 - `EvidenceEngine` 负责召回之后的证据装配和选择。
 - `GenerationStage` 只基于 `ContextPack` 生成答案。
 - `VerificationStage` 通过 verifier 间接复用 `EvidenceEngine.verify_claims()`。
 - `RepairStage` 负责反证补充或 web fallback，再复用同一个 evidence assembly。
+- `WorkspaceService` 负责 Artifact/Evidence/Claim 生命周期、准入、冲突和投影任务；EvidenceEngine 只消费它投影出的运行时 evidence。
 
 ## Research 如何接入
 
@@ -341,6 +356,17 @@ false supported rate
 ### Cross-workflow Consistency Eval
 
 同一批 source 同时进入 ask verifier 和 research digest verifier 时，support 判断应该一致。这是抽出 `EvidenceEngine` 的核心收益之一。
+
+### Workspace Coverage Eval
+
+Workspace 相关 e2e 还会检查：
+
+- citation 是否能解析到 artifact/block/span。
+- 无证据回答是否输出 `evidence_coverage=none`。
+- 部分证据回答是否输出 `partial/sparse` 和 `missing_sections`。
+- ProjectionJob 是否没有失败。
+
+这类指标不替代 EvidenceEngine 的 ranking/grounding eval，而是补上业务生命周期视角：证据能否被追踪、缺口能否被看见、投影失败能否被发现。
 
 ## 为什么这样设计
 

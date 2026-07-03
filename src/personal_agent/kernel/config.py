@@ -18,12 +18,10 @@ from personal_agent.kernel.config_models import (
     MCPConfig,
     MicrosoftGraphRagConfig,
     OpenAIConfig,
-    PlannerConfig,
     PolicyConfig,
     ReflectionReplaySettings,
     ResearchConfig,
     ReviewDigestConfig,
-    RouterConfig,
     ShortTermMemoryConfig,
     StructuredConfig,
     WebApiConfig,
@@ -43,7 +41,6 @@ class Settings(_StrictBase):
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     ms_graphrag: MicrosoftGraphRagConfig = Field(default_factory=MicrosoftGraphRagConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
-    router: RouterConfig = Field(default_factory=RouterConfig)
     structured: StructuredConfig = Field(default_factory=StructuredConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
@@ -56,7 +53,6 @@ class Settings(_StrictBase):
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     enterprise_knowledge: EnterpriseKnowledgeConfig = Field(default_factory=EnterpriseKnowledgeConfig)
-    planner: PlannerConfig = Field(default_factory=PlannerConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)

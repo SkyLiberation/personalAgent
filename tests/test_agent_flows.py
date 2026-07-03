@@ -531,6 +531,23 @@ class TestAskFlow:
         assert "ContextPack" in prompt
         assert "rank_reason" in prompt
 
+    def test_workspace_miss_does_not_short_circuit_existing_ask_pipeline(self, service: AgentService):
+        note = make_note(
+            title="旧知识库笔记",
+            content="Kafka 使用消费组来水平扩展消息处理。",
+            summary="Kafka 消费组可以扩展消息处理。",
+            user_id="default",
+        )
+        service.store.add_note(note)
+        service.runtime._llm.generate_answer = MagicMock(return_value="Kafka 通过消费组扩展消息处理。")
+
+        result = service.execute_ask(question="Kafka 如何扩展消息处理？")
+
+        assert "Kafka" in result.answer
+        assert service.runtime._llm.generate_answer.called
+        assert any(match.id == note.id for match in result.matches)
+        assert "证据不足" not in result.answer
+
     def test_graph_matches_become_context_pack_evidence(self):
         note = make_note(
             id="graph-note",

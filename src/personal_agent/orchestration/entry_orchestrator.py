@@ -13,7 +13,7 @@ import logging
 from langgraph.types import Command
 
 from personal_agent.kernel.langsmith_tracing import langsmith_trace_context
-from personal_agent.kernel.models import EntryInput
+from personal_agent.kernel.models import Citation, EntryInput
 from personal_agent.kernel.observability import RunMetrics
 from personal_agent.orchestration.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from personal_agent.orchestration.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
@@ -407,17 +407,32 @@ class EntryOrchestrator:
                     repair_telemetry=ask_ctx.repair_payload(),
                 )
             else:
+                workspace_payload = _latest_workspace_ask_payload(result_state)
+                workspace_citations = (
+                    _workspace_citations_from_payload(workspace_payload)
+                    if workspace_payload is not None else []
+                )
+                workspace_matches = (
+                    _workspace_matches_from_payload(workspace_payload)
+                    if workspace_payload is not None else []
+                )
                 match_refs = [
                     MatchRef(id=str(m.get("id", "")), title=str(m.get("title", "")))
-                    for m in (result_state.matches or [])
+                    for m in (result_state.matches or workspace_matches or [])
                     if isinstance(m, dict) and m.get("id")
                 ]
                 ask_result = AskResult(
                     answer=reply_text,
-                    citations=result_state.citations,
+                    citations=result_state.citations or workspace_citations,
                     matches=[],
                     match_refs=match_refs,
                     session_id=normalized_session,
+                    repair_telemetry={
+                        "workspace": workspace_payload is not None,
+                        "grounding_status": (workspace_payload or {}).get("grounding_status", ""),
+                        "selected_claim_ids": (workspace_payload or {}).get("selected_claim_ids", []),
+                        "conflicted_claim_ids": (workspace_payload or {}).get("conflicted_claim_ids", []),
+                    } if workspace_payload is not None else {},
                 )
 
         run_metrics.intent = ",".join(intents) or "unknown"
@@ -1002,3 +1017,47 @@ class EntryOrchestrator:
         self._record_workflow_events([step_fork_event])
         result.events.append(step_fork_event.model_dump(mode="json"))
         return result
+
+
+def _latest_workspace_ask_payload(state: AgentGraphState) -> dict[str, object] | None:
+    for data in reversed(list(state.step_execution.results.values())):
+        if not isinstance(data, dict) or not data.get("workspace_ask"):
+            continue
+        payload = data.get("workspace_answer")
+        if isinstance(payload, dict):
+            return payload
+        return data
+    return None
+
+
+def _workspace_citations_from_payload(payload: dict[str, object]) -> list[Citation]:
+    citations: list[Citation] = []
+    for index, raw in enumerate(payload.get("citations") or [], 1):
+        if not isinstance(raw, dict):
+            continue
+        citations.append(Citation(
+            note_id=str(raw.get("artifact_id") or ""),
+            title=f"Workspace evidence {index}",
+            snippet=str(raw.get("quote") or ""),
+            source_type="workspace",
+            evidence_id=str(raw.get("evidence_span_id") or ""),
+            source_ref=str(raw.get("artifact_id") or ""),
+            source_span=str(raw.get("locator") or ""),
+            element_ids=[str(item) for item in (raw.get("claim_ids") or [])],
+        ))
+    return citations
+
+
+def _workspace_matches_from_payload(payload: dict[str, object]) -> list[dict[str, object]]:
+    claim_ids = [str(item) for item in (payload.get("selected_claim_ids") or [])]
+    summaries = [str(item) for item in (payload.get("claim_summaries") or [])]
+    matches: list[dict[str, object]] = []
+    for index, claim_id in enumerate(claim_ids):
+        summary = summaries[index] if index < len(summaries) else claim_id
+        matches.append({
+            "id": claim_id,
+            "title": summary[:48],
+            "summary": summary,
+            "source": "workspace_claim",
+        })
+    return matches

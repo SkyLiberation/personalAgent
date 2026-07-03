@@ -80,7 +80,7 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 
 | 类型 | 是否生成 `ExecutionStep` | 是否进入 `StepExecutionGraph` | 典型 intent |
 | --- | --- | --- | --- |
-| Step projection workflow | 是 | 是 | `capture_*`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`direct_answer` |
+| Step projection workflow | 是 | 是 | `capture_*`、`analyze_artifact`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps`、`research_*`、`manage_research`、`maintain_knowledge`、`inspect_operations`、`inspect_workflow`、`direct_answer` |
 | Fallback branch | 否 | 否 | `unknown`、step projection 校验失败后的澄清/兜底 |
 
 ## 当前已注册 Workflow
@@ -89,11 +89,22 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 | --- | --- | --- | --- |
 | `capture_text` | `capture_text` | step projection | `cap-structure` |
 | `capture_link` | `capture_link` | step projection | `cap-link-fetch -> cap-link-store` |
-| `capture_file` | `capture_file` | step projection | `cap-file-read -> cap-file-store` |
+| `capture_file` | `capture_file` | step projection | `cap-file-inspect -> cap-file-store` |
+| `analyze_artifact` | `analyze_artifact` | step projection | `artifact-inspect -> artifact-compose` |
 | `ask` | `ask` | step projection | `ask-retrieve -> ask-compose -> ask-verify -> ask-repair` |
 | `summarize_thread` | `summarize_thread` | step projection | `sum-compose` |
 | `delete_knowledge` | `delete_knowledge` | step projection | `del-1 -> del-2 -> del-3 -> del-4` |
 | `solidify_conversation` | `solidify_conversation` | step projection | `sol-1 -> sol-2` |
+| `review_digest` | `review_digest` | step projection | `digest-generate -> digest-compose` |
+| `consolidate_knowledge` | `consolidate_knowledge` | step projection | `consolidate-run -> consolidate-compose` |
+| `inspect_knowledge_gaps` | `inspect_knowledge_gaps` | step projection | `gap-inspect -> gap-compose` |
+| `research_once` | `research_once` | step projection | `research-prepare -> research-initialize -> research-loop -> research-synthesize -> research-verify -> research-compose` |
+| `execute_research_run` | `execute_research_run` | step projection | `research-initialize -> research-loop -> research-synthesize -> research-verify` |
+| `create_research_subscription` | `create_research_subscription` | step projection | `research-subscribe` |
+| `manage_research` | `manage_research` | step projection | `research-manage-decide -> research-manage-compose` |
+| `maintain_knowledge` | `maintain_knowledge` | step projection | `knowledge-maintain-decide -> knowledge-maintain-compose` |
+| `inspect_operations` | `inspect_operations` | step projection | `ops-inspect-decide -> ops-inspect-compose` |
+| `inspect_workflow` | `inspect_workflow` | step projection | `workflow-inspect-decide -> workflow-inspect-compose` |
 | `direct_answer` | `direct_answer` | step projection | `direct-compose` |
 | `unknown` | `unknown` | fallback branch | 澄清或兜底回复 |
 
@@ -116,16 +127,24 @@ route_intent
           cap-link-fetch tool_call(capture_url)
           cap-link-store tool_call(capture_text)
      -> capture_file:
-          cap-file-read tool_call(capture_upload)
+          cap-file-inspect tool_call(inspect_artifact)
           cap-file-store tool_call(capture_text)
   -> finalize_entry_result
 ```
 
-入口文本、URL、上传文件元数据由 step executor 在 `tool_call` 前动态注入；`capture_url / capture_upload` 产出的正文会在 `handle_step_success` 注入到后续 `capture_text`。capture 的长期写入不绕过业务服务：真正的结构化、chunk、note、graph sync 等动作仍由 capture 服务和存储层负责。
+入口文本、URL、上传文件元数据由 step executor 在 `tool_call` 前动态注入；`capture_url / inspect_artifact` 产出的正文会在 `handle_step_success` 注入到后续 `capture_text`。capture 的长期写入不绕过业务服务：fingerprint 去重、结构化 chunk、note/chunk、review、graph sync 仍由 `IngestionPipeline` 和存储层负责；Artifact/Evidence、Claim/Grounding/Admission、冲突诊断、状态事件和 ProjectionJob 由 Workspace 生命周期负责。
 
 ### Summarize / Direct Answer
 
 `summarize_thread` 投影为 `sum-compose`，会优先使用 entry metadata 或 thread messages，再调用 `summarize_chat`。`direct_answer` 投影为 `direct-compose`，用小模型直接回复低风险内容；`unknown` 仍走 fallback branch 转成面向用户的澄清提示。
+
+### Knowledge / Research / Operations Tool Workflows
+
+`review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps` 是“工具执行 + compose 呈现”的短 workflow。它们保留既有业务 service 的能力：review digest 仍使用 review domain formatter，consolidate 仍执行主题整理和 supersede，gap inspection 仍读取知识图谱/笔记关系；Workspace 提供 Evidence/Claim/Decision/Gap 状态，但不把这些 workflow 简化成单表 CRUD。
+
+`research_once` 是多步 research workflow：prepare、initialize、loop、synthesize、verify、compose 都是独立 step，便于记录 ResearchRun、tool trace、digest 和 claim verification。`execute_research_run` 复用 initialize 之后的后半段；`create_research_subscription` 是单步订阅创建；`manage_research` 用受控 ReAct/resolve 管理订阅、运行、简报、反馈和入库。
+
+`maintain_knowledge`、`inspect_operations`、`inspect_workflow` 属于受控诊断/维护类 workflow。它们通常使用 `resolve` + allowlisted tools，允许读取或有限写入，但仍受 `StepProjectionValidator`、ToolGateway、风险 metadata 和审计约束。
 
 ## Ask Step Projection Workflow
 
@@ -153,6 +172,7 @@ ask-retrieve
 build AskRunContext
   -> QueryUnderstanding / RetrievalPlan
   -> multi-source recall
+       WorkspaceRetriever / graph / structural / local / episodic / reflection / web
   -> evidence dedupe
   -> candidate enrich
   -> rerank
@@ -161,6 +181,10 @@ build AskRunContext
 ```
 
 大对象如 evidence pool、ContextPack、matches 不直接放进 checkpoint，而是序列化到 `workflow_artifacts` 中的 ask context artifact；checkpoint 中只保留摘要计数和步骤状态，避免 checkpoint 膨胀。
+
+Workspace 在 Ask 中的边界是 `WorkspaceRetriever`：它把 Workspace 的 EvidenceSpan、Claim、`conflict / potential_conflict` 诊断投影为 `EvidenceItem / Citation / KnowledgeNote`，进入同一个 evidence pool。它不会返回最终答案，也不会在没有 Workspace 证据时短路 Ask；旧的 query planning、多源召回、LLM compose、verifier 和 repair 仍由 `AskService` 主链路负责。
+
+Workspace citation 会保留 artifact/block/span 级 `EvidenceRef`；直接 Workspace answer 还会输出 `evidence_coverage` 和 `missing_sections`。这些字段进入 e2e_quality，防止“有引用但覆盖不完整”的回答被当成完整成功。
 
 ### ask-compose
 
@@ -268,6 +292,7 @@ workflow 内部关键结果通过 `step_execution.results` 传递，而不是靠
 - `delete_knowledge`：`del-2` 解析出 `note_id` 后，后续 `delete_note` 动态注入目标 ID。
 - `solidify_conversation`：`sol-1` 生成 draft 后，后续 `capture_text` 动态注入正文。
 - `ask`：`ask-retrieve` 把大对象放入 durable ask context artifact，`ask-compose / ask-verify` 通过 `run_id` 读取并在生成/校验后回写。
+- `workspace`：Artifact/Evidence 先形成可引用事实底座；Claim/Grounding/Admission/ProjectionJob 是后续增强和投影，不要求在摄取成功边界内全部完成。
 - `react`：完成后把结构化 result 写入当前 step result。
 
 这样做的目标是让流程可恢复、可审计，并避免模型在计划阶段编造运行时对象。

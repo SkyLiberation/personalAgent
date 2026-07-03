@@ -51,7 +51,7 @@ LangGraph 承担**可恢复的状态机和 checkpoint** 能力，是项目真正
 
 它原本设想的位置是 capture 流水线的语义预抽取，但当前已改成 Unstructured 主导结构化处理：原始内容先经 Unstructured partition 成 typed elements，再由 `chunk_by_title` 生成结构化 chunk。LangExtract 不再作为 Graphiti 的默认前置步骤，因为二者在语义抽取层更像可替代 provider，串联会造成重复抽取、schema 冲突和成本叠加。所以现在 LangExtract 的定位是“保留的可选 semantic extraction provider”，而不是任何主链路的必经步骤。
 
-注意 ask 前的 query understanding **不属于 LangExtract**。它由独立的 planner 配置 `settings.planner`（env 前缀 `PERSONAL_AGENT_PLANNER_*`）驱动：`query_step_projector.py` 用 `qwen3-coder-flash` 和 strict `json_schema` 生成 `QueryUnderstanding / RetrievalPlan`，做 query rewrite、子查询拆分、filters 抽取和检索源路由。早期它曾借用 `settings.langextract` 配置，容易让人误以为查询理解依赖抽取层，现在已拆成独立配置。
+注意 ask 前的 query understanding **不属于 LangExtract**。它现在和 router、replanner、reranker、workspace 语义抽取/裁决一样，统一由 `settings.structured` 驱动：`query_planner.py` 通过 `StructuredModelRequest(kind="structured")` 生成 `QueryUnderstanding / RetrievalPlan`，做 query rewrite、子查询拆分、filters 抽取和检索源路由。早期它曾借用 `settings.langextract`/独立 planner 配置，容易让人误以为查询理解依赖抽取层；现在这些 JSON-schema 决策统一收敛到 `StructuredConfig`。
 
 ### 6. LangSmith 在这里承担什么价值？
 
@@ -73,7 +73,7 @@ LangChain：提供工具与消息原语（BaseTool/@tool、AnyMessage/ToolMessag
 LangGraph：把任务流程变可恢复状态机（StateGraph + Postgres checkpoint + interrupt）
 LangExtract：把文本变结构（可选 provider，当前主链路休眠）
 LangSmith：把运行过程变可观测 trace（tracing + token 成本 + 采样，永不阻塞主链路）
-planner LLM：把用户 query 变结构化检索计划（独立 settings.planner）
+structured LLM：把 router、query planner、replanner、reranker 和 workspace 语义裁决变成统一的 strict JSON-schema 决策
 Graphiti：把知识关系变语义图谱
 ```
 
@@ -81,15 +81,15 @@ Graphiti：把知识关系变语义图谱
 
 ### 8. 为什么查询理解 / 抽取要独立配置模型？
 
-因为它们需要稳定的结构化输出，而这和主对话模型的诉求不同。ask 侧的查询理解用独立的 planner 配置（`settings.planner`，默认 `qwen3-coder-flash + DashScope OpenAI-compatible endpoint`），关键原因是它支持 OpenAI 风格的 `response_format=json_schema` strict 输出；可选的 LangExtract 抽取层（`settings.langextract`）同理也单独配置。
+因为它们需要稳定的结构化输出，而这和主对话模型的诉求不同。ask 侧查询理解、入口 router、replanner、reranker 以及 workspace 语义抽取/裁决统一使用 `settings.structured`，关键原因是它们都需要 strict `json_schema`，并且应共享同一套 endpoint、模型、超时、重试和 tracing 策略；可选的 LangExtract 抽取层（`settings.langextract`）只是休眠 provider/实验层，不参与当前主链路。
 
-主对话模型、Graphiti 抽取模型、planner 模型和 LangExtract 模型相互解耦，可以让每条链路选最适合的模型：主对话关注回答质量，Graphiti 关注实体关系抽取，planner 关注查询理解的 schema 稳定性和低成本，LangExtract 关注抽取 schema 稳定性。这里特别要强调 planner 和 LangExtract 是**两套独立配置**——查询理解是 ask 侧关注点，和 capture 侧的抽取层没有依赖关系，早期共用配置是实现便利，现已拆开避免误会。
+主对话模型、Graphiti 抽取模型、Structured 模型和 LangExtract provider 相互解耦：主对话关注回答质量，Graphiti 关注实体关系抽取，Structured 模型关注所有内部语义决策的 schema 稳定性，LangExtract 只保留为可选实验 provider。这里特别要强调：查询理解是 ask 侧关注点，和 capture 侧的抽取层没有依赖关系；当前不再保留独立 planner 配置。
 
-如果 planner 未配置或调用失败，ask query planner 会 fallback 到默认 plan 和启发式 filters。capture 侧由 Unstructured 负责结构化 partition/chunk，不依赖 LangExtract 作为入库前置；这样也避免了 LangExtract 和 Graphiti 在语义抽取层重复工作。
+如果 structured client 未配置或 query planner 调用失败，ask query planner 会 fallback 到默认 plan 和有限的本地 filters；正常路径下，语义不确定性由 structured LLM 处理。capture 侧由 Unstructured 负责结构化 partition/chunk，不依赖 LangExtract 作为入库前置；这样也避免了 LangExtract 和 Graphiti 在语义抽取层重复工作。
 
 ### 9. 这个项目最体现 Agent 工程能力的点是什么？
 
-最值得讲的是“边界设计”：短期 checkpoint 和长期 note/chunk 分离，Unstructured 做结构化 chunk、独立 planner LLM 做查询理解，Graphiti 只做语义索引，回答前统一 evidence；工具不是裸函数，而是通过 ToolGateway 执行 timeout、retry、rate limit、HITL、幂等和审计；规划不是普通 Todo，而是通过 StepProjectionValidator 校验后进入 checkpoint-safe 的步骤执行。
+最值得讲的是“边界设计”：短期 checkpoint 和长期 note/chunk 分离，Unstructured 做结构化 chunk、统一 Structured LLM 做内部语义决策，Graphiti 只做语义索引，回答前统一 evidence；工具不是裸函数，而是通过 ToolGateway 执行 timeout、retry、rate limit、HITL、幂等和审计；规划不是普通 Todo，而是通过 StepProjectionValidator 校验后进入 checkpoint-safe 的步骤执行。
 
 也就是说，项目的重点不是 prompt 写得多复杂，而是把 LLM 的不确定输出放进了系统级安全边界里。
 

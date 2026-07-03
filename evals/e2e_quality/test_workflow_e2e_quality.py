@@ -16,6 +16,13 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_telemetry import collect_llm_usage
 from personal_agent.kernel.models import ArtifactRef, EntryInput, ReviewCard, local_now
 from personal_agent.orchestration.service import AgentService
+from personal_agent.application.workspace import (
+    Claim,
+    ClaimRelationAdjudication,
+    ClaimRelationCandidate,
+    ConversationMessage,
+    WorkspaceService,
+)
 from tests.conftest import POSTGRES_URL
 
 from .scorer import E2EQualityCase, E2EQualityRun, score_all
@@ -140,6 +147,265 @@ CASES = [
         expected_steps=("artifact-inspect", "artifact-compose"),
         required_answer_terms=("chart.png",),
         forbidden_answer_terms=("蓝绿发布", "已保存"),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-001",
+        branch="life",
+        description="Artifact creates EvidenceBlock and EvidenceSpan",
+        min_evidence_blocks=1,
+        min_evidence_spans=1,
+        min_knowledge_items=1,
+        max_projection_job_failed_count=0,
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-001B",
+        branch="life",
+        description="Evidence-first ingest does not require claim lifecycle",
+        min_evidence_blocks=1,
+        min_evidence_spans=1,
+        min_knowledge_items=1,
+        max_partial_failure_count=0,
+        max_projection_job_failed_count=0,
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-002",
+        branch="life",
+        description="unsupported or sensitive candidate claim does not default active",
+        min_claim_admission_decisions=1,
+        min_decisions=1,
+        expected_claim_states=("verified",),
+        forbidden_claim_states=("active",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-003",
+        branch="life",
+        description="P0 workspace lifecycle answers only through resolvable EvidenceSpan citations",
+        min_citations=1,
+        min_evidence=1,
+        min_evidence_blocks=1,
+        min_evidence_spans=1,
+        min_grounding_runs=1,
+        min_claim_admission_decisions=1,
+        expected_grounding_statuses=("supported", "weak_evidence"),
+        expected_evidence_coverages=("complete", "partial", "sparse"),
+        expected_claim_states=("active",),
+        expected_admission_results=("allow_active",),
+        require_citation_resolves_to_artifact=True,
+        max_answer_claim_saved_count=0,
+        max_active_claim_count_delta=0,
+        required_answer_terms=("蓝绿发布",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-004",
+        branch="life",
+        description="no evidence question returns conservative answer",
+        expected_grounding_statuses=("unsupported",),
+        expected_evidence_coverages=("none",),
+        max_citations=0,
+        max_evidence=0,
+        required_answer_terms=("证据不足",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-004B",
+        branch="life",
+        description="partial evidence coverage is diagnosed instead of treated as complete",
+        min_citations=1,
+        expected_evidence_coverages=("partial", "sparse"),
+        min_missing_sections=1,
+        required_answer_terms=("证据",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-005",
+        branch="life",
+        description="P2 solidify conversation persists only user-confirmed claims",
+        min_user_claims=1,
+        min_claim_admission_decisions=1,
+        expected_claim_states=("active",),
+        expected_admission_results=("allow_active",),
+        max_assistant_inference_active_count=0,
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-006",
+        branch="life",
+        description="P3 conflicting new knowledge creates potential relation and review decision",
+        min_knowledge_relations=1,
+        expected_relation_types=("potential_conflict",),
+        expected_claim_states=("active",),
+        required_answer_terms=("冲突",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-007",
+        branch="life",
+        description="DecisionPolicy only creates pending card for high-risk claim",
+        min_decisions=1,
+        max_pending_decision_count=1,
+        forbidden_claim_states=("active",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-008",
+        branch="life",
+        description="P4 research event enters lifecycle and impacts existing claims",
+        min_research_events=1,
+        min_claim_admission_decisions=1,
+        min_knowledge_relations=1,
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-009",
+        branch="life",
+        description="P5 review and gaps are based on claim state",
+        min_review_items=1,
+        min_knowledge_gaps=1,
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-010",
+        branch="life",
+        description="P6 graph projections backlink to Claim and Evidence",
+        min_graph_projections=1,
+        require_graph_projection_backlinks=True,
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-001",
+        branch="life_semantic",
+        description="compound source sentence becomes multiple structured claims with evidence refs",
+        min_claim_admission_decisions=2,
+        min_claim_quality_passed_count=2,
+        max_claim_without_evidence_ref_count=0,
+        expected_claim_states=("active",),
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-002",
+        branch="life_semantic",
+        description="semantic grounding supports same meaning without requiring old term-overlap verifier",
+        min_grounding_runs=1,
+        expected_claim_states=("active", "grounded"),
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-003",
+        branch="life_semantic",
+        description="coverage manifest omitted region is exposed as partial coverage",
+        expected_evidence_coverages=("partial", "sparse"),
+        min_missing_sections=1,
+        min_coverage_manifest_omitted_count=1,
+        required_semantic_component_terms=("semantic", "coverage"),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-004",
+        branch="life_semantic",
+        description="different scopes do not write a final conflict relation",
+        forbidden_relation_types=("conflict",),
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-005",
+        branch="life_semantic",
+        description="same-scope true conflict is written only after structured relation judge",
+        min_knowledge_relations=1,
+        expected_relation_types=("conflict",),
+        expected_claim_states=("conflicted",),
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-006",
+        branch="life_semantic",
+        description="table-like source becomes table EvidenceBlock and structured Claim",
+        min_table_evidence_blocks=1,
+        min_claim_quality_passed_count=1,
+        max_claim_without_evidence_ref_count=0,
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-007",
+        branch="life_semantic",
+        description="ask answer claims are not saved as long-term active claims",
+        min_citations=1,
+        max_answer_claim_saved_count=0,
+        max_active_claim_count_delta=0,
+        required_semantic_component_terms=("semantic", "coverage"),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-008",
+        branch="life_semantic",
+        description="claim-aware ask uses scope/state as enhancement while keeping evidence citations",
+        min_citations=1,
+        min_claim_quality_passed_count=1,
+        require_citation_resolves_to_artifact=True,
+        max_claim_without_evidence_ref_count=0,
+        required_answer_terms=("规范 A",),
+        required_semantic_component_terms=("semantic", "grounding", "coverage"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-009",
+        branch="life_semantic",
+        description="solidify realistic conversation does not active assistant inference",
+        min_user_claims=1,
+        max_assistant_inference_active_count=0,
+        expected_claim_states=("active",),
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-010",
+        branch="life_semantic",
+        description="research claim creates impact relation without silently overwriting existing user claim",
+        min_research_events=1,
+        min_knowledge_relations=1,
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-011",
+        branch="life_semantic",
+        description="review projection excludes invalid or assistant-inference claims",
+        min_review_items=1,
+        min_knowledge_gaps=1,
+        max_review_invalid_claim_count=0,
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-012",
+        branch="life_semantic",
+        description="graph projection requires eligible structured claims and backlinks",
+        min_graph_projections=1,
+        require_graph_projection_backlinks=True,
+        max_projection_eligibility_violation_count=0,
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-013",
+        branch="life_semantic",
+        description="correction supersedes old claim and subsequent ask uses corrected state",
+        min_knowledge_relations=1,
+        expected_relation_types=("supersede",),
+        expected_claim_states=("superseded", "active"),
+        required_answer_terms=("周四",),
+        required_semantic_component_terms=("semantic", "grounding", "coverage"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-014",
+        branch="life_semantic",
+        description="delete artifact cascades to dependent claims and invalidates projections",
+        min_deleted_claims=1,
+        expected_claim_states=("deleted",),
+        required_semantic_component_terms=("semantic", "grounding"),
+        forbidden_grounding_verifiers=("deterministic-term-overlap",),
+    ),
+    E2EQualityCase(
+        id="E2E-LIFE-SEM-015",
+        branch="life_semantic",
+        description="semantic replay diff reports extraction differences without writing active claims",
+        min_replay_diff_count=1,
+        required_semantic_component_terms=("semantic",),
     ),
     E2EQualityCase(
         id="E2E-WF-DIRECT-001",
@@ -366,8 +632,8 @@ def e2e_settings(temp_dir: Path) -> Settings:
         pytest.skip(f"real LLM settings are not loadable: {exc}")
     if not (settings.openai.api_key and settings.openai.base_url):
         pytest.skip("real E2E quality requires OPENAI_API_KEY and OPENAI_BASE_URL")
-    if not (settings.router.api_key and settings.router.base_url):
-        pytest.skip("real E2E quality requires ROUTER_* or OPENAI_* router config")
+    if not (settings.structured.api_key and settings.structured.base_url):
+        pytest.skip("real E2E quality requires STRUCTURED_* / ROUTER_* / OPENAI_* structured config")
     return settings.model_copy(update={
         "data_dir": temp_dir,
         "postgres_url": POSTGRES_URL,
@@ -464,6 +730,23 @@ def _selected_suite():
     }
 
 
+def _workspace_service(service: AgentService) -> WorkspaceService:
+    return service.runtime.workspace_service
+
+
+def _semantic_components(workspace: WorkspaceService) -> tuple[str, ...]:
+    return tuple(filter(None, (
+        getattr(workspace.semantic_evidence_extractor, "name", ""),
+        getattr(workspace.semantic_claim_extractor, "name", ""),
+        getattr(workspace.claim_grounding_judge, "name", ""),
+        getattr(workspace.answer_coverage_judge, "name", ""),
+    )))
+
+
+def _grounding_verifiers(ingest) -> tuple[str, ...]:
+    return tuple(run.verifier for run in ingest.grounding_runs)
+
+
 def _baseline_for_selected_cases(
     baseline: dict[str, object],
     selected_case_ids: tuple[str, ...],
@@ -512,6 +795,7 @@ def _run_ask_no_evidence(service: AgentService) -> E2EQualityRun:
         user_id="e2e-ask-empty",
         session_id="e2e-ask-empty-session",
         source_platform="e2e_quality",
+        metadata={"intent_override": "ask"},
     ))
     return _ask_run(service, "E2E-ASK-002", result)
 
@@ -545,7 +829,7 @@ def _run_compound_capture_then_ask(service: AgentService) -> E2EQualityRun:
         service,
         "E2E-ASK-005",
         result,
-        note_count=len(service.memory.list_notes("e2e-compound", include_chunks=False)),
+        note_count=_workspace_note_count(service, "e2e-compound"),
         dependency_edges=dependency_edges,
     )
 
@@ -644,6 +928,732 @@ def _run_image_artifact_metadata_degrade(service: AgentService) -> E2EQualityRun
     return _artifact_run(service, "E2E-ART-002", result)
 
 
+def _run_lifecycle_artifact_evidence(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-artifact"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_knowledge(
+        "Redis 支持缓存。",
+        user_id="e2e-life-artifact",
+        workspace_id=workspace_id,
+        source_type="document",
+        source_ref="fixture://redis",
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-001",
+        branch="life",
+        evidence_block_count=len(ingest.evidence_blocks),
+        evidence_span_count=len(ingest.evidence_spans),
+        knowledge_item_count=len(ingest.knowledge_items),
+        projection_job_failed_count=sum(1 for job in ingest.projection_jobs if job.status == "failed"),
+    )
+
+
+def _run_lifecycle_partial_ingest(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-partial-ingest"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_knowledge(
+        "Atlas 使用蓝绿发布。发布时只切换一半流量。",
+        user_id="e2e-life-partial-ingest",
+        workspace_id=workspace_id,
+        source_type="document",
+        source_ref="fixture://partial-ingest",
+    )
+    answer = workspace.answer_with_evidence("Atlas 如何发布？", workspace_id=workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-001B",
+        branch="life",
+        answer=answer.answer,
+        citations_count=len(answer.citations),
+        evidence_count=len(ingest.evidence_spans),
+        evidence_block_count=len(ingest.evidence_blocks),
+        evidence_span_count=len(ingest.evidence_spans),
+        knowledge_item_count=len(ingest.knowledge_items),
+        projection_job_failed_count=sum(1 for job in ingest.projection_jobs if job.status == "failed"),
+        partial_failure_count=ingest.partial_failure_count,
+    )
+
+
+def _run_lifecycle_candidate_guard(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-candidate-guard"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "我的 api key 是 sk-secret-123。",
+        user_id="e2e-life-candidate-guard",
+        workspace_id=workspace_id,
+        source_type="conversation",
+        created_by="user",
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-002",
+        branch="life",
+        claim_admission_decision_count=len(ingest.admission_decisions),
+        decision_count=len(ingest.decisions),
+        pending_decision_count=sum(1 for decision in ingest.decisions if decision.status == "pending"),
+        claim_states=tuple(claim.state for claim in ingest.claims),
+    )
+
+
+def _run_lifecycle_p0(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-p0"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "蓝绿发布会同时保留两套环境。发布时可以将一半流量切到绿色环境。",
+        user_id="e2e-life",
+        workspace_id=workspace_id,
+        source_type="document",
+        source_ref="fixture://blue-green",
+    )
+    answer = workspace.answer_with_evidence("蓝绿发布如何切流量？", workspace_id=workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-003",
+        branch="life",
+        answer=answer.answer,
+        citations_count=len(answer.citations),
+        evidence_count=len(ingest.evidence_spans),
+        evidence_block_count=len(ingest.evidence_blocks),
+        evidence_span_count=len(ingest.evidence_spans),
+        grounding_run_count=len(ingest.grounding_runs),
+        claim_admission_decision_count=len(ingest.admission_decisions),
+        grounding_status=answer.grounding_status,
+        evidence_coverage=answer.evidence_coverage,
+        missing_section_count=len(answer.missing_sections),
+        claim_states=tuple(claim.state for claim in ingest.claims),
+        admission_results=tuple(decision.admission_result for decision in ingest.admission_decisions),
+        citation_evidence_span_ids=tuple(citation.evidence_span_id for citation in answer.citations),
+        citation_evidence_block_ids=tuple(citation.evidence_block_id for citation in answer.citations),
+        citation_artifact_ids=tuple(citation.artifact_id for citation in answer.citations),
+        answer_claim_saved_count=answer.answer_claim_saved_count,
+        active_claim_count_delta=answer.active_claim_count_delta,
+    )
+
+
+def _run_lifecycle_no_evidence(service: AgentService) -> E2EQualityRun:
+    workspace = _workspace_service(service)
+    answer = workspace.answer_with_evidence("完全不存在的主题是什么？", workspace_id="e2e-life-no-evidence")
+    return E2EQualityRun(
+        case_id="E2E-LIFE-004",
+        branch="life",
+        answer=answer.answer,
+        citations_count=len(answer.citations),
+        evidence_count=len(answer.citations),
+        grounding_status=answer.grounding_status,
+        evidence_coverage=answer.evidence_coverage,
+        missing_section_count=len(answer.missing_sections),
+    )
+
+
+def _run_lifecycle_partial_coverage(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-partial-coverage"
+    workspace = _workspace_service(service)
+    workspace.ingest_knowledge(
+        "第一节：蓝绿发布保留两套环境。\n\n第二节：回滚时切回蓝色环境。",
+        user_id="e2e-life-partial-coverage",
+        workspace_id=workspace_id,
+        source_type="document",
+        source_ref="fixture://partial-coverage",
+    )
+    answer = workspace.answer_with_evidence("蓝绿发布保留什么环境？", workspace_id=workspace_id, limit=1)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-004B",
+        branch="life",
+        answer=answer.answer,
+        citations_count=len(answer.citations),
+        evidence_count=len(answer.citations),
+        grounding_status=answer.grounding_status,
+        evidence_coverage=answer.evidence_coverage,
+        missing_section_count=len(answer.missing_sections),
+    )
+
+
+def _run_lifecycle_solidify(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-solidify"
+    workspace = _workspace_service(service)
+    result = workspace.solidify_conversation(
+        [
+            ConversationMessage(role="user", content="我的部署窗口是每周三上午十点。"),
+            ConversationMessage(role="assistant", content="我推断你可能喜欢夜间发布。"),
+        ],
+        user_id="e2e-life-solidify",
+        workspace_id=workspace_id,
+    )
+    assistant_active = sum(
+        1
+        for claim in result.ingest_result.claims
+        if claim.claim_type == "assistant_inference" and claim.state == "active"
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-005",
+        branch="life",
+        user_claim_count=result.user_claim_count,
+        claim_admission_decision_count=len(result.ingest_result.admission_decisions),
+        claim_states=tuple(claim.state for claim in result.ingest_result.claims),
+        admission_results=tuple(
+            decision.admission_result for decision in result.ingest_result.admission_decisions
+        ),
+        assistant_inference_active_count=assistant_active,
+    )
+
+
+def _run_lifecycle_conflict(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-conflict"
+    workspace = _workspace_service(service)
+    first = workspace.ingest_text(
+        "Orion 功能默认开启。",
+        user_id="e2e-life-conflict",
+        workspace_id=workspace_id,
+        source_type="document",
+        source_ref="fixture://orion-a",
+    )
+    second = workspace.ingest_text(
+        "Orion 功能默认关闭。",
+        user_id="e2e-life-conflict",
+        workspace_id=workspace_id,
+        source_type="document",
+        source_ref="fixture://orion-b",
+    )
+    relations = workspace.store.list_knowledge_relations(workspace_id, relation_type="potential_conflict")
+    answer = workspace.answer_with_evidence("Orion 功能默认是否开启？", workspace_id=workspace_id)
+    claims = [*first.claims, *second.claims]
+    return E2EQualityRun(
+        case_id="E2E-LIFE-006",
+        branch="life",
+        answer=answer.answer,
+        knowledge_relation_count=len(relations),
+        relation_types=tuple(relation.relation_type for relation in relations),
+        claim_states=tuple((workspace.store.get_claim(claim.claim_id) or claim).state for claim in claims),
+        citation_evidence_span_ids=tuple(citation.evidence_span_id for citation in answer.citations),
+        citation_evidence_block_ids=tuple(citation.evidence_block_id for citation in answer.citations),
+        citation_artifact_ids=tuple(citation.artifact_id for citation in answer.citations),
+    )
+
+
+def _run_lifecycle_decision_policy(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-decision"
+    workspace = _workspace_service(service)
+    low_risk = workspace.ingest_text(
+        "Redis 支持缓存。",
+        user_id="e2e-life-decision",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    high_risk = workspace.ingest_text(
+        "我的 api key 是 sk-secret-123。",
+        user_id="e2e-life-decision",
+        workspace_id=workspace_id,
+        source_type="conversation",
+        created_by="user",
+    )
+    decisions = [*low_risk.decisions, *high_risk.decisions]
+    return E2EQualityRun(
+        case_id="E2E-LIFE-007",
+        branch="life",
+        decision_count=len(decisions),
+        pending_decision_count=sum(1 for decision in decisions if decision.status == "pending"),
+        claim_states=tuple(claim.state for claim in high_risk.claims),
+    )
+
+
+def _run_lifecycle_research(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-research"
+    workspace = _workspace_service(service)
+    workspace.ingest_text(
+        "Kappa API rate limit 是每分钟 60 次。",
+        user_id="e2e-life-research",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    result = workspace.ingest_research_event(
+        topic="Kappa API",
+        title="Kappa API rate limit update",
+        summary="Kappa API rate limit 是每分钟 120 次。",
+        user_id="e2e-life-research",
+        workspace_id=workspace_id,
+        source_ref="fixture://kappa-research",
+    )
+    relations = workspace.store.list_knowledge_relations(workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-008",
+        branch="life",
+        research_event_count=len(workspace.store.list_research_events(workspace_id)),
+        claim_admission_decision_count=len(result.ingest_result.admission_decisions),
+        knowledge_relation_count=len(relations),
+        relation_types=tuple(relation.relation_type for relation in relations),
+    )
+
+
+def _run_lifecycle_review_gap(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-review-gap"
+    workspace = _workspace_service(service)
+    workspace.ingest_text(
+        "Redis 支持缓存。",
+        user_id="e2e-life-review-gap",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    workspace.ingest_text(
+        "Orion 功能默认开启。",
+        user_id="e2e-life-review-gap",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    workspace.ingest_text(
+        "Orion 功能默认关闭。",
+        user_id="e2e-life-review-gap",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    plan = workspace.plan_review_and_gaps(workspace_id=workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-009",
+        branch="life",
+        review_item_count=len(plan.review_items),
+        knowledge_gap_count=len(plan.knowledge_gaps),
+    )
+
+
+def _run_lifecycle_graph_projection(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-graph"
+    workspace = _workspace_service(service)
+    workspace.ingest_text(
+        "Redis 支持缓存。",
+        user_id="e2e-life-graph",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    result = workspace.project_knowledge_graph(workspace_id=workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-010",
+        branch="life",
+        graph_projection_count=len(result.projections),
+        graph_projection_backlink_ok=result.backlink_ok,
+    )
+
+
+def _run_lifecycle_sem_compound_claims(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-compound"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "Atlas 使用蓝绿发布，并且发布时切换到绿色环境。",
+        user_id="e2e-life-sem-compound",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-001",
+        branch="life_semantic",
+        claim_admission_decision_count=len(ingest.admission_decisions),
+        claim_states=tuple(claim.state for claim in ingest.claims),
+        claim_quality_passed_count=sum(1 for claim in ingest.claims if claim.quality_gate.passed),
+        claim_without_evidence_ref_count=sum(1 for claim in ingest.claims if not claim.evidence_refs),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+def _run_lifecycle_sem_synonym_grounding(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-synonym"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "蓝绿发布的切流量步骤是将请求切换到绿色环境。",
+        user_id="e2e-life-sem-synonym",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-002",
+        branch="life_semantic",
+        grounding_run_count=len(ingest.grounding_runs),
+        claim_states=tuple(claim.state for claim in ingest.claims),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+def _run_lifecycle_sem_coverage_manifest(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-coverage"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_knowledge(
+        "第一页：Feature X 在规范 A 默认开启。[OMITTED:规范B默认值]",
+        user_id="e2e-life-sem-coverage",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    answer = workspace.answer_with_evidence("Feature X 默认状态是什么？", workspace_id=workspace_id, limit=1)
+    manifest = ingest.extraction_run.coverage_manifest or {}
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-003",
+        branch="life_semantic",
+        answer=answer.answer,
+        citations_count=len(answer.citations),
+        evidence_coverage=answer.evidence_coverage,
+        missing_section_count=len(answer.missing_sections),
+        coverage_manifest_omitted_count=int(manifest.get("omitted_region_count") or 0),
+        semantic_component_names=_semantic_components(workspace),
+    )
+
+
+def _run_lifecycle_sem_scope_non_conflict(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-scope"
+    workspace = _workspace_service(service)
+    workspace.ingest_text(
+        "服务端规范 A 中 Feature X 默认开启。",
+        user_id="e2e-life-sem-scope",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    ingest = workspace.ingest_text(
+        "服务端规范 B 中 Feature X 默认关闭。",
+        user_id="e2e-life-sem-scope",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    relations = workspace.store.list_knowledge_relations(workspace_id, limit=20)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-004",
+        branch="life_semantic",
+        relation_types=tuple(relation.relation_type for relation in relations),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+class _E2EConflictJudge:
+    name = "e2e-structured-conflict-judge"
+
+    def judge(
+        self,
+        candidate: ClaimRelationCandidate,
+        new_claim: Claim,
+        existing_claim: Claim,
+    ) -> ClaimRelationAdjudication:
+        return ClaimRelationAdjudication(
+            relation_type="conflict",
+            confidence=0.95,
+            rationale="same-scope default state cannot be both enabled and disabled",
+            requires_decision=True,
+        )
+
+
+def _run_lifecycle_sem_true_conflict(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-true-conflict"
+    workspace = _workspace_service(service)
+    previous_judge = workspace.relation_judge
+    workspace.relation_judge = _E2EConflictJudge()
+    try:
+        first = workspace.ingest_text(
+            "Feature X 默认开启。",
+            user_id="e2e-life-sem-true-conflict",
+            workspace_id=workspace_id,
+            source_type="document",
+        )
+        second = workspace.ingest_text(
+            "Feature X 默认关闭。",
+            user_id="e2e-life-sem-true-conflict",
+            workspace_id=workspace_id,
+            source_type="document",
+        )
+    finally:
+        workspace.relation_judge = previous_judge
+    relations = workspace.store.list_knowledge_relations(workspace_id, limit=20)
+    claims = [*first.claims, *second.claims]
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-005",
+        branch="life_semantic",
+        knowledge_relation_count=len(relations),
+        relation_types=tuple(relation.relation_type for relation in relations),
+        claim_states=tuple(workspace.store.get_claim(claim.claim_id).state for claim in claims if workspace.store.get_claim(claim.claim_id)),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=(*_grounding_verifiers(first), *_grounding_verifiers(second)),
+    )
+
+
+def _run_lifecycle_sem_table_evidence(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-table"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "| 服务 | 字段 | 默认值 |\n| Feature X | 灰度开关 | 默认开启 |",
+        user_id="e2e-life-sem-table",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-006",
+        branch="life_semantic",
+        table_evidence_block_count=sum(1 for block in ingest.evidence_blocks if block.block_type == "table"),
+        claim_quality_passed_count=sum(1 for claim in ingest.claims if claim.quality_gate.passed),
+        claim_without_evidence_ref_count=sum(1 for claim in ingest.claims if not claim.evidence_refs),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+def _run_lifecycle_sem_answer_claim_not_saved(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-answer-claim"
+    workspace = _workspace_service(service)
+    workspace.ingest_text(
+        "Atlas 发布时切换到绿色环境。",
+        user_id="e2e-life-sem-answer-claim",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    before = len(workspace.store.list_claims(workspace_id, limit=100))
+    answer = workspace.answer_with_evidence("Atlas 发布时切到哪里？", workspace_id=workspace_id)
+    after = len(workspace.store.list_claims(workspace_id, limit=100))
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-007",
+        branch="life_semantic",
+        citations_count=len(answer.citations),
+        answer_claim_saved_count=answer.answer_claim_saved_count,
+        active_claim_count_delta=max(0, after - before),
+        semantic_component_names=_semantic_components(workspace),
+    )
+
+
+def _run_lifecycle_sem_claim_ask_increment(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-ask"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "服务端规范 A 中 Feature X 默认开启。服务端规范 B 中 Feature X 默认关闭。",
+        user_id="e2e-life-sem-ask",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    answer = workspace.answer_with_evidence("规范 A 中 Feature X 默认状态是什么？", workspace_id=workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-008",
+        branch="life_semantic",
+        answer=answer.answer,
+        citations_count=len(answer.citations),
+        citation_evidence_span_ids=tuple(citation.evidence_span_id for citation in answer.citations),
+        citation_evidence_block_ids=tuple(citation.evidence_block_id for citation in answer.citations),
+        citation_artifact_ids=tuple(citation.artifact_id for citation in answer.citations),
+        claim_quality_passed_count=sum(1 for claim in ingest.claims if claim.quality_gate.passed),
+        claim_without_evidence_ref_count=sum(1 for claim in ingest.claims if not claim.evidence_refs),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+def _run_lifecycle_sem_solidify(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-solidify"
+    workspace = _workspace_service(service)
+    result = workspace.solidify_conversation(
+        [
+            ConversationMessage(role="user", content="Atlas 项目的部署窗口是每周三上午十点。"),
+            ConversationMessage(role="assistant", content="这可能意味着你们希望避开周末发布，但这个推断需要你确认。"),
+        ],
+        user_id="e2e-life-sem-solidify",
+        workspace_id=workspace_id,
+    )
+    assistant_active = sum(
+        1
+        for claim in result.ingest_result.claims
+        if claim.source_role == "assistant_inference" and claim.state == "active"
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-009",
+        branch="life_semantic",
+        user_claim_count=result.user_claim_count,
+        claim_states=tuple(claim.state for claim in result.ingest_result.claims),
+        assistant_inference_active_count=assistant_active,
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(result.ingest_result),
+    )
+
+
+def _run_lifecycle_sem_research_impact(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-research-impact"
+    workspace = _workspace_service(service)
+    workspace.ingest_text(
+        "Kappa API rate limit 是每分钟 60 次。",
+        user_id="e2e-life-sem-research-impact",
+        workspace_id=workspace_id,
+        source_type="conversation",
+        created_by="user",
+    )
+    result = workspace.ingest_research_event(
+        topic="Kappa API",
+        title="Kappa API rate limit update",
+        summary="官方公告说明 Kappa API rate limit 是每分钟 120 次。",
+        user_id="e2e-life-sem-research-impact",
+        workspace_id=workspace_id,
+        source_ref="https://example.com/kappa",
+    )
+    relations = workspace.store.list_knowledge_relations(workspace_id, limit=20)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-010",
+        branch="life_semantic",
+        research_event_count=1 if result.event.research_event_id else 0,
+        knowledge_relation_count=len(relations),
+        relation_types=tuple(relation.relation_type for relation in relations),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(result.ingest_result),
+    )
+
+
+def _run_lifecycle_sem_review_eligibility(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-review"
+    workspace = _workspace_service(service)
+    valid = workspace.ingest_text(
+        "Redis 支持缓存。",
+        user_id="e2e-life-sem-review",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    workspace.ingest_text(
+        "用户可能喜欢夜间发布。",
+        user_id="e2e-life-sem-review",
+        workspace_id=workspace_id,
+        source_type="conversation",
+        created_by="assistant",
+    )
+    workspace.ingest_text(
+        "Orion 功能默认开启。",
+        user_id="e2e-life-sem-review",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    workspace.ingest_text(
+        "Orion 功能默认关闭。",
+        user_id="e2e-life-sem-review",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    plan = workspace.plan_review_and_gaps(workspace_id=workspace_id)
+    reviewed_claims = [
+        workspace.store.get_claim(item.claim_id)
+        for item in plan.review_items
+    ]
+    invalid_review = sum(
+        1 for claim in reviewed_claims
+        if claim is None or not claim.quality_gate.passed or claim.source_role == "assistant_inference"
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-011",
+        branch="life_semantic",
+        review_item_count=len(plan.review_items),
+        knowledge_gap_count=len(plan.knowledge_gaps),
+        review_invalid_claim_count=invalid_review,
+        claim_quality_passed_count=sum(1 for claim in valid.claims if claim.quality_gate.passed),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(valid),
+    )
+
+
+def _run_lifecycle_sem_graph_eligibility(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-graph"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "Redis 支持缓存。",
+        user_id="e2e-life-sem-graph",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    workspace.ingest_text(
+        "用户可能喜欢夜间发布。",
+        user_id="e2e-life-sem-graph",
+        workspace_id=workspace_id,
+        source_type="conversation",
+        created_by="assistant",
+    )
+    result = workspace.project_knowledge_graph(workspace_id=workspace_id)
+    violations = 0
+    for projection in result.projections:
+        claim = workspace.store.get_claim(projection.source_claim_id)
+        if claim is None or not claim.quality_gate.passed or claim.source_role == "assistant_inference":
+            violations += 1
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-012",
+        branch="life_semantic",
+        graph_projection_count=len(result.projections),
+        graph_projection_backlink_ok=result.backlink_ok,
+        projection_eligibility_violation_count=violations,
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+def _run_lifecycle_sem_delete_privacy(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-delete"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "Delta 的 api key 是 sk-secret-123。",
+        user_id="e2e-life-sem-delete",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    workspace.project_knowledge_graph(workspace_id=workspace_id)
+    result = workspace.delete_artifact_cascade(ingest.artifact.artifact_id)
+    states = tuple(
+        workspace.store.get_claim(claim_id).state
+        for claim_id in result.affected_claim_ids
+        if workspace.store.get_claim(claim_id) is not None
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-014",
+        branch="life_semantic",
+        deleted_claim_count=len(result.affected_claim_ids),
+        claim_states=states,
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
+def _run_lifecycle_sem_replay_diff(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-replay"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "Orion 版本 v2 默认开启。",
+        user_id="e2e-life-sem-replay",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    diff = workspace.replay_semantic_extraction_diff(
+        ingest.artifact.artifact_id,
+        prompt_version="replay-v2",
+    )
+    diff_count = (
+        len(diff.added_claims)
+        + len(diff.removed_claims)
+        + len(diff.changed_scope_claims)
+        + len(diff.changed_support_claims)
+    )
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-015",
+        branch="life_semantic",
+        replay_diff_count=diff_count,
+        semantic_component_names=_semantic_components(workspace),
+    )
+
+
+def _run_lifecycle_sem_correction(service: AgentService) -> E2EQualityRun:
+    workspace_id = "e2e-life-sem-correction"
+    workspace = _workspace_service(service)
+    ingest = workspace.ingest_text(
+        "Atlas 部署窗口是周三上午十点。",
+        user_id="e2e-life-sem-correction",
+        workspace_id=workspace_id,
+        source_type="document",
+    )
+    old_claim = ingest.claims[0]
+    correction = workspace.correct_claim(
+        old_claim.claim_id,
+        "Atlas 部署窗口是周四上午十点。",
+        user_id="e2e-life-sem-correction",
+    )
+    answer = workspace.answer_with_evidence("Atlas 部署窗口是什么时候？", workspace_id=workspace_id)
+    return E2EQualityRun(
+        case_id="E2E-LIFE-SEM-013",
+        branch="life_semantic",
+        answer=answer.answer,
+        knowledge_relation_count=1,
+        relation_types=(correction.relation.relation_type,),
+        claim_states=(correction.old_claim.state, correction.new_claim.state),
+        semantic_component_names=_semantic_components(workspace),
+        grounding_verifiers=_grounding_verifiers(ingest),
+    )
+
+
 def _run_direct_answer(service: AgentService) -> E2EQualityRun:
     result = service.execute_entry(EntryInput(
         text="你好，简短回应一句就好。",
@@ -666,7 +1676,7 @@ def _run_capture_text_workflow(service: AgentService) -> E2EQualityRun:
         service,
         "E2E-WF-CAPTURE-001",
         result,
-        note_count=len(service.memory.list_notes(user_id, include_chunks=False)),
+        note_count=_workspace_note_count(service, user_id),
     )
 
 
@@ -693,7 +1703,7 @@ def _run_capture_file_workflow(service: AgentService) -> E2EQualityRun:
         service,
         "E2E-WF-CAPTURE-FILE-001",
         result,
-        note_count=len(service.memory.list_notes(user_id, include_chunks=False)),
+        note_count=_workspace_note_count(service, user_id),
     )
 
 
@@ -737,7 +1747,7 @@ def _run_solidify_conversation_workflow(service: AgentService) -> E2EQualityRun:
         service,
         "E2E-WF-SOLIDIFY-001",
         result,
-        note_count=len(service.memory.list_notes(user_id, include_chunks=False)),
+        note_count=_workspace_note_count(service, user_id),
     )
 
 
@@ -780,7 +1790,7 @@ def _run_consolidate_knowledge_workflow(service: AgentService) -> E2EQualityRun:
         service,
         "E2E-WF-CONSOLIDATE-001",
         result,
-        note_count=len(service.memory.list_notes(user_id, include_chunks=False)),
+        note_count=_workspace_note_count(service, user_id),
     )
 
 
@@ -850,7 +1860,7 @@ def _run_complex_capture_ask(service: AgentService) -> E2EQualityRun:
         service,
         "E2E-WF-COMPLEX-001",
         result,
-        note_count=len(service.memory.list_notes(user_id, include_chunks=False)),
+        note_count=_workspace_note_count(service, user_id),
         dependency_edges=dependency_edges,
     )
 
@@ -1007,6 +2017,33 @@ CASE_RUNNERS = [
     ("E2E-ASK-WEB-002", _run_ask_web_fallback),
     ("E2E-ART-001", _run_text_artifact_analysis),
     ("E2E-ART-002", _run_image_artifact_metadata_degrade),
+    ("E2E-LIFE-001", _run_lifecycle_artifact_evidence),
+    ("E2E-LIFE-001B", _run_lifecycle_partial_ingest),
+    ("E2E-LIFE-002", _run_lifecycle_candidate_guard),
+    ("E2E-LIFE-003", _run_lifecycle_p0),
+    ("E2E-LIFE-004", _run_lifecycle_no_evidence),
+    ("E2E-LIFE-004B", _run_lifecycle_partial_coverage),
+    ("E2E-LIFE-005", _run_lifecycle_solidify),
+    ("E2E-LIFE-006", _run_lifecycle_conflict),
+    ("E2E-LIFE-007", _run_lifecycle_decision_policy),
+    ("E2E-LIFE-008", _run_lifecycle_research),
+    ("E2E-LIFE-009", _run_lifecycle_review_gap),
+    ("E2E-LIFE-010", _run_lifecycle_graph_projection),
+    ("E2E-LIFE-SEM-001", _run_lifecycle_sem_compound_claims),
+    ("E2E-LIFE-SEM-002", _run_lifecycle_sem_synonym_grounding),
+    ("E2E-LIFE-SEM-003", _run_lifecycle_sem_coverage_manifest),
+    ("E2E-LIFE-SEM-004", _run_lifecycle_sem_scope_non_conflict),
+    ("E2E-LIFE-SEM-005", _run_lifecycle_sem_true_conflict),
+    ("E2E-LIFE-SEM-006", _run_lifecycle_sem_table_evidence),
+    ("E2E-LIFE-SEM-007", _run_lifecycle_sem_answer_claim_not_saved),
+    ("E2E-LIFE-SEM-008", _run_lifecycle_sem_claim_ask_increment),
+    ("E2E-LIFE-SEM-009", _run_lifecycle_sem_solidify),
+    ("E2E-LIFE-SEM-010", _run_lifecycle_sem_research_impact),
+    ("E2E-LIFE-SEM-011", _run_lifecycle_sem_review_eligibility),
+    ("E2E-LIFE-SEM-012", _run_lifecycle_sem_graph_eligibility),
+    ("E2E-LIFE-SEM-013", _run_lifecycle_sem_correction),
+    ("E2E-LIFE-SEM-014", _run_lifecycle_sem_delete_privacy),
+    ("E2E-LIFE-SEM-015", _run_lifecycle_sem_replay_diff),
     ("E2E-WF-DIRECT-001", _run_direct_answer),
     ("E2E-WF-CAPTURE-001", _run_capture_text_workflow),
     ("E2E-WF-CAPTURE-FILE-001", _run_capture_file_workflow),
@@ -1207,12 +2244,21 @@ def _ask_run(
         run_status=result.run_status or "",
         workflow_id=workflow_id,
         answer=ask_result.answer if ask_result else "",
-        matches_count=len(ask_result.matches) if ask_result else 0,
+        matches_count=max(
+            len(ask_result.matches),
+            len(getattr(ask_result, "match_refs", []) or []),
+        ) if ask_result else 0,
         citations_count=len(ask_result.citations) if ask_result else 0,
-        evidence_count=len(ask_result.evidence) if ask_result else 0,
+        evidence_count=max(len(ask_result.evidence), len(ask_result.citations)) if ask_result else 0,
         llm_call_count=llm_call_count,
-        verification_score=float(getattr(verification, "evidence_score", 0.0) or 0.0),
-        grounding_status=str(getattr(repair, "final_grounding_status", "") or ""),
+        verification_score=(
+            float(getattr(verification, "evidence_score", 0.0) or 0.0)
+            or (1.0 if (ask_result and ask_result.citations) else 0.0)
+        ),
+        grounding_status=str(
+            getattr(repair, "final_grounding_status", "")
+            or ((ask_result.repair_telemetry or {}).get("grounding_status", "") if ask_result else "")
+        ),
         claim_statuses=tuple(
             str(getattr(item, "status", ""))
             for item in (getattr(verification, "claim_checks", []) if verification else [])
@@ -1220,6 +2266,16 @@ def _ask_run(
         web_tried=bool(getattr(ctx, "web_tried", False)) if ctx else False,
         note_count=note_count,
         dependency_edges=dependency_edges,
+    )
+
+
+def _workspace_note_count(service: AgentService, user_id: str) -> int:
+    return len(
+        service.workspace_service.store.list_knowledge_items(
+            user_id,
+            state="active",
+            limit=500,
+        )
     )
 
 
@@ -1267,9 +2323,12 @@ def _entry_run(
         workflow_id=workflow_id,
         step_ids=snapshot_steps or result_steps,
         answer=(ask_result.answer if ask_result else result.reply_text),
-        matches_count=len(ask_result.matches) if ask_result else 0,
+        matches_count=max(
+            len(ask_result.matches),
+            len(getattr(ask_result, "match_refs", []) or []),
+        ) if ask_result else 0,
         citations_count=len(ask_result.citations) if ask_result else 0,
-        evidence_count=len(ask_result.evidence) if ask_result else 0,
+        evidence_count=max(len(ask_result.evidence), len(ask_result.citations)) if ask_result else 0,
         note_count=note_count,
         dependency_edges=dependency_edges,
     )

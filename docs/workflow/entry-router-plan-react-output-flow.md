@@ -222,11 +222,22 @@ WorkflowStepProjector.plan(intent)
 
 | Workflow | Steps | 说明 |
 | --- | --- | --- |
-| `capture_text` | `tool_call(capture_text)` | 将入口文本写入长期知识 |
-| `capture_link` | `tool_call(capture_url) -> tool_call(capture_text)` | 抓取 URL 正文后写入长期知识 |
-| `capture_file` | `tool_call(capture_upload) -> tool_call(capture_text)` | 解析上传文件后写入长期知识 |
+| `capture_text` | `tool_call(capture_text)` | 将入口文本写入长期知识：note/chunk + Workspace evidence/claim lifecycle |
+| `capture_link` | `tool_call(capture_url) -> tool_call(capture_text)` | 抓取 URL 正文后写入长期知识：note/chunk + Workspace evidence/claim lifecycle |
+| `capture_file` | `tool_call(inspect_artifact) -> tool_call(capture_text)` | 理解上传 artifact 后写入长期知识：note/chunk + Workspace evidence/claim lifecycle |
+| `analyze_artifact` | `tool_call(inspect_artifact) -> compose` | 只分析 artifact，不默认写入长期知识 |
 | `ask` | `retrieve -> compose -> verify -> repair` | 检索、生成、校验、补证修复的 RAG |
 | `summarize_thread` | `compose` | 加载 thread messages 并总结 |
+| `review_digest` | `tool_call(review_digest) -> compose` | 生成知识简报 |
+| `consolidate_knowledge` | `tool_call(consolidate_knowledge) -> compose` | 主题整理和 supersede |
+| `inspect_knowledge_gaps` | `tool_call(inspect_knowledge_gaps) -> compose` | 知识缺口/潜在冲突检查 |
+| `research_once` | `research_prepare_run -> research_initialize_state -> research_run_loop -> research_synthesize_digest -> research_verify_digest -> compose` | 一次性研究 |
+| `execute_research_run` | `research_initialize_state -> research_run_loop -> research_synthesize_digest -> research_verify_digest` | 执行已有 ResearchRun |
+| `create_research_subscription` | `tool_call(create_research_subscription)` | 创建周期性研究订阅 |
+| `manage_research` | `resolve/react -> compose` | 管理订阅、运行、简报、反馈和入库 |
+| `maintain_knowledge` | `resolve/react -> compose` | 查询、修正、替换、标记过期或标记冲突 |
+| `inspect_operations` | `resolve/react -> compose` | 诊断 worker 队列和重试任务 |
+| `inspect_workflow` | `resolve/react -> compose` | 查看 workflow run、步骤和历史 |
 | [`delete_knowledge`](delete-knowledge-workflow.md) | `retrieve -> resolve -> tool_call(delete_note) -> compose` | 高风险删除，必须候选解析 + HITL |
 | [`solidify_conversation`](solidify-conversation-workflow.md) | `compose -> tool_call(capture_text)` | 从 checkpoint 对话生成草稿，再写入长期知识 |
 | `direct_answer` | `compose` | 低风险直接回复 |
@@ -331,12 +342,13 @@ checkpoint 保存的是完整 graph 现场：`thread_id`、`run_id`、`step_exec
 
 | 阶段 | 代码位置 | model 配置 | 默认值 | 作用 |
 | --- | --- | --- | --- | --- |
-| Router 意图识别 | `agent/router.py` | `openai_small_model` | `gpt-4.1-nano` | 将 entry 文本分类成 intent，并输出 risk / clarification |
+| Router 意图识别 | `planning/router.py` | router / structured client 配置 | 依配置 | 将 entry 文本分类成 intent，并输出 risk / clarification |
 | ReAct 单步循环 | `orchestration_nodes/_react.py` | `openai_small_model` | `gpt-4.1-nano` | 在受控工具集合内做检索探索 |
-| Replanner | `agent/restep_projector.py` | `openai_small_model` | `gpt-4.1-nano` | 步骤失败且重试耗尽后生成替代步骤 |
+| Replanner | `planning/replanner.py` | planner client 配置 | 依配置 | 步骤失败且重试耗尽后生成替代步骤 |
 | Direct Answer | `orchestration_nodes/_entry.py` | `openai_small_model` | `gpt-4.1-nano` | 简单问题、问候、无法识别时的短回复 |
 | Solidify 草稿 | `orchestration_nodes/_steps.py` | `openai_small_model` | `gpt-4.1-nano` | 从 checkpoint 对话中选择并整理可入库知识 |
-| Ask 最终回答 | `runtime_llm.py`, `runtime_ask.py` | `openai_model` | `gpt-4.1-mini` | 基于 graph/local/web evidence 生成回答 |
+| Ask 最终回答 | `infra/runtime_llm.py`, `orchestration/runtime_ask.py` | openai client 配置 | 依配置 | 基于 workspace/graph/local/web evidence 生成回答 |
+| Workspace Claim 关系裁决 | `application/workspace/relation_judge.py` | structured client 配置 | 配置后启用 | 对 `potential_conflict` 做语义裁决，不直接写状态 |
 | 群聊总结 | `thread_summarizer.py` / runtime | `openai_model` 或小模型封装 | 依配置 | 显式总结 thread messages |
 | Graphiti 抽取 | `graphiti/llm_strategies.py` | `graphiti_llm_model`，回退 `openai_model` | 与 OpenAI 配置一致 | Graphiti 内部实体/关系抽取 |
 | Embedding | `graphiti/store.py` | `openai_embedding_model` | `text-embedding-3-small` | episode / graph 检索 embedding |
@@ -354,6 +366,7 @@ EntryInput("xxx 是什么？")
   -> project_workflow_steps: ask-retrieve -> ask-compose -> ask-verify -> ask-repair
   -> step_execution_graph
      -> ask-retrieve: query understanding / retrieval / ContextPack artifact
+        (WorkspaceRetriever 投影生命周期证据与 EvidenceRef，但不短路 Ask 控制流)
      -> ask-compose: answer generation
      -> ask-verify: verifier / retry
      -> ask-repair: contrastive retrieval / web fallback / final annotation
@@ -388,7 +401,7 @@ EntryInput("把刚才结论沉淀成知识")
      -> LLM selects scope and emits draft JSON
      -> draft_ready event
   -> sol-2 tool_call capture_text
-     -> reuse capture pipeline
+     -> reuse capture pipeline and Workspace lifecycle
   -> finalize_entry_result
 ```
 

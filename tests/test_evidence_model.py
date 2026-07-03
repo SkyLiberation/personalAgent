@@ -159,7 +159,6 @@ class TestEvidenceRerankers:
 
     def test_llm_reranker_reorders_candidates(self, monkeypatch):
         settings = Settings(
-            planner=Settings().planner.model_copy(update={"api_key": "test-key"}),
             ask=Settings().ask.model_copy(update={"reranker": "llm", "llm_rerank_top_n": 2}),
         )
         evidence = [
@@ -198,11 +197,10 @@ class TestEvidenceRerankers:
         monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
 
         from personal_agent.infra.structured_model import OpenAIModelClient
-        from personal_agent.kernel.config import OpenAIConfig
-        from personal_agent.kernel.config_models import LangSmithConfig
+        from personal_agent.kernel.config_models import StructuredConfig
 
         client = OpenAIModelClient(
-            OpenAIConfig(api_key="test-key", base_url="https://u.invalid", model="m"),
+            StructuredConfig(api_key="test-key", base_url="https://u.invalid", model="m"),
         )
 
         pack = LlmEvidenceReranker(settings, model_client=client).rerank(

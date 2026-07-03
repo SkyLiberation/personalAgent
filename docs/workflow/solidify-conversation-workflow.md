@@ -1,6 +1,6 @@
 # solidify_conversation Workflow
 
-`solidify_conversation` 用于把当前 thread 中已经讨论出的结论沉淀为长期知识。它不是把用户的“保存一下”指令本身入库，而是先从 checkpoint 对话中选择本次请求指向的知识范围，再复用 capture 链路写入 `knowledge_notes`。
+`solidify_conversation` 用于把当前 thread 中已经讨论出的结论沉淀为长期知识。它不是把用户的“保存一下”指令本身入库，而是先从 checkpoint 对话中选择本次请求指向的知识范围，再复用 capture 链路写入 note/chunk 与 Workspace 知识生命周期。
 
 ## 固定拓扑
 
@@ -29,7 +29,7 @@ solidify_conversation
 6. `_solidify_note_text()` 把 JSON 草稿转换成可入库正文；如果正文为空，workflow 失败并不写库。
 7. `draft_ready` 事件携带草稿，前端可展示给用户理解“将保存什么”。
 8. `sol-2` 的 `capture_text` 输入由 `sol-1` 的草稿动态注入，而不是使用原始“保存一下”指令。
-9. `capture_text` 复用 capture 主链路：结构化解析、Unstructured chunk、Postgres note/chunk、review card、graph sync。
+9. `capture_text` 复用 capture 主链路：fingerprint 去重、结构化解析、Unstructured chunk、Postgres note/chunk、review card、graph sync；同时进入 Workspace 生命周期，先形成 Artifact/EvidenceBlock/EvidenceSpan，再增强 Claim/Grounding/Admission/ProjectionJob。
 10. `finalize_step_execution` 汇总写入结果，并返回 plan steps / execution trace。
 
 ## 范围选择规则
@@ -52,6 +52,7 @@ solidify_conversation
 - duplicate fingerprint 和 related note 计算。
 - graph sync 与 graph quality 指标。
 - `EvidenceItem` / citation 后续可回溯。
+- Workspace Artifact / EvidenceSpan / Claim / EvidenceRef / ProjectionJob，供后续 Ask 作为证据源、覆盖诊断和冲突诊断输入。
 
 ## 失败分支
 
@@ -64,4 +65,4 @@ solidify_conversation
 
 ## 面试讲法
 
-可以说：固化对话不是把聊天记录直接存进长期记忆，而是一个两步 workflow。第一步从 checkpoint 里选择本次请求真正指向的知识并生成草稿，第二步复用 capture 链路写入长期知识。这样既避免把临时对话和助手推测当事实，也让最终入库内容仍走统一 chunk/index/graph/evidence 管线。
+可以说：固化对话不是把聊天记录直接存进长期记忆，而是一个两步 workflow。第一步从 checkpoint 里选择本次请求真正指向的知识并生成草稿，第二步复用 capture 链路写入长期知识。这样既避免把临时对话和助手推测当事实，也让最终入库内容同时进入 note/chunk/review/graph 和 Workspace Evidence/Claim/Projection 生命周期。

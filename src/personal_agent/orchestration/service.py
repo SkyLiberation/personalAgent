@@ -62,6 +62,10 @@ class AgentService:
         return self.runtime.memory
 
     @property
+    def workspace_service(self):
+        return self.runtime.workspace_service
+
+    @property
     def graph_store(self):
         return self.runtime.graph_store
 

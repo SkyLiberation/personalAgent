@@ -24,6 +24,9 @@ step_execution_graph
   -> capture_text / capture_link / capture_file steps
   -> ToolGateway
   -> capture_text tool
+  -> AgentRuntime.execute_capture
+       IngestionPipeline.ingest(...)
+       Workspace lifecycle ingest/projection
   -> answer = "已收进知识库：{title}"
   -> finalize_entry_result
 ```
@@ -74,7 +77,12 @@ entry_input.artifacts[0] / metadata.file_path
 ```text
 execute_capture(...)
   -> IngestionPipeline.ingest(...)
+  -> WorkspaceService.ingest_text(...)
+       ingest_knowledge(...)
+       enhance_claim_lifecycle(...)
 ```
+
+`IngestionPipeline` 仍负责原有 `knowledge_notes / chunks / review / graph sync` 能力。Workspace 是 Claim/Evidence 生命周期的服务边界，负责 Artifact、EvidenceBlock、EvidenceSpan、Claim、Grounding、Admission、Conflict、Decision 和 ProjectionJob。也就是说，Capture 产出笔记与 chunk，Workspace 产出可追溯证据和知识状态，二者共同构成长期知识主链路。
 
 capture pipeline 当前顺序：
 
@@ -306,7 +314,7 @@ question + dialogue context
        QueryUnderstanding
        RetrievalPlan
   -> RetrievalCoordinator.run(ctx)
-       graph / structural / local / web 按 plan 召回
+       workspace / graph / structural / local / episodic / reflection / web 召回
   -> EvidenceEngine.assemble_context(...)
        dedupe
        RRF fusion
@@ -331,6 +339,7 @@ question + dialogue context
 
 `RetrievalCoordinator` 的召回边界是：
 
+- `workspace`：读取 Workspace EvidenceSpan / Claim，携带 `conflict / potential_conflict` 诊断，转换成统一 `EvidenceItem / Citation / KnowledgeNote`。
 - `graph`：可走 Graphiti、structural 或 hybrid graph provider。
 - `local`：本地 note/chunk 检索。
 - `web`：按 retrieval plan 主动补充外部证据。
@@ -369,7 +378,7 @@ _compose_unified_answer(
 )
 ```
 
-生成阶段的输入边界是 `ContextPack`，不是原始 graph/local/web 结果。graph、local、structural、web 的候选在 retrieve 阶段已经被归一成 `EvidenceItem` 并排序。
+生成阶段的输入边界是 `ContextPack`，不是原始 Workspace、graph、local 或 web 结果。Workspace、graph、local、structural、episode、reflection、web 的候选在 retrieve 阶段已经被归一成 `EvidenceItem` 并排序。
 
 ## ask-verify
 
@@ -457,9 +466,12 @@ capture
   -> local lexical/vector indexes
   -> optional Graphiti episode / graph facts
   -> review card
+  -> Workspace Artifact / EvidenceBlock / EvidenceSpan
+  -> optional Workspace Claim lifecycle
+  -> ProjectionJob
 
 ask
-  -> graph / structural / local / web retrieval
+  -> workspace / graph / structural / local / episodic / reflection / web retrieval
   -> EvidenceItem
   -> ContextPack
   -> grounded answer
@@ -469,6 +481,9 @@ ask
 两条链路之间的关键共享模型：
 
 - `KnowledgeNote`：长期知识和 chunk 的持久化实体。
+- `Artifact / EvidenceBlock / EvidenceSpan`：Workspace 的证据生命周期和可回溯证据单元。
+- `Claim / GroundingRun / ClaimAdmissionDecision`：Workspace 的 Claim 增强、准入和状态推进。
+- `EvidenceRef`：回答引用回到 artifact/block/span 的稳定引用。
 - `Citation`：回答引用。
 - `EvidenceItem`：ask 生成前的统一证据候选。
 - `ContextPack`：最终进入 prompt 的证据包。
@@ -487,6 +502,7 @@ ask
 - chunk quality score / retrievable 标记。
 - review card。
 - chunk-level graph sync 状态和 durable worker queue 入队。
+- Workspace 生命周期写入，生成 Artifact / EvidenceBlock / EvidenceSpan / Claim / Grounding / Admission / ProjectionJob 等业务状态。
 
 当前仍有限制：
 
@@ -501,7 +517,7 @@ ask
 - workflow-step 化的 `retrieve / compose / verify / repair`。
 - `AskRunContext` 承载 retrieve / compose / verify / repair 四阶段中间状态。
 - query understanding + retrieval plan。
-- graph / structural / local / web 多源召回。
+- workspace / graph / structural / local / episodic / reflection / web 多源召回。
 - EvidenceEngine 统一 source/evidence assembly。
 - EvidenceItem 归一。
 - RRF fusion。
@@ -511,15 +527,16 @@ ask
 - ContextPack 预算控制。
 - verifier + retry。
 - 显式 ask-repair，负责 optional contrastive retrieval、web fallback 和最终证据不足标注。
+- Workspace Claim 冲突诊断会以 evidence metadata 进入 Ask；`potential_conflict` 不会直接替代回答或跳过 verifier。
 
 当前仍有限制：
 
-- ask context artifact 已落在通用 `workflow_artifacts` 表，带 `schema_version / created_by_step / consumed_by_steps / user_id` 等字段；所有 workflow step 的 input/output/error 也进入同一 artifact 规范，并可按 `step_id` 查询。
 - rerank、MMR、多样性和反证检索仍有提升空间。
-- claim grounding 主要是启发式检查，复杂蕴含判断仍需要更强 verifier。
+- claim grounding 已统一进入 EvidenceEngine / Workspace grounding 边界；复杂蕴含仍依赖 verifier 与 structured judge 的质量。
+- Workspace evidence coverage 已进入回答和 e2e，但 coverage 目前主要依据选中 evidence 与可用 span/block 的覆盖关系，后续还可以进一步结合问题分解后的子问题覆盖率。
 
 ## 面试表述
 
 可以这样说：
 
-> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接是 `capture_url -> capture_text`，文件是 `inspect_artifact -> capture_text`，底层最终统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify -> ask-repair`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和多源召回，随后把候选交给 `EvidenceEngine` 做证据归一、RRF/补全/压缩/rerank、ContextPack 和 selected citation/match；compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验和有界 retry，claim grounding 复用 `EvidenceEngine.verify_claims()`；repair 阶段显式处理反证补充、web fallback 和最终证据不足标注，并把 repair telemetry 写回 ask context artifact。
+> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接是 `capture_url -> capture_text`，文件是 `inspect_artifact -> capture_text`，底层统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync，同时进入 Workspace 生命周期，先落 Artifact/Evidence，再增强 Claim/Grounding/Admission/Conflict，并生成 ProjectionJob。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify -> ask-repair`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和 workspace/graph/local/web 等多源召回，随后把候选交给 `EvidenceEngine` 做证据归一、RRF/补全/压缩/rerank、ContextPack 和 selected citation/match；Workspace citation 会携带 EvidenceRef，回答会暴露 evidence_coverage 和 missing_sections。compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验和有界 retry，claim grounding 复用 `EvidenceEngine.verify_claims()`；repair 阶段显式处理反证补充、web fallback 和最终证据不足标注，并把 repair telemetry 写回 ask context artifact。

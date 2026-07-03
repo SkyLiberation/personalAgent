@@ -24,6 +24,7 @@ from personal_agent.application.review import (
 from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from personal_agent.application.research import ResearchScheduler, ResearchSchedulerRunner
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.application.workspace import WorkspaceService
 
 
 @dataclass(slots=True)
@@ -38,6 +39,7 @@ class WebAppContext:
     review_feedback_use_case: ReviewFeedbackUseCase
     knowledge_gap_runner: KnowledgeGapJobRunner
     research_runner: ResearchSchedulerRunner
+    workspace_service: WorkspaceService
 
     def attach_to(self, app: FastAPI) -> None:
         app.state.context = self
@@ -46,6 +48,7 @@ class WebAppContext:
         app.state.review_digest_delivery_router = self.review_digest_delivery_router
         app.state.review_digest_runner = self.review_digest_runner
         app.state.research_runner = self.research_runner
+        app.state.workspace_service = self.workspace_service
 
     def startup(self) -> None:
         for subscription in subscriptions_from_settings(self.settings):
@@ -121,6 +124,7 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         ResearchScheduler(service.research_store, service.research_service),
         tick_seconds=settings.research.scheduler_tick_seconds,
     )
+    workspace_service = service.runtime.workspace_service
     return WebAppContext(
         settings=settings,
         capture_service=capture_service,
@@ -132,4 +136,5 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         review_feedback_use_case=review_feedback_use_case,
         knowledge_gap_runner=knowledge_gap_runner,
         research_runner=research_runner,
+        workspace_service=workspace_service,
     )

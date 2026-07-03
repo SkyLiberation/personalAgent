@@ -10,7 +10,7 @@ This is the only tier where routing, planning, and orchestration are ALL real,
 so it is the one that scores true end-to-end behavior (including the multi-goal
 decomposition the stub cannot produce).
 
-Requires a configured router LLM + Postgres. ``build_real_service`` returns None
+Requires a configured structured LLM + Postgres. ``build_real_service`` returns None
 when unconfigured so the gate skips. This Golden Test is slow:
 real runs may drive live LLM planning and (for capture/solidify) background
 graph ingestion.
@@ -31,15 +31,15 @@ from .runner import run_output_from_entry_result
 
 
 def build_real_service() -> AgentService | None:
-    """Build a real AgentService (real router LLM) from env, or None when
-    the router LLM or Postgres is unconfigured."""
+    """Build a real AgentService from env, or None when the structured LLM or
+    Postgres is unconfigured."""
     try:
         settings = Settings.from_env()
     except Exception:
         return None
     if not settings.postgres_url:
         return None
-    if build_structured_model_client(settings.router, settings.langsmith) is None:
+    if build_structured_model_client(settings.structured, settings.langsmith) is None:
         return None
     try:
         return AgentService(settings)

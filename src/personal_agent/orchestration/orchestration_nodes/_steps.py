@@ -12,6 +12,7 @@ import time
 
 from langgraph.types import interrupt
 
+from personal_agent.kernel.models import Citation
 from personal_agent.kernel.prompts import render_prompt
 from personal_agent.orchestration.orchestration_models import (
     AgentGraphState,
@@ -1324,6 +1325,12 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
     # ask flow: the retrieve step assembled the ContextPack onto the run-scoped
     # AskRunContext. Compose runs pure generation from it, then backfills
     # citations/matches onto the state. No second retrieval.
+    workspace_payload = _latest_workspace_ask_result(state)
+    if workspace_payload is not None:
+        state.citations = _workspace_citations_from_payload(workspace_payload)
+        state.matches = _workspace_matches_from_payload(workspace_payload)
+        return str(workspace_payload.get("answer") or "证据不足，无法基于当前知识库回答。")
+
     ctx = deps.ask_run_context_store.get(state.run_id)
     if ctx is not None:
         ask_service = deps.ask_service_factory()
@@ -1351,6 +1358,73 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
     except Exception:
         logger.exception("Compose step %s failed", step.step_id)
         return f"根据已有信息：{context[:500]}"
+
+
+def _workspace_ask_step_result(answer) -> dict[str, object]:
+    payload = answer.model_dump(mode="json")
+    return {
+        "answer": answer.answer,
+        "workspace_ask": True,
+        "workspace_answer": payload,
+        "grounding_status": answer.grounding_status,
+        "evidence_count": len(answer.citations),
+        "citation_count": len(answer.citations),
+        "claim_ids": list(answer.selected_claim_ids),
+        "conflicted_claim_ids": list(answer.conflicted_claim_ids),
+        "evidence_span_ids": [
+            citation.evidence_span_id for citation in answer.citations
+        ],
+        "evidence_block_ids": [
+            citation.evidence_block_id for citation in answer.citations
+        ],
+        "artifact_ids": [
+            citation.artifact_id for citation in answer.citations
+        ],
+    }
+
+
+def _latest_workspace_ask_result(state: AgentGraphState) -> dict[str, object] | None:
+    for data in reversed(list(state.step_execution.results.values())):
+        if not isinstance(data, dict) or not data.get("workspace_ask"):
+            continue
+        payload = data.get("workspace_answer")
+        if isinstance(payload, dict):
+            return payload
+        return data
+    return None
+
+
+def _workspace_citations_from_payload(payload: dict[str, object]) -> list[Citation]:
+    citations: list[Citation] = []
+    for index, raw in enumerate(payload.get("citations") or [], 1):
+        if not isinstance(raw, dict):
+            continue
+        citations.append(Citation(
+            note_id=str(raw.get("artifact_id") or ""),
+            title=f"Workspace evidence {index}",
+            snippet=str(raw.get("quote") or ""),
+            source_type="workspace",
+            evidence_id=str(raw.get("evidence_span_id") or ""),
+            source_ref=str(raw.get("artifact_id") or ""),
+            source_span=str(raw.get("locator") or ""),
+            element_ids=[str(item) for item in (raw.get("claim_ids") or [])],
+        ))
+    return citations
+
+
+def _workspace_matches_from_payload(payload: dict[str, object]) -> list[dict[str, object]]:
+    claim_ids = [str(item) for item in (payload.get("selected_claim_ids") or [])]
+    summaries = [str(item) for item in (payload.get("claim_summaries") or [])]
+    matches: list[dict[str, object]] = []
+    for index, claim_id in enumerate(claim_ids):
+        summary = summaries[index] if index < len(summaries) else claim_id
+        matches.append({
+            "id": claim_id,
+            "title": summary[:48],
+            "summary": summary,
+            "source": "workspace_claim",
+        })
+    return matches
 
 
 def _answer_from_artifact_context(

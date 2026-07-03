@@ -2,23 +2,27 @@
 
 > 顶层文档总入口见 [docs/README.md](../README.md)。
 
-本目录集中保存流程级文档。`topics/` 目录讲分层设计，`workflow/` 目录讲一次请求或一个业务 workflow 的实际执行链路。
+本目录只描述“请求如何被编排和执行”。数据模型、长期知识生命周期和未来规划分别放在 `docs/summary`、`docs/topics`、`docs/future`，避免同一概念在多处重复定义。
 
-## 总览流程
+## 阅读顺序
 
-- [当前 Workflow 框架总览](workflow-framework.md)：说明 `WorkflowSpec / WorkflowRegistry / WorkflowStepProjector / StepExecutionGraph` 的职责边界，以及当前各 intent 的接入方式。
-- [Entry / Checkpoint / 输出整体流程](entry-router-plan-react-output-flow.md)：从入口、router、planning、ReAct、checkpoint、HITL、工具、记忆到输出层的端到端链路。
-- [Capture / Ask 的 RAG 架构设计](capture-ask-model-flow.md)：capture/index 与 ask/retrieval/generation 的 RAG 流水线。
-- [Evidence Engine](evidence-engine.md)：说明 ask 和 research 如何共享 source normalization、context assembly、citation selection 和 claim grounding。
+1. [Workflow 框架总览](workflow-framework.md)：当前注册的 workflow、LangGraph step execution、HITL/checkpoint、ReAct 子图和运行时边界。
+2. [Entry / Checkpoint / 输出整体流程](entry-router-plan-react-output-flow.md)：一次 `entry` 请求如何路由、投影、执行、暂停、恢复并输出。
+3. [Workspace 生命周期 Workflow](workspace-lifecycle-workflow.md)：Artifact/Evidence 优先入库、Claim 增强、准入、冲突、ProjectionJob 和 e2e 质量口径。
+4. [Capture / Ask 当前流程](capture-ask-model-flow.md)：Capture 入库、Ask 多源证据、WorkspaceRetriever、ContextPack、verify/repair 的真实链路。
+5. [Evidence Engine](evidence-engine.md)：Ask 与 Research 共享的证据归一、装配、引用选择和 claim grounding。
 
-## Step Projection Workflow
+## 单 Workflow 文档
 
-这些 workflow 会由 `WorkflowRegistry` 选中，并由 `WorkflowStepProjector` 确定性投影成 `ExecutionStep`，进入 checkpoint-safe 的步骤执行、工具治理和前端步骤面板。
+- [delete_knowledge](delete-knowledge-workflow.md)：高风险删除的候选召回、目标解析、HITL 确认和幂等执行。
+- [solidify_conversation](solidify-conversation-workflow.md)：从 checkpoint 对话生成可入库草稿，并复用 capture 主链路写入。
+- [research_once](research-once-workflow.md)：ResearchService 的 evidence-driven loop、来源聚类、个人相关性排序、digest 和 claim verification。
 
-- [ask workflow](workflow-framework.md#ask-step-projection-workflow)：四段式 `ask-retrieve -> ask-compose -> ask-verify -> ask-repair`，把检索、生成、校验、补证修复拆成可观测步骤。
-- capture workflow：`capture_text` 是单步 `capture_text` 写入；`capture_link / capture_file` 是“提取正文 -> capture_text 写入”的两步。
-- summarize/direct workflow：`summarize_thread` 和 `direct_answer` 也通过 compose step 进入统一步骤执行。
-- [delete_knowledge workflow](delete-knowledge-workflow.md)：检索候选、解析目标、HITL 确认、执行删除、生成结果摘要。
-- [solidify_conversation workflow](solidify-conversation-workflow.md)：从 checkpoint 对话生成知识草稿，并复用 capture 链路写入长期记忆。
-- [research_once workflow](research-once-workflow.md)：从 `ResearchService` 视角说明 evidence-driven research loop 如何收集来源、聚类事件、结合个人知识图谱排序并生成 digest。
-- Workflow platform：definition/deployment/eval gate 已持久化到 Postgres，replay/fork/debug bundle 基于 `workflow_events / workflow_artifacts / workflow_replay_runs` 查询。
+## 当前架构口径
+
+- `WorkflowSpec / WorkflowRegistry` 是固定业务流程真源；LLM 不生成全局拓扑。
+- `WorkflowStepProjector` 确定性生成 `ExecutionStep`；`StepProjectionValidator` 校验工具、schema、风险和确认要求。
+- 常规业务 intent 进入 `StepExecutionGraph`；`unknown` 和校验失败走 fallback/clarification。
+- Workspace 是长期知识生命周期服务边界：Artifact / EvidenceBlock / EvidenceSpan 是摄取成功边界，Claim / Grounding / Admission / Conflict 是后续增强链路，ProjectionJob 负责把知识投影到 UI、Review、Graph 和检索索引。
+- Ask 的主链路仍是 `AskService` 四阶段管线；Workspace 作为 `WorkspaceRetriever` 进入统一证据池，并把 `EvidenceRef / evidence_coverage / missing_sections` 暴露给回答质量评估。
+- Capture 仍保留 `IngestionPipeline` 的 note/chunk/review/graph sync 能力；Claim/Evidence 生命周期由 Workspace 作为业务状态真源承载。

@@ -149,11 +149,10 @@ class TestCrossLayerRegression:
                 },
             )(),
         )
-        # resolve 回退到本地候选选择器时，``_structured_llm_respond`` 经
-        # ``_react_llm_respond`` fallback 返回结构化 JSON 指明目标 note_id。
+        # resolve 通过 ``_structured_llm_respond`` 返回结构化 JSON 指明目标 note_id。
         monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_respond",
-            lambda _prompt, _deps, **_kw: (
+            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+            lambda *_args, **_kwargs: (
                 '{"thought":"定位已有笔记","done":true,'
                 f'"result":{{"note_id":"{note.id}"}}}}'
             ),

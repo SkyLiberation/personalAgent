@@ -20,7 +20,7 @@
 
 按链路分级，并由 `output_contract` 显式标注，不是一刀切：
 
-- **strict json_schema**（最强）：用在内部决策链路。query planner、replanner、router、evidence rerank 都走 `strict_json_schema_response`（`additionalProperties:false` + 全字段 required），再解析成对应 Pydantic 模型（`RouterDecision / QueryUnderstanding` 等）双保险。这些输出要被代码消费，格式错一点下游就崩。
+- **strict json_schema**（最强）：用在内部决策链路。query planner、replanner、router、evidence rerank、workspace 语义抽取/裁决都走统一 `StructuredConfig + StructuredModelRequest(kind="structured")`，adapter 用 Pydantic schema 生成 strict `json_schema` 并解析成对应模型（`RouterOutput / QueryUnderstanding` 等）。这些输出要被代码消费，格式错一点下游就崩。
 - **tool_call**：ReAct（`react.system`）走真正的 function/tool calling（`tool_choice="auto"`），不是用 JSON 字符串模拟工具调用。
 - **json_object / 降级**：Graphiti 抽取按模型能力在 json_schema 和 `{"type":"json_object"}` 之间降级，兜底 qwen3-coder-flash 这类会忽略 schema 的模型。
 - **free_text**（无 response_format）：四个面向用户的 answer prompt 全是自由文本输出。

@@ -156,10 +156,21 @@ def register_review_routes(
         due_only: bool = False,
     ) -> ReviewCardListResponse:
         resolved_user = user_id if is_admin(request) and user_id else resolve_user_id(request, settings)
-        cards = (
-            service.memory.due_reviews(resolved_user)
-            if due_only else service.memory.list_reviews(resolved_user)
+        plan = service.workspace_service.plan_review_and_gaps(
+            workspace_id=resolved_user,
+            limit=100,
         )
+        cards = [
+            ReviewCard(
+                id=item.review_item_id,
+                note_id=item.claim_id,
+                prompt=item.prompt,
+                answer_hint=item.reason,
+                due_at=item.due_at,
+            )
+            for item in plan.review_items
+            if not due_only or item.state == "due"
+        ]
         return ReviewCardListResponse(items=cards)
 
     @app.post("/api/review/cards/{review_card_id}/feedback")

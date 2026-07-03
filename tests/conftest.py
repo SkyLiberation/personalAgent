@@ -36,8 +36,6 @@ _LLM_PROVIDER_ENV_VARS = (
     "STRUCTURED_BASE_URL",
     "ROUTER_API_KEY",
     "ROUTER_BASE_URL",
-    "PERSONAL_AGENT_PLANNER_API_KEY",
-    "PERSONAL_AGENT_PLANNER_BASE_URL",
     "PERSONAL_AGENT_EXTRACT_API_KEY",
     "PERSONAL_AGENT_EXTRACT_BASE_URL",
     "PERSONAL_AGENT_GRAPHITI_LLM_API_KEY",
@@ -487,6 +485,150 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
+                CREATE TABLE IF NOT EXISTS workspace_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_extraction_runs (
+                    extraction_run_id TEXT PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_evidence_blocks (
+                    evidence_block_id TEXT PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_evidence_spans (
+                    evidence_span_id TEXT PRIMARY KEY,
+                    evidence_block_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    quote_hash TEXT NOT NULL,
+                    text_span TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_claims (
+                    claim_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    support_status TEXT NOT NULL,
+                    canonical_key TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_grounding_runs (
+                    grounding_run_id TEXT PRIMARY KEY,
+                    claim_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_claim_support_events (
+                    event_id TEXT PRIMARY KEY,
+                    claim_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_claim_admission_decisions (
+                    admission_id TEXT PRIMARY KEY,
+                    claim_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    admission_result TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_knowledge_state_events (
+                    event_id TEXT PRIMARY KEY,
+                    target_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    to_state TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_knowledge_relations (
+                    relation_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    relation_type TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_knowledge_items (
+                    knowledge_item_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    decision_type TEXT NOT NULL,
+                    risk_level TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_research_events (
+                    research_event_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_review_items (
+                    review_item_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    priority DOUBLE PRECISION NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_knowledge_gaps (
+                    gap_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    gap_type TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_graph_projections (
+                    graph_projection_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    source_claim_id TEXT NOT NULL,
+                    quality_signal TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workspace_projection_jobs (
+                    projection_job_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    projection_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    source_object_id TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
                 TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
@@ -500,6 +642,13 @@ def clean_postgres_business_tables():
                 TRUNCATE workflow_eval_policies;
                 TRUNCATE workflow_state_migrations;
                 TRUNCATE worker_queue_tasks;
+                TRUNCATE workspace_artifacts, workspace_extraction_runs, workspace_evidence_blocks,
+                    workspace_evidence_spans, workspace_claims, workspace_grounding_runs,
+                    workspace_claim_support_events, workspace_claim_admission_decisions,
+                    workspace_knowledge_state_events, workspace_knowledge_relations,
+                    workspace_knowledge_items, workspace_decisions,
+                    workspace_research_events, workspace_review_items, workspace_knowledge_gaps,
+                    workspace_graph_projections, workspace_projection_jobs;
                 TRUNCATE research_feedback_events, research_deliveries, intelligence_digests,
                     research_events, research_sources, research_runs, research_subscriptions;
                 TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes;

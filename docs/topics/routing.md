@@ -12,7 +12,7 @@ Router: What
 
 ## Router：传输模型与领域模型分离
 
-[router.py](../../src/personal_agent/agent/router.py) 使用两层模型：
+[router.py](../../src/personal_agent/planning/router.py) 使用两层模型：
 
 - `RouterOutput / GoalDraft`：LLM strict JSON Schema 传输契约
 - `RouterDecision / Goal`：系统内部领域模型
@@ -144,20 +144,21 @@ Router 不输出工具、检索策略、风险、确认要求或 workflow topolo
 ## Router 使用的 LLM 配置
 
 Router 的模型调用配置由
-[`RouterConfig`](../../src/personal_agent/core/config_models.py) 定义，与通用问答模型配置分离。
+[`StructuredConfig`](../../src/personal_agent/kernel/config_models.py) 定义，并与 query planner、replanner、reranker、workspace 语义裁决等所有 strict `json_schema` 调用共享。
 
 | 配置项 | 环境变量 | 默认值/说明 |
 |---|---|---|
-| `api_key` | `ROUTER_API_KEY` | 未设置时回退到 `OPENAI_API_KEY` |
-| `base_url` | `ROUTER_BASE_URL` | 未设置时回退到 `OPENAI_BASE_URL` |
-| `model` | `ROUTER_MODEL` | 默认 `gpt-5.4-mini` |
-| `timeout_seconds` | `PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS` | 默认 30 秒 |
-| `max_retries` | `PERSONAL_AGENT_ROUTER_MAX_RETRIES` | 默认 2 次 |
-| `extra_body` | `ROUTER_EXTRA_BODY` | 供应商扩展参数 JSON |
+| `api_key` | `STRUCTURED_API_KEY` / `ROUTER_API_KEY` | 未设置时回退到 `OPENAI_API_KEY` |
+| `base_url` | `ROUTER_BASE_URL` / `STRUCTURED_BASE_URL` | 未设置时回退到 `OPENAI_BASE_URL` |
+| `model` | `ROUTER_MODEL` / `STRUCTURED_MODEL` | 默认 `gpt-5.4-mini` |
+| `timeout_seconds` | `PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS` / `PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS` | 默认 30 秒 |
+| `max_retries` | `PERSONAL_AGENT_STRUCTURED_MAX_RETRIES` / `PERSONAL_AGENT_ROUTER_MAX_RETRIES` | 默认 2 次 |
+| `extra_body` | `STRUCTURED_EXTRA_BODY` / `ROUTER_EXTRA_BODY` | 供应商扩展参数 JSON |
 
-Router 默认使用 `responses.parse`，因此所选模型和接口需要支持 Responses API 的 Pydantic
-结构化输出。项目不提供 `json_object` 降级路径：需要结构化契约的调用统一使用 strict
-`json_schema`。配置独立的目的是让 Router 不受通用问答模型供应商能力限制。
+Router 通过 `StructuredModelRequest(kind="structured")` 走 Chat Completions strict
+`json_schema`，adapter 再解析成 Pydantic 模型。项目不提供 `json_object` 降级路径：
+需要结构化契约的调用统一使用 strict `json_schema`。配置独立于通用问答模型，是为了让
+内部语义决策不受自然语言回答模型供应商能力限制。
 
 ## WorkflowPlanner：唯一规划入口
 

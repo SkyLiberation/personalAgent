@@ -22,19 +22,19 @@
 
 ### 1.1 意图分类 System Prompt
 
-**文件**: [src/personal_agent/agent/router.py](src/personal_agent/agent/router.py#L244-L245)
+**文件**: [src/personal_agent/planning/router.py](../src/personal_agent/planning/router.py)
 
 ```
 你是一个严谨的意图分类器，只输出 JSON。
 ```
 
-**调用参数**: `openai_small_model`, temperature=0, max_tokens=500, strict `response_format={"type": "json_schema"}`（`RouterDecision` 契约）
+**调用参数**: `structured_model`, temperature=0, max_tokens=3000, `StructuredModelRequest(kind="structured")`（`RouterOutput` 契约）
 
 ---
 
 ### 1.2 意图分类 User Prompt
 
-**文件**: [src/personal_agent/agent/router.py](src/personal_agent/agent/router.py#L209-L231)
+**文件**: [src/personal_agent/planning/router.py](../src/personal_agent/planning/router.py)
 
 ```
 你是一个入口路由分类器。
@@ -123,19 +123,19 @@ expected_output 和 success_criteria 仅用于界面展示，不得声明执行�
 
 ### 2.3 任务重规划 System Prompt
 
-**文件**: [src/personal_agent/agent/restep_projector.py](src/personal_agent/agent/restep_projector.py#L104)
+**文件**: [src/personal_agent/planning/replanner.py](../src/personal_agent/planning/replanner.py)
 
 ```
 你是一个严谨的任务重新规划器，只输出 JSON。
 ```
 
-**调用参数**: `openai_small_model`, temperature=0, max_tokens=500, strict `response_format={"type": "json_schema"}`（`steps` 契约）
+**调用参数**: `structured_model`, temperature=0, max_tokens=500, `StructuredModelRequest(kind="structured")`（`steps` 契约）
 
 ---
 
 ### 2.4 任务重规划 User Prompt
 
-**文件**: [src/personal_agent/agent/restep_projector.py](src/personal_agent/agent/restep_projector.py#L76-L92)
+**文件**: [src/personal_agent/planning/replanner.py](../src/personal_agent/planning/replanner.py)
 
 ```
 你是一个任务重新规划器。当前计划中的某个步骤执行失败了，
@@ -551,23 +551,24 @@ Respond with JSON.
 
 | # | 文件 | 函数 | 模型 | Temp | Max Tokens | 用途 |
 |---|------|------|------|------|------------|------|
-| 1 | `_helpers.py` | `_react_llm_respond()` | `openai_small_model` | 0 | 400 | Graph ReAct 工具调用 / finish_react |
+| 1 | `_helpers.py` | `_react_llm_native()` | `openai_small_model` | 0 | 400 | Graph ReAct 原生 tool-calling / finish_react |
 | 2 | `step_projector.py` | deterministic projection | - | - | - | 任务规划（当前不调用 LLM） |
-| 3 | `restep_projector.py:101` | `_replan_with_llm()` | `openai_small_model` | 0 | 500 | 任务重规划 |
-| 4 | `router.py` | `_classify_with_llm()` | `openai_small_model` | 0 | 500 | 意图分类 |
+| 3 | `replanner.py` | `_replan_with_llm()` | `structured_model` | 0 | 500 | 任务重规划 |
+| 4 | `router.py` | `_classify_with_llm()` | `structured_model` | 0 | 3000 | 意图分类 |
 | 5 | `runtime_llm.py:26` | `_generate_answer()` | `openai_model` | 0.3 | 600 | 答案生成 |
 | 6 | `runtime_llm.py:62` | `_generate_answer_stream()` | `openai_model` | 0.3 | 600 | 流式答案生成 |
 | 7 | `_entry.py:593` | `_node_direct_answer_branch()` | `openai_small_model` | 默认 | 300 | 直接回答 |
-| 8 | `query_step_projector.py` | `_call_planner_llm()` | LangExtract model (`qwen3-coder-flash`) | 0 | 500 | Ask 查询理解、rewrite、filters、检索计划 |
-| 9 | `rerankers.py` | `LlmEvidenceReranker._rank_ids()` | LangExtract model (`qwen3-coder-flash`) 或 `openai_small_model` | 0 | 700 | Ask evidence listwise rerank |
+| 8 | `query_planner.py` | `_call_planner_llm()` | `structured_model` | 0 | 500 | Ask 查询理解、rewrite、filters、检索计划 |
+| 9 | `rerankers.py` | `LlmEvidenceReranker._rank_ids()` | `structured_model` | 0 | 700 | Ask evidence listwise rerank |
 | 10 | `llm_strategies.py:240` | `_generate_response()` | graphiti model | 0.6 | 可配置 | 图谱实体/关系抽取 |
 | 11 | `store.py:247` | `add_episode()` | graphiti model | 默认 | 默认 | Episode 提取 |
 | 12 | `store.py:270` | `add_episode()` (retry) | graphiti model | 默认 | 默认 | Episode 提取重试 |
 
 **模型说明**:
-- `openai_small_model` — 用于内部决策与受控工具选择；router/replanner 使用 strict `json_schema`，ReAct 使用 tool schema
+- `structured_model` — `StructuredConfig` 配置的统一 strict `json_schema` 模型；router、query planner、replanner、reranker、workspace 语义抽取/裁决共用
+- `openai_small_model` — 用于 ReAct 原生 tool-calling 等非 JSON-schema 小模型调用
 - `openai_model` — 用于答案生成，temperature=0.3，更高 max_tokens，自然语言输出
-- LangExtract model — 默认 `qwen3-coder-flash`，Ask query planner 和可选 LLM rerank 优先使用它的 strict `json_schema` 输出，未配置 extract key 时回退到 `openai_small_model`
+- LangExtract model — 仅用于休眠的可选 pre-extraction/provider 实验层，不再承载 ask query planner 或 rerank
 - graphiti model — Graphiti 库内部使用的模型，用于知识图谱实体和关系抽取
 
 **提示词设计模式总结**:

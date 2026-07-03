@@ -1,6 +1,6 @@
 # Research Once Workflow
 
-本文从 `ResearchService` 视角说明一次 `research_once` 的内部执行链路。这里不展开前端、Router、WorkflowSpec 或 LangGraph 入口，只关注业务服务如何把一个 `ResearchRun` 推进为 sources、events 和 digest。
+本文从 `ResearchService` 视角说明一次 `research_once` 的内部执行链路。`research_once` 已经接入 `WorkflowSpec`，入口拓扑是 `research-prepare -> research-initialize -> research-loop -> research-synthesize -> research-verify -> research-compose`；本文不重复展开 Router、LangGraph step execution 和 HITL/checkpoint 机制，只关注业务服务如何把一个 `ResearchRun` 推进为 sources、events 和 digest。
 
 核心代码：
 

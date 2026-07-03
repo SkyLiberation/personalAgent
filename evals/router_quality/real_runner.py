@@ -12,7 +12,7 @@ This is the layer that would have caught the DNS incident: the stub routed
 "什么是DNS" to ``ask`` correctly, but the real LLM mis-routed it to
 ``solidify_conversation``. A real-environment tier scores the real model.
 
-Requires a configured router LLM (ROUTER_* / OPENAI_* env). When unconfigured,
+Requires a configured structured LLM (STRUCTURED_* / ROUTER_* / OPENAI_* env). When unconfigured,
 ``build_real_router`` returns None so the gate can skip rather than fail — this
 is the Golden Test runner; the offline runner remains a contract test.
 """
@@ -34,7 +34,7 @@ from .runner import run_output_from_decision
 def build_real_router() -> DefaultIntentRouter | None:
     """Build a real LLM-backed router from env, or None when unconfigured."""
     settings = Settings.from_env()
-    client = build_structured_model_client(settings.router, settings.langsmith)
+    client = build_structured_model_client(settings.structured, settings.langsmith)
     if client is None:
         return None
     return DefaultIntentRouter(client)

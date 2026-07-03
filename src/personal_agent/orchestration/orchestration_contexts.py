@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from personal_agent.planning.step_projection_validator import StepProjectionValidator
     from personal_agent.application.verifier import AnswerVerifier
     from personal_agent.planning.workflow_planner import WorkflowPlanner
+    from personal_agent.application.workspace import WorkspaceService
 
 
 class ToolingContext(Protocol):
@@ -67,6 +68,7 @@ class StepExecutionContext:
     ask_service_factory: Callable[[], "AskService"]
     ask_run_context_store: "AskRunContextStore"
     workflow_artifact_store: object
+    workspace_service: "WorkspaceService"
     summary: SummaryContext
     direct_answer: DirectAnswerContext
     model_client: "StructuredModelClient | None" = None
