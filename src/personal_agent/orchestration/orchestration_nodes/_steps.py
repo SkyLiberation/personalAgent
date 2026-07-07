@@ -1282,6 +1282,14 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
             state.entry_input = original_entry
         return state.answer or ""
 
+    if route == "github_repository_qa":
+        for data in reversed(list(state.step_execution.results.values())):
+            if isinstance(data, dict):
+                answer = str(data.get("answer") or "").strip()
+                if answer:
+                    return answer
+        return f"GitHub 工具已完成检索，但没有返回可呈现内容。问题：{question}"
+
     if step.task_intent == "solidify_conversation":
         dialogue = _helpers._format_solidify_candidate_context(state.messages)
         if not dialogue:

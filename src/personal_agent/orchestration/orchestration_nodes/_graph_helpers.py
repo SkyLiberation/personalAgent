@@ -20,7 +20,13 @@ _RETRY_DELAY_SECONDS = 2.0
 
 # ReAct constants used by checkpointed graph nodes.
 _REACT_MAX_ITERATIONS_CAP = 5
-_REACT_DEFAULT_ALLOWED_TOOLS = ("graph_search", "web_search")
+_REACT_DEFAULT_ALLOWED_TOOLS = (
+    "graph_search",
+    "web_search",
+    "github.search_code",
+    "github.get_file_contents",
+    "github.search_repositories",
+)
 
 _REACT_SYSTEM_PROMPT = get_prompt("react.system").template
 

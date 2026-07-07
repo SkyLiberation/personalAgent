@@ -524,6 +524,36 @@ def _build_registry() -> WorkflowRegistry:
             recovery_policy="checkpoint_step",
         ),
         _workflow(
+            "github_repository_qa",
+            "github_repository_qa",
+            (
+                WorkflowStepSpec(
+                    "github-retrieve",
+                    "resolve",
+                    "读取或搜索远程 GitHub 仓库内容",
+                    execution_mode="react",
+                    allowed_tools=(
+                        "github.search_code",
+                        "github.get_file_contents",
+                        "github.search_repositories",
+                    ),
+                    max_iterations=2,
+                    side_effects=("external_network",),
+                    recovery_policy="clarify",
+                    branch_policy="clarify",
+                ),
+                WorkflowStepSpec(
+                    "github-compose",
+                    "compose",
+                    "基于 GitHub 工具返回内容回答用户",
+                    depends_on=("github-retrieve",),
+                    recovery_policy="branch",
+                ),
+            ),
+            projection_policy="step_projection",
+            recovery_policy="checkpoint_step",
+        ),
+        _workflow(
             "manage_research",
             "manage_research",
             (

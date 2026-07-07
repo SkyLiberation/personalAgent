@@ -26,13 +26,21 @@ floors plus a small set of strict critical cases.
   solidification, review digest, consolidation, knowledge gap inspection,
   workflow inspection, delete confirmation diagnostics, and compound
   capture-then-ask requests.
+- `github_mcp` runs deterministic end-to-end tool plumbing checks for GitHub
+  MCP prompts. It registers local read-only fake GitHub tools with the same
+  governed names as the official MCP mapping, then drives the full
+  `execute_entry -> router -> github_repository_qa workflow -> ReAct ->
+  ToolGateway -> audit trace` path. The deterministic mock is only the ReAct
+  model decision, so the test still verifies the routed workflow, step
+  projection, gateway call, and audit record.
 
 The goal is to catch behavioral regressions and environment drift across
 routing, evidence selection, answer grounding, conservative no-evidence
 behavior, artifact interpretation and degradation, Research source collection,
 satisfaction stopping, digest generation, non-ask workflow routing, complex
 intent decomposition, tool failure degradation, latency, and observability.
-The core LLM and external tools are not stubbed.
+Except for the GitHub MCP branch's deterministic ReAct tool-choice mock, the
+core LLM and external tools are not stubbed.
 `OPENAI_API_KEY` / `OPENAI_BASE_URL` and router-compatible config must be
 present, otherwise the gate skips. Other provider failures or degradations must
 be diagnosed by the run output rather than bypassed in the test.
@@ -63,6 +71,16 @@ Run selected branches:
 $env:E2E_QUALITY_BRANCHES="ask,artifact"
 uv run pytest evals/e2e_quality -v
 Remove-Item Env:\E2E_QUALITY_BRANCHES
+```
+
+Run only GitHub MCP tool-call plumbing:
+
+```powershell
+$env:E2E_QUALITY_BRANCHES="github_mcp"
+$env:E2E_QUALITY_ENFORCE_BASELINE="true"
+uv run pytest evals/e2e_quality -v
+Remove-Item Env:\E2E_QUALITY_BRANCHES
+Remove-Item Env:\E2E_QUALITY_ENFORCE_BASELINE
 ```
 
 When `E2E_QUALITY_CASES` or `E2E_QUALITY_BRANCHES` is set, the suite records

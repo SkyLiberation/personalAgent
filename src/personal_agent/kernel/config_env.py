@@ -304,7 +304,7 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_EXTRACT_FALLBACK_ON_ERROR", "true")
             ),
         ),
-        mcp=_parse_mcp_config(os.getenv("PERSONAL_AGENT_MCP_SERVERS", "")),
+        mcp=_mcp_config_from_env(),
         enterprise_knowledge=EnterpriseKnowledgeConfig(
             raw_roots=tuple(
                 Path(item)
@@ -459,10 +459,21 @@ def _parse_mcp_config(raw: str) -> MCPConfig:
       "servers": [
         {
           "server_id": "confluence",
+          "transport": "http",
           "endpoint": "https://mcp.example/rpc",
           "authorization": "Bearer ...",
           "tools": [
             {"remote_name": "search_pages", "name": "enterprise.search_pages"}
+          ]
+        },
+        {
+          "server_id": "github",
+          "transport": "stdio",
+          "command": "docker",
+          "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+          "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}", "GITHUB_READ_ONLY": "1"},
+          "tools": [
+            {"remote_name": "search_code", "name": "github.search_code"}
           ]
         }
       ]
@@ -501,6 +512,109 @@ def _parse_mcp_config(raw: str) -> MCPConfig:
         enabled=_as_bool(str(parsed.get("enabled", False))),
         servers=tuple(servers),
     )
+
+
+def _mcp_config_from_env() -> MCPConfig:
+    """Parse generic MCP config and append opt-in first-party presets."""
+    import os
+
+    config = _parse_mcp_config(os.getenv("PERSONAL_AGENT_MCP_SERVERS", ""))
+    github = _github_mcp_server_from_env()
+    if github is None:
+        return config
+    if any(server.server_id == github.server_id for server in config.servers):
+        return config
+    return MCPConfig(
+        enabled=True,
+        servers=(*config.servers, github),
+    )
+
+
+def _github_mcp_server_from_env() -> MCPServerConfig | None:
+    """Build the official GitHub MCP server preset when explicitly enabled."""
+    import os
+
+    if not _as_bool(os.getenv("PERSONAL_AGENT_GITHUB_MCP_ENABLED", "false")):
+        return None
+    token_env = os.getenv("PERSONAL_AGENT_GITHUB_MCP_TOKEN_ENV", "GITHUB_PAT")
+    image = os.getenv(
+        "PERSONAL_AGENT_GITHUB_MCP_IMAGE",
+        "ghcr.io/github/github-mcp-server",
+    )
+    command = os.getenv("PERSONAL_AGENT_GITHUB_MCP_COMMAND", "docker")
+    args = _parse_json_list_env("PERSONAL_AGENT_GITHUB_MCP_ARGS")
+    if not args:
+        args = (
+            "run",
+            "-i",
+            "--rm",
+            "-e",
+            "GITHUB_PERSONAL_ACCESS_TOKEN",
+            "-e",
+            "GITHUB_READ_ONLY",
+            image,
+        )
+    tools = tuple(
+        _github_mcp_tool_config(name)
+        for name in _parse_csv(
+            os.getenv(
+                "PERSONAL_AGENT_GITHUB_MCP_TOOLS",
+                "search_code,get_file_contents,search_repositories",
+            )
+        )
+    )
+    return MCPServerConfig(
+        server_id=os.getenv("PERSONAL_AGENT_GITHUB_MCP_SERVER_ID", "github"),
+        transport="stdio",
+        command=command,
+        args=args,
+        env={
+            "GITHUB_PERSONAL_ACCESS_TOKEN": f"${{{token_env}}}",
+            "GITHUB_READ_ONLY": os.getenv("PERSONAL_AGENT_GITHUB_MCP_READ_ONLY", "1"),
+        },
+        timeout_seconds=float(os.getenv("PERSONAL_AGENT_GITHUB_MCP_TIMEOUT_SECONDS", "20")),
+        tools=tools,
+    )
+
+
+def _github_mcp_tool_config(remote_name: str) -> MCPToolConfig:
+    descriptions = {
+        "search_code": "Search code in GitHub repositories that the configured token can read.",
+        "get_file_contents": "Read file contents from a GitHub repository that the configured token can read.",
+        "search_repositories": "Search GitHub repositories visible to the configured token.",
+    }
+    return MCPToolConfig(
+        remote_name=remote_name,
+        name=f"github.{remote_name}",
+        description=descriptions.get(remote_name),
+        business_role="enterprise_knowledge_search",
+        exposure="public_agent",
+        risk_level="low",
+        side_effects=("external_network",),
+        permission_scope="github:repo:read",
+        audit_required=True,
+        timeout_seconds=20.0,
+        max_retries=1,
+        retry_backoff_seconds=0.2,
+        rate_limit_per_minute=30,
+        allowed_domains=("github.com",),
+    )
+
+
+def _parse_json_list_env(name: str) -> tuple[str, ...]:
+    import json
+    import os
+
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(str(item) for item in parsed)
 
 
 def _parse_api_keys(raw: str) -> dict[str, str]:

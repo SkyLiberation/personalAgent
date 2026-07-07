@@ -44,6 +44,7 @@ EntryIntent = Literal[
       "review_digest", "consolidate_knowledge", "inspect_knowledge_gaps",
       "research_once", "create_research_subscription",
       "execute_research_run",
+      "github_repository_qa",
       "manage_research", "maintain_knowledge", "inspect_operations", "inspect_workflow",
     "direct_answer",
     "unknown",

@@ -8,14 +8,17 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from time import perf_counter
 import traceback
+from unittest.mock import patch
 
 import pytest
+from langchain_core.tools import tool
 
 from personal_agent.application.research import ResearchBudget
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_telemetry import collect_llm_usage
 from personal_agent.kernel.models import ArtifactRef, EntryInput, ReviewCard, local_now
 from personal_agent.orchestration.service import AgentService
+from personal_agent.tools import governance_extras, tool_response, tool_success
 from personal_agent.application.workspace import (
     Claim,
     ClaimRelationAdjudication,
@@ -525,6 +528,66 @@ CASES = [
         forbidden_answer_terms=("research_once", "调研"),
     ),
     E2EQualityCase(
+        id="E2E-GH-MCP-001",
+        branch="github_mcp",
+        description="GitHub repo implementation question calls github.search_code through ToolGateway",
+        expected_intents=("github_repository_qa",),
+        expected_workflow_id="github_repository_qa",
+        expected_steps=("github-retrieve", "github-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("github.search_code",),
+        forbidden_tool_names=("graph_search",),
+        min_tool_call_traces=1,
+    ),
+    E2EQualityCase(
+        id="E2E-GH-MCP-002",
+        branch="github_mcp",
+        description="GitHub README/file question calls github.get_file_contents through ToolGateway",
+        expected_intents=("github_repository_qa",),
+        expected_workflow_id="github_repository_qa",
+        expected_steps=("github-retrieve", "github-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("github.get_file_contents",),
+        forbidden_tool_names=("graph_search",),
+        min_tool_call_traces=1,
+    ),
+    E2EQualityCase(
+        id="E2E-GH-MCP-003",
+        branch="github_mcp",
+        description="GitHub repository discovery question calls github.search_repositories through ToolGateway",
+        expected_intents=("github_repository_qa",),
+        expected_workflow_id="github_repository_qa",
+        expected_steps=("github-retrieve", "github-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("github.search_repositories",),
+        forbidden_tool_names=("graph_search",),
+        min_tool_call_traces=1,
+    ),
+    E2EQualityCase(
+        id="E2E-GH-MCP-004",
+        branch="github_mcp",
+        description="repo-qualified code search calls github.search_code through ToolGateway",
+        expected_intents=("github_repository_qa",),
+        expected_workflow_id="github_repository_qa",
+        expected_steps=("github-retrieve", "github-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("github.search_code",),
+        forbidden_tool_names=("graph_search",),
+        min_tool_call_traces=1,
+    ),
+    E2EQualityCase(
+        id="E2E-GH-MCP-005",
+        branch="github_mcp",
+        description="personal knowledge question stays outside GitHub MCP workflow and tools",
+        expected_intents=("ask",),
+        expected_workflow_id="ask",
+        forbidden_tool_names=(
+            "github.search_code",
+            "github.get_file_contents",
+            "github.search_repositories",
+        ),
+    ),
+    E2EQualityCase(
         id="E2E-RES-001",
         branch="research",
         description="research workflow produces sourced digest through all research steps",
@@ -626,13 +689,14 @@ CASE_BY_ID = {case.id: case for case in CASES}
 
 @pytest.fixture
 def e2e_settings(temp_dir: Path) -> Settings:
+    requires_live_llm = _selected_suite_requires_live_llm()
     try:
         settings = Settings.from_env()
     except Exception as exc:
         pytest.skip(f"real LLM settings are not loadable: {exc}")
-    if not (settings.openai.api_key and settings.openai.base_url):
+    if requires_live_llm and not (settings.openai.api_key and settings.openai.base_url):
         pytest.skip("real E2E quality requires OPENAI_API_KEY and OPENAI_BASE_URL")
-    if not (settings.structured.api_key and settings.structured.base_url):
+    if requires_live_llm and not (settings.structured.api_key and settings.structured.base_url):
         pytest.skip("real E2E quality requires STRUCTURED_* / ROUTER_* / OPENAI_* structured config")
     return settings.model_copy(update={
         "data_dir": temp_dir,
@@ -728,6 +792,22 @@ def _selected_suite():
         "branch_selector": branch_selector,
         "enforce_baseline": enforce_baseline,
     }
+
+
+def _selected_suite_requires_live_llm() -> bool:
+    case_selector = os.getenv("E2E_QUALITY_CASES", "")
+    branch_selector = os.getenv("E2E_QUALITY_BRANCHES", "")
+    runner_by_id = {case_id: runner for case_id, runner in CASE_RUNNERS}
+    try:
+        selected = select_case_ids(
+            CASES,
+            runner_by_id.keys(),
+            case_selector=case_selector,
+            branch_selector=branch_selector,
+        )
+    except ValueError:
+        return True
+    return any(CASE_BY_ID[case_id].branch != "github_mcp" for case_id in selected)
 
 
 def _workspace_service(service: AgentService) -> WorkspaceService:
@@ -1865,6 +1945,292 @@ def _run_complex_capture_ask(service: AgentService) -> E2EQualityRun:
     )
 
 
+def _run_github_mcp_search_code_question(service: AgentService) -> E2EQualityRun:
+    return _run_github_mcp_prompt(
+        service,
+        case_id="E2E-GH-MCP-001",
+        prompt="在 github/github-mcp-server 里 search_code 是在哪里实现的？",
+        expected_tool_name="github.search_code",
+    )
+
+
+def _run_github_mcp_file_question(service: AgentService) -> E2EQualityRun:
+    return _run_github_mcp_prompt(
+        service,
+        case_id="E2E-GH-MCP-002",
+        prompt="帮我读取 github/github-mcp-server 的 README.md，说明它支持哪些 toolsets",
+        expected_tool_name="github.get_file_contents",
+    )
+
+
+def _run_github_mcp_repo_search_question(service: AgentService) -> E2EQualityRun:
+    return _run_github_mcp_prompt(
+        service,
+        case_id="E2E-GH-MCP-003",
+        prompt="搜索 GitHub 上 stars:>10000 topic:agent language:python 的仓库",
+        expected_tool_name="github.search_repositories",
+    )
+
+
+def _run_github_mcp_repo_qualified_code_question(service: AgentService) -> E2EQualityRun:
+    return _run_github_mcp_prompt(
+        service,
+        case_id="E2E-GH-MCP-004",
+        prompt="repo:openai/openai-python filename:client.py 里 client 初始化逻辑在哪？",
+        expected_tool_name="github.search_code",
+    )
+
+
+def _run_github_mcp_local_memory_question(service: AgentService) -> E2EQualityRun:
+    _register_fake_github_mcp_tools(service)
+    prompt = "我之前关于 Agent tool use 的笔记里有哪些结论？"
+    user_id = "e2e-e2e-gh-mcp-005"
+    result = service.execute_entry(EntryInput(
+        text=prompt,
+        user_id=user_id,
+        session_id="e2e-gh-mcp-005-session",
+        source_platform="e2e_quality",
+    ))
+    snapshot = service.get_run_snapshot(result.run_id or "")
+    audit_events = service.query_tool_audit(
+        user_id=user_id,
+        run_id=result.run_id,
+        limit=20,
+    ) if result.run_id else []
+    return E2EQualityRun(
+        case_id="E2E-GH-MCP-005",
+        branch="github_mcp",
+        intents=tuple(result.intents),
+        run_status=result.run_status or "",
+        workflow_id=snapshot.workflow_id if snapshot else "",
+        step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
+        answer=result.reply_text or "",
+        tool_names=tuple(reversed([str(event["tool_name"]) for event in audit_events])),
+        tool_call_trace_count=len(audit_events),
+        failed_tool_call_count=sum(
+            1 for event in audit_events if not bool(event.get("artifact_ok"))
+        ),
+        tool_error_kinds=tuple(
+            str(event.get("error_kind"))
+            for event in audit_events
+            if event.get("error_kind")
+        ),
+        metadata={
+            "prompt": prompt,
+            "audit_events": audit_events,
+        },
+    )
+
+
+def _run_github_mcp_prompt(
+    service: AgentService,
+    *,
+    case_id: str,
+    prompt: str,
+    expected_tool_name: str,
+) -> E2EQualityRun:
+    from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
+
+    _register_fake_github_mcp_tools(service)
+    user_id = f"e2e-{case_id.lower()}"
+    react_calls: list[dict[str, object]] = []
+
+    def _mock_github_react(_prompt, _deps, allowed):
+        call_index = len(react_calls)
+        react_calls.append({
+            "allowed": sorted(str(tool_name) for tool_name in allowed),
+            "expected_tool_name": expected_tool_name,
+        })
+        if call_index == 0:
+            if expected_tool_name not in allowed:
+                return _NativeReactOutcome(parse_failed=True)
+            return _NativeReactOutcome(
+                thought="需要通过 GitHub MCP 读取远程仓库证据。",
+                tool_name=expected_tool_name,
+                tool_input=_github_mcp_tool_args(expected_tool_name, prompt),
+                native_call_id=f"{case_id}:github-react:1",
+            )
+        return _NativeReactOutcome(
+            done=True,
+            thought="GitHub MCP 工具已经返回证据，可以结束本步骤。",
+            result={
+                "answer": (
+                    f"已通过 {expected_tool_name} 读取 GitHub 远程仓库证据，"
+                    f"可回答：{prompt}"
+                )
+            },
+        )
+
+    with patch(
+        "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+        _mock_github_react,
+    ):
+        result = service.execute_entry(EntryInput(
+            text=prompt,
+            user_id=user_id,
+            session_id=f"{case_id.lower()}-session",
+            source_platform="e2e_quality",
+        ))
+
+    snapshot = service.get_run_snapshot(result.run_id or "")
+    audit_events = service.query_tool_audit(
+        user_id=user_id,
+        run_id=result.run_id,
+        limit=20,
+    ) if result.run_id else []
+    tool_names = tuple(reversed([str(event["tool_name"]) for event in audit_events]))
+    return E2EQualityRun(
+        case_id=case_id,
+        branch="github_mcp",
+        intents=tuple(result.intents),
+        run_status=result.run_status or "",
+        workflow_id=snapshot.workflow_id if snapshot else "",
+        step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
+        answer=result.reply_text or "",
+        tool_names=tool_names,
+        tool_call_trace_count=len(audit_events),
+        failed_tool_call_count=sum(
+            1 for event in audit_events if not bool(event.get("artifact_ok"))
+        ),
+        tool_error_kinds=tuple(
+            str(event.get("error_kind"))
+            for event in audit_events
+            if event.get("error_kind")
+        ),
+        metadata={
+            "prompt": prompt,
+            "react_calls": react_calls,
+            "audit_events": audit_events,
+        },
+    )
+
+
+def _register_fake_github_mcp_tools(service: AgentService) -> None:
+    for github_tool in _build_fake_github_mcp_tools():
+        service.tool_executor.register(github_tool)
+
+
+def _build_fake_github_mcp_tools():
+    @tool(
+        "github.search_code",
+        description="Search code in GitHub repositories that the configured token can read.",
+        response_format="content_and_artifact",
+        extras=governance_extras(
+            exposure="public_agent",
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="github:repo:read",
+            timeout_seconds=20.0,
+            max_retries=1,
+            rate_limit_per_minute=30,
+            allowed_domains=("github.com",),
+        ),
+    )
+    def github_search_code(query: str, user_id: str = "default", run_id: str | None = None):
+        return tool_response(tool_success({
+            "provider": "github_mcp_fake",
+            "results": [{
+                "title": "github-mcp-server search_code implementation",
+                "content": f"Matched code query: {query}",
+                "url": "https://github.com/github/github-mcp-server/search?q=search_code",
+            }],
+        }))
+
+    @tool(
+        "github.get_file_contents",
+        description="Read file contents from a GitHub repository that the configured token can read.",
+        response_format="content_and_artifact",
+        extras=governance_extras(
+            exposure="public_agent",
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="github:repo:read",
+            timeout_seconds=20.0,
+            max_retries=1,
+            rate_limit_per_minute=30,
+            allowed_domains=("github.com",),
+        ),
+    )
+    def github_get_file_contents(
+        owner: str,
+        repo: str,
+        path: str,
+        user_id: str = "default",
+        run_id: str | None = None,
+    ):
+        return tool_response(tool_success({
+            "provider": "github_mcp_fake",
+            "owner": owner,
+            "repo": repo,
+            "path": path,
+            "content": f"# {repo}\n\nFake file content for {path}.",
+            "url": f"https://github.com/{owner}/{repo}/blob/main/{path}",
+        }))
+
+    @tool(
+        "github.search_repositories",
+        description="Search GitHub repositories visible to the configured token.",
+        response_format="content_and_artifact",
+        extras=governance_extras(
+            exposure="public_agent",
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="github:repo:read",
+            timeout_seconds=20.0,
+            max_retries=1,
+            rate_limit_per_minute=30,
+            allowed_domains=("github.com",),
+        ),
+    )
+    def github_search_repositories(query: str, user_id: str = "default", run_id: str | None = None):
+        return tool_response(tool_success({
+            "provider": "github_mcp_fake",
+            "results": [{
+                "name": "example/agent",
+                "description": f"Repository matched query: {query}",
+                "url": "https://github.com/example/agent",
+            }],
+        }))
+
+    return [
+        github_search_code,
+        github_get_file_contents,
+        github_search_repositories,
+    ]
+
+
+def _github_mcp_tool_args(tool_name: str, prompt: str) -> dict[str, object]:
+    if tool_name == "github.get_file_contents":
+        owner, repo = _github_repo_from_prompt(prompt, default=("github", "github-mcp-server"))
+        return {"owner": owner, "repo": repo, "path": _github_path_from_prompt(prompt)}
+    if tool_name == "github.search_repositories":
+        return {"query": prompt}
+    return {"query": prompt}
+
+
+def _github_repo_from_prompt(
+    prompt: str,
+    *,
+    default: tuple[str, str],
+) -> tuple[str, str]:
+    import re
+
+    match = re.search(r"(?:github\.com/|repo:)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", prompt)
+    if match:
+        return match.group(1), match.group(2)
+    return default
+
+
+def _github_path_from_prompt(prompt: str) -> str:
+    import re
+
+    match = re.search(r"\b([A-Za-z0-9_.\-/]+(?:README\.md|\.md|\.py|\.ts|\.tsx|\.js|\.go))\b", prompt)
+    if match:
+        path = match.group(1)
+        return path.rsplit("/", 1)[-1] if path.startswith("github/") else path
+    return "README.md"
+
+
 def _run_research_dual_source(service: AgentService) -> E2EQualityRun:
     run = service.run_research_once(
         user_id="e2e-research",
@@ -2055,6 +2421,11 @@ CASE_RUNNERS = [
     ("E2E-WF-INSPECT-001", _run_inspect_workflow_workflow),
     ("E2E-WF-DELETE-001", _run_delete_knowledge_workflow),
     ("E2E-WF-COMPLEX-001", _run_complex_capture_ask),
+    ("E2E-GH-MCP-001", _run_github_mcp_search_code_question),
+    ("E2E-GH-MCP-002", _run_github_mcp_file_question),
+    ("E2E-GH-MCP-003", _run_github_mcp_repo_search_question),
+    ("E2E-GH-MCP-004", _run_github_mcp_repo_qualified_code_question),
+    ("E2E-GH-MCP-005", _run_github_mcp_local_memory_question),
     ("E2E-RES-001", _run_research_dual_source),
     ("E2E-RES-002", _run_route_boundary),
     ("E2E-RES-004", _run_research_verification_query),
@@ -2215,6 +2586,7 @@ def _run_trace_summary(run: E2EQualityRun) -> dict[str, object]:
         "stop_reason": run.stop_reason,
         "tool_call_trace_count": run.tool_call_trace_count,
         "failed_tool_call_count": run.failed_tool_call_count,
+        "tool_names": run.tool_names,
         "tool_error_kinds": run.tool_error_kinds,
         "stage_timing_count": run.stage_timing_count,
     }
