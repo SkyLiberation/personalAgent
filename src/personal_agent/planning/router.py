@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, model_validator
@@ -268,6 +269,11 @@ class DefaultIntentRouter:
             self._log_decision(entry_input, deterministic, strategy="rule")
             return deterministic
 
+        github_decision = _deterministic_github_repository_decision(entry_input.text)
+        if github_decision is not None:
+            self._log_decision(entry_input, github_decision, strategy="github_rule")
+            return github_decision
+
         result = self._classify_with_llm(
             _router_text(entry_input),
             conversation_messages or [],
@@ -393,6 +399,19 @@ def _deterministic_research_decision(text: str) -> RouterDecision | None:
     )
 
 
+def _deterministic_github_repository_decision(text: str) -> RouterDecision | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    if not _looks_like_github_repository_qa(stripped, lowered):
+        return None
+    return _single_goal_decision(
+        "github_repository_qa",
+        input_text=stripped,
+    )
+
+
 def _deterministic_basic_decision(text: str) -> RouterDecision | None:
     stripped = text.strip()
     if not stripped:
@@ -478,6 +497,33 @@ def _deterministic_basic_decision(text: str) -> RouterDecision | None:
     if any(word in lowered for word in ("delete", "send email")):
         return None
     return _single_goal_decision("ask", input_text=stripped)
+
+
+def _looks_like_github_repository_qa(text: str, lowered: str) -> bool:
+    repo_qualified = bool(re.search(r"\brepo:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text))
+    github_url = "github.com/" in lowered
+    owner_repo = bool(re.search(r"\b[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\b", text))
+    github_named = "github" in lowered or "github" in text
+    file_marker = bool(re.search(r"\b(?:README\.md|filename:|[A-Za-z0-9_.\-/]+\.(?:md|py|ts|tsx|js|go|rs))\b", text))
+    search_qualifier = any(marker in lowered for marker in ("stars:", "topic:", "language:", "filename:"))
+    code_marker = _has_any(text, (
+        "search_code",
+        "代码",
+        "实现",
+        "在哪里",
+        "读取",
+        "文件",
+        "仓库",
+        "repository",
+        "repo",
+    ))
+    repository_search = github_named and _has_any(text, ("搜索", "search", "仓库", "repositories", "repository")) and search_qualifier
+    return (
+        repo_qualified
+        or github_url
+        or repository_search
+        or (github_named and owner_repo and (file_marker or code_marker))
+    )
 
 
 def _deterministic_compound_capture_ask_decision(text: str) -> RouterDecision | None:

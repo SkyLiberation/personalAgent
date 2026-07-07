@@ -344,6 +344,9 @@ class TestRegistryCapabilityConsistency:
             _low_risk_tool("inspect_worker_queue"),
             _medium_risk_tool("retry_worker_task"),
             _low_risk_tool("inspect_workflow_run"),
+            _low_risk_tool("github.search_code"),
+            _low_risk_tool("github.get_file_contents"),
+            _low_risk_tool("github.search_repositories"),
         ]
 
         ex = ToolExecutor()

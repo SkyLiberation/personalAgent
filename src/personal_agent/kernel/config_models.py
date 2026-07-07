@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -138,7 +138,12 @@ class MCPToolConfig(_StrictBase):
 
 class MCPServerConfig(_StrictBase):
     server_id: str
-    endpoint: str
+    transport: Literal["http", "stdio"] = "http"
+    endpoint: str | None = None
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     protocol_version: str = "2024-11-05"
     authorization: str | None = None

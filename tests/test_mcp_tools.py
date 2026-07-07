@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from uuid import uuid4
 
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.infra import mcp as mcp_module
-from personal_agent.kernel.config_env import _parse_mcp_config
+from personal_agent.kernel.config_env import _mcp_config_from_env, _parse_mcp_config
 from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
     build_mcp_tools,
@@ -59,6 +60,59 @@ def test_parse_mcp_config_from_env_json():
     assert config.servers[0].tools[0].name == "enterprise.search_docs"
     assert config.servers[0].tools[0].business_role == "enterprise_knowledge_search"
     assert config.servers[0].tools[0].side_effects == ("read_longterm",)
+
+
+def test_parse_stdio_mcp_config_from_env_json():
+    config = _parse_mcp_config(json.dumps({
+        "enabled": True,
+        "servers": [{
+            "server_id": "github",
+            "transport": "stdio",
+            "command": "docker",
+            "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+            "env": {
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}",
+                "GITHUB_READ_ONLY": "1",
+            },
+            "tools": [{
+                "remote_name": "search_code",
+                "name": "github.search_code",
+                "business_role": "enterprise_knowledge_search",
+                "side_effects": ["external_network"],
+                "permission_scope": "github:repo:read",
+            }],
+        }],
+    }))
+
+    assert config.enabled is True
+    assert config.servers[0].transport == "stdio"
+    assert config.servers[0].command == "docker"
+    assert config.servers[0].args[0] == "run"
+    assert config.servers[0].env["GITHUB_READ_ONLY"] == "1"
+    assert config.servers[0].tools[0].name == "github.search_code"
+
+
+def test_github_mcp_preset_from_env(monkeypatch):
+    monkeypatch.setenv("PERSONAL_AGENT_GITHUB_MCP_ENABLED", "true")
+    monkeypatch.setenv("PERSONAL_AGENT_GITHUB_MCP_TOKEN_ENV", "GITHUB_PAT")
+    monkeypatch.delenv("PERSONAL_AGENT_MCP_SERVERS", raising=False)
+
+    config = _mcp_config_from_env()
+
+    assert config.enabled is True
+    server = config.servers[0]
+    assert server.server_id == "github"
+    assert server.transport == "stdio"
+    assert server.command == "docker"
+    assert "ghcr.io/github/github-mcp-server" in server.args
+    assert server.env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "${GITHUB_PAT}"
+    assert server.env["GITHUB_READ_ONLY"] == "1"
+    assert [tool.name for tool in server.tools] == [
+        "github.search_code",
+        "github.get_file_contents",
+        "github.search_repositories",
+    ]
+    assert all(tool.permission_scope == "github:repo:read" for tool in server.tools)
 
 
 def test_build_mcp_tool_registers_governed_tool(monkeypatch):
@@ -155,6 +209,97 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
         "tools/list",
         "tools/call",
     ]
+
+
+def test_build_mcp_tool_supports_stdio_transport():
+    root = Path("data") / f"test-mcp-stdio-{uuid4().hex}"
+    server_script = root / "fake_mcp_stdio.py"
+    try:
+        root.mkdir(parents=True)
+        server_script.write_text(
+            """
+import json
+import os
+import sys
+
+for line in sys.stdin:
+    payload = json.loads(line)
+    method = payload["method"]
+    if method == "notifications/initialized":
+        continue
+    if method == "initialize":
+        result = {}
+    elif method == "tools/list":
+        result = {
+            "tools": [{
+                "name": "search_code",
+                "description": "Search repository code",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "perPage": {"type": "integer", "default": 5}
+                    },
+                    "required": ["query"]
+                }
+            }]
+        }
+    elif method == "tools/call":
+        args = payload["params"]["arguments"]
+        result = {
+            "content": [{"type": "text", "text": f"{args['query']} token={os.getenv('FAKE_MCP_TOKEN')}"}],
+            "structuredContent": {
+                "results": [{
+                    "title": "repo/file.py",
+                    "content": "matching code",
+                    "url": "https://github.com/example/repo/blob/main/file.py"
+                }]
+            }
+        }
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}), flush=True)
+    if method == "tools/call":
+        break
+""".strip(),
+            encoding="utf-8",
+        )
+        config = _parse_mcp_config(json.dumps({
+            "enabled": True,
+            "servers": [{
+                "server_id": "github",
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": ["-u", str(server_script)],
+                "env": {"FAKE_MCP_TOKEN": "visible-to-server"},
+                "tools": [{
+                    "remote_name": "search_code",
+                    "name": "github.search_code",
+                    "business_role": "enterprise_knowledge_search",
+                    "side_effects": ["external_network"],
+                    "permission_scope": "github:repo:read",
+                }],
+            }],
+        }))
+
+        tools = build_mcp_tools(config)
+
+        assert [tool.name for tool in tools] == ["github.search_code"]
+        executor = ToolExecutor(audit_sink=InMemoryToolAuditSink())
+        executor.register(tools[0])
+        result = executor.invoke_direct(
+            "github.search_code",
+            query="repo:example/repo agent",
+            perPage=1,
+            user_id="u1",
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["provider"] == "mcp"
+        assert "visible-to-server" in result["data"]["text"]
+        assert result["data"]["structured_content"]["results"][0]["title"] == "repo/file.py"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_enterprise_knowledge_search_wraps_mcp_business_sources():

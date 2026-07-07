@@ -238,6 +238,88 @@ PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://api.tavily.com
 PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS=60000
 ```
 
+## MCP 工具接入
+
+GitHub MCP 有一组一等配置，适合默认启用官方 Docker stdio server 的只读仓库能力：
+
+```env
+PERSONAL_AGENT_GITHUB_MCP_ENABLED=true
+GITHUB_PAT=your_github_personal_access_token_here
+PERSONAL_AGENT_GITHUB_MCP_TOKEN_ENV=GITHUB_PAT
+PERSONAL_AGENT_GITHUB_MCP_TOOLS=search_code,get_file_contents,search_repositories
+```
+
+启用后会注册：
+
+- `github.search_code`：搜索 GitHub 仓库代码。
+- `github.get_file_contents`：读取 GitHub 仓库文件内容。
+- `github.search_repositories`：搜索 GitHub 仓库。
+
+这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`github:repo:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。默认 Docker 启动参数会传入 `GITHUB_READ_ONLY=1`，避免暴露 issue/PR/文件写入类工具。
+
+`PERSONAL_AGENT_MCP_SERVERS` 仍可用一个 JSON 对象注册其他经过业务批准的 MCP 工具。项目启动时会先发现远端 MCP server 的工具，再只把 `tools` 中显式映射的能力注册进 `ToolGateway`；每个映射仍然带 `risk_level`、`side_effects`、`permission_scope`、限流、超时和审计配置。
+
+当前支持两类 transport：
+
+- `http`：使用 `endpoint`、`headers` 或 `authorization` 访问 JSON-RPC / Streamable HTTP MCP server。
+- `stdio`：使用 `command`、`args`、`env` 启动本地 MCP server，适合 Docker 或本地二进制形式的 MCP server。
+
+GitHub MCP 的只读仓库检索示例：
+
+```env
+GITHUB_PAT=your_github_personal_access_token_here
+PERSONAL_AGENT_MCP_SERVERS={"enabled":true,"servers":[{"server_id":"github","transport":"stdio","command":"docker","args":["run","-i","--rm","-e","GITHUB_PERSONAL_ACCESS_TOKEN","-e","GITHUB_READ_ONLY","ghcr.io/github/github-mcp-server"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${GITHUB_PAT}","GITHUB_READ_ONLY":"1"},"tools":[{"remote_name":"search_code","name":"github.search_code","description":"Search code in GitHub repositories that the configured token can read.","business_role":"enterprise_knowledge_search","side_effects":["external_network"],"permission_scope":"github:repo:read","allowed_domains":["github.com"]},{"remote_name":"get_file_contents","name":"github.get_file_contents","description":"Read file contents from a GitHub repository that the configured token can read.","business_role":"enterprise_knowledge_search","side_effects":["external_network"],"permission_scope":"github:repo:read","allowed_domains":["github.com"]}]}]}
+```
+
+同一配置展开后等价于：
+
+```json
+{
+  "enabled": true,
+  "servers": [
+    {
+      "server_id": "github",
+      "transport": "stdio",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "-e",
+        "GITHUB_READ_ONLY",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}",
+        "GITHUB_READ_ONLY": "1"
+      },
+      "tools": [
+        {
+          "remote_name": "search_code",
+          "name": "github.search_code",
+          "business_role": "enterprise_knowledge_search",
+          "side_effects": ["external_network"],
+          "permission_scope": "github:repo:read",
+          "allowed_domains": ["github.com"]
+        },
+        {
+          "remote_name": "get_file_contents",
+          "name": "github.get_file_contents",
+          "business_role": "enterprise_knowledge_search",
+          "side_effects": ["external_network"],
+          "permission_scope": "github:repo:read",
+          "allowed_domains": ["github.com"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+GitHub MCP 官方镜像支持 `GITHUB_READ_ONLY=1`，建议默认启用，并且先只映射 `search_code` / `get_file_contents` 这类读工具。后续如需 issue、PR、workflow 等写入能力，应单独声明为中高风险工具并加确认、权限域和幂等策略。
+
 ## Firecrawl 配置
 
 网页抓取工具使用的 Firecrawl API；这组配置不再驱动 `web_search`：

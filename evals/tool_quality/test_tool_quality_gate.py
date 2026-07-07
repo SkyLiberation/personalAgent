@@ -10,6 +10,9 @@ import json
 from pathlib import Path
 
 from personal_agent.kernel.config import Settings
+from personal_agent.infra.mcp import MCPToolDefinition
+from personal_agent.kernel.config_env import _github_mcp_tool_config
+from personal_agent.kernel.config_models import MCPServerConfig
 from personal_agent.tools import (
     build_capture_text_tool,
     build_capture_upload_tool,
@@ -27,6 +30,7 @@ from personal_agent.tools import (
     build_web_search_tool,
     tool_governance,
 )
+from personal_agent.tools.mcp import build_mcp_tool
 from personal_agent.tools.research_pipeline import build_research_run_loop_tool
 
 from .dataset import ToolRunOutput, default_cases_path, load_cases
@@ -39,6 +43,34 @@ class _NotInvoked:
             raise AssertionError(f"Tool golden gate must not invoke dependency {name!r}.")
 
         return _method
+
+
+class _MCPClientNotInvoked:
+    def call_tool(self, name, arguments):
+        raise AssertionError("Tool golden gate must not invoke MCP tools.")
+
+
+def _github_mcp_governance_tools():
+    server = MCPServerConfig(
+        server_id="github",
+        transport="stdio",
+        command="docker",
+    )
+    client = _MCPClientNotInvoked()
+    tools = []
+    for remote_name in ("search_code", "get_file_contents", "search_repositories"):
+        tools.append(build_mcp_tool(
+            client,
+            server,
+            _github_mcp_tool_config(remote_name),
+            MCPToolDefinition(
+                name=remote_name,
+                description=remote_name,
+                input_schema={"type": "object", "properties": {}},
+                raw={},
+            ),
+        ))
+    return tools
 
 
 def _build_registered_tools():
@@ -59,6 +91,7 @@ def _build_registered_tools():
         build_inspect_workflow_run_tool(dependency),
         build_retry_worker_task_tool(dependency),
         build_inspect_knowledge_gaps_tool(dependency),
+        *_github_mcp_governance_tools(),
     ]
 
 

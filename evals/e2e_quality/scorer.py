@@ -30,6 +30,8 @@ class E2EQualityCase:
     expected_satisfaction_should_continue: bool | None = None
     expected_gap_types: tuple[str, ...] = ()
     expected_tool_error_kinds: tuple[str, ...] = ()
+    expected_tool_names: tuple[str, ...] = ()
+    forbidden_tool_names: tuple[str, ...] = ()
     required_web_query_terms: tuple[str, ...] = ()
     required_web_query_term_groups: tuple[tuple[str, ...], ...] = ()
     required_answer_terms: tuple[str, ...] = ()
@@ -165,6 +167,7 @@ class E2EQualityRun:
     stop_reason: str = ""
     tool_call_trace_count: int = 0
     failed_tool_call_count: int = 0
+    tool_names: tuple[str, ...] = ()
     tool_error_kinds: tuple[str, ...] = ()
     stage_timing_count: int = 0
     canonical_urls: tuple[str, ...] = ()
@@ -604,6 +607,20 @@ def _metrics(case: E2EQualityCase, run: E2EQualityRun) -> list[MetricScore]:
             "tool_error_kinds",
             1.0 if not missing_errors else 0.0,
             "" if not missing_errors else f"missing={sorted(missing_errors)} actual={list(run.tool_error_kinds)}",
+        ))
+    if case.expected_tool_names:
+        missing_tools = set(case.expected_tool_names) - set(run.tool_names)
+        metrics.append(MetricScore(
+            "tool_names",
+            1.0 if not missing_tools else 0.0,
+            "" if not missing_tools else f"missing={sorted(missing_tools)} actual={list(run.tool_names)}",
+        ))
+    for tool_name in case.forbidden_tool_names:
+        forbidden = tool_name in run.tool_names
+        metrics.append(MetricScore(
+            f"tool_name_forbidden:{tool_name}",
+            0.0 if forbidden else 1.0,
+            f"actual={run.tool_names!r}" if forbidden else "",
         ))
     if case.min_stage_timings:
         metrics.append(_min("stage_timings", run.stage_timing_count, case.min_stage_timings))
