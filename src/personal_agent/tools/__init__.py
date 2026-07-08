@@ -19,6 +19,7 @@ from personal_agent.tools.delete_note import build_delete_note_tool
 from personal_agent.tools.enterprise_knowledge import build_enterprise_knowledge_search_tool
 from personal_agent.tools.restore_note import build_restore_note_tool
 from personal_agent.tools.graph_search import build_graph_search_tool
+from personal_agent.tools.gpt_researcher_a2a import build_gpt_researcher_a2a_tool
 from personal_agent.tools.inspect_artifact import build_inspect_artifact_tool
 from personal_agent.tools.inspect_knowledge_gaps import build_inspect_knowledge_gaps_tool
 from personal_agent.tools.knowledge_lifecycle import (
@@ -70,6 +71,7 @@ __all__ = [
     "build_enterprise_knowledge_search_tool",
     "build_restore_note_tool",
     "build_graph_search_tool",
+    "build_gpt_researcher_a2a_tool",
     "build_inspect_artifact_tool",
     "build_inspect_knowledge_gaps_tool",
     "build_list_recent_notes_tool",

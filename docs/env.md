@@ -257,6 +257,22 @@ PERSONAL_AGENT_GITHUB_MCP_TOOLS=search_code,get_file_contents,search_repositorie
 
 这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`github:repo:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。默认 Docker 启动参数会传入 `GITHUB_READ_ONLY=1`，避免暴露 issue/PR/文件写入类工具。
 
+Notion MCP 也有一组一等配置，默认只映射 workspace 只读能力：
+
+```env
+PERSONAL_AGENT_NOTION_MCP_ENABLED=true
+NOTION_TOKEN=your_notion_integration_token_here
+PERSONAL_AGENT_NOTION_MCP_TOKEN_ENV=NOTION_TOKEN
+PERSONAL_AGENT_NOTION_MCP_TOOLS=post-search,retrieve-page-markdown
+```
+
+启用后会注册：
+
+- `notion.search`：搜索当前 Notion integration 授权可见的页面和 data source。
+- `notion.retrieve_page_markdown`：读取指定 Notion 页面 Markdown 正文。
+
+默认 stdio 命令是 `npx -y @notionhq/notion-mcp-server`。这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`notion:workspace:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。当前 preset 不映射 `update-page-markdown`、`move-page`、评论、data source 更新等写操作；这些能力应作为单独 workflow 接入，并声明中高风险、确认和幂等策略。
+
 `PERSONAL_AGENT_MCP_SERVERS` 仍可用一个 JSON 对象注册其他经过业务批准的 MCP 工具。项目启动时会先发现远端 MCP server 的工具，再只把 `tools` 中显式映射的能力注册进 `ToolGateway`；每个映射仍然带 `risk_level`、`side_effects`、`permission_scope`、限流、超时和审计配置。
 
 当前支持两类 transport：
@@ -319,6 +335,30 @@ PERSONAL_AGENT_MCP_SERVERS={"enabled":true,"servers":[{"server_id":"github","tra
 ```
 
 GitHub MCP 官方镜像支持 `GITHUB_READ_ONLY=1`，建议默认启用，并且先只映射 `search_code` / `get_file_contents` 这类读工具。后续如需 issue、PR、workflow 等写入能力，应单独声明为中高风险工具并加确认、权限域和幂等策略。
+
+## GPT Researcher A2A 配置
+
+本工程可把已部署的 `gpt-researcher` A2A JSON-RPC 后端注册为受治理工具 `gpt_researcher.a2a_research`。后端按 `D:\mySoft\workspace\gpt-researcher\docker-compose.a2a.yml` 启动后，默认暴露：
+
+```text
+Agent Card: http://127.0.0.1:8001/.well-known/agent-card.json
+A2A JSON-RPC: http://127.0.0.1:8001/a2a
+```
+
+personalAgent 侧配置：
+
+```env
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED=false
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT=http://127.0.0.1:8001/a2a
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL=http://127.0.0.1:8001/.well-known/agent-card.json
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS=120
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_TYPE=research_report
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_SOURCE=web
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_TONE=Objective
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=
+```
+
+启用后，用户明确点名 `GPT Researcher` / `GPT-Researcher` / `A2A` 委托研究时会路由到 `gpt_researcher_a2a` workflow，通过 ToolGateway 调用 `gpt_researcher.a2a_research`。普通“调研最新动态”仍走本工程内置 `research_once` workflow。
 
 ## Firecrawl 配置
 

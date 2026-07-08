@@ -110,6 +110,17 @@ class WebSearchConfig(_StrictBase):
     allowed_domains: tuple[str, ...] = ()
 
 
+class GPTResearcherA2AConfig(_StrictBase):
+    enabled: bool = False
+    endpoint: str = "http://127.0.0.1:8001/a2a"
+    agent_card_url: str = "http://127.0.0.1:8001/.well-known/agent-card.json"
+    timeout_seconds: float = 120.0
+    report_type: str = "research_report"
+    report_source: str = "web"
+    tone: str = "Objective"
+    max_search_results: int | None = None
+
+
 class MCPToolConfig(_StrictBase):
     """Business-facing registration for one remote MCP tool.
 

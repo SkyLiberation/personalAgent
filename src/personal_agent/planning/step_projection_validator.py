@@ -194,6 +194,12 @@ class StepProjectionValidator:
                             and "topic" in err
                             and intent == "research_once"
                         )
+                        deferred_gpt_researcher_topic = (
+                            s.tool_name == "gpt_researcher.a2a_research"
+                            and "topic" not in s.tool_input
+                            and "topic" in err
+                            and intent == "gpt_researcher_a2a"
+                        )
                         deferred_research_run_id = (
                             s.tool_name
                             in {
@@ -218,6 +224,7 @@ class StepProjectionValidator:
                             or deferred_delete_note_id
                             or deferred_consolidation_topic
                             or deferred_research_topic
+                            or deferred_gpt_researcher_topic
                             or deferred_research_run_id
                         ):
                             continue

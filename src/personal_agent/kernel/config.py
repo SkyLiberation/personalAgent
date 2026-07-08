@@ -11,6 +11,7 @@ from personal_agent.kernel.config_models import (
     FeishuConfig,
     FirecrawlConfig,
     GraphitiConfig,
+    GPTResearcherA2AConfig,
     GuardrailsConfig,
     LangExtractConfig,
     LangSmithConfig,
@@ -43,6 +44,7 @@ class Settings(_StrictBase):
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     structured: StructuredConfig = Field(default_factory=StructuredConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
+    gpt_researcher_a2a: GPTResearcherA2AConfig = Field(default_factory=GPTResearcherA2AConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     review_digest: ReviewDigestConfig = Field(default_factory=ReviewDigestConfig)

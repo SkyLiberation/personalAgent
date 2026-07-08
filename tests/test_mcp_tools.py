@@ -95,6 +95,7 @@ def test_parse_stdio_mcp_config_from_env_json():
 def test_github_mcp_preset_from_env(monkeypatch):
     monkeypatch.setenv("PERSONAL_AGENT_GITHUB_MCP_ENABLED", "true")
     monkeypatch.setenv("PERSONAL_AGENT_GITHUB_MCP_TOKEN_ENV", "GITHUB_PAT")
+    monkeypatch.delenv("PERSONAL_AGENT_NOTION_MCP_ENABLED", raising=False)
     monkeypatch.delenv("PERSONAL_AGENT_MCP_SERVERS", raising=False)
 
     config = _mcp_config_from_env()
@@ -113,6 +114,28 @@ def test_github_mcp_preset_from_env(monkeypatch):
         "github.search_repositories",
     ]
     assert all(tool.permission_scope == "github:repo:read" for tool in server.tools)
+
+
+def test_notion_mcp_preset_from_env(monkeypatch):
+    monkeypatch.setenv("PERSONAL_AGENT_NOTION_MCP_ENABLED", "true")
+    monkeypatch.setenv("PERSONAL_AGENT_NOTION_MCP_TOKEN_ENV", "NOTION_TOKEN")
+    monkeypatch.delenv("PERSONAL_AGENT_GITHUB_MCP_ENABLED", raising=False)
+    monkeypatch.delenv("PERSONAL_AGENT_MCP_SERVERS", raising=False)
+
+    config = _mcp_config_from_env()
+
+    assert config.enabled is True
+    server = config.servers[0]
+    assert server.server_id == "notion"
+    assert server.transport == "stdio"
+    assert server.command == "npx"
+    assert server.args == ("-y", "@notionhq/notion-mcp-server")
+    assert server.env["NOTION_TOKEN"] == "${NOTION_TOKEN}"
+    assert [(tool.remote_name, tool.name) for tool in server.tools] == [
+        ("post-search", "notion.search"),
+        ("retrieve-page-markdown", "notion.retrieve_page_markdown"),
+    ]
+    assert all(tool.permission_scope == "notion:workspace:read" for tool in server.tools)
 
 
 def test_build_mcp_tool_registers_governed_tool(monkeypatch):

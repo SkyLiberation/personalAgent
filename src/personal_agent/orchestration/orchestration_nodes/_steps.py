@@ -924,6 +924,23 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
         if target_id:
             tool_input.setdefault("target_id", str(target_id))
 
+    elif step.tool_name == "gpt_researcher.a2a_research":
+        tool_input.setdefault("user_id", state.user_id)
+        topic = step.task_input or (
+            (entry_input.text if entry_input is not None else state.entry_text) or ""
+        )
+        if topic.strip():
+            tool_input.setdefault("topic", topic.strip())
+        for key in ("report_type", "report_source", "tone"):
+            if metadata.get(key):
+                tool_input.setdefault(key, str(metadata[key]))
+        max_search_results = metadata.get("max_search_results")
+        if max_search_results:
+            try:
+                tool_input.setdefault("max_search_results", int(max_search_results))
+            except (TypeError, ValueError):
+                pass
+
     sd.tool_input = tool_input
     step.tool_input = tool_input
 
@@ -1289,6 +1306,26 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
                 if answer:
                     return answer
         return f"GitHub 工具已完成检索，但没有返回可呈现内容。问题：{question}"
+
+    if route == "notion_workspace_qa":
+        for data in reversed(list(state.step_execution.results.values())):
+            if isinstance(data, dict):
+                answer = str(data.get("answer") or "").strip()
+                if answer:
+                    return answer
+        return f"Notion 工具已完成检索，但没有返回可呈现内容。问题：{question}"
+
+    if route == "gpt_researcher_a2a":
+        for data in reversed(list(state.step_execution.results.values())):
+            if not isinstance(data, dict):
+                continue
+            report = str(data.get("report") or "").strip()
+            if report:
+                return report
+            answer = str(data.get("answer") or "").strip()
+            if answer:
+                return answer
+        return f"GPT Researcher A2A 已完成调用，但没有返回可呈现报告。问题：{question}"
 
     if step.task_intent == "solidify_conversation":
         dialogue = _helpers._format_solidify_candidate_context(state.messages)

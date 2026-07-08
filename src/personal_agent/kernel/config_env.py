@@ -11,6 +11,7 @@ from personal_agent.kernel.config_models import (
     FeishuConfig,
     FirecrawlConfig,
     GraphitiConfig,
+    GPTResearcherA2AConfig,
     LangExtractConfig,
     LangSmithConfig,
     KnowledgeGapConfig,
@@ -164,6 +165,23 @@ def settings_from_env(settings_cls: type):
             api_key=os.getenv("FIRECRAWL_API_KEY"),
             base_url=os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev"),
             timeout_ms=int(os.getenv("FIRECRAWL_TIMEOUT_MS", "60000")),
+        ),
+        gpt_researcher_a2a=GPTResearcherA2AConfig(
+            enabled=_as_bool(os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED", "false")),
+            endpoint=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT", "http://127.0.0.1:8001/a2a"),
+            agent_card_url=os.getenv(
+                "PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL",
+                "http://127.0.0.1:8001/.well-known/agent-card.json",
+            ),
+            timeout_seconds=float(
+                os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS", "120")
+            ),
+            report_type=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_TYPE", "research_report"),
+            report_source=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_SOURCE", "web"),
+            tone=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_TONE", "Objective"),
+            max_search_results=_parse_optional_int(
+                os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS", "")
+            ),
         ),
         web_search=WebSearchConfig(
             provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "tavily"),
@@ -450,6 +468,16 @@ def _parse_json_env(name: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _parse_optional_int(raw: str | None) -> int | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _parse_mcp_config(raw: str) -> MCPConfig:
     """Parse MCP server registrations from a JSON env var.
 
@@ -519,14 +547,26 @@ def _mcp_config_from_env() -> MCPConfig:
     import os
 
     config = _parse_mcp_config(os.getenv("PERSONAL_AGENT_MCP_SERVERS", ""))
-    github = _github_mcp_server_from_env()
-    if github is None:
+    presets = tuple(
+        server
+        for server in (
+            _github_mcp_server_from_env(),
+            _notion_mcp_server_from_env(),
+        )
+        if server is not None
+    )
+    if not presets:
         return config
-    if any(server.server_id == github.server_id for server in config.servers):
-        return config
+    servers = list(config.servers)
+    existing_ids = {server.server_id for server in servers}
+    for preset in presets:
+        if preset.server_id in existing_ids:
+            continue
+        servers.append(preset)
+        existing_ids.add(preset.server_id)
     return MCPConfig(
         enabled=True,
-        servers=(*config.servers, github),
+        servers=tuple(servers),
     )
 
 
@@ -598,6 +638,66 @@ def _github_mcp_tool_config(remote_name: str) -> MCPToolConfig:
         retry_backoff_seconds=0.2,
         rate_limit_per_minute=30,
         allowed_domains=("github.com",),
+    )
+
+
+def _notion_mcp_server_from_env() -> MCPServerConfig | None:
+    """Build the Notion MCP server preset when explicitly enabled."""
+    import os
+
+    if not _as_bool(os.getenv("PERSONAL_AGENT_NOTION_MCP_ENABLED", "false")):
+        return None
+    token_env = os.getenv("PERSONAL_AGENT_NOTION_MCP_TOKEN_ENV", "NOTION_TOKEN")
+    command = os.getenv("PERSONAL_AGENT_NOTION_MCP_COMMAND", "npx")
+    args = _parse_json_list_env("PERSONAL_AGENT_NOTION_MCP_ARGS")
+    if not args:
+        args = ("-y", "@notionhq/notion-mcp-server")
+    tools = tuple(
+        _notion_mcp_tool_config(name)
+        for name in _parse_csv(
+            os.getenv(
+                "PERSONAL_AGENT_NOTION_MCP_TOOLS",
+                "post-search,retrieve-page-markdown",
+            )
+        )
+    )
+    return MCPServerConfig(
+        server_id=os.getenv("PERSONAL_AGENT_NOTION_MCP_SERVER_ID", "notion"),
+        transport="stdio",
+        command=command,
+        args=args,
+        env={
+            "NOTION_TOKEN": f"${{{token_env}}}",
+        },
+        timeout_seconds=float(os.getenv("PERSONAL_AGENT_NOTION_MCP_TIMEOUT_SECONDS", "20")),
+        tools=tools,
+    )
+
+
+def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
+    public_name_by_remote = {
+        "post-search": "notion.search",
+        "retrieve-page-markdown": "notion.retrieve_page_markdown",
+    }
+    descriptions = {
+        "post-search": "Search pages and data sources visible to the configured Notion integration.",
+        "retrieve-page-markdown": "Read a Notion page's full content as Markdown.",
+    }
+    return MCPToolConfig(
+        remote_name=remote_name,
+        name=public_name_by_remote.get(remote_name, f"notion.{remote_name.replace('-', '_')}"),
+        description=descriptions.get(remote_name),
+        business_role="enterprise_knowledge_search",
+        exposure="public_agent",
+        risk_level="low",
+        side_effects=("external_network",),
+        permission_scope="notion:workspace:read",
+        audit_required=True,
+        timeout_seconds=20.0,
+        max_retries=1,
+        retry_backoff_seconds=0.2,
+        rate_limit_per_minute=30,
+        allowed_domains=("notion.so", "api.notion.com"),
     )
 
 

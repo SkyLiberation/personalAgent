@@ -33,14 +33,26 @@ floors plus a small set of strict critical cases.
   ToolGateway -> audit trace` path. The deterministic mock is only the ReAct
   model decision, so the test still verifies the routed workflow, step
   projection, gateway call, and audit record.
+- `notion_mcp` mirrors the same full-chain checks for read-only Notion MCP
+  prompts. It registers local fake Notion tools with the governed names
+  `notion.search` and `notion.retrieve_page_markdown`, drives the full
+  `execute_entry -> router -> notion_workspace_qa workflow -> ReAct ->
+  ToolGateway -> audit trace` path, and verifies Notion write requests stay
+  outside the read-only workflow.
+- `gpt_researcher_a2a` checks the external-agent delegation path for an already
+  deployed GPT Researcher A2A backend. It registers a local fake tool with the
+  governed name `gpt_researcher.a2a_research`, then drives the full
+  `execute_entry -> router -> gpt_researcher_a2a workflow -> deterministic
+  tool_call -> ToolGateway -> audit trace` path.
 
 The goal is to catch behavioral regressions and environment drift across
 routing, evidence selection, answer grounding, conservative no-evidence
 behavior, artifact interpretation and degradation, Research source collection,
 satisfaction stopping, digest generation, non-ask workflow routing, complex
 intent decomposition, tool failure degradation, latency, and observability.
-Except for the GitHub MCP branch's deterministic ReAct tool-choice mock, the
-core LLM and external tools are not stubbed.
+Except for the GitHub/Notion MCP branches' deterministic ReAct tool-choice
+mocks and the GPT Researcher A2A branch's fake external-agent endpoint, the core
+LLM and external tools are not stubbed.
 `OPENAI_API_KEY` / `OPENAI_BASE_URL` and router-compatible config must be
 present, otherwise the gate skips. Other provider failures or degradations must
 be diagnosed by the run output rather than bypassed in the test.
@@ -77,6 +89,16 @@ Run only GitHub MCP tool-call plumbing:
 
 ```powershell
 $env:E2E_QUALITY_BRANCHES="github_mcp"
+$env:E2E_QUALITY_ENFORCE_BASELINE="true"
+uv run pytest evals/e2e_quality -v
+Remove-Item Env:\E2E_QUALITY_BRANCHES
+Remove-Item Env:\E2E_QUALITY_ENFORCE_BASELINE
+```
+
+Run only Notion MCP tool-call plumbing:
+
+```powershell
+$env:E2E_QUALITY_BRANCHES="notion_mcp"
 $env:E2E_QUALITY_ENFORCE_BASELINE="true"
 uv run pytest evals/e2e_quality -v
 Remove-Item Env:\E2E_QUALITY_BRANCHES

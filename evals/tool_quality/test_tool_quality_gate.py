@@ -11,7 +11,7 @@ from pathlib import Path
 
 from personal_agent.kernel.config import Settings
 from personal_agent.infra.mcp import MCPToolDefinition
-from personal_agent.kernel.config_env import _github_mcp_tool_config
+from personal_agent.kernel.config_env import _github_mcp_tool_config, _notion_mcp_tool_config
 from personal_agent.kernel.config_models import MCPServerConfig
 from personal_agent.tools import (
     build_capture_text_tool,
@@ -21,6 +21,7 @@ from personal_agent.tools import (
     build_create_research_subscription_tool,
     build_delete_note_tool,
     build_graph_search_tool,
+    build_gpt_researcher_a2a_tool,
     build_inspect_knowledge_gaps_tool,
     build_inspect_workflow_run_tool,
     build_retry_worker_task_tool,
@@ -73,6 +74,29 @@ def _github_mcp_governance_tools():
     return tools
 
 
+def _notion_mcp_governance_tools():
+    server = MCPServerConfig(
+        server_id="notion",
+        transport="stdio",
+        command="npx",
+    )
+    client = _MCPClientNotInvoked()
+    tools = []
+    for remote_name in ("post-search", "retrieve-page-markdown"):
+        tools.append(build_mcp_tool(
+            client,
+            server,
+            _notion_mcp_tool_config(remote_name),
+            MCPToolDefinition(
+                name=remote_name,
+                description=remote_name,
+                input_schema={"type": "object", "properties": {}},
+                raw={},
+            ),
+        ))
+    return tools
+
+
 def _build_registered_tools():
     dependency = _NotInvoked()
     return [
@@ -88,10 +112,12 @@ def _build_registered_tools():
         build_review_digest_tool(dependency),
         build_create_research_subscription_tool(dependency),
         build_research_run_loop_tool(dependency),
+        build_gpt_researcher_a2a_tool(Settings().gpt_researcher_a2a, dependency),
         build_inspect_workflow_run_tool(dependency),
         build_retry_worker_task_tool(dependency),
         build_inspect_knowledge_gaps_tool(dependency),
         *_github_mcp_governance_tools(),
+        *_notion_mcp_governance_tools(),
     ]
 
 

@@ -35,6 +35,7 @@ from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
     build_restore_note_tool,
     build_graph_search_tool,
+    build_gpt_researcher_a2a_tool,
     build_inspect_artifact_tool,
     build_inspect_knowledge_gaps_tool,
     build_list_recent_notes_tool,
@@ -567,6 +568,10 @@ class AgentRuntime:
             from personal_agent.application.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
+        if self.settings.gpt_researcher_a2a.enabled:
+            self._tool_executor.register(
+                build_gpt_researcher_a2a_tool(self.settings.gpt_researcher_a2a)
+            )
         for mcp_tool in build_mcp_tools(self.settings.mcp):
             self._tool_executor.register(mcp_tool)
         for raw_wiki_tool in build_raw_wiki_search_tools(self.settings.enterprise_knowledge):
