@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from personal_agent.governance import ToolExecutor
+from personal_agent.agents.gpt_researcher_a2a import GPTResearcherA2AAdapter
 from personal_agent.infra.a2a import A2AResearchResponse
 from personal_agent.kernel.config_models import GPTResearcherA2AConfig
-from personal_agent.tools import build_gpt_researcher_a2a_tool, tool_governance
+from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 
 
 class FakeGPTResearcherA2AClient:
@@ -12,42 +12,63 @@ class FakeGPTResearcherA2AClient:
 
     def research(self, **kwargs):
         self.calls.append(kwargs)
+        return self._response(state="completed")
+
+    def submit_research(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._response(state="working")
+
+    def get_task(self, task_id):
+        return self._response(state="completed", task_id=task_id)
+
+    def cancel_task(self, task_id):
+        return self._response(state="canceled", task_id=task_id)
+
+    def stream_task(self, task_id):
+        yield {"kind": "text", "text": f"stream {task_id}"}
+
+    def _response(self, *, state: str, task_id: str = "task-1") -> A2AResearchResponse:
+        report = "# Report\n\nAgent2Agent protocol adoption."
         return A2AResearchResponse(
-            task_id="task-1",
+            task_id=task_id,
             context_id="context-1",
-            state="completed",
-            report="# Report\n\nAgent2Agent protocol adoption.",
-            artifacts=[],
+            state=state,
+            report=report,
+            artifacts=[{"name": "report", "parts": [{"kind": "text", "text": report}]}],
             metadata={"md_path": "/outputs/task.md"},
-            raw={"id": "task-1"},
+            raw={"id": task_id},
         )
 
 
-def test_gpt_researcher_a2a_tool_returns_report_artifact_through_gateway():
+def test_gpt_researcher_a2a_adapter_returns_agent_run_result():
     client = FakeGPTResearcherA2AClient()
-    tool = build_gpt_researcher_a2a_tool(GPTResearcherA2AConfig(), client)
-    executor = ToolExecutor()
-    executor.register(tool)
+    adapter = GPTResearcherA2AAdapter(GPTResearcherA2AConfig(), client)
 
-    result = executor.invoke_direct(
-        "gpt_researcher.a2a_research",
-        topic="Agent2Agent protocol adoption",
-        user_id="alice",
-    )
+    result = adapter.invoke(AgentTask("Agent2Agent protocol adoption"), _ctx())
 
-    assert result["ok"] is True
-    assert result["data"]["provider"] == "gpt_researcher_a2a"
-    assert result["data"]["task_id"] == "task-1"
-    assert "Agent2Agent" in result["data"]["report"]
+    assert result.run.agent_id == "gpt_researcher"
+    assert result.run.status == "completed"
+    assert "Agent2Agent" in result.output_text
+    assert result.artifacts[0].verification_status == "unverified"
     assert client.calls[0]["topic"] == "Agent2Agent protocol adoption"
 
 
-def test_gpt_researcher_a2a_tool_governance_is_external_medium_risk():
-    tool = build_gpt_researcher_a2a_tool(GPTResearcherA2AConfig())
-    governance = tool_governance(tool)
+def test_gpt_researcher_a2a_adapter_governance_metadata():
+    adapter = GPTResearcherA2AAdapter(GPTResearcherA2AConfig())
+    governance = adapter.definition.governance
 
-    assert governance.exposure == "public_agent"
+    assert adapter.definition.protocol == "a2a_jsonrpc"
     assert governance.risk_level == "medium"
     assert governance.side_effects == ("external_network",)
     assert governance.permission_scope == "a2a:gpt_researcher:research"
     assert governance.rate_limit_per_minute == 5
+
+
+def _ctx() -> AgentGatewayContext:
+    return AgentGatewayContext(
+        user_id="alice",
+        session_id="s1",
+        run_id="entry-run",
+        workflow_id="gpt_researcher_a2a",
+        step_id="gptr-a2a-research",
+    )

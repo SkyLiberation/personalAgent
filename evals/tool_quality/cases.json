@@ -237,7 +237,18 @@
     "expected_audit_required": true,
     "expected_timeout_seconds": 20.0,
     "expected_max_retries": 1,
-    "expected_rate_limit_per_minute": 30
+    "expected_rate_limit_per_minute": 30,
+    "expected_capability_id": "mcp:github:search_code",
+    "expected_provider": "github",
+    "expected_semantic_domains": ["codebase"],
+    "expected_resource_types": ["repository", "file", "code"],
+    "expected_operations": ["search"],
+    "expected_auth_scope": "github:repo:read",
+    "expected_trust_level": "scoped",
+    "expected_credential_mode": "delegated_token",
+    "expected_data_egress_class": "content",
+    "expected_attestation_status": "pinned",
+    "expected_freshness_profile": "near_realtime"
   },
   {
     "id": "tool-016",
@@ -253,7 +264,18 @@
     "expected_audit_required": true,
     "expected_timeout_seconds": 20.0,
     "expected_max_retries": 1,
-    "expected_rate_limit_per_minute": 30
+    "expected_rate_limit_per_minute": 30,
+    "expected_capability_id": "mcp:github:get_file_contents",
+    "expected_provider": "github",
+    "expected_semantic_domains": ["codebase", "docs"],
+    "expected_resource_types": ["repository", "file"],
+    "expected_operations": ["read"],
+    "expected_auth_scope": "github:repo:read",
+    "expected_trust_level": "scoped",
+    "expected_credential_mode": "delegated_token",
+    "expected_data_egress_class": "content",
+    "expected_attestation_status": "pinned",
+    "expected_freshness_profile": "near_realtime"
   },
   {
     "id": "tool-017",
@@ -269,7 +291,18 @@
     "expected_audit_required": true,
     "expected_timeout_seconds": 20.0,
     "expected_max_retries": 1,
-    "expected_rate_limit_per_minute": 30
+    "expected_rate_limit_per_minute": 30,
+    "expected_capability_id": "mcp:github:search_repositories",
+    "expected_provider": "github",
+    "expected_semantic_domains": ["codebase", "repository_discovery"],
+    "expected_resource_types": ["repository"],
+    "expected_operations": ["search"],
+    "expected_auth_scope": "github:repo:read",
+    "expected_trust_level": "scoped",
+    "expected_credential_mode": "delegated_token",
+    "expected_data_egress_class": "content",
+    "expected_attestation_status": "pinned",
+    "expected_freshness_profile": "near_realtime"
   },
   {
     "id": "tool-018",
@@ -285,7 +318,18 @@
     "expected_audit_required": true,
     "expected_timeout_seconds": 20.0,
     "expected_max_retries": 1,
-    "expected_rate_limit_per_minute": 30
+    "expected_rate_limit_per_minute": 30,
+    "expected_capability_id": "mcp:notion:post-search",
+    "expected_provider": "notion",
+    "expected_semantic_domains": ["workspace_knowledge", "docs"],
+    "expected_resource_types": ["page", "data_source"],
+    "expected_operations": ["search"],
+    "expected_auth_scope": "notion:workspace:read",
+    "expected_trust_level": "scoped",
+    "expected_credential_mode": "delegated_token",
+    "expected_data_egress_class": "content",
+    "expected_attestation_status": "pinned",
+    "expected_freshness_profile": "near_realtime"
   },
   {
     "id": "tool-019",
@@ -301,22 +345,17 @@
     "expected_audit_required": true,
     "expected_timeout_seconds": 20.0,
     "expected_max_retries": 1,
-    "expected_rate_limit_per_minute": 30
-  },
-  {
-    "id": "tool-020",
-    "description": "GPT Researcher A2A 调研会委托本地外部 Agent 执行深度研究,属于中风险外部网络访问",
-    "business_scenario": "用户明确要求通过 GPT Researcher 或 A2A 后端生成研究报告",
-    "tool_name": "gpt_researcher.a2a_research",
-    "expected_exposure": "public_agent",
-    "expected_risk_level": "medium",
-    "expected_requires_confirmation": false,
-    "expected_side_effects": ["external_network"],
-    "expected_permission_scope": "a2a:gpt_researcher:research",
-    "expected_idempotency_key_required": false,
-    "expected_audit_required": true,
-    "expected_timeout_seconds": 120.0,
-    "expected_max_retries": 1,
-    "expected_rate_limit_per_minute": 5
+    "expected_rate_limit_per_minute": 30,
+    "expected_capability_id": "mcp:notion:retrieve-page-markdown",
+    "expected_provider": "notion",
+    "expected_semantic_domains": ["workspace_knowledge", "docs"],
+    "expected_resource_types": ["page"],
+    "expected_operations": ["read"],
+    "expected_auth_scope": "notion:workspace:read",
+    "expected_trust_level": "scoped",
+    "expected_credential_mode": "delegated_token",
+    "expected_data_egress_class": "content",
+    "expected_attestation_status": "pinned",
+    "expected_freshness_profile": "near_realtime"
   }
 ]

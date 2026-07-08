@@ -36,6 +36,7 @@
 | Router (§3.2) | 单轮路由决策 | ready/clarify/unsupported 判定、目标理解、route_type、能力覆盖度、matched capabilities、有序意图、clarify 字段精度 | 步骤是否真正执行、终态、副作用(→ Orchestration) |
 | Orchestration (§3.3) | **单次** entry → router → steps → terminal | 事件子序列里程碑、`forbidden_events` 负向不变式、**不挂死**终态、单点事故回归网(如 SSE 卡死) | 任何跨 turn 的状态继承与 resume(→ Conversation) |
 | Tool (§3.3.2) | 单个工具能力声明 / 工具调用投影 | 工具业务义务、risk、side effect、permission scope、confirmation、idempotency、timeout、retry、rate limit、artifact 契约 | workflow 是否选择该工具(→ WorkflowPlanner/Orchestration),工具底层业务算法质量(→ 对应用例或端到端 case) |
+| External Capability (§3.3.2.1) | MCP capability / 外部 Agent definition / capability resolution | 外部能力 metadata、跨 provider 能力选择、能力拒绝原因、AgentRun 生命周期、信任/凭证/数据外发边界 | 单个工具治理义务(→ Tool),最终答案质量(→ RAG/Research/Orchestration/E2E) |
 | Research (§3.3.3) | 单个 Research 目标 / 固定研究语料 → 工作流契约与事件质量 | 一次性研究、订阅创建、已有 run 执行、订阅/简报管理如何被组织成固定工作流;固定语料下基于事件帧的来源去重、事件聚类、可信度、个人相关性排序与 digest 选择 | 单个研究工具的治理义务(→ Tool),真实外网/真实 LLM 质量(→ Research 真实 runner) |
 | Conversation (§3.4) | **整段会话**的多轮轨迹与状态演化 | thread 连续性、HITL resume 闭环、跨轮上下文保留、副作用 delta、整段任务成功 | 单点编排契约与孤立事故回归(→ Orchestration) |
 
@@ -148,6 +149,51 @@
 - **门禁**:
   - `evals/tool_quality/test_tool_quality_gate.py`:不调用工具、不依赖数据库或网络,只装配真实 tool builders 并读取 `tool_governance()`。
   - `evals/tool_quality/test_tool_execution_contract_gate.py`:通过 fake 依赖调用真实工具网关,覆盖 artifact shape、错误分类、确认门禁、副作用调用次数和幂等 replay。
+
+### 3.3.2.1 外部能力接入评估口径
+
+GitHub MCP、Notion MCP 与 GPT Researcher A2A 的当前评估是合理的过渡期验收,但不能作为目标架构的完整验收。
+
+当前 `tool_quality` 中的 `github.search_code`、`github.get_file_contents`、`github.search_repositories`、`notion.search`、`notion.retrieve_page_markdown` case 验证的是 MCP 外部能力被包装为 governed tool 后,其 exposure、risk、side effects、permission scope、timeout、retry、rate limit、audit 和 capability metadata 是否正确。这属于 Tool 治理义务,不证明 Router/Workflow 会在用户问题中选中它们。GPT Researcher A2A 不再由 tool_quality 背书,改由 `agent_gateway_quality` 验证。
+
+当前 `e2e_quality` 中的 GitHub / Notion 分支已经迁移为 task-domain MCP 完整链路:
+
+```text
+execute_entry
+  -> router
+  -> external_codebase_qa / external_workspace_qa
+  -> capability_resolution
+  -> ReAct
+  -> ToolGateway
+  -> audit trace
+```
+
+这能证明接入不是只停留在工具注册,也能覆盖负向边界,例如本地知识问题不应误走 GitHub MCP、Notion 写请求不应误走只读 Notion MCP。GPT Researcher A2A 当前验证 `execute_entry -> router -> gpt_researcher_a2a -> agent_call(gpt_researcher) -> AgentGateway -> AgentRun / AgentArtifact` 链路。但这些 case 仍有明确边界:
+
+- fake MCP tool 不能证明真实 MCP server discovery、transport、鉴权和远端 schema 漂移;
+- MCP 分支中的 ReAct 工具选择被 deterministic mock 固定,主要验证 capability-derived allowlist、workflow、gateway 和 audit,不是评估模型自主选工具;
+- `expected_workflow_id` 已改为 `external_codebase_qa` / `external_workspace_qa`,provider 只允许出现在 `CapabilityResolution` 中;
+- `expected_tool_names` 证明实际调用了某个工具,`expected_capability_ids` 与 `min_capability_resolutions` 证明存在 resolver 输出和 scoped allowlist;
+- GPT Researcher A2A e2e 已以 AgentRun 和 unverified AgentArtifact 为成功信号；更细的 submit/poll/cancel/stream/multi-agent 行为由 `agent_gateway_quality` 验证。
+
+因此外部能力目标评估需要拆成四层:
+
+| 目标评估 | 评测单元 | 主要指标 |
+| --- | --- | --- |
+| `capability_quality` | 单个 MCP capability 或 AgentDefinition | domain、resource type、operation、risk、side effects、auth scope、schema、trust level、credential mode、data egress、attestation |
+| `resolver_quality` | `UserTask + WorkflowScope + CapabilityRegistry -> CapabilityResolution` | selected capability recall/precision、denied capability accuracy、operation scope、risk clamp、provider composition、local-first、selection policy rationale |
+| `workflow_e2e_quality` | 一次真实 `execute_entry` | task-domain workflow、capability resolution、scoped allowlist、ToolGateway audit、artifact/citation grounding |
+| `agent_gateway_quality` | 一次外部 Agent 委托 | AgentDefinition、AgentGovernance、AgentRun、AgentEvent、AgentArtifact、policy decision、context minimization、unverified artifact handling、timeout/cancel |
+
+迁移原则:
+
+1. GitHub / Notion e2e case 已作为 task-domain MCP full-chain regression;GPT Researcher e2e 已作为 A2A AgentGateway full-chain regression。
+2. 新 MCP provider 不应默认新增 provider-specific workflow case;应优先新增 capability metadata 和 resolver case。
+3. MCP e2e 断言必须保持 `workflow_id == external_*` 加 capability resolution 与实际 audit。
+4. A2A 成功标准已经从 `tool_name == gpt_researcher.a2a_research` 迁移为 AgentRun 与 AgentArtifact。
+5. AgentGateway minimal 覆盖 blocking invoke、AgentRun audit、AgentArtifact 保存、submit/poll/cancel、stream 和多 Agent registry;不能再让 A2A 以 ToolInvocation 作为验收对象。
+6. AgentArtifact 默认是 unverified candidate output。agent_gateway_quality 必须验证它不会直接冒充 verified evidence,后续进入 EvidenceNormalizer / ClaimVerifier / CitationChecker 后才可作为答案证据。
+7. resolver_quality 必须显式覆盖 CapabilitySelectionPolicy:用户显式 provider、local-first、freshness、跨 provider rationale、敏感数据外发确认和 read-only workflow 中的写能力拒绝。
 
 ### 3.3.3 Research 能力金标
 

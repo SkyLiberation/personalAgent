@@ -118,6 +118,8 @@ class StepProjectionValidator:
 
             if s.action_type == "tool_call" and not s.tool_name:
                 issues.append(f"{prefix} action_type=tool_call 但 tool_name 为空。")
+            if s.action_type == "agent_call" and not s.agent_id:
+                issues.append(f"{prefix} action_type=agent_call 但 agent_id 为空。")
             if s.action_type == "tool_call" and s.tool_name and s.tool_name not in known_tools:
                 if known_tools:
                     issues.append(
@@ -194,12 +196,6 @@ class StepProjectionValidator:
                             and "topic" in err
                             and intent == "research_once"
                         )
-                        deferred_gpt_researcher_topic = (
-                            s.tool_name == "gpt_researcher.a2a_research"
-                            and "topic" not in s.tool_input
-                            and "topic" in err
-                            and intent == "gpt_researcher_a2a"
-                        )
                         deferred_research_run_id = (
                             s.tool_name
                             in {
@@ -224,7 +220,6 @@ class StepProjectionValidator:
                             or deferred_delete_note_id
                             or deferred_consolidation_topic
                             or deferred_research_topic
-                            or deferred_gpt_researcher_topic
                             or deferred_research_run_id
                         ):
                             continue

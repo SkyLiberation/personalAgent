@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Action types the orchestration graph's ``_dispatch_step`` can execute.
-EXECUTABLE_ACTION_TYPES = {"retrieve", "resolve", "tool_call", "compose", "verify", "repair"}
+EXECUTABLE_ACTION_TYPES = {"retrieve", "resolve", "tool_call", "agent_call", "compose", "verify", "repair"}
 VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_ON_FAILURE = {"skip", "retry", "abort"}
 VALID_EXECUTION_MODES = {"deterministic", "react"}
@@ -159,6 +159,8 @@ class WorkflowSpecValidator:
 
             if step.action_type == "tool_call" and not step.tool_name:
                 issues.append(f"{prefix} action_type=tool_call 但 tool_name 为空。")
+            if step.action_type == "agent_call" and not step.agent_id:
+                issues.append(f"{prefix} action_type=agent_call 但 agent_id 为空。")
 
             if step.execution_mode == "react":
                 if step.risk_level == "high":

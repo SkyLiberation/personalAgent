@@ -24,7 +24,7 @@ def test_generic_research_request_stays_on_internal_research_workflow():
     assert decision.primary_intent == "research_once"
 
 
-def test_gpt_researcher_a2a_workflow_uses_deterministic_tool_gateway_step():
+def test_gpt_researcher_a2a_workflow_uses_agent_gateway_step():
     spec = WORKFLOW_REGISTRY.select("gpt_researcher_a2a")
     by_id = {step.step_id: step for step in spec.steps}
 
@@ -33,8 +33,8 @@ def test_gpt_researcher_a2a_workflow_uses_deterministic_tool_gateway_step():
         "gptr-a2a-research",
         "gptr-a2a-compose",
     ]
-    assert by_id["gptr-a2a-research"].action_type == "tool_call"
-    assert by_id["gptr-a2a-research"].tool_name == "gpt_researcher.a2a_research"
+    assert by_id["gptr-a2a-research"].action_type == "agent_call"
+    assert by_id["gptr-a2a-research"].agent_id == "gpt_researcher"
     assert by_id["gptr-a2a-research"].risk_level == "medium"
     assert by_id["gptr-a2a-research"].side_effects == ("external_network",)
     assert by_id["gptr-a2a-compose"].depends_on == ("gptr-a2a-research",)

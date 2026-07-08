@@ -26,24 +26,26 @@ floors plus a small set of strict critical cases.
   solidification, review digest, consolidation, knowledge gap inspection,
   workflow inspection, delete confirmation diagnostics, and compound
   capture-then-ask requests.
-- `github_mcp` runs deterministic end-to-end tool plumbing checks for GitHub
-  MCP prompts. It registers local read-only fake GitHub tools with the same
-  governed names as the official MCP mapping, then drives the full
-  `execute_entry -> router -> github_repository_qa workflow -> ReAct ->
-  ToolGateway -> audit trace` path. The deterministic mock is only the ReAct
-  model decision, so the test still verifies the routed workflow, step
-  projection, gateway call, and audit record.
+- `github_mcp` registers local read-only fake GitHub tools with governed names
+  and MCP capability metadata, then drives the full
+  `execute_entry -> router -> external_codebase_qa workflow ->
+  capability_resolution -> ReAct -> ToolGateway -> audit trace` path. The
+  deterministic mock is only the ReAct model decision, so the test still
+  verifies routed workflow selection, resolver participation, scoped allowlist,
+  gateway call, and audit record.
 - `notion_mcp` mirrors the same full-chain checks for read-only Notion MCP
-  prompts. It registers local fake Notion tools with the governed names
-  `notion.search` and `notion.retrieve_page_markdown`, drives the full
-  `execute_entry -> router -> notion_workspace_qa workflow -> ReAct ->
-  ToolGateway -> audit trace` path, and verifies Notion write requests stay
-  outside the read-only workflow.
-- `gpt_researcher_a2a` checks the external-agent delegation path for an already
-  deployed GPT Researcher A2A backend. It registers a local fake tool with the
-  governed name `gpt_researcher.a2a_research`, then drives the full
-  `execute_entry -> router -> gpt_researcher_a2a workflow -> deterministic
-  tool_call -> ToolGateway -> audit trace` path.
+  prompts. It registers local fake Notion tools with governed names and
+  capability metadata, drives the full
+  `execute_entry -> router -> external_workspace_qa workflow ->
+  capability_resolution -> ReAct -> ToolGateway -> audit trace` path, and
+  verifies Notion write requests stay outside the read-only workflow.
+- `gpt_researcher_a2a` checks the AgentGateway external-agent delegation path
+  for a deployed GPT Researcher A2A backend. It registers a local fake
+  `gpt_researcher` Agent adapter, then drives the full
+  `execute_entry -> router -> gpt_researcher_a2a workflow ->
+  agent_call(gpt_researcher) -> AgentGateway -> AgentRun / AgentArtifact`
+  path. The e2e assertion verifies AgentRun creation and unverified artifact
+  handling instead of tool audit.
 
 The goal is to catch behavioral regressions and environment drift across
 routing, evidence selection, answer grounding, conservative no-evidence
@@ -51,7 +53,7 @@ behavior, artifact interpretation and degradation, Research source collection,
 satisfaction stopping, digest generation, non-ask workflow routing, complex
 intent decomposition, tool failure degradation, latency, and observability.
 Except for the GitHub/Notion MCP branches' deterministic ReAct tool-choice
-mocks and the GPT Researcher A2A branch's fake external-agent endpoint, the core
+mocks and the GPT Researcher A2A branch's fake Agent adapter, the core
 LLM and external tools are not stubbed.
 `OPENAI_API_KEY` / `OPENAI_BASE_URL` and router-compatible config must be
 present, otherwise the gate skips. Other provider failures or degradations must

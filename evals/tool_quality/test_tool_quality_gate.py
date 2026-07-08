@@ -21,7 +21,6 @@ from personal_agent.tools import (
     build_create_research_subscription_tool,
     build_delete_note_tool,
     build_graph_search_tool,
-    build_gpt_researcher_a2a_tool,
     build_inspect_knowledge_gaps_tool,
     build_inspect_workflow_run_tool,
     build_retry_worker_task_tool,
@@ -29,6 +28,7 @@ from personal_agent.tools import (
     build_review_digest_tool,
     build_update_note_tool,
     build_web_search_tool,
+    mcp_capability_from_tool,
     tool_governance,
 )
 from personal_agent.tools.mcp import build_mcp_tool
@@ -112,7 +112,6 @@ def _build_registered_tools():
         build_review_digest_tool(dependency),
         build_create_research_subscription_tool(dependency),
         build_research_run_loop_tool(dependency),
-        build_gpt_researcher_a2a_tool(Settings().gpt_researcher_a2a, dependency),
         build_inspect_workflow_run_tool(dependency),
         build_retry_worker_task_tool(dependency),
         build_inspect_knowledge_gaps_tool(dependency),
@@ -123,6 +122,7 @@ def _build_registered_tools():
 
 def _project_tool(tool) -> ToolRunOutput:
     governance = tool_governance(tool)
+    capability = mcp_capability_from_tool(tool)
     return ToolRunOutput(
         tool_name=tool.name,
         exposure=governance.exposure,
@@ -135,6 +135,17 @@ def _project_tool(tool) -> ToolRunOutput:
         timeout_seconds=governance.timeout_seconds,
         max_retries=governance.max_retries,
         rate_limit_per_minute=governance.rate_limit_per_minute,
+        capability_id=capability.capability_id if capability else None,
+        provider=capability.provider if capability else None,
+        semantic_domains=list(capability.semantic_domains) if capability else [],
+        resource_types=list(capability.resource_types) if capability else [],
+        operations=list(capability.operations) if capability else [],
+        auth_scope=capability.auth_scope if capability else None,
+        trust_level=capability.trust_level if capability else None,
+        credential_mode=capability.credential_mode if capability else None,
+        data_egress_class=capability.data_egress_class if capability else None,
+        attestation_status=capability.attestation_status if capability else None,
+        freshness_profile=capability.freshness_profile if capability else None,
     )
 
 

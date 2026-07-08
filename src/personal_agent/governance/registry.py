@@ -24,7 +24,6 @@ _INTENT_TOOL_MAP: dict[EntryIntent, str] = {
     "consolidate_knowledge": "consolidate_knowledge",
     "inspect_knowledge_gaps": "inspect_knowledge_gaps",
     "create_research_subscription": "create_research_subscription",
-    "gpt_researcher_a2a": "gpt_researcher.a2a_research",
     "manage_research": "list_research_subscriptions",
     "maintain_knowledge": "find_similar_notes",
     "inspect_operations": "inspect_worker_queue",

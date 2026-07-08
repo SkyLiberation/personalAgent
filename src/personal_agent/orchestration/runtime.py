@@ -35,7 +35,6 @@ from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
     build_restore_note_tool,
     build_graph_search_tool,
-    build_gpt_researcher_a2a_tool,
     build_inspect_artifact_tool,
     build_inspect_knowledge_gaps_tool,
     build_list_recent_notes_tool,
@@ -68,6 +67,7 @@ from personal_agent.tools import (
     build_save_research_event_tool,
     build_web_search_tool,
 )
+from personal_agent.agents import AgentGateway, GPTResearcherA2AAdapter
 from personal_agent.orchestration.entry_orchestrator import EntryOrchestrator
 from personal_agent.application.episodic_memory import record_entry_episode
 from personal_agent.orchestration.orchestration_contexts import (
@@ -303,6 +303,9 @@ class AgentRuntime:
             idempotency_store=self.tool_governance_store,
             policy_engine=self._policy_engine,
         )
+        self._agent_gateway = AgentGateway(policy_engine=self._policy_engine)
+        if self.settings.gpt_researcher_a2a.enabled:
+            self._agent_gateway.register(GPTResearcherA2AAdapter(self.settings.gpt_researcher_a2a))
         self._llm = LlmClient(
             settings,
             model_client=self._model_client,
@@ -407,6 +410,7 @@ class AgentRuntime:
                 verifier=self._verifier,
                 step_projection_validator=self._step_projection_validator,
                 tool_executor=self._tool_executor,
+                agent_gateway=self._agent_gateway,
                 graph_store=self.graph_store,
                 execute_ask=lambda *args, **kwargs: self.execute_ask(*args, **kwargs),
                 ask_service_factory=lambda: self._ask_service(),
@@ -436,6 +440,10 @@ class AgentRuntime:
     @property
     def graph_contexts(self) -> GraphContexts:
         return self._graph_contexts
+
+    @property
+    def agent_gateway(self) -> AgentGateway:
+        return self._agent_gateway
 
     @property
     def review_digest_use_case(self) -> ReviewDigestUseCase:
@@ -568,10 +576,6 @@ class AgentRuntime:
             from personal_agent.application.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
-        if self.settings.gpt_researcher_a2a.enabled:
-            self._tool_executor.register(
-                build_gpt_researcher_a2a_tool(self.settings.gpt_researcher_a2a)
-            )
         for mcp_tool in build_mcp_tools(self.settings.mcp):
             self._tool_executor.register(mcp_tool)
         for raw_wiki_tool in build_raw_wiki_search_tools(self.settings.enterprise_knowledge):

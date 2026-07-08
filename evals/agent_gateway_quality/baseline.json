@@ -1,0 +1,10 @@
+{
+  "min_overall": 1.0,
+  "min_case_score": 1.0,
+  "critical_cases": [
+    "AGENT-GW-001",
+    "AGENT-GW-003",
+    "AGENT-GW-005"
+  ],
+  "critical_case_min_score": 1.0
+}

@@ -18,6 +18,7 @@ class ExecutionStep:
     action_type: str = ""
     description: str = ""
     tool_name: str | None = None
+    agent_id: str | None = None
     tool_input: dict[str, object] = field(default_factory=dict)
     depends_on: list[str] = field(default_factory=list)
     expected_output: str = ""

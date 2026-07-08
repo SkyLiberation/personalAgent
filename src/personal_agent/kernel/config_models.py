@@ -5,6 +5,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from personal_agent.kernel.contracts.capability import (
+    AttestationStatus,
+    CapabilityOperation,
+    CapabilityTrustLevel,
+    CredentialMode,
+    DataEgressClass,
+    FreshnessProfile,
+)
+
 
 class _StrictBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -132,6 +141,17 @@ class MCPToolConfig(_StrictBase):
     name: str | None = None
     description: str | None = None
     business_role: str | None = None
+    semantic_domains: tuple[str, ...] = Field(min_length=1)
+    resource_types: tuple[str, ...] = Field(min_length=1)
+    operations: tuple[CapabilityOperation, ...] = Field(min_length=1)
+    trust_level: CapabilityTrustLevel
+    credential_mode: CredentialMode
+    data_egress_class: DataEgressClass
+    attestation_status: AttestationStatus
+    freshness_profile: FreshnessProfile
+    provider_priority: int | None = None
+    output_schema: dict[str, Any] | None = None
+    examples: tuple[dict[str, Any], ...] = ()
     exposure: str = "public_agent"
     risk_level: str = "low"
     requires_confirmation: bool = False

@@ -9,6 +9,7 @@ from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
     _is_react_tool_blocked,
+    _resolve_capability_resolution_for_step,
     _resolve_allowed_tools_for_step,
 )
 from personal_agent.orchestration.orchestration_nodes import _helpers
@@ -40,11 +41,33 @@ def _node_react_init(state: AgentGraphState, *, deps: ReactContext) -> dict:
 
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     step = sd.to_execution_step()
+    resolution = _resolve_capability_resolution_for_step(step, deps)
+    allowed_tools = (
+        set(resolution.allowed_tools)
+        if resolution is not None
+        else _resolve_allowed_tools_for_step(step, deps)
+    )
+    if resolution is not None:
+        state.add_event("capability_resolution", {
+            "workflow_id": step.workflow_id,
+            "step_id": step.step_id,
+            "selected_capability_ids": [
+                capability.capability_id
+                for capability in resolution.selected_capabilities
+            ],
+            "allowed_tools": list(resolution.allowed_tools),
+            "denied_capability_ids": [
+                denied.capability_id
+                for denied in resolution.denied_capabilities
+            ],
+            "rationale": resolution.rationale,
+            "confidence": resolution.confidence,
+        })
 
     state.react = ReactSubState(
         step_id=step.step_id,
         max_iterations=min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP),
-        allowed_tools=list(_resolve_allowed_tools_for_step(step, deps)),
+        allowed_tools=list(allowed_tools),
         status="running",
     )
 

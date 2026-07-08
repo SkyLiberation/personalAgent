@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 from urllib.request import Request, urlopen
 
 from personal_agent.kernel.config_models import GPTResearcherA2AConfig
@@ -75,6 +75,46 @@ class GPTResearcherA2AClient:
         if not isinstance(result, dict):
             raise A2AError("GPT Researcher A2A returned a non-object task result.")
         return _research_response_from_task(result)
+
+    def submit_research(
+        self,
+        *,
+        topic: str,
+        report_type: str | None = None,
+        report_source: str | None = None,
+        tone: str | None = None,
+        max_search_results: int | None = None,
+    ) -> A2AResearchResponse:
+        return self.research(
+            topic=topic,
+            report_type=report_type,
+            report_source=report_source,
+            tone=tone,
+            max_search_results=max_search_results,
+            blocking=False,
+        )
+
+    def get_task(self, task_id: str) -> A2AResearchResponse:
+        result = self._rpc("tasks/get", {"id": task_id})
+        if not isinstance(result, dict):
+            raise A2AError("GPT Researcher A2A returned a non-object task result.")
+        return _research_response_from_task(result)
+
+    def cancel_task(self, task_id: str) -> A2AResearchResponse:
+        result = self._rpc("tasks/cancel", {"id": task_id})
+        if not isinstance(result, dict):
+            raise A2AError("GPT Researcher A2A returned a non-object task result.")
+        return _research_response_from_task(result)
+
+    def stream_task(self, task_id: str) -> Iterator[dict[str, Any]]:
+        response = self.get_task(task_id)
+        if response.report:
+            yield {
+                "kind": "text",
+                "text": response.report,
+                "task_id": response.task_id,
+                "state": response.state,
+            }
 
     def _rpc(self, method: str, params: dict[str, Any]) -> Any:
         request_id = f"gpt-researcher-{self._next_id}"

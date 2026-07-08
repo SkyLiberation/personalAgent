@@ -1,0 +1,39 @@
+[
+  {
+    "id": "AGENT-GW-001",
+    "operation": "invoke",
+    "agent_id": "gpt_researcher",
+    "expected_status": "completed",
+    "expected_permission_scope": "a2a:gpt_researcher:research",
+    "expected_artifact_status": "unverified",
+    "min_events": 2
+  },
+  {
+    "id": "AGENT-GW-002",
+    "operation": "submit_poll",
+    "agent_id": "gpt_researcher",
+    "expected_status": "completed",
+    "min_events": 2
+  },
+  {
+    "id": "AGENT-GW-003",
+    "operation": "cancel",
+    "agent_id": "gpt_researcher",
+    "expected_status": "canceled",
+    "min_events": 2
+  },
+  {
+    "id": "AGENT-GW-004",
+    "operation": "stream",
+    "agent_id": "gpt_researcher",
+    "expected_stream_event_types": ["stream_delta"],
+    "min_events": 1
+  },
+  {
+    "id": "AGENT-GW-005",
+    "operation": "multi_agent_selection",
+    "agent_id": "secondary_researcher",
+    "expected_status": "completed",
+    "forbidden_agent_ids": ["gpt_researcher"]
+  }
+]

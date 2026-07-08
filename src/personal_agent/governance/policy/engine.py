@@ -81,6 +81,8 @@ class PolicyEngine:
 
         if request.action == "tool_call":
             return self._evaluate_tool(request)
+        if request.action == "agent_call":
+            return self._evaluate_agent(request)
         if request.action in ("memory_read", "memory_write", "memory_delete", "memory_graph_sync"):
             return self._evaluate_memory(request)
         if request.action == "entry_access":
@@ -131,6 +133,16 @@ class PolicyEngine:
             return PolicyDecision.allow(rule="tool.high_risk_confirmed")
 
         return PolicyDecision.allow(rule="tool.default")
+
+    def _evaluate_agent(self, request: PolicyInput) -> PolicyDecision:
+        if self._is_high_risk_side_effect(request):
+            if not request.confirmed:
+                return PolicyDecision.confirm(
+                    f"Agent {request.tool_name} 为高风险委托，需用户确认后执行。",
+                    rule="agent.high_risk_confirmation",
+                )
+            return PolicyDecision.allow(rule="agent.high_risk_confirmed")
+        return PolicyDecision.allow(rule="agent.default")
 
     def _evaluate_react_guard(self, request: PolicyInput) -> PolicyDecision | None:
         if request.tool_name and request.tool_name not in request.react_allowed_tools:
