@@ -347,6 +347,9 @@ class TestRegistryCapabilityConsistency:
             _low_risk_tool("github.search_code"),
             _low_risk_tool("github.get_file_contents"),
             _low_risk_tool("github.search_repositories"),
+            _low_risk_tool("notion.search"),
+            _low_risk_tool("notion.retrieve_page_markdown"),
+            _medium_risk_tool("gpt_researcher.a2a_research"),
         ]
 
         ex = ToolExecutor()

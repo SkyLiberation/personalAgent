@@ -588,6 +588,51 @@ CASES = [
         ),
     ),
     E2EQualityCase(
+        id="E2E-NOTION-MCP-001",
+        branch="notion_mcp",
+        description="Notion workspace search question calls notion.search through ToolGateway",
+        expected_intents=("notion_workspace_qa",),
+        expected_workflow_id="notion_workspace_qa",
+        expected_steps=("notion-retrieve", "notion-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("notion.search",),
+        forbidden_tool_names=("graph_search", "notion.retrieve_page_markdown"),
+        min_tool_call_traces=1,
+    ),
+    E2EQualityCase(
+        id="E2E-NOTION-MCP-002",
+        branch="notion_mcp",
+        description="Notion page read question calls notion.retrieve_page_markdown through ToolGateway",
+        expected_intents=("notion_workspace_qa",),
+        expected_workflow_id="notion_workspace_qa",
+        expected_steps=("notion-retrieve", "notion-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("notion.retrieve_page_markdown",),
+        forbidden_tool_names=("graph_search", "notion.search"),
+        min_tool_call_traces=1,
+    ),
+    E2EQualityCase(
+        id="E2E-NOTION-MCP-003",
+        branch="notion_mcp",
+        description="Notion write request stays outside read-only Notion MCP workflow and tools",
+        expected_intents=("ask",),
+        expected_workflow_id="ask",
+        forbidden_tool_names=("notion.search", "notion.retrieve_page_markdown"),
+    ),
+    E2EQualityCase(
+        id="E2E-GPTR-A2A-001",
+        branch="gpt_researcher_a2a",
+        description="GPT Researcher A2A request calls gpt_researcher.a2a_research through ToolGateway",
+        expected_intents=("gpt_researcher_a2a",),
+        expected_workflow_id="gpt_researcher_a2a",
+        expected_steps=("gptr-a2a-research", "gptr-a2a-compose"),
+        expected_run_statuses=("completed",),
+        expected_tool_names=("gpt_researcher.a2a_research",),
+        forbidden_tool_names=("graph_search", "research_run_loop"),
+        min_tool_call_traces=1,
+        required_answer_terms=("Agent2Agent", "GPT Researcher A2A"),
+    ),
+    E2EQualityCase(
         id="E2E-RES-001",
         branch="research",
         description="research workflow produces sourced digest through all research steps",
@@ -807,7 +852,8 @@ def _selected_suite_requires_live_llm() -> bool:
         )
     except ValueError:
         return True
-    return any(CASE_BY_ID[case_id].branch != "github_mcp" for case_id in selected)
+    no_live_llm_branches = {"github_mcp", "notion_mcp", "gpt_researcher_a2a"}
+    return any(CASE_BY_ID[case_id].branch not in no_live_llm_branches for case_id in selected)
 
 
 def _workspace_service(service: AgentService) -> WorkspaceService:
@@ -2231,6 +2277,321 @@ def _github_path_from_prompt(prompt: str) -> str:
     return "README.md"
 
 
+def _run_notion_mcp_search_question(service: AgentService) -> E2EQualityRun:
+    return _run_notion_mcp_prompt(
+        service,
+        case_id="E2E-NOTION-MCP-001",
+        prompt="在 Notion 里搜索 Orion 项目的会议纪要",
+        expected_tool_name="notion.search",
+    )
+
+
+def _run_notion_mcp_page_question(service: AgentService) -> E2EQualityRun:
+    return _run_notion_mcp_prompt(
+        service,
+        case_id="E2E-NOTION-MCP-002",
+        prompt="读取 Notion 页面 1a6b35e6e67f802fa7e1d27686f017f2 并总结内容",
+        expected_tool_name="notion.retrieve_page_markdown",
+    )
+
+
+def _run_notion_mcp_write_request(service: AgentService) -> E2EQualityRun:
+    _register_fake_notion_mcp_tools(service)
+    prompt = "在 Notion 创建一个 Orion 项目总结页面"
+    user_id = "e2e-e2e-notion-mcp-003"
+    result = service.execute_entry(EntryInput(
+        text=prompt,
+        user_id=user_id,
+        session_id="e2e-notion-mcp-003-session",
+        source_platform="e2e_quality",
+    ))
+    snapshot = service.get_run_snapshot(result.run_id or "")
+    audit_events = service.query_tool_audit(
+        user_id=user_id,
+        run_id=result.run_id,
+        limit=20,
+    ) if result.run_id else []
+    return E2EQualityRun(
+        case_id="E2E-NOTION-MCP-003",
+        branch="notion_mcp",
+        intents=tuple(result.intents),
+        run_status=result.run_status or "",
+        workflow_id=snapshot.workflow_id if snapshot else "",
+        step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
+        answer=result.reply_text or "",
+        tool_names=tuple(reversed([str(event["tool_name"]) for event in audit_events])),
+        tool_call_trace_count=len(audit_events),
+        failed_tool_call_count=sum(
+            1 for event in audit_events if not bool(event.get("artifact_ok"))
+        ),
+        tool_error_kinds=tuple(
+            str(event.get("error_kind"))
+            for event in audit_events
+            if event.get("error_kind")
+        ),
+        metadata={
+            "prompt": prompt,
+            "audit_events": audit_events,
+        },
+    )
+
+
+def _run_notion_mcp_prompt(
+    service: AgentService,
+    *,
+    case_id: str,
+    prompt: str,
+    expected_tool_name: str,
+) -> E2EQualityRun:
+    from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
+
+    _register_fake_notion_mcp_tools(service)
+    user_id = f"e2e-{case_id.lower()}"
+    react_calls: list[dict[str, object]] = []
+
+    def _mock_notion_react(_prompt, _deps, allowed):
+        call_index = len(react_calls)
+        react_calls.append({
+            "allowed": sorted(str(tool_name) for tool_name in allowed),
+            "expected_tool_name": expected_tool_name,
+        })
+        if call_index == 0:
+            if expected_tool_name not in allowed:
+                return _NativeReactOutcome(parse_failed=True)
+            return _NativeReactOutcome(
+                thought="需要通过 Notion MCP 读取 workspace 证据。",
+                tool_name=expected_tool_name,
+                tool_input=_notion_mcp_tool_args(expected_tool_name, prompt),
+                native_call_id=f"{case_id}:notion-react:1",
+            )
+        return _NativeReactOutcome(
+            done=True,
+            thought="Notion MCP 工具已经返回证据，可以结束本步骤。",
+            result={
+                "answer": (
+                    f"已通过 {expected_tool_name} 读取 Notion workspace 证据，"
+                    f"可回答：{prompt}"
+                )
+            },
+        )
+
+    with patch(
+        "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+        _mock_notion_react,
+    ):
+        result = service.execute_entry(EntryInput(
+            text=prompt,
+            user_id=user_id,
+            session_id=f"{case_id.lower()}-session",
+            source_platform="e2e_quality",
+        ))
+
+    snapshot = service.get_run_snapshot(result.run_id or "")
+    audit_events = service.query_tool_audit(
+        user_id=user_id,
+        run_id=result.run_id,
+        limit=20,
+    ) if result.run_id else []
+    tool_names = tuple(reversed([str(event["tool_name"]) for event in audit_events]))
+    return E2EQualityRun(
+        case_id=case_id,
+        branch="notion_mcp",
+        intents=tuple(result.intents),
+        run_status=result.run_status or "",
+        workflow_id=snapshot.workflow_id if snapshot else "",
+        step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
+        answer=result.reply_text or "",
+        tool_names=tool_names,
+        tool_call_trace_count=len(audit_events),
+        failed_tool_call_count=sum(
+            1 for event in audit_events if not bool(event.get("artifact_ok"))
+        ),
+        tool_error_kinds=tuple(
+            str(event.get("error_kind"))
+            for event in audit_events
+            if event.get("error_kind")
+        ),
+        metadata={
+            "prompt": prompt,
+            "react_calls": react_calls,
+            "audit_events": audit_events,
+        },
+    )
+
+
+def _register_fake_notion_mcp_tools(service: AgentService) -> None:
+    for notion_tool in _build_fake_notion_mcp_tools():
+        service.tool_executor.register(notion_tool)
+
+
+def _build_fake_notion_mcp_tools():
+    @tool(
+        "notion.search",
+        description="Search pages and data sources visible to the configured Notion integration.",
+        response_format="content_and_artifact",
+        extras=governance_extras(
+            exposure="public_agent",
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="notion:workspace:read",
+            timeout_seconds=20.0,
+            max_retries=1,
+            rate_limit_per_minute=30,
+            allowed_domains=("notion.so", "api.notion.com"),
+        ),
+    )
+    def notion_search(query: str, user_id: str = "default", run_id: str | None = None):
+        return tool_response(tool_success({
+            "provider": "notion_mcp_fake",
+            "results": [{
+                "title": "Orion meeting notes",
+                "content": f"Matched Notion query: {query}",
+                "url": "https://www.notion.so/orion-meeting-notes",
+            }],
+        }))
+
+    @tool(
+        "notion.retrieve_page_markdown",
+        description="Read a Notion page's full content as Markdown.",
+        response_format="content_and_artifact",
+        extras=governance_extras(
+            exposure="public_agent",
+            risk_level="low",
+            side_effects=("external_network",),
+            permission_scope="notion:workspace:read",
+            timeout_seconds=20.0,
+            max_retries=1,
+            rate_limit_per_minute=30,
+            allowed_domains=("notion.so", "api.notion.com"),
+        ),
+    )
+    def notion_retrieve_page_markdown(
+        page_id: str,
+        include_transcript: bool = False,
+        user_id: str = "default",
+        run_id: str | None = None,
+    ):
+        return tool_response(tool_success({
+            "provider": "notion_mcp_fake",
+            "page_id": page_id,
+            "include_transcript": include_transcript,
+            "content": f"# Notion page {page_id}\n\nFake markdown page content.",
+            "url": f"https://www.notion.so/{page_id}",
+        }))
+
+    return [notion_search, notion_retrieve_page_markdown]
+
+
+def _notion_mcp_tool_args(tool_name: str, prompt: str) -> dict[str, object]:
+    if tool_name == "notion.retrieve_page_markdown":
+        return {
+            "page_id": _notion_page_id_from_prompt(prompt),
+            "include_transcript": "会议" in prompt or "meeting" in prompt.lower(),
+        }
+    return {"query": prompt}
+
+
+def _notion_page_id_from_prompt(prompt: str) -> str:
+    import re
+
+    match = re.search(r"\b([0-9a-fA-F]{32}|[0-9a-fA-F-]{36})\b", prompt)
+    if match:
+        return match.group(1).replace("-", "")
+    return "1a6b35e6e67f802fa7e1d27686f017f2"
+
+
+def _run_gpt_researcher_a2a_question(service: AgentService) -> E2EQualityRun:
+    _register_fake_gpt_researcher_a2a_tool(service)
+    prompt = "用 GPT Researcher A2A 调研 Agent2Agent 协议采用情况，并生成研究报告"
+    user_id = "e2e-e2e-gptr-a2a-001"
+    result = service.execute_entry(EntryInput(
+        text=prompt,
+        user_id=user_id,
+        session_id="e2e-gptr-a2a-001-session",
+        source_platform="e2e_quality",
+    ))
+    snapshot = service.get_run_snapshot(result.run_id or "")
+    audit_events = service.query_tool_audit(
+        user_id=user_id,
+        run_id=result.run_id,
+        limit=20,
+    ) if result.run_id else []
+    return E2EQualityRun(
+        case_id="E2E-GPTR-A2A-001",
+        branch="gpt_researcher_a2a",
+        intents=tuple(result.intents),
+        run_status=result.run_status or "",
+        workflow_id=snapshot.workflow_id if snapshot else "",
+        step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
+        answer=result.reply_text or "",
+        tool_names=tuple(reversed([str(event["tool_name"]) for event in audit_events])),
+        tool_call_trace_count=len(audit_events),
+        failed_tool_call_count=sum(
+            1 for event in audit_events if not bool(event.get("artifact_ok"))
+        ),
+        tool_error_kinds=tuple(
+            str(event.get("error_kind"))
+            for event in audit_events
+            if event.get("error_kind")
+        ),
+        metadata={
+            "prompt": prompt,
+            "audit_events": audit_events,
+        },
+    )
+
+
+def _register_fake_gpt_researcher_a2a_tool(service: AgentService) -> None:
+    @tool(
+        "gpt_researcher.a2a_research",
+        description="Fake GPT Researcher A2A research report tool for full-chain e2e.",
+        response_format="content_and_artifact",
+        extras=governance_extras(
+            exposure="public_agent",
+            risk_level="medium",
+            side_effects=("external_network",),
+            permission_scope="a2a:gpt_researcher:research",
+            timeout_seconds=120.0,
+            max_retries=1,
+            retry_backoff_seconds=1.0,
+            rate_limit_per_minute=5,
+            allowed_domains=("localhost", "127.0.0.1"),
+        ),
+    )
+    def gpt_researcher_a2a_research(
+        topic: str,
+        report_type: str | None = None,
+        report_source: str | None = None,
+        tone: str | None = None,
+        max_search_results: int | None = None,
+        user_id: str = "default",
+        run_id: str | None = None,
+    ):
+        return tool_response(tool_success({
+            "provider": "gpt_researcher_a2a_fake",
+            "task_id": "fake-a2a-task-1",
+            "context_id": "fake-a2a-context-1",
+            "state": "completed",
+            "report": (
+                "# GPT Researcher A2A Report\n\n"
+                f"Agent2Agent adoption research for: {topic}\n\n"
+                "The fake report proves the full entry -> router -> workflow -> "
+                "ToolGateway -> audit chain invoked GPT Researcher A2A."
+            ),
+            "metadata": {
+                "report_type": report_type,
+                "report_source": report_source,
+                "tone": tone,
+                "max_search_results": max_search_results,
+                "user_id": user_id,
+                "run_id": run_id,
+            },
+            "artifacts": [],
+        }))
+
+    service.tool_executor.register(gpt_researcher_a2a_research)
+
+
 def _run_research_dual_source(service: AgentService) -> E2EQualityRun:
     run = service.run_research_once(
         user_id="e2e-research",
@@ -2426,6 +2787,10 @@ CASE_RUNNERS = [
     ("E2E-GH-MCP-003", _run_github_mcp_repo_search_question),
     ("E2E-GH-MCP-004", _run_github_mcp_repo_qualified_code_question),
     ("E2E-GH-MCP-005", _run_github_mcp_local_memory_question),
+    ("E2E-NOTION-MCP-001", _run_notion_mcp_search_question),
+    ("E2E-NOTION-MCP-002", _run_notion_mcp_page_question),
+    ("E2E-NOTION-MCP-003", _run_notion_mcp_write_request),
+    ("E2E-GPTR-A2A-001", _run_gpt_researcher_a2a_question),
     ("E2E-RES-001", _run_research_dual_source),
     ("E2E-RES-002", _run_route_boundary),
     ("E2E-RES-004", _run_research_verification_query),

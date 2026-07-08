@@ -18,6 +18,7 @@
 - [solidify_conversation](solidify-conversation-workflow.md)：从 checkpoint 对话生成可入库草稿，并复用 capture 主链路写入。
 - [research_once](research-once-workflow.md)：ResearchService 的 evidence-driven loop、来源聚类、个人相关性排序、digest 和 claim verification。
 - [github_repository_qa](github-mcp-workflow.md)：GitHub MCP 只读仓库能力的完整入口链路、ReAct 工具选择、ToolGateway 治理和 e2e golden set。
+- [gpt_researcher_a2a](gpt-researcher-a2a-workflow.md)：把已部署 GPT Researcher A2A 后端接为 workflow-first 外部研究 Agent。
 
 ## 当前架构口径
 

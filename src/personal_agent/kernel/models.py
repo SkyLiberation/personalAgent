@@ -45,6 +45,8 @@ EntryIntent = Literal[
       "research_once", "create_research_subscription",
       "execute_research_run",
       "github_repository_qa",
+      "notion_workspace_qa",
+      "gpt_researcher_a2a",
       "manage_research", "maintain_knowledge", "inspect_operations", "inspect_workflow",
     "direct_answer",
     "unknown",

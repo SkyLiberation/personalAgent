@@ -164,6 +164,7 @@ class TestDefaultIntentRouter:
             ("生成今天的知识简报", "review_digest"),
             ("检查我的知识库还有哪些缺口", "inspect_knowledge_gaps"),
             ("查看 workflow run_id abc 的步骤执行情况", "inspect_workflow"),
+            ("用 GPT Researcher A2A 调研 Agent2Agent 协议采用情况", "gpt_researcher_a2a"),
             ("worker 是否堆积，查看失败任务", "inspect_operations"),
             ("这条知识过期了，帮我标记一下", "maintain_knowledge"),
             ("把 AI 简报订阅暂停", "manage_research"),

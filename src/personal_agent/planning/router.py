@@ -264,6 +264,11 @@ class DefaultIntentRouter:
             self._log_decision(entry_input, compound_decision, strategy="compound_rule")
             return compound_decision
 
+        gpt_researcher_decision = _deterministic_gpt_researcher_a2a_decision(entry_input.text)
+        if gpt_researcher_decision is not None:
+            self._log_decision(entry_input, gpt_researcher_decision, strategy="gpt_researcher_a2a_rule")
+            return gpt_researcher_decision
+
         deterministic = _deterministic_research_decision(entry_input.text)
         if deterministic is not None:
             self._log_decision(entry_input, deterministic, strategy="rule")
@@ -273,6 +278,11 @@ class DefaultIntentRouter:
         if github_decision is not None:
             self._log_decision(entry_input, github_decision, strategy="github_rule")
             return github_decision
+
+        notion_decision = _deterministic_notion_workspace_decision(entry_input.text)
+        if notion_decision is not None:
+            self._log_decision(entry_input, notion_decision, strategy="notion_rule")
+            return notion_decision
 
         result = self._classify_with_llm(
             _router_text(entry_input),
@@ -412,6 +422,32 @@ def _deterministic_github_repository_decision(text: str) -> RouterDecision | Non
     )
 
 
+def _deterministic_notion_workspace_decision(text: str) -> RouterDecision | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    if not _looks_like_notion_workspace_qa(stripped, lowered):
+        return None
+    return _single_goal_decision(
+        "notion_workspace_qa",
+        input_text=stripped,
+    )
+
+
+def _deterministic_gpt_researcher_a2a_decision(text: str) -> RouterDecision | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    if not _looks_like_gpt_researcher_a2a(stripped, lowered):
+        return None
+    return _single_goal_decision(
+        "gpt_researcher_a2a",
+        input_text=stripped,
+    )
+
+
 def _deterministic_basic_decision(text: str) -> RouterDecision | None:
     stripped = text.strip()
     if not stripped:
@@ -524,6 +560,78 @@ def _looks_like_github_repository_qa(text: str, lowered: str) -> bool:
         or repository_search
         or (github_named and owner_repo and (file_marker or code_marker))
     )
+
+
+def _looks_like_notion_workspace_qa(text: str, lowered: str) -> bool:
+    notion_named = "notion" in lowered or "notion" in text
+    notion_url = "notion.so/" in lowered
+    if not notion_named and not notion_url:
+        return False
+    read_markers = (
+        "搜索",
+        "查找",
+        "查询",
+        "读取",
+        "打开",
+        "总结",
+        "概括",
+        "说明",
+        "找",
+        "search",
+        "fetch",
+        "read",
+        "page",
+        "database",
+        "data source",
+        "wiki",
+        "prd",
+        "meeting",
+        "会议",
+        "页面",
+        "文档",
+        "知识库",
+    )
+    write_markers = (
+        "创建",
+        "新建",
+        "更新",
+        "修改",
+        "移动",
+        "评论",
+        "写入",
+        "发布",
+        "create",
+        "update",
+        "move",
+        "comment",
+    )
+    if _has_any(text, write_markers):
+        return False
+    return _has_any(text, read_markers) or notion_url
+
+
+def _looks_like_gpt_researcher_a2a(text: str, lowered: str) -> bool:
+    explicit_agent = (
+        "gpt-researcher" in lowered
+        or "gpt researcher" in lowered
+        or "gpt_researcher" in lowered
+        or "gptresearcher" in lowered
+    )
+    a2a_named = "a2a" in lowered or "agent2agent" in lowered or "agent-to-agent" in lowered
+    delegation_terms = (
+        "调研",
+        "研究",
+        "深度研究",
+        "生成报告",
+        "研究报告",
+        "research",
+        "report",
+        "delegate",
+        "委托",
+    )
+    if explicit_agent and _has_any(text, delegation_terms):
+        return True
+    return a2a_named and explicit_agent
 
 
 def _deterministic_compound_capture_ask_decision(text: str) -> RouterDecision | None:

@@ -80,7 +80,7 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 
 | 类型 | 是否生成 `ExecutionStep` | 是否进入 `StepExecutionGraph` | 典型 intent |
 | --- | --- | --- | --- |
-| Step projection workflow | 是 | 是 | `capture_*`、`analyze_artifact`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps`、`research_*`、`manage_research`、`maintain_knowledge`、`inspect_operations`、`inspect_workflow`、`direct_answer` |
+| Step projection workflow | 是 | 是 | `capture_*`、`analyze_artifact`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps`、`research_*`、`github_repository_qa`、`notion_workspace_qa`、`gpt_researcher_a2a`、`manage_research`、`maintain_knowledge`、`inspect_operations`、`inspect_workflow`、`direct_answer` |
 | Fallback branch | 否 | 否 | `unknown`、step projection 校验失败后的澄清/兜底 |
 
 ## 当前已注册 Workflow
@@ -100,6 +100,9 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 | `inspect_knowledge_gaps` | `inspect_knowledge_gaps` | step projection | `gap-inspect -> gap-compose` |
 | `research_once` | `research_once` | step projection | `research-prepare -> research-initialize -> research-loop -> research-synthesize -> research-verify -> research-compose` |
 | `execute_research_run` | `execute_research_run` | step projection | `research-initialize -> research-loop -> research-synthesize -> research-verify` |
+| `github_repository_qa` | `github_repository_qa` | step projection | `github-retrieve -> github-compose` |
+| `notion_workspace_qa` | `notion_workspace_qa` | step projection | `notion-retrieve -> notion-compose` |
+| `gpt_researcher_a2a` | `gpt_researcher_a2a` | step projection | `gptr-a2a-research -> gptr-a2a-compose` |
 | `create_research_subscription` | `create_research_subscription` | step projection | `research-subscribe` |
 | `manage_research` | `manage_research` | step projection | `research-manage-decide -> research-manage-compose` |
 | `maintain_knowledge` | `maintain_knowledge` | step projection | `knowledge-maintain-decide -> knowledge-maintain-compose` |
@@ -143,6 +146,8 @@ route_intent
 `review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps` 是“工具执行 + compose 呈现”的短 workflow。它们保留既有业务 service 的能力：review digest 仍使用 review domain formatter，consolidate 仍执行主题整理和 supersede，gap inspection 仍读取知识图谱/笔记关系；Workspace 提供 Evidence/Claim/Decision/Gap 状态，但不把这些 workflow 简化成单表 CRUD。
 
 `research_once` 是多步 research workflow：prepare、initialize、loop、synthesize、verify、compose 都是独立 step，便于记录 ResearchRun、tool trace、digest 和 claim verification。`execute_research_run` 复用 initialize 之后的后半段；`create_research_subscription` 是单步订阅创建；`manage_research` 用受控 ReAct/resolve 管理订阅、运行、简报、反馈和入库。
+
+`gpt_researcher_a2a` 是外部 Agent 委托 workflow：Router 只在用户明确点名 GPT Researcher / A2A 时选择它；workflow 用 deterministic `tool_call(gpt_researcher.a2a_research)` 进入 ToolGateway，再由 compose 呈现 A2A 返回的 Markdown report。它不替代 `research_once`，也不作为 ask/research 的兼容 fallback。
 
 `maintain_knowledge`、`inspect_operations`、`inspect_workflow` 属于受控诊断/维护类 workflow。它们通常使用 `resolve` + allowlisted tools，允许读取或有限写入，但仍受 `StepProjectionValidator`、ToolGateway、风险 metadata 和审计约束。
 

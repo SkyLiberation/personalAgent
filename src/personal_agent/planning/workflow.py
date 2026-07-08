@@ -554,6 +554,59 @@ def _build_registry() -> WorkflowRegistry:
             recovery_policy="checkpoint_step",
         ),
         _workflow(
+            "notion_workspace_qa",
+            "notion_workspace_qa",
+            (
+                WorkflowStepSpec(
+                    "notion-retrieve",
+                    "resolve",
+                    "读取或搜索 Notion workspace 中授权可见的页面内容",
+                    execution_mode="react",
+                    allowed_tools=(
+                        "notion.search",
+                        "notion.retrieve_page_markdown",
+                    ),
+                    max_iterations=2,
+                    side_effects=("external_network",),
+                    recovery_policy="clarify",
+                    branch_policy="clarify",
+                ),
+                WorkflowStepSpec(
+                    "notion-compose",
+                    "compose",
+                    "基于 Notion 工具返回内容回答用户",
+                    depends_on=("notion-retrieve",),
+                    recovery_policy="branch",
+                ),
+            ),
+            projection_policy="step_projection",
+            recovery_policy="checkpoint_step",
+        ),
+        _workflow(
+            "gpt_researcher_a2a",
+            "gpt_researcher_a2a",
+            (
+                WorkflowStepSpec(
+                    "gptr-a2a-research",
+                    "tool_call",
+                    "通过 GPT Researcher A2A 后端执行深度研究",
+                    tool_name="gpt_researcher.a2a_research",
+                    risk_level="medium",
+                    side_effects=("external_network",),
+                    recovery_policy="abort",
+                ),
+                WorkflowStepSpec(
+                    "gptr-a2a-compose",
+                    "compose",
+                    "呈现 GPT Researcher A2A 研究报告",
+                    depends_on=("gptr-a2a-research",),
+                    recovery_policy="branch",
+                ),
+            ),
+            projection_policy="step_projection",
+            recovery_policy="checkpoint_step",
+        ),
+        _workflow(
             "manage_research",
             "manage_research",
             (
