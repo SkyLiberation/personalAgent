@@ -24,6 +24,7 @@ class ToolCaseScore:
     idempotency_exact: float
     audit_exact: float
     resource_policy_exact: float
+    capability_metadata_exact: float
     overall_exact: float
 
     def as_dict(self) -> dict[str, float | str]:
@@ -59,6 +60,51 @@ def score_case(case: ToolEvalCase, run: ToolRunOutput) -> ToolCaseScore:
         ),
     ]
     resource_policy_exact = 1.0 if all(resource_checks) else 0.0
+    capability_checks: list[float] = []
+    if case.expected_capability_id is not None:
+        capability_checks.append(scalar_exact(run.capability_id, case.expected_capability_id))
+    if case.expected_provider is not None:
+        capability_checks.append(scalar_exact(run.provider, case.expected_provider))
+    if case.expected_semantic_domains is not None:
+        capability_checks.append(side_effects_exact(
+            run.semantic_domains,
+            case.expected_semantic_domains,
+        ))
+    if case.expected_resource_types is not None:
+        capability_checks.append(side_effects_exact(
+            run.resource_types,
+            case.expected_resource_types,
+        ))
+    if case.expected_operations is not None:
+        capability_checks.append(side_effects_exact(
+            run.operations,
+            case.expected_operations,
+        ))
+    if case.expected_auth_scope is not None:
+        capability_checks.append(scalar_exact(run.auth_scope, case.expected_auth_scope))
+    if case.expected_trust_level is not None:
+        capability_checks.append(scalar_exact(run.trust_level, case.expected_trust_level))
+    if case.expected_credential_mode is not None:
+        capability_checks.append(scalar_exact(
+            run.credential_mode,
+            case.expected_credential_mode,
+        ))
+    if case.expected_data_egress_class is not None:
+        capability_checks.append(scalar_exact(
+            run.data_egress_class,
+            case.expected_data_egress_class,
+        ))
+    if case.expected_attestation_status is not None:
+        capability_checks.append(scalar_exact(
+            run.attestation_status,
+            case.expected_attestation_status,
+        ))
+    if case.expected_freshness_profile is not None:
+        capability_checks.append(scalar_exact(
+            run.freshness_profile,
+            case.expected_freshness_profile,
+        ))
+    capability_metadata_exact = 1.0 if all(capability_checks) else 0.0
     field_scores = [
         exposure_exact,
         risk_exact,
@@ -68,6 +114,7 @@ def score_case(case: ToolEvalCase, run: ToolRunOutput) -> ToolCaseScore:
         idempotency_exact,
         audit_exact,
         resource_policy_exact,
+        capability_metadata_exact,
     ]
     return ToolCaseScore(
         case_id=case.id,
@@ -79,6 +126,7 @@ def score_case(case: ToolEvalCase, run: ToolRunOutput) -> ToolCaseScore:
         idempotency_exact=idempotency_exact,
         audit_exact=audit_exact,
         resource_policy_exact=resource_policy_exact,
+        capability_metadata_exact=capability_metadata_exact,
         overall_exact=1.0 if all(field_scores) else 0.0,
     )
 
@@ -92,6 +140,7 @@ _METRIC_NAMES = (
     "idempotency_exact",
     "audit_exact",
     "resource_policy_exact",
+    "capability_metadata_exact",
     "overall_exact",
 )
 

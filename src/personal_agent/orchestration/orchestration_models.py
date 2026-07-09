@@ -91,6 +91,7 @@ class StepRunState(BaseModel):
     action_type: str = ""
     description: str = ""
     tool_name: str | None = None
+    agent_id: str | None = None
     tool_input: dict[str, Any] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
     expected_output: str = ""
@@ -128,6 +129,7 @@ class StepRunState(BaseModel):
             action_type=s.action_type,
             description=s.description,
             tool_name=s.tool_name,
+            agent_id=s.agent_id,
             tool_input=s.tool_input,
             depends_on=s.depends_on,
             expected_output=s.expected_output,
@@ -158,6 +160,7 @@ class StepRunState(BaseModel):
             action_type=self.action_type,
             description=self.description,
             tool_name=self.tool_name,
+            agent_id=self.agent_id,
             tool_input=self.tool_input,
             depends_on=self.depends_on,
             expected_output=self.expected_output,

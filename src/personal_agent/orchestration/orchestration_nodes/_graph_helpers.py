@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING
 from collections import deque
 
 from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.contracts.capability import CapabilityResolution, CapabilityResolutionRequest
 from personal_agent.orchestration.orchestration_contexts import ReactContext
+from personal_agent.planning.capability_resolver import (
+    CapabilityResolver,
+    default_capability_policy_for_scope,
+)
+from personal_agent.tools.mcp_capability import build_mcp_capability_registry
 
 if TYPE_CHECKING:
     from personal_agent.kernel.contracts.execution import ExecutionStep
@@ -23,9 +29,6 @@ _REACT_MAX_ITERATIONS_CAP = 5
 _REACT_DEFAULT_ALLOWED_TOOLS = (
     "graph_search",
     "web_search",
-    "github.search_code",
-    "github.get_file_contents",
-    "github.search_repositories",
 )
 
 _REACT_SYSTEM_PROMPT = get_prompt("react.system").template
@@ -166,13 +169,39 @@ def _default_step_answer(steps: list) -> str:
 
 
 def _resolve_allowed_tools_for_step(step: "ExecutionStep", deps: ReactContext) -> set[str]:
-    allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
+    resolution = _resolve_capability_resolution_for_step(step, deps)
+    if resolution is not None:
+        allowed = set(resolution.allowed_tools)
+    else:
+        allowed = set(step.allowed_tools) if step.allowed_tools else set(_REACT_DEFAULT_ALLOWED_TOOLS)
     registered = {
         t.name for t in deps.tool_executor.list_tools(
             exposures={"public_agent", "scoped_agent", "admin"}
         )
     }
     return allowed & registered
+
+
+def _resolve_capability_resolution_for_step(
+    step: "ExecutionStep",
+    deps: ReactContext,
+) -> CapabilityResolution | None:
+    if step.workflow_id not in {
+        "external_codebase_qa",
+        "external_workspace_qa",
+        "external_project_ops",
+    }:
+        return None
+    registry = build_mcp_capability_registry(deps.tool_executor.list_tools(
+        exposures={"public_agent", "scoped_agent", "admin"}
+    ))
+    request = CapabilityResolutionRequest(
+        task_text=step.task_input or step.description,
+        workflow_scope=step.workflow_id,  # type: ignore[arg-type]
+        step_id=step.step_id,
+        policy=default_capability_policy_for_scope(step.workflow_id),
+    )
+    return CapabilityResolver(registry).resolve(request)
 
 
 def _is_react_tool_blocked(tool_name: str, deps: ReactContext) -> bool:

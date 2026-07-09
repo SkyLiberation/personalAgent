@@ -66,6 +66,7 @@ class WorkflowStepSpec:
     action_type: str
     description: str
     tool_name: str | None = None
+    agent_id: str | None = None
     tool_input: dict[str, object] = field(default_factory=dict)
     depends_on: tuple[str, ...] = ()
     expected_output: str = ""
@@ -91,6 +92,7 @@ class WorkflowStepSpec:
             action_type=self.action_type,
             description=self.description,
             tool_name=self.tool_name,
+            agent_id=self.agent_id,
             tool_input=dict(self.tool_input),
             depends_on=list(self.depends_on),
             expected_output=self.expected_output,
@@ -192,6 +194,7 @@ class WorkflowSpec:
                     action_type=str(raw.get("action_type", "")),
                     description=str(raw.get("description", "")),
                     tool_name=raw.get("tool_name") if raw.get("tool_name") is not None else None,
+                    agent_id=raw.get("agent_id") if raw.get("agent_id") is not None else None,
                     tool_input=dict(raw.get("tool_input") or {}),
                     depends_on=tuple(str(item) for item in (raw.get("depends_on") or ())),
                     expected_output=str(raw.get("expected_output", "")),

@@ -1,0 +1,12 @@
+{
+  "min_overall": 1.0,
+  "min_case_score": 1.0,
+  "critical_cases": [
+    "RESOLVER-GH-001",
+    "RESOLVER-NOTION-001",
+    "RESOLVER-LOCAL-001",
+    "RESOLVER-RISK-001",
+    "RESOLVER-CROSS-001"
+  ],
+  "critical_case_min_score": 1.0
+}

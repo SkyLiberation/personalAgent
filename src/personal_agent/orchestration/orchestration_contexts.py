@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from personal_agent.application.verifier import AnswerVerifier
     from personal_agent.planning.workflow_planner import WorkflowPlanner
     from personal_agent.application.workspace import WorkspaceService
+    from personal_agent.agents.gateway import AgentGateway
 
 
 class ToolingContext(Protocol):
@@ -63,6 +64,7 @@ class StepExecutionContext:
     verifier: "AnswerVerifier | None"
     step_projection_validator: "StepProjectionValidator"
     tool_executor: "ToolExecutor"
+    agent_gateway: "AgentGateway"
     graph_store: "GraphitiStore"
     execute_ask: Callable[..., "AskResult"]
     ask_service_factory: Callable[[], "AskService"]

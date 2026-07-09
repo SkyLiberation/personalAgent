@@ -274,15 +274,15 @@ class DefaultIntentRouter:
             self._log_decision(entry_input, deterministic, strategy="rule")
             return deterministic
 
-        github_decision = _deterministic_github_repository_decision(entry_input.text)
-        if github_decision is not None:
-            self._log_decision(entry_input, github_decision, strategy="github_rule")
-            return github_decision
+        codebase_decision = _deterministic_external_codebase_decision(entry_input.text)
+        if codebase_decision is not None:
+            self._log_decision(entry_input, codebase_decision, strategy="external_codebase_rule")
+            return codebase_decision
 
-        notion_decision = _deterministic_notion_workspace_decision(entry_input.text)
-        if notion_decision is not None:
-            self._log_decision(entry_input, notion_decision, strategy="notion_rule")
-            return notion_decision
+        workspace_decision = _deterministic_external_workspace_decision(entry_input.text)
+        if workspace_decision is not None:
+            self._log_decision(entry_input, workspace_decision, strategy="external_workspace_rule")
+            return workspace_decision
 
         result = self._classify_with_llm(
             _router_text(entry_input),
@@ -409,28 +409,28 @@ def _deterministic_research_decision(text: str) -> RouterDecision | None:
     )
 
 
-def _deterministic_github_repository_decision(text: str) -> RouterDecision | None:
+def _deterministic_external_codebase_decision(text: str) -> RouterDecision | None:
     stripped = text.strip()
     if not stripped:
         return None
     lowered = stripped.lower()
-    if not _looks_like_github_repository_qa(stripped, lowered):
+    if not _looks_like_external_codebase_qa(stripped, lowered):
         return None
     return _single_goal_decision(
-        "github_repository_qa",
+        "external_codebase_qa",
         input_text=stripped,
     )
 
 
-def _deterministic_notion_workspace_decision(text: str) -> RouterDecision | None:
+def _deterministic_external_workspace_decision(text: str) -> RouterDecision | None:
     stripped = text.strip()
     if not stripped:
         return None
     lowered = stripped.lower()
-    if not _looks_like_notion_workspace_qa(stripped, lowered):
+    if not _looks_like_external_workspace_qa(stripped, lowered):
         return None
     return _single_goal_decision(
-        "notion_workspace_qa",
+        "external_workspace_qa",
         input_text=stripped,
     )
 
@@ -535,7 +535,7 @@ def _deterministic_basic_decision(text: str) -> RouterDecision | None:
     return _single_goal_decision("ask", input_text=stripped)
 
 
-def _looks_like_github_repository_qa(text: str, lowered: str) -> bool:
+def _looks_like_external_codebase_qa(text: str, lowered: str) -> bool:
     repo_qualified = bool(re.search(r"\brepo:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text))
     github_url = "github.com/" in lowered
     owner_repo = bool(re.search(r"\b[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\b", text))
@@ -562,7 +562,7 @@ def _looks_like_github_repository_qa(text: str, lowered: str) -> bool:
     )
 
 
-def _looks_like_notion_workspace_qa(text: str, lowered: str) -> bool:
+def _looks_like_external_workspace_qa(text: str, lowered: str) -> bool:
     notion_named = "notion" in lowered or "notion" in text
     notion_url = "notion.so/" in lowered
     if not notion_named and not notion_url:

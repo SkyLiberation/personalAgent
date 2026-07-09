@@ -90,6 +90,10 @@ class AgentService:
         return self.runtime.tool_executor
 
     @property
+    def agent_gateway(self):
+        return self.runtime.agent_gateway
+
+    @property
     def artifact_service(self):
         return self.runtime.artifact_service
 

@@ -8,18 +8,25 @@ from uuid import uuid4
 
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.infra import mcp as mcp_module
-from personal_agent.kernel.config_env import _mcp_config_from_env, _parse_mcp_config
+from personal_agent.infra.mcp import MCPToolDefinition
+from personal_agent.kernel.config_env import (
+    _github_mcp_tool_config,
+    _mcp_config_from_env,
+    _parse_mcp_config,
+)
+from personal_agent.kernel.config_models import EnterpriseKnowledgeConfig, MCPServerConfig
 from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
+    build_mcp_capability_registry,
     build_mcp_tools,
     build_raw_wiki_search_tools,
     governance_extras,
+    mcp_capability_from_tool,
     tool_governance,
     tool_response,
     tool_schema,
     tool_success,
 )
-from personal_agent.kernel.config_models import EnterpriseKnowledgeConfig
 from langchain_core.tools import tool
 
 
@@ -48,6 +55,14 @@ def test_parse_mcp_config_from_env_json():
                 "remote_name": "search",
                 "name": "enterprise.search_docs",
                 "business_role": "enterprise_knowledge_search",
+                "semantic_domains": ["docs"],
+                "resource_types": ["page"],
+                "operations": ["search"],
+                "trust_level": "scoped",
+                "credential_mode": "delegated_token",
+                "data_egress_class": "content",
+                "attestation_status": "pinned",
+                "freshness_profile": "near_realtime",
                 "risk_level": "low",
                 "side_effects": ["read_longterm"],
                 "permission_scope": "docs:read",
@@ -78,6 +93,14 @@ def test_parse_stdio_mcp_config_from_env_json():
                 "remote_name": "search_code",
                 "name": "github.search_code",
                 "business_role": "enterprise_knowledge_search",
+                "semantic_domains": ["codebase"],
+                "resource_types": ["repository", "file", "code"],
+                "operations": ["search"],
+                "trust_level": "scoped",
+                "credential_mode": "delegated_token",
+                "data_egress_class": "content",
+                "attestation_status": "pinned",
+                "freshness_profile": "near_realtime",
                 "side_effects": ["external_network"],
                 "permission_scope": "github:repo:read",
             }],
@@ -90,6 +113,40 @@ def test_parse_stdio_mcp_config_from_env_json():
     assert config.servers[0].args[0] == "run"
     assert config.servers[0].env["GITHUB_READ_ONLY"] == "1"
     assert config.servers[0].tools[0].name == "github.search_code"
+
+
+def test_parse_mcp_config_rejects_tool_without_capability_metadata():
+    import pytest
+
+    with pytest.raises(ValueError):
+        _parse_mcp_config(json.dumps({
+            "enabled": True,
+            "servers": [{
+                "server_id": "github",
+                "transport": "stdio",
+                "command": "docker",
+                "tools": [{
+                    "remote_name": "search_code",
+                    "name": "github.search_code",
+                    "side_effects": ["external_network"],
+                    "permission_scope": "github:repo:read",
+                }],
+            }],
+        }))
+
+
+def test_parse_mcp_config_rejects_invalid_json():
+    import pytest
+
+    with pytest.raises(ValueError):
+        _parse_mcp_config("{not-json")
+
+
+def test_parse_mcp_config_rejects_non_object_payload():
+    import pytest
+
+    with pytest.raises(ValueError):
+        _parse_mcp_config("[]")
 
 
 def test_github_mcp_preset_from_env(monkeypatch):
@@ -114,6 +171,13 @@ def test_github_mcp_preset_from_env(monkeypatch):
         "github.search_repositories",
     ]
     assert all(tool.permission_scope == "github:repo:read" for tool in server.tools)
+    assert server.tools[0].semantic_domains == ("codebase",)
+    assert server.tools[0].resource_types == ("repository", "file", "code")
+    assert server.tools[0].operations == ("search",)
+    assert server.tools[0].trust_level == "scoped"
+    assert server.tools[0].credential_mode == "delegated_token"
+    assert server.tools[0].data_egress_class == "content"
+    assert server.tools[0].attestation_status == "pinned"
 
 
 def test_notion_mcp_preset_from_env(monkeypatch):
@@ -136,6 +200,13 @@ def test_notion_mcp_preset_from_env(monkeypatch):
         ("retrieve-page-markdown", "notion.retrieve_page_markdown"),
     ]
     assert all(tool.permission_scope == "notion:workspace:read" for tool in server.tools)
+    assert server.tools[0].semantic_domains == ("workspace_knowledge", "docs")
+    assert server.tools[0].resource_types == ("page", "data_source")
+    assert server.tools[0].operations == ("search",)
+    assert server.tools[0].trust_level == "scoped"
+    assert server.tools[0].credential_mode == "delegated_token"
+    assert server.tools[0].data_egress_class == "content"
+    assert server.tools[0].attestation_status == "pinned"
 
 
 def test_build_mcp_tool_registers_governed_tool(monkeypatch):
@@ -191,6 +262,14 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
                 "remote_name": "search",
                 "name": "enterprise.search_docs",
                 "business_role": "enterprise_knowledge_search",
+                "semantic_domains": ["docs"],
+                "resource_types": ["page"],
+                "operations": ["search"],
+                "trust_level": "scoped",
+                "credential_mode": "delegated_token",
+                "data_egress_class": "content",
+                "attestation_status": "pinned",
+                "freshness_profile": "near_realtime",
                 "side_effects": ["read_longterm"],
                 "permission_scope": "docs:read",
                 "timeout_seconds": 3,
@@ -209,6 +288,15 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
     assert governance.permission_scope == "docs:read"
     assert governance.timeout_seconds == 3
     assert tools[0].extras["mcp"]["business_role"] == "enterprise_knowledge_search"
+    capability = mcp_capability_from_tool(tools[0])
+    assert capability is not None
+    assert capability.capability_id == "mcp:docs:search"
+    assert capability.provider == "enterprise"
+    assert capability.server_id == "docs"
+    assert capability.remote_tool_name == "search"
+    assert capability.local_tool_name == "enterprise.search_docs"
+    assert capability.auth_scope == "docs:read"
+    assert capability.input_schema["properties"]["query"]["type"] == "string"
 
     sink = InMemoryToolAuditSink()
     executor = ToolExecutor(audit_sink=sink)
@@ -232,6 +320,39 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
         "tools/list",
         "tools/call",
     ]
+
+
+def test_mcp_capability_registry_indexes_governed_tools():
+    server = MCPServerConfig(
+        server_id="github",
+        transport="stdio",
+        command="docker",
+    )
+    client = object()
+    remote = MCPToolDefinition(
+        name="search_code",
+        description="Search repository code",
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+        raw={},
+    )
+    tool = __import__(
+        "personal_agent.tools.mcp",
+        fromlist=["build_mcp_tool"],
+    ).build_mcp_tool(
+        client,
+        server,
+        _github_mcp_tool_config("search_code"),
+        remote,
+    )
+
+    registry = build_mcp_capability_registry([tool])
+    capability = registry.get("mcp:github:search_code")
+
+    assert capability is not None
+    assert capability == mcp_capability_from_tool(tool)
+    assert registry.get_by_tool("github.search_code") == capability
+    assert registry.by_provider("github") == (capability,)
+    assert registry.by_domain("codebase") == (capability,)
 
 
 def test_build_mcp_tool_supports_stdio_transport():
@@ -299,6 +420,14 @@ for line in sys.stdin:
                     "remote_name": "search_code",
                     "name": "github.search_code",
                     "business_role": "enterprise_knowledge_search",
+                    "semantic_domains": ["codebase"],
+                    "resource_types": ["repository", "file", "code"],
+                    "operations": ["search"],
+                    "trust_level": "scoped",
+                    "credential_mode": "delegated_token",
+                    "data_egress_class": "content",
+                    "attestation_status": "pinned",
+                    "freshness_profile": "near_realtime",
                     "side_effects": ["external_network"],
                     "permission_scope": "github:repo:read",
                 }],

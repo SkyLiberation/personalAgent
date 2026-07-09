@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import ConfigDict, Field, create_model
 
 from personal_agent.infra.mcp import MCPError, MCPJsonRpcClient, MCPToolDefinition
+from personal_agent.kernel.contracts.capability import MCPCapability
 from personal_agent.kernel.config_models import MCPConfig, MCPServerConfig, MCPToolConfig
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
@@ -56,6 +57,14 @@ def build_mcp_tool(
         remote.input_schema,
     )
 
+    capability = _mcp_capability(
+        server=server,
+        mapping=mapping,
+        remote=remote,
+        tool_name=tool_name,
+        description=description,
+    )
+
     def _invoke(**kwargs: Any):
         arguments = _remote_arguments(
             kwargs,
@@ -98,7 +107,43 @@ def build_mcp_tool(
                 "business_role": mapping.business_role,
                 "input_schema": remote.input_schema,
             },
+            "mcp_capability": capability.model_dump(mode="json"),
         },
+    )
+
+
+def _mcp_capability(
+    *,
+    server: MCPServerConfig,
+    mapping: MCPToolConfig,
+    remote: MCPToolDefinition,
+    tool_name: str,
+    description: str,
+) -> MCPCapability:
+    provider = tool_name.split(".", 1)[0] if "." in tool_name else server.server_id
+    capability_id = f"mcp:{server.server_id}:{mapping.remote_name}"
+    return MCPCapability(
+        capability_id=capability_id,
+        provider=provider,
+        server_id=server.server_id,
+        remote_tool_name=mapping.remote_name,
+        local_tool_name=tool_name,
+        description=description,
+        semantic_domains=mapping.semantic_domains,
+        resource_types=mapping.resource_types,
+        operations=mapping.operations,  # type: ignore[arg-type]
+        risk_level=mapping.risk_level,
+        side_effects=mapping.side_effects,
+        auth_scope=mapping.permission_scope,
+        trust_level=mapping.trust_level,  # type: ignore[arg-type]
+        credential_mode=mapping.credential_mode,  # type: ignore[arg-type]
+        data_egress_class=mapping.data_egress_class,  # type: ignore[arg-type]
+        attestation_status=mapping.attestation_status,  # type: ignore[arg-type]
+        freshness_profile=mapping.freshness_profile,  # type: ignore[arg-type]
+        provider_priority=mapping.provider_priority,
+        input_schema=remote.input_schema,
+        output_schema=mapping.output_schema,
+        examples=mapping.examples,
     )
 
 

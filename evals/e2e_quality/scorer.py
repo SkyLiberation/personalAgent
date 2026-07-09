@@ -32,6 +32,9 @@ class E2EQualityCase:
     expected_tool_error_kinds: tuple[str, ...] = ()
     expected_tool_names: tuple[str, ...] = ()
     forbidden_tool_names: tuple[str, ...] = ()
+    expected_capability_ids: tuple[str, ...] = ()
+    expected_agent_ids: tuple[str, ...] = ()
+    expected_agent_artifact_verification_statuses: tuple[str, ...] = ()
     required_web_query_terms: tuple[str, ...] = ()
     required_web_query_term_groups: tuple[tuple[str, ...], ...] = ()
     required_answer_terms: tuple[str, ...] = ()
@@ -70,6 +73,8 @@ class E2EQualityCase:
     min_digest_items: int = 0
     min_web_search_calls: int = 0
     min_tool_call_traces: int = 0
+    min_capability_resolutions: int = 0
+    min_agent_runs: int = 0
     min_failed_tool_calls: int = 0
     min_stage_timings: int = 0
     min_satisfaction_coverage_score: float | None = None
@@ -169,6 +174,11 @@ class E2EQualityRun:
     failed_tool_call_count: int = 0
     tool_names: tuple[str, ...] = ()
     tool_error_kinds: tuple[str, ...] = ()
+    capability_ids: tuple[str, ...] = ()
+    capability_resolution_count: int = 0
+    agent_ids: tuple[str, ...] = ()
+    agent_run_count: int = 0
+    agent_artifact_verification_statuses: tuple[str, ...] = ()
     stage_timing_count: int = 0
     canonical_urls: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -614,6 +624,46 @@ def _metrics(case: E2EQualityCase, run: E2EQualityRun) -> list[MetricScore]:
             "tool_names",
             1.0 if not missing_tools else 0.0,
             "" if not missing_tools else f"missing={sorted(missing_tools)} actual={list(run.tool_names)}",
+        ))
+    if case.expected_capability_ids:
+        missing_capabilities = set(case.expected_capability_ids) - set(run.capability_ids)
+        metrics.append(MetricScore(
+            "capability_ids",
+            1.0 if not missing_capabilities else 0.0,
+            (
+                ""
+                if not missing_capabilities
+                else f"missing={sorted(missing_capabilities)} actual={list(run.capability_ids)}"
+            ),
+        ))
+    if case.min_capability_resolutions:
+        metrics.append(_min(
+            "capability_resolutions",
+            run.capability_resolution_count,
+            case.min_capability_resolutions,
+        ))
+    if case.expected_agent_ids:
+        missing_agents = set(case.expected_agent_ids) - set(run.agent_ids)
+        metrics.append(MetricScore(
+            "agent_ids",
+            1.0 if not missing_agents else 0.0,
+            "" if not missing_agents else f"missing={sorted(missing_agents)} actual={list(run.agent_ids)}",
+        ))
+    if case.min_agent_runs:
+        metrics.append(_min("agent_runs", run.agent_run_count, case.min_agent_runs))
+    if case.expected_agent_artifact_verification_statuses:
+        missing_statuses = (
+            set(case.expected_agent_artifact_verification_statuses)
+            - set(run.agent_artifact_verification_statuses)
+        )
+        metrics.append(MetricScore(
+            "agent_artifact_verification_statuses",
+            1.0 if not missing_statuses else 0.0,
+            (
+                ""
+                if not missing_statuses
+                else f"missing={sorted(missing_statuses)} actual={list(run.agent_artifact_verification_statuses)}"
+            ),
         ))
     for tool_name in case.forbidden_tool_names:
         forbidden = tool_name in run.tool_names

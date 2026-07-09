@@ -24,6 +24,17 @@ class ToolEvalCase:
     expected_timeout_seconds: float | None = None
     expected_max_retries: int | None = None
     expected_rate_limit_per_minute: int | None = None
+    expected_capability_id: str | None = None
+    expected_provider: str | None = None
+    expected_semantic_domains: list[str] | None = None
+    expected_resource_types: list[str] | None = None
+    expected_operations: list[str] | None = None
+    expected_auth_scope: str | None = None
+    expected_trust_level: str | None = None
+    expected_credential_mode: str | None = None
+    expected_data_egress_class: str | None = None
+    expected_attestation_status: str | None = None
+    expected_freshness_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,17 @@ class ToolRunOutput:
     timeout_seconds: float | None = None
     max_retries: int = 0
     rate_limit_per_minute: int | None = None
+    capability_id: str | None = None
+    provider: str | None = None
+    semantic_domains: list[str] = field(default_factory=list)
+    resource_types: list[str] = field(default_factory=list)
+    operations: list[str] = field(default_factory=list)
+    auth_scope: str | None = None
+    trust_level: str | None = None
+    credential_mode: str | None = None
+    data_egress_class: str | None = None
+    attestation_status: str | None = None
+    freshness_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +122,26 @@ def load_cases(path: str | Path) -> list[ToolEvalCase]:
             expected_timeout_seconds=_optional_float(item.get("expected_timeout_seconds")),
             expected_max_retries=_optional_int(item.get("expected_max_retries")),
             expected_rate_limit_per_minute=_optional_int(item.get("expected_rate_limit_per_minute")),
+            expected_capability_id=item.get("expected_capability_id"),
+            expected_provider=item.get("expected_provider"),
+            expected_semantic_domains=(
+                [str(domain) for domain in item["expected_semantic_domains"]]
+                if "expected_semantic_domains" in item else None
+            ),
+            expected_resource_types=(
+                [str(resource_type) for resource_type in item["expected_resource_types"]]
+                if "expected_resource_types" in item else None
+            ),
+            expected_operations=(
+                [str(operation) for operation in item["expected_operations"]]
+                if "expected_operations" in item else None
+            ),
+            expected_auth_scope=item.get("expected_auth_scope"),
+            expected_trust_level=item.get("expected_trust_level"),
+            expected_credential_mode=item.get("expected_credential_mode"),
+            expected_data_egress_class=item.get("expected_data_egress_class"),
+            expected_attestation_status=item.get("expected_attestation_status"),
+            expected_freshness_profile=item.get("expected_freshness_profile"),
         )
         for item in raw
     ]

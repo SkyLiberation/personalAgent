@@ -5,6 +5,7 @@
 声明，经 deterministic projector 投影为 `ExecutionStep`，进入 checkpoint-safe 的 LangGraph 步骤执行图。
 
 系统级的「LLM 决策点 vs 确定性流程」全景见 [summary/llm-decisions-and-deterministic-flows.md](summary/llm-decisions-and-deterministic-flows.md)。
+当前 MCP 与 A2A 的治理边界、主链路和评测门禁见 [summary/mcp-and-a2a-current-state.md](summary/mcp-and-a2a-current-state.md)。
 
 ## 目录分工
 
@@ -63,6 +64,14 @@
 | research_once（evidence-driven research loop） | [workflow/research-once-workflow.md](workflow/research-once-workflow.md) |
 | gpt_researcher_a2a（GPT Researcher A2A 外部研究 Agent） | [workflow/gpt-researcher-a2a-workflow.md](workflow/gpt-researcher-a2a-workflow.md) |
 | 主动知识闭环（gap 提问 / 巩固 / 简报） | [proactive-knowledge-loop.md](proactive-knowledge-loop.md) |
+
+## Future 设计
+
+| 主题 | 文档 |
+| --- | --- |
+| AgentGateway / A2A / MCP Capability Fabric | [future/agent-gateway-a2a-mcp-design.md](future/agent-gateway-a2a-mcp-design.md) |
+| Workflow 平台化优化 | [future/workflow-platform-optimization.md](future/workflow-platform-optimization.md) |
+| Agent Tool / Workflow 改造 | [future/agent-tool-workflow-redesign.md](future/agent-tool-workflow-redesign.md) |
 
 ## 运维与参考
 

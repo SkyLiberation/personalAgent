@@ -13,6 +13,7 @@ import time
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import Citation
+from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.prompts import render_prompt
 from personal_agent.orchestration.orchestration_models import (
     AgentGraphState,
@@ -27,6 +28,7 @@ from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _default_step_answer,
     _inject_draft_text_into_steps,
     _inject_note_id_into_steps,
+    _resolve_capability_resolution_for_step,
     _resolve_allowed_tools_for_step,
     _skip_step_dependents,
     _topological_sort_steps,
@@ -206,6 +208,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
             "step_id": step.step_id,
             "action_type": step.action_type,
             "tool_name": step.tool_name,
+            "agent_id": step.agent_id,
             "tool_input": step.tool_input,
             "task_id": step.task_id,
             "task_intent": step.task_intent,
@@ -233,10 +236,32 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
 
     # ---- ReAct branch: seed state and let ReactGraph handle execution ----
     if getattr(step, "execution_mode", "deterministic") == "react":
+        resolution = _resolve_capability_resolution_for_step(step, deps)
+        allowed_tools = (
+            set(resolution.allowed_tools)
+            if resolution is not None
+            else _resolve_allowed_tools_for_step(step, deps)
+        )
+        if resolution is not None:
+            state.add_event("capability_resolution", {
+                "workflow_id": step.workflow_id,
+                "step_id": step.step_id,
+                "selected_capability_ids": [
+                    capability.capability_id
+                    for capability in resolution.selected_capabilities
+                ],
+                "allowed_tools": list(resolution.allowed_tools),
+                "denied_capability_ids": [
+                    denied.capability_id
+                    for denied in resolution.denied_capabilities
+                ],
+                "rationale": resolution.rationale,
+                "confidence": resolution.confidence,
+            })
         state.react = ReactSubState(
             step_id=step.step_id,
             max_iterations=min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP),
-            allowed_tools=list(_resolve_allowed_tools_for_step(step, deps)),
+            allowed_tools=list(allowed_tools),
             status="running",
         )
         logger.info(
@@ -270,6 +295,20 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
             "step_execution": state.step_execution,
             "events": state.events,
         }
+
+    if step.action_type == "agent_call":
+        if not step.agent_id:
+            return _fail_current_step(
+                state,
+                step,
+                ValueError("agent_call step missing agent_id"),
+                deps=deps,
+            )
+        try:
+            _execute_agent_call_step(step, sd, state, deps)
+        except Exception as exc:
+            return _fail_current_step(state, step, exc, deps=deps)
+        return _complete_current_step(state, step, deps=deps)
 
     try:
         _dispatch_step(step, sd, state, deps)
@@ -489,6 +528,11 @@ def _step_display_output(step, result_data: object) -> dict[str, str]:
         return {
             "output_label": "生成草稿",
             "output_preview": str(result_data["answer"])[:800],
+        }
+    if step.action_type == "agent_call" and result_data.get("report"):
+        return {
+            "output_label": "外部 Agent 报告",
+            "output_preview": str(result_data["report"])[:800],
         }
     if step.action_type == "tool_call" and step.tool_name == "capture_text":
         preview = str(result_data.get("content_preview") or "").strip()
@@ -924,23 +968,6 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
         if target_id:
             tool_input.setdefault("target_id", str(target_id))
 
-    elif step.tool_name == "gpt_researcher.a2a_research":
-        tool_input.setdefault("user_id", state.user_id)
-        topic = step.task_input or (
-            (entry_input.text if entry_input is not None else state.entry_text) or ""
-        )
-        if topic.strip():
-            tool_input.setdefault("topic", topic.strip())
-        for key in ("report_type", "report_source", "tone"):
-            if metadata.get(key):
-                tool_input.setdefault(key, str(metadata[key]))
-        max_search_results = metadata.get("max_search_results")
-        if max_search_results:
-            try:
-                tool_input.setdefault("max_search_results", int(max_search_results))
-            except (TypeError, ValueError):
-                pass
-
     sd.tool_input = tool_input
     step.tool_input = tool_input
 
@@ -1102,6 +1129,116 @@ def _dispatch_step(
 
     else:
         raise ValueError(f"未知的 action_type: {step.action_type}")
+
+
+def _execute_agent_call_step(
+    step: "ExecutionStep",
+    sd: StepRunState,
+    state: AgentGraphState,
+    deps: StepExecutionContext,
+) -> None:
+    metadata = state.entry_input.metadata if state.entry_input is not None else {}
+    task_input = step.task_input or state.entry_text or step.description
+    task_payload: dict[str, object] = {"topic": task_input}
+    for key in ("report_type", "report_source", "tone"):
+        if metadata.get(key):
+            task_payload[key] = str(metadata[key])
+    max_search_results = metadata.get("max_search_results")
+    if max_search_results:
+        try:
+            task_payload["max_search_results"] = int(max_search_results)
+        except (TypeError, ValueError):
+            pass
+    task = AgentTask(
+        task_text=task_input,
+        task_type="research",
+        input=task_payload,
+        metadata={"workflow_id": step.workflow_id, "step_id": step.step_id},
+    )
+    context = AgentGatewayContext(
+        user_id=state.user_id,
+        session_id=state.session_id,
+        run_id=state.run_id,
+        thread_id=state.thread_id,
+        workflow_id=step.workflow_id,
+        step_id=step.step_id,
+        source_platform=(
+            state.entry_input.source_platform
+            if state.entry_input is not None
+            else ""
+        ),
+    )
+    state.add_event("agent_run_submitted", {
+        "step_id": step.step_id,
+        "agent_id": step.agent_id,
+        "task_type": task.task_type,
+    })
+    result = deps.agent_gateway.invoke(step.agent_id or "", task, context)
+    run = result.run
+    for event in run.events:
+        state.add_event("agent_run_event", {
+            "step_id": step.step_id,
+            "agent_id": run.agent_id,
+            "agent_run_id": run.agent_run_id,
+            "agent_event_type": event.type,
+            "payload": event.payload,
+        })
+    try:
+        for event in deps.agent_gateway.stream(run.agent_run_id, context):
+            state.add_event("agent_run_event", {
+                "step_id": step.step_id,
+                "agent_id": run.agent_id,
+                "agent_run_id": run.agent_run_id,
+                "agent_event_type": event.type,
+                "payload": event.payload,
+            })
+    except Exception:
+        logger.exception("Agent stream mapping failed for run_id=%s", run.agent_run_id)
+    for artifact in run.artifacts:
+        _persist_step_artifact(
+            state,
+            sd,
+            deps,
+            phase=f"agent_artifact_{artifact.artifact_id}",
+            payload={
+                "agent_run_id": artifact.agent_run_id,
+                "artifact_id": artifact.artifact_id,
+                "kind": artifact.kind,
+                "content": artifact.content,
+                "payload": artifact.payload,
+                "verification_status": artifact.verification_status,
+            },
+        )
+    state.add_event("agent_run_completed", {
+        "step_id": step.step_id,
+        "agent_id": run.agent_id,
+        "agent_run_id": run.agent_run_id,
+        "status": run.status,
+        "external_task_id": run.external_task_id,
+        "artifact_count": len(run.artifacts),
+        "artifact_verification_statuses": [
+            artifact.verification_status
+            for artifact in run.artifacts
+        ],
+    })
+    state.step_execution.results[step.step_id] = {
+        "provider": run.agent_id,
+        "agent_run_id": run.agent_run_id,
+        "external_task_id": run.external_task_id,
+        "status": run.status,
+        "report": result.output_text,
+        "answer": result.output_text,
+        "artifacts": [
+            {
+                "artifact_id": artifact.artifact_id,
+                "kind": artifact.kind,
+                "content": artifact.content,
+                "verification_status": artifact.verification_status,
+            }
+            for artifact in run.artifacts
+        ],
+        "metadata": result.metadata,
+    }
 
 
 def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
@@ -1299,21 +1436,29 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
             state.entry_input = original_entry
         return state.answer or ""
 
-    if route == "github_repository_qa":
+    if route == "external_codebase_qa":
         for data in reversed(list(state.step_execution.results.values())):
             if isinstance(data, dict):
                 answer = str(data.get("answer") or "").strip()
                 if answer:
                     return answer
-        return f"GitHub 工具已完成检索，但没有返回可呈现内容。问题：{question}"
+        return f"外部代码库工具已完成检索，但没有返回可呈现内容。问题：{question}"
 
-    if route == "notion_workspace_qa":
+    if route == "external_workspace_qa":
         for data in reversed(list(state.step_execution.results.values())):
             if isinstance(data, dict):
                 answer = str(data.get("answer") or "").strip()
                 if answer:
                     return answer
-        return f"Notion 工具已完成检索，但没有返回可呈现内容。问题：{question}"
+        return f"外部工作区工具已完成检索，但没有返回可呈现内容。问题：{question}"
+
+    if route == "external_project_ops":
+        for data in reversed(list(state.step_execution.results.values())):
+            if isinstance(data, dict):
+                answer = str(data.get("answer") or "").strip()
+                if answer:
+                    return answer
+        return f"外部项目工具已完成检索，但没有返回可呈现内容。问题：{question}"
 
     if route == "gpt_researcher_a2a":
         for data in reversed(list(state.step_execution.results.values())):

@@ -520,9 +520,18 @@ def _parse_mcp_config(raw: str) -> MCPConfig:
           "transport": "http",
           "endpoint": "https://mcp.example/rpc",
           "authorization": "Bearer ...",
-          "tools": [
-            {"remote_name": "search_pages", "name": "enterprise.search_pages"}
-          ]
+          "tools": [{
+            "remote_name": "search_pages",
+            "name": "enterprise.search_pages",
+            "semantic_domains": ["docs"],
+            "resource_types": ["page"],
+            "operations": ["search"],
+            "trust_level": "scoped",
+            "credential_mode": "delegated_token",
+            "data_egress_class": "content",
+            "attestation_status": "pinned",
+            "freshness_profile": "near_realtime"
+          }]
         },
         {
           "server_id": "github",
@@ -530,9 +539,18 @@ def _parse_mcp_config(raw: str) -> MCPConfig:
           "command": "docker",
           "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
           "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}", "GITHUB_READ_ONLY": "1"},
-          "tools": [
-            {"remote_name": "search_code", "name": "github.search_code"}
-          ]
+          "tools": [{
+            "remote_name": "search_code",
+            "name": "github.search_code",
+            "semantic_domains": ["codebase"],
+            "resource_types": ["repository", "file", "code"],
+            "operations": ["search"],
+            "trust_level": "scoped",
+            "credential_mode": "delegated_token",
+            "data_egress_class": "content",
+            "attestation_status": "pinned",
+            "freshness_profile": "near_realtime"
+          }]
         }
       ]
     }
@@ -543,29 +561,26 @@ def _parse_mcp_config(raw: str) -> MCPConfig:
 
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return MCPConfig()
+    except json.JSONDecodeError as exc:
+        raise ValueError("PERSONAL_AGENT_MCP_SERVERS must be valid JSON.") from exc
     if not isinstance(parsed, dict):
-        return MCPConfig()
+        raise ValueError("PERSONAL_AGENT_MCP_SERVERS must be a JSON object.")
+    raw_servers = parsed.get("servers", []) or []
+    if not isinstance(raw_servers, list):
+        raise ValueError("PERSONAL_AGENT_MCP_SERVERS.servers must be a list.")
     servers: list[MCPServerConfig] = []
-    for server in parsed.get("servers", []) or []:
+    for server in raw_servers:
         if not isinstance(server, dict):
-            continue
+            raise ValueError("MCP server entry must be an object.")
         tools: list[MCPToolConfig] = []
         for item in server.get("tools", []) or []:
             if not isinstance(item, dict):
-                continue
-            try:
-                tools.append(MCPToolConfig.model_validate(item))
-            except Exception:
-                continue
-        try:
-            servers.append(MCPServerConfig.model_validate({
-                **server,
-                "tools": tuple(tools),
-            }))
-        except Exception:
-            continue
+                raise ValueError("MCP tool entry must be an object.")
+            tools.append(MCPToolConfig.model_validate(item))
+        servers.append(MCPServerConfig.model_validate({
+            **server,
+            "tools": tuple(tools),
+        }))
     return MCPConfig(
         enabled=_as_bool(str(parsed.get("enabled", False))),
         servers=tuple(servers),
@@ -653,11 +668,57 @@ def _github_mcp_tool_config(remote_name: str) -> MCPToolConfig:
         "get_file_contents": "Read file contents from a GitHub repository that the configured token can read.",
         "search_repositories": "Search GitHub repositories visible to the configured token.",
     }
+    capability_by_remote = {
+        "search_code": {
+            "semantic_domains": ("codebase",),
+            "resource_types": ("repository", "file", "code"),
+            "operations": ("search",),
+            "freshness_profile": "near_realtime",
+            "provider_priority": 20,
+            "examples": ({
+                "user_task": "在 github/github-mcp-server 里 search_code 是在哪里实现的？",
+                "tool": "github.search_code",
+            },),
+        },
+        "get_file_contents": {
+            "semantic_domains": ("codebase", "docs"),
+            "resource_types": ("repository", "file"),
+            "operations": ("read",),
+            "freshness_profile": "near_realtime",
+            "provider_priority": 20,
+            "examples": ({
+                "user_task": "读取 github/github-mcp-server 的 README.md",
+                "tool": "github.get_file_contents",
+            },),
+        },
+        "search_repositories": {
+            "semantic_domains": ("codebase", "repository_discovery"),
+            "resource_types": ("repository",),
+            "operations": ("search",),
+            "freshness_profile": "near_realtime",
+            "provider_priority": 30,
+            "examples": ({
+                "user_task": "搜索 GitHub 上 stars:>10000 topic:agent language:python 的仓库",
+                "tool": "github.search_repositories",
+            },),
+        },
+    }
+    capability = capability_by_remote.get(remote_name, {})
     return MCPToolConfig(
         remote_name=remote_name,
         name=f"github.{remote_name}",
         description=descriptions.get(remote_name),
         business_role="enterprise_knowledge_search",
+        semantic_domains=capability.get("semantic_domains", ("codebase",)),
+        resource_types=capability.get("resource_types", ("repository",)),
+        operations=capability.get("operations", ("search",)),
+        trust_level="scoped",
+        credential_mode="delegated_token",
+        data_egress_class="content",
+        attestation_status="pinned",
+        freshness_profile=capability.get("freshness_profile", "near_realtime"),
+        provider_priority=capability.get("provider_priority"),
+        examples=capability.get("examples", ()),
         exposure="public_agent",
         risk_level="low",
         side_effects=("external_network",),
@@ -713,11 +774,44 @@ def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
         "post-search": "Search pages and data sources visible to the configured Notion integration.",
         "retrieve-page-markdown": "Read a Notion page's full content as Markdown.",
     }
+    capability_by_remote = {
+        "post-search": {
+            "semantic_domains": ("workspace_knowledge", "docs"),
+            "resource_types": ("page", "data_source"),
+            "operations": ("search",),
+            "provider_priority": 20,
+            "examples": ({
+                "user_task": "在 Notion 里搜索 Orion 项目的会议纪要",
+                "tool": "notion.search",
+            },),
+        },
+        "retrieve-page-markdown": {
+            "semantic_domains": ("workspace_knowledge", "docs"),
+            "resource_types": ("page",),
+            "operations": ("read",),
+            "provider_priority": 20,
+            "examples": ({
+                "user_task": "读取 Notion 页面并总结内容",
+                "tool": "notion.retrieve_page_markdown",
+            },),
+        },
+    }
+    capability = capability_by_remote.get(remote_name, {})
     return MCPToolConfig(
         remote_name=remote_name,
         name=public_name_by_remote.get(remote_name, f"notion.{remote_name.replace('-', '_')}"),
         description=descriptions.get(remote_name),
         business_role="enterprise_knowledge_search",
+        semantic_domains=capability.get("semantic_domains", ("workspace_knowledge",)),
+        resource_types=capability.get("resource_types", ("page",)),
+        operations=capability.get("operations", ("search",)),
+        trust_level="scoped",
+        credential_mode="delegated_token",
+        data_egress_class="content",
+        attestation_status="pinned",
+        freshness_profile="near_realtime",
+        provider_priority=capability.get("provider_priority"),
+        examples=capability.get("examples", ()),
         exposure="public_agent",
         risk_level="low",
         side_effects=("external_network",),

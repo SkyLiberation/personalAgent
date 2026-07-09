@@ -80,7 +80,7 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 
 | 类型 | 是否生成 `ExecutionStep` | 是否进入 `StepExecutionGraph` | 典型 intent |
 | --- | --- | --- | --- |
-| Step projection workflow | 是 | 是 | `capture_*`、`analyze_artifact`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps`、`research_*`、`github_repository_qa`、`notion_workspace_qa`、`gpt_researcher_a2a`、`manage_research`、`maintain_knowledge`、`inspect_operations`、`inspect_workflow`、`direct_answer` |
+| Step projection workflow | 是 | 是 | `capture_*`、`analyze_artifact`、`ask`、`summarize_thread`、`delete_knowledge`、`solidify_conversation`、`review_digest`、`consolidate_knowledge`、`inspect_knowledge_gaps`、`research_*`、`external_codebase_qa`、`external_workspace_qa`、`external_project_ops`、`gpt_researcher_a2a`、`manage_research`、`maintain_knowledge`、`inspect_operations`、`inspect_workflow`、`direct_answer` |
 | Fallback branch | 否 | 否 | `unknown`、step projection 校验失败后的澄清/兜底 |
 
 ## 当前已注册 Workflow
@@ -100,8 +100,9 @@ Context 由 `AgentRuntime` 在启动时显式构造。节点不接收 Runtime，
 | `inspect_knowledge_gaps` | `inspect_knowledge_gaps` | step projection | `gap-inspect -> gap-compose` |
 | `research_once` | `research_once` | step projection | `research-prepare -> research-initialize -> research-loop -> research-synthesize -> research-verify -> research-compose` |
 | `execute_research_run` | `execute_research_run` | step projection | `research-initialize -> research-loop -> research-synthesize -> research-verify` |
-| `github_repository_qa` | `github_repository_qa` | step projection | `github-retrieve -> github-compose` |
-| `notion_workspace_qa` | `notion_workspace_qa` | step projection | `notion-retrieve -> notion-compose` |
+| `external_codebase_qa` | `external_codebase_qa` | step projection | `codebase-resolve -> codebase-compose` |
+| `external_workspace_qa` | `external_workspace_qa` | step projection | `workspace-resolve -> workspace-compose` |
+| `external_project_ops` | `external_project_ops` | step projection | `project-resolve -> project-compose` |
 | `gpt_researcher_a2a` | `gpt_researcher_a2a` | step projection | `gptr-a2a-research -> gptr-a2a-compose` |
 | `create_research_subscription` | `create_research_subscription` | step projection | `research-subscribe` |
 | `manage_research` | `manage_research` | step projection | `research-manage-decide -> research-manage-compose` |
@@ -147,7 +148,9 @@ route_intent
 
 `research_once` 是多步 research workflow：prepare、initialize、loop、synthesize、verify、compose 都是独立 step，便于记录 ResearchRun、tool trace、digest 和 claim verification。`execute_research_run` 复用 initialize 之后的后半段；`create_research_subscription` 是单步订阅创建；`manage_research` 用受控 ReAct/resolve 管理订阅、运行、简报、反馈和入库。
 
-`gpt_researcher_a2a` 是外部 Agent 委托 workflow：Router 只在用户明确点名 GPT Researcher / A2A 时选择它；workflow 用 deterministic `tool_call(gpt_researcher.a2a_research)` 进入 ToolGateway，再由 compose 呈现 A2A 返回的 Markdown report。它不替代 `research_once`，也不作为 ask/research 的兼容 fallback。
+`gpt_researcher_a2a` 是外部 Agent 委托 workflow：Router 只在用户明确点名 GPT Researcher / A2A 时选择它；workflow 用 `agent_call(gpt_researcher)` 进入 AgentGateway，产生 AgentRun、AgentEvent 和默认 `unverified` 的 AgentArtifact，再由 compose 呈现 A2A 返回的 Markdown report。它不替代 `research_once`，也不作为 ask/research 的兼容 fallback。
+
+`external_codebase_qa`、`external_workspace_qa`、`external_project_ops` 是 MCP task-domain workflow。Router 只选择任务域，不选择 GitHub / Notion 等 provider；ReAct step 在执行前通过 `CapabilityResolver` 从 `MCPCapabilityRegistry` 解析 scoped allowlist，并写入 `capability_resolution` 事件。实际工具调用仍统一经过 ToolGateway、PolicyEngine 和审计。
 
 `maintain_knowledge`、`inspect_operations`、`inspect_workflow` 属于受控诊断/维护类 workflow。它们通常使用 `resolve` + allowlisted tools，允许读取或有限写入，但仍受 `StepProjectionValidator`、ToolGateway、风险 metadata 和审计约束。
 

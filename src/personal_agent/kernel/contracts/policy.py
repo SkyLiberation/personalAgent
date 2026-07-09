@@ -23,6 +23,7 @@ PolicyEffect = Literal["allow", "deny", "require_confirmation", "require_escalat
 # 被治理的动作类别。工具调用、记忆读写删、图谱同步、入口接入都走同一套决策。
 PolicyAction = Literal[
     "tool_call",
+    "agent_call",
     "memory_read",
     "memory_write",
     "memory_delete",

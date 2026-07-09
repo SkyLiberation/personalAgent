@@ -531,49 +531,57 @@ CASES = [
         id="E2E-GH-MCP-001",
         branch="github_mcp",
         description="GitHub repo implementation question calls github.search_code through ToolGateway",
-        expected_intents=("github_repository_qa",),
-        expected_workflow_id="github_repository_qa",
-        expected_steps=("github-retrieve", "github-compose"),
+        expected_intents=("external_codebase_qa",),
+        expected_workflow_id="external_codebase_qa",
+        expected_steps=("codebase-resolve", "codebase-compose"),
         expected_run_statuses=("completed",),
         expected_tool_names=("github.search_code",),
+        expected_capability_ids=("mcp:github:search_code",),
         forbidden_tool_names=("graph_search",),
         min_tool_call_traces=1,
+        min_capability_resolutions=1,
     ),
     E2EQualityCase(
         id="E2E-GH-MCP-002",
         branch="github_mcp",
         description="GitHub README/file question calls github.get_file_contents through ToolGateway",
-        expected_intents=("github_repository_qa",),
-        expected_workflow_id="github_repository_qa",
-        expected_steps=("github-retrieve", "github-compose"),
+        expected_intents=("external_codebase_qa",),
+        expected_workflow_id="external_codebase_qa",
+        expected_steps=("codebase-resolve", "codebase-compose"),
         expected_run_statuses=("completed",),
         expected_tool_names=("github.get_file_contents",),
+        expected_capability_ids=("mcp:github:get_file_contents",),
         forbidden_tool_names=("graph_search",),
         min_tool_call_traces=1,
+        min_capability_resolutions=1,
     ),
     E2EQualityCase(
         id="E2E-GH-MCP-003",
         branch="github_mcp",
         description="GitHub repository discovery question calls github.search_repositories through ToolGateway",
-        expected_intents=("github_repository_qa",),
-        expected_workflow_id="github_repository_qa",
-        expected_steps=("github-retrieve", "github-compose"),
+        expected_intents=("external_codebase_qa",),
+        expected_workflow_id="external_codebase_qa",
+        expected_steps=("codebase-resolve", "codebase-compose"),
         expected_run_statuses=("completed",),
         expected_tool_names=("github.search_repositories",),
+        expected_capability_ids=("mcp:github:search_repositories",),
         forbidden_tool_names=("graph_search",),
         min_tool_call_traces=1,
+        min_capability_resolutions=1,
     ),
     E2EQualityCase(
         id="E2E-GH-MCP-004",
         branch="github_mcp",
         description="repo-qualified code search calls github.search_code through ToolGateway",
-        expected_intents=("github_repository_qa",),
-        expected_workflow_id="github_repository_qa",
-        expected_steps=("github-retrieve", "github-compose"),
+        expected_intents=("external_codebase_qa",),
+        expected_workflow_id="external_codebase_qa",
+        expected_steps=("codebase-resolve", "codebase-compose"),
         expected_run_statuses=("completed",),
         expected_tool_names=("github.search_code",),
+        expected_capability_ids=("mcp:github:search_code",),
         forbidden_tool_names=("graph_search",),
         min_tool_call_traces=1,
+        min_capability_resolutions=1,
     ),
     E2EQualityCase(
         id="E2E-GH-MCP-005",
@@ -591,25 +599,29 @@ CASES = [
         id="E2E-NOTION-MCP-001",
         branch="notion_mcp",
         description="Notion workspace search question calls notion.search through ToolGateway",
-        expected_intents=("notion_workspace_qa",),
-        expected_workflow_id="notion_workspace_qa",
-        expected_steps=("notion-retrieve", "notion-compose"),
+        expected_intents=("external_workspace_qa",),
+        expected_workflow_id="external_workspace_qa",
+        expected_steps=("workspace-resolve", "workspace-compose"),
         expected_run_statuses=("completed",),
         expected_tool_names=("notion.search",),
+        expected_capability_ids=("mcp:notion:post-search",),
         forbidden_tool_names=("graph_search", "notion.retrieve_page_markdown"),
         min_tool_call_traces=1,
+        min_capability_resolutions=1,
     ),
     E2EQualityCase(
         id="E2E-NOTION-MCP-002",
         branch="notion_mcp",
         description="Notion page read question calls notion.retrieve_page_markdown through ToolGateway",
-        expected_intents=("notion_workspace_qa",),
-        expected_workflow_id="notion_workspace_qa",
-        expected_steps=("notion-retrieve", "notion-compose"),
+        expected_intents=("external_workspace_qa",),
+        expected_workflow_id="external_workspace_qa",
+        expected_steps=("workspace-resolve", "workspace-compose"),
         expected_run_statuses=("completed",),
         expected_tool_names=("notion.retrieve_page_markdown",),
+        expected_capability_ids=("mcp:notion:retrieve-page-markdown",),
         forbidden_tool_names=("graph_search", "notion.search"),
         min_tool_call_traces=1,
+        min_capability_resolutions=1,
     ),
     E2EQualityCase(
         id="E2E-NOTION-MCP-003",
@@ -622,14 +634,15 @@ CASES = [
     E2EQualityCase(
         id="E2E-GPTR-A2A-001",
         branch="gpt_researcher_a2a",
-        description="GPT Researcher A2A request calls gpt_researcher.a2a_research through ToolGateway",
+        description="GPT Researcher A2A request creates AgentRun through AgentGateway",
         expected_intents=("gpt_researcher_a2a",),
         expected_workflow_id="gpt_researcher_a2a",
         expected_steps=("gptr-a2a-research", "gptr-a2a-compose"),
         expected_run_statuses=("completed",),
-        expected_tool_names=("gpt_researcher.a2a_research",),
-        forbidden_tool_names=("graph_search", "research_run_loop"),
-        min_tool_call_traces=1,
+        expected_agent_ids=("gpt_researcher",),
+        expected_agent_artifact_verification_statuses=("unverified",),
+        forbidden_tool_names=("graph_search", "research_run_loop", "gpt_researcher.a2a_research"),
+        min_agent_runs=1,
         required_answer_terms=("Agent2Agent", "GPT Researcher A2A"),
     ),
     E2EQualityCase(
@@ -867,6 +880,56 @@ def _semantic_components(workspace: WorkspaceService) -> tuple[str, ...]:
         getattr(workspace.claim_grounding_judge, "name", ""),
         getattr(workspace.answer_coverage_judge, "name", ""),
     )))
+
+
+def _capability_resolution_events(events: list[object]) -> tuple[dict[str, object], ...]:
+    payloads: list[dict[str, object]] = []
+    for event in events:
+        if hasattr(event, "model_dump"):
+            raw = event.model_dump(mode="json")
+        elif isinstance(event, dict):
+            raw = event
+        else:
+            continue
+        if raw.get("type") != "capability_resolution":
+            continue
+        payload = raw.get("payload")
+        if isinstance(payload, dict):
+            payloads.append(payload)
+    return tuple(payloads)
+
+
+def _capability_resolution_trace(events: list[object]) -> tuple[tuple[str, ...], int]:
+    capability_ids: list[str] = []
+    for payload in _capability_resolution_events(events):
+        for capability_id in payload.get("selected_capability_ids") or ():
+            if isinstance(capability_id, str) and capability_id not in capability_ids:
+                capability_ids.append(capability_id)
+    return tuple(capability_ids), len(_capability_resolution_events(events))
+
+
+def _agent_run_trace(events: list[object]) -> tuple[tuple[str, ...], int, tuple[str, ...]]:
+    agent_ids: list[str] = []
+    verification_statuses: list[str] = []
+    count = 0
+    for event in events:
+        if hasattr(event, "model_dump"):
+            raw = event.model_dump(mode="json")
+        elif isinstance(event, dict):
+            raw = event
+        else:
+            continue
+        if raw.get("type") != "agent_run_completed":
+            continue
+        count += 1
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        agent_id = payload.get("agent_id")
+        if isinstance(agent_id, str) and agent_id not in agent_ids:
+            agent_ids.append(agent_id)
+        for status in payload.get("artifact_verification_statuses") or ():
+            if isinstance(status, str) and status not in verification_statuses:
+                verification_statuses.append(status)
+    return tuple(agent_ids), count, tuple(verification_statuses)
 
 
 def _grounding_verifiers(ingest) -> tuple[str, ...]:
@@ -2125,6 +2188,7 @@ def _run_github_mcp_prompt(
         limit=20,
     ) if result.run_id else []
     tool_names = tuple(reversed([str(event["tool_name"]) for event in audit_events]))
+    capability_ids, capability_resolution_count = _capability_resolution_trace(result.events)
     return E2EQualityRun(
         case_id=case_id,
         branch="github_mcp",
@@ -2134,6 +2198,8 @@ def _run_github_mcp_prompt(
         step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
         answer=result.reply_text or "",
         tool_names=tool_names,
+        capability_ids=capability_ids,
+        capability_resolution_count=capability_resolution_count,
         tool_call_trace_count=len(audit_events),
         failed_tool_call_count=sum(
             1 for event in audit_events if not bool(event.get("artifact_ok"))
@@ -2147,6 +2213,7 @@ def _run_github_mcp_prompt(
             "prompt": prompt,
             "react_calls": react_calls,
             "audit_events": audit_events,
+            "capability_resolution_events": _capability_resolution_events(result.events),
         },
     )
 
@@ -2161,16 +2228,37 @@ def _build_fake_github_mcp_tools():
         "github.search_code",
         description="Search code in GitHub repositories that the configured token can read.",
         response_format="content_and_artifact",
-        extras=governance_extras(
-            exposure="public_agent",
-            risk_level="low",
-            side_effects=("external_network",),
-            permission_scope="github:repo:read",
-            timeout_seconds=20.0,
-            max_retries=1,
-            rate_limit_per_minute=30,
-            allowed_domains=("github.com",),
-        ),
+        extras={
+            **governance_extras(
+                exposure="public_agent",
+                risk_level="low",
+                side_effects=("external_network",),
+                permission_scope="github:repo:read",
+                timeout_seconds=20.0,
+                max_retries=1,
+                rate_limit_per_minute=30,
+                allowed_domains=("github.com",),
+            ),
+            "mcp_capability": {
+                "capability_id": "mcp:github:search_code",
+                "provider": "github",
+                "server_id": "github",
+                "remote_tool_name": "search_code",
+                "local_tool_name": "github.search_code",
+                "semantic_domains": ("codebase",),
+                "resource_types": ("repository", "file", "code"),
+                "operations": ("search",),
+                "risk_level": "low",
+                "side_effects": ("external_network",),
+                "auth_scope": "github:repo:read",
+                "trust_level": "scoped",
+                "credential_mode": "user_token",
+                "data_egress_class": "content",
+                "attestation_status": "verified",
+                "freshness_profile": "realtime",
+                "provider_priority": 1,
+            },
+        },
     )
     def github_search_code(query: str, user_id: str = "default", run_id: str | None = None):
         return tool_response(tool_success({
@@ -2186,16 +2274,37 @@ def _build_fake_github_mcp_tools():
         "github.get_file_contents",
         description="Read file contents from a GitHub repository that the configured token can read.",
         response_format="content_and_artifact",
-        extras=governance_extras(
-            exposure="public_agent",
-            risk_level="low",
-            side_effects=("external_network",),
-            permission_scope="github:repo:read",
-            timeout_seconds=20.0,
-            max_retries=1,
-            rate_limit_per_minute=30,
-            allowed_domains=("github.com",),
-        ),
+        extras={
+            **governance_extras(
+                exposure="public_agent",
+                risk_level="low",
+                side_effects=("external_network",),
+                permission_scope="github:repo:read",
+                timeout_seconds=20.0,
+                max_retries=1,
+                rate_limit_per_minute=30,
+                allowed_domains=("github.com",),
+            ),
+            "mcp_capability": {
+                "capability_id": "mcp:github:get_file_contents",
+                "provider": "github",
+                "server_id": "github",
+                "remote_tool_name": "get_file_contents",
+                "local_tool_name": "github.get_file_contents",
+                "semantic_domains": ("codebase", "docs"),
+                "resource_types": ("repository", "file"),
+                "operations": ("read",),
+                "risk_level": "low",
+                "side_effects": ("external_network",),
+                "auth_scope": "github:repo:read",
+                "trust_level": "scoped",
+                "credential_mode": "user_token",
+                "data_egress_class": "content",
+                "attestation_status": "verified",
+                "freshness_profile": "realtime",
+                "provider_priority": 1,
+            },
+        },
     )
     def github_get_file_contents(
         owner: str,
@@ -2217,16 +2326,37 @@ def _build_fake_github_mcp_tools():
         "github.search_repositories",
         description="Search GitHub repositories visible to the configured token.",
         response_format="content_and_artifact",
-        extras=governance_extras(
-            exposure="public_agent",
-            risk_level="low",
-            side_effects=("external_network",),
-            permission_scope="github:repo:read",
-            timeout_seconds=20.0,
-            max_retries=1,
-            rate_limit_per_minute=30,
-            allowed_domains=("github.com",),
-        ),
+        extras={
+            **governance_extras(
+                exposure="public_agent",
+                risk_level="low",
+                side_effects=("external_network",),
+                permission_scope="github:repo:read",
+                timeout_seconds=20.0,
+                max_retries=1,
+                rate_limit_per_minute=30,
+                allowed_domains=("github.com",),
+            ),
+            "mcp_capability": {
+                "capability_id": "mcp:github:search_repositories",
+                "provider": "github",
+                "server_id": "github",
+                "remote_tool_name": "search_repositories",
+                "local_tool_name": "github.search_repositories",
+                "semantic_domains": ("codebase", "repository_discovery"),
+                "resource_types": ("repository",),
+                "operations": ("search",),
+                "risk_level": "low",
+                "side_effects": ("external_network",),
+                "auth_scope": "github:repo:read",
+                "trust_level": "scoped",
+                "credential_mode": "user_token",
+                "data_egress_class": "metadata",
+                "attestation_status": "verified",
+                "freshness_profile": "realtime",
+                "provider_priority": 2,
+            },
+        },
     )
     def github_search_repositories(query: str, user_id: str = "default", run_id: str | None = None):
         return tool_response(tool_success({
@@ -2311,6 +2441,7 @@ def _run_notion_mcp_write_request(service: AgentService) -> E2EQualityRun:
         run_id=result.run_id,
         limit=20,
     ) if result.run_id else []
+    capability_ids, capability_resolution_count = _capability_resolution_trace(result.events)
     return E2EQualityRun(
         case_id="E2E-NOTION-MCP-003",
         branch="notion_mcp",
@@ -2320,6 +2451,8 @@ def _run_notion_mcp_write_request(service: AgentService) -> E2EQualityRun:
         step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
         answer=result.reply_text or "",
         tool_names=tuple(reversed([str(event["tool_name"]) for event in audit_events])),
+        capability_ids=capability_ids,
+        capability_resolution_count=capability_resolution_count,
         tool_call_trace_count=len(audit_events),
         failed_tool_call_count=sum(
             1 for event in audit_events if not bool(event.get("artifact_ok"))
@@ -2332,6 +2465,7 @@ def _run_notion_mcp_write_request(service: AgentService) -> E2EQualityRun:
         metadata={
             "prompt": prompt,
             "audit_events": audit_events,
+            "capability_resolution_events": _capability_resolution_events(result.events),
         },
     )
 
@@ -2393,6 +2527,7 @@ def _run_notion_mcp_prompt(
         limit=20,
     ) if result.run_id else []
     tool_names = tuple(reversed([str(event["tool_name"]) for event in audit_events]))
+    capability_ids, capability_resolution_count = _capability_resolution_trace(result.events)
     return E2EQualityRun(
         case_id=case_id,
         branch="notion_mcp",
@@ -2402,6 +2537,8 @@ def _run_notion_mcp_prompt(
         step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
         answer=result.reply_text or "",
         tool_names=tool_names,
+        capability_ids=capability_ids,
+        capability_resolution_count=capability_resolution_count,
         tool_call_trace_count=len(audit_events),
         failed_tool_call_count=sum(
             1 for event in audit_events if not bool(event.get("artifact_ok"))
@@ -2415,6 +2552,7 @@ def _run_notion_mcp_prompt(
             "prompt": prompt,
             "react_calls": react_calls,
             "audit_events": audit_events,
+            "capability_resolution_events": _capability_resolution_events(result.events),
         },
     )
 
@@ -2429,16 +2567,37 @@ def _build_fake_notion_mcp_tools():
         "notion.search",
         description="Search pages and data sources visible to the configured Notion integration.",
         response_format="content_and_artifact",
-        extras=governance_extras(
-            exposure="public_agent",
-            risk_level="low",
-            side_effects=("external_network",),
-            permission_scope="notion:workspace:read",
-            timeout_seconds=20.0,
-            max_retries=1,
-            rate_limit_per_minute=30,
-            allowed_domains=("notion.so", "api.notion.com"),
-        ),
+        extras={
+            **governance_extras(
+                exposure="public_agent",
+                risk_level="low",
+                side_effects=("external_network",),
+                permission_scope="notion:workspace:read",
+                timeout_seconds=20.0,
+                max_retries=1,
+                rate_limit_per_minute=30,
+                allowed_domains=("notion.so", "api.notion.com"),
+            ),
+            "mcp_capability": {
+                "capability_id": "mcp:notion:post-search",
+                "provider": "notion",
+                "server_id": "notion",
+                "remote_tool_name": "post-search",
+                "local_tool_name": "notion.search",
+                "semantic_domains": ("workspace_knowledge", "docs"),
+                "resource_types": ("page", "data_source"),
+                "operations": ("search",),
+                "risk_level": "low",
+                "side_effects": ("external_network",),
+                "auth_scope": "notion:workspace:read",
+                "trust_level": "scoped",
+                "credential_mode": "user_token",
+                "data_egress_class": "content",
+                "attestation_status": "verified",
+                "freshness_profile": "realtime",
+                "provider_priority": 1,
+            },
+        },
     )
     def notion_search(query: str, user_id: str = "default", run_id: str | None = None):
         return tool_response(tool_success({
@@ -2454,16 +2613,37 @@ def _build_fake_notion_mcp_tools():
         "notion.retrieve_page_markdown",
         description="Read a Notion page's full content as Markdown.",
         response_format="content_and_artifact",
-        extras=governance_extras(
-            exposure="public_agent",
-            risk_level="low",
-            side_effects=("external_network",),
-            permission_scope="notion:workspace:read",
-            timeout_seconds=20.0,
-            max_retries=1,
-            rate_limit_per_minute=30,
-            allowed_domains=("notion.so", "api.notion.com"),
-        ),
+        extras={
+            **governance_extras(
+                exposure="public_agent",
+                risk_level="low",
+                side_effects=("external_network",),
+                permission_scope="notion:workspace:read",
+                timeout_seconds=20.0,
+                max_retries=1,
+                rate_limit_per_minute=30,
+                allowed_domains=("notion.so", "api.notion.com"),
+            ),
+            "mcp_capability": {
+                "capability_id": "mcp:notion:retrieve-page-markdown",
+                "provider": "notion",
+                "server_id": "notion",
+                "remote_tool_name": "retrieve-page-markdown",
+                "local_tool_name": "notion.retrieve_page_markdown",
+                "semantic_domains": ("workspace_knowledge", "docs"),
+                "resource_types": ("page",),
+                "operations": ("read",),
+                "risk_level": "low",
+                "side_effects": ("external_network",),
+                "auth_scope": "notion:workspace:read",
+                "trust_level": "scoped",
+                "credential_mode": "user_token",
+                "data_egress_class": "content",
+                "attestation_status": "verified",
+                "freshness_profile": "realtime",
+                "provider_priority": 1,
+            },
+        },
     )
     def notion_retrieve_page_markdown(
         page_id: str,
@@ -2501,7 +2681,7 @@ def _notion_page_id_from_prompt(prompt: str) -> str:
 
 
 def _run_gpt_researcher_a2a_question(service: AgentService) -> E2EQualityRun:
-    _register_fake_gpt_researcher_a2a_tool(service)
+    _register_fake_gpt_researcher_a2a_agent(service)
     prompt = "用 GPT Researcher A2A 调研 Agent2Agent 协议采用情况，并生成研究报告"
     user_id = "e2e-e2e-gptr-a2a-001"
     result = service.execute_entry(EntryInput(
@@ -2516,6 +2696,7 @@ def _run_gpt_researcher_a2a_question(service: AgentService) -> E2EQualityRun:
         run_id=result.run_id,
         limit=20,
     ) if result.run_id else []
+    agent_ids, agent_run_count, artifact_statuses = _agent_run_trace(result.events)
     return E2EQualityRun(
         case_id="E2E-GPTR-A2A-001",
         branch="gpt_researcher_a2a",
@@ -2525,6 +2706,9 @@ def _run_gpt_researcher_a2a_question(service: AgentService) -> E2EQualityRun:
         step_ids=tuple(str(step.get("step_id") or "") for step in (result.steps or [])),
         answer=result.reply_text or "",
         tool_names=tuple(reversed([str(event["tool_name"]) for event in audit_events])),
+        agent_ids=agent_ids,
+        agent_run_count=agent_run_count,
+        agent_artifact_verification_statuses=artifact_statuses,
         tool_call_trace_count=len(audit_events),
         failed_tool_call_count=sum(
             1 for event in audit_events if not bool(event.get("artifact_ok"))
@@ -2537,59 +2721,67 @@ def _run_gpt_researcher_a2a_question(service: AgentService) -> E2EQualityRun:
         metadata={
             "prompt": prompt,
             "audit_events": audit_events,
+            "agent_runs": [run.agent_run_id for run in service.agent_gateway.list_runs(run_id=result.run_id)],
         },
     )
 
 
-def _register_fake_gpt_researcher_a2a_tool(service: AgentService) -> None:
-    @tool(
-        "gpt_researcher.a2a_research",
-        description="Fake GPT Researcher A2A research report tool for full-chain e2e.",
-        response_format="content_and_artifact",
-        extras=governance_extras(
-            exposure="public_agent",
-            risk_level="medium",
-            side_effects=("external_network",),
-            permission_scope="a2a:gpt_researcher:research",
-            timeout_seconds=120.0,
-            max_retries=1,
-            retry_backoff_seconds=1.0,
-            rate_limit_per_minute=5,
-            allowed_domains=("localhost", "127.0.0.1"),
-        ),
-    )
-    def gpt_researcher_a2a_research(
-        topic: str,
-        report_type: str | None = None,
-        report_source: str | None = None,
-        tone: str | None = None,
-        max_search_results: int | None = None,
-        user_id: str = "default",
-        run_id: str | None = None,
-    ):
-        return tool_response(tool_success({
-            "provider": "gpt_researcher_a2a_fake",
-            "task_id": "fake-a2a-task-1",
-            "context_id": "fake-a2a-context-1",
-            "state": "completed",
-            "report": (
+def _register_fake_gpt_researcher_a2a_agent(service: AgentService) -> None:
+    from personal_agent.agents.gpt_researcher_a2a import GPTResearcherA2AAdapter
+    from personal_agent.infra.a2a import A2AResearchResponse
+    from personal_agent.kernel.config_models import GPTResearcherA2AConfig
+
+    class _FakeGPTResearcherClient:
+        def research(self, *, topic, report_type=None, report_source=None, tone=None, max_search_results=None, blocking=True):
+            report = (
                 "# GPT Researcher A2A Report\n\n"
                 f"Agent2Agent adoption research for: {topic}\n\n"
                 "The fake report proves the full entry -> router -> workflow -> "
-                "ToolGateway -> audit chain invoked GPT Researcher A2A."
-            ),
-            "metadata": {
-                "report_type": report_type,
-                "report_source": report_source,
-                "tone": tone,
-                "max_search_results": max_search_results,
-                "user_id": user_id,
-                "run_id": run_id,
-            },
-            "artifacts": [],
-        }))
+                "AgentGateway -> AgentRun chain invoked GPT Researcher A2A."
+            )
+            return A2AResearchResponse(
+                task_id="fake-a2a-task-1",
+                context_id="fake-a2a-context-1",
+                state="completed",
+                report=report,
+                artifacts=[{
+                    "name": "research_report",
+                    "parts": [{"kind": "text", "text": report}],
+                }],
+                metadata={
+                    "report_type": report_type,
+                    "report_source": report_source,
+                    "tone": tone,
+                    "max_search_results": max_search_results,
+                    "blocking": blocking,
+                },
+                raw={"id": "fake-a2a-task-1"},
+            )
 
-    service.tool_executor.register(gpt_researcher_a2a_research)
+        def submit_research(self, **kwargs):
+            return self.research(**kwargs, blocking=False)
+
+        def get_task(self, task_id):
+            return self.research(topic=task_id)
+
+        def cancel_task(self, task_id):
+            response = self.research(topic=task_id)
+            return response.__class__(
+                task_id=response.task_id,
+                context_id=response.context_id,
+                state="canceled",
+                report=response.report,
+                artifacts=response.artifacts,
+                metadata=response.metadata,
+                raw=response.raw,
+            )
+
+        def stream_task(self, task_id):
+            yield {"kind": "text", "text": f"stream for {task_id}"}
+
+    service.agent_gateway.register(
+        GPTResearcherA2AAdapter(GPTResearcherA2AConfig(enabled=True), _FakeGPTResearcherClient())
+    )
 
 
 def _run_research_dual_source(service: AgentService) -> E2EQualityRun:

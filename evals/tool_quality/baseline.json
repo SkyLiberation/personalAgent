@@ -7,5 +7,6 @@
   "idempotency_exact": 1.0,
   "audit_exact": 1.0,
   "resource_policy_exact": 1.0,
+  "capability_metadata_exact": 1.0,
   "overall_exact": 1.0
 }

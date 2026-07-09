@@ -257,6 +257,14 @@ PERSONAL_AGENT_GITHUB_MCP_TOOLS=search_code,get_file_contents,search_repositorie
 
 这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`github:repo:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。默认 Docker 启动参数会传入 `GITHUB_READ_ONLY=1`，避免暴露 issue/PR/文件写入类工具。
 
+同时，每个 GitHub MCP mapping 会注册一份 `MCPCapability`：
+
+| Tool | semantic_domains | resource_types | operations | trust / credential / egress / attestation |
+| --- | --- | --- | --- | --- |
+| `github.search_code` | `codebase` | `repository`, `file`, `code` | `search` | `scoped` / `delegated_token` / `content` / `pinned` |
+| `github.get_file_contents` | `codebase`, `docs` | `repository`, `file` | `read` | `scoped` / `delegated_token` / `content` / `pinned` |
+| `github.search_repositories` | `codebase`, `repository_discovery` | `repository` | `search` | `scoped` / `delegated_token` / `content` / `pinned` |
+
 Notion MCP 也有一组一等配置，默认只映射 workspace 只读能力：
 
 ```env
@@ -273,7 +281,25 @@ PERSONAL_AGENT_NOTION_MCP_TOOLS=post-search,retrieve-page-markdown
 
 默认 stdio 命令是 `npx -y @notionhq/notion-mcp-server`。这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`notion:workspace:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。当前 preset 不映射 `update-page-markdown`、`move-page`、评论、data source 更新等写操作；这些能力应作为单独 workflow 接入，并声明中高风险、确认和幂等策略。
 
-`PERSONAL_AGENT_MCP_SERVERS` 仍可用一个 JSON 对象注册其他经过业务批准的 MCP 工具。项目启动时会先发现远端 MCP server 的工具，再只把 `tools` 中显式映射的能力注册进 `ToolGateway`；每个映射仍然带 `risk_level`、`side_effects`、`permission_scope`、限流、超时和审计配置。
+每个 Notion MCP mapping 也会注册一份 `MCPCapability`：
+
+| Tool | semantic_domains | resource_types | operations | trust / credential / egress / attestation |
+| --- | --- | --- | --- | --- |
+| `notion.search` | `workspace_knowledge`, `docs` | `page`, `data_source` | `search` | `scoped` / `delegated_token` / `content` / `pinned` |
+| `notion.retrieve_page_markdown` | `workspace_knowledge`, `docs` | `page` | `read` | `scoped` / `delegated_token` / `content` / `pinned` |
+
+`PERSONAL_AGENT_MCP_SERVERS` 仍可用一个 JSON 对象注册其他经过业务批准的 MCP 工具。项目启动时会先发现远端 MCP server 的工具，再只把 `tools` 中显式映射的能力注册进 `ToolGateway`；每个映射必须同时声明 `risk_level`、`side_effects`、`permission_scope`、限流、超时、审计配置和 capability metadata。缺少 capability metadata 的旧格式 mapping 会被配置解析拒绝：
+
+- `semantic_domains`：能力所属语义领域，例如 `codebase`、`workspace_knowledge`、`docs`。
+- `resource_types`：可操作资源，例如 `repository`、`file`、`page`、`data_source`。
+- `operations`：允许的操作类型，例如 `search`、`read`、`list`、`create`、`update`、`delete`。
+- `trust_level`：`trusted`、`scoped`、`external`、`untrusted`。
+- `credential_mode`：`user_token`、`delegated_token`、`service_token`、`none`。
+- `data_egress_class`：`none`、`metadata`、`content`、`sensitive`。
+- `attestation_status`：`verified`、`pinned`、`self_claimed`、`unknown`。
+- `freshness_profile`：`realtime`、`near_realtime`、`static`、`unknown`。
+
+这些字段会写入 tool 的 `extras["mcp_capability"]`，并可通过 `MCPCapabilityRegistry` 查询，供后续 `CapabilityResolver` 按任务领域动态生成 scoped tool allowlist。当前 P0 provider workflow 仍保留为 plumbing baseline；P1 已要求 `tool_quality` 验证 MCP capability metadata、治理字段和安全边界同时正确。
 
 当前支持两类 transport：
 
@@ -284,7 +310,7 @@ GitHub MCP 的只读仓库检索示例：
 
 ```env
 GITHUB_PAT=your_github_personal_access_token_here
-PERSONAL_AGENT_MCP_SERVERS={"enabled":true,"servers":[{"server_id":"github","transport":"stdio","command":"docker","args":["run","-i","--rm","-e","GITHUB_PERSONAL_ACCESS_TOKEN","-e","GITHUB_READ_ONLY","ghcr.io/github/github-mcp-server"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${GITHUB_PAT}","GITHUB_READ_ONLY":"1"},"tools":[{"remote_name":"search_code","name":"github.search_code","description":"Search code in GitHub repositories that the configured token can read.","business_role":"enterprise_knowledge_search","side_effects":["external_network"],"permission_scope":"github:repo:read","allowed_domains":["github.com"]},{"remote_name":"get_file_contents","name":"github.get_file_contents","description":"Read file contents from a GitHub repository that the configured token can read.","business_role":"enterprise_knowledge_search","side_effects":["external_network"],"permission_scope":"github:repo:read","allowed_domains":["github.com"]}]}]}
+PERSONAL_AGENT_MCP_SERVERS={"enabled":true,"servers":[{"server_id":"github","transport":"stdio","command":"docker","args":["run","-i","--rm","-e","GITHUB_PERSONAL_ACCESS_TOKEN","-e","GITHUB_READ_ONLY","ghcr.io/github/github-mcp-server"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${GITHUB_PAT}","GITHUB_READ_ONLY":"1"},"tools":[{"remote_name":"search_code","name":"github.search_code","description":"Search code in GitHub repositories that the configured token can read.","business_role":"enterprise_knowledge_search","side_effects":["external_network"],"permission_scope":"github:repo:read","semantic_domains":["codebase"],"resource_types":["repository","file","code"],"operations":["search"],"trust_level":"scoped","credential_mode":"delegated_token","data_egress_class":"content","attestation_status":"pinned","freshness_profile":"near_realtime","allowed_domains":["github.com"]},{"remote_name":"get_file_contents","name":"github.get_file_contents","description":"Read file contents from a GitHub repository that the configured token can read.","business_role":"enterprise_knowledge_search","side_effects":["external_network"],"permission_scope":"github:repo:read","semantic_domains":["codebase","docs"],"resource_types":["repository","file"],"operations":["read"],"trust_level":"scoped","credential_mode":"delegated_token","data_egress_class":"content","attestation_status":"pinned","freshness_profile":"near_realtime","allowed_domains":["github.com"]}]}]}
 ```
 
 同一配置展开后等价于：
@@ -318,6 +344,14 @@ PERSONAL_AGENT_MCP_SERVERS={"enabled":true,"servers":[{"server_id":"github","tra
           "business_role": "enterprise_knowledge_search",
           "side_effects": ["external_network"],
           "permission_scope": "github:repo:read",
+          "semantic_domains": ["codebase"],
+          "resource_types": ["repository", "file", "code"],
+          "operations": ["search"],
+          "trust_level": "scoped",
+          "credential_mode": "delegated_token",
+          "data_egress_class": "content",
+          "attestation_status": "pinned",
+          "freshness_profile": "near_realtime",
           "allowed_domains": ["github.com"]
         },
         {
@@ -326,6 +360,14 @@ PERSONAL_AGENT_MCP_SERVERS={"enabled":true,"servers":[{"server_id":"github","tra
           "business_role": "enterprise_knowledge_search",
           "side_effects": ["external_network"],
           "permission_scope": "github:repo:read",
+          "semantic_domains": ["codebase", "docs"],
+          "resource_types": ["repository", "file"],
+          "operations": ["read"],
+          "trust_level": "scoped",
+          "credential_mode": "delegated_token",
+          "data_egress_class": "content",
+          "attestation_status": "pinned",
+          "freshness_profile": "near_realtime",
           "allowed_domains": ["github.com"]
         }
       ]
@@ -338,7 +380,7 @@ GitHub MCP 官方镜像支持 `GITHUB_READ_ONLY=1`，建议默认启用，并且
 
 ## GPT Researcher A2A 配置
 
-本工程可把已部署的 `gpt-researcher` A2A JSON-RPC 后端注册为受治理工具 `gpt_researcher.a2a_research`。后端按 `D:\mySoft\workspace\gpt-researcher\docker-compose.a2a.yml` 启动后，默认暴露：
+本工程可把已部署的 `gpt-researcher` A2A JSON-RPC 后端注册为外部 Agent `gpt_researcher`，由 AgentGateway 治理 AgentRun / AgentEvent / AgentArtifact。后端按 `D:\mySoft\workspace\gpt-researcher\docker-compose.a2a.yml` 启动后，默认暴露：
 
 ```text
 Agent Card: http://127.0.0.1:8001/.well-known/agent-card.json
@@ -358,7 +400,7 @@ PERSONAL_AGENT_GPT_RESEARCHER_A2A_TONE=Objective
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=
 ```
 
-启用后，用户明确点名 `GPT Researcher` / `GPT-Researcher` / `A2A` 委托研究时会路由到 `gpt_researcher_a2a` workflow，通过 ToolGateway 调用 `gpt_researcher.a2a_research`。普通“调研最新动态”仍走本工程内置 `research_once` workflow。
+启用后，用户明确点名 `GPT Researcher` / `GPT-Researcher` / `A2A` 委托研究时会路由到 `gpt_researcher_a2a` workflow，通过 `agent_call(gpt_researcher)` 进入 AgentGateway。普通“调研最新动态”仍走本工程内置 `research_once` workflow。
 
 ## Firecrawl 配置
 
