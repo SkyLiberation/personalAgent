@@ -49,6 +49,15 @@ class RetrievalStage:
         )
 
         self._coordinator.run(ctx)
+        ctx.retrieval_health["pre_enrichment_match_ids"] = [
+            match.id for match in ctx.combined_matches
+        ]
+        ctx.retrieval_health["pre_enrichment_citation_note_ids"] = [
+            citation.note_id for citation in ctx.combined_citations if citation.note_id
+        ]
+        ctx.retrieval_health["pre_enrichment_evidence_ids"] = [
+            item.source_id for item in ctx.evidence_pool
+        ]
         self._assemble_context(ctx)
 
     def _assemble_context(self, ctx: "AskRunContext") -> None:
@@ -76,6 +85,55 @@ class RetrievalStage:
         ctx.context_pack = assembled.context_pack
         ctx.selected_matches = assembled.selected_matches
         ctx.selected_citations = assembled.selected_citations
+        ctx.retrieval_health["post_enrichment_match_ids"] = [
+            match.id for match in ctx.combined_matches
+        ]
+        ctx.retrieval_health["post_enrichment_citation_note_ids"] = [
+            citation.note_id for citation in ctx.combined_citations if citation.note_id
+        ]
+        ctx.retrieval_health["post_enrichment_evidence_ids"] = [
+            item.source_id for item in ctx.evidence_pool
+        ]
+        ctx.retrieval_health["context_selected_evidence_ids"] = [
+            item.evidence.source_id for item in ctx.context_pack.selected
+        ]
+        ctx.retrieval_health["context_selected_evidence_lineage"] = [
+            {
+                **item.evidence.lineage,
+                "metadata_artifact_id": item.evidence.metadata.get("artifact_id"),
+                "retrieved_by": item.evidence.metadata.get("retrieved_by"),
+                "candidate": item.evidence.metadata.get("candidate"),
+                "fusion_rank": item.evidence.metadata.get("fusion_rank"),
+                "fusion_score": item.evidence.metadata.get("fusion_score"),
+                "fusion_components": item.evidence.metadata.get("fusion_components"),
+            }
+            for item in ctx.context_pack.selected
+        ]
+        ctx.retrieval_health["context_selected_match_ids"] = [
+            match.id for match in ctx.selected_matches
+        ]
+        ctx.retrieval_health["context_selected_match_source_refs"] = [
+            str(match.source.ref or "") for match in ctx.selected_matches
+        ]
+        ctx.retrieval_health["context_selected_citation_note_ids"] = [
+            citation.note_id for citation in ctx.selected_citations if citation.note_id
+        ]
+        ctx.retrieval_health["context_selected_citation_source_refs"] = [
+            str(citation.source_ref or "") for citation in ctx.selected_citations
+        ]
+        ctx.retrieval_health["context_dropped_evidence_ids"] = [
+            item.evidence.source_id for item in ctx.context_pack.dropped
+        ]
+        ctx.retrieval_health["context_dropped_evidence_reasons"] = [
+            {
+                "source_id": item.evidence.source_id,
+                "source_ref": item.evidence.source_ref,
+                "parent_note_id": item.evidence.parent_note_id,
+                "source_type": item.evidence.source_type,
+                "drop_reason": item.drop_reason,
+            }
+            for item in ctx.context_pack.dropped
+        ]
         for line in assembled.trace:
             ctx.add_trace(line)
 

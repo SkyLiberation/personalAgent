@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Protocol
 from personal_agent.kernel.evidence import (
     EvidenceItem,
     SourceDocument,
+    annotate_candidate_metadata,
     episodes_to_evidence,
     graph_result_to_evidence,
     memory_items_to_evidence,
@@ -62,6 +63,17 @@ class Retriever(Protocol):
         filters: RetrievalFilters,
         ctx: "AskRunContext",
     ) -> RetrievalContribution:
+        ...
+
+
+class HybridRetriever(Protocol):
+    """Production multi-source retrieval boundary.
+
+    Implementations populate a shared candidate/evidence pool from dense,
+    sparse, workspace, graph and metadata branches before fusion/reranking.
+    """
+
+    def run(self, ctx: "AskRunContext") -> None:
         ...
 
 
@@ -143,9 +155,41 @@ class LocalRetriever:
         state = self._service._run_local_retrieval(query, ctx.user_id, filters)
         out = RetrievalContribution(source=self.name)
         if state:
+            debug = getattr(getattr(self._service, "memory", None), "last_retrieval_debug", {}) or {}
+            lexical_rank_by_id = {
+                str(note_id): rank
+                for rank, note_id in enumerate(debug.get("raw_lexical_ids") or [], 1)
+            }
+            vector_rank_by_id = {
+                str(note_id): rank
+                for rank, note_id in enumerate(debug.get("raw_vector_ids") or [], 1)
+            }
             out.matches = _merge_notes([], state.matches)
             out.citations = _merge_citations([], state.citations)
-            out.evidence.extend(notes_to_evidence(state.matches))
+            local_evidence = []
+            total = max(1, len(state.matches))
+            for rank, item in enumerate(notes_to_evidence(state.matches), 1):
+                local_score = max(0.35, 1.0 - ((rank - 1) / max(total, 8)) * 0.65)
+                sparse_rank = lexical_rank_by_id.get(item.source_id)
+                dense_rank = vector_rank_by_id.get(item.source_id)
+                enriched = item.model_copy(update={
+                    "score": max(float(item.score or 0.0), local_score),
+                    "metadata": {
+                        **item.metadata,
+                        "retrieved_by": "local",
+                        "local_retrieval_rank": rank,
+                        "candidate_source_type": "sparse",
+                    },
+                })
+                annotate_candidate_metadata(
+                    enriched,
+                    source="local",
+                    rank=rank,
+                    dense_rank=dense_rank,
+                    sparse_rank=sparse_rank,
+                )
+                local_evidence.append(enriched)
+            out.evidence.extend(local_evidence)
             out.trace.append(
                 f"本地候选已进入统一证据池 matches={len(state.matches)} "
                 f"citations={len(state.citations)}"
@@ -262,12 +306,21 @@ class WorkspaceRetriever:
     def retrieve(self, query, filters, ctx) -> RetrievalContribution:
         workspace_service = getattr(self._service, "workspace_service", None)
         out = RetrievalContribution(source=self.name)
+        if not getattr(self._service.settings.ask, "workspace_retrieval_enabled", True):
+            return out
+        quota = self._workspace_quota(ctx)
+        if quota <= 0:
+            out.trace.append(
+                "Workspace 检索已跳过：当前问题未判定为 claim-sensitive，保持 evidence-first"
+            )
+            return out
         if workspace_service is None:
             return out
         try:
             answer = workspace_service.answer_with_evidence(
                 query,
                 workspace_id=ctx.user_id or "default",
+                limit=quota,
             )
         except Exception:
             logger.exception("Workspace retrieval failed user=%s", ctx.user_id)
@@ -284,19 +337,28 @@ class WorkspaceRetriever:
         )
         conflicted = set(str(item) for item in answer.conflicted_claim_ids if item)
         seen_notes: set[str] = set()
-        for index, citation in enumerate(answer.citations, 1):
-            match_id = (citation.claim_ids[0] if citation.claim_ids else citation.evidence_span_id)
+        for index, citation in enumerate(answer.citations[:quota], 1):
+            if not citation.evidence_span_id or not citation.artifact_id:
+                continue
+            match_id = citation.evidence_span_id
             title = f"Workspace evidence {index}"
+            evidence_ref_payload = (
+                citation.evidence_ref.model_dump(mode="json")
+                if citation.evidence_ref is not None
+                else {}
+            )
             metadata = {
                 "retrieved_by": self.name,
                 "workspace_id": ctx.user_id or "default",
                 "artifact_id": citation.artifact_id,
                 "evidence_block_id": citation.evidence_block_id,
                 "evidence_span_id": citation.evidence_span_id,
+                "evidence_ref": evidence_ref_payload,
                 "claim_ids": list(citation.claim_ids),
                 "conflicted_claim_ids": sorted(conflicted),
                 "potential_conflicted_claim_ids": sorted(potential_conflicts),
                 "grounding_status": answer.grounding_status,
+                "retrieval_mode": getattr(ctx.retrieval_plan, "retrieval_mode", ""),
             }
             out.evidence.append(EvidenceItem(
                 evidence_id=citation.evidence_span_id,
@@ -307,7 +369,7 @@ class WorkspaceRetriever:
                 source_ref=citation.artifact_id,
                 source_span=citation.locator,
                 element_ids=list(citation.claim_ids),
-                score=0.9,
+                score=self._workspace_score(ctx, answer.grounding_status, bool(citation.claim_ids)),
                 metadata=metadata,
             ))
             out.citations.append(Citation(
@@ -327,7 +389,7 @@ class WorkspaceRetriever:
                 id=match_id,
                 user_id=ctx.user_id,
                 source=NoteSource(
-                    type="workspace_claim",
+                    type="workspace_evidence",
                     ref=citation.artifact_id,
                     metadata=metadata,
                 ),
@@ -344,9 +406,43 @@ class WorkspaceRetriever:
             conflict_hint = f" potential_conflict={len(potential_conflicts)}"
         out.trace.append(
             f"Workspace 候选已进入统一证据池 citations={len(out.citations)} "
-            f"evidence={len(out.evidence)}{conflict_hint}"
+            f"evidence={len(out.evidence)} quota={quota}{conflict_hint}"
         )
         return out
+
+    def _workspace_quota(self, ctx: "AskRunContext") -> int:
+        plan = getattr(ctx, "retrieval_plan", None)
+        understanding = getattr(ctx, "understanding", None)
+        mode = str(
+            getattr(plan, "retrieval_mode", "")
+            or getattr(understanding, "retrieval_mode", "")
+            or "evidence_dominant"
+        )
+        claim_sensitive = bool(
+            getattr(plan, "claim_sensitive", False)
+            or getattr(understanding, "claim_sensitive", False)
+            or mode in {"claim_expand_to_evidence", "claim_state_diagnostic"}
+        )
+        ask_settings = self._service.settings.ask
+        if not claim_sensitive:
+            return max(0, int(getattr(ask_settings, "workspace_default_quota", 0)))
+        return max(0, int(getattr(ask_settings, "workspace_claim_sensitive_quota", 3)))
+
+    @staticmethod
+    def _workspace_score(ctx: "AskRunContext", grounding_status: str, has_claim: bool) -> float:
+        mode = str(getattr(ctx.retrieval_plan, "retrieval_mode", "evidence_dominant"))
+        score = 0.58
+        if mode == "claim_expand_to_evidence":
+            score += 0.08
+        elif mode == "claim_state_diagnostic":
+            score += 0.04
+        if grounding_status == "supported":
+            score += 0.08
+        elif grounding_status == "weak_evidence":
+            score += 0.03
+        if has_claim:
+            score += 0.03
+        return min(score, 0.78)
 
 
 # Opposition cues appended to a claim to bias recall toward counter-evidence.
@@ -451,8 +547,10 @@ class RetrievalCoordinator:
         for rank, item in enumerate(contrib.evidence, start=1):
             source = item.metadata.get("retrieved_by") or contrib.source or "unknown"
             source_ranks = dict(item.metadata.get("source_ranks") or {})
-            source_ranks.setdefault(source, rank)
-            item.metadata["source_ranks"] = source_ranks
+            if not source_ranks:
+                annotate_candidate_metadata(item, source=source, rank=rank)
+            else:
+                item.metadata["source_ranks"] = source_ranks
         ctx.combined_matches = _merge_notes(ctx.combined_matches, contrib.matches)
         ctx.combined_citations = _merge_citations(ctx.combined_citations, contrib.citations)
         ctx.evidence_pool.extend(contrib.evidence)
@@ -468,8 +566,6 @@ class RetrievalCoordinator:
         use_local = "local" in plan.sources
         use_web_proactive = "web" in plan.sources
         self._record_graph_freshness(ctx, use_graph=use_graph)
-
-        self._absorb(ctx, self.workspace.retrieve(query, filters, ctx))
 
         # Fetch graph + local. When planned, fetch concurrently — but absorb in a
         # fixed order (graph → sub-query → local → ...) so the evidence pool order
@@ -504,6 +600,13 @@ class RetrievalCoordinator:
 
         if local_contrib is not None:
             self._absorb(ctx, local_contrib)
+
+        workspace_contrib = self.workspace.retrieve(query, filters, ctx)
+        if workspace_contrib.evidence or workspace_contrib.citations or workspace_contrib.matches:
+            self._absorb(ctx, workspace_contrib)
+        else:
+            for line in workspace_contrib.trace:
+                ctx.add_trace(line)
 
         # --- episodic / reflection / proactive web ---
         if ctx.understanding and ctx.understanding.needs_episodic_context:

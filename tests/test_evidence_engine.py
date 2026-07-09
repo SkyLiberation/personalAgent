@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from personal_agent.application.candidate_fusion import CandidateFusion
 from personal_agent.application.candidate_enrichers import NoopCandidateEnricher
 from personal_agent.application.evidence_engine import (
     EvidenceAssemblyPolicy,
@@ -8,6 +9,8 @@ from personal_agent.application.evidence_engine import (
 )
 from personal_agent.application.rerankers import HeuristicEvidenceReranker
 from personal_agent.kernel.evidence import EvidenceItem, SourceDocument
+from personal_agent.orchestration.ask.context import AskRunContext
+from personal_agent.orchestration.ask.retrievers import RetrievalContribution, RetrievalCoordinator
 
 
 def test_assemble_context_selects_evidence_and_traces_steps():
@@ -36,6 +39,131 @@ def test_assemble_context_selects_evidence_and_traces_steps():
     assert result.assembly_trace.input_evidence_count == 2
     assert result.assembly_trace.selected_count == 1
     assert any(line.startswith("ContextPack(") for line in result.trace)
+
+
+def test_candidate_fusion_rewards_multi_source_consensus():
+    consensus = EvidenceItem(
+        source_type="chunk",
+        source_id="n1",
+        snippet="Hybrid RAG combines dense semantic and sparse lexical recall.",
+        metadata={"source_ranks": {"dense": 5, "sparse": 2}},
+    )
+    dense_only = EvidenceItem(
+        source_type="chunk",
+        source_id="n2",
+        snippet="Dense retrieval can find semantically similar passages.",
+        metadata={"source_ranks": {"dense": 1}},
+    )
+
+    result = CandidateFusion().fuse_evidence([dense_only, consensus])
+
+    assert [item.source_id for item in result.evidence] == ["n1", "n2"]
+    assert result.evidence[0].metadata["fusion_rank"] == 1
+    assert result.evidence[0].metadata["consensus_count"] == 2
+    assert {c["source"] for c in result.evidence[0].metadata["fusion_components"]} == {
+        "dense",
+        "sparse",
+    }
+
+
+def test_assemble_context_uses_candidate_fusion_trace():
+    engine = EvidenceEngine()
+    evidence = [
+        EvidenceItem(
+            source_type="chunk",
+            source_id="n1",
+            title="RRF",
+            snippet="RRF rewards candidates found by dense and sparse retrievers.",
+            metadata={"source_ranks": {"dense": 3, "sparse": 2}},
+        ),
+        EvidenceItem(
+            source_type="chunk",
+            source_id="n2",
+            title="Background",
+            snippet="General background.",
+            metadata={"source_ranks": {"dense": 1}},
+        ),
+    ]
+
+    result = engine.assemble_context(EvidenceAssemblyRequest(
+        question="How does RRF reward dense and sparse agreement?",
+        evidence=evidence,
+        matches=[],
+        citations=[],
+        store=object(),
+        filters=None,
+        candidate_enricher=NoopCandidateEnricher(),
+        reranker=HeuristicEvidenceReranker(),
+        max_items=2,
+        char_budget=800,
+        policy=EvidenceAssemblyPolicy(max_evidence_items=2, max_context_chars=800),
+    ))
+
+    assert result.assembly_trace.after_dedupe_count == 2
+    assert result.assembly_trace.after_fusion_count == 2
+    assert any(line.startswith("CandidateFusion(") for line in result.trace)
+
+
+def test_assemble_context_records_reranker_telemetry():
+    class TelemetryReranker(HeuristicEvidenceReranker):
+        name = "telemetry"
+
+        def rerank(self, *args, **kwargs):
+            self.last_telemetry = {
+                "triggered": True,
+                "trigger_reason": "score_margin",
+                "llm_call_count": 1,
+                "fallback_reason": "",
+                "candidate_count": 2,
+            }
+            return super().rerank(*args, **kwargs)
+
+    engine = EvidenceEngine()
+    result = engine.assemble_context(EvidenceAssemblyRequest(
+        question="hybrid retrieval",
+        evidence=[
+            EvidenceItem(source_type="chunk", source_id="n1", snippet="hybrid retrieval"),
+            EvidenceItem(source_type="chunk", source_id="n2", snippet="retrieval background"),
+        ],
+        matches=[],
+        citations=[],
+        store=object(),
+        filters=None,
+        candidate_enricher=NoopCandidateEnricher(),
+        reranker=TelemetryReranker(),
+        max_items=2,
+        char_budget=800,
+        policy=EvidenceAssemblyPolicy(max_evidence_items=2, max_context_chars=800),
+    ))
+
+    assert any(
+        line.startswith("RerankerTelemetry(telemetry):")
+        and "reason=score_margin" in line
+        and "llm_calls=1" in line
+        for line in result.trace
+    )
+
+
+def test_retrieval_coordinator_absorb_records_candidate_metadata():
+    ctx = AskRunContext(
+        question="What is hybrid RAG?",
+        user_id="u1",
+        session_id="s1",
+        working_context="",
+    )
+    contribution = RetrievalContribution(
+        source="graph",
+        evidence=[EvidenceItem(source_type="graph_fact", source_id="fact-1", fact="RAG uses retrieval.")],
+        trace=["graph done"],
+    )
+    coordinator = RetrievalCoordinator.__new__(RetrievalCoordinator)
+
+    coordinator._absorb(ctx, contribution)
+
+    metadata = ctx.evidence_pool[0].metadata
+    assert metadata["source_ranks"] == {"graph": 1}
+    assert metadata["candidate"]["source_type"] == "graph"
+    assert ctx.trace_steps == ["graph done"]
 
 
 def test_sources_to_evidence_normalizes_source_documents():

@@ -255,7 +255,7 @@ def test_find_similar_notes_merges_vector_only_candidates(temp_dir: Path):
     store = PostgresMemoryStore(temp_dir, POSTGRES_URL)
 
     def vector_at(index: int) -> list[float]:
-        vector = [0.0] * 128
+        vector = [0.0] * 1024
         vector[index] = 1.0
         return vector
 
@@ -297,6 +297,10 @@ def test_find_similar_notes_merges_vector_only_candidates(temp_dir: Path):
 
     assert matches
     assert matches[0].id == target.id
+    assert target.id in store.last_retrieval_debug["raw_vector_ids"]
+    assert target.id in store.last_retrieval_debug["merged_ids"]
+    assert target.id in store.last_retrieval_debug["expanded_ids"]
+    assert store.last_retrieval_debug["vector_candidates"] >= 1
     store.clear_user_data(user_id, remove_uploaded_files=False)
 
 

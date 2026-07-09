@@ -132,7 +132,7 @@ def settings_from_env(settings_cls: type):
             vision_model=os.getenv("OPENAI_VISION_MODEL", ""),
             transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1"),
             embedding_model=os.getenv(
-                "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
+                "OPENAI_EMBEDDING_MODEL", "BAAI/bge-m3"
             ),
             timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS", "30")
@@ -145,11 +145,11 @@ def settings_from_env(settings_cls: type):
             api_key=os.getenv("STRUCTURED_API_KEY")
             or os.getenv("ROUTER_API_KEY")
             or os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("ROUTER_BASE_URL")
-            or os.getenv("STRUCTURED_BASE_URL")
+            base_url=os.getenv("STRUCTURED_BASE_URL")
+            or os.getenv("ROUTER_BASE_URL")
             or os.getenv("OPENAI_BASE_URL"),
-            model=os.getenv("ROUTER_MODEL")
-            or os.getenv("STRUCTURED_MODEL", "gpt-5.4-mini"),
+            model=os.getenv("STRUCTURED_MODEL")
+            or os.getenv("ROUTER_MODEL", "gpt-5.4-mini"),
             timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS")
                 or os.getenv("PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS", "30")
@@ -340,7 +340,7 @@ def settings_from_env(settings_cls: type):
         ),
         ask=AskConfig(
             graph_provider=os.getenv("PERSONAL_AGENT_ASK_GRAPH_PROVIDER", "graphiti"),
-            reranker=os.getenv("PERSONAL_AGENT_ASK_RERANKER", "heuristic"),
+            reranker=os.getenv("PERSONAL_AGENT_ASK_RERANKER", "support"),
             candidate_enricher=os.getenv(
                 "PERSONAL_AGENT_ASK_CANDIDATE_ENRICHER", "parent_child"
             ),
@@ -365,6 +365,18 @@ def settings_from_env(settings_cls: type):
             context_char_budget=int(
                 os.getenv("PERSONAL_AGENT_ASK_CONTEXT_CHAR_BUDGET", "5000")
             ),
+            support_rerank_weight=float(
+                os.getenv("PERSONAL_AGENT_ASK_SUPPORT_RERANK_WEIGHT", "0.18")
+            ),
+            support_rerank_direct_coverage=float(
+                os.getenv("PERSONAL_AGENT_ASK_SUPPORT_RERANK_DIRECT_COVERAGE", "0.45")
+            ),
+            support_rerank_min_overlap_terms=int(
+                os.getenv("PERSONAL_AGENT_ASK_SUPPORT_RERANK_MIN_OVERLAP_TERMS", "2")
+            ),
+            support_rerank_consensus_weight=float(
+                os.getenv("PERSONAL_AGENT_ASK_SUPPORT_RERANK_CONSENSUS_WEIGHT", "0.04")
+            ),
             llm_rerank_top_n=int(
                 os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_TOP_N", "20")
             ),
@@ -372,6 +384,24 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_TIMEOUT_SECONDS", "20")
             ),
             llm_rerank_model=os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_MODEL"),
+            llm_rerank_gated_min_candidates=int(
+                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_MIN_CANDIDATES", "6")
+            ),
+            llm_rerank_gated_score_margin=float(
+                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_SCORE_MARGIN", "0.0")
+            ),
+            llm_rerank_gated_low_score=float(
+                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_LOW_SCORE", "0.45")
+            ),
+            llm_rerank_gated_dense_sparse_gap=int(
+                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_DENSE_SPARSE_GAP", "8")
+            ),
+            llm_rerank_gated_min_support_coverage=float(
+                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_MIN_SUPPORT_COVERAGE", "0.35")
+            ),
+            llm_rerank_gated_preserve_top_k=int(
+                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_PRESERVE_TOP_K", "0")
+            ),
         ),
         short_term=ShortTermMemoryConfig(
             max_messages=int(

@@ -11,6 +11,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+RetrievalMode = Literal[
+    "evidence_only",
+    "evidence_dominant",
+    "claim_expand_to_evidence",
+    "claim_state_diagnostic",
+]
+
 
 class RetrievalFilters(BaseModel):
     """Structured metadata filters extracted from the user's question."""
@@ -95,6 +102,21 @@ class QueryUnderstanding(BaseModel):
         default=False,
         description="True when the question asks about prior runs, decisions, failures, or what the agent did before.",
     )
+    claim_sensitive: bool = Field(
+        default=False,
+        description=(
+            "True when the question needs long-term knowledge state such as "
+            "claims, conflicts, supersession, stale facts, preferences, plans, "
+            "scope/time disambiguation, or user facts."
+        ),
+    )
+    retrieval_mode: RetrievalMode = Field(
+        default="evidence_dominant",
+        description=(
+            "How Claim/Workspace should participate: evidence-only, "
+            "evidence-dominant, claim expansion to evidence, or claim state diagnostics."
+        ),
+    )
     query_rewrite: str = Field(
         default="",
         description="Retrieval-optimized rewrite of the original question.",
@@ -134,4 +156,12 @@ class RetrievalPlan(BaseModel):
     filters: RetrievalFilters = Field(
         default_factory=RetrievalFilters,
         description="Metadata filters to push down into retrieval calls.",
+    )
+    claim_sensitive: bool = Field(
+        default=False,
+        description="Whether Claim/Workspace may participate in this retrieval run.",
+    )
+    retrieval_mode: RetrievalMode = Field(
+        default="evidence_dominant",
+        description="The selected evidence/claim retrieval mode for this run.",
     )

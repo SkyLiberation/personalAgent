@@ -27,6 +27,7 @@ from personal_agent.infra.storage.postgres_memory_search import (
     bm25_bonus as _bm25_bonus,
     compact_whitespace as _compact_whitespace,
     filters_sql as _filters_sql,
+    EMBEDDING_DIMENSIONS,
     local_embedding as _local_embedding,
     note_is_current as _note_is_current,
     note_matches_filters as _note_matches_filters,
@@ -82,6 +83,14 @@ class PostgresMemoryStore(PostgresStoreBase):
         self.embedding_api_key = embedding_api_key
         self.embedding_base_url = embedding_base_url
         self.langsmith_config = langsmith_config or LangSmithConfig()
+        self.last_embedding_provider = ""
+        self.last_embedding_model = ""
+        self.last_embedding_original_dimensions: int | None = None
+        self.last_embedding_output_dimensions: int | None = None
+        self.last_embedding_index_dimensions = EMBEDDING_DIMENSIONS
+        self.last_embedding_fallback_reason: str | None = None
+        self.last_embedding_used_fallback = False
+        self.last_retrieval_debug: dict[str, object] = {}
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_schema(self) -> None:
@@ -110,7 +119,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                         )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s::vector(128), %s, %s, %s, NULL, NULL, NULL, NULL, NULL, NULL
+                        %s::vector(1024), %s, %s, %s, NULL, NULL, NULL, NULL, NULL, NULL
                     )
                     ON CONFLICT (id) DO UPDATE SET
                         user_id = EXCLUDED.user_id,
@@ -644,7 +653,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                       {active_version_sql}
                       {filter_sql}
                       AND id @@@ paradedb.match('search_text', %s)
-                    ORDER BY score DESC, updated_at DESC
+                    ORDER BY score DESC, updated_at DESC, id ASC
                     LIMIT %s
                     """,
                     (
@@ -659,7 +668,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     cur.execute(
                         f"""
                         SELECT payload,
-                               1 - (embedding_vector <=> %s::vector(128)) AS vector_score
+                               1 - (embedding_vector <=> %s::vector(1024)) AS vector_score
                         FROM knowledge_notes
                         WHERE user_id = %s
                           AND deleted_at IS NULL
@@ -667,7 +676,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                           {filter_sql}
                           AND embedding_vector IS NOT NULL
                           AND embedding_model = %s
-                        ORDER BY embedding_vector <=> %s::vector(128)
+                        ORDER BY embedding_vector <=> %s::vector(1024), id ASC
                         LIMIT %s
                         """,
                         (
@@ -688,6 +697,26 @@ class PostgresMemoryStore(PostgresStoreBase):
             candidate_limit,
         )
         result = self._expand_ranked_notes(candidates, limit, filters)
+        self.last_retrieval_debug = {
+            "query": normalized_query,
+            "limit": limit,
+            "candidate_limit": candidate_limit,
+            "raw_lexical_ids": [
+                KnowledgeNote.model_validate(row["payload"]).id
+                for row in lexical_rows
+            ],
+            "raw_vector_ids": [
+                KnowledgeNote.model_validate(row["payload"]).id
+                for row in vector_rows
+            ],
+            "merged_ids": [note.id for note in candidates],
+            "expanded_ids": [note.id for note in result],
+            "lexical_candidates": len(lexical_rows),
+            "vector_candidates": len(vector_rows),
+            "merged_candidates": len(candidates),
+            "result_count": len(result),
+            "embedding_used": query_embedding is not None,
+        }
         log_event(
             logger,
             logging.INFO,
@@ -710,12 +739,27 @@ class PostgresMemoryStore(PostgresStoreBase):
     def _embed_text(self, text: str) -> list[float] | None:
         if not text.strip():
             return None
+        self.last_embedding_provider = self.embedding_provider
+        self.last_embedding_model = self.embedding_model
+        self.last_embedding_original_dimensions = None
+        self.last_embedding_output_dimensions = None
+        self.last_embedding_index_dimensions = EMBEDDING_DIMENSIONS
+        self.last_embedding_fallback_reason = None
+        self.last_embedding_used_fallback = False
         if self.embedding_provider == "local" or not self.embedding_api_key:
+            if self.embedding_provider != "local" and not self.embedding_api_key:
+                self.last_embedding_fallback_reason = "missing embedding api key"
+                self.last_embedding_used_fallback = True
             log_local_embedding(
                 model=self.embedding_model,
                 input_chars=len(text),
                 metadata={"component": "postgres_memory_store"},
             )
+            self.last_embedding_provider = "local"
+            self.last_embedding_original_dimensions = (
+                EMBEDDING_DIMENSIONS if self.embedding_provider == "local" else None
+            )
+            self.last_embedding_output_dimensions = EMBEDDING_DIMENSIONS
             return _local_embedding(text)
         try:
             result = traced_embedding(
@@ -727,6 +771,15 @@ class PostgresMemoryStore(PostgresStoreBase):
                 metadata={"component": "postgres_memory_store"},
                 upload_inputs_outputs=self.langsmith_config.upload_inputs,
             )
+            self.last_embedding_provider = result.provider
+            self.last_embedding_model = result.model
+            self.last_embedding_original_dimensions = len(result.vector)
+            if len(result.vector) != EMBEDDING_DIMENSIONS:
+                raise ValueError(
+                    f"embedding dimension mismatch: got {len(result.vector)}, "
+                    f"expected {EMBEDDING_DIMENSIONS}"
+                )
+            self.last_embedding_output_dimensions = len(result.vector)
             return result.vector
         except Exception as exc:
             log_embedding_fallback(
@@ -735,6 +788,10 @@ class PostgresMemoryStore(PostgresStoreBase):
                 input_chars=len(text[:8000]),
                 reason=str(exc),
             )
+            self.last_embedding_provider = "local"
+            self.last_embedding_output_dimensions = EMBEDDING_DIMENSIONS
+            self.last_embedding_fallback_reason = str(exc)
+            self.last_embedding_used_fallback = True
             return _local_embedding(text)
 
     def _merge_lexical_and_vector_rows(
@@ -772,7 +829,7 @@ class PostgresMemoryStore(PostgresStoreBase):
             scores[note_id] += 1.0 / (60 + rank)
             scores[note_id] += similarity / 10.0
 
-        ranked_ids = sorted(scores, key=lambda note_id: scores[note_id], reverse=True)
+        ranked_ids = sorted(scores, key=lambda note_id: (-scores[note_id], note_id))
         return [
             KnowledgeNote.model_validate(payloads[note_id])
             for note_id in ranked_ids[:candidate_limit]
@@ -1014,7 +1071,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                             )
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s,
-                            %s::vector(128), %s, %s, %s, NULL, NULL, NULL, NULL, NULL, NULL
+                            %s::vector(1024), %s, %s, %s, NULL, NULL, NULL, NULL, NULL, NULL
                         )
                         ON CONFLICT (id) DO UPDATE SET
                             user_id = EXCLUDED.user_id,

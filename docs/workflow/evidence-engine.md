@@ -111,10 +111,10 @@ Workspace 侧在 Ask 中不是直接调用 `EvidenceEngine.sources_to_evidence()
 Workspace Artifact / EvidenceBlock / EvidenceSpan / Claim / KnowledgeRelation
   -> EvidenceItem(source_type="note", metadata.workspace_id / artifact_id / evidence_span_id / claim_ids / conflict diagnostics)
   -> Citation(source_type="workspace", metadata.evidence_ref)
-  -> KnowledgeNote(source.type="workspace_claim")
+  -> KnowledgeNote(source.type="workspace_evidence")
 ```
 
-因此 Workspace 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 verifier，不会绕过 EvidenceEngine 直接生成最终回答。Workspace 自身的 `answer_with_evidence()` 也会返回 `EvidenceRef / evidence_coverage / missing_sections`，用于直接回答和 e2e 诊断；进入通用 Ask 时，这些信息以 evidence metadata / citation metadata 进入统一证据池。
+因此 Workspace 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 verifier，不会绕过 EvidenceEngine 直接生成最终回答。Workspace 自身的 `answer_with_evidence()` 也会返回 `EvidenceRef / evidence_coverage / missing_sections`，用于直接回答和 e2e 诊断；进入通用 Ask 时，Claim 只作为 metadata / element_ids 参与，最终证据 id 对齐 `EvidenceSpan`，避免把 Claim statement 当作原文证据注入。
 
 ### 2. Context Assembly
 

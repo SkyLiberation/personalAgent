@@ -20,7 +20,7 @@ def ensure_memory_schema(store) -> None:
                     graph_episode_uuid TEXT,
                     payload JSONB NOT NULL,
                     search_text TEXT NOT NULL DEFAULT '',
-                    embedding_vector VECTOR(128),
+                    embedding_vector VECTOR(1024),
                     embedding_model TEXT,
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
@@ -37,6 +37,7 @@ def ensure_memory_schema(store) -> None:
             cur.execute("ALTER TABLE knowledge_notes ADD COLUMN IF NOT EXISTS delete_snapshot_id TEXT")
             cur.execute("DROP INDEX IF EXISTS knowledge_notes_search_vector_idx")
             cur.execute("DROP INDEX IF EXISTS knowledge_notes_search_text_trgm_idx")
+            cur.execute("DROP INDEX IF EXISTS knowledge_notes_embedding_hnsw_idx")
             cur.execute("ALTER TABLE knowledge_notes DROP COLUMN IF EXISTS search_vector")
             cur.execute(
                 """
@@ -55,18 +56,12 @@ def ensure_memory_schema(store) -> None:
                       AND NOT a.attisdropped;
 
                     IF embedding_type IS NULL THEN
-                        ALTER TABLE knowledge_notes ADD COLUMN embedding_vector vector(128);
-                    ELSIF embedding_type = 'double precision[]' THEN
+                        ALTER TABLE knowledge_notes ADD COLUMN embedding_vector vector(1024);
+                    ELSIF embedding_type <> 'vector(1024)' THEN
                         ALTER TABLE knowledge_notes
-                        ALTER COLUMN embedding_vector TYPE vector(128)
-                        USING CASE
-                            WHEN embedding_vector IS NULL THEN NULL
-                            ELSE ('[' || array_to_string(embedding_vector, ',') || ']')::vector(128)
-                        END;
-                    ELSIF embedding_type <> 'vector(128)' THEN
+                        DROP COLUMN embedding_vector;
                         ALTER TABLE knowledge_notes
-                        ALTER COLUMN embedding_vector TYPE vector(128)
-                        USING embedding_vector::text::vector(128);
+                        ADD COLUMN embedding_vector vector(1024);
                     END IF;
                 END $$;
                 """

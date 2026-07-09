@@ -315,7 +315,12 @@ class AskService(AskPromptMixin):
         filters: RetrievalFilters | None = None,
     ) -> AgentState:
         """Run local note retrieval and return an ask-shaped state."""
-        matches = self.memory.search_memory(user_id, question, filters=filters)
+        matches = self.memory.search_memory(
+            user_id,
+            question,
+            limit=max(1, int(getattr(self.settings.ask, "local_retrieval_limit", 12))),
+            filters=filters,
+        )
         citations = [
             Citation(note_id=note.id, title=note.body.title, snippet=note.body.summary[:80])
             for note in matches

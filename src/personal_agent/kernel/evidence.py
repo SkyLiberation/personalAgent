@@ -76,12 +76,41 @@ class EvidenceItem(BaseModel):
         }
 
 
+class Candidate(BaseModel):
+    """Retriever-neutral candidate used before final evidence reranking.
+
+    ``EvidenceItem`` is optimized for citation and context packing. ``Candidate``
+    is optimized for hybrid retrieval: every recall branch can report ranks and
+    scores in the same shape before fusion/reranking decides what survives.
+    """
+
+    candidate_id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    source_type: str = "unknown"
+    document_id: str = ""
+    chunk_id: str = ""
+    parent_id: str | None = None
+    passage_id: str = ""
+    text: str = ""
+    title: str = ""
+    locator: str | None = None
+    raw_score: float = 0.0
+    dense_score: float | None = None
+    sparse_score: float | None = None
+    dense_rank: int | None = None
+    sparse_rank: int | None = None
+    source_rank: int | None = None
+    fusion_rank: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    support_features: dict[str, Any] = Field(default_factory=dict)
+
+
 class RankedEvidence(BaseModel):
     evidence: EvidenceItem
     score: float = 0.0
     reason: str = ""
     selected_for_prompt: bool = False
     estimated_chars: int = 0
+    drop_reason: str | None = None
 
 
 class ContextPack(BaseModel):
@@ -155,7 +184,7 @@ def select_ranked_evidence(
         if item.evidence.source_type in {"note", "chunk"} and (
             version_status in {"superseded", "deprecated"} or superseded
         ):
-            dropped.append(item)
+            dropped.append(item.model_copy(update={"drop_reason": "stale_version"}))
         else:
             candidates.append(item)
 
@@ -203,10 +232,29 @@ def select_ranked_evidence(
         selected.append(best)
         used_chars += best.estimated_chars
         remaining.remove(best)
+        companion = _parent_companion_for(best, remaining)
+        if companion is not None and len(selected) < max_items:
+            companion_fits = used_chars + companion.estimated_chars <= char_budget
+            if companion_fits:
+                companion.selected_for_prompt = True
+                selected.append(companion.model_copy(update={
+                    "reason": f"parent_companion, {companion.reason}",
+                }))
+                used_chars += companion.estimated_chars
+                remaining.remove(companion)
+
+    if len(selected) >= max_items:
+        remaining_drop_reason = "max_items"
+    elif remaining and selected and all(
+        used_chars + item.estimated_chars > char_budget for item in remaining
+    ):
+        remaining_drop_reason = "char_budget"
+    else:
+        remaining_drop_reason = "mmr_not_selected"
 
     for item in remaining:
         item.selected_for_prompt = False
-        dropped.append(item)
+        dropped.append(item.model_copy(update={"drop_reason": remaining_drop_reason}))
 
     return ContextPack(
         question=question,
@@ -215,6 +263,19 @@ def select_ranked_evidence(
         char_budget=char_budget,
         used_chars=used_chars,
     )
+
+
+def _parent_companion_for(
+    selected: RankedEvidence,
+    remaining: list[RankedEvidence],
+) -> RankedEvidence | None:
+    parent_id = selected.evidence.parent_note_id
+    if not parent_id:
+        return None
+    for item in remaining:
+        if item.evidence.source_id == parent_id and item.evidence.parent_note_id is None:
+            return item
+    return None
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -380,6 +441,242 @@ def canonical_evidence_key(item: EvidenceItem) -> tuple[str, str]:
     if item.source_type == "web":
         return ("web", (item.url or item.source_id or "").strip())
     return (item.source_type, item.source_id or (item.snippet or "").strip()[:180])
+
+
+def candidate_from_evidence(
+    item: EvidenceItem,
+    *,
+    source: str | None = None,
+    rank: int | None = None,
+) -> Candidate:
+    """Project citation-shaped evidence into a retrieval candidate.
+
+    The helper preserves the original evidence fields in metadata so a fused
+    candidate can be round-tripped back to ``EvidenceItem`` when needed.
+    """
+    metadata = dict(item.metadata)
+    source_ranks = dict(metadata.get("source_ranks") or {})
+    if (
+        source
+        and rank is not None
+        and not (
+            source == "local"
+            and any(str(key).lower() in {"dense", "sparse"} for key in source_ranks)
+        )
+    ):
+        source_ranks.setdefault(source, int(rank))
+
+    retrieved_by = str(
+        source
+        or metadata.get("retrieved_by")
+        or (next(iter(source_ranks)) if len(source_ranks) == 1 else "")
+    )
+    candidate_source_type = str(
+        metadata.get("candidate_source_type")
+        or _candidate_source_family(retrieved_by, item)
+    )
+    dense_rank = _metadata_int(metadata, "dense_rank") or _min_rank_for_sources(
+        source_ranks, {"dense", "vector", "embedding", "semantic"}
+    )
+    sparse_rank = _metadata_int(metadata, "sparse_rank") or _metadata_int(
+        metadata, "local_retrieval_rank"
+    ) or _min_rank_for_sources(source_ranks, {"sparse", "lexical", "keyword", "bm25", "local", "support"})
+    source_rank = rank or _metadata_int(metadata, "source_rank") or (
+        min(int(value) for value in source_ranks.values()) if source_ranks else None
+    )
+    text = " ".join(part for part in [item.fact or "", item.snippet] if part).strip()
+    if not text:
+        text = item.title
+    locator = (
+        item.url
+        or item.source_span
+        or item.source_ref
+        or (f"page:{item.page_number}" if item.page_number is not None else None)
+    )
+
+    candidate_metadata = {
+        **metadata,
+        "evidence_id": item.evidence_id,
+        "evidence_source_type": item.source_type,
+        "evidence_source_id": item.source_id,
+        "evidence_parent_note_id": item.parent_note_id,
+        "evidence_source_ref": item.source_ref,
+        "evidence_source_fingerprint": item.source_fingerprint,
+        "evidence_source_span": item.source_span,
+        "evidence_page_number": item.page_number,
+        "evidence_element_ids": list(item.element_ids),
+        "evidence_coordinates": item.coordinates,
+        "evidence_url": item.url,
+    }
+    if source_ranks:
+        candidate_metadata["source_ranks"] = source_ranks
+
+    support_features = dict(metadata.get("support_features") or {})
+    support_features.update({
+        "source_ranks": source_ranks,
+        "retrieved_by": retrieved_by,
+        "consensus_count": len(source_ranks) if source_ranks else metadata.get("consensus_count", 1),
+    })
+
+    return Candidate(
+        candidate_id=item.evidence_id,
+        source_type=candidate_source_type,
+        document_id=_candidate_document_id(item),
+        chunk_id=item.source_id,
+        parent_id=item.parent_note_id,
+        passage_id=item.source_span or item.evidence_id,
+        text=text,
+        title=item.title,
+        locator=locator,
+        raw_score=float(item.score or 0.0),
+        dense_score=_metadata_float(metadata, "dense_score")
+        or _metadata_float(metadata, "vector_score"),
+        sparse_score=_metadata_float(metadata, "sparse_score")
+        or _metadata_float(metadata, "lexical_score")
+        or _metadata_float(metadata, "bm25_score"),
+        dense_rank=dense_rank,
+        sparse_rank=sparse_rank,
+        source_rank=source_rank,
+        fusion_rank=_metadata_int(metadata, "fusion_rank"),
+        metadata=candidate_metadata,
+        support_features=support_features,
+    )
+
+
+def candidate_to_evidence(candidate: Candidate) -> EvidenceItem:
+    """Convert a fused candidate back into evidence for context assembly."""
+    metadata = dict(candidate.metadata)
+    metadata["candidate"] = candidate.model_dump(mode="json")
+    source_type = str(metadata.get("evidence_source_type") or "note")
+    if source_type not in {
+        "graph_fact",
+        "note",
+        "chunk",
+        "web",
+        "tool",
+        "episode",
+        "procedural",
+        "reflection",
+    }:
+        source_type = "note"
+    return EvidenceItem(
+        evidence_id=str(metadata.get("evidence_id") or candidate.candidate_id),
+        source_type=source_type,  # type: ignore[arg-type]
+        source_id=str(metadata.get("evidence_source_id") or candidate.chunk_id or candidate.document_id),
+        parent_note_id=metadata.get("evidence_parent_note_id") or candidate.parent_id,
+        title=candidate.title,
+        snippet=candidate.text,
+        fact=metadata.get("fact"),
+        source_span=metadata.get("evidence_source_span") or candidate.locator,
+        source_ref=metadata.get("evidence_source_ref") or candidate.document_id,
+        source_fingerprint=metadata.get("evidence_source_fingerprint"),
+        page_number=metadata.get("evidence_page_number"),
+        element_ids=list(metadata.get("evidence_element_ids") or []),
+        coordinates=metadata.get("evidence_coordinates"),
+        url=metadata.get("evidence_url") or (candidate.locator if candidate.source_type == "web" else None),
+        score=float(candidate.raw_score or 0.0),
+        metadata=metadata,
+    )
+
+
+def annotate_candidate_metadata(
+    item: EvidenceItem,
+    *,
+    source: str,
+    rank: int,
+    dense_rank: int | None = None,
+    sparse_rank: int | None = None,
+    dense_score: float | None = None,
+    sparse_score: float | None = None,
+) -> EvidenceItem:
+    """Attach candidate-shaped retrieval metadata to an evidence item in place."""
+    source_ranks = dict(item.metadata.get("source_ranks") or {})
+    if not (source == "local" and (dense_rank is not None or sparse_rank is not None)):
+        source_ranks.setdefault(source, int(rank))
+    if dense_rank is not None:
+        source_ranks.setdefault("dense", int(dense_rank))
+    if sparse_rank is not None:
+        source_ranks.setdefault("sparse", int(sparse_rank))
+    metadata = dict(item.metadata)
+    metadata["source_ranks"] = source_ranks
+    metadata["source_rank"] = min(source_ranks.values())
+    metadata["candidate_source_type"] = _candidate_source_family(source, item)
+    if dense_rank is not None:
+        metadata["dense_rank"] = int(dense_rank)
+    if sparse_rank is not None:
+        metadata["sparse_rank"] = int(sparse_rank)
+    if dense_score is not None:
+        metadata["dense_score"] = float(dense_score)
+    if sparse_score is not None:
+        metadata["sparse_score"] = float(sparse_score)
+    candidate = candidate_from_evidence(item.model_copy(update={"metadata": metadata}), source=source, rank=rank)
+    metadata["candidate"] = candidate.model_dump(mode="json")
+    item.metadata = metadata
+    return item
+
+
+def _candidate_document_id(item: EvidenceItem) -> str:
+    if item.parent_note_id:
+        return item.parent_note_id
+    return item.source_fingerprint or item.source_ref or item.url or item.source_id
+
+
+def _candidate_source_family(source: str, item: EvidenceItem) -> str:
+    normalized = source.strip().lower()
+    if normalized in {"dense", "vector", "embedding", "semantic"}:
+        return "dense"
+    if normalized in {"local", "sparse", "lexical", "keyword", "bm25", "support", "shared"}:
+        return "sparse"
+    if normalized in {"graph", "graphiti", "structural", "graph_provider_relation_fact", "graph_provider_answer"}:
+        return "graph"
+    if normalized == "workspace":
+        return "workspace"
+    if normalized == "web" or item.source_type == "web":
+        return "web"
+    if normalized in {"episodic", "reflection", "contrastive"}:
+        return normalized
+    if item.source_type in {"note", "chunk"}:
+        return "sparse"
+    return item.source_type or "unknown"
+
+
+def _metadata_int(metadata: dict[str, Any], key: str) -> int | None:
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _metadata_float(metadata: dict[str, Any], key: str) -> float | None:
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _min_rank_for_sources(source_ranks: dict[str, Any], needles: set[str]) -> int | None:
+    ranks: list[int] = []
+    for source, rank in source_ranks.items():
+        normalized = str(source).lower()
+        if any(needle in normalized for needle in needles):
+            try:
+                ranks.append(int(rank))
+            except (TypeError, ValueError):
+                continue
+    return min(ranks) if ranks else None
 
 
 def _merge_evidence_group(items: list[EvidenceItem]) -> EvidenceItem:

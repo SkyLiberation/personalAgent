@@ -73,7 +73,7 @@ class OpenAIConfig(_StrictBase):
     small_model: str = "deepseek-v4-flash"
     vision_model: str = ""
     transcription_model: str = "whisper-1"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "BAAI/bge-m3"
     timeout_seconds: float = 30.0
     max_retries: int = 2
     embedding_api_key: str | None = None
@@ -263,7 +263,7 @@ class LangExtractConfig(_StrictBase):
 
 class AskConfig(_StrictBase):
     graph_provider: str = "graphiti"
-    reranker: str = "heuristic"
+    reranker: str = "support"
     # Answer grounding verifier. "heuristic" = lexical overlap + negation flip
     # (default, unchanged behavior); "entailment" = three-way per-claim
     # entailment judge (entailed/contradicted/not_enough_info). See
@@ -274,6 +274,7 @@ class AskConfig(_StrictBase):
     # the verification stage). Off by default — it adds a retrieval round-trip.
     # See agent/ask/retrievers.ContrastiveRetriever.
     contrastive_retrieval: bool = False
+    local_retrieval_limit: int = 12
     candidate_enricher: str = "parent_child"
     parent_child_top_n: int = 3
     parent_child_min_overlap: int = 2
@@ -289,9 +290,22 @@ class AskConfig(_StrictBase):
     # Extractive sentence-level compression of long note/chunk snippets before
     # selection. 0 disables; otherwise the max sentences kept per snippet.
     context_compress_max_sentences: int = 3
+    support_rerank_weight: float = 0.18
+    support_rerank_direct_coverage: float = 0.45
+    support_rerank_min_overlap_terms: int = 2
+    support_rerank_consensus_weight: float = 0.04
     llm_rerank_top_n: int = 20
     llm_rerank_timeout_seconds: float = 20.0
     llm_rerank_model: str | None = None
+    llm_rerank_gated_min_candidates: int = 6
+    llm_rerank_gated_score_margin: float = 0.0
+    llm_rerank_gated_low_score: float = 0.45
+    llm_rerank_gated_dense_sparse_gap: int = 8
+    llm_rerank_gated_min_support_coverage: float = 0.35
+    llm_rerank_gated_preserve_top_k: int = 0
+    workspace_retrieval_enabled: bool = True
+    workspace_default_quota: int = 0
+    workspace_claim_sensitive_quota: int = 3
 
 
 class ShortTermMemoryConfig(_StrictBase):

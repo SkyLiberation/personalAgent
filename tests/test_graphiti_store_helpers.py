@@ -46,6 +46,27 @@ def test_settings_reads_openai_request_limits(monkeypatch):
     assert settings.openai.max_retries == 1
 
 
+def test_settings_prefers_structured_llm_over_router_env(monkeypatch):
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
+    monkeypatch.setenv("ROUTER_API_KEY", "router-key")
+    monkeypatch.setenv("ROUTER_BASE_URL", "https://router.example/v1")
+    monkeypatch.setenv("ROUTER_MODEL", "router-model")
+    monkeypatch.setenv("STRUCTURED_API_KEY", "structured-key")
+    monkeypatch.setenv("STRUCTURED_BASE_URL", "https://structured.example/v1")
+    monkeypatch.setenv("STRUCTURED_MODEL", "structured-model")
+    monkeypatch.setenv(
+        "STRUCTURED_EXTRA_BODY",
+        '{"reasoning":{"effort":"minimal"}}',
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.structured.api_key == "structured-key"
+    assert settings.structured.base_url == "https://structured.example/v1"
+    assert settings.structured.model == "structured-model"
+    assert settings.structured.extra_body == {"reasoning": {"effort": "minimal"}}
+
+
 def test_settings_reads_graphiti_llm_override_env(monkeypatch):
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY", "graph-key")

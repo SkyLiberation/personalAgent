@@ -18,8 +18,8 @@ added, removed or swapped without touching the adapter.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from time import perf_counter
+from dataclasses import dataclass, field, replace
+from time import perf_counter, sleep
 from typing import Any, Generic, Iterator, Literal, Protocol, TypeVar
 
 from openai import OpenAI
@@ -78,6 +78,8 @@ class StructuredModelResponse(Generic[StructuredOutputT]):
     total_tokens: int | None = None
     raw_response: Any = None
     tool_calls: list[dict[str, Any]] | None = None
+    retry_attempts: int = 0
+    retry_errors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +377,101 @@ class OpenAIModelClient:
             yield StreamChunk(delta="", accumulated=full_text, usage=usage)
 
 
+class RetryingStructuredModelClient:
+    """Decorator for retrying transient structured model failures.
+
+    This sits at the model-port boundary rather than in callers. The OpenAI SDK
+    may already retry inside one provider request, but this wrapper retries the
+    whole typed operation after transient transport/server failures so parsing,
+    usage recording, tracing, and application code stay uniform.
+    """
+
+    def __init__(
+        self,
+        delegate: StructuredModelClient,
+        *,
+        max_retries: int,
+        backoff_seconds: float = 0.5,
+    ) -> None:
+        self._delegate = delegate
+        self._max_retries = max(0, int(max_retries))
+        self._backoff_seconds = max(0.0, float(backoff_seconds))
+
+    def generate(
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+    ) -> StructuredModelResponse[StructuredOutputT]:
+        retry_errors: list[str] = []
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._delegate.generate(request)
+                return replace(
+                    response,
+                    retry_attempts=attempt,
+                    retry_errors=retry_errors,
+                )
+            except Exception as exc:
+                if attempt >= self._max_retries or not _is_retryable_model_error(exc):
+                    if retry_errors:
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "llm.retry.exhausted",
+                            prompt_name=request.operation,
+                            prompt_version=request.version,
+                            attempts=attempt + 1,
+                            retry_errors=retry_errors + [str(exc)[:240]],
+                        )
+                    raise
+                retry_errors.append(str(exc)[:240])
+                delay = self._backoff_seconds * (2 ** attempt)
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "llm.retry.scheduled",
+                    prompt_name=request.operation,
+                    prompt_version=request.version,
+                    attempt=attempt + 1,
+                    max_retries=self._max_retries,
+                    retry_delay_seconds=round(delay, 3),
+                    retry_error=retry_errors[-1],
+                )
+                if delay > 0:
+                    sleep(delay)
+
+
+def _is_retryable_model_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    retryable_names = (
+        "apiconnectionerror",
+        "apitimeouterror",
+        "ratelimiterror",
+        "internalservererror",
+        "serviceunavailableerror",
+        "timeout",
+        "connection",
+    )
+    if any(token in name for token in retryable_names):
+        return True
+    retryable_messages = (
+        "connection error",
+        "connection reset",
+        "connection aborted",
+        "timeout",
+        "timed out",
+        "rate limit",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "temporarily unavailable",
+        "service unavailable",
+    )
+    return any(token in message for token in retryable_messages)
+
+
 class TracePayloadPolicy(Protocol):
     """Controls which model-call payload is exposed to the trace backend."""
 
@@ -423,6 +520,8 @@ class RedactedTracePayloadPolicy:
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "total_tokens": response.total_tokens,
+            "retry_attempts": response.retry_attempts,
+            "retry_error_count": len(response.retry_errors),
         }
 
 
@@ -457,6 +556,8 @@ class FullTracePayloadPolicy:
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "total_tokens": response.total_tokens,
+            "retry_attempts": response.retry_attempts,
+            "retry_errors": response.retry_errors,
         }
         if response.value is not None:
             out["value"] = response.value.model_dump(mode="json")
@@ -535,6 +636,8 @@ class ObservedStructuredModelClient:
                 parse_schema=request.output_type.__name__,
                 parse_ok=True,
                 latency_ms=response.latency_ms,
+                retry_attempts=response.retry_attempts,
+                retry_error_count=len(response.retry_errors),
             )
             return response
         except Exception as exc:
@@ -621,9 +724,11 @@ def build_structured_model_client(
     """Composition helper for strict JSON-schema structured output."""
     if not (config.api_key and config.base_url and config.model):
         return None
-    client: StructuredModelClient = UsageRecordingStructuredModelClient(
-        OpenAIModelClient(config)
+    client: StructuredModelClient = RetryingStructuredModelClient(
+        OpenAIModelClient(config),
+        max_retries=config.max_retries,
     )
+    client = UsageRecordingStructuredModelClient(client)
     if not observability.enabled:
         return client
     policy: TracePayloadPolicy = (
@@ -643,9 +748,11 @@ def build_chat_model_client(
     """Composition helper for Chat Completions (``tool_calling`` / ``text``)."""
     if not (config.api_key and config.base_url):
         return None
-    client: StructuredModelClient = UsageRecordingStructuredModelClient(
-        OpenAIModelClient(config, model_override=model_override)
+    client: StructuredModelClient = RetryingStructuredModelClient(
+        OpenAIModelClient(config, model_override=model_override),
+        max_retries=config.max_retries,
     )
+    client = UsageRecordingStructuredModelClient(client)
     if not observability.enabled:
         return client
     policy: TracePayloadPolicy = (

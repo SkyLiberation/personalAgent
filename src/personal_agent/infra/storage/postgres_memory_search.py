@@ -9,7 +9,7 @@ from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryIte
 from personal_agent.kernel.projections import retrieval_document_from_note
 from personal_agent.kernel.query_understanding import RetrievalFilters
 
-EMBEDDING_DIMENSIONS = 128
+EMBEDDING_DIMENSIONS = 1024
 BM25_TOKENIZER = "chinese_compatible"
 BM25_KEY_FIELD = "id"
 BM25_TEXT_FIELD = "search_text"

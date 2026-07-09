@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from personal_agent.application.candidate_enrichers import CandidateEnricher
+from personal_agent.application.candidate_fusion import CandidateFusion
 from personal_agent.application.entailment import (
     CONTRADICTED,
     ENTAILED,
@@ -15,8 +16,6 @@ from personal_agent.kernel.evidence import (
     ContextPack,
     EvidenceItem,
     SourceDocument,
-    _dedupe_evidence_items,
-    apply_rrf_fusion,
     compress_evidence,
     evidence_text_spans,
     research_sources_to_source_documents,
@@ -78,6 +77,7 @@ class EvidenceAssemblyRequest:
     reranker: EvidenceReranker
     max_items: int
     char_budget: int
+    candidate_fusion: CandidateFusion | None = None
     mmr_lambda: float = 0.7
     compress_max_sentences: int = 0
     policy: EvidenceAssemblyPolicy | None = None
@@ -138,13 +138,16 @@ class EvidenceAssembler:
             max_context_chars=request.char_budget,
         )
         trace = EvidenceTrace(input_evidence_count=len(request.evidence))
-        evidence = _dedupe_evidence_items(request.evidence)
-        trace.after_dedupe_count = len(evidence)
-        evidence = apply_rrf_fusion(evidence)
+        candidate_fusion = request.candidate_fusion or CandidateFusion()
+        fusion_result = candidate_fusion.fuse_evidence(request.evidence)
+        evidence = fusion_result.evidence
+        trace.after_dedupe_count = fusion_result.trace.deduped_candidate_count
         trace.after_fusion_count = len(evidence)
-        fused = sum(1 for item in evidence if item.metadata.get("consensus_count", 1) > 1)
-        if fused:
-            trace.events.append(f"RRF 融合: 多路共识证据 consensus_items={fused}")
+        trace.events.extend(fusion_result.trace.events)
+        if not fusion_result.trace.events:
+            trace.events.append(
+                f"CandidateFusion({candidate_fusion.name}): candidates={len(evidence)}"
+            )
 
         enriched = request.candidate_enricher.enrich(
             request.question,
@@ -188,6 +191,17 @@ class EvidenceAssembler:
             f"graph_selected={len(selected_graph_items)} "
             f"chars={context_pack.used_chars}/{context_pack.char_budget}"
         )
+        reranker_telemetry = getattr(request.reranker, "last_telemetry", None)
+        if isinstance(reranker_telemetry, dict) and reranker_telemetry:
+            trace.events.append(
+                "RerankerTelemetry("
+                f"{request.reranker.name}): "
+                f"triggered={bool(reranker_telemetry.get('triggered'))} "
+                f"reason={reranker_telemetry.get('trigger_reason', '')} "
+                f"llm_calls={int(reranker_telemetry.get('llm_call_count') or 0)} "
+                f"fallback={reranker_telemetry.get('fallback_reason', '')} "
+                f"candidates={int(reranker_telemetry.get('candidate_count') or 0)}"
+            )
         citations = CitationSelector().select_citations(enriched.citations, context_pack.evidence)
         trace.citation_count = len(citations)
         return EvidenceAssemblyResult(

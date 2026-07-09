@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from personal_agent.orchestration.service import AgentService
+from personal_agent.application.workspace.models import AnswerCitation, EvidenceGroundedAnswer
 from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, EntryInput, ReviewCard, local_now
 from personal_agent.orchestration.runtime_ask import _graph_matches_to_evidence
@@ -547,6 +548,99 @@ class TestAskFlow:
         assert service.runtime._llm.generate_answer.called
         assert any(match.id == note.id for match in result.matches)
         assert "证据不足" not in result.answer
+
+    def test_workspace_skipped_for_non_claim_sensitive_question(
+        self,
+        service: AgentService,
+        monkeypatch,
+    ):
+        from personal_agent.orchestration import runtime_ask
+
+        workspace = MagicMock()
+        workspace.answer_with_evidence = MagicMock()
+        service.runtime.workspace_service = workspace
+        service.runtime._llm.generate_answer = MagicMock(return_value="Kafka 通过消费组扩展消息处理。")
+        service.store.add_note(make_note(
+            title="Kafka",
+            content="Kafka 使用消费组来水平扩展消息处理。",
+            summary="Kafka 消费组扩展消息处理。",
+            user_id="default",
+        ))
+        monkeypatch.setattr(
+            runtime_ask,
+            "plan_retrieval",
+            lambda *_args, **_kwargs: (
+                QueryUnderstanding(
+                    query_rewrite="Kafka 扩展消息处理",
+                    claim_sensitive=False,
+                    retrieval_mode="evidence_dominant",
+                ),
+                RetrievalPlan(
+                    query="Kafka 扩展消息处理",
+                    sources=["local"],
+                    claim_sensitive=False,
+                    retrieval_mode="evidence_dominant",
+                ),
+            ),
+        )
+
+        service.execute_ask(question="Kafka 如何扩展消息处理？")
+
+        workspace.answer_with_evidence.assert_not_called()
+
+    def test_workspace_used_for_claim_sensitive_question(
+        self,
+        service: AgentService,
+        monkeypatch,
+    ):
+        from personal_agent.orchestration import runtime_ask
+
+        service.runtime._llm.generate_answer = MagicMock(return_value="Orion 功能默认开启。")
+        workspace = MagicMock()
+        workspace.answer_with_evidence = MagicMock(
+            return_value=EvidenceGroundedAnswer(
+                question="Orion 功能默认是否开启？",
+                answer="基于当前证据：Orion 功能默认开启。",
+                grounding_status="supported",
+                evidence_coverage="complete",
+                citations=[
+                    AnswerCitation(
+                        evidence_span_id="espn-orion",
+                        evidence_block_id="eblk-orion",
+                        artifact_id="artifact-orion",
+                        quote="Orion 功能默认开启。",
+                        claim_ids=["claim-orion"],
+                    )
+                ],
+            )
+        )
+        service.runtime.workspace_service = workspace
+        monkeypatch.setattr(
+            runtime_ask,
+            "plan_retrieval",
+            lambda *_args, **_kwargs: (
+                QueryUnderstanding(
+                    query_rewrite="Orion 功能默认是否开启",
+                    claim_sensitive=True,
+                    retrieval_mode="claim_state_diagnostic",
+                ),
+                RetrievalPlan(
+                    query="Orion 功能默认是否开启",
+                    sources=["local"],
+                    claim_sensitive=True,
+                    retrieval_mode="claim_state_diagnostic",
+                ),
+            ),
+        )
+
+        result = service.execute_ask(question="Orion 功能默认是否开启？")
+
+        workspace.answer_with_evidence.assert_called_once_with(
+            "Orion 功能默认是否开启",
+            workspace_id="default",
+            limit=service.settings.ask.workspace_claim_sensitive_quota,
+        )
+        assert any(match.source.type == "workspace_evidence" for match in result.matches)
 
     def test_graph_matches_become_context_pack_evidence(self):
         note = make_note(

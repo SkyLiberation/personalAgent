@@ -125,6 +125,8 @@ PROMPTS: dict[str, PromptSpec] = {
             "- needs_personal_memory (bool): true if the question references personal notes, prior knowledge, or things the user previously captured\n"
             "- needs_graph_reasoning (bool): true if the question requires multi-hop entity relationship reasoning (e.g. \"how does A relate to B\", \"what connects X and Y\")\n"
             "- needs_episodic_context (bool): true if the question asks what happened in prior agent runs/workflows, what was changed, why a previous decision was made, what remains unfinished, or asks to continue a previous task\n"
+            "- claim_sensitive (bool): true only when the question needs long-term knowledge state such as conflicts, supersession/staleness, user preferences/plans/facts, scope/time/condition disambiguation, or verification against prior claims. Prefer false for ordinary factual/document questions.\n"
+            "- retrieval_mode (string): one of \"evidence_only\", \"evidence_dominant\", \"claim_expand_to_evidence\", \"claim_state_diagnostic\". Use evidence_dominant by default; use claim modes only when claim_sensitive is true.\n"
             "- query_rewrite (string): rewrite the question into a concise, keyword-rich retrieval query. Remove filler words, resolve pronouns from context, expand abbreviations. If the question is already retrieval-friendly, return it unchanged.\n"
             "- sub_queries (string[]): if the question is compound or multi-hop, decompose into 2-3 independent sub-queries. Otherwise empty array.\n"
             "- filters (object): structured metadata filters. Use only when the user explicitly asks for a time/source/tag/file constraint.\n"
@@ -156,6 +158,9 @@ PROMPTS: dict[str, PromptSpec] = {
         output_contract="EvidenceRerank",
         template=(
             "Rank evidence ids for a retrieval-augmented answer. "
+            "Prefer evidence that directly answers the user's question over broad topical matches. "
+            "For section-level candidates, rank the section containing the answer above the parent "
+            "document or adjacent background sections unless the parent itself is the only direct answer. "
             "Prefer exact, grounded, source-specific evidence over broad or tangential text. "
             "For multi-hop, comparison, temporal, or cross-source questions, preserve complementary "
             "evidence that covers different entities, sources, dates, or facts needed to answer the "

@@ -10,6 +10,7 @@ from personal_agent.infra.structured_model import (
     ObservedStructuredModelClient,
     OpenAIModelClient,
     RedactedTracePayloadPolicy,
+    RetryingStructuredModelClient,
     StructuredModelRequest,
     StructuredModelResponse,
     UsageRecordingStructuredModelClient,
@@ -162,7 +163,8 @@ def test_composition_omits_observer_when_tracing_is_disabled():
     )
 
     assert isinstance(client, UsageRecordingStructuredModelClient)
-    assert isinstance(client._delegate, OpenAIModelClient)
+    assert isinstance(client._delegate, RetryingStructuredModelClient)
+    assert isinstance(client._delegate._delegate, OpenAIModelClient)
 
 
 def test_composition_returns_none_when_model_is_unconfigured():
@@ -170,3 +172,57 @@ def test_composition_returns_none_when_model_is_unconfigured():
         StructuredConfig(api_key=None, base_url=None),
         LangSmithConfig(),
     ) is None
+
+
+def test_retrying_client_retries_transient_failures():
+    calls = 0
+
+    class Delegate:
+        def generate(self, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ConnectionError("Connection error.")
+            return StructuredModelResponse(
+                value=ExampleOutput(ok=True),
+                model="model",
+                latency_ms=1.0,
+            )
+
+    client = RetryingStructuredModelClient(
+        Delegate(),
+        max_retries=2,
+        backoff_seconds=0,
+    )
+
+    result = client.generate(_request())
+
+    assert calls == 2
+    assert result.value.ok is True
+    assert result.retry_attempts == 1
+    assert result.retry_errors == ["Connection error."]
+
+
+def test_retrying_client_does_not_retry_non_transient_failures():
+    calls = 0
+
+    class Delegate:
+        def generate(self, request):
+            nonlocal calls
+            calls += 1
+            raise ValueError("structured parse failed")
+
+    client = RetryingStructuredModelClient(
+        Delegate(),
+        max_retries=2,
+        backoff_seconds=0,
+    )
+
+    try:
+        client.generate(_request())
+    except ValueError as exc:
+        assert "structured parse failed" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    assert calls == 1

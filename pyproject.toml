@@ -49,6 +49,7 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "pyarrow>=24.0.0",
     "ruff>=0.15.12",
 ]
 

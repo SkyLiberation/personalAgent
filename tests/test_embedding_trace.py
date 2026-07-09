@@ -64,4 +64,11 @@ def test_postgres_store_embedding_falls_back_to_local_on_external_failure_with_p
     vector = store._embed_text("fallback text")  # noqa: SLF001
 
     assert vector is not None
-    assert len(vector) == 128
+    assert len(vector) == 1024
+    assert store.embedding_provider == "openai"
+    assert store.last_embedding_provider == "local"
+    assert store.last_embedding_original_dimensions is None
+    assert store.last_embedding_output_dimensions == 1024
+    assert store.last_embedding_index_dimensions == 1024
+    assert store.last_embedding_used_fallback is True
+    assert store.last_embedding_fallback_reason == "down"

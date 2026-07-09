@@ -33,6 +33,8 @@ def plan_retrieval(
         understanding = QueryUnderstanding(
             needs_personal_memory=True,
             needs_episodic_context=_looks_like_episodic_query(question),
+            claim_sensitive=_looks_like_claim_sensitive_query(question),
+            retrieval_mode=_heuristic_retrieval_mode(question),
             query_rewrite=question,
             filters=_heuristic_filters(question),
         )
@@ -120,6 +122,8 @@ def _derive_plan(question: str, understanding: QueryUnderstanding) -> RetrievalP
         query=effective_query,
         sub_queries=understanding.sub_queries,
         filters=understanding.filters,
+        claim_sensitive=understanding.claim_sensitive,
+        retrieval_mode=understanding.retrieval_mode,
     )
 
 
@@ -131,6 +135,36 @@ def _looks_like_episodic_query(question: str) -> bool:
     )
     lowered = question.lower()
     return any(marker in question or marker in lowered for marker in markers)
+
+
+def _looks_like_claim_sensitive_query(question: str) -> bool:
+    markers = (
+        "冲突", "矛盾", "不一致", "是否一致", "相互", "替代", "取代", "覆盖",
+        "过期", "失效", "废弃", "旧说法", "新说法", "最新说法", "之前我说",
+        "我说过", "我提过", "我的偏好", "我偏好", "我的计划", "我计划",
+        "我的事实", "我的资料", "记得我", "还记得", "默认是否", "是否开启",
+        "conflict", "contradict", "inconsistent", "supersede", "superseded",
+        "stale", "outdated", "preference", "my plan", "did i say",
+    )
+    lowered = question.lower()
+    return any(marker in question or marker in lowered for marker in markers)
+
+
+def _heuristic_retrieval_mode(question: str) -> str:
+    lowered = question.lower()
+    if any(marker in question or marker in lowered for marker in (
+        "冲突", "矛盾", "不一致", "是否一致", "conflict", "contradict", "inconsistent",
+    )):
+        return "claim_expand_to_evidence"
+    if any(marker in question or marker in lowered for marker in (
+        "替代", "取代", "过期", "失效", "废弃", "旧说法", "新说法", "最新说法",
+        "之前我说", "我说过", "我的偏好", "我的计划", "记得我", "还记得",
+        "supersede", "superseded", "stale", "outdated", "preference", "my plan",
+    )):
+        return "claim_state_diagnostic"
+    if _looks_like_claim_sensitive_query(question):
+        return "claim_expand_to_evidence"
+    return "evidence_dominant"
 
 
 def _heuristic_filters(question: str) -> RetrievalFilters:

@@ -4,7 +4,13 @@ from __future__ import annotations
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.config_models import StructuredConfig
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-from personal_agent.planning.query_planner import _call_planner_llm, _derive_plan, _heuristic_filters
+from personal_agent.planning.query_planner import (
+    _call_planner_llm,
+    _derive_plan,
+    _heuristic_filters,
+    _heuristic_retrieval_mode,
+    _looks_like_claim_sensitive_query,
+)
 
 
 class TestQueryUnderstandingModel:
@@ -14,6 +20,8 @@ class TestQueryUnderstandingModel:
         assert qu.needs_personal_memory is True
         assert qu.needs_graph_reasoning is False
         assert qu.needs_episodic_context is False
+        assert qu.claim_sensitive is False
+        assert qu.retrieval_mode == "evidence_dominant"
         assert qu.query_rewrite == ""
         assert qu.sub_queries == []
         assert qu.filters.active() is False
@@ -25,6 +33,8 @@ class TestQueryUnderstandingModel:
             "needs_personal_memory": False,
             "needs_graph_reasoning": True,
             "needs_episodic_context": True,
+            "claim_sensitive": True,
+            "retrieval_mode": "claim_expand_to_evidence",
             "query_rewrite": "FastAPI dependency injection mechanism",
             "sub_queries": ["What is FastAPI DI", "How does Depends work"],
             "answer_policy": "allow_web",
@@ -33,6 +43,8 @@ class TestQueryUnderstandingModel:
         assert qu.needs_freshness is True
         assert qu.needs_graph_reasoning is True
         assert qu.needs_episodic_context is True
+        assert qu.claim_sensitive is True
+        assert qu.retrieval_mode == "claim_expand_to_evidence"
         assert qu.sub_queries == ["What is FastAPI DI", "How does Depends work"]
 
 
@@ -44,6 +56,8 @@ class TestRetrievalPlanModel:
         assert plan.query == "test"
         assert plan.sub_queries == []
         assert plan.filters.active() is False
+        assert plan.claim_sensitive is False
+        assert plan.retrieval_mode == "evidence_dominant"
 
 
 class TestDerivePlan:
@@ -58,6 +72,19 @@ class TestDerivePlan:
         assert "web" not in plan.sources
         assert plan.parallel is True
         assert plan.query == "Redis caching strategy notes"
+        assert plan.claim_sensitive is False
+        assert plan.retrieval_mode == "evidence_dominant"
+
+    def test_claim_sensitive_question_carries_mode(self) -> None:
+        qu = QueryUnderstanding(
+            needs_personal_memory=True,
+            claim_sensitive=True,
+            retrieval_mode="claim_state_diagnostic",
+            query_rewrite="Orion feature default state",
+        )
+        plan = _derive_plan("Orion 功能默认是否开启？", qu)
+        assert plan.claim_sensitive is True
+        assert plan.retrieval_mode == "claim_state_diagnostic"
 
     def test_filters_are_carried_into_plan(self) -> None:
         qu = QueryUnderstanding(
@@ -137,6 +164,12 @@ class TestHeuristicFilters:
         assert filters.created_after
         assert filters.created_before
 
+    def test_detects_claim_sensitive_question(self) -> None:
+        assert _looks_like_claim_sensitive_query("这两条说法是否冲突？") is True
+        assert _heuristic_retrieval_mode("这两条说法是否冲突？") == "claim_expand_to_evidence"
+        assert _looks_like_claim_sensitive_query("Kafka 如何扩展消息处理？") is False
+        assert _heuristic_retrieval_mode("Kafka 如何扩展消息处理？") == "evidence_dominant"
+
 
 def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
     request: dict = {}
@@ -144,7 +177,9 @@ def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
     class FakeMessage:
         content = (
             '{"needs_freshness":false,"needs_personal_memory":true,'
-            '"needs_graph_reasoning":false,"needs_episodic_context":false,"query_rewrite":"redis cache",'
+            '"needs_graph_reasoning":false,"needs_episodic_context":false,'
+            '"claim_sensitive":false,"retrieval_mode":"evidence_dominant",'
+            '"query_rewrite":"redis cache",'
             '"sub_queries":[],"filters":{"source_types":[],'
             '"source_ref_contains":"","tags":[],"created_after":"",'
             '"created_before":"","metadata_contains":"","parent_note_id":""},'
@@ -195,6 +230,8 @@ def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
         "needs_personal_memory",
         "needs_graph_reasoning",
         "needs_episodic_context",
+        "claim_sensitive",
+        "retrieval_mode",
         "query_rewrite",
         "sub_queries",
         "filters",
