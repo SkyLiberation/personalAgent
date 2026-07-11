@@ -95,9 +95,11 @@ class TestEntryWithSession:
 
     def test_entry_different_users_isolation(self, service: AgentService):
         entry1 = EntryInput(text="记一下：Alice的笔记N1", user_id="alice", session_id="s1")
-        service.entry(entry1)
+        result1 = service.entry(entry1)
+        service.resume_entry(result1.run_id or "", result1.thread_id or "", "confirm", "alice")
         entry2 = EntryInput(text="记一下：Bob的笔记N2", user_id="bob", session_id="s2")
-        service.entry(entry2)
+        result2 = service.entry(entry2)
+        service.resume_entry(result2.run_id or "", result2.thread_id or "", "confirm", "bob")
 
         alice_notes = service.memory.list_notes("alice")
         bob_notes = service.memory.list_notes("bob")

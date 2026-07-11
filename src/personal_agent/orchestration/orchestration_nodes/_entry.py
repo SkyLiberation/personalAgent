@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import EntryInput, local_now
+from personal_agent.kernel.contracts.agentic import ContextEnvelope
 from personal_agent.governance.guardrails import get_content_guard
 from personal_agent.orchestration.orchestration_models import (
     AgentGraphState,
-    StepRunState,
     StepExecutionState,
     ReactSubState,
     ToolTrackingSubState,
     _new_run_id,
     _new_thread_id,
 )
-from personal_agent.orchestration.orchestration_contexts import DirectAnswerContext, PlanningContext, RoutingContext
+from personal_agent.orchestration.orchestration_contexts import DirectAnswerContext, RoutingContext
 from personal_agent.orchestration.orchestration_nodes._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
@@ -49,18 +48,35 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.entry_text = text
     state.router_decision = None
     state.execution_plan = None
+    state.task_spec = None
+    state.execution_ledger = None
+    state.context_envelope = ContextEnvelope()
     state.workflow_id = ""
     state.workflow_version = ""
+    state.control_state = None
+    state.control_decision = None
+    state.current_action = None
+    state.current_actions = []
+    state.current_action_outcome = None
+    state.latest_observations = []
+    state.completion_report = None
+    state.execution_events = []
+    state.executive_turn = 0
+    state.last_decision_hash = ""
+    state.repeated_decision_count = 0
+    state.control_route = ""
     state.react = ReactSubState()
     state.step_execution = StepExecutionState()
     state.tool_tracking = ToolTrackingSubState()
     state.tool_results = []
+    state.provider_call_count = 0
     state.tool_messages = []
     state.execution_trace = []
     state.citations = []
     state.matches = []
     state.pending_confirmation = None
     state.confirmation_decision = None
+    state.confirmed_step_id = ""
     state.answer = None
     state.answer_completed = False
     state.events = []
@@ -88,17 +104,34 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "tool_messages": [],
         "router_decision": None,
         "execution_plan": None,
+        "task_spec": None,
+        "execution_ledger": None,
+        "context_envelope": state.context_envelope,
         "workflow_id": "",
         "workflow_version": "",
+        "control_state": None,
+        "control_decision": None,
+        "current_action": None,
+        "current_actions": [],
+        "current_action_outcome": None,
+        "latest_observations": [],
+        "completion_report": None,
+        "execution_events": [],
+        "executive_turn": 0,
+        "last_decision_hash": "",
+        "repeated_decision_count": 0,
+        "control_route": "",
         "react": state.react,
         "step_execution": state.step_execution,
         "tool_tracking": state.tool_tracking,
         "tool_results": [],
+        "provider_call_count": 0,
         "execution_trace": [],
         "citations": [],
         "matches": [],
         "pending_confirmation": None,
         "confirmation_decision": None,
+        "confirmed_step_id": "",
         "answer": None,
         "answer_completed": False,
         "events": state.events,
@@ -294,108 +327,6 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
         "execution_trace": [],
         "events": state.events,
     }
-
-
-def _node_project_workflow_steps(state: AgentGraphState, *, deps: PlanningContext) -> dict:
-    """Project structured execution steps from the selected workflow.
-
-    Checkpoint boundary: after this node the projected steps exist and can be
-    inspected before validation.
-    """
-    entry_text = state.entry_text or (state.entry_input.text if state.entry_input else "")
-    if state.router_decision is None:
-        return {}
-    plan, steps = deps.workflow_planner.plan(
-        state.router_decision,
-        entry_text=entry_text,
-        routing_key=f"{state.user_id}:{state.session_id}",
-    )
-    state.execution_plan = plan
-    step_states = [StepRunState.from_execution_step(s) for s in steps]
-
-    state.step_execution.steps = step_states
-    if len(plan.tasks) == 1 and step_states:
-        state.workflow_id = step_states[0].workflow_id
-        state.workflow_version = step_states[0].workflow_version
-    else:
-        state.workflow_id = "multi_intent_plan"
-        state.workflow_version = "v1"
-    state.add_event("steps_projected", {
-        "workflow_id": state.workflow_id,
-        "workflow_version": state.workflow_version,
-        "tasks": [task.model_dump(mode="json") for task in plan.tasks],
-        "steps": [pss.model_dump(mode="json") for pss in step_states],
-    })
-
-    logger.info(
-        "project_workflow_steps run_id=%s tasks=%d steps=%d",
-        state.run_id, len(plan.tasks), len(step_states),
-    )
-    return {
-        "workflow_id": state.workflow_id,
-        "workflow_version": state.workflow_version,
-        "execution_plan": state.execution_plan,
-        "step_execution": state.step_execution,
-        "events": state.events,
-    }
-
-
-def _node_validate_projected_steps(state: AgentGraphState, *, deps: PlanningContext) -> dict:
-    """Validate compiled workflow tasks before execution."""
-    steps = [sd.to_execution_step() for sd in (state.step_execution.steps or [])]
-    validated_steps = list(steps)
-    issues: list[str] = []
-    warnings: list[str] = []
-    for task in (state.execution_plan.tasks if state.execution_plan else []):
-        task_id = task.task_id
-        task_steps = [deepcopy(step) for step in validated_steps if step.task_id == task_id]
-        task_step_ids = {step.step_id for step in task_steps}
-        for step in task_steps:
-            step.depends_on = [
-                dependency for dependency in step.depends_on
-                if dependency in task_step_ids
-            ]
-        validation = deps.step_projection_validator.validate(task_steps, task.intent)
-        issues.extend(f"[{task_id}] {issue}" for issue in validation.issues)
-        warnings.extend(f"[{task_id}] {warning}" for warning in validation.warnings)
-    if issues:
-        state.errors.extend(issues)
-        state.add_event("steps_validated", {
-            "outcome": "blocked",
-            "issues": issues,
-            "warnings": warnings,
-        })
-        state.step_execution.aborted = True
-    else:
-        state.add_event("steps_validated", {
-            "outcome": "valid",
-            "warnings": warnings,
-        })
-
-    step_states = [StepRunState.from_execution_step(s) for s in validated_steps]
-    state.step_execution.steps = step_states
-
-    logger.info(
-        "validate_projected_steps run_id=%s steps=%d blocked=%s executable=%s",
-        state.run_id, len(step_states), bool(issues), not bool(issues),
-    )
-    return {
-        "step_execution": state.step_execution,
-        "router_decision": state.router_decision,
-        "events": state.events,
-    }
-
-
-def _after_validate_projected_steps(state: AgentGraphState) -> str:
-    """After validation: enter step execution or ask the user to clarify."""
-    if (
-        state.router_decision
-        and state.router_decision.goals
-        and state.step_execution.steps
-        and not state.step_execution.aborted
-    ):
-        return "prepare_step_execution"
-    return "direct_answer_branch"
 
 
 def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerContext) -> dict:
@@ -602,6 +533,14 @@ def _execution_trace_for_intent(intent: str) -> list[str]:
 
 
 def _node_finalize_entry_result(state: AgentGraphState) -> dict:
+    from personal_agent.orchestration.orchestration_models import execution_trace_from_events
+
+    if (
+        state.task_spec is not None
+        and state.task_spec.lifecycle not in {"completed", "stopped"}
+        and not state.answer_completed
+    ):
+        state.errors.append("completion_verifier_did_not_accept_task")
     if state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:
@@ -634,8 +573,10 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
         "finalize_entry_result run_id=%s intent=%s errors=%d",
         state.run_id, state.router_decision.primary_intent if state.router_decision else "unknown", len(state.errors),
     )
+    state.execution_trace = execution_trace_from_events(state.events)
     result = {
         "answer_completed": state.answer_completed,
+        "execution_trace": state.execution_trace,
         "events": state.events,
         "updated_at": state.updated_at,
     }

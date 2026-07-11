@@ -23,7 +23,7 @@ from personal_agent.orchestration.workflow_state_migration import reset_step_and
 
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_SCHEMA_VERSION = "step_execution_v2"
+CHECKPOINT_SCHEMA_VERSION = "executive_v1"
 LEGACY_REPLAY_UPDATE_KEYS = {
     "plan",
     "plan" + "_steps",

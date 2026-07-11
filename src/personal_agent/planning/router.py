@@ -654,14 +654,31 @@ def _deterministic_compound_capture_ask_decision(text: str) -> RouterDecision | 
 
 
 def _compound_capture_ask_decision(stripped: str) -> RouterDecision:
+    markers = (
+        "然后直接回答", "再直接回答", "并直接回答",
+        "然后回答", "再回答", "并回答",
+    )
+    capture_input = stripped
+    ask_input = stripped
+    for marker in markers:
+        if marker not in stripped:
+            continue
+        capture_input, ask_input = stripped.split(marker, 1)
+        break
+    for prefix in ("请记住", "请记一下", "记住", "记一下"):
+        if capture_input.startswith(prefix):
+            capture_input = capture_input[len(prefix):]
+            break
+    capture_input = capture_input.strip(" ：:，,。")
+    ask_input = ask_input.strip(" ：:，,。")
     return RouterDecision(
         user_goal="记录一条知识并基于该主题回答后续问题",
         route_type="composite_workflow",
         matched_capabilities=["capture_text", "ask"],
         coverage="full",
         goals=[
-            Goal(goal_id="goal_1", intent="capture_text", input=stripped),
-            Goal(goal_id="goal_2", intent="ask", input=stripped),
+            Goal(goal_id="goal_1", intent="capture_text", input=capture_input or stripped),
+            Goal(goal_id="goal_2", intent="ask", input=ask_input or stripped),
         ],
     )
 

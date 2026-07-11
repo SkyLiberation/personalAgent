@@ -14,13 +14,17 @@ if TYPE_CHECKING:
     from personal_agent.governance import ToolExecutor
     from personal_agent.infra.structured_model import StructuredModelClient
     from personal_agent.orchestration.ask import AskRunContextStore
-    from personal_agent.planning.replanner import Replanner
     from personal_agent.planning.router import IntentRouter
     from personal_agent.orchestration.runtime_ask import AskService
     from personal_agent.application.runtime_results import AskResult
     from personal_agent.planning.step_projection_validator import StepProjectionValidator
     from personal_agent.application.verifier import AnswerVerifier
-    from personal_agent.planning.workflow_planner import WorkflowPlanner
+    from personal_agent.planning.protocols import ProtocolRegistry
+    from personal_agent.planning.goal_interpreter import GoalInterpreter
+    from personal_agent.planning.executive import ExecutiveController
+    from personal_agent.planning.decision_validator import DecisionValidator
+    from personal_agent.planning.ledger import ExecutionLedgerProjector, LedgerPatchValidator
+    from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
     from personal_agent.application.workspace import WorkspaceService
     from personal_agent.agents.gateway import AgentGateway
 
@@ -38,9 +42,20 @@ class RoutingContext:
 
 
 @dataclass(frozen=True, slots=True)
-class PlanningContext:
-    workflow_planner: "WorkflowPlanner"
+class ExecutiveContext:
+    settings: "Settings"
+    goal_interpreter: "GoalInterpreter"
+    controller: "ExecutiveController"
+    decision_validator: "DecisionValidator"
+    ledger_projector: "ExecutionLedgerProjector"
+    ledger_patch_validator: "LedgerPatchValidator"
+    goal_verifier: "GoalVerifier"
+    completion_verifier: "CompletionVerifier"
+    protocol_registry: "ProtocolRegistry"
     step_projection_validator: "StepProjectionValidator"
+    tool_executor: "ToolExecutor"
+    policy_engine: "PolicyEngine"
+    agent_gateway: "AgentGateway"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +75,10 @@ class SummaryContext:
 class StepExecutionContext:
     settings: "Settings"
     memory: "MemoryFacade"
-    replanner: "Replanner | None"
     verifier: "AnswerVerifier | None"
     step_projection_validator: "StepProjectionValidator"
     tool_executor: "ToolExecutor"
+    policy_engine: "PolicyEngine"
     agent_gateway: "AgentGateway"
     graph_store: "GraphitiStore"
     execute_ask: Callable[..., "AskResult"]
@@ -91,7 +106,7 @@ class GraphContexts:
     """Graph assembly input; nodes receive only one narrow child context."""
 
     routing: RoutingContext
-    planning: PlanningContext
+    executive: ExecutiveContext
     direct_answer: DirectAnswerContext
     steps: StepExecutionContext
     react: ReactContext

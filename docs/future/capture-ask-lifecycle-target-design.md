@@ -11,6 +11,25 @@
 
 但评估里部分建议仍偏迁移期，不适合作为不兼容目标态。
 
+## LangGraph 接入判断
+
+当前 `capture_*` 和 `ask` 已经属于 LangGraph 主编排：它们由固定 `WorkflowSpec` 投影为 step，在 entry graph 中获得路由、checkpoint、HITL、事件和恢复。因而问题不在于“是否再为每个业务流程单独编一张图”。
+
+真正的架构债是 step 粒度：当前 capture 把去重、持久化、分块、关联、复习和图谱同步藏在一个写入 step 内；当前 retrieve 也把多个可失败的检索和排序活动聚合在一个 step 内。这会导致局部成功后的失败只能重跑大步骤，审计也只能看到粗粒度结果。
+
+目标态保持固定拓扑，但把有恢复价值的业务边界提升为 durable step：
+
+```text
+Workflow Engine / LangGraph
+  -> durable step state + event + artifact reference
+  -> worker activity
+  -> parser / retriever / model / storage implementation
+```
+
+纯函数和无状态 helper 不进入图；有副作用、长耗时、可部分失败、需要独立 retry / HITL / capability policy，或需要单独观测的活动必须进入 durable step。这样 LangGraph 是 lifecycle control plane，而不是把所有函数包装成 node 的容器。
+
+生产入口也必须收口：文本、URL、文件、对话片段、Research source 和后台触发都提交同一个 workflow execution。整条 `execute_capture()` / `execute_ask()` 直调只可作为测试 harness 或已被 activity boundary 包裹的内部实现，不得绕过 event、artifact、policy 和 idempotency。
+
 ## 采纳的合理部分
 
 ### 1. 固定 Workflow 拓扑仍然保留

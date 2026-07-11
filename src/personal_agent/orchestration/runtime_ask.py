@@ -72,6 +72,7 @@ class AskService(AskPromptMixin):
         llm,
         planner_client=None,
         workspace_service=None,
+        policy_engine=None,
     ) -> None:
         self.settings = settings
         self.graph_store = graph_store
@@ -83,6 +84,7 @@ class AskService(AskPromptMixin):
         self._llm = llm
         self._planner_client = planner_client
         self.workspace_service = workspace_service
+        self.policy_engine = policy_engine
         self.evidence_engine = EvidenceEngine()
         self.dialogue_context_policy = get_prompt("answer.dialogue_context_policy").template
 

@@ -15,9 +15,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from personal_agent.application.evidence_engine import EvidenceAssemblyRequest
+from personal_agent.kernel.contracts.capability import (
+    CapabilityResolutionRequest,
+    CapabilitySelectionPolicy,
+    EvidenceSourceCapability,
+)
 from personal_agent.orchestration.runtime_helpers import _annotate_answer
-from personal_agent.orchestration.ask.context import AskRepairEvent
+from personal_agent.orchestration.ask.context import AskRepairEvent, RetrievalCapabilityPlan
 from personal_agent.orchestration.ask.retrievers import RetrievalCoordinator
+from personal_agent.planning.capability_resolver import CapabilityResolver
+from personal_agent.tools.mcp_capability import build_global_capability_registry
 
 if TYPE_CHECKING:
     from personal_agent.orchestration.runtime_ask import AskService
@@ -40,6 +47,7 @@ class RetrievalStage:
         ctx.understanding = understanding
         ctx.retrieval_plan = retrieval_plan
         ctx.effective_query = retrieval_plan.query or ctx.question
+        self._scope_retrieval_capabilities(ctx)
         ctx.add_trace(
             f"QueryPlan: sources={retrieval_plan.sources} parallel={retrieval_plan.parallel} "
             f"rewrite={ctx.effective_query[:60]} freshness={understanding.needs_freshness} "
@@ -136,6 +144,226 @@ class RetrievalStage:
         ]
         for line in assembled.trace:
             ctx.add_trace(line)
+
+    def _scope_retrieval_capabilities(self, ctx: "AskRunContext") -> None:
+        svc = self._service
+        assert ctx.understanding is not None
+        assert ctx.retrieval_plan is not None
+        registry = build_global_capability_registry(
+            tools=svc._tool_executor.list_tools(exposures={"public_agent", "scoped_agent", "admin"}),
+            evidence_sources=_ask_retriever_capabilities(ctx, svc),
+        )
+        preferred = list(ctx.retrieval_plan.sources)
+        if ctx.retrieval_plan.claim_sensitive:
+            preferred.append("workspace")
+        if ctx.understanding.needs_episodic_context:
+            preferred.append("episodic")
+        preferred.extend(["reflection"])
+        resolution = CapabilityResolver(
+            registry,
+            policy_engine=svc.policy_engine,
+        ).resolve(CapabilityResolutionRequest(
+            task_text=ctx.question,
+            workflow_id="ask",
+            step_id="ask-retrieve",
+            step_action_type="retrieve",
+            allowed_kinds=("retriever",),
+            allowed_operations=("search", "read"),
+            policy=CapabilitySelectionPolicy(
+                local_first=True,
+                read_only=True,
+                max_capabilities_per_step=6,
+                max_providers_per_step=6,
+                preferred_providers=tuple(dict.fromkeys(preferred)),
+            ),
+            runtime_context={
+                "user_id": ctx.user_id,
+                "session_id": ctx.session_id,
+                "needs_freshness": ctx.understanding.needs_freshness,
+                "claim_sensitive": ctx.retrieval_plan.claim_sensitive,
+                "planned_sources": list(ctx.retrieval_plan.sources),
+            },
+        ))
+        selected_sources = list(resolution.selected_retrievers)
+        if selected_sources:
+            allowed_plan_sources = [
+                source for source in ctx.retrieval_plan.sources if source in selected_sources
+            ]
+            if allowed_plan_sources:
+                ctx.retrieval_plan = ctx.retrieval_plan.model_copy(
+                    update={"sources": allowed_plan_sources}
+                )
+        denied_sources = [
+            denied.local_name
+            for denied in resolution.denied_capabilities
+            if denied.local_name
+        ]
+        external_sources = {"web"}
+        ctx.retrieval_capability_plan = RetrievalCapabilityPlan(
+            selected_sources=selected_sources,
+            denied_sources=denied_sources,
+            denial_reasons={
+                denied.local_name: denied.reason
+                for denied in resolution.denied_capabilities
+                if denied.local_name
+            },
+            freshness_required=bool(ctx.understanding.needs_freshness),
+            citation_required=True,
+            local_first=not bool(ctx.understanding.needs_freshness),
+            external_allowed=bool(external_sources & set(selected_sources)),
+            max_external_calls=1 if external_sources & set(selected_sources) else 0,
+            source_priority=selected_sources,
+            fallback_policy=ctx.understanding.answer_policy,
+            scope_id=resolution.request.scope_id,
+            resolution_id=resolution.resolution_id,
+            resolution_lifecycle_state=resolution.lifecycle_state,
+            escalation_hint=(
+                resolution.escalation_hint.model_dump(mode="json")
+                if resolution.escalation_hint is not None else None
+            ),
+            capability_resolution=resolution.model_dump(mode="json"),
+        )
+        ctx.retrieval_health["capability_resolution"] = resolution.model_dump(mode="json")
+        ctx.add_trace(
+            "RetrievalCapabilityPlan: "
+            f"selected={selected_sources} denied={denied_sources} "
+            f"external_allowed={ctx.retrieval_capability_plan.external_allowed} "
+            f"resolution={resolution.resolution_id}:{resolution.lifecycle_state}"
+        )
+
+
+def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tuple[EvidenceSourceCapability, ...]:
+    plan = ctx.retrieval_plan
+    understanding = ctx.understanding
+    planned_sources = set(plan.sources if plan is not None else [])
+    capabilities = [
+        EvidenceSourceCapability(
+            capability_id="retriever:graph",
+            kind="retriever",
+            provider="graph",
+            local_name="graph",
+            description="Graph-backed evidence retrieval.",
+            semantic_domains=("graph", "local_memory", "workspace_knowledge"),
+            resource_types=("note", "claim", "relation"),
+            operations=("search", "read"),
+            risk_level="low",
+            side_effects=("none",),
+            auth_scope="ask:read",
+            trust_level="trusted",
+            credential_mode="none",
+            data_egress_class="none",
+            attestation_status="verified",
+            freshness_profile="static",
+            metadata_source="system",
+            provider_priority=1,
+        ),
+        EvidenceSourceCapability(
+            capability_id="retriever:local",
+            kind="retriever",
+            provider="local",
+            local_name="local",
+            description="Local memory retrieval.",
+            semantic_domains=("local_memory",),
+            resource_types=("note",),
+            operations=("search", "read"),
+            risk_level="low",
+            side_effects=("none",),
+            auth_scope="ask:read",
+            trust_level="trusted",
+            credential_mode="none",
+            data_egress_class="none",
+            attestation_status="verified",
+            freshness_profile="static",
+            metadata_source="system",
+            provider_priority=1,
+        ),
+    ]
+    workspace_default_quota = int(getattr(svc.settings.ask, "workspace_default_quota", 0) or 0)
+    if bool(getattr(plan, "claim_sensitive", False)) or workspace_default_quota > 0:
+        capabilities.append(EvidenceSourceCapability(
+            capability_id="retriever:workspace",
+            kind="retriever",
+            provider="workspace",
+            local_name="workspace",
+            description="Workspace evidence and claim retrieval.",
+            semantic_domains=("workspace_knowledge", "local_memory"),
+            resource_types=("evidence", "claim"),
+            operations=("search", "read"),
+            risk_level="low",
+            side_effects=("none",),
+            auth_scope="workspace:read",
+            trust_level="trusted",
+            credential_mode="none",
+            data_egress_class="none",
+            attestation_status="verified",
+            freshness_profile="static",
+            metadata_source="system",
+            provider_priority=2,
+        ))
+    if "web" in planned_sources or bool(getattr(understanding, "needs_freshness", False)):
+        capabilities.append(EvidenceSourceCapability(
+            capability_id="retriever:web",
+            kind="retriever",
+            provider="web",
+            local_name="web",
+            description="Fresh web retrieval.",
+            semantic_domains=("web", "docs"),
+            resource_types=("web_page",),
+            operations=("search", "read"),
+            risk_level="medium",
+            side_effects=("external_network",),
+            auth_scope="web:search",
+            trust_level="external",
+            credential_mode="service_token",
+            data_egress_class="content",
+            attestation_status="self_claimed",
+            freshness_profile="realtime",
+            metadata_source="human_reviewed",
+            underlying_execution="tool_gateway",
+            provider_priority=3,
+        ))
+    if bool(getattr(understanding, "needs_episodic_context", False)):
+        capabilities.append(EvidenceSourceCapability(
+            capability_id="retriever:episodic",
+            kind="retriever",
+            provider="episodic",
+            local_name="episodic",
+            description="Prior run and episode retrieval.",
+            semantic_domains=("local_memory",),
+            resource_types=("episode",),
+            operations=("search", "read"),
+            risk_level="low",
+            side_effects=("none",),
+            auth_scope="ask:read",
+            trust_level="trusted",
+            credential_mode="none",
+            data_egress_class="none",
+            attestation_status="verified",
+            freshness_profile="static",
+            metadata_source="system",
+            provider_priority=4,
+        ))
+    capabilities.append(EvidenceSourceCapability(
+        capability_id="retriever:reflection",
+        kind="retriever",
+        provider="reflection",
+        local_name="reflection",
+        description="Reflection memory retrieval.",
+        semantic_domains=("local_memory",),
+        resource_types=("reflection",),
+        operations=("search", "read"),
+        risk_level="low",
+        side_effects=("none",),
+        auth_scope="ask:read",
+        trust_level="trusted",
+        credential_mode="none",
+        data_egress_class="none",
+        attestation_status="verified",
+        freshness_profile="static",
+        metadata_source="system",
+        provider_priority=5,
+    ))
+    return tuple(capabilities)
 
 
 class GenerationStage:

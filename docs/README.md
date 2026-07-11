@@ -1,11 +1,12 @@
 # personalAgent 文档索引
 
-本项目是一个 **workflow-first** 的个人知识 Agent：LLM 负责理解语义、生成候选与开放式表达；
-确定性代码负责授权、编排、校验、执行、持久化与审计。固定业务流程由 `WorkflowSpec / WorkflowRegistry`
-声明，经 deterministic projector 投影为 `ExecutionStep`，进入 checkpoint-safe 的 LangGraph 步骤执行图。
+本项目是一个以元能力组合和受治理状态机共同驱动的个人知识 Agent：开放式知识工作由
+`TaskSpec + SkillSet + Execution Pattern + MetaCapability` 编译执行；高风险、事务性和长生命周期业务继续由
+`WorkflowSpec / WorkflowRegistry` 承载。确定性 Runtime 负责授权、校验、执行、持久化、HITL 与审计。
 
 系统级的「LLM 决策点 vs 确定性流程」全景见 [summary/llm-decisions-and-deterministic-flows.md](summary/llm-decisions-and-deterministic-flows.md)。
-当前 MCP 与 A2A 的治理边界、主链路和评测门禁见 [summary/mcp-and-a2a-current-state.md](summary/mcp-and-a2a-current-state.md)。
+当前 Capability Scoping、MCP 与 A2A 的治理边界、主链路和评测门禁见 [summary/capability-scoping-mcp-a2a-current-state.md](summary/capability-scoping-mcp-a2a-current-state.md)。
+当前元能力编译、ContextEnvelope、ExecutionLedger、确认 commit 与 provider binding 全景见 [summary/agentic-meta-capability-current-state.md](summary/agentic-meta-capability-current-state.md)。
 
 ## 目录分工
 
@@ -39,6 +40,7 @@
 
 | 主题 | 权威文档 |
 | --- | --- |
+| Agentic 元能力运行时当前状态 | [summary/agentic-meta-capability-current-state.md](summary/agentic-meta-capability-current-state.md) |
 | Workflow / Step Projection 架构总览 | [workflow/workflow-framework.md](workflow/workflow-framework.md) |
 | Entry → Router → Plan → ReAct → 输出 端到端流程 | [workflow/entry-router-plan-react-output-flow.md](workflow/entry-router-plan-react-output-flow.md) |
 | Capture 摄取 + Ask RAG 流水线 | [workflow/capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) |
@@ -69,7 +71,9 @@
 
 | 主题 | 文档 |
 | --- | --- |
-| AgentGateway / A2A / MCP Capability Fabric | [future/agent-gateway-a2a-mcp-design.md](future/agent-gateway-a2a-mcp-design.md) |
+| 知识 Agent 元能力组合 | [future/meta-capability-composition-design.md](future/meta-capability-composition-design.md) |
+| 全局 Capability Scoping | [future/global-capability-scoping-design.md](future/global-capability-scoping-design.md) |
+| AgentGateway / A2A | [future/agent-gateway-a2a-design.md](future/agent-gateway-a2a-design.md) |
 | Workflow 平台化优化 | [future/workflow-platform-optimization.md](future/workflow-platform-optimization.md) |
 | Agent Tool / Workflow 改造 | [future/agent-tool-workflow-redesign.md](future/agent-tool-workflow-redesign.md) |
 

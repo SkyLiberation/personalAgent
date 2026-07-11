@@ -47,17 +47,24 @@ def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentSe
     ))
 
     assert result.intents == ["capture_text", "ask"]
-    assert result.plan is not None
-    assert [task["task_id"] for task in result.plan["tasks"]] == ["goal_1", "goal_2"]
-    assert [step["step_id"] for step in result.steps] == [
-        "goal_1::cap-structure",
-        "goal_2::ask-retrieve",
-        "goal_2::ask-compose",
-        "goal_2::ask-verify",
-        "goal_2::ask-repair",
-    ]
-    assert all(step["status"] == "completed" for step in result.steps)
+    assert result.run_status == "waiting_confirmation"
+    assert result.pending_confirmation
+
+    result = service.resume_entry(
+        result.run_id or "",
+        result.thread_id or "",
+        "confirm",
+        "default",
+    )
+
+    assert result.run_status == "completed"
     assert any("DNS 将域名解析为 IP 地址" in note.content for note in service.store.list_notes("default"))
+    verified_goal_ids = {
+        event.get("payload", {}).get("execution_event", {}).get("goal_id")
+        for event in result.events
+        if event.get("payload", {}).get("execution_event", {}).get("event_type") == "goal_verified"
+    }
+    assert {"goal_1", "goal_2"}.issubset(verified_goal_ids)
     assert result.reply_text
 
 
@@ -808,6 +815,14 @@ class TestEntryFlow:
         assert result.intents[-1] in ("capture_text", "unknown")
         assert result.reply_text
         if result.intents[-1] == "capture_text":
+            assert result.run_status == "waiting_confirmation"
+            result = service.resume_entry(
+                result.run_id or "",
+                result.thread_id or "",
+                "confirm",
+                "default",
+            )
+            assert result.run_status == "completed"
             assert service.memory.list_notes()
 
     def test_entry_ask(self, service: AgentService):

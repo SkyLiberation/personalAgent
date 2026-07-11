@@ -21,6 +21,15 @@ from personal_agent.kernel.models import Citation, EntryInput, EntryIntent, Thre
 from personal_agent.kernel.contracts.execution import ExecutionPlan
 from personal_agent.planning.router import RouterDecision
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
+from personal_agent.kernel.contracts.agentic import ContextEnvelope, ExecutionEvent, ExecutionLedger, TaskSpec
+from personal_agent.kernel.contracts.executive import (
+    ActionOutcome,
+    BoundedAction,
+    CompletionReport,
+    ControlDecision,
+    ControlState,
+    ObservationRef,
+)
 
 if TYPE_CHECKING:
     from personal_agent.kernel.contracts.execution import ExecutionStep
@@ -69,6 +78,7 @@ class AgentRunSnapshot(BaseModel):
     answer: str | None = None
     pending_confirmation: dict[str, Any] | None = None
     confirmation_decision: str | None = None
+    confirmed_step_id: str = ""
     last_event: AgentEvent | None = None
     errors: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=local_now)
@@ -114,6 +124,12 @@ class StepRunState(BaseModel):
     task_id: str = ""
     task_intent: EntryIntent = "unknown"
     task_input: str = ""
+    meta_capability: str = ""
+    output_contract: str = "ToolResult"
+    pattern_id: str = ""
+    skill_ids: list[str] = Field(default_factory=list)
+    capability_requirements: list[dict[str, Any]] = Field(default_factory=list)
+    subtask_spec: dict[str, Any] = Field(default_factory=dict)
     input_artifact_id: str = ""
     output_artifact_id: str = ""
     error_artifact_id: str = ""
@@ -149,6 +165,12 @@ class StepRunState(BaseModel):
             task_id=s.task_id,
             task_intent=s.task_intent,
             task_input=s.task_input,
+            meta_capability=s.meta_capability,
+            output_contract=s.output_contract,
+            pattern_id=s.pattern_id,
+            skill_ids=s.skill_ids,
+            capability_requirements=s.capability_requirements,
+            subtask_spec=s.subtask_spec,
         )
 
     def to_execution_step(self) -> "ExecutionStep":
@@ -180,6 +202,12 @@ class StepRunState(BaseModel):
             task_id=self.task_id,
             task_intent=self.task_intent,
             task_input=self.task_input,
+            meta_capability=self.meta_capability,
+            output_contract=self.output_contract,
+            pattern_id=self.pattern_id,
+            skill_ids=self.skill_ids,
+            capability_requirements=self.capability_requirements,
+            subtask_spec=self.subtask_spec,
         )
 
 
@@ -262,8 +290,26 @@ class AgentGraphState(BaseModel):
     # Routing
     router_decision: RouterDecision | None = None
     execution_plan: ExecutionPlan | None = None
+    task_spec: TaskSpec | None = None
+    execution_ledger: ExecutionLedger | None = None
+    context_envelope: ContextEnvelope = Field(default_factory=ContextEnvelope)
     workflow_id: str = ""
     workflow_version: str = ""
+
+    # Task-level executive control. These fields, rather than the projected
+    # step list, own open-task progress and completion semantics.
+    control_state: ControlState | None = None
+    control_decision: ControlDecision | None = None
+    current_action: BoundedAction | None = None
+    current_actions: list[BoundedAction] = Field(default_factory=list)
+    current_action_outcome: ActionOutcome | None = None
+    latest_observations: list[ObservationRef] = Field(default_factory=list)
+    completion_report: CompletionReport | None = None
+    execution_events: list[ExecutionEvent] = Field(default_factory=list)
+    executive_turn: int = 0
+    last_decision_hash: str = ""
+    repeated_decision_count: int = 0
+    control_route: str = ""
 
     # Sub-models (grouped private state)
     react: ReactSubState = Field(default_factory=ReactSubState)
@@ -272,6 +318,7 @@ class AgentGraphState(BaseModel):
 
     # Tool results
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
+    provider_call_count: int = 0
 
     # Lightweight execution trace (for non-planning intents)
     execution_trace: list[str] = Field(default_factory=list)
@@ -286,6 +333,7 @@ class AgentGraphState(BaseModel):
     # HITL
     pending_confirmation: dict[str, Any] | None = None
     confirmation_decision: str | None = None
+    confirmed_step_id: str = ""
 
     # Final
     answer: str | None = None
@@ -432,6 +480,21 @@ def execution_trace_from_events(events: list[AgentEvent]) -> list[str]:
             if label not in seen:
                 trace.append(label)
                 seen.add(label)
+        elif evt.type == "executive_decision":
+            decision = evt.payload.get("decision") or {}
+            action = str(decision.get("action") or "")
+            progress = str(decision.get("expected_progress") or "")
+            label = progress or action
+            if label and label not in seen:
+                trace.append(label)
+                seen.add(label)
+        elif evt.type == "protocol_started":
+            call = evt.payload.get("protocol_call") or {}
+            protocol_id = str(call.get("protocol_id") or "")
+            label = f"执行受治理协议: {protocol_id}" if protocol_id else "执行受治理协议"
+            if label not in seen:
+                trace.append(label)
+                seen.add(label)
     return trace
 
 
@@ -442,6 +505,15 @@ _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "intent_classified": "intent",
     "steps_projected": "steps_projected",
     "steps_validated": "status",
+    "goal_interpreted": "status",
+    "executive_decision": "executive_decision",
+    "action_materialized": "action_materialized",
+    "action_outcome": "action_outcome",
+    "protocol_started": "protocol_started",
+    "protocol_completed": "protocol_completed",
+    "goal_verification": "goal_verification",
+    "completion_checked": "completion_checked",
+    "completion_rejected": "completion_rejected",
     "step_started": "step_started",
     "react_iteration": "react_iteration",
     "tool_called": "tool_called",

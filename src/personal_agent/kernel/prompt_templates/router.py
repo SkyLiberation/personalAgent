@@ -95,31 +95,6 @@ PROMPTS: dict[str, PromptSpec] = {
         output_contract="RouterOutput",
         template="当前用户输入：{text}",
     ),
-    "replanner.system": PromptSpec(
-        name="replanner.system",
-        version="v2",
-        output_contract="ReExecutionSteps",
-        template="你是一个严谨的任务重新规划器，只返回符合 schema 的 JSON。",
-    ),
-    "replanner.user": PromptSpec(
-        name="replanner.user",
-        version="v3",
-        output_contract="ReExecutionSteps",
-        template=(
-            "当前计划中的某个步骤执行失败了，请根据失败信息和中间结果，生成替换剩余未完成步骤的新计划。"
-            "已经完成的步骤不要重新执行。\n\n"
-            "原始意图: {intent}\n\n"
-            "原始计划步骤:\n{steps_summary}\n\n"
-            "失败步骤: {failed_step_id} ({failed_action_type})\n"
-            "失败原因: {error}\n\n"
-            "同类任务过去失败的教训（供参考，避免重蹈覆辙；如与当前情况无关可忽略）:\n{reflections}\n\n"
-            "已完成的中间结果:\n{obs_summary}\n\n"
-            "请返回一个 JSON 对象，包含 steps 数组。每个步骤包含：step_id, action_type, description, "
-            "tool_name, tool_input, depends_on, expected_output, success_criteria, risk_level, "
-            "requires_confirmation, on_failure。"
-            "不要包含已经完成的步骤。如果无法重新规划，返回 {{\"steps\": []}}。"
-        ),
-    ),
     "react.system": PromptSpec(
         name="react.system",
         version="v2",

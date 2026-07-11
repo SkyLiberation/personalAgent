@@ -73,7 +73,7 @@ from personal_agent.application.episodic_memory import record_entry_episode
 from personal_agent.orchestration.orchestration_contexts import (
     DirectAnswerContext,
     GraphContexts,
-    PlanningContext,
+    ExecutiveContext,
     ReactContext,
     RoutingContext,
     SummaryContext,
@@ -81,8 +81,13 @@ from personal_agent.orchestration.orchestration_contexts import (
 )
 from personal_agent.planning.workflow_planner import WorkflowPlanner
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
-from personal_agent.planning.replanner import Replanner
 from personal_agent.planning.router import DefaultIntentRouter
+from personal_agent.planning.goal_interpreter import GoalInterpreter
+from personal_agent.planning.executive import ExecutiveController
+from personal_agent.planning.decision_validator import DecisionValidator
+from personal_agent.planning.ledger import ExecutionLedgerProjector, LedgerPatchValidator
+from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
+from personal_agent.planning.protocols import ProtocolRegistry
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
@@ -372,9 +377,16 @@ class AgentRuntime:
             workflow_definition_store=self.workflow_definition_store,
             dependency_model_client=self._planner_client,
         )
+        self._protocol_registry = ProtocolRegistry(self._workflow_planner)
         self._verifier = create_answer_verifier(settings)
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
-        self._replanner = Replanner(settings, model_client=self._planner_client)
+        self._goal_interpreter = GoalInterpreter()
+        self._executive_controller = ExecutiveController(model_client=self._planner_client)
+        self._decision_validator = DecisionValidator()
+        self._ledger_projector = ExecutionLedgerProjector()
+        self._ledger_patch_validator = LedgerPatchValidator()
+        self._goal_verifier = GoalVerifier()
+        self._completion_verifier = CompletionVerifier()
         # Explicit collaborators.
         self._summarizer = ThreadSummarizer(self._llm)
         from personal_agent.orchestration.ask import PostgresAskRunContextStore
@@ -398,18 +410,29 @@ class AgentRuntime:
                 intent_router=self._intent_router,
                 compress_context=lambda text, user_id: self.compress_context(text, user_id),
             ),
-            planning=PlanningContext(
-                workflow_planner=self._workflow_planner,
+            executive=ExecutiveContext(
+                settings=self.settings,
+                goal_interpreter=self._goal_interpreter,
+                controller=self._executive_controller,
+                decision_validator=self._decision_validator,
+                ledger_projector=self._ledger_projector,
+                ledger_patch_validator=self._ledger_patch_validator,
+                goal_verifier=self._goal_verifier,
+                completion_verifier=self._completion_verifier,
+                protocol_registry=self._protocol_registry,
                 step_projection_validator=self._step_projection_validator,
+                tool_executor=self._tool_executor,
+                policy_engine=self._policy_engine,
+                agent_gateway=self._agent_gateway,
             ),
             direct_answer=direct_answer_context,
             steps=StepExecutionContext(
                 settings=self.settings,
                 memory=self.memory,
-                replanner=self._replanner,
                 verifier=self._verifier,
                 step_projection_validator=self._step_projection_validator,
                 tool_executor=self._tool_executor,
+                policy_engine=self._policy_engine,
                 agent_gateway=self._agent_gateway,
                 graph_store=self.graph_store,
                 execute_ask=lambda *args, **kwargs: self.execute_ask(*args, **kwargs),
@@ -634,6 +657,7 @@ class AgentRuntime:
             llm=self._llm,
             planner_client=self._planner_client,
             workspace_service=self.workspace_service,
+            policy_engine=self._policy_engine,
         )
 
     def execute_ask(self, *args, **kwargs) -> "AskResult":

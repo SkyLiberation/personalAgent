@@ -7,13 +7,17 @@ from typing import TYPE_CHECKING
 from collections import deque
 
 from personal_agent.kernel.prompts import get_prompt
-from personal_agent.kernel.contracts.capability import CapabilityResolution, CapabilityResolutionRequest
+from personal_agent.kernel.contracts.capability import (
+    CapabilityRequirement,
+    CapabilityResolution,
+    CapabilityResolutionRequest,
+)
 from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.planning.capability_resolver import (
     CapabilityResolver,
     default_capability_policy_for_scope,
 )
-from personal_agent.tools.mcp_capability import build_mcp_capability_registry
+from personal_agent.tools.mcp_capability import build_capability_registry
 
 if TYPE_CHECKING:
     from personal_agent.kernel.contracts.execution import ExecutionStep
@@ -182,26 +186,128 @@ def _resolve_allowed_tools_for_step(step: "ExecutionStep", deps: ReactContext) -
     return allowed & registered
 
 
+def _capability_resolution_payload(resolution: CapabilityResolution) -> dict[str, object]:
+    """Stable trace shape shared by deterministic, ReAct, and agent steps."""
+    return {
+        "scope_id": resolution.request.scope_id,
+        "resolution_id": resolution.resolution_id,
+        "lifecycle_state": resolution.lifecycle_state,
+        "workflow_id": resolution.request.workflow_id,
+        "step_id": resolution.request.step_id,
+        "step_action_type": resolution.request.step_action_type,
+        "selected_capability_ids": [item.capability_id for item in resolution.selected_capabilities],
+        "allowed_tools": list(resolution.allowed_tools),
+        "selected_retrievers": list(resolution.selected_retrievers),
+        "allowed_agents": list(resolution.allowed_agents),
+        "workflow_actions": list(resolution.workflow_actions),
+        "coverage": [item.model_dump(mode="json") for item in resolution.coverage],
+        "denied_capability_ids": [item.capability_id for item in resolution.denied_capabilities],
+        "denial_reasons": {item.capability_id: item.reason for item in resolution.denied_capabilities},
+        "constraints": resolution.constraints,
+        "escalation_hint": (
+            resolution.escalation_hint.model_dump(mode="json")
+            if resolution.escalation_hint is not None else None
+        ),
+        "rationale": resolution.rationale,
+        "confidence": resolution.confidence,
+    }
+
+
 def _resolve_capability_resolution_for_step(
     step: "ExecutionStep",
     deps: ReactContext,
 ) -> CapabilityResolution | None:
-    if step.workflow_id not in {
+    requirements = tuple(
+        CapabilityRequirement.model_validate(raw)
+        for raw in step.capability_requirements
+        if isinstance(raw, dict)
+    )
+    if requirements:
+        agent_requirement = all("delegate" in requirement.operations for requirement in requirements)
+        allowed_kinds = ("agent",) if agent_requirement else ("local_tool", "mcp_tool")
+        allowed_operations = tuple(dict.fromkeys(
+            operation
+            for requirement in requirements
+            for operation in requirement.operations
+        ))
+        tools = deps.tool_executor.list_tools(exposures={"public_agent", "scoped_agent", "admin"})
+        agent_gateway = getattr(deps, "agent_gateway", None)
+        registry = build_capability_registry(
+            tools=tools,
+            agents=agent_gateway.definitions() if agent_gateway is not None else (),
+        )
+        resource_locator = next((
+            requirement.resource_locator for requirement in requirements if requirement.resource_locator
+        ), "")
+        request = CapabilityResolutionRequest(
+            task_text=step.task_input or step.description,
+            workflow_id=step.workflow_id,
+            step_action_type=step.meta_capability or getattr(step, "execution_mode", "") or step.action_type,
+            allowed_kinds=allowed_kinds,
+            allowed_operations=allowed_operations,
+            requirements=requirements,
+            step_id=step.step_id,
+            policy=default_capability_policy_for_scope(step.workflow_id),
+            runtime_context={
+                "expected_local_names": [step.agent_id] if step.agent_id else [],
+                "resource_locator": resource_locator,
+            },
+        )
+        return CapabilityResolver(registry, policy_engine=deps.policy_engine).resolve(request)
+    if step.workflow_id in {
         "external_codebase_qa",
         "external_workspace_qa",
         "external_project_ops",
     }:
-        return None
-    registry = build_mcp_capability_registry(deps.tool_executor.list_tools(
-        exposures={"public_agent", "scoped_agent", "admin"}
-    ))
-    request = CapabilityResolutionRequest(
-        task_text=step.task_input or step.description,
-        workflow_scope=step.workflow_id,  # type: ignore[arg-type]
-        step_id=step.step_id,
-        policy=default_capability_policy_for_scope(step.workflow_id),
-    )
-    return CapabilityResolver(registry).resolve(request)
+        registry = build_capability_registry(deps.tool_executor.list_tools(
+            exposures={"public_agent", "scoped_agent", "admin"}
+        ))
+        request = CapabilityResolutionRequest(
+            task_text=step.task_input or step.description,
+            workflow_id=step.workflow_id,
+            step_action_type=getattr(step, "execution_mode", "") or step.action_type,
+            allowed_kinds=("mcp_tool",),
+            step_id=step.step_id,
+            policy=default_capability_policy_for_scope(step.workflow_id),
+        )
+        return CapabilityResolver(registry, policy_engine=deps.policy_engine).resolve(request)
+    if step.tool_name:
+        registry = build_capability_registry(deps.tool_executor.list_tools(
+            exposures={"public_agent", "scoped_agent", "admin"}
+        ))
+        capability = registry.get_by_name(step.tool_name)
+        if capability is None:
+            return None
+        request = CapabilityResolutionRequest(
+            task_text=step.task_input or step.description,
+            workflow_id=step.workflow_id,
+            step_action_type=step.action_type,
+            allowed_kinds=(capability.kind,),
+            allowed_operations=capability.operations,
+            step_id=step.step_id,
+            policy=default_capability_policy_for_scope(step.workflow_id),
+            runtime_context={"expected_local_names": [step.tool_name]},
+        )
+        return CapabilityResolver(registry, policy_engine=deps.policy_engine).resolve(request)
+    if step.workflow_id == "gpt_researcher_a2a" and step.agent_id:
+        agent_gateway = getattr(deps, "agent_gateway", None)
+        if agent_gateway is None:
+            return None
+        registry = build_capability_registry(
+            agents=agent_gateway.definitions(),
+        )
+        request = CapabilityResolutionRequest(
+            task_text=step.task_input or step.description,
+            workflow_id=step.workflow_id,
+            step_action_type=step.action_type,
+            allowed_kinds=("agent",),
+            allowed_operations=("delegate",),
+            step_id=step.step_id,
+            policy=default_capability_policy_for_scope(step.workflow_id),
+            runtime_context={"expected_local_names": [step.agent_id]},
+        )
+        return CapabilityResolver(registry, policy_engine=deps.policy_engine).resolve(request)
+    return None
 
 
 def _is_react_tool_blocked(tool_name: str, deps: ReactContext) -> bool:
@@ -217,6 +323,11 @@ def _is_react_tool_blocked(tool_name: str, deps: ReactContext) -> bool:
     if spec is None:
         return True
     governance = tool_governance(spec)
+    if governance.requires_confirmation or any(
+        effect != "none" and ("write" in effect or "delete" in effect)
+        for effect in governance.side_effects
+    ):
+        return True
     decision = deps.policy_engine.evaluate(
         PolicyInput(
             action="tool_call",

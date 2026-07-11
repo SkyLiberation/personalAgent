@@ -38,6 +38,12 @@ class ExecutionStep:
     task_id: str = ""
     task_intent: EntryIntent = "unknown"
     task_input: str = ""
+    meta_capability: str = ""
+    output_contract: str = "ToolResult"
+    pattern_id: str = ""
+    skill_ids: list[str] = field(default_factory=list)
+    capability_requirements: list[dict[str, object]] = field(default_factory=list)
+    subtask_spec: dict[str, object] = field(default_factory=dict)
 
 
 class WorkflowTask(BaseModel):

@@ -32,8 +32,13 @@ from personal_agent.tools.knowledge_lifecycle import (
 )
 from personal_agent.tools.mcp import build_mcp_tools
 from personal_agent.tools.mcp_capability import (
+    CapabilityRegistry,
+    build_global_capability_registry,
     MCPCapabilityRegistry,
+    build_capability_registry,
     build_mcp_capability_registry,
+    capability_from_agent_definition,
+    capability_from_tool,
     mcp_capability_from_tool,
 )
 from personal_agent.tools.operations import (
@@ -85,8 +90,13 @@ __all__ = [
     "build_mark_note_deprecated_tool",
     "build_mark_notes_conflicted_tool",
     "build_mcp_tools",
+    "CapabilityRegistry",
+    "build_global_capability_registry",
     "MCPCapabilityRegistry",
+    "build_capability_registry",
     "build_mcp_capability_registry",
+    "capability_from_agent_definition",
+    "capability_from_tool",
     "mcp_capability_from_tool",
     "build_raw_wiki_search_tools",
     "build_review_digest_tool",

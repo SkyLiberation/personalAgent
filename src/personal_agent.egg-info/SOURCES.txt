@@ -39,9 +39,13 @@ src/personal_agent/adapters/web/routes/research.py
 src/personal_agent/adapters/web/routes/review.py
 src/personal_agent/adapters/web/routes/system.py
 src/personal_agent/adapters/web/routes/workspace.py
+src/personal_agent/agents/__init__.py
+src/personal_agent/agents/gateway.py
+src/personal_agent/agents/gpt_researcher_a2a.py
 src/personal_agent/application/__init__.py
 src/personal_agent/application/ask_pipeline_factory.py
 src/personal_agent/application/candidate_enrichers.py
+src/personal_agent/application/candidate_fusion.py
 src/personal_agent/application/chunk_quality.py
 src/personal_agent/application/chunking.py
 src/personal_agent/application/document_partition.py
@@ -109,6 +113,7 @@ src/personal_agent/governance/policy/engine.py
 src/personal_agent/governance/policy/invariants.py
 src/personal_agent/governance/policy/models.py
 src/personal_agent/infra/__init__.py
+src/personal_agent/infra/a2a.py
 src/personal_agent/infra/mcp.py
 src/personal_agent/infra/runtime_llm.py
 src/personal_agent/infra/structured_model.py
@@ -147,6 +152,8 @@ src/personal_agent/kernel/prompt_registry.py
 src/personal_agent/kernel/prompts.py
 src/personal_agent/kernel/query_understanding.py
 src/personal_agent/kernel/rate_limit.py
+src/personal_agent/kernel/contracts/agent.py
+src/personal_agent/kernel/contracts/capability.py
 src/personal_agent/kernel/contracts/events.py
 src/personal_agent/kernel/contracts/execution.py
 src/personal_agent/kernel/contracts/policy.py
@@ -204,6 +211,8 @@ src/personal_agent/orchestration/orchestration_nodes/_react.py
 src/personal_agent/orchestration/orchestration_nodes/_steps.py
 src/personal_agent/orchestration/orchestration_nodes/_tooling.py
 src/personal_agent/planning/__init__.py
+src/personal_agent/planning/capability_resolver.py
+src/personal_agent/planning/capability_validation.py
 src/personal_agent/planning/query_planner.py
 src/personal_agent/planning/replanner.py
 src/personal_agent/planning/router.py
@@ -219,11 +228,13 @@ src/personal_agent/tools/capture_url.py
 src/personal_agent/tools/consolidate_knowledge.py
 src/personal_agent/tools/delete_note.py
 src/personal_agent/tools/enterprise_knowledge.py
+src/personal_agent/tools/gpt_researcher_a2a.py
 src/personal_agent/tools/graph_search.py
 src/personal_agent/tools/inspect_artifact.py
 src/personal_agent/tools/inspect_knowledge_gaps.py
 src/personal_agent/tools/knowledge_lifecycle.py
 src/personal_agent/tools/mcp.py
+src/personal_agent/tools/mcp_capability.py
 src/personal_agent/tools/operations.py
 src/personal_agent/tools/raw_wiki.py
 src/personal_agent/tools/research.py
@@ -233,9 +244,11 @@ src/personal_agent/tools/restore_note.py
 src/personal_agent/tools/review_digest.py
 src/personal_agent/tools/web_search.py
 tests/test_agent_flows.py
+tests/test_agent_gateway.py
 tests/test_api.py
 tests/test_ask_context_artifacts.py
 tests/test_audit.py
+tests/test_capability_scoping.py
 tests/test_capture_graph_preextract.py
 tests/test_checkpoint_scripts.py
 tests/test_chunk_quality.py
@@ -256,6 +269,10 @@ tests/test_evidence_engine.py
 tests/test_evidence_model.py
 tests/test_extract_service.py
 tests/test_feishu.py
+tests/test_galileo_ragbench.py
+tests/test_github_repository_workflow.py
+tests/test_gpt_researcher_a2a_tool.py
+tests/test_gpt_researcher_a2a_workflow.py
 tests/test_graph_quality.py
 tests/test_graph_reranker.py
 tests/test_graph_search_strategies.py
@@ -273,6 +290,7 @@ tests/test_memory.py
 tests/test_mmr_selection.py
 tests/test_ms_graphrag_store.py
 tests/test_multihoprag_adapter.py
+tests/test_notion_workspace_workflow.py
 tests/test_observability.py
 tests/test_open_ragbench_adapter.py
 tests/test_open_ragbench_structural.py
@@ -291,6 +309,7 @@ tests/test_replanner.py
 tests/test_research.py
 tests/test_research_digest_verification.py
 tests/test_research_event_extraction.py
+tests/test_retrieval_gate.py
 tests/test_review_digest_job.py
 tests/test_review_digest_scheduler.py
 tests/test_review_digest_store.py
