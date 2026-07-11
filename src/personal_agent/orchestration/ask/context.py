@@ -82,6 +82,27 @@ class AskRepairTelemetry:
 
 
 @dataclass
+class RetrievalCapabilityPlan:
+    """Ask-specific projection of a platform CapabilityResolution."""
+
+    selected_sources: list[str] = field(default_factory=list)
+    denied_sources: list[str] = field(default_factory=list)
+    denial_reasons: dict[str, str] = field(default_factory=dict)
+    freshness_required: bool = False
+    citation_required: bool = True
+    local_first: bool = False
+    external_allowed: bool = False
+    max_external_calls: int = 0
+    source_priority: list[str] = field(default_factory=list)
+    fallback_policy: str = "refuse_if_insufficient"
+    scope_id: str = ""
+    resolution_id: str = ""
+    resolution_lifecycle_state: str = ""
+    escalation_hint: dict[str, Any] | None = None
+    capability_resolution: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AskRunContext:
     """Mutable per-run carrier threaded across the three ask stages."""
 
@@ -96,6 +117,7 @@ class AskRunContext:
     # Query understanding (filled by RetrievalStage)
     understanding: QueryUnderstanding | None = None
     retrieval_plan: RetrievalPlan | None = None
+    retrieval_capability_plan: RetrievalCapabilityPlan | None = None
     effective_query: str = ""
 
     # Evidence pool + accumulated candidates (filled by RetrievalStage / web fallback)
@@ -146,6 +168,8 @@ class AskRunContext:
             "trace_id": self.trace_id,
             "understanding": _dump_model(self.understanding),
             "retrieval_plan": _dump_model(self.retrieval_plan),
+            "retrieval_capability_plan": asdict(self.retrieval_capability_plan)
+            if self.retrieval_capability_plan is not None else None,
             "effective_query": self.effective_query,
             "evidence_pool": [_dump_model(item) for item in self.evidence_pool],
             "combined_matches": [_dump_model(item) for item in self.combined_matches],
@@ -176,6 +200,10 @@ class AskRunContext:
         )
         ctx.understanding = _load_model(QueryUnderstanding, payload.get("understanding"))
         ctx.retrieval_plan = _load_model(RetrievalPlan, payload.get("retrieval_plan"))
+        rcp = payload.get("retrieval_capability_plan")
+        ctx.retrieval_capability_plan = (
+            RetrievalCapabilityPlan(**rcp) if isinstance(rcp, dict) else None
+        )
         ctx.effective_query = str(payload.get("effective_query") or "")
         ctx.evidence_pool = _load_model_list(EvidenceItem, payload.get("evidence_pool"))
         ctx.combined_matches = _load_model_list(KnowledgeNote, payload.get("combined_matches"))

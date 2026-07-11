@@ -10,7 +10,7 @@ from personal_agent.planning.capability_resolver import (
     CapabilityResolver,
     default_capability_policy_for_scope,
 )
-from personal_agent.tools.mcp_capability import MCPCapabilityRegistry
+from personal_agent.tools.mcp_capability import CapabilityRegistry
 
 
 def test_capability_resolver_quality_gate():
@@ -41,8 +41,12 @@ def test_capability_resolver_quality_gate():
     assert not failures, "\n".join(failures)
 
 
-def _quality_registry() -> MCPCapabilityRegistry:
-    return MCPCapabilityRegistry((
+def _quality_registry() -> CapabilityRegistry:
+    # The eval exercises the generic registry contract. MCP remains one
+    # capability source, not a resolver-specific boundary.
+    return CapabilityRegistry(tuple(
+        capability.model_copy(update={"metadata_source": "human_reviewed"})
+        for capability in (
         MCPCapability(
             capability_id="mcp:github:search_code",
             provider="github",
@@ -133,4 +137,4 @@ def _quality_registry() -> MCPCapabilityRegistry:
             freshness_profile="realtime",
             provider_priority=1,
         ),
-    ))
+    )))

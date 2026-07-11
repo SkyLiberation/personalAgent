@@ -19,6 +19,7 @@ Requires-Dist: tiktoken>=0.12.0
 Requires-Dist: typer>=0.12.3
 Requires-Dist: uvicorn>=0.38.0
 Requires-Dist: langgraph-checkpoint-postgres>=2.0.0
+Requires-Dist: markdown>=3.6
 Requires-Dist: neo4j>=6.0.0
 Requires-Dist: langextract>=1.5.0
 Requires-Dist: unstructured>=0.18.0

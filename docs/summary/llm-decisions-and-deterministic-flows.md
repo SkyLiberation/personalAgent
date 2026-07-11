@@ -1,12 +1,12 @@
 # 当前工程的 LLM 决策与确定性流程总结
 
-> 依据当前工作区源码整理，更新时间：2026-07-02。
+> 依据当前工作区源码整理，更新时间：2026-07-11。
 >
 > 本文描述的是“实际代码边界”，包括默认启用能力、配置后启用能力，以及保留但未接入生产主链路的能力。
 
 ## 1. 总体结论
 
-当前工程不是“所有流程都交给 LLM”的自主 Agent，而是一个 **workflow-first、LLM 处理语义不确定性、代码控制执行与副作用** 的系统。
+当前工程不是“所有流程都交给 LLM”的自主 Agent，而是一个 **元能力编译与固定状态机并存、LLM 处理语义不确定性、Runtime 控制执行与副作用** 的系统。元能力运行时的完整现状见 [知识 Agent 元能力运行时当前状态](agentic-meta-capability-current-state.md)。
 
 可以概括为：
 
@@ -21,7 +21,7 @@
   ↓
 LLM 意图识别
   ↓
-确定性默认值合并、Workflow 选择、步骤投影与结构校验
+TaskSpec / Skill / Pattern 编译，或固定领域 Workflow 投影与结构校验
   ↓
 ┌──────────────────────────────┐
 │ LLM 语义节点                 │
@@ -38,7 +38,7 @@ LLM 意图识别
 
 关键边界：
 
-- LLM 不能修改 Workflow 真源。
+- LLM 不能修改固定 Workflow 真源、ExecutionLedger、scope 或 policy；开放式计划也必须由 MetaPlanCompiler 编译和校验。
 - LLM 返回的风险等级、工具需求等控制字段不能直接获得最终控制权。
 - ReAct 只能调用步骤允许列表内的工具，并被禁止执行长期写入、删除、外部发送等高风险副作用。
 - 删除必须经过用户确认，确认后的真实执行还必须通过权限和幂等校验。
@@ -70,8 +70,9 @@ LLM 意图识别
 | API 鉴权与身份绑定 | 校验 API Key，将请求绑定到 `user_id`，区分管理员权限 |
 | 限流 | 按 API Key 或工具调用主体执行固定窗口/速率规则 |
 | 输入规范化 | 统一 Entry、用户、会话、来源和 metadata |
-| Workflow 注册与选择 | 根据已分类意图选择固定 `WorkflowSpec` |
-| 步骤投影 | 将 Workflow 节点确定性转换为 `ExecutionStep` |
+| 元能力计划编译 | 将 Goal 编译为 `TaskSpec / SkillSet / Pattern / MetaStep`，并建立 `IntentPlan / ExecutionLedger` |
+| 固定 Workflow 注册与选择 | 对 capture、delete、Research lifecycle 等事务流程选择固定 `WorkflowSpec` |
+| 步骤投影 | 将 MetaStep 或固定 Workflow 节点确定性转换为 `ExecutionStep` |
 | Workflow / Step 校验 | 校验步骤 ID、依赖、环、工具、风险、确认策略及意图约束 |
 | LangGraph 编排 | 按固定边和条件函数推进 route、step、ReAct、HITL、finalize |
 | 文件与网页解析 | URL 校验、HTML 正文提取、PDF 文本提取、上传类型处理 |
@@ -89,7 +90,7 @@ LLM 意图识别
 | HITL | 使用 LangGraph interrupt/resume 暂停并接收 confirm/reject/clarify |
 | 幂等 | 高风险确认动作要求 `idempotency_key`，执行前原子预留，成功后提交 |
 | 数据持久化 | Postgres note、chunk、review、history、workflow artifact、event、audit 等读写 |
-| Checkpoint | 保存线程消息、步骤状态、待确认状态及恢复现场 |
+| Checkpoint | 保存线程消息、TaskSpec、ContextEnvelope、ExecutionLedger、步骤状态、预算、待确认状态及恢复现场 |
 | 日志与审计 | 记录 LLM trace、工具调用、策略决策、验证结果、性能和错误 |
 | 审计脱敏与查询 | 按普通用户/管理员权限返回脱敏或可揭示数据 |
 | Worker Queue | 图谱同步等任务的幂等入队、租约、重试和状态维护 |

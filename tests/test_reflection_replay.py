@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.kernel.config import OpenAIConfig, ReflectionReplaySettings, Settings
+from personal_agent.kernel.config import ReflectionReplaySettings, Settings
 from personal_agent.kernel.models import MemoryItem
 from personal_agent.memory.facade import MemoryFacade
 from personal_agent.governance.policy import PolicyEngine
@@ -113,40 +113,6 @@ class TestSearchMultiStatus:
         )
         ids = {i.id for i in found}
         assert ids == {"c1", "c2"}
-
-
-class TestReplanReflectionInjection:
-    @pytest.fixture
-    def replanner(self):
-        from personal_agent.planning.replanner import Replanner
-
-        # No LLM configured -> _replan_with_llm short-circuits; we test prompt build instead.
-        return Replanner(Settings(openai=OpenAIConfig(api_key="", base_url="", model="", small_model="")))
-
-    def test_reflections_render_into_replanner_prompt(self):
-        from personal_agent.kernel.prompts import render_prompt
-        from personal_agent.planning.replanner import _clip_reflection
-
-        item = _reflection("r1", confidence=0.6)
-        summary = _clip_reflection(item)
-        assert "conf=0.60" in summary
-        prompt = render_prompt(
-            "replanner.user",
-            intent="ask", steps_summary="s", failed_step_id="f",
-            failed_action_type="retrieve", error="e", reflections=summary, obs_summary="无",
-        )
-        assert "过往失败教训" in prompt
-        assert "教训" in prompt  # the reflection guidance line is present
-
-    def test_replan_accepts_reflections_arg(self, replanner):
-        from personal_agent.kernel.contracts.execution import ExecutionStep
-
-        steps = [
-            ExecutionStep(step_id="s1", action_type="retrieve", description="检索", status="failed"),
-        ]
-        # Should not raise when reflections are passed; falls back to heuristic.
-        result = replanner.replan(steps, steps[0], "err", {}, "ask", reflections=[_reflection("r1")])
-        assert result is not None
 
 
 class TestPromotionTrigger:

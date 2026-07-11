@@ -13,8 +13,6 @@ def test_core_prompts_are_registered_with_versions() -> None:
         "direct_answer.system",
         "router.classify.system",
         "router.classify.user",
-        "replanner.system",
-        "replanner.user",
         "query_planner.system",
         "query_planner.user",
         "evidence_rerank.system",
@@ -40,22 +38,6 @@ def test_router_user_prompt_renders_current_input() -> None:
     rendered = render_prompt("router.classify.user", text="删除关于 DNS 的知识")
 
     assert "当前用户输入：删除关于 DNS 的知识" == rendered
-
-
-def test_replanner_prompt_escapes_json_literal() -> None:
-    rendered = render_prompt(
-        "replanner.user",
-        intent="ask",
-        steps_summary="- s1: retrieve 检索 [failed]",
-        failed_step_id="s1",
-        failed_action_type="retrieve",
-        error="timeout",
-        obs_summary="无",
-        reflections="无",
-    )
-
-    assert '{"steps": []}' in rendered
-    assert "失败步骤: s1 (retrieve)" in rendered
 
 
 def test_expanded_registry_prompts_render_with_sample_variables() -> None:

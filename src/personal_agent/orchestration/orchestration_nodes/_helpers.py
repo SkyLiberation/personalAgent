@@ -67,12 +67,21 @@ _FINISH_REACT_TOOL = {
     "type": "function",
     "function": {
         "name": "finish_react",
-        "description": "结束当前 ReAct 步骤，并返回最终答案。",
+        "description": "结束当前 ReAct 步骤，并返回最终答案；若后续存在 commit 步骤，可附带待确认的状态变更提议。",
         "parameters": {
             "type": "object",
             "properties": {
                 "thought": {"type": "string", "description": "简短说明为什么可以结束。"},
                 "answer": {"type": "string", "description": "本步骤的最终答案或结构化结果摘要。"},
+                "proposed_commit": {
+                    "type": ["object", "null"],
+                    "properties": {
+                        "tool_name": {"type": "string"},
+                        "tool_input": {"type": "object"},
+                    },
+                    "required": ["tool_name", "tool_input"],
+                    "additionalProperties": False,
+                },
             },
             "required": ["thought", "answer"],
             "additionalProperties": False,
@@ -162,7 +171,10 @@ def _react_llm_native(
             return _NativeReactOutcome(
                 done=True,
                 thought=str(arguments.get("thought") or ""),
-                result={"answer": str(arguments.get("answer") or "")},
+                result={
+                    "answer": str(arguments.get("answer") or ""),
+                    "proposed_commit": arguments.get("proposed_commit"),
+                },
             )
         if not isinstance(arguments, dict):
             arguments = {}

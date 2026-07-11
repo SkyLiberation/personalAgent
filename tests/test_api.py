@@ -143,13 +143,13 @@ class TestEntryStreamEndpoint:
         )
 
         assert response.status_code == 200
-        assert response.text.count("event: steps_projected") == 1
+        assert response.text.count("event: protocol_started") == 1
         assert "event: step_started" in response.text
         assert (
             "event: step_completed" in response.text
             or "event: step_failed" in response.text
         )
-        assert response.text.index("event: steps_projected") < response.text.index("event: done")
+        assert response.text.index("event: protocol_started") < response.text.index("event: done")
 
     def test_capture_stream_shows_routing_and_captured_content_before_done(self, api_client: TestClient):
         response = api_client.get(
@@ -163,10 +163,11 @@ class TestEntryStreamEndpoint:
 
         assert response.status_code == 200
         assert "event: intent" in response.text
-        assert "event: tool_result" in response.text
+        assert "event: protocol_started" in response.text
+        assert "event: confirmation_required" in response.text
         assert "DNS" in response.text
         assert response.text.index("event: intent") < response.text.index("event: done")
-        assert response.text.index("event: tool_result") < response.text.index("event: done")
+        assert response.text.index("event: protocol_started") < response.text.index("event: confirmation_required")
 
     def test_waiting_run_snapshot_exposes_confirmation_and_can_resume(self, api_client: TestClient):
         response = api_client.get(
@@ -200,7 +201,7 @@ class TestEntryStreamEndpoint:
         )
 
         assert resumed.status_code == 200
-        assert resumed.json()["run_status"] == "completed"
+        assert resumed.json()["run_status"] == "waiting_confirmation"
 
 
 class TestDigestEndpoint:

@@ -125,6 +125,7 @@ def _mcp_capability(
     return MCPCapability(
         capability_id=capability_id,
         provider=provider,
+        local_name=tool_name,
         server_id=server.server_id,
         remote_tool_name=mapping.remote_name,
         local_tool_name=tool_name,

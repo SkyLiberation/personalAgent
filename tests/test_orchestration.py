@@ -289,7 +289,8 @@ class TestOrchestrationGraphIntegration:
 
     def test_graph_builds_and_compiles(self, runtime):
         from personal_agent.orchestration.orchestration_graph import (
-            build_step_execution_graph,
+            build_action_execution_graph,
+            build_executive_graph,
             build_react_graph,
         )
 
@@ -298,12 +299,15 @@ class TestOrchestrationGraphIntegration:
         # Should be compiled with a checkpointer
         assert graph.checkpointer is not None
         assert "entry_graph" in graph.get_graph().nodes
-        assert "step_execution_graph" in graph.get_graph().nodes
+        assert "executive_graph" in graph.get_graph().nodes
         assert "route_intent" not in graph.get_graph().nodes
 
-        step_graph = build_step_execution_graph(runtime.graph_contexts)
-        assert "step_tool_node" in step_graph.get_graph().nodes
-        assert "react_graph" in step_graph.get_graph().nodes
+        step_graph = build_action_execution_graph(runtime.graph_contexts)
+        assert "action_tool_node" in step_graph.get_graph().nodes
+        assert "react_action" in step_graph.get_graph().nodes
+        executive_graph = build_executive_graph(runtime.graph_contexts)
+        assert "decide" in executive_graph.get_graph().nodes
+        assert "verify_completion" in executive_graph.get_graph().nodes
         react_graph = build_react_graph(runtime.graph_contexts)
         assert "react_tool_node" in react_graph.get_graph().nodes
 
@@ -448,6 +452,15 @@ class TestOrchestrationGraphIntegration:
         assert result.intents[-1] in ("capture_text", "unknown")
         assert result.reply_text
         if result.intents[-1] == "capture_text":
+            assert result.run_status == "waiting_confirmation"
+            assert any(event["type"] == "memory_admission" for event in result.events)
+            result = runtime.resume_entry(
+                run_id=result.run_id or "",
+                thread_id=result.thread_id or "",
+                decision="confirm",
+                user_id="test-user",
+            )
+            assert result.run_status == "completed"
             tool_results = [
                 event for event in result.events
                 if event["type"] == "tool_result"
@@ -522,14 +535,17 @@ class TestOrchestrationGraphIntegration:
         )
 
         assert result.intents == ["solidify_conversation"]
+        assert result.run_status == "waiting_confirmation"
+        result = runtime.resume_entry(
+            run_id=result.run_id or "",
+            thread_id=result.thread_id or "",
+            decision="confirm",
+            user_id="test-user",
+        )
         assert "DNS 是域名系统" in result.reply_text
         assert any("DNS 是域名系统" in note.content for note in runtime.store.list_notes("test-user"))
-        capture_step = next(
-            step for step in result.steps if step.get("tool_name") == "capture_text"
-        )
-        assert "DNS 是域名系统" in capture_step["output_preview"]
         event_types = [event["type"] for event in result.events]
-        assert "steps_projected" in event_types
+        assert "protocol_completed" in event_types
         assert "draft_ready" in event_types
         assert event_types.count("step_completed") >= 2
 
@@ -551,6 +567,13 @@ class TestOrchestrationGraphIntegration:
                 user_id="test-user",
                 session_id="structured-solidify",
             )
+        )
+        assert result.run_status == "waiting_confirmation"
+        result = runtime.resume_entry(
+            run_id=result.run_id or "",
+            thread_id=result.thread_id or "",
+            decision="confirm",
+            user_id="test-user",
         )
         notes = runtime.store.list_notes("test-user")
 
@@ -579,12 +602,19 @@ class TestOrchestrationGraphIntegration:
                 EntryInput(text=text, user_id="test-user", session_id="focused-solidify")
             )
 
-        runtime.execute_entry(
+        pending = runtime.execute_entry(
             EntryInput(
                 text="把DNS相关知识固化下来",
                 user_id="test-user",
                 session_id="focused-solidify",
             )
+        )
+        assert pending.run_status == "waiting_confirmation"
+        runtime.resume_entry(
+            run_id=pending.run_id or "",
+            thread_id=pending.thread_id or "",
+            decision="confirm",
+            user_id="test-user",
         )
 
         solidify_prompt = prompts[-1]
@@ -621,10 +651,10 @@ class TestOrchestrationGraphIntegration:
         )
 
         assert result.intents == ["solidify_conversation"]
-        assert "steps_projected" in events
+        assert "protocol_started" in events
         assert "step_started" in events
         assert "step_completed" in events
-        assert events.index("steps_projected") < events.index("step_started")
+        assert events.index("protocol_started") < events.index("step_started")
         assert "done" not in events
 
     def test_router_requested_clarify_then_resume(self, runtime):
@@ -649,9 +679,16 @@ class TestOrchestrationGraphIntegration:
             text="记一下：澄清应由路由决策触发。",
             option_id="capture",
         )
-        assert resumed.run_status == "completed"
+        assert resumed.run_status == "waiting_confirmation"
         assert resumed.intents == ["capture_text"]
         assert resumed.reply_text
+        completed = runtime.resume_entry(
+            run_id=resumed.run_id or "",
+            thread_id=resumed.thread_id or "",
+            decision="confirm",
+            user_id="test-user",
+        )
+        assert completed.run_status == "completed"
 
     def test_short_question_does_not_trigger_clarify(self, runtime):
         """Short but meaningful questions should route instead of pausing."""
@@ -707,7 +744,7 @@ class TestOrchestrationGraphIntegration:
         assert all(item["run_id"] == result.run_id for item in history)
         assert all(item["thread_id"] == result.thread_id for item in history)
         assert any(item["checkpoint_id"] for item in history)
-        assert all(item["checkpoint_schema_version"] == "step_execution_v2" for item in history)
+        assert all(item["checkpoint_schema_version"] == "executive_v1" for item in history)
         assert all("step_execution" in item for item in history)
         assert all("step_count" in item["step_execution"] for item in history)
 
@@ -1133,10 +1170,7 @@ class TestPhase3ExecuteExecutionStep:
         assert result["source"] == "llm_candidate_selection"
 
     def test_unresolved_delete_target_fails_before_tool_call(self, runtime, monkeypatch):
-        from personal_agent.orchestration.orchestration_graph import (
-            _node_execute_step,
-            _node_handle_step_failure,
-        )
+        from personal_agent.orchestration.orchestration_nodes._steps import _node_execute_step
         from tests.note_factory import make_note
 
         runtime.store.add_note(
@@ -1179,11 +1213,10 @@ class TestPhase3ExecuteExecutionStep:
         deps = runtime.graph_contexts.steps
 
         _node_execute_step(state, deps=deps)
-        _node_handle_step_failure(state, deps=deps)
 
         assert state.step_execution.steps[0].status == "failed"
-        assert state.step_execution.steps[1].status == "skipped"
-        assert "未找到可删除的知识笔记" in state.answer
+        assert state.step_execution.steps[1].status == "planned"
+        assert not state.tool_results
 
 
 class TestPhase3InterruptResumeIntegration:
@@ -1310,7 +1343,7 @@ class TestPhase4ReActHelpers:
         )
 
     def test_resolve_allowed_tools_for_step(self, runtime):
-        from personal_agent.orchestration.orchestration_graph import _resolve_allowed_tools_for_step
+        from personal_agent.orchestration.orchestration_nodes._graph_helpers import _resolve_allowed_tools_for_step
         from personal_agent.kernel.contracts.execution import ExecutionStep
 
         step = ExecutionStep(
@@ -1324,18 +1357,18 @@ class TestPhase4ReActHelpers:
         assert "nonexistent_tool" not in resolved
 
     def test_is_react_tool_blocked_high_risk(self, runtime):
-        from personal_agent.orchestration.orchestration_graph import _is_react_tool_blocked
+        from personal_agent.orchestration.orchestration_nodes._graph_helpers import _is_react_tool_blocked
 
         assert _is_react_tool_blocked("delete_note", runtime.graph_contexts.react)
-        assert not _is_react_tool_blocked("capture_text", runtime.graph_contexts.react)
+        assert _is_react_tool_blocked("capture_text", runtime.graph_contexts.react)
 
     def test_is_react_tool_blocked_allows_safe_tools(self, runtime):
-        from personal_agent.orchestration.orchestration_graph import _is_react_tool_blocked
+        from personal_agent.orchestration.orchestration_nodes._graph_helpers import _is_react_tool_blocked
 
         assert not _is_react_tool_blocked("graph_search", runtime.graph_contexts.react)
 
     def test_build_react_context(self):
-        from personal_agent.orchestration.orchestration_graph import _build_react_context
+        from personal_agent.orchestration.orchestration_nodes._helpers import _build_react_context
         from personal_agent.kernel.contracts.execution import ExecutionStep
 
         step = ExecutionStep(step_id="s1", tool_input={"question": "什么是X？"})
@@ -1347,13 +1380,13 @@ class TestPhase4ReActHelpers:
         assert "X是一种技术" in ctx
 
     def test_format_react_tools(self, runtime):
-        from personal_agent.orchestration.orchestration_graph import _format_react_tools
+        from personal_agent.orchestration.orchestration_nodes._helpers import _format_react_tools
 
         text = _format_react_tools({"graph_search"}, runtime.graph_contexts.react)
         assert "graph_search" in text
 
     def test_summarize_react_tool_result(self):
-        from personal_agent.orchestration.orchestration_graph import _summarize_react_tool_result
+        from personal_agent.orchestration.orchestration_nodes._helpers import _summarize_react_tool_result
 
         assert "hello" in _summarize_react_tool_result({"answer": "hello world"})
         assert "无返回数据" in _summarize_react_tool_result(None)
@@ -1454,7 +1487,8 @@ class TestPhase4ReActNodes:
             ),
         )
         result = _node_react_finalize(state)
-        assert state.step_execution.results["ask-1"] == {"answer": "42", "react_iterations": 2}
+        assert state.step_execution.results["ask-1"]["answer"] == "42"
+        assert state.step_execution.results["ask-1"]["evidence_pack"]["evidence_sufficiency"] == "insufficient"
         assert state.step_execution.steps[0].status == "completed"
         assert result["react"].step_id == ""
         assert result["react"].done is True
@@ -1493,7 +1527,7 @@ class TestPhase4ReActNodes:
         assert state.step_execution.steps[0].failure_reason == "LLM returned nothing"
         assert state.step_execution.steps[0].recoverable is False
         assert state.errors == ["[ask-1] LLM returned nothing"]
-        assert _after_react_graph(state) == "handle_failure"
+        assert _after_react_graph(state) == "recover"
 
 
 class TestPhase4ReActIterateNode:
@@ -1986,52 +2020,6 @@ class TestPhase5EntryResultEvents:
         restored = EntryResult.model_validate(data)
         assert len(restored.events) == 2
         assert restored.events[0]["type"] == "intent_classified"
-
-
-class TestPhase5ExecutionTraceDerivation:
-    """Integration tests verifying execution_trace is derived from events."""
-
-    def test_finalize_step_execution_derives_trace(self, monkeypatch):
-        from personal_agent.orchestration.orchestration_graph import (
-            _node_finalize_step_execution,
-        )
-        from personal_agent.orchestration.orchestration_models import AgentGraphState
-
-        state = AgentGraphState(
-            run_id="test-trace",
-            steps=[
-                {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
-            ],
-            results={"s1": {"notes": []}},
-            answer="完成",
-            events=[
-                AgentEvent(type="entry_started", payload={}),
-                AgentEvent(type="step_started", payload={"step_id": "s1", "description": "检索相关笔记"}),
-                AgentEvent(type="step_started", payload={"step_id": "s2", "description": "生成回答"}),
-            ],
-        )
-
-        result = _node_finalize_step_execution(state)
-        assert result["execution_trace"] == ["检索相关笔记", "生成回答"]
-        assert state.execution_trace == ["检索相关笔记", "生成回答"]
-        assert result["events"][-1].type == "answer_completed"
-
-    def test_finalize_steps_no_events_produces_empty_trace(self):
-        from personal_agent.orchestration.orchestration_graph import (
-            _node_finalize_step_execution,
-        )
-        from personal_agent.orchestration.orchestration_models import AgentGraphState
-
-        state = AgentGraphState(
-            run_id="test-empty",
-            steps=[
-                {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
-            ],
-            answer="完成",
-        )
-
-        result = _node_finalize_step_execution(state)
-        assert result["execution_trace"] == []
 
 
 class TestPhase5FinalizeEntryState:

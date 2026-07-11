@@ -77,6 +77,47 @@ API / Feishu / CLI / Scheduler / Webhook
 4. 大对象不再放内存 store，而是进入 artifact store。
 5. 所有副作用必须通过 activity boundary 执行。
 
+## LangGraph 的职责边界
+
+当前工程并不是“多数 workflow 没有接入 LangGraph”：用户 entry 已经由 LangGraph 承担路由、step 投影、HITL、ReAct、checkpoint 和恢复。`capture_*`、`ask` 等业务 workflow 也已作为 `StepExecutionGraph` 的投影执行。
+
+问题在于部分 step 仍是过粗的同步黑盒。例如当前 `capture_text` 虽是一个可见 step，但其内部连续完成去重、写入、结构化分块、关联、复习和图谱同步；`ask-retrieve` 也承载多源召回、合并和排序。任一内部阶段部分成功后失败时，运行时只能把整个外层 step 标记为失败，无法从准确的业务边界恢复。
+
+目标态采用两层模型：
+
+```text
+LangGraph / Workflow Engine (control plane)
+  -> 定义拓扑、状态迁移、HITL、恢复、事件和调度
+  -> Durable Step
+  -> Worker Queue
+  -> Activity Worker (data plane)
+  -> 纯函数、解析器、SDK、ToolGateway、StorageGateway
+```
+
+这不意味着每个函数都要成为 LangGraph node。纯计算、格式转换、单次解析器调用和无状态 helper 应保持普通代码；把它们图化只会增加状态同步和调试成本。一个动作必须升级为 durable step / activity，当且仅当它至少满足一项：
+
+| 信号 | 必须成为 durable boundary 的原因 |
+| --- | --- |
+| 有外部或长期状态副作用 | 需要幂等键、审计和精确重试 |
+| 可能长时间运行或需要排队 | 需要 timeout、取消、backpressure 和 worker 隔离 |
+| 可部分成功 | 恢复时不能重复已经完成的活动 |
+| 需要独立的重试、补偿或降级 | 失败策略属于业务语义，不能隐藏在大函数内 |
+| 需要 HITL、权限或 capability policy | 决策与执行必须留下独立证据 |
+| 需要被 E2E / 运营观测 | 必须拥有稳定 input/output artifact 和事件 |
+
+因此，LangGraph 负责推进 durable state，不承担所有业务实现；Activity Worker 负责具体执行，也不自行决定流程走向。这个边界既保留 Agent 的可恢复、可观测行为，又避免把普通库调用伪装成 workflow。
+
+## 入口收口规则
+
+目标态不保留两个语义不同的生产执行入口。用户、Webhook、CLI、定时任务和 worker 触发的业务动作都必须提交或 signal 同一个 `WorkflowExecution`；`execute_capture()` / `execute_ask()` 一类整条同步直调只能保留为测试 harness 或由 workflow activity 在受控上下文中调用，不能绕过 workflow event、policy、artifact 和 idempotency 记录。
+
+允许保留的直调只有两类：
+
+- 无副作用的 query / formatter helper；
+- 已经处于 activity worker 内部、且其 input/output 已被该 activity 持久化的实现函数。
+
+这样不会把 LangGraph 扩张成业务代码容器，同时消除“同一用户动作既可能有 run history，也可能完全没有”的双轨执行语义。
+
 ## 核心模型
 
 ### WorkflowDefinition
