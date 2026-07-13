@@ -35,7 +35,7 @@ class _FakeStructuredClient:
             for source in payload["sources"]
         ]
         return StructuredModelResponse(
-            value=request.output_type(),
+            value=request.output_type.model_validate({"frames": frames}),
             model="fake",
             latency_ms=1,
             content=json.dumps({"frames": frames}),

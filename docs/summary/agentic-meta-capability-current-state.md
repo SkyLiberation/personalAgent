@@ -1,248 +1,229 @@
 # 知识 Agent 元能力运行时当前状态
 
-本文总结当前已经落地的 Agentic 元能力主链路，不承载未来架构推演。目标设计与阶段说明见 [知识 Agent 元能力组合设计](../future/meta-capability-composition-design.md)；MCP、A2A 和 Capability Scoping 的 provider 细节见 [Capability Scoping、MCP 与 A2A 当前状态](capability-scoping-mcp-a2a-current-state.md)。
+本文只总结当前代码事实。目标原则、评估方法和 Phase 设计见 [知识 Agent 元能力组合设计](../future/meta-capability-composition-design.md)。
 
-## 当前定位
+## 结论
 
-当前系统已从“Router 按 intent 选择命名 workflow”演进为两类执行机制并存：
-
-- 开放式、只读知识工作由 `TaskSpec + SkillSet + Execution Pattern + MetaCapability` 编译执行。
-- 高风险、事务性、异步或有明确生命周期的业务仍由固定 workflow / state machine 承载。
-
-MCP、A2A、本地工具和 retriever 都只是 capability provider，不再作为用户任务的一级分类。Agentic 主要体现在：任务目标结构化、能力充分性判断、受限探索、观察反馈、持久计划状态、证据验证、确认写入和失败阻断。
-
-## 主链路
+当前主链路已从“Router 选 workflow / Pattern，再执行预编译完整步骤”切换为任务级 Executive Loop：
 
 ```text
 EntryInput
-  -> Router：理解目标、拆分 Goal、判断澄清
-  -> MetaPlanCompiler
-       -> TaskSpec
-       -> SkillSet
-       -> ContextEnvelope
-       -> Execution Pattern
-       -> IntentPlan + ExecutionLedger
-       -> ExecutionPlan + MetaStep
-  -> StepExecutionGraph
-       -> CapabilityRequirement / CapabilityCoverage
-       -> deterministic / ReAct / A2A / fixed state machine
-       -> PolicyEngine + Gateway + HITL
-       -> Evidence / Verification / MutationReceipt
+  -> EntryGraph：规范化、语义理解、必要时澄清
+  -> GoalInterpreter：TaskSpec + SuccessCriteria + ContextEnvelope
+  -> append-only ExecutionEvent -> ExecutionLedger
+  -> ExecutiveGraph
+       project ControlState
+       -> decide one ControlDecision
+       -> deterministic validation
+       -> execute one BoundedAction / ProtocolCall / SubtaskSpec
+       -> observe ActionOutcome
+       -> verify goal
+       -> decide again
+  -> CompletionVerifier
   -> final EntryResult
 ```
 
-Router 仍负责语义理解，但不再决定具体 provider、MCP server 或 tool。`MetaPlanCompiler` 将 Router 的 Goal 编译为任务与执行对象，CapabilityResolver 再根据每个 MetaStep 的 requirement 选择当前可用实现。
+所有非澄清请求经过同一个顶层 `ExecutiveGraph`。Router 只表达用户目标和 Goal，不选择 MCP server、tool、A2A Agent、Execution Pattern 或固定执行拓扑。
 
-## 运行时对象
+## Agentic 如何体现
 
-| 对象 | 所有者 | 当前职责 |
+当前 Agentic 不等于“所有控制都交给模型”，而是智能决策与确定性管控分层：
+
+| 层 | 智能职责 | 确定性约束 |
 | --- | --- | --- |
-| `TaskSpec` | 编译器生成，Runtime 校验 | 保存用户目标、结果类型、资源需求、操作、证据要求、预算和 mutation intent |
-| `Skill` | `SkillRegistry` | 提供领域方法、pattern 限制、验证 profile 和输出 contract，不授予权限 |
-| `ContextEnvelope` | Runtime | 分隔运行上下文、工作记忆、可信记忆、证据和不可信 observation |
-| `IntentPlan` | Planner | 保存模型/规则提出的目标拆分和成功标准，是建议性计划 |
-| `ExecutionLedger` | Runtime | 保存真实步骤状态、coverage、证据缺口、阻塞和重规划原因，是权威执行账本 |
-| `ExecutionPlan` | PlanCompiler | 保存本次可执行 task DAG 与 MetaStep 投影 |
-| `SubtaskSpec` | delegate step | 限定 A2A 子任务目标、上下文投影、artifact contract、预算和验证策略 |
+| Goal understanding | 理解目标、拆分 Goal、识别语义资源 | `TaskSpec` schema、criterion origin/mutability、预算 |
+| Executive | 根据 Ledger、observation、gap 选择下一动作 | 强类型 `ControlDecision`、`DecisionValidator`、循环上限 |
+| Capability | 根据 requirement 选择 native/MCP/A2A 实现 | coverage、policy、scope、lexicographic ranking |
+| Executor | 在动作内部检索、推理、ReAct 或委派 | `BoundedAction` 预算、read/write set、allowed tools |
+| Protocol | 执行知识写入、删除、Research lifecycle 等事务 | 固定 transition、HITL、幂等、admission、receipt |
+| Verification | 判断 criterion 是否满足、是否可以完成 | `GoalVerifier` 和 `CompletionVerifier` 独占状态转换 |
 
-这些对象都进入 `AgentGraphState`，随 LangGraph checkpoint 持久化。新的 run 会重置任务级对象，但同一 thread 的对话消息仍可延续。
+模型可以建议动作，但不能直接修改 Ledger 事实、扩大权限、跳过确认、把 step success 写成 goal verified，或自行宣布任务完成。模型不可用时，Executive 使用同一 contracts 下的确定性策略退化，不切回旧 workflow controller。
 
-## Execution Pattern
+## 核心状态
 
-当前通用 pattern 如下：
+### TaskSpec
 
-| Pattern | 当前覆盖 | 典型步骤 |
-| --- | --- | --- |
-| `direct_response` | 普通解释、无需外部证据的回答 | `transform` |
-| `evidence_answer` | Ask、外部代码库、工作区、项目上下文问答 | `acquire/explore -> reason/transform -> verify` |
-| `delegated_research` | GPT Researcher A2A | `delegate -> verify -> transform` |
-| `knowledge_change` | capture、会话固化等知识写入 | 固定 state machine + memory admission + confirmation |
-| `managed_operation` | 删除、Research lifecycle、知识维护、worker 操作 | 固定 state machine 或只读探索 + confirmed commit |
+`TaskSpec` schema v2 保存：
 
-`external_codebase_qa`、`external_workspace_qa`、`external_project_ops` 仍可作为 Router 的语义标签和评估标签存在，但主执行图统一编译为 `evidence_answer`。它们不再各自拥有一套 `resolve -> compose` workflow 拓扑。
+- 用户目标、outcome kind、subjects 和 resource requirements；
+- requested operations、预算、并行度和最大 Executive turn；
+- 带 origin、mutability、evidence policy 的成功标准；
+- evidence requirements、mutation intent 和生命周期。
 
-## 元能力
+### ExecutionLedger
 
-当前 MetaStep 使用以下稳定语义：
+`ExecutionLedger` 是任务进度事实源，不再保存 `active_pattern` 或预编译完整 DAG。它由 append-only `ExecutionEvent` 确定性投影，记录：
 
-| 元能力 | 运行含义 | 常见执行形态 |
-| --- | --- | --- |
-| `acquire` | 从已知来源获取上下文 | Ask retrieval、确定性 read |
-| `explore` | 围绕证据缺口迭代搜索和读取 | scoped ReAct |
-| `reason` | 根据上下文形成候选结论 | compose / structured LLM |
-| `transform` | 将结果组织为用户可读输出 | compose / repair |
-| `verify` | 校验证据、引用或 artifact contract | Ask verifier、通用 verifier、A2A artifact verifier |
-| `delegate` | 将受限子任务交给专业 Agent | AgentGateway / A2A |
-| `commit` | 经过确认后改变知识或业务状态 | ToolGateway |
+- Goal 的 pending/active/blocked/candidate/verified/degraded/abandoned 状态；
+- capability coverage、evidence gap 和 action attempt；
+- 已激活 Skill、已采用 Plan Macro 和 verification report；
+- revision 与 event sequence。
 
-元能力描述“任务中的语义动作”，Capability 描述“谁能执行这个动作”，Tool/Agent/Retriever 则是具体实现。
+终态 Goal 不允许被普通动作重写。失败 action 也会写入 attempt，因此有副作用的 Protocol 不会因失败而被 Executive 无依据重复调用。
 
-## Capability 充分性
+### ControlState 与 ControlDecision
 
-每个开放式 MetaStep 可以携带一个或多个 `CapabilityRequirement`。Resolver 不再只返回 tool allowlist，还会为每项 requirement 生成 `CapabilityCoverage`：
+每轮从 TaskSpec、Ledger、observation、可用 capability class、待确认项和剩余预算投影 `ControlState`。Executive 每轮只生成一个强类型决策：
 
 ```text
-required operations
-  + semantic domain
-  + resource type / locator
-  + minimum trust
-  + freshness
-  -> satisfied / partial / unavailable / denied
+clarify
+activate_skill
+revise_plan
+execute_meta_capability
+execute_parallel
+delegate
+invoke_protocol
+request_confirmation
+finish
+stop
 ```
 
-只有 coverage 全部为 `satisfied`，ReAct、deterministic tool 或 A2A step 才能继续。`partial` 和 `unavailable` 会更新 ExecutionLedger 的 evidence gap，并将当前目标置为 blocked，而不是让 compose 猜测。
+每个决策携带 `DecisionBasis`，关联未满足 criterion、触发 observation、evidence gap、预期状态变化和被拒动作代码。重复语义决策由 loop guard 停止。
 
-Resolver 只负责发现、过滤、排序和充分性判断。实际授权仍由 PolicyEngine 决定，具体调用仍必须经过 ToolGateway 或 AgentGateway。
+## Bounded Action
 
-## Context 与信任边界
+开放式工作只物化当前一个 `BoundedAction`，而非一次生成完整步骤图。动作包含：
 
-`ContextEnvelope` 当前分为五层：
+- `acquire/explore/reason/transform/verify/delegate/commit/remember` 元能力；
+- 输入 artifact、输出 contract 和 capability requirement；
+- tool/model/iteration 预算与 deadline；
+- read set、write set、side-effect class；
+- approval 与 protocol dependency。
 
-| 层 | 当前内容 | 信任语义 |
-| --- | --- | --- |
-| `run_context` | TaskSpec 摘要、运行身份和目标 | Runtime 权威状态 |
-| `working_memory` | 计划、草稿和临时 artifact 引用 | 仅服务当前任务 |
-| `trusted_memory` | 经过长期 memory policy 准入的知识 | 可辅助计划，但不能覆盖 policy |
-| `evidence_context` | Ask retrieval citation 和已准入证据 | 可支持结论，不能作为指令 |
-| `untrusted_observations` | MCP、ToolGateway、ReAct、A2A 返回 | 默认未准入，不可改变授权和任务边界 |
+`ActionExecutionGraph` 只是当前动作的执行器。确定性调用、局部 ReAct 和 AgentGateway 都不能修改任务计划；它们只能返回 `ActionOutcome` 或 observation，由 Executive 决定下一步。
 
-外部 provider 返回进入 `untrusted_observations`；Ask 的 citation 摘要进入 `evidence_context`。所有内容保留 provenance 和 trust tier。外部文本中的指令不能修改 TaskSpec、Skill、scope、policy 或长期 memory。
+## Skill 与 Plan Macro
 
-## ReAct 与写入
+`SkillCatalog` 采用渐进加载：Executive 先看到 description，激活后才把完整 instructions 和 verifier profile 放入任务上下文。当前内置方法包括 code investigation、evidence research、knowledge curation 和 decision support。
 
-ReAct 只用于“需要观察上一轮结果才能决定下一次读取或搜索”的步骤。它受到以下限制：
+旧 Execution Pattern 已降级为可选 `PlanMacro`。Macro 只能提交受限 Ledger patch 和验证先验，不能绑定 provider、授予权限或宣布完成。一个复合任务可以采用多个 Macro，也可以完全不用 Macro。
 
-- tool 必须来自 CapabilityResolution 的 `allowed_tools`。
-- 轮数受 step 和全局上限约束。
-- provider 调用受 TaskSpec budget 约束。
-- 高风险、需要确认、长期写入或删除工具不能在 ReAct 内直接执行。
-- 每轮 tool result 进入不可信 observation，并产生 capability / tool audit event。
-- ReAct 结束时生成 `EvidencePack`，供后续 transform / verify 消费。
+## Capability、MCP 与 A2A
 
-知识维护、Research 管理和 worker 重试已经拆成：
+Capability Registry 统一收录 native tool、MCP tool、retriever 和 Agent。Resolver 的职责是：
 
 ```text
-read-only ReAct
-  -> proposed_commit(tool_name, tool_input)
-  -> commit scope validation
-  -> CapabilityResolver
-  -> user confirmation
-  -> ToolGateway
-  -> MutationReceipt / compose
+requirement
+  -> eligibility / policy filtering
+  -> coverage: satisfied / partial / unavailable / denied
+  -> lexicographic rank
+  -> allowed tools / agents
 ```
 
-如果探索阶段没有足够依据，就不会产生 `proposed_commit`，commit step 以“未执行状态变更”完成。
+排序不再把信任、资源绑定、操作覆盖和偏好混成一个可相互抵消的加权总分。授权仍由 PolicyEngine 决定，调用必须经过 ToolGateway 或 AgentGateway。
 
-## 长期知识写入
+MCP 融入 `acquire/explore`，是可动态选择的 provider，不是一级 workflow。A2A 融入 `delegate`：Executive 先产生 provider-neutral `SubtaskSpec`，Resolver 在执行前选择 Agent，主 Agent 保留上下文、验证和最终回答所有权。Agent artifact 默认是不可信 observation，结构通过不等于事实已验证。
 
-直接调用 `capture_text`、`delete_note`、`update_note` 等长期知识变更工具之前，Runtime 会执行 `MemoryAdmissionGate`：
+## Protocol
 
-- TaskSpec 必须存在明确的 mutation intent。
-- 写入必须进入 confirmation interrupt。
-- confirmation 与具体 step ID 绑定，不能复用于后续写入。
-- 确认后的调用携带幂等键并继续经过 ToolGateway。
-- 拒绝后跳过依赖步骤，不产生长期知识修改。
+capture、solidify、delete、Research lifecycle、订阅和运维类事务通过 `ProtocolRegistry` 暴露为 `ProtocolCall`。Protocol 内部仍可使用确定性步骤和 LangGraph interrupt，但它不再拥有顶层路由权。
 
-因此，capture 和 solidify 当前会先返回 `waiting_confirmation`；用户确认后从 checkpoint 恢复并执行写入。这是当前有意采用的不兼容行为。
+Protocol 边界强制执行：
 
-## MCP
+- side effect 不能由普通 BoundedAction 执行；
+- durable memory mutation 经过 `MemoryAdmissionGate`；
+- confirmation 与具体调用绑定；
+- ToolGateway 继续执行 scope、policy、audit 和幂等检查；
+- 成功必须返回可验证 Mutation Receipt；
+- 失败或不确定结果作为 observation 返回 Executive。
 
-MCP capability 以 `Capability(kind="mcp_tool")` 进入统一 registry。外部证据任务的实际路径为：
+capture 和 solidify 先返回 `waiting_confirmation`，确认后从同一 checkpoint 恢复。这是有意采用的不兼容行为。
+
+## Verification 与完成
+
+动作成功只产生 candidate，不产生 verified：
 
 ```text
-TaskSpec.resource_requirements
-  -> evidence_answer / explore
-  -> CapabilityRequirement
-  -> Resolver 在 native_tool + mcp_tool 中判断 coverage
-  -> scoped ReAct
-  -> ToolGateway
-  -> EvidencePack
-  -> transform / verify
+ActionOutcome(succeeded)
+  -> goal_candidate_complete
+  -> GoalVerifier checks criterion-specific evidence
+  -> goal_verified or goal_activated with gaps
 ```
 
-本地存在满足 requirement 的 native capability 时，任务不必依赖 MCP；远端仓库、Notion、项目系统等资源则可以由 MCP provider 满足。Router 不直接选择 GitHub、Notion 或具体 MCP tool。
+`finish` 必须携带 `CompletionClaim` 并经过 `CompletionVerifier`。只要仍有 unresolved goal、未满足 required criterion、待确认项或缺失 completion claim，Runtime 就拒绝完成并把缺口返回 Executive。
 
-## A2A
+复合 capture + ask 的当前行为是：确认写入后，将 Mutation Receipt 作为当前任务的 evidence artifact 准入 `ContextEnvelope`，后续 ask 消费该产物并分别验证两个 Goal，最后才允许完成。这避免“写入成功但后续目标看不到刚产生的知识”。
 
-A2A 当前是 `delegate` 的 provider，不进入 ReAct tool loop：
+## 恢复与可观测性
 
-```text
-delegated_research
-  -> CapabilityRequirement(kind=agent, operation=delegate)
-  -> CapabilityResolver
-  -> SubtaskSpec + minimal context projection
-  -> AgentGateway
-  -> GPTResearcherA2AAdapter
-  -> AgentRun / events / artifacts
-  -> structural artifact verification
-  -> transform
-```
+LangGraph checkpoint 保存 TaskSpec、ControlState、Ledger、当前 action、observation、ReAct、Protocol 和 confirmation 状态。当前保留：
 
-Agent artifact 默认仍是不可信 observation。当前 verifier 已验证报告和 artifact 的结构完整性，但不把结构验证等同于事实真实性；外部主张仍需要来源证据复核后才能进入长期知识。
+- checkpoint resume；
+- 完整 checkpoint replay/fork；
+- event-sourced projection 和 debug bundle；
+- action input/output/error artifact；
+- SSE decision、protocol、verification 和 completion events。
 
-## Checkpoint、事件与恢复
+旧 step 级 fork、workflow state migration、step mapping 数据表和公共 API 已删除。新旧 workflow step 不能跨版本复用为“已完成事实”，避免绕过当前 Goal/Completion Verification。
 
-LangGraph 继续作为运行时，而不是业务分类器：
+## 已删除的旧控制链
 
-- checkpoint 保存 TaskSpec、ContextEnvelope、ExecutionLedger、步骤、ReAct 和确认状态。
-- interrupt 用于入口澄清和 commit / memory admission 确认。
-- ExecutionLedger 在 step running、coverage、completed、verified、blocked 时更新 revision。
-- capability resolution、context admission、verification、memory admission 和 commit 都有结构化事件。
-- step 输入、输出、错误和 Agent artifact 继续写入 workflow artifact store。
+当前代码已移除：
 
-核心新增事件包括：
+- `MetaPlanCompiler` 顶层控制与 `_select_pattern()`；
+- `IntentPlan`、`active_pattern`、`allowed_patterns` 和 `source_intents` 控制语义；
+- 预编译完整任务 DAG 后按索引执行的顶层循环；
+- 失败后自由追加 ExecutionStep 的 `Replanner` 及 prompt；
+- step type 为 verify 就直接写 verified；
+- provider-specific intent 到 MCP/A2A/workflow 的顶层执行映射；
+- step 级 fork 与 workflow state compatibility migration。
 
-```text
-task_spec_compiled
-skill_selected
-context_admitted
-plan_ledger_created / plan_ledger_updated
-capability_resolution / capability_execution
-verification_completed
-memory_admission
-```
+## Phase 落地状态
+
+| Phase | 当前状态 |
+| --- | --- |
+| 1 TaskSpec、criterion、revision | 已落地 |
+| 2 Ledger、Goal/Completion Verification | 已落地 |
+| 3 ExecutiveGraph 与强类型决策 | 已落地 |
+| 4 Bounded Action、Executor、Recovery | 已落地 |
+| 5 Capability gap 与动态 provider resolution | 已落地 |
+| 6 动态 Skill 与 Plan Macro | 已落地 |
+| 7 A2A、只读并行 contract、artifact admission | 已落地 |
+| 8 Protocol 收口与唯一主入口 | 已落地 |
+| 9 删除旧控制链与系统回归 | 已落地 |
 
 ## 当前边界
 
-当前已经形成可执行的元能力主链路，但仍有明确边界：
-
-- SkillRegistry 目前是代码内版本化 registry，尚未形成独立部署与评估存储。
-- Resource locator 只有在 TaskSpec 已提取或调用方提供时才做强绑定；通用实体解析仍需继续增强。
-- A2A 当前完成结构性 artifact 验证，尚未实现跨 provider 的事实交叉验证。
-- 顶层 provider-call budget 覆盖 deterministic tool、ReAct tool 和 A2A；Ask 内部多源 retrieval 仍有自己的预算控制。
-- 固定 workflow 仍是 capture、delete、Research lifecycle、订阅和其他事务流程的事实源；MetaPlanCompiler 不动态改写其内部状态机。
-- Runtime 已记录 blocked / replan reason，但当前不会让 LLM 任意生成新 DAG；局部恢复仍受既有 retry、branch 和固定 pattern 约束。
+- Executive 可使用 structured model 决策，但测试和无模型环境主要覆盖确定性 fallback；真实模型的决策质量仍需独立 eval，而不是用单一 golden path 判断。
+- `execute_parallel` 已有依赖、读写集、side effect 和预算校验；当前动作执行器采用确定性 join/调度，尚未把 wall-clock 并发作为正确性前提。
+- A2A 已实现动态 capability binding、最小 SubtaskSpec 和结构验证；跨 provider 事实交叉验证仍由主 Agent 的后续 evidence action 完成。
+- Skill/Macro 是代码内版本化 catalog，尚无独立部署、灰度和在线质量存储。
+- Research 内部策略仍有领域专用决策循环，但生命周期和副作用边界已由 Protocol 持有，不再作为顶层 Agent controller。
 
 ## 验证状态
 
-当前实现对应测试覆盖：
-
-- TaskSpec、Skill、ContextAdmission、CapabilityCoverage、A2A verification gate、MemoryAdmissionGate。
-- Entry、Ask、capture confirmation / resume、ReAct、MCP GitHub、MCP Notion、GPT Researcher A2A。
-- Workflow validator、step projection、checkpoint、HITL 和 replay。
-
-最近一次核心回归结果：
+本次落地后的验证：
 
 ```text
-151 passed
-ruff check: passed
-python compileall: passed
+python compileall src/personal_agent: passed
+focused Executive / Protocol / API regressions: passed
+full pytest: 874 passed, 4 warnings
 git diff --check: passed
 ```
 
-全量 `pytest -q` 在收集 Web 路由测试时仍要求 `PERSONAL_AGENT_POSTGRES_URL`；这是当前测试环境前置条件，不属于元能力运行时失败。
+全量测试需要设置：
+
+```text
+PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_test?sslmode=disable
+```
 
 ## 代码事实源
 
 | 主题 | 当前事实源 |
 | --- | --- |
-| 元能力与运行时 contracts | `kernel/contracts/agentic.py`、`kernel/contracts/capability.py` |
-| TaskSpec、Skill、pattern 与 plan compilation | `planning/agentic.py` |
-| Capability filtering / coverage | `planning/capability_resolver.py`、`planning/capability_validation.py` |
-| Memory admission | `planning/memory_admission.py` |
+| Task/Ledger/Skill contracts | `kernel/contracts/agentic.py` |
+| ControlDecision/BoundedAction contracts | `kernel/contracts/executive.py` |
+| Goal interpretation | `planning/goal_interpreter.py` |
+| Executive policy | `planning/executive.py` |
+| Ledger projection | `planning/ledger.py` |
+| Decision validation | `planning/decision_validator.py` |
+| Goal/Completion verification | `planning/verification.py` |
+| Skill/Macro catalog | `planning/skills.py` |
+| Protocol registry | `planning/protocols.py` |
+| Capability resolution | `planning/capability_resolver.py` |
+| Executive nodes | `orchestration/orchestration_nodes/_executive.py` |
+| Executive/Action/ReAct graph | `orchestration/orchestration_graph.py` |
 | checkpoint state | `orchestration/orchestration_models.py` |
-| 入口编译 | `orchestration/orchestration_nodes/_entry.py` |
-| step、ledger、commit、A2A | `orchestration/orchestration_nodes/_steps.py` |
-| ReAct、EvidencePack、context admission | `orchestration/orchestration_nodes/_react.py` |
-| 固定领域 workflow | `planning/workflow.py` |
-
+| deterministic action/Protocol executor | `orchestration/orchestration_nodes/_steps.py` |
+| scoped ReAct executor | `orchestration/orchestration_nodes/_react.py` |

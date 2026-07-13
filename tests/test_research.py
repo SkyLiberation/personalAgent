@@ -747,7 +747,9 @@ def test_research_pipeline_persists_events_and_digest(postgres_url):
     assert digest is not None
     assert len(digest.items) == 1
     assert digest.items[0].confidence_label == "已验证"
-    assert digest.items[0].personal_relevance
+    # Personalization is demand-driven; a generic run does not spend an extra
+    # knowledge-search call merely to manufacture a relevance explanation.
+    assert digest.items[0].personal_relevance == ""
     persisted = store.get_run(run.id)
     assert persisted.research_state is not None
     executed_decisions = [
@@ -764,12 +766,12 @@ def test_research_pipeline_persists_events_and_digest(postgres_url):
     tool_names = [trace.tool_name for trace in persisted.research_state.tool_call_traces]
     assert "web_search" in tool_names
     assert "capture_url" in tool_names
-    assert "graph_search" in tool_names
+    assert "graph_search" not in tool_names
     sources = store.list_run_sources(run.id)
     assert {source.decision_id for source in sources} == {executed_decisions[0].id}
     assert all(source.query == executed_decisions[0].query for source in sources)
     events = store.list_run_events(run.id)
-    assert events[0].source_ids == [source.id for source in sources]
+    assert set(events[0].source_ids) == {source.id for source in sources}
     assert events[0].frame is not None
     assert events[0].frame.actor or events[0].frame.object
     assert digest.items[0].source_ids == events[0].source_ids
@@ -946,15 +948,18 @@ def test_research_workflow_contracts_are_deterministic_unit_contracts():
     manage = WORKFLOW_REGISTRY.select("manage_research")
     assert manage.steps[0].allowed_tools == (
         "list_research_subscriptions",
+        "list_research_runs",
+        "get_research_digest",
+    )
+    assert manage.steps[1].action_type == "commit"
+    assert set(manage.steps[1].tool_input["allowed_commit_tools"]) == {
         "update_research_subscription",
         "pause_research_subscription",
         "resume_research_subscription",
         "run_research_subscription_now",
-        "list_research_runs",
-        "get_research_digest",
         "submit_research_feedback",
         "save_research_event",
-    )
+    }
 
 
 def test_feishu_research_feedback_parser():

@@ -308,6 +308,7 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
 
     def purge_expired_artifacts(self, *, limit: int = 1000) -> int:
         self.ensure_schema()
+        cutoff = datetime.now(UTC)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -316,13 +317,13 @@ class PostgresWorkflowReplayStore(PostgresStoreBase):
                     WHERE artifact_id IN (
                         SELECT artifact_id
                         FROM workflow_artifacts
-                        WHERE expires_at IS NOT NULL AND expires_at <= clock_timestamp()
+                        WHERE expires_at IS NOT NULL AND expires_at <= %s
                         ORDER BY expires_at
                         LIMIT %s
                     )
                     RETURNING artifact_id
                     """,
-                    (max(1, limit),),
+                    (cutoff, max(1, limit)),
                 )
                 return len(cur.fetchall())
 

@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from personal_agent.kernel.contracts.agentic import (
     ExecutionLedger,
     ExecutionLedgerItem,
-    PlanMacroRef,
     TaskSpec,
 )
 from personal_agent.kernel.contracts.capability import CapabilityRequirement

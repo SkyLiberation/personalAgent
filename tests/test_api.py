@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
-from datetime import timedelta
 from fastapi.testclient import TestClient
 from psycopg import connect
 from unittest.mock import MagicMock
 
-from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.kernel.models import EntryInput
 from personal_agent.application.review.delivery import DeliveryRouter
 from personal_agent.application.review.models import DeliveryResult
@@ -296,31 +294,25 @@ class TestReviewDigestManagementEndpoints:
 
     def test_list_review_cards_and_submit_feedback(self, api_client: TestClient):
         service = api_client.app.state.service
-        capture = service.execute_capture("复习卡 API 反馈", source_type="text", user_id="default")
-        card = ReviewCard(
-            id="card-api-1",
-            note_id=capture.note.id,
-            prompt="复习卡 API 的反馈入口是什么？",
-            answer_hint="/api/review/cards/{id}/feedback",
-            interval_days=1,
-            due_at=local_now() - timedelta(minutes=1),
-        )
-        service.memory.add_review(card)
+        service.execute_capture("复习卡 API 反馈", source_type="text", user_id="default")
 
         listed = api_client.get("/api/review/cards", params={"due_only": True})
         assert listed.status_code == 200
-        assert "card-api-1" in {item["id"] for item in listed.json()["items"]}
+        cards = listed.json()["items"]
+        assert cards
+        card_id = cards[0]["id"]
 
         feedback = api_client.post(
-            "/api/review/cards/card-api-1/feedback",
+            f"/api/review/cards/{card_id}/feedback",
             json={"outcome": "remembered"},
         )
 
         assert feedback.status_code == 200
         assert feedback.json()["ok"] is True
-        updated = service.memory.get_review("card-api-1", "default")
-        assert updated is not None
-        assert updated.interval_days == 2
+        updated = service.workspace_service.store.list_review_items(
+            "default", state="answered", limit=100,
+        )
+        assert card_id in {item.review_item_id for item in updated}
 
 
 class TestNotesEndpoint:
@@ -346,8 +338,10 @@ class TestNotesEndpoint:
 
     def test_restore_deleted_note_from_snapshot(self, api_client: TestClient):
         service = api_client.app.state.service
-        captured = service.execute_capture("DNS 是域名系统", source_type="text", user_id="restore-user")
-        note_id = captured.note.id
+        service.execute_capture("DNS 是域名系统", source_type="text", user_id="restore-user")
+        note_id = api_client.get(
+            "/api/notes", params={"user_id": "restore-user"},
+        ).json()[0]["id"]
 
         deleted = api_client.delete("/api/notes/{note_id}".format(note_id=note_id), params={"user_id": "restore-user"})
 
@@ -368,7 +362,7 @@ class TestNotesEndpoint:
 
         assert restored.status_code == 200
         data = restored.json()["data"]
-        assert data["restored_note_id"] == note_id
+        assert data["id"] == note_id
         listed_after_restore = api_client.get("/api/notes", params={"user_id": "restore-user"}).json()
         assert any(item["id"] == note_id for item in listed_after_restore)
 

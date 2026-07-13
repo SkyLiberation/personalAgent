@@ -272,15 +272,6 @@ class AgentService:
     def fork_from_checkpoint(self, **kwargs):
         return self.runtime.fork_from_checkpoint(**kwargs)
 
-    def fork_from_step(self, **kwargs):
-        return self.runtime.fork_from_step(**kwargs)
-
-    def set_workflow_state_migration(self, workflow_id: str, **kwargs):
-        return self.runtime.set_workflow_state_migration(workflow_id, **kwargs)
-
-    def preview_workflow_state_migration(self, **kwargs):
-        return self.runtime.preview_workflow_state_migration(**kwargs)
-
     def execute_digest(self, user_id: str | None = None):
         return self.runtime.execute_digest(user_id=user_id)
 

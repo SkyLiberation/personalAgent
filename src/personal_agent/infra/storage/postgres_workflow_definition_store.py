@@ -120,19 +120,6 @@ class PostgresWorkflowDefinitionStore(PostgresStoreBase):
                     )
                     """
                 )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS workflow_state_migrations (
-                        workflow_id TEXT NOT NULL,
-                        from_version TEXT NOT NULL,
-                        to_version TEXT NOT NULL,
-                        step_mapping JSONB NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                        PRIMARY KEY (workflow_id, from_version, to_version)
-                    )
-                    """
-                )
         self._initialized = True
 
     def sync_registry(
@@ -492,58 +479,6 @@ class PostgresWorkflowDefinitionStore(PostgresStoreBase):
         if row is None:
             return None
         return WorkflowSpec.from_definition_payload(row["spec"] or {})
-
-    def set_state_migration(
-        self,
-        workflow_id: str,
-        *,
-        from_version: str,
-        to_version: str,
-        step_mapping: dict[str, str] | None = None,
-    ) -> dict[str, object]:
-        self.ensure_schema()
-        mapping = dict(step_mapping or {})
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO workflow_state_migrations (
-                        workflow_id, from_version, to_version, step_mapping
-                    )
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (workflow_id, from_version, to_version) DO UPDATE
-                    SET step_mapping = EXCLUDED.step_mapping,
-                        updated_at = now()
-                    """,
-                    (workflow_id, from_version, to_version, Jsonb(mapping)),
-                )
-        return {
-            "workflow_id": workflow_id,
-            "from_version": from_version,
-            "to_version": to_version,
-            "step_mapping": mapping,
-        }
-
-    def get_state_migration(
-        self,
-        workflow_id: str,
-        *,
-        from_version: str,
-        to_version: str,
-    ) -> dict[str, object] | None:
-        self.ensure_schema()
-        with self._connect(row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT workflow_id, from_version, to_version, step_mapping
-                    FROM workflow_state_migrations
-                    WHERE workflow_id = %s AND from_version = %s AND to_version = %s
-                    """,
-                    (workflow_id, from_version, to_version),
-                )
-                row = cur.fetchone()
-        return dict(row) if row else None
 
     def select_active_spec(
         self,

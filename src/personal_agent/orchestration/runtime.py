@@ -1311,54 +1311,6 @@ class AgentRuntime:
         record_entry_episode(self.memory, result, settings=self.settings)
         return result
 
-    def fork_from_step(
-        self,
-        *,
-        run_id: str,
-        step_id: str,
-        updates: dict[str, object] | None = None,
-    ) -> EntryResult:
-        result = self._entry.fork_from_step(
-            run_id=run_id,
-            step_id=step_id,
-            updates=updates,
-        )
-        record_entry_episode(self.memory, result, settings=self.settings)
-        return result
-
-    def set_workflow_state_migration(self, workflow_id: str, **kwargs):
-        return self.workflow_definition_store.set_state_migration(workflow_id, **kwargs)
-
-    def preview_workflow_state_migration(
-        self,
-        *,
-        run_id: str,
-        to_version: str,
-    ):
-        from personal_agent.orchestration.workflow_state_migration import migrate_step_execution
-
-        source_state = self._entry.get_run_state(run_id)
-        if source_state is None:
-            raise ValueError(f"Workflow run not found: {run_id}")
-        target = self.workflow_definition_store.get_definition(
-            source_state.workflow_id,
-            to_version,
-        )
-        if target is None:
-            raise ValueError(
-                f"Workflow definition not found: {source_state.workflow_id}@{to_version}"
-            )
-        migration = self.workflow_definition_store.get_state_migration(
-            source_state.workflow_id,
-            from_version=source_state.workflow_version,
-            to_version=to_version,
-        )
-        return migrate_step_execution(
-            source_state.step_execution,
-            target,
-            step_mapping=dict((migration or {}).get("step_mapping") or {}),
-        )
-
     # ---- digest / intent (formerly RuntimeEntryMixin) ----
 
     def execute_digest(self, user_id: str | None = None) -> DigestResult:
