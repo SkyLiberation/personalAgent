@@ -1,220 +1,162 @@
 from __future__ import annotations
 
-from pathlib import Path
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from personal_agent.planning.step_projection_validator import StepProjectionValidationResult
-from personal_agent.planning.router import Goal, RouterDecision
-from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import EntryInput
+from personal_agent.orchestration.service import AgentService
+from personal_agent.planning.router import Goal, RouterDecision
 from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 @pytest.fixture
-def test_settings(temp_dir: Path) -> Settings:
-    return Settings(
+def svc(temp_dir: Path) -> AgentService:
+    service = AgentService(Settings(
         data_dir=temp_dir,
         postgres_url=POSTGRES_URL,
-        openai=OpenAIConfig(
-            api_key=None,
-            base_url=None,
-            model="gpt-4.1-mini",
-            small_model="gpt-4.1-nano",
-        ),
+        openai=OpenAIConfig(api_key=None, base_url=None, model="gpt-4.1-mini"),
+    ))
+    service.graph_store = MagicMock()
+    service.graph_store.configured.return_value = False
+    return service
+
+
+def _force_route(service: AgentService, route: str) -> None:
+    router = MagicMock()
+    router.classify.return_value = RouterDecision(goals=[Goal(
+        goal_id="goal_1",
+        intent=route,
+        input=f"Mock input for {route}",
+        confidence=0.9,
+    )])
+    service.runtime._intent_router = router
+    service.runtime._graph_contexts = replace(
+        service.runtime.graph_contexts,
+        routing=replace(service.runtime.graph_contexts.routing, intent_router=router),
     )
 
 
-@pytest.fixture
-def svc(test_settings: Settings) -> AgentService:
-    svc = AgentService(test_settings)
-    svc.graph_store = MagicMock()
-    svc.graph_store.configured.return_value = False
-    return svc
+def _event_types(result) -> list[str]:
+    return [event["type"] for event in result.events]
 
 
-def _bypass_validator(svc: AgentService) -> MagicMock:
-    """Replace step_projection_validator.validate to always pass (note_id resolved at runtime)."""
-    mock_validator = MagicMock()
-    mock_validator.validate.return_value = StepProjectionValidationResult(
-        valid=True, issues=[], warnings=[], corrected_steps=None,
-    )
-    svc.runtime._step_projection_validator = mock_validator
-    svc.runtime._graph_contexts = replace(
-        svc.runtime.graph_contexts,
-        planning=replace(
-            svc.runtime.graph_contexts.planning,
-            step_projection_validator=mock_validator,
-        ),
-        steps=replace(
-            svc.runtime.graph_contexts.steps,
-            step_projection_validator=mock_validator,
+def test_delete_is_a_governed_protocol_not_a_top_level_step_plan(
+    svc: AgentService,
+    monkeypatch,
+):
+    _force_route(svc, "delete_knowledge")
+    note = svc.execute_capture(
+        text="旧部署流程记录",
+        source_type="text",
+        user_id="alice",
+    ).note
+    monkeypatch.setattr(
+        "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
+        lambda *_args, **_kwargs: (
+            '{"thought":"定位已有笔记","done":true,'
+            f'"result":{{"note_id":"{note.id}"}}}}'
         ),
     )
-    return mock_validator
+    monkeypatch.setattr(
+        "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+        lambda *_args, **_kwargs: type("R", (), {
+            "done": True,
+            "thought": "定位已有笔记",
+            "result": {"note_id": note.id},
+            "tool_name": None,
+            "tool_input": None,
+            "native_call_id": None,
+            "parse_failed": False,
+        })(),
+    )
+    svc.graph_store.ask.return_value = type("R", (), {
+        "enabled": True,
+        "answer": "graph match",
+        "entity_names": ["部署"],
+        "relation_facts": [],
+        "related_episode_uuids": ["ep-deploy"],
+    })()
+
+    result = svc.entry(EntryInput(
+        text="删除那条关于旧部署流程的笔记",
+        user_id="alice",
+        session_id="delete-protocol",
+    ))
+
+    assert result.plan is None
+    assert result.run_status == "waiting_confirmation"
+    assert result.pending_confirmation
+    assert "protocol_started" in _event_types(result)
+    assert "confirmation_required" in _event_types(result)
+    assert "steps_projected" not in _event_types(result)
 
 
-class TestCrossLayerRegression:
-    """Full entry -> router -> projector -> validator -> executor cross-layer tests.
+def test_solidify_without_source_dialogue_stops_without_fabricating_a_note(
+    svc: AgentService,
+):
+    _force_route(svc, "solidify_conversation")
 
-    Mocks _intent_router.classify to force planning intents so that the
-    graph-native step execution path is exercised end-to-end.
-    """
+    result = svc.entry(EntryInput(
+        text="把关于缓存一致性的结论固化下来",
+        user_id="bob",
+        session_id="solidify-empty",
+    ))
 
-    def _mock_router(self, svc: AgentService, route: str) -> MagicMock:
-        """Replace the runtime's intent router with a mock returning a forced decision."""
-        decision = RouterDecision(
-            goals=[Goal(
-                goal_id="goal_1",
-                intent=route,
-                input=f"Mock input for {route}",
-                confidence=0.9,
-            )],
-        )
-        mock_router = MagicMock()
-        mock_router.classify.return_value = decision
-        svc.runtime._intent_router = mock_router
-        svc.runtime._graph_contexts = replace(
-            svc.runtime.graph_contexts,
-            routing=replace(
-                svc.runtime.graph_contexts.routing,
-                intent_router=mock_router,
-            ),
-        )
-        return mock_router
+    execution_types = {
+        event.get("payload", {}).get("execution_event", {}).get("event_type")
+        for event in result.events
+    }
+    assert result.run_status == "completed"
+    assert "protocol_started" in _event_types(result)
+    assert "step_failed" in _event_types(result)
+    assert "task_stopped" in execution_types
+    assert not svc.memory.list_notes("bob")
 
-    def test_delete_knowledge_triggers_step_execution_graph(self, svc: AgentService):
-        """delete_knowledge is compiled and enters graph step execution."""
-        self._mock_router(svc, "delete_knowledge")
-        _bypass_validator(svc)
-        # Prime knowledge base with a note to resolve
-        svc.execute_capture(
-            text="旧部署流程：第一步构建镜像，第二步部署到K8s集群。",
-            source_type="text", user_id="alice",
-        )
-        svc.graph_store.ask.return_value = type("R", (), {
-            "enabled": False, "answer": "",
-            "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
-        })()
-        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="部分回答"))
 
-        entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
-        result = svc.entry(entry)
+def test_protocol_failure_is_observed_before_executive_stop(svc: AgentService):
+    _force_route(svc, "solidify_conversation")
 
-        # Graph step execution populates steps with status
-        assert len(result.steps) > 0
-        statuses = {s.get("status") for s in result.steps}
-        assert "completed" in statuses or "failed" in statuses
+    result = svc.entry(EntryInput(
+        text="固化一段并不存在的对话",
+        user_id="bob",
+        session_id="solidify-order",
+    ))
 
-    def test_solidify_conversation_triggers_step_execution_graph(self, svc: AgentService):
-        """solidify_conversation is compiled and enters graph step execution."""
-        self._mock_router(svc, "solidify_conversation")
-        svc.graph_store.ask.return_value = type("R", (), {
-            "enabled": False, "answer": "",
-            "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
-        })()
-        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="固化的草稿内容"))
+    event_types = _event_types(result)
+    assert event_types.index("step_failed") < event_types.index("action_outcome")
+    assert event_types.index("action_outcome") < event_types.index("run_completed")
+    decisions = [
+        event["payload"]["decision"]["action"]
+        for event in result.events
+        if event["type"] == "executive_decision"
+    ]
+    assert decisions[-1] == "stop"
 
-        entry = EntryInput(text="把关于缓存一致性的结论固化下来", user_id="bob")
-        result = svc.entry(entry)
 
-        assert len(result.steps) > 0
-        action_types = {s.get("action_type") for s in result.steps}
-        assert "compose" in action_types
+def test_protocol_steps_never_remain_planned_at_a_terminal_boundary(svc: AgentService):
+    _force_route(svc, "solidify_conversation")
 
-    def test_delete_knowledge_full_flow_waits_for_graph_confirmation(self, svc: AgentService, monkeypatch):
-        """Complete delete flow: project -> resolve -> tool_call waits for Graph confirmation."""
-        self._mock_router(svc, "delete_knowledge")
-        _bypass_validator(svc)
-        note = svc.execute_capture(
-            text="旧部署流程记录", source_type="text", user_id="alice",
-        ).note
-        # ReAct 检索步直接消费原生 tool-calling 结果
-        monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
-            lambda _prompt, _deps, _allowed: type(
-                "R", (), {
-                    "done": True,
-                    "thought": "定位已有笔记",
-                    "result": {"note_id": note.id},
-                    "tool_name": None,
-                    "tool_input": None,
-                    "native_call_id": None,
-                    "parse_failed": False,
-                },
-            )(),
-        )
-        # resolve 通过 ``_structured_llm_respond`` 返回结构化 JSON 指明目标 note_id。
-        monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
-            lambda *_args, **_kwargs: (
-                '{"thought":"定位已有笔记","done":true,'
-                f'"result":{{"note_id":"{note.id}"}}}}'
-            ),
-        )
+    result = svc.entry(EntryInput(
+        text="固化一段并不存在的对话",
+        user_id="bob",
+        session_id="solidify-terminal",
+    ))
 
-        # Mock graph to return episode UUIDs so resolve tier-1 hits
-        svc.graph_store.ask.return_value = type("R", (), {
-            "enabled": True, "answer": "graph match",
-            "entity_names": ["部署"],
-            "relation_facts": [],
-            "related_episode_uuids": ["ep-uuid-deploy"],
-        })()
-        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="找到笔记"))
-
-        entry = EntryInput(text="删除那条关于旧部署流程的笔记", user_id="alice")
-        result = svc.entry(entry)
-
-        # execution steps should include tool_call with delete_note
-        tool_steps = [s for s in result.steps if s.get("action_type") == "tool_call"]
-        assert len(tool_steps) > 0
-        assert tool_steps[0].get("status") == "awaiting_confirmation"
-        assert result.pending_confirmation
-
-    def test_solidify_full_flow_compose_generates_answer(self, svc: AgentService):
-        """Solidify full flow: compose -> capture_text generates and stores draft text."""
-        self._mock_router(svc, "solidify_conversation")
-        svc.graph_store.ask.return_value = type("R", (), {
-            "enabled": True, "answer": "graph results about caching",
-            "entity_names": ["缓存", "一致性"],
-            "relation_facts": ["缓存一致性需要分布式锁"],
-            "related_episode_uuids": ["ep-cache"],
-        })()
-        svc.runtime.execute_ask = MagicMock(
-            return_value=MagicMock(answer="结论：缓存一致性需要分布式锁和版本号机制。")
-        )
-
-        entry = EntryInput(text="把关于缓存一致性的讨论结论固化下来", user_id="bob")
-        result = svc.entry(entry)
-
-        # Result should have a reply (from compose step or default)
-        assert result.reply_text
-        # execution steps should exist
-        assert len(result.steps) > 0
-
-    def test_delete_knowledge_steps_status_transitions(self, svc: AgentService):
-        """Verify execution steps transition from 'planned' to final statuses."""
-        self._mock_router(svc, "delete_knowledge")
-        _bypass_validator(svc)
-        svc.execute_capture(
-            text="应删除的测试笔记", source_type="text", user_id="alice",
-        )
-        svc.graph_store.ask.return_value = type("R", (), {
-            "enabled": False, "answer": "",
-            "entity_names": [], "relation_facts": [], "related_episode_uuids": [],
-        })()
-        svc.runtime.execute_ask = MagicMock(return_value=MagicMock(answer="无法完成"))
-
-        entry = EntryInput(text="删除那条关于测试笔记的内容", user_id="alice")
-        result = svc.entry(entry)
-
-        # All execution steps should have a non-'planned' status (completed, failed, or skipped)
-        for step in result.steps:
-            assert step.get("status") != "planned", (
-                f"Step {step.get('step_id')} still 'planned' — expected transition"
-            )
+    started = {
+        event["payload"].get("step_id")
+        for event in result.events
+        if event["type"] == "step_started" and event["payload"].get("step_id") != "__steps__"
+    }
+    terminal = {
+        event["payload"].get("step_id")
+        for event in result.events
+        if event["type"] in {"step_completed", "step_failed"}
+    }
+    assert started
+    assert started.issubset(terminal)

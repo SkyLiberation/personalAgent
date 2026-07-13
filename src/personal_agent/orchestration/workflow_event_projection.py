@@ -40,8 +40,20 @@ def project_workflow_events(
 
         if event.type == "entry_started":
             projection.status = AgentRunStatus.running
+        elif event.type == "goal_interpreted":
+            projection.workflow_id = "executive"
+            projection.workflow_version = "v1"
+            projection.status = AgentRunStatus.running
+        elif event.type == "protocol_started":
+            call = payload.get("protocol_call") or {}
+            projection.workflow_id = str(call.get("protocol_id") or "protocol")
+            projection.workflow_version = "protocol-v1"
+        elif event.type == "action_materialized" and not projection.workflow_id:
+            projection.workflow_id = "executive"
+            projection.workflow_version = "v1"
         elif event.type == "intent_classified":
-            projection.intent = str(payload.get("intent") or "unknown")
+            intents = payload.get("intents") or []
+            projection.intent = str(payload.get("intent") or (intents[0] if intents else "unknown"))
             projection.status = AgentRunStatus.running
         elif event.type == "steps_projected":
             projection.workflow_id = str(payload.get("workflow_id") or "")

@@ -459,15 +459,6 @@ def clean_postgres_business_tables():
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     PRIMARY KEY (workflow_id, environment)
                 );
-                CREATE TABLE IF NOT EXISTS workflow_state_migrations (
-                    workflow_id TEXT NOT NULL,
-                    from_version TEXT NOT NULL,
-                    to_version TEXT NOT NULL,
-                    step_mapping JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (workflow_id, from_version, to_version)
-                );
                 CREATE TABLE IF NOT EXISTS worker_queue_tasks (
                     task_id TEXT PRIMARY KEY,
                     queue TEXT NOT NULL,
@@ -640,7 +631,6 @@ def clean_postgres_business_tables():
                 TRUNCATE workflow_replay_runs;
                 TRUNCATE workflow_eval_runs;
                 TRUNCATE workflow_eval_policies;
-                TRUNCATE workflow_state_migrations;
                 TRUNCATE worker_queue_tasks;
                 TRUNCATE workspace_artifacts, workspace_extraction_runs, workspace_evidence_blocks,
                     workspace_evidence_spans, workspace_claims, workspace_grounding_runs,

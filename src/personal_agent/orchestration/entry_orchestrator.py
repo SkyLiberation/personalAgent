@@ -19,7 +19,6 @@ from personal_agent.orchestration.orchestration_graph import _build_checkpointer
 from personal_agent.orchestration.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
 from personal_agent.application.runtime_results import AskResult, CaptureResult, EntryResult
 from personal_agent.planning.router import describe_router_decision
-from personal_agent.orchestration.workflow_state_migration import reset_step_and_dependents
 
 logger = logging.getLogger(__name__)
 
@@ -896,128 +895,6 @@ class EntryOrchestrator:
         self._record_workflow_events([fork_event])
         result.events.append(fork_event.model_dump(mode="json"))
         return result
-
-    def fork_from_step(
-        self,
-        *,
-        run_id: str,
-        step_id: str,
-        updates: dict[str, object] | None = None,
-    ) -> EntryResult:
-        """Fork a run from the checkpoint immediately before a selected step."""
-        latest = self.get_run_snapshot(run_id)
-        if latest is None:
-            raise ValueError(f"Workflow run not found: {run_id}")
-
-        selected_checkpoint_id: str | None = None
-        selected_checkpoint_ns: str | None = None
-        selected_state: AgentGraphState | None = None
-        fallback: tuple[str, str | None, AgentGraphState] | None = None
-
-        checkpointer = self._get_orch_graph().checkpointer
-        for checkpoint_tuple in checkpointer.list(None, limit=2000):
-            checkpoint = getattr(checkpoint_tuple, "checkpoint", None)
-            values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
-            if not isinstance(values, dict):
-                continue
-            try:
-                state = AgentGraphState.model_validate(values)
-            except Exception:
-                continue
-            if state.run_id != run_id:
-                continue
-            checkpoint_config = getattr(checkpoint_tuple, "config", None)
-            checkpoint_id = _checkpoint_id_from_config(checkpoint_config)
-            configurable = (
-                checkpoint_config.get("configurable")
-                if isinstance(checkpoint_config, dict)
-                else {}
-            )
-            checkpoint_ns = (
-                str(configurable.get("checkpoint_ns") or "")
-                if isinstance(configurable, dict)
-                else ""
-            )
-            target = next(
-                (step for step in state.step_execution.steps if step.step_id == step_id),
-                None,
-            )
-            if not checkpoint_id or target is None:
-                continue
-            if fallback is None:
-                fallback = (checkpoint_id, checkpoint_ns or None, state)
-            if target.status == "running":
-                selected_checkpoint_id = checkpoint_id
-                selected_checkpoint_ns = checkpoint_ns or None
-                selected_state = state
-                break
-
-        if selected_state is None and fallback is not None:
-            selected_checkpoint_id, selected_checkpoint_ns, selected_state = fallback
-        if selected_state is None or selected_checkpoint_id is None:
-            raise ValueError(f"Step {step_id} was not found in run {run_id}")
-
-        step_execution = reset_step_and_dependents(
-            selected_state.step_execution,
-            step_id,
-        )
-        fork_updates: dict[str, object] = {
-            "step_execution": step_execution,
-            "react": selected_state.react.model_copy(
-                update={
-                    "iterations": [],
-                    "step_id": "",
-                    "iteration_index": 0,
-                    "done": False,
-                    "result": {},
-                    "status": "idle",
-                    "stop_reason": "",
-                    "pending_thought": "",
-                    "pending_tool": "",
-                    "pending_input": {},
-                }
-            ),
-            "tool_tracking": selected_state.tool_tracking.model_copy(
-                update={
-                    "active_context": None,
-                    "pending_step_id": "",
-                    "pending_call_id": "",
-                    "pending_tool_name": "",
-                    "pending_tool_input": {},
-                    "pending_react_iteration": None,
-                }
-            ),
-            "tool_messages": [],
-            "pending_confirmation": None,
-            "confirmation_decision": None,
-            "answer": None,
-            "answer_completed": False,
-            "errors": [],
-        }
-        fork_updates.update(updates or {})
-        result = self.fork_from_checkpoint(
-            thread_id=latest.thread_id,
-            checkpoint_id=selected_checkpoint_id,
-            updates=fork_updates,
-            checkpoint_ns=selected_checkpoint_ns,
-        )
-        step_fork_event = AgentEvent(
-            run_id=result.run_id or "",
-            thread_id=result.thread_id or latest.thread_id,
-            type="workflow_forked",
-            payload={
-                "source_run_id": run_id,
-                "source_checkpoint_id": selected_checkpoint_id,
-                "source_checkpoint_ns": selected_checkpoint_ns,
-                "source_step_id": step_id,
-                "mode": "fork-step",
-                "new_run_id": result.run_id,
-            },
-        )
-        self._record_workflow_events([step_fork_event])
-        result.events.append(step_fork_event.model_dump(mode="json"))
-        return result
-
 
 def _latest_workspace_ask_payload(state: AgentGraphState) -> dict[str, object] | None:
     for data in reversed(list(state.step_execution.results.values())):

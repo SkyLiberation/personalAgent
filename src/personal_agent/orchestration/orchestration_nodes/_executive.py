@@ -11,7 +11,6 @@ from langgraph.types import interrupt
 from personal_agent.kernel.contracts.agentic import (
     AttemptRef,
     ExecutionLedger,
-    ExecutionLedgerItem,
     PlanMacroRef,
 )
 from personal_agent.kernel.contracts.capability import (
@@ -442,6 +441,13 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             retryable=False,
             provider_calls=state.provider_call_count,
         )
+        _append_execution_event(state, deps, "attempt_recorded", goal_id=state.current_action.goal_id, payload={
+            "attempt": AttemptRef(
+                action_id=state.current_action.action_id,
+                meta_capability=state.current_action.meta_capability,
+                status="failed",
+            ).model_dump(mode="json"),
+        })
         _append_execution_event(state, deps, "goal_blocked", goal_id=state.current_action.goal_id, payload={
             "evidence_gaps": ("executor_failed",),
         })

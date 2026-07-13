@@ -180,15 +180,27 @@ def register_review_routes(
         request: Request,
     ) -> dict[str, object]:
         resolved_user = body.user_id if is_admin(request) and body.user_id else resolve_user_id(request, settings)
-        result = review_feedback_use_case.apply_to_review_card(
-            user_id=resolved_user,
-            review_card_id=review_card_id,
-            outcome=body.outcome,
-            source_channel="web",
+        review_items = service.workspace_service.store.list_review_items(
+            resolved_user,
+            limit=200,
         )
-        if not result.ok:
-            raise HTTPException(status_code=404, detail=result.error or "Review card not found.")
-        return result.model_dump(mode="json")
+        item = next(
+            (candidate for candidate in review_items if candidate.review_item_id == review_card_id),
+            None,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Review card not found.")
+        state = "answered" if body.outcome == "remembered" else (
+            "skipped" if body.outcome == "later" else "due"
+        )
+        saved = item.model_copy(update={"state": state})
+        service.workspace_service.store.save_review_items([saved])
+        return {
+            "ok": True,
+            "outcome": body.outcome,
+            "review_card_id": review_card_id,
+            "state": state,
+        }
 
 
 def _get_digest_subscription_or_404(
