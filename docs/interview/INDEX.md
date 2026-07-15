@@ -4,7 +4,7 @@
 
 项目最核心的一句话：
 
-> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的记忆、行动和规划都放进可恢复、可校验、可审计、可评测的系统边界里：LangGraph checkpoint 管短期执行现场，Postgres note/chunk 管长期事实，MemoryEpisode 管情景记忆（过往任务的意图与结果）、MemoryItem 管反思 / 程序经验，统一 Structured LLM 管 router/query planner/replanner/reranker/workspace 语义裁决，Unstructured 管文档结构化（LangExtract 作为休眠的可选抽取层保留），Graphiti 做语义索引，Evidence 管回答依据，WorkflowSpec/WorkflowRegistry 管固定流程拓扑，PolicyEngine 管策略决策，ToolGateway 管副作用，WorkflowSpecValidator/StepProjectionValidator 管 spec 与步骤投影安全，evals 模块验证检索、问答和规划策略是否真的有效。
+> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的目标、行动和记忆放进可恢复、可校验、可审计、可评测的边界里：TaskAnalyzer 理解目标，GoalGraphCompiler 建立执行事实，Executive 根据 Observation 逐轮决策，CapabilityResolver 动态选择 native/MCP/A2A，Protocol 管稳定事务，Gateway 管权限和副作用，Verifier 管完成，LangGraph checkpoint 管暂停恢复，分层 eval 验证每个决策边界。
 
 
 本文档已按模块拆分。下面按顺序列出各模块及其覆盖的问题，点击模块标题进入对应文件。
@@ -68,10 +68,10 @@
 - 工具结果为什么不直接写入用户 messages？
 - 当前工具层最大不足是什么？
 
-## [Workflow / 步骤投影层](06-workflow-step-projection.md)
+## [Procedure / 步骤投影层](06-workflow-step-projection.md)
 
 - 当前 planning 是怎么落地的？
-- WorkflowSpec / WorkflowRegistry 解决了什么？
+- ProcedureSpec / ProcedureCatalog 解决了什么？
 - 步骤投影和普通 Todo list 的区别是什么？
 - 哪些任务会进入 step projection？哪些不会？
 - `delete_knowledge` 为什么是 `retrieve -> resolve -> delete_note -> compose`？

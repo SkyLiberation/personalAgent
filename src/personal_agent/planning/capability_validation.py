@@ -14,7 +14,7 @@ from personal_agent.kernel.contracts.capability import (
 
 
 class ResolutionValidator:
-    """Validate an admitted resolution against its immutable step request."""
+    """Validate an admitted resolution against its immutable action request."""
 
     def errors(
         self,
@@ -26,12 +26,9 @@ class ResolutionValidator:
         errors: list[str] = []
         if resolution.request.scope_id != request.scope_id:
             errors.append("scope_id_changed")
-        if resolution.request.workflow_id != request.workflow_id:
-            errors.append("workflow_id_changed")
-        if resolution.request.step_id != request.step_id:
-            errors.append("step_id_changed")
-        if resolution.request.step_action_type != request.step_action_type:
-            errors.append("step_action_type_changed")
+        for field in ("task_id", "goal_id", "action_id", "meta_capability"):
+            if getattr(resolution.request, field) != getattr(request, field):
+                errors.append(f"{field}_changed")
 
         selected_ids = {capability.capability_id for capability in resolution.selected_capabilities}
         denied_ids = {capability.capability_id for capability in resolution.denied_capabilities}
@@ -48,6 +45,15 @@ class ResolutionValidator:
                 hard_denied_ids=hard_denied_ids,
                 require_reviewed_metadata=request.policy.require_reviewed_metadata_for_high_risk,
             ))
+            if request.requirements and not any(
+                _matches_requirement(capability, requirement)
+                for requirement in request.requirements
+            ):
+                errors.append(f"requirement_outside_scope:{capability.capability_id}")
+            if request.policy.read_only and set(capability.operations) & {
+                "create", "update", "delete", "ingest", "repair",
+            }:
+                errors.append(f"write_outside_read_only:{capability.capability_id}")
         return tuple(dict.fromkeys(errors))
 
     @staticmethod
@@ -62,7 +68,7 @@ class ResolutionValidator:
         errors: list[str] = []
         if capability.kind not in allowed_kinds:
             errors.append(f"kind_outside_scope:{capability.capability_id}")
-        if not set(capability.operations).issubset(allowed_operations):
+        if allowed_operations and not set(capability.operations).intersection(allowed_operations):
             errors.append(f"operation_outside_scope:{capability.capability_id}")
         if capability.capability_id in hard_denied_ids:
             errors.append(f"policy_hard_denied:{capability.capability_id}")
@@ -79,6 +85,16 @@ def _is_high_risk(capability: Capability) -> bool:
         or any(effect != "none" and ("write" in effect or "delete" in effect) for effect in capability.side_effects)
         or any(operation in {"create", "update", "delete"} for operation in capability.operations)
     )
+
+
+def _matches_requirement(capability: Capability, requirement) -> bool:
+    if requirement.required_providers and capability.provider not in requirement.required_providers:
+        return False
+    if requirement.semantic_domains and not set(requirement.semantic_domains) & set(capability.semantic_domains):
+        return False
+    if requirement.resource_types and not set(requirement.resource_types) & set(capability.resource_types):
+        return False
+    return not requirement.operations or bool(set(requirement.operations) & set(capability.operations))
 
 
 __all__ = ["ResolutionValidator"]

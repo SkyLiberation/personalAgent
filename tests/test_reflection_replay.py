@@ -129,7 +129,7 @@ class TestPromotionTrigger:
 
         episode = MemoryEpisode(
             id="e1", user_id="u1", session_id="s", thread_id="t", run_id="run1",
-            workflow="ask", title="t", summary="s", outcome="completed", entry_text="q",
+            result_contract="ask", title="t", summary="s", outcome="completed", entry_text="q",
         )
         _promote_applied_reflections(fac, _Result(), episode, Settings())
         # completed -> 0.7 + 0.2 = 0.9 >= 0.8 -> confirmed
@@ -148,7 +148,7 @@ class TestPromotionTrigger:
 
         episode = MemoryEpisode(
             id="e1", user_id="u1", session_id="s", thread_id="t", run_id="run1",
-            workflow="ask", title="t", summary="s", outcome="completed", entry_text="q",
+            result_contract="ask", title="t", summary="s", outcome="completed", entry_text="q",
         )
         disabled = Settings(reflection_replay=ReflectionReplaySettings(enabled=False))
         _promote_applied_reflections(fac, _Result(), episode, disabled)

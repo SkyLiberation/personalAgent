@@ -8,8 +8,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class ResolverQualityCase:
     id: str
-    task_text: str
-    workflow_scope: str
+    requirements: tuple[dict, ...]
     expected_capability_ids: tuple[str, ...] = ()
     forbidden_capability_ids: tuple[str, ...] = ()
     expected_denial_reasons: tuple[str, ...] = ()
@@ -23,8 +22,7 @@ def load_cases(path: Path | None = None) -> tuple[ResolverQualityCase, ...]:
     return tuple(
         ResolverQualityCase(
             id=str(item["id"]),
-            task_text=str(item["task_text"]),
-            workflow_scope=str(item["workflow_scope"]),
+            requirements=tuple(dict(value) for value in item.get("requirements", ())),
             expected_capability_ids=tuple(str(value) for value in item.get("expected_capability_ids", ())),
             forbidden_capability_ids=tuple(str(value) for value in item.get("forbidden_capability_ids", ())),
             expected_denial_reasons=tuple(str(value) for value in item.get("expected_denial_reasons", ())),

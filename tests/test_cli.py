@@ -6,9 +6,9 @@ import pytest
 from pathlib import Path
 from typer.testing import CliRunner
 
-from personal_agent.planning.router import DefaultIntentRouter
+from personal_agent.planning.task_analyzer import DefaultTaskAnalyzer
 from personal_agent.adapters.cli.main import app
-from tests.conftest import POSTGRES_URL, stub_router_decision
+from tests.conftest import POSTGRES_URL, stub_task_analysis
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -26,9 +26,9 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
 
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
     monkeypatch.setattr(
-        DefaultIntentRouter,
-        "_classify_with_llm",
-        lambda _self, text, messages=None: stub_router_decision(text, messages),
+        DefaultTaskAnalyzer,
+        "_analyze_with_model",
+        lambda _self, text, messages=None: stub_task_analysis(text, messages),
     )
     return CliRunner()
 
@@ -38,7 +38,7 @@ class TestCLIEntry:
         result = cli_runner.invoke(app, ["entry", "记一下：测试采集JSON输出"])
         assert result.exit_code == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
-        assert data["intents"] == ["capture_text"]
+        assert data["result_contracts"] == ["external_state"]
         assert data["reply"]
         assert data["run_id"]
 
@@ -46,7 +46,7 @@ class TestCLIEntry:
         result = cli_runner.invoke(app, ["entry", "什么是测试？", "--session-id", "cli-question"])
         assert result.exit_code == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
-        assert data["intents"] == ["ask"]
+        assert data["result_contracts"] == ["response"]
         assert data["reply"]
         assert data["run_id"]
 

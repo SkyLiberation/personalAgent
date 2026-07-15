@@ -18,7 +18,7 @@ from personal_agent.kernel.observability import RunMetrics
 from personal_agent.orchestration.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
 from personal_agent.orchestration.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
 from personal_agent.application.runtime_results import AskResult, CaptureResult, EntryResult
-from personal_agent.planning.router import describe_router_decision
+from personal_agent.planning.task_analyzer import describe_task_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +36,9 @@ ALLOWED_REPLAY_UPDATE_KEYS = {
     "entry_text",
     "messages",
     "thread_summary",
-    "router_decision",
-    "execution_plan",
-    "workflow_id",
-    "workflow_version",
+    "task_analysis",
+    "procedure_id",
+    "procedure_version",
     "react",
     "step_execution",
     "tool_tracking",
@@ -72,6 +71,14 @@ def _interrupt_payload_from_result(result: object) -> dict | None:
     return {"message": str(interrupt_value)}
 
 
+def _durable_interrupt_status(interrupt_data: dict) -> str:
+    return (
+        "waiting"
+        if interrupt_data.get("kind") == "clarification_required"
+        else "blocked_approval"
+    )
+
+
 def _steps_from_snapshot(snapshot: dict) -> list:
     """Extract projected step list from a checkpoint snapshot."""
     step_execution = snapshot.get("step_execution")
@@ -82,22 +89,18 @@ def _steps_from_snapshot(snapshot: dict) -> list:
     return []
 
 
-def _snapshot_intents(snapshot: dict) -> list[str]:
-    """Extract routed intents from a raw state snapshot dict.
-
-    Handles three forms of ``router_decision`` in the snapshot:
-    None (before routing), a dict (legacy checkpoints), or a RouterDecision instance.
-    """
-    rd = snapshot.get("router_decision")
+def _snapshot_result_contracts(snapshot: dict) -> list[str]:
+    """Extract analyzed result contracts from a raw state snapshot."""
+    rd = snapshot.get("task_analysis")
     if rd is None:
         return []
     if isinstance(rd, dict):
         return [
-            str(item.get("intent", "unknown"))
+            str(item.get("result_contract", "unknown"))
             for item in rd.get("goals", [])
             if isinstance(item, dict)
         ]
-    return [goal.intent for goal in getattr(rd, "goals", [])]
+    return [goal.result_contract for goal in getattr(rd, "goals", [])]
 
 
 def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) -> dict:
@@ -188,9 +191,9 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "user_id": state.user_id,
         "session_id": state.session_id,
         "status": state.to_run_snapshot().status.value,
-        "intents": [goal.intent for goal in state.router_decision.goals] if state.router_decision else [],
-        "workflow_id": state.workflow_id,
-        "workflow_version": state.workflow_version,
+        "result_contracts": [goal.result_contract for goal in state.task_analysis.goals] if state.task_analysis else [],
+        "procedure_id": state.procedure_id,
+        "procedure_version": state.procedure_version,
         "next": list(getattr(snapshot, "next", ()) or ()),
         "metadata": metadata if isinstance(metadata, dict) else {},
         "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else None,
@@ -258,7 +261,7 @@ class EntryOrchestrator:
             logger.info("Entry orchestration graph built with Postgres checkpoints")
         return self._orch_graph
 
-    def _record_workflow_events(self, events: list[AgentEvent] | list[object]) -> None:
+    def _record_execution_events(self, events: list[AgentEvent] | list[object]) -> None:
         if not events:
             return
         try:
@@ -266,9 +269,9 @@ class EntryOrchestrator:
                 event if isinstance(event, AgentEvent) else AgentEvent.model_validate(event)
                 for event in events
             ]
-            self._runtime.workflow_event_store.record_agent_events(parsed)
+            self._runtime.execution_event_store.record_agent_events(parsed)
         except Exception:
-            logger.exception("Failed to persist workflow events")
+            logger.exception("Failed to persist execution events")
 
     def execute_entry(
         self, entry_input: EntryInput, on_progress=None
@@ -281,6 +284,11 @@ class EntryOrchestrator:
         normalized_session = entry_input.session_id or "default"
         run_id = _new_run_id()
         thread_id = _new_thread_id(normalized_user, normalized_session)
+        run_manager = self._runtime.durable_run_manager
+        run_manager.create(run_id)
+        lease = run_manager.acquire_lease(run_id)
+        run_manager.transition(run_id, "queued", fencing_token=lease.fencing_token)
+        run_manager.transition(run_id, "running", fencing_token=lease.fencing_token)
 
         initial_state = AgentGraphState(
             run_id=run_id,
@@ -334,11 +342,17 @@ class EntryOrchestrator:
                     on_progress or (lambda _event_type, _payload: None),
                 )
         except Exception as exc:
+            current = run_manager.get(run_id)
+            if current.status not in {"cancelled", "completed", "failed", "timed_out"}:
+                run_manager.transition(run_id, "failed", fencing_token=current.fencing_token)
             run_metrics.complete(status="failed", error_type=exc.__class__.__name__)
             raise
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
-            run_metrics.complete(status="waiting_confirmation", interrupt_kind=interrupt_data.get("kind"))
+            current = run_manager.get(run_id)
+            waiting_status = _durable_interrupt_status(interrupt_data)
+            run_manager.transition(run_id, waiting_status, fencing_token=current.fencing_token)
+            run_metrics.complete(status=waiting_status, interrupt_kind=interrupt_data.get("kind"))
             result = self._entry_result_from_interrupt(
                 _checkpoint_values_after_interrupt(graph, config, invoke_result),
                 interrupt_data,
@@ -350,28 +364,39 @@ class EntryOrchestrator:
                     else initial_state.events
                 ),
             )
-            self._record_workflow_events(result.events)
+            self._record_execution_events(result.events)
             return result
 
         result_state = AgentGraphState.model_validate(invoke_result)
-        self._record_workflow_events(result_state.events)
+        current = run_manager.get(run_id)
+        durable_result = run_manager.admit_external_completion(
+            run_id,
+            fencing_token=current.fencing_token,
+        )
+        self._record_execution_events(result_state.events)
 
         # Map graph state back to the multi-intent entry result.
         reply_text = result_state.answer or "暂时没有可执行的结果。"
-        intents = (
-            [goal.intent for goal in result_state.router_decision.goals]
-            if result_state.router_decision else []
+        result_contracts = (
+            [goal.result_contract for goal in result_state.task_analysis.goals]
+            if result_state.task_analysis else []
         )
 
         capture_result = None
         ask_result = None
-        if any(intent in ("capture_text", "capture_link", "capture_file") for intent in intents):
+        if (
+            result_state.task_spec is not None
+            and result_state.task_spec.result_contract == "external_state"
+        ):
             for item in reversed(result_state.tool_results):
                 capture_payload = item.get("capture_result") if isinstance(item, dict) else None
                 if isinstance(capture_payload, dict):
                     capture_result = CaptureResult.model_validate(capture_payload)
                     break
-        if "ask" in intents:
+        if (
+            result_state.task_spec is not None
+            and result_state.task_spec.result_contract in {"response", "artifact", "compound"}
+        ):
             # Full KnowledgeNote matches are not checkpointed onto the state
             # (only summary dicts, to avoid checkpoint bloat). Surface them as
             # lightweight MatchRefs so result matching / citation validation see
@@ -434,7 +459,7 @@ class EntryOrchestrator:
                     } if workspace_payload is not None else {},
                 )
 
-        run_metrics.intent = ",".join(intents) or "unknown"
+        run_metrics.result_contracts = ",".join(result_contracts)
         run_metrics.complete(
             status="completed",
             step_count=len(result_state.step_execution.steps),
@@ -442,18 +467,18 @@ class EntryOrchestrator:
             event_count=len(result_state.events),
         )
         return EntryResult(
-            intents=intents,
-            reason=describe_router_decision(result_state.router_decision),
+            result_contracts=result_contracts,
+            reason=describe_task_analysis(result_state.task_analysis),
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
-            plan=result_state.execution_plan.model_dump(mode="json") if result_state.execution_plan else None,
+            plan=None,
             steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
             run_id=run_id,
             thread_id=thread_id,
-            run_status="completed",
+            run_status=durable_result.status,
             events=[e.model_dump(mode="json") for e in result_state.events],
         )
 
@@ -491,7 +516,7 @@ class EntryOrchestrator:
                         continue
                     emitted_event_ids.add(event.event_id)
                     observed_events.append(event)
-                    self._record_workflow_events([event])
+                    self._record_execution_events([event])
                     for event_type, payload in events_to_sse_tuples([event]):
                         # The HTTP layer emits one terminal result with complete
                         # answer/citation metadata after graph completion.
@@ -525,7 +550,7 @@ class EntryOrchestrator:
             run_id, thread_id, kind or "confirmation", interrupt_data.get("step_id", "?"),
         )
         return EntryResult(
-            intents=_snapshot_intents(state_snapshot),
+            result_contracts=_snapshot_result_contracts(state_snapshot),
             reason=reason,
             reply_text=str(interrupt_data.get("message", default_message)),
             steps=[
@@ -537,7 +562,7 @@ class EntryOrchestrator:
             run_id=run_id,
             thread_id=thread_id,
             pending_confirmation=interrupt_data,
-            run_status="waiting_confirmation",
+            run_status=_durable_interrupt_status(interrupt_data),
             events=[
                 e.model_dump(mode="json") if hasattr(e, "model_dump") else e
                 for e in (state_snapshot.get("events") or fallback_events or [])
@@ -585,6 +610,9 @@ class EntryOrchestrator:
             thread_id=thread_id,
             user_id=user_id,
         )
+        run_manager = self._runtime.durable_run_manager
+        lease = run_manager.acquire_lease(run_id)
+        run_manager.transition(run_id, "running", fencing_token=lease.fencing_token)
 
         logger.info(
             "Resuming graph run_id=%s thread_id=%s decision=%s",
@@ -605,6 +633,9 @@ class EntryOrchestrator:
             ):
                 invoke_result = graph.invoke(Command(resume=resume_value), config)
         except Exception as exc:
+            current_run = run_manager.get(run_id)
+            if current_run.status not in {"cancelled", "completed", "failed", "timed_out"}:
+                run_manager.transition(run_id, "failed", fencing_token=current_run.fencing_token)
             run_metrics.complete(
                 status="failed",
                 resume_decision=decision,
@@ -613,8 +644,11 @@ class EntryOrchestrator:
             raise
         interrupt_data = _interrupt_payload_from_result(invoke_result)
         if interrupt_data is not None:
+            current_run = run_manager.get(run_id)
+            waiting_status = _durable_interrupt_status(interrupt_data)
+            run_manager.transition(run_id, waiting_status, fencing_token=current_run.fencing_token)
             run_metrics.complete(
-                status="waiting_confirmation",
+                status=waiting_status,
                 resume_decision=decision,
                 interrupt_kind=interrupt_data.get("kind"),
             )
@@ -624,18 +658,23 @@ class EntryOrchestrator:
                 run_id=run_id,
                 thread_id=thread_id,
             )
-            self._record_workflow_events(result.events)
+            self._record_execution_events(result.events)
             return result
 
         result_state = AgentGraphState.model_validate(invoke_result)
-        self._record_workflow_events(result_state.events)
+        current_run = run_manager.get(run_id)
+        durable_result = run_manager.admit_external_completion(
+            run_id,
+            fencing_token=current_run.fencing_token,
+        )
+        self._record_execution_events(result_state.events)
 
         reply_text = result_state.answer or "操作已完成。"
-        intents = (
-            [goal.intent for goal in result_state.router_decision.goals]
-            if result_state.router_decision else []
+        result_contracts = (
+            [goal.result_contract for goal in result_state.task_analysis.goals]
+            if result_state.task_analysis else []
         )
-        run_metrics.intent = ",".join(intents) or "unknown"
+        run_metrics.result_contracts = ",".join(result_contracts)
         run_metrics.session_id = result_state.session_id
         run_metrics.complete(
             status="completed",
@@ -646,16 +685,16 @@ class EntryOrchestrator:
         )
 
         return EntryResult(
-            intents=intents,
-            reason=describe_router_decision(result_state.router_decision),
+            result_contracts=result_contracts,
+            reason=describe_task_analysis(result_state.task_analysis),
             reply_text=reply_text,
-            plan=result_state.execution_plan.model_dump(mode="json") if result_state.execution_plan else None,
+            plan=None,
             steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
             run_id=run_id,
             thread_id=thread_id,
-            run_status="completed",
+            run_status=durable_result.status,
             events=[e.model_dump(mode="json") for e in result_state.events],
         )
 
@@ -770,7 +809,7 @@ class EntryOrchestrator:
             raise ValueError(f"Checkpoint {checkpoint_id} could not be read for replay.")
         _ensure_checkpoint_schema_supported(source_values, checkpoint_id)
         source_run_id = str(source_values.get("run_id") or "")
-        replay_record = self._runtime.workflow_replay_store.create_replay_run(
+        replay_record = self._runtime.execution_replay_store.create_replay_run(
             source_run_id=source_run_id or "unknown",
             source_thread_id=thread_id,
             source_checkpoint_id=checkpoint_id,
@@ -786,7 +825,7 @@ class EntryOrchestrator:
             fork_config = graph.update_state(config, updates, **update_kwargs)
             invoke_result = graph.invoke(None, fork_config)
         except Exception as exc:
-            self._runtime.workflow_replay_store.finish_replay_run(
+            self._runtime.execution_replay_store.finish_replay_run(
                 replay_record.replay_id,
                 status="failed",
                 payload_update={"error": f"{type(exc).__name__}: {exc}"},
@@ -802,10 +841,10 @@ class EntryOrchestrator:
                 run_id=run_id,
                 thread_id=thread_id,
             )
-            self._record_workflow_events(result.events)
-            self._runtime.workflow_replay_store.finish_replay_run(
+            self._record_execution_events(result.events)
+            self._runtime.execution_replay_store.finish_replay_run(
                 replay_record.replay_id,
-                status="waiting_confirmation",
+                status="blocked_approval",
                 new_run_id=run_id or None,
             )
             return result
@@ -818,15 +857,15 @@ class EntryOrchestrator:
             result_state.run_id = requested_run_id
             for event in result_state.events:
                 event.run_id = requested_run_id
-        self._record_workflow_events(result_state.events)
-        intents = (
-            [goal.intent for goal in result_state.router_decision.goals]
-            if result_state.router_decision else []
+        self._record_execution_events(result_state.events)
+        result_contracts = (
+            [goal.result_contract for goal in result_state.task_analysis.goals]
+            if result_state.task_analysis else []
         )
         replay_event = AgentEvent(
             run_id=result_state.run_id,
             thread_id=result_state.thread_id,
-            type="workflow_replayed",
+            type="execution_replayed",
             payload={
                 "replay_id": replay_record.replay_id,
                 "source_run_id": source_run_id,
@@ -834,17 +873,17 @@ class EntryOrchestrator:
                 "mode": "replay-checkpoint",
             },
         )
-        self._record_workflow_events([replay_event])
-        self._runtime.workflow_replay_store.finish_replay_run(
+        self._record_execution_events([replay_event])
+        self._runtime.execution_replay_store.finish_replay_run(
             replay_record.replay_id,
             status="completed",
             new_run_id=result_state.run_id,
         )
         return EntryResult(
-            intents=intents,
-            reason=describe_router_decision(result_state.router_decision),
+            result_contracts=result_contracts,
+            reason=describe_task_analysis(result_state.task_analysis),
             reply_text=result_state.answer or "回放已完成。",
-            plan=result_state.execution_plan.model_dump(mode="json") if result_state.execution_plan else None,
+            plan=None,
             steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
@@ -886,13 +925,13 @@ class EntryOrchestrator:
         fork_event = AgentEvent(
             run_id=result.run_id or new_run_id,
             thread_id=result.thread_id or thread_id,
-            type="workflow_forked",
+            type="execution_forked",
             payload={
                 "source_checkpoint_id": checkpoint_id,
                 "new_run_id": result.run_id or new_run_id,
             },
         )
-        self._record_workflow_events([fork_event])
+        self._record_execution_events([fork_event])
         result.events.append(fork_event.model_dump(mode="json"))
         return result
 

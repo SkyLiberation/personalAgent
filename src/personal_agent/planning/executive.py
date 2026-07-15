@@ -18,23 +18,25 @@ from personal_agent.kernel.contracts.executive import (
     ActivateSkillDecision,
     BoundedAction,
     CapabilityClassSummary,
+    ClarifyDecision,
     CompletionClaim,
     ControlDecision,
+    ControlState,
     DecisionBasis,
     DelegateDecision,
     ExecuteMetaCapabilityDecision,
-    ExecuteParallelDecision,
     FinishDecision,
-    InvokeProtocolDecision,
-    LedgerPatch,
-    LedgerPatchOperation,
+    InvokeProcedureDecision,
     ObservationRef,
-    ProtocolCall,
-    RevisePlanDecision,
+    ProposedResourceAccessPlan,
+    ProcedureCall,
+    RequestConfirmationDecision,
     StopDecision,
     SubtaskSpec,
 )
-from personal_agent.planning.skills import PlanMacroCatalog, SkillCatalog
+from personal_agent.kernel.contracts.procedure import ProcedureCandidate
+from personal_agent.kernel.contracts.planning import PlanStep
+from personal_agent.skills import SkillRegistry
 
 if TYPE_CHECKING:
     from personal_agent.infra.structured_model import StructuredModelClient
@@ -44,11 +46,15 @@ logger = logging.getLogger(__name__)
 
 class _ModelExecutiveDecision(BaseModel):
     action: Literal[
-        "activate_skill", "apply_macro", "acquire", "explore", "reason", "transform",
-        "delegate", "finish", "stop",
+        "activate_skill", "acquire", "explore", "reason", "transform",
+        "verify", "commit", "delegate", "clarify", "request_confirmation",
+        "invoke_procedure", "finish", "stop",
     ]
     target_goal_id: str
     skill_id: str = ""
+    procedure_id: str = ""
+    question: str = ""
+    reason_code: str = ""
     expected_progress: str = ""
 
 
@@ -57,12 +63,12 @@ class ExecutiveController:
         self,
         model_client: "StructuredModelClient | None" = None,
         *,
-        skills: SkillCatalog | None = None,
-        macros: PlanMacroCatalog | None = None,
+        skills: SkillRegistry | None = None,
+        tenant_id: str = "default",
     ) -> None:
         self._model_client = model_client
-        self.skills = skills or SkillCatalog()
-        self.macros = macros or PlanMacroCatalog()
+        self.tenant_id = tenant_id
+        self.skills = skills or SkillRegistry.with_builtin_trust(tenant_id)
 
     def decide(
         self,
@@ -71,6 +77,8 @@ class ExecutiveController:
         *,
         observations: tuple[ObservationRef, ...] = (),
         capability_classes: tuple[CapabilityClassSummary, ...] = (),
+        control_state: ControlState | None = None,
+        model_context: dict[str, object] | None = None,
     ) -> ControlDecision:
         open_goals = [
             item for item in ledger.items
@@ -78,160 +86,294 @@ class ExecutiveController:
         ]
         if not open_goals:
             return self._finish(task, ledger)
-        goal = _select_goal(open_goals)
-        basis = _basis(goal, observations)
-
-        skill = next(
-            (item for item in self.skills.candidates(task) if item.skill_id not in ledger.active_skill_ids),
-            None,
+        ready_goals = [item for item in open_goals if _dependencies_satisfied(item, ledger)]
+        procedure_candidates = (
+            control_state.procedure_candidates if control_state is not None else ()
         )
-        if skill is not None and goal.goal_kind != "direct_response":
-            return ActivateSkillDecision(
-                target_goal_id=goal.goal_id,
-                skill_id=skill.skill_id,
-                basis=basis,
-                expected_progress="load_task_method",
+        model_choice = self._model_choice(
+            task,
+            ledger,
+            ready_goals,
+            observations,
+            capability_classes,
+            control_state,
+            model_context,
+        )
+        if not ready_goals:
+            return StopDecision(
+                target_goal_id=open_goals[0].goal_id,
+                basis=DecisionBasis(expected_state_change="task_stopped"),
+                expected_progress="stop_dependency_deadlock",
+                reason_code="goal_dependency_deadlock",
+                user_message="目标依赖未完成，且当前没有可继续推进的独立目标。",
+            )
+        fallback_goal = _select_goal(ready_goals)
+        goal = next(
+            (item for item in ready_goals if model_choice and item.goal_id == model_choice.target_goal_id),
+            fallback_goal,
+        )
+        goal_observations = _observations_for_goal(goal, observations)
+        basis = _basis(goal, goal_observations)
+        candidate_skills = _skill_candidates(self.skills, task, goal)
+        goal_procedures = tuple(
+            item for item in procedure_candidates
+            if item.goal_id == goal.goal_id and item.status in {"eligible", "mandatory"}
+        )
+        mandatory = tuple(item for item in goal_procedures if item.status == "mandatory")
+        if mandatory:
+            return self._procedure_decision(
+                task, goal, basis, mandatory[0], goal_observations,
             )
 
-        macro_goal = next((
-            candidate for candidate in open_goals
-            if (
-                (candidate_macro := self.macros.for_goal_kind(candidate.goal_kind)) is not None
-                and all(ref.macro_id != candidate_macro.macro_id for ref in ledger.applied_macros)
+        if model_choice is not None:
+            materialized = self._materialize_choice(
+                task,
+                ledger,
+                goal,
+                basis,
+                model_choice,
+                capability_classes,
+                candidate_skills,
+                goal_procedures,
             )
-        ), goal)
-        macro = self.macros.for_goal_kind(macro_goal.goal_kind)
-        if macro is not None and all(ref.macro_id != macro.macro_id for ref in ledger.applied_macros):
-            return RevisePlanDecision(
-                target_goal_id=macro_goal.goal_id,
-                basis=_basis(macro_goal, observations),
-                expected_progress="apply_plan_prior",
-                proposed_ledger_patch=LedgerPatch(
-                    reason_code="macro_recommended",
-                    operations=(LedgerPatchOperation(
-                        op="apply_macro",
-                        goal_id=macro_goal.goal_id,
-                        values={"macro_id": macro.macro_id, "version": macro.version},
-                    ),),
-                ),
-            )
+            if materialized is not None:
+                return materialized
 
-        parallel = self._parallel_decision(task, ledger, open_goals, observations)
-        if parallel is not None:
-            return parallel
+        if goal_procedures and not goal.attempts:
+            return self._procedure_decision(task, goal, basis, goal_procedures[0])
+        fallback = self._materialize_contract_action(task, ledger, goal, basis)
+        if fallback is not None:
+            return fallback
+        return StopDecision(
+            target_goal_id=goal.goal_id,
+            basis=basis.model_copy(update={
+                "rejected_action_codes": ("no_safe_contract_action",),
+            }),
+            expected_progress="stop_without_inventing_action_sequence",
+            reason_code="executive_model_unavailable",
+            user_message="当前没有足够信息生成安全的下一步动作，任务已停止。",
+        )
 
-        if goal.goal_kind == "protocol":
-            if goal.attempts:
-                return StopDecision(
-                    target_goal_id=goal.goal_id,
-                    basis=basis.model_copy(update={
-                        "expected_state_change": "task_stopped",
-                        "rejected_action_codes": ("repeat_protocol_without_new_input",),
-                    }),
-                    expected_progress="stop_without_repeating_side_effect_protocol",
-                    reason_code="protocol_result_inconclusive",
-                    user_message="协议已执行，但结果不足以证明目标完成；未重复执行可能产生副作用的操作。",
-                )
-            return InvokeProtocolDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress="execute_governed_protocol",
-                protocol_call=ProtocolCall(
-                    protocol_id=goal.protocol_id or "unknown",
-                    goal_id=goal.goal_id,
-                    operation=goal.protocol_id or "unknown",
-                    input={"text": goal.description},
-                    requires_confirmation=task.mutation_intent is not None,
-                ),
-            )
-
-        if (
-            goal.status == "blocked"
-            and goal.goal_kind in {"investigation", "evidence_answer"}
-            and any(item.kind == "agent" and "delegate" in item.operations for item in capability_classes)
-            and all(item.meta_capability != "delegate" for item in goal.attempts)
-        ):
-            requirement = _requirement(task, goal, "delegate")
-            return DelegateDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis.model_copy(update={"expected_state_change": "delegate_capability_gap"}),
-                expected_progress="obtain_specialist_artifact",
-                subtask=SubtaskSpec(
-                    goal=goal.description,
-                    parent_goal_id=goal.goal_id,
-                    required_capability=requirement,
-                    expected_artifact_contract="ResearchReport",
-                ),
-            )
-
-        model_choice = self._model_choice(task, ledger, goal, observations, capability_classes)
-        return self._materialize_choice(task, ledger, goal, basis, model_choice)
-
-    def _parallel_decision(
+    def decide_plan_step(
         self,
         task: TaskSpec,
         ledger: ExecutionLedger,
-        goals: list[ExecutionLedgerItem],
-        observations: tuple[ObservationRef, ...],
-    ) -> ExecuteParallelDecision | None:
-        candidates = [
-            item for item in goals
-            if item.status == "active"
-            and item.goal_kind in {"evidence_answer", "investigation"}
-            and not item.attempts
-        ]
-        if len(candidates) < 2 or task.constraints.max_parallelism < 2:
-            return None
-        actions = []
-        for goal in candidates[:task.constraints.max_parallelism]:
-            meta = _next_meta_capability(goal, [])
-            requirement = _requirement(task, goal, meta)
-            actions.append(BoundedAction(
-                goal_id=goal.goal_id,
-                meta_capability=meta,
-                description=f"{meta}: {goal.description}",
-                output_contract=_action_output_contract(meta),
-                requirement=requirement,
-                max_tool_calls=6 if meta == "explore" else 2,
-                max_model_calls=1,
-                max_iterations=task.constraints.max_iterations,
+        step: PlanStep,
+        *,
+        observations: tuple[ObservationRef, ...] = (),
+        control_state: ControlState | None = None,
+    ) -> ControlDecision:
+        goal = next((item for item in ledger.items if item.goal_id == step.goal_id), None)
+        if goal is None:
+            return StopDecision(
+                target_goal_id=step.goal_id,
+                reason_code="plan_step_goal_missing",
+                user_message="计划引用的目标已失效，任务已安全停止。",
+            )
+        basis = _basis(goal, _observations_for_goal(goal, observations))
+        procedures = tuple(
+            item for item in (control_state.procedure_candidates if control_state else ())
+            if item.goal_id == goal.goal_id and item.status in {"eligible", "mandatory"}
+        )
+        mandatory = next((item for item in procedures if item.status == "mandatory"), None)
+        if mandatory is not None:
+            return self._procedure_decision(task, goal, basis, mandatory, observations)
+        if step.kind == "procedure":
+            candidate = next((item for item in procedures if item.procedure_id == step.procedure_id), None)
+            if candidate is None:
+                return StopDecision(
+                    target_goal_id=goal.goal_id,
+                    basis=basis,
+                    reason_code="planned_procedure_ineligible",
+                    user_message="计划要求的受治理过程当前不可用，任务已安全停止。",
+                )
+            return self._procedure_decision(task, goal, basis, candidate, observations)
+        if step.kind == "delegate":
+            requirement = step.capability_requirement
+            assert requirement is not None
+            return DelegateDecision(
+                target_goal_id=goal.goal_id,
+                basis=basis,
+                expected_progress=step.objective,
+                subtask=SubtaskSpec(
+                    goal=step.objective,
+                    parent_goal_id=goal.goal_id,
+                    required_capability=requirement,
+                    requested_operations=requirement.operations,
+                    expected_artifact_contract=step.success_observation_contract,
+                ),
+            )
+        return self._action_from_plan_step(task, ledger, goal, basis, step)
+
+    def _action_from_plan_step(
+        self,
+        task: TaskSpec,
+        ledger: ExecutionLedger,
+        goal: ExecutionLedgerItem,
+        basis: DecisionBasis,
+        step: PlanStep,
+    ) -> ControlDecision:
+        requirement = step.capability_requirement
+        operations = set(requirement.operations if requirement is not None else ())
+        if step.kind == "verify":
+            meta = "verify"
+        elif step.kind == "synthesize":
+            meta = "transform"
+        elif operations.intersection({"create", "update", "delete", "ingest", "repair"}):
+            meta = "commit"
+        else:
+            meta = "acquire"
+        resources = _resources_for_goal(task, goal.goal_id)
+        bounded = BoundedAction(
+            goal_id=goal.goal_id,
+            meta_capability=meta,
+            description=step.objective,
+            output_contract=step.success_observation_contract,
+            requirement=requirement,
+            max_tool_calls=2 if requirement is not None else 0,
+            max_model_calls=1,
+            max_iterations=task.constraints.max_iterations,
+            proposed_resource_access=ProposedResourceAccessPlan(
                 read_set=tuple(
                     {"semantic_domain": item.semantic_domain, "locator": item.locator}
-                    for item in task.resource_requirements
+                    for item in resources
                 ),
-                payload={"task_text": goal.description},
-            ))
-        return ExecuteParallelDecision(
-            target_goal_id=actions[0].goal_id,
-            basis=_basis(candidates[0], observations).model_copy(update={
-                "expected_state_change": "parallel_evidence_acquisition",
-            }),
-            expected_progress="advance_independent_read_only_goals",
-            parallel_actions=tuple(actions),
+                write_set=tuple(
+                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
+                    for item in resources
+                ) if meta == "commit" else (),
+                side_effect_class=step.side_effect_intent,
+            ),
+            payload={
+                "task_text": step.objective,
+                "plan_step_id": step.step_id,
+                "information_goal": step.information_goal,
+                "execution_guidance": _execution_guidance(self, task, ledger, goal),
+                "agentic_synthesis": self._model_client is not None,
+            },
+        )
+        return ExecuteMetaCapabilityDecision(
+            target_goal_id=goal.goal_id,
+            basis=basis,
+            expected_progress=step.objective,
+            bounded_action=bounded,
+        )
+
+    def _materialize_contract_action(
+        self,
+        task: TaskSpec,
+        ledger: ExecutionLedger,
+        goal: ExecutionLedgerItem,
+        basis: DecisionBasis,
+    ) -> ControlDecision | None:
+        """Compile one declared result contract; never infer a multi-action sequence."""
+        resources = _resources_for_goal(task, goal.goal_id)
+        operations = tuple(dict.fromkeys(
+            operation for item in resources for operation in item.required_operations
+        ))
+        if set(operations).intersection({"create", "update", "delete", "ingest", "repair"}):
+            return None
+        if operations:
+            requirement = CapabilityRequirement(
+                requirement_id=f"{goal.goal_id}:reactive",
+                purpose=f"satisfy_goal_{goal.goal_id}",
+                semantic_domains=tuple(dict.fromkeys(item.semantic_domain for item in resources)),
+                resource_types=tuple(dict.fromkeys(
+                    value for item in resources for value in item.resource_types
+                )),
+                operations=operations,
+                resource_locator=next((item.locator for item in resources if item.locator), None),
+                freshness_required=any(item.freshness_required for item in resources),
+                required_providers=tuple(dict.fromkeys(
+                    provider for item in resources for provider in item.required_providers
+                )),
+                output_contract=goal.output_contract,
+            )
+            step = PlanStep(
+                goal_id=goal.goal_id,
+                kind="capability",
+                objective=goal.description,
+                supports_criterion_ids=goal.success_criterion_ids,
+                capability_requirement=requirement,
+                success_observation_contract=goal.output_contract,
+                failure_classes=("capability_unavailable",),
+            )
+        elif goal.result_contract in {"response", "artifact"}:
+            step = PlanStep(
+                goal_id=goal.goal_id,
+                kind="synthesize",
+                objective=goal.description,
+                supports_criterion_ids=goal.success_criterion_ids,
+                success_observation_contract=goal.output_contract,
+                failure_classes=("insufficient_context",),
+                replan_policy="request_input",
+            )
+        else:
+            return None
+        return self._action_from_plan_step(task, ledger, goal, basis, step)
+
+    @staticmethod
+    def _procedure_decision(
+        task: TaskSpec,
+        goal: ExecutionLedgerItem,
+        basis: DecisionBasis,
+        candidate: ProcedureCandidate,
+        observations: tuple[ObservationRef, ...] = (),
+    ) -> ControlDecision:
+        has_new_user_input = bool(observations) and observations[-1].kind in {
+            "user_clarification", "user_confirmation",
+        }
+        if goal.attempts and not has_new_user_input:
+            return StopDecision(
+                target_goal_id=goal.goal_id,
+                basis=basis.model_copy(update={
+                    "expected_state_change": "task_stopped",
+                    "rejected_action_codes": ("repeat_procedure_without_new_input",),
+                }),
+                expected_progress="stop_without_repeating_side_effect_procedure",
+                reason_code="procedure_result_inconclusive",
+                user_message="受治理过程已执行，但结果不足以证明目标完成；未重复执行可能产生副作用的操作。",
+            )
+        resources = _resources_for_goal(task, goal.goal_id)
+        procedure_text = goal.description
+        if has_new_user_input:
+            procedure_text = f"{procedure_text}\n补充信息：{observations[-1].summary}"
+        return InvokeProcedureDecision(
+            target_goal_id=goal.goal_id,
+            basis=basis,
+            expected_progress="execute_governed_procedure",
+            procedure_call=ProcedureCall(
+                procedure_id=candidate.procedure_id,
+                procedure_version=candidate.version,
+                goal_id=goal.goal_id,
+                input={
+                    "text": procedure_text,
+                    "resource_types": sorted({value for item in resources for value in item.resource_types}),
+                    "operations": sorted({value for item in resources for value in item.required_operations}),
+                    "locator": next((item.locator for item in resources if item.locator), None),
+                },
+                idempotency_key=f"{task.task_id}:{goal.goal_id}:{candidate.procedure_id}",
+                expected_output_contract="ProcedureOutcome",
+            ),
         )
 
     def _model_choice(
         self,
         task: TaskSpec,
         ledger: ExecutionLedger,
-        goal: ExecutionLedgerItem,
+        goals: list[ExecutionLedgerItem],
         observations: tuple[ObservationRef, ...],
         capability_classes: tuple[CapabilityClassSummary, ...],
+        control_state: ControlState | None,
+        model_context: dict[str, object] | None,
     ) -> _ModelExecutiveDecision | None:
-        if self._model_client is None:
+        if self._model_client is None or model_context is None:
             return None
         try:
             from personal_agent.infra.structured_model import StructuredModelRequest
 
-            state = {
-                "task_goal": task.user_goal,
-                "goal": goal.model_dump(mode="json"),
-                "attempted_meta_capabilities": [item.meta_capability for item in goal.attempts],
-                "latest_observations": [item.model_dump(mode="json") for item in observations[-4:]],
-                "capability_classes": [item.model_dump(mode="json") for item in capability_classes],
-                "active_skills": list(ledger.active_skill_ids),
-                "applied_macros": [item.macro_id for item in ledger.applied_macros],
-            }
+            ready_goal_ids = {item.goal_id for item in goals}
+            state = model_context
             response = self._model_client.generate(StructuredModelRequest(
                 operation="executive_decision",
                 version="v1",
@@ -239,8 +381,13 @@ class ExecutiveController:
                     {
                         "role": "system",
                         "content": (
-                            "Choose the single bounded semantic action that best advances the unmet goal. "
-                            "Use observations, avoid repeating failed paths, and do not choose finish unless the goal is verified. "
+                            "Choose one bounded control action with the best expected progress and target a ready goal. "
+                            "Do not revise goals, criteria, dependencies, or the active plan; those belong to the planning layer. "
+                            "Skills and their playbooks are optional methods; procedures are governed transactions, "
+                            "and observations are feedback. Choose invoke_procedure only from eligible candidates and never "
+                            "bypass a mandatory procedure. "
+                            "Use their full contracts, respect budgets, avoid failed paths, and clarify when a resource binding "
+                            "or authorization is required. Never choose finish unless the goal is verified. "
                             "Return only the requested structured object; do not reveal chain-of-thought."
                         ),
                     },
@@ -250,10 +397,10 @@ class ExecutiveController:
                 temperature=0,
                 max_tokens=300,
                 kind="structured",
-                metadata={"task_id": task.task_id, "goal_id": goal.goal_id},
+                metadata={"task_id": task.task_id, "ready_goal_ids": sorted(ready_goal_ids)},
             ))
             choice = response.value
-            if choice.target_goal_id != goal.goal_id:
+            if choice.target_goal_id not in ready_goal_ids:
                 return None
             return choice
         except Exception:
@@ -267,22 +414,63 @@ class ExecutiveController:
         goal: ExecutionLedgerItem,
         basis: DecisionBasis,
         choice: _ModelExecutiveDecision | None,
-    ) -> ControlDecision:
-        attempted = [item.meta_capability for item in goal.attempts if item.status == "succeeded"]
-        action = choice.action if choice is not None else _next_meta_capability(goal, attempted)
+        capability_classes: tuple[CapabilityClassSummary, ...],
+        candidate_skills: tuple,
+        procedure_candidates: tuple[ProcedureCandidate, ...],
+    ) -> ControlDecision | None:
+        if choice is None:
+            return None
+        action = choice.action
+        if action == "activate_skill":
+            allowed = {item.skill_id for item in candidate_skills}
+            if choice is not None and choice.skill_id in allowed and choice.skill_id not in ledger.active_skill_ids:
+                return ActivateSkillDecision(
+                    target_goal_id=goal.goal_id,
+                    skill_id=choice.skill_id,
+                    basis=basis,
+                    expected_progress=choice.expected_progress or "load_relevant_method",
+                )
+            return None
+        if action == "invoke_procedure":
+            candidate = next((
+                item for item in procedure_candidates
+                if choice is not None and item.procedure_id == choice.procedure_id
+            ), None)
+            return self._procedure_decision(task, goal, basis, candidate) if candidate else None
+        if action == "clarify":
+            if choice is None or not choice.question.strip():
+                return None
+            return ClarifyDecision(
+                target_goal_id=goal.goal_id,
+                basis=basis,
+                expected_progress=choice.expected_progress or "obtain_missing_input",
+                question=choice.question.strip(),
+            )
+        if action == "request_confirmation":
+            if choice is None or task.mutation_intent is None:
+                return None
+            return RequestConfirmationDecision(
+                target_goal_id=goal.goal_id,
+                basis=basis,
+                expected_progress=choice.expected_progress or "obtain_mutation_confirmation",
+                title="确认执行变更",
+                summary=choice.question.strip() or goal.description,
+            )
         if action == "finish":
             if goal.status == "verified":
                 return self._finish(task, ledger)
-            action = _next_meta_capability(goal, attempted)
+            return None if choice is not None else self._finish(task, ledger)
         if action == "stop":
             return StopDecision(
                 target_goal_id=goal.goal_id,
                 basis=basis,
                 expected_progress="stop_without_unsafe_guessing",
-                reason_code="executive_no_safe_progress",
+                reason_code=choice.reason_code if choice and choice.reason_code else "executive_no_safe_progress",
                 user_message="当前能力或证据不足，任务已停止。",
             )
-        if action == "delegate" or goal.goal_kind == "delegate":
+        if action == "delegate":
+            if not _has_exact_delegate(task, goal, capability_classes):
+                return None
             requirement = _requirement(task, goal, "delegate")
             return DelegateDecision(
                 target_goal_id=goal.goal_id,
@@ -292,29 +480,43 @@ class ExecutiveController:
                     goal=goal.description,
                     parent_goal_id=goal.goal_id,
                     required_capability=requirement,
+                    requested_operations=requirement.operations,
                     expected_artifact_contract="ResearchReport",
                 ),
             )
-        if action in {"activate_skill", "apply_macro"}:
-            # Mandatory skill/macro opportunities were handled before the model call.
-            action = _next_meta_capability(goal, attempted)
-        meta = action if action in {"acquire", "explore", "reason", "transform", "verify"} else "transform"
+        meta = action if action in {
+            "acquire", "explore", "reason", "transform", "verify", "commit",
+        } else "transform"
+        if meta == "commit" and task.mutation_intent is None:
+            return None
         requirement = _requirement(task, goal, meta)
+        resources = _resources_for_goal(task, goal.goal_id)
         bounded = BoundedAction(
             goal_id=goal.goal_id,
             meta_capability=meta,
             description=f"{meta}: {goal.description}",
             output_contract=_action_output_contract(meta),
             requirement=requirement,
-            max_tool_calls=6 if meta == "explore" else 2,
+            max_tool_calls=(6 if meta == "explore" else 2)
+            if meta in {"acquire", "explore", "commit"} else 0,
             max_model_calls=1,
             max_iterations=task.constraints.max_iterations,
-            read_set=tuple(
-                {"semantic_domain": item.semantic_domain, "locator": item.locator}
-                for item in task.resource_requirements
+            proposed_resource_access=ProposedResourceAccessPlan(
+                read_set=tuple(
+                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
+                    for item in resources
+                ),
+                write_set=tuple(
+                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
+                    for item in resources
+                ) if meta == "commit" else (),
+                side_effect_class="mutation" if meta == "commit" else "none",
             ),
-            side_effect_class="none",
-            payload={"task_text": goal.description},
+            payload={
+                "task_text": goal.description,
+                "execution_guidance": _execution_guidance(self, task, ledger, goal),
+                "agentic_synthesis": self._model_client is not None,
+            },
         )
         return ExecuteMetaCapabilityDecision(
             target_goal_id=goal.goal_id,
@@ -341,6 +543,71 @@ def _select_goal(goals: list[ExecutionLedgerItem]) -> ExecutionLedgerItem:
     return sorted(goals, key=lambda item: (priority.get(item.status, 9), item.goal_id))[0]
 
 
+def _dependencies_satisfied(goal: ExecutionLedgerItem, ledger: ExecutionLedger) -> bool:
+    status_by_id = {item.goal_id: item.status for item in ledger.items}
+    return all(
+        status_by_id.get(dependency.dependency_goal_id) in {"verified", "degraded"}
+        for dependency in goal.dependencies
+        if dependency.blocks_execution
+    )
+
+
+def _observations_for_goal(
+    goal: ExecutionLedgerItem,
+    observations: tuple[ObservationRef, ...],
+) -> tuple[ObservationRef, ...]:
+    scoped = tuple(item for item in observations if item.goal_id == goal.goal_id)
+    return scoped or tuple(item for item in observations if not item.goal_id)
+
+
+def _skill_candidates(catalog: SkillRegistry, task: TaskSpec, goal: ExecutionLedgerItem) -> tuple:
+    domains = {item.semantic_domain for item in _resources_for_goal(task, goal.goal_id)}
+    return tuple(
+        skill for skill in catalog.candidates(task)
+        if domains.intersection(skill.applicability.semantic_domains)
+        or task.result_contract in skill.applicability.result_contracts
+    )
+def _execution_guidance(
+    controller: ExecutiveController,
+    task: TaskSpec,
+    ledger: ExecutionLedger,
+    goal: ExecutionLedgerItem,
+) -> list[str]:
+    guidance = []
+    relevant_skill_ids = {
+        item.skill_id for item in _skill_candidates(controller.skills, task, goal)
+    }
+    for skill_id in ledger.active_skill_ids:
+        if skill_id not in relevant_skill_ids:
+            continue
+        # Active skills are task-scoped; only inject methods applicable to this goal.
+        try:
+            skill = controller.skills.get(controller.tenant_id, skill_id)
+        except (KeyError, PermissionError):
+            continue
+        instructions = skill.instructions.strip()
+        if instructions:
+            guidance.append(instructions)
+    return guidance
+
+
+def _has_exact_delegate(
+    task: TaskSpec,
+    goal: ExecutionLedgerItem,
+    capability_classes: tuple[CapabilityClassSummary, ...],
+) -> bool:
+    requirement = _requirement(task, goal, "delegate")
+    domains = set(requirement.semantic_domains)
+    required_providers = set(requirement.required_providers)
+    return any(
+        item.kind == "agent"
+        and "delegate" in item.operations
+        and (not domains or bool(domains.intersection(item.semantic_domains)))
+        and (not required_providers or bool(required_providers.intersection(item.providers)))
+        for item in capability_classes
+    )
+
+
 def _basis(goal: ExecutionLedgerItem, observations: tuple[ObservationRef, ...]) -> DecisionBasis:
     return DecisionBasis(
         unmet_criterion_ids=goal.success_criterion_ids,
@@ -350,22 +617,8 @@ def _basis(goal: ExecutionLedgerItem, observations: tuple[ObservationRef, ...]) 
     )
 
 
-def _next_meta_capability(goal: ExecutionLedgerItem, attempted: list[str]) -> str:
-    if goal.status == "blocked":
-        if goal.goal_kind in {"investigation", "evidence_answer"} and attempted.count("explore") < 2:
-            return "explore"
-        return "stop"
-    sequence = {
-        "direct_response": ("transform",),
-        "evidence_answer": ("acquire", "reason", "transform"),
-        "investigation": ("explore", "transform"),
-        "delegate": ("delegate", "transform"),
-    }.get(goal.goal_kind, ("transform",))
-    return next((item for item in sequence if item not in attempted), "transform")
-
-
 def _requirement(task: TaskSpec, goal: ExecutionLedgerItem, meta: str) -> CapabilityRequirement:
-    resources = task.resource_requirements
+    resources = _resources_for_goal(task, goal.goal_id)
     domains = tuple(dict.fromkeys(item.semantic_domain for item in resources))
     resource_types = tuple(dict.fromkeys(value for item in resources for value in item.resource_types))
     locator = next((item.locator for item in resources if item.locator), None)
@@ -378,20 +631,36 @@ def _requirement(task: TaskSpec, goal: ExecutionLedgerItem, meta: str) -> Capabi
             operation for item in resources for operation in item.required_operations
             if operation in {"search", "read", "list"}
         )) or ("read",)
+    elif meta == "commit":
+        operations = tuple(dict.fromkeys(
+            operation for item in resources for operation in item.required_operations
+            if operation in {"create", "update", "delete", "ingest", "repair"}
+        ))
     else:
         operations = ()
     return CapabilityRequirement(
         requirement_id=f"{goal.goal_id}:{meta}",
-        purpose=f"{meta}_{goal.goal_kind}",
+        purpose=f"{meta}_{goal.result_contract}",
         semantic_domains=domains,
         resource_types=resource_types,
         operations=operations,
         resource_locator=locator,
         minimum_trust_level="external",
-        freshness_required=task.evidence_requirements.contradiction_check,
+        freshness_required=any(item.freshness_required for item in resources),
+        preferred_providers=tuple(dict.fromkeys(
+            provider for item in resources for provider in item.preferred_providers
+        )),
+        required_providers=tuple(dict.fromkeys(
+            provider for item in resources for provider in item.required_providers
+        )),
         output_contract=_action_output_contract(meta),
         side_effect_class="none",
     )
+
+
+def _resources_for_goal(task: TaskSpec, goal_id: str):
+    scoped = tuple(item for item in task.resource_requirements if item.goal_id == goal_id)
+    return scoped or task.resource_requirements
 
 
 def _action_output_contract(meta: str) -> str:
@@ -402,6 +671,7 @@ def _action_output_contract(meta: str) -> str:
         "transform": "Answer",
         "verify": "VerificationReport",
         "delegate": "AgentArtifact",
+        "commit": "MutationReceipt",
     }.get(meta, "ToolResult")
 
 

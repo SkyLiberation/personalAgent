@@ -4,7 +4,7 @@
 
 - [记忆层说明](memory.md)
 - [检索与推理层](retrieval-reasoning.md)
-- [Entry / Checkpoint / 输出整体流程](../workflow/entry-router-plan-react-output-flow.md)
+- [Entry 到 Executive Agent Loop](../workflow/entry-executive-agent-loop.md)
 - [Prompt 汇编](../llm-prompts.md)
 
 ## 设计原则

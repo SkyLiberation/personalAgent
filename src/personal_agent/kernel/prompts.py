@@ -5,16 +5,16 @@ from typing import Any
 from personal_agent.kernel.prompt_registry import PromptSpec
 from personal_agent.kernel.prompt_templates.ask import PROMPTS as ASK_PROMPTS
 from personal_agent.kernel.prompt_templates.graph import PROMPTS as GRAPH_PROMPTS
-from personal_agent.kernel.prompt_templates.planning import PROMPTS as PLANNING_PROMPTS
-from personal_agent.kernel.prompt_templates.router import PROMPTS as ROUTER_PROMPTS
+from personal_agent.kernel.prompt_templates.runtime import PROMPTS as RUNTIME_PROMPTS
+from personal_agent.kernel.prompt_templates.task_analyzer import PROMPTS as TASK_ANALYZER_PROMPTS
 from personal_agent.kernel.prompt_templates.thread import PROMPTS as THREAD_PROMPTS
 
 
 _PROMPTS: dict[str, PromptSpec] = {
     **ASK_PROMPTS,
     **GRAPH_PROMPTS,
-    **PLANNING_PROMPTS,
-    **ROUTER_PROMPTS,
+    **RUNTIME_PROMPTS,
+    **TASK_ANALYZER_PROMPTS,
     **THREAD_PROMPTS,
 }
 

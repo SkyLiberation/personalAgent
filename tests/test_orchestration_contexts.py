@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import fields
 
 from personal_agent.orchestration.orchestration_contexts import (
-    DirectAnswerContext,
+    ConversationContext,
     ExecutiveContext,
     GraphContexts,
     ReactContext,
@@ -19,26 +19,26 @@ def _field_names(model) -> set[str]:
 
 def test_graph_context_is_only_an_assembly_boundary():
     assert _field_names(GraphContexts) == {
-        "routing", "executive", "direct_answer", "steps", "react",
+        "routing", "executive", "steps", "react",
     }
 
 
 def test_routing_context_cannot_access_execution_capabilities():
     assert _field_names(RoutingContext) == {
-        "settings", "memory", "intent_router", "compress_context",
+        "settings", "memory", "task_analyzer", "compress_context",
     }
 
 
 def test_executive_context_separates_decision_from_execution():
     names = _field_names(ExecutiveContext)
-    assert {"goal_interpreter", "controller", "decision_validator"}.issubset(names)
+    assert {"goal_graph_compiler", "controller", "decision_validator"}.issubset(names)
     assert {"ledger_projector", "goal_verifier", "completion_verifier"}.issubset(names)
     assert "replanner" not in names
 
 
-def test_direct_answer_context_has_no_governed_execution_capabilities():
-    assert _field_names(DirectAnswerContext) == {
-        "settings", "compress_context", "model_client",
+def test_conversation_context_has_no_governed_execution_capabilities():
+    assert _field_names(ConversationContext) == {
+        "settings", "compress_context",
     }
 
 
@@ -48,7 +48,8 @@ def test_step_and_react_contexts_have_distinct_boundaries():
     assert "replanner" not in step_names
     assert "agent_gateway" in step_names
     assert react_names == {
-        "settings", "tool_executor", "policy_engine", "model_client", "structured_client",
+        "settings", "tool_executor", "policy_engine", "context_manager", "context_gateway",
+        "model_client", "structured_client",
     }
 
 

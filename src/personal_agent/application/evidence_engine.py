@@ -362,7 +362,7 @@ class CitationSelector:
 class EvidenceEngine:
     """Shared source/evidence assembly and claim-grounding service.
 
-    Workflow-specific services own control flow. This engine owns the common
+    Domain procedures own lifecycle control. This engine owns the common
     evidence mechanics: source normalization, pool assembly, prompt context
     selection and claim grounding.
     """

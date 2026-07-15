@@ -128,7 +128,6 @@ def _mcp_capability(
         local_name=tool_name,
         server_id=server.server_id,
         remote_tool_name=mapping.remote_name,
-        local_tool_name=tool_name,
         description=description,
         semantic_domains=mapping.semantic_domains,
         resource_types=mapping.resource_types,

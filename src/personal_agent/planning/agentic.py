@@ -1,18 +1,19 @@
 """Context admission helpers used by bounded executors.
 
-Task interpretation and control decisions live in ``goal_interpreter`` and
+Task interpretation and control decisions live in ``goal_graph_compiler`` and
 ``executive``. This module deliberately contains no pattern selector or plan
 compiler.
 """
 
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.agentic import ContextEnvelope, ContextItem, Skill, TaskSpec
+from personal_agent.kernel.contracts.agentic import ContextEnvelope, ContextItem, TaskSpec
+from personal_agent.skills import LoadedSkill
 
 
 class ContextAdmission:
     @staticmethod
-    def initial(task: TaskSpec, skills: tuple[Skill, ...] = ()) -> ContextEnvelope:
+    def initial(task: TaskSpec, skills: tuple[LoadedSkill, ...] = ()) -> ContextEnvelope:
         return ContextEnvelope(
             run_context=(ContextItem(
                 ref_id=task.task_id,
@@ -23,7 +24,7 @@ class ContextAdmission:
                 payload={"revision": task.revision},
                 admitted=True,
             ),),
-            active_skill_ids=tuple(skill.skill_id for skill in skills),
+            active_skill_ids=tuple(skill.manifest.skill_id for skill in skills),
         )
 
     @staticmethod

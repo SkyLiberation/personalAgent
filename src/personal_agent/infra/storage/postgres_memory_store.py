@@ -227,7 +227,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                     """
                     INSERT INTO memory_episodes
                         (
-                            id, user_id, session_id, thread_id, run_id, workflow, outcome,
+                            id, user_id, session_id, thread_id, run_id, result_contract, outcome,
                             title, summary, payload, search_text, created_at, updated_at
                         )
                     VALUES (
@@ -239,7 +239,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                         session_id = EXCLUDED.session_id,
                         thread_id = EXCLUDED.thread_id,
                         run_id = EXCLUDED.run_id,
-                        workflow = EXCLUDED.workflow,
+                        result_contract = EXCLUDED.result_contract,
                         outcome = EXCLUDED.outcome,
                         title = EXCLUDED.title,
                         summary = EXCLUDED.summary,
@@ -253,7 +253,7 @@ class PostgresMemoryStore(PostgresStoreBase):
                         episode.session_id,
                         episode.thread_id,
                         episode.run_id,
-                        episode.workflow,
+                        episode.result_contract,
                         episode.outcome,
                         episode.title,
                         episode.summary,
@@ -413,7 +413,7 @@ class PostgresMemoryStore(PostgresStoreBase):
         *,
         limit: int = 50,
         session_id: str | None = None,
-        workflow: str | None = None,
+        result_contract: str | None = None,
         outcome: str | None = None,
     ) -> list[MemoryEpisode]:
         self.ensure_schema()
@@ -422,9 +422,9 @@ class PostgresMemoryStore(PostgresStoreBase):
         if session_id:
             clauses.append("session_id = %s")
             params.append(session_id)
-        if workflow:
-            clauses.append("workflow = %s")
-            params.append(workflow)
+        if result_contract:
+            clauses.append("result_contract = %s")
+            params.append(result_contract)
         if outcome:
             clauses.append("outcome = %s")
             params.append(outcome)

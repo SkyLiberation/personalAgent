@@ -2,20 +2,21 @@
 
 ### 1. 这个 personal agent 的核心链路是什么？
 
-用户请求先进入 LangGraph entry，经过 router（`DefaultIntentRouter`，LLM 分类）判断 intent。普通问答、capture、direct answer、summarize 会走各自分支；需要明确步骤边界的高风险或复杂任务，例如 `delete_knowledge` 和 `solidify_conversation`，会进入 workflow step projection。其中 capture 按来源细分为 `capture_text / capture_link / capture_file` 三个意图，summarize 实际意图名是 `summarize_thread`，另有 `unknown` 作为无法判定时的澄清兜底。
+用户请求先进入 LangGraph EntryGraph，由 `DefaultTaskAnalyzer` 输出 Goal、typed GoalRelation 和 ResourceHint；信息不足时通过 interrupt 澄清。`GoalGraphCompiler` 生成 TaskSpec 与 ExecutionLedger，随后 Executive 按 decide/act/observe/verify 循环逐轮选择 BoundedAction、delegate 或 Protocol。capture、delete、solidify 等稳定事务进入 Protocol 内部 step projection；ask、direct response 和 summarize 属于开放式元能力组合，不是顶层 workflow。
 
-问答路径会从长期记忆、图谱或外部工具中检索证据，统一成 `EvidenceItem`，再由 `ContextPack` 做去重、排序和预算裁剪，最后进入 prompt。写入路径通过 capture 工具把内容沉淀到 Postgres `knowledge_notes`，并可同步 Graphiti。删除路径会先从固定 `WorkflowSpec` 投影步骤、解析目标、生成确认，再通过 HITL resume 真正执行。
+问答动作会从长期记忆、图谱、MCP 或外部工具中检索证据，统一成 `EvidenceItem`，再由 `ContextPack` 做去重、排序和预算裁剪。写入与删除由 Protocol 持有确认、幂等和 receipt；动作结果形成 Observation，必须经过 GoalVerifier 和 CompletionVerifier 才能完成任务。
 
 ### 2. 你为什么采用多层 Agent 架构？
 
-README 里当前工程不是只拆成 memory、tools、planning，而是分成入口层、意图识别 / 路由层、Workflow / 步骤投影层、运行时 / 编排层、工具层、记忆层、检索与推理层、执行与反馈层、观测与治理层；此外 `evals/` 作为评测模块，用来验证检索、问答和 workflow projection 策略。
+README 里当前工程不是只拆成 memory、tools、planning，而是分成入口、Task Analysis/Goal Graph、Executive/Protocol、运行时编排、Capability/Gateway、记忆、检索推理、执行反馈与观测治理；`evals/` 分边界验证语义分析、控制、能力选择、协议编译和最终任务质量。
 
 这样拆是因为一个 Agent 从用户请求到真实行动，中间不只是“模型回答”这一件事，而是包含入口适配、意图判断、上下文组织、workflow 步骤投影、工具执行、状态恢复、证据检索、结果反馈和治理审计等多个职责。每一层都应该有清楚边界：
 
 - 入口层统一 Web API、前端、CLI、飞书等来源。
-- 路由层判断请求应该走 ask、capture（细分 text/link/file 三种来源）、delete_knowledge、solidify_conversation、direct_answer 还是 summarize_thread，无法判定时走 unknown 澄清分支。
+- Task Analyzer 只理解目标、关系和资源提示，不判断 capability coverage 或 provider。
+- Executive 持续拥有目标，根据 Observation 选择动作、修订 inferred relation 或停止。
 - 运行时 / 编排层用 LangGraph 管理 entry 总流程、checkpoint、interrupt/resume 和状态流转。
-- Workflow / step planning 层通过 `WorkflowRegistry` 选择 `WorkflowSpec`；只有需要步骤执行的 workflow 由 planner 把 `WorkflowStepSpec` 确定性投影成 `ExecutionStep`，例如删除和固化会把关键步骤变成可展示、可恢复、可确认的运行时步骤视图。
+- Procedure 层通过精确 `ProcedureCall` 选择 `ProcedureSpec`，只把稳定事务内部节点投影为 `ExecutionStep`。
 - 工具层把模型意图转换为受治理的系统动作。
 - 记忆层区分短期执行现场和长期知识。
 - 检索与推理层用独立的 planner LLM 做 query understanding，再把图谱、本地知识和网络搜索组织成 evidence。
@@ -51,7 +52,7 @@ LangGraph 承担**可恢复的状态机和 checkpoint** 能力，是项目真正
 
 它原本设想的位置是 capture 流水线的语义预抽取，但当前已改成 Unstructured 主导结构化处理：原始内容先经 Unstructured partition 成 typed elements，再由 `chunk_by_title` 生成结构化 chunk。LangExtract 不再作为 Graphiti 的默认前置步骤，因为二者在语义抽取层更像可替代 provider，串联会造成重复抽取、schema 冲突和成本叠加。所以现在 LangExtract 的定位是“保留的可选 semantic extraction provider”，而不是任何主链路的必经步骤。
 
-注意 ask 前的 query understanding **不属于 LangExtract**。它现在和 router、replanner、reranker、workspace 语义抽取/裁决一样，统一由 `settings.structured` 驱动：`query_planner.py` 通过 `StructuredModelRequest(kind="structured")` 生成 `QueryUnderstanding / RetrievalPlan`，做 query rewrite、子查询拆分、filters 抽取和检索源路由。早期它曾借用 `settings.langextract`/独立 planner 配置，容易让人误以为查询理解依赖抽取层；现在这些 JSON-schema 决策统一收敛到 `StructuredConfig`。
+注意 ask 前的 query understanding **不属于 LangExtract**。它和 Task Analyzer、Executive、verifier、reranker、workspace 语义裁决一样使用 structured client；`query_planner.py` 生成 `QueryUnderstanding / RetrievalPlan`，负责 query rewrite、子查询、filters 和检索源建议。
 
 ### 6. LangSmith 在这里承担什么价值？
 
@@ -73,7 +74,7 @@ LangChain：提供工具与消息原语（BaseTool/@tool、AnyMessage/ToolMessag
 LangGraph：把任务流程变可恢复状态机（StateGraph + Postgres checkpoint + interrupt）
 LangExtract：把文本变结构（可选 provider，当前主链路休眠）
 LangSmith：把运行过程变可观测 trace（tracing + token 成本 + 采样，永不阻塞主链路）
-structured LLM：把 router、query planner、replanner、reranker 和 workspace 语义裁决变成统一的 strict JSON-schema 决策
+structured LLM：把 Task Analyzer、Executive、Goal Verifier、query planner、reranker 和 workspace 语义裁决变成 strict JSON-schema 决策
 Graphiti：把知识关系变语义图谱
 ```
 
@@ -81,7 +82,7 @@ Graphiti：把知识关系变语义图谱
 
 ### 8. 为什么查询理解 / 抽取要独立配置模型？
 
-因为它们需要稳定的结构化输出，而这和主对话模型的诉求不同。ask 侧查询理解、入口 router、replanner、reranker 以及 workspace 语义抽取/裁决统一使用 `settings.structured`，关键原因是它们都需要 strict `json_schema`，并且应共享同一套 endpoint、模型、超时、重试和 tracing 策略；可选的 LangExtract 抽取层（`settings.langextract`）只是休眠 provider/实验层，不参与当前主链路。
+因为它们需要稳定的结构化输出，而这和主对话模型的诉求不同。Task Analysis、Executive、Goal Verification、query understanding、rerank 和 workspace 语义裁决统一使用 `settings.structured`，共享 endpoint、超时、重试和 tracing；LangExtract 只是休眠的实验 provider。
 
 主对话模型、Graphiti 抽取模型、Structured 模型和 LangExtract provider 相互解耦：主对话关注回答质量，Graphiti 关注实体关系抽取，Structured 模型关注所有内部语义决策的 schema 稳定性，LangExtract 只保留为可选实验 provider。这里特别要强调：查询理解是 ask 侧关注点，和 capture 侧的抽取层没有依赖关系；当前不再保留独立 planner 配置。
 

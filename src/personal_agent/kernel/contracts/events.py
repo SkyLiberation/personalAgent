@@ -9,68 +9,14 @@ it without importing the orchestration package. Richer state models
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import local_now
 
-AgentEventType = Literal[
-    "entry_started",
-    "clarification_required",
-    "clarification_resumed",
-    "intent_classified",
-    "task_spec_compiled",
-    "goal_interpreted",
-    "control_state_projected",
-    "executive_decision",
-    "decision_validated",
-    "decision_rejected",
-    "action_materialized",
-    "action_outcome",
-    "capability_gap",
-    "skill_activated",
-    "macro_applied",
-    "goal_verification",
-    "completion_checked",
-    "completion_rejected",
-    "protocol_started",
-    "protocol_completed",
-    "task_revised",
-    "skill_selected",
-    "context_admitted",
-    "plan_ledger_created",
-    "plan_ledger_updated",
-    "steps_projected",
-    "steps_validated",
-    "capability_resolution",
-    "capability_execution",
-    "agent_run_submitted",
-    "agent_run_event",
-    "agent_run_completed",
-    "agent_run_failed",
-    "step_started",
-    "react_iteration",
-    "tool_called",
-    "tool_result",
-    "confirmation_required",
-    "confirmation_resumed",
-    "draft_ready",
-    "verification_completed",
-    "memory_admission",
-    "answer_delta",
-    "answer_completed",
-    "step_completed",
-    "step_failed",
-    "replan_attempted",
-    "replan_completed",
-    "workflow_forked",
-    "workflow_replayed",
-    "artifact_written",
-    "run_completed",
-    "run_failed",
-]
+AgentEventType = str
 
 
 class AgentEvent(BaseModel):

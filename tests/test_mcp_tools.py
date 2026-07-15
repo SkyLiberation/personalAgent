@@ -294,7 +294,7 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
     assert capability.provider == "enterprise"
     assert capability.server_id == "docs"
     assert capability.remote_tool_name == "search"
-    assert capability.local_tool_name == "enterprise.search_docs"
+    assert capability.local_name == "enterprise.search_docs"
     assert capability.auth_scope == "docs:read"
     assert capability.input_schema["properties"]["query"]["type"] == "string"
 

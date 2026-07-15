@@ -8,7 +8,7 @@ import pytest
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import EntryInput
-from tests.conftest import POSTGRES_URL, stub_router_decision
+from tests.conftest import POSTGRES_URL, stub_task_analysis
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -32,19 +32,19 @@ def service(test_settings: Settings) -> AgentService:
     svc = AgentService(test_settings)
     svc.graph_store = MagicMock()
     svc.graph_store.configured.return_value = False
-    svc.intent_router._classify_with_llm = stub_router_decision
+    svc.task_analyzer._analyze_with_model = stub_task_analysis
     return svc
 
 
 # ── Entry pipeline tests ────────────────────────────────────────────
 
 class TestEntryPipeline:
-    """Full entry -> router -> planner -> executor integration tests."""
+    """Full TaskAnalyzer -> GoalGraph -> Executive integration tests."""
 
     def test_entry_capture_text(self, service: AgentService):
         entry = EntryInput(text="记一下：支付系统重构项目第一阶段主要是拆分核心链路", user_id="alice")
         result = service.entry(entry)
-        assert result.intents[-1] in ("capture_text", "direct_answer")
+        assert result.result_contracts[-1] == "external_state"
         assert result.reply_text
         # Capture should produce a note
         if result.capture_result:
@@ -57,20 +57,19 @@ class TestEntryPipeline:
         service.execute_capture(text="服务降级是在系统压力过大时主动关闭非核心能力", source_type="text")
         entry = EntryInput(text="什么是服务降级？", user_id="default")
         result = service.entry(entry)
-        assert result.intents[-1] in ("ask", "direct_answer")
+        assert result.result_contracts[-1] == "response"
         assert result.reply_text
 
-    def test_entry_direct_answer_routing(self, service: AgentService):
+    def test_entry_conversation_goal(self, service: AgentService):
         entry = EntryInput(text="你好", user_id="default")
         result = service.entry(entry)
-        # Should route to direct_answer for greetings
-        assert result.intents[-1] in ("direct_answer", "capture_text")
+        assert result.result_contracts[-1] == "response"
         assert result.reply_text
 
     def test_entry_has_execution_trace(self, service: AgentService):
         entry = EntryInput(text="请帮我总结一下这段时间的笔记", user_id="default")
         result = service.entry(entry)
-        # Non-planning intents produce execution_trace instead of steps
+        # Non-planning result_contracts produce execution_trace instead of steps
         assert isinstance(result.execution_trace, list)
         assert len(result.execution_trace) > 0
         for trace in result.execution_trace:
@@ -79,7 +78,7 @@ class TestEntryPipeline:
     def test_entry_unknown_intent(self, service: AgentService):
         entry = EntryInput(text="", user_id="default")
         result = service.entry(entry)
-        assert result.intents == []
+        assert result.result_contracts == []
         assert result.reply_text
 
 

@@ -73,7 +73,7 @@
 - 使用飞书官方 SDK 长连接接收消息事件
 - 将飞书消息标准化为 `FeishuIncomingMessage`
 - 下载飞书文件并写入本地 uploads
-- 向 Agent 注册飞书群聊消息加载能力，由 `summarize_thread` 分支在路由完成后按需调用
+- 向 Agent 注册飞书群聊消息加载端口；线程总结 Goal 在 Action 执行阶段按需调用
 - 转换成 `EntryInput`
 - 调用 `AgentService.entry()`
 - 将结果回复到飞书消息或群聊
@@ -128,7 +128,7 @@ Feishu long connection event
   -> EntryInput(source_platform="feishu")
   -> AgentService.entry()
   -> AgentRuntime.execute_entry()
-     -> route_intent: summarize_thread 时按需加载飞书群聊消息
+     -> TaskAnalyzer 形成 summarize Goal；Protocol 执行时按需加载飞书群聊消息
   -> Feishu reply
 ```
 

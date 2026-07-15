@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
+from personal_agent.kernel.contracts.procedure import ProcedureCall, ProcedureCandidate
 
 
 def _short_id() -> str:
@@ -28,6 +29,18 @@ class ResourceAccess(BaseModel):
     locator: str | None = None
 
 
+class ProposedResourceAccessPlan(BaseModel):
+    read_set: tuple[ResourceAccess, ...] = ()
+    write_set: tuple[ResourceAccess, ...] = ()
+    side_effect_class: str = "none"
+
+
+class ResolvedResourceAccessPlan(ProposedResourceAccessPlan):
+    source_refs: tuple[str, ...] = ()
+    resolution_evidence: tuple[str, ...] = ()
+    complete: bool = True
+
+
 class BoundedAction(BaseModel):
     action_id: str = Field(default_factory=_short_id)
     goal_id: str
@@ -43,11 +56,11 @@ class BoundedAction(BaseModel):
     max_model_calls: int = Field(default=1, ge=0, le=16)
     max_iterations: int = Field(default=3, ge=1, le=12)
     deadline: datetime | None = None
-    read_set: tuple[ResourceAccess, ...] = ()
-    write_set: tuple[ResourceAccess, ...] = ()
-    side_effect_class: str = "none"
+    proposed_resource_access: ProposedResourceAccessPlan = Field(
+        default_factory=ProposedResourceAccessPlan,
+    )
     approval_dependencies: tuple[str, ...] = ()
-    protocol_dependencies: tuple[str, ...] = ()
+    procedure_dependencies: tuple[str, ...] = ()
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -60,29 +73,12 @@ class SubtaskSpec(BaseModel):
     expected_artifact_contract: str = "AgentArtifact"
     verification_policy: str = "required"
     max_provider_calls: int = Field(default=1, ge=1, le=16)
+    requested_capability_ids: tuple[str, ...] = ()
+    requested_operations: tuple[str, ...] = ()
+    token_budget: int = Field(default=4096, ge=1)
+    cost_budget: float = Field(default=1.0, ge=0)
+    time_budget_seconds: int = Field(default=120, ge=1)
     deadline: datetime | None = None
-
-
-class ProtocolCall(BaseModel):
-    protocol_call_id: str = Field(default_factory=_short_id)
-    protocol_id: str
-    goal_id: str
-    operation: str
-    input: dict[str, Any] = Field(default_factory=dict)
-    requires_confirmation: bool = False
-
-
-class LedgerPatchOperation(BaseModel):
-    op: Literal["add_goal", "update_goal", "abandon_goal", "apply_macro"]
-    goal_id: str = ""
-    values: dict[str, Any] = Field(default_factory=dict)
-
-
-class LedgerPatch(BaseModel):
-    patch_id: str = Field(default_factory=_short_id)
-    reason_code: str
-    triggering_event_ids: tuple[str, ...] = ()
-    operations: tuple[LedgerPatchOperation, ...] = ()
 
 
 class CompletionClaim(BaseModel):
@@ -108,19 +104,9 @@ class ActivateSkillDecision(DecisionBase):
     skill_id: str
 
 
-class RevisePlanDecision(DecisionBase):
-    action: Literal["revise_plan"] = "revise_plan"
-    proposed_ledger_patch: LedgerPatch
-
-
 class ExecuteMetaCapabilityDecision(DecisionBase):
     action: Literal["execute_meta_capability"] = "execute_meta_capability"
     bounded_action: BoundedAction
-
-
-class ExecuteParallelDecision(DecisionBase):
-    action: Literal["execute_parallel"] = "execute_parallel"
-    parallel_actions: tuple[BoundedAction, ...]
 
 
 class DelegateDecision(DecisionBase):
@@ -128,9 +114,9 @@ class DelegateDecision(DecisionBase):
     subtask: SubtaskSpec
 
 
-class InvokeProtocolDecision(DecisionBase):
-    action: Literal["invoke_protocol"] = "invoke_protocol"
-    protocol_call: ProtocolCall
+class InvokeProcedureDecision(DecisionBase):
+    action: Literal["invoke_procedure"] = "invoke_procedure"
+    procedure_call: ProcedureCall
 
 
 class RequestConfirmationDecision(DecisionBase):
@@ -153,11 +139,9 @@ class StopDecision(DecisionBase):
 ControlDecision = Annotated[
     ClarifyDecision
     | ActivateSkillDecision
-    | RevisePlanDecision
     | ExecuteMetaCapabilityDecision
-    | ExecuteParallelDecision
     | DelegateDecision
-    | InvokeProtocolDecision
+    | InvokeProcedureDecision
     | RequestConfirmationDecision
     | FinishDecision
     | StopDecision,
@@ -174,6 +158,7 @@ class CapabilityClassSummary(BaseModel):
 
 class ObservationRef(BaseModel):
     observation_id: str = Field(default_factory=_short_id)
+    goal_id: str = ""
     kind: str
     provenance: str
     summary: str
@@ -204,6 +189,35 @@ class ActionOutcome(BaseModel):
     provider_calls: int = 0
 
 
+class RetryDirective(BaseModel):
+    requirement_id: str
+    retry_kind: Literal["same_provider", "equivalent_provider", "none"] = "none"
+    excluded_provider_ids: tuple[str, ...] = ()
+    preserve_contract: bool = True
+    idempotency_key: str
+
+
+class BudgetReservation(BaseModel):
+    reservation_id: str = Field(default_factory=_short_id)
+    token_budget: int = Field(default=0, ge=0)
+    provider_call_budget: int = Field(default=0, ge=0)
+    cost_budget: float = Field(default=0, ge=0)
+    time_budget_seconds: int = Field(default=0, ge=0)
+
+
+class ResolvedActionSpec(BaseModel):
+    action_spec_id: str = Field(default_factory=_short_id)
+    action_id: str
+    decision_ref: str
+    goal_id: str
+    capability_refs: tuple[str, ...] = ()
+    context_projection_ref: str
+    resource_access_plan: ResolvedResourceAccessPlan
+    retry_directive: RetryDirective | None = None
+    budget_reservation: BudgetReservation
+    verification_contract: str
+
+
 class Escalation(BaseModel):
     action_id: str
     goal_id: str
@@ -226,6 +240,21 @@ class VerificationReport(BaseModel):
     evidence_refs: tuple[str, ...] = ()
     unresolved_gaps: tuple[str, ...] = ()
     recommended_next_actions: tuple[str, ...] = ()
+    gaps: tuple["VerificationGap", ...] = ()
+
+
+class VerificationGap(BaseModel):
+    gap_id: str = Field(default_factory=_short_id)
+    gap_code: str
+    affected_criteria: tuple[str, ...] = ()
+    remediation_classes: tuple[str, ...] = ()
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    evidence_refs: tuple[str, ...] = ()
+    verifier_id: str
+    verifier_version: str
+    decision_basis: str
+    calibration_profile: str
 
 
 class CompletionReport(BaseModel):
@@ -244,6 +273,7 @@ class ControlState(BaseModel):
     active_goal_ids: tuple[str, ...] = ()
     active_skill_ids: tuple[str, ...] = ()
     available_capability_classes: tuple[CapabilityClassSummary, ...] = ()
+    procedure_candidates: tuple[ProcedureCandidate, ...] = ()
     outstanding_evidence_gaps: tuple[str, ...] = ()
     pending_approval_ids: tuple[str, ...] = ()
     latest_observations: tuple[ObservationRef, ...] = ()
@@ -255,6 +285,7 @@ __all__ = [
     "ActionOutcome",
     "ActivateSkillDecision",
     "BoundedAction",
+    "BudgetReservation",
     "CapabilityClassSummary",
     "CapabilityGapObservation",
     "ClarifyDecision",
@@ -267,17 +298,18 @@ __all__ = [
     "DelegateDecision",
     "Escalation",
     "ExecuteMetaCapabilityDecision",
-    "ExecuteParallelDecision",
     "FinishDecision",
-    "InvokeProtocolDecision",
-    "LedgerPatch",
-    "LedgerPatchOperation",
+    "InvokeProcedureDecision",
     "ObservationRef",
-    "ProtocolCall",
+    "ProposedResourceAccessPlan",
+    "ProcedureCall",
     "RequestConfirmationDecision",
     "ResourceAccess",
-    "RevisePlanDecision",
+    "ResolvedActionSpec",
+    "ResolvedResourceAccessPlan",
+    "RetryDirective",
     "StopDecision",
     "SubtaskSpec",
     "VerificationReport",
+    "VerificationGap",
 ]

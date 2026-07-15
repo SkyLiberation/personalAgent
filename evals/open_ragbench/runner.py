@@ -162,7 +162,7 @@ def resolve_retrieval_strategy_profile(
 @dataclass(frozen=True)
 class KeywordSearchStrategy:
     name: str = "keyword"
-    description: str = "LocalMemoryStore.find_similar_notes keyword-overlap baseline."
+    description: str = "Deterministic offline keyword-overlap baseline."
 
     def evaluate(
         self,

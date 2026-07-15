@@ -46,7 +46,7 @@ def search_text_for_episode(episode: MemoryEpisode) -> str:
     parts = [
         episode.title,
         episode.summary,
-        episode.workflow,
+        episode.result_contract,
         episode.outcome,
         episode.entry_text,
         " ".join(episode.decisions),

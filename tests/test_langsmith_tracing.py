@@ -221,7 +221,7 @@ def test_redacted_trace_processors_hide_prompt_content():
         "model": "small",
         "temperature": 0,
         "max_tokens": 10,
-        "metadata": {"source": "intent_router"},
+        "metadata": {"source": "task_analyzer"},
     })
     outputs = _redacted_outputs(LlmTraceResult(
         content="private output",

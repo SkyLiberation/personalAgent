@@ -14,7 +14,7 @@ class TurnExpectation:
     decision: str = "clarify"
     option_id: str = ""
     expected_outcome: str = "ready"  # "ready" | "clarify"
-    expected_intents: list[str] = field(default_factory=list)
+    expected_result_contracts: list[str] = field(default_factory=list)
     expected_event_subsequence: list[str] = field(default_factory=list)
     expected_context_refs: list[int] = field(default_factory=list)
     expected_response_contains: list[str] = field(default_factory=list)
@@ -34,7 +34,7 @@ class ConversationEvalCase:
 class ConversationTurnOutput:
     kind: str = "entry"
     outcome: str = "ready"
-    intents: list[str] = field(default_factory=list)
+    result_contracts: list[str] = field(default_factory=list)
     event_types: list[str] = field(default_factory=list)
     reply_text: str = ""
     run_id: str = ""

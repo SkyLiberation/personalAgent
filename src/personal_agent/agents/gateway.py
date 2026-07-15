@@ -7,7 +7,7 @@ from personal_agent.governance.policy import PolicyEngine, PolicyInput
 from personal_agent.kernel.contracts.agent import (
     AgentAdapter,
     AgentArtifact,
-    AgentDefinition,
+    SubagentProfile,
     AgentEvent,
     AgentGatewayContext,
     AgentRun,
@@ -49,14 +49,14 @@ class AgentGateway:
         self._adapters: dict[str, AgentAdapter] = {}
 
     def register(self, adapter: AgentAdapter) -> None:
-        self._adapters[adapter.definition.agent_id] = adapter
+        self._adapters[adapter.profile.agent_id] = adapter
 
-    def definitions(self) -> tuple[AgentDefinition, ...]:
-        return tuple(adapter.definition for adapter in self._adapters.values())
+    def profiles(self) -> tuple[SubagentProfile, ...]:
+        return tuple(adapter.profile for adapter in self._adapters.values())
 
-    def definition(self, agent_id: str) -> AgentDefinition | None:
+    def profile(self, agent_id: str) -> SubagentProfile | None:
         adapter = self._adapters.get(agent_id)
-        return adapter.definition if adapter is not None else None
+        return adapter.profile if adapter is not None else None
 
     def invoke(
         self,
@@ -65,7 +65,7 @@ class AgentGateway:
         context: AgentGatewayContext,
     ) -> AgentRunResult:
         adapter = self._adapter(agent_id)
-        self._authorize(adapter.definition, context, execution_mode="deterministic")
+        self._authorize(adapter.profile, context, execution_mode="deterministic")
         result = adapter.invoke(task, context)
         run = self._append_event(result.run, "completed", {"status": result.run.status})
         run = replace(run, artifacts=tuple(_unverified(artifact) for artifact in result.artifacts))
@@ -84,7 +84,7 @@ class AgentGateway:
         context: AgentGatewayContext,
     ) -> AgentRun:
         adapter = self._adapter(agent_id)
-        self._authorize(adapter.definition, context, execution_mode="deterministic")
+        self._authorize(adapter.profile, context, execution_mode="deterministic")
         run = adapter.submit(task, context)
         run = self._append_event(run, "submitted", {"status": run.status})
         return self._store.put(run)
@@ -92,22 +92,22 @@ class AgentGateway:
     def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
         stored = self._require_run(agent_run_id)
         adapter = self._adapter(stored.agent_id)
-        self._authorize(adapter.definition, context, execution_mode="deterministic")
+        self._authorize(adapter.profile, context, execution_mode="deterministic")
         run = adapter.poll(agent_run_id, context)
         return self._store.put(_merge_events(stored, run))
 
     def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
         stored = self._require_run(agent_run_id)
         adapter = self._adapter(stored.agent_id)
-        self._authorize(adapter.definition, context, execution_mode="deterministic")
+        self._authorize(adapter.profile, context, execution_mode="deterministic")
         run = adapter.cancel(agent_run_id, context)
-        run = self._append_event(_merge_events(stored, run), "canceled", {"status": run.status})
+        run = self._append_event(_merge_events(stored, run), "cancelled", {"status": run.status})
         return self._store.put(run)
 
     def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[AgentEvent]:
         stored = self._require_run(agent_run_id)
         adapter = self._adapter(stored.agent_id)
-        self._authorize(adapter.definition, context, execution_mode="deterministic")
+        self._authorize(adapter.profile, context, execution_mode="deterministic")
         for event in adapter.stream(agent_run_id, context):
             current = self._store.get(agent_run_id) or stored
             self._store.put(replace(current, events=(*current.events, event)))
@@ -133,7 +133,7 @@ class AgentGateway:
 
     def _authorize(
         self,
-        definition: AgentDefinition,
+        definition: SubagentProfile,
         context: AgentGatewayContext,
         *,
         execution_mode: str,
@@ -172,7 +172,7 @@ def _merge_events(stored: AgentRun, fresh: AgentRun) -> AgentRun:
 
 
 def _unverified(artifact: AgentArtifact) -> AgentArtifact:
-    return replace(artifact, verification_status="unverified")
+    return replace(artifact, producer_verification_status="unverified")
 
 
 __all__ = ["AgentGateway", "InMemoryAgentRunStore"]

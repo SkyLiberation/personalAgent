@@ -50,7 +50,7 @@
 
 但**读回这半条链是断的**：
 
-- replan 不读它：`replanner.py` 的 `replan()` 入参只有当前 run 的 `original_steps / failed_step / error / observations / intent`，prompt 里没有任何 memory/reflection 检索。
+- Executive 是否消费程序经验取决于激活的 Skill/Macro 与 ControlState；旧 `replanner.py` 已删除，不再维护独立的失败后步骤生成链路。
 - 下一次 ask 也不读它：`runtime_ask.py` 检索的是 `search_episodes(...)`，SQL `FROM memory_episodes`——只查 episodes 表，反思候选在 `memory_items` 表，不在检索范围内。
 - 接口写好了却没接线：`facade.py` 的 `list_memory_items` / `search_memory_items`、`core/evidence.py` 的 `memory_items_to_evidence`（注释明确写「Convert procedural/reflection long-term memory to evidence」）——全仓只有测试引用，生产代码零调用。证据系统甚至给 `reflection` 预留了 source_type 和权重 0.11，就差最后一根线。
 

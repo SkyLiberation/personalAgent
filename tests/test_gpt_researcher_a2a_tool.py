@@ -49,15 +49,15 @@ def test_gpt_researcher_a2a_adapter_returns_agent_run_result():
     assert result.run.agent_id == "gpt_researcher"
     assert result.run.status == "completed"
     assert "Agent2Agent" in result.output_text
-    assert result.artifacts[0].verification_status == "unverified"
+    assert result.artifacts[0].producer_verification_status == "unverified"
     assert client.calls[0]["topic"] == "Agent2Agent protocol adoption"
 
 
 def test_gpt_researcher_a2a_adapter_governance_metadata():
     adapter = GPTResearcherA2AAdapter(GPTResearcherA2AConfig())
-    governance = adapter.definition.governance
+    governance = adapter.profile.governance
 
-    assert adapter.definition.protocol == "a2a_jsonrpc"
+    assert adapter.profile.protocol == "a2a_jsonrpc"
     assert governance.risk_level == "medium"
     assert governance.side_effects == ("external_network",)
     assert governance.permission_scope == "a2a:gpt_researcher:research"
@@ -69,6 +69,7 @@ def _ctx() -> AgentGatewayContext:
         user_id="alice",
         session_id="s1",
         run_id="entry-run",
-        workflow_id="gpt_researcher_a2a",
-        step_id="gptr-a2a-research",
+        task_id="task",
+        goal_id="research",
+        action_id="delegate-research",
     )

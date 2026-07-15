@@ -1,0 +1,14 @@
+id: knowledge-curation
+version: 2.0.0
+description: Govern durable knowledge admission and conflict handling.
+publisher: personal-agent
+content_hash: sha256:c57f4fc8869b2ab3a41f1b744b71e04939781aeac8c9f5fcc8dcb08a07aaa95f
+runtime_compatibility: ">=3.0,<4.0"
+requested_permissions: [artifact.read, knowledge.write]
+required_capability_kinds: [local_tool]
+output_contracts: [KnowledgeStateReceipt]
+verifier_profile: memory_admission
+eval_contract: memory_admission
+applicability:
+  result_contracts: [external_state]
+  operations: [create, update, delete, ingest, repair]

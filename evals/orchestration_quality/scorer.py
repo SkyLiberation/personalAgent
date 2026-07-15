@@ -13,7 +13,7 @@ from .metrics import (
     event_subsequence_match,
     forbidden_events_absent,
     outcome_correct,
-    primary_intent_correct,
+    primary_result_contract_correct,
     reached_terminal,
 )
 
@@ -22,7 +22,7 @@ from .metrics import (
 class OrchestrationCaseScore:
     case_id: str
     outcome_accuracy: float
-    primary_intent_accuracy: float
+    primary_result_contract_accuracy: float
     event_sequence_match: float
     forbidden_events_absent: float
     reached_terminal: float
@@ -42,8 +42,8 @@ def score_case(
     return OrchestrationCaseScore(
         case_id=case.id,
         outcome_accuracy=outcome_correct(run.outcome, case.expected_outcome),
-        primary_intent_accuracy=primary_intent_correct(
-            run.primary_intent, case.expected_primary_intent,
+        primary_result_contract_accuracy=primary_result_contract_correct(
+            run.primary_result_contract, case.expected_primary_result_contract,
         ),
         event_sequence_match=event_subsequence_match(
             run.event_types, case.expected_event_subsequence,
@@ -68,7 +68,7 @@ def score_case(
 
 
 _METRIC_NAMES = (
-    "outcome_accuracy", "primary_intent_accuracy",
+    "outcome_accuracy", "primary_result_contract_accuracy",
     "event_sequence_match", "forbidden_events_absent", "reached_terminal",
     "latency_ms", "llm_call_count", "input_tokens", "output_tokens", "total_tokens",
     "latency_p95_ms", "total_tokens_p95",

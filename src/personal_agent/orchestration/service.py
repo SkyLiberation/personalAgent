@@ -82,8 +82,8 @@ class AgentService:
         return self.runtime.tool_governance_store
 
     @property
-    def intent_router(self):
-        return self.runtime.intent_router
+    def task_analyzer(self):
+        return self.runtime.task_analyzer
 
     @property
     def tool_executor(self):
@@ -96,10 +96,6 @@ class AgentService:
     @property
     def artifact_service(self):
         return self.runtime.artifact_service
-
-    @property
-    def workflow_planner(self):
-        return self.runtime.workflow_planner
 
     @property
     def step_projection_validator(self):
@@ -208,6 +204,19 @@ class AgentService:
     def resume_entry(self, *args, **kwargs):
         return self.runtime.resume_entry(*args, **kwargs)
 
+    def control_run(self, run_id: str, command: str):
+        manager = self.runtime.durable_run_manager
+        run = manager.get(run_id)
+        if run.status in {"completed", "completed_degraded", "cancelled", "failed", "timed_out"}:
+            return run
+        token = manager.acquire_lease(run_id).fencing_token
+        if command == "cancel":
+            return manager.request_cancel(run_id, fencing_token=token)
+        target = {"pause": "waiting", "resume": "running"}.get(command)
+        if target is None:
+            raise ValueError(f"unsupported control command: {command}")
+        return manager.transition(run_id, target, fencing_token=token)
+
     def get_run_snapshot(self, run_id: str):
         return self.runtime.get_run_snapshot(run_id)
 
@@ -217,54 +226,54 @@ class AgentService:
     def list_run_history(self, run_id: str, limit: int = 100):
         return self.runtime.list_run_history(run_id, limit=limit)
 
-    def list_workflow_definitions(self):
-        return self.runtime.list_workflow_definitions()
+    def list_procedure_definitions(self):
+        return self.runtime.list_procedure_definitions()
 
-    def set_workflow_deployment(self, workflow_id: str, **kwargs):
-        return self.runtime.set_workflow_deployment(workflow_id, **kwargs)
+    def set_procedure_deployment(self, procedure_id: str, **kwargs):
+        return self.runtime.set_procedure_deployment(procedure_id, **kwargs)
 
-    def get_workflow_deployment(self, workflow_id: str, environment: str = "default"):
-        return self.runtime.get_workflow_deployment(workflow_id, environment=environment)
+    def get_procedure_deployment(self, procedure_id: str, environment: str = "default"):
+        return self.runtime.get_procedure_deployment(procedure_id, environment=environment)
 
-    def record_workflow_eval_run(self, workflow_id: str, version: str, **kwargs):
-        return self.runtime.record_workflow_eval_run(workflow_id, version, **kwargs)
+    def record_procedure_eval_run(self, procedure_id: str, version: str, **kwargs):
+        return self.runtime.record_procedure_eval_run(procedure_id, version, **kwargs)
 
-    def get_workflow_eval_gate_status(self, workflow_id: str, version: str, **kwargs):
-        return self.runtime.get_workflow_eval_gate_status(workflow_id, version, **kwargs)
+    def get_procedure_eval_gate_status(self, procedure_id: str, version: str, **kwargs):
+        return self.runtime.get_procedure_eval_gate_status(procedure_id, version, **kwargs)
 
-    def set_workflow_eval_policy(self, workflow_id: str, **kwargs):
-        return self.runtime.set_workflow_eval_policy(workflow_id, **kwargs)
+    def set_procedure_eval_policy(self, procedure_id: str, **kwargs):
+        return self.runtime.set_procedure_eval_policy(procedure_id, **kwargs)
 
-    def evaluate_workflow_deployment_gate(self, workflow_id: str, version: str, **kwargs):
-        return self.runtime.evaluate_workflow_deployment_gate(
-            workflow_id,
+    def evaluate_procedure_deployment_gate(self, procedure_id: str, version: str, **kwargs):
+        return self.runtime.evaluate_procedure_deployment_gate(
+            procedure_id,
             version,
             **kwargs,
         )
 
-    def dry_run_workflow(self, **kwargs):
-        return self.runtime.dry_run_workflow(**kwargs)
+    def dry_run_procedure(self, **kwargs):
+        return self.runtime.dry_run_procedure(**kwargs)
 
-    def list_workflow_artifacts(self, run_id: str, **kwargs):
-        return self.runtime.list_workflow_artifacts(run_id, **kwargs)
+    def list_execution_artifacts(self, run_id: str, **kwargs):
+        return self.runtime.list_execution_artifacts(run_id, **kwargs)
 
-    def get_workflow_artifact(self, artifact_id: str):
-        return self.runtime.get_workflow_artifact(artifact_id)
+    def get_execution_artifact(self, artifact_id: str):
+        return self.runtime.get_execution_artifact(artifact_id)
 
-    def redact_workflow_artifact(self, artifact_id: str, **kwargs):
-        return self.runtime.redact_workflow_artifact(artifact_id, **kwargs)
+    def redact_execution_artifact(self, artifact_id: str, **kwargs):
+        return self.runtime.redact_execution_artifact(artifact_id, **kwargs)
 
-    def purge_expired_workflow_artifacts(self, **kwargs):
-        return self.runtime.purge_expired_workflow_artifacts(**kwargs)
+    def purge_expired_execution_artifacts(self, **kwargs):
+        return self.runtime.purge_expired_execution_artifacts(**kwargs)
 
-    def rebuild_workflow_projection(self, run_id: str):
-        return self.runtime.rebuild_workflow_projection(run_id)
+    def rebuild_execution_projection(self, run_id: str):
+        return self.runtime.rebuild_execution_projection(run_id)
 
     def list_replay_runs(self, run_id: str, limit: int = 50):
         return self.runtime.list_replay_runs(run_id, limit=limit)
 
-    def build_workflow_debug_bundle(self, run_id: str):
-        return self.runtime.build_workflow_debug_bundle(run_id)
+    def build_execution_debug_bundle(self, run_id: str):
+        return self.runtime.build_execution_debug_bundle(run_id)
 
     def replay_from_checkpoint(self, **kwargs):
         return self.runtime.replay_from_checkpoint(**kwargs)

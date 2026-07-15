@@ -21,9 +21,9 @@ from personal_agent.infra.storage.postgres_research_store import PostgresResearc
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
-from personal_agent.infra.storage.postgres_workflow_definition_store import PostgresWorkflowDefinitionStore
-from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
-from personal_agent.infra.storage.postgres_workflow_replay_store import PostgresWorkflowReplayStore
+from personal_agent.infra.storage.postgres_procedure_definition_store import PostgresProcedureDefinitionStore
+from personal_agent.infra.storage.postgres_execution_event_store import PostgresExecutionEventStore
+from personal_agent.infra.storage.postgres_execution_replay_store import PostgresExecutionReplayStore
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from personal_agent.governance import ToolExecutor
 from personal_agent.tools import (
@@ -71,7 +71,7 @@ from personal_agent.agents import AgentGateway, GPTResearcherA2AAdapter
 from personal_agent.orchestration.entry_orchestrator import EntryOrchestrator
 from personal_agent.application.episodic_memory import record_entry_episode
 from personal_agent.orchestration.orchestration_contexts import (
-    DirectAnswerContext,
+    ConversationContext,
     GraphContexts,
     ExecutiveContext,
     ReactContext,
@@ -79,15 +79,19 @@ from personal_agent.orchestration.orchestration_contexts import (
     SummaryContext,
     StepExecutionContext,
 )
-from personal_agent.planning.workflow_planner import WorkflowPlanner
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
-from personal_agent.planning.router import DefaultIntentRouter
-from personal_agent.planning.goal_interpreter import GoalInterpreter
+from personal_agent.planning.task_analyzer import DefaultTaskAnalyzer
+from personal_agent.planning.goal_graph import GoalGraphCompiler
 from personal_agent.planning.executive import ExecutiveController
 from personal_agent.planning.decision_validator import DecisionValidator
-from personal_agent.planning.ledger import ExecutionLedgerProjector, LedgerPatchValidator
+from personal_agent.planning.ledger import ExecutionLedgerProjector, GoalDecompositionValidator
 from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
-from personal_agent.planning.protocols import ProtocolRegistry
+from personal_agent.planning.procedures import (
+    PROCEDURE_CATALOG,
+    ProcedureApplicabilityResolver,
+    ProcedureMaterializer,
+    ProcedureRuntime,
+)
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
@@ -259,9 +263,9 @@ class AgentRuntime:
         # (nodes without a context param) share one configured instance.
         self._content_guard = configure_guardrails(settings.guardrails)
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
-        self.workflow_definition_store = PostgresWorkflowDefinitionStore(settings.postgres_url)
-        self.workflow_event_store = PostgresWorkflowEventStore(settings.postgres_url)
-        self.workflow_replay_store = PostgresWorkflowReplayStore(settings.postgres_url)
+        self.procedure_definition_store = PostgresProcedureDefinitionStore(settings.postgres_url)
+        self.execution_event_store = PostgresExecutionEventStore(settings.postgres_url)
+        self.execution_replay_store = PostgresExecutionReplayStore(settings.postgres_url)
         self.worker_queue_store = PostgresWorkerQueueStore(settings.postgres_url)
         self.research_store = PostgresResearchStore(
             settings.postgres_url,
@@ -280,7 +284,7 @@ class AgentRuntime:
             settings.structured,
             settings.langsmith,
         )
-        self._intent_router = DefaultIntentRouter(self._structured_client)
+        self._task_analyzer = DefaultTaskAnalyzer(self._structured_client)
         # Unified LLM ports: every application caller depends on these instead of
         # ``OpenAI`` / ``traced_chat_completion``. ``model_client`` serves
         # tool_calling + free-form text; ``structured_client`` serves every
@@ -371,30 +375,71 @@ class AgentRuntime:
         self._tool_executor.register(build_research_synthesize_digest_tool(self._research_service))
         self._tool_executor.register(build_research_verify_digest_tool(self._research_service))
         self._register_tools()
-        self._sync_workflow_definitions()
-        self._workflow_planner = WorkflowPlanner(
-            settings,
-            workflow_definition_store=self.workflow_definition_store,
-            dependency_model_client=self._planner_client,
+        self._sync_procedure_definitions()
+        self._procedure_applicability_resolver = ProcedureApplicabilityResolver(
+            PROCEDURE_CATALOG,
         )
-        self._protocol_registry = ProtocolRegistry(self._workflow_planner)
+        self._procedure_runtime = ProcedureRuntime(
+            ProcedureMaterializer(PROCEDURE_CATALOG),
+        )
         self._verifier = create_answer_verifier(settings)
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
-        self._goal_interpreter = GoalInterpreter()
+        self._goal_graph_compiler = GoalGraphCompiler()
         self._executive_controller = ExecutiveController(model_client=self._planner_client)
         self._decision_validator = DecisionValidator()
         self._ledger_projector = ExecutionLedgerProjector()
-        self._ledger_patch_validator = LedgerPatchValidator()
-        self._goal_verifier = GoalVerifier()
+        self._goal_decomposition_validator = GoalDecompositionValidator()
+        self._goal_verifier = GoalVerifier(self._planner_client)
         self._completion_verifier = CompletionVerifier()
+        from personal_agent.context import ContextManager, ModelContextGateway
+        from personal_agent.planning.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
+        from personal_agent.runtime import (
+            DurableRunManager,
+            ResolvedActionBuilder,
+            ResourceAccessResolver,
+            RunScheduler,
+        )
+        self._context_manager = ContextManager()
+        self._context_gateway = ModelContextGateway()
+        self._observation_normalizer = ObservationNormalizer()
+        self._technical_recovery_policy = TechnicalRecoveryPolicy()
+        from personal_agent.planning.outcome_ranking import OutcomeAwareCapabilityRanker
+        self._capability_ranker = OutcomeAwareCapabilityRanker()
+        self._resource_access_resolver = ResourceAccessResolver()
+        self._resolved_action_builder = ResolvedActionBuilder()
+        self._run_scheduler = RunScheduler()
+        from personal_agent.planning.adaptive import (
+            BOUNDED_READ_ONLY_PROFILE,
+            AdaptivePlanner,
+            FrontierSelector,
+            PlanLedgerProjector,
+            PlanMonitor,
+            PlanValidator,
+            PlanningFactProjector,
+            PlanningModePolicy,
+        )
+        self._planning_fact_projector = PlanningFactProjector()
+        self._planning_mode_policy = PlanningModePolicy(self._planner_client)
+        self._adaptive_planner = AdaptivePlanner(self._planner_client)
+        self._plan_validator = PlanValidator()
+        self._plan_ledger_projector = PlanLedgerProjector()
+        self._frontier_selector = FrontierSelector()
+        self._plan_monitor = PlanMonitor(self._planner_client)
+        self._planner_profile = BOUNDED_READ_ONLY_PROFILE
+        from personal_agent.infra.storage import PostgresDurableRunRepository
+
+        self._durable_run_manager = DurableRunManager(
+            PostgresDurableRunRepository(settings.postgres_url)
+        )
+        from personal_agent.agents.runtime import SubagentRuntime
+        self._subagent_runtime = SubagentRuntime()
         # Explicit collaborators.
         self._summarizer = ThreadSummarizer(self._llm)
         from personal_agent.orchestration.ask import PostgresAskRunContextStore
 
-        direct_answer_context = DirectAnswerContext(
+        conversation_context = ConversationContext(
             settings=self.settings,
             compress_context=lambda text, user_id: self.compress_context(text, user_id),
-            model_client=self._model_client,
         )
         summary_context = SummaryContext(
             summarize_chat=lambda text, user_id: self.summarize_chat(text, user_id),
@@ -407,25 +452,42 @@ class AgentRuntime:
             routing=RoutingContext(
                 settings=self.settings,
                 memory=self.memory,
-                intent_router=self._intent_router,
+                task_analyzer=self._task_analyzer,
                 compress_context=lambda text, user_id: self.compress_context(text, user_id),
             ),
             executive=ExecutiveContext(
                 settings=self.settings,
-                goal_interpreter=self._goal_interpreter,
+                goal_graph_compiler=self._goal_graph_compiler,
                 controller=self._executive_controller,
                 decision_validator=self._decision_validator,
                 ledger_projector=self._ledger_projector,
-                ledger_patch_validator=self._ledger_patch_validator,
+                goal_decomposition_validator=self._goal_decomposition_validator,
                 goal_verifier=self._goal_verifier,
                 completion_verifier=self._completion_verifier,
-                protocol_registry=self._protocol_registry,
+                procedure_applicability_resolver=self._procedure_applicability_resolver,
+                procedure_runtime=self._procedure_runtime,
                 step_projection_validator=self._step_projection_validator,
                 tool_executor=self._tool_executor,
                 policy_engine=self._policy_engine,
                 agent_gateway=self._agent_gateway,
+                context_manager=self._context_manager,
+                context_gateway=self._context_gateway,
+                observation_normalizer=self._observation_normalizer,
+                recovery_policy=self._technical_recovery_policy,
+                resource_access_resolver=self._resource_access_resolver,
+                action_builder=self._resolved_action_builder,
+                scheduler=self._run_scheduler,
+                subagent_runtime=self._subagent_runtime,
+                capability_ranker=self._capability_ranker,
+                planning_fact_projector=self._planning_fact_projector,
+                planning_mode_policy=self._planning_mode_policy,
+                adaptive_planner=self._adaptive_planner,
+                plan_validator=self._plan_validator,
+                plan_ledger_projector=self._plan_ledger_projector,
+                frontier_selector=self._frontier_selector,
+                plan_monitor=self._plan_monitor,
+                planner_profile=self._planner_profile,
             ),
-            direct_answer=direct_answer_context,
             steps=StepExecutionContext(
                 settings=self.settings,
                 memory=self.memory,
@@ -440,10 +502,10 @@ class AgentRuntime:
                 ask_run_context_store=PostgresAskRunContextStore(
                     self.settings.postgres_url
                 ),
-                workflow_artifact_store=self.workflow_replay_store,
+                execution_artifact_store=self.execution_replay_store,
                 workspace_service=self.workspace_service,
                 summary=summary_context,
-                direct_answer=direct_answer_context,
+                conversation=conversation_context,
                 model_client=self._model_client,
                 structured_client=self._structured_client,
             ),
@@ -451,6 +513,8 @@ class AgentRuntime:
                 settings=self.settings,
                 tool_executor=self._tool_executor,
                 policy_engine=self._policy_engine,
+                context_manager=self._context_manager,
+                context_gateway=self._context_gateway,
                 model_client=self._model_client,
                 structured_client=self._structured_client,
             ),
@@ -463,6 +527,10 @@ class AgentRuntime:
     @property
     def graph_contexts(self) -> GraphContexts:
         return self._graph_contexts
+
+    @property
+    def durable_run_manager(self):
+        return self._durable_run_manager
 
     @property
     def agent_gateway(self) -> AgentGateway:
@@ -495,14 +563,30 @@ class AgentRuntime:
         lookback_hours: int = 24,
         **_: object,
     ):
-        """Execute one-shot research through the workflow graph, not a black-box tool."""
+        """Execute one-shot research through the agent control loop."""
+        from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+
+        analysis = TaskAnalysis(
+            user_goal=topic,
+            goals=[Goal(
+                goal_id="goal_1",
+                description=topic,
+                result_contract="artifact",
+                resource_hints=[ResourceHint(
+                    semantic_domain="external_research",
+                    resource_types=["research", "report", "evidence"],
+                    operations=["search", "read", "verify"],
+                    freshness_required=True,
+                )],
+            )],
+        )
         result = self.execute_entry(EntryInput(
             text=topic,
             user_id=user_id,
             session_id=f"research-once:{uuid4().hex}",
-            source_platform="api",
+            source_platform="runtime",
             metadata={
-                "intent_override": "research_once",
+                "task_analysis": analysis.model_dump(mode="json"),
                 "instructions": instructions,
                 "max_items": str(max_items),
                 "lookback_hours": str(lookback_hours),
@@ -512,8 +596,7 @@ class AgentRuntime:
         if result.run_id:
             state = self._entry.get_run_state(result.run_id)
             if state is not None:
-                for step_id in ("research-synthesize", "research-prepare"):
-                    data = state.step_execution.results.get(step_id)
+                for data in reversed(list(state.step_execution.results.values())):
                     if isinstance(data, dict):
                         candidate = data.get("run_id")
                         if isinstance(candidate, str) and candidate:
@@ -527,7 +610,7 @@ class AgentRuntime:
             run = self.research_store.get_run(run_id)
             if run is not None:
                 return run
-        raise RuntimeError("Research workflow completed without a persisted ResearchRun")
+        raise RuntimeError("Research procedure completed without a persisted ResearchRun")
 
     def enqueue_research_subscription(self, subscription_id: str):
         subscription = self.research_store.get_subscription(subscription_id)
@@ -544,13 +627,11 @@ class AgentRuntime:
     def save_research_event(self, event_id: str, *, user_id: str):
         return self._research_service.save_event(event_id, user_id=user_id)
 
-    def _sync_workflow_definitions(self) -> None:
+    def _sync_procedure_definitions(self) -> None:
         try:
-            from personal_agent.planning.workflow import WORKFLOW_REGISTRY
-
-            self.workflow_definition_store.sync_registry(WORKFLOW_REGISTRY)
+            self.procedure_definition_store.sync_registry(PROCEDURE_CATALOG)
         except Exception:
-            logger.exception("Failed to sync workflow definitions")
+            logger.exception("Failed to sync procedure definitions")
 
     # ---- tool registry (capture / search / delete tools) ----
 
@@ -1075,16 +1156,16 @@ class AgentRuntime:
     # ---- public properties (delegate to private fields so test mocks are visible) ----
 
     @property
-    def intent_router(self):
-        return self._intent_router
+    def task_analyzer(self):
+        return self._task_analyzer
 
     @property
     def tool_executor(self):
         return self._tool_executor
 
     @property
-    def workflow_planner(self):
-        return self._workflow_planner
+    def procedure_runtime(self):
+        return self._procedure_runtime
 
     @property
     def step_projection_validator(self):
@@ -1129,103 +1210,103 @@ class AgentRuntime:
     def list_run_history(self, run_id: str, limit: int = 100):
         return self._entry.list_run_history(run_id, limit=limit)
 
-    def list_workflow_definitions(self):
-        return self.workflow_definition_store.list_definitions()
+    def list_procedure_definitions(self):
+        return self.procedure_definition_store.list_definitions()
 
-    def set_workflow_deployment(self, workflow_id: str, **kwargs):
-        return self.workflow_definition_store.set_deployment(workflow_id, **kwargs)
+    def set_procedure_deployment(self, procedure_id: str, **kwargs):
+        return self.procedure_definition_store.set_deployment(procedure_id, **kwargs)
 
-    def get_workflow_deployment(self, workflow_id: str, environment: str = "default"):
-        return self.workflow_definition_store.get_deployment(
-            workflow_id,
+    def get_procedure_deployment(self, procedure_id: str, environment: str = "default"):
+        return self.procedure_definition_store.get_deployment(
+            procedure_id,
             environment=environment,
         )
 
-    def record_workflow_eval_run(self, workflow_id: str, version: str, **kwargs):
-        return self.workflow_definition_store.record_eval_run(
-            workflow_id=workflow_id,
+    def record_procedure_eval_run(self, procedure_id: str, version: str, **kwargs):
+        return self.procedure_definition_store.record_eval_run(
+            procedure_id=procedure_id,
             version=version,
             **kwargs,
         )
 
-    def get_workflow_eval_gate_status(
+    def get_procedure_eval_gate_status(
         self,
-        workflow_id: str,
+        procedure_id: str,
         version: str,
         *,
         suite: str = "default",
     ) -> dict[str, object]:
-        return self.workflow_definition_store.get_eval_gate_status(
-            workflow_id,
+        return self.procedure_definition_store.get_eval_gate_status(
+            procedure_id,
             version,
             suite=suite,
         )
 
-    def set_workflow_eval_policy(self, workflow_id: str, **kwargs):
-        return self.workflow_definition_store.set_eval_policy(workflow_id, **kwargs)
+    def set_procedure_eval_policy(self, procedure_id: str, **kwargs):
+        return self.procedure_definition_store.set_eval_policy(procedure_id, **kwargs)
 
-    def evaluate_workflow_deployment_gate(
+    def evaluate_procedure_deployment_gate(
         self,
-        workflow_id: str,
+        procedure_id: str,
         version: str,
         **kwargs,
     ) -> dict[str, object]:
-        return self.workflow_definition_store.evaluate_deployment_gate(
-            workflow_id,
+        return self.procedure_definition_store.evaluate_deployment_gate(
+            procedure_id,
             version,
             **kwargs,
         )
 
-    def dry_run_workflow(
+    def dry_run_procedure(
         self,
         *,
-        intent: str,
+        procedure_id: str,
         routing_key: str = "dry-run",
         spec_payload: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        """Validate and project a workflow definition without executing effects."""
+        """Validate and project a governed procedure without executing effects."""
         from dataclasses import asdict
 
-        from personal_agent.planning.workflow import WORKFLOW_REGISTRY, WorkflowSpec
-        from personal_agent.planning.workflow_validator import WorkflowSpecValidator
+        from personal_agent.kernel.contracts.procedure import ProcedureSpec
+        from personal_agent.planning.procedures import ProcedureSpecValidator
 
         spec = (
-            WorkflowSpec.from_definition_payload(spec_payload)
+            ProcedureSpec.from_definition_payload(spec_payload)
             if spec_payload is not None
-            else self.workflow_definition_store.select_active_spec(
-                intent,
-                registry=WORKFLOW_REGISTRY,
+            else self.procedure_definition_store.select_active_spec(
+                procedure_id,
+                registry=PROCEDURE_CATALOG,
                 routing_key=routing_key,
             )
         )
         if spec is None:
-            return {"valid": False, "issues": ["workflow deployment is disabled"], "steps": []}
-        spec_validation = WorkflowSpecValidator().validate_spec(spec)
-        steps = spec.project()
-        step_validation = self.step_projection_validator.validate(
-            steps,
-            spec.intent,
-        ) if steps else None
+            return {"valid": False, "issues": ["procedure deployment is disabled"], "steps": []}
+        issues = []
+        try:
+            ProcedureSpecValidator().validate(spec)
+        except ValueError as exc:
+            issues.append(str(exc))
+        steps = spec.project("dry-run")
+        step_validation = self.step_projection_validator.validate(steps) if steps else None
         return {
-            "valid": spec_validation.valid and (step_validation is None or step_validation.valid),
-            "workflow_id": spec.workflow_id,
-            "workflow_version": spec.version,
+            "valid": not issues and (step_validation is None or step_validation.valid),
+            "procedure_id": spec.procedure_id,
+            "procedure_version": spec.version,
             "issues": [
-                *spec_validation.issues,
+                *issues,
                 *(step_validation.issues if step_validation else []),
             ],
             "warnings": [
-                *spec_validation.warnings,
                 *(step_validation.warnings if step_validation else []),
             ],
             "steps": [asdict(step) for step in steps],
-            "eval_gate": self.workflow_definition_store.evaluate_deployment_gate(
-                spec.workflow_id,
+            "eval_gate": self.procedure_definition_store.evaluate_deployment_gate(
+                spec.procedure_id,
                 spec.version,
             ),
         }
 
-    def list_workflow_artifacts(
+    def list_execution_artifacts(
         self,
         run_id: str,
         *,
@@ -1233,44 +1314,44 @@ class AgentRuntime:
         step_id: str | None = None,
         limit: int = 50,
     ):
-        return self.workflow_replay_store.list_artifacts(
+        return self.execution_replay_store.list_artifacts(
             run_id,
             kind=kind,
             step_id=step_id,
             limit=limit,
         )
 
-    def get_workflow_artifact(self, artifact_id: str):
-        return self.workflow_replay_store.get_artifact(artifact_id)
+    def get_execution_artifact(self, artifact_id: str):
+        return self.execution_replay_store.get_artifact(artifact_id)
 
-    def redact_workflow_artifact(self, artifact_id: str, *, keys: set[str] | None = None):
-        return self.workflow_replay_store.redact_artifact(artifact_id, keys=keys)
+    def redact_execution_artifact(self, artifact_id: str, *, keys: set[str] | None = None):
+        return self.execution_replay_store.redact_artifact(artifact_id, keys=keys)
 
-    def purge_expired_workflow_artifacts(self, *, limit: int = 1000) -> int:
-        return self.workflow_replay_store.purge_expired_artifacts(limit=limit)
+    def purge_expired_execution_artifacts(self, *, limit: int = 1000) -> int:
+        return self.execution_replay_store.purge_expired_artifacts(limit=limit)
 
     def list_replay_runs(self, run_id: str, limit: int = 50):
-        return self.workflow_replay_store.list_replay_runs(run_id, limit=limit)
+        return self.execution_replay_store.list_replay_runs(run_id, limit=limit)
 
-    def rebuild_workflow_projection(self, run_id: str):
-        from personal_agent.orchestration.workflow_event_projection import project_workflow_events
+    def rebuild_execution_projection(self, run_id: str):
+        from personal_agent.orchestration.execution_event_projection import project_execution_events
 
-        return project_workflow_events(
+        return project_execution_events(
             run_id,
-            self.workflow_event_store.list_events(run_id),
+            self.execution_event_store.list_events(run_id),
         )
 
-    def build_workflow_debug_bundle(self, run_id: str) -> dict[str, object]:
+    def build_execution_debug_bundle(self, run_id: str) -> dict[str, object]:
         events = [
             event.model_dump(mode="json")
-            for event in self.workflow_event_store.list_events(run_id)
+            for event in self.execution_event_store.list_events(run_id)
         ]
         history = self.list_run_history(run_id, limit=100)
-        return self.workflow_replay_store.build_debug_bundle(
+        return self.execution_replay_store.build_debug_bundle(
             run_id=run_id,
             events=events,
             history=history,
-            projection=self.rebuild_workflow_projection(run_id).model_dump(mode="json"),
+            projection=self.rebuild_execution_projection(run_id).model_dump(mode="json"),
         )
 
     def replay_from_checkpoint(

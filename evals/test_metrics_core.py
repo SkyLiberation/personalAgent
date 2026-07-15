@@ -46,7 +46,7 @@ class TestReachedTerminal:
         assert reached_terminal(["run_failed"], require=True) == 1.0
 
     def test_required_but_hung(self):
-        assert reached_terminal(["entry_started", "steps_projected"], require=True) == 0.0
+        assert reached_terminal(["entry_started", "goal_graph_compiled"], require=True) == 0.0
 
     def test_terminal_events_membership(self):
         assert set(TERMINAL_EVENTS) == {"run_completed", "run_failed"}

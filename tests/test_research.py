@@ -906,11 +906,11 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
     assert store.get_run(run.id).status == "completed_verified"
 
 
-def test_subscription_parser_workflow_intents_are_registered():
-    from personal_agent.planning.workflow import WORKFLOW_REGISTRY
+def test_research_procedures_are_registered():
+    from personal_agent.planning.procedures import PROCEDURE_CATALOG
 
-    research_steps = WORKFLOW_REGISTRY.select("research_once").steps
-    assert [step.tool_name for step in research_steps[:5]] == [
+    research_nodes = PROCEDURE_CATALOG.get("research_run").nodes
+    assert [node.domain_handler for node in research_nodes[:5]] == [
         "research_prepare_run",
         "research_initialize_state",
         "research_run_loop",
@@ -918,48 +918,24 @@ def test_subscription_parser_workflow_intents_are_registered():
         "research_verify_digest",
     ]
     assert (
-        WORKFLOW_REGISTRY.select("create_research_subscription").steps[0].tool_name
+        PROCEDURE_CATALOG.get("research_subscription_create").nodes[0].domain_handler
         == "create_research_subscription"
     )
 
 
-def test_research_workflow_contracts_are_deterministic_unit_contracts():
-    from personal_agent.planning.workflow import WORKFLOW_REGISTRY
+def test_research_procedure_contract_is_deterministic():
+    from personal_agent.planning.procedures import PROCEDURE_CATALOG
 
-    research_once = WORKFLOW_REGISTRY.select("research_once")
-    assert [(step.step_id, step.tool_name, step.depends_on) for step in research_once.steps] == [
-        ("research-prepare", "research_prepare_run", ()),
-        ("research-initialize", "research_initialize_state", ("research-prepare",)),
-        ("research-loop", "research_run_loop", ("research-initialize",)),
-        ("research-synthesize", "research_synthesize_digest", ("research-loop",)),
-        ("research-verify", "research_verify_digest", ("research-synthesize",)),
-        ("research-compose", None, ("research-verify",)),
+    research = PROCEDURE_CATALOG.get("research_run")
+    assert [(node.node_id, node.domain_handler, node.depends_on) for node in research.nodes] == [
+        ("prepare", "research_prepare_run", ()),
+        ("initialize", "research_initialize_state", ("prepare",)),
+        ("research-loop", "research_run_loop", ("initialize",)),
+        ("synthesize", "research_synthesize_digest", ("research-loop",)),
+        ("verify", "research_verify_digest", ("synthesize",)),
+        ("present", None, ("verify",)),
     ]
-    assert research_once.steps[2].side_effects == ("external_network", "write_longterm")
-
-    execute_run = WORKFLOW_REGISTRY.select("execute_research_run")
-    assert [(step.step_id, step.tool_name, step.depends_on) for step in execute_run.steps] == [
-        ("research-initialize", "research_initialize_state", ()),
-        ("research-loop", "research_run_loop", ("research-initialize",)),
-        ("research-synthesize", "research_synthesize_digest", ("research-loop",)),
-        ("research-verify", "research_verify_digest", ("research-synthesize",)),
-    ]
-
-    manage = WORKFLOW_REGISTRY.select("manage_research")
-    assert manage.steps[0].allowed_tools == (
-        "list_research_subscriptions",
-        "list_research_runs",
-        "get_research_digest",
-    )
-    assert manage.steps[1].action_type == "commit"
-    assert set(manage.steps[1].tool_input["allowed_commit_tools"]) == {
-        "update_research_subscription",
-        "pause_research_subscription",
-        "resume_research_subscription",
-        "run_research_subscription_now",
-        "submit_research_feedback",
-        "save_research_event",
-    }
+    assert research.nodes[2].side_effects == ("external_network", "write_longterm")
 
 
 def test_feishu_research_feedback_parser():

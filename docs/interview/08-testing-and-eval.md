@@ -4,7 +4,7 @@
 
 可以做几类测试：校验没有 `resolve` 的删除计划必须失败；`delete_note` 不允许出现在 ReAct 步骤中；`delete_note` 必须声明 high risk 和 requires confirmation；`capture_text` 在 solidify 中必须依赖 compose；工具参数不满足 args schema 时不能执行。
 
-这些是 unit / contract tests，目标是证明危险计划不能越过校验。实际分两份：`tests/test_step_projection_validator.py` 测运行时投影层（ExecutionStep 危险计划拦截），`tests/test_workflow_validator.py` 测 spec 契约层（WorkflowSpec 自洽性 + spec↔工具能力一致性闸门，例如未注册工具、要求确认的工具但步骤没声明确认都会被拦）。
+这些是 unit / contract tests，目标是证明危险决策不能越过校验。`tests/test_step_projection_validator.py` 测运行时 ExecutionStep 投影；Procedure 契约与 materialization 在 planning/platform tests 中验证；DecisionValidator、Capability scope、HITL 和 Gateway 测试分别保护开放决策、授权和副作用边界。
 
 ### 2. 怎么测试 `delete_note` 必须经过确认？
 

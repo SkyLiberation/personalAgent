@@ -2252,7 +2252,10 @@ def _should_enrich_personal_relevance(run: ResearchRun) -> bool:
     if run.policy.ranking_objective == "personal_relevance_first":
         return True
     intent_text = f"{run.topic} {run.instructions}".lower()
-    return any(token in intent_text for token in ("personal", "个人", "知识库", "相关"))
+    return any(
+        token in intent_text
+        for token in ("personal", "enterprise", "个人", "企业", "内部", "知识库", "相关")
+    )
 
 
 def _personal_relevance_context(event: ResearchEvent) -> dict[str, object]:

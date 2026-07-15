@@ -293,7 +293,7 @@ data: {
 }
 ```
 
-当 router 判断输入缺少必要信息时，`pending_confirmation` 的澄清 payload 形态如下；前端可展示 `message`、`missing_information` 与 `options`，再使用 resume API 提交用户补充内容：
+当 TaskAnalyzer 判断输入缺少完成 Goal 所需的必要信息时，`pending_confirmation` 的澄清 payload 形态如下；前端可展示 `message`、`missing_information` 与 `options`，再使用 resume API 提交用户补充内容：
 
 ```json
 {
@@ -331,11 +331,12 @@ data: {
   "items": [
     {
       "run_id": "run_xxx",
-      "thread_id": "user:session:run_xxx",
+      "thread_id": "user:session",
       "user_id": "default",
       "session_id": "default",
-      "status": "waiting_confirmation",
-      "intent": "delete_knowledge",
+      "status": "blocked_approval",
+      "result_contracts": ["external_state"],
+      "procedure_id": "knowledge_delete",
       "entry_text": "删除过期笔记",
       "steps": [],
       "execution_trace": [],
@@ -353,7 +354,7 @@ data: {
 
 ### `POST /api/entry/runs/{run_id}/resume`
 
-恢复处于 `waiting_confirmation` 状态的 LangGraph run。
+恢复处于 `waiting` 或 `blocked_approval` 状态的 LangGraph run。
 
 请求体：
 

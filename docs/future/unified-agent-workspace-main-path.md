@@ -1,14 +1,14 @@
 # 统一 Agent 工作台主路径设计
 
-本文不考虑对当前 `note/chunk` 模型、现有 `capture_* / ask / research_*` workflow 名称、前端 Tab 结构或接口契约的兼容性。目标是重新设计一个更贴近个人知识业务本质的 Agent 工作台。
+本文不考虑对当前 `note/chunk` 模型、旧 `capture_* / ask / research_*` 路由名称、前端 Tab 结构或接口契约的兼容性。目标是重新设计一个更贴近个人知识业务本质的 Agent 工作台。
 
 核心判断：
 
 > 统一工作台不是把 Capture、Ask、Research、Review 放进同一个输入框，而是把它们统一到一条知识生命周期里：Artifact -> Evidence -> Claim -> KnowledgeItem -> KnowledgeState -> Evolution。
 
-Capture / Ask 主链路的不兼容目标细化见 [Capture / Ask 生命周期主链路目标设计](capture-ask-lifecycle-target-design.md)。该文档基于最新评估，将合理的过渡期观察改写为 Artifact / Evidence / Claim 主链路方案，并明确不再以 `KnowledgeNote / chunk` 或 Workspace side-write 作为事实真源。
+Capture / Ask 不再维护独立的 workflow-first 目标文档。其 Artifact / Evidence / Claim 主链路、KnowledgeState 真源和投影边界以本文为准；语义抽取与 grounding 细节见 [语义生命周期抽取非兼容改造设计](semantic-lifecycle-extraction-redesign.md)，当前控制面事实见 [核心架构与主链接入状态](../summary/core-architecture-current-state.md)，剩余并行与 steering 设计见 [并行 Join 与语义 Steering](parallel-steering-runtime-design.md)。
 
-当前工程已经证明了业务型 Agent 的主干能力：统一入口、受控 workflow、工具治理、长期记忆、证据问答、Research、HITL 和持久化任务。但如果要做真正长期可用的个人知识 Agent，下一阶段不应继续以 note/chunk 或能力模块为中心，而应以知识如何形成、被证据支撑、被使用、被纠错和持续演进为中心。
+当前工程已经证明了业务型 Agent 的主干能力：统一入口、Executive 控制循环、Governed Procedure、工具治理、长期记忆、证据问答、Research、HITL 和持久化任务。但如果要做真正长期可用的个人知识 Agent，下一阶段不应继续以 note/chunk 或能力模块为中心，而应以知识如何形成、被证据支撑、被使用、被纠错和持续演进为中心。
 
 ## 目标定位
 
@@ -17,14 +17,14 @@ Capture / Ask 主链路的不兼容目标细化见 [Capture / Ask 生命周期�
 ```text
 输入资料 / 问题 / 指令 / 反馈
   -> Agent 理解用户目标
-  -> 形成任务和可恢复 workflow
+  -> 形成 TaskSpec、GoalGraph 和可恢复执行状态
   -> 生成或检索 Artifact / Evidence / Claim
   -> 产出 KnowledgeItem / Answer / Decision
   -> 更新 KnowledgeState / KnowledgeRelation
   -> 后续问答、复习、Research 和纠错继续复用这条链路
 ```
 
-用户不需要知道 Capture、Ask、RAG、Graph、Workflow。所有能力都表现为：
+用户不需要知道 Capture、Ask、RAG、Graph、Procedure。所有能力都表现为：
 
 > 我把资料、问题、判断或反馈交给 Agent；它处理、解释、给证据、要确认、能纠错，并把知识状态维护好。
 
@@ -295,7 +295,7 @@ Task 3: capture verified conclusion from Task 2
 
 - Goal / Task 不拥有工具执行权。
 - 高风险动作不能由模型直接授权。
-- 目标引用、证据策略和依赖关系可以由语义层提出，但必须被 workflow 和 policy 校验。
+- 目标引用、证据策略和依赖关系可以由语义层提出，但必须被 GoalGraph、GoalDecompositionValidator、TaskSpec revision validator 和 policy 校验。
 - TaskPlan 只能引用 Artifact / Evidence / Claim / KnowledgeItem 的 ID 或候选 ID，不能直接携带不可校验的大段模型结论作为执行真源。
 
 ### 3. 知识层：Claim / Evidence / State
@@ -538,28 +538,11 @@ created_at
 
 这些非法转移必须进入 fixture/replay gate 和 e2e scorer，一旦发生就是 critical failure。
 
-### 7. 执行层：受控 Workflow
+### 7. 执行层：Executive 与 Governed Procedure
 
-即使不考虑兼容性，也不应让 LLM 自由执行一切。执行层仍采用受控 workflow，只是 workflow 名称和产物应业务化。
+即使不考虑兼容性，也不应让 LLM 自由执行一切，但也不能把每个业务动词固化成流程。开放式抽取、证据回答、冲突分析、Research 和知识缺口检查由 Executive 组合元能力；只有需要保护稳定不变量的写入、删除、固化、订阅创建等事务进入 Governed Procedure。
 
-推荐 workflow：
-
-```text
-ingest_knowledge
-extract_claims
-answer_with_evidence
-solidify_conversation_claims
-revise_knowledge
-delete_or_restore_knowledge
-consolidate_topic
-resolve_conflict
-research_external_change
-review_due_knowledge
-inspect_knowledge_gaps
-project_knowledge_graph
-```
-
-每个 workflow 必须声明：
+每个 Procedure 必须声明：
 
 ```text
 steps
@@ -577,9 +560,9 @@ audit policy
 保留的安全边界：
 
 ```text
-LLM 理解语义
-代码控制流程
-Workflow 控制副作用
+LLM 理解语义并提出有界决策
+Executive 根据 Observation 控制开放任务
+Procedure 保护事务不变量和副作用顺序
 Policy 控制权限
 Evidence 控制回答
 User confirmation 控制高风险动作
@@ -592,7 +575,7 @@ User confirmation 控制高风险动作
 ```text
 1. 用户提交资料、问题、对话结论或反馈
 2. 系统生成 Goal 和 TaskPlan
-3. Workflow 生成 Artifact
+3. Executive action 或 Procedure node 生成 Artifact
 4. 系统抽取 Candidate Claims
 5. 系统建立 Evidence
 6. 系统生成 KnowledgeItem
@@ -835,9 +818,9 @@ Research 输出不应是长文本摘要，而应是可操作事件：
 - 为什么推荐给用户。
 - 有用 / 不感兴趣 / 收藏 / 入库 / 标记冲突。
 
-## Workflow 映射
+## Task 与 Procedure 映射
 
-| 用户表达 | 目标 workflow | 说明 |
+| 用户表达 | Task/Procedure 边界 | 说明 |
 | --- | --- | --- |
 | “帮我记住这段话” | `ingest_knowledge` | 形成 Artifact / Evidence / Claim / KnowledgeItem |
 | 粘贴 URL | `ingest_knowledge` | URL 是 Artifact 来源 |
@@ -1253,7 +1236,7 @@ ContextPack 应携带 `evidence_coverage: complete | partial | sparse | none` �
 
 目标架构必须从一开始绑定 e2e quality eval，否则 Artifact / Evidence / Claim / KnowledgeState 很容易停留在漂亮对象模型，无法证明真实业务路径变好。
 
-当前工程已有 live e2e quality suite，覆盖 ask、research、artifact 和 workflow 分支，并使用 route intent、workflow id、steps、matches、citations、evidence、verification score、grounding status、claim status、Research source/event/digest 等指标。新架构应保留这种端到端诊断思路，但把评测中心从“workflow 是否跑通”升级为“知识生命周期是否正确推进”。
+当前工程已有 live e2e quality suite，覆盖 ask、research、artifact 和 Procedure 分支，并使用 goal kinds、procedure id、steps、matches、citations、evidence、verification score、grounding status、claim status、Research source/event/digest 等指标。新架构应保留这种端到端诊断思路，但把评测中心从“步骤是否跑通”升级为“知识生命周期是否正确推进”。
 
 ### Eval 分层
 
@@ -1269,7 +1252,7 @@ E2E eval 应分三层，不同层承担不同风险：
 
 ### 新的 E2E Run 观测字段
 
-当前 `E2EQualityRun` 已有 intents、workflow、steps、answer、matches、citations、evidence、verification、claim statuses、research sources/events/digest 等字段。目标架构应新增生命周期字段：
+当前 `E2EQualityRun` 已有 `result_contracts`、`procedure_id`、steps、answer、matches、citations、evidence、verification、claim statuses、research sources/events/digest 等字段。目标架构应新增生命周期字段：
 
 ```text
 artifact_count

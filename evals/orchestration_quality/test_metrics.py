@@ -6,7 +6,7 @@ from .metrics import (
     event_subsequence_match,
     forbidden_events_absent,
     outcome_correct,
-    primary_intent_correct,
+    primary_result_contract_correct,
     reached_terminal,
 )
 
@@ -19,15 +19,15 @@ class TestOutcomeCorrect:
         assert outcome_correct("ready", "clarify") == 0.0
 
 
-class TestPrimaryIntentCorrect:
+class TestPrimaryResultContractCorrect:
     def test_match(self):
-        assert primary_intent_correct("ask", "ask") == 1.0
+        assert primary_result_contract_correct("response", "response") == 1.0
 
     def test_mismatch(self):
-        assert primary_intent_correct("ask", "summarize_thread") == 0.0
+        assert primary_result_contract_correct("response", "external_state") == 0.0
 
     def test_no_gold_is_perfect(self):
-        assert primary_intent_correct("", "") == 1.0
+        assert primary_result_contract_correct("", "") == 1.0
 
 
 class TestEventSubsequenceMatch:
@@ -52,7 +52,7 @@ class TestForbiddenEventsAbsent:
         assert forbidden_events_absent(["a", "b"], ["x"]) == 1.0
 
     def test_present_fails(self):
-        assert forbidden_events_absent(["a", "steps_projected"], ["steps_projected"]) == 0.0
+        assert forbidden_events_absent(["a", "goal_graph_compiled"], ["goal_graph_compiled"]) == 0.0
 
     def test_none_forbidden_is_perfect(self):
         assert forbidden_events_absent(["a"], []) == 1.0
@@ -68,7 +68,7 @@ class TestReachedTerminal:
     def test_no_terminal_event_hangs(self):
         # The production "卡住" shape: proceeded to capture, then no terminal.
         assert reached_terminal(
-            ["entry_started", "intent_classified", "steps_projected", "step_started"],
+            ["entry_started", "task_analyzed", "goal_graph_compiled", "step_started"],
             require=True,
         ) == 0.0
 

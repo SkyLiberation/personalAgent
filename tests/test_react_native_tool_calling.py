@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.governance import ToolExecutor
 from personal_agent.governance.policy import PolicyEngine
+from personal_agent.context import ContextManager, ModelContextGateway
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.orchestration.orchestration_models import (
@@ -74,6 +75,8 @@ def _react_context(settings: Settings, tool_executor: ToolExecutor) -> ReactCont
         settings=settings,
         tool_executor=tool_executor,
         policy_engine=PolicyEngine(),
+        context_manager=ContextManager(),
+        context_gateway=ModelContextGateway(),
     )
 
 

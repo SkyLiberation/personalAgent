@@ -12,7 +12,7 @@ delete_knowledge
     -> del-4 compose
 ```
 
-这个拓扑来自 `WorkflowSpec`，不是 LLM 动态生成。LLM 只允许出现在执行期的语义决策节点，例如 `delete_target_resolve` 的候选选择。
+这个拓扑来自 `knowledge_delete` 的 `ProcedureSpec`，不是 LLM 动态生成。LLM 只允许出现在执行期的语义决策节点，例如 `delete_target_resolve` 的候选选择。
 
 ## Step 契约
 
@@ -25,7 +25,7 @@ delete_knowledge
 
 ## 执行细节
 
-1. Router 把用户输入归类为 `delete_knowledge`，并设置高风险、需要 step projection。
+1. TaskAnalyzer 识别删除 Goal；GoalGraphCompiler 从 Protocol Registry 读取 `delete_knowledge` 的 mutation metadata。
 2. `WorkflowStepProjector` 从 `WORKFLOW_REGISTRY` 取出 `delete_knowledge` spec，确定性生成 4 个 `ExecutionStep`。
 3. `StepProjectionValidator` 校验必须包含 `tool_call(delete_note)`，且高风险删除必须要求确认。
 4. `del-1` 进入 retrieve，调用 graph/local 检索得到候选线索。

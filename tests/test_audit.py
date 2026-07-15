@@ -10,7 +10,7 @@ from personal_agent.infra.storage.audit_redaction import redact_audit_payload
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.tools.base import ToolArtifact, ToolInvocationEvent
 from personal_agent.governance.gateway import ToolGatewayContext
-from tests.conftest import POSTGRES_URL, stub_router_decision
+from tests.conftest import POSTGRES_URL, stub_task_analysis
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -177,7 +177,7 @@ def admin_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     from personal_agent.adapters.web.api import create_app
     app = create_app()
-    app.state.service.intent_router._classify_with_llm = stub_router_decision
+    app.state.service.task_analyzer._analyze_with_model = stub_task_analysis
     return TestClient(app)
 
 

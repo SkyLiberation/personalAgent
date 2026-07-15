@@ -12,10 +12,6 @@ from personal_agent.tools import governance_extras, tool_response, tool_success
 from personal_agent.orchestration.orchestration_nodes._steps import _infer_research_max_items
 
 
-def RouterDecision(route="unknown", **_kwargs):
-    return route
-
-
 class TestStepProjectionValidationResult:
     def test_valid_when_no_issues(self):
         result = StepProjectionValidationResult(valid=True)
@@ -151,18 +147,31 @@ class TestStepProjectionValidatorGovernance:
     def validator(self, registry):
         return StepProjectionValidator(tool_executor=registry)
 
-    @pytest.fixture
-    def default_decision(self):
-        return RouterDecision(route="ask")
-
-    def test_tool_call_missing_tool_name_is_blocking(self, validator, default_decision):
+    def test_tool_call_missing_tool_name_is_blocking(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="调用工具"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("tool_name" in issue for issue in result.issues)
 
-    def test_unregistered_tool_is_blocking_when_executor_is_available(self, validator, default_decision):
+    def test_dynamic_tool_call_accepts_capability_requirement(self):
+        step = ExecutionStep(
+            action_type="tool_call",
+            description="resolve at runtime",
+            capability_requirements=[{
+                "requirement_id": "dynamic-read",
+                "purpose": "read source",
+                "semantic_domains": ["artifact"],
+                "resource_types": ["document"],
+                "operations": ["read"],
+            }],
+        )
+
+        result = StepProjectionValidator().validate([step])
+
+        assert result.valid
+
+    def test_unregistered_tool_is_blocking_when_executor_is_available(self, validator):
         steps = [
             ExecutionStep(
                 step_id="s1",
@@ -171,77 +180,76 @@ class TestStepProjectionValidatorGovernance:
                 tool_name="missing_tool",
             ),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("missing_tool" in issue and "未在 ToolExecutor 中注册" in issue for issue in result.issues)
 
-    def test_tool_requires_confirmation_but_step_does_not_warns(self, validator, default_decision):
+    def test_tool_requires_confirmation_but_step_does_not_warns(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="high"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("要求确认" in w for w in result.warnings)
 
-    def test_tool_requires_confirmation_and_step_has_it_passes(self, validator, default_decision):
+    def test_tool_requires_confirmation_and_step_has_it_passes(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="high",
                      requires_confirmation=True),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert not any("要求确认" in w for w in result.warnings)
 
-    def test_tool_writes_longterm_without_confirmation_warns(self, validator, default_decision):
+    def test_tool_writes_longterm_without_confirmation_warns(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="写入操作",
                      tool_name="write_op", risk_level="low"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("修改长期知识" in w for w in result.warnings)
 
-    def test_tool_writes_longterm_with_high_risk_no_warning(self, validator, default_decision):
+    def test_tool_writes_longterm_with_high_risk_no_warning(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="写入操作",
                      tool_name="write_op", risk_level="high"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert not any("修改长期知识" in w for w in result.warnings)
 
-    def test_tool_accesses_external_warns(self, validator, default_decision):
+    def test_tool_accesses_external_warns(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="外部操作",
                      tool_name="external_op", risk_level="low"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("访问外部网络" in w for w in result.warnings)
 
-    def test_tool_risk_higher_than_step_warns(self, validator, default_decision):
+    def test_tool_risk_higher_than_step_warns(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="low"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("固有风险等级" in w for w in result.warnings)
 
-    def test_deep_param_validation_missing_required(self, validator, default_decision):
+    def test_deep_param_validation_missing_required(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", tool_input={}, risk_level="high"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("tool_input 参数校验失败" in i for i in result.issues)
 
-    def test_deep_param_validation_passes_with_valid_input(self, validator, default_decision):
+    def test_deep_param_validation_passes_with_valid_input(self, validator):
         steps = [
             ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op",
                      tool_input={"target": "note-123"}, risk_level="high"),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert not any("tool_input 参数校验失败" in i for i in result.issues)
 
     def test_capture_text_may_receive_text_from_upstream_compose(self, validator):
-        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
             ExecutionStep(
@@ -250,13 +258,12 @@ class TestStepProjectionValidatorGovernance:
             ),
         ]
 
-        result = validator.validate(steps, decision)
+        result = validator.validate(steps)
 
         assert result.valid
         assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
 
     def test_solidify_allows_intermediate_verify_step_when_dag_is_valid(self, validator):
-        decision = RouterDecision(route="solidify_conversation")
         steps = [
             ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
             ExecutionStep(step_id="sol-2", action_type="verify", description="校验是否已写入",
@@ -265,7 +272,7 @@ class TestStepProjectionValidatorGovernance:
                      tool_name="capture_text", depends_on=["sol-2"]),
         ]
 
-        result = validator.validate(steps, decision)
+        result = validator.validate(steps)
 
         assert result.valid
 
@@ -285,14 +292,14 @@ class TestStepProjectionValidatorResearch:
     def validator(self, registry):
         return StepProjectionValidator(tool_executor=registry)
 
-    def test_research_once_allows_runtime_injected_topic_and_run_id(self, validator):
+    def test_research_projection_requires_explicit_root_input_and_allows_dependency_outputs(self, validator):
         steps = [
             ExecutionStep(
                 step_id="research-prepare",
                 action_type="tool_call",
                 description="创建 ResearchRun",
                 tool_name="research_prepare_run",
-                tool_input={},
+                tool_input={"topic": "agent planning"},
             ),
             ExecutionStep(
                 step_id="research-initialize",
@@ -328,7 +335,7 @@ class TestStepProjectionValidatorResearch:
             ),
         ]
 
-        result = validator.validate(steps, "research_once")
+        result = validator.validate(steps)
 
         assert result.valid
         assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
@@ -359,11 +366,7 @@ class TestReActValidation:
     def validator(self, registry):
         return StepProjectionValidator(tool_executor=registry)
 
-    @pytest.fixture
-    def default_decision(self):
-        return RouterDecision(route="ask")
-
-    def test_react_validates_allowed_tools_registered(self, validator, default_decision):
+    def test_react_validates_allowed_tools_registered(self, validator):
         steps = [
             ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
@@ -372,10 +375,10 @@ class TestReActValidation:
                 max_iterations=3,
             ),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("nonexistent_tool" in i and "未在 ToolExecutor 中注册" in i for i in result.issues)
 
-    def test_react_warns_max_iterations_over_cap(self, validator, default_decision):
+    def test_react_warns_max_iterations_over_cap(self, validator):
         steps = [
             ExecutionStep(
                 step_id="s1", action_type="retrieve", description="test",
@@ -384,10 +387,10 @@ class TestReActValidation:
                 max_iterations=10,
             ),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert any("max_iterations" in w and "超过上限" in w for w in result.warnings)
 
-    def test_react_valid_step_passes(self, validator, default_decision):
+    def test_react_valid_step_passes(self, validator):
         steps = [
             ExecutionStep(
                 step_id="s1", action_type="retrieve", description="检索",
@@ -396,5 +399,5 @@ class TestReActValidation:
                 max_iterations=3,
             ),
         ]
-        result = validator.validate(steps, default_decision)
+        result = validator.validate(steps)
         assert result.ok

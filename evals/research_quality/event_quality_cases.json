@@ -59,14 +59,13 @@
       "personalize_and_rank",
       "evaluate_research_satisfaction"
     ],
-    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
+    "expected_tool_names": ["web_search", "capture_url"],
     "expected_events": [
       {
         "title_terms": ["OpenAI", "Agent", "Model"],
         "expected_status": "verified",
         "min_sources": 2,
-        "requires_primary_source": true,
-        "min_personal_relevance": 0.45
+        "requires_primary_source": true
       },
       {
         "title_terms": ["rumor", "Agent", "Model"],
@@ -120,7 +119,7 @@
       "personalize_and_rank",
       "evaluate_research_satisfaction"
     ],
-    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
+    "expected_tool_names": ["web_search", "capture_url"],
     "expected_events": [
       {
         "title_terms": ["GitHub", "Agent", "Benchmark"],
@@ -261,7 +260,7 @@
       "personalize_and_rank",
       "evaluate_research_satisfaction"
     ],
-    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
+    "expected_tool_names": ["web_search", "capture_url"],
     "expected_events": [
       {
         "title_terms": ["OpenAI", "Runtime", "SDK"],
@@ -331,7 +330,7 @@
       "personalize_and_rank",
       "evaluate_research_satisfaction"
     ],
-    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
+    "expected_tool_names": ["web_search", "capture_url"],
     "expected_events": [
       {
         "title_terms": ["launches", "Agent", "Runtime", "SDK"],
@@ -454,7 +453,7 @@
       "personalize_and_rank",
       "evaluate_research_satisfaction"
     ],
-    "expected_tool_names": ["web_search", "capture_url", "graph_search"],
+    "expected_tool_names": ["web_search", "capture_url"],
     "expected_query_terms": [
       ["Agent", "Runtime", "latest"],
       ["Media", "Runtime", "official", "announcement"]

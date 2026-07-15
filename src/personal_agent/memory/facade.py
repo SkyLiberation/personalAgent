@@ -245,14 +245,14 @@ class MemoryFacade:
         *,
         limit: int = 50,
         session_id: str | None = None,
-        workflow: str | None = None,
+        result_contract: str | None = None,
         outcome: str | None = None,
     ) -> list[MemoryEpisode]:
         return self.local.list_episodes(
             user_id,
             limit=limit,
             session_id=session_id,
-            workflow=workflow,
+            result_contract=result_contract,
             outcome=outcome,
         )
 

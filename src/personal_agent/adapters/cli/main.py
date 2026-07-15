@@ -40,7 +40,7 @@ def _build_service() -> AgentService:
 def _format_entry_result(result: EntryResult) -> str:
     """Format an EntryResult as JSON for CLI output."""
     output: dict = {
-        "intents": result.intents,
+        "result_contracts": result.result_contracts,
         "reason": result.reason,
         "reply": result.reply_text,
         "run_id": result.run_id,
@@ -113,9 +113,9 @@ def worker(
     }, ensure_ascii=False, indent=2))
 
 
-@app.command("workflow-eval-record")
-def workflow_eval_record(
-    workflow_id: str = typer.Argument(...),
+@app.command("procedure-eval-record")
+def procedure_eval_record(
+    procedure_id: str = typer.Argument(...),
     version: str = typer.Argument(...),
     passed: bool = typer.Option(..., help="Whether the suite passed."),
     suite: str = typer.Option("default"),
@@ -125,8 +125,8 @@ def workflow_eval_record(
 ) -> None:
     """Record an eval result for CI/deployment gating."""
     service = _build_service()
-    result = service.record_workflow_eval_run(
-        workflow_id,
+    result = service.record_procedure_eval_run(
+        procedure_id,
         version,
         suite=suite,
         passed=passed,
@@ -136,7 +136,7 @@ def workflow_eval_record(
     )
     typer.echo(json.dumps({
         "eval_run_id": result.eval_run_id,
-        "workflow_id": result.workflow_id,
+        "procedure_id": result.procedure_id,
         "version": result.version,
         "suite": result.suite,
         "passed": result.passed,
@@ -144,9 +144,9 @@ def workflow_eval_record(
     }, ensure_ascii=False, indent=2))
 
 
-@app.command("workflow-deploy")
-def workflow_deploy(
-    workflow_id: str = typer.Argument(...),
+@app.command("procedure-deploy")
+def procedure_deploy(
+    procedure_id: str = typer.Argument(...),
     stable_version: str = typer.Argument(...),
     environment: str = typer.Option("default"),
     status: str = typer.Option("stable"),
@@ -155,10 +155,10 @@ def workflow_deploy(
     eval_suite: str = typer.Option("default"),
     force: bool = typer.Option(False, help="Bypass eval gate."),
 ) -> None:
-    """Deploy a workflow version after the eval gate passes."""
+    """Deploy a procedure version after the eval gate passes."""
     service = _build_service()
-    result = service.set_workflow_deployment(
-        workflow_id,
+    result = service.set_procedure_deployment(
+        procedure_id,
         stable_version=stable_version,
         environment=environment,
         status=status,
@@ -168,7 +168,7 @@ def workflow_deploy(
         require_eval_gate=not force,
     )
     typer.echo(json.dumps({
-        "workflow_id": result.workflow_id,
+        "procedure_id": result.procedure_id,
         "environment": result.environment,
         "stable_version": result.stable_version,
         "canary_version": result.canary_version,
@@ -177,15 +177,15 @@ def workflow_deploy(
     }, ensure_ascii=False, indent=2))
 
 
-@app.command("workflow-dry-run")
-def workflow_dry_run(
-    intent: str = typer.Argument(...),
+@app.command("procedure-dry-run")
+def procedure_dry_run(
+    procedure_id: str = typer.Argument(...),
     routing_key: str = typer.Option("cli-dry-run"),
 ) -> None:
-    """Validate and project the active workflow without executing it."""
+    """Validate and project the active procedure without executing it."""
     service = _build_service()
     typer.echo(json.dumps(
-        service.dry_run_workflow(intent=intent, routing_key=routing_key),
+        service.dry_run_procedure(procedure_id=procedure_id, routing_key=routing_key),
         ensure_ascii=False,
         indent=2,
     ))

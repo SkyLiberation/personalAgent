@@ -4,9 +4,8 @@ from collections.abc import Iterable
 
 from langchain_core.tools import BaseTool
 
-from personal_agent.kernel.contracts.agent import AgentDefinition
+from personal_agent.kernel.contracts.agent import SubagentProfile
 from personal_agent.kernel.contracts.capability import Capability, MCPCapability
-from personal_agent.kernel.contracts.workflow import WorkflowSpec
 from personal_agent.tools.base import tool_governance
 
 
@@ -26,7 +25,9 @@ class MCPCapabilityRegistry:
 
     def register(self, capability: MCPCapability) -> None:
         self._by_id[capability.capability_id] = capability
-        self._by_tool[capability.local_tool_name] = capability
+        if not capability.local_name:
+            raise ValueError("MCP capability requires local_name")
+        self._by_tool[capability.local_name] = capability
 
     def get(self, capability_id: str) -> MCPCapability | None:
         return self._by_id.get(capability_id)
@@ -63,9 +64,6 @@ class CapabilityRegistry:
         self._by_id[capability.capability_id] = capability
         if capability.local_name:
             self._by_name[capability.local_name] = capability
-        legacy_tool_name = getattr(capability, "local_tool_name", "")
-        if legacy_tool_name:
-            self._by_name[str(legacy_tool_name)] = capability
 
     def get(self, capability_id: str) -> Capability | None:
         return self._by_id.get(capability_id)
@@ -123,14 +121,18 @@ def capability_from_tool(tool: BaseTool) -> Capability:
         credential_mode="none",
         data_egress_class="content" if "external_network" in governance.side_effects else "none",
         attestation_status="verified",
-        freshness_profile="unknown",
+        freshness_profile=(
+            "near_realtime"
+            if "external_network" in governance.side_effects
+            else "unknown"
+        ),
         metadata_source="system",
         input_schema=getattr(tool, "args", {}) if isinstance(getattr(tool, "args", {}), dict) else {},
         provider_priority=provider_priority,
     )
 
 
-def capability_from_agent_definition(definition: AgentDefinition) -> Capability:
+def capability_from_subagent_profile(definition: SubagentProfile) -> Capability:
     governance = definition.governance
     return Capability(
         capability_id=f"agent:{definition.agent_id}",
@@ -148,86 +150,63 @@ def capability_from_agent_definition(definition: AgentDefinition) -> Capability:
         credential_mode="delegated_token",
         data_egress_class=governance.data_egress_class,  # type: ignore[arg-type]
         attestation_status="self_claimed",
-        freshness_profile="unknown",
+        freshness_profile=(
+            "near_realtime"
+            if "external_network" in governance.side_effects
+            else "unknown"
+        ),
         metadata_source="system",
-    )
-
-
-def capability_from_workflow_action(
-    *,
-    workflow_id: str,
-    step_id: str,
-    action_type: str,
-    description: str,
-    selectable: bool = False,
-) -> Capability:
-    """Project workflow internals into the registry without exposing them by default."""
-    operation = action_type if action_type in {"verify", "repair"} else "read"
-    return Capability(
-        capability_id=f"workflow_action:{workflow_id}:{step_id}",
-        kind="workflow_action",
-        provider="internal",
-        local_name=f"{workflow_id}.{step_id}",
-        description=description,
-        semantic_domains=(workflow_id,),
-        resource_types=("workflow_step",),
-        operations=(operation,),  # type: ignore[arg-type]
-        risk_level="low",
-        side_effects=("none",),
-        auth_scope="workflow:internal",
-        trust_level="trusted",
-        credential_mode="none",
-        data_egress_class="none",
-        attestation_status="verified",
-        freshness_profile="static",
-        metadata_source="system",
-        selectable=selectable,
-        selectable_only_in_steps=(step_id,) if selectable else (),
     )
 
 
 def build_capability_registry(
     tools: Iterable[BaseTool] = (),
-    agents: Iterable[AgentDefinition] = (),
+    agents: Iterable[SubagentProfile] = (),
     extra: Iterable[Capability] = (),
-    workflow_actions: Iterable[Capability] = (),
 ) -> CapabilityRegistry:
-    registry = CapabilityRegistry((*extra, *workflow_actions))
+    registry = CapabilityRegistry((*runtime_meta_capabilities(), *extra))
     for tool in tools:
         registry.register(capability_from_tool(tool))
     for definition in agents:
-        registry.register(capability_from_agent_definition(definition))
+        registry.register(capability_from_subagent_profile(definition))
     return registry
+
+
+def runtime_meta_capabilities() -> tuple[Capability, ...]:
+    """Capabilities implemented by graph-native executors rather than tools."""
+    return (
+        Capability(
+            capability_id="runtime:knowledge_retrieval",
+            kind="retriever",
+            provider="internal",
+            description="Retrieve and answer from local knowledge and conversation context.",
+            semantic_domains=("knowledge", "conversation", "local_memory"),
+            resource_types=("note", "evidence", "thread"),
+            operations=("search", "read"),
+            risk_level="low",
+            side_effects=("none",),
+            trust_level="trusted",
+            credential_mode="none",
+            data_egress_class="none",
+            attestation_status="verified",
+            freshness_profile="static",
+            metadata_source="system",
+            provider_priority=0,
+        ),
+    )
 
 
 def build_global_capability_registry(
     *,
     tools: Iterable[BaseTool] = (),
-    agents: Iterable[AgentDefinition] = (),
+    agents: Iterable[SubagentProfile] = (),
     evidence_sources: Iterable[Capability] = (),
-    workflow_specs: Iterable[WorkflowSpec] = (),
 ) -> CapabilityRegistry:
-    """Assemble the platform registry without making execution decisions.
-
-    Workflow actions are intentionally registered as internal capabilities. A
-    workflow must explicitly opt an action into selection before the resolver
-    can ever return it.
-    """
-    actions = tuple(
-        capability_from_workflow_action(
-            workflow_id=spec.workflow_id,
-            step_id=step.step_id,
-            action_type=step.action_type,
-            description=step.description,
-        )
-        for spec in workflow_specs
-        for step in spec.steps
-    )
+    """Assemble executable provider capabilities without making decisions."""
     return build_capability_registry(
         tools=tools,
         agents=agents,
         extra=evidence_sources,
-        workflow_actions=actions,
     )
 
 
@@ -277,8 +256,8 @@ __all__ = [
     "build_capability_registry",
     "build_global_capability_registry",
     "build_mcp_capability_registry",
-    "capability_from_agent_definition",
-    "capability_from_workflow_action",
+    "capability_from_subagent_profile",
     "capability_from_tool",
     "mcp_capability_from_tool",
+    "runtime_meta_capabilities",
 ]

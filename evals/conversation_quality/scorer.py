@@ -66,7 +66,7 @@ def score_case(case: ConversationEvalCase, run: ConversationRunOutput) -> Conver
     paired = list(zip(case.turns, run.turns))
     complete = len(case.turns) == len(run.turns)
     outcomes = [exact_match(actual.outcome, gold.expected_outcome) for gold, actual in paired]
-    intents = [exact_match(actual.intents, gold.expected_intents) for gold, actual in paired]
+    result_contracts = [exact_match(actual.result_contracts, gold.expected_result_contracts) for gold, actual in paired]
     events = [
         ordered_subsequence(actual.event_types, gold.expected_event_subsequence)
         for gold, actual in paired
@@ -100,7 +100,7 @@ def score_case(case: ConversationEvalCase, run: ConversationRunOutput) -> Conver
     ]
     final_success = 1.0 if (
         complete
-        and all(value == 1.0 for value in outcomes + intents + events + context + responses + resumes)
+        and all(value == 1.0 for value in outcomes + result_contracts + events + context + responses + resumes)
         and all(terminal_requirements)
         and continuity == 1.0
         and side_effect == 1.0
@@ -108,7 +108,7 @@ def score_case(case: ConversationEvalCase, run: ConversationRunOutput) -> Conver
     return ConversationCaseScore(
         case_id=case.id,
         turn_outcome_accuracy=_mean(outcomes) if complete else 0.0,
-        turn_intent_accuracy=_mean(intents) if complete else 0.0,
+        turn_intent_accuracy=_mean(result_contracts) if complete else 0.0,
         event_sequence_match=_mean(events) if complete else 0.0,
         context_retention=_mean(context) if complete else 0.0,
         response_grounding=_mean(responses) if complete else 0.0,

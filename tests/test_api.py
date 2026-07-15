@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 from personal_agent.kernel.models import EntryInput
 from personal_agent.application.review.delivery import DeliveryRouter
 from personal_agent.application.review.models import DeliveryResult
-from tests.conftest import POSTGRES_URL, stub_router_decision
+from tests.conftest import POSTGRES_URL, stub_task_analysis
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -26,7 +26,7 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     from personal_agent.adapters.web.api import create_app
     app = create_app()
-    app.state.service.intent_router._classify_with_llm = stub_router_decision
+    app.state.service.task_analyzer._analyze_with_model = stub_task_analysis
     app.state.review_digest_delivery_router = DeliveryRouter({"feishu": _FakeDigestProvider()})
     return TestClient(app)
 
@@ -120,7 +120,7 @@ class TestEntryStreamEndpoint:
 
         assert matching
         assert matching[0]["thread_id"] == "test-user:entry-stream-ask"
-        assert matching[0]["intents"] == ["ask"]
+        assert matching[0]["result_contracts"] == ["response"]
 
     def test_solidify_stream_emits_steps_only_once(self, api_client: TestClient):
         api_client.get(
@@ -141,13 +141,13 @@ class TestEntryStreamEndpoint:
         )
 
         assert response.status_code == 200
-        assert response.text.count("event: protocol_started") == 1
+        assert response.text.count("event: procedure_started") == 1
         assert "event: step_started" in response.text
         assert (
             "event: step_completed" in response.text
             or "event: step_failed" in response.text
         )
-        assert response.text.index("event: protocol_started") < response.text.index("event: done")
+        assert response.text.index("event: procedure_started") < response.text.index("event: done")
 
     def test_capture_stream_shows_routing_and_captured_content_before_done(self, api_client: TestClient):
         response = api_client.get(
@@ -160,12 +160,12 @@ class TestEntryStreamEndpoint:
         )
 
         assert response.status_code == 200
-        assert "event: intent" in response.text
-        assert "event: protocol_started" in response.text
+        assert "event: task_analysis" in response.text
+        assert "event: procedure_started" in response.text
         assert "event: confirmation_required" in response.text
         assert "DNS" in response.text
-        assert response.text.index("event: intent") < response.text.index("event: done")
-        assert response.text.index("event: protocol_started") < response.text.index("event: confirmation_required")
+        assert response.text.index("event: task_analysis") < response.text.index("event: done")
+        assert response.text.index("event: procedure_started") < response.text.index("event: confirmation_required")
 
     def test_waiting_run_snapshot_exposes_confirmation_and_can_resume(self, api_client: TestClient):
         response = api_client.get(
@@ -186,7 +186,7 @@ class TestEntryStreamEndpoint:
         ).json()["items"]
         run = next(item for item in runs if item["session_id"] == "entry-stream-resume")
 
-        assert run["status"] == "waiting_confirmation"
+        assert run["status"] == "waiting"
         assert run["pending_confirmation"]["kind"] == "clarification_required"
 
         resumed = api_client.post(
@@ -199,7 +199,7 @@ class TestEntryStreamEndpoint:
         )
 
         assert resumed.status_code == 200
-        assert resumed.json()["run_status"] == "waiting_confirmation"
+        assert resumed.json()["run_status"] == "blocked_approval"
 
 
 class TestDigestEndpoint:

@@ -37,7 +37,7 @@ from personal_agent.tools.mcp_capability import (
     MCPCapabilityRegistry,
     build_capability_registry,
     build_mcp_capability_registry,
-    capability_from_agent_definition,
+    capability_from_subagent_profile,
     capability_from_tool,
     mcp_capability_from_tool,
 )
@@ -95,7 +95,7 @@ __all__ = [
     "MCPCapabilityRegistry",
     "build_capability_registry",
     "build_mcp_capability_registry",
-    "capability_from_agent_definition",
+    "capability_from_subagent_profile",
     "capability_from_tool",
     "mcp_capability_from_tool",
     "build_raw_wiki_search_tools",

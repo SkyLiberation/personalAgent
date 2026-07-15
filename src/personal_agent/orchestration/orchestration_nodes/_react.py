@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from personal_agent.orchestration.orchestration_models import AgentGraphState, ReactSubState
 from personal_agent.orchestration.orchestration_contexts import ReactContext
-from personal_agent.kernel.contracts.capability import EvidencePack
+from personal_agent.kernel.contracts.capability import CapabilityEvidencePack
+from personal_agent.kernel.contracts.agentic import ContextBudget, ContextItem
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
-    _capability_resolution_payload,
     _is_react_tool_blocked,
-    _resolve_capability_resolution_for_step,
-    _resolve_allowed_tools_for_step,
 )
 from personal_agent.orchestration.orchestration_nodes import _helpers
 from personal_agent.orchestration.orchestration_nodes._tooling import (
@@ -22,6 +21,7 @@ from personal_agent.orchestration.orchestration_nodes._tooling import (
     _log_tool_invocation_event,
     _tool_result_event_payload,
 )
+from personal_agent.orchestration.orchestration_nodes._steps import _update_execution_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +43,10 @@ def _node_react_init(state: AgentGraphState, *, deps: ReactContext) -> dict:
 
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     step = sd.to_execution_step()
-    resolution = _resolve_capability_resolution_for_step(step, deps)
-    allowed_tools = (
-        set(resolution.allowed_tools)
-        if resolution is not None
-        else _resolve_allowed_tools_for_step(step, deps)
-    )
-    if resolution is not None:
-        state.add_event("capability_resolution", _capability_resolution_payload(resolution))
-
     state.react = ReactSubState(
         step_id=step.step_id,
         max_iterations=min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP),
-        allowed_tools=list(allowed_tools),
+        allowed_tools=list(sd.allowed_tools),
         status="running",
     )
 
@@ -94,14 +85,17 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
     if idx == 0 and not state.react.user_prompt:
         sd = state.step_execution.steps[state.step_execution.current_step_index]
         step = sd.to_execution_step()
-        context_block = _helpers._build_react_context(step, state.step_execution.results)
         tools_block = _helpers._format_react_tools(allowed, deps)
         state.react.user_prompt = (
             f"## 步骤描述\n{step.description}\n\n"
-            f"## 已有上下文\n{context_block}\n\n"
             f"## 可用工具\n{tools_block}\n\n"
             f"请开始推理（最多 {max_iter} 轮）。"
         )
+        if step.execution_guidance:
+            state.react.user_prompt += (
+                "\n\n## 执行方法与停止条件\n- "
+                + "\n- ".join(step.execution_guidance)
+            )
         if _has_downstream_commit(state, step_id):
             state.react.user_prompt += (
                 "\n\n本步骤只允许读取和诊断，绝不能直接修改状态。"
@@ -110,7 +104,8 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
             )
 
     # ---- Call LLM (native tool calling) ----
-    outcome = _helpers._react_llm_native(state.react.user_prompt, deps, allowed)
+    model_prompt = _materialize_react_prompt(state, deps)
+    outcome = _helpers._react_llm_native(model_prompt, deps, allowed)
     if outcome is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
         state.react.done = True
@@ -149,7 +144,6 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
 
     # ---- No tool_calls produced: parse failure ----
     if outcome.parse_failed or not outcome.tool_name:
-        state.react.user_prompt += "\n\n观察：LLM 输出未包含可执行的 tool_calls，请调用工具或 finish_react。"
         state.react.iteration_index = idx + 1
         state.add_event("react_iteration", {
             "step_id": step_id,
@@ -216,7 +210,13 @@ def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContex
             "evidence": [],
         }
     else:
-        artifact = _latest_tool_artifact(state)
+        artifact = dict(_latest_tool_artifact(state))
+    step = next(
+        (item for item in state.step_execution.steps if item.step_id == state.react.step_id),
+        None,
+    )
+    artifact["_step_id"] = state.react.step_id
+    artifact["_goal_id"] = step.task_id if step is not None else ""
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     if artifact.get("ok"):
@@ -290,11 +290,6 @@ def _record_react_observation(
         "action_input": normalized_input,
         "observation": observation[:300],
     })
-    state.react.user_prompt += (
-        f"\n\n思考：{thought}\n"
-        f"动作：{tool_name}({_json_dumps_safe(normalized_input)})\n"
-        f"观察：{observation}"
-    )
     state.react.iteration_index = idx + 1
     state.react.status = "running"
     state.react.stop_reason = ""
@@ -387,24 +382,15 @@ def _update_react_ledger(
     status: str,
     reason: str | None = None,
 ) -> None:
-    ledger = state.execution_ledger
-    if ledger is None:
-        return
     step = next((item for item in state.step_execution.steps if item.step_id == step_id), None)
     if step is None or not step.task_id:
         return
-    items = tuple(
-        item.model_copy(update={"status": status, "replan_reason": reason})
-        if item.goal_id == step.task_id else item
-        for item in ledger.items
+    _update_execution_ledger(
+        state,
+        goal_id=step.task_id,
+        status=status,
+        replan_reason=reason,
     )
-    state.execution_ledger = ledger.model_copy(update={"items": items, "revision": ledger.revision + 1})
-    state.add_event("plan_ledger_updated", {
-        "goal_id": step.task_id,
-        "status": status,
-        "replan_reason": reason,
-        "revision": state.execution_ledger.revision,
-    })
 
 
 def _has_downstream_commit(state: AgentGraphState, step_id: str) -> bool:
@@ -424,7 +410,7 @@ def _has_downstream_commit(state: AgentGraphState, step_id: str) -> bool:
     return False
 
 
-def _build_evidence_pack(state: AgentGraphState, step_id: str) -> EvidencePack:
+def _build_evidence_pack(state: AgentGraphState, step_id: str) -> CapabilityEvidencePack:
     """Normalize a bounded ReAct run into the artifact consumed by compose."""
     resolution_payload: dict = {}
     for event in reversed(state.events):
@@ -454,7 +440,7 @@ def _build_evidence_pack(state: AgentGraphState, step_id: str) -> EvidencePack:
         if isinstance(item, dict) and item.get("evidence")
     )
     sufficient = bool(sources or snippets)
-    return EvidencePack(
+    return CapabilityEvidencePack(
         scope_id=str(resolution_payload.get("scope_id") or ""),
         resolution_id=str(resolution_payload.get("resolution_id") or ""),
         selected_capability_ids=tuple(str(item) for item in resolution_payload.get("selected_capability_ids", ())),
@@ -498,9 +484,72 @@ def _should_continue_react(state: AgentGraphState) -> str:
     return "iterate"
 
 
-def _json_dumps_safe(obj: object) -> str:
-    import json as _json
-
-    if isinstance(obj, dict):
-        return _json.dumps(obj, ensure_ascii=False)
-    return str(obj)
+def _materialize_react_prompt(state: AgentGraphState, deps: ReactContext) -> str:
+    runtime = ContextItem(
+        ref_id=f"react:{state.react.step_id}:objective",
+        kind="react_objective",
+        provenance="runtime",
+        trust_tier="runtime",
+        summary=state.react.user_prompt[:2000],
+        payload={
+            "instruction": state.react.user_prompt,
+            "iteration": state.react.iteration_index,
+            "max_iterations": state.react.max_iterations,
+            "allowed_tools": tuple(state.react.allowed_tools),
+            "authority_tier": "system_policy",
+        },
+        admitted=True,
+    )
+    prior_results = tuple(ContextItem(
+        ref_id=f"react:{state.react.step_id}:result:{step_id}",
+        kind="prior_action_result",
+        provenance="action_execution",
+        trust_tier="untrusted",
+        summary=_helpers._summarize_result(result),
+        payload={"result": result},
+        admitted=False,
+    ) for step_id, result in state.step_execution.results.items())
+    observations = tuple(ContextItem(
+        ref_id=f"react:{state.react.step_id}:observation:{index}",
+        kind="provider_observation",
+        provenance=str(item.get("action_tool") or "react"),
+        trust_tier="untrusted",
+        summary=str(item.get("observation") or "")[:2000],
+        payload={
+            "tool": item.get("action_tool"),
+            "observation": item.get("observation"),
+        },
+        admitted=False,
+    ) for index, item in enumerate(state.react.iterations))
+    items = (runtime, *prior_results, *observations)
+    ledger_revision = state.execution_ledger.revision if state.execution_ledger else 0
+    event_cursor = (
+        str(state.execution_ledger.last_event_sequence)
+        if state.execution_ledger else str(len(state.events))
+    )
+    projection = deps.context_manager.project(
+        items,
+        purpose="bounded_react",
+        budget=ContextBudget(
+            model_profile="runtime-default",
+            tokenizer_profile="runtime-default",
+            max_context_tokens=16_384,
+            safety_margin=512,
+            reserved_output_tokens=2_048,
+        ),
+        ledger_revision=ledger_revision,
+        event_cursor=event_cursor,
+    )
+    state.context_projections.append(projection)
+    materialized = deps.context_gateway.open(
+        projection,
+        items,
+        purpose="bounded_react",
+    )
+    state.add_event("context_projected", projection.model_dump(mode="json"))
+    state.add_event("context_materialized", {
+        "projection_id": projection.projection_id,
+        "purpose": "bounded_react",
+        "materialized_refs": materialized.materialized_refs,
+    })
+    return json.dumps(materialized.model_payload(), ensure_ascii=False, default=str)

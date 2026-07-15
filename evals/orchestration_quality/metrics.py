@@ -5,9 +5,8 @@ Cross-harness primitives are re-exported from :mod:`evals._metrics_core`:
   - ``event_subsequence_match`` -> ``ordered_subsequence`` (event milestones)
   - ``reached_terminal`` / ``TERMINAL_EVENTS`` (run must not hang)
 
-Unique to orchestration are the primary-intent match (which treats an empty
-gold as "no goal expected") and the negative ``forbidden_events`` invariant —
-a clarify run must never emit ``steps_projected``.
+Unique to orchestration are the primary-result-contract match and the negative
+``forbidden_events`` invariant: a clarify run must never compile a goal graph.
 """
 
 from __future__ import annotations
@@ -22,14 +21,13 @@ __all__ = [
     "outcome_correct",
     "event_subsequence_match",
     "reached_terminal",
-    "primary_intent_correct",
+    "primary_result_contract_correct",
     "forbidden_events_absent",
 ]
 
 
-def primary_intent_correct(predicted: str, gold: str) -> float:
-    """1.0 when the primary intent matches. Returns 1.0 when no gold intent is
-    annotated (clarify cases route to no goal)."""
+def primary_result_contract_correct(predicted: str, gold: str) -> float:
+    """Score the terminal goal's result contract; clarify has no contract."""
     if not gold:
         return 1.0
     return 1.0 if predicted == gold else 0.0

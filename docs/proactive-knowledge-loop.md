@@ -4,7 +4,7 @@
 
 三项能力共享同一应用层，并从两类入口进入：
 
-- 用户请求：`Router -> WorkflowPlanner -> StepExecutionGraph -> tool adapter -> use case`
+- 用户请求：`TaskAnalyzer -> GoalGraph -> Executive -> Protocol 或 BoundedAction -> use case`
 - 定时或管理入口：`Scheduler / CLI / API -> use case -> delivery`
 
 Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报生成逻辑；意图入口也不会触发订阅投递。
@@ -13,7 +13,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 2. **自动主题整理**（`consolidate_knowledge`）——按主题选择多条笔记并整理成综述，原笔记标记为已被取代。
 3. **简报知识增长 section**（`review/service`）——日报中展示笔记增长趋势与图谱概览。
 
-> 与本文相关的基础设施见 [review-digest.md](review-digest.md)；系统整体的 LLM/确定性分工见 [summary/llm-decisions-and-deterministic-flows.md](summary/llm-decisions-and-deterministic-flows.md)。
+> 与本文相关的基础设施见 [review-digest.md](review-digest.md)；系统整体架构与 LLM/确定性分工见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
 
 ---
 
@@ -30,7 +30,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
   -> knowledge_gap_deliveries 按天原子去重（claim）
   -> DeliveryRouter / FeishuDeliveryProvider 主动提问
   -> 用户回复
-  -> 既有 entry -> router -> capture 路径将回答写回知识库
+  -> 统一 entry -> Executive -> capture Protocol 将回答写回知识库
 ```
 
 ### 检测逻辑（确定性）
@@ -107,9 +107,9 @@ topic
 
 ### 入口边界
 
-当前已接入 `EntryIntent` 与 `WorkflowSpec`。Router 只提取主题，不输出 note_id 或执行步骤；相关笔记选择由 `KnowledgeConsolidationUseCase` 完成。
+当前以 `consolidate_knowledge` Protocol 接入 Executive。Task Analyzer 只表达目标和主题，不输出 note_id 或执行步骤；相关笔记选择由 `KnowledgeConsolidationUseCase` 完成。
 
-`review_digest` 与 `inspect_knowledge_gaps` 同样是正式意图：前者只即时生成简报，后者只返回缺口分析；二者都不执行 scheduler 的投递和按日幂等逻辑。
+`review_digest` 与 `inspect_knowledge_gaps` 同样是 Protocol operation：前者只即时生成简报，后者只返回缺口分析；二者都不执行 scheduler 的投递和按日幂等逻辑。
 
 ---
 

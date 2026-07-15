@@ -1,4 +1,4 @@
-"""Entry processing nodes: normalize, clarify, route, project, branch, finalize."""
+"""Entry processing nodes: normalize, analyze, clarify, and finalize."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from personal_agent.orchestration.orchestration_models import (
     _new_run_id,
     _new_thread_id,
 )
-from personal_agent.orchestration.orchestration_contexts import DirectAnswerContext, RoutingContext
+from personal_agent.orchestration.orchestration_contexts import ConversationContext, RoutingContext
 from personal_agent.orchestration.orchestration_nodes._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
@@ -46,13 +46,13 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.session_id = session_id
     state.thread_id = thread_id
     state.entry_text = text
-    state.router_decision = None
-    state.execution_plan = None
+    state.task_analysis = None
     state.task_spec = None
     state.execution_ledger = None
     state.context_envelope = ContextEnvelope()
-    state.workflow_id = ""
-    state.workflow_version = ""
+    state.procedure_id = ""
+    state.procedure_version = ""
+    state.active_procedure = None
     state.control_state = None
     state.control_decision = None
     state.current_action = None
@@ -65,6 +65,12 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.last_decision_hash = ""
     state.repeated_decision_count = 0
     state.control_route = ""
+    state.context_projections = []
+    state.planning_model_context = {}
+    state.control_model_context = {}
+    state.resolved_action_spec = None
+    state.resolved_action_specs = []
+    state.retry_directive = None
     state.react = ReactSubState()
     state.step_execution = StepExecutionState()
     state.tool_tracking = ToolTrackingSubState()
@@ -102,13 +108,13 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "entry_text": text,
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
-        "router_decision": None,
-        "execution_plan": None,
+        "task_analysis": None,
         "task_spec": None,
         "execution_ledger": None,
         "context_envelope": state.context_envelope,
-        "workflow_id": "",
-        "workflow_version": "",
+        "procedure_id": "",
+        "procedure_version": "",
+        "active_procedure": None,
         "control_state": None,
         "control_decision": None,
         "current_action": None,
@@ -121,6 +127,12 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "last_decision_hash": "",
         "repeated_decision_count": 0,
         "control_route": "",
+        "context_projections": [],
+        "planning_model_context": {},
+        "control_model_context": {},
+        "resolved_action_spec": None,
+        "resolved_action_specs": [],
+        "retry_directive": None,
         "react": state.react,
         "step_execution": state.step_execution,
         "tool_tracking": state.tool_tracking,
@@ -142,13 +154,13 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
 
 
 def _node_prepare_clarify(state: AgentGraphState) -> dict:
-    """Materialize a router-requested clarification before interrupting.
+    """Materialize a TaskAnalyzer clarification before interrupting.
 
-    ``route_intent`` has already determined that information is missing. This
+    ``analyze_task`` has already determined that information is missing. This
     node writes the payload first so the checkpoint records exactly what the
     UI should present before ``interrupt()`` pauses execution.
     """
-    decision = state.router_decision
+    decision = state.task_analysis
     if decision is None or not decision.requires_clarification:
         return {}
 
@@ -227,13 +239,13 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
         "option_id": option_id,
         "text_preview": clarified_text[:120],
     })
-    state.router_decision = None
+    state.task_analysis = None
     return {
         "entry_text": clarified_text,
         "entry_input": state.entry_input,
         "messages": [HumanMessage(content=supplemental, id=f"{state.run_id}:clarification")],
         "pending_confirmation": None,
-        "router_decision": None,
+        "task_analysis": None,
         "events": state.events,
     }
 
@@ -242,28 +254,19 @@ def _after_prepare_clarify(state: AgentGraphState) -> str:
     """Route to interrupt after its payload has been checkpointed."""
     if state.pending_confirmation is not None:
         return "interrupt_clarify_entry"
-    return "route_intent"
+    return "analyze_task"
 
 
 def _after_interrupt_clarify(state: AgentGraphState) -> str:
-    """After interrupt, go to finalize if cancelled/empty, else continue to route_intent."""
+    """After interrupt, finalize if cancelled/empty; otherwise analyze the enriched task."""
     if state.answer_completed:
         return "finalize_entry_result"
-    return "route_intent"
+    return "analyze_task"
 
 
 # ============================================================================
-# Phase 6: route_intent -> should_project_steps -> project_workflow_steps -> validate_projected_steps (split from
-# the former composite route_and_plan node)
-# ============================================================================
-
-
-def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
-    """Session binding + intent classification (no planning yet).
-
-    Checkpoint boundary: after this node the intent is known and can be
-    inspected / resumed without re-running classification.
-    """
+def _node_analyze_task(state: AgentGraphState, *, deps: RoutingContext) -> dict:
+    """Bind conversation context and produce semantic task understanding."""
     from personal_agent.kernel.logging_utils import log_event as _log_event
 
     if state.entry_input is None:
@@ -275,127 +278,69 @@ def _node_route_intent(state: AgentGraphState, *, deps: RoutingContext) -> dict:
 
     deps.memory.bind_session(state.user_id, state.session_id)
     conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    override_intent = (state.entry_input.metadata or {}).get("intent_override")
-    if override_intent:
-        from personal_agent.planning.router import Goal, RouterDecision
+    supplied_analysis = (state.entry_input.metadata or {}).get("task_analysis")
+    trusted_internal_entry = state.entry_input.source_platform in {"worker", "runtime"}
+    if trusted_internal_entry and isinstance(supplied_analysis, dict):
+        from personal_agent.planning.task_analyzer import TaskAnalysis
 
-        decision = RouterDecision(
-            goals=[Goal(
-                goal_id="goal_1",
-                intent=str(override_intent),
-                input=state.entry_input.text or state.entry_text or str(override_intent),
-            )]
-        )
+        decision = TaskAnalysis.model_validate(supplied_analysis)
     else:
-        decision = deps.intent_router.classify(
+        decision = deps.task_analyzer.analyze(
             state.entry_input,
             conversation_messages=conversation_messages,
         )
 
-    state.router_decision = decision
-    state.execution_plan = None
+    state.task_analysis = decision
+    if decision.outcome == "rejected":
+        state.answer = decision.rejection_reason
+        state.answer_completed = True
     state.step_execution.steps = []
     state.execution_trace = []
 
-    state.add_event("intent_classified", {
-        "intents": [goal.intent for goal in decision.goals],
+    state.add_event("task_analyzed", {
+        "result_contracts": [goal.result_contract for goal in decision.goals],
         "goals": [goal.model_dump(mode="json") for goal in decision.goals],
-        "reason": _router_reason(decision),
+        "relations": [item.model_dump(mode="json") for item in decision.relations],
+        "reason": _analysis_reason(decision),
         "requires_clarification": decision.requires_clarification,
+        "outcome": decision.outcome,
     })
 
     _log_event(
         logger,
         logging.INFO,
-        "entry.route.decision",
+        "entry.task_analysis",
         user_id=state.user_id,
         session_id=state.session_id,
-        intents=[goal.intent for goal in decision.goals],
+        result_contracts=[goal.result_contract for goal in decision.goals],
         requires_clarification=decision.requires_clarification,
-        reason=_router_reason(decision),
+        reason=_analysis_reason(decision),
     )
 
     logger.info(
-        "route_intent run_id=%s intents=%s requires_clarification=%s",
-        state.run_id, [goal.intent for goal in decision.goals], decision.requires_clarification,
+        "analyze_task run_id=%s goals=%s requires_clarification=%s",
+        state.run_id, [goal.goal_id for goal in decision.goals], decision.requires_clarification,
     )
 
     return {
-        "router_decision": state.router_decision,
-        "execution_plan": None,
+        "task_analysis": state.task_analysis,
+        "answer": state.answer,
+        "answer_completed": state.answer_completed,
         "step_execution": state.step_execution,
         "execution_trace": [],
         "events": state.events,
     }
 
 
-def _node_direct_answer_branch(state: AgentGraphState, *, deps: DirectAnswerContext) -> dict:
-    """Execute direct answer or classification-driven clarification."""
-    entry_input = state.entry_input
-    if entry_input is None or not entry_input.text.strip():
-        state.answer = "你好，有什么可以帮你的？"
-        return {"answer": state.answer}
-
-    logger.debug("Executing direct_answer branch user=%s", state.user_id)
-
-    if not state.router_decision or state.router_decision.primary_intent == "unknown":
-        state.answer = _build_clarification_answer(state)
-        route = state.router_decision.primary_intent if state.router_decision else "unknown"
-        state.execution_trace = _execution_trace_for_intent(route)
-        return {"answer": state.answer, "execution_trace": state.execution_trace}
-
-    if (
-        deps.settings.openai.api_key
-        and deps.settings.openai.base_url
-        and deps.settings.openai.small_model
-        and deps.model_client is not None
-    ):
-        from personal_agent.infra.structured_model import StructuredModelRequest
-        from personal_agent.kernel.prompts import get_prompt
-        from pydantic import BaseModel
-
-        try:
-            dialogue_messages = _entry_conversation_messages(
-                state,
-                exclude_latest=False,
-                deps=deps,
-            )
-            if not dialogue_messages:
-                dialogue_messages = [{"role": "user", "content": entry_input.text}]
-            direct_prompt = get_prompt("direct_answer.system")
-            response = deps.model_client.generate(StructuredModelRequest(
-                operation="direct_answer",
-                version=direct_prompt.version,
-                messages=[
-                    {"role": "system", "content": direct_prompt.template},
-                    *dialogue_messages,
-                ],
-                output_type=BaseModel,
-                temperature=0.3,
-                max_tokens=300,
-                kind="text",
-                metadata={"component": "orchestration", "intents": [goal.intent for goal in state.router_decision.goals]},
-            ))
-            generated = (response.content or "").strip()
-            if generated:
-                state.answer = generated
-                route = state.router_decision.primary_intent if state.router_decision else "unknown"
-                state.execution_trace = _execution_trace_for_intent(route)
-                return {"answer": state.answer, "execution_trace": state.execution_trace}
-        except Exception:
-            logger.exception("Direct answer LLM call failed")
-
-    state.answer = "回答模型当前不可用，请检查 LLM 配置或稍后重试。"
-    route = state.router_decision.primary_intent if state.router_decision else "unknown"
-    state.execution_trace = _execution_trace_for_intent(route)
-    return {"answer": state.answer, "execution_trace": state.execution_trace}
+def _primary_result_contract(decision) -> str:
+    return decision.goals[-1].result_contract if decision is not None and decision.goals else "unknown"
 
 
 def _entry_conversation_messages(
     state: AgentGraphState,
     *,
     exclude_latest: bool = True,
-    deps: "RoutingContext | DirectAnswerContext | None" = None,
+    deps: "RoutingContext | ConversationContext | None" = None,
 ) -> list[dict[str, str]]:
     """Return structured thread dialogue from checkpoint messages.
 
@@ -428,108 +373,10 @@ def _entry_conversation_messages(
     return result.messages
 
 
-# ---------------------------------------------------------------------------
-# Entry response helpers
-# ---------------------------------------------------------------------------
+def _analysis_reason(decision) -> str:
+    from personal_agent.planning.task_analyzer import describe_task_analysis
 
-def _build_clarification_answer(state: AgentGraphState) -> str:
-    """Build a clarification prompt from the classify result."""
-    decision = state.router_decision
-    if decision is None:
-        return "我暂时没判断出你的意图。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
-    missing = [
-        str(item).strip()
-        for item in decision.missing_information
-        if str(item).strip()
-    ]
-    if decision.error == "router_unavailable":
-        return _router_reason(decision)
-    if missing:
-        details = "、".join(missing[:3])
-        return f"我还需要你补充：{details}。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
-    return "我暂时没判断出你的意图。你可以说明这是要记录、查询、总结，还是要执行某个操作。"
-
-
-def _router_reason(decision) -> str:
-    from personal_agent.planning.router import describe_router_decision
-
-    return describe_router_decision(decision)
-
-
-_EXECUTION_TRACE_MAP: dict[str, list[str]] = {
-    "ask": [
-        "在知识库和图谱中检索相关内容",
-        "整合检索到的证据，生成自然语言回答",
-        "校验回答的事实依据和引用完整性",
-        "若证据不足，通过网络搜索补充外部信息",
-    ],
-    "capture_text": [
-        "采集内容并写入知识库",
-        "整理采集结果，生成标题和摘要",
-        "校验笔记完整性和格式",
-    ],
-    "capture_link": [
-        "抓取链接内容",
-        "采集内容并写入知识库",
-        "整理采集结果",
-    ],
-    "capture_file": [
-        "理解上传 artifact",
-        "采集内容并写入知识库",
-        "整理采集结果",
-    ],
-    "analyze_artifact": [
-        "理解上传 artifact",
-        "基于 artifact 内容回答用户",
-    ],
-    "summarize_thread": [
-        "获取群聊消息记录",
-        "按主题分点总结讨论要点和结论",
-    ],
-    "direct_answer": [
-        "直接生成简短回复",
-    ],
-}
-def _execution_trace_for_intent(intent: str) -> list[str]:
-    """Return a lightweight trace for non-planning branches."""
-    trace_map = {
-        "ask": [
-            "在知识库和图谱中检索相关内容",
-            "整合检索到的证据，生成自然语言回答",
-            "校验回答的事实依据和引用完整性",
-            "若证据不足，通过网络搜索补充外部信息",
-        ],
-        "capture_text": [
-            "采集内容并写入知识库",
-            "整理采集结果，生成标题和摘要",
-            "校验笔记完整性和格式",
-        ],
-        "capture_link": [
-            "抓取链接内容",
-            "采集内容并写入知识库",
-            "整理采集结果",
-        ],
-        "capture_file": [
-            "理解上传 artifact",
-            "采集内容并写入知识库",
-            "整理采集结果",
-        ],
-        "analyze_artifact": [
-            "理解上传 artifact",
-            "基于 artifact 内容回答用户",
-        ],
-        "summarize_thread": [
-            "获取群聊消息记录",
-            "按主题分点总结讨论要点和结论",
-        ],
-        "direct_answer": [
-            "直接生成简短回复",
-        ],
-        "unknown": [
-            "根据意图识别结果请求用户补充信息",
-        ],
-    }
-    return trace_map.get(intent, ["生成通用回复"])
+    return describe_task_analysis(decision)
 
 
 def _node_finalize_entry_result(state: AgentGraphState) -> dict:
@@ -561,17 +408,17 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
             state.add_event("answer_completed", {"answer": state.answer})
         state.add_event("run_completed", {
             "answer": state.answer,
-            "intents": [goal.intent for goal in state.router_decision.goals] if state.router_decision else [],
+            "result_contracts": [goal.result_contract for goal in state.task_analysis.goals] if state.task_analysis else [],
         })
         logger.info(
             "finalize_entry_result relies on checkpoint messages run_id=%s intent=%s answer_len=%d",
             state.run_id,
-            state.router_decision.primary_intent if state.router_decision else "unknown",
+            _primary_result_contract(state.task_analysis),
             len(state.answer or ""),
         )
     logger.info(
         "finalize_entry_result run_id=%s intent=%s errors=%d",
-        state.run_id, state.router_decision.primary_intent if state.router_decision else "unknown", len(state.errors),
+        state.run_id, _primary_result_contract(state.task_analysis), len(state.errors),
     )
     state.execution_trace = execution_trace_from_events(state.events)
     result = {

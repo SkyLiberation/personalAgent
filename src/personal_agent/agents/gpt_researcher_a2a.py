@@ -7,7 +7,7 @@ from personal_agent.infra.a2a import A2AResearchResponse, GPTResearcherA2AClient
 from personal_agent.kernel.config_models import GPTResearcherA2AConfig
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
-    AgentDefinition,
+    SubagentProfile,
     AgentEvent,
     AgentGatewayContext,
     AgentGovernance,
@@ -57,13 +57,15 @@ class GPTResearcherA2AAdapter:
     ) -> None:
         self._config = config
         self._client = client or GPTResearcherA2AClient(config)
-        self.definition = AgentDefinition(
+        self.profile = SubagentProfile(
             agent_id="gpt_researcher",
             provider="gpt_researcher",
             protocol="a2a_jsonrpc",
             description="GPT Researcher A2A deep research agent.",
             semantic_domains=("external_research", "web_research"),
             task_types=("research",),
+            capability_ids=("agent:gpt_researcher",),
+            allowed_operations=("delegate",),
             governance=AgentGovernance(
                 risk_level="medium",
                 side_effects=("external_network",),
@@ -91,7 +93,7 @@ class GPTResearcherA2AAdapter:
         response = self._client.submit_research(**self._request_kwargs(task))
         status = _status_from_a2a(response.state)
         if status == "completed":
-            status = "working"
+            status = "running"
         return replace(self._run_from_response(task, context, response), status=status)
 
     def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
@@ -106,7 +108,7 @@ class GPTResearcherA2AAdapter:
         task = AgentTask(task_text="", task_type="research")
         return replace(
             self._run_from_response(task, context, response, agent_run_id=agent_run_id),
-            status="canceled",
+            status="cancelled",
         )
 
     def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[AgentEvent]:
@@ -146,7 +148,7 @@ class GPTResearcherA2AAdapter:
                     kind="markdown_report",
                     content=response.report,
                     payload={"source": "status.message"},
-                    verification_status="unverified",
+                    producer_verification_status="unverified",
                 ),
             )
         status = _status_from_a2a(response.state)
@@ -160,7 +162,7 @@ class GPTResearcherA2AAdapter:
         )
         return AgentRun(
             agent_run_id=resolved_run_id,
-            agent_id=self.definition.agent_id,
+            agent_id=self.profile.agent_id,
             status=status,
             task=task,
             context=context,
@@ -191,7 +193,7 @@ def _artifact_from_a2a(agent_run_id: str, raw: dict, report: str) -> AgentArtifa
         kind=str(raw.get("name") or raw.get("kind") or "a2a_artifact"),
         content=content,
         payload=raw,
-        verification_status="unverified",
+        producer_verification_status="unverified",
     )
 
 
@@ -202,8 +204,8 @@ def _status_from_a2a(state: str) -> str:
     if normalized in {"failed", "error"}:
         return "failed"
     if normalized in {"canceled", "cancelled"}:
-        return "canceled"
-    return "working"
+        return "cancelled"
+    return "running"
 
 
 def _agent_run_id(task_id: str) -> str:

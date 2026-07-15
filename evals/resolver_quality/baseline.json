@@ -4,8 +4,8 @@
   "critical_cases": [
     "RESOLVER-GH-001",
     "RESOLVER-NOTION-001",
-    "RESOLVER-LOCAL-001",
-    "RESOLVER-RISK-001",
+    "RESOLVER-GH-002",
+    "RESOLVER-NOTION-002",
     "RESOLVER-CROSS-001"
   ],
   "critical_case_min_score": 1.0

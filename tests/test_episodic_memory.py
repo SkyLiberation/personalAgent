@@ -7,7 +7,7 @@ from personal_agent.kernel.models import EntryInput
 
 def test_build_entry_episode_from_completed_run():
     result = EntryResult(
-        intents=["delete_knowledge"],
+        result_contracts=["external_state"],
         reason="删除知识。",
         reply_text="已删除笔记「Graphiti」。",
         run_id="run-123",
@@ -17,9 +17,9 @@ def test_build_entry_episode_from_completed_run():
         events=[
             {
                 "event_id": "evt-1",
-                "type": "intent_classified",
+                "type": "task_analyzed",
                 "payload": {
-                    "intent": "delete_knowledge",
+                    "result_contracts": ["external_state"],
                     "risk_level": "high",
                 },
             },
@@ -43,21 +43,21 @@ def test_build_entry_episode_from_completed_run():
     assert episode.id == "episode:run-123"
     assert episode.user_id == "alice"
     assert episode.session_id == "s1"
-    assert episode.workflow == "delete_knowledge"
+    assert episode.result_contract == "external_state"
     assert episode.outcome == "completed"
     assert "delete_note" in episode.tool_refs
     assert "note-1" in episode.note_refs
-    assert episode.decisions == ["识别意图为 delete_knowledge，风险 high"]
+    assert episode.decisions == ["结果契约: external_state"]
 
 
 def test_build_entry_episode_records_open_item_for_confirmation():
     result = EntryResult(
-        intents=["delete_knowledge"],
+        result_contracts=["external_state"],
         reason="操作需要用户确认",
         reply_text="确认删除笔记「Graphiti」？",
         run_id="run-456",
         thread_id="alice:s1",
-        run_status="waiting_confirmation",
+        run_status="blocked_approval",
         pending_confirmation={
             "message": "确认删除笔记「Graphiti」？",
             "note_id": "note-1",
@@ -73,14 +73,14 @@ def test_build_entry_episode_records_open_item_for_confirmation():
 
     episode = build_entry_episode(result)
 
-    assert episode.outcome == "waiting_confirmation"
+    assert episode.outcome == "blocked_approval"
     assert episode.entry_text == "删除 Graphiti 笔记"
     assert episode.open_items == ["确认删除笔记「Graphiti」？"]
 
 
 def test_failed_entry_builds_reflection_candidate():
     result = EntryResult(
-        intents=["delete_knowledge"],
+        result_contracts=["external_state"],
         reason="计划执行失败",
         reply_text="删除失败",
         run_id="run-failed",

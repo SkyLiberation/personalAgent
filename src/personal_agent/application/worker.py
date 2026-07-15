@@ -112,19 +112,36 @@ class WorkflowWorker:
         return bool(note_id) and self.runtime.sync_note_to_graph(note_id)
 
     def _handle_research_run(self, task: WorkerTask) -> bool:
+        from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+
         run_id = str(task.payload.get("run_id") or "")
         if not run_id:
             return False
         run = self.runtime.research_store.get_run(run_id)
         if run is None:
             return False
+        analysis = TaskAnalysis(
+            user_goal=f"执行 Research run {run_id}: {run.topic}",
+            goals=[Goal(
+                goal_id="goal_1",
+                description=run.topic,
+                result_contract="artifact",
+                resource_hints=[ResourceHint(
+                    semantic_domain="external_research",
+                    resource_types=["research", "report", "evidence"],
+                    operations=["search", "read", "verify"],
+                    locator=run_id,
+                    freshness_required=True,
+                )],
+            )],
+        )
         result = self.runtime.execute_entry(EntryInput(
             text=f"执行 Research run {run_id}: {run.topic}",
             user_id=run.user_id,
             session_id=f"research:{run_id}",
             source_platform="worker",
             metadata={
-                "intent_override": "execute_research_run",
+                "task_analysis": analysis.model_dump(mode="json"),
                 "research_run_id": run_id,
             },
         ))

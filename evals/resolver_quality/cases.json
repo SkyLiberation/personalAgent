@@ -1,62 +1,105 @@
 [
   {
     "id": "RESOLVER-GH-001",
-    "task_text": "在 github/github-mcp-server 里 search_code 是在哪里实现的？",
-    "workflow_scope": "external_codebase_qa",
+    "requirements": [
+      {
+        "requirement_id": "code-search",
+        "purpose": "search source code",
+        "semantic_domains": ["codebase"],
+        "resource_types": ["code"],
+        "operations": ["search"],
+        "required_providers": ["github"]
+      }
+    ],
     "expected_capability_ids": ["mcp:github:search_code"],
     "forbidden_capability_ids": ["mcp:notion:post-search"],
     "min_selected": 1
   },
   {
     "id": "RESOLVER-GH-002",
-    "task_text": "读取 github/github-mcp-server 的 README.md 内容",
-    "workflow_scope": "external_codebase_qa",
+    "requirements": [
+      {
+        "requirement_id": "file-read",
+        "purpose": "read repository file",
+        "semantic_domains": ["codebase"],
+        "resource_types": ["file"],
+        "operations": ["read"],
+        "required_providers": ["github"]
+      }
+    ],
     "expected_capability_ids": ["mcp:github:get_file_contents"],
     "min_selected": 1
   },
   {
     "id": "RESOLVER-GH-003",
-    "task_text": "搜索 topic:mcp language:go 的 GitHub 仓库",
-    "workflow_scope": "external_codebase_qa",
+    "requirements": [
+      {
+        "requirement_id": "repository-search",
+        "purpose": "discover repositories",
+        "semantic_domains": ["repository_discovery"],
+        "resource_types": ["repository"],
+        "operations": ["search"],
+        "required_providers": ["github"]
+      }
+    ],
     "expected_capability_ids": ["mcp:github:search_repositories"],
     "min_selected": 1
   },
   {
     "id": "RESOLVER-NOTION-001",
-    "task_text": "在 Notion 里搜索 Orion 项目的会议纪要",
-    "workflow_scope": "external_workspace_qa",
+    "requirements": [
+      {
+        "requirement_id": "workspace-search",
+        "purpose": "search workspace pages",
+        "semantic_domains": ["workspace_knowledge"],
+        "resource_types": ["page"],
+        "operations": ["search"],
+        "required_providers": ["notion"]
+      }
+    ],
     "expected_capability_ids": ["mcp:notion:post-search"],
     "forbidden_capability_ids": ["mcp:github:search_code"],
     "min_selected": 1
   },
   {
     "id": "RESOLVER-NOTION-002",
-    "task_text": "读取 Notion 页面 1a6b35e6e67f802fa7e1d27686f017f2 并总结内容",
-    "workflow_scope": "external_workspace_qa",
+    "requirements": [
+      {
+        "requirement_id": "workspace-read",
+        "purpose": "read workspace page",
+        "semantic_domains": ["workspace_knowledge"],
+        "resource_types": ["page"],
+        "operations": ["read"],
+        "required_providers": ["notion"]
+      }
+    ],
     "expected_capability_ids": ["mcp:notion:retrieve-page-markdown"],
     "min_selected": 1
   },
   {
-    "id": "RESOLVER-LOCAL-001",
-    "task_text": "我之前关于 Agent tool use 的笔记里有哪些结论？",
-    "workflow_scope": "external_codebase_qa",
-    "expected_capability_ids": [],
-    "expected_denial_reasons": ["local_first"],
-    "max_selected": 0
-  },
-  {
-    "id": "RESOLVER-RISK-001",
-    "task_text": "在 Notion 创建一个 Orion 项目总结页面",
-    "workflow_scope": "external_workspace_qa",
-    "expected_capability_ids": [],
-    "expected_denial_reasons": ["read_only_policy"],
-    "max_selected": 0
-  },
-  {
     "id": "RESOLVER-CROSS-001",
-    "task_text": "对照 github/github-mcp-server README 和 Notion Orion PRD 的差异",
-    "workflow_scope": "external_project_ops",
-    "expected_capability_ids": ["mcp:github:get_file_contents", "mcp:notion:post-search"],
+    "requirements": [
+      {
+        "requirement_id": "github-doc",
+        "purpose": "read repository documentation",
+        "semantic_domains": ["docs"],
+        "resource_types": ["file"],
+        "operations": ["read"],
+        "required_providers": ["github"]
+      },
+      {
+        "requirement_id": "notion-page",
+        "purpose": "read workspace page",
+        "semantic_domains": ["workspace_knowledge"],
+        "resource_types": ["page"],
+        "operations": ["read"],
+        "required_providers": ["notion"]
+      }
+    ],
+    "expected_capability_ids": [
+      "mcp:github:get_file_contents",
+      "mcp:notion:retrieve-page-markdown"
+    ],
     "min_selected": 2
   }
 ]

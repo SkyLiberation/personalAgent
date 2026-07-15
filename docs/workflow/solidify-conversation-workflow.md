@@ -21,7 +21,7 @@ solidify_conversation
 
 ## 执行细节
 
-1. Router 将“把刚才结论记下来 / 沉淀一下”归类为 `solidify_conversation`，并标记为需要 step projection。
+1. TaskAnalyzer 识别会话固化 Goal；GoalGraphCompiler 将其绑定到 `solidify_conversation` Protocol。
 2. `WorkflowStepProjector` 从 `WORKFLOW_REGISTRY` 确定性投影 `sol-1 -> sol-2`。
 3. `StepProjectionValidator` 校验 workflow 必须包含 `tool_call(capture_text)`，且 `sol-2` 依赖 `sol-1`。
 4. `sol-1` 使用 checkpoint 中的历史 `messages` 构造候选 turn，上下文不直接当长期事实，而是供模型选择本次要固化的范围。

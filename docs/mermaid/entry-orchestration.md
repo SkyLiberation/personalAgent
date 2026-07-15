@@ -8,17 +8,13 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	entry_graph(entry_graph)
-	direct_answer_branch(direct_answer_branch)
+	executive_graph(executive_graph)
 	finalize_entry_result(finalize_entry_result)
-	step_execution_graph(step_execution_graph)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> entry_graph;
-	direct_answer_branch --> finalize_entry_result;
-	entry_graph -.-> direct_answer_branch;
-	entry_graph -.-> finalize_entry_result;
-	entry_graph -.-> step_execution_graph;
-	step_execution_graph -.-> direct_answer_branch;
-	step_execution_graph -.-> finalize_entry_result;
+	entry_graph -. &nbsp;executive&nbsp; .-> executive_graph;
+	entry_graph -. &nbsp;finalize&nbsp; .-> finalize_entry_result;
+	executive_graph --> finalize_entry_result;
 	finalize_entry_result --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
@@ -36,25 +32,25 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	normalize_entry(normalize_entry)
-	route_intent(route_intent)
+	analyze_task(analyze_task)
 	prepare_clarify_entry(prepare_clarify_entry)
 	interrupt_clarify_entry(interrupt_clarify_entry)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> normalize_entry;
+	analyze_task -. &nbsp;return_to_parent&nbsp; .-> __end__;
+	analyze_task -.-> prepare_clarify_entry;
 	interrupt_clarify_entry -. &nbsp;finalize_entry_result&nbsp; .-> __end__;
-	interrupt_clarify_entry -.-> route_intent;
-	normalize_entry --> route_intent;
+	interrupt_clarify_entry -.-> analyze_task;
+	normalize_entry --> analyze_task;
+	prepare_clarify_entry -.-> analyze_task;
 	prepare_clarify_entry -.-> interrupt_clarify_entry;
-	prepare_clarify_entry -.-> route_intent;
-	route_intent -. &nbsp;return_to_parent&nbsp; .-> __end__;
-	route_intent -.-> prepare_clarify_entry;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
 
 ```
 
-## Subgraph: step_execution_graph
+## Subgraph: executive_graph
 ```mermaid
 ---
 config:
@@ -63,53 +59,85 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
-	project_workflow_steps(project_workflow_steps)
-	validate_projected_steps(validate_projected_steps)
-	prepare_step_execution(prepare_step_execution)
-	select_next_step(select_next_step)
-	execute_step(execute_step)
-	handle_step_success(handle_step_success)
-	handle_step_failure(handle_step_failure)
-	confirm_step(confirm_step)
-	step_tool_node(step_tool_node)
-	consume_step_tool_result(consume_step_tool_result)
-	react_graph(react_graph)
-	finalize_step_execution(finalize_step_execution)
+	compile_goal_graph(compile_goal_graph)
+	project_control_state(project_control_state)
+	decide(decide)
+	validate_decision(validate_decision)
+	apply_decision(apply_decision)
+	action_execution(action_execution)
+	observe_action(observe_action)
+	verify_goal_progress(verify_goal_progress)
+	verify_completion(verify_completion)
 	__end__([<p>__end__</p>]):::last
-	__start__ --> project_workflow_steps;
-	confirm_step -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
-	confirm_step -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	confirm_step -. &nbsp;tool_node&nbsp; .-> step_tool_node;
-	consume_step_tool_result -.-> confirm_step;
-	consume_step_tool_result -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
-	consume_step_tool_result -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	consume_step_tool_result -. &nbsp;react_step&nbsp; .-> react_graph;
-	consume_step_tool_result -. &nbsp;tool_node&nbsp; .-> step_tool_node;
-	execute_step -.-> confirm_step;
-	execute_step -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
-	execute_step -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	execute_step -. &nbsp;react_step&nbsp; .-> react_graph;
-	execute_step -. &nbsp;tool_node&nbsp; .-> step_tool_node;
-	handle_step_failure -. &nbsp;finalize_steps&nbsp; .-> finalize_step_execution;
-	handle_step_failure -. &nbsp;continue_loop&nbsp; .-> select_next_step;
-	handle_step_success -. &nbsp;continue_loop&nbsp; .-> select_next_step;
-	prepare_step_execution --> select_next_step;
-	project_workflow_steps --> validate_projected_steps;
-	react_graph -. &nbsp;handle_failure&nbsp; .-> handle_step_failure;
-	react_graph -. &nbsp;handle_success&nbsp; .-> handle_step_success;
-	select_next_step -.-> execute_step;
-	select_next_step -. &nbsp;finalize_steps&nbsp; .-> finalize_step_execution;
-	step_tool_node --> consume_step_tool_result;
-	validate_projected_steps -. &nbsp;direct_answer_branch&nbsp; .-> __end__;
-	validate_projected_steps -.-> prepare_step_execution;
-	finalize_step_execution --> __end__;
+	__start__ --> compile_goal_graph;
+	action_execution --> observe_action;
+	apply_decision -. &nbsp;stop&nbsp; .-> __end__;
+	apply_decision -. &nbsp;action&nbsp; .-> action_execution;
+	apply_decision -. &nbsp;loop&nbsp; .-> project_control_state;
+	apply_decision -. &nbsp;completion&nbsp; .-> verify_completion;
+	compile_goal_graph --> project_control_state;
+	decide --> validate_decision;
+	observe_action --> verify_goal_progress;
+	project_control_state --> decide;
+	validate_decision --> apply_decision;
+	verify_completion -. &nbsp;complete&nbsp; .-> __end__;
+	verify_completion -. &nbsp;loop&nbsp; .-> project_control_state;
+	verify_goal_progress --> project_control_state;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
 
 ```
 
-## Subgraph: react_graph
+## Subgraph: action_execution
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	prepare_action(prepare_action)
+	select_action_step(select_action_step)
+	execute_action_step(execute_action_step)
+	handle_action_success(handle_action_success)
+	recover_action(recover_action)
+	confirm_action_step(confirm_action_step)
+	action_tool_node(action_tool_node)
+	consume_action_tool_result(consume_action_tool_result)
+	react_action(react_action)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> prepare_action;
+	action_tool_node --> consume_action_tool_result;
+	confirm_action_step -. &nbsp;tool_node&nbsp; .-> action_tool_node;
+	confirm_action_step -. &nbsp;handle_success&nbsp; .-> handle_action_success;
+	confirm_action_step -. &nbsp;handle_failure&nbsp; .-> recover_action;
+	consume_action_tool_result -. &nbsp;tool_node&nbsp; .-> action_tool_node;
+	consume_action_tool_result -. &nbsp;confirm_step&nbsp; .-> confirm_action_step;
+	consume_action_tool_result -. &nbsp;handle_success&nbsp; .-> handle_action_success;
+	consume_action_tool_result -. &nbsp;react_step&nbsp; .-> react_action;
+	consume_action_tool_result -. &nbsp;handle_failure&nbsp; .-> recover_action;
+	execute_action_step -. &nbsp;tool_node&nbsp; .-> action_tool_node;
+	execute_action_step -. &nbsp;confirm_step&nbsp; .-> confirm_action_step;
+	execute_action_step -. &nbsp;handle_success&nbsp; .-> handle_action_success;
+	execute_action_step -. &nbsp;react_step&nbsp; .-> react_action;
+	execute_action_step -. &nbsp;handle_failure&nbsp; .-> recover_action;
+	handle_action_success --> select_action_step;
+	prepare_action --> select_action_step;
+	react_action -. &nbsp;handle_success&nbsp; .-> handle_action_success;
+	react_action -. &nbsp;recover&nbsp; .-> recover_action;
+	recover_action -. &nbsp;action_done&nbsp; .-> __end__;
+	recover_action -. &nbsp;retry&nbsp; .-> select_action_step;
+	select_action_step -. &nbsp;finalize_steps&nbsp; .-> __end__;
+	select_action_step -. &nbsp;execute_step&nbsp; .-> execute_action_step;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+```
+
+## Subgraph: react_action
 ```mermaid
 ---
 config:
@@ -149,84 +177,83 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
-	direct_answer_branch(direct_answer_branch)
 	finalize_entry_result(finalize_entry_result)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> entry_graph\3anormalize_entry;
-	direct_answer_branch --> finalize_entry_result;
-	entry_graph\3a__end__ -.-> direct_answer_branch;
-	entry_graph\3a__end__ -.-> finalize_entry_result;
-	entry_graph\3a__end__ -.-> step_execution_graph\3aproject_workflow_steps;
-	step_execution_graph\3a__end__ -.-> direct_answer_branch;
-	step_execution_graph\3a__end__ -.-> finalize_entry_result;
+	entry_graph\3a__end__ -. &nbsp;executive&nbsp; .-> executive_graph\3acompile_goal_graph;
+	entry_graph\3a__end__ -. &nbsp;finalize&nbsp; .-> finalize_entry_result;
+	executive_graph\3a__end__ --> finalize_entry_result;
 	finalize_entry_result --> __end__;
 	subgraph entry_graph
 	entry_graph\3anormalize_entry(normalize_entry)
-	entry_graph\3aroute_intent(route_intent)
+	entry_graph\3aanalyze_task(analyze_task)
 	entry_graph\3aprepare_clarify_entry(prepare_clarify_entry)
 	entry_graph\3ainterrupt_clarify_entry(interrupt_clarify_entry)
 	entry_graph\3a__end__(<p>__end__</p>)
+	entry_graph\3aanalyze_task -. &nbsp;return_to_parent&nbsp; .-> entry_graph\3a__end__;
+	entry_graph\3aanalyze_task -.-> entry_graph\3aprepare_clarify_entry;
 	entry_graph\3ainterrupt_clarify_entry -. &nbsp;finalize_entry_result&nbsp; .-> entry_graph\3a__end__;
-	entry_graph\3ainterrupt_clarify_entry -.-> entry_graph\3aroute_intent;
-	entry_graph\3anormalize_entry --> entry_graph\3aroute_intent;
+	entry_graph\3ainterrupt_clarify_entry -.-> entry_graph\3aanalyze_task;
+	entry_graph\3anormalize_entry --> entry_graph\3aanalyze_task;
+	entry_graph\3aprepare_clarify_entry -.-> entry_graph\3aanalyze_task;
 	entry_graph\3aprepare_clarify_entry -.-> entry_graph\3ainterrupt_clarify_entry;
-	entry_graph\3aprepare_clarify_entry -.-> entry_graph\3aroute_intent;
-	entry_graph\3aroute_intent -. &nbsp;return_to_parent&nbsp; .-> entry_graph\3a__end__;
-	entry_graph\3aroute_intent -.-> entry_graph\3aprepare_clarify_entry;
 	end
-	subgraph step_execution_graph
-	step_execution_graph\3aproject_workflow_steps(project_workflow_steps)
-	step_execution_graph\3avalidate_projected_steps(validate_projected_steps)
-	step_execution_graph\3aprepare_step_execution(prepare_step_execution)
-	step_execution_graph\3aselect_next_step(select_next_step)
-	step_execution_graph\3aexecute_step(execute_step)
-	step_execution_graph\3ahandle_step_success(handle_step_success)
-	step_execution_graph\3ahandle_step_failure(handle_step_failure)
-	step_execution_graph\3aconfirm_step(confirm_step)
-	step_execution_graph\3astep_tool_node(step_tool_node)
-	step_execution_graph\3aconsume_step_tool_result(consume_step_tool_result)
-	step_execution_graph\3afinalize_step_execution(finalize_step_execution)
-	step_execution_graph\3a__end__(<p>__end__</p>)
-	step_execution_graph\3aconfirm_step -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
-	step_execution_graph\3aconfirm_step -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
-	step_execution_graph\3aconfirm_step -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3astep_tool_node;
-	step_execution_graph\3aconsume_step_tool_result -.-> step_execution_graph\3aconfirm_step;
-	step_execution_graph\3aconsume_step_tool_result -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
-	step_execution_graph\3aconsume_step_tool_result -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
-	step_execution_graph\3aconsume_step_tool_result -. &nbsp;react_step&nbsp; .-> step_execution_graph\3areact_graph\3areact_init;
-	step_execution_graph\3aconsume_step_tool_result -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3astep_tool_node;
-	step_execution_graph\3aexecute_step -.-> step_execution_graph\3aconfirm_step;
-	step_execution_graph\3aexecute_step -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
-	step_execution_graph\3aexecute_step -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
-	step_execution_graph\3aexecute_step -. &nbsp;react_step&nbsp; .-> step_execution_graph\3areact_graph\3areact_init;
-	step_execution_graph\3aexecute_step -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3astep_tool_node;
-	step_execution_graph\3ahandle_step_failure -. &nbsp;finalize_steps&nbsp; .-> step_execution_graph\3afinalize_step_execution;
-	step_execution_graph\3ahandle_step_failure -. &nbsp;continue_loop&nbsp; .-> step_execution_graph\3aselect_next_step;
-	step_execution_graph\3ahandle_step_success -. &nbsp;continue_loop&nbsp; .-> step_execution_graph\3aselect_next_step;
-	step_execution_graph\3aprepare_step_execution --> step_execution_graph\3aselect_next_step;
-	step_execution_graph\3aproject_workflow_steps --> step_execution_graph\3avalidate_projected_steps;
-	step_execution_graph\3areact_graph\3areact_finalize -. &nbsp;handle_failure&nbsp; .-> step_execution_graph\3ahandle_step_failure;
-	step_execution_graph\3areact_graph\3areact_finalize -. &nbsp;handle_success&nbsp; .-> step_execution_graph\3ahandle_step_success;
-	step_execution_graph\3aselect_next_step -.-> step_execution_graph\3aexecute_step;
-	step_execution_graph\3aselect_next_step -. &nbsp;finalize_steps&nbsp; .-> step_execution_graph\3afinalize_step_execution;
-	step_execution_graph\3astep_tool_node --> step_execution_graph\3aconsume_step_tool_result;
-	step_execution_graph\3avalidate_projected_steps -. &nbsp;direct_answer_branch&nbsp; .-> step_execution_graph\3a__end__;
-	step_execution_graph\3avalidate_projected_steps -.-> step_execution_graph\3aprepare_step_execution;
-	step_execution_graph\3afinalize_step_execution --> step_execution_graph\3a__end__;
-	subgraph react_graph
-	step_execution_graph\3areact_graph\3areact_init(react_init)
-	step_execution_graph\3areact_graph\3areact_iterate(react_iterate)
-	step_execution_graph\3areact_graph\3areact_tool_node(react_tool_node)
-	step_execution_graph\3areact_graph\3aconsume_react_tool_result(consume_react_tool_result)
-	step_execution_graph\3areact_graph\3areact_finalize(react_finalize)
-	step_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;finalize&nbsp; .-> step_execution_graph\3areact_graph\3areact_finalize;
-	step_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;iterate&nbsp; .-> step_execution_graph\3areact_graph\3areact_iterate;
-	step_execution_graph\3areact_graph\3aconsume_react_tool_result -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3areact_graph\3areact_tool_node;
-	step_execution_graph\3areact_graph\3areact_init --> step_execution_graph\3areact_graph\3areact_iterate;
-	step_execution_graph\3areact_graph\3areact_iterate -. &nbsp;finalize&nbsp; .-> step_execution_graph\3areact_graph\3areact_finalize;
-	step_execution_graph\3areact_graph\3areact_iterate -. &nbsp;tool_node&nbsp; .-> step_execution_graph\3areact_graph\3areact_tool_node;
-	step_execution_graph\3areact_graph\3areact_tool_node --> step_execution_graph\3areact_graph\3aconsume_react_tool_result;
-	step_execution_graph\3areact_graph\3areact_iterate -. &nbsp;iterate&nbsp; .-> step_execution_graph\3areact_graph\3areact_iterate;
+	subgraph executive_graph
+	executive_graph\3acompile_goal_graph(compile_goal_graph)
+	executive_graph\3aproject_control_state(project_control_state)
+	executive_graph\3adecide(decide)
+	executive_graph\3avalidate_decision(validate_decision)
+	executive_graph\3aapply_decision(apply_decision)
+	executive_graph\3aobserve_action(observe_action)
+	executive_graph\3averify_goal_progress(verify_goal_progress)
+	executive_graph\3averify_completion(verify_completion)
+	executive_graph\3a__end__(<p>__end__</p>)
+	executive_graph\3aaction_execution\3a__end__ --> executive_graph\3aobserve_action;
+	executive_graph\3aapply_decision -. &nbsp;stop&nbsp; .-> executive_graph\3a__end__;
+	executive_graph\3aapply_decision -. &nbsp;action&nbsp; .-> executive_graph\3aaction_execution\3aprepare_action;
+	executive_graph\3aapply_decision -. &nbsp;loop&nbsp; .-> executive_graph\3aproject_control_state;
+	executive_graph\3aapply_decision -. &nbsp;completion&nbsp; .-> executive_graph\3averify_completion;
+	executive_graph\3acompile_goal_graph --> executive_graph\3aproject_control_state;
+	executive_graph\3adecide --> executive_graph\3avalidate_decision;
+	executive_graph\3aobserve_action --> executive_graph\3averify_goal_progress;
+	executive_graph\3aproject_control_state --> executive_graph\3adecide;
+	executive_graph\3avalidate_decision --> executive_graph\3aapply_decision;
+	executive_graph\3averify_completion -. &nbsp;complete&nbsp; .-> executive_graph\3a__end__;
+	executive_graph\3averify_completion -. &nbsp;loop&nbsp; .-> executive_graph\3aproject_control_state;
+	executive_graph\3averify_goal_progress --> executive_graph\3aproject_control_state;
+	subgraph action_execution
+	executive_graph\3aaction_execution\3aprepare_action(prepare_action)
+	executive_graph\3aaction_execution\3aselect_action_step(select_action_step)
+	executive_graph\3aaction_execution\3aexecute_action_step(execute_action_step)
+	executive_graph\3aaction_execution\3ahandle_action_success(handle_action_success)
+	executive_graph\3aaction_execution\3arecover_action(recover_action)
+	executive_graph\3aaction_execution\3aconfirm_action_step(confirm_action_step)
+	executive_graph\3aaction_execution\3aaction_tool_node(action_tool_node)
+	executive_graph\3aaction_execution\3aconsume_action_tool_result(consume_action_tool_result)
+	executive_graph\3aaction_execution\3areact_action(react_action)
+	executive_graph\3aaction_execution\3a__end__(<p>__end__</p>)
+	executive_graph\3aaction_execution\3aaction_tool_node --> executive_graph\3aaction_execution\3aconsume_action_tool_result;
+	executive_graph\3aaction_execution\3aconfirm_action_step -. &nbsp;tool_node&nbsp; .-> executive_graph\3aaction_execution\3aaction_tool_node;
+	executive_graph\3aaction_execution\3aconfirm_action_step -. &nbsp;handle_success&nbsp; .-> executive_graph\3aaction_execution\3ahandle_action_success;
+	executive_graph\3aaction_execution\3aconfirm_action_step -. &nbsp;handle_failure&nbsp; .-> executive_graph\3aaction_execution\3arecover_action;
+	executive_graph\3aaction_execution\3aconsume_action_tool_result -. &nbsp;tool_node&nbsp; .-> executive_graph\3aaction_execution\3aaction_tool_node;
+	executive_graph\3aaction_execution\3aconsume_action_tool_result -. &nbsp;confirm_step&nbsp; .-> executive_graph\3aaction_execution\3aconfirm_action_step;
+	executive_graph\3aaction_execution\3aconsume_action_tool_result -. &nbsp;handle_success&nbsp; .-> executive_graph\3aaction_execution\3ahandle_action_success;
+	executive_graph\3aaction_execution\3aconsume_action_tool_result -. &nbsp;react_step&nbsp; .-> executive_graph\3aaction_execution\3areact_action;
+	executive_graph\3aaction_execution\3aconsume_action_tool_result -. &nbsp;handle_failure&nbsp; .-> executive_graph\3aaction_execution\3arecover_action;
+	executive_graph\3aaction_execution\3aexecute_action_step -. &nbsp;tool_node&nbsp; .-> executive_graph\3aaction_execution\3aaction_tool_node;
+	executive_graph\3aaction_execution\3aexecute_action_step -. &nbsp;confirm_step&nbsp; .-> executive_graph\3aaction_execution\3aconfirm_action_step;
+	executive_graph\3aaction_execution\3aexecute_action_step -. &nbsp;handle_success&nbsp; .-> executive_graph\3aaction_execution\3ahandle_action_success;
+	executive_graph\3aaction_execution\3aexecute_action_step -. &nbsp;react_step&nbsp; .-> executive_graph\3aaction_execution\3areact_action;
+	executive_graph\3aaction_execution\3aexecute_action_step -. &nbsp;handle_failure&nbsp; .-> executive_graph\3aaction_execution\3arecover_action;
+	executive_graph\3aaction_execution\3ahandle_action_success --> executive_graph\3aaction_execution\3aselect_action_step;
+	executive_graph\3aaction_execution\3aprepare_action --> executive_graph\3aaction_execution\3aselect_action_step;
+	executive_graph\3aaction_execution\3areact_action -. &nbsp;handle_success&nbsp; .-> executive_graph\3aaction_execution\3ahandle_action_success;
+	executive_graph\3aaction_execution\3areact_action -. &nbsp;recover&nbsp; .-> executive_graph\3aaction_execution\3arecover_action;
+	executive_graph\3aaction_execution\3arecover_action -. &nbsp;action_done&nbsp; .-> executive_graph\3aaction_execution\3a__end__;
+	executive_graph\3aaction_execution\3arecover_action -. &nbsp;retry&nbsp; .-> executive_graph\3aaction_execution\3aselect_action_step;
+	executive_graph\3aaction_execution\3aselect_action_step -. &nbsp;finalize_steps&nbsp; .-> executive_graph\3aaction_execution\3a__end__;
+	executive_graph\3aaction_execution\3aselect_action_step -. &nbsp;execute_step&nbsp; .-> executive_graph\3aaction_execution\3aexecute_action_step;
 	end
 	end
 	classDef default fill:#f2f0ff,line-height:1.2

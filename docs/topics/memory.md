@@ -29,16 +29,16 @@
 
 主要载体：
 
-- [AgentGraphState](../../src/personal_agent/agent/orchestration_models.py)：checkpoint-safe 的图执行状态。
+- [AgentGraphState](../../src/personal_agent/orchestration/orchestration_models.py)：checkpoint-safe 的图执行状态。
 - Postgres checkpoint：由 LangGraph Postgres checkpointer 管理 `checkpoints`、`checkpoint_blobs`、`checkpoint_writes`。
 - `messages`：同一 `thread_id` 下跨 run 累积的用户/助手对话。
-- `plan / react / tool_tracking / events / execution_trace / pending_confirmation`：当前执行、恢复、确认和审计需要的状态。
+- `task_spec / execution_ledger / control_state / react / tool_tracking / events / pending_confirmation`：当前决策、执行、恢复、确认和审计需要的状态。
 
 这层的价值是保证同一 thread 内的多轮任务可连续、可暂停、可恢复。高风险确认、solidify 草稿、计划步骤结果都先保存在 checkpoint 中；只有正式写入 `knowledge_notes` 后，才算长期知识。
 
 ### 短期上下文窗口
 
-checkpoint `messages` 是同一 thread 内累积的全量真源，但不会原样进入 prompt。进入 router、planner、ask、direct_answer 前，会经过 [short_term_context.py](../../src/personal_agent/agent/short_term_context.py) 的统一策略。
+checkpoint `messages` 是同一 thread 内累积的全量真源，但不会原样进入 prompt。进入 TaskAnalyzer、Executive、Ask 和 compose action 前，会经过 [short_term_context.py](../../src/personal_agent/memory/short_term_context.py) 的统一策略。
 
 当前已落地能力：
 
@@ -47,12 +47,12 @@ checkpoint `messages` 是同一 thread 内累积的全量真源，但不会原�
 - 单条截断：超长消息保留首尾，中间插入截断标记。
 - 角色过滤：只保留 user / assistant，过滤工具消息等内部消息。
 - 排除当前轮：entry 分支可用 `exclude_latest=True` 避免本轮输入重复进入上下文。
-- 滚动摘要：溢出消息达到触发条件时，可调用 `summarize_thread` 生成 `[早前对话摘要]`。
+- 滚动摘要：溢出消息达到触发条件时，由 context compressor 生成 `[早前对话摘要]`；它与用户请求的线程总结是两个不同语义。
 - 纯文本预算：planner query understanding 使用 `char_budget` 做字符级裁剪。
 
 当前滚动摘要仍是轻量 prompt 策略，有两个需要明确治理的风险：
 
-- 每次重新摘要可能不稳定：同一批历史对话可能被 LLM 压出不同重点，影响 planner、ask 或 direct answer 的行为一致性。
+- 每次重新摘要可能不稳定：同一批历史对话可能被 LLM 压出不同重点，影响 TaskAnalyzer、Executive 或 Ask 的行为一致性。
 - 摘要可能把助手推测写成事实：历史助手回答里的猜测、方案或未验证判断，如果被摘要成确定表述，会污染后续上下文。
 
 因此，进入 prompt 的短期对话线索必须带有明确边界：只用于理解指代、用户目标、已确认选择和待办状态，不作为事实证据；如果与当前可追溯 evidence、工具结果或长期知识冲突，以当前证据为准。
@@ -120,8 +120,9 @@ Ask 路径不会直接把所有 note 塞进 prompt，而是先从本地长期知
 - `run_id / thread_id / user_id / session_id`：运行和会话身份。
 - `messages`：同一 thread 内跨 run 累积的用户/助手对话。
 - `tool_messages`：当前动作的内部工具交换通道，不污染用户可见对话。
-- `router_decision`：入口意图分类结果。
-- `plan`：计划步骤、步骤结果、当前步骤和重试信息。
+- `task_analysis / task_spec`：入口目标理解和确定性编译后的任务契约。
+- `execution_ledger / control_state / control_decision`：Goal 状态、当前控制投影和本轮决策。
+- `current_action / step_execution`：当前 BoundedAction 或 Protocol 的局部执行状态。
 - `react`：ReAct 迭代、允许工具、停止原因和结果。
 - `tool_tracking`：当前工具调用归属，用于恢复后消费正确结果。
 - `citations / matches`：回答阶段的轻量证据摘要。
@@ -376,7 +377,7 @@ class MemoryEpisode(BaseModel):
     session_id: str
     thread_id: str
     run_id: str
-    workflow: EntryIntent
+    workflow: str  # semantic hint or Protocol operation
     title: str
     summary: str
     outcome: Literal["completed", "failed", "waiting_confirmation", "cancelled"]
@@ -420,7 +421,7 @@ needs_episodic_context = true
 
 当问题包含“上次 / 之前 / 为什么当时 / 做过什么 / 继续那个任务”等历史执行意图时，检索 `memory_episodes`。判定来自 planner 的 LLM 理解，外加 `_looks_like_episodic_query` 启发式兜底。检索本身是 ParadeDB BM25 全文检索（对 `search_text` 列做 `paradedb.match`，非向量召回），取 top 5，session 优先、全局兜底。命中后转成 `source_type="episode"` 的 `EvidenceItem`，进统一 ContextPack 和其他证据按相关度竞争预算。如果问题是普通事实问答，仍优先 semantic note/chunk、graph fact 和 web/tool evidence。
 
-消费侧有一个要正视的边界：`search_episodes` 全工程**只在 ask 链路被调用**，没有其他消费点。这在"历史行为类问题都会被 router 判成 ask"的假设下是自洽的，但代价是把召回正确性押在了两道串联的 LLM 判断上（`router 判 ask` → `query understanding 判 needs_episodic_context`），任一误判都会让历史召回失效且无 fallback。尤其 `direct_answer` 分支只读当前 thread 对话、不查 episode 也不查 note，是这个假设破裂时的盲区。修复方向是给 direct_answer 加一次轻量 episodic 检查，或把历史行为类问题的路由召回率纳入专门 eval。
+消费侧仍有一个边界：`search_episodes` 目前只由 Ask retrieval strategy 调用。TaskAnalyzer 若把历史行为请求表达成其他 Goal kind，Executive 可能不会激活该 strategy。这个问题应通过 resource hint、capability requirement 与历史行为场景 eval 解决，不能重新引入入口关键词 Router。
 
 使用边界必须明确：
 

@@ -1,14 +1,13 @@
 # E2E Live Behavioral Diagnostics
 
-This suite exercises ask, research, artifact/multimodal input, and broader
-workflow behavior
-through routed workflow branches in the real configured environment. It is a
+This suite exercises open goals, governed protocols, artifact/multimodal input,
+MCP tools, and A2A delegation in the real configured environment. It is a
 live diagnostic / release-confidence gate, not a deterministic golden gate:
 real LLM and real web providers can drift, so the baseline uses soft aggregate
 floors plus a small set of strict critical cases.
 
-- `ask` seeds the test knowledge store first, then runs the routed
-  `execute_entry` ask workflow through the real router, retrieval planner,
+- `ask` seeds the test knowledge store first, then runs
+  `execute_entry -> TaskAnalyzer -> GoalGraph -> Executive`, including retrieval planning,
   answer generation, verification, repair telemetry, and Evidence Engine. It
   covers evidence-grounded answers, no-local-evidence conservative answers, and
   bounded web fallback that stays in the ask branch.
@@ -28,34 +27,34 @@ floors plus a small set of strict critical cases.
   capture-then-ask requests.
 - `github_mcp` registers local read-only fake GitHub tools with governed names
   and MCP capability metadata, then drives the full
-  `execute_entry -> router -> external_codebase_qa workflow ->
-  capability_resolution -> ReAct -> ToolGateway -> audit trace` path. The
+  `execute_entry -> TaskAnalyzer -> Executive -> capability_resolution ->
+  ReAct -> ToolGateway -> audit trace` path. The
   deterministic mock is only the ReAct model decision, so the test still
-  verifies routed workflow selection, resolver participation, scoped allowlist,
+  verifies resource binding, resolver participation, action scope,
   gateway call, and audit record.
 - `notion_mcp` mirrors the same full-chain checks for read-only Notion MCP
   prompts. It registers local fake Notion tools with governed names and
   capability metadata, drives the full
-  `execute_entry -> router -> external_workspace_qa workflow ->
-  capability_resolution -> ReAct -> ToolGateway -> audit trace` path, and
-  verifies Notion write requests stay outside the read-only workflow.
+  `execute_entry -> TaskAnalyzer -> Executive -> capability_resolution ->
+  ReAct -> ToolGateway -> audit trace` path, and verifies Notion write
+  requests stay outside the read-only action scope.
 - `gpt_researcher_a2a` checks the AgentGateway external-agent delegation path
   for a deployed GPT Researcher A2A backend. It registers a local fake
   `gpt_researcher` Agent adapter, then drives the full
-  `execute_entry -> router -> gpt_researcher_a2a workflow ->
-  agent_call(gpt_researcher) -> AgentGateway -> AgentRun / AgentArtifact`
+  `execute_entry -> TaskAnalyzer -> Executive delegate -> capability_resolution ->
+  AgentGateway -> AgentRun / AgentArtifact`
   path. The e2e assertion verifies AgentRun creation and unverified artifact
   handling instead of tool audit.
 
 The goal is to catch behavioral regressions and environment drift across
-routing, evidence selection, answer grounding, conservative no-evidence
+task analysis, GoalGraph compilation, Executive decisions, evidence selection, answer grounding, conservative no-evidence
 behavior, artifact interpretation and degradation, Research source collection,
 satisfaction stopping, digest generation, non-ask workflow routing, complex
 intent decomposition, tool failure degradation, latency, and observability.
 Except for the GitHub/Notion MCP branches' deterministic ReAct tool-choice
 mocks and the GPT Researcher A2A branch's fake Agent adapter, the core
 LLM and external tools are not stubbed.
-`OPENAI_API_KEY` / `OPENAI_BASE_URL` and router-compatible config must be
+`OPENAI_API_KEY` / `OPENAI_BASE_URL` and structured-model config must be
 present, otherwise the gate skips. Other provider failures or degradations must
 be diagnosed by the run output rather than bypassed in the test.
 
@@ -120,4 +119,4 @@ Trace output:
   `suite.scored` events.
 - If pytest times out, inspect the last `case.started` event to identify the
   active case, then use its diagnostic logs and LLM usage fields to locate the
-  provider, router, artifact, or research degradation point.
+  provider, task-analysis, artifact, or research degradation point.

@@ -9,7 +9,7 @@ from personal_agent.agents import AgentGateway
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
-    AgentDefinition,
+    SubagentProfile,
     AgentEvent,
     AgentGatewayContext,
     AgentGovernance,
@@ -39,8 +39,9 @@ def _run_case(case) -> AgentGatewayQualityRun:
         user_id="quality",
         session_id=case.id,
         run_id=f"entry-{case.id}",
-        workflow_id="gpt_researcher_a2a",
-        step_id="gptr-a2a-research",
+        task_id="agent-gateway-quality",
+        goal_id=case.id,
+        action_id=f"{case.id}:delegate",
         source_platform="agent_gateway_quality",
     )
     task = AgentTask(task_text="Agent2Agent adoption", task_type="research")
@@ -69,13 +70,13 @@ def _run_case(case) -> AgentGatewayQualityRun:
     else:
         raise AssertionError(f"unknown operation={case.operation!r}")
 
-    definition = gateway.definition(run.agent_id)
+    definition = gateway.profile(run.agent_id)
     return AgentGatewayQualityRun(
         case_id=case.id,
         agent_id=run.agent_id,
         status=run.status,
         permission_scope=definition.governance.permission_scope if definition else "",
-        artifact_statuses=tuple(artifact.verification_status for artifact in run.artifacts),
+        artifact_statuses=tuple(artifact.producer_verification_status for artifact in run.artifacts),
         event_types=tuple(event.type for event in run.events),
         stream_event_types=stream_events,
     )
@@ -83,7 +84,7 @@ def _run_case(case) -> AgentGatewayQualityRun:
 
 class _QualityAgent:
     def __init__(self, agent_id: str, *, permission_scope: str) -> None:
-        self.definition = AgentDefinition(
+        self.profile = SubagentProfile(
             agent_id=agent_id,
             provider=agent_id,
             protocol="local",
@@ -101,13 +102,13 @@ class _QualityAgent:
         return AgentRunResult(run=run, output_text="quality report", artifacts=run.artifacts)
 
     def submit(self, task: AgentTask, context: AgentGatewayContext) -> AgentRun:
-        return self._run(task, context, status="working")
+        return self._run(task, context, status="running")
 
     def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
         return self._run(AgentTask("quality"), context, status="completed", agent_run_id=agent_run_id)
 
     def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
-        return self._run(AgentTask("quality"), context, status="canceled", agent_run_id=agent_run_id)
+        return self._run(AgentTask("quality"), context, status="cancelled", agent_run_id=agent_run_id)
 
     def stream(self, agent_run_id: str, context: AgentGatewayContext):
         yield AgentEvent(
@@ -131,7 +132,7 @@ class _QualityAgent:
             agent_run_id=run_id,
             kind="markdown_report",
             content="quality report",
-            verification_status="unverified",
+            producer_verification_status="unverified",
         )
         event = AgentEvent(
             event_id=new_agent_event_id(),
@@ -141,7 +142,7 @@ class _QualityAgent:
         )
         return AgentRun(
             agent_run_id=run_id,
-            agent_id=self.definition.agent_id,
+            agent_id=self.profile.agent_id,
             status=status,  # type: ignore[arg-type]
             task=task,
             context=context,

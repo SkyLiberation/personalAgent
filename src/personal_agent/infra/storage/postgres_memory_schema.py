@@ -156,7 +156,7 @@ def ensure_memory_schema(store) -> None:
                     session_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
-                    workflow TEXT NOT NULL,
+                    result_contract TEXT NOT NULL,
                     outcome TEXT NOT NULL,
                     title TEXT NOT NULL,
                     summary TEXT NOT NULL,
@@ -169,10 +169,15 @@ def ensure_memory_schema(store) -> None:
             )
             cur.execute("DROP INDEX IF EXISTS memory_episodes_search_vector_idx")
             cur.execute("DROP INDEX IF EXISTS memory_episodes_search_text_trgm_idx")
+            cur.execute("DROP INDEX IF EXISTS memory_episodes_workflow_idx")
             cur.execute("ALTER TABLE memory_episodes DROP COLUMN IF EXISTS search_vector")
+            cur.execute("ALTER TABLE memory_episodes ADD COLUMN IF NOT EXISTS result_contract TEXT NOT NULL DEFAULT 'unknown'")
+            cur.execute("ALTER TABLE memory_episodes DROP COLUMN IF EXISTS goal_kind")
+            cur.execute("ALTER TABLE memory_episodes DROP COLUMN IF EXISTS workflow")
             cur.execute("CREATE INDEX IF NOT EXISTS memory_episodes_user_idx ON memory_episodes (user_id, created_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS memory_episodes_thread_idx ON memory_episodes (thread_id, created_at DESC)")
-            cur.execute("CREATE INDEX IF NOT EXISTS memory_episodes_workflow_idx ON memory_episodes (user_id, workflow, created_at DESC)")
+            cur.execute("DROP INDEX IF EXISTS memory_episodes_goal_kind_idx")
+            cur.execute("CREATE INDEX IF NOT EXISTS memory_episodes_result_contract_idx ON memory_episodes (user_id, result_contract, created_at DESC)")
             cur.execute(
                 f"""
                 CREATE INDEX IF NOT EXISTS memory_episodes_bm25_idx

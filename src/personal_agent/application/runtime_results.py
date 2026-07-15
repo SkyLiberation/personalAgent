@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from personal_agent.kernel.models import Citation, EntryIntent, KnowledgeNote, ReviewCard
+from personal_agent.kernel.models import Citation, KnowledgeNote, ReviewCard
 from personal_agent.kernel.projections import MatchRef
 from personal_agent.application.verifier import VerificationResult
 
@@ -31,7 +31,7 @@ class DigestResult(BaseModel):
 
 
 class EntryResult(BaseModel):
-    intents: list[EntryIntent] = Field(default_factory=list)
+    result_contracts: list[str] = Field(default_factory=list)
     reason: str
     reply_text: str
     capture_result: CaptureResult | None = None
@@ -40,12 +40,10 @@ class EntryResult(BaseModel):
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     applied_reflection_ids: list[str] = Field(default_factory=list)
-    # Phase 3: HITL interrupt/resume
     run_id: str | None = None
     thread_id: str | None = None
     pending_confirmation: dict[str, object] | None = None
-    run_status: str | None = None  # "completed" | "waiting_confirmation"
-    # Phase 5: structured events from the orchestration graph
+    run_status: str | None = None
     events: list[object] = Field(default_factory=list)
 
 

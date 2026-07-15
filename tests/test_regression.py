@@ -9,7 +9,7 @@ import pytest
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import EntryInput
 from personal_agent.orchestration.service import AgentService
-from personal_agent.planning.router import Goal, RouterDecision
+from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
 from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -28,17 +28,28 @@ def svc(temp_dir: Path) -> AgentService:
 
 
 def _force_route(service: AgentService, route: str) -> None:
-    router = MagicMock()
-    router.classify.return_value = RouterDecision(goals=[Goal(
+    kind, domain, resource_types, operations = {
+        "delete_knowledge": ("external_state", "knowledge", ["note"], ["delete"]),
+        "capture_text": ("external_state", "knowledge", ["text"], ["ingest"]),
+        "solidify_conversation": ("external_state", "conversation", ["thread"], ["ingest"]),
+        "ask": ("response", "knowledge", ["note"], ["search", "read"]),
+    }.get(route, ("response", "", [], []))
+    analyzer = MagicMock()
+    analyzer.analyze.return_value = TaskAnalysis(user_goal=f"Mock input for {route}", goals=[Goal(
         goal_id="goal_1",
-        intent=route,
-        input=f"Mock input for {route}",
-        confidence=0.9,
+        result_contract=kind,
+        side_effect_intent="mutation" if kind == "external_state" else "none",
+        description=f"Mock input for {route}",
+        resource_hints=[ResourceHint(
+            semantic_domain=domain,
+            resource_types=resource_types,
+            operations=operations,
+        )] if domain else [],
     )])
-    service.runtime._intent_router = router
+    service.runtime._task_analyzer = analyzer
     service.runtime._graph_contexts = replace(
         service.runtime.graph_contexts,
-        routing=replace(service.runtime.graph_contexts.routing, intent_router=router),
+        routing=replace(service.runtime.graph_contexts.routing, task_analyzer=analyzer),
     )
 
 
@@ -46,7 +57,7 @@ def _event_types(result) -> list[str]:
     return [event["type"] for event in result.events]
 
 
-def test_delete_is_a_governed_protocol_not_a_top_level_step_plan(
+def test_delete_is_a_governed_procedure_not_a_top_level_step_plan(
     svc: AgentService,
     monkeypatch,
 ):
@@ -90,11 +101,11 @@ def test_delete_is_a_governed_protocol_not_a_top_level_step_plan(
     ))
 
     assert result.plan is None
-    assert result.run_status == "waiting_confirmation"
+    assert result.run_status == "blocked_approval"
     assert result.pending_confirmation
-    assert "protocol_started" in _event_types(result)
+    assert "procedure_started" in _event_types(result)
     assert "confirmation_required" in _event_types(result)
-    assert "steps_projected" not in _event_types(result)
+    assert "goal_graph_compiled" in _event_types(result)
 
 
 def test_solidify_without_source_dialogue_stops_without_fabricating_a_note(
@@ -113,13 +124,13 @@ def test_solidify_without_source_dialogue_stops_without_fabricating_a_note(
         for event in result.events
     }
     assert result.run_status == "completed"
-    assert "protocol_started" in _event_types(result)
+    assert "procedure_started" in _event_types(result)
     assert "step_failed" in _event_types(result)
     assert "task_stopped" in execution_types
     assert not svc.memory.list_notes("bob")
 
 
-def test_protocol_failure_is_observed_before_executive_stop(svc: AgentService):
+def test_procedure_failure_is_observed_before_executive_stop(svc: AgentService):
     _force_route(svc, "solidify_conversation")
 
     result = svc.entry(EntryInput(
@@ -139,7 +150,7 @@ def test_protocol_failure_is_observed_before_executive_stop(svc: AgentService):
     assert decisions[-1] == "stop"
 
 
-def test_protocol_steps_never_remain_planned_at_a_terminal_boundary(svc: AgentService):
+def test_procedure_steps_never_remain_planned_at_a_terminal_boundary(svc: AgentService):
     _force_route(svc, "solidify_conversation")
 
     result = svc.entry(EntryInput(

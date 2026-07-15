@@ -37,23 +37,6 @@ class ArtifactRef(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-EntryIntent = Literal[
-    "capture_text", "capture_link", "capture_file",
-    "ask", "analyze_artifact", "summarize_thread",
-    "delete_knowledge", "solidify_conversation",
-      "review_digest", "consolidate_knowledge", "inspect_knowledge_gaps",
-      "research_once", "create_research_subscription",
-      "execute_research_run",
-      "external_codebase_qa",
-      "external_workspace_qa",
-      "external_project_ops",
-      "gpt_researcher_a2a",
-      "manage_research", "maintain_knowledge", "inspect_operations", "inspect_workflow",
-    "direct_answer",
-    "unknown",
-]
-
-
 class EntryInput(BaseModel):
     text: str = ""
     user_id: str = "default"
@@ -61,7 +44,7 @@ class EntryInput(BaseModel):
     source_platform: str = "web"
     source_type: str = "text"
     source_ref: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[ArtifactRef] = Field(default_factory=list)
 
 
@@ -437,7 +420,7 @@ class KnowledgeNote(BaseModel):
 
 
 MemoryKind = Literal["semantic", "episodic", "procedural", "reflection"]
-EpisodeOutcome = Literal["completed", "failed", "waiting_confirmation", "cancelled"]
+EpisodeOutcome = Literal["completed", "failed", "blocked_approval", "cancelled"]
 
 
 class MemoryEpisode(BaseModel):
@@ -447,7 +430,7 @@ class MemoryEpisode(BaseModel):
     session_id: str = "default"
     thread_id: str = ""
     run_id: str = ""
-    workflow: EntryIntent = "unknown"
+    result_contract: str = "unknown"
     title: str = ""
     summary: str = ""
     outcome: EpisodeOutcome = "completed"
@@ -497,8 +480,6 @@ class AgentState(BaseModel):
     raw_item: RawIngestItem | None = None
     question: str | None = None
     entry_input: EntryInput | None = None
-    intent: EntryIntent = "unknown"
-    intent_reason: str | None = None
     note: KnowledgeNote | None = None
     chunk_drafts: list[ChunkDraft] = Field(default_factory=list)
     chunk_notes: list[KnowledgeNote] = Field(default_factory=list)

@@ -217,7 +217,7 @@ class RunMetrics:
     thread_id: str = ""
     user_id: str = ""
     session_id: str = ""
-    intent: str = "unknown"
+    result_contracts: str = ""
     started_at: float = field(default_factory=perf_counter)
 
     def complete(self, *, status: str, **dimensions: object) -> None:
@@ -231,7 +231,7 @@ class RunMetrics:
                 "thread_id": self.thread_id,
                 "user_id": self.user_id,
                 "session_id": self.session_id,
-                "intent": self.intent,
+                "result_contracts": self.result_contracts,
                 "status": status,
                 **dimensions,
             },

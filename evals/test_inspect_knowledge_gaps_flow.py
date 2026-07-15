@@ -15,7 +15,7 @@ What this covers that nothing else does:
 
   * ``tests/test_knowledge_gap_analyzer.py`` unit-tests the detector against a
     fake memory/graph — never through the router/planner/step graph, never real.
-  * ``evals/router_quality`` scores only that "检查缺口" classifies to
+  * ``evals/task_analysis_quality`` scores only that "检查缺口" classifies to
     ``inspect_knowledge_gaps``; it never executes the inspection.
 
 Detection of a *potential_conflict* is deterministic: two recent notes whose
@@ -106,7 +106,7 @@ class TestInspectKnowledgeGapsGolden:
         )
 
         # Routed to inspection and the run did not hang.
-        assert result.intents and result.intents[-1] == "inspect_knowledge_gaps"
+        assert result.result_contracts and result.result_contracts[-1] == "artifact"
         assert result.run_status in _TERMINAL
 
         # The detector fired end-to-end: the report carries the gaps header and is
@@ -142,7 +142,7 @@ class TestInspectKnowledgeGapsGolden:
             )
         )
 
-        assert result.intents and result.intents[-1] == "inspect_knowledge_gaps"
+        assert result.result_contracts and result.result_contracts[-1] == "artifact"
         assert result.run_status in _TERMINAL
 
         # No conflict (same polarity) and an empty user-scoped graph → clean report.

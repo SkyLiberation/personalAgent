@@ -20,18 +20,21 @@ from personal_agent.orchestration.orchestration_nodes._entry import (
     _node_interrupt_clarify,
     _node_normalize_entry,
     _node_prepare_clarify,
-    _node_route_intent,
+    _node_analyze_task,
 )
 from personal_agent.orchestration.orchestration_nodes._executive import (
     _after_apply_decision,
     _after_completion,
-    _after_recovery,
     _node_apply_decision,
     _node_decide,
-    _node_interpret_goal,
+    _node_compile_goal_graph,
+    _node_create_or_revise_plan,
+    _node_assess_planning_mode,
+    _node_monitor_plan,
     _node_observe_action,
+    _node_project_planning_facts,
     _node_project_control_state,
-    _node_recover_action,
+    _node_resolve_action,
     _node_validate_decision,
     _node_verify_completion,
     _node_verify_goal_progress,
@@ -59,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 def _after_entry_route(state: AgentGraphState) -> str:
-    if state.router_decision and state.router_decision.requires_clarification:
+    if state.task_analysis and state.task_analysis.requires_clarification:
         return "prepare_clarify_entry"
     return "return_to_parent"
 
@@ -69,32 +72,64 @@ def _after_entry_graph(state: AgentGraphState) -> str:
 
 
 def _after_react_graph(state: AgentGraphState) -> str:
-    return "handle_success" if state.react.status == "completed" else "recover"
+    return "handle_success" if state.react.status == "completed" else "action_done"
+
+
+def _after_observation(state: AgentGraphState) -> str:
+    return "retry" if state.control_route == "technical_retry" else "verify"
+
+
+def _after_goal_compile(state: AgentGraphState) -> str:
+    return "direct" if state.control_route == "direct_candidate" else "planning"
+
+
+def _after_planning_mode(state: AgentGraphState) -> str:
+    if state.planning_mode is not None and state.planning_mode.mode == "deliberative":
+        return "plan"
+    return "control"
+
+
+def _after_plan_creation(state: AgentGraphState) -> str:
+    return "control" if state.control_route == "plan_ready" else "stop"
+
+
+def _after_plan_monitor(state: AgentGraphState) -> str:
+    if state.planning_mode is None:
+        return "planning"
+    if state.control_route == "replan":
+        return "replan"
+    if state.control_route == "planning_stop":
+        return "stop"
+    return "control"
+
+
+def _after_goal_verification(state: AgentGraphState) -> str:
+    return "completion" if state.control_route == "direct_completion" else "monitor"
 
 
 def build_entry_graph(contexts: GraphContexts):
     """Understand the user goal and resolve entry-level clarification only."""
     builder = StateGraph(AgentGraphState)
     builder.add_node("normalize_entry", _node_normalize_entry)
-    builder.add_node("route_intent", lambda state: _node_route_intent(state, deps=contexts.routing))
+    builder.add_node("analyze_task", lambda state: _node_analyze_task(state, deps=contexts.routing))
     builder.add_node("prepare_clarify_entry", _node_prepare_clarify)
     builder.add_node("interrupt_clarify_entry", _node_interrupt_clarify)
     builder.add_edge(START, "normalize_entry")
-    builder.add_edge("normalize_entry", "route_intent")
+    builder.add_edge("normalize_entry", "analyze_task")
     builder.add_conditional_edges(
-        "route_intent",
+        "analyze_task",
         _after_entry_route,
         {"prepare_clarify_entry": "prepare_clarify_entry", "return_to_parent": END},
     )
     builder.add_conditional_edges(
         "prepare_clarify_entry",
         _after_prepare_clarify,
-        {"route_intent": "route_intent", "interrupt_clarify_entry": "interrupt_clarify_entry"},
+        {"analyze_task": "analyze_task", "interrupt_clarify_entry": "interrupt_clarify_entry"},
     )
     builder.add_conditional_edges(
         "interrupt_clarify_entry",
         _after_interrupt_clarify,
-        {"route_intent": "route_intent", "finalize_entry_result": END},
+        {"analyze_task": "analyze_task", "finalize_entry_result": END},
     )
     return builder.compile()
 
@@ -134,7 +169,6 @@ def build_action_execution_graph(contexts: GraphContexts):
     builder.add_node("select_action_step", _node_select_next_step)
     builder.add_node("execute_action_step", lambda state: _node_execute_step(state, deps=contexts.steps))
     builder.add_node("handle_action_success", lambda state: _node_handle_step_success(state, deps=contexts.steps))
-    builder.add_node("recover_action", _node_recover_action)
     builder.add_node("confirm_action_step", lambda state: _node_confirm_step(state, deps=contexts.steps))
     builder.add_node("action_tool_node", contexts.steps.tool_executor.graph_node())
     builder.add_node(
@@ -159,28 +193,23 @@ def build_action_execution_graph(contexts: GraphContexts):
                 "react_step": "react_action",
                 "tool_node": "action_tool_node",
                 "handle_success": "handle_action_success",
-                "handle_failure": "recover_action",
+                "handle_failure": END,
             },
         )
     builder.add_edge("action_tool_node", "consume_action_tool_result")
     builder.add_conditional_edges(
         "react_action",
         _after_react_graph,
-        {"handle_success": "handle_action_success", "recover": "recover_action"},
+        {"handle_success": "handle_action_success", "action_done": END},
     )
     builder.add_edge("handle_action_success", "select_action_step")
-    builder.add_conditional_edges(
-        "recover_action",
-        _after_recovery,
-        {"retry": "select_action_step", "action_done": END},
-    )
     builder.add_conditional_edges(
         "confirm_action_step",
         _after_confirm_step,
         {
             "tool_node": "action_tool_node",
             "handle_success": "handle_action_success",
-            "handle_failure": "recover_action",
+            "handle_failure": END,
         },
     )
     return builder.compile()
@@ -190,18 +219,38 @@ def build_executive_graph(contexts: GraphContexts):
     """Durable task-level decide-act-observe-verify loop."""
     deps = contexts.executive
     builder = StateGraph(AgentGraphState)
-    builder.add_node("interpret_goal", lambda state: _node_interpret_goal(state, deps=deps))
+    builder.add_node("compile_goal_graph", lambda state: _node_compile_goal_graph(state, deps=deps))
+    builder.add_node("project_planning_facts", lambda state: _node_project_planning_facts(state, deps=deps))
+    builder.add_node("assess_planning_mode", lambda state: _node_assess_planning_mode(state, deps=deps))
+    builder.add_node("create_or_revise_plan", lambda state: _node_create_or_revise_plan(state, deps=deps))
     builder.add_node("project_control_state", lambda state: _node_project_control_state(state, deps=deps))
     builder.add_node("decide", lambda state: _node_decide(state, deps=deps))
     builder.add_node("validate_decision", lambda state: _node_validate_decision(state, deps=deps))
     builder.add_node("apply_decision", lambda state: _node_apply_decision(state, deps=deps))
+    builder.add_node("resolve_action", lambda state: _node_resolve_action(state, deps=deps))
     builder.add_node("action_execution", build_action_execution_graph(contexts))
     builder.add_node("observe_action", lambda state: _node_observe_action(state, deps=deps))
     builder.add_node("verify_goal_progress", lambda state: _node_verify_goal_progress(state, deps=deps))
     builder.add_node("verify_completion", lambda state: _node_verify_completion(state, deps=deps))
+    builder.add_node("monitor_plan", lambda state: _node_monitor_plan(state, deps=deps))
 
-    builder.add_edge(START, "interpret_goal")
-    builder.add_edge("interpret_goal", "project_control_state")
+    builder.add_edge(START, "compile_goal_graph")
+    builder.add_conditional_edges(
+        "compile_goal_graph",
+        _after_goal_compile,
+        {"direct": "verify_goal_progress", "planning": "project_planning_facts"},
+    )
+    builder.add_edge("project_planning_facts", "assess_planning_mode")
+    builder.add_conditional_edges(
+        "assess_planning_mode",
+        _after_planning_mode,
+        {"plan": "create_or_revise_plan", "control": "project_control_state"},
+    )
+    builder.add_conditional_edges(
+        "create_or_revise_plan",
+        _after_plan_creation,
+        {"control": "project_control_state", "stop": END},
+    )
     builder.add_edge("project_control_state", "decide")
     builder.add_edge("decide", "validate_decision")
     builder.add_edge("validate_decision", "apply_decision")
@@ -210,14 +259,33 @@ def build_executive_graph(contexts: GraphContexts):
         _after_apply_decision,
         {
             "loop": "project_control_state",
-            "action": "action_execution",
+            "action": "resolve_action",
             "completion": "verify_completion",
             "stop": END,
         },
     )
+    builder.add_edge("resolve_action", "action_execution")
     builder.add_edge("action_execution", "observe_action")
-    builder.add_edge("observe_action", "verify_goal_progress")
-    builder.add_edge("verify_goal_progress", "project_control_state")
+    builder.add_conditional_edges(
+        "observe_action",
+        _after_observation,
+        {"retry": "resolve_action", "verify": "verify_goal_progress"},
+    )
+    builder.add_conditional_edges(
+        "verify_goal_progress",
+        _after_goal_verification,
+        {"completion": "verify_completion", "monitor": "monitor_plan"},
+    )
+    builder.add_conditional_edges(
+        "monitor_plan",
+        _after_plan_monitor,
+        {
+            "replan": "create_or_revise_plan",
+            "planning": "project_planning_facts",
+            "control": "project_control_state",
+            "stop": END,
+        },
+    )
     builder.add_conditional_edges(
         "verify_completion",
         _after_completion,
