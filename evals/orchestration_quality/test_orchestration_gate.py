@@ -1,11 +1,11 @@
 """End-to-end orchestration-quality regression gate.
 
-Drives every golden-set case through a real ``AgentRuntime`` (entry → router →
-step projection → optional HITL interrupt) with a deterministic stub standing in
-for the router LLM, then scores the projected run against the frozen baseline.
+Drives every golden-set case through a real ``AgentRuntime`` (entry → task
+analysis → goal graph → executive loop → optional HITL interrupt) with a
+deterministic TaskAnalyzer stub, then scores the run against the frozen baseline.
 
-Requires Postgres (the LangGraph checkpointer); the router LLM is stubbed so
-routing is deterministic and no live model endpoint is needed. Cases are
+Requires Postgres (the LangGraph checkpointer); TaskAnalyzer is stubbed so
+analysis is deterministic and no live model endpoint is needed. Cases are
 authored so the asserted event *subsequence* is reachable without live
 extraction (Neo4j/LLM ingestion), keeping the gate in the fast tier — we pin
 milestone ordering and the clarify/ready decision, not ingestion outcomes.
@@ -73,25 +73,26 @@ class TestOrchestrationQualityGate:
             if case.expected_outcome == "clarify":
                 run = runs[case.id]
                 assert run.paused_for_clarification, f"{case.id}: expected HITL pause"
-                assert "steps_projected" not in run.event_types, (
-                    f"{case.id}: clarify must pause before step projection"
+                assert "goal_graph_compiled" not in run.event_types, (
+                    f"{case.id}: clarify must pause before goal compilation"
                 )
 
-    def test_ready_cases_reach_step_projection(self, cases, runs):
+    def test_ready_cases_reach_goal_compilation(self, cases, runs):
         for case in cases:
             if case.expected_outcome == "ready":
                 run = runs[case.id]
                 assert not run.paused_for_clarification, f"{case.id}: unexpected pause"
-                assert "steps_projected" in run.event_types, (
-                    f"{case.id}: ready run must project steps"
+                assert "goal_graph_compiled" in run.event_types, (
+                    f"{case.id}: ready run must compile a goal graph"
                 )
 
-    def test_primary_intent_matches_gold(self, cases, runs):
+    def test_primary_result_contract_matches_gold(self, cases, runs):
         for case in cases:
-            if case.expected_primary_intent:
+            if case.expected_primary_result_contract:
                 run = runs[case.id]
-                assert run.primary_intent == case.expected_primary_intent, (
-                    f"{case.id}: {run.primary_intent} != {case.expected_primary_intent}"
+                assert run.primary_result_contract == case.expected_primary_result_contract, (
+                    f"{case.id}: {run.primary_result_contract} != "
+                    f"{case.expected_primary_result_contract}"
                 )
 
     def test_proceeding_runs_reach_terminal(self, cases, runs):

@@ -4,18 +4,18 @@
 
 ## 设计目标
 
-运行时与编排层负责把入口、路由、Workflow / Step Projection、工具、记忆、检索、校验和反馈串成稳定执行链路：
+运行时与编排层负责把入口、Task Analysis、Executive、Action/Procedure、工具、记忆、验证和反馈串成稳定执行链路：
 
 - `AgentService` 保持薄 facade
 - `AgentRuntime` 拥有核心运行时依赖
-- LangGraph entry 总图承担路由、固定分支、workflow 步骤投影、ReAct、HITL 和 checkpoint 编排
+- LangGraph 总图承担 analyze/decide/act/observe/verify、局部 ReAct、HITL 和 checkpoint 编排
 - 统一返回 Web、CLI、飞书可消费的结果对象
 
 ## 组件分层
 
 ### 1. `AgentService`
 
-代码位置：[service.py](../../src/personal_agent/agent/service.py)
+代码位置：[service.py](../../src/personal_agent/orchestration/service.py)
 
 作用：
 
@@ -25,25 +25,26 @@
 
 ### 2. `AgentRuntime`
 
-代码位置：[runtime.py](../../src/personal_agent/agent/runtime.py)
+代码位置：[runtime.py](../../src/personal_agent/orchestration/runtime.py)
 
 作用：
 
 - 持有工具注册表
 - 持有记忆门面
-- 持有 verifier、workflow step projector（历史类名仍为 planner）、validator、replanner
+- 持有 TaskAnalyzer、GoalGraphCompiler、Executive、Resolver、Verifier、ProcedureCatalog 和 Gateway
 - 执行 capture、ask、digest、entry、graph sync 等核心流程
 
 ### 3. LangGraph 编排
 
-代码位置：[orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py)、[orchestration_nodes/](../../src/personal_agent/agent/orchestration_nodes/)、[capture_flow.py](../../src/personal_agent/agent/capture_flow.py)、[graph_capture_flow.py](../../src/personal_agent/agent/graph_capture_flow.py)、[nodes.py](../../src/personal_agent/agent/nodes.py)
+代码位置：[orchestration_graph.py](../../src/personal_agent/orchestration/orchestration_graph.py)、[orchestration_nodes/](../../src/personal_agent/orchestration/orchestration_nodes/)
 
 作用：
 
-- `build_entry_orchestration_graph()`：entry 父图，组合 `EntryGraph`、普通分支与步骤执行子图
-- `build_entry_graph()`：归一化、意图路由与澄清 interrupt/resume
-- `build_step_execution_graph()`：负责确定性步骤、HITL、重试与最终汇总
-- `build_react_graph()`：受限 ReAct 轮次及其工具执行边界
+- `build_entry_orchestration_graph()`：组合 Entry、Executive 与最终结果映射
+- `build_entry_graph()`：归一化、Task Analysis 与澄清 interrupt/resume
+- `build_executive_graph()`：持久化 decide/act/observe/verify 循环
+- `build_action_execution_graph()`：执行当前 BoundedAction 或 Procedure nodes
+- `build_react_graph()`：当前动作内部的受限 ReAct
 - `run_capture_flow()`：capture 分支的确定性业务流，不单独 compile LangGraph
 - `GraphCaptureFlow`：capture 后的图谱摄取、graph sync 状态回写、批量同步和质量指标
 - `execute_ask()`：ask 运行时 pipeline，负责 graph/local/web 检索、rerank、生成和校验
@@ -79,10 +80,11 @@ question
 EntryInput
   -> AgentRuntime.execute_entry()
   -> build_entry_orchestration_graph()
-  -> EntryGraph: normalize_entry -> route_intent / clarification
-  -> capture / ask / summarize / direct_answer
-     或 StepExecutionGraph: project_workflow_steps -> validate_projected_steps -> step loop / HITL
-        -> ReactGraph（仅 react 步骤）
+  -> EntryGraph: normalize_entry -> analyze_task / clarification
+  -> GoalGraphCompiler
+  -> ExecutiveGraph: decide -> validate -> act -> observe -> verify
+     -> ActionExecutionGraph
+        -> Procedure nodes / bounded action / optional ReAct / HITL
   -> finalize_entry_result
   -> EntryResult
 ```
@@ -93,32 +95,26 @@ EntryInput
 - 已将 `AgentService` 收敛为薄 facade
 - 已支持 capture、ask、digest、entry 等统一运行时方法
 - 已支持 LangGraph entry 总编排
-- 已支持 workflow 投影步骤在 orchestration graph 内执行
+- 已支持 Procedure 投影步骤和开放式 BoundedAction 在同一 orchestration graph 内执行
 - 已支持图谱失败时本地回退
 - 已支持 verifier 校验和低置信度重试
 - 已支持图谱异步/手动同步重试
 - 已支持 Graph HITL 确认和拒绝
 - 已支持 LangGraph checkpoint 历史查询和基于历史 checkpoint 的 fork 回放
 - 已支持 health 和开发环境全量数据 reset
-- 已支持 projected `steps` 与 `execution_trace` 分离，避免普通 branch workflow 生成伪步骤
+- 已支持 Goal/Action/Procedure 事件与用户可见 execution trace 分离
 
-## 新增公开方法（v0.2+）
+## 公开运行时边界
 
 为减少 Web 层对 runtime 内部方法的直接访问，新增以下公开 API：
 
-### `classify_intent(entry_input: EntryInput) -> RouterDecision`
+### `task_analyzer / procedure_runtime`
 
-意图分类的公开封装，供入口层在不需要完整 `execute_entry()` 时快速获得路由决策。
-
-### `workflow_planner / step_projection_validator`
-
-运行时在 composition root 中把 `WorkflowPlanner` 和 `StepProjectionValidator` 注入
-`PlanningContext`。Router 产出的 Goal 会统一进入 WorkflowPlanner；Planner 选择 WorkflowSpec
-并编译 ExecutionPlan，Validator 只校验 workflow 编译结果，不读取 Router 执行策略。
+`task_analyzer` 是入口语义端口，不输出 provider 或步骤。`procedure_runtime` 只物化已经由 Executive 选择并经 Validator 批准的稳定事务；开放式 Goal 由 Executive 物化为 BoundedAction 或 delegate。
 
 ### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
 
-基于 LangGraph `get_state_history()` 返回某次 run 的 checkpoint 时间线摘要，包括 checkpoint id、父 checkpoint id、线程、状态、intent、下一步节点、事件数量、工具结果数量和 pending confirmation。它用于调试和运营后台查看“这次执行是如何走到当前状态的”，不直接暴露完整 checkpoint payload。
+基于 LangGraph `get_state_history()` 返回某次 run 的 checkpoint 时间线摘要，包括 checkpoint id、父 checkpoint id、线程、状态、goal kinds、下一步节点、事件数量、工具结果数量和 pending confirmation。它用于调试和运营后台查看“这次执行是如何走到当前状态的”，不直接暴露完整 checkpoint payload。
 
 这个接口不只是在给 `replay_from_checkpoint()` 提供 `checkpoint_id`，更重要的是帮助人或管理后台**选择应该从哪个历史点回放**。如果只返回一串 checkpoint id，使用者无法判断哪个点是“路由刚完成”、哪个点是“步骤刚投影出来”、哪个点是“删除确认前”、哪个点已经执行过工具。轻量摘要会保留足够的判断信息：
 
@@ -128,8 +124,8 @@ EntryInput
   "parent_checkpoint_id": "0e9...",
   "thread_id": "user:dns-session",
   "run_id": "abc123",
-  "status": "waiting_confirmation",
-  "intent": "delete_knowledge",
+  "status": "blocked_approval",
+  "result_contracts": ["external_state"],
   "next": ["confirm_step"],
   "event_count": 7,
   "tool_result_count": 1,
@@ -216,7 +212,7 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 
 ### 2. 普通分支事件粒度仍可增强
 
-普通 `capture / ask / summarize / direct_answer` 已进入 entry 总编排，但分支内部仍主要返回 answer、citations、matches 等结果字段。后续可继续补充更细粒度的 `AgentEvent`，让普通分支和计划步骤在前端反馈上更一致。
+开放 Goal 与 Protocol 已进入同一 Executive 总编排；局部 executor 仍有一些领域结果主要通过 answer、citations、matches 返回。后续应继续补充 action/observation 级 `AgentEvent`，避免再形成按 intent 划分的入口分支。
 
 ### 3. ReAct 单步策略仍处于受控首版
 

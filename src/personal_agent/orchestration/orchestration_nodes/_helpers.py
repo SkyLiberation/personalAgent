@@ -15,23 +15,9 @@ from personal_agent.kernel.llm_schemas import structured_response_format, strict
 from personal_agent.kernel.prompts import get_prompt
 
 if TYPE_CHECKING:
-    from personal_agent.orchestration.orchestration_nodes._deps import ExecutionStep
     from personal_agent.kernel.config import ShortTermMemoryConfig
 
 logger = logging.getLogger(__name__)
-
-def _build_react_context(step: "ExecutionStep", results: dict) -> str:
-    import json as _json
-
-    parts: list[str] = []
-    if step.tool_input:
-        parts.append(f"步骤输入：{_json.dumps(step.tool_input, ensure_ascii=False)}")
-    for sid, data in results.items():
-        if isinstance(data, dict):
-            summary = data.get("answer") or data.get("hint") or _json.dumps(data, ensure_ascii=False)[:200]
-            parts.append(f"[{sid}] {summary}")
-    return "\n".join(parts) if parts else "无"
-
 
 def _format_react_tools(allowed: set[str], deps: ReactContext) -> str:
     lines: list[str] = []

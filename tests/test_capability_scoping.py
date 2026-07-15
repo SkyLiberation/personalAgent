@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from personal_agent.kernel.contracts.capability import (
     Capability,
+    CapabilityRequirement,
     CapabilityResolution,
     CapabilityResolutionRequest,
     CapabilitySelectionPolicy,
@@ -9,110 +10,173 @@ from personal_agent.kernel.contracts.capability import (
 )
 from personal_agent.planning.capability_validation import ResolutionValidator
 from personal_agent.planning.capability_resolver import CapabilityResolver
-from personal_agent.tools.mcp_capability import CapabilityRegistry, capability_from_workflow_action
+from personal_agent.planning.outcome_ranking import OutcomeAwareCapabilityRanker
+from personal_agent.tools.mcp_capability import CapabilityRegistry
 
 
-def test_resolver_rejects_kind_outside_step_scope():
+def _request(
+    *,
+    requirement: CapabilityRequirement,
+    kinds=("mcp_tool",),
+    operations=("search", "read"),
+    policy: CapabilitySelectionPolicy | None = None,
+) -> CapabilityResolutionRequest:
+    return CapabilityResolutionRequest(
+        task_id="task-1",
+        goal_id="goal-1",
+        action_id="action-1",
+        meta_capability="acquire",
+        allowed_kinds=kinds,
+        allowed_operations=operations,
+        requirements=(requirement,),
+        policy=policy or CapabilitySelectionPolicy(),
+    )
+
+
+def test_resolver_rejects_kind_outside_action_scope():
     resolver = CapabilityResolver(CapabilityRegistry((
         _capability("retriever:local", kind="retriever", provider="local", local_name="local"),
-        _capability("tool:capture_text", kind="local_tool", provider="internal", local_name="capture_text", operations=("create",)),
+        _capability(
+            "tool:capture_text",
+            kind="local_tool",
+            provider="internal",
+            local_name="capture_text",
+            operations=("create",),
+        ),
     )))
+    requirement = CapabilityRequirement(
+        requirement_id="evidence",
+        purpose="retrieve notes",
+        semantic_domains=("local_memory",),
+        operations=("search", "read"),
+    )
 
-    resolution = resolver.resolve(CapabilityResolutionRequest(
-        task_text="回答 MCP 笔记有哪些",
-        workflow_id="ask",
-        step_id="ask-retrieve",
-        step_action_type="retrieve",
-        allowed_kinds=("retriever",),
-        allowed_operations=("search", "read"),
-        policy=CapabilitySelectionPolicy(max_providers_per_step=4),
+    resolution = resolver.resolve(_request(
+        requirement=requirement,
+        kinds=("retriever",),
+        policy=CapabilitySelectionPolicy(max_providers_per_action=4),
     ))
 
     assert resolution.selected_retrievers == ("local",)
-    assert "capture_text" not in resolution.allowed_tools
     assert any(
         denied.capability_id == "tool:capture_text" and denied.reason == "kind_not_allowed"
         for denied in resolution.denied_capabilities
     )
 
 
-def test_local_first_denies_external_retriever_but_keeps_local_sources():
+def test_local_first_is_explicit_policy_not_text_classification():
     resolver = CapabilityResolver(CapabilityRegistry((
         _capability("retriever:local", kind="retriever", provider="local", local_name="local"),
-        _capability("retriever:web", kind="retriever", provider="web", local_name="web", side_effects=("external_network",)),
+        _capability(
+            "retriever:web",
+            kind="retriever",
+            provider="web",
+            local_name="web",
+            side_effects=("external_network",),
+        ),
     )))
+    requirement = CapabilityRequirement(
+        requirement_id="evidence",
+        purpose="retrieve evidence",
+        operations=("search", "read"),
+    )
 
-    resolution = resolver.resolve(CapabilityResolutionRequest(
-        task_text="我之前关于 Agent 工具调用的笔记有哪些？",
-        workflow_id="ask",
-        step_id="ask-retrieve",
-        step_action_type="retrieve",
-        allowed_kinds=("retriever",),
-        allowed_operations=("search", "read"),
-        policy=CapabilitySelectionPolicy(max_providers_per_step=4),
+    resolution = resolver.resolve(_request(
+        requirement=requirement,
+        kinds=("retriever",),
+        policy=CapabilitySelectionPolicy(
+            local_first=True,
+            max_providers_per_action=4,
+        ),
     ))
 
     assert resolution.selected_retrievers == ("local",)
-    assert "web" in {denied.local_name for denied in resolution.denied_capabilities}
-    assert resolution.constraints["allowed_kinds"] == ["retriever"]
+    assert any(item.local_name == "web" and item.reason == "local_first" for item in resolution.denied_capabilities)
 
 
-def test_read_only_step_rejects_write_capability():
+def test_read_only_action_rejects_write_capability():
     resolver = CapabilityResolver(CapabilityRegistry((
-        _capability("mcp:github:get_file_contents", kind="mcp_tool", provider="github", local_name="github.get_file_contents", operations=("read",)),
-        _capability("mcp:github:create_issue", kind="mcp_tool", provider="github", local_name="github.create_issue", operations=("create",)),
+        _capability(
+            "mcp:github:get_file_contents",
+            kind="mcp_tool",
+            provider="github",
+            local_name="github.get_file_contents",
+            operations=("read",),
+        ),
+        _capability(
+            "mcp:github:create_issue",
+            kind="mcp_tool",
+            provider="github",
+            local_name="github.create_issue",
+            operations=("create",),
+        ),
     )))
+    requirement = CapabilityRequirement(
+        requirement_id="repository",
+        purpose="read repository content",
+        semantic_domains=("codebase",),
+        resource_types=("repository", "file"),
+        operations=("read",),
+        required_providers=("github",),
+    )
 
-    resolution = resolver.resolve(CapabilityResolutionRequest(
-        task_text="总结这个 GitHub repo 的 README",
-        workflow_id="external_codebase_qa",
-        step_id="codebase-resolve",
-        step_action_type="react",
-        allowed_kinds=("mcp_tool",),
-        allowed_operations=("search", "read"),
-        policy=CapabilitySelectionPolicy(preferred_providers=("github",), max_providers_per_step=1),
+    resolution = resolver.resolve(_request(
+        requirement=requirement,
+        operations=("read",),
+        policy=CapabilitySelectionPolicy(
+            read_only=True,
+            preferred_providers=("github",),
+            max_providers_per_action=1,
+        ),
     ))
 
     assert resolution.allowed_tools == ("github.get_file_contents",)
     assert any(
-        denied.local_name == "github.create_issue" and denied.reason == "operation_not_allowed"
+        denied.local_name == "github.create_issue"
+        and denied.reason == "requirement_mismatch"
         for denied in resolution.denied_capabilities
     )
 
 
 def test_unreviewed_high_risk_capability_is_rejected_before_execution():
-    unreviewed = _capability(
-        "mcp:github:create_issue",
-        kind="mcp_tool",
-        provider="github",
-        local_name="github.create_issue",
+    resolver = CapabilityResolver(CapabilityRegistry((
+        _capability(
+            "mcp:github:create_issue",
+            kind="mcp_tool",
+            provider="github",
+            local_name="github.create_issue",
+            operations=("create",),
+        ),
+    )))
+    requirement = CapabilityRequirement(
+        requirement_id="issue-create",
+        purpose="create issue",
+        semantic_domains=("codebase",),
+        resource_types=("repository",),
         operations=("create",),
+        required_providers=("github",),
     )
-    resolver = CapabilityResolver(CapabilityRegistry((unreviewed,)))
 
-    resolution = resolver.resolve(CapabilityResolutionRequest(
-        task_text="创建一个 GitHub issue",
-        workflow_id="external_project_ops",
-        step_id="project-write",
-        step_action_type="tool_call",
-        allowed_kinds=("mcp_tool",),
-        allowed_operations=("create",),
-        policy=CapabilitySelectionPolicy(local_first=False, read_only=False),
+    resolution = resolver.resolve(_request(
+        requirement=requirement,
+        operations=("create",),
+        policy=CapabilitySelectionPolicy(read_only=False),
     ))
 
     assert not resolution.selected_capabilities
     assert any(item.reason == "unreviewed_high_risk_metadata" for item in resolution.denied_capabilities)
-    assert resolution.lifecycle_state == "policy_clamped"
 
 
-def test_resolution_validator_rejects_scope_expansion_and_tracks_scope_identity():
-    request = CapabilityResolutionRequest(
-        task_text="搜索本地笔记",
-        workflow_id="ask",
-        step_id="ask-retrieve",
-        step_action_type="retrieve",
-        allowed_kinds=("retriever",),
-        allowed_operations=("search", "read"),
+def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity():
+    requirement = CapabilityRequirement(
+        requirement_id="search",
+        purpose="search notes",
+        operations=("search",),
+    )
+    request = _request(
+        requirement=requirement,
+        kinds=("retriever",),
+        operations=("search", "read"),
     )
     selected = _capability(
         "tool:delete_note",
@@ -121,27 +185,27 @@ def test_resolution_validator_rejects_scope_expansion_and_tracks_scope_identity(
         local_name="delete_note",
         operations=("delete",),
     ).model_copy(update={"metadata_source": "system"})
-    resolution = CapabilityResolution(
-        request=request,
-        selected_capabilities=(selected,),
-    )
+    resolution = CapabilityResolution(request=request, selected_capabilities=(selected,))
 
     errors = ResolutionValidator().errors(request, resolution)
 
     assert request.scope_id
     assert any(error.startswith("kind_outside_scope") for error in errors)
     assert any(error.startswith("operation_outside_scope") for error in errors)
+    assert any(error.startswith("requirement_outside_scope") for error in errors)
 
 
 def test_missing_freshness_source_returns_non_authoritative_escalation_hint():
-    resolution = CapabilityResolver(CapabilityRegistry(())).resolve(CapabilityResolutionRequest(
-        task_text="Python 当前稳定版是多少",
-        workflow_id="ask",
-        step_id="ask-retrieve",
-        step_action_type="retrieve",
-        allowed_kinds=("retriever",),
-        allowed_operations=("search", "read"),
-        runtime_context={"needs_freshness": True},
+    requirement = CapabilityRequirement(
+        requirement_id="fresh",
+        purpose="retrieve current release information",
+        semantic_domains=("web",),
+        operations=("search", "read"),
+        freshness_required=True,
+    )
+    resolution = CapabilityResolver(CapabilityRegistry(())).resolve(_request(
+        requirement=requirement,
+        kinds=("retriever",),
     ))
 
     assert resolution.escalation_hint is not None
@@ -165,26 +229,60 @@ def test_evidence_source_capability_is_a_retrieval_only_contract():
     assert source.underlying_execution == "tool_gateway"
 
 
-def test_internal_workflow_actions_are_registered_but_not_resolver_selectable():
-    action = capability_from_workflow_action(
-        workflow_id="ask",
-        step_id="ask-verify",
-        action_type="verify",
-        description="Verify answer claims.",
+def test_outcome_ranker_reorders_only_hard_eligible_candidates():
+    preferred = _capability(
+        "retriever:preferred",
+        kind="retriever",
+        provider="preferred",
+        local_name="preferred",
     )
-    resolution = CapabilityResolver(CapabilityRegistry((action,))).resolve(
-        CapabilityResolutionRequest(
-            task_text="验证回答",
-            workflow_id="ask",
-            step_id="ask-verify",
-            step_action_type="verify",
-            allowed_kinds=("workflow_action",),
-            allowed_operations=("verify",),
+    denied = _capability(
+        "tool:write",
+        kind="local_tool",
+        provider="write",
+        local_name="write",
+        operations=("create",),
+    )
+    baseline = _capability(
+        "retriever:baseline",
+        kind="retriever",
+        provider="baseline",
+        local_name="baseline",
+    )
+    ranker = OutcomeAwareCapabilityRanker(minimum_samples=2)
+    for _ in range(2):
+        ranker.store.record(
+            preferred.capability_id,
+            succeeded=True,
+            verifier_passed=True,
+            latency_ms=10,
         )
+        ranker.store.record(
+            baseline.capability_id,
+            succeeded=False,
+            verifier_passed=False,
+            latency_ms=100,
+        )
+    requirement = CapabilityRequirement(
+        requirement_id="evidence",
+        purpose="read evidence",
+        operations=("search", "read"),
     )
+    resolution = CapabilityResolver(
+        CapabilityRegistry((baseline, preferred, denied)),
+        ranker=ranker,
+    ).resolve(_request(
+        requirement=requirement,
+        kinds=("retriever",),
+        policy=CapabilitySelectionPolicy(
+            max_capabilities_per_action=1,
+            max_providers_per_action=1,
+        ),
+    ))
 
-    assert resolution.workflow_actions == ()
-    assert any(item.reason == "internal_workflow_action" for item in resolution.denied_capabilities)
+    assert resolution.selected_retrievers == ("preferred",)
+    assert any(item.capability_id == denied.capability_id for item in resolution.denied_capabilities)
+    assert resolution.constraints["ranking"]["feature_version"] == "capability-outcome-v1"
 
 
 def _capability(

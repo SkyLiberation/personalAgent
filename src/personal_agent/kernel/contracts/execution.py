@@ -5,14 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
-
-from personal_agent.kernel.models import EntryIntent
-
-
 @dataclass(slots=True)
 class ExecutionStep:
-    """A workflow node compiled for one concrete task."""
+    """A bounded action or governed procedure node ready for execution."""
 
     step_id: str = field(default_factory=lambda: uuid4().hex[:8])
     action_type: str = ""
@@ -31,42 +26,19 @@ class ExecutionStep:
     execution_mode: str = "deterministic"
     allowed_tools: list[str] = field(default_factory=list)
     max_iterations: int = 3
-    workflow_id: str = ""
-    workflow_version: str = ""
-    workflow_step_id: str = ""
-    projection_kind: str = "workflow_step"
+    llm_decision_node: str = ""
+    procedure_id: str = ""
+    procedure_version: str = ""
+    procedure_node_id: str = ""
+    procedure_recovery_policy: str = "skip"
+    procedure_branch_policy: str = "continue"
+    conditional_edges: list[dict[str, str]] = field(default_factory=list)
+    projection_kind: str = "bounded_action"
     task_id: str = ""
-    task_intent: EntryIntent = "unknown"
     task_input: str = ""
     meta_capability: str = ""
     output_contract: str = "ToolResult"
-    pattern_id: str = ""
     skill_ids: list[str] = field(default_factory=list)
+    execution_guidance: list[str] = field(default_factory=list)
     capability_requirements: list[dict[str, object]] = field(default_factory=list)
     subtask_spec: dict[str, object] = field(default_factory=dict)
-
-
-class WorkflowTask(BaseModel):
-    """One selected workflow bound to a user goal."""
-
-    task_id: str
-    intent: EntryIntent
-    input: str
-    depends_on: list[str] = Field(default_factory=list)
-    workflow_id: str
-    workflow_version: str
-    step_ids: list[str] = Field(default_factory=list)
-
-
-class ExecutionPlan(BaseModel):
-    """Immutable task-level plan consumed by orchestration."""
-
-    plan_id: str = Field(default_factory=lambda: uuid4().hex[:12])
-    tasks: list[WorkflowTask] = Field(default_factory=list)
-
-    @property
-    def primary_intent(self) -> EntryIntent:
-        return self.tasks[-1].intent if self.tasks else "unknown"
-
-    def task(self, task_id: str) -> WorkflowTask | None:
-        return next((task for task in self.tasks if task.task_id == task_id), None)

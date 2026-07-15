@@ -49,10 +49,11 @@ def project_turn(
 ) -> ConversationTurnOutput:
     events = [_event_type(event) for event in list(getattr(result, "events", []) or [])]
     status = str(getattr(result, "run_status", "") or "")
+    clarification_pending = status == "waiting"
     return ConversationTurnOutput(
         kind=kind,
-        outcome="clarify" if status == "waiting_confirmation" else "ready",
-        intents=list(getattr(result, "intents", []) or []),
+        outcome="clarify" if clarification_pending else "ready",
+        result_contracts=list(getattr(result, "result_contracts", []) or []),
         event_types=events,
         reply_text=str(getattr(result, "reply_text", "") or ""),
         run_id=str(getattr(result, "run_id", "") or ""),

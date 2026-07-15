@@ -13,7 +13,7 @@ flowchart LR
 
         subgraph Capture["Capture / Indexing"]
             direction TB
-            EntryLayer["入口层<br/>route intent<br/>bind user/session<br/>normalize source scope"]:::layer
+            EntryLayer["入口层<br/>Task Analysis<br/>bind user/session<br/>normalize source scope"]:::layer
             EntryInput["EntryInput<br/>text: 用户输入<br/>user_id/session_id<br/>source_type/source_ref<br/>metadata"]:::model
             CaptureLayer["采集层<br/>extract content<br/>fingerprint dedupe<br/>duplicate skip / version decision"]:::layer
             RawIngestItem["RawIngestItem<br/>content: 入库正文<br/>source_type/source_ref<br/>metadata<br/>source_fingerprint"]:::model

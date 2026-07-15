@@ -78,21 +78,17 @@
 
 往生产走，这里要补的是：跨来源内容指纹去重、按 parent_note_id 归并不同形态、source-aware MMR 或按 query_type 调权的融合（而不是直接合池丢给 LLM rerank）、检测高分证据之间的事实矛盾并在回答里显式提示分歧，而不是让模型默默挑一个。这些方向在 `rag-eval-results.md` 的"下一步"里也已列为待办。
 
-### 6. 要加一个新 intent（比如"更新知识"），改动面有多大？
+### 6. 要增加一种新知识能力，改动面有多大？
 
-因为 workflow 是声明式 frozen 的，主要改动集中在几处：在 router 加 intent 分类与默认决策；在 `workflow.py` 的模块级 `_build_registry()`（构造 `WORKFLOW_REGISTRY`）里声明新的 `WorkflowSpec`（节点、依赖、风险、HITL、projection_policy）；如果涉及新工具，在工具层注册并补 args schema 和 governance；如果需要步骤执行，StepProjectionValidator 加 intent 特定规则；最后补 eval。新声明的 spec 还会被 `WorkflowSpecValidator` 和 `validate_registry_against_capabilities` 两道 spec 层闸门检查（对真实注册表跑断言，见 `tests/test_workflow_validator.py`），所以"加一份声明"必须同时通过 spec 自洽与工具能力一致性校验。
+若只是新的开放方法，增加 Skill 或 Capability metadata 与 eval，Executive 无需新增业务 route。若它保护新的稳定事务，才增加 ProcedureSpec、工具 schema/governance、Applicability 条件和 Procedure eval。TaskAnalyzer 仍只输出 provider-neutral Goal/ResourceHint，不增加关键词 intent 分支。
 
-这个边界是刻意的：流程拓扑集中在 WorkflowRegistry 一处声明，LLM 不能临场发明控制流，所以加 intent 是"加一份声明 + 接治理"，而不是改散落各处的 if-else。
+### 7. Ask 为什么不建固定 Procedure？
 
-### 7. projection_policy 为什么只给 delete/solidify 开，ask 为什么不投影成 ExecutionStep？
-
-因为只有需要步骤状态、HITL 确认或 checkpoint 恢复的 workflow 才值得付出 ExecutionStep 投影的成本。delete 要确认和恢复，solidify 要先 compose 再 capture，这些都需要可展示、可恢复的步骤图。
-
-ask、capture、direct answer、summarize 有直接 Graph 分支和 `execution_trace`，不需要额外步骤状态。给它们也投影成 ExecutionStep 只会增加无谓的状态管理开销，所以默认 `projection_policy="none"`。
+Ask 的证据需求会随 Observation 和 VerificationGap 变化，固定拓扑会压缩策略空间。它仍使用 ExecutionStep 作为动作级运行投影，但步骤由 Executive 逐轮产生，不由一个 ask Procedure 预先声明。
 
 ### 8. 真要做开放式 autonomous planner，怎么加 guardrail？和 StepProjectionValidator 什么关系？
 
-StepProjectionValidator（`StepProjectionValidator`）现在校验的是确定性投影出来的步骤图：步骤类型、依赖环、工具注册、args schema、风险等级、ReAct 越权、intent 规则。它本身就是 guardrail 的核心。它之上还有一层更早的闸门：`WorkflowSpecValidator` 在 spec 声明期就把 delete_longterm 必须 high+confirmation+hitl 这类不变式拦在源头，所以非法流程在变成 ExecutionStep 之前就过不了。
+StepProjectionValidator 校验 dispatch projection 的工具注册、args schema、风险、确认和 ReAct 越权。DecisionValidator 更早校验开放决策；ProcedureSpecValidator 校验稳定事务声明。三者分工，不用一个 Validator 猜任务语义。
 
 如果引入 autonomous planner，它生成的计划仍然必须过同一个 StepProjectionValidator，再加几道：限制可组合的工具集（只允许低风险只读）、要求每条计划可映射到已知能力、必须有 eval 覆盖、高风险动作仍走 HITL。也就是说 autonomous planner 只是换了"谁生成计划"，校验、确认、审计这套边界不变。
 

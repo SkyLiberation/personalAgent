@@ -1,8 +1,8 @@
 """Capability contracts.
 
-Capabilities describe what a workflow step may consider before any concrete
-execution happens. They are deliberately separate from Gateway governance:
-capability scoping answers "what can this step consider"; gateways answer
+Capabilities describe what a bounded action may consider before concrete
+execution. They are deliberately separate from Gateway governance:
+capability scoping answers "what can this action consider"; gateways answer
 "may this concrete invocation run, and how is it audited".
 """
 
@@ -19,7 +19,6 @@ CapabilityKind = Literal[
     "mcp_tool",
     "retriever",
     "agent",
-    "workflow_action",
 ]
 CapabilityOperation = Literal[
     "search",
@@ -43,9 +42,6 @@ ResolutionLifecycleState = Literal[
     "created", "resolved", "validated", "policy_clamped", "executed",
     "audited", "rejected", "failed", "superseded",
 ]
-CapabilityResolutionScope = str
-
-
 class CapabilityRequirement(BaseModel):
     """A provider-independent requirement for one meta-capability.
 
@@ -63,6 +59,8 @@ class CapabilityRequirement(BaseModel):
     resource_locator: str | None = None
     minimum_trust_level: CapabilityTrustLevel = "external"
     freshness_required: bool = False
+    preferred_providers: tuple[str, ...] = ()
+    required_providers: tuple[str, ...] = ()
     output_contract: str = "ToolResult"
     side_effect_class: str = "none"
 
@@ -100,7 +98,7 @@ class Capability(BaseModel):
     metadata_source: CapabilityMetadataSource = "provider"
     metadata_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     selectable: bool = True
-    selectable_only_in_steps: tuple[str, ...] = ()
+    selectable_only_in_actions: tuple[str, ...] = ()
     provider_priority: int | None = None
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] | None = None
@@ -111,7 +109,6 @@ class MCPCapability(Capability):
     kind: CapabilityKind = "mcp_tool"
     server_id: str
     remote_tool_name: str
-    local_tool_name: str
     credential_mode: CredentialMode = "delegated_token"
     data_egress_class: DataEgressClass = "content"
 
@@ -134,16 +131,11 @@ class EscalationHint(BaseModel):
     requested_operations: tuple[CapabilityOperation, ...] = ()
     suggested_execution_shape: str | None = None
 
-    @property
-    def local_name_resolved(self) -> str:
-        return self.local_name or self.local_tool_name
-
-
 class CapabilitySelectionPolicy(BaseModel):
-    local_first: bool = True
+    local_first: bool = False
     read_only: bool = True
-    max_capabilities_per_step: int = Field(default=4, ge=1)
-    max_providers_per_step: int = Field(default=2, ge=1)
+    max_capabilities_per_action: int = Field(default=4, ge=1)
+    max_providers_per_action: int = Field(default=2, ge=1)
     deny_sensitive_egress: bool = True
     require_trusted_for_sensitive: bool = True
     require_reviewed_metadata_for_high_risk: bool = True
@@ -152,11 +144,10 @@ class CapabilitySelectionPolicy(BaseModel):
 
 class CapabilityResolutionRequest(BaseModel):
     scope_id: str = ""
-    task_text: str
-    workflow_id: str = ""
-    workflow_scope: CapabilityResolutionScope | None = None
-    step_id: str = ""
-    step_action_type: str = ""
+    task_id: str = ""
+    goal_id: str
+    action_id: str
+    meta_capability: str
     allowed_kinds: tuple[CapabilityKind, ...] = ("mcp_tool",)
     allowed_operations: tuple[CapabilityOperation, ...] = ("search", "read", "list")
     requirements: tuple[CapabilityRequirement, ...] = ()
@@ -168,22 +159,18 @@ class CapabilityResolutionRequest(BaseModel):
         if self.scope_id:
             return self
         identity = ":".join((
-            self.workflow_id or str(self.workflow_scope or ""),
-            self.step_id,
-            self.step_action_type,
+            self.task_id,
+            self.goal_id,
+            self.action_id,
+            self.meta_capability,
         ))
         self.scope_id = sha256(identity.encode("utf-8")).hexdigest()[:16]
         return self
-
-    @property
-    def scope(self) -> str:
-        return self.workflow_id or str(self.workflow_scope or "")
 
 
 class DeniedCapability(BaseModel):
     capability_id: str
     local_name: str = ""
-    local_tool_name: str = ""
     provider: str
     reason: str
 
@@ -194,7 +181,7 @@ class ResolutionLifecycleEvent(BaseModel):
     trace_ref: str = ""
 
 
-class EvidencePack(BaseModel):
+class CapabilityEvidencePack(BaseModel):
     scope_id: str
     resolution_id: str
     selected_capability_ids: tuple[str, ...] = ()
@@ -219,7 +206,6 @@ class CapabilityResolution(BaseModel):
     allowed_tools: tuple[str, ...] = ()
     selected_retrievers: tuple[str, ...] = ()
     allowed_agents: tuple[str, ...] = ()
-    workflow_actions: tuple[str, ...] = ()
     coverage: tuple[CapabilityCoverage, ...] = ()
     constraints: dict[str, Any] = Field(default_factory=dict)
     escalation_hint: EscalationHint | None = None
@@ -251,7 +237,6 @@ __all__ = [
     "CapabilityMetadataSource",
     "CapabilityResolution",
     "CapabilityResolutionRequest",
-    "CapabilityResolutionScope",
     "CapabilityRequirement",
     "CapabilityOperation",
     "CapabilitySelectionPolicy",
@@ -260,7 +245,7 @@ __all__ = [
     "DataEgressClass",
     "DeniedCapability",
     "EscalationHint",
-    "EvidencePack",
+    "CapabilityEvidencePack",
     "EvidenceSourceCapability",
     "FreshnessProfile",
     "MCPCapability",

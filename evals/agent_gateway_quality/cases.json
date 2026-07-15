@@ -19,7 +19,7 @@
     "id": "AGENT-GW-003",
     "operation": "cancel",
     "agent_id": "gpt_researcher",
-    "expected_status": "canceled",
+    "expected_status": "cancelled",
     "min_events": 2
   },
   {

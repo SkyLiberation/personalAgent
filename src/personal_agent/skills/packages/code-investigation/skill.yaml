@@ -1,0 +1,14 @@
+id: code-investigation
+version: 2.0.0
+description: Locate code evidence and explain verified call paths.
+publisher: personal-agent
+content_hash: sha256:3c6b37615d026b96674f86c146b2775539b6c4acd2b41e9c34b4e7210a0c9cf1
+runtime_compatibility: ">=3.0,<4.0"
+requested_permissions: [artifact.read]
+required_capability_kinds: [retriever, mcp_tool]
+output_contracts: [EvidencePack, VerificationReport]
+verifier_profile: code_evidence
+eval_contract: code_evidence_traceability
+applicability:
+  semantic_domains: [codebase]
+  operations: [search, read, verify]

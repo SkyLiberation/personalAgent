@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class EntryResponse(BaseModel):
-    intents: list[str] = Field(default_factory=list)
+    result_contracts: list[str] = Field(default_factory=list)
     reason: str
     reply_text: str
     capture_result: dict | None = None
@@ -37,7 +37,7 @@ class RunSnapshotResponse(BaseModel):
     user_id: str
     session_id: str
     status: str
-    intents: list[str] = Field(default_factory=list)
+    result_contracts: list[str] = Field(default_factory=list)
     entry_text: str
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
@@ -73,7 +73,7 @@ def entry_response(result) -> EntryResponse:
 
 def entry_response_dict(result) -> dict[str, object]:
     return {
-        "intents": result.intents,
+        "result_contracts": result.result_contracts,
         "reason": result.reason,
         "reply_text": result.reply_text,
         "capture_result": result.capture_result.model_dump(mode="json") if result.capture_result else None,
@@ -97,7 +97,7 @@ def run_snapshot_to_response(snapshot) -> RunSnapshotResponse:
         user_id=snapshot.user_id,
         session_id=snapshot.session_id,
         status=snapshot.status.value,
-        intents=snapshot.intents,
+        result_contracts=snapshot.result_contracts,
         entry_text=snapshot.entry_text,
         steps=snapshot.steps,
         execution_trace=snapshot.execution_trace,

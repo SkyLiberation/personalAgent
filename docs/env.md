@@ -400,7 +400,7 @@ PERSONAL_AGENT_GPT_RESEARCHER_A2A_TONE=Objective
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=
 ```
 
-启用后，用户明确点名 `GPT Researcher` / `GPT-Researcher` / `A2A` 委托研究时会路由到 `gpt_researcher_a2a` workflow，通过 `agent_call(gpt_researcher)` 进入 AgentGateway。普通“调研最新动态”仍走本工程内置 `research_once` workflow。
+启用后，GPT Researcher 作为 Agent capability 注册。用户明确点名时，Task Analyzer 形成 required provider binding，Executive 产生 delegate，CapabilityResolver 选择 `gpt_researcher` 并通过 AgentGateway 调用。普通研究任务可由 Executive 选择本地研究动作或 `research_once` Protocol。
 
 ## Firecrawl 配置
 
@@ -483,7 +483,7 @@ LANGSMITH_WORKSPACE_ID=
 `PERSONAL_AGENT_LANGSMITH_ENABLED` 决定，采样比例由 `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 决定。
 生产环境建议保持 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false`。
 
-结构化模型调用通过 composition root 注入观测装饰器，Router 等业务组件不读取该开关。
+结构化模型调用通过 composition root 注入观测装饰器，TaskAnalyzer、Executive 等业务组件不读取该开关。
 该策略不能保证覆盖 LangGraph/LangChain 自动产生的所有节点 trace，也不能覆盖尚未迁移到统一
 Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
 文件内容或密钥。

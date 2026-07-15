@@ -8,7 +8,7 @@ to completion. Every hop is covered at two levels:
   * runtime level  — AgentRuntime.execute_entry / resume_entry directly
   * HTTP/SSE level — the same flow over /api/entry/stream + /api/entry/runs/{id}/resume
 
-The router LLM is replaced by ``stub_router_decision`` (see evals/conftest.py)
+The router LLM is replaced by ``stub_task_analysis`` (see evals/conftest.py)
 so routing is deterministic and does not depend on a live model endpoint.
 
 Tests are split into two tiers:
@@ -54,7 +54,7 @@ class TestClarifyInterruptContract:
                 session_id="eval-solidify-direct",
             )
         )
-        assert result.intents and result.intents[-1] == "solidify_conversation"
+        assert result.result_contracts and result.result_contracts[-1] == "external_state"
         # A clear solidify request must not stall on clarification.
         assert result.pending_confirmation is None
 
@@ -68,7 +68,7 @@ class TestClarifyInterruptContract:
             )
         )
         # The run must pause for clarification, not silently complete.
-        assert interrupted.run_status == "waiting_confirmation"
+        assert interrupted.run_status == "waiting"
         assert interrupted.pending_confirmation is not None
         assert interrupted.pending_confirmation["kind"] == "clarification_required"
         assert interrupted.run_id
@@ -76,7 +76,7 @@ class TestClarifyInterruptContract:
         # The clarification event must come after intent classification.
         event_types = [event["type"] for event in interrupted.events]
         assert "clarification_required" in event_types
-        assert event_types.index("intent_classified") < event_types.index(
+        assert event_types.index("task_analyzed") < event_types.index(
             "clarification_required"
         )
 
@@ -89,7 +89,7 @@ class TestClarifyInterruptContract:
                 session_id="eval-clarify-reject",
             )
         )
-        assert interrupted.run_status == "waiting_confirmation"
+        assert interrupted.run_status == "waiting"
 
         resumed = runtime.resume_entry(
             run_id=interrupted.run_id or "",
@@ -99,7 +99,7 @@ class TestClarifyInterruptContract:
             text="",
         )
         # A rejected run terminates; it must not have routed into capture_text.
-        assert "capture_text" not in resumed.intents
+        assert "external_state" not in resumed.result_contracts
 
 
 class TestClarifyInterruptContractHttp:
@@ -126,7 +126,7 @@ class TestClarifyInterruptContractHttp:
         assert "event: confirmation_required" in stream.text
 
         run = self._latest_run(api_client, session_id)
-        assert run["status"] == "waiting_confirmation"
+        assert run["status"] == "waiting"
         assert run["pending_confirmation"]["kind"] == "clarification_required"
 
     def test_resume_rejects_unknown_run(self, api_client):
@@ -170,9 +170,9 @@ class TestClarifyResumeCompletion:
                 session_id="eval-clarify-resume-complete",
             )
         )
-        assert interrupted.run_status == "waiting_confirmation"
+        assert interrupted.run_status == "waiting"
 
-        resumed = runtime.resume_entry(
+        confirmation = runtime.resume_entry(
             run_id=interrupted.run_id or "",
             thread_id=interrupted.thread_id or "",
             decision="clarify",
@@ -180,9 +180,19 @@ class TestClarifyResumeCompletion:
             text="记一下：澄清补充后应继续执行并完成。",
             option_id="capture",
         )
-        assert resumed.run_status == "completed"
-        assert resumed.intents and resumed.intents[-1] == "capture_text"
-        assert resumed.reply_text
+        assert confirmation.run_status == "blocked_approval"
+        assert confirmation.pending_confirmation is not None
+        assert confirmation.pending_confirmation["action_type"] == "memory_admission"
+
+        completed = runtime.resume_entry(
+            run_id=confirmation.run_id or "",
+            thread_id=confirmation.thread_id or "",
+            decision="confirm",
+            user_id="eval-user",
+        )
+        assert completed.run_status == "completed"
+        assert completed.result_contracts and completed.result_contracts[-1] == "external_state"
+        assert completed.reply_text
 
     def test_clarify_stream_resume_completes_http(self, api_client):
         """Over HTTP: POST /resume with clarify text drives the run to completed."""
@@ -196,7 +206,7 @@ class TestClarifyResumeCompletion:
         ).json()["items"]
         run = next(item for item in runs if item["session_id"] == session_id)
 
-        resumed = api_client.post(
+        confirmation = api_client.post(
             f"/api/entry/runs/{run['run_id']}/resume",
             json={
                 "decision": "clarify",
@@ -204,5 +214,14 @@ class TestClarifyResumeCompletion:
                 "text": "记一下：补充信息通过 /resume 提交后流程应完成。",
             },
         )
-        assert resumed.status_code == 200
-        assert resumed.json()["run_status"] == "completed"
+        assert confirmation.status_code == 200
+        confirmation_body = confirmation.json()
+        assert confirmation_body["run_status"] == "blocked_approval"
+        assert confirmation_body["pending_confirmation"]["action_type"] == "memory_admission"
+
+        completed = api_client.post(
+            f"/api/entry/runs/{run['run_id']}/resume",
+            json={"decision": "confirm", "user_id": "eval-user"},
+        )
+        assert completed.status_code == 200
+        assert completed.json()["run_status"] == "completed"

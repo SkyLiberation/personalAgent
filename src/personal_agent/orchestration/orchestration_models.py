@@ -17,11 +17,16 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-from personal_agent.kernel.models import Citation, EntryInput, EntryIntent, ThreadSummary, local_now
-from personal_agent.kernel.contracts.execution import ExecutionPlan
-from personal_agent.planning.router import RouterDecision
+from personal_agent.kernel.models import Citation, EntryInput, ThreadSummary, local_now
+from personal_agent.planning.task_analyzer import TaskAnalysis
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
-from personal_agent.kernel.contracts.agentic import ContextEnvelope, ExecutionEvent, ExecutionLedger, TaskSpec
+from personal_agent.kernel.contracts.agentic import (
+    ContextEnvelope,
+    ContextProjection,
+    ExecutionEvent,
+    ExecutionLedger,
+    TaskSpec,
+)
 from personal_agent.kernel.contracts.executive import (
     ActionOutcome,
     BoundedAction,
@@ -29,6 +34,20 @@ from personal_agent.kernel.contracts.executive import (
     ControlDecision,
     ControlState,
     ObservationRef,
+    ResolvedActionSpec,
+    RetryDirective,
+)
+from personal_agent.kernel.contracts.procedure import ProcedureInstance
+from personal_agent.kernel.contracts.planning import (
+    DispatchGroup,
+    FrontierDecision,
+    PlanLedger,
+    PlanMonitorDecision,
+    PlannerExecutionProfile,
+    PlanningBudget,
+    PlanningFacts,
+    PlanningModeAssessment,
+    ReplanRequest,
 )
 
 if TYPE_CHECKING:
@@ -53,12 +72,18 @@ def _new_thread_id(user_id: str, session_id: str, run_id: str | None = None) -> 
 # ---------------------------------------------------------------------------
 
 class AgentRunStatus(str, Enum):
-    pending = "pending"
+    created = "created"
+    queued = "queued"
     running = "running"
+    waiting = "waiting"
+    blocked_approval = "blocked_approval"
+    cancel_requested = "cancel_requested"
+    cancelling = "cancelling"
     completed = "completed"
-    failed = "failed"
-    waiting_confirmation = "waiting_confirmation"
+    completed_degraded = "completed_degraded"
     cancelled = "cancelled"
+    failed = "failed"
+    timed_out = "timed_out"
 
 
 class AgentRunSnapshot(BaseModel):
@@ -68,10 +93,10 @@ class AgentRunSnapshot(BaseModel):
     thread_id: str
     user_id: str
     session_id: str
-    status: AgentRunStatus = AgentRunStatus.pending
-    intents: list[EntryIntent] = Field(default_factory=list)
-    workflow_id: str = ""
-    workflow_version: str = ""
+    status: AgentRunStatus = AgentRunStatus.created
+    result_contracts: list[str] = Field(default_factory=list)
+    procedure_id: str = ""
+    procedure_version: str = ""
     entry_text: str = ""
     steps: list[dict[str, Any]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
@@ -91,7 +116,7 @@ class AgentRunSnapshot(BaseModel):
 
 
 class StepRunState(BaseModel):
-    """Checkpoint-safe, serialisable workflow step projection state.
+    """Checkpoint-safe, serialisable execution step projection state.
 
     Mirrors the ``ExecutionStep`` dataclass fields so that the orchestration graph
     can store and resume step projections without dict conversion.
@@ -117,17 +142,20 @@ class StepRunState(BaseModel):
     execution_mode: str = "deterministic"
     allowed_tools: list[str] = Field(default_factory=list)
     max_iterations: int = 3
-    workflow_id: str = ""
-    workflow_version: str = ""
-    workflow_step_id: str = ""
-    projection_kind: str = "workflow_step"
+    llm_decision_node: str = ""
+    procedure_id: str = ""
+    procedure_version: str = ""
+    procedure_node_id: str = ""
+    procedure_recovery_policy: str = "skip"
+    procedure_branch_policy: str = "continue"
+    conditional_edges: list[dict[str, str]] = Field(default_factory=list)
+    projection_kind: str = "bounded_action"
     task_id: str = ""
-    task_intent: EntryIntent = "unknown"
     task_input: str = ""
     meta_capability: str = ""
     output_contract: str = "ToolResult"
-    pattern_id: str = ""
     skill_ids: list[str] = Field(default_factory=list)
+    execution_guidance: list[str] = Field(default_factory=list)
     capability_requirements: list[dict[str, Any]] = Field(default_factory=list)
     subtask_spec: dict[str, Any] = Field(default_factory=dict)
     input_artifact_id: str = ""
@@ -139,7 +167,7 @@ class StepRunState(BaseModel):
 
     @classmethod
     def from_execution_step(cls, s: "ExecutionStep") -> "StepRunState":
-        """Create a StepRunState from a workflow step projection."""
+        """Create a StepRunState from an execution step projection."""
         return cls(
             step_id=s.step_id,
             action_type=s.action_type,
@@ -158,17 +186,20 @@ class StepRunState(BaseModel):
             execution_mode=s.execution_mode,
             allowed_tools=s.allowed_tools,
             max_iterations=s.max_iterations,
-            workflow_id=s.workflow_id,
-            workflow_version=s.workflow_version,
-            workflow_step_id=s.workflow_step_id,
+            llm_decision_node=s.llm_decision_node,
+            procedure_id=s.procedure_id,
+            procedure_version=s.procedure_version,
+            procedure_node_id=s.procedure_node_id,
+            procedure_recovery_policy=s.procedure_recovery_policy,
+            procedure_branch_policy=s.procedure_branch_policy,
+            conditional_edges=s.conditional_edges,
             projection_kind=s.projection_kind,
             task_id=s.task_id,
-            task_intent=s.task_intent,
             task_input=s.task_input,
             meta_capability=s.meta_capability,
             output_contract=s.output_contract,
-            pattern_id=s.pattern_id,
             skill_ids=s.skill_ids,
+            execution_guidance=s.execution_guidance,
             capability_requirements=s.capability_requirements,
             subtask_spec=s.subtask_spec,
         )
@@ -195,17 +226,20 @@ class StepRunState(BaseModel):
             execution_mode=self.execution_mode,
             allowed_tools=self.allowed_tools,
             max_iterations=self.max_iterations,
-            workflow_id=self.workflow_id,
-            workflow_version=self.workflow_version,
-            workflow_step_id=self.workflow_step_id,
+            llm_decision_node=self.llm_decision_node,
+            procedure_id=self.procedure_id,
+            procedure_version=self.procedure_version,
+            procedure_node_id=self.procedure_node_id,
+            procedure_recovery_policy=self.procedure_recovery_policy,
+            procedure_branch_policy=self.procedure_branch_policy,
+            conditional_edges=self.conditional_edges,
             projection_kind=self.projection_kind,
             task_id=self.task_id,
-            task_intent=self.task_intent,
             task_input=self.task_input,
             meta_capability=self.meta_capability,
             output_contract=self.output_contract,
-            pattern_id=self.pattern_id,
             skill_ids=self.skill_ids,
+            execution_guidance=self.execution_guidance,
             capability_requirements=self.capability_requirements,
             subtask_spec=self.subtask_spec,
         )
@@ -288,13 +322,28 @@ class AgentGraphState(BaseModel):
     tool_messages: list[AnyMessage] = Field(default_factory=list)
 
     # Routing
-    router_decision: RouterDecision | None = None
-    execution_plan: ExecutionPlan | None = None
+    task_analysis: TaskAnalysis | None = None
     task_spec: TaskSpec | None = None
     execution_ledger: ExecutionLedger | None = None
     context_envelope: ContextEnvelope = Field(default_factory=ContextEnvelope)
-    workflow_id: str = ""
-    workflow_version: str = ""
+    context_projections: list[ContextProjection] = Field(default_factory=list)
+    planning_model_context: dict[str, object] = Field(default_factory=dict)
+    control_model_context: dict[str, object] = Field(default_factory=dict)
+    procedure_id: str = ""
+    procedure_version: str = ""
+    active_procedure: ProcedureInstance | None = None
+
+    # Adaptive planning owns short-horizon strategy. Step status is projected
+    # exclusively from plan events rather than duplicated on PlanStep.
+    planning_facts: PlanningFacts | None = None
+    planning_mode: PlanningModeAssessment | None = None
+    planner_profile: PlannerExecutionProfile | None = None
+    planning_budget: PlanningBudget = Field(default_factory=PlanningBudget)
+    plan_ledger: PlanLedger = Field(default_factory=PlanLedger)
+    frontier_decision: FrontierDecision | None = None
+    selected_plan_step_ids: list[str] = Field(default_factory=list)
+    plan_monitor_decision: PlanMonitorDecision | None = None
+    replan_request: ReplanRequest | None = None
 
     # Task-level executive control. These fields, rather than the projected
     # step list, own open-task progress and completion semantics.
@@ -303,6 +352,10 @@ class AgentGraphState(BaseModel):
     current_action: BoundedAction | None = None
     current_actions: list[BoundedAction] = Field(default_factory=list)
     current_action_outcome: ActionOutcome | None = None
+    resolved_action_spec: ResolvedActionSpec | None = None
+    resolved_action_specs: list[ResolvedActionSpec] = Field(default_factory=list)
+    dispatch_groups: list[DispatchGroup] = Field(default_factory=list)
+    retry_directive: RetryDirective | None = None
     latest_observations: list[ObservationRef] = Field(default_factory=list)
     completion_report: CompletionReport | None = None
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
@@ -320,7 +373,7 @@ class AgentGraphState(BaseModel):
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
     provider_call_count: int = 0
 
-    # Lightweight execution trace (for non-planning intents)
+    # Lightweight execution trace for user-visible progress.
     execution_trace: list[str] = Field(default_factory=list)
 
     # Reflection ids injected into this run (replan/ask), for post-run promotion
@@ -379,12 +432,12 @@ class AgentGraphState(BaseModel):
             user_id=self.user_id,
             session_id=self.session_id,
             status=resolved_status,
-            intents=(
-                [goal.intent for goal in self.router_decision.goals]
-                if self.router_decision else []
+            result_contracts=(
+                [goal.result_contract for goal in self.task_analysis.goals]
+                if self.task_analysis else []
             ),
-            workflow_id=self.workflow_id,
-            workflow_version=self.workflow_version,
+            procedure_id=self.procedure_id,
+            procedure_version=self.procedure_version,
             entry_text=self.entry_text,
             steps=[s.model_dump(mode="json") for s in self.step_execution.steps],
             execution_trace=self.execution_trace,
@@ -404,29 +457,17 @@ def _infer_status(state: AgentGraphState) -> AgentRunStatus:
     if state.answer_completed:
         return AgentRunStatus.completed
     if state.pending_confirmation is not None:
-        return AgentRunStatus.waiting_confirmation
-    if state.router_decision is not None:
+        if state.pending_confirmation.get("kind") == "clarification_required":
+            return AgentRunStatus.waiting
+        return AgentRunStatus.blocked_approval
+    if state.task_analysis is not None:
         return AgentRunStatus.running
-    return AgentRunStatus.pending
+    return AgentRunStatus.created
 
 
 # ---------------------------------------------------------------------------
 # Conversion helpers: EntryResult <-> AgentEvent / AgentGraphState
 # ---------------------------------------------------------------------------
-
-def steps_to_steps_projected_events(
-    steps: list[dict[str, Any]], run_id: str, thread_id: str
-) -> list[AgentEvent]:
-    """Create a ``steps_projected`` event from projected step dicts."""
-    return [
-        AgentEvent(
-            run_id=run_id,
-            thread_id=thread_id,
-            type="steps_projected",
-            payload={"steps": steps},
-        )
-    ]
-
 
 def execution_trace_to_events(
     traces: list[str], run_id: str, thread_id: str
@@ -488,10 +529,10 @@ def execution_trace_from_events(events: list[AgentEvent]) -> list[str]:
             if label and label not in seen:
                 trace.append(label)
                 seen.add(label)
-        elif evt.type == "protocol_started":
-            call = evt.payload.get("protocol_call") or {}
-            protocol_id = str(call.get("protocol_id") or "")
-            label = f"执行受治理协议: {protocol_id}" if protocol_id else "执行受治理协议"
+        elif evt.type == "procedure_started":
+            call = evt.payload.get("procedure_call") or {}
+            procedure_id = str(call.get("procedure_id") or "")
+            label = f"执行受治理过程: {procedure_id}" if procedure_id else "执行受治理过程"
             if label not in seen:
                 trace.append(label)
                 seen.add(label)
@@ -502,15 +543,13 @@ _SSE_EVENT_TYPE_MAP: dict[str, str] = {
     "entry_started": "status",
     "clarification_required": "confirmation_required",
     "clarification_resumed": "status",
-    "intent_classified": "intent",
-    "steps_projected": "steps_projected",
-    "steps_validated": "status",
-    "goal_interpreted": "status",
+    "task_analyzed": "task_analysis",
+    "goal_graph_compiled": "goal_graph_compiled",
     "executive_decision": "executive_decision",
     "action_materialized": "action_materialized",
     "action_outcome": "action_outcome",
-    "protocol_started": "protocol_started",
-    "protocol_completed": "protocol_completed",
+    "procedure_started": "procedure_started",
+    "procedure_completed": "procedure_completed",
     "goal_verification": "goal_verification",
     "completion_checked": "completion_checked",
     "completion_rejected": "completion_rejected",

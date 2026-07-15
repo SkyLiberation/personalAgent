@@ -10,7 +10,7 @@
     "expected_research_type": "technical_product_update",
     "expected_evidence_requirement": "official_or_multi_source",
     "acceptable_evidence_requirements": ["official_required"],
-    "expected_query_intents": ["latest", "official"]
+    "expected_query_goal_kinds": ["latest", "official"]
   },
   {
     "id": "research-understanding-002",
@@ -22,7 +22,7 @@
     "expected_max_items": 3,
     "expected_research_type": "academic_research",
     "expected_evidence_requirement": "paper_or_primary_source",
-    "expected_query_intents": ["paper", "repo"]
+    "expected_query_goal_kinds": ["paper", "repo"]
   },
   {
     "id": "research-understanding-003",
@@ -34,7 +34,7 @@
     "expected_max_items": 2,
     "expected_research_type": "company_financials",
     "expected_evidence_requirement": "primary_financial_source_required",
-    "expected_query_intents": ["financial_filing", "transcript", "official"]
+    "expected_query_goal_kinds": ["financial_filing", "transcript", "official"]
   },
   {
     "id": "research-understanding-004",
@@ -48,6 +48,6 @@
     "acceptable_research_types": ["general_news"],
     "expected_evidence_requirement": "official_or_multi_source",
     "acceptable_evidence_requirements": ["multi_source"],
-    "expected_query_intents": ["latest", "official"]
+    "expected_query_goal_kinds": ["latest", "official"]
   }
 ]

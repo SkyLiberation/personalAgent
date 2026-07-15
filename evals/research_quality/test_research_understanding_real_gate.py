@@ -2,7 +2,7 @@
 
 This gate evaluates the model-facing part of ``initialize_state``: converting a
 raw natural-language research request into topic, instructions, policy, max
-items and query-plan intents. It intentionally stops before search/cluster/digest
+items and query-plan result_contracts. It intentionally stops before search/cluster/digest
 so failures are attributable to request understanding rather than providers.
 """
 

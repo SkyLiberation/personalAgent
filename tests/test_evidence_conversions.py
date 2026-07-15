@@ -193,7 +193,7 @@ class TestEpisodesToEvidence:
             session_id="s1",
             thread_id="u1:s1",
             run_id="run-1",
-            workflow="solidify_conversation",
+            result_contract="solidify_conversation",
             title="固化对话",
             summary="把当前会话沉淀为笔记。",
             decisions=["识别意图为 solidify_conversation"],
@@ -207,7 +207,7 @@ class TestEpisodesToEvidence:
         assert len(items) == 1
         assert items[0].source_type == "episode"
         assert items[0].source_id == "episode:run-1"
-        assert items[0].metadata["workflow"] == "solidify_conversation"
+        assert items[0].metadata["result_contract"] == "solidify_conversation"
         assert items[0].metadata["note_refs"] == ["note-1"]
 
 

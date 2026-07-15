@@ -40,7 +40,7 @@ def test_clarification_resumes_original_run(runtime):
     assert resumed.outcome == "ready"
     assert resumed.run_id == interrupted.run_id == resumed.resumed_from_run_id
     assert resumed.thread_id == interrupted.thread_id
-    assert resumed.intents == ["ask"]
+    assert resumed.result_contracts == ["response"]
     assert resumed.reached_terminal
 
 
@@ -53,5 +53,5 @@ def test_rejected_clarification_terminates_without_side_effect(runtime):
         session_id="conversation-runtime-reject",
     )
     assert run.turns[-1].reached_terminal
-    assert run.turns[-1].intents == []
+    assert run.turns[-1].result_contracts == []
     assert run.final_note_delta == 0

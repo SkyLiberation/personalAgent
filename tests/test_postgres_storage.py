@@ -410,7 +410,7 @@ def test_memory_episodes_are_persisted_and_searchable(temp_dir: Path):
         session_id="s1",
         thread_id=f"{user_id}:s1",
         run_id="run-episode-search",
-        workflow="delete_knowledge",
+        result_contract="delete_knowledge",
         title="删除知识: Graphiti 清理",
         summary="用户确认删除 Graphiti 笔记，并清理图谱 episode。",
         outcome="completed",
@@ -431,6 +431,30 @@ def test_memory_episodes_are_persisted_and_searchable(temp_dir: Path):
 
     result = store.clear_user_data(user_id, remove_uploaded_files=False)
     assert result["episodes"] == 1
+
+
+def test_durable_run_repository_fences_workers_across_managers():
+    from personal_agent.infra.storage import PostgresDurableRunRepository
+    from personal_agent.runtime.run_manager import DurableRunManager, RunStateError
+
+    run_id = f"durable-{uuid4().hex}"
+    idempotency_key = f"submit-{uuid4().hex}"
+    first = DurableRunManager(PostgresDurableRunRepository(POSTGRES_URL))
+    second = DurableRunManager(PostgresDurableRunRepository(POSTGRES_URL))
+
+    created = first.submit(run_id, idempotency_key=idempotency_key)
+    assert second.submit(run_id, idempotency_key=idempotency_key) == created
+    old_lease = first.acquire_lease(run_id)
+    first.transition(run_id, "queued", fencing_token=old_lease.fencing_token)
+    new_lease = second.acquire_lease(run_id)
+
+    with pytest.raises(RunStateError, match="stale fencing"):
+        first.transition(run_id, "running", fencing_token=old_lease.fencing_token)
+    assert second.transition(
+        run_id,
+        "running",
+        fencing_token=new_lease.fencing_token,
+    ).status == "running"
 
 
 def test_memory_items_are_persisted_and_searchable(temp_dir: Path):

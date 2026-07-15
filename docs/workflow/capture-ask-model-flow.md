@@ -17,7 +17,7 @@
 
 ## Capture Step Workflow
 
-capture 由固定 `WorkflowSpec` 投影为步骤。step executor 只负责编排不同来源的正文提取或 artifact 理解，并把可入库文本交给统一的 capture pipeline。
+capture 由 `knowledge_ingest` Procedure 投影节点。step executor 只负责编排不同来源的正文提取或 artifact 理解，并把可入库文本交给统一的 capture pipeline。
 
 ```text
 step_execution_graph
@@ -68,7 +68,7 @@ entry_input.artifacts[0] / metadata.file_path
   -> AgentRuntime.execute_capture(...)
 ```
 
-当前文件入口会先把上传 artifact 理解成可回答/可入库的文本化上下文，再进入统一 capture pipeline。`capture_upload` 工具仍存在并可提取上传文件正文，但当前 `capture_file` 的 `WorkflowSpec` 主路径已经切到 `inspect_artifact -> capture_text`。
+当前文件入口会先把上传 artifact 理解成可回答/可入库的文本化上下文，再进入统一 capture pipeline。`capture_upload` 工具仍存在并可提取上传文件正文；`knowledge_ingest` Procedure 根据 resource type 物化 source acquisition 与 ingest 节点。
 
 ## IngestionPipeline
 
@@ -242,7 +242,7 @@ ask 复用的是 plan/step execution 的运行结构，包括：
 - frontend steps
 - failure handling
 
-但 ask 的步骤拓扑不是 LLM planner 生成的，而是 `WorkflowSpec` 固定声明后由 `WorkflowStepProjector` 确定性投影。
+Ask 不存在固定 Procedure。Executive 根据当前 Goal、Observation 和 VerificationGap 逐轮选择 acquire、reason、verify 等有界动作；每个动作再投影为 checkpoint-safe ExecutionStep。
 
 ## AskRunContext
 
@@ -539,4 +539,4 @@ ask
 
 可以这样说：
 
-> 当前 capture 和 ask 都是 step projection workflow。capture 由固定 `WorkflowSpec` 投影：文本是 `capture_text` 单步写入，链接是 `capture_url -> capture_text`，文件是 `inspect_artifact -> capture_text`，底层统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync，同时进入 Workspace 生命周期，先落 Artifact/Evidence，再增强 Claim/Grounding/Admission/Conflict，并生成 ProjectionJob。ask 由固定 `WorkflowSpec` 投影出 `ask-retrieve -> ask-compose -> ask-verify -> ask-repair`，复用 LangGraph 的 step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和 workspace/graph/local/web 等多源召回，随后把候选交给 `EvidenceEngine` 做证据归一、RRF/补全/压缩/rerank、ContextPack 和 selected citation/match；Workspace citation 会携带 EvidenceRef，回答会暴露 evidence_coverage 和 missing_sections。compose 阶段只基于 ContextPack 生成答案；verify 阶段做校验和有界 retry，claim grounding 复用 `EvidenceEngine.verify_claims()`；repair 阶段显式处理反证补充、web fallback 和最终证据不足标注，并把 repair telemetry 写回 ask context artifact。
+> Capture 是 Governed Procedure，Ask 是开放 Agent Loop。`knowledge_ingest` 根据文本、链接或文件资源物化 acquisition/ingest 节点，底层统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync，同时进入 Workspace 的 Artifact/Evidence、Claim/Grounding/Admission/Conflict 生命周期。Ask 由 Executive 逐轮产生 retrieve/compose/verify/repair 动作，复用 LangGraph step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和 workspace/graph/local/web 多源召回，并交给 `EvidenceEngine` 做证据归一、RRF、压缩、rerank、ContextPack 和 citation/match；compose 只基于投影上下文生成，verify/repair 通过 VerificationGap 驱动下一轮策略。

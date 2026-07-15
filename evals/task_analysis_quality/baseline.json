@@ -1,0 +1,7 @@
+{
+  "_comment": "Offline contract baseline for semantic TaskAnalyzer outputs. Capability coverage is evaluated after resolution, not at entry.",
+  "outcome_accuracy": 1.0,
+  "result_contract_f1": 0.95,
+  "result_contract_sequence_exact": 0.95,
+  "clarify_field_precision": 0.9
+}

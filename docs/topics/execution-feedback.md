@@ -38,7 +38,7 @@
 - `metadata`
 - `answer_delta`
 - `intent`
-- `steps_projected`
+- `goal_graph_compiled`
 - `step_started`
 - `step_completed`
 - `step_failed`

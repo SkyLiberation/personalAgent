@@ -1,19 +1,17 @@
 # personalAgent 文档索引
 
-本项目是一个以元能力组合和受治理状态机共同驱动的个人知识 Agent：开放式知识工作由
-`TaskSpec + SkillSet + Execution Pattern + MetaCapability` 编译执行；高风险、事务性和长生命周期业务继续由
-`WorkflowSpec / WorkflowRegistry` 承载。确定性 Runtime 负责授权、校验、执行、持久化、HITL 与审计。
+本项目是一个以 Goal-owned Agent Loop 和受治理状态机共同驱动的个人知识 Agent：开放任务由
+`TaskSpec + ExecutionLedger + Executive + MetaCapability` 逐轮执行；高风险、事务性业务由
+`ProcedureSpec / ProcedureCatalog` 保护。确定性 Runtime 负责授权、解析、调度、持久化、HITL 与验证门禁。
 
-系统级的「LLM 决策点 vs 确定性流程」全景见 [summary/llm-decisions-and-deterministic-flows.md](summary/llm-decisions-and-deterministic-flows.md)。
-当前 Capability Scoping、MCP 与 A2A 的治理边界、主链路和评测门禁见 [summary/capability-scoping-mcp-a2a-current-state.md](summary/capability-scoping-mcp-a2a-current-state.md)。
-当前元能力编译、ContextEnvelope、ExecutionLedger、确认 commit 与 provider binding 全景见 [summary/agentic-meta-capability-current-state.md](summary/agentic-meta-capability-current-state.md)。
+当前系统分层、Entry 主链、LLM/确定性边界、Capability/MCP/A2A、Procedure、知识与运行时事实统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
 
 ## 目录分工
 
 | 目录 | 定位 |
 | --- | --- |
-| `topics/` | 分层设计文档（按能力域拆分：路由、工具、记忆、检索、可观测/治理、动态规划等） |
-| `workflow/` | 一次请求或一个业务 workflow 的实际执行链路 |
+| `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
+| `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
 | `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
 | `interview/` | 面试问答稿（同内容的 Q&A 形态，面向讲解场景） |
 | `mermaid/` | Model / Layer 依赖类图 |
@@ -26,27 +24,27 @@
 
 写文档时遵守以下约束：
 
-- **单一事实源**：不要在多个文档或多个层次重复维护同一份流程拓扑、工具契约或治理规则。比如 workflow 拓扑以 `WorkflowSpec / WorkflowRegistry` 为准，文档只解释该事实源如何被使用。
-- **按现有能力组织**：章节应围绕已经存在的模块边界和能力边界展开，例如声明期 `WorkflowSpecValidator` 与执行前 `StepProjectionValidator` 的职责差异，而不是在发现问题后追加“不能这样做”的孤立说明。
+- **单一事实源**：不要在多个文档或多个层次重复维护同一份流程拓扑、工具契约或治理规则。Procedure 拓扑以 `ProcedureSpec / ProcedureCatalog` 为准，开放任务策略以 Executive decision/event 为准。
+- **按现有能力组织**：章节应围绕已经存在的模块边界和能力边界展开，例如声明期 `ProcedureSpecValidator` 与执行前 `StepProjectionValidator` 的职责差异。
 - **避免补丁式写法**：不要在原文后面堆叠“注意 / 但是 / 其实”来修补前文。若原结构表达不准确，应重写相关小节，让最终文档读起来像一版一致的设计说明。
 - **不要路径先行**：架构文档不要在开头罗列一串文件路径。文档应先解释层级、职责、关键组件和协作关系；组件名本身足以引导读者在当前目录结构中定位代码。只有在 API、部署、故障排查这类需要精确操作的文档里，才把具体路径作为必要信息出现。
 - **区分现状和未来**：已落地能力写在 `topics/`、`workflow/` 或顶层权威文档；未来设想写入 `future/` 或明确标注为演进方向，不能把目标状态写成当前能力。
 - **先金标后能力**：每个 Agent 能力的新增、优化或修复，必须先以 golden set / eval case 的形式定义期望行为和验收标准；实现后必须验证新 case 通过，且核心回归集不退化。组件文档只描述已被代码和测试支撑的能力，不把“基于 golden set 开发”写成某个组件的局部补丁说明。
 - **测试新增克制**：不能因为每次小改动随意新增单测。新增测试必须服务于清晰的工程边界：新增或修复 Agent 能力边界、复现 golden set / 线上问题并提供可定位信号、保护安全/副作用/权限/幂等不变式、或锁定容易误合并/误路由的核心决策点。纯重构、实现细节调整、已被上层 golden set 清楚覆盖且定位足够明确的变化，不应再额外堆叠单测。
 - **语义判断优先 LLM**：涉及意图拆分、目标依赖、候选选择、答案组织、重规划等需要语义理解的 Agent 能力，应优先设计为结构化 LLM 决策，并用 schema、validator、fallback、policy 和 eval 约束输出。流程真源、工具执行、安全边界、幂等和审计仍由确定性系统负责，不能让 LLM 越权生成不可验证的控制流或副作用。
-- **和测试/代码同步**：如果文档声明某个模块不承担某职责，代码和测试也应体现这个边界。架构级约束优先沉到 `.github/workflows/architecture.yml` 这类 CI 门禁，而不是放在运行时兜底或只写进文档；其中模块依赖方向和无环性由 `scripts/check_layers.py` 的 `Layer / cycle gate` 执行，workflow contract 由 `Workflow registry gate` 执行。文档不是单独的口径修饰，而是工程事实的索引和解释。
+- **和测试/代码同步**：如果文档声明某个模块不承担某职责，代码和测试也应体现这个边界。架构级约束优先沉到 CI 门禁；Procedure contract、Capability scope 和 trajectory eval 分别验证确定性拓扑、授权边界与开放策略质量。
 
 ## 按主题找权威文档
 
 | 主题 | 权威文档 |
 | --- | --- |
-| Agentic 元能力运行时当前状态 | [summary/agentic-meta-capability-current-state.md](summary/agentic-meta-capability-current-state.md) |
-| Workflow / Step Projection 架构总览 | [workflow/workflow-framework.md](workflow/workflow-framework.md) |
-| Entry → Router → Plan → ReAct → 输出 端到端流程 | [workflow/entry-router-plan-react-output-flow.md](workflow/entry-router-plan-react-output-flow.md) |
+| 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
+| Procedure / Step Projection 架构总览 | [workflow/workflow-framework.md](workflow/workflow-framework.md) |
+| Entry → Executive Agent Loop 端到端流程 | [workflow/entry-executive-agent-loop.md](workflow/entry-executive-agent-loop.md) |
 | Capture 摄取 + Ask RAG 流水线 | [workflow/capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) |
 | 检索策略与评测口径 | [retrieval-strategies.md](retrieval-strategies.md) |
 | 检索/推理层与 verifier、统一证据模型 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
-| 路由（Router 传输/领域模型拆分） | [topics/routing.md](topics/routing.md) |
+| Task Analysis 与 Goal Graph | [topics/task-analysis.md](topics/task-analysis.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
 | 运行时编排（AgentService / AgentRuntime / replay） | [topics/runtime.md](topics/runtime.md) |
 | 工具层（治理 / Gateway / Artifact / 审计） | [topics/tools.md](topics/tools.md) |
@@ -57,9 +55,9 @@
 | LangChain / LangGraph 能力取舍 | [topics/langchain-langgraph-capability-adoption.md](topics/langchain-langgraph-capability-adoption.md) |
 | 动态规划（未来能力，含 projection vs dynamic 对照表） | [topics/dynamic-planning.md](topics/dynamic-planning.md) |
 
-## 关键业务 Workflow
+## 关键业务 Procedure
 
-| Workflow | 文档 |
+| Procedure / 链路 | 文档 |
 | --- | --- |
 | delete_knowledge（高风险删除 + HITL） | [workflow/delete-knowledge-workflow.md](workflow/delete-knowledge-workflow.md) |
 | solidify_conversation（会话固化为长期知识） | [workflow/solidify-conversation-workflow.md](workflow/solidify-conversation-workflow.md) |
@@ -71,11 +69,10 @@
 
 | 主题 | 文档 |
 | --- | --- |
-| 知识 Agent 元能力组合 | [future/meta-capability-composition-design.md](future/meta-capability-composition-design.md) |
-| 全局 Capability Scoping | [future/global-capability-scoping-design.md](future/global-capability-scoping-design.md) |
-| AgentGateway / A2A | [future/agent-gateway-a2a-design.md](future/agent-gateway-a2a-design.md) |
-| Workflow 平台化优化 | [future/workflow-platform-optimization.md](future/workflow-platform-optimization.md) |
-| Agent Tool / Workflow 改造 | [future/agent-tool-workflow-redesign.md](future/agent-tool-workflow-redesign.md) |
+| 并行 Join 与语义 Steering | [future/parallel-steering-runtime-design.md](future/parallel-steering-runtime-design.md) |
+| 统一 Agent 工作台主路径 | [future/unified-agent-workspace-main-path.md](future/unified-agent-workspace-main-path.md) |
+| 语义生命周期抽取 | [future/semantic-lifecycle-extraction-redesign.md](future/semantic-lifecycle-extraction-redesign.md) |
+| 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
 
 ## 运维与参考
 

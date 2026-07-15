@@ -1,13 +1,11 @@
 """Run-scoped context for the staged ask pipeline.
 
-The ask flow is split into bounded stages (retrieval, generation,
-verification, repair) that map 1:1 onto the ``ask-retrieve`` /
-``ask-compose`` / ``ask-verify`` / ``ask-repair`` workflow steps.
-``AskRunContext`` is the mutable carrier that
-threads intermediate state between those stages within a single run.
+The ask service exposes bounded retrieval, generation, verification, and repair
+stages. ``AskRunContext`` is the mutable carrier that threads intermediate
+state between Executive actions within a single run.
 
 The large retrieval payload (evidence pool, context pack, scored matches) is
-stored as a workflow artifact instead of on the checkpointed
+stored as an execution artifact instead of on the checkpointed
 ``AgentGraphState``.  This keeps LangGraph checkpoints compact while allowing
 compose / verify to recover the staged ask context after process restarts.
 """
@@ -269,7 +267,7 @@ class PostgresAskRunContextStore(AskRunContextStore):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO workflow_artifacts (
+                    INSERT INTO execution_artifacts (
                         artifact_id, run_id, step_id, kind, schema_version,
                         payload, summary, created_by_step, consumed_by_steps,
                         user_id, content_hash, created_at, updated_at
@@ -311,7 +309,7 @@ class PostgresAskRunContextStore(AskRunContextStore):
                 cur.execute(
                     """
                     SELECT payload
-                    FROM workflow_artifacts
+                    FROM execution_artifacts
                     WHERE artifact_id = %s AND kind = 'ask_run_context'
                     """,
                     (self._artifact_id(run_id),),
@@ -331,7 +329,7 @@ class PostgresAskRunContextStore(AskRunContextStore):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM workflow_artifacts WHERE artifact_id = %s",
+                    "DELETE FROM execution_artifacts WHERE artifact_id = %s",
                     (self._artifact_id(run_id),),
                 )
 
@@ -351,7 +349,7 @@ class PostgresAskRunContextStore(AskRunContextStore):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS workflow_artifacts (
+                    CREATE TABLE IF NOT EXISTS execution_artifacts (
                         artifact_id TEXT PRIMARY KEY,
                         run_id TEXT NOT NULL,
                         step_id TEXT NOT NULL DEFAULT '',
@@ -370,20 +368,20 @@ class PostgresAskRunContextStore(AskRunContextStore):
                 )
                 cur.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS workflow_artifacts_run_kind_idx
-                    ON workflow_artifacts (run_id, kind, updated_at DESC)
+                    CREATE INDEX IF NOT EXISTS execution_artifacts_run_kind_idx
+                    ON execution_artifacts (run_id, kind, updated_at DESC)
                     """
                 )
-                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS step_id TEXT NOT NULL DEFAULT ''")
-                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1")
-                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''")
-                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS created_by_step TEXT NOT NULL DEFAULT ''")
-                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS consumed_by_steps JSONB NOT NULL DEFAULT '[]'::jsonb")
-                cur.execute("ALTER TABLE workflow_artifacts ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE execution_artifacts ADD COLUMN IF NOT EXISTS step_id TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE execution_artifacts ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1")
+                cur.execute("ALTER TABLE execution_artifacts ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE execution_artifacts ADD COLUMN IF NOT EXISTS created_by_step TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE execution_artifacts ADD COLUMN IF NOT EXISTS consumed_by_steps JSONB NOT NULL DEFAULT '[]'::jsonb")
+                cur.execute("ALTER TABLE execution_artifacts ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''")
                 cur.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS workflow_artifacts_run_step_idx
-                    ON workflow_artifacts (run_id, step_id, kind, updated_at DESC)
+                    CREATE INDEX IF NOT EXISTS execution_artifacts_run_step_idx
+                    ON execution_artifacts (run_id, step_id, kind, updated_at DESC)
                     """
                 )
         self._initialized = True

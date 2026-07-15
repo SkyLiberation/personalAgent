@@ -3,17 +3,18 @@ from personal_agent.infra.storage.postgres_memory_store import PostgresMemorySto
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore, WorkerTask
-from personal_agent.infra.storage.postgres_workflow_definition_store import (
-    PostgresWorkflowDefinitionStore,
-    WorkflowDeployment,
-    WorkflowEvalRun,
+from personal_agent.infra.storage.postgres_procedure_definition_store import (
+    PostgresProcedureDefinitionStore,
+    ProcedureDeployment,
+    ProcedureEvalRun,
 )
-from personal_agent.infra.storage.postgres_workflow_event_store import PostgresWorkflowEventStore
-from personal_agent.infra.storage.postgres_workflow_replay_store import (
-    PostgresWorkflowReplayStore,
-    WorkflowArtifactRecord,
-    WorkflowReplayRecord,
+from personal_agent.infra.storage.postgres_execution_event_store import PostgresExecutionEventStore
+from personal_agent.infra.storage.postgres_execution_replay_store import (
+    PostgresExecutionReplayStore,
+    ExecutionArtifactRecord,
+    ExecutionReplayRecord,
 )
+from personal_agent.infra.storage.postgres_run_repository import PostgresDurableRunRepository
 
 __all__ = [
     "PostgresDebugResetStore",
@@ -21,12 +22,13 @@ __all__ = [
     "PostgresResearchStore",
     "PostgresToolGovernanceStore",
     "PostgresWorkerQueueStore",
-    "PostgresWorkflowDefinitionStore",
-    "PostgresWorkflowEventStore",
-    "PostgresWorkflowReplayStore",
+    "PostgresProcedureDefinitionStore",
+    "PostgresExecutionEventStore",
+    "PostgresExecutionReplayStore",
+    "PostgresDurableRunRepository",
     "WorkerTask",
-    "WorkflowArtifactRecord",
-    "WorkflowDeployment",
-    "WorkflowEvalRun",
-    "WorkflowReplayRecord",
+    "ExecutionArtifactRecord",
+    "ProcedureDeployment",
+    "ProcedureEvalRun",
+    "ExecutionReplayRecord",
 ]

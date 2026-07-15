@@ -10,9 +10,8 @@ def test_core_prompts_are_registered_with_versions() -> None:
         "ask.graph_answer.user",
         "ask.local_answer.user",
         "ask.correction.user",
-        "direct_answer.system",
-        "router.classify.system",
-        "router.classify.user",
+        "task_analyzer.system",
+        "task_analyzer.user",
         "query_planner.system",
         "query_planner.user",
         "evidence_rerank.system",
@@ -34,10 +33,10 @@ def test_core_prompts_are_registered_with_versions() -> None:
         assert prompt.template.strip()
 
 
-def test_router_user_prompt_renders_current_input() -> None:
-    rendered = render_prompt("router.classify.user", text="删除关于 DNS 的知识")
+def test_task_analyzer_user_prompt_renders_current_input() -> None:
+    rendered = render_prompt("task_analyzer.user", text="删除关于 DNS 的知识")
 
-    assert "当前用户输入：删除关于 DNS 的知识" == rendered
+    assert "分析下面的当前请求：\n删除关于 DNS 的知识" == rendered
 
 
 def test_expanded_registry_prompts_render_with_sample_variables() -> None:

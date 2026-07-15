@@ -8,7 +8,7 @@
 
 这不是给现有问答外接一个 cron，也不是把搜索结果定时拼成列表。目标是把当前一次性 `web_search / capture_url / graph_search / capture_text` 能力组织成一个长期运行、可恢复、可反馈学习的研究闭环。
 
-本文属于未来目标设计。允许新增业务模型、数据表、工具、Workflow 和 Worker task type，但继续复用当前的 LangGraph、ToolGateway、PolicyEngine、Postgres durable queue、DeliveryRouter 和审计体系，不引入第二套 Agent 或调度框架。
+本文的 P1/P2 属于未来目标设计。允许新增业务模型、数据表、工具、Procedure 和 Worker task type，但继续复用当前的 LangGraph、ToolGateway、PolicyEngine、Postgres durable queue、DeliveryRouter 和审计体系，不引入第二套 Agent 或调度框架。
 
 ## 业务定位
 
@@ -124,13 +124,13 @@ Review Digest 和 Research Digest 都需要调度与投递，但业务真源不�
 对比我已有的工具治理设计并生成研究报告。
 ```
 
-一次性和周期性任务共用 ResearchWorkflow。区别仅在触发方式、collection window 和结果是否继续调度。
+一次性和周期性任务共用 `research_run` Procedure。区别仅在触发方式、collection window 和结果是否继续调度。
 
 ## 目标架构
 
 ```text
 User Entry / Web API / Feishu Command
-  -> Research Intent
+  -> Semantic Task Analysis
   -> ResearchSubscriptionUseCase
   -> ResearchSubscriptionStore
 
@@ -139,7 +139,7 @@ External Cron / In-app Scheduler
   -> enqueue(research_run)
   -> Postgres Worker Queue
   -> Research Worker
-  -> ResearchWorkflow
+  -> research_run Procedure
        -> Query Planner
        -> Collect ReAct
        -> Event Normalization
@@ -157,8 +157,8 @@ External Cron / In-app Scheduler
 关键边界：
 
 1. Scheduler 只判断到期并创建 durable task，不执行搜索和生成。
-2. Worker 只领取并驱动 ResearchWorkflow，不私自绕过 ToolGateway。
-3. Workflow 决定研究过程，工具负责可治理的外部或内部动作。
+2. Worker 只领取任务并通过统一 Entry/Executive 驱动 `research_run` Procedure，不私自绕过 ToolGateway。
+3. Procedure 保护研究生命周期不变量；Executive 和领域循环根据 Observation 决定开放式收集动作。
 4. Delivery 是工作流的末端 activity，不与研究分析逻辑耦合。
 5. 用户知识库写入属于独立确认动作，不是简报生成的默认副作用。
 
@@ -246,8 +246,8 @@ class ResearchRun:
 
     window_start: datetime
     window_end: datetime
-    workflow_id: str
-    workflow_version: str
+    procedure_id: str
+    procedure_version: str
 
     query_plan: QueryPlan | None
     source_count: int
@@ -313,9 +313,9 @@ class IntelligenceDigest:
 - 它与用户已有知识或关注点有什么关系。
 - 下一步可以展开、跟踪还是入库。
 
-## ResearchWorkflow
+## Research Procedure
 
-### Workflow 定义
+### Procedure 定义
 
 ```text
 research-trigger
@@ -332,7 +332,7 @@ research-trigger
   -> research-record-outcome
 ```
 
-建议将它定义为新的固定 `WorkflowSpec`。拓扑、预算和风险策略由 workflow 决定，Agent 自主性主要存在于 `plan-queries`、`collect` 和必要的补充验证中。
+当前已将它定义为 `research_run` `ProcedureSpec`。Procedure 固定生命周期、不变量和副作用边界；Agent 自主性存在于查询规划、证据缺口驱动的 collect loop 和必要的补充验证中。
 
 ### 1. Load Subscription
 
@@ -593,7 +593,7 @@ SearchNewsArgs:
 
 ### `fetch_source`
 
-替代 ResearchWorkflow 直接理解 `capture_url` 的采集语义，返回：
+避免 `research_run` Procedure 直接理解 `capture_url` 的 provider 私有语义，返回：
 
 - 正文 artifact ref。
 - 标题、作者、发布时间。
@@ -633,7 +633,7 @@ class ToolArtifact:
     next_actions: list[str]
 ```
 
-`next_actions` 只是工具建议，不直接获得执行权，Agent 和 workflow 仍需结合预算与策略决定下一步。
+`next_actions` 只是工具建议，不直接获得执行权，Executive 或 Procedure 内的领域循环仍需结合预算与策略决定下一步。
 
 ## 调度与 Durable Execution
 
@@ -654,11 +654,11 @@ cron / K8s CronJob
   -> enqueue worker task
 ```
 
-Scheduler 不同步执行 ResearchWorkflow，避免一个慢搜索阻塞其他订阅。
+Scheduler 不同步执行 `research_run` Procedure，避免一个慢搜索阻塞其他订阅。
 
 ### Worker Queue
 
-扩展当前 `WorkflowWorker`：
+扩展当前 durable background worker：
 
 ```python
 self._handlers = {
@@ -736,8 +736,8 @@ trigger_type
 status
 window_start
 window_end
-workflow_id
-workflow_version
+procedure_id
+procedure_version
 query_plan JSONB
 source_count
 event_count
@@ -1022,9 +1022,9 @@ ResearchEvalCase:
 
 > 状态：已实现。
 
-目标：先证明 ResearchWorkflow 的收集、去重、验证和知识对照质量。
+目标：先证明 `research_run` Procedure 的收集、去重、验证和知识对照质量。
 
-- 增加 `research_once` workflow，并将主链路拆为 `research_prepare_run → research_plan_queries → research_collect_sources → research_cluster_events → research_rank_events → research_compose_digest`。
+- 增加 `research_run` Procedure，并将主链路拆为 `research_prepare_run → research_plan_queries → research_collect_sources → research_cluster_events → research_rank_events → research_compose_digest`。
 - 使用 `web_search / capture_url / graph_search`。
 - 生成结构化研究报告，不做定时调度。
 - 建立冻结来源 eval。
@@ -1042,7 +1042,7 @@ ResearchEvalCase:
 
 目标：支持“每天 9 点 AI 新闻简报”。
 
-生产 worker 消费 scheduled `research_run` 后通过内部 `execute_research_run` workflow 复用已有 `run_id` 执行主链路，投递仍作为独立 durable task 解耦。
+生产 worker 消费 scheduled `research_run` 后通过可信结构化 TaskAnalysis 进入统一 Executive，并由 `research_run` Procedure 复用已有 `run_id` 执行主链路；投递仍作为独立 durable task 解耦。
 
 - 增加 `ResearchSubscription`、store 和 API。
 - 扩展 scheduler 和 worker task。
@@ -1094,7 +1094,7 @@ ResearchEvalCase:
   1. 确认主题、时间、时区、数量和投递目标。
   2. 创建 ResearchSubscription。
   3. Scheduler 到期创建 ResearchRun。
-  4. Worker 执行受控 ResearchWorkflow。
+  4. Worker 通过统一 Executive 执行受控 `research_run` Procedure。
   5. 搜索、阅读、去重、验证、排序。
   6. 生成带来源和可信度的飞书简报。
   7. 用户可以回复 N1 展开 / 收藏 / 入库 / 不感兴趣。
@@ -1113,10 +1113,10 @@ ResearchEvalCase:
 
 ## 与其他未来设计的关系
 
-- Durable run、worker queue、artifact、event history 和 deployment 复用 [Workflow 平台化优化设计](workflow-platform-optimization.md)。
-- 外部证据归一、反证、grounding 和 eval 复用 [Capture / Ask RAG 质量优化设计](rag-quality-optimization.md)。
-- 第一阶段使用单个受控 ReAct，不依赖 multi-agent；后续高价值事件验证可以复用 [Multi-Agent 设计方案](multi-agent-design.md) 的 critic / judge 思路。
-- ResearchWorkflow 仍采用确定性骨架，不把全局流程交给 autonomous planner。
+- Durable run、worker queue、artifact、event history 和 deployment 复用当前运行时基础设施；需要领域不变量的生命周期遵循 [核心架构当前状态](../summary/core-architecture-current-state.md) 中的 Governed Procedure 边界。
+- 外部证据归一、反证、grounding 和 eval 复用 [语义生命周期抽取非兼容改造设计](semantic-lifecycle-extraction-redesign.md) 与统一 Evidence/Claim 契约。
+- 第一阶段使用单个受控 ReAct；后续高价值事件验证由 Executive 显式创建有界验证 Goal 或委派，不引入固定 role-based multi-agent 控制器。
+- `research_run` Procedure 保留确定性生命周期骨架，开放式证据收集仍由有预算的领域循环决定。
 
 ## 最终判断
 
@@ -1125,7 +1125,7 @@ ResearchEvalCase:
 ```text
 Scheduler
   + Durable Queue
-  + Workflow
+  + Governed Procedure
   + ReAct Tool Calling
   + Web Search / URL Fetch
   + Personal Knowledge Retrieval

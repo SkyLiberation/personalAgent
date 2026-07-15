@@ -5,10 +5,14 @@ from pathlib import Path
 
 from evals.resolver_quality.dataset import load_cases
 from evals.resolver_quality.scorer import ResolverQualityRun, score_all
-from personal_agent.kernel.contracts.capability import CapabilityResolutionRequest, MCPCapability
+from personal_agent.kernel.contracts.capability import (
+    CapabilityRequirement,
+    CapabilityResolutionRequest,
+    CapabilitySelectionPolicy,
+    MCPCapability,
+)
 from personal_agent.planning.capability_resolver import (
     CapabilityResolver,
-    default_capability_policy_for_scope,
 )
 from personal_agent.tools.mcp_capability import CapabilityRegistry
 
@@ -19,9 +23,21 @@ def test_capability_resolver_quality_gate():
     runs: list[ResolverQualityRun] = []
     for case in cases:
         resolution = resolver.resolve(CapabilityResolutionRequest(
-            task_text=case.task_text,
-            workflow_scope=case.workflow_scope,  # type: ignore[arg-type]
-            policy=default_capability_policy_for_scope(case.workflow_scope),
+            task_id="resolver-quality",
+            goal_id=case.id,
+            action_id=f"{case.id}:resolve",
+            meta_capability="acquire",
+            allowed_kinds=("mcp_tool",),
+            allowed_operations=("search", "read"),
+            requirements=tuple(
+                CapabilityRequirement.model_validate(item)
+                for item in case.requirements
+            ),
+            policy=CapabilitySelectionPolicy(
+                read_only=True,
+                max_capabilities_per_action=4,
+                max_providers_per_action=2,
+            ),
         ))
         runs.append(ResolverQualityRun(
             case_id=case.id,
@@ -52,7 +68,7 @@ def _quality_registry() -> CapabilityRegistry:
             provider="github",
             server_id="github",
             remote_tool_name="search_code",
-            local_tool_name="github.search_code",
+            local_name="github.search_code",
             semantic_domains=("codebase",),
             resource_types=("repository", "file", "code"),
             operations=("search",),
@@ -70,7 +86,7 @@ def _quality_registry() -> CapabilityRegistry:
             provider="github",
             server_id="github",
             remote_tool_name="get_file_contents",
-            local_tool_name="github.get_file_contents",
+            local_name="github.get_file_contents",
             semantic_domains=("codebase", "docs"),
             resource_types=("repository", "file"),
             operations=("read",),
@@ -88,7 +104,7 @@ def _quality_registry() -> CapabilityRegistry:
             provider="github",
             server_id="github",
             remote_tool_name="search_repositories",
-            local_tool_name="github.search_repositories",
+            local_name="github.search_repositories",
             semantic_domains=("codebase", "repository_discovery"),
             resource_types=("repository",),
             operations=("search",),
@@ -106,7 +122,7 @@ def _quality_registry() -> CapabilityRegistry:
             provider="notion",
             server_id="notion",
             remote_tool_name="post-search",
-            local_tool_name="notion.search",
+            local_name="notion.search",
             semantic_domains=("workspace_knowledge", "docs"),
             resource_types=("page", "data_source"),
             operations=("search",),
@@ -124,7 +140,7 @@ def _quality_registry() -> CapabilityRegistry:
             provider="notion",
             server_id="notion",
             remote_tool_name="retrieve-page-markdown",
-            local_tool_name="notion.retrieve_page_markdown",
+            local_name="notion.retrieve_page_markdown",
             semantic_domains=("workspace_knowledge", "docs"),
             resource_types=("page",),
             operations=("read",),

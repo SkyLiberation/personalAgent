@@ -5,31 +5,11 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from personal_agent.kernel.models import EntryIntent
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance
 from personal_agent.governance.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
 
 logger = logging.getLogger(__name__)
-
-_INTENT_TOOL_MAP: dict[EntryIntent, str] = {
-    "capture_text": "capture_text",
-    "capture_link": "capture_url",
-    "capture_file": "inspect_artifact",
-    "ask": "graph_search",
-    "analyze_artifact": "inspect_artifact",
-    "delete_knowledge": "delete_note",
-    "solidify_conversation": "capture_text",
-    "review_digest": "review_digest",
-    "consolidate_knowledge": "consolidate_knowledge",
-    "inspect_knowledge_gaps": "inspect_knowledge_gaps",
-    "create_research_subscription": "create_research_subscription",
-    "manage_research": "list_research_subscriptions",
-    "maintain_knowledge": "find_similar_notes",
-    "inspect_operations": "inspect_worker_queue",
-    "inspect_workflow": "inspect_workflow_run",
-}
-
 
 class ToolExecutor:
     """Registered LangChain tools and non-graph administrative invocation.
@@ -88,29 +68,6 @@ class ToolExecutor:
                 source_platform=kwargs.get("source_platform"),
             ),
         )
-
-    def match_tool(self, intent: EntryIntent, description: str = "") -> BaseTool | None:
-        name = _INTENT_TOOL_MAP.get(intent)
-        if name:
-            matched = self.get(name)
-            if matched is not None:
-                return matched
-        lowered = description.lower()
-        return next((tool for tool in self.list_tools() if tool.name in lowered), None)
-
-    def invoke_with_fallback(self, intent: EntryIntent, description: str = "", **kwargs: Any) -> dict[str, Any]:
-        primary = self.match_tool(intent, description)
-        if primary is not None:
-            result = self.invoke_direct(primary.name, **kwargs)
-            if result["ok"]:
-                return result
-        for tool in self.list_tools():
-            if primary is not None and tool.name == primary.name:
-                continue
-            result = self.invoke_direct(tool.name, **kwargs)
-            if result["ok"]:
-                return result
-        return tool_failure(f"所有工具均未成功处理意图 {intent}").model_dump(mode="json")
 
     def __len__(self) -> int:
         return len(self.list_tools())

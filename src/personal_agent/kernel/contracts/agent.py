@@ -5,7 +5,11 @@ from typing import Any, Iterator, Literal, Protocol
 from uuid import uuid4
 
 AgentProtocol = Literal["a2a_jsonrpc", "local", "http"]
-AgentRunStatus = Literal["submitted", "working", "completed", "failed", "canceled"]
+AgentRunStatus = Literal[
+    "created", "queued", "running", "waiting", "blocked_approval",
+    "cancel_requested", "cancelling", "completed", "completed_degraded",
+    "cancelled", "failed", "timed_out",
+]
 AgentEventType = Literal[
     "submitted",
     "status_changed",
@@ -13,7 +17,7 @@ AgentEventType = Literal[
     "artifact_created",
     "completed",
     "failed",
-    "canceled",
+    "cancelled",
 ]
 
 
@@ -31,13 +35,20 @@ class AgentGovernance:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentDefinition:
+class SubagentProfile:
     agent_id: str
     provider: str
     protocol: AgentProtocol
     description: str = ""
     semantic_domains: tuple[str, ...] = ()
     task_types: tuple[str, ...] = ()
+    model_profile: str = "default"
+    skill_ids: tuple[str, ...] = ()
+    capability_ids: tuple[str, ...] = ()
+    allowed_operations: tuple[str, ...] = ()
+    max_turns: int = 12
+    max_runtime_seconds: int = 120
+    can_delegate: bool = False
     governance: AgentGovernance = field(default_factory=AgentGovernance)
 
 
@@ -55,8 +66,9 @@ class AgentGatewayContext:
     session_id: str
     run_id: str
     thread_id: str = ""
-    workflow_id: str = ""
-    step_id: str = ""
+    task_id: str = ""
+    goal_id: str = ""
+    action_id: str = ""
     source_platform: str = ""
     confirmed: bool = False
 
@@ -68,7 +80,7 @@ class AgentArtifact:
     kind: str
     content: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
-    verification_status: Literal["unverified", "verified", "rejected"] = "unverified"
+    producer_verification_status: Literal["unverified", "verified", "rejected"] = "unverified"
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +114,7 @@ class AgentRunResult:
 
 
 class AgentAdapter(Protocol):
-    definition: AgentDefinition
+    profile: SubagentProfile
 
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> AgentRunResult: ...
 
@@ -130,7 +142,6 @@ def new_agent_artifact_id() -> str:
 __all__ = [
     "AgentAdapter",
     "AgentArtifact",
-    "AgentDefinition",
     "AgentEvent",
     "AgentEventType",
     "AgentGatewayContext",
@@ -140,6 +151,7 @@ __all__ = [
     "AgentRunResult",
     "AgentRunStatus",
     "AgentTask",
+    "SubagentProfile",
     "new_agent_artifact_id",
     "new_agent_event_id",
     "new_agent_run_id",

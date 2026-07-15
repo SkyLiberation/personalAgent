@@ -10,34 +10,56 @@ from personal_agent.application.workspace.models import AnswerCitation, Evidence
 from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, EntryInput, ReviewCard, local_now
 from personal_agent.orchestration.runtime_ask import _graph_matches_to_evidence
-from personal_agent.planning.router import GoalDraft, RouterOutput
+from personal_agent.planning.task_analyzer import (
+    EvidenceRequirement,
+    GoalDraft,
+    GoalRelationDraft,
+    ResourceHint,
+    TaskAnalysisOutput,
+)
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.memory.graphiti.store import GraphAskResult, GraphCaptureResult
-from tests.conftest import POSTGRES_URL, stub_router_decision
+from tests.conftest import POSTGRES_URL, stub_task_analysis
 from tests.note_factory import make_note
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 
 def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentService):
-    service.intent_router._classify_with_llm = lambda _text, _messages=None: RouterOutput(
+    service.task_analyzer._analyze_with_model = lambda _text, _messages=None: TaskAnalysisOutput(
         user_goal="记录 DNS 事实并回答 DNS 的作用",
-        route_type="composite_workflow",
-        matched_capabilities=["capture_text", "ask"],
-        coverage="full",
-        missing_requirements=[],
         outcome="ready",
         goals=[
-            GoalDraft(
-                intent="capture_text",
-                input="DNS 将域名解析为 IP 地址。",
+                GoalDraft(
+                    result_contract="external_state",
+                    description="DNS 将域名解析为 IP 地址。",
+                    side_effect_intent="mutation",
+                resource_hints=[ResourceHint(
+                    semantic_domain="knowledge",
+                    resource_types=["text"],
+                    operations=["ingest"],
+                )],
             ),
-            GoalDraft(
-                intent="ask",
-                input="DNS 的作用是什么？",
+                GoalDraft(
+                    result_contract="response",
+                    description="DNS 的作用是什么？",
+                    evidence_requirement=EvidenceRequirement(citation_required=True),
+                resource_hints=[ResourceHint(
+                    semantic_domain="knowledge",
+                    resource_types=["note"],
+                    operations=["search", "read"],
+                )],
             ),
         ],
+        relations=[GoalRelationDraft(
+            predecessor=1,
+            successor=2,
+            kind="consumes_output",
+            origin="user_explicit",
+            rationale="先写入 DNS 事实，再用该知识回答问题。",
+        )],
         clarification=None,
+        rejection_reason=None,
     )
 
     result = service.entry(EntryInput(
@@ -46,8 +68,8 @@ def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentSe
         session_id="compound-capture-ask",
     ))
 
-    assert result.intents == ["capture_text", "ask"]
-    assert result.run_status == "waiting_confirmation"
+    assert result.result_contracts == ["external_state", "response"]
+    assert result.run_status == "blocked_approval"
     assert result.pending_confirmation
 
     result = service.resume_entry(
@@ -93,7 +115,7 @@ def service(test_settings: Settings) -> AgentService:
     mock_store.ingest_note.return_value = GraphCaptureResult(enabled=False)
     svc.graph_store = mock_store
     svc.graph_store = mock_store
-    svc.intent_router._classify_with_llm = stub_router_decision
+    svc.task_analyzer._analyze_with_model = stub_task_analysis
     return svc
 
 
@@ -812,10 +834,10 @@ class TestEntryFlow:
     def test_entry_capture_text(self, service: AgentService):
         entry = EntryInput(text="记一下：服务降级是重要的系统设计模式", source_platform="test")
         result = service.entry(entry)
-        assert result.intents[-1] in ("capture_text", "unknown")
+        assert result.result_contracts[-1] == "external_state"
         assert result.reply_text
-        if result.intents[-1] == "capture_text":
-            assert result.run_status == "waiting_confirmation"
+        if result.result_contracts[-1] == "external_state":
+            assert result.run_status == "blocked_approval"
             result = service.resume_entry(
                 result.run_id or "",
                 result.thread_id or "",
@@ -829,7 +851,7 @@ class TestEntryFlow:
         service.execute_capture(text="服务降级是系统设计中的常见模式", source_type="text")
         entry = EntryInput(text="什么是服务降级？", source_platform="test")
         result = service.entry(entry)
-        assert result.intents == ["ask"]
+        assert result.result_contracts == ["response"]
         assert result.reply_text
         snapshot = service.get_run_snapshot(result.run_id or "")
         assert snapshot is not None
@@ -838,7 +860,7 @@ class TestEntryFlow:
     def test_entry_empty_text(self, service: AgentService):
         entry = EntryInput(text="", source_platform="test")
         result = service.entry(entry)
-        assert result.intents == []
+        assert result.result_contracts == []
 
     def test_entry_capture_link(self, service: AgentService):
         entry = EntryInput(
@@ -847,6 +869,6 @@ class TestEntryFlow:
             metadata={"url": "https://example.com/article"},
         )
         result = service.entry(entry)
-        assert result.intents[-1] in ("capture_link", "capture_text", "unknown")
+        assert result.result_contracts[-1] == "external_state"
         assert result.reply_text
 

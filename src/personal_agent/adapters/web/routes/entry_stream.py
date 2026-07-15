@@ -65,8 +65,8 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
             result = await execution_task
 
             if result.pending_confirmation:
-                yield sse_event("intent", {
-                    "intents": result.intents,
+                yield sse_event("task_analysis", {
+                    "result_contracts": result.result_contracts,
                     "reason": result.reason,
                 })
                 yield sse_event("confirmation_required", {
@@ -75,7 +75,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                 })
                 yield sse_event("done", {
                     "reply": result.reply_text,
-                    "waiting_confirmation": True,
+                    "blocked_approval": True,
                     "run_id": result.run_id,
                 })
                 return
@@ -93,22 +93,17 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                         continue
                     yield sse_event(sse_type, payload)
 
-                if result.steps:
-                    yield sse_event("steps_projected", {"steps": result.steps})
                 derived_trace = execution_trace_from_events(parsed_events)
                 if derived_trace:
                     yield sse_event("execution_trace", {"execution_trace": derived_trace})
             elif not result.events and not streamed_graph_events:
-                if result.steps:
-                    yield sse_event("steps_projected", {"steps": result.steps})
-
                 if result.execution_trace:
                     yield sse_event("execution_trace", {"execution_trace": result.execution_trace})
 
             if streamed_graph_events and result.execution_trace:
                 yield sse_event("execution_trace", {"execution_trace": result.execution_trace})
 
-            if any(intent in ("capture_text", "capture_link", "capture_file") for intent in result.intents):
+            if result.capture_result is not None:
                 capture_data = result.capture_result.model_dump(mode="json") if result.capture_result else None
                 yield sse_event("capture_result", {
                     "note": capture_data.get("note") if capture_data else None,
@@ -119,7 +114,7 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                     "run_id": result.run_id,
                 })
 
-            if "ask" in result.intents:
+            if result.ask_result is not None:
                 ask_data = result.ask_result.model_dump(mode="json") if result.ask_result else {}
                 yield sse_event("status", {"message": "正在检索你的个人记忆..."})
                 yield sse_event("metadata", {

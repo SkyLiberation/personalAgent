@@ -55,12 +55,16 @@ class TestOrchestrationRealGate:
     def test_aggregate_meets_real_baseline(self, cases, runs, baseline):
         report = score_all(cases, runs)
         divergences = [
-            f"  {c.id} [{c.text[:16]}]: gold={c.expected_outcome}/{c.expected_primary_intent} "
-            f"got={runs[c.id].outcome}/{runs[c.id].primary_intent} "
+            f"  {c.id} [{c.text[:16]}]: gold={c.expected_outcome}/{c.expected_primary_result_contract} "
+            f"got={runs[c.id].outcome}/{runs[c.id].primary_result_contract} "
             f"terminal={runs[c.id].reached_terminal}"
             for c in cases
             if runs[c.id].outcome != c.expected_outcome
-            or (c.expected_primary_intent and runs[c.id].primary_intent != c.expected_primary_intent)
+            or (
+                c.expected_primary_result_contract
+                and runs[c.id].primary_result_contract
+                != c.expected_primary_result_contract
+            )
         ]
         report_text = report.summary() + "\ndivergences:\n" + "\n".join(divergences or ["  (none)"])
         print(report_text)

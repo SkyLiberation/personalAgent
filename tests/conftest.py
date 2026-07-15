@@ -12,10 +12,13 @@ from psycopg import sql
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.planning.router import (
+from personal_agent.planning.task_analyzer import (
     ClarificationDraft,
+    EvidenceRequirement,
     GoalDraft,
-    RouterOutput,
+    GoalRelationDraft,
+    ResourceHint,
+    TaskAnalysisOutput,
 )
 from tests.note_factory import make_note
 
@@ -66,33 +69,69 @@ def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_config_env_module, "load_dotenv", lambda override=True: False)
 
 
-def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = None) -> RouterOutput:
+def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None) -> TaskAnalysisOutput:
     """Deterministic LLM stand-in for integration tests exercising routed branches."""
     stripped = text.strip()
-    def decision(intent: str, message: str, **kwargs) -> RouterOutput:
+    def decision(intent: str, message: str, **kwargs) -> TaskAnalysisOutput:
         clarify = bool(kwargs.get("requires_clarification", False))
-        unsupported = bool(kwargs.get("unsupported", False))
-        route_type = str(kwargs.get("route_type") or (
-            "clarify" if clarify
-            else "unsupported" if unsupported
-            else "direct_answer" if intent == "direct_answer"
-            else "single_workflow"
-        ))
-        outcome = "clarify" if clarify else "unsupported" if unsupported else "ready"
-        coverage = str(kwargs.get("coverage") or (
-            "ambiguous" if clarify else "unsupported" if unsupported else "full"
-        ))
-        return RouterOutput(
+        resource_hints = list(kwargs.get("resource_hints", []))
+        semantic_defaults = {
+            "capture_text": ("external_state", "knowledge", ["text"], ["ingest"]),
+            "capture_link": ("external_state", "knowledge", ["url"], ["ingest"]),
+            "solidify_conversation": ("external_state", "conversation", ["thread"], ["ingest"]),
+            "delete_knowledge": ("external_state", "knowledge", ["note"], ["delete"]),
+            "consolidate_knowledge": ("external_state", "knowledge", ["note"], ["repair"]),
+            "create_research_subscription": (
+                "external_state", "external_research", ["subscription"], ["create"],
+            ),
+            "research_once": (
+                "artifact", "external_research", ["research", "report"],
+                ["search", "read", "verify"],
+            ),
+            "ask": ("response", "knowledge", ["note", "evidence"], ["search", "read"]),
+            "summarize_thread": ("response", "conversation", ["thread"], ["read"]),
+            "review_digest": ("response", "knowledge", ["note"], ["list", "read"]),
+            "inspect_knowledge_gaps": (
+                "artifact", "knowledge", ["note", "relation"], ["search", "read"],
+            ),
+            "inspect_operations": (
+                "artifact", "operations", ["task"], ["list", "read"],
+            ),
+            "inspect_workflow": (
+                "artifact", "operations", ["execution"], ["read"],
+            ),
+            "manage_research": (
+                "external_state", "external_research", ["subscription", "run"], ["update"],
+            ),
+            "maintain_knowledge": ("external_state", "knowledge", ["note"], ["update"]),
+            "act": ("external_state", "external", ["artifact"], ["update"]),
+        }
+        result_contract, domain, resource_types, operations = semantic_defaults.get(
+            intent,
+            ("response", "", [], []),
+        )
+        if not resource_hints and operations:
+            resource_hints = [ResourceHint(
+                semantic_domain=domain,
+                resource_types=resource_types,
+                operations=operations,
+                origin="user_explicit",
+            )]
+        mutation = result_contract == "external_state"
+        evidence = bool(resource_hints) and not mutation
+        return TaskAnalysisOutput(
             user_goal=str(kwargs.get("user_goal") or message),
-            route_type=route_type,
-            matched_capabilities=list(kwargs.get(
-                "matched_capabilities",
-                [] if clarify or unsupported else [intent],
-            )),
-            coverage=coverage,
-            missing_requirements=list(kwargs.get("missing_requirements", [])),
-            outcome=outcome,
-            goals=[] if clarify or unsupported else [GoalDraft(intent=intent, input=stripped)],
+            outcome="clarify" if clarify else "ready",
+            goals=[] if clarify else [GoalDraft(
+                result_contract=result_contract,
+                description=stripped,
+                side_effect_intent="mutation" if mutation else "none",
+                evidence_requirement=(
+                    EvidenceRequirement(citation_required=True)
+                    if evidence else None
+                ),
+                resource_hints=resource_hints,
+            )],
             clarification=(
                 ClarificationDraft(
                     missing_information=list(
@@ -105,6 +144,7 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
                 )
                 if clarify else None
             ),
+            rejection_reason=None,
         )
     if not stripped:
         return decision(
@@ -123,18 +163,42 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
     if any(word in stripped for word in ("记住", "记一下")) and any(
         word in stripped for word in ("然后回答", "再回答", "并回答")
     ):
-        return RouterOutput(
+        return TaskAnalysisOutput(
             user_goal="记录一条知识并基于该主题回答后续问题",
-            route_type="composite_workflow",
-            matched_capabilities=["capture_text", "ask"],
-            coverage="full",
-            missing_requirements=[],
             outcome="ready",
             goals=[
-                GoalDraft(intent="capture_text", input=stripped),
-                GoalDraft(intent="ask", input=stripped),
+                GoalDraft(
+                    result_contract="external_state",
+                    description=stripped,
+                    side_effect_intent="mutation",
+                    resource_hints=[ResourceHint(
+                        semantic_domain="knowledge",
+                        resource_types=["text"],
+                        operations=["ingest"],
+                        origin="user_explicit",
+                    )],
+                ),
+                GoalDraft(
+                    result_contract="response",
+                    description=stripped,
+                    evidence_requirement=EvidenceRequirement(citation_required=True),
+                    resource_hints=[ResourceHint(
+                        semantic_domain="knowledge",
+                        resource_types=["note", "evidence"],
+                        operations=["search", "read"],
+                        origin="user_explicit",
+                    )],
+                ),
             ],
+            relations=[GoalRelationDraft(
+                predecessor=1,
+                successor=2,
+                kind="consumes_output",
+                origin="user_explicit",
+                rationale="后续回答明确基于刚记录的内容",
+            )],
             clarification=None,
+            rejection_reason=None,
         )
     if any(word in stripped for word in ("固化下来", "沉淀下来", "沉淀成", "记下来")):
         return decision("solidify_conversation", "沉淀会话结论。")
@@ -163,13 +227,13 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
         return decision("inspect_workflow", "诊断 workflow。")
     if any(word in stripped for word in ("发到邮箱", "发送邮件", "剪成短视频", "生成PPT", "生成 PPT")):
         return decision(
-            "unknown",
-            "当前能力无法完整覆盖该请求。",
-            unsupported=True,
-            coverage="partial",
-            matched_capabilities=["analyze_artifact"] if "音频" in stripped or "图片" in stripped else [],
-            missing_requirements=["缺少文件生成、视频编辑或邮件发送能力"],
-            user_goal="完成当前未注册能力覆盖的跨应用处理",
+            "act",
+            "完成跨应用处理",
+            resource_hints=[ResourceHint(
+                semantic_domain="communication",
+                resource_types=["email", "artifact"],
+                operations=["create"],
+            )],
         )
     if any(word in stripped for word in ("每天", "每周", "工作日")) and any(
         word in stripped for word in ("新闻", "资讯", "动态", "简报", "跟踪")
@@ -198,7 +262,7 @@ def stub_router_decision(text: str, _messages: list[dict[str, str]] | None = Non
     if any(word in stripped for word in ("记一下", "记住")):
         return decision("capture_text", "记录内容。")
     if any(word in stripped for word in ("你好", "谢谢", "你是谁")):
-        return decision("direct_answer", "直接回答。")
+        return decision("respond", "直接回答。")
     return decision("ask", "回答问题。")
 
 
@@ -253,7 +317,7 @@ def clean_postgres_business_tables():
                     session_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
-                    workflow TEXT NOT NULL,
+                    result_contract TEXT NOT NULL,
                     outcome TEXT NOT NULL,
                     title TEXT NOT NULL,
                     summary TEXT NOT NULL,
@@ -379,7 +443,7 @@ def clean_postgres_business_tables():
                     gap_date TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS workflow_artifacts (
+                CREATE TABLE IF NOT EXISTS execution_artifacts (
                     artifact_id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
                     step_id TEXT NOT NULL DEFAULT '',
@@ -396,7 +460,7 @@ def clean_postgres_business_tables():
                     expires_at TIMESTAMPTZ,
                     redacted_at TIMESTAMPTZ
                 );
-                CREATE TABLE IF NOT EXISTS workflow_events (
+                CREATE TABLE IF NOT EXISTS execution_events (
                     event_id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
@@ -406,18 +470,18 @@ def clean_postgres_business_tables():
                     timestamp TIMESTAMPTZ NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
-                CREATE TABLE IF NOT EXISTS workflow_definitions (
-                    workflow_id TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS procedure_definitions (
+                    procedure_id TEXT NOT NULL,
                     version TEXT NOT NULL,
-                    intent TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
                     spec JSONB NOT NULL,
                     status TEXT NOT NULL DEFAULT 'registered',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (workflow_id, version)
+                    PRIMARY KEY (procedure_id, version)
                 );
-                CREATE TABLE IF NOT EXISTS workflow_deployments (
-                    workflow_id TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS procedure_deployments (
+                    procedure_id TEXT NOT NULL,
                     environment TEXT NOT NULL DEFAULT 'default',
                     stable_version TEXT NOT NULL,
                     canary_version TEXT,
@@ -425,9 +489,9 @@ def clean_postgres_business_tables():
                     status TEXT NOT NULL DEFAULT 'stable',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (workflow_id, environment)
+                    PRIMARY KEY (procedure_id, environment)
                 );
-                CREATE TABLE IF NOT EXISTS workflow_replay_runs (
+                CREATE TABLE IF NOT EXISTS execution_replay_runs (
                     replay_id TEXT PRIMARY KEY,
                     source_run_id TEXT NOT NULL,
                     source_thread_id TEXT NOT NULL,
@@ -439,9 +503,9 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
-                CREATE TABLE IF NOT EXISTS workflow_eval_runs (
+                CREATE TABLE IF NOT EXISTS procedure_eval_runs (
                     eval_run_id TEXT PRIMARY KEY,
-                    workflow_id TEXT NOT NULL,
+                    procedure_id TEXT NOT NULL,
                     version TEXT NOT NULL,
                     suite TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -451,13 +515,13 @@ def clean_postgres_business_tables():
                     report JSONB NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
-                CREATE TABLE IF NOT EXISTS workflow_eval_policies (
-                    workflow_id TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS procedure_eval_policies (
+                    procedure_id TEXT NOT NULL,
                     environment TEXT NOT NULL DEFAULT 'default',
                     policy JSONB NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (workflow_id, environment)
+                    PRIMARY KEY (procedure_id, environment)
                 );
                 CREATE TABLE IF NOT EXISTS worker_queue_tasks (
                     task_id TEXT PRIMARY KEY,
@@ -624,13 +688,13 @@ def clean_postgres_business_tables():
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
                 TRUNCATE knowledge_gap_deliveries;
-                TRUNCATE workflow_artifacts;
-                TRUNCATE workflow_events;
-                TRUNCATE workflow_definitions;
-                TRUNCATE workflow_deployments;
-                TRUNCATE workflow_replay_runs;
-                TRUNCATE workflow_eval_runs;
-                TRUNCATE workflow_eval_policies;
+                TRUNCATE execution_artifacts;
+                TRUNCATE execution_events;
+                TRUNCATE procedure_definitions;
+                TRUNCATE procedure_deployments;
+                TRUNCATE execution_replay_runs;
+                TRUNCATE procedure_eval_runs;
+                TRUNCATE procedure_eval_policies;
                 TRUNCATE worker_queue_tasks;
                 TRUNCATE workspace_artifacts, workspace_extraction_runs, workspace_evidence_blocks,
                     workspace_evidence_spans, workspace_claims, workspace_grounding_runs,

@@ -2,7 +2,7 @@
   {
     "id": "research-frontend-e2e-001",
     "prompt": "调研 Agent Runtime SDK 最近的重要发布，最多整理 1 条，高可信，优先确认官方来源",
-    "expected_intents": ["research_once"],
+    "expected_result_contracts": ["artifact"],
     "expected_step_tools": [
       "research_prepare_run",
       "research_initialize_state",

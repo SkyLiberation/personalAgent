@@ -34,17 +34,17 @@ def test_required_term_groups_accept_equivalent_phrasing():
     assert result.score == 1.0
 
 
-def test_expected_run_statuses_accept_hitl_waiting_confirmation():
+def test_expected_run_statuses_accept_hitl_blocked_approval():
     case = E2EQualityCase(
         id="E2E-WF-DELETE-001",
         branch="workflow",
         description="delete pauses for confirmation",
-        expected_run_statuses=("waiting_confirmation",),
+        expected_run_statuses=("blocked_approval",),
     )
     run = E2EQualityRun(
         case_id=case.id,
         branch=case.branch,
-        run_status="waiting_confirmation",
+        run_status="blocked_approval",
     )
 
     result = score_case(case, run)

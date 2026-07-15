@@ -55,8 +55,8 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
     session_id = entry_input.session_id if entry_input is not None else _event_session_id(events)
     entry_text = entry_input.text if entry_input is not None else _entry_text_from_events(events)
     outcome = _episode_outcome(result)
-    intent = result.intents[-1] if result.intents else "unknown"
-    intent_chain = list(result.intents)
+    result_contract = result.result_contracts[-1] if result.result_contracts else "unknown"
+    result_contracts = list(result.result_contracts)
     now = local_now()
 
     decisions = _decisions_from_events(events)
@@ -71,8 +71,8 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
         session_id=session_id or "default",
         thread_id=result.thread_id or "",
         run_id=result.run_id or "",
-        workflow=intent,
-        title=_episode_title(intent, entry_text, outcome),
+        result_contract=result_contract,
+        title=_episode_title(result_contract, entry_text, outcome),
         summary=_episode_summary(result, entry_text, tool_refs, note_refs),
         outcome=outcome,
         entry_text=entry_text,
@@ -82,8 +82,8 @@ def build_entry_episode(result: EntryResult, entry_input: EntryInput | None = No
         tool_refs=tool_refs,
         note_refs=note_refs,
         metadata={
-                "reason": result.reason,
-                "intents": intent_chain,
+            "reason": result.reason,
+            "result_contracts": result_contracts,
             "step_count": len(result.steps),
             "execution_trace": result.execution_trace,
         },
@@ -97,10 +97,10 @@ def build_reflection_candidate(result: EntryResult, episode: MemoryEpisode) -> M
     error_lines = _errors_from_result(result)
     if episode.outcome not in {"failed", "cancelled"} and not error_lines:
         return None
-    title = f"反思候选: {episode.workflow} {episode.outcome}"
+    title = f"反思候选: {episode.result_contract} {episode.outcome}"
     trace = "；".join(str(item) for item in result.execution_trace[:5])
     content_parts = [
-        f"workflow={episode.workflow}",
+        f"result_contract={episode.result_contract}",
         f"outcome={episode.outcome}",
         f"entry={_clip(episode.entry_text, 180)}",
     ]
@@ -123,7 +123,7 @@ def build_reflection_candidate(result: EntryResult, episode: MemoryEpisode) -> M
         source_episode_ids=[episode.id],
         source_run_ids=[episode.run_id],
         evidence_refs=[*episode.event_refs[:8], *episode.note_refs[:8]],
-        applies_to=[episode.workflow],
+        applies_to=[episode.result_contract],
         metadata={
             "outcome": episode.outcome,
             "reason": result.reason,
@@ -188,36 +188,31 @@ def _entry_text_from_events(events: list[dict[str, Any]]) -> str:
 
 
 def _episode_outcome(result: EntryResult) -> str:
-    if result.run_status == "waiting_confirmation":
-        return "waiting_confirmation"
+    if result.run_status == "blocked_approval":
+        return "blocked_approval"
     if result.run_status in {"completed", "failed", "cancelled"}:
         return result.run_status
     if result.pending_confirmation:
-        return "waiting_confirmation"
+        return "blocked_approval"
     return "completed"
 
 
-def _episode_title(intent: str, entry_text: str, outcome: str) -> str:
+def _episode_title(result_contract: str, entry_text: str, outcome: str) -> str:
     labels = {
-        "ask": "回答问题",
-        "capture_text": "采集文本",
-        "capture_link": "采集链接",
-        "capture_file": "采集文件",
-        "analyze_artifact": "理解附件",
-        "delete_knowledge": "删除知识",
-        "solidify_conversation": "固化对话",
-        "summarize_thread": "总结会话",
-        "direct_answer": "直接回复",
+        "response": "生成回答",
+        "artifact": "生成产物",
+        "external_state": "变更外部状态",
+        "compound": "完成复合目标",
         "unknown": "处理入口请求",
     }
     text = _clip(entry_text, 48)
     suffix = f": {text}" if text else ""
-    status = "等待确认" if outcome == "waiting_confirmation" else "已完成"
+    status = "等待确认" if outcome == "blocked_approval" else "已完成"
     if outcome == "failed":
         status = "失败"
     elif outcome == "cancelled":
         status = "已取消"
-    return f"{labels.get(intent, intent)}{suffix} ({status})"
+    return f"{labels.get(result_contract, result_contract)}{suffix} ({status})"
 
 
 def _episode_summary(
@@ -247,10 +242,9 @@ def _decisions_from_events(events: list[dict[str, Any]]) -> list[str]:
         if not isinstance(payload, dict):
             continue
         event_type = event.get("type")
-        if event_type == "intent_classified":
-            decisions.append(
-                f"识别意图为 {payload.get('intent', 'unknown')}，风险 {payload.get('risk_level', 'low')}"
-            )
+        if event_type == "task_analyzed":
+            result_contracts = payload.get("result_contracts") or ["unknown"]
+            decisions.append(f"结果契约: {', '.join(str(item) for item in result_contracts)}")
         elif event_type in {"confirmation_resumed", "clarification_resumed"}:
             decisions.append(f"{event_type}: {payload.get('decision') or payload.get('text') or 'resumed'}")
         elif event_type == "replan_completed":

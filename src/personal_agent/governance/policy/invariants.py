@@ -2,8 +2,8 @@
 
 These predicates used to be re-encoded independently in three places:
 - ``policy/engine.py`` (ReAct autonomy guard + high-risk confirmation gate),
-- ``agent/workflow_validator.py`` (declaration-time spec invariants),
-- ``agent/step_projection_validator.py`` (runtime step + intent rules).
+- ``planning/procedures.py`` (declaration-time procedure invariants),
+- ``planning/step_projection_validator.py`` (runtime projection rules).
 
 Defense in depth is intentional — all three still check — but they must agree by
 construction. Centralizing the *definitions* here means a change to "what is

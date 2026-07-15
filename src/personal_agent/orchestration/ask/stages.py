@@ -1,7 +1,6 @@
-"""The bounded ask stages: retrieval, generation, verification, repair.
+"""The bounded ask pipeline: retrieval, generation, verification, repair.
 
-These map 1:1 onto the ``ask-retrieve`` / ``ask-compose`` / ``ask-verify`` /
-``ask-repair`` workflow steps. Each stage reads from and writes to the shared
+These stages execute inside an acquire/reason action. Each stage reads and writes the shared
 :class:`AskRunContext`. Heavy collaborator logic (prompt building, the verifier,
 the retry loop) lives on :class:`AskService`; the stages orchestrate it.
 
@@ -16,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from personal_agent.application.evidence_engine import EvidenceAssemblyRequest
 from personal_agent.kernel.contracts.capability import (
+    CapabilityRequirement,
     CapabilityResolutionRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
@@ -163,17 +163,28 @@ class RetrievalStage:
             registry,
             policy_engine=svc.policy_engine,
         ).resolve(CapabilityResolutionRequest(
-            task_text=ctx.question,
-            workflow_id="ask",
-            step_id="ask-retrieve",
-            step_action_type="retrieve",
+            task_id="",
+            goal_id=f"ask:{ctx.session_id}",
+            action_id="ask-retrieve",
+            meta_capability="acquire",
             allowed_kinds=("retriever",),
             allowed_operations=("search", "read"),
+            requirements=(CapabilityRequirement(
+                requirement_id="ask:evidence",
+                purpose="retrieve evidence for the current question",
+                operations=("search", "read"),
+                freshness_required=ctx.understanding.needs_freshness,
+                preferred_providers=tuple(dict.fromkeys(preferred)),
+                output_contract="EvidenceItem",
+            ),),
             policy=CapabilitySelectionPolicy(
-                local_first=True,
+                local_first=(
+                    not ctx.understanding.needs_freshness
+                    and "web" not in ctx.retrieval_plan.sources
+                ),
                 read_only=True,
-                max_capabilities_per_step=6,
-                max_providers_per_step=6,
+                max_capabilities_per_action=6,
+                max_providers_per_action=6,
                 preferred_providers=tuple(dict.fromkeys(preferred)),
             ),
             runtime_context={

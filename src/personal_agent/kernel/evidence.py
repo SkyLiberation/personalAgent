@@ -45,10 +45,12 @@ class EvidenceItem(BaseModel):
     evidence_id: str = Field(default_factory=lambda: uuid4().hex[:12])
     source_type: Literal["graph_fact", "note", "chunk", "web", "tool", "episode", "procedural", "reflection"]
     source_id: str = ""
+    source_snapshot_id: str = ""
     parent_note_id: str | None = None
     title: str = ""
     snippet: str = ""
     fact: str | None = None
+    proposition: str = ""
     source_span: str | None = None
     source_ref: str | None = None
     source_fingerprint: str | None = None
@@ -65,6 +67,7 @@ class EvidenceItem(BaseModel):
             "evidence_id": self.evidence_id,
             "source_type": self.source_type,
             "source_id": self.source_id,
+            "source_snapshot_id": self.source_snapshot_id,
             "parent_note_id": self.parent_note_id,
             "source_ref": self.source_ref,
             "source_fingerprint": self.source_fingerprint,
@@ -1152,7 +1155,7 @@ def web_results_to_evidence(
 
 
 def episodes_to_evidence(episodes: list[MemoryEpisode]) -> list[EvidenceItem]:
-    """Convert workflow/run episodes to historical-intent evidence."""
+    """Convert run episodes to historical-goal evidence."""
     items: list[EvidenceItem] = []
     for episode in episodes:
         snippet_parts = [episode.summary]
@@ -1170,7 +1173,7 @@ def episodes_to_evidence(episodes: list[MemoryEpisode]) -> list[EvidenceItem]:
                 "run_id": episode.run_id,
                 "thread_id": episode.thread_id,
                 "session_id": episode.session_id,
-                "workflow": episode.workflow,
+                "result_contract": episode.result_contract,
                 "outcome": episode.outcome,
                 "entry_text": episode.entry_text,
                 "event_refs": episode.event_refs,

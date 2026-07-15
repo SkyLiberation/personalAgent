@@ -96,8 +96,8 @@ def score_understanding_case(
         else 0.0
     )
     query_intent_coverage = _list_coverage(
-        output.query_intents,
-        case.expected_query_intents,
+        output.query_goal_kinds,
+        case.expected_query_goal_kinds,
     )
     query_subject_coverage = _query_subject_coverage(
         output.query_texts,

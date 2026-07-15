@@ -22,7 +22,7 @@ from personal_agent.kernel.config import Settings
 from tests.conftest import (  # reuse the canonical test infrastructure
     POSTGRES_URL,
     clean_postgres_business_tables,  # noqa: F401 — re-exported fixture
-    stub_router_decision,
+    stub_task_analysis,
 )
 
 
@@ -55,7 +55,7 @@ def runtime(stub_settings: Settings):
         store=store,
         graph_store=GraphitiStore(stub_settings),
     )
-    runtime._intent_router._classify_with_llm = stub_router_decision
+    runtime._task_analyzer._analyze_with_model = stub_task_analysis
     return runtime
 
 
@@ -77,5 +77,5 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     from personal_agent.adapters.web.api import create_app
 
     app = create_app()
-    app.state.service.runtime._intent_router._classify_with_llm = stub_router_decision
+    app.state.service.runtime._task_analyzer._analyze_with_model = stub_task_analysis
     return TestClient(app)

@@ -10,8 +10,8 @@ class E2EQualityCase:
     id: str
     branch: str
     description: str
-    expected_intents: tuple[str, ...] = ()
-    expected_workflow_id: str = ""
+    expected_result_contracts: tuple[str, ...] = ()
+    expected_procedure_id: str = ""
     expected_steps: tuple[str, ...] = ()
     expected_run_statuses: tuple[str, ...] = ()
     expected_research_statuses: tuple[str, ...] = ()
@@ -104,9 +104,9 @@ class E2EQualityCase:
 class E2EQualityRun:
     case_id: str
     branch: str
-    intents: tuple[str, ...] = ()
+    result_contracts: tuple[str, ...] = ()
     run_status: str = ""
-    workflow_id: str = ""
+    procedure_id: str = ""
     step_ids: tuple[str, ...] = ()
     answer: str = ""
     matches_count: int = 0
@@ -296,14 +296,14 @@ def score_case(case: E2EQualityCase, run: E2EQualityRun) -> CaseScore:
 
 def _metrics(case: E2EQualityCase, run: E2EQualityRun) -> list[MetricScore]:
     metrics: list[MetricScore] = []
-    if case.expected_intents:
-        metrics.append(_exact("route_intents", run.intents, case.expected_intents))
-    if case.expected_workflow_id:
-        metrics.append(_exact("workflow_id", run.workflow_id, case.expected_workflow_id))
+    if case.expected_result_contracts:
+        metrics.append(_exact("result_contracts", run.result_contracts, case.expected_result_contracts))
+    if case.expected_procedure_id:
+        metrics.append(_exact("procedure_id", run.procedure_id, case.expected_procedure_id))
     if case.expected_steps:
         missing = set(case.expected_steps) - set(run.step_ids)
         metrics.append(MetricScore(
-            "workflow_steps",
+            "action_steps",
             1.0 if not missing else 0.0,
             "" if not missing else f"missing={sorted(missing)}",
         ))

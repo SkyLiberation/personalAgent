@@ -49,7 +49,7 @@ episode；如果只想做 smoke 或策略初筛，优先使用 `--graphiti-note-
 
 ## 策略
 
-- `keyword`：评估 `LocalMemoryStore.find_similar_notes`。
+- `keyword`：离线、确定性的词法重叠基线，不代表生产检索链路。
 - `citation_reranker`：把 section 包装成伪关系边，评估 `rank_graph_citation_hits`。
 - `structural`：离线 structural retriever baseline，基于文档-章节图做 section 局部评分，并向父文档/兄弟 section 传播分数。
 - `current_runtime_ask`：完整生产 `AgentRuntime.execute_ask()` 路径，会执行生成和 verifier，是 Ask 效果主回归口径；因为很慢，建议复用 Graphiti manifest 后再跑。

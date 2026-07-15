@@ -23,7 +23,7 @@ def _get_orch_graph():
 
     settings = Settings.from_env()
     service = AgentService(settings=settings)
-    return service._entry._get_orch_graph()
+    return service.runtime._entry._get_orch_graph()
 
 
 def _build_mermaid(xray: int | bool = False) -> str:
@@ -78,7 +78,7 @@ def main() -> int:
 
     top_level_mermaid = _build_mermaid(xray=False)
 
-    SUBGRAPH_NAMES = ["entry_graph", "step_execution_graph", "react_graph"]
+    SUBGRAPH_NAMES = ["entry_graph", "executive_graph", "action_execution", "react_action"]
 
     if args.xray <= 0:
         content = _wrap_mermaid(top_level_mermaid, as_markdown)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.conftest import POSTGRES_URL, stub_router_decision
+from tests.conftest import POSTGRES_URL, stub_task_analysis
 from langchain_core.messages import AIMessage, HumanMessage
 
 from personal_agent.orchestration.orchestration_models import (
@@ -18,31 +18,48 @@ from personal_agent.orchestration.orchestration_models import (
     _new_run_id,
     _new_thread_id,
     execution_trace_to_events,
-    steps_to_steps_projected_events,
 )
 from personal_agent.orchestration.orchestration_nodes._helpers import _dialogue_prompt_messages
-from personal_agent.planning.router import (
+from personal_agent.planning.task_analyzer import (
     Goal,
-    RouterDecision as RouterDecisionModel,
-    describe_router_decision,
+    ResourceHint,
+    TaskAnalysis as TaskAnalysisModel,
+    describe_task_analysis,
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
+from personal_agent.runtime.run_manager import RunStateError
 
 
-def RouterDecision(route="unknown", user_visible_message="", **kwargs):
+def TaskAnalysis(route="unknown", user_visible_message="", **kwargs):
     item_fields = {
         key: value for key, value in kwargs.items()
         if key in Goal.model_fields
     }
-    item = Goal(
-        goal_id="goal_1",
-        intent=route,
-        **item_fields,
-    )
-    return RouterDecisionModel(
-        goals=[item],
-        requires_clarification=bool(kwargs.get("requires_clarification", False)),
+    clarify = bool(kwargs.get("requires_clarification", False))
+    item_fields.setdefault("description", str(kwargs.get("input") or user_visible_message or route))
+    kind, domain, resource_types, operations = {
+        "capture_text": ("external_state", "knowledge", ["text"], ["ingest"]),
+        "capture_link": ("external_state", "knowledge", ["url"], ["ingest"]),
+        "solidify_conversation": ("external_state", "conversation", ["thread"], ["ingest"]),
+        "delete_knowledge": ("external_state", "knowledge", ["note"], ["delete"]),
+        "ask": ("response", "knowledge", ["note"], ["search", "read"]),
+        "summarize_thread": ("response", "conversation", ["thread"], ["read"]),
+    }.get(route, ("response", "", [], []))
+    item_fields.setdefault("result_contract", kind)
+    if kind == "external_state":
+        item_fields.setdefault("side_effect_intent", "mutation")
+    if domain:
+        item_fields.setdefault("resource_hints", [ResourceHint(
+            semantic_domain=domain,
+            resource_types=resource_types,
+            operations=operations,
+        )])
+    item = Goal(goal_id="goal_1", **item_fields)
+    return TaskAnalysisModel(
+        user_goal=item.description,
+        outcome="clarify" if clarify else "ready",
+        goals=[] if clarify else [item],
         missing_information=list(kwargs.get("missing_information", [])),
         clarification_prompt=str(kwargs.get("clarification_prompt", "")),
     )
@@ -63,7 +80,7 @@ class TestAgentGraphState:
             user_id="user-1",
             session_id="sess-1",
             entry_text="什么是服务降级？",
-            router_decision=RouterDecision(route="ask"),
+            task_analysis=TaskAnalysis(route="ask"),
             answer="服务降级是在系统压力过大时...",
             step_execution=StepExecutionState(steps=[
                 {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
@@ -108,11 +125,11 @@ class TestAgentGraphState:
     def test_to_run_snapshot_pending(self):
         state = AgentGraphState()
         snap = state.to_run_snapshot()
-        assert snap.status == AgentRunStatus.pending
+        assert snap.status == AgentRunStatus.created
         assert snap.run_id == state.run_id
 
     def test_to_run_snapshot_completed(self):
-        state = AgentGraphState(router_decision=RouterDecision(route="ask"), answer="42", answer_completed=True)
+        state = AgentGraphState(task_analysis=TaskAnalysis(route="ask"), answer="42", answer_completed=True)
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.completed
         assert snap.answer == "42"
@@ -130,13 +147,13 @@ class TestAgentEvent:
 
     def test_serialization_roundtrip(self):
         event = AgentEvent(
-            run_id="r1", thread_id="t1", type="intent_classified",
-            payload={"intent": "ask"},
+            run_id="r1", thread_id="t1", type="task_analyzed",
+            payload={"result_contracts": ["response"]},
         )
         data = event.model_dump(mode="json")
         restored = AgentEvent.model_validate(data)
-        assert restored.type == "intent_classified"
-        assert restored.payload["intent"] == "ask"
+        assert restored.type == "task_analyzed"
+        assert restored.payload["result_contracts"] == ["response"]
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +163,8 @@ class TestAgentEvent:
 class TestAgentRunSnapshot:
     def test_snapshot_defaults(self):
         snap = AgentRunSnapshot(run_id="r1", thread_id="t1", user_id="u1", session_id="s1")
-        assert snap.status == AgentRunStatus.pending
-        assert snap.intents == []
+        assert snap.status == AgentRunStatus.created
+        assert snap.result_contracts == []
         assert snap.steps == []
 
 
@@ -195,7 +212,7 @@ class TestNormalizeEntry:
         state = AgentGraphState(
             run_id="new-run",
             entry_input=EntryInput(text="什么是DNS", user_id="u1", session_id="s1"),
-            router_decision=RouterDecision(route="ask"),
+            task_analysis=TaskAnalysis(route="ask"),
             answer="上一轮天气回答",
             answer_completed=True,
             pending_confirmation={"kind": "clarification_required"},
@@ -216,7 +233,7 @@ class TestNormalizeEntry:
         result = _node_normalize_entry(state)
 
         assert result["thread_id"] == "u1:s1"
-        assert result["router_decision"] is None
+        assert result["task_analysis"] is None
         assert result["answer"] is None
         assert result["answer_completed"] is False
         assert result["pending_confirmation"] is None
@@ -239,16 +256,6 @@ class TestNormalizeEntry:
 # ---------------------------------------------------------------------------
 
 class TestEventConversions:
-    def test_steps_to_steps_projected_events(self):
-        steps = [
-            {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
-            {"step_id": "s2", "action_type": "tool_call", "status": "planned"},
-        ]
-        events = steps_to_steps_projected_events(steps, "r1", "t1")
-        assert len(events) == 1
-        assert events[0].type == "steps_projected"
-        assert events[0].payload["steps"] == steps
-
     def test_execution_trace_to_events(self):
         traces = ["检索知识库", "整合证据", "生成回答"]
         events = execution_trace_to_events(traces, "r1", "t1")
@@ -284,7 +291,7 @@ class TestOrchestrationGraphIntegration:
             store=store,
             graph_store=GraphitiStore(stub_settings),
         )
-        runtime._intent_router._classify_with_llm = stub_router_decision
+        runtime._task_analyzer._analyze_with_model = stub_task_analysis
         return runtime
 
     def test_graph_builds_and_compiles(self, runtime):
@@ -300,7 +307,7 @@ class TestOrchestrationGraphIntegration:
         assert graph.checkpointer is not None
         assert "entry_graph" in graph.get_graph().nodes
         assert "executive_graph" in graph.get_graph().nodes
-        assert "route_intent" not in graph.get_graph().nodes
+        assert "analyze_task" not in graph.get_graph().nodes
 
         step_graph = build_action_execution_graph(runtime.graph_contexts)
         assert "action_tool_node" in step_graph.get_graph().nodes
@@ -311,14 +318,14 @@ class TestOrchestrationGraphIntegration:
         react_graph = build_react_graph(runtime.graph_contexts)
         assert "react_tool_node" in react_graph.get_graph().nodes
 
-    def test_route_intent_does_not_use_ask_history_when_thread_is_empty(self, runtime, monkeypatch):
+    def test_analyze_task_does_not_use_ask_history_when_thread_is_empty(self, runtime, monkeypatch):
         captured_messages: list[list[dict[str, str]]] = []
 
-        def classify(entry_input, conversation_messages=None):
+        def analyze(entry_input, conversation_messages=None):
             captured_messages.append(conversation_messages or [])
-            return RouterDecision(route="direct_answer", user_visible_message="直接回答。")
+            return TaskAnalysis(route="respond", user_visible_message="回答。")
 
-        monkeypatch.setattr(runtime._intent_router, "classify", classify)
+        monkeypatch.setattr(runtime._task_analyzer, "analyze", analyze)
 
         runtime.execute_entry(
             EntryInput(text="继续", user_id="test-user", session_id="persisted-context")
@@ -326,78 +333,15 @@ class TestOrchestrationGraphIntegration:
 
         assert captured_messages == [[]]
 
-    def test_direct_answer_does_not_duplicate_thread_dialogue_in_system_context(self, runtime, monkeypatch):
-        from personal_agent.orchestration.orchestration_nodes._entry import _node_direct_answer_branch
-
-        captured_messages: list[list[dict]] = []
-
-        class FakeCompletions:
-            def create(self, **kwargs):
-                captured_messages.append(kwargs["messages"])
-
-                class Message:
-                    content = "继续回答"
-
-                class Choice:
-                    message = Message()
-
-                class Response:
-                    choices = [Choice()]
-
-                return Response()
-
-        class FakeChat:
-            completions = FakeCompletions()
-
-        class FakeOpenAI:
-            def __init__(self, **_kwargs):
-                self.chat = FakeChat()
-
-        monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
-        monkeypatch.setattr(runtime.settings.openai, "api_key", "test-key")
-        monkeypatch.setattr(runtime.settings.openai, "base_url", "http://llm.test")
-        monkeypatch.setattr(runtime.settings.openai, "small_model", "small")
-        # The DirectAnswerContext was built without credentials; inject a real
-        # model client now that the openai config has been monkeypatched.
-        import personal_agent.infra.structured_model as _sm
-        _da = runtime.graph_contexts.direct_answer
-        object.__setattr__(_da, "model_client", _sm.OpenAIModelClient(runtime.settings.openai))
-        runtime.memory.bind_session("test-user", "direct-dup")
-
-        state = AgentGraphState(
-            run_id="direct-dup-run",
-            user_id="test-user",
-            session_id="direct-dup",
-            entry_input=EntryInput(text="继续", user_id="test-user", session_id="direct-dup"),
-            entry_text="继续",
-            router_decision=RouterDecision(route="direct_answer"),
-            messages=[
-                HumanMessage(content="上一轮用户问题"),
-                AIMessage(content="上一轮助手回答"),
-                HumanMessage(content="继续"),
-            ],
-        )
-
-        result = _node_direct_answer_branch(
-            state,
-            deps=runtime.graph_contexts.direct_answer,
-        )
-        system_content = captured_messages[0][0]["content"]
-        user_contents = [item["content"] for item in captured_messages[0][1:]]
-
-        assert result["answer"] == "继续回答"
-        assert "上一轮用户问题" not in system_content
-        assert "上一轮用户问题" in user_contents
-
-    def test_direct_answer_through_orch_graph(self, runtime):
-        """A simple direct_answer should flow through the graph and produce a result."""
+    def test_simple_conversation_through_executive_graph(self, runtime):
+        """A simple conversation is still handled by the common Executive loop."""
         entry = EntryInput(
             text="你好",
             user_id="test-user",
             session_id="orch-test",
         )
         result = runtime.execute_entry(entry)
-        assert result.intents[-1] in ("direct_answer", "unknown", "capture_text")
+        assert result.result_contracts == ["response"]
         assert result.reply_text
         latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
@@ -414,7 +358,7 @@ class TestOrchestrationGraphIntegration:
             session_id="orch-test-ask",
         )
         result = runtime.execute_entry(entry)
-        assert result.intents == ["ask"]
+        assert result.result_contracts == ["response"]
         assert result.reply_text
         latest = runtime._entry._get_orch_graph().get_state(
             {"configurable": {"thread_id": result.thread_id}}
@@ -449,10 +393,10 @@ class TestOrchestrationGraphIntegration:
             session_id="orch-test-cap",
         )
         result = runtime.execute_entry(entry)
-        assert result.intents[-1] in ("capture_text", "unknown")
+        assert result.result_contracts[-1] == "external_state"
         assert result.reply_text
-        if result.intents[-1] == "capture_text":
-            assert result.run_status == "waiting_confirmation"
+        if result.result_contracts[-1] == "external_state":
+            assert result.run_status == "blocked_approval"
             assert any(event["type"] == "memory_admission" for event in result.events)
             result = runtime.resume_entry(
                 run_id=result.run_id or "",
@@ -481,6 +425,14 @@ class TestOrchestrationGraphIntegration:
             "summarize_chat",
             lambda messages, _user_id: f"总结结果：{messages}",
         )
+        monkeypatch.setattr(
+            runtime._task_analyzer,
+            "analyze",
+            lambda *_args, **_kwargs: TaskAnalysis(
+                route="summarize_thread",
+                user_visible_message="总结群聊内容。",
+            ),
+        )
 
         result = runtime.execute_entry(
             EntryInput(
@@ -492,7 +444,7 @@ class TestOrchestrationGraphIntegration:
             )
         )
 
-        assert result.intents == ["summarize_thread"]
+        assert result.result_contracts == ["response"]
         assert loaded == [("feishu-summary", 20)]
         assert "项目今天完成发布" in result.reply_text
 
@@ -534,8 +486,8 @@ class TestOrchestrationGraphIntegration:
             )
         )
 
-        assert result.intents == ["solidify_conversation"]
-        assert result.run_status == "waiting_confirmation"
+        assert result.result_contracts == ["external_state"]
+        assert result.run_status == "blocked_approval"
         result = runtime.resume_entry(
             run_id=result.run_id or "",
             thread_id=result.thread_id or "",
@@ -545,7 +497,7 @@ class TestOrchestrationGraphIntegration:
         assert "DNS 是域名系统" in result.reply_text
         assert any("DNS 是域名系统" in note.content for note in runtime.store.list_notes("test-user"))
         event_types = [event["type"] for event in result.events]
-        assert "protocol_completed" in event_types
+        assert "procedure_completed" in event_types
         assert "draft_ready" in event_types
         assert event_types.count("step_completed") >= 2
 
@@ -568,7 +520,7 @@ class TestOrchestrationGraphIntegration:
                 session_id="structured-solidify",
             )
         )
-        assert result.run_status == "waiting_confirmation"
+        assert result.run_status == "blocked_approval"
         result = runtime.resume_entry(
             run_id=result.run_id or "",
             thread_id=result.thread_id or "",
@@ -577,7 +529,7 @@ class TestOrchestrationGraphIntegration:
         )
         notes = runtime.store.list_notes("test-user")
 
-        assert result.intents == ["solidify_conversation"]
+        assert result.result_contracts == ["external_state"]
         assert result.reply_text == "DNS（域名系统）\n\nDNS 用于将域名转换为 IP 地址。"
         assert any(note.content == result.reply_text for note in notes)
         assert not any(note.content == "把DNS相关知识固化下来" for note in notes)
@@ -609,7 +561,7 @@ class TestOrchestrationGraphIntegration:
                 session_id="focused-solidify",
             )
         )
-        assert pending.run_status == "waiting_confirmation"
+        assert pending.run_status == "blocked_approval"
         runtime.resume_entry(
             run_id=pending.run_id or "",
             thread_id=pending.thread_id or "",
@@ -650,26 +602,26 @@ class TestOrchestrationGraphIntegration:
             on_progress=lambda event, payload: events.append(event),
         )
 
-        assert result.intents == ["solidify_conversation"]
-        assert "protocol_started" in events
+        assert result.result_contracts == ["external_state"]
+        assert "procedure_started" in events
         assert "step_started" in events
         assert "step_completed" in events
-        assert events.index("protocol_started") < events.index("step_started")
+        assert events.index("procedure_started") < events.index("step_started")
         assert "done" not in events
 
-    def test_router_requested_clarify_then_resume(self, runtime):
-        """Router requests clarification, then supplemental text is routed again."""
+    def test_task_analyzer_requested_clarify_then_resume(self, runtime):
+        """Task analysis requests clarification before compiling a GoalGraph."""
         entry = EntryInput(
             text="帮我",
             user_id="test-user",
             session_id="orch-test-clarify",
         )
         result = runtime.execute_entry(entry)
-        assert result.run_status == "waiting_confirmation"
+        assert result.run_status == "waiting"
         assert result.pending_confirmation
         assert result.pending_confirmation["kind"] == "clarification_required"
         event_types = [event["type"] for event in result.events]
-        assert event_types.index("intent_classified") < event_types.index("clarification_required")
+        assert event_types.index("task_analyzed") < event_types.index("clarification_required")
 
         resumed = runtime.resume_entry(
             run_id=result.run_id or "",
@@ -679,8 +631,8 @@ class TestOrchestrationGraphIntegration:
             text="记一下：澄清应由路由决策触发。",
             option_id="capture",
         )
-        assert resumed.run_status == "waiting_confirmation"
-        assert resumed.intents == ["capture_text"]
+        assert resumed.run_status == "blocked_approval"
+        assert resumed.result_contracts == ["external_state"]
         assert resumed.reply_text
         completed = runtime.resume_entry(
             run_id=resumed.run_id or "",
@@ -691,7 +643,7 @@ class TestOrchestrationGraphIntegration:
         assert completed.run_status == "completed"
 
     def test_short_question_does_not_trigger_clarify(self, runtime):
-        """Short but meaningful questions should route instead of pausing."""
+        """Short but meaningful questions should become executable goals."""
         entry = EntryInput(
             text="你是谁",
             user_id="test-user",
@@ -700,7 +652,7 @@ class TestOrchestrationGraphIntegration:
         result = runtime.execute_entry(entry)
         assert result.run_status == "completed"
         assert result.pending_confirmation is None
-        assert result.intents == ["direct_answer"]
+        assert result.result_contracts == ["response"]
         assert result.reply_text
         snapshot = runtime.get_run_snapshot(result.run_id or "")
         assert snapshot is not None
@@ -887,7 +839,7 @@ class TestOrchestrationGraphIntegration:
         snapshots = runtime.list_run_snapshots(user_id="test-user", limit=10)
         relevant = [s for s in snapshots if s.session_id == "state-test"]
         assert len(relevant) >= 1
-        assert relevant[0].intents[-1] in ("direct_answer", "unknown", "capture_text")
+        assert relevant[0].result_contracts == ["response"]
 
 
 # ---------------------------------------------------------------------------
@@ -1161,7 +1113,11 @@ class TestPhase3ExecuteExecutionStep:
         state = AgentGraphState(user_id="u1", entry_text="删除关于DNS的知识")
 
         result = _execute_resolve_step(
-            StepRunState(step_id="resolve-1", action_type="resolve").to_execution_step(),
+            StepRunState(
+                step_id="resolve-1",
+                action_type="resolve",
+                llm_decision_node="delete_target_resolve",
+            ).to_execution_step(),
             state,
             runtime.graph_contexts.steps,
         )
@@ -1244,30 +1200,26 @@ class TestPhase3InterruptResumeIntegration:
 
     def test_execute_entry_returns_run_id_and_status(self, runtime):
         """After a normal execution, EntryResult should include run_id and run_status."""
-        entry = EntryInput(text="你好", user_id="u1", session_id="s1")
+        runtime._task_analyzer._analyze_with_model = stub_task_analysis
+        entry = EntryInput(
+            text="你好",
+            user_id="u1",
+            session_id="phase3-run-status",
+        )
         result = runtime.execute_entry(entry)
         assert result.run_id is not None
         assert result.run_status == "completed"
 
-    def test_resume_entry_accepts_valid_decision(self, runtime):
-        """resume_entry should be callable and return an EntryResult."""
-        # Build the graph to ensure checkpointer is ready
+    def test_resume_entry_rejects_unknown_run(self, runtime):
+        """Resume is a control-plane operation and cannot create a run."""
         runtime._entry._get_orch_graph()
-        # Even without a prior interrupted run, resume_entry should
-        # handle the graph invocation gracefully (LangGraph may start
-        # a fresh run or return the final state).
-        result = runtime.resume_entry(
-            run_id="fresh-run",
-            thread_id="u1:default:fresh-run",
-            decision="confirm",
-            user_id="u1",
-        )
-        assert isinstance(result.intents, list)
-        assert result.run_id is not None
-        assert result.run_status in ("completed", "waiting_confirmation")
-        if result.run_status == "waiting_confirmation":
-            assert result.pending_confirmation
-            assert result.pending_confirmation["kind"] == "clarification_required"
+        with pytest.raises(RunStateError, match="unknown run"):
+            runtime.resume_entry(
+                run_id="fresh-run",
+                thread_id="u1:default:fresh-run",
+                decision="confirm",
+                user_id="u1",
+            )
 
     def test_confirmation_decision_field_roundtrip(self):
         """AgentGraphState.confirmation_decision should survive serialization."""
@@ -1279,19 +1231,19 @@ class TestPhase3InterruptResumeIntegration:
         restored = AgentGraphState.model_validate(data)
         assert restored.confirmation_decision == "confirmed"
 
-    def test_to_run_snapshot_waiting_confirmation(self):
-        """When pending_confirmation is set, _infer_status returns waiting_confirmation."""
+    def test_to_run_snapshot_blocked_approval(self):
+        """When pending_confirmation is set, _infer_status returns blocked_approval."""
         state = AgentGraphState(
-            router_decision=RouterDecision(route="delete_knowledge"),
+            task_analysis=TaskAnalysis(route="delete_knowledge"),
             pending_confirmation={"step_id": "s1", "action_type": "delete_note"},
             answer_completed=False,
         )
         snap = state.to_run_snapshot()
-        assert snap.status == AgentRunStatus.waiting_confirmation
+        assert snap.status == AgentRunStatus.blocked_approval
 
     def test_to_run_snapshot_keeps_resolved_confirmation_decision(self):
         state = AgentGraphState(
-            router_decision=RouterDecision(route="delete_knowledge"),
+            task_analysis=TaskAnalysis(route="delete_knowledge"),
             confirmation_decision="confirmed",
             answer="已删除。",
             answer_completed=True,
@@ -1342,19 +1294,19 @@ class TestPhase4ReActHelpers:
             graph_store=GraphitiStore(stub_settings),
         )
 
-    def test_resolve_allowed_tools_for_step(self, runtime):
-        from personal_agent.orchestration.orchestration_nodes._graph_helpers import _resolve_allowed_tools_for_step
-        from personal_agent.kernel.contracts.execution import ExecutionStep
+    def test_react_consumes_pre_resolved_tool_scope(self, runtime):
+        from personal_agent.orchestration.orchestration_nodes._react import _node_react_init
 
-        step = ExecutionStep(
-            step_id="s1",
-            action_type="retrieve",
-            allowed_tools=["graph_search", "nonexistent_tool"],
-            execution_mode="react",
+        state = AgentGraphState(
+            step_execution=StepExecutionState(steps=[StepRunState(
+                step_id="s1",
+                action_type="retrieve",
+                allowed_tools=["graph_search"],
+                execution_mode="react",
+            )]),
         )
-        resolved = _resolve_allowed_tools_for_step(step, runtime.graph_contexts.react)
-        assert "graph_search" in resolved
-        assert "nonexistent_tool" not in resolved
+        _node_react_init(state, deps=runtime.graph_contexts.react)
+        assert state.react.allowed_tools == ["graph_search"]
 
     def test_is_react_tool_blocked_high_risk(self, runtime):
         from personal_agent.orchestration.orchestration_nodes._graph_helpers import _is_react_tool_blocked
@@ -1366,18 +1318,6 @@ class TestPhase4ReActHelpers:
         from personal_agent.orchestration.orchestration_nodes._graph_helpers import _is_react_tool_blocked
 
         assert not _is_react_tool_blocked("graph_search", runtime.graph_contexts.react)
-
-    def test_build_react_context(self):
-        from personal_agent.orchestration.orchestration_nodes._helpers import _build_react_context
-        from personal_agent.kernel.contracts.execution import ExecutionStep
-
-        step = ExecutionStep(step_id="s1", tool_input={"question": "什么是X？"})
-        results = {
-            "prev": {"answer": "X是一种技术", "hint": "fallback"},
-        }
-        ctx = _build_react_context(step, results)
-        assert "什么是X" in ctx
-        assert "X是一种技术" in ctx
 
     def test_format_react_tools(self, runtime):
         from personal_agent.orchestration.orchestration_nodes._helpers import _format_react_tools
@@ -1527,7 +1467,7 @@ class TestPhase4ReActNodes:
         assert state.step_execution.steps[0].failure_reason == "LLM returned nothing"
         assert state.step_execution.steps[0].recoverable is False
         assert state.errors == ["[ask-1] LLM returned nothing"]
-        assert _after_react_graph(state) == "recover"
+        assert _after_react_graph(state) == "action_done"
 
 
 class TestPhase4ReActIterateNode:
@@ -1820,55 +1760,6 @@ class TestPhase4ReActMainGraphIntegration:
         assert tool_result_event.payload["invocation"]["execution_mode"] == "react"
         assert tool_result_event.payload["invocation"]["permission_scope"] == "memory:read"
 
-    def test_main_graph_routes_react_through_main_nodes(self, runtime, monkeypatch):
-        """An ask entry with execution steps routes ReAct through main graph nodes."""
-        from personal_agent.orchestration.orchestration_graph import build_entry_orchestration_graph, _build_checkpointer
-
-        def _mock_llm(*_args, **_kwargs):
-            return '{"thought": "已检索","done": true,"result": {"answer": "服务降级是指在系统压力过大时主动关闭非核心能力"}}'
-
-        monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
-            _mock_llm,
-        )
-
-        checkpointer = _build_checkpointer(runtime.settings)
-        graph = build_entry_orchestration_graph(runtime.graph_contexts, checkpointer=checkpointer)
-
-        state = AgentGraphState(
-            run_id="r-ask",
-            user_id="u1",
-            entry_text="什么是服务降级？",
-            router_decision=RouterDecision(route="ask"),
-            step_execution=StepExecutionState(
-                steps=[
-                    {
-                        "step_id": "ask-1",
-                        "action_type": "retrieve",
-                        "description": "在知识库中检索相关内容",
-                        "tool_name": "graph_search",
-                        "execution_mode": "react",
-                        "allowed_tools": ["graph_search", "web_search"],
-                        "max_iterations": 3,
-                        "status": "planned",
-                    },
-                    {
-                        "step_id": "ask-2",
-                        "action_type": "compose",
-                        "description": "整合生成回答",
-                        "depends_on": ["ask-1"],
-                        "status": "planned",
-                    },
-                ],
-                current_step_index=0,
-            ),
-        )
-
-        config = {"configurable": {"thread_id": "test-main-react"}}
-        result = AgentGraphState.model_validate(graph.invoke(state, config))
-        # The graph should complete with answer set
-        assert result.answer or result.step_execution.steps[0].status == "completed"
-
     def test_after_step_execution_routes_to_react_step(self):
         from personal_agent.orchestration.orchestration_graph import _after_step_execution
 
@@ -1962,13 +1853,13 @@ class TestPhase5EventHelpers:
         )
 
         events = [
-            AgentEvent(type="steps_projected", payload={"steps": []}),
+            AgentEvent(type="goal_graph_compiled", payload={"goal_count": 1}),
             AgentEvent(type="step_started", payload={"description": "测试"}),
             AgentEvent(type="run_completed", payload={"answer": "ok"}),
         ]
         tuples = events_to_sse_tuples(events)
         assert len(tuples) == 3
-        assert tuples[0][0] == "steps_projected"
+        assert tuples[0][0] == "goal_graph_compiled"
         assert tuples[1][0] == "step_started"
         assert tuples[2][0] == "done"
         # Each payload gets _event_id and _event_type metadata
@@ -1989,7 +1880,7 @@ class TestPhase5EntryResultEvents:
         from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
-            intents=["ask"],
+            result_contracts=["response"],
             reason="测试",
             reply_text="答案",
             events=[{"type": "entry_started", "payload": {}}],
@@ -2000,7 +1891,7 @@ class TestPhase5EntryResultEvents:
     def test_entry_result_events_default_empty(self):
         from personal_agent.application.runtime_results import EntryResult
 
-        result = EntryResult(intents=["direct_answer"], reason="测试", reply_text="你好")
+        result = EntryResult(result_contracts=["response"], reason="测试", reply_text="你好")
         assert result.events == []
 
     def test_entry_result_events_serialization_roundtrip(self):
@@ -2008,18 +1899,18 @@ class TestPhase5EntryResultEvents:
         from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
-            intents=["ask"],
+            result_contracts=["response"],
             reason="测试",
             reply_text="答案",
             events=[
-                AgentEvent(type="intent_classified", payload={"intent": "ask"}).model_dump(mode="json"),
+                AgentEvent(type="task_analyzed", payload={"result_contracts": ["response"]}).model_dump(mode="json"),
                 AgentEvent(type="answer_completed", payload={"answer": "答案"}).model_dump(mode="json"),
             ],
         )
         data = result.model_dump(mode="json")
         restored = EntryResult.model_validate(data)
         assert len(restored.events) == 2
-        assert restored.events[0]["type"] == "intent_classified"
+        assert restored.events[0]["type"] == "task_analyzed"
 
 
 class TestPhase5FinalizeEntryState:
@@ -2030,7 +1921,7 @@ class TestPhase5FinalizeEntryState:
 
         state = AgentGraphState(
             run_id="test-finalize",
-            router_decision=RouterDecision(route="direct_answer"),
+            task_analysis=TaskAnalysis(route="respond"),
             answer="你好",
         )
 
@@ -2049,7 +1940,7 @@ class TestPhase5FinalizeEntryState:
 
         state = AgentGraphState(
             run_id="test-step-finalize",
-            router_decision=RouterDecision(route="ask"),
+            task_analysis=TaskAnalysis(route="ask"),
             answer="完成",
             answer_completed=True,
         )
@@ -2073,19 +1964,19 @@ class TestPhase5GraphToEntryResultEvents:
         # Simulate what happens in execute_entry after graph.invoke()
         state = AgentGraphState(
             run_id="test-events",
-            router_decision=RouterDecision(route="direct_answer", user_visible_message="用户打招呼"),
+            task_analysis=TaskAnalysis(route="respond", user_visible_message="用户打招呼"),
             answer="你好！有什么可以帮助你的？",
             answer_completed=True,
             execution_trace=["生成直接回复"],
         )
         state.add_event("entry_started", {"text": "你好"})
-        state.add_event("intent_classified", {"intent": "direct_answer"})
+        state.add_event("task_analyzed", {"result_contracts": ["response"]})
         state.add_event("answer_completed", {"answer": "你好！有什么可以帮助你的？"})
         state.add_event("run_completed", {})
 
         result = EntryResult(
-            intents=[goal.intent for goal in state.router_decision.goals] if state.router_decision else [],
-            reason=describe_router_decision(state.router_decision),
+            result_contracts=[goal.result_contract for goal in state.task_analysis.goals] if state.task_analysis else [],
+            reason=describe_task_analysis(state.task_analysis),
             reply_text=state.answer or "",
             execution_trace=state.execution_trace,
             run_id=state.run_id,
@@ -2096,29 +1987,29 @@ class TestPhase5GraphToEntryResultEvents:
         assert len(result.events) == 4
         event_types = [e["type"] for e in result.events]
         assert "entry_started" in event_types
-        assert "intent_classified" in event_types
+        assert "task_analyzed" in event_types
         assert "answer_completed" in event_types
         assert "run_completed" in event_types
 
     def test_interrupted_result_has_events(self):
-        """Verify that interrupted (waiting_confirmation) results carry accumulated events."""
+        """Verify that interrupted (blocked_approval) results carry accumulated events."""
         from personal_agent.application.runtime_results import EntryResult
 
         result = EntryResult(
-            intents=["unknown"],
+            result_contracts=["unknown"],
             reason="操作需要用户确认",
             reply_text="确认删除？",
             run_id="r1",
             thread_id="t1",
             pending_confirmation={"step_id": "s2"},
-            run_status="waiting_confirmation",
+            run_status="blocked_approval",
             events=[
                 {"type": "entry_started", "payload": {}},
                 {"type": "step_started", "payload": {"step_id": "s1"}},
             ],
         )
 
-        assert result.run_status == "waiting_confirmation"
+        assert result.run_status == "blocked_approval"
         assert len(result.events) == 2
 
 

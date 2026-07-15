@@ -25,9 +25,14 @@
 [orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py) 定义 `AgentEvent`，用于记录编排过程：
 
 - `entry_started`
-- `intent_classified`
-- `steps_projected`
-- `steps_validated`
+- `task_analyzed`
+- `control_decision_made`
+- `action_observed`
+- `goal_verified`
+- `goal_graph_compiled`
+- `planning_mode_assessed`
+- `executive_decision`
+- `decision_validated`
 - `step_started`
 - `react_iteration`
 - `tool_called`
@@ -97,13 +102,13 @@ LangGraph checkpoint 保存可恢复执行现场：
 - 工具审计事件会通过 `get_current_run_tree()` 填充 `langsmith_run_id`，把业务审计记录与 LangSmith run 关联。
 - `PERSONAL_AGENT_LANGSMITH_ENABLED=false` 时会强制设置 `LANGSMITH_TRACING=false`，避免外部环境误开。
 
-核心规划链路也已开始接入 LLM trace wrapper：
+核心决策链路也已开始接入 LLM trace wrapper：
 
-- router：记录 `prompt_name=router`、模型、latency、JSON parse 状态。
-- planner：记录 `prompt_name=planner`、模型、latency、`ExecutionStep[]` parse 状态。
-- replanner：记录 `prompt_name=replanner`、失败 step metadata 和 parse 状态。
+- Task Analyzer：记录 `prompt_name=task_analyzer`、模型、latency、schema parse 状态。
+- Executive：记录 ControlState revision、候选动作、决策 basis 和 validator 结果。
+- Goal Verifier：记录 criterion、evidence provenance 和结构化判定。
 - ReAct：记录 `prompt_name=react`、模型调用和 `ReactAction` parse 状态。
-- direct answer：记录 `prompt_name=direct_answer` 与 route metadata。
+- 开放响应：记录 Executive `transform` action、使用的 generation prompt 与 verification outcome。
 - runtime answer generation：非流式回答记录 `prompt_name=answer_generation`；流式回答记录 stream latency 和输出长度。
 - query planner：记录 `prompt_name=query_planner`、结构化 schema 和 `QueryUnderstanding` parse 状态。
 - LLM reranker：记录 `prompt_name=evidence_rerank`、候选数量和 `EvidenceRerank` parse 状态。
@@ -169,9 +174,9 @@ trace metadata 通道，避免业务代码把敏感上下文旁路写入模型�
 
 目前无法稳定地从一个界面看到：
 
-- router prompt
-- planner prompt
-- replanner prompt
+- Task Analyzer prompt
+- Executive decision prompt
+- Goal Verifier prompt
 - verifier prompt
 - ReAct prompt
 - raw model output
@@ -288,9 +293,9 @@ PERSONAL_AGENT_TRACE_SAMPLE_RATE=1.0
   "thread_id": "user:session",
   "user_id": "user id",
   "session_id": "session id",
-  "intents": ["capture_text", "ask"],
-  "plan_id": "execution plan id",
-  "workflow_ids": ["capture_text", "ask"],
+  "result_contracts": ["external_state", "response"],
+  "task_id": "task id",
+  "procedure_id": "knowledge_ingest",
   "source_platform": "web | cli | feishu",
   "step_count": 4
 }
@@ -314,7 +319,7 @@ LLM 子 run 建议携带：
 
 ```json
 {
-  "prompt_name": "router | planner | replanner | verifier | react",
+  "prompt_name": "task_analyzer | executive | goal_verifier | query_planner | react",
   "prompt_version": "v1",
   "model": "...",
   "parse_schema": "...",
@@ -364,8 +369,8 @@ LLM 子 run 建议携带：
 工作项：
 
 - 建立统一 LLM wrapper。（已完成）
-- router、planner、replanner、ReAct 通过 wrapper 调用。（已完成）
-- direct_answer、runtime answer generation、query planner 和 LLM reranker 通过 wrapper 或 trace context 记录。（已完成）
+- Task Analyzer、Executive、Goal Verifier、ReAct 通过 structured client 或 wrapper 调用。（已完成）
+- Executive transform、runtime answer generation、query planner 和 LLM reranker 通过 wrapper 或 trace context 记录。（已完成）
 - 记录 `prompt_name`、`prompt_version`、`model`、`latency_ms`、`parse_ok`、`parse_error`。（主链路已完成）
 - 使用 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS` 控制是否上传完整 prompt/output。（已完成）
 - Graphiti 内部策略记录 `graphiti_extraction` 调用和 parse 状态。（已完成）

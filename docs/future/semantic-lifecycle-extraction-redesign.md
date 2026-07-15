@@ -452,7 +452,7 @@ Claim + GroundingJudgment + sensitivity + source_role + user_policy
 - `partial_supported` 默认 `keep_candidate`，除非用户明确确认。
 - Research 来源不能因为模型自信直接覆盖用户已有 active Claim，必须通过 relation/admission。
 
-## Workflow 变化
+## 执行机制变化
 
 ### ingest_knowledge
 
@@ -723,9 +723,9 @@ privacy redaction
 - 删除 Artifact 会影响所有 EvidenceRef 和依赖 Claim。
 - 高敏感 Claim 必须可被查出并撤销投影。
 
-### Workflow / Eval / Replay
+### Procedure / Eval / Replay
 
-语义抽取引入模型漂移后，workflow 平台必须能重放和比较。
+语义抽取引入模型漂移后，execution event、artifact 与 Procedure 平台必须能重放和比较。
 
 ```text
 ExtractionRun / LifecycleRun

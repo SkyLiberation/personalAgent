@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
 
 from personal_agent.orchestration.orchestration_models import AgentRunStatus
 from personal_agent.orchestration.service import AgentService
@@ -22,7 +23,33 @@ from personal_agent.adapters.web.routes.entry_serializers import (
 logger = logging.getLogger(__name__)
 
 
+class RunControlRequest(BaseModel):
+    command: str
+    user_id: str = "default"
+
+
 def register_entry_run_routes(app: FastAPI, *, settings: Settings, service: AgentService) -> None:
+    @app.post("/api/entry/runs/{run_id}/control")
+    def control_run(run_id: str, body: RunControlRequest, request: Request) -> dict:
+        resolved_user = body.user_id if body.user_id != "default" else resolve_user_id(request, settings)
+        snapshot = service.get_run_snapshot(run_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Run not found.")
+        if snapshot.user_id != resolved_user:
+            raise HTTPException(status_code=403, detail="Run scope denied.")
+        if body.command not in {"cancel", "pause", "resume"}:
+            raise HTTPException(status_code=400, detail="Unsupported control command.")
+        try:
+            run = service.control_run(run_id, body.command)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "run_id": run.run_id,
+            "status": run.status,
+            "revision": run.revision,
+            "fencing_token": run.fencing_token,
+        }
+
     @app.post("/api/entry/runs/{run_id}/resume", response_model=EntryResponse)
     def resume_entry(
         run_id: str, body: ResumeEntryRequest, http_request: Request,
@@ -32,7 +59,7 @@ def register_entry_run_routes(app: FastAPI, *, settings: Settings, service: Agen
         snapshot = service.get_run_snapshot(run_id)
         if snapshot is None:
             raise HTTPException(status_code=404, detail="Run not found.")
-        if snapshot.status != AgentRunStatus.waiting_confirmation:
+        if snapshot.status not in {AgentRunStatus.waiting, AgentRunStatus.blocked_approval}:
             raise HTTPException(
                 status_code=400,
                 detail=f"Run is not in a resumable state (current: {snapshot.status.value}).",

@@ -101,7 +101,7 @@ class TestConsolidateKnowledgeGolden:
         )
 
         # Routed to consolidation and the run did not hang (no-hang invariant).
-        assert result.intents and result.intents[-1] == "consolidate_knowledge"
+        assert result.result_contracts and result.result_contracts[-1] == "external_state"
         assert result.run_status in _TERMINAL
 
         # The seeded sources are superseded by a single new synthesis note.
@@ -140,7 +140,7 @@ class TestConsolidateKnowledgeGolden:
         )
 
         # Still routes and still terminates — declining is not hanging.
-        assert result.intents and result.intents[-1] == "consolidate_knowledge"
+        assert result.result_contracts and result.result_contracts[-1] == "external_state"
         assert result.run_status in _TERMINAL
 
         # The single note must NOT be superseded (graceful "< 2 sources").

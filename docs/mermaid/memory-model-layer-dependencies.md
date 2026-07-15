@@ -13,7 +13,7 @@ flowchart LR
 
         subgraph ShortTerm["短期记忆 / 执行现场"]
             direction TB
-            EntryLayer["LangGraph Entry<br/>execute_entry()<br/>router / step projection / ask<br/>interrupt / resume"]:::layer
+            EntryLayer["LangGraph Entry<br/>execute_entry()<br/>TaskAnalyzer / Executive / Action<br/>interrupt / resume"]:::layer
             AgentGraphState["AgentGraphState<br/>messages<br/>plan / react<br/>tool_tracking<br/>events / errors<br/>pending_confirmation<br/>answer"]:::model
             CheckpointStore["Postgres Checkpoint<br/>checkpoints<br/>checkpoint_blobs<br/>checkpoint_writes"]:::model
             ShortTermConfig["ShortTermMemoryConfig<br/>token_budget<br/>max_messages<br/>per_message_char_limit<br/>rolling_summary"]:::model

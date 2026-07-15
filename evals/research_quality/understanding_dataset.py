@@ -21,7 +21,7 @@ class ResearchUnderstandingEvalCase:
     acceptable_research_types: list[str] = field(default_factory=list)
     expected_evidence_requirement: str = ""
     acceptable_evidence_requirements: list[str] = field(default_factory=list)
-    expected_query_intents: list[str] = field(default_factory=list)
+    expected_query_goal_kinds: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -31,7 +31,7 @@ class ResearchUnderstandingRunOutput:
     max_items: int = 0
     research_type: str = ""
     evidence_requirement: str = ""
-    query_intents: list[str] = field(default_factory=list)
+    query_goal_kinds: list[str] = field(default_factory=list)
     query_texts: list[str] = field(default_factory=list)
     llm_call_count: int = 0
 
@@ -58,7 +58,7 @@ def load_understanding_cases(path: str | Path | None = None) -> list[ResearchUnd
             acceptable_evidence_requirements=[
                 str(value) for value in item.get("acceptable_evidence_requirements", [])
             ],
-            expected_query_intents=[str(intent) for intent in item.get("expected_query_intents", [])],
+            expected_query_goal_kinds=[str(intent) for intent in item.get("expected_query_goal_kinds", [])],
         )
         for item in raw
     ]
@@ -77,6 +77,6 @@ def run_output_from_state(state: Any) -> ResearchUnderstandingRunOutput:
         max_items=int(getattr(state, "max_items", 0)),
         research_type=str(getattr(policy, "research_type", "")),
         evidence_requirement=str(getattr(policy, "evidence_requirement", "")),
-        query_intents=[str(getattr(query, "intent", "")) for query in query_plan],
+        query_goal_kinds=[str(getattr(query, "intent", "")) for query in query_plan],
         query_texts=[str(getattr(query, "query", "")) for query in query_plan],
     )

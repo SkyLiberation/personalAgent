@@ -1,500 +1,138 @@
-# 自建 Golden Set 设计
+# Golden Set 设计
 
-> 状态:持续维护 · 数据来源口径:**手工标注真实场景** · 创建于 2026-06-22 · 最近真实环境验证:2026-06-26
+## 目标
 
-## 1. 背景与问题
+工程使用多套职责互斥的 golden set 评估 Task Analysis、Goal/Procedure 编译、Executive 控制、Capability、工具治理、检索回答和多轮状态。
 
-工程需要同时覆盖外部基准与项目自身场景。两者用途不同:
-
-| 层 | 位置 | 性质 | 作用 |
-| --- | --- | --- | --- |
-| 公开 RAG 基准 | [evals/multihoprag/](../evals/multihoprag/)、[evals/open_ragbench/](../evals/open_ragbench/) | 借来的外部数据集,只测检索 IR 指标 | 非本工程领域数据,与真实 capture/note 语义脱节 |
-| 自建能力金标 | `evals/*_quality/` | 手工标注项目真实场景,覆盖 RAG、Router、Orchestration、Conversation | 衡量本系统的检索、决策、执行与多轮状态质量 |
-
-本文定义统一的 golden set 口径、目录结构、标注规范、门禁策略与结果解释方式。公开基准用于横向比较,自建金标用于项目内回归,二者不能相互替代。
-
-## 2. 设计原则
-
-1. **复用已验证的口径,不另起炉灶。** [evals/rag_quality](../evals/rag_quality/) 的 `RagEvalCase → RunOutput → scorer → baseline.json` 四段式已跑通,新能力的金标沿用同一形状:`Case`(标注)→ `RunOutput`(可打分投影)→ `scorer`(纯函数指标)→ `baseline.json`(回归门禁地板)。
-2. **标注与管线解耦。** scorer 只消费 thin 投影(`RunOutput`),从不直接吃 `AskRunContext`/runtime,保证指标可独立单测。fixture/stub 只验证 scorer 与系统契约,不计作 Golden Test 结果。
-3. **门禁是地板,不是目标。** `baseline.json` 里每个指标是"不得低于"的回归地板。降地板需评审理由;升地板即棘轮式提质。
-4. **真实场景优先。** 所有 case 的 `question`/`input` 来自真实领域(个人知识/笔记)手工标注,而非合成模板。先小批量(每能力 20–30 条)跑通门禁,再考虑脚本扩充。
-
-## 3. 多类金标口径(scope)
-
-"golden set" 对本工程不是单一概念,而是一组互不相同的标注口径。各能力独立交付,优先级如下。
-
-需要先明确当前评测边界:RAG、Router、Orchestration 的 case 都以**一条独立用户输入或一次运行**为评测单元。即使输入文本包含“刚才”“这段对话”等字样,若 runner 没有注入真实历史消息,它仍然是单轮样本;单次输入被拆成多个有序 intent,也只是**单轮多目标**,不等于多轮对话。跨 turn 的上下文继承、状态演化与 HITL resume 由 §3.4 单独覆盖。
-
-### 3.0 能力边界与互补关系(职责矩阵)
-
-各套金标**职责互斥、不可相互替代**。每套只对自己评测单元内的一类质量负责,并显式声明"不覆盖什么、交给谁"。这张矩阵是判断"某能力该进哪套金标"以及"两套是否冗余"的唯一依据。
-
-| 金标 | 评测单元 | 专属能力(仅此处覆盖) | 明确不覆盖(交给谁) |
-| --- | --- | --- | --- |
-| RAG (§3.1) | 单次"检索 → 生成"运行 | 检索 IR(recall/ndcg/precision)、答案相关性与忠实度、claim 判定、对比证据、图证据覆盖 | 意图路由、步骤编排、多轮状态 |
-| Router (§3.2) | 单轮路由决策 | ready/clarify/unsupported 判定、目标理解、route_type、能力覆盖度、matched capabilities、有序意图、clarify 字段精度 | 步骤是否真正执行、终态、副作用(→ Orchestration) |
-| Orchestration (§3.3) | **单次** entry → router → steps → terminal | 事件子序列里程碑、`forbidden_events` 负向不变式、**不挂死**终态、单点事故回归网(如 SSE 卡死) | 任何跨 turn 的状态继承与 resume(→ Conversation) |
-| Tool (§3.3.2) | 单个工具能力声明 / 工具调用投影 | 工具业务义务、risk、side effect、permission scope、confirmation、idempotency、timeout、retry、rate limit、artifact 契约 | workflow 是否选择该工具(→ WorkflowPlanner/Orchestration),工具底层业务算法质量(→ 对应用例或端到端 case) |
-| External Capability (§3.3.2.1) | MCP capability / 外部 Agent definition / capability resolution | 外部能力 metadata、跨 provider 能力选择、能力拒绝原因、AgentRun 生命周期、信任/凭证/数据外发边界 | 单个工具治理义务(→ Tool),最终答案质量(→ RAG/Research/Orchestration/E2E) |
-| Research (§3.3.3) | 单个 Research 目标 / 固定研究语料 → 工作流契约与事件质量 | 一次性研究、订阅创建、已有 run 执行、订阅/简报管理如何被组织成固定工作流;固定语料下基于事件帧的来源去重、事件聚类、可信度、个人相关性排序与 digest 选择 | 单个研究工具的治理义务(→ Tool),真实外网/真实 LLM 质量(→ Research 真实 runner) |
-| Conversation (§3.4) | **整段会话**的多轮轨迹与状态演化 | thread 连续性、HITL resume 闭环、跨轮上下文保留、副作用 delta、整段任务成功 | 单点编排契约与孤立事故回归(→ Orchestration) |
-
-**为什么 Orchestration 与 Conversation 不冗余(常见疑问)**:一个 Conversation case 的每个 turn 内部确实复用与 Orchestration 相同的 entry→steps→terminal 流程,二者在"单轮编排"这段存在**实现重叠**(见下方共享指标核心)。但它们的**评测语义不可互换**:
-
-- Orchestration 要的是**孤立、可精确归因、单点**的回归信号——`forbidden_events` 这类负向不变式、以及 orch-009 那种"复刻生产事故"的回归网,必须保持单轮纯净,不能被卷进多轮判定。
-- Conversation 的 `final_task_success` 是**全有或全无的合取门**(任一 turn 任一指标非满分即归零)。把单点编排 case 塞进来会让单点失败的归因被多轮合取淹没,违反 §6.1.2"专项事故应另设精确回归 case,不能只依赖宽松平均分"。
-- Conversation 的 `thread_continuity` / `resume_success` / `context_retention` / `side_effect_delta` 在单轮里**不存在对应物**——没有"前一轮"。
-
-因此正确的去冗余方式不是合并金标,而是**抽取共享的纯函数指标**(见 §4 共享指标核心),消除代码重复的同时保留两套各自的评测边界。新增能力(如 `consolidate_knowledge` 自动主题整理)按本矩阵归位:其端到端"选源 → supersede"副作用应进 Orchestration(单次运行),"先写多条笔记 → 再整理"的跨轮依赖应进 Conversation。
-
-**自包含 vs 有状态(Phase 1 / Phase 2)**:Orchestration 的 case 进一步分两类。**自包含**(如 orch-001~009:你好 / 删除 / 总结)的正确性只取决于输入本身,无需预置数据。**有状态**的正确性*定义在库里已存在的数据上*——`consolidate_knowledge` 与 `inspect_knowledge_gaps` 是典型:前者不先 seed ≥ 2 条同主题笔记只会命中"至少两条"拒绝分支;后者不先 seed 出冲突/孤岛,检测永远返回"无缺口"。二者都测不到真正语义。有状态流程**必须先 seed DB 再跑完整 `execute_entry`**,且按 §6.2 用独立 `user_id` 隔离。
-
-按 §6,只有真实 LLM + 真实管线才算 Golden Test,因此这两个有状态流程都用真实 router LLM(`build_real_service` 从环境装配,未配置则 skip),**不使用 stub 路由**;seed 走 store(属基础设施,非 stub),每次用唯一 `user_id` 保证隔离与确定性:
-
-- [evals/test_consolidate_knowledge_flow.py](../evals/test_consolidate_knowledge_flow.py):seed 后走完整 router→planning→step→tool,断言路由到 `consolidate_knowledge`、抵达终态(不挂死)、源笔记被 supersede 且回链综述;含"仅一条来源 → 优雅拒绝、不挂死、不误改"反例。
-- [evals/test_inspect_knowledge_gaps_flow.py](../evals/test_inspect_knowledge_gaps_flow.py):seed 两条同主题、极性相反的笔记造出 `potential_conflict`,断言路由到 `inspect_knowledge_gaps`、抵达终态、报告含确定性表头(per-gap 措辞可能经 LLM 改写,表头不会);含"同极性 → 无冲突、报告干净"反例。
-
-二者覆盖了 use-case 层测试(`tests/test_agent_flows.py` / `tests/test_knowledge_gap_analyzer.py`,直调用例、用假依赖)与 Orchestration thin 投影(无 seed、无副作用维度)都触及不到的整条**真实有状态编排路径**。
-
-### 3.1 RAG 质量金标
-
-- **口径**:`{question → gold_evidence_ids, reference_answer, gold_claim_verdicts, claims_needing_contrast}`,即现有 [dataset.py](../evals/rag_quality/dataset.py) 的 `RagEvalCase`。
-- **质量指标**:recall@5 / ndcg@5 / context_precision / answer_relevance / faithfulness / claim_accuracy / contrastive_coverage。
-- **图检索指标**:
-  - `graph_contribution_rate` —— 检索证据中由 Graphiti/GraphRAG/structural 路径贡献的比例。
-  - `graph_hit_rate` —— case 是否至少命中一条图证据。
-  - `graph_requirement_met` —— 对 `requires_graph_evidence=true` 的 case,必须实际命中图证据;非图证据答对也不能替代图检索覆盖。
-- **效率指标**:`latency_ms` / `latency_p95_ms` / `llm_call_count` / `input_tokens` / `output_tokens` / `total_tokens` / `total_tokens_p95`。
-- **覆盖矩阵**:
-  - 单跳精确命中 / 多跳召回(已有雏形)
-  - 含矛盾证据、需对比证据翻转判定
-  - 无答案 / 证据不足(应 `not_found` 而非编造)
-  - 中文长文 chunk 折叠回 parent 的召回
-  - 同义改写、跨 note 概念聚合
-- **reference run 来源**:离线层使用经评审的确定性投影;真实层回放真实管线输出。两类结果必须分开报告。
-
-### 3.2 Router 目标与能力覆盖金标
-
-- **口径**:`{entry_input → expected_outcome ("ready"|"clarify"|"unsupported"|"rejected"), expected_route_type, expected_coverage, expected_matched_capabilities, expected_intents (有序), expected_clarification_fields?, expected_missing_requirements?}`。对齐 [router.py](../src/personal_agent/planning/router.py) 的 `RouterOutput` 契约。
-- **评测边界**:单轮路由。Router 先识别 `user_goal`,再判断当前 capability 是否完整覆盖、部分覆盖、目标不清或不支持;`expected_intents: [a, b]` 表示同一轮输入的多目标有序分解,不是两个对话轮次。
-- **ask / research_once 标注边界**:二者都可以使用外部信息,不能用“是否联网”区分。`ask` 是回答型产物,适合概念解释、简单实时事实、怎么做、为什么、区别和面向已有知识的检索问答;`research_once` 是研究型产物,适合用户明确要求调研/收集/整理最新动态、发布、新闻、论文、财报、官方来源、高可信、多来源或最多 N 条 digest 的任务。典型反例:`查一下 Python 最新稳定版本是多少` 仍是 `ask`;`收集最近一周 Agent Runtime SDK 的官方发布和 GitHub 动态,最多 2 条` 是 `research_once`。
-- **指标**:
-  - `outcome_accuracy` —— ready/clarify/unsupported/rejected 判定正确率
-  - `route_type_exact` / `coverage_exact` —— 路由类型和能力覆盖度是否命中
-  - `capability_f1` —— matched capabilities 是否覆盖正确能力
-  - `intent_set_f1` / `intent_sequence_exact` —— 多目标意图集合和顺序是否正确
-  - `missing_requirement_precision` —— unsupported 场景是否指出缺失能力
-  - `clarify_precision` —— 该追问时确实追问、不该追问时不打扰
-- **标注难点**:意图边界主观,需在标注规范里固化"何时算 clarify / unsupported"的判据(见 §5),避免 Router 退化成已有 intent 菜单选择器。
-
-### 3.3 Orchestration 端到端金标
-
-- **口径**:`{user_input → expected_step_sequence (类型/顺序), expected_terminal_outcome, expected_hitl_interrupts?}`。覆盖单次 entry → router → steps → terminal,以及 HITL interrupt 是否正确发生。
-- **指标**:
-  - `step_sequence_match` —— 期望步骤序列的编辑距离 / 类型集合命中
-  - `terminal_outcome_match` —— 终态产物是否符合期望
-  - `hitl_trigger_accuracy` —— 该中断处确实触发 HITL
-- **依赖**:需运行 Postgres;scorer 可离线单测,Golden Test 必须运行真实全流程。
-- **评测边界**:case 只执行一次 `execute_entry`;clarify case 验证“正确暂停”,用户下一轮补充信息后的 resume 属于 §3.4。
-
-### 3.3.1 WorkflowPlanner 依赖规划金标
-
-- **为什么独立建集**:Router 只负责把用户输入拆成有序 Goal,不应该输出执行依赖;Orchestration 端到端金标又太重,不适合快速验证 task DAG / step DAG 的确定性编译。因此单独建立 `workflow_planner_quality` 金标,专门覆盖 `RouterDecision.goals -> ExecutionPlan / ExecutionStep`。离线 gate 使用 fake structured model 覆盖 LLM 依赖判断路径,真实运行时使用结构化模型判断语义依赖,确定性规则负责安全补强和兜底。
-- **口径**:`{goals → expected_task_dependencies, expected_step_dependencies}`。case 输入是已经人工评审过的 Goal 序列,输出断言 Planner 生成的 task-level 依赖和关键 step-level 依赖。
-- **当前覆盖**:
-  - 写入后追问同一知识:`capture_text -> ask` 必须依赖。
-  - 多个互不相关只读 ask 不应仅因同属一轮就强制依赖。
-  - 后续 goal 有“继续/上述/刚才”等指代线索时依赖前一个 task。
-  - 连续长期写入需要串行,避免副作用乱序。
-  - 只读 ask 与无关写入同属一轮时,写入不依赖先前只读 task。
-  - 当模型判断前序 Goal 依赖后序 Goal 时,Planner 需要通过 task DAG 拓扑排序生成正确执行顺序。
-- **指标**:
-  - `task_dependency_exact` —— task-level 依赖图完全匹配。
-  - `task_dependency_node_accuracy` —— 每个 task 的依赖列表逐点匹配率。
-  - `task_dependency_edge_f1` —— task 依赖边的 F1。
-  - `step_dependency_exact` —— 标注的关键 step 依赖完全匹配。
-  - `step_dependency_node_accuracy` —— 标注 step 的依赖列表逐点匹配率。
-  - `step_dependency_edge_f1` —— 标注 step 依赖边的 F1。
-  - `overall_exact` —— task 与 step 两层都完全匹配。
-- **门禁**:`evals/workflow_planner_quality/test_workflow_planner_gate.py`。该 gate 不调用 LLM、不依赖数据库,属于离线快测。
-
-### 3.3.2 Tool 治理义务金标
-
-- **为什么独立建集**:工具是 Agent 触碰长期记忆、外部网络、后台任务和高风险副作用的真实边界。Workflow registry gate 能检查 workflow 引用了已注册工具,StepProjectionValidator 能检查当前 runtime 是否可执行,但它们不负责回答“这个工具的业务义务是否声明正确”。因此单独建立 `tool_quality` 金标,覆盖 `ToolGovernance` 与业务场景的一致性。
-- **口径**:Tool 金标分两层。第一层是 `{tool_name, business_scenario → expected_governance}`,断言该工具必须声明的 exposure、risk、side_effects、permission_scope、requires_confirmation、idempotency_key_required、audit_required、timeout、retry、rate_limit。第二层是 `{tool_name, args → expected_artifact_contract}`,通过 fake 依赖走真实 `ToolExecutor / ToolGateway`,断言 artifact shape、error_kind、evidence、确认门禁、副作用调用次数和幂等 replay。
-- **当前覆盖**:
-  - 只读本地检索:`graph_search` 只能 `read_local`,不能外网或写入。
-  - 公网搜索和 URL 采集:必须声明 `external_network`,有限流、超时和有限重试。
-  - 长期记忆写入:`capture_text / capture_upload / update_note / consolidate_knowledge` 必须声明 `write_longterm` 和对应权限域。
-  - 高风险删除/恢复:`delete_note / restore_note` 必须 high risk、HITL confirmation、idempotency、audit 且不自动重试。
-  - 周期性情报与 Research workflow:订阅、收集、后台 run 状态变更必须声明研究域权限、外网访问或长期写入副作用。
-  - 运维诊断与重试:`inspect_workflow_run` 只能只读,`retry_worker_task` 必须是 scoped 中风险写入。
-- **指标**:
-  - `exposure_exact` —— 工具暴露面是否符合场景。
-  - `risk_exact` —— 风险等级是否符合副作用强度。
-  - `confirmation_exact` —— 是否正确要求人工确认。
-  - `side_effect_exact` —— 副作用集合是否完全匹配。
-  - `permission_scope_exact` —— 权限域是否准确。
-  - `idempotency_exact` —— 高风险确认动作是否要求幂等 key。
-  - `audit_exact` —— 是否要求审计。
-  - `resource_policy_exact` —— timeout / retry / rate limit 是否符合预期。
-  - `outcome_exact` —— 执行结果 ok/failure 是否符合预期。
-  - `error_kind_exact` —— 失败是否被归类为 transient / invalid_param / permission / unrecoverable。
-  - `data_shape_match` —— 成功 artifact 是否含必要字段。
-  - `evidence_count_match` —— evidence 数量是否达到场景要求。
-  - `repeat_exact` —— replay 行为是否符合幂等预期。
-  - `call_count_exact` —— fake 依赖记录的副作用调用次数是否准确。
-  - `overall_exact` —— 对应层全部匹配。
-- **门禁**:
-  - `evals/tool_quality/test_tool_quality_gate.py`:不调用工具、不依赖数据库或网络,只装配真实 tool builders 并读取 `tool_governance()`。
-  - `evals/tool_quality/test_tool_execution_contract_gate.py`:通过 fake 依赖调用真实工具网关,覆盖 artifact shape、错误分类、确认门禁、副作用调用次数和幂等 replay。
-
-### 3.3.2.1 外部能力接入评估口径
-
-GitHub MCP、Notion MCP 与 GPT Researcher A2A 的当前评估是合理的过渡期验收,但不能作为目标架构的完整验收。
-
-当前 `tool_quality` 中的 `github.search_code`、`github.get_file_contents`、`github.search_repositories`、`notion.search`、`notion.retrieve_page_markdown` case 验证的是 MCP 外部能力被包装为 governed tool 后,其 exposure、risk、side effects、permission scope、timeout、retry、rate limit、audit 和 capability metadata 是否正确。这属于 Tool 治理义务,不证明 Router/Workflow 会在用户问题中选中它们。GPT Researcher A2A 不再由 tool_quality 背书,改由 `agent_gateway_quality` 验证。
-
-当前 `e2e_quality` 中的 GitHub / Notion 分支已经迁移为 task-domain MCP 完整链路:
+统一形状为：
 
 ```text
-execute_entry
-  -> router
-  -> external_codebase_qa / external_workspace_qa
-  -> capability_resolution
-  -> ReAct
-  -> ToolGateway
-  -> audit trace
+Case -> RunOutput -> pure scorer -> baseline -> regression gate
 ```
 
-这能证明接入不是只停留在工具注册,也能覆盖负向边界,例如本地知识问题不应误走 GitHub MCP、Notion 写请求不应误走只读 Notion MCP。GPT Researcher A2A 当前验证 `execute_entry -> router -> gpt_researcher_a2a -> agent_call(gpt_researcher) -> AgentGateway -> AgentRun / AgentArtifact` 链路。但这些 case 仍有明确边界:
+baseline 是不得下降的地板，不是质量目标。降低 baseline 必须说明原因；模型、prompt、schema 或控制策略变化必须先补能定位问题的 case。
 
-- fake MCP tool 不能证明真实 MCP server discovery、transport、鉴权和远端 schema 漂移;
-- MCP 分支中的 ReAct 工具选择被 deterministic mock 固定,主要验证 capability-derived allowlist、workflow、gateway 和 audit,不是评估模型自主选工具;
-- `expected_workflow_id` 已改为 `external_codebase_qa` / `external_workspace_qa`,provider 只允许出现在 `CapabilityResolution` 中;
-- `expected_tool_names` 证明实际调用了某个工具,`expected_capability_ids` 与 `min_capability_resolutions` 证明存在 resolver 输出和 scoped allowlist;
-- GPT Researcher A2A e2e 已以 AgentRun 和 unverified AgentArtifact 为成功信号；更细的 submit/poll/cancel/stream/multi-agent 行为由 `agent_gateway_quality` 验证。
+## 设计原则
 
-因此外部能力目标评估需要拆成四层:
+1. case 标注用户可观察行为和架构不变式，不锁定无意义的内部实现细节。
+2. scorer 只消费 thin `RunOutput`，不直接依赖 runtime 对象。
+3. 离线 deterministic gate 与真实模型/真实 provider gate 分开报告。
+4. 副作用、权限、幂等、HITL 和完成条件使用硬断言，不能被平均分掩盖。
+5. 每套 suite 只拥有一个清晰决策边界，避免同一个语义在 TaskAnalyzer、Executive、Protocol 和 E2E 重复打分。
+6. Observation 驱动的计划修订必须评估触发证据、Patch 合法性和最终效果，不能只评估初始计划。
 
-| 目标评估 | 评测单元 | 主要指标 |
+## 评测矩阵
+
+| Suite | 评测单元 | 负责 | 不负责 |
+| --- | --- | --- | --- |
+| `task_analysis_quality` | 单轮 EntryInput/对话上下文 | outcome、Goal 拆分、ResourceHint、typed GoalRelation、clarification | capability coverage、provider 选择、执行步骤 |
+| Goal Graph / Executive tests | TaskAnalysis + Ledger + Observation | graph 不变式、ready Goal、决策合法性、依赖修订、verification/completion | 自然语言分析质量 |
+| Procedure tests | ProcedureSpec + ProcedureCall | spec 校验、节点投影、事务不变量、版本隔离 | 开放式 Goal、语义依赖推断 |
+| Capability quality | CapabilityRequirement + Registry/Policy | native/MCP/A2A eligibility、coverage、scope、binding、rank、拒绝原因 | 最终答案质量 |
+| Tool quality | tool definition/call | governance、schema、risk、HITL、幂等、artifact contract | 为什么选择这个工具 |
+| RAG quality | retrieval + answer run | recall、ranking、faithfulness、citation、contradiction | 顶层控制决策 |
+| Orchestration quality | 单次 entry 到 terminal | 关键事件、禁止事件、终态、不挂死、事故回归 | 跨 turn 状态继承 |
+| Conversation quality | 完整多轮轨迹 | thread 连续性、clarification/confirmation resume、状态 delta | 单点组件指标 |
+| E2E quality | 真实环境完整任务 | 用户目标、provider、数据与终态的综合结果 | 组件级精确归因 |
+
+## Task Analysis 金标
+
+位置：`evals/task_analysis_quality/`。
+
+Case 口径：
+
+```text
+EntryInput
+  -> expected_outcome: ready / clarify / rejected
+  -> expected_result_contracts
+  -> optional expected relations/resource hints/clarification fields
+```
+
+这里不再标注 `route_type`、`coverage`、`matched_capabilities` 或 `missing_requirements`。Task Analyzer 不读取 Capability Registry，因此不能判断当前部署是否能完成任务。
+
+重点覆盖：
+
+- 简单请求只产生一个最小充分 Goal；
+- 复合请求拆为独立可验证 Goal；
+- 明确“先 A，再基于 A 做 B”形成 `user_explicit consumes_output/requires_completion`；
+- 只有展示或时间偏好时使用非阻塞 `ordering_preference`；
+- 独立 Goal 不因出现“然后”就自动串行；
+- 明确 provider 只形成 required/preferred ResourceHint；
+- 信息不足会改变目标或副作用边界时才澄清；
+- 模型不可用时显式 `analyzer_unavailable`，不启用关键词兜底。
+
+离线 gate 使用 deterministic structured-output fixture 验证 schema/scorer；real gate 使用真实 structured model，允许单独 baseline 和波动范围。
+
+## Goal Graph 与 Executive
+
+Goal Graph 使用单元和场景测试保护确定性不变式：
+
+- relation 端点存在、无重复、自依赖或阻塞环；
+- ordering preference 不阻塞；
+- `user_explicit` dependency 不可改；
+- inferred/runtime dependency 只能在存在触发 Observation 时修订；
+- Patch 后仍无环，且不能让开放 Goal 依赖 abandoned Goal；
+- Executive 一次只产生一个合法 ControlDecision；
+- action success 只到 candidate，必须再经过 GoalVerifier；
+- finish 必须通过 CompletionVerifier。
+
+模型 Executive 的独立 quality suite 应按“状态 -> 决策 -> 结果”评估，而不是要求每个 case 命中唯一动作。可接受动作集合、禁止动作、预期信息增益、预算和最终 criterion 达成比 exact next-action 更能衡量 Agentic 决策质量。
+
+## Procedure 编译门禁
+
+Procedure 编译由 `tests/test_agentic_planning.py` 与入口级 case 共同覆盖。Case 直接构造 `ProcedureSpec + ProcedureCall`，不经过 Task Analyzer。指标包括：
+
+- task dependency exact / edge F1；
+- step dependency exact / edge F1；
+- topology 与 namespace；
+- tool sequence 与 forbidden tool；
+- risk、confirmation 和 projection contract。
+
+开放式 answer、investigation、summarize 不属于 Procedure 编译门禁。它们由 Executive 组合 BoundedAction，并在 Executive、RAG 和 E2E suites 中评估。
+
+## Capability 与外部 Agent
+
+Capability case 应直接构造 Goal-scoped `CapabilityRequirement`，覆盖：
+
+- required provider 不得被 preferred provider 替代；
+- capability class、resource type 和 operation 全部匹配；
+- denied、unavailable、partial、satisfied 不混淆；
+- lexicographic rank 不允许低信任通过加权分抵消硬约束；
+- MCP 调用仍受 ToolGateway scope/policy/audit；
+- A2A 委派只接收最小 SubtaskSpec，artifact 默认 unverified；
+- provider 失败成为 Observation，由 Executive 决定重试、换 provider、澄清或停止。
+
+## Orchestration 与 Conversation
+
+Orchestration case 一次只执行一个 entry，重点检查事件子序列、禁止事件和 terminal。Conversation case 才负责多个 turn、同 thread checkpoint、clarification/confirmation resume 与副作用 delta。
+
+两者可以共享事件 scorer，但不能合并成一个平均分：单次事故需要精确归因，多轮成功是跨 turn 的合取条件。
+
+有状态 case 必须使用独立 user/thread，并显式 seed 所需数据；没有 seed 的“知识整理/冲突检测”只能测到空数据分支。
+
+## 真实环境分层
+
+| 层 | 依赖 | 用途 |
 | --- | --- | --- |
-| `capability_quality` | 单个 MCP capability 或 AgentDefinition | domain、resource type、operation、risk、side effects、auth scope、schema、trust level、credential mode、data egress、attestation |
-| `resolver_quality` | `UserTask + WorkflowScope + CapabilityRegistry -> CapabilityResolution` | selected capability recall/precision、denied capability accuracy、operation scope、risk clamp、provider composition、local-first、selection policy rationale |
-| `workflow_e2e_quality` | 一次真实 `execute_entry` | task-domain workflow、capability resolution、scoped allowlist、ToolGateway audit、artifact/citation grounding |
-| `agent_gateway_quality` | 一次外部 Agent 委托 | AgentDefinition、AgentGovernance、AgentRun、AgentEvent、AgentArtifact、policy decision、context minimization、unverified artifact handling、timeout/cancel |
+| L0 pure scorer | 无 DB/LLM | 指标数学与边界 |
+| L1 hermetic contract | fake model/provider | schema、validator、投影与事故复现 |
+| L2 real model | 真实模型，可隔离 DB/provider | prompt 与语义决策质量 |
+| L3 live E2E | 真实 DB、模型、MCP/A2A/provider | 部署可用性与综合任务成功 |
 
-迁移原则:
+报告必须标明层级。fixture 通过不能被表述为真实 Agent 质量通过；live provider 波动也不能替代 hermetic contract gate。
 
-1. GitHub / Notion e2e case 已作为 task-domain MCP full-chain regression;GPT Researcher e2e 已作为 A2A AgentGateway full-chain regression。
-2. 新 MCP provider 不应默认新增 provider-specific workflow case;应优先新增 capability metadata 和 resolver case。
-3. MCP e2e 断言必须保持 `workflow_id == external_*` 加 capability resolution 与实际 audit。
-4. A2A 成功标准已经从 `tool_name == gpt_researcher.a2a_research` 迁移为 AgentRun 与 AgentArtifact。
-5. AgentGateway minimal 覆盖 blocking invoke、AgentRun audit、AgentArtifact 保存、submit/poll/cancel、stream 和多 Agent registry;不能再让 A2A 以 ToolInvocation 作为验收对象。
-6. AgentArtifact 默认是 unverified candidate output。agent_gateway_quality 必须验证它不会直接冒充 verified evidence,后续进入 EvidenceNormalizer / ClaimVerifier / CitationChecker 后才可作为答案证据。
-7. resolver_quality 必须显式覆盖 CapabilitySelectionPolicy:用户显式 provider、local-first、freshness、跨 provider rationale、敏感数据外发确认和 read-only workflow 中的写能力拒绝。
+## Baseline 与失败诊断
 
-### 3.3.3 Research 能力金标
+每次 gate 输出 aggregate 和逐 case mismatch。硬不变式单独失败，不参与宽松平均。baseline 文件只存稳定指标阈值和必要说明，不保存无法复现的临时运行结果。
 
-- **为什么独立建集**:Research 不是单个工具,而是一组围绕外部信息收集、证据缺口追踪、事件聚类、可信度校准、个人相关性排序、简报生成和周期订阅的领域能力。Workflow 是否编译成固定步骤属于确定性 contract,应由普通单元测试和 `WorkflowSpecValidator` 覆盖,不放进 golden set。Research 金标不仅看最终 digest,还要检查中间节点是否正确:query plan、decision loop、source trace、event frame、gap/satisfaction、claim verification 和 latency trace 都必须能被打分。
-- **口径**:
-  - Request understanding 真实层:`{raw_request, default_max_items → expected_topic_terms, forbidden_topic_terms, expected_instruction_terms, expected_max_items, expected_research_type, expected_evidence_requirement, expected_query_intents}`。gate 使用真实 LLM,只执行 `prepare_run → initialize_state`,专门评估自然语言研究请求是否被正确转成 topic、instructions、max_items、policy 和 query plan。
-  - Event/loop quality 契约:`{topic, mock_understanding, fixed_search_results_by_query, fixed_event_frames, fixed_graph_matches, fixed_enterprise_matches → expected_understanding_*, expected_query_plan_terms, expected_query_terms, expected_decision_phases, expected_stage_names, expected_tool_names, expected_gap_types, expected_source_count, expected_events, expected_digest_title_terms}`。gate 不访问真实外网/LLM,但会执行真实 `ResearchService.prepare_run → initialize_state → run_research_loop → synthesize_digest → verify_digest`;`mock_understanding` 只注入 `research_request_understanding` 这个 LLM 节点,固定 `event_frames_by_title` 相当于 replay 结构化事件帧输出。`enterprise_matches_by_title` 用来模拟企业知识业务工具 `enterprise_knowledge_search` 的内部方案证据,测试的是 Research 能否完成“公开资料 + 企业内部方案对照”的业务闭环,不是 MCP 协议本身。
-  - Event quality 真实层:`{topic, fixed_search_results, real_langextract_frames, fixed_graph_matches → expected_*}`。搜索结果和图谱匹配仍固定以保证可归因,但事件帧由当前 `.env` 中配置的真实 LangExtract API 生成;该层才用于评价 LangExtract 接入后的真实 Research 事件抽取质量。
-  - Digest claim verification 契约:`{event, source content, draft digest claims → expected retained items, confidence labels, claim support levels, final run status}`。gate 直接执行真实 `verify_digest()`,专门防止“有 URL 但 claim 被夸大”“contradicted item 未删除”“reported 被写成 verified”等最终简报层错误。
-  - Frontend E2E 真实层:`{prompt → expected_intents, expected_step_tools, expected_research_statuses, expected_topic_terms, min_digest_items, min_supported_claim_rate, max_latency_ms}`。gate 使用 Playwright 从前端对话框输入触发 `/api/entry/stream`,再通过 entry run 和 research run 查询真实产物,断言路由、workflow 步骤、digest、claim support 和端到端 latency。
-- **当前覆盖**:
-  - `initialize_state` 的 LLM request understanding: 是否把含控制语的原始中文请求规范化为 topic、instructions、max_items、research policy 和 query plan。
-  - 初始 query plan、decision phase 与 evidence gap 能否驱动 `research_run_loop` 继续搜索,例如单源媒体事件触发 verification phase 的 official confirmation 查询。
-  - `ResearchSatisfaction` 是否记录并满足 coverage、confidence、remaining critical gaps、marginal gain 与 should_continue 预期,避免只靠固定轮数或预算停止。
-  - stage timing、tool trace、source trace、event frame snapshot、claim support/evidence span/support level 是否都保留下来并被判分。
-  - URL canonicalization 与去重是否正确。
-  - 多源同事件是否聚合并标为 `verified`,单源事件是否保持 `uncertain`。
-  - 语义相同但标题改写较大的事件是否能通过 event frame 合并。
-  - 标题相似但事件类型不同的来源是否避免误合并。
-  - 与个人知识图谱相关的事件是否优先进入 digest。
-  - Agent Framework 研究是否调用 `enterprise_knowledge_search` 对照企业内部方案文档,并把内部证据命中的外部事件提升为高 personal relevance。
-  - claim-level verification 是否删除 unsupported claim、移除 contradicted item,并保持 confidence label 与事件可信度一致。
-  - 前端对话框触发的一次性研究是否真正走到 `research_prepare_run → research_initialize_state → research_run_loop → research_synthesize_digest → research_verify_digest`,并在 latency 预算内产出有来源支撑的 digest。
-- **指标**:
+失败按边界归因：
 
-  | 层 | 指标 | 含义 |
-  | --- | --- | --- |
-  | Request understanding | `understanding_topic_accuracy` / `understanding_instruction_coverage` | LLM understanding 是否把原始请求规范化成正确研究对象与约束 |
-  | Request understanding | `understanding_max_items_accuracy` / `understanding_policy_accuracy` | LLM understanding 是否正确解析条数和研究类型 policy |
-  | Event quality | `source_count_exact` | URL 规范化与去重后的来源数量是否匹配 |
-  | Event quality | `min_iterations_met` | evidence-driven loop 是否至少执行到期望轮次 |
-  | Intermediate plan | `query_plan_coverage` | `initialize_state` 生成的初始 query plan 是否覆盖主题/期望意图 |
-  | Event quality | `query_coverage` | loop 是否执行了期望的初始查询或补证据查询 |
-  | Intermediate decision | `decision_execution_rate` / `decision_phase_coverage` | `_next_research_decision` 产生的已观察 decision 是否执行,且多轮场景是否进入 verification phase |
-  | Event quality | `gap_coverage` | loop 是否产生期望的证据缺口类型 |
-  | Event quality | `stop_reason_match` | 停止原因是否符合场景预期 |
-  | Intermediate stop | `satisfaction_recorded` | `_evaluate_research_satisfaction` 是否写入目标满足度判断 |
-  | Intermediate stop | `satisfaction_continue_match` / `satisfaction_coverage_met` / `satisfaction_confidence_met` | 满足度是否按 gold 判断继续/停止,且覆盖度与可信度达到预期 |
-  | Intermediate stop | `satisfaction_marginal_gain_met` / `satisfaction_gap_coverage` | 低边际收益或剩余关键 gap 是否被正确表达,避免静默耗尽预算 |
-  | Observability | `stage_trace_coverage` / `tool_trace_coverage` | 关键 stage timing 与工具调用 trace 是否存在 |
-  | Traceability | `source_trace_rate` / `decision_elapsed_rate` | sources 是否能追到 decision/query,decision 是否记录开始/结束时间 |
-  | Event frame | `event_frame_rate` / `event_source_trace_rate` | event 是否保留 frame 快照和 source_ids |
-  | Event quality | `event_recall` / `event_precision` | 基于 actor/action/object/event_type 事件帧的聚类是否命中人工期望事件,且没有额外拆分/误聚类 |
-  | Event quality | `status_accuracy` | 多源 verified、单源 uncertain 等可信度状态是否校准 |
-  | Event quality | `source_support_accuracy` | 事件是否满足期望来源数量和 primary source 要求 |
-  | Event quality | `personal_relevance_accuracy` | 图谱相关事件是否被赋予足够个人相关性 |
-  | Event quality | `digest_coverage` | digest 是否选中期望的高价值事件 |
-  | Claim verification | `claim_support_rate` / `claim_evidence_span_rate` / `claim_support_level_accuracy` | digest claim 是否被 supported/partially_supported,有 evidence spans,且 support level 与 gold 匹配 |
-  | Claim verification | `item_count_accuracy` / `confidence_label_accuracy` / `absent_claim_term_accuracy` | claim verification 专项 gate 中,不支持/矛盾 claim 是否被删除,confidence label 是否未被错误升级 |
-  | Frontend E2E | `ui_completion_rate` / `intent_accuracy` / `step_tool_coverage` | 前端真实提交后是否完成,并触发期望 intent 与 Research workflow 步骤 |
-  | Frontend E2E | `research_run_created_rate` / `research_status_accuracy` / `topic_term_coverage` | 是否创建真实 ResearchRun,状态和 topic 是否符合 gold |
-  | Frontend E2E | `digest_item_rate` / `claim_support_rate` / `latency_within_budget_rate` | digest 数量、claim 支撑率和端到端耗时是否满足门禁 |
-  | Event quality | `primary_source_rate` | 产出事件中含 official/paper 来源的比例 |
-  | Event quality | `overall_score` | 上述分项的平均值,用于整体门禁,不再使用手工权重 |
-- **门禁**:
-  - `evals/research_quality/test_research_event_quality_gate.py`:使用固定搜索结果、固定 event frame 和固定 graph matches 执行真实 `ResearchService` evidence loop,属于确定性 Research 行为质量快测,不作为真实 LangExtract 质量结论。
-  - `evals/research_quality/test_research_event_quality_real_gate.py`:使用固定搜索结果和固定 graph matches,但事件帧来自真实 LangExtract API,并启用生产 fallback;provider 抖动会体现为质量分下降,而不是让报告在打分前中断。`research-event-004` 覆盖“语义相同但标题改写较大”的多源事件,期望合并成 verified;`research-event-005` 覆盖“标题相似但事件类型不同”的反例,期望保持拆分,防止过度合并。
-  - `evals/research_quality/test_research_understanding_real_gate.py`:使用真实 LLM 评估 `initialize_state` 的 request understanding 输出,不访问搜索或事件抽取层。
-  - `evals/research_quality/test_digest_claim_verification_gate.py`:使用固定事件和来源内容执行真实 `verify_digest()`,覆盖 unsupported/contradicted/reported-not-upgraded 三类 claim-level verification 事故。
-  - `testing/research-quality-frontend-e2e.playwright.spec.cjs`:使用真实前端、真实后端和真实外部检索链路,从对话框输入触发一次性 research,生成 `test-results/research-quality-frontend-e2e-report.json`。该 gate 不使用 API 直接启动 research,也不 mock 网络或 LLM。
+- Goal/Relation 错：Task Analysis；
+- relation 合法但 runtime 未调整：Executive/Patch；
+- requirement 正确但 provider 错：Capability Resolver；
+- provider 正确但调用越权：Gateway/Policy；
+- action 成功但错误完成：Verifier；
+- Protocol 内步骤错误：Protocol compilation/execution；
+- 单轮正确但 resume 丢状态：Conversation/checkpoint。
 
-### 3.4 Conversation 多轮对话金标
-
-- **为什么独立建集**:多轮质量不是把若干单轮 case 拼在一起。后续 turn 的正确行为依赖前序用户输入、助手输出、HITL 状态、会话内短期记忆和已经产生的副作用,评测对象是**整段会话轨迹及状态演化**。
-- **口径**:
-
-  ```json
-  {
-    "id": "conv-001",
-    "description": "知识问答后用指代词固化上一轮结论",
-    "expected_final_note_delta": 1,
-    "turns": [
-      {
-        "kind": "entry",
-        "user_input": "什么是 DNS？",
-        "expected_outcome": "ready",
-        "expected_intents": ["ask"]
-      },
-      {
-        "kind": "entry",
-        "user_input": "把刚才的结论固化下来",
-        "expected_outcome": "ready",
-        "expected_intents": ["solidify_conversation"],
-        "expected_context_refs": [0]
-      }
-    ]
-  }
-  ```
-
-- **runner 约束**:
-  - 同一 case 的全部 turn 必须复用同一个 `session_id`/thread,按顺序真实执行,不能逐 turn 新建隔离 session。
-  - runner 应保存每轮 assistant response、事件序列、interrupt/checkpoint、状态快照和可观察副作用,再投影为与 runtime 解耦的 `ConversationRunOutput`。
-  - HITL case 必须执行“触发 interrupt → 用户补充信息 → resume → 抵达终态”的完整闭环,不能只以暂停作为成功。
-  - case 之间必须隔离 session 和可变数据;涉及写入/删除时使用独立 fixture 或清理策略,避免前一 case 污染后一 case。
-- **核心指标**:
-  - `turn_outcome_accuracy` —— 每轮 ready/clarify/terminal 判定正确率。
-  - `turn_intent_accuracy` —— 每轮意图及单轮多目标顺序是否正确。
-  - `context_retention` —— 期望引用的历史 turn 是否仍存在于同一 thread checkpoint;它只证明上下文可用,不冒充语义理解正确。
-  - `response_grounding` —— 对确需跨轮语义理解的 case,用人工标注的关键事实检查最终回答/产物是否真正使用了正确历史。
-  - `resume_success_rate` —— HITL 补充后是否从原 checkpoint 恢复并完成,而非新开一条无关 run。
-  - `side_effect_accuracy` —— note 创建/更新/删除等副作用是否发生且只发生一次。
-  - `final_task_success` —— 整段会话最终目标是否完成。
-- **首批覆盖矩阵**:
-  - 指代与上下文继承:“这个”“刚才那个”“继续”。
-  - 追问深化:首轮回答后要求解释、对比、举例,不得丢失主题。
-  - clarify → 补充对象/范围/时间 → resume。
-  - 话题切换后返回旧话题,以及不应串用旧上下文的反例。
-  - ask → solidify、长对话 → summarize_thread 等依赖真实历史的能力。
-  - 会话内写入后再次询问能够召回;跨 session 时只允许使用已持久化的长期记忆。
-  - 执行失败 → 用户重试/修正,验证幂等性与副作用不重复。
-- **测试分层**:离线 fixture 验证 scorer 与状态契约;集成测试验证真实 checkpoint/runtime 与确定性模型桩;Golden Test 使用真实 LLM、真实 session 连续执行全部 turn。只有最后一层产生 Golden 质量结果。
-
-## 4. 目录结构
-
-沿用 `evals/<capability>/` 的并列结构,每个能力一个自包含子包:
-
-```
-evals/
-  _metrics_core.py    # 共享指标核心(见下)
-  test_metrics_core.py
-  rag_quality/        # §3.1
-    cases.json        # 金标
-    dataset.py        # Case / RunOutput 模型
-    metrics.py        # 纯函数指标
-    scorer.py         # Case×RunOutput → 报告
-    baseline.json     # 回归地板
-    runner.py         # 真实管线 → RunOutput 投影 + 回放 CLI
-    test_*_gate.py    # 门禁测试
-  router_quality/     # §3.2
-    cases.json
-    dataset.py        # RouterEvalCase / RouterRunOutput
-    metrics.py
-    scorer.py
-    baseline.json
-    runner.py
-    test_router_gate.py
-  orchestration_quality/   # §3.3
-    cases.json
-    ...(同形)
-    test_orchestration_gate.py
-  tool_quality/            # §3.3.2;工具治理义务
-    cases.json
-    execution_cases.json
-    dataset.py             # ToolEvalCase / ToolRunOutput
-    metrics.py
-    scorer.py
-    baseline.json
-    execution_baseline.json
-    test_tool_quality_gate.py
-    test_tool_execution_contract_gate.py
-  research_quality/        # §3.3.3;Research evidence loop 与事件质量
-    understanding_cases.json
-    understanding_dataset.py
-    understanding_scorer.py
-    understanding_baseline.json
-    event_quality_cases.json
-    dataset.py             # ResearchEventQualityEvalCase / ResearchEventQualityRunOutput
-    metrics.py             # research event/loop 质量指标
-    scorer.py
-    event_quality_baseline.json
-    event_quality_real_baseline.json
-    digest_verification_cases.json
-    digest_verification_dataset.py
-    digest_verification_scorer.py
-    digest_verification_baseline.json
-    frontend_e2e_cases.json
-    frontend_e2e_baseline.json
-    test_research_understanding_real_gate.py
-    test_research_event_quality_gate.py
-    test_research_event_quality_real_gate.py
-    test_digest_claim_verification_gate.py
-  conversation_quality/    # §3.4;多轮会话轨迹与状态演化
-    cases.json
-    dataset.py             # ConversationEvalCase / TurnExpectation
-    metrics.py
-    scorer.py
-    baseline.json
-    runner.py              # 同 session 顺序执行 turns + 状态投影
-    test_conversation_gate.py
-    test_conversation_runtime_gate.py
-    test_conversation_real_gate.py
-```
-
-Research 前端 E2E 的 Playwright spec 和 config 不放在 `evals/` 下,而是复用根目录的 `testing/research-quality-frontend-e2e.playwright.spec.cjs` 与 `testing/playwright.research-quality.config.cjs`;case 和 baseline 仍在 `evals/research_quality/` 中维护。
-
-**约定**:`cases.json` 一律 UTF-8;loader 用 `Path(...).read_text(encoding="utf-8")`(注意 Windows 默认 GBK,直接 `open()` 会炸中文)。
-
-**共享指标核心(`evals/_metrics_core.py`)**:跨金标真正重复的纯函数只有三个,统一收在此模块,各能力 `metrics.py` 按自己的惯用名 re-export,保证 scorer/runner/test 的 `.metrics` 导入面不变:
-
-| 核心函数 | 语义 | 被谁以何名复用 |
-| --- | --- | --- |
-| `exact_match(predicted, expected)` | 标量/列表相等判定 | Router & Orchestration 的 `outcome_correct`;Conversation 的 `exact_match`(逐轮 outcome/intent) |
-| `ordered_subsequence(actual, expected)` | 有序子序列里程碑命中 | Orchestration 的 `event_subsequence_match`;Conversation 的 `ordered_subsequence` |
-| `reached_terminal` / `TERMINAL_EVENTS` | 运行是否抵达终态(不挂死) | Orchestration 与 Conversation 的 runner/scorer |
-
-边界原则:**只有"任何金标都会用到且逻辑完全一致"的指标才进核心**。带领域语义的指标(RAG 的 IR/忠实度、Router 的 intent F1、Conversation 的 thread/resume/side-effect、Orchestration 的 `forbidden_events`/`primary_intent_correct`)一律留在各自 `metrics.py`,不上提——避免核心沦为大杂烩。
-
-## 5. 标注规范(手工标注)
-
-每个能力的 `cases.json` 是手工标注真实场景的产物。统一规则:
-
-1. **来源真实**:`question`/`input` 取自真实个人知识/笔记场景,不用合成模板;PII 用占位符。
-2. **稳定 id**:`<cap>-NNN` 形如 `rq-001`/`router-001`,新增追加不复用。
-3. **每条带 `description`**:一句话说明该 case 想测什么场景(loader 忽略未知键,可自由加人读注释)。
-4. **金标可判定**:
-   - RAG:`gold_evidence_ids` 必须能在对应 corpus 中定位;`gold_claim_verdicts` 按答案中 claim 出现顺序对齐。
-   - Router:`expected_outcome / expected_route_type / expected_coverage / expected_matched_capabilities` 必须描述目标是否被当前能力完整覆盖;clarify 判据固化为——"缺少执行目标所必需的信息(对象/范围/时间)"才标 clarify,语气模糊但意图明确不标;能力不足标 unsupported,不得硬塞进最相近 intent。
-   - Orchestration:`expected_step_sequence` 标步骤**类型**而非具体文案,避免脆性。
-   - Conversation:每轮必须标注期望 outcome;只在确有上下文依赖时填写 `expected_context_refs`;涉及副作用时必须标明最终数量/目标对象或幂等约束,不能只写“成功”。
-5. **覆盖矩阵**:每能力的金标必须覆盖正例 + 反例(矛盾/无答案/不该追问),不能全是 happy path。
-6. **评审**:金标变更走 PR review;新增/修改 case 需在 PR 描述里说明覆盖的新场景。
-7. **多轮边界**:Conversation case 的 turn 是不可拆分的最小评测序列。不得为了提高单轮指标而把后续 turn 单独运行;历史 assistant 输出若由 fixture 固定,必须显式标记 `history_mode: fixed`,不能冒充真实逐轮生成。
-
-## 6. 测试与门禁策略
-
-测试分三类,但只有真实环境测试称为 **Golden Test**:
-
-- **Scorer/契约测试**:纯函数、序列化 fixture 或确定性桩,用于验证数据模型、指标算法和 baseline 比较逻辑。它们可以进入普通 CI,但结果不计作 Golden 分数。
-- **系统集成测试**:使用真实 runtime、LangGraph、Postgres 与确定性模型桩,验证 checkpoint、事件顺序、终态和副作用等系统契约。它们不衡量真实模型质量。
-- **Golden Test**:统一使用真实 LLM、真实运行管线、真实基础设施和人工 gold 标签。多轮 case 必须在同一 session 内连续执行全部 turn,包括 checkpoint resume 和副作用核验。
-- **运行规则**:Golden Test 不设置额外的 nightly/opt-in 功能开关。真实环境配置齐全时直接执行;缺少 LLM、Postgres 等必要配置时明确 skip 或失败,由执行环境策略决定。
-- **evals/ 默认在 testpaths 外**,显式运行。
-- **baseline 规则**:`baseline_real.json` 是 Golden Test 的质量门禁;离线 `baseline.json` 只约束 fixture/契约回归。上调即棘轮提质;下调必须写明评审理由。
-- **性能与成本门禁**:质量指标使用最小值地板;`*_max` 使用最大值天花板。真实层 Golden 应对 `latency_p95_ms` 与 `total_tokens_p95` 设置上限,避免平均值掩盖长尾请求或异常 token 消耗。
-
-### 6.1 结果解释原则
-
-1. **离线与集成测试全绿只证明评测契约和确定性路径没有回归**,不能称为 Golden 通过。
-2. **Golden Test 聚合分数用于发现整体退化**,专项事故应另设精确回归 case,不能只依赖宽松平均分。
-3. **安全不变式应保持严格**:例如进入执行的 run 必须到达 `run_completed`/`run_failed`,HITL resume 必须复用原 run/thread,副作用不得重复。
-4. **模型偏好与系统错误分开处理**:歧义输入上的合理分歧可保留噪声裕度;挂死、越权、错误副作用等不可用模型非确定性解释。
-5. **结果命名必须准确**:stub/fixture 的 1.0 只能报告为契约测试结果;Golden 结果只来自真实环境。
-
-### 6.2 真实数据采集闭环
-
-真实日志、trace 和 note 快照只能生成**待标注草稿**,不能直接成为 gold。闭环为:
-
-`真实使用/事故 → 去重草稿 → 人工确认或修正 expected_* → 合入 cases.json → 离线与真实层回归`
-
-采集时保留模型的 `observed_*` 作为标注参考,但不得用模型自己的输出自动填充 `expected_*`。Router 可从结构化决策日志采集;RAG 与 Orchestration/Conversation 应从 ask trace、entry events、checkpoint 和副作用快照中采集。
-
-## 7. 当前结果说明
-
-### 7.1 数据规模与测试状态
-
-| 能力 | Case 数 | 主要覆盖 | Golden Test 结果(2026-06-23) |
-| --- | ---: | --- | --- |
-| RAG | 25(其中 22 条进入真实 seed-and-ask) | 单跳、多跳、图谱增强、同义改写、跨 note 聚合、矛盾、无答案 | 最近测量:recall@5 1.0000、ndcg@5 0.9964、图贡献率/命中率均为 0、平均 latency 16574.8ms、平均 token 3279.8。现已对 `rq-003` 增加严格图证据要求,当前 Graphiti 配置修复前 Golden 将失败 |
-| Router | 24 | 全意图词表、clarify、删除/总结/采集边界 | 2/2 通过;outcome 0.9167、intent F1 0.8194、latency p95 5423.4ms、token p95 1008;DNS 专项通过 |
-| Orchestration | 9 | clarify、步骤投影、事件顺序、高风险意图、终态不变式 | 终态 1.0000,但新增性能 Gate 失败:latency p95 69467.6ms > 60000ms;日志显示 Graphiti embedding 401 导致长尾 |
-| Research | 4 workflow + 4 understanding + 6 event quality + 3 digest verification + 1 frontend E2E | 一次性研究、订阅创建、已有 run 执行、订阅/简报管理的工作流契约;真实 LLM request understanding;固定语料下 query/decision/satisfaction/事件聚类/claim verification;前端对话框触发的真实端到端 research | Workflow 契约 Gate 通过;真实 request understanding Gate 通过;固定 event-frame 契约 overall 1.0000;digest claim verification Gate 通过;真实 LangExtract event quality 最近测量 overall 1.0000,real baseline 地板上调到 0.9600;Frontend E2E Golden 于 2026-06-30 通过,latency 252758ms,claim support 1.0000 |
-| Conversation | 8 | 同 thread、多轮追问、clarify→resume/reject、总结、话题切换、写后即查、solidify | 质量/结构结果见 §7.2;latency/token 已接入 scorer 与 `baseline_real.json`,待 Graphiti 配置修复后重新校准真实 p95 |
-
-### 7.2 Conversation 指标结果
-
-Conversation 不能用 pytest 的通过数量代替质量分数。当前结果按运行层级拆分如下:
-
-| 指标 | 含义 | Golden Test |
-| --- | --- | ---: |
-| `turn_outcome_accuracy` | 每轮 ready/clarify 判定是否符合金标 | 1.0000 |
-| `turn_intent_accuracy` | 每轮有序 intent 是否符合金标 | 0.9375 |
-| `event_sequence_match` | 每轮关键事件是否按期望顺序出现 | 1.0000 |
-| `context_retention` | 标注引用的历史 turn 是否仍保留在同一 checkpoint | 1.0000 |
-| `response_grounding` | 回答或产物是否包含金标要求的历史关键事实 | 1.0000 |
-| `resume_success_rate` | 是否沿原 run/thread 恢复并抵达终态 | 1.0000 |
-| `thread_continuity` | 同一 case 的全部 turn 是否使用同一 thread | 1.0000 |
-| `side_effect_accuracy` | note 等副作用数量是否准确且不重复 | 1.0000 |
-| `final_task_success` | 整段会话的所有必要条件是否同时满足 | 0.8750 |
-
-结果解释:
-
-- 8 条 Conversation case 全部在真实 Router LLM、真实 runtime、Postgres/checkpoint 和真实副作用环境中连续执行。
-- 结构与状态指标全部为 1.0000,说明同 session/thread、HITL resume、上下文保留和副作用约束均满足。
-- `turn_intent_accuracy=0.9375` 表示 16 个 turn 中有 1 个 intent 与当前 gold 不一致;该分歧使 `final_task_success` 降为 0.8750。
-
-### 7.3 结果能够说明什么
-
-- 多套能力已经具备统一的 `Case → RunOutput → scorer → baseline` 回归形状,可对数据、模型或编排改动进行可重复比较。
-- Orchestration 的终态指标能够捕获“流程进入执行但未结束”的挂起风险。
-- Conversation 的结果证明评测 runner 确实复用同一 thread,并通过原 `run_id/thread_id` 完成 HITL resume,而不是把补充信息降级成新单轮请求。
-- 真实模型层曾出现与确定性桩不同的路由判断,说明真实层是必要的独立信号,不能由离线满分替代。
-- RAG 检索层表现稳定,但生成与 claim 判定层明显弱于检索层;当前门禁不能把“整体通过”解释为回答质量良好。
-- 新增效率指标已经捕获 Orchestration 的真实长尾:平均耗时看似可接受,但 p95 超过 60 秒并触发 Gate。
-- 新增图检索指标证明原 RAG 结果没有图证据贡献;“管线支持 Graphiti”不等于 Golden 实际覆盖图检索。
-
-### 7.4 结果不能说明什么
-
-- RAG 离线 reference run 仍主要衡量评测口径与理想投影,不能代表真实捕获语料上的线上质量。
-- Router 离线 case 以单目标为主,不能充分代表真实 LLM 的多目标分解稳定性。
-- 真实 LLM 具有非确定性;一次通过不等于长期稳定,需要保留多次运行分布和 per-case 分歧。
-- 当前数据规模仍偏小,尤其 Conversation 只有 8 条;尚不足以覆盖长对话、多次 HITL、失败重试幂等和跨 session 长期记忆。
-- `context_retention=1.0` 只证明历史仍在 checkpoint 中,不单独证明模型理解了正确指代;需结合 `response_grounding` 和最终任务结果判断。
-- RAG `claim_accuracy=0.0000` 当前未纳入 `baseline_real.json` 门禁,所以测试通过不代表 claim 判定可接受;这是本轮真实测试暴露出的门禁缺口。
-- 当前 LLM 服务限制为 20 requests/minute;并发执行 Golden Test 会触发 429 并污染结果,测试必须串行或实现显式速率控制。
-- RAG 与 Conversation 运行中出现 `Neo4jDriver._execute_index_query was never awaited` 警告;本轮未造成失败,但表明图存储异步调用存在资源管理风险。
-- Token 指标统计项目直接发起且能返回 usage 的 LLM 调用;embedding token 与不返回 usage 的第三方调用不计入,因此它是可比较预算而非完整账单。
-
-## 8. 设计决策与待确认问题
-
-- RAG 金标的 corpus:是用 §3.1 提到的真实 note 快照,还是为金标单独维护一份小 corpus 固定下来?(影响 `gold_evidence_ids` 的稳定性)
-- ~~Conversation 离线 fixture 的历史 assistant 输出如何保存?~~ **已确认**:保存人工评审后的确定性 `reference_runs.json` 投影,用于验证 scorer 与门禁语义;它不冒充 Golden 结果。真实逐轮行为由 Golden Test 测量。
-- ~~Conversation case 的副作用如何隔离?~~ **已确认**:真实层每次 case invocation 使用独立 `user_id + session_id`,以用户作用域隔离 note 与 checkpoint;Postgres/stub 集成层继续使用测试 fixture 逐 test 清理业务表。
-- ~~Router `intent` 顺序是否有语义?~~ **已确认**:有语义(`primary_intent = goals[-1]`,渲染为 `a → b`),故同时保留集合 F1 与有序 exact 两个指标。
-- ~~Orchestration `expected_step_sequence` 的粒度?~~ **已确认**:event-type 有序子序列(非 node 级),避免与 LangGraph 内部实现耦合。
+这个归因表也是新增 case 选择 suite 的依据。

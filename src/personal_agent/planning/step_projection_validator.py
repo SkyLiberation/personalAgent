@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from personal_agent.kernel.models import EntryIntent
 from personal_agent.tools import tool_governance
 from personal_agent.kernel.contracts.execution import ExecutionStep
 
@@ -82,10 +81,9 @@ def _has_upstream_tool(
 class StepProjectionValidator:
     """Pre-execution gate for runtime tool executability.
 
-    Workflow topology and step structure are gated by WorkflowSpecValidator in
-    CI / deployment checks. This runtime gate only checks facts that depend on
-    the currently wired ToolExecutor or dynamic execution-time parameter
-    injection.
+    Procedure topology is gated by ProcedureSpecValidator in CI and deployment
+    checks. This runtime gate protects the final projection for both procedure
+    nodes and open bounded actions.
     """
 
     def __init__(self, tool_executor: "ToolExecutor | None" = None) -> None:
@@ -106,7 +104,6 @@ class StepProjectionValidator:
     def validate(
         self,
         steps: list[ExecutionStep],
-        intent: EntryIntent,
     ) -> StepProjectionValidationResult:
         issues: list[str] = []
         warnings: list[str] = []
@@ -116,8 +113,14 @@ class StepProjectionValidator:
         for i, s in enumerate(steps):
             prefix = f"步骤[{i}] {s.step_id!r}:"
 
-            if s.action_type == "tool_call" and not s.tool_name:
-                issues.append(f"{prefix} action_type=tool_call 但 tool_name 为空。")
+            if (
+                s.action_type == "tool_call"
+                and not s.tool_name
+                and not s.capability_requirements
+            ):
+                issues.append(
+                    f"{prefix} tool_call 必须声明 tool_name 或 capability_requirements。"
+                )
             if s.action_type == "agent_call" and not s.agent_id:
                 issues.append(f"{prefix} action_type=agent_call 但 agent_id 为空。")
             if s.action_type == "tool_call" and s.tool_name and s.tool_name not in known_tools:
@@ -139,91 +142,17 @@ class StepProjectionValidator:
                         tool_spec.args_schema.model_validate(s.tool_input)
                         schema_errors: list[str] = []
                     except ValidationError as exc:
-                        schema_errors = [
-                            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
-                            for err in exc.errors()
-                        ]
+                        schema_errors = exc.errors()
                     for err in schema_errors:
-                        deferred_capture_text = (
-                            s.tool_name == "capture_text"
-                            and "text" not in s.tool_input
-                            and "text" in err
-                            and (
-                                (
-                                    intent == "solidify_conversation"
-                                    and _has_upstream_action_type(steps, s, "compose")
-                                )
-                                or intent == "capture_text"
-                                or (
-                                    intent in {"capture_link", "capture_file"}
-                                    and _has_upstream_tool(
-                                        steps,
-                                        s,
-                                        {"capture_url", "capture_upload", "inspect_artifact"},
-                                    )
-                                )
-                            )
-                        )
-                        deferred_capture_url = (
-                            s.tool_name == "capture_url"
-                            and "url" not in s.tool_input
-                            and "url" in err
-                            and intent == "capture_link"
-                        )
-                        deferred_capture_upload = (
-                            s.tool_name == "capture_upload"
-                            and (
-                                ("file_path" not in s.tool_input and "file_path" in err)
-                                or ("filename" not in s.tool_input and "filename" in err)
-                            )
-                            and intent == "capture_file"
-                        )
-                        deferred_delete_note_id = (
-                            s.tool_name == "delete_note"
-                            and "note_id" not in s.tool_input
-                            and "note_id" in err
-                            and _has_upstream_action_type(steps, s, "resolve")
-                        )
-                        deferred_consolidation_topic = (
-                            s.tool_name == "consolidate_knowledge"
-                            and "topic" not in s.tool_input
-                            and "topic" in err
-                            and intent == "consolidate_knowledge"
-                        )
-                        deferred_research_topic = (
-                            s.tool_name == "research_prepare_run"
-                            and "topic" not in s.tool_input
-                            and "topic" in err
-                            and intent == "research_once"
-                        )
-                        deferred_research_run_id = (
-                            s.tool_name
-                            in {
-                                "research_initialize_state",
-                                "research_run_loop",
-                                "research_synthesize_digest",
-                                "research_verify_digest",
-                            }
-                            and "run_id" not in s.tool_input
-                            and "run_id" in err
-                            and (
-                                _has_upstream_tool(steps, s, {"research_prepare_run"})
-                                or _has_upstream_tool(steps, s, {"research_initialize_state"})
-                                or _has_upstream_tool(steps, s, {"research_run_loop"})
-                                or _has_upstream_tool(steps, s, {"research_synthesize_digest"})
-                            )
-                        )
-                        if (
-                            deferred_capture_text
-                            or deferred_capture_url
-                            or deferred_capture_upload
-                            or deferred_delete_note_id
-                            or deferred_consolidation_topic
-                            or deferred_research_topic
-                            or deferred_research_run_id
-                        ):
+                        # Procedure/action dependencies may supply a required field at
+                        # runtime. This is a structural rule, not a business-route
+                        # exception; provided values are still type-checked.
+                        if err["type"] == "missing" and s.depends_on:
                             continue
-                        issues.append(f"{prefix} tool_input 参数校验失败: {err}")
+                        location = ".".join(str(part) for part in err["loc"])
+                        issues.append(
+                            f"{prefix} tool_input 参数校验失败: {location}: {err['msg']}"
+                        )
 
                 # --- Governance cross-checks ---
                 if tool_spec is not None:
@@ -235,19 +164,10 @@ class StepProjectionValidator:
                             f"但步骤未设置 requires_confirmation。"
                         )
                     # Tool writes longterm but step has no confirmation
-                    explicit_solidify_write = (
-                        intent in {
-                            "solidify_conversation",
-                            "capture_text",
-                            "capture_link",
-                            "capture_file",
-                            "consolidate_knowledge",
-                        }
-                        and s.tool_name in {"capture_text", "consolidate_knowledge"}
-                    )
+                    governed_procedure_write = bool(s.procedure_id)
                     if (
                         any(effect in governance.side_effects for effect in ("write_longterm", "delete_longterm"))
-                        and not explicit_solidify_write
+                        and not governed_procedure_write
                         and not s.requires_confirmation
                         and s.risk_level != "high"
                     ):

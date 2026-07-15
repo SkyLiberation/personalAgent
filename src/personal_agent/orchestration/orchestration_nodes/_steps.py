@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import Citation
-from personal_agent.kernel.contracts.capability import CapabilityResolution
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
+from personal_agent.kernel.contracts.executive import ResolvedActionSpec
 from personal_agent.kernel.prompts import render_prompt
 from personal_agent.orchestration.orchestration_models import (
     AgentGraphState,
@@ -23,12 +23,9 @@ from personal_agent.orchestration.orchestration_models import (
 from personal_agent.orchestration.orchestration_contexts import StepExecutionContext
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
-    _capability_resolution_payload,
     _default_step_answer,
     _inject_draft_text_into_steps,
     _inject_note_id_into_steps,
-    _resolve_capability_resolution_for_step,
-    _resolve_allowed_tools_for_step,
     _skip_step_dependents,
     _topological_sort_steps,
 )
@@ -41,6 +38,7 @@ from personal_agent.orchestration.orchestration_nodes._tooling import (
     _pending_tool_updates,
     _tool_result_event_payload,
 )
+from personal_agent.planning.ledger import ExecutionLedgerProjector, next_execution_event
 
 if TYPE_CHECKING:
     from personal_agent.orchestration.orchestration_nodes._graph_helpers import ExecutionStep
@@ -57,66 +55,52 @@ def _update_execution_ledger(
     evidence_gaps: tuple[str, ...] | None = None,
     replan_reason: str | None = None,
 ) -> None:
-    """Project executor progress without claiming task-level completion."""
+    """Append executor facts and project them through the canonical ledger projector."""
     ledger = state.execution_ledger
     if ledger is None or not goal_id:
         return
-    updated_items = []
-    changed = False
-    for item in ledger.items:
-        if item.goal_id != goal_id:
-            updated_items.append(item)
-            continue
-        update = {}
-        if status is not None:
-            update["status"] = {
-                "running": "active",
-                "completed": "active",
-                "verified": "candidate_complete",
-                "blocked": "blocked",
-            }.get(status, status)
-        if coverage:
-            update["coverage"] = coverage
-        if evidence_gaps is not None:
-            update["evidence_gaps"] = evidence_gaps
-        if replan_reason is not None:
-            update["replan_reason"] = replan_reason
-        updated_items.append(item.model_copy(update=update))
-        changed = bool(update)
-    if not changed:
-        return
-    state.execution_ledger = ledger.model_copy(update={
-        "items": tuple(updated_items),
-        "revision": ledger.revision + 1,
-    })
-    state.add_event("plan_ledger_updated", {
-        "goal_id": goal_id,
-        "status": status,
-        "coverage": [item.model_dump(mode="json") for item in coverage],
-        "evidence_gaps": list(evidence_gaps or ()),
-        "replan_reason": replan_reason,
-        "revision": state.execution_ledger.revision,
-    })
+    projector = ExecutionLedgerProjector()
 
+    def append(event_type: str, payload: dict | None = None) -> None:
+        if state.execution_ledger is None:
+            return
+        event = next_execution_event(
+            state.execution_ledger,
+            event_type,
+            goal_id=goal_id,
+            payload=payload,
+        )
+        state.execution_ledger = projector.project(state.execution_ledger, (event,))
+        state.execution_events.append(event)
+        state.add_event("plan_ledger_updated", {
+            "execution_event": event.model_dump(mode="json"),
+            "ledger_revision": state.execution_ledger.revision,
+        })
 
-def _apply_capability_resolution(
-    state: AgentGraphState,
-    step: "ExecutionStep",
-    resolution: CapabilityResolution,
-) -> bool:
-    state.add_event("capability_resolution", _capability_resolution_payload(resolution))
-    incomplete = tuple(item for item in resolution.coverage if item.status != "satisfied")
-    _update_execution_ledger(
-        state,
-        goal_id=step.task_id,
-        coverage=resolution.coverage,
-        evidence_gaps=tuple(
-            f"{item.requirement_id}: {item.rationale}"
-            for item in incomplete
-        ),
-        status="blocked" if incomplete else "running",
-    )
-    return not incomplete
+    if coverage or evidence_gaps is not None:
+        append("coverage_recorded", {
+            "coverage": [item.model_dump(mode="json") for item in coverage],
+            "evidence_gaps": list(evidence_gaps or ()),
+        })
+    if replan_reason is not None:
+        append("plan_revised", {"replan_reason": replan_reason})
+    item = next((item for item in state.execution_ledger.items if item.goal_id == goal_id), None)
+    target_event = {
+        "running": "goal_activated",
+        "active": "goal_activated",
+        "completed": "goal_activated",
+        "verified": "goal_candidate_complete",
+        "candidate_complete": "goal_candidate_complete",
+        "blocked": "goal_blocked",
+    }.get(status or "")
+    if target_event is not None and item is not None:
+        target_status = {
+            "goal_activated": "active",
+            "goal_candidate_complete": "candidate_complete",
+            "goal_blocked": "blocked",
+        }[target_event]
+        if item.status != target_status:
+            append(target_event, {"evidence_gaps": list(evidence_gaps or item.evidence_gaps)})
 
 
 def _admit_untrusted_observation(
@@ -247,6 +231,17 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
                 "events": state.events,
             }
 
+    # Submit all independent work before polling child runs. Remote subagents
+    # can progress while the parent executes the remaining ready actions.
+    step_count = len(state.step_execution.steps)
+    for offset in range(1, step_count + 1):
+        i = (state.step_execution.current_step_index + offset) % step_count
+        sd = state.step_execution.steps[i]
+        if sd.status == "submitted":
+            state.step_execution.current_step_index = i
+            sd.status = "running"
+            return {"step_execution": state.step_execution}
+
     # No more steps
     logger.info("select_next_step run_id=%s: no more steps", state.run_id)
     return {}
@@ -275,15 +270,14 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
         deps,
         phase="input",
         payload={
-            "workflow_id": step.workflow_id,
-            "workflow_version": step.workflow_version,
+            "procedure_id": step.procedure_id,
+            "procedure_version": step.procedure_version,
             "step_id": step.step_id,
             "action_type": step.action_type,
             "tool_name": step.tool_name,
             "agent_id": step.agent_id,
             "tool_input": step.tool_input,
             "task_id": step.task_id,
-            "task_intent": step.task_intent,
             "task_input": step.task_input,
         },
     )
@@ -306,26 +300,21 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
                 "events": state.events,
             }
 
-    # ---- ReAct branch: seed state and let ReactGraph handle execution ----
+    resolved_spec = _resolved_spec_for_step(state, step)
+
+    # ---- ReAct branch: consume the already resolved scope ----
     if getattr(step, "execution_mode", "deterministic") == "react":
-        resolution = _resolve_capability_resolution_for_step(step, deps)
-        allowed_tools = (
-            set(resolution.allowed_tools)
-            if resolution is not None
-            else _resolve_allowed_tools_for_step(step, deps)
-        )
-        if resolution is not None:
-            if not _apply_capability_resolution(state, step, resolution):
-                return _fail_current_step(
-                    state,
-                    step,
-                    PermissionError("Capability coverage is insufficient for this step."),
-                    deps=deps,
-                )
+        if resolved_spec is None:
+            return _fail_current_step(
+                state,
+                step,
+                RuntimeError("ReAct dispatch requires a ResolvedActionSpec."),
+                deps=deps,
+            )
         state.react = ReactSubState(
             step_id=step.step_id,
             max_iterations=min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP),
-            allowed_tools=list(allowed_tools),
+            allowed_tools=list(step.allowed_tools),
             status="running",
         )
         logger.info(
@@ -339,6 +328,13 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
         }
 
     if step.action_type == "tool_call":
+        if resolved_spec is None:
+            return _fail_current_step(
+                state,
+                step,
+                RuntimeError("Tool dispatch requires a ResolvedActionSpec."),
+                deps=deps,
+            )
         if not step.tool_name:
             return _fail_current_step(
                 state,
@@ -376,24 +372,15 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
                 "pending_confirmation": state.pending_confirmation,
                 "events": state.events,
             }
-        resolution = _resolve_capability_resolution_for_step(step, deps)
-        if resolution is not None:
-            if not _apply_capability_resolution(state, step, resolution):
-                return _fail_current_step(
-                    state,
-                    step,
-                    PermissionError("Capability coverage is insufficient for this step."),
-                    deps=deps,
-                )
-            if step.tool_name not in resolution.allowed_tools:
-                return _fail_current_step(
-                    state,
-                    step,
-                    PermissionError(
-                        f"Capability resolution did not admit deterministic tool {step.tool_name}."
-                    ),
-                    deps=deps,
-                )
+        if step.tool_name not in step.allowed_tools:
+            return _fail_current_step(
+                state,
+                step,
+                PermissionError(
+                    f"Resolved action did not admit deterministic tool {step.tool_name}."
+                ),
+                deps=deps,
+            )
         try:
             _reserve_provider_call(state)
         except Exception as exc:
@@ -414,6 +401,13 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
         }
 
     if step.action_type == "agent_call":
+        if resolved_spec is None:
+            return _fail_current_step(
+                state,
+                step,
+                RuntimeError("Agent dispatch requires a ResolvedActionSpec."),
+                deps=deps,
+            )
         if not step.agent_id:
             return _fail_current_step(
                 state,
@@ -421,29 +415,28 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
                 ValueError("agent_call step missing agent_id"),
                 deps=deps,
             )
-        resolution = _resolve_capability_resolution_for_step(step, deps)
-        if resolution is not None:
-            if not _apply_capability_resolution(state, step, resolution):
-                return _fail_current_step(
-                    state,
-                    step,
-                    PermissionError("Capability coverage is insufficient for this step."),
-                    deps=deps,
-                )
-            if step.agent_id not in resolution.allowed_agents:
-                return _fail_current_step(
-                    state,
-                    step,
-                    PermissionError(
-                        f"Capability resolution did not admit agent {step.agent_id}."
-                    ),
-                    deps=deps,
-                )
+        expected_ref = f"agent:{step.agent_id}"
+        if expected_ref not in resolved_spec.capability_refs:
+            return _fail_current_step(
+                state,
+                step,
+                PermissionError(f"Resolved action did not admit agent {step.agent_id}."),
+                deps=deps,
+            )
         try:
-            _reserve_provider_call(state)
-            _execute_agent_call_step(step, sd, state, deps)
+            existing = state.step_execution.results.get(step.step_id)
+            if not isinstance(existing, dict) or not existing.get("agent_run_id"):
+                _reserve_provider_call(state)
+            completed = _execute_agent_call_step(step, sd, state, deps)
         except Exception as exc:
             return _fail_current_step(state, step, exc, deps=deps)
+        if not completed:
+            sd.status = "submitted"
+            return {
+                "step_execution": state.step_execution,
+                "provider_call_count": state.provider_call_count,
+                "events": state.events,
+            }
         return _complete_current_step(state, step, deps=deps)
 
     try:
@@ -469,7 +462,9 @@ def _node_consume_step_tool_result(state: AgentGraphState, *, deps: StepExecutio
             RuntimeError("工具返回上下文与当前计划步骤不匹配。"),
             deps=deps,
         )
-    artifact = _latest_tool_artifact(state)
+    artifact = dict(_latest_tool_artifact(state))
+    artifact["_step_id"] = step.step_id
+    artifact["_goal_id"] = step.task_id
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     state.add_event("tool_result", _tool_result_event_payload(
@@ -655,7 +650,7 @@ def _persist_step_artifact(
 ) -> None:
     artifact_id = f"step:{state.run_id}:{sd.step_id}:{phase}"
     try:
-        deps.workflow_artifact_store.put_artifact(
+        deps.execution_artifact_store.put_artifact(
             artifact_id=artifact_id,
             run_id=state.run_id,
             step_id=sd.step_id,
@@ -744,6 +739,26 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: StepExecutionCont
 
     sd = state.step_execution.steps[state.step_execution.current_step_index]
     step = sd.to_execution_step()
+    result_data = state.step_execution.results.get(step.step_id)
+    matched_edge = next((
+        edge for edge in step.conditional_edges
+        if _procedure_condition_matches(result_data, str(edge.get("condition") or ""))
+    ), None)
+    if matched_edge is not None and matched_edge.get("target") in {"clarify", "abort"}:
+        target = str(matched_edge["target"])
+        sd.status = "failed"
+        sd.failure_reason = (
+            f"procedure branch {matched_edge.get('condition')} -> {target}"
+        )
+        state.step_execution.aborted = True
+        _skip_step_dependents(step.step_id, state.step_execution.steps)
+        state.add_event("procedure_branch_selected", {
+            "procedure_id": step.procedure_id,
+            "procedure_node_id": step.procedure_node_id,
+            "condition": matched_edge.get("condition"),
+            "target": target,
+        })
+        return {"step_execution": state.step_execution, "events": state.events}
 
     # Inject resolved note_id into dependent tool_call steps
     if step.action_type == "resolve":
@@ -779,6 +794,19 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: StepExecutionCont
         state.run_id, step.step_id,
     )
     return {"step_execution": state.step_execution, "events": state.events}
+
+
+def _procedure_condition_matches(result: object, condition: str) -> bool:
+    if not condition or not isinstance(result, dict):
+        return False
+    if bool(result.get(condition)):
+        return True
+    declared = result.get("conditions")
+    if isinstance(declared, (list, tuple, set)) and condition in declared:
+        return True
+    if condition == "no_candidate":
+        return result.get("candidate_count") == 0 or result.get("candidates") == []
+    return False
 
 
 def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
@@ -918,17 +946,10 @@ def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: Ag
     entry_input = state.entry_input
     metadata = dict(entry_input.metadata) if entry_input is not None else {}
     tool_input = dict(step.tool_input or {})
-    route = step.task_intent
-
     if step.tool_name == "capture_text":
         tool_input.setdefault("user_id", state.user_id)
-        if route == "capture_link":
-            tool_input.setdefault("source_type", "link")
-        elif route == "capture_file":
-            tool_input.setdefault("source_type", "file")
-        else:
-            tool_input.setdefault("source_type", "text")
-        if "text" not in tool_input and route == "capture_text":
+        tool_input.setdefault("source_type", str(metadata.get("source_type") or "text"))
+        if "text" not in tool_input:
             text = step.task_input or (
                 (entry_input.text if entry_input is not None else state.entry_text) or ""
             )
@@ -1111,11 +1132,8 @@ def _apply_tool_result_to_state(step: "ExecutionStep", result_data: object, stat
         return
     if step.tool_name != "capture_text" or not isinstance(result_data, dict):
         return
-    route = step.task_intent
-    if route not in {"capture_text", "capture_link", "capture_file"}:
-        return
     title = str(result_data.get("title") or "").strip()
-    if title:
+    if title and not state.answer:
         state.answer = f"已收进知识库：{title}"
 
 
@@ -1177,6 +1195,7 @@ def _dispatch_step(
     if step.action_type == "retrieve":
         result_data = _execute_retrieve_step(step, state, deps)
         results[step.step_id] = result_data
+        _apply_declared_result_to_state(step, result_data, state)
 
     elif step.action_type == "tool_call":
         raise RuntimeError("tool_call must be executed by the main graph ToolGateway")
@@ -1184,6 +1203,7 @@ def _dispatch_step(
     elif step.action_type == "resolve":
         result_data = _execute_resolve_step(step, state, deps)
         results[step.step_id] = result_data
+        _apply_declared_result_to_state(step, result_data, state)
 
     elif step.action_type == "commit":
         _execute_commit_step(step, sd, state, deps)
@@ -1206,6 +1226,19 @@ def _dispatch_step(
 
     else:
         raise ValueError(f"未知的 action_type: {step.action_type}")
+
+
+def _apply_declared_result_to_state(
+    step: "ExecutionStep",
+    result_data: object,
+    state: AgentGraphState,
+) -> None:
+    """Project a step result through its declared output contract."""
+    if step.output_contract not in {"Answer", "Response"} or not isinstance(result_data, dict):
+        return
+    answer = str(result_data.get("answer") or "").strip()
+    if answer:
+        state.answer = answer
 
 
 def _execute_commit_step(
@@ -1232,24 +1265,19 @@ def _execute_commit_step(
 
     tool_name = str(proposed.get("tool_name") or "").strip()
     tool_input = proposed.get("tool_input")
-    allowed_tools = {
-        str(item) for item in (step.tool_input.get("allowed_commit_tools") or [])
-    }
-    if not tool_name or tool_name not in allowed_tools:
-        raise PermissionError("Proposed commit tool is absent or outside this commit scope.")
     if not isinstance(tool_input, dict):
         raise ValueError("Proposed commit tool_input must be an object.")
+
+    resolved_spec = _resolved_spec_for_step(state, step)
+    if resolved_spec is None:
+        raise PermissionError("Commit action has no governed capability scope.")
+    if not tool_name or tool_name not in step.allowed_tools:
+        raise PermissionError("Capability resolution did not admit the proposed commit tool.")
 
     sd.tool_name = tool_name
     sd.tool_input = dict(tool_input)
     step.tool_name = tool_name
     step.tool_input = dict(tool_input)
-    resolution = _resolve_capability_resolution_for_step(step, deps)
-    if resolution is not None:
-        if not _apply_capability_resolution(state, step, resolution):
-            raise PermissionError("Capability coverage is insufficient for the proposed commit.")
-        if tool_name not in resolution.allowed_tools:
-            raise PermissionError("Capability resolution did not admit the proposed commit tool.")
 
     state.pending_confirmation = {
         "step_id": step.step_id,
@@ -1270,8 +1298,9 @@ def _execute_agent_call_step(
     sd: StepRunState,
     state: AgentGraphState,
     deps: StepExecutionContext,
-) -> None:
-    from personal_agent.kernel.contracts.agentic import SubtaskSpec
+) -> bool:
+    """Submit or poll one child run; return whether it reached completion."""
+    from personal_agent.kernel.contracts.executive import SubtaskSpec
 
     metadata = state.entry_input.metadata if state.entry_input is not None else {}
     task_input = step.task_input or state.entry_text or step.description
@@ -1297,7 +1326,7 @@ def _execute_agent_call_step(
         task_type="research",
         input=task_payload,
         metadata={
-            "workflow_id": step.workflow_id,
+            "procedure_id": step.procedure_id,
             "step_id": step.step_id,
             "subtask_id": subtask.subtask_id if subtask is not None else "",
             "expected_artifact_contract": (
@@ -1310,23 +1339,35 @@ def _execute_agent_call_step(
         session_id=state.session_id,
         run_id=state.run_id,
         thread_id=state.thread_id,
-        workflow_id=step.workflow_id,
-        step_id=step.step_id,
+        task_id=state.task_spec.task_id if state.task_spec else "",
+        goal_id=step.task_id,
+        action_id=step.step_id,
         source_platform=(
             state.entry_input.source_platform
             if state.entry_input is not None
             else ""
         ),
     )
-    state.add_event("agent_run_submitted", {
-        "step_id": step.step_id,
-        "agent_id": step.agent_id,
-        "task_type": task.task_type,
-        "subtask_id": subtask.subtask_id if subtask is not None else "",
-    })
-    result = deps.agent_gateway.invoke(step.agent_id or "", task, context)
-    run = result.run
+    previous = state.step_execution.results.get(step.step_id)
+    saved = previous if isinstance(previous, dict) else {}
+    agent_run_id = str(saved.get("agent_run_id") or "")
+    if agent_run_id:
+        run = deps.agent_gateway.poll(agent_run_id, context)
+    else:
+        run = deps.agent_gateway.submit(step.agent_id or "", task, context)
+        state.add_event("agent_run_submitted", {
+            "step_id": step.step_id,
+            "agent_id": step.agent_id,
+            "agent_run_id": run.agent_run_id,
+            "task_type": task.task_type,
+            "subtask_id": subtask.subtask_id if subtask is not None else "",
+        })
+
+    seen_event_ids = {str(item) for item in saved.get("seen_event_ids", [])}
     for event in run.events:
+        if event.event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event.event_id)
         state.add_event("agent_run_event", {
             "step_id": step.step_id,
             "agent_id": run.agent_id,
@@ -1334,17 +1375,33 @@ def _execute_agent_call_step(
             "agent_event_type": event.type,
             "payload": event.payload,
         })
-    try:
-        for event in deps.agent_gateway.stream(run.agent_run_id, context):
-            state.add_event("agent_run_event", {
-                "step_id": step.step_id,
-                "agent_id": run.agent_id,
-                "agent_run_id": run.agent_run_id,
-                "agent_event_type": event.type,
-                "payload": event.payload,
-            })
-    except Exception:
-        logger.exception("Agent stream mapping failed for run_id=%s", run.agent_run_id)
+
+    if run.status in {"created", "queued", "running", "waiting", "blocked_approval"}:
+        state.step_execution.results[step.step_id] = {
+            "provider": run.agent_id,
+            "agent_run_id": run.agent_run_id,
+            "external_task_id": run.external_task_id,
+            "status": run.status,
+            "seen_event_ids": sorted(seen_event_ids),
+        }
+        state.add_event("agent_run_waiting", {
+            "step_id": step.step_id,
+            "agent_id": run.agent_id,
+            "agent_run_id": run.agent_run_id,
+            "status": run.status,
+        })
+        return False
+    if run.status in {"cancel_requested", "cancelling", "cancelled", "failed", "timed_out"}:
+        raise RuntimeError(
+            run.error or f"child agent run {run.agent_run_id} ended with {run.status}"
+        )
+
+    output_text = str(
+        run.result.get("report")
+        or run.result.get("answer")
+        or run.result.get("output")
+        or next((artifact.content for artifact in run.artifacts if artifact.content), "")
+    )
     for artifact in run.artifacts:
         _persist_step_artifact(
             state,
@@ -1357,7 +1414,7 @@ def _execute_agent_call_step(
                 "kind": artifact.kind,
                 "content": artifact.content,
                 "payload": artifact.payload,
-                "verification_status": artifact.verification_status,
+                "producer_verification_status": artifact.producer_verification_status,
             },
         )
         _admit_untrusted_observation(
@@ -1365,7 +1422,7 @@ def _execute_agent_call_step(
             ref_id=f"agent:{artifact.artifact_id}",
             provenance=run.agent_id,
             summary=str(artifact.content)[:2000],
-            payload={"agent_run_id": run.agent_run_id, "verification_status": artifact.verification_status},
+            payload={"agent_run_id": run.agent_run_id, "producer_verification_status": artifact.producer_verification_status},
         )
     state.add_event("agent_run_completed", {
         "step_id": step.step_id,
@@ -1374,8 +1431,8 @@ def _execute_agent_call_step(
         "status": run.status,
         "external_task_id": run.external_task_id,
         "artifact_count": len(run.artifacts),
-        "artifact_verification_statuses": [
-            artifact.verification_status
+        "artifact_producer_verification_statuses": [
+            artifact.producer_verification_status
             for artifact in run.artifacts
         ],
     })
@@ -1384,36 +1441,62 @@ def _execute_agent_call_step(
         "agent_run_id": run.agent_run_id,
         "external_task_id": run.external_task_id,
         "status": run.status,
-        "report": result.output_text,
-        "answer": result.output_text,
+        "report": output_text,
+        "answer": output_text,
         "artifacts": [
             {
                 "artifact_id": artifact.artifact_id,
                 "kind": artifact.kind,
                 "content": artifact.content,
-                "verification_status": artifact.verification_status,
+                "producer_verification_status": artifact.producer_verification_status,
             }
             for artifact in run.artifacts
         ],
-        "metadata": result.metadata,
+        "metadata": dict(run.result.get("metadata") or {}),
+        "seen_event_ids": sorted(seen_event_ids),
     }
+    return True
+
+
+def _resolved_spec_for_step(state: AgentGraphState, step) -> ResolvedActionSpec | None:
+    exact = next(
+        (item for item in state.resolved_action_specs if item.action_id == step.step_id),
+        None,
+    )
+    if exact is not None:
+        return exact
+    return next(
+        (item for item in state.resolved_action_specs if item.goal_id == step.task_id),
+        None,
+    )
 
 
 def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
     question = step.tool_input.get("question") if step.tool_input else None
     question = str(question or step.task_input or state.entry_text or step.description or "")
 
+    if _step_requires_resource(step, domain="conversation", resource_type="thread", operation="read"):
+        return {
+            "answer": _summarize_thread(state, deps),
+            "retrieval_kind": "thread_summary",
+        }
+
     # For the ask flow, the retrieve step runs query understanding +
     # multi-source recall + context assembly — the ~18s pass — and stashes the
     # run-scoped AskRunContext for the downstream compose/verify steps. The
     # running "retrieve" step honestly reflects that latency to the user.
-    if step.task_intent == "ask":
+    if _step_requires_resource(
+        step,
+        domain="knowledge",
+        resource_type="note",
+        operation="search",
+    ):
         from personal_agent.orchestration.orchestration_nodes._entry import _entry_conversation_messages
 
         conversation = _entry_conversation_messages(
             state,
             exclude_latest=True,
-            deps=deps.direct_answer,
+            deps=deps.conversation,
         )
         ask_service = deps.ask_service_factory()
         ctx = ask_service.build_run_context(
@@ -1466,6 +1549,8 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionCont
 
 
 def _execute_resolve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
+    if step.llm_decision_node != "delete_target_resolve":
+        raise ValueError(f"unsupported deterministic decision node: {step.llm_decision_node or 'missing'}")
     user_id = state.user_id
     original_query = step.task_input or state.entry_text or ""
 
@@ -1571,88 +1656,29 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
 
     context = "\n".join(context_parts) if context_parts else "暂无检索结果。"
 
+    thread_summary = next((
+        str(data.get("answer") or "")
+        for data in reversed(list(state.step_execution.results.values()))
+        if isinstance(data, dict) and data.get("retrieval_kind") == "thread_summary"
+    ), "")
+    if thread_summary:
+        return thread_summary
+
+    if _step_requires_resource(step, domain="conversation", resource_type="thread"):
+        prior = next((
+            item.summary
+            for item in reversed(state.latest_observations)
+            if item.goal_id == step.task_id and item.kind == "action_result" and item.summary
+        ), "")
+        if prior:
+            return prior
+
     if step.tool_input and step.tool_input.get("question"):
         question = str(step.tool_input["question"])
     else:
         question = step.task_input or step.description or "根据已有信息生成回答"
 
-    route = step.task_intent
-    if route in {
-        "review_digest",
-        "consolidate_knowledge",
-        "inspect_knowledge_gaps",
-    }:
-        for data in reversed(list(state.step_execution.results.values())):
-            if not isinstance(data, dict):
-                continue
-            text = str(data.get("text") or "").strip()
-            if text:
-                return text
-            if route == "consolidate_knowledge" and data.get("note_id"):
-                title = str(data.get("title") or step.task_input or "主题综述")
-                source_count = len(data.get("source_note_ids") or data.get("superseded") or [])
-                return f"已将 {source_count} 条相关笔记整理为《{title}》。"
-        raise RuntimeError("工作流未产生可呈现的结果。")
-
-    if route == "summarize_thread":
-        return _summarize_thread(state, deps)
-
-    if route == "analyze_artifact":
-        return _answer_from_artifact_context(
-            question=question,
-            context=context,
-            deps=deps,
-        )
-
-    if route == "direct_answer":
-        from personal_agent.orchestration.orchestration_nodes._entry import _node_direct_answer_branch
-
-        original_entry = state.entry_input
-        if original_entry is not None and step.task_input:
-            state.entry_input = original_entry.model_copy(update={"text": step.task_input})
-        try:
-            _node_direct_answer_branch(state, deps=deps.direct_answer)
-        finally:
-            state.entry_input = original_entry
-        return state.answer or ""
-
-    if route == "external_codebase_qa":
-        for data in reversed(list(state.step_execution.results.values())):
-            if isinstance(data, dict):
-                answer = str(data.get("answer") or "").strip()
-                if answer:
-                    return answer
-        return f"外部代码库工具已完成检索，但没有返回可呈现内容。问题：{question}"
-
-    if route == "external_workspace_qa":
-        for data in reversed(list(state.step_execution.results.values())):
-            if isinstance(data, dict):
-                answer = str(data.get("answer") or "").strip()
-                if answer:
-                    return answer
-        return f"外部工作区工具已完成检索，但没有返回可呈现内容。问题：{question}"
-
-    if route == "external_project_ops":
-        for data in reversed(list(state.step_execution.results.values())):
-            if isinstance(data, dict):
-                answer = str(data.get("answer") or "").strip()
-                if answer:
-                    return answer
-        return f"外部项目工具已完成检索，但没有返回可呈现内容。问题：{question}"
-
-    if route == "gpt_researcher_a2a":
-        for data in reversed(list(state.step_execution.results.values())):
-            if not isinstance(data, dict):
-                continue
-            report = str(data.get("report") or "").strip()
-            if report:
-                return report
-            answer = str(data.get("answer") or "").strip()
-            if answer:
-                return answer
-        return f"GPT Researcher A2A 已完成调用，但没有返回可呈现报告。问题：{question}"
-
-    if step.task_intent == "solidify_conversation":
+    if step.llm_decision_node == "solidify_draft":
         dialogue = _helpers._format_solidify_candidate_context(state.messages)
         if not dialogue:
             # No prior conversation to distill — solidify is only meaningful over
@@ -1825,60 +1851,8 @@ def _workspace_matches_from_payload(payload: dict[str, object]) -> list[dict[str
     return matches
 
 
-def _answer_from_artifact_context(
-    *,
-    question: str,
-    context: str,
-    deps: StepExecutionContext,
-) -> str:
-    prompt = (
-        "你正在处理用户本轮上传的 artifact。请只基于 artifact 上下文和用户问题回答；"
-        "不要把内容写入长期知识库，不要声称已保存。"
-        "如果上下文说明无法自动理解内容，请如实说明需要可解析的文本、图片视觉模型或音频转写能力。\n\n"
-        f"用户请求：{question}\n\n"
-        f"artifact 上下文：\n{context[:16000]}"
-    )
-    if deps.model_client is None:
-        return f"根据 artifact 上下文：{context[:1000]}"
-    try:
-        from personal_agent.infra.structured_model import StructuredModelRequest
-        from personal_agent.kernel.prompts import get_prompt
-        from pydantic import BaseModel
-
-        answer_prompt = get_prompt("answer_generation.system")
-        response = deps.model_client.generate(StructuredModelRequest(
-            operation="artifact_answer",
-            version=answer_prompt.version,
-            messages=[
-                {"role": "system", "content": answer_prompt.template},
-                {"role": "user", "content": prompt},
-            ],
-            output_type=BaseModel,
-            temperature=0.2,
-            max_tokens=900,
-            kind="text",
-            metadata={"component": "orchestration", "intent": "analyze_artifact"},
-        ))
-        generated = (response.content or "").strip()
-        if generated:
-            return _ensure_artifact_filename_in_answer(generated, context)
-    except Exception:
-        logger.exception("Artifact compose failed")
-    return f"根据 artifact 上下文：{context[:1000]}"
-
-
-def _ensure_artifact_filename_in_answer(answer: str, context: str) -> str:
-    match = re.search(r"Uploaded (?:text |PDF |image )?artifact: ([^\n]+)", context)
-    if not match:
-        return answer
-    filename = match.group(1).strip()
-    if not filename or filename in answer:
-        return answer
-    return f"关于 {filename}：{answer}"
-
-
 def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str:
-    """Execute the summarize workflow's compose operation."""
+    """Load and summarize a conversation resource admitted by the task contract."""
     entry_input = state.entry_input
     if entry_input is None:
         return "未收到可总结的内容。"
@@ -1929,61 +1903,53 @@ def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str
     return "已识别为总结诉求。请直接发送需要总结的文本内容，或在群聊中使用此功能。"
 
 
+def _step_requires_resource(
+    step,
+    *,
+    domain: str,
+    resource_type: str,
+    operation: str | None = None,
+) -> bool:
+    return any(
+        domain in set(raw.get("semantic_domains") or ())
+        and resource_type in set(raw.get("resource_types") or ())
+        and (operation is None or operation in set(raw.get("operations") or ()))
+        for raw in step.capability_requirements
+        if isinstance(raw, dict)
+    )
+
+
 def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
-    if step.pattern_id == "delegated_research":
-        delegated = next((
-            data for data in reversed(list(state.step_execution.results.values()))
-            if isinstance(data, dict) and data.get("agent_run_id")
-        ), None)
-        report = str((delegated or {}).get("report") or "").strip()
-        artifacts = list((delegated or {}).get("artifacts") or [])
-        structural_verified = bool(report) and all(
-            isinstance(item, dict) and item.get("artifact_id")
-            for item in artifacts
-        )
-        state.step_execution.results[step.step_id] = {
-            "verified": structural_verified,
-            "verification_kind": "structural_artifact_verification",
-            "artifact_count": len(artifacts),
-            "untrusted_source": True,
-            "warning": "外部 Agent 结果已完成结构校验，事实主张仍需以来源证据复核。",
-        }
-        if not structural_verified:
-            raise ValueError("Delegated agent did not return a verifiable report artifact.")
+    ctx = deps.ask_run_context_store.get(state.run_id)
+    if ctx is not None:
+        try:
+            ask_service = deps.ask_service_factory()
+            ask_service.run_verification_stage(ctx)
+            deps.ask_run_context_store.put(state.run_id, ctx)
+            state.answer = ctx.answer
+            state.citations = list(ctx.selected_citations or [])
+            state.matches = [
+                {"id": m.id, "title": m.body.title, "summary": m.body.summary}
+                for m in (ctx.selected_matches or [])
+            ]
+            verification = ctx.verification
+            state.step_execution.results[step.step_id] = {
+                "verified": bool(
+                    verification is not None
+                    and getattr(verification, "ok", False)
+                    and getattr(verification, "sufficient", False)
+                ),
+                "evidence_score": (
+                    float(getattr(verification, "evidence_score", 0.0))
+                    if verification is not None else 0.0
+                ),
+                "citation_count": len(ctx.selected_citations or []),
+                "match_count": len(ctx.selected_matches or []),
+                "repair": ctx.repair_payload(),
+            }
+        except Exception:
+            logger.exception("Ask verify stage %s error", step.step_id)
         return
-    # ask flow: run the real verification stage on the run-scoped context —
-    # verify + bounded retry. Repair/fallback is a separate ask-repair step.
-    if step.task_intent == "ask":
-        ctx = deps.ask_run_context_store.get(state.run_id)
-        if ctx is not None:
-            try:
-                ask_service = deps.ask_service_factory()
-                ask_service.run_verification_stage(ctx)
-                deps.ask_run_context_store.put(state.run_id, ctx)
-                state.answer = ctx.answer
-                state.citations = list(ctx.selected_citations or [])
-                state.matches = [
-                    {"id": m.id, "title": m.body.title, "summary": m.body.summary}
-                    for m in (ctx.selected_matches or [])
-                ]
-                verification = ctx.verification
-                state.step_execution.results[step.step_id] = {
-                    "verified": bool(
-                        verification is not None
-                        and getattr(verification, "ok", False)
-                        and getattr(verification, "sufficient", False)
-                    ),
-                    "evidence_score": (
-                        float(getattr(verification, "evidence_score", 0.0))
-                        if verification is not None else 0.0
-                    ),
-                    "citation_count": len(ctx.selected_citations or []),
-                    "match_count": len(ctx.selected_matches or []),
-                    "repair": ctx.repair_payload(),
-                }
-            except Exception:
-                logger.exception("Ask verify stage %s error", step.step_id)
-            return
 
     if not state.answer:
         return
@@ -2005,8 +1971,6 @@ def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContex
 
 
 def _execute_repair_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
-    if step.task_intent != "ask":
-        raise ValueError(f"repair action is only supported for ask, got {step.task_intent!r}")
     ctx = deps.ask_run_context_store.get(state.run_id)
     if ctx is None:
         return
