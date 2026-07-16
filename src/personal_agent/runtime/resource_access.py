@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.executive import (
+from personal_agent.runtime.contracts.control import (
     ProposedResourceAccessPlan,
     ResolvedResourceAccessPlan,
     ResourceAccess,

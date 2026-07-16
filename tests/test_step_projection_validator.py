@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.planning.step_projection_validator import StepProjectionValidationResult, StepProjectionValidator
-from personal_agent.kernel.contracts.execution import ExecutableInvocation
+from personal_agent.execution.contracts.invocation import ExecutableInvocation
 from langchain_core.tools import tool
 
 from personal_agent.governance import ToolExecutor

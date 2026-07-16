@@ -5,7 +5,7 @@ import logging
 import pytest
 from pydantic import ValidationError
 
-from personal_agent.infra.structured_model import StructuredModelResponse
+from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from personal_agent.kernel.models import ArtifactRef, EntryInput
 from personal_agent.planning.task_analyzer import (
     ClarificationDraft,

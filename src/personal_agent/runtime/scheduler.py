@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.executive import ResolvedActionSpec
-from personal_agent.kernel.contracts.planning import DispatchGroup, JoinPolicy
+from personal_agent.runtime.contracts.control import ResolvedActionSpec
+from personal_agent.runtime.contracts.planning import DispatchGroup, JoinPolicy
 
 
 class SchedulingError(ValueError):

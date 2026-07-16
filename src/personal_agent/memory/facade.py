@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from personal_agent.kernel.models import (
     GraphReconcileIssue,
@@ -26,9 +26,14 @@ from personal_agent.kernel.contracts.policy import (
 
 if TYPE_CHECKING:
     from personal_agent.memory.graphiti.store import GraphitiStore
-    from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
+
+
+class MemoryStorePort(Protocol):
+    """Structural port implemented by the durable memory adapter."""
+
+    def ensure_schema(self) -> None: ...
 
 _MEMORY_SCOPES: dict[str, str] = {
     "memory_read": "memory:read",
@@ -98,7 +103,7 @@ class MemoryFacade:
 
     def __init__(
         self,
-        local_store: "PostgresMemoryStore",
+        local_store: MemoryStorePort,
         graph_store: "GraphitiStore | None" = None,
         *,
         policy_engine: PolicyEvaluator,

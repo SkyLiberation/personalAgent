@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from personal_agent.kernel.contracts.capability import CapabilityResolutionDecision
-from personal_agent.kernel.contracts.executive import (
+from personal_agent.capabilities.contracts.execution import ExecutionResolutionResult
+from personal_agent.runtime.contracts.control import (
     BoundedAction,
     BudgetReservation,
     ResolvedActionSpec,
@@ -29,18 +29,19 @@ class ResolvedActionBuilder:
         action: BoundedAction,
         context_projection_ref: str,
         access_plan: ResolvedResourceAccessPlan,
-        capability_resolution: CapabilityResolutionDecision | None = None,
+        capability_resolution: ExecutionResolutionResult | None = None,
         retry_directive: RetryDirective | None = None,
     ) -> ResolvedActionSpec:
-        capability_refs = tuple(
-            item.capability_id
-            for item in capability_resolution.selected_capabilities
-        ) if capability_resolution is not None else ()
+        grant_ref = (
+            capability_resolution.execution_grant.grant_id
+            if capability_resolution is not None and capability_resolution.execution_grant is not None
+            else None
+        )
         return ResolvedActionSpec(
             action_id=action.action_id,
             decision_ref=decision_ref,
             goal_id=action.goal_id,
-            capability_refs=capability_refs,
+            execution_grant_ref=grant_ref,
             context_projection_ref=context_projection_ref,
             resource_access_plan=access_plan,
             retry_directive=retry_directive,

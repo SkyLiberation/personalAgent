@@ -12,28 +12,32 @@ if TYPE_CHECKING:
     from personal_agent.memory import MemoryFacade
     from personal_agent.governance.policy import PolicyEngine
     from personal_agent.governance import ToolExecutor
-    from personal_agent.infra.structured_model import StructuredModelClient
+    from personal_agent.capabilities.contracts.model import StructuredModelClient
     from personal_agent.orchestration.ask import AskRunContextStore
     from personal_agent.planning.task_analyzer import TaskAnalyzer
     from personal_agent.orchestration.runtime_ask import AskService
     from personal_agent.application.runtime_results import AskResult
     from personal_agent.planning.step_projection_validator import StepProjectionValidator
     from personal_agent.application.verifier import AnswerVerifier
-    from personal_agent.planning.procedures import (
+    from personal_agent.runtime.procedure_runtime import (
         ProcedureApplicabilityResolver,
         ProcedureRuntime,
     )
-    from personal_agent.planning.goal_graph import GoalGraphCompiler
-    from personal_agent.planning.executive import ExecutiveController
-    from personal_agent.planning.decision_validator import DecisionValidator
-    from personal_agent.planning.ledger import TaskRuntimeProjector, GoalDecompositionValidator
-    from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
+    from personal_agent.planning.task_compiler import GoalGraphCompiler
+    from personal_agent.runtime.control_runtime import ExecutiveController
+    from personal_agent.governance.decision_admission import AcceptedCommandCompiler, DecisionValidator
+    from personal_agent.governance.route_admission import ExecutionRoutePolicy
+    from personal_agent.runtime.task_runtime import TaskRuntimeProjector, GoalDecompositionValidator
+    from personal_agent.verification.runtime import CompletionVerifier, GoalVerifier
     from personal_agent.application.workspace import WorkspaceService
     from personal_agent.agents.gateway import AgentGateway
     from personal_agent.agents.runtime import SubagentRuntime
     from personal_agent.context import ContextManager, ModelContextGateway
-    from personal_agent.planning.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
-    from personal_agent.planning.outcome_ranking import OutcomeAwareCapabilityRanker
+    from personal_agent.runtime.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
+    from personal_agent.capabilities.outcomes import OutcomeAwareCapabilityRanker
+    from personal_agent.runtime.procedure_grants import ProcedureGrantIssuer
+    from personal_agent.capabilities.acquisition import CapabilityAcquisitionManager
+    from personal_agent.governance.evidence_admission import EvidenceAdmission
     from personal_agent.planning.adaptive import (
         AdaptivePlanner,
         FrontierSelector,
@@ -41,10 +45,12 @@ if TYPE_CHECKING:
         PlanMonitor,
         PlanValidator,
         PlanningFactProjector,
-        PlanningModePolicy,
+        CoordinationModePolicy,
     )
-    from personal_agent.kernel.contracts.planning import PlannerExecutionProfile
+    from personal_agent.runtime.contracts.planning import PlannerExecutionProfile
     from personal_agent.runtime import ResolvedActionBuilder, ResourceAccessResolver, RunScheduler
+    from personal_agent.execution.invocation_journal import InvocationJournal
+    from personal_agent.runtime.commits import ControlCommitter, TaskCompilationCommitter
 
 
 class ToolingContext(Protocol):
@@ -64,7 +70,9 @@ class ExecutiveContext:
     settings: "Settings"
     goal_graph_compiler: "GoalGraphCompiler"
     controller: "ExecutiveController"
-    decision_validator: "DecisionValidator"
+    decision_admission: "DecisionValidator"
+    accepted_command_compiler: "AcceptedCommandCompiler"
+    route_policy: "ExecutionRoutePolicy"
     task_runtime_projector: "TaskRuntimeProjector"
     goal_decomposition_validator: "GoalDecompositionValidator"
     goal_verifier: "GoalVerifier"
@@ -84,14 +92,19 @@ class ExecutiveContext:
     scheduler: "RunScheduler"
     subagent_runtime: "SubagentRuntime"
     capability_ranker: "OutcomeAwareCapabilityRanker"
+    procedure_grant_issuer: "ProcedureGrantIssuer"
+    capability_acquisition_manager: "CapabilityAcquisitionManager"
+    evidence_admission: "EvidenceAdmission"
     planning_fact_projector: "PlanningFactProjector"
-    planning_mode_policy: "PlanningModePolicy"
+    coordination_policy: "CoordinationModePolicy"
     adaptive_planner: "AdaptivePlanner"
     plan_validator: "PlanValidator"
     plan_runtime_projector: "PlanRuntimeProjector"
     frontier_selector: "FrontierSelector"
     plan_monitor: "PlanMonitor"
     planner_profile: "PlannerExecutionProfile"
+    task_compilation_committer: "TaskCompilationCommitter"
+    control_committer: "ControlCommitter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +133,8 @@ class StepExecutionContext:
     ask_service_factory: Callable[[], "AskService"]
     ask_run_context_store: "AskRunContextStore"
     execution_artifact_store: object
+    invocation_journal: "InvocationJournal"
+    procedure_grant_issuer: "ProcedureGrantIssuer"
     workspace_service: "WorkspaceService"
     summary: SummaryContext
     conversation: ConversationContext
@@ -134,6 +149,7 @@ class ReactContext:
     policy_engine: "PolicyEngine"
     context_manager: "ContextManager"
     context_gateway: "ModelContextGateway"
+    invocation_journal: "InvocationJournal"
     model_client: "StructuredModelClient | None" = None
     structured_client: "StructuredModelClient | None" = None
 

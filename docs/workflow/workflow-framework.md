@@ -46,14 +46,14 @@ GitHub、Notion 和 GPT Researcher 不在 Catalog。前两者是 MCP capability�
 
 ## 选择与物化
 
-TaskAnalyzer 只输出 provider-neutral Goal、ResourceHint 和 GoalRelation。GoalGraphCompiler 生成 TaskSpec、criterion 与 mutation intent。ProcedureApplicabilityResolver 只读取这些结构化事实：
+TaskAnalyzer 只输出 provider-neutral Goal、ResourceHint 和 GoalRelation。GoalGraphCompiler 生成 `TaskContract`、criterion、mutation intent 与初始 runtime。ProcedureApplicabilityResolver 只读取 materialized Goal 和结构化资源事实：
 
 - mandatory candidate 不可被开放动作绕过；
 - eligible candidate 由 Executive 决定是否调用；
 - ineligible candidate 不进入 LegalAffordance；
 - 未知 procedure 不降级到通用流程。
 
-Executive 产生 `InvokeProcedureDecision` 后，DecisionValidator 校验 Goal ownership、mutation、预算和 mandatory constraint。Materializer 再为每个 node 生成带 procedure identity 的 ExecutionStep。这个过程不读取自然语言猜依赖。
+Executive 产生 `InvokeProcedureDecision` Proposal 后，Decision Admission 校验 Goal ownership、mutation、预算和 mandatory constraint，并编译 `AcceptedControlCommand`。Materializer 再为每个 node 生成带 procedure identity 的 invocation；每个 node 在 dispatch 前获得精确 `ProcedureNodeGrant`。这个过程不读取自然语言猜依赖。
 
 ## 执行边界
 

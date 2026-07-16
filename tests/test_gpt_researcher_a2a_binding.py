@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from personal_agent.kernel.contracts.agent import AgentGovernance, SubagentProfile
-from personal_agent.kernel.contracts.capability import CapabilityRequirement, CapabilityResolutionRequest
-from personal_agent.planning.capability_resolver import CapabilityResolver
-from personal_agent.planning.goal_graph import GoalGraphCompiler
+from personal_agent.capabilities.contracts.execution import CapabilityRequirement, ExecutionCapabilityRequest
+from personal_agent.capabilities.resolver import CapabilityResolver
+from personal_agent.planning.task_compiler import GoalGraphCompiler
 from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
-from personal_agent.tools.mcp_capability import CapabilityRegistry, capability_from_subagent_profile
+from personal_agent.tools.mcp_capability import build_capability_portfolio
 
 
 def test_explicit_gpt_researcher_is_required_delegate_binding():
@@ -56,7 +56,7 @@ def test_generic_research_is_open_but_research_procedure_is_eligible():
     assert decision.goals[0].result_contract == "artifact"
     interpretation = GoalGraphCompiler().compile(decision, decision.user_goal)
     assert interpretation.task_contract.goal_graph.goals[0].result_contract == "artifact"
-    from personal_agent.planning.procedures import (
+    from personal_agent.runtime.procedure_runtime import (
         PROCEDURE_CATALOG,
         ProcedureApplicabilityResolver,
     )
@@ -70,13 +70,13 @@ def test_generic_research_is_open_but_research_procedure_is_eligible():
 
 
 def test_delegate_requirement_resolves_explicit_fresh_agent_capability():
-    capability = capability_from_subagent_profile(SubagentProfile(
+    profile = SubagentProfile(
         agent_id="gpt_researcher",
         provider="gpt_researcher",
         protocol="a2a_jsonrpc",
         semantic_domains=("external_research",),
         governance=AgentGovernance(side_effects=("external_network",)),
-    ))
+    )
     requirement = CapabilityRequirement.from_dimensions(
         requirement_id="delegate-research",
         purpose="delegate research",
@@ -86,16 +86,16 @@ def test_delegate_requirement_resolves_explicit_fresh_agent_capability():
         freshness_required=True,
         required_providers=("gpt_researcher",),
     )
-    resolution = CapabilityResolver(CapabilityRegistry((capability,))).resolve(
-        CapabilityResolutionRequest(
+    resolution = CapabilityResolver(build_capability_portfolio(agents=(profile,))).resolve(
+        ExecutionCapabilityRequest(
             task_id="task",
             goal_id="goal",
             action_id="delegate-research",
-            meta_capability="delegate",
+            execution_intent="delegate",
             allowed_kinds=("agent",),
             allowed_operations=("delegate",),
             requirements=(requirement,),
         )
     )
-    assert resolution.allowed_agents == ("gpt_researcher",)
+    assert resolution.selected_definition.local_name == "gpt_researcher"
     assert resolution.coverage[0].status == "satisfied"

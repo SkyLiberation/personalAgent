@@ -2,7 +2,7 @@
 
 ### 1. 这个 personal agent 的核心链路是什么？
 
-用户请求先进入 LangGraph EntryGraph，由 `DefaultTaskAnalyzer` 输出 Goal、typed GoalRelation 和 ResourceHint；信息不足时通过 interrupt 澄清。`GoalGraphCompiler` 生成 TaskSpec 与 ExecutionLedger，随后 Executive 按 decide/act/observe/verify 循环逐轮选择 BoundedAction、delegate 或 Protocol。capture、delete、solidify 等稳定事务进入 Protocol 内部 step projection；ask、direct response 和 summarize 属于开放式元能力组合，不是顶层 workflow。
+用户请求先进入 LangGraph EntryGraph，由 `DefaultTaskAnalyzer` 输出 Goal、typed GoalRelation 和 ResourceHint；信息不足时通过 interrupt 澄清。`GoalGraphCompiler` 生成 `TaskContract`、初始 `TaskRuntimeProjection` 和 `ContextInventory`，随后 Executive 按 propose/admit/resolve/act/observe/verify 循环逐轮推进。写入、删除、solidify 等稳定事务进入 Governed Procedure；普通回答和分析由开放式能力组合完成，不是顶层 workflow。
 
 问答动作会从长期记忆、图谱、MCP 或外部工具中检索证据，统一成 `EvidenceItem`，再由 `ContextPack` 做去重、排序和预算裁剪。写入与删除由 Protocol 持有确认、幂等和 receipt；动作结果形成 Observation，必须经过 GoalVerifier 和 CompletionVerifier 才能完成任务。
 

@@ -1,6 +1,5 @@
-from personal_agent.application.research.models import (
+from personal_agent.kernel.contracts.research import (
     ContentPreferences,
-    DeliveryTarget,
     DigestClaim,
     EventScoreBreakdown,
     IntelligenceDigest,
@@ -38,7 +37,6 @@ from personal_agent.application.research.extraction import (
 
 __all__ = [
     "ContentPreferences",
-    "DeliveryTarget",
     "DigestClaim",
     "EventScoreBreakdown",
     "IntelligenceDigest",

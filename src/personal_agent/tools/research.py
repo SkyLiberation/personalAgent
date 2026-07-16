@@ -6,8 +6,9 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from personal_agent.application.research import (
-    DeliveryTarget, ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
+    ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
 )
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 

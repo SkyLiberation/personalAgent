@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Protocol
 from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.memory import MemoryFacade
 from personal_agent.application.review.formatter import DigestFormatter
-from personal_agent.application.review.models import ReviewDigest, ReviewDigestSection, ReviewFeedbackOutcome, ReviewFeedbackResult
+from personal_agent.kernel.contracts.review import (
+    ReviewDigest,
+    ReviewDigestSection,
+    ReviewFeedbackOutcome,
+    ReviewFeedbackResult,
+)
 
 if TYPE_CHECKING:
     from personal_agent.memory.graphiti.store import GraphitiStore

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from personal_agent.kernel.contracts.agent import ChildAgentRunOutcome
-from personal_agent.kernel.contracts.agentic import (
+from personal_agent.runtime.contracts.task import (
     ContextInventory,
     GoalDefinition,
     GoalGraphDefinition,
@@ -15,22 +15,22 @@ from personal_agent.kernel.contracts.agentic import (
     SuccessCriterion,
     TaskConstraints,
 )
-from personal_agent.kernel.contracts.capability import (
+from personal_agent.capabilities.contracts.execution import (
     Capability,
     CapabilityRequirement,
     CapabilityResolutionDecision,
 )
-from personal_agent.kernel.contracts.execution import (
+from personal_agent.execution.contracts.invocation import (
     ExecutableInvocation,
     InvocationAttemptState,
 )
-from personal_agent.kernel.contracts.planning import (
+from personal_agent.runtime.contracts.planning import (
     PlanRuntimeProjection,
     PlannerExecutionProfile,
     PlanningLimits,
     PlanningUsage,
 )
-from personal_agent.kernel.contracts.procedure import (
+from personal_agent.capabilities.contracts.procedure import (
     ProcedureInvocation,
     ProcedureRunProjection,
 )

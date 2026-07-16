@@ -13,18 +13,18 @@ _EXPORTS = {
     "DefaultTaskAnalyzer": ("personal_agent.planning.task_analyzer", "DefaultTaskAnalyzer"),
     "DigestResult": ("personal_agent.application.runtime_results", "DigestResult"),
     "EntryResult": ("personal_agent.application.runtime_results", "EntryResult"),
-    "ExecutableInvocation": ("personal_agent.kernel.contracts.execution", "ExecutableInvocation"),
+    "ExecutableInvocation": ("personal_agent.execution.contracts.invocation", "ExecutableInvocation"),
     "Goal": ("personal_agent.planning.task_analyzer", "Goal"),
     "TaskAnalyzer": ("personal_agent.planning.task_analyzer", "TaskAnalyzer"),
     "ResetResult": ("personal_agent.application.runtime_results", "ResetResult"),
     "TaskAnalysis": ("personal_agent.planning.task_analyzer", "TaskAnalysis"),
     "TaskAnalysisOutput": ("personal_agent.planning.task_analyzer", "TaskAnalysisOutput"),
     "VerificationResult": ("personal_agent.application.verifier", "VerificationResult"),
-    "PROCEDURE_CATALOG": ("personal_agent.planning.procedures", "PROCEDURE_CATALOG"),
+    "PROCEDURE_CATALOG": ("personal_agent.runtime.procedure_runtime", "PROCEDURE_CATALOG"),
     "ProcedureApplicabilityResolver": (
-        "personal_agent.planning.procedures", "ProcedureApplicabilityResolver",
+        "personal_agent.runtime.procedure_runtime", "ProcedureApplicabilityResolver",
     ),
-    "ProcedureRuntime": ("personal_agent.planning.procedures", "ProcedureRuntime"),
+    "ProcedureRuntime": ("personal_agent.runtime.procedure_runtime", "ProcedureRuntime"),
 }
 
 __all__ = list(_EXPORTS)

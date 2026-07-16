@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from personal_agent.kernel.contracts.agentic import TaskContract
+from personal_agent.runtime.contracts.task import TaskContract
 
 
 class MutationAdmissionDecision(BaseModel):

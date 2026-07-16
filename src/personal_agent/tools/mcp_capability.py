@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 
 from langchain_core.tools import BaseTool
 
 from personal_agent.kernel.contracts.agent import SubagentProfile
-from personal_agent.kernel.contracts.capability import Capability, MCPCapability
+from personal_agent.capabilities.contracts.execution import Capability, MCPCapability
+from personal_agent.capabilities.portfolio import (
+    CapabilityPortfolio,
+    ExecutionCapabilityAvailability,
+    MCPCapabilityPortfolio,
+)
+from personal_agent.capabilities.definitions import builtin_atomic_capabilities
 from personal_agent.tools.base import tool_governance
 
 
@@ -14,86 +21,6 @@ def mcp_capability_from_tool(tool: BaseTool) -> MCPCapability | None:
     if not isinstance(payload, dict):
         return None
     return MCPCapability.model_validate(payload)
-
-
-class MCPCapabilityRegistry:
-    def __init__(self, capabilities: Iterable[MCPCapability] = ()) -> None:
-        self._by_id: dict[str, MCPCapability] = {}
-        self._by_tool: dict[str, MCPCapability] = {}
-        for capability in capabilities:
-            self.register(capability)
-
-    def register(self, capability: MCPCapability) -> None:
-        self._by_id[capability.capability_id] = capability
-        if not capability.local_name:
-            raise ValueError("MCP capability requires local_name")
-        self._by_tool[capability.local_name] = capability
-
-    def get(self, capability_id: str) -> MCPCapability | None:
-        return self._by_id.get(capability_id)
-
-    def get_by_tool(self, tool_name: str) -> MCPCapability | None:
-        return self._by_tool.get(tool_name)
-
-    def list(self) -> tuple[MCPCapability, ...]:
-        return tuple(self._by_id.values())
-
-    def by_provider(self, provider: str) -> tuple[MCPCapability, ...]:
-        return tuple(
-            capability
-            for capability in self._by_id.values()
-            if capability.provider == provider
-        )
-
-    def by_domain(self, domain: str) -> tuple[MCPCapability, ...]:
-        return tuple(
-            capability
-            for capability in self._by_id.values()
-            if domain in capability.semantic_domains
-        )
-
-
-class CapabilityRegistry:
-    def __init__(self, capabilities: Iterable[Capability] = ()) -> None:
-        self._by_id: dict[str, Capability] = {}
-        self._by_name: dict[str, Capability] = {}
-        for capability in capabilities:
-            self.register(capability)
-
-    def register(self, capability: Capability) -> None:
-        self._by_id[capability.capability_id] = capability
-        if capability.local_name:
-            self._by_name[capability.local_name] = capability
-
-    def get(self, capability_id: str) -> Capability | None:
-        return self._by_id.get(capability_id)
-
-    def get_by_name(self, local_name: str) -> Capability | None:
-        return self._by_name.get(local_name)
-
-    def list(self) -> tuple[Capability, ...]:
-        return tuple(self._by_id.values())
-
-    def by_kind(self, kind: str) -> tuple[Capability, ...]:
-        return tuple(
-            capability
-            for capability in self._by_id.values()
-            if capability.kind == kind
-        )
-
-    def by_provider(self, provider: str) -> tuple[Capability, ...]:
-        return tuple(
-            capability
-            for capability in self._by_id.values()
-            if capability.provider == provider
-        )
-
-    def by_domain(self, domain: str) -> tuple[Capability, ...]:
-        return tuple(
-            capability
-            for capability in self._by_id.values()
-            if domain in capability.semantic_domains
-        )
 
 
 def capability_from_tool(tool: BaseTool) -> Capability:
@@ -159,64 +86,59 @@ def capability_from_subagent_profile(definition: SubagentProfile) -> Capability:
     )
 
 
-def build_capability_registry(
+def build_capability_portfolio(
     tools: Iterable[BaseTool] = (),
     agents: Iterable[SubagentProfile] = (),
     extra: Iterable[Capability] = (),
-) -> CapabilityRegistry:
-    registry = CapabilityRegistry((*runtime_meta_capabilities(), *extra))
+) -> CapabilityPortfolio:
+    registry = CapabilityPortfolio((*builtin_atomic_capabilities(), *extra))
     for tool in tools:
-        registry.register(capability_from_tool(tool))
+        capability = capability_from_tool(tool)
+        registry.register(capability)
+        _observe_live_binding(registry, capability)
     for definition in agents:
-        registry.register(capability_from_subagent_profile(definition))
+        capability = capability_from_subagent_profile(definition)
+        registry.register(capability)
+        _observe_live_binding(registry, capability)
     return registry
 
 
-def runtime_meta_capabilities() -> tuple[Capability, ...]:
-    """Capabilities implemented by graph-native executors rather than tools."""
-    return (
-        Capability.from_dimensions(
-            capability_id="runtime:knowledge_retrieval",
-            kind="retriever",
-            provider="internal",
-            description="Retrieve and answer from local knowledge and conversation context.",
-            semantic_domains=("knowledge", "conversation", "local_memory"),
-            resource_types=("note", "evidence", "thread"),
-            operations=("search", "read"),
-            risk_level="low",
-            side_effects=("none",),
-            trust_level="trusted",
-            credential_mode="none",
-            data_egress_class="none",
-            attestation_status="verified",
-            freshness_profile="static",
-            metadata_source="system",
-            provider_priority=0,
-        ),
-    )
-
-
-def build_global_capability_registry(
+def build_execution_capability_portfolio(
     *,
     tools: Iterable[BaseTool] = (),
     agents: Iterable[SubagentProfile] = (),
     evidence_sources: Iterable[Capability] = (),
-) -> CapabilityRegistry:
+) -> CapabilityPortfolio:
     """Assemble executable provider capabilities without making decisions."""
-    return build_capability_registry(
+    return build_capability_portfolio(
         tools=tools,
         agents=agents,
         extra=evidence_sources,
     )
 
 
-def build_mcp_capability_registry(tools: Iterable[BaseTool]) -> MCPCapabilityRegistry:
-    registry = MCPCapabilityRegistry()
+def build_mcp_capability_portfolio(tools: Iterable[BaseTool]) -> MCPCapabilityPortfolio:
+    registry = MCPCapabilityPortfolio()
     for tool in tools:
         capability = mcp_capability_from_tool(tool)
         if capability is not None:
             registry.register(capability)
+            _observe_live_binding(registry, capability)
     return registry
+
+
+def _observe_live_binding(registry: CapabilityPortfolio, capability: Capability) -> None:
+    now = datetime.now(UTC)
+    registry.observe(ExecutionCapabilityAvailability(
+        capability_ref=capability.capability_id,
+        availability_revision=1,
+        status="available",
+        credential_ready=True,
+        health_observed_at=now,
+        health_expires_at=now + timedelta(minutes=5),
+        provider_binding_revision=1,
+        reason_codes=("discovered_from_live_runtime_binding",),
+    ))
 
 
 def _operations_from_tool_governance(side_effects: tuple[str, ...]) -> tuple[str, ...]:
@@ -243,6 +165,13 @@ def _local_tool_capability_shape(
         "delete_note": (("knowledge_lifecycle",), ("note",), ("delete",), 1),
         "update_note": (("knowledge_lifecycle",), ("note",), ("update",), 1),
         "restore_note": (("knowledge_lifecycle",), ("note",), ("update",), 2),
+        "consolidate_knowledge": (("knowledge", "knowledge_lifecycle"), ("note",), ("repair", "update"), 1),
+        "research_prepare_run": (("research",), ("research",), ("create",), 1),
+        "research_initialize_state": (("research",), ("research",), ("update",), 1),
+        "research_run_loop": (("research", "external_research"), ("evidence",), ("search", "read", "update"), 1),
+        "research_synthesize_digest": (("research",), ("report",), ("update",), 1),
+        "research_verify_digest": (("research",), ("report", "evidence"), ("verify", "update"), 1),
+        "create_research_subscription": (("research",), ("subscription",), ("create",), 1),
     }
     return shapes.get(
         tool_name,
@@ -251,13 +180,10 @@ def _local_tool_capability_shape(
 
 
 __all__ = [
-    "MCPCapabilityRegistry",
-    "CapabilityRegistry",
-    "build_capability_registry",
-    "build_global_capability_registry",
-    "build_mcp_capability_registry",
+    "build_capability_portfolio",
+    "build_execution_capability_portfolio",
+    "build_mcp_capability_portfolio",
     "capability_from_subagent_profile",
     "capability_from_tool",
     "mcp_capability_from_tool",
-    "runtime_meta_capabilities",
 ]

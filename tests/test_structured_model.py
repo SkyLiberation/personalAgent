@@ -11,11 +11,15 @@ from personal_agent.infra.structured_model import (
     OpenAIModelClient,
     RedactedTracePayloadPolicy,
     RetryingStructuredModelClient,
-    StructuredModelRequest,
-    StructuredModelResponse,
     UsageRecordingStructuredModelClient,
     build_structured_model_client,
 )
+from personal_agent.capabilities.contracts.model import (
+    StructuredModelRequest,
+    StructuredModelResponse,
+    sealed_context_projection_ref,
+)
+from personal_agent.capabilities.model_resolution import GovernedModelClient
 
 
 class ExampleOutput(BaseModel):
@@ -23,11 +27,15 @@ class ExampleOutput(BaseModel):
 
 
 def _request(text: str = "secret") -> StructuredModelRequest[ExampleOutput]:
+    messages = [{"role": "user", "content": text}]
     return StructuredModelRequest(
         operation="router",
         version="v1",
-        messages=[{"role": "user", "content": text}],
+        messages=messages,
         output_type=ExampleOutput,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="router", messages=messages,
+        ),
     )
 
 
@@ -150,10 +158,12 @@ def test_composition_selects_payload_policy():
         LangSmithConfig(enabled=True, upload_inputs=True),
     )
 
-    assert isinstance(redacted, ObservedStructuredModelClient)
-    assert isinstance(redacted._payload_policy, RedactedTracePayloadPolicy)
-    assert isinstance(full, ObservedStructuredModelClient)
-    assert isinstance(full._payload_policy, FullTracePayloadPolicy)
+    assert isinstance(redacted, GovernedModelClient)
+    assert isinstance(redacted.transport, ObservedStructuredModelClient)
+    assert isinstance(redacted.transport._payload_policy, RedactedTracePayloadPolicy)
+    assert isinstance(full, GovernedModelClient)
+    assert isinstance(full.transport, ObservedStructuredModelClient)
+    assert isinstance(full.transport._payload_policy, FullTracePayloadPolicy)
 
 
 def test_composition_omits_observer_when_tracing_is_disabled():
@@ -162,9 +172,10 @@ def test_composition_omits_observer_when_tracing_is_disabled():
         LangSmithConfig(enabled=False),
     )
 
-    assert isinstance(client, UsageRecordingStructuredModelClient)
-    assert isinstance(client._delegate, RetryingStructuredModelClient)
-    assert isinstance(client._delegate._delegate, OpenAIModelClient)
+    assert isinstance(client, GovernedModelClient)
+    assert isinstance(client.transport, UsageRecordingStructuredModelClient)
+    assert isinstance(client.transport._delegate, RetryingStructuredModelClient)
+    assert isinstance(client.transport._delegate._delegate, OpenAIModelClient)
 
 
 def test_composition_returns_none_when_model_is_unconfigured():

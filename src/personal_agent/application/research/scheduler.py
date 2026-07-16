@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from personal_agent.application.research.models import ResearchSubscriptionRecord, utc_now
+from personal_agent.kernel.contracts.research import ResearchSubscriptionRecord, utc_now
 
 logger = logging.getLogger(__name__)
 

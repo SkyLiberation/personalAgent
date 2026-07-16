@@ -1,7 +1,6 @@
 name: Architecture & Imports
 
-# Enforces the layered architecture established in the refactor:
-# a strict 8-layer + kernel DAG with no import cycles and no upward edges.
+# Enforces the explicit Runtime/Capability/Governance package DAG.
 # The layer gate is pure-stdlib and needs no dependencies, so it always runs fast.
 
 on:
@@ -18,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Enforce layered DAG (no cycles, no upward edges)
+      - name: Enforce explicit package DAG (fail closed)
         run: python scripts/check_layers.py
 
   workflow-registry:

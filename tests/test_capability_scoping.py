@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.capability import (
+from datetime import UTC, datetime
+
+from personal_agent.capabilities.contracts.execution import (
     Capability,
     CapabilityRequirement,
-    CapabilityResolutionDecision,
-    CapabilityResolutionRequest,
+    ExecutionCapabilityRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
-    ResolutionConstraints,
 )
-from personal_agent.planning.capability_validation import ResolutionValidator
-from personal_agent.planning.capability_resolver import CapabilityResolver
-from personal_agent.planning.outcome_ranking import OutcomeAwareCapabilityRanker
-from personal_agent.tools.mcp_capability import CapabilityRegistry
+from personal_agent.capabilities.admission import ResolutionValidator
+from personal_agent.capabilities.resolver import CapabilityResolver
+from personal_agent.capabilities.outcomes import OutcomeAwareCapabilityRanker
+from personal_agent.capabilities.contracts.outcomes import (
+    CapabilityEffectivenessEvent,
+    CapabilityExecutionOutcomeEvent,
+)
+from personal_agent.capabilities.portfolio import CapabilityPortfolio, ExecutionCapabilityAvailability
 
 
 def _request(
@@ -21,12 +25,12 @@ def _request(
     kinds=("mcp_tool",),
     operations=("search", "read"),
     policy: CapabilitySelectionPolicy | None = None,
-) -> CapabilityResolutionRequest:
-    return CapabilityResolutionRequest(
+) -> ExecutionCapabilityRequest:
+    return ExecutionCapabilityRequest(
         task_id="task-1",
         goal_id="goal-1",
         action_id="action-1",
-        meta_capability="acquire",
+        execution_intent="acquire",
         allowed_kinds=kinds,
         allowed_operations=operations,
         requirements=(requirement,),
@@ -35,7 +39,7 @@ def _request(
 
 
 def test_resolver_rejects_kind_outside_action_scope():
-    resolver = CapabilityResolver(CapabilityRegistry((
+    resolver = CapabilityResolver(CapabilityPortfolio((
         _capability("retriever:local", kind="retriever", provider="local", local_name="local"),
         _capability(
             "tool:capture_text",
@@ -58,15 +62,15 @@ def test_resolver_rejects_kind_outside_action_scope():
         policy=CapabilitySelectionPolicy(max_providers_per_action=4),
     ))
 
-    assert resolution.selected_retrievers == ("local",)
+    assert resolution.selected_definition.local_name == "local"
     assert any(
         denied.capability_id == "tool:capture_text" and denied.reason == "kind_not_allowed"
-        for denied in resolution.denied_capabilities
+        for denied in resolution.denials
     )
 
 
 def test_local_first_is_explicit_policy_not_text_classification():
-    resolver = CapabilityResolver(CapabilityRegistry((
+    resolver = CapabilityResolver(CapabilityPortfolio((
         _capability("retriever:local", kind="retriever", provider="local", local_name="local"),
         _capability(
             "retriever:web",
@@ -91,12 +95,12 @@ def test_local_first_is_explicit_policy_not_text_classification():
         ),
     ))
 
-    assert resolution.selected_retrievers == ("local",)
-    assert any(item.local_name == "web" and item.reason == "local_first" for item in resolution.denied_capabilities)
+    assert resolution.selected_definition.local_name == "local"
+    assert any(item.local_name == "web" and item.reason == "local_first" for item in resolution.denials)
 
 
 def test_read_only_action_rejects_write_capability():
-    resolver = CapabilityResolver(CapabilityRegistry((
+    resolver = CapabilityResolver(CapabilityPortfolio((
         _capability(
             "mcp:github:get_file_contents",
             kind="mcp_tool",
@@ -131,24 +135,32 @@ def test_read_only_action_rejects_write_capability():
         ),
     ))
 
-    assert resolution.allowed_tools == ("github.get_file_contents",)
+    assert resolution.selected_definition.local_name == "github.get_file_contents"
     assert any(
         denied.local_name == "github.create_issue"
         and denied.reason == "requirement_mismatch"
-        for denied in resolution.denied_capabilities
+        for denied in resolution.denials
     )
 
 
 def test_unreviewed_high_risk_capability_is_rejected_before_execution():
-    resolver = CapabilityResolver(CapabilityRegistry((
-        _capability(
-            "mcp:github:create_issue",
-            kind="mcp_tool",
-            provider="github",
-            local_name="github.create_issue",
-            operations=("create",),
-        ),
-    )))
+    capability = _capability(
+        "mcp:github:create_issue",
+        kind="mcp_tool",
+        provider="github",
+        local_name="github.create_issue",
+        operations=("create",),
+    ).model_copy(update={"metadata_source": "provider", "attestation_status": "self_claimed"})
+    portfolio = CapabilityPortfolio((capability,))
+    portfolio.observe(ExecutionCapabilityAvailability(
+        capability_ref=capability.capability_id,
+        availability_revision=1,
+        status="available",
+        credential_ready=True,
+        health_observed_at=datetime.now(UTC),
+        provider_binding_revision=1,
+    ))
+    resolver = CapabilityResolver(portfolio)
     requirement = CapabilityRequirement.from_dimensions(
         requirement_id="issue-create",
         purpose="create issue",
@@ -164,8 +176,8 @@ def test_unreviewed_high_risk_capability_is_rejected_before_execution():
         policy=CapabilitySelectionPolicy(read_only=False),
     ))
 
-    assert not resolution.selected_capabilities
-    assert any(item.reason == "unreviewed_high_risk_metadata" for item in resolution.denied_capabilities)
+    assert resolution.selected_definition is None
+    assert any(item.reason == "unreviewed_high_risk_metadata" for item in resolution.denials)
 
 
 def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity():
@@ -186,22 +198,9 @@ def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity
         local_name="delete_note",
         operations=("delete",),
     ).model_copy(update={"metadata_source": "system"})
-    resolution = CapabilityResolutionDecision(
-        request_scope_id=request.scope_id,
-        selected_capabilities=(selected,),
-        constraints=ResolutionConstraints(
-            task_id=request.task_id,
-            goal_id=request.goal_id,
-            action_id=request.action_id,
-            meta_capability=request.meta_capability,
-            allowed_kinds=request.allowed_kinds,
-            allowed_operations=request.allowed_operations,
-        ),
-    )
+    errors = ResolutionValidator().errors(request, selected, ())
 
-    errors = ResolutionValidator().errors(request, resolution)
-
-    assert request.scope_id
+    assert request.request_id
     assert any(error.startswith("kind_outside_scope") for error in errors)
     assert any(error.startswith("operation_outside_scope") for error in errors)
     assert any(error.startswith("requirement_outside_scope") for error in errors)
@@ -215,14 +214,14 @@ def test_missing_freshness_source_returns_non_authoritative_escalation_hint():
         operations=("search", "read"),
         freshness_required=True,
     )
-    resolution = CapabilityResolver(CapabilityRegistry(())).resolve(_request(
+    resolution = CapabilityResolver(CapabilityPortfolio(())).resolve(_request(
         requirement=requirement,
         kinds=("retriever",),
     ))
 
     assert resolution.escalation_hint is not None
     assert resolution.escalation_hint.reason == "freshness_needed"
-    assert resolution.selected_retrievers == ()
+    assert resolution.selected_definition is None
 
 
 def test_evidence_source_capability_is_a_retrieval_only_contract():
@@ -262,26 +261,36 @@ def test_outcome_ranker_reorders_only_hard_eligible_candidates():
         local_name="baseline",
     )
     ranker = OutcomeAwareCapabilityRanker(minimum_samples=2)
-    for _ in range(2):
-        ranker.store.record(
-            preferred.capability_id,
-            succeeded=True,
-            verifier_passed=True,
-            latency_ms=10,
+    for index in range(2):
+        preferred_execution = CapabilityExecutionOutcomeEvent(
+            task_id="task", goal_id="goal", action_ref=f"preferred-{index}",
+            invocation_ref=f"preferred-{index}", grant_ref=f"grant-p-{index}",
+            capability_ref=preferred.capability_id, outcome="succeeded", latency_ms=10,
         )
-        ranker.store.record(
-            baseline.capability_id,
-            succeeded=False,
-            verifier_passed=False,
-            latency_ms=100,
+        baseline_execution = CapabilityExecutionOutcomeEvent(
+            task_id="task", goal_id="goal", action_ref=f"baseline-{index}",
+            invocation_ref=f"baseline-{index}", grant_ref=f"grant-b-{index}",
+            capability_ref=baseline.capability_id, outcome="failed", latency_ms=100,
         )
+        ranker.store.append_execution(preferred_execution)
+        ranker.store.append_execution(baseline_execution)
+        ranker.store.append_effectiveness(CapabilityEffectivenessEvent(
+            task_id="task", goal_id="goal", capability_ref=preferred.capability_id,
+            execution_outcome_ref=preferred_execution.event_id,
+            verification_ref=f"verify-p-{index}", verdict="effective", criterion_ids=("c1",),
+        ))
+        ranker.store.append_effectiveness(CapabilityEffectivenessEvent(
+            task_id="task", goal_id="goal", capability_ref=baseline.capability_id,
+            execution_outcome_ref=baseline_execution.event_id,
+            verification_ref=f"verify-b-{index}", verdict="ineffective", criterion_ids=("c1",),
+        ))
     requirement = CapabilityRequirement.from_dimensions(
         requirement_id="evidence",
         purpose="read evidence",
         operations=("search", "read"),
     )
     resolution = CapabilityResolver(
-        CapabilityRegistry((baseline, preferred, denied)),
+        CapabilityPortfolio((baseline, preferred, denied)),
         ranker=ranker,
     ).resolve(_request(
         requirement=requirement,
@@ -292,9 +301,9 @@ def test_outcome_ranker_reorders_only_hard_eligible_candidates():
         ),
     ))
 
-    assert resolution.selected_retrievers == ("preferred",)
-    assert any(item.capability_id == denied.capability_id for item in resolution.denied_capabilities)
-    assert resolution.constraints.ranking["feature_version"] == "capability-outcome-v1"
+    assert resolution.selected_definition.local_name == "preferred"
+    assert any(item.capability_id == denied.capability_id for item in resolution.denials)
+    assert resolution.ranking_audit["feature_version"] == "capability-outcome-v2"
 
 
 def _capability(
@@ -323,5 +332,6 @@ def _capability(
         data_egress_class="none" if side_effects == ("none",) else "content",
         attestation_status="verified",
         freshness_profile="static",
+        metadata_source="system",
         provider_priority=1,
     )

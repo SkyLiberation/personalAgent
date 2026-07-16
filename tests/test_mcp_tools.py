@@ -17,7 +17,7 @@ from personal_agent.kernel.config_env import (
 from personal_agent.kernel.config_models import EnterpriseKnowledgeConfig, MCPServerConfig
 from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
-    build_mcp_capability_registry,
+    build_mcp_capability_portfolio,
     build_mcp_tools,
     build_raw_wiki_search_tools,
     governance_extras,
@@ -345,7 +345,7 @@ def test_mcp_capability_registry_indexes_governed_tools():
         remote,
     )
 
-    registry = build_mcp_capability_registry([tool])
+    registry = build_mcp_capability_portfolio([tool])
     capability = registry.get("mcp:github:search_code")
 
     assert capability is not None

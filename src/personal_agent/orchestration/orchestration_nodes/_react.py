@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+from hashlib import sha256
 
 from personal_agent.orchestration.orchestration_models import RunCheckpoint, ReactSubState
 from personal_agent.orchestration.orchestration_contexts import ReactContext
-from personal_agent.kernel.contracts.capability import CapabilityEvidencePack
-from personal_agent.kernel.contracts.agentic import ContextBudget, ContextItem, RuntimeSnapshotRef
+from personal_agent.capabilities.contracts.execution import CapabilityEvidencePack
+from personal_agent.runtime.contracts.task import ContextBudget, ContextItem, RuntimeSnapshotRef
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
     _is_react_tool_blocked,
@@ -173,6 +174,40 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
     elif state.task_contract is not None and state.provider_call_count >= state.task_contract.constraints.max_provider_calls:
         observation = "错误：本任务的 provider 调用预算已耗尽。"
     else:
+        step = next(
+            (item for item in state.invocation_batch.invocations if item.step_id == step_id),
+            None,
+        )
+        if step is None or not step.execution_grant_ref:
+            return _record_react_observation(
+                state, thought, tool_name, tool_input,
+                "错误：ReAct tool dispatch 缺少叶子 ExecutionGrant。",
+            )
+        call_id = outcome.native_call_id or f"react:{step_id}:{idx}"
+        state.invocation_journal, commit = deps.invocation_journal.reserve(
+            state.invocation_journal,
+            expected_revision=state.invocation_journal.revision,
+            invocation_id=call_id,
+            grant_ref=step.execution_grant_ref,
+            idempotency_key=call_id,
+            provider_ref=tool_name,
+            payload_ref="sha256:" + sha256(
+                json.dumps(tool_input, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest(),
+        )
+        if not commit.dispatch_required:
+            existing = state.invocation_journal.entries[call_id]
+            if existing.status in {"dispatched", "acknowledged"}:
+                state.invocation_journal = deps.invocation_journal.transition(
+                    state.invocation_journal, call_id, "outcome_unknown",
+                )
+            return _record_react_observation(
+                state, thought, tool_name, tool_input,
+                "错误：既有 ReAct dispatch 结果未知，需要 reconciliation。",
+            )
+        state.invocation_journal = deps.invocation_journal.transition(
+            state.invocation_journal, call_id, "dispatched",
+        )
         state.provider_call_count += 1
         state.react.pending_thought = thought
         state.react.pending_tool = tool_name
@@ -187,11 +222,12 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
                 step_id=step_id,
                 suffix=f"react:{step_id}:{idx}",
                 iteration=idx,
-                call_id=outcome.native_call_id,
+                call_id=call_id,
             )],
             "tool_tracking": state.tool_tracking,
             "react": state.react,
             "provider_call_count": state.provider_call_count,
+            "invocation_journal": state.invocation_journal,
             "events": state.events,
         }
 
@@ -219,6 +255,17 @@ def _node_consume_react_tool_result(state: RunCheckpoint, *, deps: ReactContext 
     artifact["_goal_id"] = step.goal_id if step is not None else ""
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
+    if (
+        deps is not None
+        and tool_call_id in state.invocation_journal.entries
+        and state.invocation_journal.entries[tool_call_id].status in {"dispatched", "acknowledged"}
+    ):
+        state.invocation_journal = deps.invocation_journal.transition(
+            state.invocation_journal,
+            tool_call_id,
+            "observed",
+            observation_ref=f"react:{tool_call_id}",
+        )
     if artifact.get("ok"):
         observation = _helpers._summarize_react_tool_result(artifact.get("data"))
     else:
@@ -260,6 +307,7 @@ def _node_consume_react_tool_result(state: RunCheckpoint, *, deps: ReactContext 
     result["tool_tracking"] = state.tool_tracking
     result["tool_results"] = state.tool_results
     result["context_inventory"] = state.context_inventory
+    result["invocation_journal"] = state.invocation_journal
     state.react.pending_thought = ""
     state.react.pending_tool = ""
     state.react.pending_input = {}
@@ -441,7 +489,7 @@ def _build_evidence_pack(state: RunCheckpoint, step_id: str) -> CapabilityEviden
     )
     sufficient = bool(sources or snippets)
     return CapabilityEvidencePack(
-        scope_id=str(resolution_payload.get("scope_id") or ""),
+        request_id=str(resolution_payload.get("request_id") or ""),
         resolution_id=str(resolution_payload.get("resolution_id") or ""),
         selected_capability_ids=tuple(str(item) for item in resolution_payload.get("selected_capability_ids", ())),
         denied_capability_ids=tuple(str(item) for item in resolution_payload.get("denied_capability_ids", ())),
@@ -463,7 +511,8 @@ def _record_capability_execution(state: RunCheckpoint, step_id: str, artifact: d
         if not isinstance(payload, dict) or payload.get("step_id") != step_id:
             continue
         state.add_event("capability_execution", {
-            "scope_id": payload.get("scope_id", ""),
+            "request_id": payload.get("request_id", ""),
+            "execution_grant_ref": payload.get("selected_execution_grant_ref"),
             "resolution_id": payload.get("resolution_id", ""),
             "step_id": step_id,
             "lifecycle_state": "executed" if artifact.get("ok") else "failed",

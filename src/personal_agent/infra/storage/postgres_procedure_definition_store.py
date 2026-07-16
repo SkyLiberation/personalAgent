@@ -7,7 +7,7 @@ from typing import Iterable
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from personal_agent.kernel.contracts.procedure import (
+from personal_agent.capabilities.contracts.procedure import (
     ProcedureCatalogPort,
     ProcedureDefinition,
 )

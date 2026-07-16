@@ -2,7 +2,7 @@
 
 ### 1. 当前 planning 如何落地？
 
-开放任务不是预先选择固定流程。TaskAnalyzer 输出 Goal、资源提示和 typed relation；GoalGraphCompiler 生成 TaskSpec 与 Ledger；Executive 根据 Observation 逐轮选择 BoundedAction、Delegate、Procedure、计划修订或完成提案。
+开放任务不是预先选择固定流程。TaskAnalyzer 输出 Goal、资源提示和 typed relation；GoalGraphCompiler 生成 `TaskContract` 与初始 `TaskRuntimeProjection`；Executive 根据 Observation 逐轮提出 BoundedAction、Delegate、Procedure、能力获取或完成 Proposal，只有 Admission 接受后才成为 Command。
 
 稳定事务由 ProcedureSpec 声明内部节点。ProcedureMaterializer 只物化已被 Executive 选择且通过 Validator 的 ProcedureCall，不理解自然语言，也不为开放任务生成 DAG。
 

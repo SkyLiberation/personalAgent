@@ -14,11 +14,21 @@ Two genuinely different jobs that were previously conflated under a single
 from __future__ import annotations
 
 import logging
+from typing import Protocol
 
-from personal_agent.infra.runtime_llm import LlmClient
 from personal_agent.kernel.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
+
+
+class TextGenerationClient(Protocol):
+    def generate_answer(
+        self,
+        prompt: str,
+        *,
+        prompt_name: str,
+        prompt_version: str,
+    ) -> str | None: ...
 
 
 class ThreadSummarizer:
@@ -28,7 +38,7 @@ class ThreadSummarizer:
     compression cue have different goals and must not share a prompt.
     """
 
-    def __init__(self, llm: LlmClient) -> None:
+    def __init__(self, llm: TextGenerationClient) -> None:
         self._llm = llm
 
     def summarize_chat(self, messages_text: str, _user_id: str = "default") -> str:

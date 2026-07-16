@@ -10,7 +10,7 @@ from personal_agent.kernel.logging_utils import log_event, trace_span
 from personal_agent.kernel.models import AgentState, KnowledgeNote, RawIngestItem, local_now
 from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
 from personal_agent.memory import MemoryFacade
-from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.application.worker_queue import WorkerQueuePort
 from personal_agent.application.capture.nodes import (
     capture_node,
     chunk_reconcile_node,
@@ -53,7 +53,7 @@ class IngestionPipeline:
         settings: Settings,
         memory: MemoryFacade,
         graph_store: GraphitiStore,
-        worker_queue: PostgresWorkerQueueStore | None = None,
+        worker_queue: WorkerQueuePort | None = None,
     ) -> None:
         self.settings = settings
         self.memory = memory

@@ -203,8 +203,8 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "invocation_batch": _invocation_batch_summary(state),
         "answer_completed": state.answer_completed,
         "pending_confirmation": (
-            state.pending_confirmation.model_dump(mode="json")
-            if state.pending_confirmation else None
+            state.control.pending_interaction.model_dump(mode="json")
+            if state.control.pending_interaction else None
         ),
     }
 

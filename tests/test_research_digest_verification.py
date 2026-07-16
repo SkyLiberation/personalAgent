@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from personal_agent.application.research import ResearchService
-from personal_agent.application.research.models import (
+from personal_agent.kernel.contracts.research import (
     DigestClaim,
     IntelligenceDigest,
     IntelligenceDigestItem,

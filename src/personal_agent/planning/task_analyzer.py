@@ -7,8 +7,8 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from personal_agent.infra.structured_model import StructuredModelClient, StructuredModelRequest
-from personal_agent.kernel.contracts.capability import CapabilityOperation
+from personal_agent.capabilities.contracts.model import StructuredModelClient, StructuredModelRequest
+from personal_agent.kernel.contracts.capability_values import CapabilityOperation
 from personal_agent.kernel.logging_utils import log_event
 from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.prompts import get_prompt, render_prompt
@@ -262,11 +262,16 @@ class DefaultTaskAnalyzer:
             "content": render_prompt("task_analyzer.user", text=text),
         })
         try:
+            from personal_agent.capabilities.contracts.model import sealed_context_projection_ref
+
             response = self._model_client.generate(StructuredModelRequest(
                 operation="task_analysis",
                 version=prompt.version,
                 messages=messages,
                 output_type=TaskAnalysisOutput,
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose="task_analysis", messages=messages,
+                ),
                 temperature=0,
                 max_tokens=3000,
             ))

@@ -22,7 +22,7 @@
 
 ## 当前架构口径
 
-- `TaskAnalysis + GoalRelation` 是入口语义事实，`GoalGraphCompiler` 确定性生成 TaskSpec 与初始 Ledger。
+- `TaskAnalysis + GoalRelation` 是入口语义提案，`GoalGraphCompiler` 确定性生成 `TaskContract`、初始 `TaskRuntimeProjection` 与 `ContextInventory`。
 - `ExecutiveGraph` 是唯一顶层控制器；它按 Observation 每轮选择一个动作，并可受约束修订推断关系。
 - `ProcedureSpec / ProcedureCatalog` 只承载稳定事务，不负责顶层意图路由。
 - `ActionExecutionGraph` 执行当前 `BoundedAction` 或 Procedure；局部 ReAct 不能修改任务计划。

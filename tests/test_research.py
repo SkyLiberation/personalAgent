@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from personal_agent.application.research import (
-    DeliveryTarget,
     ResearchLimits,
     ResearchUsage,
     ResearchFeedback,
@@ -17,7 +16,8 @@ from personal_agent.application.research import (
     SchedulePolicy,
     subscription_due,
 )
-from personal_agent.application.research.models import (
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
+from personal_agent.kernel.contracts.research import (
     EvidenceGap,
     PersonalRelevance,
     ResearchDecisionRecord,
@@ -30,7 +30,7 @@ from personal_agent.application.research.models import (
 )
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.application.worker import WorkflowWorker
+from personal_agent.orchestration.worker import WorkflowWorker
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -893,7 +893,7 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
         sent = []
 
         def send(self, target, message):
-            from personal_agent.application.review.models import DeliveryResult
+            from personal_agent.kernel.contracts.review import DeliveryResult
             self.sent.append((target, message))
             return DeliveryResult(ok=True, provider_message_id="m1")
 
@@ -921,7 +921,7 @@ def test_worker_separates_research_and_delivery_tasks(postgres_url):
 
 
 def test_research_procedures_are_registered():
-    from personal_agent.planning.procedures import PROCEDURE_CATALOG
+    from personal_agent.runtime.procedure_runtime import PROCEDURE_CATALOG
 
     research_nodes = PROCEDURE_CATALOG.get("research_run").nodes
     assert [node.domain_handler for node in research_nodes[:5]] == [
@@ -938,7 +938,7 @@ def test_research_procedures_are_registered():
 
 
 def test_research_procedure_contract_is_deterministic():
-    from personal_agent.planning.procedures import PROCEDURE_CATALOG
+    from personal_agent.runtime.procedure_runtime import PROCEDURE_CATALOG
 
     research = PROCEDURE_CATALOG.get("research_run")
     assert [(node.node_id, node.domain_handler, node.depends_on) for node in research.nodes] == [

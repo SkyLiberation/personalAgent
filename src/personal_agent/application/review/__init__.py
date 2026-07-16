@@ -2,10 +2,9 @@
 
 from personal_agent.application.review.formatter import DigestFormatter
 from personal_agent.application.review.jobs import ReviewDigestJob, subscriptions_from_settings
-from personal_agent.application.review.models import (
+from personal_agent.kernel.contracts.review import (
     DeliveryMessage,
     DeliveryResult,
-    DeliveryTarget,
     DigestSubscription,
     ReviewDigest,
     ReviewDigestJobResult,
@@ -19,7 +18,6 @@ from personal_agent.application.review.service import ReviewDigestUseCase, Revie
 __all__ = [
     "DeliveryMessage",
     "DeliveryResult",
-    "DeliveryTarget",
     "DigestFormatter",
     "DigestSubscription",
     "ReviewDigest",

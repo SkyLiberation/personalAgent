@@ -81,24 +81,27 @@ from personal_agent.orchestration.orchestration_contexts import (
 )
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
 from personal_agent.planning.task_analyzer import DefaultTaskAnalyzer
-from personal_agent.planning.goal_graph import GoalGraphCompiler
-from personal_agent.planning.executive import ExecutiveController
-from personal_agent.planning.decision_validator import DecisionValidator
-from personal_agent.planning.ledger import TaskRuntimeProjector, GoalDecompositionValidator
-from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
-from personal_agent.planning.procedures import (
+from personal_agent.planning.task_compiler import GoalGraphCompiler
+from personal_agent.runtime.control_runtime import ExecutiveController
+from personal_agent.governance.decision_admission import AcceptedCommandCompiler, DecisionValidator
+from personal_agent.governance.route_admission import ExecutionRoutePolicy
+from personal_agent.runtime.task_runtime import TaskRuntimeProjector, GoalDecompositionValidator
+from personal_agent.verification.runtime import CompletionVerifier, GoalVerifier
+from personal_agent.execution.invocation_journal import InvocationJournal
+from personal_agent.runtime.procedure_runtime import (
     PROCEDURE_CATALOG,
     ProcedureApplicabilityResolver,
     ProcedureMaterializer,
     ProcedureRuntime,
 )
+from personal_agent.runtime.procedure_grants import ProcedureGrantIssuer
+from personal_agent.capabilities.acquisition import CapabilityAcquisitionManager
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.runtime_ask import AskService
 from personal_agent.orchestration.runtime_helpers import (
     _annotate_answer,
-    _best_snippet,
     _evidence_content,
     _extract_question_keywords,
     _format_graph_relation,
@@ -386,13 +389,19 @@ class AgentRuntime:
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
         self._goal_graph_compiler = GoalGraphCompiler()
         self._executive_controller = ExecutiveController(model_client=self._planner_client)
-        self._decision_validator = DecisionValidator()
+        self._decision_admission = DecisionValidator()
+        self._accepted_command_compiler = AcceptedCommandCompiler()
         self._task_runtime_projector = TaskRuntimeProjector()
         self._goal_decomposition_validator = GoalDecompositionValidator()
         self._goal_verifier = GoalVerifier(self._planner_client)
         self._completion_verifier = CompletionVerifier()
+        from personal_agent.governance.evidence_admission import EvidenceAdmission
+        self._evidence_admission = EvidenceAdmission()
+        from personal_agent.runtime.commits import ControlCommitter, TaskCompilationCommitter
+        self._task_compilation_committer = TaskCompilationCommitter()
+        self._control_committer = ControlCommitter()
         from personal_agent.context import ContextManager, ModelContextGateway
-        from personal_agent.planning.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
+        from personal_agent.runtime.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
         from personal_agent.runtime import (
             DurableRunManager,
             ResolvedActionBuilder,
@@ -403,7 +412,7 @@ class AgentRuntime:
         self._context_gateway = ModelContextGateway()
         self._observation_normalizer = ObservationNormalizer()
         self._technical_recovery_policy = TechnicalRecoveryPolicy()
-        from personal_agent.planning.outcome_ranking import OutcomeAwareCapabilityRanker
+        from personal_agent.capabilities.outcomes import OutcomeAwareCapabilityRanker
         self._capability_ranker = OutcomeAwareCapabilityRanker()
         self._resource_access_resolver = ResourceAccessResolver()
         self._resolved_action_builder = ResolvedActionBuilder()
@@ -416,10 +425,10 @@ class AgentRuntime:
             PlanMonitor,
             PlanValidator,
             PlanningFactProjector,
-            PlanningModePolicy,
+            CoordinationModePolicy,
         )
         self._planning_fact_projector = PlanningFactProjector()
-        self._planning_mode_policy = PlanningModePolicy(self._planner_client)
+        self._coordination_policy = CoordinationModePolicy(self._planner_client)
         self._adaptive_planner = AdaptivePlanner(self._planner_client)
         self._plan_validator = PlanValidator()
         self._plan_runtime_projector = PlanRuntimeProjector()
@@ -448,6 +457,7 @@ class AgentRuntime:
                 limit,
             ),
         )
+        self._invocation_journal = InvocationJournal()
         self._graph_contexts = GraphContexts(
             routing=RoutingContext(
                 settings=self.settings,
@@ -459,7 +469,9 @@ class AgentRuntime:
                 settings=self.settings,
                 goal_graph_compiler=self._goal_graph_compiler,
                 controller=self._executive_controller,
-                decision_validator=self._decision_validator,
+                decision_admission=self._decision_admission,
+                accepted_command_compiler=self._accepted_command_compiler,
+                route_policy=ExecutionRoutePolicy(),
                 task_runtime_projector=self._task_runtime_projector,
                 goal_decomposition_validator=self._goal_decomposition_validator,
                 goal_verifier=self._goal_verifier,
@@ -479,14 +491,19 @@ class AgentRuntime:
                 scheduler=self._run_scheduler,
                 subagent_runtime=self._subagent_runtime,
                 capability_ranker=self._capability_ranker,
+                procedure_grant_issuer=ProcedureGrantIssuer(),
+                capability_acquisition_manager=CapabilityAcquisitionManager(),
+                evidence_admission=self._evidence_admission,
                 planning_fact_projector=self._planning_fact_projector,
-                planning_mode_policy=self._planning_mode_policy,
+                coordination_policy=self._coordination_policy,
                 adaptive_planner=self._adaptive_planner,
                 plan_validator=self._plan_validator,
                 plan_runtime_projector=self._plan_runtime_projector,
                 frontier_selector=self._frontier_selector,
                 plan_monitor=self._plan_monitor,
                 planner_profile=self._planner_profile,
+                task_compilation_committer=self._task_compilation_committer,
+                control_committer=self._control_committer,
             ),
             steps=StepExecutionContext(
                 settings=self.settings,
@@ -503,6 +520,8 @@ class AgentRuntime:
                     self.settings.postgres_url
                 ),
                 execution_artifact_store=self.execution_replay_store,
+                invocation_journal=self._invocation_journal,
+                procedure_grant_issuer=ProcedureGrantIssuer(),
                 workspace_service=self.workspace_service,
                 summary=summary_context,
                 conversation=conversation_context,
@@ -515,6 +534,7 @@ class AgentRuntime:
                 policy_engine=self._policy_engine,
                 context_manager=self._context_manager,
                 context_gateway=self._context_gateway,
+                invocation_journal=self._invocation_journal,
                 model_client=self._model_client,
                 structured_client=self._structured_client,
             ),
@@ -1110,7 +1130,7 @@ class AgentRuntime:
         It exercises the same durable queue/lease/complete/fail path that a
         future background worker will use.
         """
-        from personal_agent.application.worker import WorkflowWorker
+        from personal_agent.orchestration.worker import WorkflowWorker
 
         worker = WorkflowWorker(
             self,
@@ -1267,8 +1287,8 @@ class AgentRuntime:
         """Validate and project a governed procedure without executing effects."""
         from dataclasses import asdict
 
-        from personal_agent.kernel.contracts.procedure import ProcedureDefinition
-        from personal_agent.planning.procedures import ProcedureSpecValidator
+        from personal_agent.capabilities.contracts.procedure import ProcedureDefinition
+        from personal_agent.runtime.procedure_runtime import ProcedureSpecValidator
 
         spec = (
             ProcedureDefinition.from_definition_payload(spec_payload)
@@ -1458,7 +1478,6 @@ __all__ = [
     "ResetResult",
     "RetryResult",
     "_annotate_answer",
-    "_best_snippet",
     "_evidence_content",
     "_extract_question_keywords",
     "_format_graph_relation",

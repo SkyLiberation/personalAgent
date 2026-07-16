@@ -82,7 +82,7 @@ pause | resume | cancel
 撤销尚未提交的可变目标
 ```
 
-TaskAnalyzer 输出 `TaskSpecRevisionProposal`，引用当前 task revision、用户输入和受影响 Goal。DecisionValidator 保证：
+TaskAnalyzer 输出 `TaskContractRevisionProposal`，引用当前 task revision、用户输入和受影响 Goal。Revision Admission 保证：
 
 - immutable user criterion 不可删除或弱化；
 - 已提交 mutation 不可被假装撤销；
@@ -90,21 +90,21 @@ TaskAnalyzer 输出 `TaskSpecRevisionProposal`，引用当前 task revision、�
 - 正在运行的 child 由 Executive 决定继续、取消或降级为旁证；
 - revision 使用 compare-and-set，过期 steering 明确冲突。
 
-TaskSpec revision 提交后产生 `ReplanRequest(source=user_steering)`，由当前主链的 `AdaptivePlanner` 基于新 revision 创建 PlanPatch 或替换短视窗计划。Steering 不允许直接修改 AdaptivePlan、ExecutionLedger 或正在执行的 ResolvedAction。
+TaskContract revision 提交后产生 `ReplanRequest(source=user_steering)`，由当前主链的 `AdaptivePlanner` 基于新 revision 创建 PlanPatch 或替换短视窗计划。Steering 不允许直接修改 PlanDefinition、TaskRuntimeProjection 或正在执行的 ResolvedAction。
 
 ### 验收
 
 - steering 不 fork 丢失原 run，也不直接改写 Ledger；
 - 同时到达的 steering 通过 revision 冲突收敛；
 - 取消 child 可观测，晚到结果不能完成父 Goal；
-- replay 能解释用户输入、TaskSpec revision、Executive 决策和最终验证之间的因果链。
+- replay 能解释用户输入、TaskContract revision、Executive 决策和最终验证之间的因果链。
 
 ## 落地顺序
 
 1. 接入逐 dispatch `RunControlGuard`、lease/fence 复检和父子 cancel 传播。
 2. 增加 branch event reducer、join executor、late result/orphan artifact 处理和 join verifier fixture。
 3. 把本地 read action dispatch 迁到 worker slot，保留远程 child 的现有 submit/poll 契约。
-4. 增加 TaskSpecRevisionProposal 与 revision CAS。
+4. 增加 TaskContractRevisionProposal 与 revision CAS。
 5. 接入 Web/CLI steering API 和 trajectory eval。
 
 任何阶段都不得通过恢复业务关键词 Router、固定 workflow DAG 或未解析工具名来缩短实现。

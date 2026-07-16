@@ -268,7 +268,7 @@ class TestToolExecutor:
         result = message.artifact
 
         assert result["ok"] is False
-        assert "不允许在 ReAct" in result["error"]
+        assert "leaf execution grant" in result["error"]
         assert sink.events[0].execution_mode == "react"
 
     def test_gateway_rate_limits_per_user_and_tool(self):

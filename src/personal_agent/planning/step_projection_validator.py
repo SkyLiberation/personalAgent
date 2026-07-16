@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from personal_agent.tools import tool_governance
-from personal_agent.kernel.contracts.execution import ExecutableInvocation
+from personal_agent.execution.contracts.invocation import ExecutableInvocation
 
 if TYPE_CHECKING:
     from personal_agent.governance import ToolExecutor

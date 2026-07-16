@@ -7,7 +7,6 @@ from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.application.research import (
     ContentPreferences,
-    DeliveryTarget,
     ResearchFeedback,
     ResearchSubscriptionRecord,
     ResearchSubscriptionSpec,
@@ -19,6 +18,7 @@ from personal_agent.adapters.web.routes._shared import (
     resolve_query_user_id,
     resolve_user_id,
 )
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 
 
 class ResearchSubscriptionRequest(BaseModel):

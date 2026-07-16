@@ -19,7 +19,7 @@ from personal_agent.governance.policy.invariants import (
     is_high_risk_side_effect_action,
     react_autonomy_blocked,
 )
-from personal_agent.governance.policy.models import PolicyDecision, PolicyInput
+from personal_agent.kernel.contracts.policy import PolicyDecision, PolicyInput
 
 logger = logging.getLogger(__name__)
 

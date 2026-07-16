@@ -20,8 +20,9 @@ from personal_agent.application.review import (
 from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from personal_agent.application.research import (
-    DeliveryTarget, ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
+    ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
 )
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 
 app = typer.Typer(help="Personal knowledge agent CLI")
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ def worker(
     max_tasks: int = typer.Option(0, min=0, help="Stop after N tasks; 0 runs forever."),
 ) -> None:
     """Run a durable workflow activity worker."""
-    from personal_agent.application.worker import WorkflowWorker
+    from personal_agent.orchestration.worker import WorkflowWorker
 
     service = _build_service()
     if queue == "research":

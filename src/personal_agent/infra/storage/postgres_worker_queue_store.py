@@ -1,34 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, Field
-
 from personal_agent.infra.storage.postgres_common import PostgresStoreBase
-
-WorkerTaskStatus = Literal["queued", "running", "completed", "failed", "dead"]
-
-
-class WorkerTask(BaseModel):
-    task_id: str
-    queue: str
-    task_type: str
-    status: WorkerTaskStatus
-    payload: dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: str
-    priority: int = 0
-    attempts: int = 0
-    max_attempts: int = 1
-    leased_by: str | None = None
-    leased_until: datetime | None = None
-    due_at: datetime
-    last_error: str | None = None
-    created_at: datetime
-    updated_at: datetime
+from personal_agent.application.worker_queue import WorkerTask
 
 
 class PostgresWorkerQueueStore(PostgresStoreBase):

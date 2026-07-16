@@ -7,13 +7,13 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import local_now
 from personal_agent.application.review.delivery import DeliveryRouter
 from personal_agent.application.review.formatter import DigestFormatter
-from personal_agent.application.review.models import (
+from personal_agent.kernel.contracts.review import (
     DeliveryMessage,
-    DeliveryTarget,
     DigestSubscription,
     ReviewDigest,
     ReviewDigestJobResult,
 )
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 from personal_agent.application.review.service import ReviewDigestUseCase
 
 logger = logging.getLogger(__name__)

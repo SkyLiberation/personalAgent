@@ -27,7 +27,6 @@ from personal_agent.application.workspace.models import (
     GraphProjection,
     GraphProjectionResult,
     GroundingRun,
-    JudgeCalibration,
     IngestKnowledgeResult,
     KnowledgeGap,
     KnowledgeItem,

@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 
 from personal_agent.governance.policy import PolicyEngine, PolicyInput
+from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.kernel.contracts.agent import (
     AgentAdapter,
     AgentArtifact,
@@ -64,7 +65,9 @@ class AgentGateway:
         agent_id: str,
         task: AgentTask,
         context: AgentGatewayContext,
+        grant: DelegationGrant,
     ) -> ChildAgentRunOutcome:
+        self._authorize_grant(agent_id, context, grant)
         adapter = self._adapter(agent_id)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
         result = adapter.invoke(task, context)
@@ -89,7 +92,9 @@ class AgentGateway:
         agent_id: str,
         task: AgentTask,
         context: AgentGatewayContext,
+        grant: DelegationGrant,
     ) -> ChildAgentRunRecord:
+        self._authorize_grant(agent_id, context, grant)
         adapter = self._adapter(agent_id)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
         run = adapter.submit(task, context)
@@ -163,6 +168,17 @@ class AgentGateway:
         ))
         if not decision.allowed:
             raise PermissionError(decision.reason or f"Agent {definition.agent_id} is not allowed.")
+
+    @staticmethod
+    def _authorize_grant(
+        agent_id: str,
+        context: AgentGatewayContext,
+        grant: DelegationGrant,
+    ) -> None:
+        if grant.agent_binding_ref.rsplit(":", 1)[-1] != agent_id:
+            raise PermissionError("delegation grant is bound to a different agent")
+        if context.action_id and grant.action_ref != context.action_id:
+            raise PermissionError("delegation grant is bound to a different child start")
 
     @staticmethod
     def _append_event(run: ChildAgentRunRecord, event_type, payload: dict[str, object]) -> ChildAgentRunRecord:

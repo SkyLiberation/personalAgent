@@ -7,7 +7,7 @@ the governance logic previously hardcoded inside the tool gateway, the
 """
 
 from personal_agent.governance.policy.engine import PolicyEngine, PolicyRules
-from personal_agent.governance.policy.models import PolicyAction, PolicyDecision, PolicyEffect, PolicyInput
+from personal_agent.kernel.contracts.policy import PolicyAction, PolicyDecision, PolicyEffect, PolicyInput
 
 __all__ = [
     "PolicyAction",

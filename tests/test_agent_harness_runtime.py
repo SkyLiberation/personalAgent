@@ -16,22 +16,24 @@ from personal_agent.kernel.contracts.agent import (
     AgentTask,
     SubagentProfile,
 )
-from personal_agent.kernel.contracts.agentic import (
+from personal_agent.runtime.contracts.task import (
     ContextBudget,
     ContextItem,
     RuntimeSnapshotRef,
     SuccessCriterion,
 )
-from personal_agent.kernel.contracts.capability import CapabilityRequirement
-from personal_agent.kernel.contracts.execution import InvocationAttemptState
-from personal_agent.kernel.contracts.executive import (
+from personal_agent.capabilities.contracts.execution import CapabilityRequirement
+from personal_agent.capabilities.contracts.grants import DelegationGrant, GrantDependencySet
+from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
+from personal_agent.execution.contracts.invocation import InvocationAttemptState
+from personal_agent.runtime.contracts.control import (
     BoundedAction,
     ProposedResourceAccessPlan,
     ResourceAccess,
     SubtaskSpec,
 )
-from personal_agent.planning.direct import DirectAdmission, DirectCandidate
-from personal_agent.planning.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
+from personal_agent.runtime.direct import DirectAdmission, DirectCandidate
+from personal_agent.runtime.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
 from personal_agent.runtime.action_spec import ResolvedActionBuilder
 from personal_agent.runtime.resource_access import ResourceAccessResolver
 from personal_agent.runtime.run_manager import DurableRunManager, RunStateError
@@ -124,7 +126,7 @@ def test_resource_resolution_is_conservative_and_scheduler_is_physical_only() ->
         action=BoundedAction(
             action_id="action",
             goal_id="goal",
-            meta_capability="commit",
+            execution_intent="commit",
             description="update note",
             proposed_resource_access=proposed,
         ),
@@ -243,7 +245,13 @@ def test_agent_step_uses_durable_submit_then_poll() -> None:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        def submit(self, agent_id: str, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
+        def submit(
+            self,
+            agent_id: str,
+            task: AgentTask,
+            context: AgentGatewayContext,
+            grant: DelegationGrant,
+        ) -> ChildAgentRunRecord:
             self.calls.append("submit")
             return ChildAgentRunRecord(
                 definition=ChildAgentRunDefinition(
@@ -296,13 +304,39 @@ def test_agent_step_uses_durable_submit_then_poll() -> None:
         agent_id="researcher",
         task_id="goal-1",
         task_input="research topic",
+        execution_grant_ref="grant-delegate-1",
         attempt=InvocationAttemptState(status="running"),
+    )
+    grant = DelegationGrant(
+        grant_id="grant-delegate-1",
+        request_id="request-delegate-1",
+        action_ref="delegate-1",
+        granted_resource_selector=ResourceSelector(),
+        granted_operation_scope=OperationScope(operations=frozenset({"delegate"})),
+        granted_data_egress="content",
+        granted_credential_mode="none",
+        retry_family_id="retry-delegate-1",
+        dependency_set=GrantDependencySet(
+            task_revision=1,
+            goal_definition_fingerprint="goal",
+            action_fingerprint="action",
+            capability_definition_revision=1,
+            authority_revision=1,
+            policy_bundle_hash="policy",
+        ),
+        agent_binding_ref="local:researcher",
+        bounded_sub_goal="research topic",
+        token_budget=1024,
+        cost_budget=1,
+        time_budget_seconds=60,
+        completion_contract="AgentArtifact",
     )
     state = RunCheckpoint(
         run_id="parent-1",
         user_id="tenant",
         session_id="session",
         invocation_batch=InvocationBatchState(invocations=[step]),
+        execution_grants={grant.grant_id: grant},
     )
 
     assert not _execute_agent_call_step(step, step, state, deps)

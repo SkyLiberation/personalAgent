@@ -14,7 +14,7 @@ def test_open_execution_has_no_fake_procedure_identity() -> None:
             run_id="run",
             thread_id="thread",
             type="action_materialized",
-            payload={"action": {"meta_capability": "acquire"}},
+            payload={"action": {"execution_intent": "acquire"}},
         ),
     ])
 

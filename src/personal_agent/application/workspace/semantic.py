@@ -18,9 +18,12 @@ from personal_agent.application.workspace.models import (
     EvidenceSpan,
     EvidenceSpanType,
     JudgeCalibration,
-    stable_hash,
 )
-from personal_agent.infra.structured_model import StructuredModelClient, StructuredModelRequest
+from personal_agent.capabilities.contracts.model import (
+    StructuredModelClient,
+    StructuredModelRequest,
+    sealed_context_projection_ref,
+)
 
 
 class SemanticEvidenceSpanDraft(BaseModel):
@@ -170,6 +173,17 @@ class LLMSemanticEvidenceExtractor:
         self._model_client = model_client
 
     def extract(self, *, artifact: Artifact, blocks: list[EvidenceBlock]) -> SemanticEvidenceExtraction:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Extract semantic evidence spans from parsed knowledge blocks. "
+                    "Preserve scope, condition, time, negation, exceptions and omitted regions. "
+                    "Every returned span text must be copied from the source blocks."
+                ),
+            },
+            {"role": "user", "content": _blocks_prompt(artifact, blocks)},
+        ]
         response = self._model_client.generate(StructuredModelRequest(
             operation="workspace_semantic_evidence_extraction",
             version=self.version,
@@ -177,20 +191,10 @@ class LLMSemanticEvidenceExtractor:
             output_type=SemanticEvidenceExtraction,
             temperature=0,
             max_tokens=1800,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Extract semantic evidence spans from parsed knowledge blocks. "
-                        "Preserve scope, condition, time, negation, exceptions and omitted regions. "
-                        "Every returned span text must be copied from the source blocks."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": _blocks_prompt(artifact, blocks),
-                },
-            ],
+            messages=messages,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="workspace_semantic_evidence_extraction", messages=messages,
+            ),
             metadata={"artifact_id": artifact.artifact_id, "workspace_id": artifact.workspace_id},
         ))
         return response.value
@@ -212,6 +216,25 @@ class LLMSemanticClaimExtractor:
         created_by: str,
         limit: int,
     ) -> CandidateClaimExtraction:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Extract structured candidate claims from evidence spans. A claim is not a chunk: "
+                    "it must include subject, predicate, object, scope/condition/time when present, "
+                    "source_role, confidence, and evidence_ref_ids. Do not mark assistant inference as "
+                    "user knowledge. Use only provided evidence_ref_ids. "
+                    "Each claim must express exactly one atomic fact or relation. If one evidence span "
+                    "contains multiple facts joined by words such as 并且, 同时, 以及, and, also, then "
+                    "split them into separate claims that reuse the same evidence_ref_id. Do not merge "
+                    "two predicates/actions into one statement."
+                ),
+            },
+            {
+                "role": "user",
+                "content": _claim_prompt(artifact, spans, evidence_refs, created_by=created_by, limit=limit),
+            },
+        ]
         response = self._model_client.generate(StructuredModelRequest(
             operation="workspace_candidate_claim_extraction",
             version=self.version,
@@ -219,25 +242,10 @@ class LLMSemanticClaimExtractor:
             output_type=CandidateClaimExtraction,
             temperature=0,
             max_tokens=2200,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Extract structured candidate claims from evidence spans. A claim is not a chunk: "
-                        "it must include subject, predicate, object, scope/condition/time when present, "
-                        "source_role, confidence, and evidence_ref_ids. Do not mark assistant inference as "
-                        "user knowledge. Use only provided evidence_ref_ids. "
-                        "Each claim must express exactly one atomic fact or relation. If one evidence span "
-                        "contains multiple facts joined by words such as 并且, 同时, 以及, and, also, then "
-                        "split them into separate claims that reuse the same evidence_ref_id. Do not merge "
-                        "two predicates/actions into one statement."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": _claim_prompt(artifact, spans, evidence_refs, created_by=created_by, limit=limit),
-                },
-            ],
+            messages=messages,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="workspace_candidate_claim_extraction", messages=messages,
+            ),
             metadata={"artifact_id": artifact.artifact_id, "workspace_id": artifact.workspace_id},
         ))
         return response.value
@@ -259,6 +267,23 @@ class LLMClaimGroundingJudge:
         source_type: str,
         created_by: str,
     ) -> ClaimGroundingJudgment:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Judge whether evidence semantically supports a structured claim. "
+                    "Consider subject, predicate, object, scope, condition, time, negation and source role. "
+                    "Return user_asserted only for explicit user assertions from conversation/user_message."
+                ),
+            },
+            {
+                "role": "user",
+                "content": _grounding_prompt(
+                    claim, evidence_refs, evidence_spans,
+                    source_type=source_type, created_by=created_by,
+                ),
+            },
+        ]
         response = self._model_client.generate(StructuredModelRequest(
             operation="workspace_claim_grounding_judge",
             version=self.version,
@@ -266,26 +291,10 @@ class LLMClaimGroundingJudge:
             output_type=ClaimGroundingJudgment,
             temperature=0,
             max_tokens=1200,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Judge whether evidence semantically supports a structured claim. "
-                        "Consider subject, predicate, object, scope, condition, time, negation and source role. "
-                        "Return user_asserted only for explicit user assertions from conversation/user_message."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": _grounding_prompt(
-                        claim,
-                        evidence_refs,
-                        evidence_spans,
-                        source_type=source_type,
-                        created_by=created_by,
-                    ),
-                },
-            ],
+            messages=messages,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="workspace_claim_grounding_judge", messages=messages,
+            ),
             metadata={"claim_id": claim.claim_id, "workspace_id": claim.workspace_id},
         ))
         return response.value
@@ -306,6 +315,20 @@ class LLMAnswerCoverageJudge:
         available: list[EvidenceSpan],
         manifests: list[CoverageManifest],
     ) -> AnswerCoverageJudgment:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Judge whether selected evidence covers the user's question. "
+                    "Do not hide omitted, partial, or failed manifest regions. "
+                    "Return partial/sparse with missing_sections when relevant scope or source regions are absent."
+                ),
+            },
+            {
+                "role": "user",
+                "content": _coverage_prompt(question, selected, available, manifests),
+            },
+        ]
         response = self._model_client.generate(StructuredModelRequest(
             operation="workspace_answer_coverage_judge",
             version=self.version,
@@ -313,20 +336,10 @@ class LLMAnswerCoverageJudge:
             output_type=AnswerCoverageJudgment,
             temperature=0,
             max_tokens=1200,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Judge whether selected evidence covers the user's question. "
-                        "Do not hide omitted, partial, or failed manifest regions. "
-                        "Return partial/sparse with missing_sections when relevant scope or source regions are absent."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": _coverage_prompt(question, selected, available, manifests),
-                },
-            ],
+            messages=messages,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="workspace_answer_coverage_judge", messages=messages,
+            ),
             metadata={"selected_span_count": len(selected), "available_span_count": len(available)},
         ))
         return response.value

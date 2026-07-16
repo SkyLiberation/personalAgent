@@ -23,19 +23,23 @@ from personal_agent.orchestration.orchestration_nodes._entry import (
     _node_analyze_task,
 )
 from personal_agent.orchestration.orchestration_nodes._executive import (
+    _after_action_resolution,
+    _after_decision_admission,
     _after_apply_decision,
     _after_completion,
     _node_apply_decision,
+    _node_admit_execution_route,
+    _node_admit_decision,
     _node_decide,
     _node_compile_goal_graph,
     _node_create_or_revise_plan,
-    _node_assess_planning_mode,
+    _node_assess_coordination,
     _node_monitor_plan,
     _node_observe_action,
     _node_project_planning_facts,
     _node_project_control_state,
     _node_resolve_action,
-    _node_validate_decision,
+    _node_handle_decision_denial,
     _node_verify_completion,
     _node_verify_goal_progress,
 )
@@ -76,35 +80,35 @@ def _after_react_graph(state: RunCheckpoint) -> str:
 
 
 def _after_observation(state: RunCheckpoint) -> str:
-    return "retry" if state.control_route == "technical_retry" else "verify"
+    return "retry" if state.control.disposition == "retry_invocation" else "verify"
 
 
 def _after_goal_compile(state: RunCheckpoint) -> str:
-    return "direct" if state.control_route == "direct_candidate" else "planning"
+    return "direct" if state.answer is not None else "planning"
 
 
-def _after_planning_mode(state: RunCheckpoint) -> str:
-    if state.planning_mode is not None and state.planning_mode.mode == "deliberative":
+def _after_coordination(state: RunCheckpoint) -> str:
+    if state.coordination is not None and state.coordination.mode == "deliberative":
         return "plan"
     return "control"
 
 
 def _after_plan_creation(state: RunCheckpoint) -> str:
-    return "control" if state.control_route == "plan_ready" else "stop"
+    return "stop" if state.control.disposition == "terminate" else "control"
 
 
 def _after_plan_monitor(state: RunCheckpoint) -> str:
-    if state.planning_mode is None:
+    if state.coordination is None:
         return "planning"
-    if state.control_route == "replan":
+    if state.control.disposition in {"patch_plan", "replace_plan"}:
         return "replan"
-    if state.control_route == "planning_stop":
+    if state.control.disposition in {"await_input", "terminate"}:
         return "stop"
     return "control"
 
 
 def _after_goal_verification(state: RunCheckpoint) -> str:
-    return "completion" if state.control_route == "direct_completion" else "monitor"
+    return "completion" if state.control.disposition == "propose_completion" else "monitor"
 
 
 def build_entry_graph(contexts: GraphContexts):
@@ -221,11 +225,13 @@ def build_executive_graph(contexts: GraphContexts):
     builder = StateGraph(RunCheckpoint)
     builder.add_node("compile_goal_graph", lambda state: _node_compile_goal_graph(state, deps=deps))
     builder.add_node("project_planning_facts", lambda state: _node_project_planning_facts(state, deps=deps))
-    builder.add_node("assess_planning_mode", lambda state: _node_assess_planning_mode(state, deps=deps))
+    builder.add_node("assess_coordination", lambda state: _node_assess_coordination(state, deps=deps))
     builder.add_node("create_or_revise_plan", lambda state: _node_create_or_revise_plan(state, deps=deps))
     builder.add_node("project_control_state", lambda state: _node_project_control_state(state, deps=deps))
     builder.add_node("decide", lambda state: _node_decide(state, deps=deps))
-    builder.add_node("validate_decision", lambda state: _node_validate_decision(state, deps=deps))
+    builder.add_node("admit_decision", lambda state: _node_admit_decision(state, deps=deps))
+    builder.add_node("handle_decision_denial", lambda state: _node_handle_decision_denial(state, deps=deps))
+    builder.add_node("admit_execution_route", lambda state: _node_admit_execution_route(state, deps=deps))
     builder.add_node("apply_decision", lambda state: _node_apply_decision(state, deps=deps))
     builder.add_node("resolve_action", lambda state: _node_resolve_action(state, deps=deps))
     builder.add_node("action_execution", build_action_execution_graph(contexts))
@@ -240,10 +246,10 @@ def build_executive_graph(contexts: GraphContexts):
         _after_goal_compile,
         {"direct": "verify_goal_progress", "planning": "project_planning_facts"},
     )
-    builder.add_edge("project_planning_facts", "assess_planning_mode")
+    builder.add_edge("project_planning_facts", "assess_coordination")
     builder.add_conditional_edges(
-        "assess_planning_mode",
-        _after_planning_mode,
+        "assess_coordination",
+        _after_coordination,
         {"plan": "create_or_revise_plan", "control": "project_control_state"},
     )
     builder.add_conditional_edges(
@@ -252,8 +258,14 @@ def build_executive_graph(contexts: GraphContexts):
         {"control": "project_control_state", "stop": END},
     )
     builder.add_edge("project_control_state", "decide")
-    builder.add_edge("decide", "validate_decision")
-    builder.add_edge("validate_decision", "apply_decision")
+    builder.add_edge("decide", "admit_decision")
+    builder.add_conditional_edges(
+        "admit_decision",
+        _after_decision_admission,
+        {"route": "admit_execution_route", "deny": "handle_decision_denial"},
+    )
+    builder.add_edge("handle_decision_denial", END)
+    builder.add_edge("admit_execution_route", "apply_decision")
     builder.add_conditional_edges(
         "apply_decision",
         _after_apply_decision,
@@ -264,7 +276,11 @@ def build_executive_graph(contexts: GraphContexts):
             "stop": END,
         },
     )
-    builder.add_edge("resolve_action", "action_execution")
+    builder.add_conditional_edges(
+        "resolve_action",
+        _after_action_resolution,
+        {"dispatch": "action_execution", "control": "project_control_state"},
+    )
     builder.add_edge("action_execution", "observe_action")
     builder.add_conditional_edges(
         "observe_action",

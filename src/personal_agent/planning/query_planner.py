@@ -12,7 +12,7 @@ from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
 if TYPE_CHECKING:
-    from personal_agent.infra.structured_model import StructuredModelClient
+    from personal_agent.capabilities.contracts.model import StructuredModelClient
 
 logger = logging.getLogger(__name__)
 
@@ -69,16 +69,23 @@ def _call_planner_llm(
         conversation_context_block=conversation_context_block,
     )
 
-    from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import (
+        StructuredModelRequest,
+        sealed_context_projection_ref,
+    )
 
+    messages = [
+        {"role": "system", "content": system_prompt.template},
+        {"role": "user", "content": user_content},
+    ]
     response = model_client.generate(StructuredModelRequest(
         operation="query_planner",
         version=system_prompt.version,
-        messages=[
-            {"role": "system", "content": system_prompt.template},
-            {"role": "user", "content": user_content},
-        ],
+        messages=messages,
         output_type=QueryUnderstanding,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="query_planner", messages=messages,
+        ),
         temperature=0.0,
         max_tokens=500,
         kind="structured",

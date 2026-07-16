@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from pydantic import BaseModel, ConfigDict
 
-from personal_agent.kernel.contracts.agentic import ContextItem, ContextProjection
+from personal_agent.runtime.contracts.task import ContextItem, ContextProjection
 
 
 class ContextMaterializationError(ValueError):

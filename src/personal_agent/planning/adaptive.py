@@ -9,15 +9,15 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
-from personal_agent.kernel.contracts.agentic import (
+from personal_agent.runtime.contracts.task import (
     TaskRuntimeProjection,
     TaskContract,
     materialize_goals,
 )
-from personal_agent.kernel.contracts.capability import CapabilityRequirement
-from personal_agent.kernel.contracts.executive import ObservationRef
+from personal_agent.capabilities.contracts.execution import CapabilityRequirement
+from personal_agent.runtime.contracts.control import ObservationRef
 from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
-from personal_agent.kernel.contracts.planning import (
+from personal_agent.runtime.contracts.planning import (
     PlanDefinition,
     AddPlanStep,
     CancelPlanBranch,
@@ -32,16 +32,16 @@ from personal_agent.kernel.contracts.planning import (
     PlanningLimits,
     PlanningUsage,
     PlanningFacts,
-    PlanningModeAssessment,
+    CoordinationAssessment,
     PlanningSnapshot,
     RemoveUnstartedPlanStep,
     ReplacePlanStep,
     ReplanRequest,
 )
-from personal_agent.kernel.contracts.procedure import ProcedureCandidate
+from personal_agent.capabilities.contracts.procedure import ProcedureCandidate
 
 if TYPE_CHECKING:
-    from personal_agent.infra.structured_model import StructuredModelClient
+    from personal_agent.capabilities.contracts.model import StructuredModelClient
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ class PlanningFactProjector:
         )
 
 
-class PlanningModePolicy:
+class CoordinationModePolicy:
     """Strategy selector with deterministic admissions and an optional model assessor."""
 
     def __init__(self, model_client: "StructuredModelClient | None" = None) -> None:
@@ -184,18 +184,22 @@ class PlanningModePolicy:
         target_goal_ids: tuple[str, ...],
         limits: PlanningLimits,
         usage: PlanningUsage,
-    ) -> tuple[PlanningModeAssessment, PlanningUsage]:
+    ) -> tuple[CoordinationAssessment, PlanningUsage]:
+        # A mandatory procedure constrains the action's execution route; it
+        # does not change whether the task needs a plan. A single ready goal
+        # can therefore remain reactive and still execute through a procedure.
         if (
-            facts.mandatory_procedure_goal_ids
-            and len(facts.mandatory_procedure_goal_ids) == facts.active_goal_count
+            facts.active_goal_count == 1
+            and facts.mandatory_procedure_goal_ids
+            and not facts.unresolved_user_ambiguity
         ):
-            return PlanningModeAssessment(
-                mode="procedural",
-                reason_codes=("mandatory_procedure",),
+            return CoordinationAssessment(
+                mode="reactive",
+                reason_codes=("single_goal_mandatory_route",),
                 target_goal_ids=target_goal_ids,
             ), usage
         if facts.active_goal_count > 1 or facts.hard_dependency_count > 0:
-            return PlanningModeAssessment(
+            return CoordinationAssessment(
                 mode="deliberative",
                 reason_codes=("compound_goal_graph",),
                 target_goal_ids=target_goal_ids,
@@ -207,7 +211,7 @@ class PlanningModePolicy:
             and not facts.write_or_external_effect_intent
             and not facts.unresolved_user_ambiguity
         ):
-            return PlanningModeAssessment(
+            return CoordinationAssessment(
                 mode="reactive",
                 reason_codes=("single_explicit_atomic_operation",),
                 target_goal_ids=target_goal_ids,
@@ -217,7 +221,7 @@ class PlanningModePolicy:
             return assessed, usage.model_copy(update={
                 "mode_assessor_calls": usage.mode_assessor_calls + 1,
             })
-        return PlanningModeAssessment(
+        return CoordinationAssessment(
             mode="deliberative",
             reason_codes=("strategy_ambiguous_model_unavailable",),
             target_goal_ids=target_goal_ids,
@@ -230,37 +234,44 @@ class PlanningModePolicy:
         target_goal_ids: tuple[str, ...],
         limits: PlanningLimits,
         usage: PlanningUsage,
-    ) -> PlanningModeAssessment | None:
+    ) -> CoordinationAssessment | None:
         if (
             self._model_client is None
             or usage.mode_assessor_calls >= limits.max_mode_assessor_calls
         ):
             return None
         try:
-            from personal_agent.infra.structured_model import StructuredModelRequest
+            from personal_agent.capabilities.contracts.model import (
+                StructuredModelRequest,
+                sealed_context_projection_ref,
+            )
 
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Choose reactive only when one bounded next action can safely close the goal. "
+                        "Choose deliberative when strategy, evidence routes, or dependencies require a short plan. "
+                        "Do not choose tools, providers, delegation, or execution topology."
+                    ),
+                },
+                {"role": "user", "content": facts.model_dump_json()},
+            ]
             response = self._model_client.generate(StructuredModelRequest(
-                operation="planning_mode_assessment",
+                operation="coordination_assessment",
                 version="v1",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Choose reactive only when one bounded next action can safely close the goal. "
-                            "Choose deliberative when strategy, evidence routes, or dependencies require a short plan. "
-                            "Do not choose tools, providers, delegation, or execution topology."
-                        ),
-                    },
-                    {"role": "user", "content": facts.model_dump_json()},
-                ],
+                messages=messages,
                 output_type=_ModelModeChoice,
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose="coordination_assessment", messages=messages,
+                ),
                 temperature=0,
                 max_tokens=220,
             ))
             choice = response.value
             if choice.mode not in {"reactive", "deliberative"}:
                 return None
-            return PlanningModeAssessment(
+            return CoordinationAssessment(
                 mode=choice.mode,
                 reason_codes=choice.reason_codes,
                 target_goal_ids=target_goal_ids,
@@ -336,7 +347,7 @@ class AdaptivePlanner:
         self,
         task: TaskContract,
         ledger: TaskRuntimeProjection,
-        assessment: PlanningModeAssessment,
+        assessment: CoordinationAssessment,
         procedures: tuple[ProcedureCandidate, ...],
         limits: PlanningLimits,
         usage: PlanningUsage,
@@ -398,7 +409,7 @@ class AdaptivePlanner:
         ):
             return None, usage
         try:
-            from personal_agent.infra.structured_model import StructuredModelRequest
+            from personal_agent.capabilities.contracts.model import StructuredModelRequest
 
             class PatchProposal(BaseModel):
                 operations: tuple[
@@ -426,6 +437,7 @@ class AdaptivePlanner:
                     }, ensure_ascii=False)},
                 ],
                 output_type=PatchProposal,
+                context_projection_ref=str(model_context.get("projection_id") or ""),
                 temperature=0,
                 max_tokens=1200,
             ))
@@ -459,7 +471,7 @@ class AdaptivePlanner:
         self,
         task: TaskContract,
         ledger: TaskRuntimeProjection,
-        assessment: PlanningModeAssessment,
+        assessment: CoordinationAssessment,
         procedures: tuple[ProcedureCandidate, ...],
         *,
         model_context: dict[str, object] | None,
@@ -467,7 +479,7 @@ class AdaptivePlanner:
         if self._model_client is None or model_context is None:
             return None
         try:
-            from personal_agent.infra.structured_model import StructuredModelRequest
+            from personal_agent.capabilities.contracts.model import StructuredModelRequest
 
             state = {
                 "model_context": model_context,
@@ -489,6 +501,7 @@ class AdaptivePlanner:
                     {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
                 ],
                 output_type=_ModelPlanProposal,
+                context_projection_ref=str(model_context.get("projection_id") or ""),
                 temperature=0,
                 max_tokens=1800,
                 metadata={"task_id": task.task_id},
@@ -953,7 +966,7 @@ class PlanMonitor:
         ):
             return None
         try:
-            from personal_agent.infra.structured_model import StructuredModelRequest
+            from personal_agent.capabilities.contracts.model import StructuredModelRequest
 
             response = self._model_client.generate(StructuredModelRequest(
                 operation="plan_semantic_monitor",
@@ -972,6 +985,7 @@ class PlanMonitor:
                     }, ensure_ascii=False)},
                 ],
                 output_type=_SemanticMonitorChoice,
+                context_projection_ref=str(model_context.get("projection_id") or ""),
                 temperature=0,
                 max_tokens=300,
             ))
@@ -1034,6 +1048,6 @@ __all__ = [
     "ADVISORY_READ_ONLY_PROFILE", "BOUNDED_READ_ONLY_PROFILE", "AdaptivePlanner",
     "GOVERNED_MIXED_PROFILE",
     "FrontierSelector", "PlanRuntimeProjector", "PlanMonitor", "PlanValidator",
-    "PlanningConflictError", "PlanningFactProjector", "PlanningModePolicy",
+    "PlanningConflictError", "PlanningFactProjector", "CoordinationModePolicy",
     "PlanningValidationError", "profile_for_task",
 ]

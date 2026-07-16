@@ -4,7 +4,7 @@ import re
 
 from personal_agent.kernel.config import Settings
 from personal_agent.application.review import DigestSubscription
-from personal_agent.application.review.models import ReviewFeedbackOutcome
+from personal_agent.kernel.contracts.review import ReviewFeedbackOutcome
 from personal_agent.adapters.feishu.models import FeishuIncomingMessage
 
 

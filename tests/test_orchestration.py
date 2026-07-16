@@ -28,7 +28,8 @@ from personal_agent.planning.task_analyzer import (
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
-from personal_agent.kernel.contracts.execution import InvocationAttemptState
+from personal_agent.execution.contracts.invocation import InvocationAttemptState
+from personal_agent.runtime.contracts.control import ControlTurnState
 from personal_agent.runtime.run_manager import RunStateError
 
 
@@ -216,11 +217,11 @@ class TestNormalizeEntry:
             entry_input=EntryInput(text="什么是DNS", user_id="u1", session_id="s1"),
             task_analysis=TaskAnalysis(route="ask"),
             answer="上一轮天气回答",
-            pending_confirmation={
+            control=ControlTurnState(pending_interaction={
                 "kind": "clarification_required",
                 "action_type": "clarify_entry",
                 "step_id": "clarify_entry",
-            },
+            }),
             execution_trace=["上一轮轨迹"],
             citations=[{"note_id": "old", "title": "旧证据", "snippet": "旧"}],
             errors=["上一轮错误"],
@@ -896,13 +897,13 @@ class TestPhase3RoutingFunctions:
     def test_after_confirm_step_confirmed(self):
         from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
-        state = RunCheckpoint(confirmation_decision="confirmed")
+        state = RunCheckpoint(control=ControlTurnState(interaction_decision="confirmed"))
         assert _after_confirm_step(state) == "tool_node"
 
     def test_after_confirm_step_rejected(self):
         from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
-        state = RunCheckpoint(confirmation_decision="rejected")
+        state = RunCheckpoint(control=ControlTurnState(interaction_decision="rejected"))
         assert _after_confirm_step(state) == "handle_failure"
 
     def test_after_confirm_step_none_defaults_to_failure(self):
@@ -1226,24 +1227,26 @@ class TestPhase3InterruptResumeIntegration:
             )
 
     def test_confirmation_decision_field_roundtrip(self):
-        """RunCheckpoint.confirmation_decision should survive serialization."""
+        """The control turn's interaction decision should survive serialization."""
         state = RunCheckpoint(
-            confirmation_decision="confirmed",
-            pending_confirmation={
+            control=ControlTurnState(
+                interaction_decision="confirmed",
+                pending_interaction={
                 "kind": "confirmation_required", "action_type": "test", "step_id": "s1",
-            },
+                },
+            ),
         )
         data = state.model_dump(mode="json")
         restored = RunCheckpoint.model_validate(data)
-        assert restored.confirmation_decision == "confirmed"
+        assert restored.control.interaction_decision == "confirmed"
 
     def test_to_run_snapshot_blocked_approval(self):
         """When pending_confirmation is set, _infer_status returns blocked_approval."""
         state = RunCheckpoint(
             task_analysis=TaskAnalysis(route="delete_knowledge"),
-            pending_confirmation={
+            control=ControlTurnState(pending_interaction={
                 "kind": "confirmation_required", "step_id": "s1", "action_type": "delete_note",
-            },
+            }),
         )
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.blocked_approval
@@ -1251,7 +1254,7 @@ class TestPhase3InterruptResumeIntegration:
     def test_to_run_snapshot_keeps_resolved_confirmation_decision(self):
         state = RunCheckpoint(
             task_analysis=TaskAnalysis(route="delete_knowledge"),
-            confirmation_decision="confirmed",
+            control=ControlTurnState(interaction_decision="confirmed"),
             answer="已删除。",
         )
         state.add_event("answer_completed", {"answer": "已删除。"})

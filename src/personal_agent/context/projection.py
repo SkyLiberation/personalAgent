@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from personal_agent.kernel.contracts.agentic import (
+from personal_agent.runtime.contracts.task import (
     ContextBudget,
     ContextItem,
     ContextProjection,

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from personal_agent.kernel.models import Citation, KnowledgeNote
-# Re-exported for ask runtime callers (runtime.py / runtime_ask.py); now defined
-# in the evidence module so it no longer creates a core -> agent dependency.
-from personal_agent.kernel.evidence import _best_snippet  # noqa: F401
 from personal_agent.memory.graphiti.store import GraphAskResult
 from personal_agent.application.verifier import VerificationResult
 

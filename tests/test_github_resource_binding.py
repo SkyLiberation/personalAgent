@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.capability import (
+from personal_agent.capabilities.contracts.execution import (
     Capability,
     CapabilityRequirement,
-    CapabilityResolutionRequest,
+    ExecutionCapabilityRequest,
 )
-from personal_agent.planning.capability_resolver import CapabilityResolver
-from personal_agent.planning.goal_graph import GoalGraphCompiler
+from personal_agent.capabilities.resolver import CapabilityResolver
+from personal_agent.planning.task_compiler import GoalGraphCompiler
 from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
-from personal_agent.tools.mcp_capability import CapabilityRegistry
+from datetime import UTC, datetime
+from personal_agent.capabilities.portfolio import (
+    CapabilityPortfolio,
+    ExecutionCapabilityAvailability,
+)
 
 
 def test_github_question_becomes_provider_neutral_goal_with_required_binding():
@@ -51,18 +55,28 @@ def test_required_provider_binding_filters_other_codebase_providers():
         operations=("search", "read"),
         required_providers=("github",),
     )
-    resolution = CapabilityResolver(CapabilityRegistry((gitlab, github))).resolve(
-        CapabilityResolutionRequest(
+    portfolio = CapabilityPortfolio((gitlab, github))
+    for capability in (gitlab, github):
+        portfolio.observe(ExecutionCapabilityAvailability(
+            capability_ref=capability.capability_id,
+            availability_revision=1,
+            status="available",
+            credential_ready=True,
+            health_observed_at=datetime.now(UTC),
+            provider_binding_revision=1,
+        ))
+    resolution = CapabilityResolver(portfolio).resolve(
+        ExecutionCapabilityRequest(
             task_id="task",
             goal_id="goal",
             action_id="read-repository",
-            meta_capability="acquire",
+            execution_intent="acquire",
             allowed_kinds=("mcp_tool",),
             allowed_operations=("search", "read"),
             requirements=(requirement,),
         )
     )
-    assert [item.provider for item in resolution.selected_capabilities] == ["github"]
+    assert resolution.selected_definition.provider == "github"
     assert resolution.coverage[0].status == "satisfied"
 
 

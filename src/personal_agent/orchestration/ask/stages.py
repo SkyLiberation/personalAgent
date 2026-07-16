@@ -14,17 +14,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from personal_agent.application.evidence_engine import EvidenceAssemblyRequest
-from personal_agent.kernel.contracts.capability import (
+from personal_agent.capabilities.contracts.execution import (
     CapabilityRequirement,
-    CapabilityResolutionRequest,
+    ExecutionCapabilityRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
 )
 from personal_agent.orchestration.runtime_helpers import _annotate_answer
 from personal_agent.orchestration.ask.context import AskRepairEvent, RetrievalCapabilityPlan
 from personal_agent.orchestration.ask.retrievers import RetrievalCoordinator
-from personal_agent.planning.capability_resolver import CapabilityResolver
-from personal_agent.tools.mcp_capability import build_global_capability_registry
+from personal_agent.capabilities.resolver import CapabilityResolver
+from personal_agent.tools.mcp_capability import build_execution_capability_portfolio
 
 if TYPE_CHECKING:
     from personal_agent.orchestration.runtime_ask import AskService
@@ -149,7 +149,7 @@ class RetrievalStage:
         svc = self._service
         assert ctx.understanding is not None
         assert ctx.retrieval_plan is not None
-        registry = build_global_capability_registry(
+        registry = build_execution_capability_portfolio(
             tools=svc._tool_executor.list_tools(exposures={"public_agent", "scoped_agent", "admin"}),
             evidence_sources=_ask_retriever_capabilities(ctx, svc),
         )
@@ -162,11 +162,11 @@ class RetrievalStage:
         resolution = CapabilityResolver(
             registry,
             policy_engine=svc.policy_engine,
-        ).resolve(CapabilityResolutionRequest(
+        ).resolve(ExecutionCapabilityRequest(
             task_id=f"ask-task:{ctx.session_id}",
             goal_id=f"ask:{ctx.session_id}",
             action_id="ask-retrieve",
-            meta_capability="acquire",
+            execution_intent="acquire",
             allowed_kinds=("retriever",),
             allowed_operations=("search", "read"),
             requirements=(CapabilityRequirement.from_dimensions(
@@ -195,7 +195,11 @@ class RetrievalStage:
                 "planned_sources": list(ctx.retrieval_plan.sources),
             },
         ))
-        selected_sources = list(resolution.selected_retrievers)
+        selected = resolution.selected_definition
+        selected_sources = (
+            [str(selected.local_name or selected.capability_id)]
+            if selected is not None and selected.kind == "retriever" else []
+        )
         if selected_sources:
             allowed_plan_sources = [
                 source for source in ctx.retrieval_plan.sources if source in selected_sources
@@ -206,7 +210,7 @@ class RetrievalStage:
                 )
         denied_sources = [
             denied.local_name
-            for denied in resolution.denied_capabilities
+            for denied in resolution.denials
             if denied.local_name
         ]
         external_sources = {"web"}
@@ -215,7 +219,7 @@ class RetrievalStage:
             denied_sources=denied_sources,
             denial_reasons={
                 denied.local_name: denied.reason
-                for denied in resolution.denied_capabilities
+                for denied in resolution.denials
                 if denied.local_name
             },
             freshness_required=bool(ctx.understanding.needs_freshness),
@@ -225,9 +229,9 @@ class RetrievalStage:
             max_external_calls=1 if external_sources & set(selected_sources) else 0,
             source_priority=selected_sources,
             fallback_policy=ctx.understanding.answer_policy,
-            scope_id=resolution.request_scope_id,
-            resolution_id=resolution.resolution_id,
-            resolution_validation_state=resolution.validation_state,
+            scope_id=resolution.decision.request_id,
+            resolution_id=resolution.decision.resolution_id,
+            resolution_validation_state=resolution.decision.validation_state,
             escalation_hint=(
                 resolution.escalation_hint.model_dump(mode="json")
                 if resolution.escalation_hint is not None else None
@@ -239,7 +243,7 @@ class RetrievalStage:
             "RetrievalCapabilityPlan: "
             f"selected={selected_sources} denied={denied_sources} "
             f"external_allowed={ctx.retrieval_capability_plan.external_allowed} "
-            f"resolution={resolution.resolution_id}:{resolution.validation_state}"
+            f"resolution={resolution.decision.resolution_id}:{resolution.decision.validation_state}"
         )
 
 

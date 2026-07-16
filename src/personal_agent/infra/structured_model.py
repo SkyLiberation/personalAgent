@@ -18,101 +18,28 @@ added, removed or swapped without touching the adapter.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from time import perf_counter, sleep
-from typing import Any, Generic, Iterator, Literal, Protocol, TypeVar
+from typing import Any, Iterator, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel
+from personal_agent.capabilities.contracts.model import (
+    StreamChunk,
+    StreamingModelClient,
+    StructuredModelClient,
+    StructuredModelRequest,
+    StructuredModelResponse,
+    StructuredOutputT,
+)
 
-from personal_agent.infra.structured_parse import parse_structured
+from personal_agent.kernel.structured_parse import parse_structured
 from personal_agent.kernel.config_models import LangSmithConfig, OpenAIConfig, StructuredConfig
 from personal_agent.kernel.llm_schemas import structured_response_format
 from personal_agent.kernel.llm_telemetry import record_llm_usage
 from personal_agent.kernel.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
-StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
-
-ModelRequestKind = Literal["structured", "tool_calling", "text"]
-
-
-@dataclass(frozen=True, slots=True)
-class StructuredModelRequest(Generic[StructuredOutputT]):
-    """Provider-neutral request for one typed model response.
-
-    ``kind`` selects the transport:
-
-    - ``structured`` (default): Chat Completions strict ``json_schema`` parsed
-      into ``output_type``.
-    - ``tool_calling``: Chat Completions with ``tools`` / ``tool_choice``;
-      ``output_type`` may be ``BaseModel`` (unused, kept for typing).
-    - ``text``: Chat Completions, optionally with ``response_format``.
-
-    ``tools`` / ``tool_choice`` / ``response_format`` are ignored unless the
-    matching ``kind`` is set. ``extra_body`` is forwarded to the provider.
-    """
-
-    operation: str
-    version: str
-    messages: list[dict[str, Any]]
-    output_type: type[StructuredOutputT]
-    temperature: float = 0
-    max_tokens: int = 500
-    kind: ModelRequestKind = "structured"
-    tools: list[dict[str, object]] = field(default_factory=list)
-    tool_choice: str | dict[str, object] | None = None
-    response_format: dict[str, object] | None = None
-    extra_body: dict[str, object] | None = None
-    metadata: dict[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class StructuredModelResponse(Generic[StructuredOutputT]):
-    value: StructuredOutputT
-    model: str
-    latency_ms: float
-    content: str = ""
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    total_tokens: int | None = None
-    raw_response: Any = None
-    tool_calls: list[dict[str, Any]] | None = None
-    retry_attempts: int = 0
-    retry_errors: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True, slots=True)
-class StreamChunk:
-    """One delta from a streaming model response.
-
-    ``usage`` is populated only on the final chunk (empty ``delta``) so the
-    tracing observer can record token usage without intruding on the adapter.
-    """
-
-    delta: str
-    accumulated: str
-    usage: dict[str, int] | None = None
-
-
-class StructuredModelClient(Protocol):
-    """Application port for typed / tool-calling / text model calls."""
-
-    def generate(
-        self,
-        request: StructuredModelRequest[StructuredOutputT],
-    ) -> StructuredModelResponse[StructuredOutputT]: ...
-
-
-class StreamingModelClient(Protocol):
-    """Application port for streaming text generation (answer deltas)."""
-
-    def stream(
-        self,
-        request: StructuredModelRequest[Any],
-    ) -> Iterator[StreamChunk]: ...
-
-
 def _is_reasoning_model(model: str) -> bool:
     name = model.lower()
     return name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3")
@@ -286,6 +213,7 @@ class OpenAIModelClient:
             version=request.version,
             messages=request.messages,
             output_type=request.output_type,
+            context_projection_ref=request.context_projection_ref,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             kind="text",
@@ -729,14 +657,15 @@ def build_structured_model_client(
         max_retries=config.max_retries,
     )
     client = UsageRecordingStructuredModelClient(client)
-    if not observability.enabled:
-        return client
-    policy: TracePayloadPolicy = (
-        FullTracePayloadPolicy()
-        if observability.upload_inputs
-        else RedactedTracePayloadPolicy()
-    )
-    return ObservedStructuredModelClient(client, policy)
+    if observability.enabled:
+        policy: TracePayloadPolicy = (
+            FullTracePayloadPolicy()
+            if observability.upload_inputs
+            else RedactedTracePayloadPolicy()
+        )
+        client = ObservedStructuredModelClient(client, policy)
+    from personal_agent.capabilities.model_resolution import GovernedModelClient
+    return GovernedModelClient(client, provider="openai_compatible", model=config.model)
 
 
 def build_chat_model_client(
@@ -753,14 +682,19 @@ def build_chat_model_client(
         max_retries=config.max_retries,
     )
     client = UsageRecordingStructuredModelClient(client)
-    if not observability.enabled:
-        return client
-    policy: TracePayloadPolicy = (
-        FullTracePayloadPolicy()
-        if observability.upload_inputs
-        else RedactedTracePayloadPolicy()
+    if observability.enabled:
+        policy: TracePayloadPolicy = (
+            FullTracePayloadPolicy()
+            if observability.upload_inputs
+            else RedactedTracePayloadPolicy()
+        )
+        client = ObservedStructuredModelClient(client, policy)
+    from personal_agent.capabilities.model_resolution import GovernedModelClient
+    return GovernedModelClient(
+        client,
+        provider="openai_compatible",
+        model=model_override or config.model,
     )
-    return ObservedStructuredModelClient(client, policy)
 
 
 def build_streaming_model_client(
@@ -771,6 +705,13 @@ def build_streaming_model_client(
     if not (config.api_key and config.base_url):
         return None
     client: StreamingModelClient = OpenAIModelClient(config)
-    if not observability.enabled:
-        return client
-    return ObservedStreamingModelClient(client, observability)
+    observed: StreamingModelClient = (
+        ObservedStreamingModelClient(client, observability)
+        if observability.enabled else client
+    )
+    from personal_agent.capabilities.model_resolution import GovernedStreamingModelClient
+    return GovernedStreamingModelClient(
+        observed,
+        provider="openai_compatible",
+        model=config.model,
+    )

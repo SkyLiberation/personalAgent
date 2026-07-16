@@ -31,13 +31,13 @@ from personal_agent.application.ask_pipeline_factory import AskPipelineComponent
 from personal_agent.application.evidence_engine import EvidenceEngine
 from personal_agent.planning.query_planner import plan_retrieval
 from personal_agent.orchestration.runtime_helpers import (
-    _best_snippet,
     _graph_episode_uuids,
     _graph_fact_lines,
     _graph_facts_by_episode,
     _merge_citations,
     _merge_notes,
 )
+from personal_agent.kernel.evidence import _best_snippet
 from personal_agent.application.runtime_results import AskResult, RetryResult
 from personal_agent.application.verifier import VerificationResult
 

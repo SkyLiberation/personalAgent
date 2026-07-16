@@ -45,7 +45,10 @@ class LlmClient:
         prompt_name: str = "answer_generation",
         prompt_version: str | None = None,
     ) -> str | None:
-        from personal_agent.infra.structured_model import StructuredModelRequest
+        from personal_agent.capabilities.contracts.model import (
+            StructuredModelRequest,
+            sealed_context_projection_ref,
+        )
         from pydantic import BaseModel
 
         if self._model_client is None:
@@ -55,14 +58,18 @@ class LlmClient:
             return None
         answer_prompt = get_prompt("answer_generation.system")
         try:
+            messages = [
+                {"role": "system", "content": answer_prompt.template},
+                {"role": "user", "content": prompt},
+            ]
             response = self._model_client.generate(StructuredModelRequest(
                 operation=prompt_name,
                 version=prompt_version or answer_prompt.version,
-                messages=[
-                    {"role": "system", "content": answer_prompt.template},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 output_type=BaseModel,
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose=prompt_name, messages=messages,
+                ),
                 temperature=0.3,
                 max_tokens=_max_tokens_for_prompt(prompt_name),
                 kind="text",
@@ -82,7 +89,10 @@ class LlmClient:
         Completes with ('answer_complete', {'answer': full_text}).
         On failure, yields ('answer_error', {'error': message}) and stops.
         """
-        from personal_agent.infra.structured_model import StructuredModelRequest
+        from personal_agent.capabilities.contracts.model import (
+            StructuredModelRequest,
+            sealed_context_projection_ref,
+        )
         from pydantic import BaseModel
 
         if self._streaming_client is None:
@@ -93,14 +103,18 @@ class LlmClient:
             return
         try:
             answer_prompt = get_prompt("answer_generation.system")
+            messages = [
+                {"role": "system", "content": answer_prompt.template},
+                {"role": "user", "content": prompt},
+            ]
             request = StructuredModelRequest(
                 operation="answer_generation_stream",
                 version=answer_prompt.version,
-                messages=[
-                    {"role": "system", "content": answer_prompt.template},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 output_type=BaseModel,
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose="answer_generation_stream", messages=messages,
+                ),
                 temperature=0.3,
                 max_tokens=_max_tokens_for_prompt("answer_generation_stream"),
                 kind="text",

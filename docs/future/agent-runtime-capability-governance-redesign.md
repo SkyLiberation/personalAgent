@@ -2,7 +2,10 @@
 
 ## 定位
 
-本文定义 personalAgent 下一阶段的目标架构。目标不是继续增加平级模块，而是让系统直接回答三个稳定问题：
+本文记录 personalAgent 三控制域重构的目标、取舍与落地验收。核心协议已经在 2026-07 落地；本文保留为架构决策记录，当前运行事实以
+[当前核心架构](../summary/core-architecture-current-state.md) 为准。
+
+目标不是继续增加平级模块，而是让系统直接回答三个稳定问题：
 
 1. Agent 如何运行并持续接近 Goal；
 2. Agent 在一次模型调用或 Action 中可以使用哪些能力；
@@ -19,12 +22,17 @@ Agent Control Plane
 
 真正调用模型、Tool、MCP、Retriever、Agent 和 Procedure 的部分属于 `Agent Execution Plane`。Checkpoint、Event Store、Artifact Store 以及 Observation/Evidence/VerificationReport 的持久化属于状态与证据基础设施。`GoalVerifier`、`CompletionVerifier` 不是基础设施：它们是组合 Runtime 业务语义、Governance 确定性下限和必要语义判断的应用服务。控制域是兄弟关系，不是三个串行 Manager，也不是三个保存全部状态的大对象。
 
-本文是未来目标态，不把设计描述成当前事实。当前事实仍以
-[当前核心架构](../summary/core-architecture-current-state.md) 为准；成功标准详细设计见
+成功标准详细设计见
 [成功标准与验证重构](success-criteria-verification-redesign.md)；本地并行与运行中语义修改见
 [并行 Join 与语义 Steering](parallel-steering-runtime-design.md)。
 
 本轮不保留旧接口兼容、双写、历史 checkpoint 迁移或灰度模型。目标模型落地时直接修改所有调用方并删除被替代的类型、字段和路径。
+
+### 落地状态
+
+已落地：CoordinationMode/ExecutionRoute 拆分、Task lifecycle/intake、Proposal→Admission→AcceptedCommand、封闭 ExecutionGrant、Capability Portfolio 与 availability、Model Invocation Protocol、Context projection 必填、Procedure/child 子授权、Evidence Admission、Execution/Effectiveness 事件拆分、Invocation Journal/outbox、Task/Control commit、显式包依赖 DAG 与 CI 门禁。
+
+继续演进但不阻塞本次目标态：本地并行 join 和运行中语义 steering，见独立设计文档；生产数据库上的 crash-window 演练属于部署验证，不改变上述模型所有权。
 
 ## 1. 外部评估结论
 
@@ -77,11 +85,11 @@ Portfolio 继续提供统一发现视图，但 Skill 与执行能力使用不同
 
 ControlPhase 只表示 Orchestration 的 durable resume anchor，不复制 InvocationJournal 的远端执行状态。原子提交也不要求把所有 Projection 变成第二份 canonical state：提交 canonical fact、cursor 和 checkpoint CAS；Projection 可以在同一事务内更新，也可以按 cursor 确定性追平。
 
-## 2. 当前设计需要解决的问题
+## 2. 重构前设计需要解决的问题
 
 ### 2.1 运行协议仍混合两个维度
 
-当前 `PlanningMode = reactive | deliberative | procedural` 把两个问题放进同一枚举：
+重构前 `PlanningMode = reactive | deliberative | procedural` 把两个问题放进同一枚举：
 
 - `reactive/deliberative` 描述是否需要显式短期协调；
 - `procedural` 描述一个 Action 采用哪种执行路径。
@@ -456,7 +464,7 @@ FinishDecision
 TerminateDecision
 ```
 
-当前 `ExecuteMetaCapabilityDecision` 目标态更名为 `ExecuteBoundedActionDecision`；`BoundedAction.meta_capability` 更名为 `execution_intent`。`acquire/explore/reason/verify/transform/commit` 是 Action 语义分类，不是 Capability 类型。
+`ExecuteBoundedActionDecision` 是有界动作提案的 canonical 类型；`BoundedAction.execution_intent` 是 Action 语义字段。旧的泛化 action decision 和 `meta_capability` 命名删除。`acquire/explore/reason/verify/transform/commit` 是 Action 语义分类，不是 Capability 类型。
 
 基础 Skill activation 从 ControlDecision 删除。模型调用发现上下文不足时，Model Invocation Protocol 返回 typed `ContextGapOutcome`，由 Runtime 选择重新解析 Skill、请求能力补齐、clarification 或失败；不得先调用 Executive 再让 Executive 决定是否为本次调用激活 Skill。
 
@@ -1288,8 +1296,8 @@ durable prepared invocation
 - `PlanningMode` 更名为 `CoordinationMode`，删除 `procedural` 值；
 - `PlanningModeAssessment/Policy` 更名为 `CoordinationAssessment/Policy`；
 - Procedure applicability 生成 ExecutionRoute constraint，不生成 CoordinationMode；
-- `ExecuteMetaCapabilityDecision` 更名为 `ExecuteBoundedActionDecision`；
-- `BoundedAction.meta_capability` 更名为 `execution_intent`；
+- 有界动作提案统一为 `ExecuteBoundedActionDecision`；
+- Action 语义字段统一为 `BoundedAction.execution_intent`，删除 `meta_capability`；
 - 从 ControlDecision 删除基础 `ActivateSkillDecision`；
 - Skill 和 Model Invocation 从通用 Action CapabilityRequest/Grant 中移出；
 - 删除具体通用 `CapabilityGrant`，Gateway 只接受封闭 ExecutionGrant union 的合法叶子；
@@ -1594,7 +1602,7 @@ GoalVerifier 接受全部 required criteria 后，CompletionVerifier 接受 Comp
 
 交付：
 
-- 删除旧 PlanningMode procedural、ActivateSkillDecision、implicit/general grant、InvocationIntent、meta_capability 和重复 state；
+- 删除旧 PlanningMode procedural、ActivateSkillDecision、implicit/general grant、InvocationIntent、`meta_capability` 和重复 state；
 - 将 kernel/contracts 收缩为 kernel/primitives + domain-owned contracts；
 - 静态测试禁止旧类型/字段回归；
 - 更新 current-state、workflow 和 topics 的历史命名；

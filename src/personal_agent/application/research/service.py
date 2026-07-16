@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from personal_agent.application.research.models import (
+from personal_agent.kernel.contracts.research import (
     DigestClaim,
     EventScoreBreakdown,
     IntelligenceDigest,
@@ -1297,7 +1297,8 @@ class ResearchService:
         reserved, delivery_id = self.store.reserve_delivery(digest, subscription)
         if not reserved:
             return True
-        from personal_agent.application.review.models import DeliveryMessage, DeliveryTarget
+        from personal_agent.kernel.contracts.review import DeliveryMessage
+        from personal_agent.kernel.contracts.delivery import DeliveryTarget
         result = self.delivery_router.send(
             DeliveryTarget(**subscription.delivery.model_dump()),
             DeliveryMessage(

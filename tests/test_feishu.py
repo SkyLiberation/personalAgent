@@ -8,7 +8,7 @@ from personal_agent.kernel.models import EntryInput
 from personal_agent.adapters.feishu.models import FeishuIncomingMessage
 from personal_agent.adapters.feishu.service import FeishuService
 from personal_agent.application.review import DigestSubscription
-from personal_agent.application.review.models import ReviewFeedbackResult
+from personal_agent.kernel.contracts.review import ReviewFeedbackResult
 
 
 def test_feishu_entry_does_not_preclassify_or_prefetch_thread_messages(temp_dir):

@@ -222,26 +222,33 @@ class LlmEvidenceReranker:
         if self._model_client is None:
             raise RuntimeError("LLM reranker requires a configured model client")
 
-        from personal_agent.infra.structured_model import StructuredModelRequest
+        from personal_agent.capabilities.contracts.model import (
+            StructuredModelRequest,
+            sealed_context_projection_ref,
+        )
 
         system_prompt = get_prompt("evidence_rerank.system")
+        messages = [
+            {"role": "system", "content": system_prompt.template},
+            {
+                "role": "user",
+                "content": render_prompt(
+                    "evidence_rerank.user",
+                    rerank_prompt=_rerank_prompt(question, candidates),
+                ),
+            },
+        ]
         response = self._model_client.generate(StructuredModelRequest(
             operation="evidence_rerank",
             version=system_prompt.version,
             temperature=0,
             max_tokens=700,
             kind="structured",
-            messages=[
-                {"role": "system", "content": system_prompt.template},
-                {
-                    "role": "user",
-                    "content": render_prompt(
-                        "evidence_rerank.user",
-                        rerank_prompt=_rerank_prompt(question, candidates),
-                    ),
-                },
-            ],
+            messages=messages,
             output_type=_RerankResult,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="evidence_rerank", messages=messages,
+            ),
             metadata={"component": "evidence_reranker", "candidate_count": len(candidates)},
         ))
         valid_ids = {item.evidence.evidence_id for item in candidates}

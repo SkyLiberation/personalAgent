@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from threading import RLock
 
 from personal_agent.kernel.contracts.agent import SubagentProfile
-from personal_agent.kernel.contracts.executive import SubtaskSpec
+from personal_agent.runtime.contracts.control import SubtaskSpec
 
 
 @dataclass(frozen=True, slots=True)

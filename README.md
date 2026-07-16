@@ -48,15 +48,15 @@ External Cron / Manual Research
 | 组件 | 代码落点 | 能力总结 | 文档 |
 | --- | --- | --- | --- |
 | `入口层` | [adapters/web/api.py](src/personal_agent/adapters/web/api.py), [adapters/web/routes/](src/personal_agent/adapters/web/routes), [adapters/feishu/service.py](src/personal_agent/adapters/feishu/service.py), [adapters/cli/main.py](src/personal_agent/adapters/cli/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
-| `任务理解 / Goal Graph` | [task_analyzer.py](src/personal_agent/planning/task_analyzer.py), [goal_graph.py](src/personal_agent/planning/goal_graph.py) | TaskAnalyzer 输出 Goal、typed relation 与资源提示；确定性 Compiler/Validator 生成 TaskSpec 和初始 Ledger | [docs/topics/task-analysis.md](docs/topics/task-analysis.md) |
-| `AdaptivePlanner / Executive / Procedure` | [adaptive.py](src/personal_agent/planning/adaptive.py), [executive.py](src/personal_agent/planning/executive.py), [procedures.py](src/personal_agent/planning/procedures.py) | Planner 管短视窗策略，Executive 管在线动作，Procedure 持有稳定事务与副作用边界 | [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) |
+| `任务理解 / Goal Graph` | [task_analyzer.py](src/personal_agent/planning/task_analyzer.py), [task_compiler.py](src/personal_agent/planning/task_compiler.py) | TaskAnalyzer 输出语义提案；确定性 Compiler 生成 TaskContract、初始 Runtime 和 ContextInventory | [docs/topics/task-analysis.md](docs/topics/task-analysis.md) |
+| `AdaptivePlanner / Executive / Procedure` | [adaptive.py](src/personal_agent/planning/adaptive.py), [control_runtime.py](src/personal_agent/runtime/control_runtime.py), [procedure_runtime.py](src/personal_agent/runtime/procedure_runtime.py) | Planner 管短视窗策略，Executive 只产生有界提案，Procedure 持有稳定事务与副作用边界 | [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) |
 | `运行时 / 编排层` | [runtime.py](src/personal_agent/orchestration/runtime.py), [orchestration_graph.py](src/personal_agent/orchestration/orchestration_graph.py), [orchestration_nodes/](src/personal_agent/orchestration/orchestration_nodes/) | `AgentRuntime` 装配窄 Graph Context；LangGraph 承载 analyze/decide/act/observe/verify、HITL 和 checkpoint | [docs/topics/runtime.md](docs/topics/runtime.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [application/capture/service.py](src/personal_agent/application/capture/service.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、研究/订阅管理、知识生命周期、worker 诊断、run 诊断、delete/restore、consolidate 等动作 | [docs/topics/tools.md](docs/topics/tools.md) |
 | `记忆层` | [memory/](src/personal_agent/memory), [infra/storage/](src/personal_agent/infra/storage), [kernel/models.py](src/personal_agent/kernel/models.py) | 有受限会话线索、Postgres 长期记忆、Research 数据、LangGraph checkpoint、run snapshot 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
 | `检索与推理层` | [orchestration/ask/](src/personal_agent/orchestration/ask), [application/verifier.py](src/personal_agent/application/verifier.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 支持图谱、结构、本地、网络、情景和反思多路召回，RRF/MMR、上下文压缩、反证检索、引用生成和蕴含级校验 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
 | `主动知识循环` | [application/review/](src/personal_agent/application/review), [application/insight/](src/personal_agent/application/insight), [application/knowledge/](src/personal_agent/application/knowledge) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
 | `持续研究层` | [application/research/](src/personal_agent/application/research), [infra/storage/postgres_research_store.py](src/personal_agent/infra/storage/postgres_research_store.py), [adapters/web/routes/research.py](src/personal_agent/adapters/web/routes/research.py) | 支持一次性研究、定时订阅、来源归一、事件聚类、可信度、个人关联、情报简报、反馈偏好和确认入库 | [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) |
-| `后台任务 / 调度层` | [application/worker.py](src/personal_agent/application/worker.py), [infra/storage/postgres_worker_queue_store.py](src/personal_agent/infra/storage/postgres_worker_queue_store.py), [deploy/cron/](deploy/cron) | Postgres durable queue 提供 lease、heartbeat、重试、dead-letter 和用户并发限制；生产 Research 使用外部 cron 入队、独立 worker 执行 | [docs/deploy.md](docs/deploy.md) |
+| `后台任务 / 调度层` | [orchestration/worker.py](src/personal_agent/orchestration/worker.py), [application/worker_queue.py](src/personal_agent/application/worker_queue.py), [infra/storage/postgres_worker_queue_store.py](src/personal_agent/infra/storage/postgres_worker_queue_store.py) | 应用层定义 queue port，Postgres adapter 提供 lease、heartbeat、重试和 dead-letter，orchestration worker 组合 handler | [docs/deploy.md](docs/deploy.md) |
 | `执行与反馈层` | [adapters/web/routes/](src/personal_agent/adapters/web/routes), [orchestration/runtime.py](src/personal_agent/orchestration/runtime.py), [orchestration/orchestration_models.py](src/personal_agent/orchestration/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、失败降级、异步任务和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测、治理与评测层` | [kernel/observability.py](src/personal_agent/kernel/observability.py), [adapters/web/auth.py](src/personal_agent/adapters/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、执行回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
@@ -229,12 +229,16 @@ personalAgent/                  # 项目根目录
 ├─ log/                         # 运行日志目录
 └─ src/
    └─ personal_agent/           # Python 应用主包
-      ├─ planning/              # TaskAnalyzer / GoalGraph / Executive / Ledger / Procedure
+      ├─ planning/              # TaskAnalyzer / TaskCompiler / Coordination / Adaptive Plan
       │  ├─ task_analyzer.py    # 目标、关系和资源提示的结构化语义分析
-      │  ├─ goal_graph.py       # TaskSpec / ExecutionLedger 的编译和校验
-      │  ├─ executive.py        # Observation 驱动的逐轮决策
-      │  ├─ ledger.py           # 事件投影和受约束计划修订
-      │  └─ procedures.py       # 稳定事务与副作用边界
+      │  ├─ task_compiler.py    # TaskContract / 初始 Runtime 的确定性编译
+      │  └─ adaptive.py         # CoordinationMode、短视窗计划和 Monitor
+      ├─ runtime/               # Task runtime、Executive control、Procedure 与 commits
+      ├─ capabilities/          # Portfolio、availability、resolution、grant 与 outcome
+      ├─ governance/            # Proposal/Evidence admission、Policy 与 Gateway
+      ├─ execution/             # Invocation、Journal 与 outbox
+      ├─ context/               # purpose-scoped ContextProjection 与 materialization
+      ├─ verification/          # Goal 与 Task completion verification
       ├─ orchestration/         # LangGraph 总图、节点、runtime 与 service
       │  ├─ runtime.py          # AgentRuntime：统一执行入口
       │  ├─ service.py          # Web/CLI/飞书使用的应用 facade

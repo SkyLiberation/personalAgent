@@ -21,9 +21,10 @@ from langextract.providers.schemas.openai import OpenAISchema
 from pydantic import BaseModel, Field
 
 from personal_agent.application.extract.langextract_client import run_extract
-from personal_agent.infra.structured_model import (
+from personal_agent.capabilities.contracts.model import (
     StructuredModelClient,
     StructuredModelRequest,
+    sealed_context_projection_ref,
 )
 from personal_agent.kernel.config import LangExtractConfig
 from personal_agent.kernel.contracts.research import ResearchSource
@@ -329,6 +330,16 @@ class StructuredResearchEventExtractor:
         ]
         if self.model_client is None:
             return {}
+        messages = [
+            {"role": "system", "content": STRUCTURED_RESEARCH_EVENT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"topic": topic, "instructions": instructions, "sources": payload},
+                    ensure_ascii=False,
+                ),
+            },
+        ]
         response = self.model_client.generate(
             StructuredModelRequest(
                 operation="research_event_frame",
@@ -338,23 +349,10 @@ class StructuredResearchEventExtractor:
                 max_tokens=1600,
                 temperature=0,
                 metadata={"model": self.config.model_id, "component": "research"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": STRUCTURED_RESEARCH_EVENT_SYSTEM_PROMPT,
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "topic": topic,
-                                "instructions": instructions,
-                                "sources": payload,
-                            },
-                            ensure_ascii=False,
-                        ),
-                    },
-                ],
+                messages=messages,
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose="research_event_frame", messages=messages,
+                ),
             )
         )
         parsed = response.value

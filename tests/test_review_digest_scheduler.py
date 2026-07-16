@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from personal_agent.application.review import DigestSubscription, ReviewDigestScheduler
-from personal_agent.application.review.models import ReviewDigestJobResult
+from personal_agent.kernel.contracts.review import ReviewDigestJobResult
 from personal_agent.application.review.scheduler import is_subscription_due
 
 

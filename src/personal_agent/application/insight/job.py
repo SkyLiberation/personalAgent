@@ -15,7 +15,8 @@ from typing import Protocol
 from pydantic import BaseModel
 
 from personal_agent.kernel.models import local_now
-from personal_agent.application.review.models import DeliveryMessage, DeliveryTarget, DigestSubscription
+from personal_agent.kernel.contracts.review import DeliveryMessage, DigestSubscription
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 from personal_agent.application.review.scheduler import is_subscription_due
 from personal_agent.application.insight.service import KnowledgeGapUseCase
 

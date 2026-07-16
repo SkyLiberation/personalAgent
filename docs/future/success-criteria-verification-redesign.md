@@ -865,7 +865,7 @@ class EvalTrialResult(BaseModel):
 - `success_criteria: list[str]`；
 - 依赖 Compiler 猜测 criterion 来源的输出。
 
-### `planning/goal_graph.py`
+### `planning/task_compiler.py`
 
 保留：
 
@@ -881,7 +881,7 @@ class EvalTrialResult(BaseModel):
 - acceptance 裸字符串拼装；
 - 基于任意 operation 文本的本地 mutation taxonomy。
 
-### `kernel/contracts/agentic.py`
+### `runtime/contracts/task.py`
 
 增加：
 

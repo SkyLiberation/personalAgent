@@ -126,7 +126,7 @@ def test_solidify_without_source_dialogue_stops_without_fabricating_a_note(
     assert result.run_status == "completed"
     assert "procedure_started" in _event_types(result)
     assert "step_failed" in _event_types(result)
-    assert "task_stopped" in execution_types
+    assert "task_terminated" in execution_types
     assert not svc.memory.list_notes("bob")
 
 

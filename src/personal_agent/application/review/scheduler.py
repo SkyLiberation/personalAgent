@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from personal_agent.kernel.models import local_now
 from personal_agent.application.review.jobs import ReviewDigestJob
-from personal_agent.application.review.models import DigestSubscription, ReviewDigestJobResult
+from personal_agent.kernel.contracts.review import DigestSubscription, ReviewDigestJobResult
 
 logger = logging.getLogger(__name__)
 

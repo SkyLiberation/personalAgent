@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from types import SimpleNamespace
 
-from personal_agent.kernel.contracts.agentic import (
+from personal_agent.runtime.contracts.task import (
     AttemptRef,
     ContextItem,
     ContextProjection,
@@ -21,26 +21,28 @@ from personal_agent.kernel.contracts.agentic import (
     TaskContract,
     materialize_goals,
 )
-from personal_agent.kernel.contracts.capability import CapabilityRequirement
-from personal_agent.kernel.contracts.executive import (
+from personal_agent.capabilities.contracts.execution import CapabilityRequirement
+from personal_agent.runtime.contracts.control import (
     BoundedAction,
-    ExecuteMetaCapabilityDecision,
+    ControlProposal,
+    ExecuteBoundedActionDecision,
     InvokeProcedureDecision,
     ObservationRef,
+    observation_provenance,
 )
-from personal_agent.kernel.contracts.planning import (
+from personal_agent.runtime.contracts.planning import (
     PlanDefinition,
     DerivedGoalSpec,
     GoalDecompositionProposal,
     PlanPatch,
     PlanStep,
     PlanningUsage,
-    PlanningModeAssessment,
+    CoordinationAssessment,
     PlanningSnapshot,
     ReplacePlanStep,
     RuntimeGoalCriterion,
 )
-from personal_agent.kernel.contracts.procedure import ProcedureInvocation, ProcedureRef
+from personal_agent.capabilities.contracts.procedure import ProcedureInvocation, ProcedureRef
 from personal_agent.orchestration.orchestration_models import RunCheckpoint
 from personal_agent.orchestration.orchestration_nodes._executive import _steps_for_action
 from personal_agent.planning.adaptive import (
@@ -51,18 +53,18 @@ from personal_agent.planning.adaptive import (
     PlanMonitor,
     PlanValidator,
     PlanningConflictError,
-    PlanningModePolicy,
+    CoordinationModePolicy,
     PlanningValidationError,
 )
-from personal_agent.planning.decision_validator import DecisionValidationError, DecisionValidator
-from personal_agent.planning.executive import ExecutiveController
-from personal_agent.planning.goal_graph import GoalGraphCompiler
-from personal_agent.planning.ledger import (
+from personal_agent.governance.decision_admission import DecisionValidator
+from personal_agent.runtime.control_runtime import ExecutiveController
+from personal_agent.planning.task_compiler import GoalGraphCompiler
+from personal_agent.runtime.task_runtime import (
     TaskRuntimeProjector,
     GoalDecompositionValidator,
     LedgerTransitionError,
 )
-from personal_agent.planning.procedures import (
+from personal_agent.runtime.procedure_runtime import (
     PROCEDURE_CATALOG,
     ProcedureApplicabilityResolver,
     ProcedureMaterializer,
@@ -236,7 +238,7 @@ def test_open_commit_is_materialized_as_read_only_proposal_then_governed_commit(
     ))
     action = BoundedAction(
         goal_id="goal_1",
-        meta_capability="commit",
+        execution_intent="commit",
         description="更新外部记录",
         output_contract="MutationReceipt",
         requirement=CapabilityRequirement.from_dimensions(
@@ -302,7 +304,7 @@ def test_procedure_recovery_policy_is_projected_to_runtime_step() -> None:
 
 
 def test_executive_invokes_a_mandatory_procedure_before_open_action() -> None:
-    from personal_agent.kernel.contracts.executive import ControlState
+    from personal_agent.runtime.contracts.control import ControlState
 
     task, ledger = _knowledge_task()
     candidates = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(task, ledger)
@@ -320,17 +322,16 @@ def test_executive_invokes_a_mandatory_procedure_before_open_action() -> None:
 
 
 def test_decision_validator_rejects_mandatory_procedure_bypass() -> None:
-    from personal_agent.kernel.contracts.executive import ControlState, DecisionBasis
+    from personal_agent.runtime.contracts.control import ControlState, DecisionBasis
 
     task, ledger = _knowledge_task()
     candidates = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(task, ledger)
-    decision = ExecuteMetaCapabilityDecision(
+    decision = ExecuteBoundedActionDecision(
         target_goal_id="goal_1",
         basis=DecisionBasis(),
-        bounded_action=BoundedAction(goal_id="goal_1", meta_capability="transform", description="bypass"),
+        bounded_action=BoundedAction(goal_id="goal_1", execution_intent="transform", description="bypass"),
     )
-    with pytest.raises(DecisionValidationError, match="mandatory"):
-        DecisionValidator().validate(task, ledger, decision, ControlState(
+    admission = DecisionValidator().admit(task, ledger, ControlProposal(decision=decision), ControlState(
             task_id=task.task_id,
             task_revision=task.revision,
             task_goal=task.user_goal,
@@ -339,14 +340,16 @@ def test_decision_validator_rejects_mandatory_procedure_bypass() -> None:
             remaining_provider_calls=8,
             remaining_executive_turns=8,
         ))
+    assert admission.verdict == "denied"
+    assert admission.reason_codes == ("mandatory_procedure_bypass",)
 
 
 def test_procedure_clarifies_then_retries_only_with_new_user_input() -> None:
-    from personal_agent.kernel.contracts.executive import ControlState
+    from personal_agent.runtime.contracts.control import ControlState
 
     task, ledger = _knowledge_task(operation="delete")
     runtime = ledger.goal_states["goal_1"].model_copy(update={
-        "attempts": (AttemptRef(action_id="delete-attempt", meta_capability="commit", status="failed"),),
+        "attempts": (AttemptRef(action_id="delete-attempt", execution_intent="commit", status="failed"),),
     })
     ledger = ledger.model_copy(update={"goal_states": {"goal_1": runtime}})
     candidates = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(task, ledger)
@@ -360,11 +363,15 @@ def test_procedure_clarifies_then_retries_only_with_new_user_input() -> None:
         remaining_executive_turns=8,
     )
     clarification = ExecutiveController().decide(task, ledger, observations=(ObservationRef(
-        goal_id="goal_1", kind="procedure_clarification", provenance="knowledge_delete", summary="请提供准确标题",
+        goal_id="goal_1", kind="procedure_clarification",
+        provenance=observation_provenance("runtime", "knowledge_delete", "请提供准确标题"),
+        summary="请提供准确标题",
     ),), control_state=control)
-    assert clarification.action == "stop"
+    assert clarification.action == "terminate"
     retried = ExecutiveController().decide(task, ledger, observations=(ObservationRef(
-        goal_id="goal_1", kind="user_clarification", provenance="user", summary="标题是 DNS 记录",
+        goal_id="goal_1", kind="user_clarification",
+        provenance=observation_provenance("user", "user", "标题是 DNS 记录"),
+        summary="标题是 DNS 记录",
     ),), control_state=control)
     assert isinstance(retried, InvokeProcedureDecision)
     assert "DNS 记录" in retried.procedure_invocation.input["text"]
@@ -436,9 +443,9 @@ def test_goal_decomposition_requires_real_observation_and_current_revisions() ->
         )
 
 
-def test_planning_mode_uses_contract_facts_not_goal_labels() -> None:
-    assessment, _ = PlanningModePolicy().assess(
-        facts=__import__("personal_agent.kernel.contracts.planning", fromlist=["PlanningFacts"]).PlanningFacts(
+def test_coordination_uses_contract_facts_not_goal_labels() -> None:
+    assessment, _ = CoordinationModePolicy().assess(
+        facts=__import__("personal_agent.runtime.contracts.planning", fromlist=["PlanningFacts"]).PlanningFacts(
             task_revision=1,
             goal_graph_revision=1,
             active_goal_count=1,
@@ -455,7 +462,7 @@ def test_planning_mode_uses_contract_facts_not_goal_labels() -> None:
 
 def test_contract_planner_creates_provider_neutral_short_plan() -> None:
     task, ledger = _knowledge_task(operation="read")
-    assessment = PlanningModeAssessment(
+    assessment = CoordinationAssessment(
         mode="deliberative",
         reason_codes=("ambiguous_strategy",),
         target_goal_ids=("goal_1",),
@@ -479,7 +486,7 @@ def test_plan_snapshot_ignores_unrelated_execution_events_but_fences_goal_graph_
         task_id=task.task_id,
         event_type="attempt_recorded",
         goal_id="goal_1",
-        payload={"attempt": AttemptRef(action_id="a", meta_capability="acquire", status="succeeded").model_dump()},
+        payload={"attempt": AttemptRef(action_id="a", execution_intent="acquire", status="succeeded").model_dump()},
     )
     advanced = projector.project(ledger, (attempt_event,))
     PlanValidator().validate(plan, task, advanced, BOUNDED_READ_ONLY_PROFILE)
@@ -548,7 +555,7 @@ def test_monitor_deduplicates_equivalent_replan_requests() -> None:
         observation_id="gap-1",
         goal_id="goal_1",
         kind="capability_gap",
-        provenance="resolver",
+        provenance=observation_provenance("runtime", "resolver", "no capability"),
         summary="no capability",
     )
     first, plan_runtime = PlanMonitor().inspect(
@@ -593,7 +600,9 @@ def test_monitor_uses_bounded_semantic_fallback_only_for_ambiguous_observation()
             observation_id="ambiguous-1",
             goal_id="goal_1",
             kind="new_evidence",
-            provenance="retriever",
+            provenance=observation_provenance(
+                "tool", "retriever", "the route assumptions changed",
+            ),
             summary="the route assumptions changed",
         ),),
         BOUNDED_READ_ONLY_PROFILE.limits,

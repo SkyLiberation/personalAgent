@@ -9,9 +9,9 @@ from personal_agent.application.research.extraction import (
     StructuredResearchEventExtractor,
     frames_describe_same_event,
 )
-from personal_agent.infra.structured_model import StructuredModelResponse
+from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from personal_agent.kernel.config_models import LangExtractConfig
-from personal_agent.application.research.models import ResearchSource
+from personal_agent.kernel.contracts.research import ResearchSource
 
 
 class _FakeStructuredClient:

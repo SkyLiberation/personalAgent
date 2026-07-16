@@ -8,7 +8,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import ConfigDict, Field, create_model
 
 from personal_agent.infra.mcp import MCPError, MCPJsonRpcClient, MCPToolDefinition
-from personal_agent.kernel.contracts.capability import MCPCapability
+from personal_agent.capabilities.contracts.execution import MCPCapability
 from personal_agent.kernel.config_models import MCPConfig, MCPServerConfig, MCPToolConfig
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 

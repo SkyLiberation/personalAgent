@@ -22,6 +22,10 @@ from personal_agent.kernel.contracts.tool_runtime import (
     ToolGatewayContext,
 )
 from personal_agent.governance.policy import PolicyDecision, PolicyEngine, PolicyInput
+from personal_agent.capabilities.contracts.grants import (
+    AtomicCapabilityGrant,
+    ProcedureNodeGrant,
+)
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -128,7 +132,14 @@ class ToolGateway:
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
 
-    def invoke(self, name: str, args: dict[str, Any], context: ToolGatewayContext) -> dict[str, Any]:
+    def invoke(
+        self,
+        name: str,
+        args: dict[str, Any],
+        context: ToolGatewayContext,
+        *,
+        grant: AtomicCapabilityGrant | ProcedureNodeGrant | None = None,
+    ) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
             return tool_failure(f"未找到工具：{name}", error_kind="invalid_param").model_dump(mode="json")
@@ -139,7 +150,8 @@ class ToolGateway:
         timed_out = False
         rate_limited = False
         try:
-            violation = self._validate_policy(tool, args, context)
+            grant_violation = self._validate_execution_grant(name, context, grant)
+            violation = grant_violation or self._validate_policy(tool, args, context)
             if violation is not None:
                 output = tool_failure(violation.message, error_kind=violation.kind)
             elif self._is_rate_limited(tool, context):
@@ -288,7 +300,8 @@ class ToolGateway:
         normalized_args = args if isinstance(args, dict) else {}
         call_id = str(call.get("id", ""))
         context = self._context_from_state(state, call_id)
-        artifact = self.invoke(name, normalized_args, context)
+        grant = self._grant_from_state(state, context.step_id)
+        artifact = self.invoke(name, normalized_args, context, grant=grant)
         content = (
             str(artifact.get("data"))
             if artifact.get("ok")
@@ -338,6 +351,45 @@ class ToolGateway:
         # 真正的并发去重在执行前的 reserve() 完成，避免 seen()/commit()
         # 分离导致两个进程同时通过检查。
         return self._validate_idempotency(tool, governance, args)
+
+    @staticmethod
+    def _validate_execution_grant(
+        tool_name: str,
+        context: ToolGatewayContext,
+        grant: AtomicCapabilityGrant | ProcedureNodeGrant | None,
+    ) -> _PolicyViolation | None:
+        if context.execution_mode == "direct":
+            return None
+        if grant is None:
+            return _PolicyViolation("agent tool dispatch requires a leaf execution grant")
+        bound_name = grant.provider_binding_ref.rsplit(":", 1)[-1]
+        if bound_name != tool_name:
+            return _PolicyViolation("execution grant is bound to a different tool")
+        if (
+            context.step_id
+            and isinstance(grant, AtomicCapabilityGrant)
+            and grant.action_ref != context.step_id
+        ):
+            return _PolicyViolation("execution grant is bound to a different invocation")
+        return None
+
+    @staticmethod
+    def _grant_from_state(
+        state: Any,
+        step_id: str | None,
+    ) -> AtomicCapabilityGrant | ProcedureNodeGrant | None:
+        invocations = getattr(getattr(state, "invocation_batch", None), "invocations", ())
+        invocation = next((item for item in invocations if item.step_id == step_id), None)
+        if invocation is None:
+            react_step_id = getattr(getattr(state, "react", None), "step_id", "")
+            invocation = next((item for item in invocations if item.step_id == react_step_id), None)
+        grant_ref = getattr(invocation, "execution_grant_ref", None)
+        grant = getattr(state, "execution_grants", {}).get(grant_ref or "")
+        if isinstance(grant, ProcedureNodeGrant) and invocation is not None:
+            node_id = getattr(invocation, "procedure_node_id", None) or invocation.step_id
+            if grant.node_id != node_id:
+                return None
+        return grant if isinstance(grant, (AtomicCapabilityGrant, ProcedureNodeGrant)) else None
 
     def _validate_idempotency(
         self,

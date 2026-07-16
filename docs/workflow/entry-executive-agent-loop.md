@@ -1,120 +1,100 @@
 # Entry 到 Executive Agent Loop
 
-本文描述一次 `entry` 请求从输入到最终返回的当前主链路。系统只有一条顶层控制链：Task Analyzer 形成可修订的 Goal Graph，Executive 在 Observation 反馈下逐轮决策，确定性 Runtime 校验并执行当前动作。
+本文描述当前 entry 主链。业务模块的职责和设计原因见 [当前核心架构](../summary/core-architecture-current-state.md)。
 
 ## 总链路
 
 ```mermaid
 flowchart TD
-    A[EntryInput] --> B[normalize_entry]
-    B --> C[analyze_task]
+    A[EntryInput] --> B[normalize / TaskIntake]
+    B --> C[TaskAnalyzer]
     C -->|信息不足| D[clarification interrupt]
     D --> C
-    C -->|ready| E[compile_goal_graph]
-    E --> F[project_control_state]
-    F --> G[Executive decide]
-    G --> H[validate_decision]
-    H --> I[apply_decision]
-    I -->|execute| J[ActionExecutionGraph]
-    J --> K[observe_action]
-    K --> L[verify_goal_progress]
-    L --> F
-    I -->|revise/activate| F
-    I -->|finish| M[verify_completion]
-    M -->|未完成| F
-    M -->|完成| N[finalize_entry_result]
+    C -->|ready| E[GoalGraphCompiler]
+    E --> F[TaskCompilationCommit]
+    F --> G[CoordinationMode]
+    G -->|deliberative| H[Adaptive Plan / Frontier]
+    G -->|reactive| I[Executive propose]
+    H --> I
+    I --> J[Decision Admission]
+    J -->|denied| Q[typed termination/disposition]
+    J -->|accepted| K[AcceptedControlCommand + ControlCommit]
+    K --> L[Route Admission]
+    L --> M[Capability Resolution + ExecutionGrant]
+    M -->|gap| I
+    M -->|grant| N[Gateway / Journal / Dispatch]
+    N --> O[Observation + Evidence Admission]
+    O --> P[Plan Monitor + Goal Verification]
+    P -->|继续| G
+    P -->|全部满足| R[Completion Verification]
+    R -->|rejected| G
+    R -->|accepted| S[finalize EntryResult]
 ```
 
-`EntryGraph`、`ExecutiveGraph`、`ActionExecutionGraph` 和局部 `ReActGraph` 都由 LangGraph 承载，并共享持久化 checkpoint。业务 workflow 不再拥有顶层路由权。
+这不是固定业务 Workflow。Reactive 任务跳过 Plan；Mutation 可被 Route Admission 强制进入 Procedure；能力缺失回到 Executive；Observation 可以触发局部 plan patch；interrupt 使用同一个 thread/checkpoint 恢复。
 
-## 1. 任务分析
+## 1. Intake、分析与编译
 
-`normalize_entry` 负责输入 guard、run/thread 标识和运行态清零。`analyze_task` 调用 `DefaultTaskAnalyzer`，输出：
+`TaskIntakeState` 保存 Task 建立前的输入引用、clarification 和 proposal revision。`TaskAnalyzer` 只输出语义提案，不读取 Capability Portfolio，也不选择 provider。
 
-- 用户总目标；
-- 一个或多个可验证 Goal；
-- `consumes_output`、`requires_completion` 或 `ordering_preference` 关系；
-- Goal 级资源提示；
-- 必要的澄清信息。
+`GoalGraphCompiler` 将提案编译为 `TaskContract`、初始 `TaskRuntimeProjection` 和 `ContextInventory`。它确定性校验 Goal identity、依赖端点、阻塞环、资源归属、Mutation taxonomy 和最低成功标准。
 
-Task Analyzer 不读取 Capability Registry，不选择 MCP、A2A、tool、Execution Pattern 或 workflow，也不判断 capability coverage。空输入触发结构化澄清；模型不可用时显式返回 `analyzer_unavailable`，生产链路没有关键词意图兜底。
+`TaskCompilationCommitter` 通过 proposal revision CAS 原子确认“哪个 intake proposal 生成了哪一版 Task/Runtime”。旧的 `TaskSpec`、`ExecutionLedger` 和 `ContextEnvelope` 命名已删除。
 
-## 2. Goal Graph 编译
+## 2. 协调与短期计划
 
-`GoalGraphCompiler` 将 `TaskAnalysis` 确定性编译为 `TaskSpec`、`ContextEnvelope` 和初始 `ExecutionLedger`。`GoalGraphValidator` 校验关系端点、重复关系、自依赖与阻塞环。
+`CoordinationModePolicy` 输出 reactive 或 deliberative。Procedure/ReAct/Tool/Delegation 是 ExecutionRoute，不是第三种 mode。
 
-初始关系只是执行假设：
+Deliberative 模式由 `AdaptivePlanner` 创建短 horizon、provider-neutral 的 `PlanDefinition`。Plan step 只声明 `CapabilityRequirement` 与期望 Observation。`FrontierSelector` 选择依赖已满足的 step；`PlanMonitor` 在执行后决定保持、局部重试或 CAS patch。
 
-- `user_explicit` 关系不可修改；
-- `model_inferred` 与 `runtime_derived` 关系可被后续 Observation 推翻；
-- `ordering_preference` 不阻塞执行，也不制造伪依赖。
+## 3. Executive、Admission 与 Commit
 
-## 3. Executive 决策
+Executive 每轮只生成一个 `ControlProposal`，可包含 clarify、bounded action、delegate、procedure、confirmation、capability acquisition、finish 或 terminate。
 
-每轮先从 TaskSpec、Ledger、最新 Observation、剩余预算和可用能力类型投影 `ControlState`。Executive 一次只产生一个强类型 `ControlDecision`：
+`DecisionValidator` 不修改 Proposal，而是输出显式 `StageAdmissionDecision`。Accepted admission 由 `AcceptedCommandCompiler` 编译成新的 `AcceptedControlCommand`。`ControlCommitter` 将 proposal/admission/command 与 Task revision、event cursor 绑定，拒绝 stale commit。
 
-- `clarify`
-- `activate_skill`
-- `revise_plan`
-- `execute_meta_capability`
-- `execute_parallel`
-- `delegate`
-- `invoke_protocol`
-- `request_confirmation`
-- `finish`
-- `stop`
+## 4. Route、Capability 与执行
 
-配置 structured model 时，模型可以同时比较 ready Goal、证据缺口、Skill、Plan Macro 和 capability class。模型只提出决策，不直接修改 Ledger、扩大 scope、执行副作用或宣布完成。
+`RouteAdmission` 根据 Action 语义、风险、mandatory Procedure 和 delegation policy 选择 execution route，但不能扩大 AcceptedCommand 的资源与操作范围。
 
-`DecisionValidator` 与 `LedgerPatchValidator` 负责确定性门禁。依赖修订必须引用触发它的 Observation，并通过端点、可变性、阻塞环、终态和 abandoned 传播校验。通过后的变更记录为 append-only `ExecutionEvent`，再由 Projector 更新 Ledger。
+`CapabilityResolver` 使用 Requirement、Goal 有效资源、Policy、实时 availability 和 provider binding 选择能力。成功时签发一次性叶子 Grant：
 
-## 4. 动作执行
+- `AtomicCapabilityGrant`：单个 Tool/MCP invocation；
+- `ProcedureGrant` / `ProcedureNodeGrant`：Procedure start 与具体 node；
+- `DelegationGrant`：具体 child Agent start。
 
-开放式工作被物化为当前一个 `BoundedAction`，而不是预先生成完整 step DAG。动作可使用 `acquire`、`explore`、`reason`、`transform`、`verify`、`delegate`、`commit` 或 `remember` 元能力，并显式携带预算、读写集、副作用等级和 capability requirement。
+远程能力没有实时 availability 时 fail closed。没有合法 Grant 时产生 `CapabilityGapObservation`，不使用相似 Tool 猜测执行。
 
-CapabilityResolver 在统一 Registry 中按当前 requirement、scope、policy、provider binding 与 coverage 选择 native、MCP 或 A2A 实现：
+Gateway 在 dispatch 前复核 Grant、binding、resource、operation、confirmation 和 commit-time policy。`InvocationJournal.reserve` 同时建立 prepared outbox；随后记录 dispatched、observed 或 uncertain，使用 idempotency key 与 revision 防止重复副作用。
 
-- MCP 通常参与 `acquire/explore/commit`，调用仍经过 ToolGateway；
-- A2A 参与 `delegate`，输入是 provider-neutral `SubtaskSpec`，调用经过 AgentGateway；
-- Agent 返回值只是 Observation，主 Agent 保留验证和最终回答所有权。
+## 5. Context 与模型调用
 
-稳定事务走 `ProcedureCall`。ingest、solidify、delete、Research lifecycle 等 Procedure 持有固定 transition、HITL、幂等、admission 与 receipt 规则，但完成后仍回到同一个 Executive Loop。
+Runtime 从 `ContextInventory` 按 purpose/snapshot/budget 创建 `ContextProjection`，`ModelContextGateway` 只 materialize 被选中的 item，并区分可信 instruction 与不可信 content。
 
-确定性单步可直接执行；需要局部探索时进入受 allowed tools 和迭代预算约束的 `ReActGraph`。ReAct 只负责当前动作，不能重写任务计划。
+每个 `StructuredModelRequest` 必须有 `context_projection_ref`。Agent 主链使用 projection id；完整输入由当前服务独占的有界调用使用 content-addressed sealed context。Structured 与 streaming client 都通过 Model Invocation Admission 获取 provider、egress 和 token scope。
 
-## 5. Observation 与验证
+## 6. Observation、Monitor 与 Verification
 
-动作执行结果先归一为 `ActionOutcome`，再由 `observe_action` 形成 Goal 级 Observation。失败也会记录 attempt，供下一轮 Executive 判断重试、换能力、澄清、委派、修订关系或停止。
+执行结果先归一为带 typed provenance、trust 和 taint 的 `ObservationRef`。外部内容默认不可信，进入 semantic verification 前必须获得 criterion-scoped `EvidenceAdmissionDecision`。
 
-动作成功只将 Goal 推到 `candidate_complete`。`GoalVerifier` 根据该 Goal 的 criterion 和 provenance evidence 判定：
+`PlanMonitor` 判断 Observation 对当前计划的影响；`GoalVerifier` 判断 evidence 是否满足 SuccessCriterion；两者互不替代。Mutation 还必须通过确定性 `MutationReceipt` 检查。
 
-- `goal_verified`
-- 重新激活并附带 evidence gap
-- `goal_degraded`
+技术调用结果写 `CapabilityExecutionOutcomeEvent`，Goal 验证后才写 `CapabilityEffectivenessEvent`。Action 成功不会直接把 Goal 标记为 verified。
 
-`finish` 还必须通过 `CompletionVerifier`；存在未解决 Goal、未满足 criterion、待确认项或缺失 completion claim 时，Runtime 会拒绝完成并回到 Executive。
+## 7. Completion、中断与恢复
 
-## 6. 中断、恢复与输出
+`CompletionVerifier` 检查所有必需 Goal、criterion、verification report、pending interaction 和 completion claim。验证失败会回到控制循环，而不是接受模型的 finish 自述。
 
-当前有两类 LangGraph interrupt：
+当前 interrupt 包括任务澄清和 Mutation confirmation。恢复使用相同 `thread_id` 和 `RunCheckpoint`；confirmation 与具体 invocation 绑定，不能跨 Action 复用。
 
-1. Task Analyzer 请求用户补充信息；
-2. Protocol 或外部 mutation 请求副作用确认。
+`RunCheckpoint` 保存恢复所需引用、ControlTurnState、commits、Journal/outbox、Observation、Evidence admission 和 Verification report。业务定义仍由 TaskContract 所有，Checkpoint 不复制 Goal definition。
 
-恢复必须使用相同 `thread_id` 和 checkpoint。确认与具体调用绑定，不能被其他动作复用。
+## 8. 关键不变量
 
-`finalize_entry_result` 将最终状态映射为 `EntryResult`，包括回复、run/thread 标识、执行轨迹、引用、事件和待确认信息。Web SSE 从相同事件流投影 `task_analyzed`、decision、action、tool、observation、verification、confirmation 和 completion 状态。
-
-## 设计模式
-
-| 模式 | 当前角色 |
-| --- | --- |
-| Compiler | `GoalGraphCompiler` 将语义分析编译为运行时事实 |
-| Specification / Validator | Graph、Decision、Patch、Completion 的确定性不变式 |
-| Command | `ControlDecision` 与 `LedgerPatchOperation` 表达受约束变更 |
-| Event Sourcing | `ExecutionEvent` 是进度与计划修订的追加事实 |
-| Projector | 从事件重建 `ExecutionLedger` |
-| Ports and Adapters | Analyzer、Capability、ToolGateway、AgentGateway 隔离模型与 provider |
-| State | LangGraph 节点和 checkpoint 管理可恢复控制状态 |
-
-这些模式的目的不是增加层级，而是把模型擅长的语义判断与 Runtime 必须保证的授权、图一致性、副作用和完成条件分开。
+- Analyzer/Planner/Executive 输出都是 proposal。
+- 只有 AcceptedControlCommand 可以进入 route 和 execution resolution。
+- 只有精确 ExecutionGrant 可以启动 agent runtime dispatch。
+- Mutation 需要 confirmation、commit-time policy 和 receipt。
+- Observation 不自动成为 Evidence，Evidence 不自动表示内容真实。
+- Goal verification 与 Task completion 分开。
+- Task/Control/Dispatch 都有 CAS 或原子 commit 边界。

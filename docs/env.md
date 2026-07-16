@@ -299,7 +299,7 @@ PERSONAL_AGENT_NOTION_MCP_TOOLS=post-search,retrieve-page-markdown
 - `attestation_status`：`verified`、`pinned`、`self_claimed`、`unknown`。
 - `freshness_profile`：`realtime`、`near_realtime`、`static`、`unknown`。
 
-这些字段会写入 tool 的 `extras["mcp_capability"]`，并可通过 `MCPCapabilityRegistry` 查询，供后续 `CapabilityResolver` 按任务领域动态生成 scoped tool allowlist。当前 P0 provider workflow 仍保留为 plumbing baseline；P1 已要求 `tool_quality` 验证 MCP capability metadata、治理字段和安全边界同时正确。
+这些字段会写入 tool 的 `extras["mcp_capability"]`，启动时转换为 canonical `MCPCapability` 并进入 `CapabilityPortfolio`。Portfolio 将静态定义与实时 `ExecutionCapabilityAvailability` 分开；`CapabilityResolver` 按 Goal requirement、资源范围、Policy 和 provider binding 生成精确 Grant。远程能力没有可用性观测或 credential 未就绪时 fail closed，`tool_quality` 同时校验 capability metadata、治理字段和安全边界。
 
 当前支持两类 transport：
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from personal_agent.planning.goal_graph import GoalGraphCompiler
+from personal_agent.planning.task_compiler import GoalGraphCompiler
 from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
 
 

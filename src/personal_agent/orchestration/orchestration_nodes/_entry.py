@@ -8,7 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import EntryInput, local_now
-from personal_agent.kernel.contracts.agentic import ContextInventory
+from personal_agent.runtime.contracts.task import ContextInventory
+from personal_agent.runtime.contracts.intake import TaskIntakeState
 from personal_agent.kernel.contracts.interaction import InteractionOption, InteractionRequest
 from personal_agent.governance.guardrails import get_content_guard
 from personal_agent.orchestration.orchestration_models import (
@@ -47,25 +48,43 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
     state.session_id = session_id
     state.thread_id = thread_id
     state.entry_text = text
+    state.intake = TaskIntakeState(
+        original_input_ref=f"entry:{state.run_id}",
+        source_message_refs=(f"{state.run_id}:user",),
+    )
     state.task_analysis = None
     state.task_contract = None
     state.task_runtime = None
     state.context_inventory = ContextInventory()
     state.active_procedure = None
-    state.control_state = None
-    state.control_decision = None
-    state.current_actions = []
-    state.current_action_outcome = None
-    state.latest_observations = []
+    state.control.state = None
+    state.control.proposal = None
+    state.decision_admission = None
+    state.control.accepted_command = None
+    state.control.actions = []
+    state.control.action_outcome = None
+    state.control.observations = []
+    state.verification_reports = {}
     state.completion_report = None
     state.execution_events = []
-    state.executive_turn = 0
-    state.last_decision_hash = ""
-    state.repeated_decision_count = 0
-    state.control_route = None
+    state.execution_grants = {}
+    from personal_agent.execution.contracts.journal import InvocationJournalProjection
+    state.invocation_journal = InvocationJournalProjection()
+    from personal_agent.capabilities.contracts.acquisition import CapabilityAcquisitionProjection
+    state.capability_acquisition = CapabilityAcquisitionProjection()
+    state.evidence_admissions = {}
+    state.capability_execution_outcomes = []
+    state.capability_effectiveness_outcomes = []
+    state.task_compilation_commit = None
+    state.control_commits = []
+    state.control.turn_index = 0
+    state.control.last_decision_hash = ""
+    state.control.repeated_decision_count = 0
+    state.control.phase = "preparing_model_call"
+    state.control.disposition = "continue_control"
     state.context_projections = []
-    state.resolved_action_specs = []
-    state.retry_directive = None
+    state.control.resolved_actions = []
+    state.control.retry_directive = None
     state.react = ReactSubState()
     state.invocation_batch = InvocationBatchState()
     state.tool_tracking = ToolTrackingSubState()
@@ -74,9 +93,9 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
     state.tool_messages = []
     state.citations = []
     state.matches = []
-    state.pending_confirmation = None
-    state.confirmation_decision = None
-    state.confirmed_step_id = None
+    state.control.pending_interaction = None
+    state.control.interaction_decision = None
+    state.control.confirmed_invocation_id = None
     state.answer = None
     state.events = []
     state.errors = []
@@ -102,24 +121,25 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
         "task_analysis": None,
+        "intake": state.intake,
         "task_contract": None,
         "task_runtime": None,
         "context_inventory": state.context_inventory,
         "active_procedure": None,
-        "control_state": None,
-        "control_decision": None,
-        "current_actions": [],
-        "current_action_outcome": None,
-        "latest_observations": [],
+        "control": state.control,
+        "decision_admission": None,
+        "verification_reports": {},
         "completion_report": None,
         "execution_events": [],
-        "executive_turn": 0,
-        "last_decision_hash": "",
-        "repeated_decision_count": 0,
-        "control_route": None,
+        "execution_grants": {},
+        "invocation_journal": state.invocation_journal,
+        "capability_acquisition": state.capability_acquisition,
+        "evidence_admissions": {},
+        "capability_execution_outcomes": [],
+        "capability_effectiveness_outcomes": [],
+        "task_compilation_commit": None,
+        "control_commits": [],
         "context_projections": [],
-        "resolved_action_specs": [],
-        "retry_directive": None,
         "react": state.react,
         "invocation_batch": state.invocation_batch,
         "tool_tracking": state.tool_tracking,
@@ -127,9 +147,6 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
         "provider_call_count": 0,
         "citations": [],
         "matches": [],
-        "pending_confirmation": None,
-        "confirmation_decision": None,
-        "confirmed_step_id": None,
         "answer": None,
         "events": state.events,
         "errors": [],
@@ -172,28 +189,42 @@ def _node_prepare_clarify(state: RunCheckpoint) -> dict:
             for option in issue["options"]
         ),
     )
-    state.add_event("clarification_required", payload.model_dump(mode="json"))
-    return {"pending_confirmation": payload, "events": state.events}
+    state.control.pending_interaction = payload
+    event = state.add_event("clarification_required", payload.model_dump(mode="json"))
+    if state.intake is None:
+        raise RuntimeError("clarification requires intake state")
+    state.intake = state.intake.model_copy(update={
+        "status": "awaiting_input",
+        "interaction_request_ref": event.event_id,
+    })
+    return {"intake": state.intake, "control": state.control, "events": state.events}
 
 
 def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
     """Pause the graph for human clarification and process the resume value.
 
-    Expects ``state.pending_confirmation`` to be populated by the upstream
+    Expects ``state.control.pending_interaction`` to be populated by the upstream
     ``_node_prepare_clarify`` node (and therefore present in the checkpoint).
     """
-    payload = state.pending_confirmation
+    payload = state.control.pending_interaction
     if payload is None:
         return {}
 
     resume_value = interrupt(payload.model_dump(mode="json"))
     decision = str(_resume_value_get(resume_value, "decision", "clarify")).lower()
     if decision in ("reject", "cancel"):
+        state.control.pending_interaction = None
         state.answer = "已取消。你可以重新发送更完整的内容。"
         state.add_event("answer_completed", {"reason": "clarification_cancelled"})
         state.add_event("clarification_resumed", {"decision": "cancelled"})
+        if state.intake is not None:
+            state.intake = state.intake.model_copy(update={
+                "status": "cancelled",
+                "interaction_request_ref": None,
+            })
         return {
-            "pending_confirmation": None,
+            "intake": state.intake,
+            "control": state.control,
             "answer": state.answer,
             "events": state.events,
         }
@@ -201,11 +232,18 @@ def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
     supplemental = str(_resume_value_get(resume_value, "text", "")).strip()
     option_id = str(_resume_value_get(resume_value, "option_id", "")).strip()
     if not supplemental:
+        state.control.pending_interaction = None
         state.answer = "还需要补充具体内容后才能继续。请重新发起请求，并说明要记录、查询、总结或执行什么。"
         state.add_event("answer_completed", {"reason": "clarification_empty"})
         state.add_event("clarification_resumed", {"decision": "empty"})
+        if state.intake is not None:
+            state.intake = state.intake.model_copy(update={
+                "status": "cancelled",
+                "interaction_request_ref": None,
+            })
         return {
-            "pending_confirmation": None,
+            "intake": state.intake,
+            "control": state.control,
             "answer": state.answer,
             "events": state.events,
         }
@@ -226,11 +264,18 @@ def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
         "text_preview": clarified_text[:120],
     })
     state.task_analysis = None
+    state.control.pending_interaction = None
+    if state.intake is not None:
+        state.intake = state.intake.model_copy(update={
+            "status": "analyzing",
+            "interaction_request_ref": None,
+        })
     return {
         "entry_text": clarified_text,
         "entry_input": state.entry_input,
         "messages": [HumanMessage(content=supplemental, id=f"{state.run_id}:clarification")],
-        "pending_confirmation": None,
+        "control": state.control,
+        "intake": state.intake,
         "task_analysis": None,
         "events": state.events,
     }
@@ -238,7 +283,7 @@ def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
 
 def _after_prepare_clarify(state: RunCheckpoint) -> str:
     """Route to interrupt after its payload has been checkpointed."""
-    if state.pending_confirmation is not None:
+    if state.control.pending_interaction is not None:
         return "interrupt_clarify_entry"
     return "analyze_task"
 
@@ -282,13 +327,22 @@ def _node_analyze_task(state: RunCheckpoint, *, deps: RoutingContext) -> dict:
         state.add_event("answer_completed", {"reason": "task_rejected"})
     state.invocation_batch.invocations = []
 
-    state.add_event("task_analyzed", {
+    event = state.add_event("task_analyzed", {
         "result_contracts": [goal.result_contract for goal in decision.goals],
         "goals": [goal.model_dump(mode="json") for goal in decision.goals],
         "relations": [item.model_dump(mode="json") for item in decision.relations],
         "reason": _analysis_reason(decision),
         "requires_clarification": decision.requires_clarification,
         "outcome": decision.outcome,
+    })
+    if state.intake is None:
+        raise RuntimeError("task analysis requires intake state")
+    state.intake = state.intake.model_copy(update={
+        "status": "cancelled" if decision.outcome == "rejected" else "analyzing",
+        "current_proposal_ref": event.event_id,
+        "proposal_revision": state.intake.proposal_revision + 1,
+        "missing_requirement_ids": tuple(decision.missing_information),
+        "interaction_request_ref": None,
     })
 
     _log_event(
@@ -309,6 +363,7 @@ def _node_analyze_task(state: RunCheckpoint, *, deps: RoutingContext) -> dict:
 
     return {
         "task_analysis": state.task_analysis,
+        "intake": state.intake,
         "answer": state.answer,
         "invocation_batch": state.invocation_batch,
         "events": state.events,

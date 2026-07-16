@@ -7,7 +7,7 @@ compiler.
 
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.agentic import ContextInventory, ContextItem, TaskContract
+from personal_agent.runtime.contracts.task import ContextInventory, ContextItem, TaskContract
 class ContextAdmission:
     @staticmethod
     def initial(task: TaskContract) -> ContextInventory:

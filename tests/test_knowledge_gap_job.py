@@ -3,12 +3,12 @@ from __future__ import annotations
 from personal_agent.application.insight.analyzer import KnowledgeGap
 from personal_agent.application.insight.job import KnowledgeGapJob, KnowledgeGapScheduler
 from personal_agent.application.insight.service import KnowledgeGapReport, format_knowledge_gaps
-from personal_agent.application.review.models import (
+from personal_agent.kernel.contracts.review import (
     DeliveryMessage,
     DeliveryResult,
-    DeliveryTarget,
     DigestSubscription,
 )
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 from personal_agent.application.review.delivery import DeliveryRouter
 
 

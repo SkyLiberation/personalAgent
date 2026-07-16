@@ -1,8 +1,7 @@
 # personalAgent 文档索引
 
 本项目是一个以 Goal-owned Agent Loop 和受治理状态机共同驱动的个人知识 Agent：开放任务由
-`TaskSpec + ExecutionLedger + Executive + MetaCapability` 逐轮执行；高风险、事务性业务由
-`ProcedureSpec / ProcedureCatalog` 保护。确定性 Runtime 负责授权、解析、调度、持久化、HITL 与验证门禁。
+`TaskContract + TaskRuntimeProjection + Executive Control` 逐轮执行；能力由 Capability Plane 解析并签发精确 Grant，高风险事务由 Governed Procedure 保护，Governance Plane 负责 Admission、Policy、HITL、Evidence 与验证门禁。
 
 当前系统分层、Entry 主链、LLM/确定性边界、Capability/MCP/A2A、Procedure、知识与运行时事实统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
 

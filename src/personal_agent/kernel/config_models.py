@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.kernel.contracts.capability import (
+from personal_agent.kernel.contracts.capability_values import (
     AttestationStatus,
     CapabilityOperation,
     CapabilityTrustLevel,

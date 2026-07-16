@@ -1,644 +1,258 @@
 # personalAgent 当前核心架构
 
-本文是当前工程 Agent 主链的事实源。阅读顺序是：先认识模块及其边界，再理解模块承载的业务设计，最后通过完整任务观察模块如何协作。
+本文描述已经落地的 Agent 主链。组织方式是先说明每个模块解决什么业务问题，再说明模块之间通过什么协议协作；它不是代码调用顺序的逐行翻译。
 
-`docs/future` 中已经落地的文档只保留为历史决策记录；尚未闭合的本地并行与运行中语义 Steering 见 [并行 Join 与语义 Steering 后续设计](../future/parallel-steering-runtime-design.md)。
+## 1. 架构要回答的三个问题
 
-## 1. 系统定位与模块地图
+一个可持续演进的 Agent 必须同时回答：
 
-personalAgent 是 Goal-owned Agent runtime，不是按 `ask / capture / research` 选择固定 Workflow 的请求路由器。
+1. **如何运行**：如何把用户目标推进为可验证结果，并在失败、暂停和恢复后继续。
+2. **用什么能力**：如何发现、筛选并授权 Tool、MCP、Procedure、Model 和 child Agent。
+3. **如何保持确定性**：如何限制概率模型的权力，使写操作、证据和完成判断可审计、可恢复。
 
-用户负责描述期望结果，系统把结果固化成 Goal；Planner 和 Executive 选择短期路径；Capability Resolution 决定当前环境中谁能执行；Verifier 独占完成判断。
+当前工程用三个控制面回答这三个问题：
 
-### 1.1 核心模块
-
-| 模块 | 主要职责 | 核心产物 |
+| 控制面 | 负责 | 不负责 |
 | --- | --- | --- |
-| TaskAnalyzer | 理解用户目标和资源语义 | `TaskAnalysis` |
-| GoalGraphCompiler | 把语义提案编译成可信任务契约 | `GoalCompilation` |
-| Task/Goal Aggregate | 保存任务定义、运行状态和事件投影 | `TaskContract`、`TaskRuntimeProjection` |
-| PlanningMode | 判断当前任务需要何种策略成本 | `PlanningModeAssessment` |
-| Adaptive Planning | 维护短 horizon 策略 | `PlanDefinition`、`PlanRuntimeProjection` |
-| Executive Control | 每轮提出一个有界决策 | `ControlDecision`、`BoundedAction` |
-| Resource/Capability | 将业务资源需求绑定到可执行能力 | `CapabilityResolutionDecision` |
-| Governed Procedure | 执行带事务不变量的操作 | `ProcedureOutcome`、`MutationReceipt` |
-| Invocation Runtime | 承载一次实际执行及 attempt 状态 | `ExecutableInvocation`、`InvocationAttemptState` |
-| Context Gateway | 为不同模型调用投影最小可信上下文 | `ContextProjection` |
-| Observation/Verification | 将执行结果转成进展和完成判断 | `Observation`、`VerificationReport` |
-| Orchestration/Checkpoint | 组织节点、恢复现场和 interrupt/resume | `RunCheckpoint` |
-| Research/A2A | 提供长时研究与 child Agent 能力 | 独立 Definition/Projection/Event |
+| Runtime Plane | Goal、短期计划、单轮控制、运行状态和恢复 | 直接信任模型输出、选择未经授权的 provider |
+| Capability Plane | 能力目录、实时可用性、解析、排名、授权和获取 | 修改 Goal、宣布任务完成 |
+| Governance Plane | 提案准入、Policy、Confirmation、Evidence admission、Verification | 生成业务策略、代替执行器执行操作 |
 
-### 1.2 依赖方向
+“控制面”表示它掌握某类决策的唯一写入口，而不是三个独立部署的服务。好处是职责冲突可以被协议拒绝：Executive 可以提出动作，但 Capability Plane 决定谁能做，Governance Plane 决定是否允许做，Verifier 决定结果是否完成 Goal。
+
+## 2. 统一模型语义
+
+核心模型遵循五种角色：
 
 ```text
-EntryInput
-  -> TaskAnalyzer
-  -> GoalGraphCompiler
-  -> TaskContract + TaskRuntimeProjection
-  -> PlanningMode / AdaptivePlanner / Executive
-  -> Capability Resolution or Procedure
-  -> ExecutableInvocation
-  -> Observation
-  -> GoalVerifier / PlanMonitor
-  -> CompletionVerifier
-```
-
-这张图只表达依赖方向，不表示固定 Workflow。Reactive 任务可以不创建 Plan；Mutation 可以进入 Procedure；执行产生的新 Observation 可以触发 retry、patch、replacement 或 clarification。
-
-### 1.3 统一建模规则
-
-所有核心模块使用同一组 Model 语义：
-
-```text
-Definition  不可变业务契约
-Command     一次有界变更请求
+Definition  不可变的业务要求
+Command     已获准的一次有界变更请求
 Event       已经发生的事实
-Projection  由事实得到的可恢复当前状态
+Projection  由事实投影出的可恢复当前状态
 View        读取时组合多个 owner，不保存新事实
 ```
 
-全局约束是：同一事实只有一个 owner；模型只能提案；权限只能缩小；Action 成功不等于 Goal 完成；可推导值不作为第二份可写状态。
+全局开发准则是高内聚、低耦合、不过度设计：同一事实只有一个 owner；可推导值不重复持久化；不保留新旧模型兼容层；校验器拒绝冲突，不负责同步副本；空字符串和裸字典不能充当身份、授权或状态。
 
-## 2. TaskAnalyzer 模块
+包依赖由 `scripts/check_layers.py` 按显式 DAG fail closed 检查。未知包、未声明边、缺失包和循环依赖都会使 CI 失败。
 
-### 2.1 模块定位
+## 3. Task Analysis：只理解，不执行
 
-`TaskAnalyzer` 位于自然语言入口和正式任务契约之间，负责理解用户表达的结果语义。它不生成执行步骤，也不选择 Tool、MCP server、Agent provider 或 Procedure。
+`TaskAnalyzer` 位于用户自然语言和正式任务契约之间，输出 provider-neutral 的 `TaskAnalysis`。它识别：用户希望得到什么、可能包含哪些 Goal、资源语义、成功标准、Goal 关系，以及是否需要澄清。
 
-实现位置：`planning/task_analyzer.py`。
+它的业务价值是把开放语言问题变成结构化语义提案；它不选择 Tool、MCP server、Procedure 或 child Agent，也不产生可执行权限。LLM 可能生成重复 ID、悬空依赖、错误副作用或缺失标准，因此 `TaskAnalysis` 不能直接进入运行时。
 
-### 2.2 输入与输出
+实现：`planning/task_analyzer.py`。
 
-输入是 `EntryInput` 中的用户文本及允许的分析上下文；输出是 provider-neutral `TaskAnalysis`：
+## 4. GoalGraphCompiler：把概率提案变成可信任务定义
+
+`GoalGraphCompiler` 是语义理解与确定性运行时之间的编译边界。输入是 `TaskAnalysis`，输出是 `GoalCompilation`：
 
 ```text
 TaskAnalysis
-├─ user_goal
-├─ goals[]
-│  ├─ goal_id / description / result_contract
-│  ├─ resource_hints[]
-│  ├─ success_criteria[]
-│  └─ evidence_requirement
-├─ relations[]
-├─ requires_clarification
-└─ rejection
+  -> TaskContract
+  -> 初始 TaskRuntimeProjection
+  -> ContextInventory
 ```
 
-Analyzer 输出的 `ResourceHint` 表达语义判断，例如资源 domain、type、locator、operation、freshness、provider binding 和 origin。
+实现：`planning/task_compiler.py`。
 
-### 2.3 业务设计
+### 4.1 为什么需要编译，而不是直接执行分析结果
 
-Analyzer 只拥有“理解权”，不拥有“事实确认权”。LLM 输出可能重复 Goal ID、引用不存在的依赖、遗漏成功标准或错误识别副作用，因此 `TaskAnalysis` 是 semantic proposal，不是可执行状态。
+LLM 擅长理解语义，但不适合拥有身份分配、依赖合法性、Mutation 分类和完成标准的最终决定权。Compiler 将这些规则集中为可测试的确定性步骤，使后续模块面对的是合法契约，而不是各自修补模型输出。
 
-旧 Router、`goal_kind` 动作表和固定 Workflow 选择已删除。原因是同一句请求可能同时包含 response、artifact 和 external-state 结果，路由标签无法表达多个独立验收目标及其依赖。
+### 4.2 Compiler 实际完成的设计职责
 
-## 3. GoalGraphCompiler 模块
+**建立稳定身份和拓扑。** Compiler 校验 Goal ID 唯一、依赖端点存在、关系不重复、自依赖不存在、阻塞依赖无环。`goal_id` 是 Goal 定义、运行状态、Action、Observation、Procedure 和 Verification 的关联键；悬空或循环身份会让任务永远无法收敛，所以必须在运行前拒绝。
 
-### 3.1 模块定位
+**固化资源归属。** `ResourceHint` 是 Analyzer 的语义猜测，Compiler 将其规范化为 `ResourceRequirement`。Requirement 不保存 `goal_id`：Goal 局部资源放在 `GoalDefinition.resources`，任务共享资源放在 `TaskContract.shared_resources`。归属由聚合结构表达，避免叶子对象和外层对象同时维护 identity。
 
-`GoalGraphCompiler` 是概率性语义理解与确定性运行时之间的信任边界。它把 `TaskAnalysis` 编译成满足身份、依赖、授权、证据和验证不变量的初始任务契约。
+**建立 canonical Mutation taxonomy。** Compiler 将 create、update、delete、ingest、repair 归一为 Mutation operations。这不是为了多做一次标签转换，而是让 Confirmation、Procedure、Policy、Receipt 和 Verifier 使用同一套副作用语言。如果跳过归一化，每个 Tool 的 `save/write/persist/apply` 都会各自解释风险，治理无法统一。taxonomy 在这里表示“受控分类体系”。
 
-实现位置：`planning/goal_graph.py`。
+**派生不可降低的成功标准。** 用户明确提出的标准标记为 `user_explicit`。用户没有逐条写标准时，Compiler 根据 Goal 的 `result_contract`、Mutation 和 evidence requirement 生成最小 `contract_derived` criterion。例如 Mutation 至少要求目标操作完成并有 `MutationReceipt`；需证据的回答至少要求证据覆盖。它不是启发式地宣布成功，而是建立 Verifier 后续必须检查的底线。模型可以提出更细的 `model_derived` 标准，但不能削弱用户标准和契约底线。
 
-### 3.2 输入与输出
+**确定结果契约。** 单 Goal 使用其结果类型；多种结果并存时，Task 的 `result_contract=compound`，表示任务只有在多个 Goal 各自满足其输出与 criteria 后才完成，而不是返回一个任意字符串就算结束。
 
-```text
-TaskAnalysis + entry_text
-        ↓
-GoalCompilation
-├─ TaskContract
-├─ TaskRuntimeProjection
-└─ ContextInventory
-```
+**原子建立定义与初始状态。** `TaskCompilationCommitter` 用 proposal revision 做 CAS，一次提交 `TaskContract`、初始 `TaskRuntimeProjection` 和 `TaskCompilationCommit`。无阻塞依赖的 Goal 初始为 active，有阻塞依赖的 Goal 为 pending。
 
-Compiler 不选择 Planning mode，不生成 Plan，不选择 Capability 或 Procedure，也不负责运行中的状态迁移。
+### 4.3 Compiler 不做什么
 
-### 3.3 编译职责
+Compiler 不选择协调模式、不生成短期计划、不绑定 provider、不批准写操作，也不判断运行结果是否成功。若某项逻辑无法解释为“建立任务不变量”，它就不应放进 Compiler。
 
-#### 身份和拓扑合法化
+## 5. TaskContract 与 TaskRuntimeProjection：要求和进度分治
 
-Compiler 验证 Goal ID 唯一、relation 引用存在、关系不重复、blocking dependency 无环。`ordering_preference` 不阻塞执行；`consumes_output` 和 `requires_completion` 会成为执行门禁。
-
-该步骤保护 Goal 的跨阶段关联：PlanStep、Action、Observation、ProcedureInvocation 和 Verification 都通过 `goal_id` 归属结果。悬空或循环依赖会让 Goal 永久 pending，因此不能进入正式契约。
-
-#### 事实归属固化
-
-每个 Goal 的资源、criterion 和前置依赖写入对应 `GoalDefinition`：
+`TaskContract` 是整个任务的不可变 Definition，回答“必须完成什么”：
 
 ```text
 TaskContract
+├─ task_id / revision / user_goal / result_contract
+├─ constraints / mutation_intent / evidence_requirements
 ├─ shared_resources
 └─ GoalGraphDefinition
-   └─ GoalDefinition
-      ├─ resources
-      ├─ criteria
+   └─ GoalDefinition[]
+      ├─ description / result_contract
+      ├─ resources / criteria / constraints
       └─ dependencies
 ```
 
-`ResourceRequirement` 不保存 `goal_id`。归属由 `TaskContract.shared_resources` 或 `GoalDefinition.resources` 的嵌套位置表达，避免叶子对象 identity 与外层 Goal identity 冲突。
-
-#### 治理要求派生
-
-Compiler 根据 canonical Mutation taxonomy 识别 `create / update / delete / ingest / repair`，生成 typed `MutationIntent.operations`，把 Task 标记为非只读，并为 Mutation Goal 增加 confirmation 与 `MutationReceipt` 标准。
-
-MutationIntent 只声明任务可能需要写，不表示批准执行。实际写入仍必须经过 Procedure、精确目标、confirmation、commit-time policy 和 receipt。
-
-#### 完成契约生成
-
-用户显式 criteria 标记为 `user_explicit`；缺失时由 Compiler 生成 `contract_derived` criterion。搜索、验证或显式 evidence requirement 生成 evidence policy。
-
-运行输出契约按风险确定：
-
-```text
-Mutation            -> MutationReceipt
-Evidence required   -> VerifiedAnswer
-Ordinary result     -> Answer
-```
-
-该设计保证 Planner、Executive 和 Verifier 在执行前就共享同一验收条件，不能根据已经获得的结果降低完成标准。
-
-#### 初始 Definition 和 Runtime 建立
-
-Compiler 创建 revision 为 `1` 的 `TaskContract / GoalGraphDefinition`，并创建对应 `TaskRuntimeProjection`。无 blocking dependency 的 Goal 初始化为 `active`；存在阻塞依赖的 Goal 初始化为 `pending`；需要证据的 Goal带有初始 evidence gap。
-
-Revision 表示定义版本，不表示 Goal 数量。运行中合法 decomposition 会创建新的 Task/GoalGraph revision，旧 projection 因 revision 不匹配而不能参与决策。
-
-### 3.4 模块不变量
-
-- Definition Goal 集合与 runtime `goal_states` 必须完全一致；
-- Goal 不能依赖自己，blocking graph 必须无环；
-- Definition 树中的 resource、criterion、constraint、dependency 均不可原地修改；
-- 未知 Goal 的资源读取必须 fail closed；
-- Compiler 不得发明默认业务资源或具体执行能力。
-
-## 4. Task/Goal Aggregate 模块
-
-### 4.1 模块定位
-
-Task/Goal Aggregate 是整个运行时的业务核心，负责区分“用户要求什么”和“当前完成到哪里”。
-
-实现位置：`kernel/contracts/agentic.py`、`planning/ledger.py`。
-
-### 4.2 Definition 所有权
-
-```text
-TaskContract
-├─ task identity / revision
-├─ user_goal / result_contract / constraints
-├─ shared_resources
-├─ evidence_requirements / mutation_intent
-└─ GoalGraphDefinition
-   └─ GoalDefinition[]
-```
-
-Goal description、resource、criterion、dependency 和 output contract 只存在于 `GoalDefinition`。Task 级聚合属性如全部 resources、requested operations 和 success criteria 通过只读 property 计算，不持久化第二份列表。
-
-`task.resources_for_goal(goal_id)` 是有效资源的唯一读取入口，返回 Task shared resources 与 Goal local resources；未知 Goal 抛出错误。
-
-### 4.3 Runtime 所有权
+`TaskRuntimeProjection` 是运行投影，回答“当前推进到哪里”：
 
 ```text
 TaskRuntimeProjection
-├─ task/task-graph revision
-├─ lifecycle / event cursor
-├─ active_skill_ids
+├─ task_id / task_revision / lifecycle / event cursor
 └─ goal_states{goal_id -> GoalRuntimeState}
+   ├─ status / attempts
+   ├─ evidence gaps / coverage
+   └─ verification_ref / replan reason
 ```
 
-`GoalRuntimeState` 只保存 status、attempt、evidence gap、coverage、verification 和 replan reason，不复制 Definition 字段。
+两者不是两份“整个任务状态”。Contract 拥有 Goal 的定义字段；Runtime 只拥有会随执行变化的字段，不复制 description、resource、criterion 或 dependency。
 
-`TaskRuntimeProjector` 根据 typed `ExecutionEvent` 更新 projection，并校验 task identity、严格 event sequence 和合法 Goal 状态迁移。
+`materialize_goals(task, runtime)` 先校验 task identity、revision 和 Goal 集合完全一致，再生成只读 `MaterializedGoalView`。需要这一步，是为了让调用方获得一个一致视图，而不让每个模块自行 join、遗漏 revision fencing，或把 View 变成第三个事实 owner。
 
-### 4.4 读取模型
+`task.resources_for_goal(goal_id)` 是有效资源的唯一读取入口：返回共享资源与该 Goal 局部资源；未知 Goal fail closed。这里的资源是任务运行要访问的业务对象或边界，例如 workspace、repository、document、web source、external account 及其允许操作，不是具体 Tool 实例。
 
-`materialize_goals(task, runtime)` 校验 task identity、task revision 和 Definition/Runtime Goal 集合后，返回 `MaterializedGoalView`。Planner、Executive、Procedure applicability 和 Verifier 通过这一入口同时读取 definition 与 runtime，不自行 join 两份状态。
+Goal status 中，`verified` 表示已通过验收，`degraded` 表示按明确的降级终止规则关闭，`abandoned` 表示不再追求。调度器跳过这些终态，因为继续为它们生成 Action 会重复副作用或浪费预算。Task 是否完成则由 CompletionVerifier 根据所有必需 Goal 的状态和报告统一判断。
 
-### 4.5 业务设计
+实现：`runtime/contracts/task.py`、`runtime/task_runtime.py`、`runtime/commits.py`。
 
-Definition/Runtime 分离使用户目标在运行中保持稳定，而 attempt、verification 和 status 可以频繁变化。Revision fencing 防止新定义配旧状态；Materialized View 解决组合读取，但不成为第三个事实 owner。
+## 6. Coordination 与 Adaptive Planning：决定是否需要短期策略
 
-## 5. PlanningMode 模块
+`CoordinationMode` 只有 `reactive` 和 `deliberative`。它回答“当前是否值得维护短期计划”，不回答“使用什么执行技术”。
 
-### 5.1 模块定位
+- `reactive`：一个有界下一动作可能安全推进 Goal。
+- `deliberative`：多 Goal、依赖、证据路径或不确定性需要短 horizon 计划。
 
-PlanningMode 决定当前任务值得支付多少策略成本，而不是决定执行哪种业务 Workflow。
+Procedure、native tool、ReAct 和 delegation 属于 `ExecutionRoute`，不再混入 mode。一次 deliberative Plan 的某个 step 完全可以路由到这些执行方式；因此“deliberative 包含其他处理”是正常组合，不是模式嵌套。
 
-实现位置：`planning/adaptive.py` 中的 `PlanningFactProjector`、`PlanningModePolicy`。
+只有 deliberative 会创建 `PlanDefinition`。`AdaptivePlanner` 生成 provider-neutral 的语义步骤和 `CapabilityRequirement`，不写具体工具名。`FrontierSelector` 选择依赖已满足的 step；`PlanMonitor` 根据新 Observation 判断保持计划、局部重试、step invalidation 或 branch invalidation；只有受影响部分通过 CAS patch 更新，避免每轮重做整份计划。
 
-### 5.2 输入与输出
+实现：`planning/adaptive.py`。
 
-`PlanningFactProjector` 从 TaskContract、Goal runtime、依赖、证据、Mutation、mandatory Procedure 和 provider binding 投影 `PlanningFacts`。`PlanningModePolicy` 输出：
+## 7. Executive Control：每轮只推进一个有界决策
 
-| Mode | 适用状态 |
+`ExecutiveController` 读取 materialized Goal、当前 Observation、Plan frontier、预算、Procedure candidate 和能力类别摘要，输出 `ControlProposal`。它优化的是“下一步最可能让哪个开放 Goal 接近验收”，不是一次生成完整 Workflow。
+
+可提议的决策包括 clarify、execute bounded action、delegate、invoke procedure、request confirmation、request capability acquisition、finish 和 terminate。
+
+模型只能产生 Proposal。`DecisionValidator` 根据 Task revision、Goal 状态、资源范围、Mutation/confirmation、预算和 route 约束生成 `StageAdmissionDecision`。只有 accepted admission 才能由 `AcceptedCommandCompiler` 生成新的 `AcceptedControlCommand`；拒绝不会通过修改原 Proposal 来“修正”它。
+
+`ControlCommitter` 将 proposal、admission、accepted command 与 runtime cursor 作为同一条 CAS 链提交。这样恢复时可以证明“执行的是哪一个提案、依据哪一次治理决定”，不会出现 decision 已变但审计仍指向旧值。
+
+实现：`runtime/control_runtime.py`、`governance/decision_admission.py`、`runtime/commits.py`。
+
+## 8. Capability Plane：从业务需要到一次性执行授权
+
+Capability Plane 分成四层：
+
+1. `Capability` 描述能力是什么，包括 kind、operations、semantic domain、resource types、provider、风险和 binding metadata。
+2. `ExecutionCapabilityAvailability` 描述此刻是否可用、credential 是否就绪、provider binding revision 和健康观测时间。
+3. `CapabilityResolver` 将 `CapabilityRequirement` 与资源范围、Policy、实时可用性和历史结果比对，生成显式 resolution decision。
+4. Resolver 只为本次 invocation 签发精确 `ExecutionGrant`，授权具体 capability、Goal、资源、操作、provider binding 和有效期。
+
+`semantic_domain`、`resource_types`、`required_operations` 在能力匹配与 Procedure applicability 时使用：它们把“对哪个业务对象做什么”与具体工具解耦。`origin` 表示要求来自用户、任务编译、Plan 还是恢复逻辑，用于审计和优先级判断；即使所有输入经过 LLM Analysis，后续由 Compiler、Planner 或 Recovery 新增的要求也不是同一来源。
+
+远程、MCP 和 Agent 能力在没有实时 availability observation 时 fail closed。只有 system metadata 且无需 credential 的本地能力可在无观测时视为可用。能力缺失不会硬选最相似工具，而是产生 `CapabilityGapObservation`，由 Executive 请求 acquisition、clarification 或终止。
+
+`runtime_meta` 是 Capability 的运行约束，不是业务能力本身：它描述 provider binding revision、credential mode、执行环境、并发/超时、成本和健康信息，供 Resolver 与 Gateway 在执行前再次核对。
+
+实现：`capabilities/contracts`、`capabilities/portfolio.py`、`capabilities/resolver.py`、`capabilities/acquisition.py`。
+
+## 9. Execution Route 与 Gateway：授权和执行分开
+
+Route admission 在 accepted command 后选择原子 Tool、Procedure、ReAct 或 child Agent。Route 只决定执行机制，不改变 Goal 和成功标准。
+
+`ToolGateway` 和 `AgentGateway` 是最终执行门：它们要求 invocation/node 与 grant 精确绑定，复核 capability/provider/resource/operation，执行 commit-time policy，并记录审计。Procedure 的 Mutation node 在用户确认后会获得新的 confirmation-bound grant；幂等键不能冒充 confirmation reference。
+
+Procedure 用于封装稳定事务不变量，例如 prepare、confirm、commit、receipt。它不是 Planning mode，也不是普通 prompt 模板。`ProcedureApplicabilityResolver` 比较当前 Goal 的有效资源与 Procedure 声明的 domain/type/operation：只有能覆盖要求的 Procedure 才是 candidate，mandatory Procedure 会阻止 Executive 绕过事务路径。
+
+`InvocationJournal` 在 provider 调用前原子写入 reserved journal entry 与 prepared outbox；dispatch 后转为 dispatched，观察结果后转为 observed。相同 idempotency key 和 revision 通过 CAS 防止重复副作用。一次任务会有多个 invocation，因此 Journal 保存多个 item；每个 Goal 也可能经历搜索、转换、写入和验证等多次执行。
+
+实现：`execution/`、`governance/gateway.py`、`runtime/procedure_runtime.py`、`agents/gateway.py`。
+
+## 10. Context Gateway：控制模型到底看见什么
+
+Context Gateway 是模型输入的唯一边界，因为“运行时拥有很多数据”不等于“每次 LLM 都应看到全部数据”。它按 purpose、snapshot 和 token budget 从 `ContextInventory` 生成 `ContextProjection`，显式记录 selected、omitted、selection reason 和 projection id；Materializer 只展开 projection 引用的 item，并区分可信 instruction 与不可信 content。
+
+Agent 主链的模型调用使用审计后的 `ContextProjection.projection_id`。边界明确、完整输入就是 message list 的应用服务使用 content-addressed `sealed-context` 引用；任何可见内容变化都会改变 hash。`StructuredModelRequest.context_projection_ref` 必填，空值和旧的 `inline:*` 绕过会被拒绝。所有 structured 与 streaming 调用都必须经过 governed model client，形成 call intent、skill context decision 和一次性 model invocation grant。
+
+因此 Context Gateway 管理的是“进入模型的上下文投影和可信度”，不是替代 Memory、Task 或 Runtime 成为所有原始数据的 owner。
+
+实现：`context/`、`capabilities/contracts/model.py`、`capabilities/model_resolution.py`。
+
+## 11. Observation、Monitor 与 Verification：反馈、调路、验收分离
+
+三者处理同一执行结果的不同问题：
+
+- `ObservationRef`：发生了什么。它包含 goal、provenance、trust、taint、summary 和 artifact refs，是运行反馈事实。
+- `PlanMonitor`：这件事是否使当前短期计划失效。它可以维持、重试或触发局部 patch，但无权宣布 Goal 完成。
+- `GoalVerifier`：证据是否满足 SuccessCriterion。它输出独立 `VerificationReport`。
+
+外部 Observation 默认带 `external_content` taint，不能作为 system instruction。进入 semantic verification 前必须经过 `EvidenceAdmission`，得到 purpose 和 criterion scope 有界的 `EvidenceRef`；带不可信 instruction taint 的内容会被拒绝。
+
+Action technical success 只产生 `CapabilityExecutionOutcomeEvent`，说明 provider 是否完成调用。Goal verification 后才产生 `CapabilityEffectivenessEvent`，说明该能力是否真正推进验收。超时、策略拒绝和 credential 缺失不会被误计为能力质量差。
+
+Mutation 不能靠模型文字自证：Verifier 确定性检查 Tool result 中的 `MutationReceipt`。`CompletionVerifier` 再根据所有必需 Goal 的 verification report、completion claim 和终止规则判断 Task lifecycle。
+
+实现：`runtime/contracts/control.py`、`governance/evidence_admission.py`、`verification/runtime.py`、`capabilities/outcomes.py`。
+
+## 12. Orchestration 与 RunCheckpoint：组织流程，不拥有业务事实
+
+Orchestration graph 串联 compile、coordinate、control、admit、resolve、dispatch、observe、monitor 和 verify 节点。`RunCheckpoint` 保存恢复所需的引用和子状态，包括 Task definition/runtime、control commits、invocation journal/outbox、evidence admissions、verification reports、Procedure/Agent run 和 interrupt 信息。
+
+Checkpoint 是运行容器，不应复制 Goal definition。Runtime 更新通常指通过 typed `ExecutionEvent` 更新 `TaskRuntimeProjection`；verification report、admission 和 outcome event 各自由自己的集合保存，Runtime 只持有引用。
+
+Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gateway 交给 Tool executor、Procedure runtime、ReAct loop 或 Agent provider 执行。Graph 本身不绕过 Gateway 直接调用 provider。
+
+实现：`orchestration/orchestration_graph.py`、`orchestration/orchestration_nodes/`、`orchestration/orchestration_models.py`。
+
+## 13. 一次任务如何闭环
+
+```text
+用户输入
+  -> TaskAnalyzer 产生语义提案
+  -> GoalGraphCompiler 建立 TaskContract + 初始 Runtime
+  -> CoordinationMode 决定 reactive 或 deliberative
+  -> Executive 产生 ControlProposal
+  -> Governance admission 产生 AcceptedControlCommand
+  -> CapabilityResolver 选择能力并签发精确 Grant
+  -> Gateway + InvocationJournal 执行
+  -> Observation 记录发生的事实
+  -> EvidenceAdmission 限定可用于验收的证据
+  -> PlanMonitor 调整短期策略
+  -> GoalVerifier 检查 criteria
+  -> CompletionVerifier 决定继续、降级、澄清或完成
+```
+
+这不是固定流水线：reactive 可跳过 Plan；Capability gap 会回到 Executive；Mutation 进入 confirmation-bound Procedure；Observation 可触发局部 replan；interrupt 后从 Checkpoint 恢复。但任何分支都不能跳过 Proposal/Admission/Grant/Gateway/Verification 的权责边界。
+
+## 14. 当前架构不变量
+
+- Goal 定义只属于 `TaskContract`，运行状态只属于 `TaskRuntimeProjection`。
+- Definition 与 Runtime 的 task identity、revision、Goal 集合必须一致。
+- `goal_id` 是跨模块关联键，但不是所有叶子模型都重复保存的字段。
+- 模型输出永远是 proposal，不是权限、事实或完成证明。
+- ExecutionGrant 只能缩小，不能在下游扩权。
+- 无实时可用性证据的远程能力 fail closed。
+- Mutation 必须有 confirmation、commit-time policy 和 receipt。
+- Observation 必须带 typed provenance/trust/taint；Evidence 必须经过 purpose-scoped admission。
+- Action success 不等于 Goal success；Goal success 不等于 Task completion。
+- Journal 与 outbox、Proposal 与 Admission/Command 均使用原子 commit 和 CAS fencing。
+- 包依赖只能沿显式 DAG，禁止循环和兼容重导出。
+
+## 15. 主要代码入口
+
+| 关注点 | 路径 |
 | --- | --- |
-| `reactive` | 一个有界动作可能直接推进 |
-| `deliberative` | 多 Goal、依赖、证据或不确定路径需要短期协调 |
-| `procedural` | 稳定事务不变量覆盖当前开放 Goal |
-
-### 5.3 业务设计
-
-简单任务强制规划会增加模型调用、延迟和错误面；复杂任务完全不规划会失去依赖与证据协调。因此明确情况由确定性 facts 处理，只有灰区才调用受预算限制的语义 assessor。
-
-模型不可用时不回退到关键词动作表，因为关键词不能维护资源 scope、Goal dependency 和 Mutation authority。
-
-## 6. Adaptive Planning 模块
-
-### 6.1 模块定位
-
-Adaptive Planning 为 deliberative 任务维护短 horizon、provider-neutral 策略。它不拥有用户 Goal，不选择具体 Tool/Provider，也不决定物理并发。
-
-实现位置：`planning/adaptive.py`。
-
-### 6.2 核心模型
-
-```text
-PlanDefinition
-  immutable steps / dependencies / strategy / planning snapshot
-
-PlanRuntimeProjection
-  step statuses / replan signatures / event cursor
-
-PlanEvent
-  proposed / selected / running / observed / satisfied / invalidated ...
-```
-
-`PlanStep` 声明 Goal、criterion、semantic objective、CapabilityRequirement 或 Procedure、observation contract、failure class 和 replan policy。
-
-### 6.3 子模块
-
-- `AdaptivePlanner`：创建短 horizon `PlanDefinition`；
-- `PlanRuntimeProjector`：从 PlanEvent 重建 step 状态；
-- `FrontierSelector`：选择语义 ready set；
-- `PlanValidator`：校验依赖、revision、权限和 provider-neutral 约束；
-- `PlanMonitor`：根据 Observation 决定 keep、retry、patch 或 replacement。
-
-### 6.4 业务设计
-
-Plan 是可替换策略，不是任务真相。Definition、Projection 和 event log 分离，避免 step status 与历史事实不一致。Patch 使用 task、goal graph、plan revision 和 event cursor 做 compare-and-set，只能修改未启动或已失效步骤。
-
-短 horizon 用尽但 Goal 仍开放时创建 replacement definition，旧决策历史留在 append-only event stream。`FrontierSelector` 只负责语义 ready，Scheduler 独占 dispatch 与物理并发。当前生产 profile 的 `max_frontier_width=1`，不宣称本地多 Action 已并行。
-
-## 7. Executive Control 模块
-
-### 7.1 模块定位
-
-Executive 是在线控制器，每轮根据当前事实提出一次有界变化。它不写 Task/Plan projection，不直接调用 Provider，也不拥有 Task 完成权。
-
-实现位置：`planning/executive.py`、`planning/decision_validator.py`。
-
-### 7.2 输入与输出
-
-Executive 读取 `MaterializedGoalView`、ControlState、Plan frontier、Observation、budget 和 Procedure candidates，只能输出 typed decision：
-
-```text
-clarify / activate_skill / execute_meta_capability / delegate
-invoke_procedure / request_confirmation / finish / stop
-```
-
-Reactive 模式可以为 ready Goal 构造 `BoundedAction`；Deliberative 模式只能消费已验证 frontier。
-
-### 7.3 DecisionValidator
-
-`DecisionValidator` 校验：
-
-- decision 的 Goal ownership；
-- blocking dependency 和 terminal status；
-- provider/model/tool budget；
-- mandatory Procedure；
-- MutationIntent、write set 和 confirmation；
-- delegation scope；
-- Action operation 是否超出 Task contract。
-
-### 7.4 业务设计
-
-长链模型计划会同时放大环境过期、语义错误和权限错误。逐轮有界决策让每次变化都基于最新 Observation，并在执行前经过确定性 validator。Terminal Goal 不得获得新 Action；`finish` 只是 CompletionVerifier 的提案。
-
-## 8. Resource/Capability 模块
-
-### 8.1 模块定位
-
-该模块把 Task/Goal 的业务资源需求转换为当前环境可执行的 Capability，并确保选择过程不扩大授权。
-
-实现位置：`kernel/contracts/resource.py`、`kernel/contracts/capability.py`、`planning/capability_resolver.py`、`planning/capability_validation.py`。
-
-### 8.2 三个阶段模型
-
-```text
-ResourceRequirement    Task/Goal 需要操作什么资源
-CapabilityRequirement  当前 Action 需要什么执行能力
-Capability             Provider 实际提供什么能力
-```
-
-三个 Model 语义不同，不能合并；它们共享以下值对象和 canonical matcher：
-
-```text
-ResourceSelector       domains / resource types / locator
-OperationScope         operations / side-effect class
-ProviderConstraint     provider / freshness / trust
-```
-
-### 8.3 Scope 传播
-
-ResourceRequirement 随 GoalDefinition 传递；进入后续阶段时由外层 aggregate 携带 identity：
-
-```text
-GoalDefinition(goal_id)
-└─ ResourceRequirement[]
-      ↓
-PlanStep(goal_id)
-└─ CapabilityRequirement
-      ↓
-BoundedAction(goal_id)
-      ↓
-CapabilityResolutionRequest(task_id, goal_id, action_id)
-```
-
-叶子 requirement 不重复 `goal_id`，避免内外 identity 冲突。
-
-### 8.4 Capability Resolution
-
-Resolver 对 registry 执行 hard eligibility、resource match、operation coverage、policy、provider binding 和 outcome-aware ranking。Resolution contracts 分为：
-
-```text
-CapabilityResolutionRequest   immutable scope
-ResolutionRunProjection       lifecycle / cursor / failure
-CapabilityResolutionDecision  selected/denied / coverage / constraints
-ResolutionEvent               audit facts
-```
-
-### 8.5 业务设计
-
-Planner 不选择 Provider，因为凭证、trust、data egress 和可用性属于运行环境。Capability 支持写不代表 Action 获得写权限；实际 grant 只能是 request 与 capability operation 的允许交集。
-
-Mutation taxonomy 只有 `resource.py` 一个 owner，Planner、DecisionValidator、Resolver 和 ResolutionValidator 共用，防止同一 operation 在不同阶段获得不同风险解释。
-
-## 9. Governed Procedure 模块
-
-### 9.1 模块定位
-
-Procedure 承载拓扑和事务不变量稳定的业务操作，例如知识写入、删除、知识整理和研究订阅创建。
-
-实现位置：`kernel/contracts/procedure.py`、`planning/procedures.py`。
-
-### 9.2 核心模型
-
-```text
-ProcedureDefinition      固定拓扑和不变量
-ProcedureInvocation      本次调用及 ProcedureRef
-ProcedureRunProjection   当前节点和运行状态
-ProcedureEvent           已发生事实
-ProcedureOutcome         终态业务结果
-```
-
-`ProcedureApplicabilityResolver` 根据当前 Goal 的有效 resource domain/type/operation 生成 candidates；`ProcedureMaterializer` 把选中的 definition 和 invocation 物化为 typed node invocation；projector 从 events 更新 run projection。
-
-### 9.3 业务设计
-
-Mutation 的精确目标、确认、幂等、receipt 和恢复位置不能由开放式 Planner 临时拼接。Planner 只能把 Procedure 当作原子 step，不能展开、跳过或替换内部门禁。
-
-正式 Mutation 路径：
-
-```text
-read-only proposal
-  -> evidence
-  -> mandatory Procedure
-  -> exact target
-  -> confirmation
-  -> commit-time policy
-  -> idempotent mutation
-  -> MutationReceipt
-  -> GoalVerifier
-```
-
-## 10. Invocation Runtime 模块
-
-### 10.1 模块定位
-
-Invocation Runtime 是所有实际执行方式的统一边界，负责表达“本次执行什么”和“这次执行到什么状态”。
-
-实现位置：`kernel/contracts/execution.py`、`orchestration/orchestration_nodes/_steps.py`。
-
-### 10.2 核心模型
-
-```text
-ExecutableInvocation
-└─ tool / react / agent / procedure node / delegated subtask payload
-
-InvocationAttemptState
-└─ status / retry / failure / input-output artifact refs
-```
-
-Checkpoint 使用 `InvocationBatchState` 保存 canonical invocation collection、cursor、result refs 和 retry counts。
-
-### 10.3 执行边界
-
-- Tool 和 MCP Tool 进入 `ToolGateway`；
-- graph-native retriever 在受控 executor 中执行；
-- ReAct 只能使用 ResolutionDecision 允许的 tool set；
-- A2A 进入 `AgentGateway` 的 submit/poll lifecycle；
-- Procedure node 保留 `ProcedureNodeInvocation`，不复制完整 definition。
-
-### 10.4 业务设计
-
-PlanStep、Procedure node 和 attempt 状态不能互相镜像，否则计划修改后仍可能执行旧 step。当前已删除 `ExecutionStep / StepRunState` 镜像，Tool、ReAct、Agent 和 Procedure 统一进入 attempt lifecycle。
-
-ToolGateway 统一执行 schema、policy、idempotency、timeout、HITL 和 audit。Provider 返回成功只结束 attempt，不自动完成 Goal。
-
-## 11. Context Gateway 模块
-
-### 11.1 模块定位
-
-Context Gateway 是所有核心模型调用的输入边界，负责按 purpose、budget、trust 和 admission 选择上下文。
-
-实现位置：`context/projection.py`、`context/gateway.py`。
-
-### 11.2 核心模型
-
-```text
-ContextInventory.items      canonical content inventory
-        ↓ ContextManager.project
-ContextProjection           selected ids / exclusions / snapshot
-        ↓ ContextProjectionMaterializer
-ModelContextGateway         temporary model payload
-```
-
-`ContextProjection` 通过 `RuntimeSnapshotRef` 绑定 Task、GoalGraph、Plan、execution 和 artifact 版本，以 typed exclusion 记录未选择原因。
-
-### 11.3 业务设计
-
-Planner、Executive 和 Verifier需要的信息不同，Tool/provider 输出又不能自动成为 instruction。把整个 checkpoint 拼进 prompt 会扩大数据暴露并产生第二份业务状态。
-
-因此 materialized payload 只存在于一次模型调用，不写入 RunCheckpoint。Runtime/trusted 且 admitted 的 item 才能成为 instruction；工具输出保持 untrusted content。Active skill 只属于 TaskRuntimeProjection。
-
-## 12. Observation、Monitor 与 Verification 模块
-
-### 12.1 模块定位
-
-该模块负责把一次执行结果转换成可引用事实、计划影响和 Goal 完成判断。
-
-实现位置：`planning/verification.py`、`planning/adaptive.py` 中的 `PlanMonitor`，以及 orchestration executive nodes。
-
-### 12.2 三层结果语义
-
-```text
-InvocationAttemptState   技术执行是否结束
-Observation              执行后获得了什么事实
-VerificationReport       事实是否满足 Goal criterion
-```
-
-`GoalVerifier` 先执行确定性 evidence、source count、receipt 和 approval 下限，再允许有预算的 semantic verifier 处理开放语义。
-
-`PlanMonitor` 根据 revision、horizon、capability gap、verification gap 和 technical failure 决定 keep、retry、patch 或 replacement；只有未分类 Observation 进入 bounded semantic fallback。
-
-`CompletionVerifier` 检查全部 required Goal、criterion、approval 和 CompletionClaim，独占 Task lifecycle 的 completed 转换。
-
-### 12.3 业务设计
-
-Action success 与 Goal success 分离，避免 Tool 返回 `ok=true` 就完成业务结果。确定性门禁先于语义判断，保证模型不能降低 receipt、approval 或 evidence 下限。Replan signature、patch quota 和 model-call budget 防止策略抖动。
-
-## 13. Orchestration、Checkpoint 与 Persistence 模块
-
-### 13.1 模块定位
-
-Orchestration 使用 LangGraph 组织节点、interrupt/resume、checkpoint 和恢复；它协调领域模块，但不成为所有业务事实的 owner。
-
-实现位置：`orchestration/orchestration_graph.py`、`orchestration/orchestration_models.py`、`orchestration/entry_orchestrator.py`。
-
-### 13.2 RunCheckpoint
-
-`RunCheckpoint` 保存恢复当前执行现场所需的 Task contract/runtime、Plan definition/runtime、control、invocation batch、procedure projection、interaction、presentation refs 和 cursors。
-
-React、invocation batch 和 tool tracking 已使用独立 substate；planning/control 的进一步 owner substate 收敛仍属于当前边界。
-
-以下内容为派生值，不是可写 checkpoint 字段：
-
-- `answer_completed`、`execution_trace`；
-- single `current_action`、single `resolved_action_spec`；
-- selected plan step ids；
-- top-level procedure id/version；
-- materialized model context。
-
-Pending confirmation 使用 typed `InteractionRequest`，control route 使用 `ControlPhase`。
-
-### 13.3 三层持久化
-
-```text
-RunCheckpoint
-  当前可恢复现场
-
-Task/Plan/Procedure/Resolution Event
-  append-only 因果和审计
-
-PostgreSQL artifact/replay/run repository
-  大对象、长期结果、调试与 replay 引用
-```
-
-### 13.4 业务设计
-
-Checkpoint 的生命周期、事件审计和大对象存储需求不同，不能混为一个 Model。Projection 保存当前状态和 cursor，不嵌入完整 event log；artifact 通过引用进入 checkpoint，避免状态无限膨胀。
-
-## 14. Research 与 A2A 模块
-
-### 14.1 Research
-
-Research 是长时、证据驱动的领域能力，不是顶层路由。实现位置：`kernel/contracts/research.py`、`application/research`。
-
-```text
-ResearchSubscriptionSpec + SubscriptionCursor
-ResearchRunDefinition + ResearchRunProjection
-ResearchDecisionIntent + ResearchDecisionOutcome
-CanonicalResearchEvent + EventAssessment
-ResearchLimits + ResearchUsage
-```
-
-静态 topic、窗口、policy 和 limits 与动态计数、timing、评分、decision history 分离，支持定时运行、恢复和审计。
-
-### 14.2 A2A
-
-A2A 是独立 Agent 执行边界。实现位置：`kernel/contracts/agent.py`、`agents/gateway.py`。
-
-```text
-ChildAgentRunDefinition
-ChildAgentRunProjection
-ChildAgentArtifactIndex
-ChildAgentRunEvent
-ChildAgentRunOutcome
-```
-
-Child run 使用 submit/poll/cancel lifecycle，不伪装成 ToolGateway Tool。Child artifact 默认不可信，必须返回父 Goal verification；projection 不内嵌 task、context、artifact 或 event log。
-
-### 14.3 业务设计
-
-Research 和 A2A 都是长生命周期 aggregate，Definition/Projection/Event 混装会让恢复状态与审计历史冲突。因此它们遵循与 Task、Plan、Procedure 相同的所有权规则。
-
-## 15. 跨模块执行示例
-
-用户请求：
-
-> 保存这段资料，然后根据资料回答问题。
-
-### Task 形成
-
-`TaskAnalyzer` 提出 Goal A `external_state`、Goal B `response`，以及 B consumes A。`GoalGraphCompiler` 校验图，固化 A 的 ingest resource 和 MutationReceipt criterion、B 的 evidence policy，初始化 A active、B pending。
-
-这一阶段只确定用户结果、资源 scope、依赖和完成标准，不决定执行工具。
-
-### 策略形成
-
-`PlanningModePolicy` 根据 Mutation 和依赖选择 procedural/deliberative。`ProcedureApplicabilityResolver` 根据 A 的 domain/type/operation 找到 mandatory `knowledge_ingest`。需要短期协调时，AdaptivePlanner 创建 provider-neutral PlanDefinition。
-
-这一阶段只决定策略形态，不授予具体 Provider 权限。
-
-### 有界行动
-
-`Executive` 只能推进 A，`DecisionValidator` 阻止绕过 Procedure 或提前执行 B。Procedure 产生 read-only proposal、精确目标、confirmation、commit 和 MutationReceipt。
-
-这一阶段每次只批准一项有界变化，MutationIntent 本身不等于写入授权。
-
-### 观察与验证
-
-GoalVerifier 使用 receipt 验证 A；Task runtime event 释放 B。Executive 为 B 提出 search/read Action，Capability Resolution 在 local/MCP/A2A 中选择当前允许的能力。执行结果先形成 Observation，再按 evidence policy 验证 B。
-
-工具成功但证据不足时，PlanMonitor 继续探索或 patch，不完成 Goal。
-
-### Task 完成
-
-CompletionVerifier 检查 A、B、全部 required criterion、receipt、approval 和 CompletionClaim，最后更新 Task lifecycle。
-
-这条主链中没有任何单一模块拥有完整权力：Analyzer 不能执行，Planner 不能授权，Resolver 不能扩大 scope，Tool 不能宣布 Goal 完成，Executive 不能绕过 CompletionVerifier。
-
-## 16. 当前边界
-
-以下能力未作为当前事实宣称：
-
-- 本地多个 Action 的真实 worker 并发与 all/any/quorum join；
-- 用户运行中修改 `TaskContract / GoalGraphDefinition` 的 semantic steering API；
-- Analyzer 自动识别并提升多个 Goal 的公共资源到 `shared_resources`；
-- 所有 adapter/provider payload 完成强类型替换，部分边界仍使用 raw dict；
-- outcome ranking 的跨进程生产样本闭环；
-- RunCheckpoint 中 planning/control 字段全部收敛为独立 owner substate。
-
-这些边界不能用 schema、DI、event type 或 mock 调用冒充已落地能力。
-
-## 17. 验证基线
-
-核心测试覆盖：
-
-- Goal identity、dependency、revision fencing 和 terminal 状态；
-- effective resource scope、未知 Goal fail-closed 和 Mutation taxonomy；
-- criterion provenance、evidence、receipt 和 Completion gate；
-- PlanningMode、Plan CAS、replacement 和 monitor budget；
-- Capability matcher、operation coverage 和 Provider policy；
-- Procedure confirmation、idempotency 和 recovery；
-- Context purpose/trust/admission；
-- checkpoint round-trip、event replay 和 artifact refs；
-- Research/A2A Definition/Projection 分离。
-
-2026-07-15 本地验证结果：
-
-- `.venv\Scripts\python.exe -m pytest --collect-only -q`：842 tests collected；
-- `.venv\Scripts\python.exe -m pytest -q --maxfail=1`：842 passed，39 warnings；
-- warnings 来自第三方依赖弃用提示、现有 Neo4j async resource warning 和测试中的 `datetime.utcnow()`，没有测试失败；
-- 本轮未重新执行依赖外部模型或服务的 eval/benchmark，未执行结果不记为通过。
-
-后续修改每个模块时，必须先明确该模块的输入、产物、事实所有权和禁止职责，再说明它保护的业务不变量。无法说明业务目的的字段、转换或 fallback，不应通过增加 validator 或兼容副本保留，而应重新确定模块边界。
+| Task Analysis / Compile | `planning/task_analyzer.py`、`planning/task_compiler.py` |
+| Task / Goal contracts | `runtime/contracts/task.py` |
+| Coordination / Adaptive Plan | `planning/adaptive.py` |
+| Executive Control | `runtime/control_runtime.py` |
+| Admission / Evidence | `governance/decision_admission.py`、`governance/evidence_admission.py` |
+| Capability management | `capabilities/` |
+| Invocation / outbox | `execution/` |
+| Procedure runtime | `runtime/procedure_runtime.py` |
+| Context boundary | `context/` |
+| Verification | `verification/runtime.py` |
+| Graph / checkpoint | `orchestration/` |
+| Architecture gate | `scripts/check_layers.py`、`.github/workflows/architecture.yml` |

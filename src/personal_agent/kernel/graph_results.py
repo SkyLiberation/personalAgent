@@ -5,7 +5,7 @@ retrievers, future hybrid) and the core evidence/normalize layer. They live in `
 that ``core.evidence`` no longer has to import from ``graphiti.store`` (which
 would be a layering inversion: core depending on a concrete provider).
 
-The graphiti package re-exports these for backward compatibility.
+Concrete graph providers import these canonical boundary contracts directly.
 """
 from __future__ import annotations
 

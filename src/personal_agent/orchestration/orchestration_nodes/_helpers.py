@@ -108,7 +108,10 @@ def _react_llm_native(
     往返。模型原生 ``tool_calls`` 的结构化保证
     （schema 校验、call_id、parallel calls）被直接保留。
     """
-    from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import (
+        StructuredModelRequest,
+        sealed_context_projection_ref,
+    )
     from pydantic import BaseModel
 
     if deps.model_client is None:
@@ -122,14 +125,18 @@ def _react_llm_native(
     tools = tool_defs + [_FINISH_REACT_TOOL]
     try:
         react_prompt = get_prompt("react.system")
+        messages = [
+            {"role": "system", "content": _REACT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
         response = deps.model_client.generate(StructuredModelRequest(
             operation="react",
             version=react_prompt.version,
-            messages=[
-                {"role": "system", "content": _REACT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             output_type=BaseModel,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="react", messages=messages,
+            ),
             temperature=0,
             max_tokens=400,
             kind="tool_calling",
@@ -190,7 +197,10 @@ def _structured_llm_respond(
     JSON string consumed by ``_react_parse_response`` because these step
     decisions parse permissive dict shapes rather than a single Pydantic model.
     """
-    from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import (
+        StructuredModelRequest,
+        sealed_context_projection_ref,
+    )
     from pydantic import BaseModel
 
     system_prompt = get_prompt("structured.system")
@@ -199,14 +209,18 @@ def _structured_llm_respond(
     except KeyError:
         prompt_version = system_prompt.version
 
+    messages = [
+        {"role": "system", "content": system_prompt.template},
+        {"role": "user", "content": user_prompt},
+    ]
     request = StructuredModelRequest(
         operation=prompt_name,
         version=prompt_version,
-        messages=[
-            {"role": "system", "content": system_prompt.template},
-            {"role": "user", "content": user_prompt},
-        ],
+        messages=messages,
         output_type=BaseModel,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose=prompt_name, messages=messages,
+        ),
         temperature=0,
         max_tokens=max_tokens,
         kind="structured",
@@ -234,7 +248,7 @@ def _react_parse_response(raw: str) -> dict | None:
     unwrap and parse telemetry with every other structured site.
     """
     from personal_agent.kernel.llm_trace import log_llm_parse
-    from personal_agent.infra.structured_parse import load_json_lenient
+    from personal_agent.kernel.structured_parse import load_json_lenient
 
     try:
         parsed = load_json_lenient(raw)

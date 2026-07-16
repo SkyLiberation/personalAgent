@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import UTC, datetime
 
-from personal_agent.kernel.contracts.agentic import TaskContract
 from personal_agent.skills.contracts import (
     LoadedSkill,
     SkillInstallation,
@@ -81,15 +80,19 @@ class SkillRegistry:
             raise PermissionError(f"skill is not trusted: {skill_id}")
         return self._loader.load(self._paths[skill_id])
 
-    def candidates(self, task: TaskContract) -> tuple[SkillPackageManifest, ...]:
-        domains = {item.semantic_domain for item in task.resource_requirements}
-        operations = set(task.requested_operations)
+    def candidates(
+        self,
+        *,
+        semantic_domains: frozenset[str],
+        operations: frozenset[str],
+        result_contract: str,
+    ) -> tuple[SkillPackageManifest, ...]:
         return tuple(
             manifest for manifest in self.manifests()
             if (
-                domains.intersection(manifest.applicability.semantic_domains)
+                semantic_domains.intersection(manifest.applicability.semantic_domains)
                 or operations.intersection(manifest.applicability.operations)
-                or task.result_contract in manifest.applicability.result_contracts
+                or result_contract in manifest.applicability.result_contracts
             )
         )
 

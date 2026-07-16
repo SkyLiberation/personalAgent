@@ -7,12 +7,12 @@ from personal_agent.kernel.models import ReviewCard, local_now
 from personal_agent.application.review import (
     DeliveryMessage,
     DeliveryResult,
-    DeliveryTarget,
     DigestSubscription,
     ReviewDigestJob,
     ReviewDigestUseCase,
     subscriptions_from_settings,
 )
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 from personal_agent.application.review.delivery import DeliveryRouter
 from tests.note_factory import make_note
 

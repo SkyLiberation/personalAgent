@@ -31,7 +31,10 @@ def test_routing_context_cannot_access_execution_capabilities():
 
 def test_executive_context_separates_decision_from_execution():
     names = _field_names(ExecutiveContext)
-    assert {"goal_graph_compiler", "controller", "decision_validator"}.issubset(names)
+    assert {
+        "goal_graph_compiler", "controller", "decision_admission",
+        "accepted_command_compiler",
+    }.issubset(names)
     assert {"task_runtime_projector", "goal_verifier", "completion_verifier"}.issubset(names)
     assert "replanner" not in names
 
@@ -49,7 +52,7 @@ def test_step_and_react_contexts_have_distinct_boundaries():
     assert "agent_gateway" in step_names
     assert react_names == {
         "settings", "tool_executor", "policy_engine", "context_manager", "context_gateway",
-        "model_client", "structured_client",
+        "invocation_journal", "model_client", "structured_client",
     }
 
 

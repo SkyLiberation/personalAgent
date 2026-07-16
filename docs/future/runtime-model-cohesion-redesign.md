@@ -108,10 +108,10 @@ ExecutionLedgerItem
 
 相关实现：
 
-- [`TaskSpec` 与 `ExecutionLedgerItem`](../../src/personal_agent/kernel/contracts/agentic.py)
-- [`GoalGraphCompiler`](../../src/personal_agent/planning/goal_graph.py)
-- [`ProcedureApplicabilityResolver`](../../src/personal_agent/planning/procedures.py)
-- [`ExecutiveController._resources_for_goal`](../../src/personal_agent/planning/executive.py)
+- 当前替代模型：[`TaskContract` 与 `TaskRuntimeProjection`](../../src/personal_agent/runtime/contracts/task.py)
+- [`GoalGraphCompiler`](../../src/personal_agent/planning/task_compiler.py)
+- [`ProcedureApplicabilityResolver`](../../src/personal_agent/runtime/procedure_runtime.py)
+- [`ExecutiveController`](../../src/personal_agent/runtime/control_runtime.py)
 
 ### P0：AgentGraphState 存在多组双写事实
 
@@ -224,7 +224,7 @@ untrusted_observations 中的 item 必须是 untrusted
 
 `active_skill_ids` 也不属于 Context inventory，却同时存在于 ContextEnvelope 和 ExecutionLedger。Context 应只拥有 content inventory 与 selection projection，skill activation 应属于 Task runtime。
 
-相关实现：[`ContextItem`、`ContextEnvelope` 与 `ContextProjection`](../../src/personal_agent/kernel/contracts/agentic.py)。
+当前实现：[`ContextItem`、`ContextInventory` 与 `ContextProjection`](../../src/personal_agent/runtime/contracts/task.py)。
 
 ### P1：ResourceRequirement、CapabilityRequirement 与 Capability 缺少共享值对象
 
@@ -246,7 +246,7 @@ side effect
 
 相关实现：
 
-- [`ResourceRequirement`](../../src/personal_agent/kernel/contracts/agentic.py)
+- [`ResourceRequirement`](../../src/personal_agent/runtime/contracts/task.py)
 - [`CapabilityRequirement` 与 `Capability`](../../src/personal_agent/kernel/contracts/capability.py)
 - [`CapabilityResolver`](../../src/personal_agent/planning/capability_resolver.py)
 - [`ResolutionValidator`](../../src/personal_agent/planning/capability_validation.py)
@@ -539,7 +539,7 @@ ResourceRequirement、CapabilityRequirement 和 CapabilityDescriptor 组合这�
 ### 11. Capability Resolution 分离 request、projection 与 decision
 
 ```text
-CapabilityResolutionRequest   immutable input
+ExecutionCapabilityRequest   immutable input
 ResolutionRunProjection       lifecycle / cursor / failure
 CapabilityResolutionDecision  selected / denied / coverage / rationale
 ResolutionEvent               external append-only facts

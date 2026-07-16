@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from personal_agent.kernel.models import Citation, EntryInput, ThreadSummary, local_now
 from personal_agent.planning.task_analyzer import TaskAnalysis
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
-from personal_agent.kernel.contracts.agentic import (
+from personal_agent.runtime.contracts.task import (
     ContextInventory,
     ContextProjection,
     ExecutionEvent,
@@ -29,21 +29,27 @@ from personal_agent.kernel.contracts.agentic import (
     MaterializedGoalView,
     materialize_goals,
 )
-from personal_agent.kernel.contracts.executive import (
-    ActionOutcome,
+from personal_agent.runtime.contracts.intake import TaskIntakeState
+from personal_agent.runtime.contracts.control import (
     BoundedAction,
-    CompletionReport,
-    ControlDecision,
-    ControlState,
-    ObservationRef,
+    ControlTurnState,
     ResolvedActionSpec,
-    RetryDirective,
 )
-from personal_agent.kernel.contracts.execution import ExecutableInvocation
+from personal_agent.verification.contracts.reports import CompletionReport, VerificationReport
+from personal_agent.execution.contracts.invocation import ExecutableInvocation
+from personal_agent.execution.contracts.journal import InvocationJournalProjection
+from personal_agent.capabilities.contracts.grants import ExecutionGrant
+from personal_agent.capabilities.contracts.acquisition import CapabilityAcquisitionProjection
+from personal_agent.governance.contracts.evidence import EvidenceAdmissionDecision
+from personal_agent.governance.contracts.admission import StageAdmissionDecision
+from personal_agent.runtime.contracts.commits import ControlCommit, TaskCompilationCommit
+from personal_agent.capabilities.contracts.outcomes import (
+    CapabilityEffectivenessEvent,
+    CapabilityExecutionOutcomeEvent,
+)
 from personal_agent.kernel.contracts.interaction import InteractionDecision, InteractionRequest
-from personal_agent.kernel.contracts.procedure import ProcedureRunProjection
-from personal_agent.kernel.contracts.planning import (
-    DispatchGroup,
+from personal_agent.capabilities.contracts.procedure import ProcedureRunProjection
+from personal_agent.runtime.contracts.planning import (
     FrontierDecision,
     PlanDefinition,
     PlanRuntimeProjection,
@@ -51,15 +57,9 @@ from personal_agent.kernel.contracts.planning import (
     PlannerExecutionProfile,
     PlanningUsage,
     PlanningFacts,
-    PlanningModeAssessment,
+    CoordinationAssessment,
     ReplanRequest,
 )
-
-ControlPhase = Literal[
-    "direct_candidate", "direct_completion", "planning_blocked", "plan_ready",
-    "replan", "planning_stop", "control", "loop", "action", "verify",
-    "technical_retry", "completion", "stop",
-]
 
 def _new_run_id() -> str:
     return uuid4().hex[:12]
@@ -194,6 +194,7 @@ class RunCheckpoint(BaseModel):
     tool_messages: list[AnyMessage] = Field(default_factory=list)
 
     # Routing
+    intake: TaskIntakeState | None = None
     task_analysis: TaskAnalysis | None = None
     task_contract: TaskContract | None = None
     task_runtime: TaskRuntimeProjection | None = None
@@ -204,7 +205,7 @@ class RunCheckpoint(BaseModel):
     # Adaptive planning owns short-horizon strategy. Step status is projected
     # exclusively from plan events rather than duplicated on PlanStep.
     planning_facts: PlanningFacts | None = None
-    planning_mode: PlanningModeAssessment | None = None
+    coordination: CoordinationAssessment | None = None
     planner_profile: PlannerExecutionProfile | None = None
     planning_usage: PlanningUsage = Field(default_factory=PlanningUsage)
     plan_definition: PlanDefinition | None = None
@@ -213,22 +214,23 @@ class RunCheckpoint(BaseModel):
     plan_monitor_decision: PlanMonitorDecision | None = None
     replan_request: ReplanRequest | None = None
 
-    # Task-level executive control. These fields, rather than the projected
-    # step list, own open-task progress and completion semantics.
-    control_state: ControlState | None = None
-    control_decision: ControlDecision | None = None
-    current_actions: list[BoundedAction] = Field(default_factory=list)
-    current_action_outcome: ActionOutcome | None = None
-    resolved_action_specs: list[ResolvedActionSpec] = Field(default_factory=list)
-    dispatch_groups: list[DispatchGroup] = Field(default_factory=list)
-    retry_directive: RetryDirective | None = None
-    latest_observations: list[ObservationRef] = Field(default_factory=list)
+    # One checkpoint-local owner for the bounded executive turn. Business
+    # facts remain in Task/Plan/Invocation/Observation aggregates.
+    control: ControlTurnState = Field(default_factory=ControlTurnState)
+    decision_admission: StageAdmissionDecision | None = None
+    verification_reports: dict[str, VerificationReport] = Field(default_factory=dict)
     completion_report: CompletionReport | None = None
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
-    executive_turn: int = 0
-    last_decision_hash: str = ""
-    repeated_decision_count: int = 0
-    control_route: ControlPhase | None = None
+    execution_grants: dict[str, ExecutionGrant] = Field(default_factory=dict)
+    invocation_journal: InvocationJournalProjection = Field(default_factory=InvocationJournalProjection)
+    capability_acquisition: CapabilityAcquisitionProjection = Field(
+        default_factory=CapabilityAcquisitionProjection,
+    )
+    evidence_admissions: dict[str, EvidenceAdmissionDecision] = Field(default_factory=dict)
+    capability_execution_outcomes: list[CapabilityExecutionOutcomeEvent] = Field(default_factory=list)
+    capability_effectiveness_outcomes: list[CapabilityEffectivenessEvent] = Field(default_factory=list)
+    task_compilation_commit: TaskCompilationCommit | None = None
+    control_commits: list[ControlCommit] = Field(default_factory=list)
 
     # Sub-models (grouped private state)
     react: ReactSubState = Field(default_factory=ReactSubState)
@@ -247,10 +249,6 @@ class RunCheckpoint(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
 
     # HITL
-    pending_confirmation: InteractionRequest | None = None
-    confirmation_decision: InteractionDecision | None = None
-    confirmed_step_id: str | None = None
-
     # Final
     answer: str | None = None
 
@@ -278,7 +276,7 @@ class RunCheckpoint(BaseModel):
     @property
     def answer_completed(self) -> bool:
         """Derive completion from canonical task lifecycle or terminal run facts."""
-        if self.task_runtime is not None and self.task_runtime.lifecycle in {"completed", "stopped"}:
+        if self.task_runtime is not None and self.task_runtime.lifecycle in {"completed", "terminated"}:
             return True
         return any(event.type in {"answer_completed", "run_completed"} for event in self.events)
 
@@ -288,11 +286,11 @@ class RunCheckpoint(BaseModel):
 
     @property
     def current_action(self) -> BoundedAction | None:
-        return self.current_actions[0] if self.current_actions else None
+        return self.control.actions[0] if self.control.actions else None
 
     @property
     def resolved_action_spec(self) -> ResolvedActionSpec | None:
-        return self.resolved_action_specs[0] if self.resolved_action_specs else None
+        return self.control.resolved_actions[0] if self.control.resolved_actions else None
 
     @property
     def selected_plan_step_ids(self) -> list[str]:
@@ -345,9 +343,9 @@ class RunCheckpoint(BaseModel):
             steps=[s.model_dump(mode="json") for s in self.invocation_batch.invocations],
             execution_trace=self.execution_trace,
             answer=self.answer,
-            pending_confirmation=self.pending_confirmation,
-            confirmation_decision=self.confirmation_decision,
-            confirmed_step_id=self.confirmed_step_id,
+            pending_confirmation=self.control.pending_interaction,
+            confirmation_decision=self.control.interaction_decision,
+            confirmed_step_id=self.control.confirmed_invocation_id,
             last_event=last,
             errors=self.errors,
             created_at=self.created_at,
@@ -360,8 +358,8 @@ def _infer_status(state: RunCheckpoint) -> AgentRunStatus:
         return AgentRunStatus.failed
     if state.answer_completed:
         return AgentRunStatus.completed
-    if state.pending_confirmation is not None:
-        if state.pending_confirmation.kind == "clarification_required":
+    if state.control.pending_interaction is not None:
+        if state.control.pending_interaction.kind == "clarification_required":
             return AgentRunStatus.waiting
         return AgentRunStatus.blocked_approval
     if state.task_analysis is not None:

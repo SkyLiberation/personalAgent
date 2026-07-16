@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import re
+from hashlib import sha256
+from datetime import UTC, datetime
 from pathlib import Path
 
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import Citation
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
-from personal_agent.kernel.contracts.executive import ResolvedActionSpec
+from personal_agent.runtime.contracts.control import ResolvedActionSpec
 from personal_agent.kernel.contracts.interaction import InteractionRequest
 from personal_agent.kernel.prompts import render_prompt
 from personal_agent.orchestration.orchestration_models import (
@@ -38,7 +40,12 @@ from personal_agent.orchestration.orchestration_nodes._tooling import (
     _pending_tool_updates,
     _tool_result_event_payload,
 )
-from personal_agent.planning.ledger import TaskRuntimeProjector, next_execution_event
+from personal_agent.runtime.task_runtime import TaskRuntimeProjector, next_execution_event
+from personal_agent.capabilities.contracts.grants import (
+    AtomicCapabilityGrant,
+    DelegationGrant,
+    ProcedureNodeGrant,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +264,7 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
     """
     if state.invocation_batch.current_step_index >= len(state.invocation_batch.invocations):
         return {}
+    state.control.advance_phase("awaiting_result")
 
     sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
     step = sd
@@ -354,8 +362,8 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
                 PermissionError(admission.reason),
                 deps=deps,
             )
-        if admission.status == "requires_confirmation" and state.confirmed_step_id != step.step_id:
-            state.pending_confirmation = InteractionRequest(
+        if admission.status == "requires_confirmation" and state.control.confirmed_invocation_id != step.step_id:
+            state.control.pending_interaction = InteractionRequest(
                 kind="confirmation_required",
                 action_type="memory_admission",
                 step_id=step.step_id,
@@ -365,13 +373,26 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
             )
             sd.status = "awaiting_confirmation"
             state.add_event(
-                "confirmation_required", state.pending_confirmation.model_dump(mode="json"),
+                "confirmation_required", state.control.pending_interaction.model_dump(mode="json"),
             )
             return {
                 "invocation_batch": state.invocation_batch,
-                "pending_confirmation": state.pending_confirmation,
+                "control": state.control,
                 "events": state.events,
             }
+        if step.requires_confirmation or admission.status == "requires_confirmation":
+            grant_ref = step.execution_grant_ref or resolved_spec.execution_grant_ref
+            grant = state.execution_grants.get(grant_ref or "")
+            if grant is None or state.control.confirmed_invocation_id != step.step_id:
+                return _fail_current_step(
+                    state,
+                    step,
+                    PermissionError("confirmed mutation requires the exact invocation-bound grant"),
+                    deps=deps,
+                )
+            confirmed_grant = deps.procedure_grant_issuer.bind_confirmation(grant, step.step_id)
+            state.execution_grants[confirmed_grant.grant_id] = confirmed_grant
+            step.execution_grant_ref = confirmed_grant.grant_id
         if step.tool_name not in step.allowed_tools:
             return _fail_current_step(
                 state,
@@ -382,11 +403,16 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
                 deps=deps,
             )
         try:
+            _reserve_dispatch(state, step, deps, provider_ref=step.tool_name)
+        except Exception as exc:
+            return _fail_current_step(state, step, exc, deps=deps)
+        try:
             _reserve_provider_call(state)
         except Exception as exc:
             return _fail_current_step(state, step, exc, deps=deps)
         return {
             "provider_call_count": state.provider_call_count,
+            "invocation_journal": state.invocation_journal,
             "tool_messages": [_begin_tool_call(
                 state,
                 context="invocation_batch",
@@ -415,8 +441,10 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
                 ValueError("agent_call step missing agent_id"),
                 deps=deps,
             )
-        expected_ref = f"agent:{step.agent_id}"
-        if expected_ref not in resolved_spec.capability_refs:
+        grant = state.execution_grants.get(resolved_spec.execution_grant_ref or "")
+        if not isinstance(grant, DelegationGrant) or not grant.agent_binding_ref.endswith(
+            f":{step.agent_id}"
+        ):
             return _fail_current_step(
                 state,
                 step,
@@ -426,6 +454,7 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
         try:
             existing = state.invocation_batch.results.get(step.step_id)
             if not isinstance(existing, dict) or not existing.get("agent_run_id"):
+                _reserve_dispatch(state, step, deps, provider_ref=step.agent_id)
                 _reserve_provider_call(state)
             completed = _execute_agent_call_step(step, sd, state, deps)
         except Exception as exc:
@@ -435,8 +464,16 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
             return {
                 "invocation_batch": state.invocation_batch,
                 "provider_call_count": state.provider_call_count,
+                "invocation_journal": state.invocation_journal,
                 "events": state.events,
             }
+        if step.step_id in state.invocation_journal.entries:
+            state.invocation_journal = deps.invocation_journal.transition(
+                state.invocation_journal,
+                step.step_id,
+                "observed",
+                observation_ref=f"agent:{step.step_id}",
+            )
         return _complete_current_step(state, step, deps=deps)
 
     try:
@@ -475,6 +512,13 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
         tool_call_id=tool_call_id,
         artifact=artifact,
     ))
+    state.invocation_journal = deps.invocation_journal.transition(
+        state.invocation_journal,
+        step.step_id,
+        "observed",
+        remote_receipt_ref=tool_call_id or None,
+        observation_ref=f"tool:{tool_call_id or step.step_id}",
+    ) if deps is not None else state.invocation_journal
     _record_capability_execution(state, step.step_id, artifact)
     _admit_untrusted_observation(
         state,
@@ -498,7 +542,7 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
     state.invocation_batch.results[step.step_id] = result_data
     _apply_tool_result_to_state(step, result_data, state)
     if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
-        state.pending_confirmation = InteractionRequest(
+        state.control.pending_interaction = InteractionRequest(
             kind="confirmation_required",
             step_id=step.step_id,
             action_type="delete_note",
@@ -508,8 +552,62 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
             description=str(result_data.get("description") or ""),
         )
     else:
-        state.pending_confirmation = None
+        state.control.pending_interaction = None
     return _complete_current_step(state, step, deps=deps)
+
+
+def _reserve_dispatch(
+    state: RunCheckpoint,
+    step: ExecutableInvocation,
+    deps: StepExecutionContext,
+    *,
+    provider_ref: str,
+) -> None:
+    spec = _resolved_spec_for_step(state, step)
+    grant_ref = step.execution_grant_ref or (spec.execution_grant_ref if spec else None)
+    if not grant_ref:
+        raise PermissionError("provider dispatch requires a leaf ExecutionGrant")
+    grant = state.execution_grants.get(grant_ref)
+    if grant is None:
+        raise PermissionError("execution grant reference is not materialized")
+    expires_at = grant.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
+        raise PermissionError("execution grant expired")
+    if step.action_type == "tool_call" and not isinstance(
+        grant, (AtomicCapabilityGrant, ProcedureNodeGrant)
+    ):
+        raise PermissionError("tool dispatch requires atomic or procedure-node grant")
+    if step.action_type == "agent_call" and not isinstance(grant, DelegationGrant):
+        raise PermissionError("agent dispatch requires DelegationGrant")
+
+    state.invocation_journal, result = deps.invocation_journal.reserve(
+        state.invocation_journal,
+        expected_revision=state.invocation_journal.revision,
+        invocation_id=step.step_id,
+        grant_ref=grant_ref,
+        idempotency_key=step.step_id,
+        provider_ref=provider_ref,
+        payload_ref="sha256:" + sha256(
+            json.dumps(step.tool_input, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest(),
+    )
+    existing = state.invocation_journal.entries[step.step_id]
+    if not result.dispatch_required:
+        if existing.status in {"dispatched", "acknowledged"}:
+            state.invocation_journal = deps.invocation_journal.transition(
+                state.invocation_journal,
+                step.step_id,
+                "outcome_unknown",
+            )
+            raise RuntimeError("prior dispatch outcome is unknown; reconciliation required")
+        raise RuntimeError(f"invocation already reached terminal journal state {existing.status}")
+    state.invocation_journal = deps.invocation_journal.transition(
+        state.invocation_journal,
+        step.step_id,
+        "dispatched",
+    )
 
 
 def _fail_current_step(
@@ -557,6 +655,7 @@ def _fail_current_step(
         "task_runtime": state.task_runtime,
         "provider_call_count": state.provider_call_count,
         "context_inventory": state.context_inventory,
+        "invocation_journal": state.invocation_journal,
         "errors": state.errors,
         "events": state.events,
     }
@@ -571,16 +670,17 @@ def _complete_current_step(
     deps: StepExecutionContext | None = None,
 ) -> dict:
     sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
-    if state.pending_confirmation is not None:
+    if state.control.pending_interaction is not None:
         sd.status = "awaiting_confirmation"
         state.add_event(
-            "confirmation_required", state.pending_confirmation.model_dump(mode="json"),
+            "confirmation_required", state.control.pending_interaction.model_dump(mode="json"),
         )
         logger.info("Step %s awaiting confirmation", step.step_id)
         result = {
             "invocation_batch": state.invocation_batch,
+            "invocation_journal": state.invocation_journal,
             "answer": state.answer,
-            "pending_confirmation": state.pending_confirmation,
+            "control": state.control,
             "events": state.events,
         }
         result.update(_pending_tool_updates(state))
@@ -630,13 +730,14 @@ def _complete_current_step(
         })
     result = {
         "invocation_batch": state.invocation_batch,
+        "invocation_journal": state.invocation_journal,
         "task_runtime": state.task_runtime,
         "provider_call_count": state.provider_call_count,
         "context_inventory": state.context_inventory,
         "answer": state.answer,
         "citations": state.citations,
         "matches": state.matches,
-        "pending_confirmation": state.pending_confirmation,
+        "control": state.control,
         "events": state.events,
     }
     result.update(_pending_tool_updates(state))
@@ -701,7 +802,8 @@ def _record_capability_execution(
         if not isinstance(payload, dict) or payload.get("step_id") != step_id:
             continue
         state.add_event("capability_execution", {
-            "scope_id": payload.get("scope_id", ""),
+            "request_id": payload.get("request_id", ""),
+            "execution_grant_ref": payload.get("selected_execution_grant_ref"),
             "resolution_id": payload.get("resolution_id", ""),
             "step_id": step_id,
             "lifecycle_state": "executed" if artifact.get("ok") else "failed",
@@ -825,7 +927,7 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
 
     sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
     step = sd
-    pending = state.pending_confirmation
+    pending = state.control.pending_interaction
 
     # ---- Build the interrupt payload (presented to the caller) ----
     confirm_payload = {
@@ -857,9 +959,9 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
             f"{state.thread_id}:{state.run_id}:{step.step_id}:confirmed",
         )
         sd.status = "running"
-        state.pending_confirmation = None
-        state.confirmation_decision = "confirmed"
-        state.confirmed_step_id = step.step_id
+        state.control.pending_interaction = None
+        state.control.interaction_decision = "confirmed"
+        state.control.confirmed_invocation_id = step.step_id
         state.add_event("confirmation_resumed", {
             "step_id": step.step_id,
             "decision": "confirmed",
@@ -876,17 +978,15 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
             )],
             "tool_tracking": state.tool_tracking,
             "invocation_batch": state.invocation_batch,
-            "pending_confirmation": None,
-            "confirmation_decision": "confirmed",
-            "confirmed_step_id": step.step_id,
+            "control": state.control,
             "events": state.events,
         }
 
     # Reject (or unknown decision)
     sd.status = "skipped"
     _skip_step_dependents(step.step_id, state.invocation_batch.invocations)
-    state.confirmation_decision = "rejected"
-    state.pending_confirmation = None
+    state.control.interaction_decision = "rejected"
+    state.control.pending_interaction = None
     if not state.answer:
         state.answer = f"操作已取消：{step.description or (pending.action_type if pending else '')}"
 
@@ -901,7 +1001,7 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
     logger.info("Step %s rejected by user", step.step_id)
     return {
         "invocation_batch": state.invocation_batch,
-        "confirmation_decision": "rejected",
+        "control": state.control,
     }
 
 
@@ -1274,7 +1374,7 @@ def _execute_commit_step(
     step.tool_name = tool_name
     step.tool_input = dict(tool_input)
 
-    state.pending_confirmation = InteractionRequest(
+    state.control.pending_interaction = InteractionRequest(
         kind="confirmation_required",
         step_id=step.step_id,
         action_type="commit",
@@ -1349,7 +1449,10 @@ def _execute_agent_call_step(
     if agent_run_id:
         run = deps.agent_gateway.poll(agent_run_id, context)
     else:
-        run = deps.agent_gateway.submit(step.agent_id or "", task, context)
+        grant = state.execution_grants.get(step.execution_grant_ref or "")
+        if not isinstance(grant, DelegationGrant):
+            raise PermissionError("agent start requires its exact DelegationGrant")
+        run = deps.agent_gateway.submit(step.agent_id or "", task, context, grant)
         state.add_event("agent_run_submitted", {
             "step_id": step.step_id,
             "agent_id": step.agent_id,
@@ -1461,13 +1564,13 @@ def _execute_agent_call_step(
 
 def _resolved_spec_for_step(state: RunCheckpoint, step) -> ResolvedActionSpec | None:
     exact = next(
-        (item for item in state.resolved_action_specs if item.action_id == step.step_id),
+        (item for item in state.control.resolved_actions if item.action_id == step.step_id),
         None,
     )
     if exact is not None:
         return exact
     return next(
-        (item for item in state.resolved_action_specs if item.goal_id == step.goal_id),
+        (item for item in state.control.resolved_actions if item.goal_id == step.goal_id),
         None,
     )
 
@@ -1508,7 +1611,7 @@ def _execute_retrieve_step(step, state: RunCheckpoint, deps: StepExecutionContex
         )
         ask_service.run_retrieval_stage(ctx)
         deps.ask_run_context_store.put(state.run_id, ctx)
-        from personal_agent.kernel.contracts.agentic import ContextItem
+        from personal_agent.runtime.contracts.task import ContextItem
 
         evidence_items = tuple(
             ContextItem(
@@ -1667,7 +1770,7 @@ def _execute_compose_step(step, state: RunCheckpoint, deps: StepExecutionContext
     if _step_requires_resource(step, domain="conversation", resource_type="thread"):
         prior = next((
             item.summary
-            for item in reversed(state.latest_observations)
+            for item in reversed(state.control.observations)
             if item.goal_id == step.goal_id and item.kind == "action_result" and item.summary
         ), "")
         if prior:
@@ -2046,7 +2149,7 @@ def _after_step_failure(state: RunCheckpoint) -> str:
 
 def _after_confirm_step(state: RunCheckpoint) -> str:
     """After confirmation: route to success or failure handler."""
-    if state.confirmation_decision == "confirmed":
+    if state.control.interaction_decision == "confirmed":
         return "tool_node"
     return "handle_failure"
 

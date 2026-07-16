@@ -1,48 +1,31 @@
 # 动态规划当前实现
 
-动态规划已不是“未来再接一个生成完整步骤列表的 Planner”。当前实现是任务级、增量式 Executive Loop：
+当前规划由“协调成本”和“执行路径”两个正交维度组成：
 
 ```text
-TaskAnalysis
-  -> GoalGraphCompiler
-  -> ControlState
-  -> one ControlDecision
-  -> one BoundedAction / Delegate / Protocol
-  -> Observation
-  -> Goal Verification
-  -> next decision
+TaskContract + TaskRuntimeProjection + Observation
+  -> CoordinationMode: reactive | deliberative
+  -> optional short-horizon Plan
+  -> Executive ControlProposal
+  -> Admission + AcceptedControlCommand
+  -> ExecutionRoute + Capability Resolution
+  -> Observation / Monitor / Verification
 ```
 
-## 计划单位
+## CoordinationMode
 
-Runtime 不预编译开放任务的完整 step DAG。每轮只物化当前动作，并保留：
+Reactive 表示一个有界动作可能直接推进 Goal；Deliberative 表示多 Goal、依赖、证据路线或不确定性值得维护短 horizon Plan。Procedure、Tool、ReAct 和 Delegation 是 ExecutionRoute，不是 mode。
 
-- TaskSpec 与 success criteria；
-- typed Goal Graph；
-- append-only ExecutionEvent；
-- ExecutionLedger；
-- latest Observation；
-- remaining budget；
-- active Skill 与 adopted Plan Macro。
+## Plan 单位
 
-这样新证据、provider 失败、授权缺口或用户补充能影响下一轮决策，而不需要废弃并重建整份计划。
+只有 deliberative 创建 `PlanDefinition`。Plan step 是 provider-neutral 语义步骤，只保存 Goal、依赖、`CapabilityRequirement`、预期 Observation 与 failure class。`PlanRuntimeProjection` 只保存 step status 与 cursor，不复制 Definition。
 
-## 关系修订
+`FrontierSelector` 选择依赖满足的 step；`PlanMonitor` 根据 Observation 决定 keep、retry、patch、replace、request input 或 stop。Patch 引用 task/plan revision 和 event cursor，用 CAS 防止旧计划覆盖新状态。
 
-Task Analyzer 提出的关系是初始假设。Executive 可基于 Observation 提出 `add_dependency/remove_dependency/update_dependency`，但 Patch 必须：
+## Executive 单轮控制
 
-- 引用触发事件；
-- 只修改 inferred/runtime relation；
-- 保持端点有效和阻塞图无环；
-- 不重写 terminal Goal；
-- 不让开放 Goal 依赖 abandoned Goal。
-
-## Protocol 边界
-
-稳定事务使用 ProcedureSpec 投影内部节点。这不是第二套顶层 Planner：Executive 决定是否调用 Procedure，ProcedureMaterializer 只物化该事务的确定性内部图。
+Executive 不预生成完整 Workflow，每轮只生成一个 `ControlProposal`。Governance admission 接受后才编译 `AcceptedControlCommand`；CapabilityResolver 再绑定具体能力。失败和能力缺口都先成为 Observation，再影响下一轮控制。
 
 ## 模型与确定性职责
 
-模型负责目标选择、信息增益、动作类型、能力需求和是否需要修订假设。Runtime 负责 schema、预算、scope、policy、依赖图、副作用、HITL、事件投影和完成验证。
-
-因此当前口径是“incremental deliberation + deterministic control”，不是 workflow-first，也不是无约束 autonomous planner。
+模型负责语义候选、Goal 选择、信息增益和最小计划提案。确定性模块负责 schema、identity、revision、dependency DAG、budget、scope、Policy、Grant、Mutation/HITL、Journal/outbox 和 Verification。

@@ -17,7 +17,7 @@ Capture / Ask 不再维护独立的 workflow-first 目标文档。其 Artifact /
 ```text
 输入资料 / 问题 / 指令 / 反馈
   -> Agent 理解用户目标
-  -> 形成 TaskSpec、GoalGraph 和可恢复执行状态
+  -> 形成 TaskContract、GoalGraphDefinition 和可恢复 TaskRuntimeProjection
   -> 生成或检索 Artifact / Evidence / Claim
   -> 产出 KnowledgeItem / Answer / Decision
   -> 更新 KnowledgeState / KnowledgeRelation
@@ -295,7 +295,7 @@ Task 3: capture verified conclusion from Task 2
 
 - Goal / Task 不拥有工具执行权。
 - 高风险动作不能由模型直接授权。
-- 目标引用、证据策略和依赖关系可以由语义层提出，但必须被 GoalGraph、GoalDecompositionValidator、TaskSpec revision validator 和 policy 校验。
+- 目标引用、证据策略和依赖关系可以由语义层提出，但必须被 GoalGraph、GoalDecompositionValidator、TaskContract revision admission 和 policy 校验。
 - TaskPlan 只能引用 Artifact / Evidence / Claim / KnowledgeItem 的 ID 或候选 ID，不能直接携带不可校验的大段模型结论作为执行真源。
 
 ### 3. 知识层：Claim / Evidence / State

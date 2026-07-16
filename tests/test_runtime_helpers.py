@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from personal_agent.orchestration.runtime import (
-    _best_snippet,
+from personal_agent.orchestration.runtime_helpers import (
     _extract_question_keywords,
     _graph_episode_uuids,
     _split_sentences,
     _tokenize_for_overlap,
 )
+from personal_agent.kernel.evidence import _best_snippet
 from personal_agent.kernel.models import (
     Citation,
     GraphNodeRef,

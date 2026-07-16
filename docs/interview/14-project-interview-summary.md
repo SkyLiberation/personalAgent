@@ -9,9 +9,9 @@
 ```text
 EntryInput
   -> TaskAnalyzer: Goal + GoalRelation + ResourceHint
-  -> GoalGraphCompiler: TaskSpec + ExecutionLedger
-  -> Executive: one ControlDecision
-  -> Decision/Patch validation
+  -> GoalGraphCompiler: TaskContract + TaskRuntimeProjection
+  -> Executive: one ControlProposal
+  -> Admission: AcceptedControlCommand
   -> BoundedAction / Delegate / ProcedureCall
   -> Observation
   -> GoalVerifier
@@ -26,14 +26,14 @@ Task Analyzer 不判断 capability coverage，也不选择工具。`intent_hint`
 
 Agentic 体现在控制会被反馈改变，而不是“用了 ReAct”：
 
-- Executive 每轮看到完整 ready Goal、Ledger、Observation、Skill、Macro、capability class 和剩余预算；
+- Executive 每轮看到 materialized ready Goal、Runtime、Observation、Plan frontier、capability class 和剩余预算；
 - 初始 inferred dependency 可被新 Observation 受控修订；
 - MCP/A2A 是动态 provider，不是固定入口 workflow；
 - 失败被归一为 Observation，可触发换能力、澄清、委派、修订或停止；
 - action success 不等于 Goal success，必须经过 criterion-specific verification；
 - Task 完成还要通过 CompletionVerifier。
 
-模型不能直接修改 Ledger、扩大 scope、绕过确认、执行未声明副作用或宣布完成。
+模型不能直接修改 Runtime、扩大 scope、绕过确认、执行未声明副作用或宣布完成。
 
 ## 核心分层
 
@@ -41,8 +41,8 @@ Agentic 体现在控制会被反馈改变，而不是“用了 ReAct”：
 | --- | --- |
 | Entry | Web、CLI、飞书输入归一与 guard |
 | Task Analysis | 目标、关系、资源与澄清 |
-| Goal Graph | 编译 TaskSpec、criterion、mutation intent 和初始 Ledger |
-| Executive | 选择 Goal、元能力、Skill/Macro、委派、Protocol 或图修订 |
+| Goal Graph | 编译 TaskContract、criterion、mutation intent 和初始 Runtime |
+| Executive | 针对开放 Goal 提出一个有界 ControlProposal |
 | Capability | requirement 到 native/MCP/A2A 的 eligibility、coverage 和 rank |
 | Action Executor | 当前有界动作、局部 ReAct 和 artifact 产出 |
 | Protocol | 稳定事务、HITL、幂等、admission、receipt |

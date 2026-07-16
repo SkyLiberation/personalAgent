@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 from personal_agent.kernel.models import EntryInput
 from personal_agent.application.review.delivery import DeliveryRouter
-from personal_agent.application.review.models import DeliveryResult
+from personal_agent.kernel.contracts.review import DeliveryResult
 from tests.conftest import POSTGRES_URL, stub_task_analysis
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
