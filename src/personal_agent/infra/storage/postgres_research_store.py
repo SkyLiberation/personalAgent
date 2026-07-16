@@ -9,11 +9,11 @@ from psycopg.types.json import Jsonb
 
 from personal_agent.kernel.contracts.research import (
     IntelligenceDigest,
-    ResearchEvent,
+    ResearchEventRecord,
     ResearchFeedback,
-    ResearchRun,
+    ResearchRunRecord,
     ResearchSource,
-    ResearchSubscription,
+    ResearchSubscriptionRecord,
     utc_now,
 )
 from personal_agent.infra.storage.postgres_common import PostgresStoreBase
@@ -122,7 +122,7 @@ class PostgresResearchStore(PostgresStoreBase):
             conn.commit()
         self._initialized = True
 
-    def upsert_subscription(self, subscription: ResearchSubscription) -> ResearchSubscription:
+    def upsert_subscription(self, subscription: ResearchSubscriptionRecord) -> ResearchSubscriptionRecord:
         self.ensure_schema()
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -149,7 +149,7 @@ class PostgresResearchStore(PostgresStoreBase):
             conn.commit()
         return subscription
 
-    def get_subscription(self, subscription_id: str | None) -> ResearchSubscription | None:
+    def get_subscription(self, subscription_id: str | None) -> ResearchSubscriptionRecord | None:
         if not subscription_id:
             return None
         self.ensure_schema()
@@ -157,11 +157,11 @@ class PostgresResearchStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute("SELECT payload FROM research_subscriptions WHERE id = %s", (subscription_id,))
                 row = cur.fetchone()
-        return ResearchSubscription.model_validate(row["payload"]) if row else None
+        return ResearchSubscriptionRecord.model_validate(row["payload"]) if row else None
 
     def list_subscriptions(
         self, *, user_id: str | None = None, enabled_only: bool = False
-    ) -> list[ResearchSubscription]:
+    ) -> list[ResearchSubscriptionRecord]:
         self.ensure_schema()
         clauses: list[str] = []
         params: list[Any] = []
@@ -178,16 +178,18 @@ class PostgresResearchStore(PostgresStoreBase):
                     params,
                 )
                 rows = cur.fetchall()
-        return [ResearchSubscription.model_validate(row["payload"]) for row in rows]
+        return [ResearchSubscriptionRecord.model_validate(row["payload"]) for row in rows]
 
     def delete_subscription(self, subscription_id: str, *, user_id: str) -> bool:
         subscription = self.get_subscription(subscription_id)
         if subscription is None or subscription.user_id != user_id:
             return False
-        self.upsert_subscription(subscription.model_copy(update={"enabled": False, "updated_at": utc_now()}))
+        self.upsert_subscription(
+            subscription.with_spec_updates(enabled=False, updated_at=utc_now())
+        )
         return True
 
-    def create_run(self, run: ResearchRun) -> ResearchRun:
+    def create_run(self, run: ResearchRunRecord) -> ResearchRunRecord:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -209,9 +211,9 @@ class PostgresResearchStore(PostgresStoreBase):
                 )
                 row = cur.fetchone()
             conn.commit()
-        return ResearchRun.model_validate(row["payload"])
+        return ResearchRunRecord.model_validate(row["payload"])
 
-    def update_run(self, run: ResearchRun) -> ResearchRun:
+    def update_run(self, run: ResearchRunRecord) -> ResearchRunRecord:
         self.ensure_schema()
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -229,15 +231,15 @@ class PostgresResearchStore(PostgresStoreBase):
             conn.commit()
         return run
 
-    def get_run(self, run_id: str) -> ResearchRun | None:
+    def get_run(self, run_id: str) -> ResearchRunRecord | None:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT payload FROM research_runs WHERE id = %s", (run_id,))
                 row = cur.fetchone()
-        return ResearchRun.model_validate(row["payload"]) if row else None
+        return ResearchRunRecord.model_validate(row["payload"]) if row else None
 
-    def list_runs(self, *, user_id: str, limit: int = 50) -> list[ResearchRun]:
+    def list_runs(self, *, user_id: str, limit: int = 50) -> list[ResearchRunRecord]:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -249,9 +251,9 @@ class PostgresResearchStore(PostgresStoreBase):
                     (user_id, max(1, limit)),
                 )
                 rows = cur.fetchall()
-        return [ResearchRun.model_validate(row["payload"]) for row in rows]
+        return [ResearchRunRecord.model_validate(row["payload"]) for row in rows]
 
-    def enqueue_run(self, run: ResearchRun) -> None:
+    def enqueue_run(self, run: ResearchRunRecord) -> None:
         if self.worker_queue is None:
             raise RuntimeError("Research store has no worker queue.")
         self.worker_queue.enqueue(
@@ -262,7 +264,7 @@ class PostgresResearchStore(PostgresStoreBase):
             max_attempts=3,
         )
 
-    def enqueue_delivery(self, run: ResearchRun) -> None:
+    def enqueue_delivery(self, run: ResearchRunRecord) -> None:
         if self.worker_queue is None:
             raise RuntimeError("Research store has no worker queue.")
         self.worker_queue.enqueue(
@@ -309,7 +311,7 @@ class PostgresResearchStore(PostgresStoreBase):
                 rows = cur.fetchall()
         return [ResearchSource.model_validate(row["payload"]) for row in rows]
 
-    def replace_run_events(self, run_id: str, events: list[ResearchEvent]) -> None:
+    def replace_run_events(self, run_id: str, events: list[ResearchEventRecord]) -> None:
         self.ensure_schema()
         run = self.get_run(run_id)
         if run is None:
@@ -332,7 +334,7 @@ class PostgresResearchStore(PostgresStoreBase):
                     )
             conn.commit()
 
-    def list_run_events(self, run_id: str) -> list[ResearchEvent]:
+    def list_run_events(self, run_id: str) -> list[ResearchEventRecord]:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -346,7 +348,7 @@ class PostgresResearchStore(PostgresStoreBase):
                     (run_id,),
                 )
                 rows = cur.fetchall()
-        return [ResearchEvent.model_validate(row["payload"]) for row in rows]
+        return [ResearchEventRecord.model_validate(row["payload"]) for row in rows]
 
     def list_recent_event_keys(self, user_id: str, since: datetime) -> set[str]:
         self.ensure_schema()
@@ -362,7 +364,7 @@ class PostgresResearchStore(PostgresStoreBase):
                 rows = cur.fetchall()
         return {str(row["canonical_key"]) for row in rows}
 
-    def get_event(self, event_id: str, *, user_id: str) -> ResearchEvent | None:
+    def get_event(self, event_id: str, *, user_id: str) -> ResearchEventRecord | None:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -371,7 +373,7 @@ class PostgresResearchStore(PostgresStoreBase):
                     (event_id, user_id),
                 )
                 row = cur.fetchone()
-        return ResearchEvent.model_validate(row["payload"]) if row else None
+        return ResearchEventRecord.model_validate(row["payload"]) if row else None
 
     def save_digest(self, digest: IntelligenceDigest) -> IntelligenceDigest:
         self.ensure_schema()
@@ -401,7 +403,7 @@ class PostgresResearchStore(PostgresStoreBase):
         return IntelligenceDigest.model_validate(row["payload"]) if row else None
 
     def reserve_delivery(
-        self, digest: IntelligenceDigest, subscription: ResearchSubscription
+        self, digest: IntelligenceDigest, subscription: ResearchSubscriptionRecord
     ) -> tuple[bool, str]:
         self.ensure_schema()
         delivery_id = uuid4().hex
@@ -473,7 +475,7 @@ class PostgresResearchStore(PostgresStoreBase):
 
     def find_latest_delivered_item(
         self, *, user_id: str, target_id: str, short_id: str
-    ) -> tuple[IntelligenceDigest, ResearchRun, ResearchEvent] | None:
+    ) -> tuple[IntelligenceDigest, ResearchRunRecord, ResearchEventRecord] | None:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -501,7 +503,7 @@ class PostgresResearchStore(PostgresStoreBase):
             )
             if item is None:
                 continue
-            run = ResearchRun.model_validate(row["run_payload"])
+            run = ResearchRunRecord.model_validate(row["run_payload"])
             event = self.get_event(item.event_id, user_id=user_id)
             if event is not None:
                 return digest, run, event

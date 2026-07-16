@@ -4,20 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from personal_agent.kernel.contracts.agentic import ExecutionLedger, TaskSpec
+from personal_agent.kernel.contracts.agentic import (
+    TaskRuntimeProjection,
+    TaskContract,
+    materialize_goals,
+)
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
-from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.kernel.contracts.execution import ExecutableInvocation
 from personal_agent.kernel.contracts.procedure import (
     PROCEDURE_SENTINELS,
     ProcedureApplicability,
-    ProcedureCall,
+    ProcedureInvocation,
     ProcedureCandidate,
     ProcedureCondition,
     ProcedureEvent,
-    ProcedureInstance,
+    ProcedureRunProjection,
     ProcedureNodeSpec,
     ProcedureNodeState,
-    ProcedureSpec,
+    ProcedureDefinition,
 )
 
 
@@ -26,7 +30,7 @@ class ProcedureDefinitionError(ValueError):
 
 
 class ProcedureSpecValidator:
-    def validate(self, spec: ProcedureSpec) -> None:
+    def validate(self, spec: ProcedureDefinition) -> None:
         if not spec.procedure_id or not spec.version or not spec.nodes:
             raise ProcedureDefinitionError("procedure requires identity, version, and nodes")
         node_ids = [node.node_id for node in spec.nodes]
@@ -75,10 +79,10 @@ class ProcedureSpecValidator:
 
 
 class ProcedureCatalog:
-    def __init__(self, specs: tuple[ProcedureSpec, ...]) -> None:
+    def __init__(self, specs: tuple[ProcedureDefinition, ...]) -> None:
         validator = ProcedureSpecValidator()
-        self._specs: dict[tuple[str, str], ProcedureSpec] = {}
-        self._latest: dict[str, ProcedureSpec] = {}
+        self._specs: dict[tuple[str, str], ProcedureDefinition] = {}
+        self._latest: dict[str, ProcedureDefinition] = {}
         for spec in specs:
             validator.validate(spec)
             key = (spec.procedure_id, spec.version)
@@ -87,13 +91,13 @@ class ProcedureCatalog:
             self._specs[key] = spec
             self._latest[spec.procedure_id] = spec
 
-    def get(self, procedure_id: str, version: str | None = None) -> ProcedureSpec:
+    def get(self, procedure_id: str, version: str | None = None) -> ProcedureDefinition:
         spec = self._latest.get(procedure_id) if version is None else self._specs.get((procedure_id, version))
         if spec is None:
             raise KeyError(f"unknown procedure: {procedure_id}@{version or 'latest'}")
         return spec
 
-    def all_specs(self) -> tuple[ProcedureSpec, ...]:
+    def all_specs(self) -> tuple[ProcedureDefinition, ...]:
         return tuple(self._specs.values())
 
 
@@ -103,21 +107,18 @@ class ProcedureApplicabilityResolver:
     def __init__(self, catalog: ProcedureCatalog) -> None:
         self._catalog = catalog
 
-    def resolve(self, task: TaskSpec, ledger: ExecutionLedger) -> tuple[ProcedureCandidate, ...]:
+    def resolve(self, task: TaskContract, ledger: TaskRuntimeProjection) -> tuple[ProcedureCandidate, ...]:
         candidates: list[ProcedureCandidate] = []
-        for goal in ledger.items:
+        for goal in materialize_goals(task, ledger):
             if goal.status in {"verified", "degraded", "abandoned"}:
                 continue
-            resources = tuple(
-                item for item in task.resource_requirements
-                if item.goal_id in {"", goal.goal_id}
-            )
+            resources = task.resources_for_goal(goal.goal_id)
             for spec in self._catalog.all_specs():
                 candidates.append(self._evaluate(spec, goal.goal_id, resources))
         return tuple(candidates)
 
     @staticmethod
-    def _evaluate(spec: ProcedureSpec, goal_id: str, resources) -> ProcedureCandidate:
+    def _evaluate(spec: ProcedureDefinition, goal_id: str, resources) -> ProcedureCandidate:
         applicability = spec.applicability
         domains = {item.semantic_domain for item in resources}
         resource_types = {value for item in resources for value in item.resource_types}
@@ -155,76 +156,85 @@ class ProcedureApplicabilityResolver:
 
 @dataclass(frozen=True, slots=True)
 class MaterializedProcedure:
-    call: ProcedureCall
-    spec: ProcedureSpec
-    instance: ProcedureInstance
-    steps: tuple[ExecutionStep, ...]
+    invocation: ProcedureInvocation
+    definition: ProcedureDefinition
+    projection: ProcedureRunProjection
+    steps: tuple[ExecutableInvocation, ...]
 
 
 class ProcedureMaterializer:
     def __init__(self, catalog: ProcedureCatalog) -> None:
         self._catalog = catalog
 
-    def materialize(self, call: ProcedureCall, *, task_id: str) -> MaterializedProcedure:
-        spec = self._catalog.get(call.procedure_id, call.procedure_version)
-        nodes = self._adapt_nodes(spec, call)
-        steps = tuple(node.to_execution_step(spec.procedure_id, spec.version, call.goal_id) for node in nodes)
+    def materialize(self, invocation: ProcedureInvocation) -> MaterializedProcedure:
+        definition = self._catalog.get(
+            invocation.procedure.procedure_id,
+            invocation.procedure.version,
+        )
+        nodes = self._adapt_nodes(definition, invocation)
+        steps = tuple(
+            node.to_invocation(definition.procedure_id, definition.version, invocation.goal_id)
+            for node in nodes
+        )
         step_ids = {
-            node.node_id: f"{call.procedure_call_id}:{node.node_id}" for node in nodes
+            node.node_id: f"{invocation.invocation_id}:{node.node_id}" for node in nodes
         }
-        task_input = str(call.input.get("text") or "")
+        task_input = str(invocation.input.get("text") or "")
         for step in steps:
             step.step_id = step_ids[step.procedure_node_id]
             step.depends_on = [step_ids[node_id] for node_id in step.depends_on]
             step.task_input = task_input
             if (
-                spec.procedure_id == "knowledge_ingest"
+                definition.procedure_id == "knowledge_ingest"
                 and step.tool_name == "capture_text"
                 and not step.depends_on
             ):
                 step.tool_input.update({"text": task_input, "source_type": "text"})
-        instance = ProcedureInstance(
-            procedure_id=spec.procedure_id,
-            version=spec.version,
-            task_id=task_id,
-            goal_id=call.goal_id,
-            input=call.input,
+        projection = ProcedureRunProjection(
+            invocation_id=invocation.invocation_id,
+            procedure=invocation.procedure,
             active_node_ids=tuple(
                 node.node_id for node in nodes if not node.depends_on
             ),
             node_states=tuple(ProcedureNodeState(node_id=node.node_id) for node in nodes),
         )
-        return MaterializedProcedure(call, spec, instance, steps)
+        return MaterializedProcedure(invocation, definition, projection, steps)
 
     @staticmethod
-    def _adapt_nodes(spec: ProcedureSpec, call: ProcedureCall) -> tuple[ProcedureNodeSpec, ...]:
-        if spec.procedure_id == "research_run" and call.input.get("locator"):
+    def _adapt_nodes(
+        definition: ProcedureDefinition,
+        invocation: ProcedureInvocation,
+    ) -> tuple[ProcedureNodeSpec, ...]:
+        if definition.procedure_id == "research_run" and invocation.input.get("locator"):
             return tuple(
                 replace(node, depends_on=()) if node.node_id == "initialize" else node
-                for node in spec.nodes if node.node_id != "prepare"
+                for node in definition.nodes if node.node_id != "prepare"
             )
-        if spec.procedure_id != "knowledge_ingest":
-            return spec.nodes
-        resource_types = {str(item) for item in call.input.get("resource_types", [])}
+        if definition.procedure_id != "knowledge_ingest":
+            return definition.nodes
+        resource_types = {str(item) for item in invocation.input.get("resource_types", [])}
         if not resource_types.intersection({"url", "link", "file", "artifact", "document"}):
             return tuple(
                 replace(node, depends_on=()) if node.node_id == "ingest" else node
-                for node in spec.nodes if node.node_id != "acquire-source"
+                for node in definition.nodes if node.node_id != "acquire-source"
             )
         acquire_domain = "web" if resource_types.intersection({"url", "link"}) else "artifact"
-        acquire = next(node for node in spec.nodes if node.node_id == "acquire-source")
+        acquire = next(node for node in definition.nodes if node.node_id == "acquire-source")
         requirement = acquire.capability_requirement
         assert requirement is not None
         adapted = replace(acquire, capability_requirement=requirement.model_copy(update={
             "semantic_domains": (acquire_domain,),
             "resource_types": tuple(sorted(resource_types)),
-            "resource_locator": str(call.input.get("locator") or "") or None,
+            "resource_locator": str(invocation.input.get("locator") or "") or None,
         }))
-        return tuple(adapted if node.node_id == "acquire-source" else node for node in spec.nodes)
+        return tuple(
+            adapted if node.node_id == "acquire-source" else node
+            for node in definition.nodes
+        )
 
 
 class ProcedureEventProjector:
-    def project(self, instance: ProcedureInstance, events: tuple[ProcedureEvent, ...]) -> ProcedureInstance:
+    def project(self, instance: ProcedureRunProjection, events: tuple[ProcedureEvent, ...]) -> ProcedureRunProjection:
         current = instance
         node_states = {item.node_id: item for item in current.node_states}
         for event in sorted(events, key=lambda item: item.sequence):
@@ -257,16 +267,24 @@ class ProcedureRuntime:
         self._materializer = materializer
         self._projector = ProcedureEventProjector()
 
-    def start(self, call: ProcedureCall, *, task_id: str) -> MaterializedProcedure:
-        materialized = self._materializer.materialize(call, task_id=task_id)
+    def start(self, invocation: ProcedureInvocation) -> MaterializedProcedure:
+        materialized = self._materializer.materialize(invocation)
         event = ProcedureEvent(
             sequence=1,
-            procedure_run_id=materialized.instance.procedure_run_id,
+            procedure_run_id=materialized.projection.procedure_run_id,
             event_type="procedure_started",
-            payload={"procedure_id": call.procedure_id, "version": call.procedure_version},
+            payload={
+                "procedure_id": invocation.procedure.procedure_id,
+                "version": invocation.procedure.version,
+            },
         )
-        instance = self._projector.project(materialized.instance, (event,))
-        return MaterializedProcedure(call, materialized.spec, instance, materialized.steps)
+        projection = self._projector.project(materialized.projection, (event,))
+        return MaterializedProcedure(
+            invocation,
+            materialized.definition,
+            projection,
+            materialized.steps,
+        )
 
 
 def _requirement(
@@ -277,7 +295,7 @@ def _requirement(
     operations: tuple[str, ...],
     output_contract: str,
 ) -> CapabilityRequirement:
-    return CapabilityRequirement(
+    return CapabilityRequirement.from_dimensions(
         requirement_id=requirement_id,
         purpose=purpose,
         semantic_domains=domains,
@@ -289,7 +307,7 @@ def _requirement(
 
 def _catalog() -> ProcedureCatalog:
     return ProcedureCatalog((
-        ProcedureSpec(
+        ProcedureDefinition(
             procedure_id="knowledge_ingest",
             version="1",
             purpose="Acquire an optional source and admit it into durable knowledge.",
@@ -324,7 +342,7 @@ def _catalog() -> ProcedureCatalog:
             confirmation_policy="required",
             recovery_policy="checkpoint_node",
         ),
-        ProcedureSpec(
+        ProcedureDefinition(
             procedure_id="knowledge_delete",
             version="1",
             purpose="Resolve, confirm, delete, and audit durable knowledge.",
@@ -363,7 +381,7 @@ def _catalog() -> ProcedureCatalog:
             confirmation_policy="required",
             recovery_policy="checkpoint_node",
         ),
-        ProcedureSpec(
+        ProcedureDefinition(
             procedure_id="conversation_solidify",
             version="1",
             purpose="Convert a selected conversation scope into admitted knowledge.",
@@ -386,7 +404,7 @@ def _catalog() -> ProcedureCatalog:
             confirmation_policy="required",
             recovery_policy="checkpoint_node",
         ),
-        ProcedureSpec(
+        ProcedureDefinition(
             procedure_id="knowledge_consolidate",
             version="1",
             purpose="Consolidate related knowledge and record supersession relationships.",
@@ -402,7 +420,7 @@ def _catalog() -> ProcedureCatalog:
             invariants=("provenance preserved", "supersession recorded", "mutation receipt"),
             confirmation_policy="required",
         ),
-        ProcedureSpec(
+        ProcedureDefinition(
             procedure_id="research_run",
             version="1",
             purpose="Run durable evidence-driven research with checkpoints and verification.",
@@ -443,7 +461,7 @@ def _catalog() -> ProcedureCatalog:
             recovery_policy="checkpoint_node",
             evidence_required=True,
         ),
-        ProcedureSpec(
+        ProcedureDefinition(
             procedure_id="research_subscription_create",
             version="1",
             purpose="Create a durable scheduled research subscription.",

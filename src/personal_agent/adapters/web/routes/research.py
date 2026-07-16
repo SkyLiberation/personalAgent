@@ -9,7 +9,8 @@ from personal_agent.application.research import (
     ContentPreferences,
     DeliveryTarget,
     ResearchFeedback,
-    ResearchSubscription,
+    ResearchSubscriptionRecord,
+    ResearchSubscriptionSpec,
     SchedulePolicy,
     SourcePreferences,
 )
@@ -77,17 +78,19 @@ def register_research_routes(
             user_id=None if is_admin(request) else user_id,
             enabled_only=enabled_only,
         )
-        return {"items": [item.model_dump(mode="json") for item in items]}
+        return {"items": [_subscription_payload(item) for item in items]}
 
     @app.post("/api/research/subscriptions")
     def create_subscription(body: ResearchSubscriptionRequest, request: Request):
         caller = resolve_user_id(request, settings)
         user_id = body.user_id if is_admin(request) and body.user_id else caller
-        saved = service.create_research_subscription(ResearchSubscription(
+        saved = service.create_research_subscription(ResearchSubscriptionRecord.create(
+            ResearchSubscriptionSpec(
             user_id=user_id,
             **body.model_dump(exclude={"user_id"}),
+            )
         ))
-        return saved.model_dump(mode="json")
+        return _subscription_payload(saved)
 
     @app.patch("/api/research/subscriptions/{subscription_id}")
     def update_subscription(
@@ -96,9 +99,9 @@ def register_research_routes(
         existing = _subscription_or_404(service, subscription_id, request, settings)
         updates = {key: value for key, value in body.model_dump().items() if value is not None}
         saved = service.research_service.update_subscription(
-            existing.model_copy(update=updates)
+            existing.with_spec_updates(**updates)
         )
-        return saved.model_dump(mode="json")
+        return _subscription_payload(saved)
 
     @app.delete("/api/research/subscriptions/{subscription_id}")
     def delete_subscription(subscription_id: str, request: Request):
@@ -111,7 +114,7 @@ def register_research_routes(
         run = service.enqueue_research_subscription(subscription_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Research subscription not found.")
-        return run.model_dump(mode="json")
+        return _run_payload(run)
 
     @app.post("/api/research/once")
     def run_once(body: ResearchOnceRequest, request: Request):
@@ -124,14 +127,14 @@ def register_research_routes(
             max_items=body.max_items,
             lookback_hours=body.lookback_hours,
         )
-        return run.model_dump(mode="json")
+        return _run_payload(run)
 
     @app.get("/api/research/runs")
     def list_runs(request: Request, user_id: str | None = None, limit: int = 50):
         resolved_user = resolve_query_user_id(request, settings, user_id)
         return {
             "items": [
-                item.model_dump(mode="json")
+                _run_payload(item)
                 for item in store.list_runs(user_id=resolved_user, limit=limit)
             ]
         }
@@ -145,7 +148,7 @@ def register_research_routes(
             raise HTTPException(status_code=404, detail="Research run not found.")
         digest = store.get_digest(run.digest_id) if run.digest_id else None
         return {
-            "run": run.model_dump(mode="json"),
+            "run": _run_payload(run),
             "digest": digest.model_dump(mode="json") if digest else None,
         }
 
@@ -182,12 +185,30 @@ def _subscription_or_404(
     subscription_id: str,
     request: Request,
     settings: Settings,
-) -> ResearchSubscription:
+) -> ResearchSubscriptionRecord:
     item = service.research_store.get_subscription(subscription_id)
     _check_user(item.user_id if item else None, request, settings)
     if item is None:
         raise HTTPException(status_code=404, detail="Research subscription not found.")
     return item
+
+
+def _subscription_payload(item: ResearchSubscriptionRecord) -> dict[str, object]:
+    return {
+        **item.spec.model_dump(mode="json"),
+        "last_window_end": (
+            item.cursor.last_window_end.isoformat() if item.cursor.last_window_end else None
+        ),
+    }
+
+
+def _run_payload(run) -> dict[str, object]:
+    return {
+        **run.definition.model_dump(mode="json"),
+        **run.projection.model_dump(mode="json"),
+        "query_plan": run.query_plan,
+        "query_plan_details": [item.model_dump(mode="json") for item in run.query_plan_details],
+    }
 
 
 def _check_user(

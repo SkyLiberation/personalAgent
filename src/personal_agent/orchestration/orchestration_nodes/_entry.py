@@ -8,11 +8,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import EntryInput, local_now
-from personal_agent.kernel.contracts.agentic import ContextEnvelope
+from personal_agent.kernel.contracts.agentic import ContextInventory
+from personal_agent.kernel.contracts.interaction import InteractionOption, InteractionRequest
 from personal_agent.governance.guardrails import get_content_guard
 from personal_agent.orchestration.orchestration_models import (
-    AgentGraphState,
-    StepExecutionState,
+    RunCheckpoint,
+    InvocationBatchState,
     ReactSubState,
     ToolTrackingSubState,
     _new_run_id,
@@ -28,7 +29,7 @@ from personal_agent.orchestration.orchestration_nodes._helpers import (
 
 logger = logging.getLogger(__name__)
 
-def _node_normalize_entry(state: AgentGraphState) -> dict:
+def _node_normalize_entry(state: RunCheckpoint) -> dict:
     if state.run_id is None or state.run_id == "":
         state.run_id = _new_run_id()
 
@@ -47,15 +48,12 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.thread_id = thread_id
     state.entry_text = text
     state.task_analysis = None
-    state.task_spec = None
-    state.execution_ledger = None
-    state.context_envelope = ContextEnvelope()
-    state.procedure_id = ""
-    state.procedure_version = ""
+    state.task_contract = None
+    state.task_runtime = None
+    state.context_inventory = ContextInventory()
     state.active_procedure = None
     state.control_state = None
     state.control_decision = None
-    state.current_action = None
     state.current_actions = []
     state.current_action_outcome = None
     state.latest_observations = []
@@ -64,27 +62,22 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     state.executive_turn = 0
     state.last_decision_hash = ""
     state.repeated_decision_count = 0
-    state.control_route = ""
+    state.control_route = None
     state.context_projections = []
-    state.planning_model_context = {}
-    state.control_model_context = {}
-    state.resolved_action_spec = None
     state.resolved_action_specs = []
     state.retry_directive = None
     state.react = ReactSubState()
-    state.step_execution = StepExecutionState()
+    state.invocation_batch = InvocationBatchState()
     state.tool_tracking = ToolTrackingSubState()
     state.tool_results = []
     state.provider_call_count = 0
     state.tool_messages = []
-    state.execution_trace = []
     state.citations = []
     state.matches = []
     state.pending_confirmation = None
     state.confirmation_decision = None
-    state.confirmed_step_id = ""
+    state.confirmed_step_id = None
     state.answer = None
-    state.answer_completed = False
     state.events = []
     state.errors = []
     state.created_at = local_now()
@@ -109,15 +102,12 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
         "task_analysis": None,
-        "task_spec": None,
-        "execution_ledger": None,
-        "context_envelope": state.context_envelope,
-        "procedure_id": "",
-        "procedure_version": "",
+        "task_contract": None,
+        "task_runtime": None,
+        "context_inventory": state.context_inventory,
         "active_procedure": None,
         "control_state": None,
         "control_decision": None,
-        "current_action": None,
         "current_actions": [],
         "current_action_outcome": None,
         "latest_observations": [],
@@ -126,26 +116,21 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
         "executive_turn": 0,
         "last_decision_hash": "",
         "repeated_decision_count": 0,
-        "control_route": "",
+        "control_route": None,
         "context_projections": [],
-        "planning_model_context": {},
-        "control_model_context": {},
-        "resolved_action_spec": None,
         "resolved_action_specs": [],
         "retry_directive": None,
         "react": state.react,
-        "step_execution": state.step_execution,
+        "invocation_batch": state.invocation_batch,
         "tool_tracking": state.tool_tracking,
         "tool_results": [],
         "provider_call_count": 0,
-        "execution_trace": [],
         "citations": [],
         "matches": [],
         "pending_confirmation": None,
         "confirmation_decision": None,
-        "confirmed_step_id": "",
+        "confirmed_step_id": None,
         "answer": None,
-        "answer_completed": False,
         "events": state.events,
         "errors": [],
         "created_at": state.created_at,
@@ -153,7 +138,7 @@ def _node_normalize_entry(state: AgentGraphState) -> dict:
     }
 
 
-def _node_prepare_clarify(state: AgentGraphState) -> dict:
+def _node_prepare_clarify(state: RunCheckpoint) -> dict:
     """Materialize a TaskAnalyzer clarification before interrupting.
 
     ``analyze_task`` has already determined that information is missing. This
@@ -169,22 +154,29 @@ def _node_prepare_clarify(state: AgentGraphState) -> dict:
         or "请补充你想记录、查询、总结或执行的具体内容。",
         "入口信息不足，需要用户补充。",
     )
-    payload = {
-        "kind": "clarification_required",
-        "action_type": "clarify_entry",
-        "step_id": "clarify_entry",
-        "title": "需要补充信息",
-        "message": issue["message"],
-        "summary": issue["summary"],
-        "original_text": state.entry_text,
-        "missing_information": decision.missing_information,
-        "options": issue["options"],
-    }
-    state.add_event("clarification_required", payload)
+    payload = InteractionRequest(
+        kind="clarification_required",
+        action_type="clarify_entry",
+        step_id="clarify_entry",
+        title="需要补充信息",
+        message=issue["message"],
+        summary=issue["summary"],
+        original_text=state.entry_text,
+        missing_information=tuple(decision.missing_information),
+        options=tuple(
+            InteractionOption(
+                option_id=str(option["id"]),
+                label=str(option["label"]),
+                description=str(option["prompt"]),
+            )
+            for option in issue["options"]
+        ),
+    )
+    state.add_event("clarification_required", payload.model_dump(mode="json"))
     return {"pending_confirmation": payload, "events": state.events}
 
 
-def _node_interrupt_clarify(state: AgentGraphState) -> dict:
+def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
     """Pause the graph for human clarification and process the resume value.
 
     Expects ``state.pending_confirmation`` to be populated by the upstream
@@ -194,18 +186,15 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
     if payload is None:
         return {}
 
-    resume_value = interrupt(payload)
+    resume_value = interrupt(payload.model_dump(mode="json"))
     decision = str(_resume_value_get(resume_value, "decision", "clarify")).lower()
     if decision in ("reject", "cancel"):
         state.answer = "已取消。你可以重新发送更完整的内容。"
-        state.answer_completed = True
-        state.execution_trace = ["用户取消补充信息，流程结束"]
+        state.add_event("answer_completed", {"reason": "clarification_cancelled"})
         state.add_event("clarification_resumed", {"decision": "cancelled"})
         return {
             "pending_confirmation": None,
             "answer": state.answer,
-            "answer_completed": True,
-            "execution_trace": state.execution_trace,
             "events": state.events,
         }
 
@@ -213,14 +202,11 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
     option_id = str(_resume_value_get(resume_value, "option_id", "")).strip()
     if not supplemental:
         state.answer = "还需要补充具体内容后才能继续。请重新发起请求，并说明要记录、查询、总结或执行什么。"
-        state.answer_completed = True
-        state.execution_trace = ["补充信息为空，流程结束"]
+        state.add_event("answer_completed", {"reason": "clarification_empty"})
         state.add_event("clarification_resumed", {"decision": "empty"})
         return {
             "pending_confirmation": None,
             "answer": state.answer,
-            "answer_completed": True,
-            "execution_trace": state.execution_trace,
             "events": state.events,
         }
 
@@ -250,14 +236,14 @@ def _node_interrupt_clarify(state: AgentGraphState) -> dict:
     }
 
 
-def _after_prepare_clarify(state: AgentGraphState) -> str:
+def _after_prepare_clarify(state: RunCheckpoint) -> str:
     """Route to interrupt after its payload has been checkpointed."""
     if state.pending_confirmation is not None:
         return "interrupt_clarify_entry"
     return "analyze_task"
 
 
-def _after_interrupt_clarify(state: AgentGraphState) -> str:
+def _after_interrupt_clarify(state: RunCheckpoint) -> str:
     """After interrupt, finalize if cancelled/empty; otherwise analyze the enriched task."""
     if state.answer_completed:
         return "finalize_entry_result"
@@ -265,7 +251,7 @@ def _after_interrupt_clarify(state: AgentGraphState) -> str:
 
 
 # ============================================================================
-def _node_analyze_task(state: AgentGraphState, *, deps: RoutingContext) -> dict:
+def _node_analyze_task(state: RunCheckpoint, *, deps: RoutingContext) -> dict:
     """Bind conversation context and produce semantic task understanding."""
     from personal_agent.kernel.logging_utils import log_event as _log_event
 
@@ -293,9 +279,8 @@ def _node_analyze_task(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     state.task_analysis = decision
     if decision.outcome == "rejected":
         state.answer = decision.rejection_reason
-        state.answer_completed = True
-    state.step_execution.steps = []
-    state.execution_trace = []
+        state.add_event("answer_completed", {"reason": "task_rejected"})
+    state.invocation_batch.invocations = []
 
     state.add_event("task_analyzed", {
         "result_contracts": [goal.result_contract for goal in decision.goals],
@@ -325,9 +310,7 @@ def _node_analyze_task(state: AgentGraphState, *, deps: RoutingContext) -> dict:
     return {
         "task_analysis": state.task_analysis,
         "answer": state.answer,
-        "answer_completed": state.answer_completed,
-        "step_execution": state.step_execution,
-        "execution_trace": [],
+        "invocation_batch": state.invocation_batch,
         "events": state.events,
     }
 
@@ -337,7 +320,7 @@ def _primary_result_contract(decision) -> str:
 
 
 def _entry_conversation_messages(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     *,
     exclude_latest: bool = True,
     deps: "RoutingContext | ConversationContext | None" = None,
@@ -379,12 +362,10 @@ def _analysis_reason(decision) -> str:
     return describe_task_analysis(decision)
 
 
-def _node_finalize_entry_result(state: AgentGraphState) -> dict:
-    from personal_agent.orchestration.orchestration_models import execution_trace_from_events
-
+def _node_finalize_entry_result(state: RunCheckpoint) -> dict:
     if (
-        state.task_spec is not None
-        and state.task_spec.lifecycle not in {"completed", "stopped"}
+        state.task_runtime is not None
+        and state.task_runtime.lifecycle not in {"completed", "stopped"}
         and not state.answer_completed
     ):
         state.errors.append("completion_verifier_did_not_accept_task")
@@ -403,7 +384,6 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
                         "reason": output_guard.reason,
                     },
                 )
-        state.answer_completed = True
         if not any(event.type == "answer_completed" for event in state.events):
             state.add_event("answer_completed", {"answer": state.answer})
         state.add_event("run_completed", {
@@ -420,10 +400,7 @@ def _node_finalize_entry_result(state: AgentGraphState) -> dict:
         "finalize_entry_result run_id=%s intent=%s errors=%d",
         state.run_id, _primary_result_contract(state.task_analysis), len(state.errors),
     )
-    state.execution_trace = execution_trace_from_events(state.events)
     result = {
-        "answer_completed": state.answer_completed,
-        "execution_trace": state.execution_trace,
         "events": state.events,
         "updated_at": state.updated_at,
     }

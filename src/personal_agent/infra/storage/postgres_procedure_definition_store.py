@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 from personal_agent.kernel.contracts.procedure import (
     ProcedureCatalogPort,
-    ProcedureSpec,
+    ProcedureDefinition,
 )
 from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 
@@ -463,7 +463,7 @@ class PostgresProcedureDefinitionStore(PostgresStoreBase):
             canary_percent=row["canary_percent"],
         )
 
-    def get_definition(self, procedure_id: str, version: str) -> ProcedureSpec | None:
+    def get_definition(self, procedure_id: str, version: str) -> ProcedureDefinition | None:
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -478,7 +478,7 @@ class PostgresProcedureDefinitionStore(PostgresStoreBase):
                 row = cur.fetchone()
         if row is None:
             return None
-        return ProcedureSpec.from_definition_payload(row["spec"] or {})
+        return ProcedureDefinition.from_definition_payload(row["spec"] or {})
 
     def select_active_spec(
         self,
@@ -487,7 +487,7 @@ class PostgresProcedureDefinitionStore(PostgresStoreBase):
         registry: ProcedureCatalogPort,
         environment: str = "default",
         routing_key: str = "",
-    ) -> ProcedureSpec | None:
+    ) -> ProcedureDefinition | None:
         """Return the deployed spec by identity, or None when disabled."""
         static_spec = registry.get(procedure_id)
         deployment = self.get_deployment(static_spec.procedure_id, environment=environment)
@@ -528,7 +528,7 @@ class PostgresProcedureDefinitionStore(PostgresStoreBase):
                 rows = cur.fetchall()
         return [dict(row) for row in rows]
 
-    def record_definitions(self, specs: Iterable[ProcedureSpec]) -> int:
+    def record_definitions(self, specs: Iterable[ProcedureDefinition]) -> int:
         self.ensure_schema()
         count = 0
         with self._connect() as conn:
@@ -568,5 +568,3 @@ def _eval_run_from_row(row) -> ProcedureEvalRun:
         metrics=row["metrics"] or {},
         report=row["report"] or {},
     )
-
-

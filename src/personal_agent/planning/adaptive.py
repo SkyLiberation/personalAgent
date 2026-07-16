@@ -9,22 +9,28 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
-from personal_agent.kernel.contracts.agentic import ExecutionLedger, TaskSpec
+from personal_agent.kernel.contracts.agentic import (
+    TaskRuntimeProjection,
+    TaskContract,
+    materialize_goals,
+)
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
 from personal_agent.kernel.contracts.executive import ObservationRef
+from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
 from personal_agent.kernel.contracts.planning import (
-    AdaptivePlan,
+    PlanDefinition,
     AddPlanStep,
     CancelPlanBranch,
     ClosePlanHorizon,
     FrontierDecision,
     PlanEvent,
-    PlanLedger,
+    PlanRuntimeProjection,
     PlanMonitorDecision,
     PlanPatch,
     PlanStep,
     PlannerExecutionProfile,
-    PlanningBudget,
+    PlanningLimits,
+    PlanningUsage,
     PlanningFacts,
     PlanningModeAssessment,
     PlanningSnapshot,
@@ -69,7 +75,7 @@ GOVERNED_MIXED_PROFILE = PlannerExecutionProfile(
 
 
 def profile_for_task(
-    task: TaskSpec,
+    task: TaskContract,
     procedures: tuple[ProcedureCandidate, ...],
 ) -> PlannerExecutionProfile:
     if task.mutation_intent is not None or any(
@@ -113,13 +119,13 @@ class PlanningFactProjector:
 
     def project(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         procedures: tuple[ProcedureCandidate, ...],
         profile: PlannerExecutionProfile,
     ) -> PlanningFacts:
         open_items = tuple(
-            item for item in ledger.items
+            item for item in materialize_goals(task, ledger)
             if item.status not in {"verified", "degraded", "abandoned"}
         )
         hard_dependencies = sum(
@@ -127,9 +133,12 @@ class PlanningFactProjector:
             for item in open_items
             for dependency in item.dependencies
         )
-        scoped_resources = tuple(
-            resource for resource in task.resource_requirements
-            if not resource.goal_id or resource.goal_id in {item.goal_id for item in open_items}
+        scoped_resources = (
+            *(
+                resource
+                for item in open_items
+                for resource in task.resources_for_goal(item.goal_id)
+            ),
         )
         explicit_operations = {
             operation
@@ -173,8 +182,9 @@ class PlanningModePolicy:
         facts: PlanningFacts,
         *,
         target_goal_ids: tuple[str, ...],
-        budget: PlanningBudget,
-    ) -> tuple[PlanningModeAssessment, PlanningBudget]:
+        limits: PlanningLimits,
+        usage: PlanningUsage,
+    ) -> tuple[PlanningModeAssessment, PlanningUsage]:
         if (
             facts.mandatory_procedure_goal_ids
             and len(facts.mandatory_procedure_goal_ids) == facts.active_goal_count
@@ -183,14 +193,14 @@ class PlanningModePolicy:
                 mode="procedural",
                 reason_codes=("mandatory_procedure",),
                 target_goal_ids=target_goal_ids,
-            ), budget
+            ), usage
         if facts.active_goal_count > 1 or facts.hard_dependency_count > 0:
             return PlanningModeAssessment(
                 mode="deliberative",
                 reason_codes=("compound_goal_graph",),
                 target_goal_ids=target_goal_ids,
                 recommended_horizon=min(max(facts.active_goal_count, 2), 5),
-            ), budget
+            ), usage
         if (
             facts.active_goal_count == 1
             and facts.user_explicit_operation_count == 1
@@ -201,28 +211,29 @@ class PlanningModePolicy:
                 mode="reactive",
                 reason_codes=("single_explicit_atomic_operation",),
                 target_goal_ids=target_goal_ids,
-            ), budget
-        assessed = self._assess_with_model(facts, target_goal_ids, budget)
+            ), usage
+        assessed = self._assess_with_model(facts, target_goal_ids, limits, usage)
         if assessed is not None:
-            return assessed, budget.model_copy(update={
-                "mode_assessor_calls": budget.mode_assessor_calls + 1,
+            return assessed, usage.model_copy(update={
+                "mode_assessor_calls": usage.mode_assessor_calls + 1,
             })
         return PlanningModeAssessment(
             mode="deliberative",
             reason_codes=("strategy_ambiguous_model_unavailable",),
             target_goal_ids=target_goal_ids,
             uncertainty_summary="No safe deterministic admission applies.",
-        ), budget
+        ), usage
 
     def _assess_with_model(
         self,
         facts: PlanningFacts,
         target_goal_ids: tuple[str, ...],
-        budget: PlanningBudget,
+        limits: PlanningLimits,
+        usage: PlanningUsage,
     ) -> PlanningModeAssessment | None:
         if (
             self._model_client is None
-            or budget.mode_assessor_calls >= budget.max_mode_assessor_calls
+            or usage.mode_assessor_calls >= limits.max_mode_assessor_calls
         ):
             return None
         try:
@@ -267,13 +278,13 @@ class PlanValidator:
 
     def validate(
         self,
-        plan: AdaptivePlan,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        plan: PlanDefinition,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         profile: PlannerExecutionProfile,
     ) -> None:
         if plan.task_id != task.task_id:
-            raise PlanningValidationError("plan task does not match TaskSpec")
+            raise PlanningValidationError("plan task does not match TaskContract")
         if plan.planning_snapshot.task_revision != task.revision:
             raise PlanningConflictError("plan was created from a stale task revision")
         if plan.planning_snapshot.goal_graph_revision != ledger.goal_graph_revision:
@@ -282,7 +293,7 @@ class PlanValidator:
             raise PlanningValidationError("deliberative plan requires at least one step")
         if len(plan.steps) > plan.planning_horizon:
             raise PlanningValidationError("plan exceeds its short planning horizon")
-        goal_ids = {item.goal_id for item in ledger.items}
+        goal_ids = {item.goal_id for item in materialize_goals(task, ledger)}
         criterion_ids = {item.criterion_id for item in task.success_criteria}
         step_ids = {item.step_id for item in plan.steps}
         if len(step_ids) != len(plan.steps):
@@ -323,19 +334,20 @@ class AdaptivePlanner:
 
     def create_plan(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         assessment: PlanningModeAssessment,
         procedures: tuple[ProcedureCandidate, ...],
-        budget: PlanningBudget,
+        limits: PlanningLimits,
+        usage: PlanningUsage,
         *,
         model_context: dict[str, object] | None = None,
         observation_ids: tuple[str, ...] = (),
         gap_ids: tuple[str, ...] = (),
         capability_registry_revision: str = "",
-    ) -> tuple[AdaptivePlan | None, PlanningBudget]:
-        if budget.planner_calls >= budget.max_planner_calls:
-            return None, budget
+    ) -> tuple[PlanDefinition | None, PlanningUsage]:
+        if usage.planner_calls >= limits.max_planner_calls:
+            return None, usage
         snapshot = PlanningSnapshot(
             task_revision=task.revision,
             goal_graph_revision=ledger.goal_graph_revision,
@@ -345,14 +357,14 @@ class AdaptivePlanner:
         proposal = self._with_model(
             task, ledger, assessment, procedures, model_context=model_context,
         )
-        calls = budget.planner_calls
+        calls = usage.planner_calls
         if proposal is not None:
             calls += 1
         else:
             proposal = self._compile_contract_plan(task, ledger, procedures)
         if proposal is None or not proposal.steps:
-            return None, budget.model_copy(update={"planner_calls": calls})
-        plan = AdaptivePlan(
+            return None, usage.model_copy(update={"planner_calls": calls})
+        plan = PlanDefinition(
             task_id=task.task_id,
             planning_snapshot=snapshot,
             planning_horizon=min(max(len(proposal.steps), 1), 5),
@@ -364,26 +376,27 @@ class AdaptivePlanner:
             created_from_observation_ids=observation_ids,
             created_from_gap_ids=gap_ids,
         )
-        return plan, budget.model_copy(update={"planner_calls": calls})
+        return plan, usage.model_copy(update={"planner_calls": calls})
 
     def create_patch(
         self,
-        task: TaskSpec,
-        plan_ledger: PlanLedger,
+        task: TaskContract,
+        plan: PlanDefinition | None,
+        plan_runtime: PlanRuntimeProjection,
         request: ReplanRequest,
-        budget: PlanningBudget,
+        limits: PlanningLimits,
+        usage: PlanningUsage,
         *,
         model_context: dict[str, object] | None,
-    ) -> tuple[PlanPatch | None, PlanningBudget]:
-        plan = plan_ledger.plan
+    ) -> tuple[PlanPatch | None, PlanningUsage]:
         if (
             plan is None
             or self._model_client is None
             or model_context is None
-            or budget.planner_calls >= budget.max_planner_calls
-            or budget.applied_patches >= budget.max_plan_patches_per_horizon
+            or usage.planner_calls >= limits.max_planner_calls
+            or usage.applied_patches >= limits.max_plan_patches_per_horizon
         ):
-            return None, budget
+            return None, usage
         try:
             from personal_agent.infra.structured_model import StructuredModelRequest
 
@@ -418,14 +431,14 @@ class AdaptivePlanner:
             ))
             proposal = response.value
             if not proposal.operations:
-                return None, budget.model_copy(update={
-                    "planner_calls": budget.planner_calls + 1,
+                return None, usage.model_copy(update={
+                    "planner_calls": usage.planner_calls + 1,
                 })
             return PlanPatch(
                 plan_id=plan.plan_id,
                 base_plan_revision=plan.revision,
                 base_task_revision=task.revision,
-                created_at_ledger_event_cursor=plan_ledger.last_event_sequence,
+                created_at_ledger_event_cursor=plan_runtime.last_event_sequence,
                 trigger_observation_ids=request.observation_ids,
                 trigger_gap_ids=request.gap_ids,
                 reason_code=proposal.reason_code,
@@ -435,17 +448,17 @@ class AdaptivePlanner:
                     if criterion.mutability == "immutable"
                 ),
                 expected_improvement=proposal.expected_improvement,
-            ), budget.model_copy(update={
-                "planner_calls": budget.planner_calls + 1,
+            ), usage.model_copy(update={
+                "planner_calls": usage.planner_calls + 1,
             })
         except Exception:
             logger.exception("Adaptive plan patch failed")
-            return None, budget
+            return None, usage
 
     def _with_model(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         assessment: PlanningModeAssessment,
         procedures: tuple[ProcedureCandidate, ...],
         *,
@@ -487,8 +500,8 @@ class AdaptivePlanner:
 
     @staticmethod
     def _compile_contract_plan(
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         procedures: tuple[ProcedureCandidate, ...],
     ) -> _ModelPlanProposal | None:
         """Compile only explicit task contracts; never infer a semantic action sequence."""
@@ -496,8 +509,9 @@ class AdaptivePlanner:
         procedure_by_goal = {
             item.goal_id: item for item in procedures if item.status == "mandatory"
         }
-        status_by_goal = {item.goal_id: item.status for item in ledger.items}
-        for goal in ledger.items:
+        goals = materialize_goals(task, ledger)
+        status_by_goal = {item.goal_id: item.status for item in goals}
+        for goal in goals:
             if goal.status in {"verified", "degraded", "abandoned"}:
                 continue
             if any(
@@ -520,19 +534,16 @@ class AdaptivePlanner:
                     side_effect_intent=procedure.side_effect_class,
                 ))
                 continue
-            resources = tuple(
-                item for item in task.resource_requirements
-                if item.goal_id in {"", goal.goal_id}
-            )
+            resources = task.resources_for_goal(goal.goal_id)
             operations = tuple(dict.fromkeys(
                 operation for item in resources for operation in item.required_operations
             ))
             if goal.result_contract == "external_state" or set(operations).intersection(
-                {"create", "update", "delete", "ingest", "repair"}
+                MUTATING_OPERATIONS
             ):
                 continue
             if operations:
-                requirement = CapabilityRequirement(
+                requirement = CapabilityRequirement.from_dimensions(
                     requirement_id=f"{goal.goal_id}:plan",
                     purpose=f"satisfy_goal_{goal.goal_id}",
                     semantic_domains=tuple(dict.fromkeys(
@@ -581,51 +592,61 @@ class AdaptivePlanner:
         )
 
 
-class PlanLedgerProjector:
+class PlanRuntimeProjector:
     """Event-sourced projection for plan state; PlanStep itself has no status field."""
 
-    def create(self, plan: AdaptivePlan) -> PlanLedger:
+    def create(self, plan: PlanDefinition) -> PlanRuntimeProjection:
         statuses = {step.step_id: "proposed" for step in plan.steps}
-        ledger = PlanLedger(plan=plan, step_statuses=statuses)
-        ledger = self.append(ledger, "plan_created", payload={
+        ledger = PlanRuntimeProjection(
+            plan_id=plan.plan_id,
+            plan_revision=plan.revision,
+            step_statuses=statuses,
+        )
+        ledger = self.append(plan, ledger, "plan_created", payload={
             "snapshot": plan.planning_snapshot.model_dump(mode="json"),
         })
-        ledger = self.append(ledger, "plan_validated")
-        return self._project_ready(ledger)
+        ledger = self.append(plan, ledger, "plan_validated")
+        return self._project_ready(plan, ledger)
 
-    def replace(self, ledger: PlanLedger, plan: AdaptivePlan) -> PlanLedger:
-        """Replace the active horizon while preserving the event stream."""
-        if ledger.plan is None:
+    def replace(
+        self,
+        previous: PlanDefinition | None,
+        ledger: PlanRuntimeProjection,
+        plan: PlanDefinition,
+    ) -> PlanRuntimeProjection:
+        """Replace the active definition while preserving the projection cursor."""
+        if previous is None:
             return self.create(plan)
-        previous = ledger.plan
         statuses = {step.step_id: "proposed" for step in plan.steps}
         updated = ledger.model_copy(update={
-            "plan": plan,
+            "plan_id": plan.plan_id,
+            "plan_revision": plan.revision,
             "step_statuses": statuses,
         })
-        updated = self.append(updated, "plan_replaced", payload={
+        updated = self.append(plan, updated, "plan_replaced", payload={
             "previous_plan_id": previous.plan_id,
             "previous_plan_revision": previous.revision,
             "snapshot": plan.planning_snapshot.model_dump(mode="json"),
         })
-        updated = self.append(updated, "plan_validated")
-        return self._project_ready(updated)
+        updated = self.append(plan, updated, "plan_validated")
+        return self._project_ready(plan, updated)
 
     def append(
         self,
-        ledger: PlanLedger,
+        plan: PlanDefinition,
+        ledger: PlanRuntimeProjection,
         event_type: str,
         *,
         step_ids: tuple[str, ...] = (),
         observation_ids: tuple[str, ...] = (),
         payload: dict[str, object] | None = None,
-    ) -> PlanLedger:
-        if ledger.plan is None:
-            raise PlanningValidationError("plan event requires an active plan")
+    ) -> PlanRuntimeProjection:
+        if ledger.plan_id != plan.plan_id or ledger.plan_revision != plan.revision:
+            raise PlanningValidationError("plan projection does not reference the supplied definition")
         event = PlanEvent(
             sequence=ledger.last_event_sequence + 1,
-            plan_id=ledger.plan.plan_id,
-            plan_revision=ledger.plan.revision,
+            plan_id=plan.plan_id,
+            plan_revision=plan.revision,
             event_type=event_type,
             step_ids=step_ids,
             observation_ids=observation_ids,
@@ -646,23 +667,26 @@ class PlanLedgerProjector:
                     raise PlanningValidationError(f"unknown plan step: {step_id}")
                 statuses[step_id] = projected
         updated = ledger.model_copy(update={
-            "events": (*ledger.events, event),
             "step_statuses": statuses,
             "last_event_sequence": event.sequence,
         })
-        return self._project_ready(updated)
+        return self._project_ready(plan, updated)
 
-    def frontier(self, ledger: PlanLedger) -> tuple[PlanStep, ...]:
-        if ledger.plan is None:
-            return ()
+    def frontier(
+        self, plan: PlanDefinition, ledger: PlanRuntimeProjection,
+    ) -> tuple[PlanStep, ...]:
         return tuple(
-            step for step in ledger.plan.steps
+            step for step in plan.steps
             if ledger.step_statuses.get(step.step_id) == "ready"
         )
 
-    def apply_patch(self, ledger: PlanLedger, patch: PlanPatch) -> PlanLedger:
-        plan = ledger.plan
-        if plan is None or patch.plan_id != plan.plan_id:
+    def apply_patch(
+        self,
+        plan: PlanDefinition,
+        ledger: PlanRuntimeProjection,
+        patch: PlanPatch,
+    ) -> tuple[PlanDefinition, PlanRuntimeProjection]:
+        if patch.plan_id != plan.plan_id:
             raise PlanningConflictError("patch targets a different plan")
         if patch.base_plan_revision != plan.revision:
             raise PlanningConflictError("patch base revision is stale")
@@ -719,18 +743,22 @@ class PlanLedgerProjector:
                 "plan_revision": plan.revision + 1,
             }),
         })
-        updated = ledger.model_copy(update={"plan": revised, "step_statuses": statuses})
-        return self.append(updated, "plan_patched", payload={
+        updated = ledger.model_copy(update={
+            "plan_revision": revised.revision,
+            "step_statuses": statuses,
+        })
+        updated = self.append(revised, updated, "plan_patched", payload={
             "patch_id": patch.patch_id,
             "reason_code": patch.reason_code,
         })
+        return revised, updated
 
     @staticmethod
-    def _project_ready(ledger: PlanLedger) -> PlanLedger:
-        if ledger.plan is None:
-            return ledger
+    def _project_ready(
+        plan: PlanDefinition, ledger: PlanRuntimeProjection,
+    ) -> PlanRuntimeProjection:
         statuses = dict(ledger.step_statuses)
-        for step in ledger.plan.steps:
+        for step in plan.steps:
             if statuses.get(step.step_id) != "proposed":
                 continue
             if all(statuses.get(dependency) == "satisfied" for dependency in step.depends_on_step_ids):
@@ -765,40 +793,42 @@ class PlanMonitor:
 
     def inspect(
         self,
-        task: TaskSpec,
-        execution_ledger: ExecutionLedger,
-        plan_ledger: PlanLedger,
+        task: TaskContract,
+        task_runtime: TaskRuntimeProjection,
+        plan: PlanDefinition | None,
+        plan_runtime: PlanRuntimeProjection,
         observations: tuple[ObservationRef, ...],
-        budget: PlanningBudget,
+        limits: PlanningLimits,
+        usage: PlanningUsage,
         *,
         model_context: dict[str, object] | None = None,
-    ) -> tuple[PlanMonitorDecision, PlanLedger]:
-        plan = plan_ledger.plan
+    ) -> tuple[PlanMonitorDecision, PlanRuntimeProjection]:
         if plan is None:
             return PlanMonitorDecision(
                 impact="none", action="keep", reason_code="no_active_plan",
-            ), plan_ledger
+            ), plan_runtime
         if task.revision != plan.planning_snapshot.task_revision:
             return self._request(
-                task, plan_ledger, observations, "goal_assumption_invalidated",
+                task, plan, plan_runtime, observations, "goal_assumption_invalidated",
                 "task_revision_changed",
             )
-        if execution_ledger.goal_graph_revision != plan.planning_snapshot.goal_graph_revision:
+        if task_runtime.goal_graph_revision != plan.planning_snapshot.goal_graph_revision:
             return self._request(
-                task, plan_ledger, observations, "goal_assumption_invalidated",
+                task, plan, plan_runtime, observations, "goal_assumption_invalidated",
                 "goal_graph_revision_changed",
             )
         open_goal_ids = {
-            item.goal_id for item in execution_ledger.items
+            item.goal_id for item in materialize_goals(task, task_runtime)
             if item.status not in {"verified", "degraded", "abandoned"}
         }
         if open_goal_ids and all(
             status in {"satisfied", "cancelled"}
-            for status in plan_ledger.step_statuses.values()
+            for status in plan_runtime.step_statuses.values()
         ):
             return self._request(
                 task,
-                plan_ledger,
+                plan,
+                plan_runtime,
                 observations,
                 "goal_assumption_invalidated",
                 "planning_horizon_exhausted",
@@ -807,21 +837,21 @@ class PlanMonitor:
         if latest is None:
             return PlanMonitorDecision(
                 impact="none", action="keep", reason_code="no_new_observation",
-            ), plan_ledger
+            ), plan_runtime
         selected = tuple(
-            step_id for step_id, status in plan_ledger.step_statuses.items()
+            step_id for step_id, status in plan_runtime.step_statuses.items()
             if status in {"selected", "running", "observed"}
         )
         if latest.kind in {"capability_gap", "verification_gap"}:
-            if budget.applied_patches >= budget.max_plan_patches_per_horizon:
+            if usage.applied_patches >= limits.max_plan_patches_per_horizon:
                 return PlanMonitorDecision(
                     impact="branch_invalidated",
                     action="request_input",
                     affected_step_ids=selected,
                     reason_code="plan_patch_budget_exhausted",
-                ), plan_ledger
+                ), plan_runtime
             return self._request(
-                task, plan_ledger, observations, "step_invalidated", latest.kind,
+                task, plan, plan_runtime, observations, "step_invalidated", latest.kind,
                 affected_step_ids=selected,
             )
         if latest.kind in {"technical_error", "provider_timeout"} and latest.payload.get("retryable"):
@@ -830,17 +860,19 @@ class PlanMonitor:
                 action="local_retry",
                 affected_step_ids=selected,
                 reason_code="technical_retry_available",
-            ), plan_ledger
+            ), plan_runtime
         semantic = self._semantic_impact(
             selected,
-            budget,
+            limits,
+            usage,
             model_context=model_context,
         )
         if semantic is not None:
             if semantic.impact in {"step_invalidated", "branch_invalidated"}:
                 return self._request(
                     task,
-                    plan_ledger,
+                    plan,
+                    plan_runtime,
                     observations,
                     semantic.impact,
                     semantic.reason_code,
@@ -853,34 +885,33 @@ class PlanMonitor:
                 affected_step_ids=semantic.affected_step_ids,
                 reason_code=semantic.reason_code,
                 decision_source="semantic",
-            ), plan_ledger
+            ), plan_runtime
         return PlanMonitorDecision(
             impact="none", action="keep", reason_code="observation_preserves_strategy",
-        ), plan_ledger
+        ), plan_runtime
 
     @staticmethod
     def _request(
-        task: TaskSpec,
-        plan_ledger: PlanLedger,
+        task: TaskContract,
+        plan: PlanDefinition,
+        plan_runtime: PlanRuntimeProjection,
         observations: tuple[ObservationRef, ...],
         impact: str,
         reason_code: str,
         *,
         affected_step_ids: tuple[str, ...] = (),
         decision_source: str = "deterministic",
-    ) -> tuple[PlanMonitorDecision, PlanLedger]:
-        plan = plan_ledger.plan
-        assert plan is not None
+    ) -> tuple[PlanMonitorDecision, PlanRuntimeProjection]:
         observation_ids = tuple(item.observation_id for item in observations[-4:])
         signature = hashlib.sha256(json.dumps({
             "reason": reason_code,
             "observations": observation_ids,
             "steps": affected_step_ids,
         }, sort_keys=True).encode()).hexdigest()[:20]
-        if signature in plan_ledger.seen_replan_signatures:
+        if signature in plan_runtime.seen_replan_signatures:
             return PlanMonitorDecision(
                 impact="none", action="keep", reason_code="duplicate_replan_suppressed",
-            ), plan_ledger
+            ), plan_runtime
         request = ReplanRequest(
             source="monitor",
             task_revision=task.revision,
@@ -891,10 +922,10 @@ class PlanMonitor:
             observation_ids=observation_ids,
             reason_code=reason_code,
         )
-        updated = plan_ledger.model_copy(update={
-            "seen_replan_signatures": (*plan_ledger.seen_replan_signatures, signature),
+        updated = plan_runtime.model_copy(update={
+            "seen_replan_signatures": (*plan_runtime.seen_replan_signatures, signature),
         })
-        updated = PlanLedgerProjector().append(updated, "replan_requested", payload={
+        updated = PlanRuntimeProjector().append(plan, updated, "replan_requested", payload={
             "request": request.model_dump(mode="json"),
             "impact": impact,
         })
@@ -910,14 +941,15 @@ class PlanMonitor:
     def _semantic_impact(
         self,
         selected_step_ids: tuple[str, ...],
-        budget: PlanningBudget,
+        limits: PlanningLimits,
+        usage: PlanningUsage,
         *,
         model_context: dict[str, object] | None,
     ) -> _SemanticMonitorChoice | None:
         if (
             self._model_client is None
             or model_context is None
-            or budget.semantic_monitor_calls >= budget.max_semantic_monitor_calls
+            or usage.semantic_monitor_calls >= limits.max_semantic_monitor_calls
         ):
             return None
         try:
@@ -1001,7 +1033,7 @@ def _descendants(steps: tuple[PlanStep, ...], root_step_id: str) -> set[str]:
 __all__ = [
     "ADVISORY_READ_ONLY_PROFILE", "BOUNDED_READ_ONLY_PROFILE", "AdaptivePlanner",
     "GOVERNED_MIXED_PROFILE",
-    "FrontierSelector", "PlanLedgerProjector", "PlanMonitor", "PlanValidator",
+    "FrontierSelector", "PlanRuntimeProjector", "PlanMonitor", "PlanValidator",
     "PlanningConflictError", "PlanningFactProjector", "PlanningModePolicy",
     "PlanningValidationError", "profile_for_task",
 ]

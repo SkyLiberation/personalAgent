@@ -4,7 +4,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 
 
 ResearchFrequency = Literal["daily", "weekdays", "weekly"]
@@ -117,13 +119,8 @@ class ContentPreferences(BaseModel):
     empty_policy: Literal["send_short", "silent"] = "send_short"
 
 
-class DeliveryTarget(BaseModel):
-    channel: str = "feishu"
-    target_type: str = "chat_id"
-    target_id: str = ""
-
-
-class ResearchSubscription(BaseModel):
+class ResearchSubscriptionSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
     id: str = Field(default_factory=lambda: uuid4().hex)
     user_id: str = "default"
     name: str
@@ -137,15 +134,47 @@ class ResearchSubscription(BaseModel):
     source_preferences: SourcePreferences = Field(default_factory=SourcePreferences)
     content_preferences: ContentPreferences = Field(default_factory=ContentPreferences)
     schedule: SchedulePolicy = Field(default_factory=SchedulePolicy)
-    delivery: DeliveryTarget = Field(default_factory=DeliveryTarget)
+    delivery: DeliveryTarget | None = None
     save_policy: Literal["none", "digest_only", "approved_items"] = "approved_items"
     enabled: bool = True
-    last_window_end: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
 
-class ResearchBudget(BaseModel):
+class SubscriptionCursor(BaseModel):
+    subscription_id: str
+    last_window_end: datetime | None = None
+
+
+class ResearchSubscriptionRecord(BaseModel):
+    spec: ResearchSubscriptionSpec
+    cursor: SubscriptionCursor
+
+    @classmethod
+    def create(cls, spec: ResearchSubscriptionSpec) -> "ResearchSubscriptionRecord":
+        return cls(spec=spec, cursor=SubscriptionCursor(subscription_id=spec.id))
+
+    def with_spec_updates(self, **updates: object) -> "ResearchSubscriptionRecord":
+        return self.model_copy(update={"spec": self.spec.model_copy(update=updates)})
+
+    def with_cursor(self, last_window_end: datetime | None) -> "ResearchSubscriptionRecord":
+        return self.model_copy(update={
+            "cursor": self.cursor.model_copy(update={"last_window_end": last_window_end}),
+        })
+
+    def __getattr__(self, name: str):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            pass
+        if hasattr(self.spec, name):
+            return getattr(self.spec, name)
+        if hasattr(self.cursor, name):
+            return getattr(self.cursor, name)
+        raise AttributeError(name)
+
+
+class ResearchLimits(BaseModel):
     max_queries: int = Field(default=5, ge=1, le=20)
     max_exploration_queries: int = Field(default=3, ge=1, le=20)
     max_verification_queries: int = Field(default=2, ge=0, le=20)
@@ -153,6 +182,15 @@ class ResearchBudget(BaseModel):
     max_search_results: int = Field(default=30, ge=1, le=100)
     max_fulltext_fetches: int = Field(default=5, ge=0, le=20)
     max_tool_calls: int = Field(default=15, ge=1, le=100)
+
+
+class ResearchUsage(BaseModel):
+    iteration_count: int = Field(default=0, ge=0)
+    exploration_query_count: int = Field(default=0, ge=0)
+    verification_query_count: int = Field(default=0, ge=0)
+    low_yield_rounds: int = Field(default=0, ge=0)
+    tool_call_count: int = Field(default=0, ge=0)
+    satisfaction_model_call_count: int = Field(default=0, ge=0)
 
 
 class ResearchPolicy(BaseModel):
@@ -171,7 +209,9 @@ class ResearchQuery(BaseModel):
     priority: float = Field(default=0.5, ge=0, le=1)
 
 
-class ResearchDecision(BaseModel):
+class ResearchDecisionIntent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     id: str = Field(default_factory=lambda: uuid4().hex)
     iteration: int
     action: ResearchAction
@@ -180,12 +220,45 @@ class ResearchDecision(BaseModel):
     event_id: str | None = None
     gap_id: str | None = None
     reason: str = ""
+    query_phase: ResearchQueryPhase = "exploration"
+
+
+class ResearchDecisionOutcome(BaseModel):
+    decision_id: str
     status: ResearchDecisionStatus = "planned"
     result_count: int = 0
-    query_phase: ResearchQueryPhase = "exploration"
     started_at: datetime | None = None
     completed_at: datetime | None = None
     elapsed_ms: int = 0
+
+
+class ResearchDecisionRecord(BaseModel):
+    intent: ResearchDecisionIntent
+    outcome: ResearchDecisionOutcome
+
+    @classmethod
+    def create(cls, **values: object) -> "ResearchDecisionRecord":
+        outcome_fields = {
+            key: values.pop(key)
+            for key in ("status", "result_count", "started_at", "completed_at", "elapsed_ms")
+            if key in values
+        }
+        intent = ResearchDecisionIntent(**values)
+        return cls(
+            intent=intent,
+            outcome=ResearchDecisionOutcome(decision_id=intent.id, **outcome_fields),
+        )
+
+    def __getattr__(self, name: str):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            pass
+        if hasattr(self.intent, name):
+            return getattr(self.intent, name)
+        if hasattr(self.outcome, name):
+            return getattr(self.outcome, name)
+        raise AttributeError(name)
 
 
 class EvidenceGap(BaseModel):
@@ -226,30 +299,25 @@ class ResearchToolCallTrace(BaseModel):
     recorded_at: datetime = Field(default_factory=utc_now)
 
 
-class ResearchState(BaseModel):
+class ResearchRunProjection(BaseModel):
     run_id: str
-    topic: str
-    instructions: str = ""
-    max_items: int = Field(default=5, ge=1, le=20)
-    window_start: datetime
-    window_end: datetime
-    budget: ResearchBudget = Field(default_factory=ResearchBudget)
+    initialized: bool = False
+    status: ResearchRunStatus = "queued"
+    usage: ResearchUsage = Field(default_factory=ResearchUsage)
     query_history: list[str] = Field(default_factory=list)
-    decisions: list[ResearchDecision] = Field(default_factory=list)
-    policy: ResearchPolicy = Field(default_factory=ResearchPolicy)
-    query_plan: list[ResearchQuery] = Field(default_factory=list)
+    decisions: list[ResearchDecisionRecord] = Field(default_factory=list)
     evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
-    iteration_count: int = 0
-    exploration_query_count: int = 0
-    verification_query_count: int = 0
-    low_yield_rounds: int = 0
-    tool_call_count: int = 0
-    satisfaction_model_call_count: int = 0
     stage_timings: list[ResearchStageTiming] = Field(default_factory=list)
     tool_call_traces: list[ResearchToolCallTrace] = Field(default_factory=list)
     personal_relevance_cache: dict[str, PersonalRelevance] = Field(default_factory=dict)
     satisfaction: ResearchSatisfaction | None = None
     stop_reason: str = ""
+    source_count: int = 0
+    event_count: int = 0
+    selected_count: int = 0
+    digest_id: str | None = None
+    failure_reason: str | None = None
+    completed_at: datetime | None = None
 
 
 class ResearchSource(BaseModel):
@@ -307,7 +375,9 @@ class ResearchEventFrameSnapshot(BaseModel):
     confidence: float = Field(default=0, ge=0, le=1)
 
 
-class ResearchEvent(BaseModel):
+class CanonicalResearchEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     id: str = Field(default_factory=lambda: uuid4().hex)
     canonical_key: str
     title: str
@@ -318,14 +388,54 @@ class ResearchEvent(BaseModel):
     event_type: str = "news"
     source_ids: list[str] = Field(default_factory=list)
     frame: ResearchEventFrameSnapshot | None = None
+
+
+class EventAssessment(BaseModel):
+    event_id: str
     sources: list[ResearchSource] = Field(default_factory=list)
     importance_score: float = Field(default=0.5, ge=0, le=1)
     novelty_score: float = Field(default=0.5, ge=0, le=1)
     confidence_score: float = Field(default=0.3, ge=0, le=1)
-    personal_relevance: PersonalRelevance = Field(default_factory=PersonalRelevance)
     status: Literal["verified", "reported", "uncertain", "conflicted"] = "uncertain"
     final_score: float = 0
     score_breakdown: EventScoreBreakdown = Field(default_factory=EventScoreBreakdown)
+
+
+class ResearchEventRecord(BaseModel):
+    event: CanonicalResearchEvent
+    assessment: EventAssessment
+    personal_relevance: PersonalRelevance = Field(default_factory=PersonalRelevance)
+
+    @classmethod
+    def create(cls, **values: object) -> "ResearchEventRecord":
+        assessment_fields = {
+            key: values.pop(key)
+            for key in (
+                "sources", "importance_score", "novelty_score", "confidence_score",
+                "status", "final_score", "score_breakdown",
+            )
+            if key in values
+        }
+        relevance = values.pop("personal_relevance", None)
+        event = CanonicalResearchEvent(**values)
+        return cls(
+            event=event,
+            assessment=EventAssessment(event_id=event.id, **assessment_fields),
+            personal_relevance=(
+                relevance if isinstance(relevance, PersonalRelevance) else PersonalRelevance()
+            ),
+        )
+
+    def __getattr__(self, name: str):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            pass
+        if hasattr(self.event, name):
+            return getattr(self.event, name)
+        if hasattr(self.assessment, name):
+            return getattr(self.assessment, name)
+        raise AttributeError(name)
 
 
 class DigestClaim(BaseModel):
@@ -378,39 +488,31 @@ class IntelligenceDigest(BaseModel):
         return "\n".join(lines)
 
 
-class ResearchRun(BaseModel):
+class ResearchRunDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
     id: str = Field(default_factory=lambda: uuid4().hex)
     subscription_id: str | None = None
     user_id: str
     trigger_type: Literal["manual", "scheduled", "event"] = "manual"
-    status: ResearchRunStatus = "queued"
     topic: str
     instructions: str = ""
     max_items: int = Field(default=5, ge=1, le=20)
     window_start: datetime
     window_end: datetime
     policy: ResearchPolicy = Field(default_factory=ResearchPolicy)
-    query_plan: list[str] = Field(default_factory=list)
-    query_plan_details: list[ResearchQuery] = Field(default_factory=list)
-    source_count: int = 0
-    event_count: int = 0
-    selected_count: int = 0
-    digest_id: str | None = None
-    budget: ResearchBudget = Field(default_factory=ResearchBudget)
-    research_state: ResearchState | None = None
-    failure_reason: str | None = None
+    queries: list[ResearchQuery] = Field(default_factory=list)
+    limits: ResearchLimits = Field(default_factory=ResearchLimits)
     created_at: datetime = Field(default_factory=utc_now)
-    completed_at: datetime | None = None
 
     @classmethod
     def for_subscription(
         cls,
-        subscription: ResearchSubscription,
+        subscription: ResearchSubscriptionRecord,
         *,
         window_end: datetime,
         trigger_type: Literal["manual", "scheduled"] = "scheduled",
-        budget: ResearchBudget | None = None,
-    ) -> "ResearchRun":
+        limits: ResearchLimits | None = None,
+    ) -> "ResearchRunDefinition":
         start = subscription.last_window_end or (
             window_end - timedelta(hours=subscription.lookback_hours)
         )
@@ -423,8 +525,49 @@ class ResearchRun(BaseModel):
             max_items=subscription.max_items,
             window_start=start,
             window_end=window_end,
-            budget=budget or ResearchBudget(),
+            limits=limits or ResearchLimits(),
         )
+
+
+class ResearchRunRecord(BaseModel):
+    definition: ResearchRunDefinition
+    projection: ResearchRunProjection
+
+    @classmethod
+    def create(cls, definition: ResearchRunDefinition) -> "ResearchRunRecord":
+        return cls(
+            definition=definition,
+            projection=ResearchRunProjection(run_id=definition.id),
+        )
+
+    def with_definition_updates(self, **updates: object) -> "ResearchRunRecord":
+        return self.model_copy(update={
+            "definition": self.definition.model_copy(update=updates),
+        })
+
+    def with_projection_updates(self, **updates: object) -> "ResearchRunRecord":
+        return self.model_copy(update={
+            "projection": self.projection.model_copy(update=updates),
+        })
+
+    @property
+    def query_plan_details(self) -> list[ResearchQuery]:
+        return self.definition.queries
+
+    @property
+    def query_plan(self) -> list[str]:
+        return [query.query for query in self.definition.queries]
+
+    def __getattr__(self, name: str):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            pass
+        if hasattr(self.definition, name):
+            return getattr(self.definition, name)
+        if hasattr(self.projection, name):
+            return getattr(self.projection, name)
+        raise AttributeError(name)
 
 
 class ResearchFeedback(BaseModel):

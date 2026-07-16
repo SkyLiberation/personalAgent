@@ -69,7 +69,7 @@ def test_fork_from_checkpoint_creates_new_run_and_records_event(runtime):
     assert "execution_forked" in event_types
 
 
-def test_step_execution_persists_input_and_output_artifacts(runtime):
+def test_invocation_batch_persists_input_and_output_artifacts(runtime):
     result = runtime.execute_entry(
         EntryInput(text="你好", user_id="test-user", session_id="step-artifacts")
     )

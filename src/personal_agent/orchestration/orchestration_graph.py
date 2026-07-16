@@ -12,7 +12,7 @@ from psycopg.rows import dict_row
 from personal_agent.infra.storage.postgres_common import normalize_postgres_url
 from personal_agent.kernel.config import Settings
 from personal_agent.orchestration.orchestration_contexts import GraphContexts
-from personal_agent.orchestration.orchestration_models import AgentGraphState
+from personal_agent.orchestration.orchestration_models import RunCheckpoint
 from personal_agent.orchestration.orchestration_nodes._entry import (
     _after_interrupt_clarify,
     _after_prepare_clarify,
@@ -48,12 +48,12 @@ from personal_agent.orchestration.orchestration_nodes._react import (
 )
 from personal_agent.orchestration.orchestration_nodes._steps import (
     _after_confirm_step,
-    _after_step_execution,
+    _after_invocation_batch,
     _node_confirm_step,
     _node_consume_step_tool_result,
     _node_execute_step,
     _node_handle_step_success,
-    _node_prepare_step_execution,
+    _node_prepare_invocation_batch,
     _node_select_next_step,
     _should_execute_step,
 )
@@ -61,39 +61,39 @@ from personal_agent.orchestration.orchestration_nodes._steps import (
 logger = logging.getLogger(__name__)
 
 
-def _after_entry_route(state: AgentGraphState) -> str:
+def _after_entry_route(state: RunCheckpoint) -> str:
     if state.task_analysis and state.task_analysis.requires_clarification:
         return "prepare_clarify_entry"
     return "return_to_parent"
 
 
-def _after_entry_graph(state: AgentGraphState) -> str:
+def _after_entry_graph(state: RunCheckpoint) -> str:
     return "finalize" if state.answer_completed else "executive"
 
 
-def _after_react_graph(state: AgentGraphState) -> str:
+def _after_react_graph(state: RunCheckpoint) -> str:
     return "handle_success" if state.react.status == "completed" else "action_done"
 
 
-def _after_observation(state: AgentGraphState) -> str:
+def _after_observation(state: RunCheckpoint) -> str:
     return "retry" if state.control_route == "technical_retry" else "verify"
 
 
-def _after_goal_compile(state: AgentGraphState) -> str:
+def _after_goal_compile(state: RunCheckpoint) -> str:
     return "direct" if state.control_route == "direct_candidate" else "planning"
 
 
-def _after_planning_mode(state: AgentGraphState) -> str:
+def _after_planning_mode(state: RunCheckpoint) -> str:
     if state.planning_mode is not None and state.planning_mode.mode == "deliberative":
         return "plan"
     return "control"
 
 
-def _after_plan_creation(state: AgentGraphState) -> str:
+def _after_plan_creation(state: RunCheckpoint) -> str:
     return "control" if state.control_route == "plan_ready" else "stop"
 
 
-def _after_plan_monitor(state: AgentGraphState) -> str:
+def _after_plan_monitor(state: RunCheckpoint) -> str:
     if state.planning_mode is None:
         return "planning"
     if state.control_route == "replan":
@@ -103,13 +103,13 @@ def _after_plan_monitor(state: AgentGraphState) -> str:
     return "control"
 
 
-def _after_goal_verification(state: AgentGraphState) -> str:
+def _after_goal_verification(state: RunCheckpoint) -> str:
     return "completion" if state.control_route == "direct_completion" else "monitor"
 
 
 def build_entry_graph(contexts: GraphContexts):
     """Understand the user goal and resolve entry-level clarification only."""
-    builder = StateGraph(AgentGraphState)
+    builder = StateGraph(RunCheckpoint)
     builder.add_node("normalize_entry", _node_normalize_entry)
     builder.add_node("analyze_task", lambda state: _node_analyze_task(state, deps=contexts.routing))
     builder.add_node("prepare_clarify_entry", _node_prepare_clarify)
@@ -136,7 +136,7 @@ def build_entry_graph(contexts: GraphContexts):
 
 def build_react_graph(contexts: GraphContexts):
     """Bounded executor-local ReAct loop."""
-    builder = StateGraph(AgentGraphState)
+    builder = StateGraph(RunCheckpoint)
     builder.add_node("react_init", lambda state: _node_react_init(state, deps=contexts.react))
     builder.add_node("react_iterate", lambda state: _node_react_iterate(state, deps=contexts.react))
     builder.add_node("react_tool_node", contexts.react.tool_executor.graph_node())
@@ -164,8 +164,8 @@ def build_react_graph(contexts: GraphContexts):
 
 def build_action_execution_graph(contexts: GraphContexts):
     """Execute only the current bounded action or one deterministic protocol."""
-    builder = StateGraph(AgentGraphState)
-    builder.add_node("prepare_action", _node_prepare_step_execution)
+    builder = StateGraph(RunCheckpoint)
+    builder.add_node("prepare_action", _node_prepare_invocation_batch)
     builder.add_node("select_action_step", _node_select_next_step)
     builder.add_node("execute_action_step", lambda state: _node_execute_step(state, deps=contexts.steps))
     builder.add_node("handle_action_success", lambda state: _node_handle_step_success(state, deps=contexts.steps))
@@ -187,7 +187,7 @@ def build_action_execution_graph(contexts: GraphContexts):
     for node_name in ("execute_action_step", "consume_action_tool_result"):
         builder.add_conditional_edges(
             node_name,
-            _after_step_execution,
+            _after_invocation_batch,
             {
                 "confirm_step": "confirm_action_step",
                 "react_step": "react_action",
@@ -218,7 +218,7 @@ def build_action_execution_graph(contexts: GraphContexts):
 def build_executive_graph(contexts: GraphContexts):
     """Durable task-level decide-act-observe-verify loop."""
     deps = contexts.executive
-    builder = StateGraph(AgentGraphState)
+    builder = StateGraph(RunCheckpoint)
     builder.add_node("compile_goal_graph", lambda state: _node_compile_goal_graph(state, deps=deps))
     builder.add_node("project_planning_facts", lambda state: _node_project_planning_facts(state, deps=deps))
     builder.add_node("assess_planning_mode", lambda state: _node_assess_planning_mode(state, deps=deps))
@@ -297,7 +297,7 @@ def build_executive_graph(contexts: GraphContexts):
 def build_entry_orchestration_graph(contexts: GraphContexts, checkpointer=None):
     if checkpointer is None:
         raise ValueError("A persistent Postgres checkpointer is required.")
-    builder = StateGraph(AgentGraphState)
+    builder = StateGraph(RunCheckpoint)
     builder.add_node("entry_graph", build_entry_graph(contexts))
     builder.add_node("executive_graph", build_executive_graph(contexts))
     builder.add_node("finalize_entry_result", _node_finalize_entry_result)

@@ -27,7 +27,7 @@ def test_procedure_identity_appears_only_after_procedure_started() -> None:
         run_id="run",
         thread_id="thread",
         type="procedure_started",
-        payload={"procedure_call": {
+        payload={"procedure_invocation": {
             "procedure_id": "knowledge_ingest",
             "procedure_version": "1",
         }},

@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from pydantic import ValidationError
 
-from personal_agent.orchestration.orchestration_models import AgentGraphState, ReactSubState, ToolTrackingSubState
+from personal_agent.orchestration.orchestration_models import RunCheckpoint, ReactSubState, ToolTrackingSubState
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.tools import (
     ToolError,
@@ -252,7 +252,7 @@ class TestToolExecutor:
         executor = ToolExecutor(audit_sink=sink)
         executor.register(dangerous)
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             react=ReactSubState(allowed_tools=["dangerous"]),
             tool_tracking=ToolTrackingSubState(active_context="react", pending_call_id="call-1"),
             tool_messages=[

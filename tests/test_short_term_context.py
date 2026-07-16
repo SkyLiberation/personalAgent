@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from personal_agent.orchestration.orchestration_models import AgentGraphState
+from personal_agent.orchestration.orchestration_models import RunCheckpoint
 from personal_agent.orchestration.orchestration_nodes._entry import _entry_conversation_messages
 from personal_agent.kernel.config import ShortTermMemoryConfig
 from personal_agent.memory.short_term_context import (
@@ -244,7 +244,7 @@ def test_build_dialogue_context_result_reuses_prior_summary_when_no_overflow():
 
 
 def test_entry_conversation_messages_persist_thread_summary():
-    state = AgentGraphState(
+    state = RunCheckpoint(
         user_id="u1",
         messages=[
             HumanMessage(content="目标：升级短期摘要"),

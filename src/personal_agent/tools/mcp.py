@@ -122,7 +122,7 @@ def _mcp_capability(
 ) -> MCPCapability:
     provider = tool_name.split(".", 1)[0] if "." in tool_name else server.server_id
     capability_id = f"mcp:{server.server_id}:{mapping.remote_name}"
-    return MCPCapability(
+    return MCPCapability.from_dimensions(
         capability_id=capability_id,
         provider=provider,
         local_name=tool_name,

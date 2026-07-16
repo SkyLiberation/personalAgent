@@ -1,4 +1,4 @@
-"""AgentGraphState, AgentEvent and related types for LangGraph orchestration.
+"""RunCheckpoint, AgentEvent and related types for LangGraph orchestration.
 
 These models are serialisable and checkpoint-safe.  They carry the run-time
 state of an entry orchestration execution, distinct from the business-fact store
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from langchain_core.messages import AnyMessage
@@ -21,11 +21,13 @@ from personal_agent.kernel.models import Citation, EntryInput, ThreadSummary, lo
 from personal_agent.planning.task_analyzer import TaskAnalysis
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
 from personal_agent.kernel.contracts.agentic import (
-    ContextEnvelope,
+    ContextInventory,
     ContextProjection,
     ExecutionEvent,
-    ExecutionLedger,
-    TaskSpec,
+    TaskRuntimeProjection,
+    TaskContract,
+    MaterializedGoalView,
+    materialize_goals,
 )
 from personal_agent.kernel.contracts.executive import (
     ActionOutcome,
@@ -37,22 +39,27 @@ from personal_agent.kernel.contracts.executive import (
     ResolvedActionSpec,
     RetryDirective,
 )
-from personal_agent.kernel.contracts.procedure import ProcedureInstance
+from personal_agent.kernel.contracts.execution import ExecutableInvocation
+from personal_agent.kernel.contracts.interaction import InteractionDecision, InteractionRequest
+from personal_agent.kernel.contracts.procedure import ProcedureRunProjection
 from personal_agent.kernel.contracts.planning import (
     DispatchGroup,
     FrontierDecision,
-    PlanLedger,
+    PlanDefinition,
+    PlanRuntimeProjection,
     PlanMonitorDecision,
     PlannerExecutionProfile,
-    PlanningBudget,
+    PlanningUsage,
     PlanningFacts,
     PlanningModeAssessment,
     ReplanRequest,
 )
 
-if TYPE_CHECKING:
-    from personal_agent.kernel.contracts.execution import ExecutionStep
-
+ControlPhase = Literal[
+    "direct_candidate", "direct_completion", "planning_blocked", "plan_ready",
+    "replan", "planning_stop", "control", "loop", "action", "verify",
+    "technical_retry", "completion", "stop",
+]
 
 def _new_run_id() -> str:
     return uuid4().hex[:12]
@@ -95,15 +102,15 @@ class AgentRunSnapshot(BaseModel):
     session_id: str
     status: AgentRunStatus = AgentRunStatus.created
     result_contracts: list[str] = Field(default_factory=list)
-    procedure_id: str = ""
-    procedure_version: str = ""
+    procedure_id: str | None = None
+    procedure_version: str | None = None
     entry_text: str = ""
     steps: list[dict[str, Any]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
     answer: str | None = None
-    pending_confirmation: dict[str, Any] | None = None
-    confirmation_decision: str | None = None
-    confirmed_step_id: str = ""
+    pending_confirmation: InteractionRequest | None = None
+    confirmation_decision: InteractionDecision | None = None
+    confirmed_step_id: str | None = None
     last_event: AgentEvent | None = None
     errors: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=local_now)
@@ -111,142 +118,7 @@ class AgentRunSnapshot(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# StepRunState - checkpoint-safe execution step model
-# ---------------------------------------------------------------------------
-
-
-class StepRunState(BaseModel):
-    """Checkpoint-safe, serialisable execution step projection state.
-
-    Mirrors the ``ExecutionStep`` dataclass fields so that the orchestration graph
-    can store and resume step projections without dict conversion.
-    """
-
-    step_id: str = ""
-    action_type: str = ""
-    description: str = ""
-    tool_name: str | None = None
-    agent_id: str | None = None
-    tool_input: dict[str, Any] = Field(default_factory=dict)
-    depends_on: list[str] = Field(default_factory=list)
-    expected_output: str = ""
-    success_criteria: str = ""
-    risk_level: str = "low"
-    requires_confirmation: bool = False
-    on_failure: str = "skip"
-    status: str = "planned"
-    retry_count: int = 0
-    max_retries: int = 3
-    failure_reason: str = ""
-    recoverable: bool = True
-    execution_mode: str = "deterministic"
-    allowed_tools: list[str] = Field(default_factory=list)
-    max_iterations: int = 3
-    llm_decision_node: str = ""
-    procedure_id: str = ""
-    procedure_version: str = ""
-    procedure_node_id: str = ""
-    procedure_recovery_policy: str = "skip"
-    procedure_branch_policy: str = "continue"
-    conditional_edges: list[dict[str, str]] = Field(default_factory=list)
-    projection_kind: str = "bounded_action"
-    task_id: str = ""
-    task_input: str = ""
-    meta_capability: str = ""
-    output_contract: str = "ToolResult"
-    skill_ids: list[str] = Field(default_factory=list)
-    execution_guidance: list[str] = Field(default_factory=list)
-    capability_requirements: list[dict[str, Any]] = Field(default_factory=list)
-    subtask_spec: dict[str, Any] = Field(default_factory=dict)
-    input_artifact_id: str = ""
-    output_artifact_id: str = ""
-    error_artifact_id: str = ""
-    output_label: str = ""
-    output_title: str = ""
-    output_preview: str = ""
-
-    @classmethod
-    def from_execution_step(cls, s: "ExecutionStep") -> "StepRunState":
-        """Create a StepRunState from an execution step projection."""
-        return cls(
-            step_id=s.step_id,
-            action_type=s.action_type,
-            description=s.description,
-            tool_name=s.tool_name,
-            agent_id=s.agent_id,
-            tool_input=s.tool_input,
-            depends_on=s.depends_on,
-            expected_output=s.expected_output,
-            success_criteria=s.success_criteria,
-            risk_level=s.risk_level,
-            requires_confirmation=s.requires_confirmation,
-            on_failure=s.on_failure,
-            status=s.status,
-            retry_count=s.retry_count,
-            execution_mode=s.execution_mode,
-            allowed_tools=s.allowed_tools,
-            max_iterations=s.max_iterations,
-            llm_decision_node=s.llm_decision_node,
-            procedure_id=s.procedure_id,
-            procedure_version=s.procedure_version,
-            procedure_node_id=s.procedure_node_id,
-            procedure_recovery_policy=s.procedure_recovery_policy,
-            procedure_branch_policy=s.procedure_branch_policy,
-            conditional_edges=s.conditional_edges,
-            projection_kind=s.projection_kind,
-            task_id=s.task_id,
-            task_input=s.task_input,
-            meta_capability=s.meta_capability,
-            output_contract=s.output_contract,
-            skill_ids=s.skill_ids,
-            execution_guidance=s.execution_guidance,
-            capability_requirements=s.capability_requirements,
-            subtask_spec=s.subtask_spec,
-        )
-
-    def to_execution_step(self) -> "ExecutionStep":
-        """Convert back to a step projection for validator / executor consumption."""
-        from personal_agent.kernel.contracts.execution import ExecutionStep
-
-        return ExecutionStep(
-            step_id=self.step_id,
-            action_type=self.action_type,
-            description=self.description,
-            tool_name=self.tool_name,
-            agent_id=self.agent_id,
-            tool_input=self.tool_input,
-            depends_on=self.depends_on,
-            expected_output=self.expected_output,
-            success_criteria=self.success_criteria,
-            risk_level=self.risk_level,
-            requires_confirmation=self.requires_confirmation,
-            on_failure=self.on_failure,
-            status=self.status,
-            retry_count=self.retry_count,
-            execution_mode=self.execution_mode,
-            allowed_tools=self.allowed_tools,
-            max_iterations=self.max_iterations,
-            llm_decision_node=self.llm_decision_node,
-            procedure_id=self.procedure_id,
-            procedure_version=self.procedure_version,
-            procedure_node_id=self.procedure_node_id,
-            procedure_recovery_policy=self.procedure_recovery_policy,
-            procedure_branch_policy=self.procedure_branch_policy,
-            conditional_edges=self.conditional_edges,
-            projection_kind=self.projection_kind,
-            task_id=self.task_id,
-            task_input=self.task_input,
-            meta_capability=self.meta_capability,
-            output_contract=self.output_contract,
-            skill_ids=self.skill_ids,
-            execution_guidance=self.execution_guidance,
-            capability_requirements=self.capability_requirements,
-            subtask_spec=self.subtask_spec,
-        )
-
-
-# ---------------------------------------------------------------------------
-# AgentGraphState — the checkpoint-able state for the orchestration graph
+# RunCheckpoint — the checkpoint-able state for the orchestration graph
 # ---------------------------------------------------------------------------
 
 class ReactSubState(BaseModel):
@@ -267,10 +139,10 @@ class ReactSubState(BaseModel):
     pending_input: dict[str, Any] = Field(default_factory=dict)
 
 
-class StepExecutionState(BaseModel):
-    """Step execution private state."""
+class InvocationBatchState(BaseModel):
+    """Canonical invocations and their attempt state for the current batch."""
 
-    steps: list[StepRunState] = Field(default_factory=list)
+    invocations: list[ExecutableInvocation] = Field(default_factory=list)
     current_step_index: int = 0
     results: dict[str, Any] = Field(default_factory=dict)
     aborted: bool = False
@@ -280,7 +152,7 @@ class StepExecutionState(BaseModel):
 class ToolTrackingSubState(BaseModel):
     """Tool call tracking — shared across plan and react execution."""
 
-    active_context: Literal["step_execution", "react"] | None = None
+    active_context: Literal["invocation_batch", "react"] | None = None
     pending_step_id: str = ""
     pending_call_id: str = ""
     pending_tool_name: str = ""
@@ -288,7 +160,7 @@ class ToolTrackingSubState(BaseModel):
     pending_react_iteration: int | None = None
 
 
-class AgentGraphState(BaseModel):
+class RunCheckpoint(BaseModel):
     """Checkpoint-safe, serialisable state for the entry orchestration graph.
 
     Design principles
@@ -299,7 +171,7 @@ class AgentGraphState(BaseModel):
     - Business facts live in PostgresMemoryStore.
     - Large payloads (note text, full search results) are stored by
       reference, not by value.
-    - Sub-system state (react, step_execution, tool_tracking) is grouped into
+    - Sub-system state (react, invocation_batch, tool_tracking) is grouped into
       sub-models to reduce field count and clarify ownership boundaries.
     """
 
@@ -323,25 +195,21 @@ class AgentGraphState(BaseModel):
 
     # Routing
     task_analysis: TaskAnalysis | None = None
-    task_spec: TaskSpec | None = None
-    execution_ledger: ExecutionLedger | None = None
-    context_envelope: ContextEnvelope = Field(default_factory=ContextEnvelope)
+    task_contract: TaskContract | None = None
+    task_runtime: TaskRuntimeProjection | None = None
+    context_inventory: ContextInventory = Field(default_factory=ContextInventory)
     context_projections: list[ContextProjection] = Field(default_factory=list)
-    planning_model_context: dict[str, object] = Field(default_factory=dict)
-    control_model_context: dict[str, object] = Field(default_factory=dict)
-    procedure_id: str = ""
-    procedure_version: str = ""
-    active_procedure: ProcedureInstance | None = None
+    active_procedure: ProcedureRunProjection | None = None
 
     # Adaptive planning owns short-horizon strategy. Step status is projected
     # exclusively from plan events rather than duplicated on PlanStep.
     planning_facts: PlanningFacts | None = None
     planning_mode: PlanningModeAssessment | None = None
     planner_profile: PlannerExecutionProfile | None = None
-    planning_budget: PlanningBudget = Field(default_factory=PlanningBudget)
-    plan_ledger: PlanLedger = Field(default_factory=PlanLedger)
+    planning_usage: PlanningUsage = Field(default_factory=PlanningUsage)
+    plan_definition: PlanDefinition | None = None
+    plan_runtime: PlanRuntimeProjection = Field(default_factory=PlanRuntimeProjection)
     frontier_decision: FrontierDecision | None = None
-    selected_plan_step_ids: list[str] = Field(default_factory=list)
     plan_monitor_decision: PlanMonitorDecision | None = None
     replan_request: ReplanRequest | None = None
 
@@ -349,10 +217,8 @@ class AgentGraphState(BaseModel):
     # step list, own open-task progress and completion semantics.
     control_state: ControlState | None = None
     control_decision: ControlDecision | None = None
-    current_action: BoundedAction | None = None
     current_actions: list[BoundedAction] = Field(default_factory=list)
     current_action_outcome: ActionOutcome | None = None
-    resolved_action_spec: ResolvedActionSpec | None = None
     resolved_action_specs: list[ResolvedActionSpec] = Field(default_factory=list)
     dispatch_groups: list[DispatchGroup] = Field(default_factory=list)
     retry_directive: RetryDirective | None = None
@@ -362,19 +228,16 @@ class AgentGraphState(BaseModel):
     executive_turn: int = 0
     last_decision_hash: str = ""
     repeated_decision_count: int = 0
-    control_route: str = ""
+    control_route: ControlPhase | None = None
 
     # Sub-models (grouped private state)
     react: ReactSubState = Field(default_factory=ReactSubState)
-    step_execution: StepExecutionState = Field(default_factory=StepExecutionState)
+    invocation_batch: InvocationBatchState = Field(default_factory=InvocationBatchState)
     tool_tracking: ToolTrackingSubState = Field(default_factory=ToolTrackingSubState)
 
     # Tool results
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
     provider_call_count: int = 0
-
-    # Lightweight execution trace for user-visible progress.
-    execution_trace: list[str] = Field(default_factory=list)
 
     # Reflection ids injected into this run (replan/ask), for post-run promotion
     applied_reflection_ids: list[str] = Field(default_factory=list)
@@ -384,13 +247,12 @@ class AgentGraphState(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
 
     # HITL
-    pending_confirmation: dict[str, Any] | None = None
-    confirmation_decision: str | None = None
-    confirmed_step_id: str = ""
+    pending_confirmation: InteractionRequest | None = None
+    confirmation_decision: InteractionDecision | None = None
+    confirmed_step_id: str | None = None
 
     # Final
     answer: str | None = None
-    answer_completed: bool = False
 
     # Events (accumulated during the run)
     events: list[AgentEvent] = Field(default_factory=list)
@@ -406,6 +268,47 @@ class AgentGraphState(BaseModel):
     # Helpers
     # ------------------------------------------------------------------
 
+    @property
+    def goals(self) -> tuple[MaterializedGoalView, ...]:
+        """Return the canonical definition/runtime join for task goals."""
+        if self.task_contract is None or self.task_runtime is None:
+            return ()
+        return materialize_goals(self.task_contract, self.task_runtime)
+
+    @property
+    def answer_completed(self) -> bool:
+        """Derive completion from canonical task lifecycle or terminal run facts."""
+        if self.task_runtime is not None and self.task_runtime.lifecycle in {"completed", "stopped"}:
+            return True
+        return any(event.type in {"answer_completed", "run_completed"} for event in self.events)
+
+    @property
+    def execution_trace(self) -> list[str]:
+        return execution_trace_from_events(self.events)
+
+    @property
+    def current_action(self) -> BoundedAction | None:
+        return self.current_actions[0] if self.current_actions else None
+
+    @property
+    def resolved_action_spec(self) -> ResolvedActionSpec | None:
+        return self.resolved_action_specs[0] if self.resolved_action_specs else None
+
+    @property
+    def selected_plan_step_ids(self) -> list[str]:
+        return [
+            step_id for step_id, status in self.plan_runtime.step_statuses.items()
+            if status in {"selected", "running", "observed"}
+        ]
+
+    @property
+    def procedure_id(self) -> str | None:
+        return self.active_procedure.procedure.procedure_id if self.active_procedure else None
+
+    @property
+    def procedure_version(self) -> str | None:
+        return self.active_procedure.procedure.version if self.active_procedure else None
+
     def add_event(self, event_type: AgentEventType, payload: dict[str, Any] | None = None) -> AgentEvent:
         event = AgentEvent(
             run_id=self.run_id,
@@ -418,7 +321,7 @@ class AgentGraphState(BaseModel):
         return event
 
     def update_step_status(self, step_id: str, status: str) -> None:
-        for s in self.step_execution.steps:
+        for s in self.invocation_batch.invocations:
             if s.step_id == step_id:
                 s.status = status
                 return
@@ -439,11 +342,12 @@ class AgentGraphState(BaseModel):
             procedure_id=self.procedure_id,
             procedure_version=self.procedure_version,
             entry_text=self.entry_text,
-            steps=[s.model_dump(mode="json") for s in self.step_execution.steps],
+            steps=[s.model_dump(mode="json") for s in self.invocation_batch.invocations],
             execution_trace=self.execution_trace,
             answer=self.answer,
             pending_confirmation=self.pending_confirmation,
             confirmation_decision=self.confirmation_decision,
+            confirmed_step_id=self.confirmed_step_id,
             last_event=last,
             errors=self.errors,
             created_at=self.created_at,
@@ -451,13 +355,13 @@ class AgentGraphState(BaseModel):
         )
 
 
-def _infer_status(state: AgentGraphState) -> AgentRunStatus:
+def _infer_status(state: RunCheckpoint) -> AgentRunStatus:
     if state.errors:
         return AgentRunStatus.failed
     if state.answer_completed:
         return AgentRunStatus.completed
     if state.pending_confirmation is not None:
-        if state.pending_confirmation.get("kind") == "clarification_required":
+        if state.pending_confirmation.kind == "clarification_required":
             return AgentRunStatus.waiting
         return AgentRunStatus.blocked_approval
     if state.task_analysis is not None:
@@ -466,7 +370,7 @@ def _infer_status(state: AgentGraphState) -> AgentRunStatus:
 
 
 # ---------------------------------------------------------------------------
-# Conversion helpers: EntryResult <-> AgentEvent / AgentGraphState
+# Conversion helpers: EntryResult <-> AgentEvent / RunCheckpoint
 # ---------------------------------------------------------------------------
 
 def execution_trace_to_events(
@@ -530,7 +434,7 @@ def execution_trace_from_events(events: list[AgentEvent]) -> list[str]:
                 trace.append(label)
                 seen.add(label)
         elif evt.type == "procedure_started":
-            call = evt.payload.get("procedure_call") or {}
+            call = evt.payload.get("procedure_invocation") or {}
             procedure_id = str(call.get("procedure_id") or "")
             label = f"执行受治理过程: {procedure_id}" if procedure_id else "执行受治理过程"
             if label not in seen:

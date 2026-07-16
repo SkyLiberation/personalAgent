@@ -28,7 +28,7 @@ class ResearchRankEventsArgs(BaseModel):
 def build_research_prepare_run_tool(service) -> BaseTool:
     @tool(
         "research_prepare_run",
-        description="创建 ResearchRun 并进入 running 状态，作为 Research workflow 的业务状态锚点。",
+        description="创建 ResearchRunRecord 并进入 running 状态，作为 Research workflow 的业务状态锚点。",
         args_schema=ResearchPrepareRunArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
@@ -64,7 +64,7 @@ def build_research_prepare_run_tool(service) -> BaseTool:
 def build_research_initialize_state_tool(service) -> BaseTool:
     @tool(
         "research_initialize_state",
-        description="初始化 evidence-driven ResearchState，生成初始研究动作和查询策略。",
+        description="初始化 evidence-driven ResearchRunProjection，生成初始研究动作和查询策略。",
         args_schema=ResearchRunIdArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
@@ -90,7 +90,7 @@ def build_research_initialize_state_tool(service) -> BaseTool:
 def build_research_run_loop_tool(service) -> BaseTool:
     @tool(
         "research_run_loop",
-        description="运行 evidence-driven 研究循环，按证据缺口动态搜索、聚类、排序并更新 ResearchState。",
+        description="运行 evidence-driven 研究循环，按证据缺口动态搜索、聚类、排序并更新 ResearchRunProjection。",
         args_schema=ResearchRunIdArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
@@ -120,7 +120,7 @@ def build_research_run_loop_tool(service) -> BaseTool:
 def build_research_synthesize_digest_tool(service) -> BaseTool:
     @tool(
         "research_synthesize_digest",
-        description="根据 ResearchState 中的事件和证据状态生成情报简报。",
+        description="根据 ResearchRunProjection 中的事件和证据状态生成情报简报。",
         args_schema=ResearchRankEventsArgs,
         response_format="content_and_artifact",
         extras=governance_extras(

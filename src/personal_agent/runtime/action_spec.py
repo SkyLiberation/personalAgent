@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from personal_agent.kernel.contracts.capability import CapabilityResolution
+from personal_agent.kernel.contracts.capability import CapabilityResolutionDecision
 from personal_agent.kernel.contracts.executive import (
     BoundedAction,
     BudgetReservation,
@@ -29,7 +29,7 @@ class ResolvedActionBuilder:
         action: BoundedAction,
         context_projection_ref: str,
         access_plan: ResolvedResourceAccessPlan,
-        capability_resolution: CapabilityResolution | None = None,
+        capability_resolution: CapabilityResolutionDecision | None = None,
         retry_directive: RetryDirective | None = None,
     ) -> ResolvedActionSpec:
         capability_refs = tuple(

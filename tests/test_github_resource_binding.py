@@ -34,7 +34,7 @@ def test_github_question_becomes_provider_neutral_goal_with_required_binding():
     assert goal.resource_hints[0].user_required_provider == "github"
     assert goal.resource_hints[0].origin == "user_explicit"
 
-    task = GoalGraphCompiler().compile(decision, decision.user_goal).task_spec
+    task = GoalGraphCompiler().compile(decision, decision.user_goal).task_contract
     requirement = task.resource_requirements[0]
     assert requirement.semantic_domain == "codebase"
     assert requirement.required_providers == ("github",)
@@ -43,7 +43,7 @@ def test_github_question_becomes_provider_neutral_goal_with_required_binding():
 def test_required_provider_binding_filters_other_codebase_providers():
     github = _repo_capability("github")
     gitlab = _repo_capability("gitlab")
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="repo-read",
         purpose="read repository",
         semantic_domains=("codebase",),
@@ -67,7 +67,7 @@ def test_required_provider_binding_filters_other_codebase_providers():
 
 
 def _repo_capability(provider: str) -> Capability:
-    return Capability(
+    return Capability.from_dimensions(
         capability_id=f"mcp:{provider}:repository",
         kind="mcp_tool",
         provider=provider,

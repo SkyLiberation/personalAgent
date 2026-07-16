@@ -105,7 +105,7 @@ def capability_from_tool(tool: BaseTool) -> Capability:
         tool.name,
         _operations_from_tool_governance(governance.side_effects),
     )
-    return Capability(
+    return Capability.from_dimensions(
         capability_id=f"tool:{tool.name}",
         kind="local_tool",
         provider="internal",
@@ -134,7 +134,7 @@ def capability_from_tool(tool: BaseTool) -> Capability:
 
 def capability_from_subagent_profile(definition: SubagentProfile) -> Capability:
     governance = definition.governance
-    return Capability(
+    return Capability.from_dimensions(
         capability_id=f"agent:{definition.agent_id}",
         kind="agent",
         provider=definition.provider,
@@ -175,7 +175,7 @@ def build_capability_registry(
 def runtime_meta_capabilities() -> tuple[Capability, ...]:
     """Capabilities implemented by graph-native executors rather than tools."""
     return (
-        Capability(
+        Capability.from_dimensions(
             capability_id="runtime:knowledge_retrieval",
             kind="retriever",
             provider="internal",

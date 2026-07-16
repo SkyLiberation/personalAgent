@@ -16,19 +16,20 @@ from personal_agent.application.research.models import (
     IntelligenceDigestItem,
     EvidenceGap,
     PersonalRelevance,
-    ResearchBudget,
-    ResearchDecision,
-    ResearchEvent,
+    ResearchLimits,
+    ResearchDecisionRecord,
+    ResearchEventRecord,
     ResearchEventFrameSnapshot,
     ResearchFeedback,
     ResearchPolicy,
     ResearchQuery,
-    ResearchRun,
+    ResearchRunDefinition,
+    ResearchRunRecord,
     ResearchSatisfaction,
     ResearchStageTiming,
     ResearchSource,
-    ResearchState,
-    ResearchSubscription,
+    ResearchRunProjection,
+    ResearchSubscriptionRecord,
     ResearchToolCallTrace,
 )
 from personal_agent.application.research.extraction import (
@@ -276,26 +277,28 @@ class ResearchService:
         generate_text: Callable[[str, str], str | None] | None = None,
         save_note: Callable[..., object] | None = None,
         event_extractor: ResearchEventExtractor | None = None,
-        default_budget: ResearchBudget | None = None,
+        default_limits: ResearchLimits | None = None,
     ) -> None:
         self.store = store
         self.tools = tool_executor
         self.generate_text = generate_text
         self.save_note = save_note
         self.event_extractor = event_extractor or HeuristicResearchEventExtractor()
-        self.default_budget = default_budget or ResearchBudget()
+        self.default_limits = default_limits or ResearchLimits()
         self.delivery_router = None
 
     def set_delivery_router(self, router) -> None:
         self.delivery_router = router
 
-    def create_subscription(self, subscription: ResearchSubscription) -> ResearchSubscription:
+    def create_subscription(self, subscription: ResearchSubscriptionRecord) -> ResearchSubscriptionRecord:
         return self.store.upsert_subscription(subscription)
 
-    def update_subscription(self, subscription: ResearchSubscription) -> ResearchSubscription:
-        return self.store.upsert_subscription(subscription.model_copy(update={"updated_at": datetime.now(UTC)}))
+    def update_subscription(self, subscription: ResearchSubscriptionRecord) -> ResearchSubscriptionRecord:
+        return self.store.upsert_subscription(
+            subscription.with_spec_updates(updated_at=datetime.now(UTC))
+        )
 
-    def get_subscription(self, subscription_id: str) -> ResearchSubscription | None:
+    def get_subscription(self, subscription_id: str) -> ResearchSubscriptionRecord | None:
         return self.store.get_subscription(subscription_id)
 
     def list_subscriptions(
@@ -303,34 +306,33 @@ class ResearchService:
         *,
         user_id: str,
         enabled_only: bool = True,
-    ) -> list[ResearchSubscription]:
+    ) -> list[ResearchSubscriptionRecord]:
         return self.store.list_subscriptions(user_id=user_id, enabled_only=enabled_only)
 
-    def list_runs(self, *, user_id: str, limit: int = 50) -> list[ResearchRun]:
+    def list_runs(self, *, user_id: str, limit: int = 50) -> list[ResearchRunRecord]:
         return self.store.list_runs(user_id=user_id, limit=limit)
 
-    def get_run(self, run_id: str) -> ResearchRun | None:
+    def get_run(self, run_id: str) -> ResearchRunRecord | None:
         return self.store.get_run(run_id)
 
     def get_digest(self, digest_id: str) -> IntelligenceDigest | None:
         return self.store.get_digest(digest_id)
 
-    def initialize_state(self, run_id: str) -> ResearchState:
+    def initialize_state(self, run_id: str) -> ResearchRunProjection:
         run, subscription = self._load_run_context(run_id)
         understanding = self._understand_research_request(run, subscription)
-        run = run.model_copy(update={
-            "topic": understanding.topic,
-            "instructions": understanding.instructions,
-            "max_items": understanding.max_items,
-            "window_start": understanding.window_start,
-            "window_end": understanding.window_end,
-            "policy": understanding.policy,
-            "query_plan_details": understanding.queries,
-            "query_plan": [query.query for query in understanding.queries],
-        })
+        run = run.with_definition_updates(
+            topic=understanding.topic,
+            instructions=understanding.instructions,
+            max_items=understanding.max_items,
+            window_start=understanding.window_start,
+            window_end=understanding.window_end,
+            policy=understanding.policy,
+            queries=understanding.queries,
+        )
         queries = understanding.queries
         decisions = [
-            ResearchDecision(
+            ResearchDecisionRecord.create(
                 iteration=index,
                 action="search_web",
                 query=query.query,
@@ -340,48 +342,31 @@ class ResearchService:
             )
             for index, query in enumerate(queries, 1)
         ]
-        state = ResearchState(
+        state = ResearchRunProjection(
             run_id=run.id,
-            topic=run.topic,
-            instructions=run.instructions,
-            max_items=run.max_items,
-            window_start=run.window_start,
-            window_end=run.window_end,
-            budget=run.budget,
+            initialized=True,
+            status="running",
             decisions=decisions,
-            policy=understanding.policy,
-            query_plan=queries,
         )
-        self.store.update_run(run.model_copy(update={
-            "status": "running",
-            "query_plan": [query.query for query in queries],
-            "query_plan_details": queries,
-            "policy": understanding.policy,
-            "research_state": state,
-            "topic": run.topic,
-            "instructions": run.instructions,
-            "max_items": run.max_items,
-            "window_start": run.window_start,
-            "window_end": run.window_end,
-        }))
+        self.store.update_run(run.model_copy(update={"projection": state}))
         return state
 
-    def run_research_loop(self, run_id: str) -> ResearchState:
+    def run_research_loop(self, run_id: str) -> ResearchRunProjection:
         run, subscription = self._load_run_context(run_id)
-        if run.research_state is None:
+        if not run.projection.initialized:
             state = self.initialize_state(run_id)
             run, subscription = self._load_run_context(run_id)
         else:
-            state = run.research_state
+            state = run.projection
         sources = self.store.list_run_sources(run.id)
         events = self.store.list_run_events(run.id)
 
         while not state.stop_reason:
-            if state.iteration_count >= state.budget.max_queries:
+            if state.usage.iteration_count >= run.limits.max_queries:
                 state.stop_reason = "query budget exhausted"
                 break
             stage_start = _timer_start()
-            decision = self._next_research_decision(state, events)
+            decision = self._next_research_decision(run.definition, state, events)
             _record_stage_timing(
                 state,
                 "next_research_decision",
@@ -389,29 +374,29 @@ class ResearchService:
                 decision_id=decision.id,
             )
             if decision.action == "stop":
-                decision.status = "executed"
+                decision.outcome.status = "executed"
                 if decision not in state.decisions:
                     state.decisions.append(decision)
                 state.stop_reason = decision.reason or "no useful next action"
                 break
-            if not self._decision_allowed(decision, state):
-                decision.status = "skipped"
+            if not self._decision_allowed(run.definition, decision, state):
+                decision.outcome.status = "skipped"
                 if decision not in state.decisions:
                     state.decisions.append(decision)
                 state.stop_reason = "no new allowed research action"
                 break
 
-            state.iteration_count += 1
+            state.usage.iteration_count += 1
             if decision.query_phase == "verification":
-                state.verification_query_count += 1
+                state.usage.verification_query_count += 1
             else:
-                state.exploration_query_count += 1
+                state.usage.exploration_query_count += 1
             decision_started = datetime.now(UTC)
             decision_timer = _timer_start()
-            decision.started_at = decision_started
+            decision.outcome.started_at = decision_started
             new_sources = self._execute_research_decision(run, subscription, decision, state)
-            decision.completed_at = datetime.now(UTC)
-            decision.elapsed_ms = _elapsed_ms(decision_timer)
+            decision.outcome.completed_at = datetime.now(UTC)
+            decision.outcome.elapsed_ms = _elapsed_ms(decision_timer)
             _record_stage_timing(
                 state,
                 "execute_research_decision",
@@ -419,12 +404,12 @@ class ResearchService:
                 decision_id=decision.id,
                 item_count=len(new_sources),
             )
-            decision.status = "executed"
-            decision.result_count = len(new_sources)
+            decision.outcome.status = "executed"
+            decision.outcome.result_count = len(new_sources)
             state.query_history.append(decision.query)
             if decision not in state.decisions:
                 state.decisions.append(decision)
-            state.low_yield_rounds = state.low_yield_rounds + 1 if not new_sources else 0
+            state.usage.low_yield_rounds = state.usage.low_yield_rounds + 1 if not new_sources else 0
 
             stage_start = _timer_start()
             sources = _merge_sources(sources, new_sources)
@@ -456,7 +441,7 @@ class ResearchService:
             )
             stage_start = _timer_start()
             self.store.replace_run_events(run.id, events)
-            state.evidence_gaps = self._evidence_gaps(events, state.policy)
+            state.evidence_gaps = self._evidence_gaps(events, run.policy)
             _record_stage_timing(
                 state,
                 "store_events_and_detect_gaps",
@@ -465,16 +450,17 @@ class ResearchService:
                 item_count=len(state.evidence_gaps),
             )
 
-            run = run.model_copy(update={
+            run = run.model_copy(update={"projection": state.model_copy(update={
                 "status": "running",
                 "source_count": len(sources),
                 "event_count": len(events),
-                "selected_count": min(len(events), subscription.max_items if subscription else run.max_items),
-                "research_state": state,
-            })
+                "selected_count": min(
+                    len(events), subscription.max_items if subscription else run.max_items,
+                ),
+            })})
             self.store.update_run(run)
             stage_start = _timer_start()
-            if self._should_stop_loop(state, events):
+            if self._should_stop_loop(run.definition, state, events):
                 _record_stage_timing(
                     state,
                     "evaluate_research_satisfaction",
@@ -491,11 +477,10 @@ class ResearchService:
 
         if not state.stop_reason:
             state.stop_reason = "research loop completed"
-        self.store.update_run(run.model_copy(update={
-            "research_state": state,
+        self.store.update_run(run.model_copy(update={"projection": state.model_copy(update={
             "source_count": len(sources),
             "event_count": len(events),
-        }))
+        })}))
         return state
 
     def synthesize_digest(
@@ -503,27 +488,28 @@ class ResearchService:
         run_id: str,
         *,
         max_items: int | None = None,
-    ) -> ResearchRun:
+    ) -> ResearchRunRecord:
         run, subscription = self._load_run_context(run_id)
         events = self.store.list_run_events(run_id)
         selected_limit = max_items or (subscription.max_items if subscription else run.max_items)
         digest = self._compose_digest(run, events[:selected_limit])
         self.store.save_digest(digest)
         sources = self.store.list_run_sources(run.id)
-        completed = run.model_copy(update={
-            "status": "completed_with_limitations" if sources else "partial_no_supported_claims",
-            "source_count": len(sources),
-            "event_count": len(events),
-            "selected_count": min(len(events), selected_limit),
-            "digest_id": digest.id,
-            "completed_at": datetime.now(UTC),
-        })
+        completed = run.with_projection_updates(
+            status="completed_with_limitations" if sources else "partial_no_supported_claims",
+            source_count=len(sources),
+            event_count=len(events),
+            selected_count=min(len(events), selected_limit),
+            digest_id=digest.id,
+            completed_at=datetime.now(UTC),
+        )
         self.store.update_run(completed)
         if subscription is not None:
-            self.store.upsert_subscription(subscription.model_copy(update={
-                "last_window_end": run.window_end,
-                "updated_at": datetime.now(UTC),
-            }))
+            self.store.upsert_subscription(
+                subscription.with_cursor(run.window_end).with_spec_updates(
+                    updated_at=datetime.now(UTC),
+                )
+            )
         return completed
 
     def verify_digest(self, run_id: str) -> IntelligenceDigest | None:
@@ -556,11 +542,11 @@ class ResearchService:
                 ),
             })
             self.store.save_digest(digest)
-        self.store.update_run(run.model_copy(update={
-            "status": _verified_run_status(run, digest),
-            "selected_count": len(digest.items),
-            "completed_at": datetime.now(UTC),
-        }))
+        self.store.update_run(run.with_projection_updates(
+            status=_verified_run_status(run, digest),
+            selected_count=len(digest.items),
+            completed_at=datetime.now(UTC),
+        ))
         return digest
 
     def prepare_run(
@@ -571,52 +557,50 @@ class ResearchService:
         instructions: str = "",
         max_items: int = 5,
         lookback_hours: int = 24,
-        budget: ResearchBudget | None = None,
-    ) -> ResearchRun:
+        limits: ResearchLimits | None = None,
+    ) -> ResearchRunRecord:
         end = datetime.now(UTC)
-        run = ResearchRun(
+        definition = ResearchRunDefinition(
             user_id=user_id,
             topic=topic,
             instructions=instructions,
             max_items=max_items,
             window_start=end - timedelta(hours=lookback_hours),
             window_end=end,
-            budget=budget or self.default_budget.model_copy(deep=True),
+            limits=limits or self.default_limits.model_copy(deep=True),
         )
-        created = self.store.create_run(run)
-        self.store.update_run(created.model_copy(update={"status": "running"}))
+        created = self.store.create_run(ResearchRunRecord.create(definition))
+        self.store.update_run(created.with_projection_updates(status="running"))
         return created
 
     def enqueue_subscription_run(
         self,
-        subscription: ResearchSubscription,
+        subscription: ResearchSubscriptionRecord,
         *,
         window_end: datetime | None = None,
         trigger_type: str = "scheduled",
-    ) -> ResearchRun:
-        run = ResearchRun.for_subscription(
+    ) -> ResearchRunRecord:
+        definition = ResearchRunDefinition.for_subscription(
             subscription,
             window_end=window_end or datetime.now(UTC),
             trigger_type="manual" if trigger_type == "manual" else "scheduled",
         )
-        created = self.store.create_run(run)
+        created = self.store.create_run(ResearchRunRecord.create(definition))
         self.store.enqueue_run(created)
         return created
 
     def plan_queries(self, run_id: str) -> list[str]:
         run, subscription = self._load_run_context(run_id)
         understanding = self._understand_research_request(run, subscription)
-        updated = run.model_copy(update={
-            "topic": understanding.topic,
-            "instructions": understanding.instructions,
-            "max_items": understanding.max_items,
-            "window_start": understanding.window_start,
-            "window_end": understanding.window_end,
-            "status": "running",
-            "policy": understanding.policy,
-            "query_plan": [query.query for query in understanding.queries],
-            "query_plan_details": understanding.queries,
-        })
+        updated = run.with_definition_updates(
+            topic=understanding.topic,
+            instructions=understanding.instructions,
+            max_items=understanding.max_items,
+            window_start=understanding.window_start,
+            window_end=understanding.window_end,
+            policy=understanding.policy,
+            queries=understanding.queries,
+        ).with_projection_updates(status="running")
         self.store.update_run(updated)
         return [query.query for query in understanding.queries]
 
@@ -628,51 +612,47 @@ class ResearchService:
             run, subscription = self._load_run_context(run_id)
         sources = self._collect(run, subscription, query_plan)
         self.store.replace_run_sources(run.id, sources)
-        self.store.update_run(run.model_copy(update={
-            "status": "running",
-            "query_plan": query_plan,
-            "source_count": len(sources),
-        }))
+        self.store.update_run(run.with_projection_updates(
+            status="running", source_count=len(sources),
+        ))
         return sources
 
-    def cluster_events(self, run_id: str, sources: list[ResearchSource] | None = None) -> list[ResearchEvent]:
+    def cluster_events(self, run_id: str, sources: list[ResearchSource] | None = None) -> list[ResearchEventRecord]:
         run, subscription = self._load_run_context(run_id)
         source_items = sources or self.store.list_run_sources(run_id)
         events = self._cluster_sources(run, subscription, source_items)
         self.store.replace_run_events(run.id, events)
-        self.store.update_run(run.model_copy(update={
-            "status": "running",
-            "source_count": len(source_items),
-            "event_count": len(events),
-        }))
+        self.store.update_run(run.with_projection_updates(
+            status="running", source_count=len(source_items), event_count=len(events),
+        ))
         return events
 
     def rank_events(
         self,
         run_id: str,
-        events: list[ResearchEvent] | None = None,
+        events: list[ResearchEventRecord] | None = None,
         *,
         max_items: int | None = None,
-    ) -> list[ResearchEvent]:
+    ) -> list[ResearchEventRecord]:
         run, subscription = self._load_run_context(run_id)
         event_items = events or self.store.list_run_events(run_id)
         selected_limit = max_items or (subscription.max_items if subscription else run.max_items)
         ranked = self._personalize_and_rank(run, subscription, event_items)
         self.store.replace_run_events(run.id, ranked)
-        self.store.update_run(run.model_copy(update={
-            "status": "running",
-            "event_count": len(ranked),
-            "selected_count": min(len(ranked), selected_limit),
-        }))
+        self.store.update_run(run.with_projection_updates(
+            status="running",
+            event_count=len(ranked),
+            selected_count=min(len(ranked), selected_limit),
+        ))
         return ranked[:selected_limit]
 
     def compose_digest(
         self,
         run_id: str,
-        events: list[ResearchEvent] | None = None,
+        events: list[ResearchEventRecord] | None = None,
         *,
         max_items: int | None = None,
-    ) -> ResearchRun:
+    ) -> ResearchRunRecord:
         run, subscription = self._load_run_context(run_id)
         if events is None:
             events = self.rank_events(run_id, max_items=max_items)
@@ -680,33 +660,36 @@ class ResearchService:
         digest = self._compose_digest(run, selected)
         self.store.save_digest(digest)
         sources = self.store.list_run_sources(run.id)
-        completed = run.model_copy(update={
-            "status": "completed_with_limitations" if sources else "partial_no_supported_claims",
-            "source_count": len(sources),
-            "event_count": len(self.store.list_run_events(run.id)),
-            "selected_count": len(selected),
-            "digest_id": digest.id,
-            "completed_at": datetime.now(UTC),
-        })
+        completed = run.with_projection_updates(
+            status="completed_with_limitations" if sources else "partial_no_supported_claims",
+            source_count=len(sources),
+            event_count=len(self.store.list_run_events(run.id)),
+            selected_count=len(selected),
+            digest_id=digest.id,
+            completed_at=datetime.now(UTC),
+        )
         self.store.update_run(completed)
         if subscription is not None:
-            self.store.upsert_subscription(subscription.model_copy(update={
-                "last_window_end": run.window_end,
-                "updated_at": datetime.now(UTC),
-            }))
+            self.store.upsert_subscription(
+                subscription.with_cursor(run.window_end).with_spec_updates(
+                    updated_at=datetime.now(UTC),
+                )
+            )
         return completed
 
     def _next_research_decision(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
-    ) -> ResearchDecision:
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
+    ) -> ResearchDecisionRecord:
         if not state.query_history:
             for decision in state.decisions:
-                if decision.status == "planned" and self._decision_allowed(decision, state):
+                if decision.status == "planned" and self._decision_allowed(definition, decision, state):
                     return decision
-        raw_gap_decisions = self._gap_research_decisions(state, events)
+        raw_gap_decisions = self._gap_research_decisions(definition, state, events)
         policy_decision = self._select_research_policy_decision(
+            definition,
             state,
             events,
             raw_gap_decisions,
@@ -715,32 +698,34 @@ class ResearchService:
             return policy_decision
         gap_decisions = [
             decision for decision in raw_gap_decisions
-            if self._decision_allowed(decision, state)
+            if self._decision_allowed(definition, decision, state)
         ]
         if gap_decisions:
-            if self._should_use_gap_selector(state, gap_decisions):
+            if self._should_use_gap_selector(definition, state, gap_decisions):
                 return self._select_gap_research_decision(
+                    definition,
                     state,
                     events,
                     gap_decisions,
                 ) or gap_decisions[0]
             return gap_decisions[0]
         for decision in state.decisions:
-            if decision.status == "planned" and self._decision_allowed(decision, state):
+            if decision.status == "planned" and self._decision_allowed(definition, decision, state):
                 return decision
-        return ResearchDecision(
-            iteration=state.iteration_count + 1,
+        return ResearchDecisionRecord.create(
+            iteration=state.usage.iteration_count + 1,
             action="stop",
             reason="no open research actions remain",
         )
 
     def _gap_research_decisions(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
-    ) -> list[ResearchDecision]:
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
+    ) -> list[ResearchDecisionRecord]:
         by_event_id = {event.id: event for event in events}
-        decisions: list[ResearchDecision] = []
+        decisions: list[ResearchDecisionRecord] = []
         for gap in sorted(
             (gap for gap in state.evidence_gaps if gap.status == "open"),
             key=lambda item: (_gap_action_priority(item), -item.severity),
@@ -749,20 +734,20 @@ class ResearchService:
             if event is None:
                 continue
             if gap.type == "missing_primary_source":
-                for query in _gap_queries(event.title, state.policy):
-                    decisions.append(ResearchDecision(
-                        iteration=state.iteration_count + 1,
+                for query in _gap_queries(event.title, definition.policy):
+                    decisions.append(ResearchDecisionRecord.create(
+                        iteration=state.usage.iteration_count + 1,
                         action="search_web",
                         query=query,
-                        purpose=_primary_source_action(state.policy),
+                        purpose=_primary_source_action(definition.policy),
                         event_id=event.id,
                         gap_id=gap.id,
                         reason="resolve missing_primary_source gap",
                         query_phase="verification",
                     ))
             elif gap.type == "single_source":
-                decisions.append(ResearchDecision(
-                    iteration=state.iteration_count + 1,
+                decisions.append(ResearchDecisionRecord.create(
+                    iteration=state.usage.iteration_count + 1,
                     action="search_web",
                     query=f"{event.title} independent coverage",
                     purpose="find independent source",
@@ -775,10 +760,11 @@ class ResearchService:
 
     def _select_research_policy_decision(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
-        suggested_actions: list[ResearchDecision],
-    ) -> ResearchDecision | None:
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
+        suggested_actions: list[ResearchDecisionRecord],
+    ) -> ResearchDecisionRecord | None:
         if self.generate_text is None or not events:
             return None
         event_ids = {event.id for event in events}
@@ -801,7 +787,7 @@ class ResearchService:
                 "reason": decision.reason,
             }
             for decision in suggested_actions
-            if self._decision_allowed(decision, state)
+            if self._decision_allowed(definition, decision, state)
         ]
         event_payload = [
             {
@@ -828,14 +814,14 @@ class ResearchService:
             "\"cost_level\":\"low|medium|high\",\"reason\":\"...\"}。\n"
             "约束：search_web 的 query 必须具体、不能重复已执行查询；event_id 必须来自事件列表或为空；"
             "不要为了补低价值信息消耗预算。\n"
-            f"主题：{state.topic}\n要求：{state.instructions}\n"
-            f"研究策略：{json.dumps(state.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
-            f"初始查询计划：{json.dumps([query.model_dump(mode='json') for query in state.query_plan], ensure_ascii=False)}\n"
+            f"主题：{definition.topic}\n要求：{definition.instructions}\n"
+            f"研究策略：{json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
+            f"初始查询计划：{json.dumps([query.model_dump(mode='json') for query in definition.queries], ensure_ascii=False)}\n"
             f"已执行查询：{json.dumps(state.query_history, ensure_ascii=False)}\n"
-            f"剩余查询预算：{max(0, state.budget.max_queries - state.iteration_count)}\n"
-            f"剩余探索查询预算：{max(0, state.budget.max_exploration_queries - state.exploration_query_count)}\n"
-            f"剩余验证查询预算：{max(0, state.budget.max_verification_queries - state.verification_query_count)}\n"
-            f"剩余工具预算：{max(0, state.budget.max_tool_calls - state.tool_call_count)}\n"
+            f"剩余查询预算：{max(0, definition.limits.max_queries - state.usage.iteration_count)}\n"
+            f"剩余探索查询预算：{max(0, definition.limits.max_exploration_queries - state.usage.exploration_query_count)}\n"
+            f"剩余验证查询预算：{max(0, definition.limits.max_verification_queries - state.usage.verification_query_count)}\n"
+            f"剩余工具预算：{max(0, definition.limits.max_tool_calls - state.usage.tool_call_count)}\n"
             f"事件：{json.dumps(event_payload, ensure_ascii=False)}\n"
             f"证据缺口：{json.dumps(open_gaps, ensure_ascii=False)}\n"
             f"可参考动作：{json.dumps(action_hints, ensure_ascii=False)}"
@@ -849,8 +835,8 @@ class ResearchService:
         action = str(parsed.get("action") or "").strip()
         reason = str(parsed.get("reason") or "").strip()
         if action == "stop":
-            return ResearchDecision(
-                iteration=state.iteration_count + 1,
+            return ResearchDecisionRecord.create(
+                iteration=state.usage.iteration_count + 1,
                 action="stop",
                 reason=reason or "research policy selected stop",
             )
@@ -862,8 +848,8 @@ class ResearchService:
         event_id = str(parsed.get("event_id") or "").strip() or None
         if event_id is not None and event_id not in event_ids:
             return None
-        decision = ResearchDecision(
-            iteration=state.iteration_count + 1,
+        decision = ResearchDecisionRecord.create(
+            iteration=state.usage.iteration_count + 1,
             action="search_web",
             query=query,
             purpose=str(parsed.get("purpose") or parsed.get("expected_gain") or "policy-directed search"),
@@ -871,27 +857,29 @@ class ResearchService:
             reason=reason or "research policy selected search_web",
             query_phase=_policy_query_phase(str(parsed.get("expected_gain") or parsed.get("purpose") or "")),
         )
-        if not self._decision_allowed(decision, state):
+        if not self._decision_allowed(definition, decision, state):
             return None
         return decision
 
     def _should_use_gap_selector(
         self,
-        state: ResearchState,
-        candidates: list[ResearchDecision],
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        candidates: list[ResearchDecisionRecord],
     ) -> bool:
         if self.generate_text is None or len(candidates) < 3:
             return False
-        if state.verification_query_count >= state.budget.max_verification_queries:
+        if state.usage.verification_query_count >= definition.limits.max_verification_queries:
             return False
-        return state.policy.verification_strictness == "high"
+        return definition.policy.verification_strictness == "high"
 
     def _select_gap_research_decision(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
-        candidates: list[ResearchDecision],
-    ) -> ResearchDecision | None:
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
+        candidates: list[ResearchDecisionRecord],
+    ) -> ResearchDecisionRecord | None:
         if self.generate_text is None or len(candidates) <= 1:
             return None
         candidate_payload = [
@@ -923,11 +911,11 @@ class ResearchService:
             "尤其是补齐官方来源或独立来源。若候选都没有价值，选择 stop。\n"
             "只输出 JSON：{\"candidate_id\":\"candidate_0\",\"reason\":\"...\"} "
             "或 {\"candidate_id\":\"stop\",\"reason\":\"...\"}。\n"
-            f"主题：{state.topic}\n要求：{state.instructions}\n"
-            f"研究策略：{json.dumps(state.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
+            f"主题：{definition.topic}\n要求：{definition.instructions}\n"
+            f"研究策略：{json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
             f"已执行查询：{json.dumps(state.query_history, ensure_ascii=False)}\n"
-            f"剩余查询预算：{max(0, state.budget.max_queries - state.iteration_count)}\n"
-            f"剩余验证查询预算：{max(0, state.budget.max_verification_queries - state.verification_query_count)}\n"
+            f"剩余查询预算：{max(0, definition.limits.max_queries - state.usage.iteration_count)}\n"
+            f"剩余验证查询预算：{max(0, definition.limits.max_verification_queries - state.usage.verification_query_count)}\n"
             f"事件：{json.dumps(event_payload, ensure_ascii=False)}\n"
             f"候选：{json.dumps(candidate_payload, ensure_ascii=False)}"
         )
@@ -939,8 +927,8 @@ class ResearchService:
             return None
         candidate_id = str(parsed.get("candidate_id") or "").strip()
         if candidate_id == "stop":
-            return ResearchDecision(
-                iteration=state.iteration_count + 1,
+            return ResearchDecisionRecord.create(
+                iteration=state.usage.iteration_count + 1,
                 action="stop",
                 reason=str(parsed.get("reason") or "model selected stop"),
             )
@@ -956,14 +944,17 @@ class ResearchService:
         reason = str(parsed.get("reason") or "").strip()
         if reason:
             selected = selected.model_copy(update={
-                "reason": f"{selected.reason}; model: {reason}",
+                "intent": selected.intent.model_copy(update={
+                    "reason": f"{selected.reason}; model: {reason}",
+                }),
             })
         return selected
 
     def _decision_allowed(
         self,
-        decision: ResearchDecision,
-        state: ResearchState,
+        definition: ResearchRunDefinition,
+        decision: ResearchDecisionRecord,
+        state: ResearchRunProjection,
     ) -> bool:
         if decision.action != "search_web":
             return True
@@ -972,35 +963,35 @@ class ResearchService:
             return False
         if normalized in {query.strip().lower() for query in state.query_history}:
             return False
-        if state.iteration_count >= state.budget.max_queries:
+        if state.usage.iteration_count >= definition.limits.max_queries:
             return False
         if (
             decision.query_phase == "exploration"
-            and state.exploration_query_count >= state.budget.max_exploration_queries
+            and state.usage.exploration_query_count >= definition.limits.max_exploration_queries
         ):
             return False
         if (
             decision.query_phase == "verification"
-            and state.verification_query_count >= state.budget.max_verification_queries
+            and state.usage.verification_query_count >= definition.limits.max_verification_queries
         ):
             return False
         return True
 
     def _execute_research_decision(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
-        decision: ResearchDecision,
-        state: ResearchState | None = None,
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
+        decision: ResearchDecisionRecord,
+        state: ResearchRunProjection | None = None,
     ) -> list[ResearchSource]:
         if decision.action == "search_web":
-            remaining = max(1, min(10, run.budget.max_search_results))
+            remaining = max(1, min(10, run.limits.max_search_results))
             return self._collect(run, subscription, [decision.query], state=state, decision=decision)[:remaining]
         return []
 
     def _evidence_gaps(
         self,
-        events: list[ResearchEvent],
+        events: list[ResearchEventRecord],
         policy: ResearchPolicy | None = None,
     ) -> list[EvidenceGap]:
         resolved = policy or ResearchPolicy()
@@ -1034,8 +1025,13 @@ class ResearchService:
                 ))
         return gaps
 
-    def _should_stop_loop(self, state: ResearchState, events: list[ResearchEvent]) -> bool:
-        satisfaction = self._evaluate_research_satisfaction(state, events)
+    def _should_stop_loop(
+        self,
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
+    ) -> bool:
+        satisfaction = self._evaluate_research_satisfaction(definition, state, events)
         state.satisfaction = satisfaction
         if satisfaction.should_continue:
             return False
@@ -1044,11 +1040,12 @@ class ResearchService:
 
     def _evaluate_research_satisfaction(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
     ) -> ResearchSatisfaction:
-        fallback = self._default_research_satisfaction(state, events)
-        if not self._should_call_satisfaction_model(state, events, fallback):
+        fallback = self._default_research_satisfaction(definition, state, events)
+        if not self._should_call_satisfaction_model(definition, state, events, fallback):
             return fallback
         gap_payload = [
             {
@@ -1084,19 +1081,19 @@ class ResearchService:
             "marginal_gain 衡量继续搜索预计新增价值；"
             "remaining_critical_gap_ids 只能引用给定 gaps 中仍阻碍目标满足的 gap id。"
             "在预算有限时，如果继续搜索只能低收益重复，应 should_continue=false。\n"
-            f"主题：{state.topic}\n要求：{state.instructions}\n目标条数：{state.max_items}\n"
-            f"研究策略：{json.dumps(state.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
-            f"迭代次数：{state.iteration_count}/{state.budget.max_queries}\n"
-            f"探索查询：{state.exploration_query_count}/{state.budget.max_exploration_queries}\n"
-            f"验证查询：{state.verification_query_count}/{state.budget.max_verification_queries}\n"
-            f"工具调用：{state.tool_call_count}/{state.budget.max_tool_calls}\n"
-            f"连续低收益轮次：{state.low_yield_rounds}\n"
+            f"主题：{definition.topic}\n要求：{definition.instructions}\n目标条数：{definition.max_items}\n"
+            f"研究策略：{json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
+            f"迭代次数：{state.usage.iteration_count}/{definition.limits.max_queries}\n"
+            f"探索查询：{state.usage.exploration_query_count}/{definition.limits.max_exploration_queries}\n"
+            f"验证查询：{state.usage.verification_query_count}/{definition.limits.max_verification_queries}\n"
+            f"工具调用：{state.usage.tool_call_count}/{definition.limits.max_tool_calls}\n"
+            f"连续低收益轮次：{state.usage.low_yield_rounds}\n"
             f"已执行查询：{json.dumps(state.query_history, ensure_ascii=False)}\n"
             f"事件：{json.dumps(event_payload, ensure_ascii=False)}\n"
             f"证据缺口：{json.dumps(gap_payload, ensure_ascii=False)}"
         )
         stage_start = _timer_start()
-        state.satisfaction_model_call_count += 1
+        state.usage.satisfaction_model_call_count += 1
         raw = self.generate_text(prompt, "research_satisfaction")
         _record_stage_timing(
             state,
@@ -1134,20 +1131,20 @@ class ResearchService:
             ),
             reason=str(parsed.get("reason") or fallback.reason),
         )
-        if state.iteration_count >= state.budget.max_queries:
+        if state.usage.iteration_count >= definition.limits.max_queries:
             return satisfaction.model_copy(update={
                 "should_continue": False,
                 "reason": "query budget exhausted",
             })
         if (
             satisfaction.remaining_critical_gaps
-            and state.verification_query_count >= state.budget.max_verification_queries
+            and state.usage.verification_query_count >= definition.limits.max_verification_queries
         ):
             return satisfaction.model_copy(update={
                 "should_continue": False,
                 "reason": "verification query budget exhausted",
             })
-        if state.tool_call_count >= state.budget.max_tool_calls:
+        if state.usage.tool_call_count >= definition.limits.max_tool_calls:
             return satisfaction.model_copy(update={
                 "should_continue": False,
                 "reason": "tool budget exhausted",
@@ -1156,36 +1153,38 @@ class ResearchService:
 
     def _should_call_satisfaction_model(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
         fallback: ResearchSatisfaction,
     ) -> bool:
         if self.generate_text is None or not events:
             return False
         if not fallback.should_continue:
             return False
-        if state.satisfaction_model_call_count >= state.budget.max_satisfaction_model_calls:
+        if state.usage.satisfaction_model_call_count >= definition.limits.max_satisfaction_model_calls:
             return False
-        if state.tool_call_count >= state.budget.max_tool_calls:
+        if state.usage.tool_call_count >= definition.limits.max_tool_calls:
             return False
-        if state.iteration_count >= state.budget.max_queries:
+        if state.usage.iteration_count >= definition.limits.max_queries:
             return False
-        if state.low_yield_rounds > 0:
+        if state.usage.low_yield_rounds > 0:
             return True
         if fallback.remaining_critical_gaps:
             return True
-        return state.iteration_count >= 2
+        return state.usage.iteration_count >= 2
 
     def _default_research_satisfaction(
         self,
-        state: ResearchState,
-        events: list[ResearchEvent],
+        definition: ResearchRunDefinition,
+        state: ResearchRunProjection,
+        events: list[ResearchEventRecord],
     ) -> ResearchSatisfaction:
-        target_count = max(1, state.max_items)
+        target_count = max(1, definition.max_items)
         selected = events[:target_count]
         supported = [
             event for event in selected
-            if _event_satisfies_policy(event, state.policy)
+            if _event_satisfies_policy(event, definition.policy)
         ]
         coverage_score = min(1.0, len(selected) / target_count)
         confidence_score = (
@@ -1198,7 +1197,7 @@ class ResearchService:
             and gap.type in {"missing_primary_source", "single_source"}
             and any(event.id == gap.event_id for event in selected)
         ]
-        if state.tool_call_count >= state.budget.max_tool_calls:
+        if state.usage.tool_call_count >= definition.limits.max_tool_calls:
             return ResearchSatisfaction(
                 coverage_score=coverage_score,
                 confidence_score=confidence_score,
@@ -1207,7 +1206,7 @@ class ResearchService:
                 should_continue=False,
                 reason="tool budget exhausted",
             )
-        if state.iteration_count >= state.budget.max_queries:
+        if state.usage.iteration_count >= definition.limits.max_queries:
             return ResearchSatisfaction(
                 coverage_score=coverage_score,
                 confidence_score=confidence_score,
@@ -1216,7 +1215,10 @@ class ResearchService:
                 should_continue=False,
                 reason="query budget exhausted",
             )
-        if critical_gaps and state.verification_query_count >= state.budget.max_verification_queries:
+        if (
+            critical_gaps
+            and state.usage.verification_query_count >= definition.limits.max_verification_queries
+        ):
             return ResearchSatisfaction(
                 coverage_score=coverage_score,
                 confidence_score=confidence_score,
@@ -1225,7 +1227,7 @@ class ResearchService:
                 should_continue=False,
                 reason="verification query budget exhausted",
             )
-        if state.low_yield_rounds >= 2:
+        if state.usage.low_yield_rounds >= 2:
             return ResearchSatisfaction(
                 coverage_score=coverage_score,
                 confidence_score=confidence_score,
@@ -1272,7 +1274,7 @@ class ResearchService:
 
     def _load_run_context(
         self, run_id: str
-    ) -> tuple[ResearchRun, ResearchSubscription | None]:
+    ) -> tuple[ResearchRunRecord, ResearchSubscriptionRecord | None]:
         run = self.store.get_run(run_id)
         if run is None:
             raise ValueError(f"Research run not found: {run_id}")
@@ -1331,9 +1333,9 @@ class ResearchService:
                     for topic in topics:
                         if topic not in prefs.include_topics:
                             prefs.include_topics.append(topic)
-                self.update_subscription(subscription.model_copy(update={
-                    "content_preferences": prefs,
-                }))
+                self.update_subscription(
+                    subscription.with_spec_updates(content_preferences=prefs)
+                )
         return feedback
 
     def save_event(self, event_id: str, *, user_id: str):
@@ -1355,8 +1357,8 @@ class ResearchService:
 
     def _understand_research_request(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
     ) -> ResearchRequestUnderstanding:
         fallback = self._default_research_understanding(run, subscription)
         if self.generate_text is None:
@@ -1383,9 +1385,9 @@ class ResearchService:
             f"已有 instructions：{run.instructions}\n"
             f"默认 max_items：{run.max_items}\n"
             f"默认时间窗口小时数：{max(1, int((run.window_end - run.window_start).total_seconds() // 3600))}\n"
-            f"总查询预算：{run.budget.max_queries}\n"
-            f"初始探索查询预算：{run.budget.max_exploration_queries}\n"
-            f"证据验证查询预算：{run.budget.max_verification_queries}\n"
+            f"总查询预算：{run.limits.max_queries}\n"
+            f"初始探索查询预算：{run.limits.max_exploration_queries}\n"
+            f"证据验证查询预算：{run.limits.max_verification_queries}\n"
             f"订阅 seed queries：{json.dumps(subscription.seed_queries if subscription else [], ensure_ascii=False)}"
         )
         raw = self.generate_text(prompt, "research_request_understanding")
@@ -1418,7 +1420,7 @@ class ResearchService:
             policy=policy,
             raw_queries=parsed.get("query_plan", parsed.get("queries")),
             seed_queries=subscription.seed_queries if subscription else [],
-            max_queries=min(run.budget.max_queries, run.budget.max_exploration_queries),
+            max_queries=min(run.limits.max_queries, run.limits.max_exploration_queries),
         )
         if not queries:
             queries = fallback.queries
@@ -1435,8 +1437,8 @@ class ResearchService:
 
     def _default_research_understanding(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
     ) -> ResearchRequestUnderstanding:
         policy = ResearchPolicyResolver.resolve(
             {},
@@ -1455,8 +1457,8 @@ class ResearchService:
 
     def _plan_queries(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
         policy: ResearchPolicy | None = None,
     ) -> list[ResearchQuery]:
         resolved = policy or ResearchPolicyResolver.resolve(
@@ -1469,26 +1471,27 @@ class ResearchService:
             policy=resolved,
             raw_queries=run.query_plan_details or run.query_plan,
             seed_queries=list(subscription.seed_queries if subscription else []),
-            max_queries=min(run.budget.max_queries, run.budget.max_exploration_queries),
+            max_queries=min(run.limits.max_queries, run.limits.max_exploration_queries),
         )
 
     def _collect(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
         queries: list[str],
         *,
-        state: ResearchState | None = None,
-        decision: ResearchDecision | None = None,
+        state: ResearchRunProjection | None = None,
+        decision: ResearchDecisionRecord | None = None,
     ) -> list[ResearchSource]:
         sources: list[ResearchSource] = []
         seen: set[str] = set()
-        remaining = run.budget.max_search_results
+        remaining = run.limits.max_search_results
         for query in queries:
             if remaining <= 0:
                 break
             outcome = self._invoke_research_tool(
                 state,
+                run.limits,
                 "web_search",
                 query=query,
                 limit=min(10, remaining),
@@ -1530,16 +1533,17 @@ class ResearchService:
                 if remaining <= 0:
                     break
         fetches = 0
-        policy = state.policy if state is not None else run.policy
+        policy = run.policy
         for source in sorted(sources, key=lambda item: _source_priority(item, policy), reverse=True):
             if state is not None and state.stop_reason:
                 break
-            if fetches >= run.budget.max_fulltext_fetches:
+            if fetches >= run.limits.max_fulltext_fetches:
                 break
             if "capture_url" not in self.tools:
                 break
             outcome = self._invoke_research_tool(
                 state,
+                run.limits,
                 "capture_url",
                 url=source.url,
                 user_id=run.user_id,
@@ -1555,10 +1559,10 @@ class ResearchService:
 
     def _cluster_sources(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
         sources: list[ResearchSource],
-    ) -> list[ResearchEvent]:
+    ) -> list[ResearchEventRecord]:
         frames = self.event_extractor.extract(
             sources,
             topic=run.topic,
@@ -1582,7 +1586,7 @@ class ResearchService:
                 cluster_frames.append(frame)
             else:
                 clusters[target].append(source)
-        events: list[ResearchEvent] = []
+        events: list[ResearchEventRecord] = []
         previous_keys = self.store.list_recent_event_keys(run.user_id, run.window_start)
         for index, cluster in enumerate(clusters):
             primary = max(cluster, key=lambda item: _source_priority(item, run.policy))
@@ -1596,7 +1600,7 @@ class ResearchService:
             )
             novelty = 0.2 if key in previous_keys else 0.9
             summary = primary.content[:800] or primary.snippet[:800]
-            events.append(ResearchEvent(
+            events.append(ResearchEventRecord.create(
                 canonical_key=key,
                 title=primary.title,
                 summary=summary,
@@ -1616,11 +1620,11 @@ class ResearchService:
 
     def _personalize_and_rank(
         self,
-        run: ResearchRun,
-        subscription: ResearchSubscription | None,
-        events: list[ResearchEvent],
-        state: ResearchState | None = None,
-    ) -> list[ResearchEvent]:
+        run: ResearchRunRecord,
+        subscription: ResearchSubscriptionRecord | None,
+        events: list[ResearchEventRecord],
+        state: ResearchRunProjection | None = None,
+    ) -> list[ResearchEventRecord]:
         enrich_personal_relevance = _should_enrich_personal_relevance(run)
         for event in events:
             relevance_cache_key = _personal_relevance_cache_key(event)
@@ -1632,8 +1636,8 @@ class ResearchService:
                 )
                 weights = _ranking_weights(run.policy, novelty_w=novelty_w, relevance_w=relevance_w)
                 breakdown = _event_score_breakdown(event, run.policy, weights)
-                event.score_breakdown = breakdown
-                event.final_score = breakdown.final_score
+                event.assessment.score_breakdown = breakdown
+                event.assessment.final_score = breakdown.final_score
                 continue
             relevance = PersonalRelevance()
             relevance_matches: list[object] = []
@@ -1641,6 +1645,7 @@ class ResearchService:
             if enrich_personal_relevance and "graph_search" in self.tools:
                 outcome = self._invoke_research_tool(
                     state,
+                    run.limits,
                     "graph_search",
                     question=_personal_relevance_question(event),
                     structured_context=_personal_relevance_context(event),
@@ -1653,6 +1658,7 @@ class ResearchService:
             if enrich_personal_relevance and "enterprise_knowledge_search" in self.tools:
                 outcome = self._invoke_research_tool(
                     state,
+                    run.limits,
                     "enterprise_knowledge_search",
                     query=_personal_relevance_question(event),
                     limit=5,
@@ -1687,8 +1693,8 @@ class ResearchService:
             )
             weights = _ranking_weights(run.policy, novelty_w=novelty_w, relevance_w=relevance_w)
             breakdown = _event_score_breakdown(event, run.policy, weights)
-            event.score_breakdown = breakdown
-            event.final_score = breakdown.final_score
+            event.assessment.score_breakdown = breakdown
+            event.assessment.final_score = breakdown.final_score
         minimum = (
             subscription.content_preferences.minimum_importance if subscription else 0
         )
@@ -1700,7 +1706,8 @@ class ResearchService:
 
     def _invoke_research_tool(
         self,
-        state: ResearchState | None,
+        state: ResearchRunProjection | None,
+        limits: ResearchLimits,
         name: str,
         **kwargs,
     ) -> dict:
@@ -1713,14 +1720,14 @@ class ResearchService:
                 "error": "Research tool-call budget exhausted.",
             }
         if state is not None and count_budget:
-            if state.tool_call_count >= state.budget.max_tool_calls:
+            if state.usage.tool_call_count >= limits.max_tool_calls:
                 state.stop_reason = "tool budget exhausted"
                 return {
                     "ok": False,
                     "error_kind": "budget_exhausted",
                     "error": "Research tool-call budget exhausted.",
                 }
-            state.tool_call_count += 1
+            state.usage.tool_call_count += 1
         started = _timer_start()
         outcome = self.tools.invoke_direct(name, **kwargs)
         if state is not None:
@@ -1735,7 +1742,7 @@ class ResearchService:
         return outcome
 
     def _compose_digest(
-        self, run: ResearchRun, events: list[ResearchEvent]
+        self, run: ResearchRunRecord, events: list[ResearchEventRecord]
     ) -> IntelligenceDigest:
         items = [
             IntelligenceDigestItem(
@@ -1810,7 +1817,7 @@ def _elapsed_ms(started: float) -> int:
 
 
 def _record_stage_timing(
-    state: ResearchState,
+    state: ResearchRunProjection,
     stage: str,
     started: float,
     *,
@@ -2088,7 +2095,7 @@ def _source_priority(source: ResearchSource, policy: ResearchPolicy | None = Non
 
 def _importance(
     source: ResearchSource,
-    subscription: ResearchSubscription | None,
+    subscription: ResearchSubscriptionRecord | None,
     policy: ResearchPolicy | None = None,
 ) -> float:
     text = f"{source.title} {source.snippet}".lower()
@@ -2123,7 +2130,7 @@ def _has_required_primary_source(
     return any(source.source_type in accepted for source in sources)
 
 
-def _event_satisfies_policy(event: ResearchEvent, policy: ResearchPolicy) -> bool:
+def _event_satisfies_policy(event: ResearchEventRecord, policy: ResearchPolicy) -> bool:
     independent_domains = {source.domain for source in event.sources}
     has_primary = _has_required_primary_source(event.sources, policy)
     if policy.evidence_requirement == "multi_source":
@@ -2226,7 +2233,7 @@ def _ranking_weights(
     return {"importance": 0.2, "confidence": 0.4, "novelty": min(0.2, novelty_w), "relevance": min(0.25, relevance_w)}
 
 
-def _personal_relevance_question(event: ResearchEvent) -> str:
+def _personal_relevance_question(event: ResearchEventRecord) -> str:
     context = _personal_relevance_context(event)
     return " ".join(
         str(context[key])
@@ -2235,7 +2242,7 @@ def _personal_relevance_question(event: ResearchEvent) -> str:
     )
 
 
-def _personal_relevance_cache_key(event: ResearchEvent) -> str:
+def _personal_relevance_cache_key(event: ResearchEventRecord) -> str:
     return _fingerprint(json.dumps(
         {
             "canonical_key": event.canonical_key,
@@ -2248,7 +2255,7 @@ def _personal_relevance_cache_key(event: ResearchEvent) -> str:
     ))
 
 
-def _should_enrich_personal_relevance(run: ResearchRun) -> bool:
+def _should_enrich_personal_relevance(run: ResearchRunRecord) -> bool:
     if run.policy.ranking_objective == "personal_relevance_first":
         return True
     intent_text = f"{run.topic} {run.instructions}".lower()
@@ -2258,7 +2265,7 @@ def _should_enrich_personal_relevance(run: ResearchRun) -> bool:
     )
 
 
-def _personal_relevance_context(event: ResearchEvent) -> dict[str, object]:
+def _personal_relevance_context(event: ResearchEventRecord) -> dict[str, object]:
     domains = ", ".join(sorted({source.domain for source in event.sources})[:4])
     return {
         "title": event.title,
@@ -2270,7 +2277,7 @@ def _personal_relevance_context(event: ResearchEvent) -> dict[str, object]:
 
 
 def _personal_relevance_from_matches(
-    event: ResearchEvent,
+    event: ResearchEventRecord,
     matches: list[object],
 ) -> tuple[str, float, str]:
     match_text = " ".join(
@@ -2308,7 +2315,7 @@ def _personal_relevance_from_matches(
 
 
 def _event_score_breakdown(
-    event: ResearchEvent,
+    event: ResearchEventRecord,
     policy: ResearchPolicy,
     weights: dict[str, float],
 ) -> EventScoreBreakdown:
@@ -2341,7 +2348,7 @@ def _event_score_breakdown(
     )
 
 
-def _why_it_matters(event: ResearchEvent) -> str:
+def _why_it_matters(event: ResearchEventRecord) -> str:
     if event.status == "verified":
         return "该事件有一手或多个独立来源支持，且具有较高新颖性或个人相关性。"
     if event.status == "reported":
@@ -2366,7 +2373,7 @@ def _frame_snapshot(frame: object | None) -> ResearchEventFrameSnapshot | None:
     )
 
 
-def _event_decision_ids(event: ResearchEvent) -> list[str]:
+def _event_decision_ids(event: ResearchEventRecord) -> list[str]:
     ids: list[str] = []
     for source in event.sources:
         if source.decision_id and source.decision_id not in ids:
@@ -2374,7 +2381,7 @@ def _event_decision_ids(event: ResearchEvent) -> list[str]:
     return ids
 
 
-def _initial_digest_claims(event: ResearchEvent) -> list[DigestClaim]:
+def _initial_digest_claims(event: ResearchEventRecord) -> list[DigestClaim]:
     texts: list[str] = []
     for text in (event.title, _first_sentence(event.summary)):
         normalized = " ".join(str(text or "").split())
@@ -2397,7 +2404,7 @@ def _initial_digest_claims(event: ResearchEvent) -> list[DigestClaim]:
 
 def _verify_digest_item_claims(
     item: IntelligenceDigestItem,
-    event: ResearchEvent,
+    event: ResearchEventRecord,
 ) -> IntelligenceDigestItem:
     claims = item.claims or _initial_digest_claims(event)
     checked_claims = [
@@ -2482,7 +2489,7 @@ def _digest_item_has_supported_fact(item: IntelligenceDigestItem) -> bool:
 
 
 def _verified_digest_confidence_label(
-    event: ResearchEvent,
+    event: ResearchEventRecord,
     claims: list[DigestClaim],
     *,
     removed_non_core_unsupported: bool = False,
@@ -2499,8 +2506,8 @@ def _verified_digest_confidence_label(
     return "信息不足"
 
 
-def _verified_run_status(run: ResearchRun, digest: IntelligenceDigest) -> str:
-    stop_reason = (run.research_state.stop_reason if run.research_state else "") or ""
+def _verified_run_status(run: ResearchRunRecord, digest: IntelligenceDigest) -> str:
+    stop_reason = run.projection.stop_reason or ""
     if not digest.items:
         if "budget exhausted" in stop_reason:
             return "partial_budget_exhausted"

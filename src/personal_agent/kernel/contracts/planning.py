@@ -28,19 +28,24 @@ StrategyImpact = Literal[
 ]
 
 
-class PlanningBudget(BaseModel):
+class PlanningLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode_assessor_calls: int = Field(default=0, ge=0)
-    planner_calls: int = Field(default=0, ge=0)
-    semantic_monitor_calls: int = Field(default=0, ge=0)
-    semantic_verifier_calls: int = Field(default=0, ge=0)
     max_mode_assessor_calls: int = Field(default=1, ge=0)
     max_planner_calls: int = Field(default=4, ge=0)
     max_semantic_monitor_calls: int = Field(default=4, ge=0)
     max_semantic_verifier_calls: int = Field(default=4, ge=0)
     max_plan_patches_per_horizon: int = Field(default=3, ge=0)
     max_horizon_replacements: int = Field(default=2, ge=0)
+
+
+class PlanningUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode_assessor_calls: int = Field(default=0, ge=0)
+    planner_calls: int = Field(default=0, ge=0)
+    semantic_monitor_calls: int = Field(default=0, ge=0)
+    semantic_verifier_calls: int = Field(default=0, ge=0)
     applied_patches: int = Field(default=0, ge=0)
     horizon_replacements: int = Field(default=0, ge=0)
 
@@ -54,7 +59,7 @@ class PlannerExecutionProfile(BaseModel):
     max_frontier_width: int = Field(default=1, ge=1, le=8)
     allowed_side_effect_classes: tuple[str, ...] = ("none",)
     required_capability_gates: tuple[str, ...] = ()
-    planning_budget: PlanningBudget = Field(default_factory=PlanningBudget)
+    limits: PlanningLimits = Field(default_factory=PlanningLimits)
 
 
 class PlanningFacts(BaseModel):
@@ -128,8 +133,8 @@ class PlanStep(BaseModel):
         return self
 
 
-class AdaptivePlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class PlanDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     plan_id: str = Field(default_factory=_short_id)
     task_id: str
@@ -285,11 +290,11 @@ class PlanEvent(BaseModel):
     payload: dict[str, object] = Field(default_factory=dict)
 
 
-class PlanLedger(BaseModel):
+class PlanRuntimeProjection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    plan: AdaptivePlan | None = None
-    events: tuple[PlanEvent, ...] = ()
+    plan_id: str | None = None
+    plan_revision: int | None = Field(default=None, ge=1)
     step_statuses: dict[str, PlanStepStatus] = Field(default_factory=dict)
     last_event_sequence: int = 0
     seen_replan_signatures: tuple[str, ...] = ()
@@ -307,12 +312,12 @@ class PlanMonitorDecision(BaseModel):
 
 
 __all__ = [
-    "AdaptivePlan", "AddPlanStep", "CancelPlanBranch", "ClosePlanHorizon",
+    "PlanDefinition", "AddPlanStep", "CancelPlanBranch", "ClosePlanHorizon",
     "DerivedGoalSpec", "DispatchGroup", "FrontierDecision", "GoalDecompositionProposal",
-    "JoinPolicy", "PlanEvent", "PlanLedger",
+    "JoinPolicy", "PlanEvent", "PlanRuntimeProjection",
     "PlanMonitorDecision", "PlanPatch", "PlanPatchOperation", "PlanStep",
     "PlanStepKind", "PlanStepStatus", "PlannerAuthority", "PlannerExecutionProfile",
-    "PlanningBudget", "PlanningFacts", "PlanningMode", "PlanningModeAssessment",
+    "PlanningLimits", "PlanningUsage", "PlanningFacts", "PlanningMode", "PlanningModeAssessment",
     "PlanningSnapshot", "RemoveUnstartedPlanStep", "ReplacePlanStep", "ReplanRequest",
     "RuntimeGoalCriterion", "StrategyImpact",
 ]

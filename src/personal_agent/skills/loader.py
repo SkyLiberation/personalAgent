@@ -59,7 +59,10 @@ class SkillPackageLoader:
                 continue
             digest.update(path.relative_to(package_path).as_posix().encode("utf-8"))
             digest.update(b"\0")
-            digest.update(path.read_bytes())
+            # Package signatures are content signatures, not checkout-style
+            # signatures. Normalize text line endings so Git's autocrlf does
+            # not invalidate a trusted package on Windows.
+            digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
             digest.update(b"\0")
         return digest.hexdigest()
 

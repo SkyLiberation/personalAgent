@@ -5,7 +5,9 @@ import re
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from personal_agent.application.research import DeliveryTarget, ResearchSubscription, SchedulePolicy
+from personal_agent.application.research import (
+    DeliveryTarget, ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
+)
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
@@ -37,7 +39,7 @@ def build_create_research_subscription_tool(service) -> BaseTool:
         max_items = _extract_max_items(request)
         topic = _extract_topic(request)
         frequency = "weekdays" if "工作日" in request else "weekly" if "每周" in request else "daily"
-        subscription = ResearchSubscription(
+        subscription = ResearchSubscriptionRecord.create(ResearchSubscriptionSpec(
             user_id=user_id,
             name=f"{topic} 情报简报",
             topic=topic,
@@ -49,7 +51,7 @@ def build_create_research_subscription_tool(service) -> BaseTool:
                 schedule_time=schedule_time,
             ),
             delivery=DeliveryTarget(target_id=target_id),
-        )
+        ))
         saved = service.create_subscription(subscription)
         return tool_response(tool_success({
             "subscription": saved.model_dump(mode="json"),

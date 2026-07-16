@@ -6,18 +6,18 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from langgraph.types import interrupt
 
 from personal_agent.kernel.models import Citation
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.contracts.executive import ResolvedActionSpec
+from personal_agent.kernel.contracts.interaction import InteractionRequest
 from personal_agent.kernel.prompts import render_prompt
 from personal_agent.orchestration.orchestration_models import (
-    AgentGraphState,
-    StepRunState,
-    StepExecutionState,
+    RunCheckpoint,
+    ExecutableInvocation,
+    InvocationBatchState,
     ReactSubState,
 )
 from personal_agent.orchestration.orchestration_contexts import StepExecutionContext
@@ -38,16 +38,13 @@ from personal_agent.orchestration.orchestration_nodes._tooling import (
     _pending_tool_updates,
     _tool_result_event_payload,
 )
-from personal_agent.planning.ledger import ExecutionLedgerProjector, next_execution_event
-
-if TYPE_CHECKING:
-    from personal_agent.orchestration.orchestration_nodes._graph_helpers import ExecutionStep
+from personal_agent.planning.ledger import TaskRuntimeProjector, next_execution_event
 
 logger = logging.getLogger(__name__)
 
 
-def _update_execution_ledger(
-    state: AgentGraphState,
+def _update_task_runtime(
+    state: RunCheckpoint,
     *,
     goal_id: str,
     status: str | None = None,
@@ -56,25 +53,25 @@ def _update_execution_ledger(
     replan_reason: str | None = None,
 ) -> None:
     """Append executor facts and project them through the canonical ledger projector."""
-    ledger = state.execution_ledger
+    ledger = state.task_runtime
     if ledger is None or not goal_id:
         return
-    projector = ExecutionLedgerProjector()
+    projector = TaskRuntimeProjector()
 
     def append(event_type: str, payload: dict | None = None) -> None:
-        if state.execution_ledger is None:
+        if state.task_runtime is None:
             return
         event = next_execution_event(
-            state.execution_ledger,
+            state.task_runtime,
             event_type,
             goal_id=goal_id,
             payload=payload,
         )
-        state.execution_ledger = projector.project(state.execution_ledger, (event,))
+        state.task_runtime = projector.project(state.task_runtime, (event,))
         state.execution_events.append(event)
-        state.add_event("plan_ledger_updated", {
+        state.add_event("plan_runtime_updated", {
             "execution_event": event.model_dump(mode="json"),
-            "ledger_revision": state.execution_ledger.revision,
+            "ledger_revision": state.task_runtime.revision,
         })
 
     if coverage or evidence_gaps is not None:
@@ -84,7 +81,7 @@ def _update_execution_ledger(
         })
     if replan_reason is not None:
         append("plan_revised", {"replan_reason": replan_reason})
-    item = next((item for item in state.execution_ledger.items if item.goal_id == goal_id), None)
+    item = next((item for item in state.goals if item.goal_id == goal_id), None)
     target_event = {
         "running": "goal_activated",
         "active": "goal_activated",
@@ -104,7 +101,7 @@ def _update_execution_ledger(
 
 
 def _admit_untrusted_observation(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     *,
     ref_id: str,
     provenance: str,
@@ -114,8 +111,8 @@ def _admit_untrusted_observation(
     """Record provider output as an observation, never as an instruction."""
     from personal_agent.planning.agentic import ContextAdmission
 
-    state.context_envelope = ContextAdmission.admit_observation(
-        state.context_envelope,
+    state.context_inventory = ContextAdmission.admit_observation(
+        state.context_inventory,
         ref_id=ref_id,
         kind="provider_observation",
         provenance=provenance,
@@ -130,8 +127,8 @@ def _admit_untrusted_observation(
     })
 
 
-def _reserve_provider_call(state: AgentGraphState) -> None:
-    task = state.task_spec
+def _reserve_provider_call(state: RunCheckpoint) -> None:
+    task = state.task_contract
     if task is not None and state.provider_call_count >= task.constraints.max_provider_calls:
         raise RuntimeError("Task provider-call budget is exhausted.")
     state.provider_call_count += 1
@@ -143,7 +140,7 @@ def _reserve_provider_call(state: AgentGraphState) -> None:
 # the assembled ContextPack, verify runs verification + web fallback + annotate.
 # The run-scoped AskRunContext threads the large payload (evidence/context_pack)
 # between ask steps via deps.ask_run_context_store. The store persists a durable
-# artifact payload, so only summary counts go into AgentGraphState and compose /
+# artifact payload, so only summary counts go into RunCheckpoint and compose /
 # verify can recover without bloating LangGraph checkpoints.
 
 
@@ -174,21 +171,21 @@ _SOLIDIFY_DRAFT_SCHEMA = {
 # ===================================================================
 
 
-def _node_prepare_step_execution(state: AgentGraphState) -> dict:
+def _node_prepare_invocation_batch(state: RunCheckpoint) -> dict:
     """Sort execution steps and initialise execution state."""
-    if not state.step_execution.steps:
-        logger.info("prepare_step_execution: no steps to execute")
-        state.step_execution.aborted = True
-        return {"step_execution": state.step_execution}
+    if not state.invocation_batch.invocations:
+        logger.info("prepare_invocation_batch: no steps to execute")
+        state.invocation_batch.aborted = True
+        return {"invocation_batch": state.invocation_batch}
 
     # Topologically sort steps
-    sorted_steps = _topological_sort_steps(state.step_execution.steps)
-    state.step_execution = StepExecutionState(
-        steps=sorted_steps,
+    sorted_steps = _topological_sort_steps(state.invocation_batch.invocations)
+    state.invocation_batch = InvocationBatchState(
+        invocations=sorted_steps,
         current_step_index=0,
-        results=state.step_execution.results or {},
+        results=state.invocation_batch.results or {},
         aborted=False,
-        retry_counts=state.step_execution.retry_counts or {},
+        retry_counts=state.invocation_batch.retry_counts or {},
     )
 
     state.add_event("step_started", {
@@ -196,27 +193,27 @@ def _node_prepare_step_execution(state: AgentGraphState) -> dict:
         "description": f"开始执行 {len(sorted_steps)} 个步骤",
     })
     logger.info(
-        "prepare_step_execution run_id=%s steps=%d",
+        "prepare_invocation_batch run_id=%s steps=%d",
         state.run_id, len(sorted_steps),
     )
     return {
-        "step_execution": state.step_execution,
+        "invocation_batch": state.invocation_batch,
         "events": state.events,
     }
 
 
-def _node_select_next_step(state: AgentGraphState) -> dict:
+def _node_select_next_step(state: RunCheckpoint) -> dict:
     """Find the next unexecuted step and set current_step_index.
 
     Skips steps with status 'skipped' or 'completed'.
     Returns with updated current_step_index or leaves it unchanged
     when no more steps remain (checked by the conditional edge).
     """
-    for i, sd in enumerate(state.step_execution.steps):
+    for i, sd in enumerate(state.invocation_batch.invocations):
         if sd.status in ("planned",):
-            state.step_execution.current_step_index = i
+            state.invocation_batch.current_step_index = i
             sd.status = "running"
-            _update_execution_ledger(state, goal_id=sd.task_id, status="running")
+            _update_task_runtime(state, goal_id=sd.goal_id, status="running")
             state.add_event("step_started", {
                 "step_id": sd.step_id,
                 "action_type": sd.action_type,
@@ -227,27 +224,27 @@ def _node_select_next_step(state: AgentGraphState) -> dict:
                 state.run_id, sd.step_id, i,
             )
             return {
-                "step_execution": state.step_execution,
+                "invocation_batch": state.invocation_batch,
                 "events": state.events,
             }
 
     # Submit all independent work before polling child runs. Remote subagents
     # can progress while the parent executes the remaining ready actions.
-    step_count = len(state.step_execution.steps)
+    step_count = len(state.invocation_batch.invocations)
     for offset in range(1, step_count + 1):
-        i = (state.step_execution.current_step_index + offset) % step_count
-        sd = state.step_execution.steps[i]
+        i = (state.invocation_batch.current_step_index + offset) % step_count
+        sd = state.invocation_batch.invocations[i]
         if sd.status == "submitted":
-            state.step_execution.current_step_index = i
+            state.invocation_batch.current_step_index = i
             sd.status = "running"
-            return {"step_execution": state.step_execution}
+            return {"invocation_batch": state.invocation_batch}
 
     # No more steps
     logger.info("select_next_step run_id=%s: no more steps", state.run_id)
     return {}
 
 
-def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
+def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> dict:
     """Dispatch a single execution step.  Raises on failure; retry/replan handled
     by the handle_step_result node.
 
@@ -258,11 +255,11 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
     StepExecutionGraph routes into ReactGraph. Tool calls are prepared as LangChain
     messages so the appropriate subgraph ``ToolGateway`` performs execution.
     """
-    if state.step_execution.current_step_index >= len(state.step_execution.steps):
+    if state.invocation_batch.current_step_index >= len(state.invocation_batch.invocations):
         return {}
 
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
-    step = sd.to_execution_step()
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
+    step = sd
     _prepare_entry_tool_input(sd, step, state)
     _persist_step_artifact(
         state,
@@ -277,7 +274,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
             "tool_name": step.tool_name,
             "agent_id": step.agent_id,
             "tool_input": step.tool_input,
-            "task_id": step.task_id,
+            "task_id": step.goal_id,
             "task_input": step.task_input,
         },
     )
@@ -285,7 +282,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
     # Idempotency: skip side-effect steps that already ran
     if step.action_type == "tool_call" and step.tool_name:
         idem_key = step.step_id
-        if idem_key in state.step_execution.results:
+        if idem_key in state.invocation_batch.results:
             logger.info(
                 "Skipping already-executed tool_call step %s (idempotent)",
                 step.step_id,
@@ -296,7 +293,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
                 "result_summary": "跳过（已执行）",
             })
             return {
-                "step_execution": state.step_execution,
+                "invocation_batch": state.invocation_batch,
                 "events": state.events,
             }
 
@@ -322,7 +319,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
             step.step_id, state.react.max_iterations, state.react.allowed_tools,
         )
         return {
-            "step_execution": state.step_execution,
+            "invocation_batch": state.invocation_batch,
             "react": state.react,
             "events": state.events,
         }
@@ -344,7 +341,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
             )
         from personal_agent.planning.memory_admission import MemoryAdmissionGate
 
-        admission = MemoryAdmissionGate().evaluate(state.task_spec, tool_name=step.tool_name)
+        admission = MemoryAdmissionGate().evaluate(state.task_contract, tool_name=step.tool_name)
         state.add_event("memory_admission", {
             "step_id": step.step_id,
             "tool_name": step.tool_name,
@@ -358,17 +355,20 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
                 deps=deps,
             )
         if admission.status == "requires_confirmation" and state.confirmed_step_id != step.step_id:
-            state.pending_confirmation = {
-                "step_id": step.step_id,
-                "action_type": "memory_admission",
-                "title": "确认知识变更",
-                "summary": admission.reason,
-                "description": step.description,
-            }
+            state.pending_confirmation = InteractionRequest(
+                kind="confirmation_required",
+                action_type="memory_admission",
+                step_id=step.step_id,
+                title="确认知识变更",
+                summary=admission.reason,
+                description=step.description,
+            )
             sd.status = "awaiting_confirmation"
-            state.add_event("confirmation_required", state.pending_confirmation)
+            state.add_event(
+                "confirmation_required", state.pending_confirmation.model_dump(mode="json"),
+            )
             return {
-                "step_execution": state.step_execution,
+                "invocation_batch": state.invocation_batch,
                 "pending_confirmation": state.pending_confirmation,
                 "events": state.events,
             }
@@ -389,14 +389,14 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
             "provider_call_count": state.provider_call_count,
             "tool_messages": [_begin_tool_call(
                 state,
-                context="step_execution",
+                context="invocation_batch",
                 tool_name=step.tool_name,
                 tool_input=step.tool_input,
                 step_id=step.step_id,
                 suffix=step.step_id,
             )],
             "tool_tracking": state.tool_tracking,
-            "step_execution": state.step_execution,
+            "invocation_batch": state.invocation_batch,
             "events": state.events,
         }
 
@@ -424,7 +424,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
                 deps=deps,
             )
         try:
-            existing = state.step_execution.results.get(step.step_id)
+            existing = state.invocation_batch.results.get(step.step_id)
             if not isinstance(existing, dict) or not existing.get("agent_run_id"):
                 _reserve_provider_call(state)
             completed = _execute_agent_call_step(step, sd, state, deps)
@@ -433,7 +433,7 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
         if not completed:
             sd.status = "submitted"
             return {
-                "step_execution": state.step_execution,
+                "invocation_batch": state.invocation_batch,
                 "provider_call_count": state.provider_call_count,
                 "events": state.events,
             }
@@ -447,14 +447,14 @@ def _node_execute_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
     return _complete_current_step(state, step, deps=deps)
 
 
-def _node_consume_step_tool_result(state: AgentGraphState, *, deps: StepExecutionContext | None = None) -> dict:
+def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionContext | None = None) -> dict:
     """Consume the latest ToolGateway artifact for a deterministic execution step."""
-    if state.step_execution.current_step_index >= len(state.step_execution.steps):
+    if state.invocation_batch.current_step_index >= len(state.invocation_batch.invocations):
         _clear_pending_tool_call(state)
         return _pending_tool_updates(state)
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
-    step = sd.to_execution_step()
-    if state.tool_tracking.active_context != "step_execution" or state.tool_tracking.pending_step_id != step.step_id:
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
+    step = sd
+    if state.tool_tracking.active_context != "invocation_batch" or state.tool_tracking.pending_step_id != step.step_id:
         _clear_pending_tool_call(state)
         return _fail_current_step(
             state,
@@ -464,13 +464,13 @@ def _node_consume_step_tool_result(state: AgentGraphState, *, deps: StepExecutio
         )
     artifact = dict(_latest_tool_artifact(state))
     artifact["_step_id"] = step.step_id
-    artifact["_goal_id"] = step.task_id
+    artifact["_goal_id"] = step.goal_id
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     state.add_event("tool_result", _tool_result_event_payload(
         state,
         deps=deps,
-        context="step_execution",
+        context="invocation_batch",
         step_id=step.step_id,
         tool_call_id=tool_call_id,
         artifact=artifact,
@@ -495,37 +495,38 @@ def _node_consume_step_tool_result(state: AgentGraphState, *, deps: StepExecutio
         )
 
     result_data = artifact.get("data") if artifact.get("data") is not None else {"ok": True}
-    state.step_execution.results[step.step_id] = result_data
+    state.invocation_batch.results[step.step_id] = result_data
     _apply_tool_result_to_state(step, result_data, state)
     if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
-        state.pending_confirmation = {
-            "step_id": step.step_id,
-            "action_type": "delete_note",
-            "note_id": result_data.get("note_id"),
-            "title": result_data.get("title"),
-            "summary": result_data.get("summary"),
-            "description": result_data.get("description"),
-        }
+        state.pending_confirmation = InteractionRequest(
+            kind="confirmation_required",
+            step_id=step.step_id,
+            action_type="delete_note",
+            resource_id=(str(result_data.get("note_id")) if result_data.get("note_id") else None),
+            title=str(result_data.get("title") or ""),
+            summary=str(result_data.get("summary") or ""),
+            description=str(result_data.get("description") or ""),
+        )
     else:
         state.pending_confirmation = None
     return _complete_current_step(state, step, deps=deps)
 
 
 def _fail_current_step(
-    state: AgentGraphState,
-    step: "ExecutionStep",
+    state: RunCheckpoint,
+    step: "ExecutableInvocation",
     exc: Exception,
     *,
     deps: StepExecutionContext | None = None,
 ) -> dict:
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
     err_msg = f"{type(exc).__name__}: {exc}"
     logger.warning("execution step %s failed: %s", step.step_id, err_msg)
     sd.status = "failed"
     sd.retry_count = sd.retry_count + 1
     sd.failure_reason = err_msg
     sd.recoverable = step.on_failure == "retry" and sd.retry_count < sd.max_retries
-    state.step_execution.retry_counts[step.step_id] = sd.retry_count
+    state.invocation_batch.retry_counts[step.step_id] = sd.retry_count
     state.errors.append(f"[{step.step_id}] {err_msg}")
     state.add_event("step_failed", {
         "step_id": step.step_id,
@@ -533,9 +534,9 @@ def _fail_current_step(
         "on_failure": step.on_failure,
         "retry_count": sd.retry_count,
     })
-    _update_execution_ledger(
+    _update_task_runtime(
         state,
-        goal_id=step.task_id,
+        goal_id=step.goal_id,
         status="blocked",
         replan_reason=err_msg,
     )
@@ -552,10 +553,10 @@ def _fail_current_step(
             },
         )
     result = {
-        "step_execution": state.step_execution,
-        "execution_ledger": state.execution_ledger,
+        "invocation_batch": state.invocation_batch,
+        "task_runtime": state.task_runtime,
         "provider_call_count": state.provider_call_count,
-        "context_envelope": state.context_envelope,
+        "context_inventory": state.context_inventory,
         "errors": state.errors,
         "events": state.events,
     }
@@ -564,18 +565,20 @@ def _fail_current_step(
 
 
 def _complete_current_step(
-    state: AgentGraphState,
-    step: "ExecutionStep",
+    state: RunCheckpoint,
+    step: "ExecutableInvocation",
     *,
     deps: StepExecutionContext | None = None,
 ) -> dict:
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
     if state.pending_confirmation is not None:
         sd.status = "awaiting_confirmation"
-        state.add_event("confirmation_required", state.pending_confirmation)
+        state.add_event(
+            "confirmation_required", state.pending_confirmation.model_dump(mode="json"),
+        )
         logger.info("Step %s awaiting confirmation", step.step_id)
         result = {
-            "step_execution": state.step_execution,
+            "invocation_batch": state.invocation_batch,
             "answer": state.answer,
             "pending_confirmation": state.pending_confirmation,
             "events": state.events,
@@ -584,12 +587,12 @@ def _complete_current_step(
         return result
 
     sd.status = "completed"
-    _update_execution_ledger(
+    _update_task_runtime(
         state,
-        goal_id=step.task_id,
+        goal_id=step.goal_id,
         status="candidate_complete" if step.action_type == "verify" else "active",
     )
-    display_output = _step_display_output(step, state.step_execution.results.get(step.step_id))
+    display_output = _step_display_output(step, state.invocation_batch.results.get(step.step_id))
     sd.output_label = display_output.get("output_label", "")
     sd.output_title = display_output.get("output_title", "")
     sd.output_preview = display_output.get("output_preview", "")
@@ -602,7 +605,7 @@ def _complete_current_step(
             payload={
                 "step_id": step.step_id,
                 "status": "completed",
-                "result": state.step_execution.results.get(step.step_id),
+                "result": state.invocation_batch.results.get(step.step_id),
                 "answer": state.answer,
                 "citations": [
                     citation.model_dump(mode="json")
@@ -615,21 +618,21 @@ def _complete_current_step(
     completion_payload = {
         "step_id": step.step_id,
         "description": step.description,
-        "result_summary": _helpers._summarize_result(state.step_execution.results.get(step.step_id)),
+        "result_summary": _helpers._summarize_result(state.invocation_batch.results.get(step.step_id)),
     }
     completion_payload.update(display_output)
     state.add_event("step_completed", completion_payload)
     if step.action_type == "verify":
         state.add_event("verification_completed", {
             "step_id": step.step_id,
-            "goal_id": step.task_id,
+            "goal_id": step.goal_id,
             "output_contract": step.output_contract,
         })
     result = {
-        "step_execution": state.step_execution,
-        "execution_ledger": state.execution_ledger,
+        "invocation_batch": state.invocation_batch,
+        "task_runtime": state.task_runtime,
         "provider_call_count": state.provider_call_count,
-        "context_envelope": state.context_envelope,
+        "context_inventory": state.context_inventory,
         "answer": state.answer,
         "citations": state.citations,
         "matches": state.matches,
@@ -641,8 +644,8 @@ def _complete_current_step(
 
 
 def _persist_step_artifact(
-    state: AgentGraphState,
-    sd: StepRunState,
+    state: RunCheckpoint,
+    sd: ExecutableInvocation,
     deps: StepExecutionContext,
     *,
     phase: str,
@@ -686,7 +689,7 @@ def _persist_step_artifact(
 
 
 def _record_capability_execution(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     step_id: str,
     artifact: dict,
 ) -> None:
@@ -732,53 +735,53 @@ def _step_display_output(step, result_data: object) -> dict[str, str]:
     return {}
 
 
-def _node_handle_step_success(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
+def _node_handle_step_success(state: RunCheckpoint, *, deps: StepExecutionContext) -> dict:
     """Post-success: inject dependency outputs into downstream planned steps."""
-    if state.step_execution.current_step_index >= len(state.step_execution.steps):
+    if state.invocation_batch.current_step_index >= len(state.invocation_batch.invocations):
         return {}
 
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
-    step = sd.to_execution_step()
-    result_data = state.step_execution.results.get(step.step_id)
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
+    step = sd
+    result_data = state.invocation_batch.results.get(step.step_id)
     matched_edge = next((
         edge for edge in step.conditional_edges
-        if _procedure_condition_matches(result_data, str(edge.get("condition") or ""))
+        if _procedure_condition_matches(result_data, edge.condition)
     ), None)
-    if matched_edge is not None and matched_edge.get("target") in {"clarify", "abort"}:
-        target = str(matched_edge["target"])
+    if matched_edge is not None and matched_edge.target in {"clarify", "abort"}:
+        target = matched_edge.target
         sd.status = "failed"
         sd.failure_reason = (
-            f"procedure branch {matched_edge.get('condition')} -> {target}"
+            f"procedure branch {matched_edge.condition} -> {target}"
         )
-        state.step_execution.aborted = True
-        _skip_step_dependents(step.step_id, state.step_execution.steps)
+        state.invocation_batch.aborted = True
+        _skip_step_dependents(step.step_id, state.invocation_batch.invocations)
         state.add_event("procedure_branch_selected", {
             "procedure_id": step.procedure_id,
             "procedure_node_id": step.procedure_node_id,
             "condition": matched_edge.get("condition"),
             "target": target,
         })
-        return {"step_execution": state.step_execution, "events": state.events}
+        return {"invocation_batch": state.invocation_batch, "events": state.events}
 
     # Inject resolved note_id into dependent tool_call steps
     if step.action_type == "resolve":
-        result_data = state.step_execution.results.get(step.step_id)
+        result_data = state.invocation_batch.results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("note_id"):
             _inject_note_id_into_steps(
-                step.step_id, str(result_data["note_id"]), state.user_id, state.step_execution.steps,
+                step.step_id, str(result_data["note_id"]), state.user_id, state.invocation_batch.invocations,
             )
 
     # Inject compose draft text into dependent capture_text steps
     if step.action_type == "compose":
-        result_data = state.step_execution.results.get(step.step_id)
+        result_data = state.invocation_batch.results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("answer"):
             _inject_draft_text_into_steps(
-                step.step_id, str(result_data["answer"]), state.user_id, state.step_execution.steps,
+                step.step_id, str(result_data["answer"]), state.user_id, state.invocation_batch.invocations,
             )
 
     # Inject fetched/extracted artifact text into dependent capture_text steps.
     if step.action_type == "tool_call" and step.tool_name in {"capture_url", "capture_upload", "inspect_artifact"}:
-        result_data = state.step_execution.results.get(step.step_id)
+        result_data = state.invocation_batch.results.get(step.step_id)
         if isinstance(result_data, dict) and result_data.get("text"):
             source_type = "link" if step.tool_name == "capture_url" else str(result_data.get("source_type") or "file")
             _inject_capture_text_from_tool_result(
@@ -786,14 +789,14 @@ def _node_handle_step_success(state: AgentGraphState, *, deps: StepExecutionCont
                 str(result_data["text"]),
                 state.user_id,
                 source_type,
-                state.step_execution.steps,
+                state.invocation_batch.invocations,
             )
 
     logger.info(
         "handle_step_success run_id=%s step=%s",
         state.run_id, step.step_id,
     )
-    return {"step_execution": state.step_execution, "events": state.events}
+    return {"invocation_batch": state.invocation_batch, "events": state.events}
 
 
 def _procedure_condition_matches(result: object, condition: str) -> bool:
@@ -809,7 +812,7 @@ def _procedure_condition_matches(result: object, condition: str) -> bool:
     return False
 
 
-def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) -> dict:
+def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> dict:
     """Pause the graph for human confirmation via ``interrupt()``.
 
     First invocation: ``interrupt()`` pauses the graph and returns an
@@ -817,24 +820,24 @@ def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
     via ``Command(resume=...)``), ``interrupt()`` returns the user's decision
     dict and the node processes the confirm / reject action.
     """
-    if state.step_execution.current_step_index >= len(state.step_execution.steps):
+    if state.invocation_batch.current_step_index >= len(state.invocation_batch.invocations):
         return {}
 
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
-    step = sd.to_execution_step()
-    pending = state.pending_confirmation or {}
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
+    step = sd
+    pending = state.pending_confirmation
 
     # ---- Build the interrupt payload (presented to the caller) ----
     confirm_payload = {
         "step_id": step.step_id,
-        "action_type": pending.get("action_type", step.action_type),
-        "note_id": pending.get("note_id"),
-        "title": pending.get("title", ""),
-        "summary": pending.get("summary", ""),
-        "description": pending.get("description", ""),
+        "action_type": pending.action_type if pending else step.action_type,
+        "note_id": pending.resource_id if pending else None,
+        "title": pending.title if pending else "",
+        "summary": pending.summary if pending else "",
+        "description": pending.description if pending else "",
         "message": (
             step.description
-            or f"确认执行 {pending.get('action_type', step.action_type)} 操作？"
+            or f"确认执行 {pending.action_type if pending else step.action_type} 操作？"
         ),
     }
 
@@ -865,14 +868,14 @@ def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
         return {
             "tool_messages": [_begin_tool_call(
                 state,
-                context="step_execution",
+                context="invocation_batch",
                 tool_name=step.tool_name or "",
                 tool_input=tool_input,
                 step_id=step.step_id,
                 suffix=f"{step.step_id}:confirmed",
             )],
             "tool_tracking": state.tool_tracking,
-            "step_execution": state.step_execution,
+            "invocation_batch": state.invocation_batch,
             "pending_confirmation": None,
             "confirmation_decision": "confirmed",
             "confirmed_step_id": step.step_id,
@@ -881,11 +884,11 @@ def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
 
     # Reject (or unknown decision)
     sd.status = "skipped"
-    _skip_step_dependents(step.step_id, state.step_execution.steps)
+    _skip_step_dependents(step.step_id, state.invocation_batch.invocations)
     state.confirmation_decision = "rejected"
     state.pending_confirmation = None
     if not state.answer:
-        state.answer = f"操作已取消：{step.description or pending.get('action_type', '')}"
+        state.answer = f"操作已取消：{step.description or (pending.action_type if pending else '')}"
 
     state.add_event("confirmation_resumed", {
         "step_id": step.step_id,
@@ -897,37 +900,29 @@ def _node_confirm_step(state: AgentGraphState, *, deps: StepExecutionContext) ->
     })
     logger.info("Step %s rejected by user", step.step_id)
     return {
-        "step_execution": state.step_execution,
+        "invocation_batch": state.invocation_batch,
         "confirmation_decision": "rejected",
     }
 
 
-def _node_finalize_step_execution(state: AgentGraphState, *, deps: StepExecutionContext | None = None) -> dict:
+def _node_finalize_invocation_batch(state: RunCheckpoint, *, deps: StepExecutionContext | None = None) -> dict:
     """Compose default answer if none was set, mark execution complete."""
     if not state.answer:
-        state.answer = _default_step_answer(state.step_execution.steps)
+        state.answer = _default_step_answer(state.invocation_batch.invocations)
 
-    state.answer_completed = True
-
-    # Phase 5: derive execution_trace from structured events
-    from personal_agent.orchestration.orchestration_models import execution_trace_from_events
-    state.execution_trace = execution_trace_from_events(state.events)
-
-    state.add_event("answer_completed", {"answer": state.answer})
+    state.add_event("invocation_batch_completed", {"answer_candidate": state.answer})
     logger.info(
-        "finalize_step_execution run_id=%s answer_len=%d trace_items=%d",
+        "finalize_invocation_batch run_id=%s answer_len=%d trace_items=%d",
         state.run_id, len(state.answer or ""), len(state.execution_trace),
     )
     return {
         "answer": state.answer,
-        "answer_completed": True,
-        "execution_trace": state.execution_trace,
         "events": state.events,
         "updated_at": state.updated_at,
     }
 
 
-def _prepare_entry_tool_input(sd: StepRunState, step: "ExecutionStep", state: AgentGraphState) -> None:
+def _prepare_entry_tool_input(sd: ExecutableInvocation, step: "ExecutableInvocation", state: RunCheckpoint) -> None:
     """Fill deterministic workflow tool arguments from the entry/checkpoint state."""
     if getattr(step, "execution_mode", "deterministic") == "react":
         entry_input = state.entry_input
@@ -1100,7 +1095,7 @@ def _infer_research_max_items(text: str) -> int | None:
 
 def _inject_research_pipeline_inputs(
     tool_input: dict,
-    state: AgentGraphState,
+    state: RunCheckpoint,
     metadata: dict,
 ) -> None:
     if "run_id" not in tool_input:
@@ -1108,7 +1103,7 @@ def _inject_research_pipeline_inputs(
         if run_id:
             tool_input["run_id"] = str(run_id)
         else:
-            for result in reversed(list(state.step_execution.results.values())):
+            for result in reversed(list(state.invocation_batch.results.values())):
                 if not isinstance(result, dict):
                     continue
                 run_id = result.get("run_id")
@@ -1118,13 +1113,13 @@ def _inject_research_pipeline_inputs(
                     tool_input["run_id"] = str(run_id)
                     break
     if "max_items" not in tool_input:
-        for result in reversed(list(state.step_execution.results.values())):
+        for result in reversed(list(state.invocation_batch.results.values())):
             if isinstance(result, dict) and result.get("max_items"):
                 tool_input["max_items"] = int(result["max_items"])
                 break
 
 
-def _apply_tool_result_to_state(step: "ExecutionStep", result_data: object, state: AgentGraphState) -> None:
+def _apply_tool_result_to_state(step: "ExecutableInvocation", result_data: object, state: RunCheckpoint) -> None:
     if step.tool_name in {"research_synthesize_digest", "research_verify_digest"} and isinstance(result_data, dict):
         answer = str(result_data.get("answer") or "").strip()
         if answer:
@@ -1180,17 +1175,17 @@ def _inject_capture_text_from_tool_result(
 # ---------------------------------------------------------------------------
 
 def _dispatch_step(
-    step: "ExecutionStep",
-    sd: StepRunState,
-    state: AgentGraphState,
+    step: "ExecutableInvocation",
+    sd: ExecutableInvocation,
+    state: RunCheckpoint,
     deps: StepExecutionContext,
 ) -> None:
     """Execute a single step by action_type. Raises on failure.
 
-    The graph-native executor operates on ``AgentGraphState`` so every step
+    The graph-native executor operates on ``RunCheckpoint`` so every step
     update can be checkpointed.
     """
-    results: dict = state.step_execution.results
+    results: dict = state.invocation_batch.results
 
     if step.action_type == "retrieve":
         result_data = _execute_retrieve_step(step, state, deps)
@@ -1229,9 +1224,9 @@ def _dispatch_step(
 
 
 def _apply_declared_result_to_state(
-    step: "ExecutionStep",
+    step: "ExecutableInvocation",
     result_data: object,
-    state: AgentGraphState,
+    state: RunCheckpoint,
 ) -> None:
     """Project a step result through its declared output contract."""
     if step.output_contract not in {"Answer", "Response"} or not isinstance(result_data, dict):
@@ -1243,13 +1238,13 @@ def _apply_declared_result_to_state(
 
 def _execute_commit_step(
     step,
-    sd: StepRunState,
-    state: AgentGraphState,
+    sd: ExecutableInvocation,
+    state: RunCheckpoint,
     deps: StepExecutionContext,
 ) -> None:
     """Convert a read-only exploration proposal into a confirmed gateway action."""
     proposed: dict | None = None
-    for result in reversed(list(state.step_execution.results.values())):
+    for result in reversed(list(state.invocation_batch.results.values())):
         if not isinstance(result, dict):
             continue
         candidate = result.get("proposed_commit")
@@ -1257,7 +1252,7 @@ def _execute_commit_step(
             proposed = candidate
             break
     if proposed is None:
-        state.step_execution.results[step.step_id] = {
+        state.invocation_batch.results[step.step_id] = {
             "committed": False,
             "reason": "探索阶段未提出可执行的状态变更。",
         }
@@ -1279,14 +1274,15 @@ def _execute_commit_step(
     step.tool_name = tool_name
     step.tool_input = dict(tool_input)
 
-    state.pending_confirmation = {
-        "step_id": step.step_id,
-        "action_type": "commit",
-        "title": "确认状态变更",
-        "summary": f"将执行 {tool_name}",
-        "description": step.description,
-    }
-    state.step_execution.results[step.step_id] = {
+    state.pending_confirmation = InteractionRequest(
+        kind="confirmation_required",
+        step_id=step.step_id,
+        action_type="commit",
+        title="确认状态变更",
+        summary=f"将执行 {tool_name}",
+        description=step.description,
+    )
+    state.invocation_batch.results[step.step_id] = {
         "committed": False,
         "proposed_tool": tool_name,
         "pending_confirmation": True,
@@ -1294,23 +1290,22 @@ def _execute_commit_step(
 
 
 def _execute_agent_call_step(
-    step: "ExecutionStep",
-    sd: StepRunState,
-    state: AgentGraphState,
+    step: "ExecutableInvocation",
+    sd: ExecutableInvocation,
+    state: RunCheckpoint,
     deps: StepExecutionContext,
 ) -> bool:
     """Submit or poll one child run; return whether it reached completion."""
-    from personal_agent.kernel.contracts.executive import SubtaskSpec
-
     metadata = state.entry_input.metadata if state.entry_input is not None else {}
     task_input = step.task_input or state.entry_text or step.description
     task_payload: dict[str, object] = {"topic": task_input}
-    subtask = SubtaskSpec.model_validate(step.subtask_spec) if step.subtask_spec else None
+    subtask = step.subtask
     if subtask is not None:
-        task_payload["subtask_spec"] = subtask.model_dump(mode="json")
+        task_payload["subtask_contract"] = subtask.model_dump(mode="json")
+        task_payload["context_projection_ids"] = list(subtask.context_projection_ids)
         task_payload["context_projection"] = [
             item.model_dump(mode="json")
-            for item in (*subtask.context_projection, *state.context_envelope.evidence_context)
+            for item in state.context_inventory.selected(category="evidence")
         ]
     for key in ("report_type", "report_source", "tone"):
         if metadata.get(key):
@@ -1339,8 +1334,8 @@ def _execute_agent_call_step(
         session_id=state.session_id,
         run_id=state.run_id,
         thread_id=state.thread_id,
-        task_id=state.task_spec.task_id if state.task_spec else "",
-        goal_id=step.task_id,
+        task_id=state.task_contract.task_id if state.task_contract else None,
+        goal_id=step.goal_id,
         action_id=step.step_id,
         source_platform=(
             state.entry_input.source_platform
@@ -1348,7 +1343,7 @@ def _execute_agent_call_step(
             else ""
         ),
     )
-    previous = state.step_execution.results.get(step.step_id)
+    previous = state.invocation_batch.results.get(step.step_id)
     saved = previous if isinstance(previous, dict) else {}
     agent_run_id = str(saved.get("agent_run_id") or "")
     if agent_run_id:
@@ -1358,7 +1353,7 @@ def _execute_agent_call_step(
         state.add_event("agent_run_submitted", {
             "step_id": step.step_id,
             "agent_id": step.agent_id,
-            "agent_run_id": run.agent_run_id,
+            "agent_run_id": run.definition.agent_run_id,
             "task_type": task.task_type,
             "subtask_id": subtask.subtask_id if subtask is not None else "",
         })
@@ -1370,39 +1365,42 @@ def _execute_agent_call_step(
         seen_event_ids.add(event.event_id)
         state.add_event("agent_run_event", {
             "step_id": step.step_id,
-            "agent_id": run.agent_id,
-            "agent_run_id": run.agent_run_id,
+            "agent_id": run.definition.agent_id,
+            "agent_run_id": run.definition.agent_run_id,
             "agent_event_type": event.type,
             "payload": event.payload,
         })
 
-    if run.status in {"created", "queued", "running", "waiting", "blocked_approval"}:
-        state.step_execution.results[step.step_id] = {
-            "provider": run.agent_id,
-            "agent_run_id": run.agent_run_id,
-            "external_task_id": run.external_task_id,
-            "status": run.status,
+    projection = run.projection
+    artifacts = run.artifact_index.artifacts
+    if projection.status in {"created", "queued", "running", "waiting", "blocked_approval"}:
+        state.invocation_batch.results[step.step_id] = {
+            "provider": run.definition.agent_id,
+            "agent_run_id": run.definition.agent_run_id,
+            "external_task_id": projection.external_task_id,
+            "status": projection.status,
             "seen_event_ids": sorted(seen_event_ids),
         }
         state.add_event("agent_run_waiting", {
             "step_id": step.step_id,
-            "agent_id": run.agent_id,
-            "agent_run_id": run.agent_run_id,
-            "status": run.status,
+            "agent_id": run.definition.agent_id,
+            "agent_run_id": run.definition.agent_run_id,
+            "status": projection.status,
         })
         return False
-    if run.status in {"cancel_requested", "cancelling", "cancelled", "failed", "timed_out"}:
+    if projection.status in {"cancel_requested", "cancelling", "cancelled", "failed", "timed_out"}:
         raise RuntimeError(
-            run.error or f"child agent run {run.agent_run_id} ended with {run.status}"
+            projection.error
+            or f"child agent run {run.definition.agent_run_id} ended with {projection.status}"
         )
 
     output_text = str(
-        run.result.get("report")
-        or run.result.get("answer")
-        or run.result.get("output")
-        or next((artifact.content for artifact in run.artifacts if artifact.content), "")
+        projection.result.get("report")
+        or projection.result.get("answer")
+        or projection.result.get("output")
+        or next((artifact.content for artifact in artifacts if artifact.content), "")
     )
-    for artifact in run.artifacts:
+    for artifact in artifacts:
         _persist_step_artifact(
             state,
             sd,
@@ -1420,27 +1418,30 @@ def _execute_agent_call_step(
         _admit_untrusted_observation(
             state,
             ref_id=f"agent:{artifact.artifact_id}",
-            provenance=run.agent_id,
+            provenance=run.definition.agent_id,
             summary=str(artifact.content)[:2000],
-            payload={"agent_run_id": run.agent_run_id, "producer_verification_status": artifact.producer_verification_status},
+            payload={
+                "agent_run_id": run.definition.agent_run_id,
+                "producer_verification_status": artifact.producer_verification_status,
+            },
         )
     state.add_event("agent_run_completed", {
         "step_id": step.step_id,
-        "agent_id": run.agent_id,
-        "agent_run_id": run.agent_run_id,
-        "status": run.status,
-        "external_task_id": run.external_task_id,
-        "artifact_count": len(run.artifacts),
+        "agent_id": run.definition.agent_id,
+        "agent_run_id": run.definition.agent_run_id,
+        "status": projection.status,
+        "external_task_id": projection.external_task_id,
+        "artifact_count": len(artifacts),
         "artifact_producer_verification_statuses": [
             artifact.producer_verification_status
-            for artifact in run.artifacts
+            for artifact in artifacts
         ],
     })
-    state.step_execution.results[step.step_id] = {
-        "provider": run.agent_id,
-        "agent_run_id": run.agent_run_id,
-        "external_task_id": run.external_task_id,
-        "status": run.status,
+    state.invocation_batch.results[step.step_id] = {
+        "provider": run.definition.agent_id,
+        "agent_run_id": run.definition.agent_run_id,
+        "external_task_id": projection.external_task_id,
+        "status": projection.status,
         "report": output_text,
         "answer": output_text,
         "artifacts": [
@@ -1450,15 +1451,15 @@ def _execute_agent_call_step(
                 "content": artifact.content,
                 "producer_verification_status": artifact.producer_verification_status,
             }
-            for artifact in run.artifacts
+            for artifact in artifacts
         ],
-        "metadata": dict(run.result.get("metadata") or {}),
+        "metadata": dict(projection.result.get("metadata") or {}),
         "seen_event_ids": sorted(seen_event_ids),
     }
     return True
 
 
-def _resolved_spec_for_step(state: AgentGraphState, step) -> ResolvedActionSpec | None:
+def _resolved_spec_for_step(state: RunCheckpoint, step) -> ResolvedActionSpec | None:
     exact = next(
         (item for item in state.resolved_action_specs if item.action_id == step.step_id),
         None,
@@ -1466,12 +1467,12 @@ def _resolved_spec_for_step(state: AgentGraphState, step) -> ResolvedActionSpec 
     if exact is not None:
         return exact
     return next(
-        (item for item in state.resolved_action_specs if item.goal_id == step.task_id),
+        (item for item in state.resolved_action_specs if item.goal_id == step.goal_id),
         None,
     )
 
 
-def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
+def _execute_retrieve_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> object:
     question = step.tool_input.get("question") if step.tool_input else None
     question = str(question or step.task_input or state.entry_text or step.description or "")
 
@@ -1511,18 +1512,17 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionCont
 
         evidence_items = tuple(
             ContextItem(
-                ref_id=str(citation.evidence_id or citation.note_id or index),
+                item_id=str(citation.evidence_id or citation.note_id or index),
+                category="evidence",
                 kind="retrieved_evidence",
                 provenance=str(citation.source_type or "knowledge"),
-                trust_tier="evidence",
+                trust="evidence",
                 summary=str(citation.snippet or "")[:1000],
-                admitted=True,
+                admission="admitted",
             )
             for index, citation in enumerate(ctx.selected_citations or [], 1)
         )
-        state.context_envelope = state.context_envelope.model_copy(update={
-            "evidence_context": (*state.context_envelope.evidence_context, *evidence_items),
-        })
+        state.context_inventory = state.context_inventory.with_items(*evidence_items)
         state.add_event("context_admitted", {
             "step_id": step.step_id,
             "trust_tier": "evidence",
@@ -1548,7 +1548,7 @@ def _execute_retrieve_step(step, state: AgentGraphState, deps: StepExecutionCont
     return {"answer": "", "entity_names": [], "relation_facts": [], "hint": "graph disabled or empty"}
 
 
-def _execute_resolve_step(step, state: AgentGraphState, deps: StepExecutionContext) -> object:
+def _execute_resolve_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> object:
     if step.llm_decision_node != "delete_target_resolve":
         raise ValueError(f"unsupported deterministic decision node: {step.llm_decision_node or 'missing'}")
     user_id = state.user_id
@@ -1557,7 +1557,7 @@ def _execute_resolve_step(step, state: AgentGraphState, deps: StepExecutionConte
     candidates: list[dict] = []
 
     # 1. Graph episode UUID mapping
-    for sid, data in state.step_execution.results.items():
+    for sid, data in state.invocation_batch.results.items():
         if not isinstance(data, dict):
             continue
         episode_uuids = data.get("related_episode_uuids")
@@ -1643,9 +1643,9 @@ def _select_local_delete_candidate_with_llm(
     return []
 
 
-def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionContext) -> str:
+def _execute_compose_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> str:
     context_parts: list[str] = []
-    for sid, data in state.step_execution.results.items():
+    for sid, data in state.invocation_batch.results.items():
         if isinstance(data, dict):
             if data.get("text"):
                 context_parts.append(str(data["text"]))
@@ -1658,7 +1658,7 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
 
     thread_summary = next((
         str(data.get("answer") or "")
-        for data in reversed(list(state.step_execution.results.values()))
+        for data in reversed(list(state.invocation_batch.results.values()))
         if isinstance(data, dict) and data.get("retrieval_kind") == "thread_summary"
     ), "")
     if thread_summary:
@@ -1668,7 +1668,7 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
         prior = next((
             item.summary
             for item in reversed(state.latest_observations)
-            if item.goal_id == step.task_id and item.kind == "action_result" and item.summary
+            if item.goal_id == step.goal_id and item.kind == "action_result" and item.summary
         ), "")
         if prior:
             return prior
@@ -1730,8 +1730,8 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
     ctx = deps.ask_run_context_store.get(state.run_id)
     if ctx is not None:
         task_evidence = (
-            list(state.context_envelope.evidence_context)
-            if state.context_envelope is not None else []
+            list(state.context_inventory.selected(category="evidence"))
+            if state.context_inventory is not None else []
         )
         mutation_evidence = [item for item in task_evidence if item.kind == "mutation_receipt"]
         if mutation_evidence:
@@ -1739,17 +1739,17 @@ def _execute_compose_step(step, state: AgentGraphState, deps: StepExecutionConte
 
             state.citations = [
                 Citation(
-                    note_id=str(item.payload.get("note_id") or item.ref_id),
+                    note_id=str(item.payload.get("note_id") or item.item_id),
                     title=str(item.payload.get("title") or "当前任务知识"),
                     snippet=item.summary,
                     source_type="task_artifact",
-                    evidence_id=item.ref_id,
+                    evidence_id=item.item_id,
                 )
                 for item in mutation_evidence
             ]
             state.matches = [
                 {
-                    "id": str(item.payload.get("note_id") or item.ref_id),
+                    "id": str(item.payload.get("note_id") or item.item_id),
                     "title": str(item.payload.get("title") or "当前任务知识"),
                     "summary": item.summary,
                 }
@@ -1807,8 +1807,8 @@ def _workspace_ask_step_result(answer) -> dict[str, object]:
     }
 
 
-def _latest_workspace_ask_result(state: AgentGraphState) -> dict[str, object] | None:
-    for data in reversed(list(state.step_execution.results.values())):
+def _latest_workspace_ask_result(state: RunCheckpoint) -> dict[str, object] | None:
+    for data in reversed(list(state.invocation_batch.results.values())):
         if not isinstance(data, dict) or not data.get("workspace_ask"):
             continue
         payload = data.get("workspace_answer")
@@ -1851,7 +1851,7 @@ def _workspace_matches_from_payload(payload: dict[str, object]) -> list[dict[str
     return matches
 
 
-def _summarize_thread(state: AgentGraphState, deps: StepExecutionContext) -> str:
+def _summarize_thread(state: RunCheckpoint, deps: StepExecutionContext) -> str:
     """Load and summarize a conversation resource admitted by the task contract."""
     entry_input = state.entry_input
     if entry_input is None:
@@ -1911,15 +1911,14 @@ def _step_requires_resource(
     operation: str | None = None,
 ) -> bool:
     return any(
-        domain in set(raw.get("semantic_domains") or ())
-        and resource_type in set(raw.get("resource_types") or ())
-        and (operation is None or operation in set(raw.get("operations") or ()))
-        for raw in step.capability_requirements
-        if isinstance(raw, dict)
+        domain in set(requirement.semantic_domains)
+        and resource_type in set(requirement.resource_types)
+        and (operation is None or operation in set(requirement.operations))
+        for requirement in step.capability_requirements
     )
 
 
-def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
+def _execute_verify_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> None:
     ctx = deps.ask_run_context_store.get(state.run_id)
     if ctx is not None:
         try:
@@ -1933,7 +1932,7 @@ def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContex
                 for m in (ctx.selected_matches or [])
             ]
             verification = ctx.verification
-            state.step_execution.results[step.step_id] = {
+            state.invocation_batch.results[step.step_id] = {
                 "verified": bool(
                     verification is not None
                     and getattr(verification, "ok", False)
@@ -1970,7 +1969,7 @@ def _execute_verify_step(step, state: AgentGraphState, deps: StepExecutionContex
         logger.exception("Verify step %s error", step.step_id)
 
 
-def _execute_repair_step(step, state: AgentGraphState, deps: StepExecutionContext) -> None:
+def _execute_repair_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> None:
     ctx = deps.ask_run_context_store.get(state.run_id)
     if ctx is None:
         return
@@ -1985,7 +1984,7 @@ def _execute_repair_step(step, state: AgentGraphState, deps: StepExecutionContex
             for m in (ctx.selected_matches or [])
         ]
         verification = ctx.verification
-        state.step_execution.results[step.step_id] = {
+        state.invocation_batch.results[step.step_id] = {
             "repaired": bool(ctx.repair.events),
             "verified": bool(
                 verification is not None
@@ -2008,25 +2007,25 @@ def _execute_repair_step(step, state: AgentGraphState, deps: StepExecutionContex
 # Conditional edge functions
 # ---------------------------------------------------------------------------
 
-def _should_execute_step(state: AgentGraphState) -> str:
+def _should_execute_step(state: RunCheckpoint) -> str:
     """Check if there are more steps to execute."""
-    if state.step_execution.aborted:
+    if state.invocation_batch.aborted:
         return "finalize_steps"
     if (
-        state.step_execution.current_step_index < len(state.step_execution.steps)
-        and state.step_execution.steps[state.step_execution.current_step_index].status == "running"
+        state.invocation_batch.current_step_index < len(state.invocation_batch.invocations)
+        and state.invocation_batch.invocations[state.invocation_batch.current_step_index].status == "running"
     ):
         return "execute_step"
-    for sd in state.step_execution.steps:
+    for sd in state.invocation_batch.invocations:
         if sd.status in ("planned",):
             return "execute_step"
     return "finalize_steps"
 
 
-def _after_step_execution(state: AgentGraphState) -> str:
+def _after_invocation_batch(state: RunCheckpoint) -> str:
     """Determine whether step succeeded, failed, awaits confirmation, or needs ReAct."""
-    if state.step_execution.current_step_index < len(state.step_execution.steps):
-        sd = state.step_execution.steps[state.step_execution.current_step_index]
+    if state.invocation_batch.current_step_index < len(state.invocation_batch.invocations):
+        sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
         if sd.status == "awaiting_confirmation":
             return "confirm_step"
         if sd.status == "failed":
@@ -2038,20 +2037,20 @@ def _after_step_execution(state: AgentGraphState) -> str:
     return "handle_success"
 
 
-def _after_step_failure(state: AgentGraphState) -> str:
+def _after_step_failure(state: RunCheckpoint) -> str:
     """After handling failure: continue or abort to finalize."""
-    if state.step_execution.aborted:
+    if state.invocation_batch.aborted:
         return "finalize_steps"
     return "continue_loop"
 
 
-def _after_confirm_step(state: AgentGraphState) -> str:
+def _after_confirm_step(state: RunCheckpoint) -> str:
     """After confirmation: route to success or failure handler."""
     if state.confirmation_decision == "confirmed":
         return "tool_node"
     return "handle_failure"
 
 
-def _after_step_success(state: AgentGraphState) -> str:
+def _after_step_success(state: RunCheckpoint) -> str:
     """After handling success: always continue to next step."""
     return "continue_loop"

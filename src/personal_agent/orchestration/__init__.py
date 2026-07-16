@@ -13,7 +13,7 @@ _EXPORTS = {
     "DefaultTaskAnalyzer": ("personal_agent.planning.task_analyzer", "DefaultTaskAnalyzer"),
     "DigestResult": ("personal_agent.application.runtime_results", "DigestResult"),
     "EntryResult": ("personal_agent.application.runtime_results", "EntryResult"),
-    "ExecutionStep": ("personal_agent.kernel.contracts.execution", "ExecutionStep"),
+    "ExecutableInvocation": ("personal_agent.kernel.contracts.execution", "ExecutableInvocation"),
     "Goal": ("personal_agent.planning.task_analyzer", "Goal"),
     "TaskAnalyzer": ("personal_agent.planning.task_analyzer", "TaskAnalyzer"),
     "ResetResult": ("personal_agent.application.runtime_results", "ResetResult"),

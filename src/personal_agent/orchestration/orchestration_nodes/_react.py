@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import logging
 
-from personal_agent.orchestration.orchestration_models import AgentGraphState, ReactSubState
+from personal_agent.orchestration.orchestration_models import RunCheckpoint, ReactSubState
 from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.kernel.contracts.capability import CapabilityEvidencePack
-from personal_agent.kernel.contracts.agentic import ContextBudget, ContextItem
+from personal_agent.kernel.contracts.agentic import ContextBudget, ContextItem, RuntimeSnapshotRef
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
     _is_react_tool_blocked,
@@ -21,7 +21,7 @@ from personal_agent.orchestration.orchestration_nodes._tooling import (
     _log_tool_invocation_event,
     _tool_result_event_payload,
 )
-from personal_agent.orchestration.orchestration_nodes._steps import _update_execution_ledger
+from personal_agent.orchestration.orchestration_nodes._steps import _update_task_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +30,19 @@ logger = logging.getLogger(__name__)
 # ===================================================================
 
 
-def _node_react_init(state: AgentGraphState, *, deps: ReactContext) -> dict:
+def _node_react_init(state: RunCheckpoint, *, deps: ReactContext) -> dict:
     """Seed ReAct iteration state from the current execution step.
 
     Reads the step at ``current_step_index``, resolves allowed tools, and
     builds the initial LLM prompt.  The step status stays ``"running"`` —
     ReactGraph will mark it ``"completed"`` on finish.
     """
-    if state.step_execution.current_step_index >= len(state.step_execution.steps):
+    if state.invocation_batch.current_step_index >= len(state.invocation_batch.invocations):
         state.react = ReactSubState(done=True, status="failed", stop_reason="missing_step")
         return {"react": state.react}
 
-    sd = state.step_execution.steps[state.step_execution.current_step_index]
-    step = sd.to_execution_step()
+    sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
+    step = sd
     state.react = ReactSubState(
         step_id=step.step_id,
         max_iterations=min(step.max_iterations, _REACT_MAX_ITERATIONS_CAP),
@@ -64,7 +64,7 @@ def _node_react_init(state: AgentGraphState, *, deps: ReactContext) -> dict:
     return {"react": state.react}
 
 
-def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
+def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
     """Execute one ReAct iteration by consuming the model's native tool_calls.
 
     Directly consumes ``_NativeReactOutcome`` from ``_helpers._react_llm_native``
@@ -83,8 +83,8 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
 
     # ---- Build prompt (first iteration) ----
     if idx == 0 and not state.react.user_prompt:
-        sd = state.step_execution.steps[state.step_execution.current_step_index]
-        step = sd.to_execution_step()
+        sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
+        step = sd
         tools_block = _helpers._format_react_tools(allowed, deps)
         state.react.user_prompt = (
             f"## 步骤描述\n{step.description}\n\n"
@@ -170,7 +170,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
         observation = f"错误：工具 '{tool_name}' 不在允许列表 {list(allowed)} 中。"
     elif _is_react_tool_blocked(tool_name, deps):
         observation = f"错误：工具 '{tool_name}' 是高风险/写操作工具，不允许在 ReAct 中调用。"
-    elif state.task_spec is not None and state.provider_call_count >= state.task_spec.constraints.max_provider_calls:
+    elif state.task_contract is not None and state.provider_call_count >= state.task_contract.constraints.max_provider_calls:
         observation = "错误：本任务的 provider 调用预算已耗尽。"
     else:
         state.provider_call_count += 1
@@ -198,7 +198,7 @@ def _node_react_iterate(state: AgentGraphState, *, deps: ReactContext) -> dict:
     return _record_react_observation(state, thought, tool_name, tool_input, observation)
 
 
-def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContext | None = None) -> dict:
+def _node_consume_react_tool_result(state: RunCheckpoint, *, deps: ReactContext | None = None) -> dict:
     """Turn the shared ToolGateway result into a ReAct observation."""
     matches_iteration = state.tool_tracking.pending_react_iteration == state.react.iteration_index
     matches_step = state.tool_tracking.pending_step_id == state.react.step_id
@@ -212,11 +212,11 @@ def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContex
     else:
         artifact = dict(_latest_tool_artifact(state))
     step = next(
-        (item for item in state.step_execution.steps if item.step_id == state.react.step_id),
+        (item for item in state.invocation_batch.invocations if item.step_id == state.react.step_id),
         None,
     )
     artifact["_step_id"] = state.react.step_id
-    artifact["_goal_id"] = step.task_id if step is not None else ""
+    artifact["_goal_id"] = step.goal_id if step is not None else ""
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     if artifact.get("ok"):
@@ -234,8 +234,8 @@ def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContex
     _record_capability_execution(state, state.react.step_id, artifact)
     from personal_agent.planning.agentic import ContextAdmission
 
-    state.context_envelope = ContextAdmission.admit_observation(
-        state.context_envelope,
+    state.context_inventory = ContextAdmission.admit_observation(
+        state.context_inventory,
         ref_id=f"react:{tool_call_id or state.react.step_id}:{state.react.iteration_index}",
         kind="provider_observation",
         provenance=state.react.pending_tool or "react_tool",
@@ -259,7 +259,7 @@ def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContex
     )
     result["tool_tracking"] = state.tool_tracking
     result["tool_results"] = state.tool_results
-    result["context_envelope"] = state.context_envelope
+    result["context_inventory"] = state.context_inventory
     state.react.pending_thought = ""
     state.react.pending_tool = ""
     state.react.pending_input = {}
@@ -267,7 +267,7 @@ def _node_consume_react_tool_result(state: AgentGraphState, *, deps: ReactContex
 
 
 def _record_react_observation(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     thought: str,
     tool_name: str,
     tool_input: object,
@@ -305,7 +305,7 @@ def _record_react_observation(
     return {"react": state.react, "events": state.events}
 
 
-def _node_react_finalize(state: AgentGraphState) -> dict:
+def _node_react_finalize(state: RunCheckpoint) -> dict:
     """Persist the terminal ReAct outcome and release loop working data."""
     step_id = state.react.step_id
 
@@ -313,14 +313,14 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
     result_to_persist = dict(state.react.result) if state.react.result else {}
     if step_id:
         result_to_persist["evidence_pack"] = _build_evidence_pack(state, step_id).model_dump(mode="json")
-        state.step_execution.results[step_id] = result_to_persist
+        state.invocation_batch.results[step_id] = result_to_persist
 
     completed = state.react.status == "completed"
     failure_reason = state.react.stop_reason or "ReAct 未完成步骤。"
     failure_policy = "skip"
     failure_retry_count = 0
-    if state.step_execution.current_step_index < len(state.step_execution.steps):
-        sd = state.step_execution.steps[state.step_execution.current_step_index]
+    if state.invocation_batch.current_step_index < len(state.invocation_batch.invocations):
+        sd = state.invocation_batch.invocations[state.invocation_batch.current_step_index]
         if sd.step_id == step_id:
             if completed:
                 sd.status = "completed"
@@ -334,7 +334,7 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
                 sd.retry_count += 1
                 sd.failure_reason = reason
                 sd.recoverable = sd.on_failure == "retry" and sd.retry_count < sd.max_retries
-                state.step_execution.retry_counts[step_id] = sd.retry_count
+                state.invocation_batch.retry_counts[step_id] = sd.retry_count
                 state.errors.append(f"[{step_id}] {reason}")
                 failure_reason = reason
                 failure_policy = sd.on_failure
@@ -369,32 +369,32 @@ def _node_react_finalize(state: AgentGraphState) -> dict:
     logger.info("react_finalize step_id=%s result_keys=%s", step_id, list(result_to_persist.keys()))
     return {
         "react": state.react,
-        "step_execution": state.step_execution,
-        "execution_ledger": state.execution_ledger,
+        "invocation_batch": state.invocation_batch,
+        "task_runtime": state.task_runtime,
         "errors": state.errors,
         "events": state.events,
     }
 
 
 def _update_react_ledger(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     step_id: str,
     status: str,
     reason: str | None = None,
 ) -> None:
-    step = next((item for item in state.step_execution.steps if item.step_id == step_id), None)
-    if step is None or not step.task_id:
+    step = next((item for item in state.invocation_batch.invocations if item.step_id == step_id), None)
+    if step is None or not step.goal_id:
         return
-    _update_execution_ledger(
+    _update_task_runtime(
         state,
-        goal_id=step.task_id,
+        goal_id=step.goal_id,
         status=status,
         replan_reason=reason,
     )
 
 
-def _has_downstream_commit(state: AgentGraphState, step_id: str) -> bool:
-    by_id = {step.step_id: step for step in state.step_execution.steps}
+def _has_downstream_commit(state: RunCheckpoint, step_id: str) -> bool:
+    by_id = {step.step_id: step for step in state.invocation_batch.invocations}
     pending = [candidate for candidate in by_id.values() if step_id in candidate.depends_on]
     seen: set[str] = set()
     while pending:
@@ -410,7 +410,7 @@ def _has_downstream_commit(state: AgentGraphState, step_id: str) -> bool:
     return False
 
 
-def _build_evidence_pack(state: AgentGraphState, step_id: str) -> CapabilityEvidencePack:
+def _build_evidence_pack(state: RunCheckpoint, step_id: str) -> CapabilityEvidencePack:
     """Normalize a bounded ReAct run into the artifact consumed by compose."""
     resolution_payload: dict = {}
     for event in reversed(state.events):
@@ -455,7 +455,7 @@ def _build_evidence_pack(state: AgentGraphState, step_id: str) -> CapabilityEvid
     )
 
 
-def _record_capability_execution(state: AgentGraphState, step_id: str, artifact: dict) -> None:
+def _record_capability_execution(state: RunCheckpoint, step_id: str, artifact: dict) -> None:
     for event in reversed(state.events):
         if getattr(event, "type", "") != "capability_resolution":
             continue
@@ -473,7 +473,7 @@ def _record_capability_execution(state: AgentGraphState, step_id: str, artifact:
         return
 
 
-def _should_continue_react(state: AgentGraphState) -> str:
+def _should_continue_react(state: RunCheckpoint) -> str:
     """Conditional edge: continue iterating or finalize."""
     if state.tool_tracking.active_context == "react":
         return "tool_node"
@@ -484,12 +484,13 @@ def _should_continue_react(state: AgentGraphState) -> str:
     return "iterate"
 
 
-def _materialize_react_prompt(state: AgentGraphState, deps: ReactContext) -> str:
+def _materialize_react_prompt(state: RunCheckpoint, deps: ReactContext) -> str:
     runtime = ContextItem(
-        ref_id=f"react:{state.react.step_id}:objective",
+        item_id=f"react:{state.react.step_id}:objective",
+        category="run",
         kind="react_objective",
         provenance="runtime",
-        trust_tier="runtime",
+        trust="runtime",
         summary=state.react.user_prompt[:2000],
         payload={
             "instruction": state.react.user_prompt,
@@ -498,35 +499,34 @@ def _materialize_react_prompt(state: AgentGraphState, deps: ReactContext) -> str
             "allowed_tools": tuple(state.react.allowed_tools),
             "authority_tier": "system_policy",
         },
-        admitted=True,
+        admission="admitted",
     )
     prior_results = tuple(ContextItem(
-        ref_id=f"react:{state.react.step_id}:result:{step_id}",
+        item_id=f"react:{state.react.step_id}:result:{step_id}",
+        category="observation",
         kind="prior_action_result",
         provenance="action_execution",
-        trust_tier="untrusted",
+        trust="untrusted",
         summary=_helpers._summarize_result(result),
         payload={"result": result},
-        admitted=False,
-    ) for step_id, result in state.step_execution.results.items())
+        admission="candidate",
+    ) for step_id, result in state.invocation_batch.results.items())
     observations = tuple(ContextItem(
-        ref_id=f"react:{state.react.step_id}:observation:{index}",
+        item_id=f"react:{state.react.step_id}:observation:{index}",
+        category="observation",
         kind="provider_observation",
         provenance=str(item.get("action_tool") or "react"),
-        trust_tier="untrusted",
+        trust="untrusted",
         summary=str(item.get("observation") or "")[:2000],
         payload={
             "tool": item.get("action_tool"),
             "observation": item.get("observation"),
         },
-        admitted=False,
+        admission="candidate",
     ) for index, item in enumerate(state.react.iterations))
     items = (runtime, *prior_results, *observations)
-    ledger_revision = state.execution_ledger.revision if state.execution_ledger else 0
-    event_cursor = (
-        str(state.execution_ledger.last_event_sequence)
-        if state.execution_ledger else str(len(state.events))
-    )
+    task_contract = state.task_contract
+    task_runtime = state.task_runtime
     projection = deps.context_manager.project(
         items,
         purpose="bounded_react",
@@ -537,8 +537,15 @@ def _materialize_react_prompt(state: AgentGraphState, deps: ReactContext) -> str
             safety_margin=512,
             reserved_output_tokens=2_048,
         ),
-        ledger_revision=ledger_revision,
-        event_cursor=event_cursor,
+        source_snapshot=RuntimeSnapshotRef(
+            run_id=state.run_id,
+            task_id=task_contract.task_id if task_contract is not None else None,
+            task_revision=task_contract.revision if task_contract is not None else None,
+            runtime_revision=task_runtime.revision if task_runtime is not None else 0,
+            event_sequence=(
+                task_runtime.last_event_sequence if task_runtime is not None else len(state.events)
+            ),
+        ),
     )
     state.context_projections.append(projection)
     materialized = deps.context_gateway.open(

@@ -12,13 +12,17 @@ from personal_agent.kernel.contracts.agentic import (
     AttemptRef,
     ContextBudget,
     ContextItem,
-    ExecutionLedger,
+    RuntimeSnapshotRef,
+    TaskRuntimeProjection,
 )
 from personal_agent.kernel.contracts.capability import (
     CapabilityResolutionRequest,
     CapabilitySelectionPolicy,
 )
-from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.kernel.contracts.execution import (
+    DelegatedSubtaskInvocation,
+    ExecutableInvocation,
+)
 from personal_agent.kernel.contracts.executive import (
     ActionOutcome,
     ActivateSkillDecision,
@@ -38,7 +42,7 @@ from personal_agent.kernel.contracts.executive import (
     StopDecision,
 )
 from personal_agent.orchestration.orchestration_contexts import ExecutiveContext
-from personal_agent.orchestration.orchestration_models import AgentGraphState, StepExecutionState, StepRunState
+from personal_agent.orchestration.orchestration_models import RunCheckpoint, ControlPhase, InvocationBatchState
 from personal_agent.planning.capability_resolver import CapabilityResolver
 from personal_agent.planning.direct import DirectAdmission, DirectCandidate
 from personal_agent.planning.ledger import next_execution_event
@@ -48,112 +52,120 @@ from personal_agent.tools.mcp_capability import build_capability_registry
 logger = logging.getLogger(__name__)
 
 
+def _context_snapshot(state: RunCheckpoint) -> RuntimeSnapshotRef:
+    if state.task_contract is None or state.task_runtime is None:
+        raise RuntimeError("context projection requires task definition and runtime")
+    return RuntimeSnapshotRef(
+        run_id=state.run_id,
+        task_id=state.task_contract.task_id,
+        task_revision=state.task_contract.revision,
+        runtime_revision=state.task_runtime.revision,
+        event_sequence=state.task_runtime.last_event_sequence,
+    )
+
+
 def _append_execution_event(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     deps: ExecutiveContext,
     event_type: str,
     *,
     goal_id: str | None = None,
     payload: dict | None = None,
 ) -> None:
-    if state.execution_ledger is None:
+    if state.task_runtime is None:
         raise RuntimeError("execution ledger is not initialized")
     event = next_execution_event(
-        state.execution_ledger,
+        state.task_runtime,
         event_type,
         goal_id=goal_id,
         payload=payload,
     )
-    state.execution_ledger = deps.ledger_projector.project(state.execution_ledger, (event,))
+    state.task_runtime = deps.task_runtime_projector.project(state.task_runtime, (event,))
     state.execution_events.append(event)
-    state.add_event("plan_ledger_updated", {
+    state.add_event("plan_runtime_updated", {
         "execution_event": event.model_dump(mode="json"),
-        "ledger_revision": state.execution_ledger.revision,
+        "ledger_revision": state.task_runtime.revision,
     })
 
 
-def _node_compile_goal_graph(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
+def _node_compile_goal_graph(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
     if state.task_analysis is None:
         raise RuntimeError("goal graph compilation requires task analysis")
     compilation = deps.goal_graph_compiler.compile(state.task_analysis, state.entry_text)
-    state.task_spec = compilation.task_spec
-    state.context_envelope = compilation.context_envelope
-    state.execution_ledger = ExecutionLedger(task_id=compilation.task_spec.task_id)
+    state.task_contract = compilation.task_contract
+    state.context_inventory = compilation.context_inventory
+    state.task_runtime = TaskRuntimeProjection(
+        task_id=compilation.task_contract.task_id,
+        task_revision=compilation.task_contract.revision,
+        goal_graph_revision=0,
+    )
     _append_execution_event(state, deps, "task_created", payload={
-        "task_spec": state.task_spec.model_dump(mode="json"),
+        "task_contract": state.task_contract.model_dump(mode="json"),
     })
-    for item in compilation.ledger.items:
-        _append_execution_event(state, deps, "goal_added", goal_id=item.goal_id, payload={
-            "goal": item.model_dump(mode="json"),
+    for goal_id, item in compilation.runtime.goal_states.items():
+        _append_execution_event(state, deps, "goal_added", goal_id=goal_id, payload={
+            "runtime": item.model_dump(mode="json"),
         })
     state.executive_turn = 0
     state.control_decision = None
-    state.current_action = None
     state.current_actions = []
     state.current_action_outcome = None
     state.completion_report = None
     state.latest_observations = []
-    state.planning_model_context = {}
-    state.control_model_context = {}
-    from personal_agent.kernel.contracts.planning import PlanLedger, PlanningBudget
+    from personal_agent.kernel.contracts.planning import PlanRuntimeProjection, PlanningUsage
     state.planning_facts = None
     state.planning_mode = None
     state.planner_profile = deps.planner_profile
-    state.planning_budget = PlanningBudget.model_validate(
-        deps.planner_profile.planning_budget.model_dump()
-    )
-    state.plan_ledger = PlanLedger()
+    state.planning_usage = PlanningUsage()
+    state.plan_definition = None
+    state.plan_runtime = PlanRuntimeProjection()
     state.frontier_decision = None
-    state.selected_plan_step_ids = []
     state.plan_monitor_decision = None
     state.replan_request = None
     state.dispatch_groups = []
     state.add_event("goal_graph_compiled", {
-        "task_id": state.task_spec.task_id,
-        "revision": state.task_spec.revision,
-        "goal_ids": [item.goal_id for item in state.execution_ledger.items],
+        "task_id": state.task_contract.task_id,
+        "revision": state.task_contract.revision,
+        "goal_ids": [item.goal_id for item in state.goals],
     })
     if (
         state.task_analysis.direct_answer
-        and len(state.execution_ledger.items) == 1
-        and state.execution_ledger.items[0].result_contract == "response"
+        and len(state.goals) == 1
+        and state.goals[0].result_contract == "response"
     ):
         candidate = DirectCandidate(
-            goal=state.execution_ledger.items[0].description,
-            criteria=state.task_spec.success_criteria,
+            goal=state.goals[0].description,
+            criteria=state.task_contract.success_criteria,
             answer=state.task_analysis.direct_answer,
         )
-        if DirectAdmission().admit(candidate, required_criteria=state.task_spec.success_criteria):
+        if DirectAdmission().admit(candidate, required_criteria=state.task_contract.success_criteria):
             state.answer = candidate.answer
             _append_execution_event(
                 state,
                 deps,
                 "goal_candidate_complete",
-                goal_id=state.execution_ledger.items[0].goal_id,
+                goal_id=state.goals[0].goal_id,
             )
             state.control_route = "direct_candidate"
             state.add_event("direct_candidate_admitted", {
-                "goal_id": state.execution_ledger.items[0].goal_id,
-                "criterion_ids": [item.criterion_id for item in state.task_spec.success_criteria],
+                "goal_id": state.goals[0].goal_id,
+                "criterion_ids": [item.criterion_id for item in state.task_contract.success_criteria],
             })
     return {
-        "task_spec": state.task_spec,
-        "execution_ledger": state.execution_ledger,
-        "context_envelope": state.context_envelope,
+        "task_contract": state.task_contract,
+        "task_runtime": state.task_runtime,
+        "context_inventory": state.context_inventory,
         "context_projections": state.context_projections,
-        "planning_model_context": state.planning_model_context,
-        "control_model_context": state.control_model_context,
-        "resolved_action_spec": state.resolved_action_spec,
         "resolved_action_specs": state.resolved_action_specs,
         "retry_directive": state.retry_directive,
         "active_procedure": state.active_procedure,
         "planning_facts": state.planning_facts,
         "planning_mode": state.planning_mode,
         "planner_profile": state.planner_profile,
-        "planning_budget": state.planning_budget,
-        "plan_ledger": state.plan_ledger,
+        "planning_usage": state.planning_usage,
+        "plan_definition": state.plan_definition,
+        "plan_runtime": state.plan_runtime,
         "frontier_decision": state.frontier_decision,
-        "selected_plan_step_ids": state.selected_plan_step_ids,
         "dispatch_groups": state.dispatch_groups,
         "execution_events": state.execution_events,
         "events": state.events,
@@ -163,26 +175,24 @@ def _node_compile_goal_graph(state: AgentGraphState, *, deps: ExecutiveContext) 
     }
 
 
-def _node_project_planning_facts(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None:
+def _node_project_planning_facts(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None:
         raise RuntimeError("planning facts require task and goal graph")
     procedures = deps.procedure_applicability_resolver.resolve(
-        state.task_spec,
-        state.execution_ledger,
+        state.task_contract,
+        state.task_runtime,
     )
     planning_items = _planning_context_items(state, procedures)
     projection = deps.context_manager.project(
         planning_items,
         purpose="planning",
         budget=_context_budget(state),
-        ledger_revision=state.execution_ledger.revision,
-        event_cursor=str(state.execution_ledger.last_event_sequence),
+        source_snapshot=_context_snapshot(state),
     )
     state.context_projections.append(projection)
     materialized = deps.context_gateway.open(
         projection, planning_items, purpose="planning",
     )
-    state.planning_model_context = materialized.model_payload()
     state.add_event("context_projected", projection.model_dump(mode="json"))
     state.add_event("context_materialized", {
         "projection_id": projection.projection_id,
@@ -191,10 +201,10 @@ def _node_project_planning_facts(state: AgentGraphState, *, deps: ExecutiveConte
     })
     from personal_agent.planning.adaptive import profile_for_task
 
-    state.planner_profile = profile_for_task(state.task_spec, procedures)
+    state.planner_profile = profile_for_task(state.task_contract, procedures)
     state.planning_facts = deps.planning_fact_projector.project(
-        state.task_spec,
-        state.execution_ledger,
+        state.task_contract,
+        state.task_runtime,
         procedures,
         state.planner_profile,
     )
@@ -202,23 +212,23 @@ def _node_project_planning_facts(state: AgentGraphState, *, deps: ExecutiveConte
     return {
         "planning_facts": state.planning_facts,
         "planner_profile": state.planner_profile,
-        "planning_model_context": state.planning_model_context,
         "context_projections": state.context_projections,
         "events": state.events,
     }
 
 
-def _node_assess_planning_mode(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.planning_facts is None or state.execution_ledger is None:
+def _node_assess_planning_mode(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.planning_facts is None or state.task_runtime is None:
         raise RuntimeError("planning mode requires projected facts")
     target_goal_ids = tuple(
-        item.goal_id for item in state.execution_ledger.items
+        item.goal_id for item in state.goals
         if item.status not in {"verified", "degraded", "abandoned"}
     )
-    state.planning_mode, state.planning_budget = deps.planning_mode_policy.assess(
+    state.planning_mode, state.planning_usage = deps.planning_mode_policy.assess(
         state.planning_facts,
         target_goal_ids=target_goal_ids,
-        budget=state.planning_budget,
+        limits=state.planner_profile.limits,
+        usage=state.planning_usage,
     )
     state.add_event("planning_mode_assessed", {
         **state.planning_mode.model_dump(mode="json"),
@@ -227,35 +237,34 @@ def _node_assess_planning_mode(state: AgentGraphState, *, deps: ExecutiveContext
     })
     return {
         "planning_mode": state.planning_mode,
-        "planning_budget": state.planning_budget,
+        "planning_usage": state.planning_usage,
         "events": state.events,
     }
 
 
-def _node_create_or_revise_plan(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
+def _node_create_or_revise_plan(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
     if (
-        state.task_spec is None
-        or state.execution_ledger is None
+        state.task_contract is None
+        or state.task_runtime is None
         or state.planning_mode is None
     ):
         raise RuntimeError("adaptive planning requires task, goal graph, and mode")
     procedures = deps.procedure_applicability_resolver.resolve(
-        state.task_spec,
-        state.execution_ledger,
+        state.task_contract,
+        state.task_runtime,
     )
     planning_items = _planning_context_items(state, procedures)
     projection = deps.context_manager.project(
         planning_items,
         purpose="planning",
         budget=_context_budget(state),
-        ledger_revision=state.execution_ledger.revision,
-        event_cursor=str(state.execution_ledger.last_event_sequence),
+        source_snapshot=_context_snapshot(state),
     )
     state.context_projections.append(projection)
     materialized = deps.context_gateway.open(
         projection, planning_items, purpose="planning",
     )
-    state.planning_model_context = materialized.model_payload()
+    planning_model_context = materialized.model_payload()
     state.add_event("context_projected", projection.model_dump(mode="json"))
     state.add_event("context_materialized", {
         "projection_id": projection.projection_id,
@@ -269,32 +278,34 @@ def _node_create_or_revise_plan(state: AgentGraphState, *, deps: ExecutiveContex
     if (
         state.replan_request is not None
         and state.replan_request.reason_code in replacement_reasons
-        and state.planning_budget.horizon_replacements
-        >= state.planning_budget.max_horizon_replacements
+        and state.planning_usage.horizon_replacements
+        >= state.planner_profile.limits.max_horizon_replacements
     ):
         state.control_route = "planning_blocked"
         state.add_event("adaptive_plan_replacement_budget_exhausted", {
             "request": state.replan_request.model_dump(mode="json"),
-            "budget": state.planning_budget.model_dump(mode="json"),
+            "budget": state.planning_usage.model_dump(mode="json"),
         })
         state.replan_request = None
         return {
-            "planning_budget": state.planning_budget,
+            "planning_usage": state.planning_usage,
             "replan_request": None,
             "control_route": state.control_route,
             "events": state.events,
         }
     if (
         state.replan_request is not None
-        and state.plan_ledger.plan is not None
+        and state.plan_definition is not None
         and state.replan_request.reason_code not in replacement_reasons
     ):
-        patch, state.planning_budget = deps.adaptive_planner.create_patch(
-            state.task_spec,
-            state.plan_ledger,
+        patch, state.planning_usage = deps.adaptive_planner.create_patch(
+            state.task_contract,
+            state.plan_definition,
+            state.plan_runtime,
             state.replan_request,
-            state.planning_budget,
-            model_context=state.planning_model_context,
+            state.planner_profile.limits,
+            state.planning_usage,
+            model_context=planning_model_context,
         )
         if patch is None:
             state.control_route = "planning_blocked"
@@ -302,69 +313,75 @@ def _node_create_or_revise_plan(state: AgentGraphState, *, deps: ExecutiveContex
                 "request": state.replan_request.model_dump(mode="json"),
             })
         else:
-            candidate_ledger = deps.plan_ledger_projector.apply_patch(
-                state.plan_ledger,
+            candidate_plan, candidate_ledger = deps.plan_runtime_projector.apply_patch(
+                state.plan_definition,
+                state.plan_runtime,
                 patch,
             )
-            assert candidate_ledger.plan is not None
             deps.plan_validator.validate(
-                candidate_ledger.plan,
-                state.task_spec,
-                state.execution_ledger,
+                candidate_plan,
+                state.task_contract,
+                state.task_runtime,
                 state.planner_profile,
             )
-            state.plan_ledger = candidate_ledger
-            state.planning_budget = state.planning_budget.model_copy(update={
-                "applied_patches": state.planning_budget.applied_patches + 1,
+            state.plan_definition = candidate_plan
+            state.plan_runtime = candidate_ledger
+            state.planning_usage = state.planning_usage.model_copy(update={
+                "applied_patches": state.planning_usage.applied_patches + 1,
             })
             state.control_route = "plan_ready"
             state.add_event("adaptive_plan_patched", patch.model_dump(mode="json"))
         state.replan_request = None
         return {
-            "plan_ledger": state.plan_ledger,
-            "planning_budget": state.planning_budget,
+            "plan_definition": state.plan_definition,
+            "plan_runtime": state.plan_runtime,
+            "planning_usage": state.planning_usage,
             "replan_request": state.replan_request,
             "control_route": state.control_route,
             "events": state.events,
             "context_projections": state.context_projections,
         }
-    plan, state.planning_budget = deps.adaptive_planner.create_plan(
-        state.task_spec,
-        state.execution_ledger,
+    plan, state.planning_usage = deps.adaptive_planner.create_plan(
+        state.task_contract,
+        state.task_runtime,
         state.planning_mode,
         procedures,
-        state.planning_budget,
-        model_context=state.planning_model_context,
+        state.planner_profile.limits,
+        state.planning_usage,
+        model_context=planning_model_context,
         observation_ids=tuple(
             item.observation_id for item in state.latest_observations[-6:]
         ),
         gap_ids=tuple(
-            gap for item in state.execution_ledger.items for gap in item.evidence_gaps
+            gap for item in state.goals for gap in item.evidence_gaps
         ),
     )
     if plan is None:
-        state.plan_ledger = state.plan_ledger.model_copy(update={"plan": None})
+        state.plan_definition = None
+        state.plan_runtime = PlanRuntimeProjection()
         state.control_route = "planning_blocked"
         state.add_event("adaptive_plan_unavailable", {
             "reason_code": "planner_could_not_produce_safe_plan",
-            "budget": state.planning_budget.model_dump(mode="json"),
+            "budget": state.planning_usage.model_dump(mode="json"),
         })
     else:
         deps.plan_validator.validate(
             plan,
-            state.task_spec,
-            state.execution_ledger,
+            state.task_contract,
+            state.task_runtime,
             state.planner_profile,
         )
-        replacing = state.plan_ledger.plan is not None
-        state.plan_ledger = (
-            deps.plan_ledger_projector.replace(state.plan_ledger, plan)
-            if replacing else deps.plan_ledger_projector.create(plan)
+        previous_plan = state.plan_definition
+        replacing = previous_plan is not None
+        state.plan_definition = plan
+        state.plan_runtime = (
+            deps.plan_runtime_projector.replace(previous_plan, state.plan_runtime, plan)
+            if replacing else deps.plan_runtime_projector.create(plan)
         )
         state.control_route = "plan_ready"
         if replacing:
-            state.planning_budget = state.planning_budget.model_copy(update={
-                "horizon_replacements": state.planning_budget.horizon_replacements + 1,
+            state.planning_usage = state.planning_usage.model_copy(update={
+                "horizon_replacements": state.planning_usage.horizon_replacements + 1,
             })
         state.add_event("adaptive_plan_created", {
             "plan": plan.model_dump(mode="json"),
@@ -372,8 +389,9 @@ def _node_create_or_revise_plan(state: AgentGraphState, *, deps: ExecutiveContex
         })
     state.replan_request = None
     return {
-        "plan_ledger": state.plan_ledger,
-        "planning_budget": state.planning_budget,
+        "plan_definition": state.plan_definition,
+        "plan_runtime": state.plan_runtime,
+        "planning_usage": state.planning_usage,
         "replan_request": state.replan_request,
         "control_route": state.control_route,
         "events": state.events,
@@ -381,31 +399,33 @@ def _node_create_or_revise_plan(state: AgentGraphState, *, deps: ExecutiveContex
     }
 
 
-def _node_monitor_plan(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None:
+def _node_monitor_plan(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None:
         raise RuntimeError("plan monitoring requires task and goal graph")
-    if state.plan_ledger.plan is not None:
+    if state.plan_definition is not None:
         status_by_goal = {
-            item.goal_id: item.status for item in state.execution_ledger.items
+            item.goal_id: item.status for item in state.goals
         }
         for step_id in tuple(state.selected_plan_step_ids):
             step = next(
-                (item for item in state.plan_ledger.plan.steps if item.step_id == step_id),
+                (item for item in state.plan_definition.steps if item.step_id == step_id),
                 None,
             )
             if step is None:
                 continue
             if status_by_goal.get(step.goal_id) in {"verified", "degraded"}:
-                state.plan_ledger = deps.plan_ledger_projector.append(
-                    state.plan_ledger,
+                state.plan_runtime = deps.plan_runtime_projector.append(
+                    state.plan_definition,
+                    state.plan_runtime,
                     "step_satisfied",
                     step_ids=(step_id,),
                 )
             elif state.latest_observations:
                 latest = state.latest_observations[-1]
                 if not latest.goal_id or latest.goal_id == step.goal_id:
-                    state.plan_ledger = deps.plan_ledger_projector.append(
-                        state.plan_ledger,
+                    state.plan_runtime = deps.plan_runtime_projector.append(
+                        state.plan_definition,
+                        state.plan_runtime,
                         "step_observed",
                         step_ids=(step_id,),
                         observation_ids=(latest.observation_id,),
@@ -415,32 +435,34 @@ def _node_monitor_plan(state: AgentGraphState, *, deps: ExecutiveContext) -> dic
         monitor_items,
         purpose="plan_monitoring",
         budget=_context_budget(state),
-        ledger_revision=state.execution_ledger.revision,
-        event_cursor=str(state.execution_ledger.last_event_sequence),
+        source_snapshot=_context_snapshot(state),
     )
     state.context_projections.append(projection)
     materialized = deps.context_gateway.open(
         projection, monitor_items, purpose="plan_monitoring",
     )
-    state.plan_monitor_decision, state.plan_ledger = deps.plan_monitor.inspect(
-        state.task_spec,
-        state.execution_ledger,
-        state.plan_ledger,
+    state.plan_monitor_decision, state.plan_runtime = deps.plan_monitor.inspect(
+        state.task_contract,
+        state.task_runtime,
+        state.plan_definition,
+        state.plan_runtime,
         tuple(state.latest_observations),
-        state.planning_budget,
+        state.planner_profile.limits,
+        state.planning_usage,
         model_context=materialized.model_payload(),
     )
     if state.plan_monitor_decision.decision_source == "semantic":
-        state.planning_budget = state.planning_budget.model_copy(update={
-            "semantic_monitor_calls": state.planning_budget.semantic_monitor_calls + 1,
+        state.planning_usage = state.planning_usage.model_copy(update={
+            "semantic_monitor_calls": state.planning_usage.semantic_monitor_calls + 1,
         })
     state.replan_request = state.plan_monitor_decision.replan_request
     if (
         state.plan_monitor_decision.impact in {"step_invalidated", "branch_invalidated"}
         and state.plan_monitor_decision.affected_step_ids
     ):
-        state.plan_ledger = deps.plan_ledger_projector.append(
-            state.plan_ledger,
+        state.plan_runtime = deps.plan_runtime_projector.append(
+            state.plan_definition,
+            state.plan_runtime,
             "step_invalidated",
             step_ids=state.plan_monitor_decision.affected_step_ids,
         )
@@ -451,18 +473,18 @@ def _node_monitor_plan(state: AgentGraphState, *, deps: ExecutiveContext) -> dic
     )
     state.add_event("plan_monitored", state.plan_monitor_decision.model_dump(mode="json"))
     return {
-        "plan_ledger": state.plan_ledger,
+        "plan_runtime": state.plan_runtime,
         "plan_monitor_decision": state.plan_monitor_decision,
         "replan_request": state.replan_request,
         "control_route": state.control_route,
-        "planning_budget": state.planning_budget,
+        "planning_usage": state.planning_usage,
         "context_projections": state.context_projections,
         "events": state.events,
     }
 
 
-def _node_project_control_state(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None:
+def _node_project_control_state(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None:
         raise RuntimeError("control state requires task and ledger")
     registry = build_capability_registry(
         tools=deps.tool_executor.list_tools(exposures={"public_agent", "scoped_agent", "admin"}),
@@ -485,28 +507,28 @@ def _node_project_control_state(state: AgentGraphState, *, deps: ExecutiveContex
     from personal_agent.kernel.contracts.executive import ControlState
 
     state.control_state = ControlState(
-        task_id=state.task_spec.task_id,
-        task_revision=state.task_spec.revision,
-        task_goal=state.task_spec.user_goal,
-        ledger_revision=state.execution_ledger.revision,
-        active_goal_ids=state.execution_ledger.active_goal_ids,
-        active_skill_ids=state.execution_ledger.active_skill_ids,
+        task_id=state.task_contract.task_id,
+        task_revision=state.task_contract.revision,
+        task_goal=state.task_contract.user_goal,
+        ledger_revision=state.task_runtime.revision,
+        active_goal_ids=state.task_runtime.active_goal_ids,
+        active_skill_ids=state.task_runtime.active_skill_ids,
         available_capability_classes=summaries,
         procedure_candidates=deps.procedure_applicability_resolver.resolve(
-            state.task_spec,
-            state.execution_ledger,
+            state.task_contract,
+            state.task_runtime,
         ),
         outstanding_evidence_gaps=tuple(
-            gap for item in state.execution_ledger.items for gap in item.evidence_gaps
+            gap for item in state.goals for gap in item.evidence_gaps
         ),
-        pending_approval_ids=(str(state.pending_confirmation.get("step_id")),)
+        pending_approval_ids=(state.pending_confirmation.step_id,)
         if state.pending_confirmation else (),
         latest_observations=tuple(state.latest_observations[-6:]),
         remaining_provider_calls=max(
-            state.task_spec.constraints.max_provider_calls - state.provider_call_count, 0,
+            state.task_contract.constraints.max_provider_calls - state.provider_call_count, 0,
         ),
         remaining_executive_turns=max(
-            state.task_spec.constraints.max_executive_turns - state.executive_turn, 0,
+            state.task_contract.constraints.max_executive_turns - state.executive_turn, 0,
         ),
     )
     state.add_event("control_state_projected", {
@@ -519,28 +541,40 @@ def _node_project_control_state(state: AgentGraphState, *, deps: ExecutiveContex
         control_items,
         purpose="executive_decision",
         budget=_context_budget(state),
-        ledger_revision=state.execution_ledger.revision,
-        event_cursor=str(state.execution_ledger.last_event_sequence),
+        source_snapshot=_context_snapshot(state),
     )
     state.context_projections.append(projection)
     materialized = deps.context_gateway.open(
         projection, control_items, purpose="executive_decision",
     )
-    state.control_model_context = materialized.model_payload()
     state.add_event("context_projected", projection.model_dump(mode="json"))
     return {
         "control_state": state.control_state,
         "context_projections": state.context_projections,
-        "control_model_context": state.control_model_context,
         "events": state.events,
     }
 
 
-def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None or state.control_state is None:
+def _node_decide(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None or state.control_state is None:
         raise RuntimeError("executive decision requires projected control state")
+    control_projection = next(
+        (
+            item for item in reversed(state.context_projections)
+            if item.purpose == "executive_decision"
+        ),
+        None,
+    )
+    control_model_context = (
+        deps.context_gateway.open(
+            control_projection,
+            _control_context_items(state),
+            purpose="executive_decision",
+        ).model_payload()
+        if control_projection is not None else None
+    )
     if state.control_state.remaining_executive_turns <= 0:
-        goal_id = state.execution_ledger.active_goal_ids[0] if state.execution_ledger.active_goal_ids else "task"
+        goal_id = state.task_runtime.active_goal_ids[0] if state.task_runtime.active_goal_ids else "task"
         from personal_agent.kernel.contracts.executive import DecisionBasis
 
         decision = StopDecision(
@@ -552,22 +586,26 @@ def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
         )
     else:
         open_goals = tuple(
-            item for item in state.execution_ledger.items
+            item for item in state.goals
             if item.status not in {"verified", "degraded", "abandoned"}
         )
         if not open_goals:
             # Completion preempts frontier selection. The controller only
             # proposes Finish; CompletionVerifier remains the sole authority.
             decision = deps.controller.decide(
-                state.task_spec,
-                state.execution_ledger,
+                state.task_contract,
+                state.task_runtime,
                 observations=tuple(state.latest_observations),
                 capability_classes=state.control_state.available_capability_classes,
                 control_state=state.control_state,
-                model_context=state.control_model_context,
+                model_context=control_model_context,
             )
         elif state.planning_mode is not None and state.planning_mode.mode == "deliberative":
-            frontier = deps.plan_ledger_projector.frontier(state.plan_ledger)
+            if state.plan_definition is None:
+                raise RuntimeError("deliberative control requires an active plan definition")
+            frontier = deps.plan_runtime_projector.frontier(
+                state.plan_definition, state.plan_runtime,
+            )
             state.frontier_decision = deps.frontier_selector.select(
                 frontier,
                 state.planner_profile,
@@ -575,8 +613,8 @@ def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
             if state.frontier_decision is None:
                 decision = StopDecision(
                     target_goal_id=(
-                        state.execution_ledger.active_goal_ids[0]
-                        if state.execution_ledger.active_goal_ids else "task"
+                        state.task_runtime.active_goal_ids[0]
+                        if state.task_runtime.active_goal_ids else "task"
                     ),
                     reason_code="plan_frontier_empty",
                     user_message="当前计划没有可安全执行的步骤，任务已停止。",
@@ -590,9 +628,9 @@ def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
             else:
                 selected_id = state.frontier_decision.selected_step_ids[0]
                 step = next(item for item in frontier if item.step_id == selected_id)
-                state.selected_plan_step_ids = [selected_id]
-                state.plan_ledger = deps.plan_ledger_projector.append(
-                    state.plan_ledger,
+                state.plan_runtime = deps.plan_runtime_projector.append(
+                    state.plan_definition,
+                    state.plan_runtime,
                     "frontier_selected",
                     step_ids=(selected_id,),
                     payload={
@@ -600,22 +638,21 @@ def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
                     },
                 )
                 decision = deps.controller.decide_plan_step(
-                    state.task_spec,
-                    state.execution_ledger,
+                    state.task_contract,
+                    state.task_runtime,
                     step,
                     observations=tuple(state.latest_observations),
                     control_state=state.control_state,
                 )
         else:
             state.frontier_decision = None
-            state.selected_plan_step_ids = []
             decision = deps.controller.decide(
-                state.task_spec,
-                state.execution_ledger,
+                state.task_contract,
+                state.task_runtime,
                 observations=tuple(state.latest_observations),
                 capability_classes=state.control_state.available_capability_classes,
                 control_state=state.control_state,
-                model_context=state.control_model_context,
+                model_context=control_model_context,
             )
     state.executive_turn += 1
     semantic_hash = _decision_semantic_hash(decision)
@@ -647,8 +684,7 @@ def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
     return {
         "control_decision": state.control_decision,
         "frontier_decision": state.frontier_decision,
-        "selected_plan_step_ids": state.selected_plan_step_ids,
-        "plan_ledger": state.plan_ledger,
+        "plan_runtime": state.plan_runtime,
         "executive_turn": state.executive_turn,
         "last_decision_hash": state.last_decision_hash,
         "repeated_decision_count": state.repeated_decision_count,
@@ -656,13 +692,13 @@ def _node_decide(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
     }
 
 
-def _node_validate_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None or state.control_decision is None:
+def _node_validate_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None or state.control_decision is None:
         raise RuntimeError("decision validation requires task, ledger, and decision")
     try:
         deps.decision_validator.validate(
-            state.task_spec,
-            state.execution_ledger,
+            state.task_contract,
+            state.task_runtime,
             state.control_decision,
             state.control_state,
         )
@@ -691,22 +727,19 @@ def _node_validate_decision(state: AgentGraphState, *, deps: ExecutiveContext) -
     return {"control_decision": state.control_decision, "events": state.events}
 
 
-def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
+def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
     decision = state.control_decision
-    if decision is None or state.execution_ledger is None or state.task_spec is None:
+    if decision is None or state.task_runtime is None or state.task_contract is None:
         raise RuntimeError("cannot apply an empty executive decision")
-    state.current_action = None
+    state.current_actions = []
     state.current_action_outcome = None
-    state.step_execution = StepExecutionState()
+    state.invocation_batch = InvocationBatchState()
 
     if isinstance(decision, ActivateSkillDecision):
         skill = deps.controller.skills.get(deps.controller.tenant_id, decision.skill_id)
         _append_execution_event(state, deps, "skill_activated", goal_id=decision.target_goal_id, payload={
             "skill_id": skill.manifest.skill_id,
             "version": skill.manifest.version,
-        })
-        state.context_envelope = state.context_envelope.model_copy(update={
-            "active_skill_ids": state.execution_ledger.active_skill_ids,
         })
         state.add_event("skill_activated", {
             "skill_id": skill.manifest.skill_id,
@@ -715,24 +748,24 @@ def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> d
         return _route_update(state, "loop")
 
     if isinstance(decision, ExecuteMetaCapabilityDecision):
-        state.current_action = decision.bounded_action
         state.current_actions = [decision.bounded_action]
-        if state.selected_plan_step_ids and state.plan_ledger.plan is not None:
-            state.plan_ledger = deps.plan_ledger_projector.append(
-                state.plan_ledger,
+        if state.selected_plan_step_ids and state.plan_definition is not None:
+            state.plan_runtime = deps.plan_runtime_projector.append(
+                state.plan_definition,
+                state.plan_runtime,
                 "step_running",
                 step_ids=tuple(state.selected_plan_step_ids),
             )
         steps = _steps_for_action(state, decision.bounded_action)
-        state.step_execution = StepExecutionState(
-            steps=[StepRunState.from_execution_step(step) for step in steps],
+        state.invocation_batch = InvocationBatchState(
+            invocations=list(steps),
         )
         state.add_event("action_materialized", {
             "action": state.current_action.model_dump(mode="json"),
             "step_count": len(steps),
         })
         update = _route_update(state, "action")
-        update["plan_ledger"] = state.plan_ledger
+        update["plan_runtime"] = state.plan_runtime
         return update
 
     if isinstance(decision, DelegateDecision):
@@ -744,9 +777,8 @@ def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             })
             state.add_event("capability_gap", gap.model_dump(mode="json"))
             return _route_update(state, "loop")
-        state.current_action = action
         state.current_actions = [action]
-        state.step_execution = StepExecutionState(steps=[StepRunState.from_execution_step(step)])
+        state.invocation_batch = InvocationBatchState(invocations=[step])
         state.add_event("action_materialized", {
             "action": action.model_dump(mode="json"),
             "step_count": 1,
@@ -755,37 +787,34 @@ def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> d
 
     if isinstance(decision, InvokeProcedureDecision):
         materialized = deps.procedure_runtime.start(
-            decision.procedure_call,
-            task_id=state.task_spec.task_id,
+            decision.procedure_invocation,
         )
-        state.current_action = BoundedAction(
-            action_id=decision.procedure_call.procedure_call_id,
+        procedure_action = BoundedAction(
+            action_id=decision.procedure_invocation.invocation_id,
             goal_id=decision.target_goal_id,
-            meta_capability="commit" if state.task_spec.mutation_intent else "acquire",
-            description=f"procedure:{decision.procedure_call.procedure_id}",
+            meta_capability="commit" if state.task_contract.mutation_intent else "acquire",
+            description=f"procedure:{decision.procedure_invocation.procedure.procedure_id}",
             output_contract="ProcedureOutcome",
             proposed_resource_access=ProposedResourceAccessPlan(
                 side_effect_class="procedure",
                 write_set=({
                     "semantic_domain": "procedure",
-                    "locator": decision.procedure_call.procedure_id,
+                    "locator": decision.procedure_invocation.procedure.procedure_id,
                 },),
             ),
             payload={
-                "procedure_id": decision.procedure_call.procedure_id,
-                "procedure_run_id": materialized.instance.procedure_run_id,
+                "procedure_id": decision.procedure_invocation.procedure.procedure_id,
+                "procedure_run_id": materialized.projection.procedure_run_id,
             },
         )
-        state.current_actions = [state.current_action]
-        state.procedure_id = decision.procedure_call.procedure_id
-        state.procedure_version = decision.procedure_call.procedure_version
-        state.active_procedure = materialized.instance
-        state.step_execution = StepExecutionState(
-            steps=[StepRunState.from_execution_step(step) for step in materialized.steps],
+        state.current_actions = [procedure_action]
+        state.active_procedure = materialized.projection
+        state.invocation_batch = InvocationBatchState(
+            invocations=list(materialized.steps),
         )
         state.add_event("procedure_started", {
-            "procedure_call": decision.procedure_call.model_dump(mode="json"),
-            "procedure_run_id": materialized.instance.procedure_run_id,
+            "procedure_invocation": decision.procedure_invocation.model_dump(mode="json"),
+            "procedure_run_id": materialized.projection.procedure_run_id,
             "step_count": len(materialized.steps),
         })
         return _route_update(state, "action")
@@ -794,7 +823,7 @@ def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> d
         response = interrupt({
             "kind": "clarification",
             "question": decision.question,
-            "task_id": state.task_spec.task_id,
+            "task_id": state.task_contract.task_id,
         })
         observation = ObservationRef(
             goal_id=decision.target_goal_id,
@@ -811,7 +840,7 @@ def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             "kind": "confirmation",
             "title": decision.title,
             "summary": decision.summary,
-            "task_id": state.task_spec.task_id,
+            "task_id": state.task_contract.task_id,
         })
         observation = ObservationRef(
             goal_id=decision.target_goal_id,
@@ -828,23 +857,20 @@ def _node_apply_decision(state: AgentGraphState, *, deps: ExecutiveContext) -> d
 
     if isinstance(decision, StopDecision):
         state.answer = state.answer or decision.user_message
-        state.task_spec = state.task_spec.model_copy(update={"lifecycle": "stopped"})
-        state.answer_completed = True
         _append_execution_event(state, deps, "task_stopped", payload={"reason_code": decision.reason_code})
         return _route_update(state, "stop")
 
     raise RuntimeError(f"unsupported executive decision: {decision.action}")
 
 
-def _node_resolve_action(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None or not state.current_actions:
+def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None or not state.current_actions:
         raise RuntimeError("action resolution requires materialized actions")
     projection = deps.context_manager.project(
         _context_items(state),
         purpose="action_execution",
         budget=_context_budget(state),
-        ledger_revision=state.execution_ledger.revision,
-        event_cursor=str(state.execution_ledger.last_event_sequence),
+        source_snapshot=_context_snapshot(state),
     )
     state.context_projections.append(projection)
     registry = build_capability_registry(
@@ -861,7 +887,7 @@ def _node_resolve_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
                 ranker=deps.capability_ranker,
             ).resolve(
                 CapabilityResolutionRequest(
-                    task_id=state.task_spec.task_id,
+                    task_id=state.task_contract.task_id,
                     goal_id=action.goal_id,
                     action_id=action.action_id,
                     meta_capability=action.meta_capability,
@@ -894,15 +920,15 @@ def _node_resolve_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
         deps.scheduler.validate_dispatch(spec)
         specs.append(spec)
         matching_steps = [
-            step for step in state.step_execution.steps
-            if step.step_id == action.action_id or step.task_id == action.goal_id
+            step for step in state.invocation_batch.invocations
+            if step.step_id == action.action_id or step.goal_id == action.goal_id
         ]
         if resolution is not None:
             state.add_event("capability_resolution", {
                 "resolution_id": resolution.resolution_id,
-                "scope_id": resolution.request.scope_id,
-                "goal_id": resolution.request.goal_id,
-                "action_id": resolution.request.action_id,
+                "scope_id": resolution.request_scope_id,
+                "goal_id": resolution.constraints.goal_id,
+                "action_id": resolution.constraints.action_id,
                 "selected_capability_ids": [
                     item.capability_id for item in resolution.selected_capabilities
                 ],
@@ -922,7 +948,6 @@ def _node_resolve_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
                 if resolution.allowed_agents and not step.agent_id:
                     step.agent_id = resolution.allowed_agents[0]
     state.resolved_action_specs = specs
-    state.resolved_action_spec = specs[0]
     state.dispatch_groups = list(deps.scheduler.create_dispatch_groups(
         tuple(specs),
         requested_join_policy=(
@@ -930,9 +955,10 @@ def _node_resolve_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             if state.frontier_decision is not None else "all"
         ),
     ))
-    if state.plan_ledger.plan is not None and state.selected_plan_step_ids:
-        state.plan_ledger = deps.plan_ledger_projector.append(
-            state.plan_ledger,
+    if state.plan_definition is not None and state.selected_plan_step_ids:
+        state.plan_runtime = deps.plan_runtime_projector.append(
+            state.plan_definition,
+            state.plan_runtime,
             "dispatch_grouped",
             step_ids=tuple(state.selected_plan_step_ids),
             payload={
@@ -946,23 +972,22 @@ def _node_resolve_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
         "context_projection": projection.model_dump(mode="json"),
     })
     return {
-        "resolved_action_spec": state.resolved_action_spec,
         "resolved_action_specs": state.resolved_action_specs,
         "dispatch_groups": state.dispatch_groups,
-        "plan_ledger": state.plan_ledger,
+        "plan_runtime": state.plan_runtime,
         "context_projections": state.context_projections,
-        "step_execution": state.step_execution,
+        "invocation_batch": state.invocation_batch,
         "events": state.events,
     }
 
 
-def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.current_action is None or state.execution_ledger is None:
+def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.current_action is None or state.task_runtime is None:
         return _route_update(state, "loop")
     state.control_route = "verify"
     state.retry_directive = None
-    statuses = [step.status for step in state.step_execution.steps]
-    failed = next((step for step in state.step_execution.steps if step.status == "failed"), None)
+    statuses = [step.status for step in state.invocation_batch.invocations]
+    failed = next((step for step in state.invocation_batch.invocations if step.status == "failed"), None)
     if failed is not None:
         summary = failed.failure_reason or "bounded action failed"
         if state.active_procedure is not None:
@@ -971,7 +996,7 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             })
         classification = classify_failure(summary)
         goal = next(
-            (item for item in state.execution_ledger.items if item.goal_id == state.current_action.goal_id),
+            (item for item in state.goals if item.goal_id == state.current_action.goal_id),
             None,
         )
         incomplete = tuple(
@@ -1067,7 +1092,7 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
                 state.current_action.requirement.requirement_id
                 if state.current_action.requirement else state.current_action.action_id
             ),
-            idempotency_key=f"{state.task_spec.task_id}:{state.current_action.action_id}:{attempt_count}",
+            idempotency_key=f"{state.task_contract.task_id}:{state.current_action.action_id}:{attempt_count}",
             attempt_count=attempt_count,
             max_attempts=2,
             action_idempotent=(
@@ -1112,7 +1137,7 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
                 "status": "completed",
             })
         result_keys = tuple(
-            step.output_artifact_id for step in state.step_execution.steps if step.output_artifact_id
+            step.output_artifact_id for step in state.invocation_batch.invocations if step.output_artifact_id
         )
         observation = ObservationRef(
             goal_id=state.current_action.goal_id,
@@ -1122,7 +1147,7 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             payload={
                 "action_id": state.current_action.action_id,
                 "meta_capability": state.current_action.meta_capability,
-                "step_ids": [step.step_id for step in state.step_execution.steps],
+                "step_ids": [step.step_id for step in state.invocation_batch.invocations],
             },
         )
         outcome = ActionOutcome(
@@ -1144,7 +1169,7 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
         })
         for additional in state.current_actions[1:]:
             additional_step = next(
-                (step for step in state.step_execution.steps if step.step_id == additional.action_id),
+                (step for step in state.invocation_batch.invocations if step.step_id == additional.action_id),
                 None,
             )
             if additional_step is None or additional_step.status != "completed":
@@ -1168,38 +1193,32 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
             from personal_agent.kernel.contracts.agentic import ContextItem
 
             receipt_items = []
-            for result in state.step_execution.results.values():
+            for result in state.invocation_batch.results.values():
                 if not isinstance(result, dict) or not result.get("note_id"):
                     continue
                 note_id = str(result["note_id"])
                 receipt_items.append(ContextItem(
-                    ref_id=note_id,
+                    item_id=note_id,
+                    category="evidence",
                     kind="mutation_receipt",
                     provenance=str(state.current_action.payload["procedure_id"]),
-                    trust_tier="evidence",
+                    trust="evidence",
                     summary=str(result.get("summary") or result.get("title") or "")[:1000],
                     payload={
                         "note_id": note_id,
                         "title": str(result.get("title") or ""),
                         "summary": str(result.get("summary") or ""),
                     },
-                    admitted=True,
+                    admission="admitted",
                 ))
-            if receipt_items and state.context_envelope is not None:
-                existing_refs = {
-                    item.ref_id for item in state.context_envelope.evidence_context
-                }
+            if receipt_items and state.context_inventory is not None:
+                existing_refs = set(state.context_inventory.items)
                 unique_receipts = {
-                    item.ref_id: item for item in receipt_items
-                    if item.ref_id not in existing_refs
+                    item.item_id: item for item in receipt_items
+                    if item.item_id not in existing_refs
                 }
                 receipt_items = list(unique_receipts.values())
-                state.context_envelope = state.context_envelope.model_copy(update={
-                    "evidence_context": (
-                        *state.context_envelope.evidence_context,
-                        *receipt_items,
-                    ),
-                })
+                state.context_inventory = state.context_inventory.with_items(*receipt_items)
                 state.add_event("context_admitted", {
                     "trust_tier": "evidence",
                     "count": len(receipt_items),
@@ -1220,19 +1239,19 @@ def _node_observe_action(state: AgentGraphState, *, deps: ExecutiveContext) -> d
         "retry_directive": state.retry_directive,
         "control_route": state.control_route,
         "latest_observations": state.latest_observations,
-        "execution_ledger": state.execution_ledger,
+        "task_runtime": state.task_runtime,
         "execution_events": state.execution_events,
-        "context_envelope": state.context_envelope,
+        "context_inventory": state.context_inventory,
         "active_procedure": state.active_procedure,
         "errors": state.errors,
         "events": state.events,
     }
 
 
-def _node_verify_goal_progress(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None:
+def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None:
         return {}
-    candidates = [item for item in state.execution_ledger.items if item.status == "candidate_complete"]
+    candidates = [item for item in state.goals if item.status == "candidate_complete"]
     for goal in candidates:
         verification_results = _goal_scoped_verification_results(state, goal.goal_id)
         evidence_refs = tuple(dict.fromkeys(
@@ -1253,8 +1272,7 @@ def _node_verify_goal_progress(state: AgentGraphState, *, deps: ExecutiveContext
             verification_items,
             purpose="semantic_verification",
             budget=_context_budget(state),
-            ledger_revision=state.execution_ledger.revision,
-            event_cursor=str(state.execution_ledger.last_event_sequence),
+            source_snapshot=_context_snapshot(state),
         )
         state.context_projections.append(projection)
         materialized = deps.context_gateway.open(
@@ -1263,18 +1281,18 @@ def _node_verify_goal_progress(state: AgentGraphState, *, deps: ExecutiveContext
         semantic_context = None
         if (
             deps.goal_verifier.semantic_enabled
-            and state.planning_budget.semantic_verifier_calls
-            < state.planning_budget.max_semantic_verifier_calls
+            and state.planning_usage.semantic_verifier_calls
+            < state.planner_profile.limits.max_semantic_verifier_calls
         ):
             semantic_context = materialized.model_payload()
-            state.planning_budget = state.planning_budget.model_copy(update={
-                "semantic_verifier_calls": state.planning_budget.semantic_verifier_calls + 1,
+            state.planning_usage = state.planning_usage.model_copy(update={
+                "semantic_verifier_calls": state.planning_usage.semantic_verifier_calls + 1,
             })
         report = deps.goal_verifier.verify(
-            state.task_spec,
+            state.task_contract,
             goal,
             answer=state.answer,
-            citation_count=len(state.citations) if len(state.execution_ledger.items) == 1 else 0,
+            citation_count=len(state.citations) if len(state.goals) == 1 else 0,
             tool_results=tuple(verification_results),
             evidence_refs=evidence_refs,
             model_context=semantic_context,
@@ -1314,17 +1332,17 @@ def _node_verify_goal_progress(state: AgentGraphState, *, deps: ExecutiveContext
                     latency_ms=0.0,
                 )
     if state.control_route == "direct_candidate":
-        if state.execution_ledger.items and all(
-            item.status == "verified" for item in state.execution_ledger.items
+        if state.goals and all(
+            item.status == "verified" for item in state.goals
         ):
             state.control_decision = FinishDecision(
-                target_goal_id=state.execution_ledger.items[-1].goal_id,
+                target_goal_id=state.goals[-1].goal_id,
                 basis=DecisionBasis(expected_state_change="task_completed"),
                 expected_progress="verified_direct_completion",
                 completion_claim=CompletionClaim(
-                    goal_ids=tuple(item.goal_id for item in state.execution_ledger.items),
+                    goal_ids=tuple(item.goal_id for item in state.goals),
                     criterion_ids=tuple(
-                        item.criterion_id for item in state.task_spec.success_criteria
+                        item.criterion_id for item in state.task_contract.success_criteria
                     ),
                 ),
             )
@@ -1332,23 +1350,23 @@ def _node_verify_goal_progress(state: AgentGraphState, *, deps: ExecutiveContext
         else:
             state.control_route = "loop"
     return {
-        "execution_ledger": state.execution_ledger,
+        "task_runtime": state.task_runtime,
         "execution_events": state.execution_events,
         "events": state.events,
         "control_decision": state.control_decision,
         "control_route": state.control_route,
         "latest_observations": state.latest_observations,
-        "planning_budget": state.planning_budget,
+        "planning_usage": state.planning_usage,
         "context_projections": state.context_projections,
     }
 
 
 def _goal_scoped_verification_results(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     goal_id: str,
 ) -> list[dict]:
     goal_step_ids = {
-        item.step_id for item in state.step_execution.steps if item.task_id == goal_id
+        item.step_id for item in state.invocation_batch.invocations if item.goal_id == goal_id
     }
     results = [
         item for item in state.tool_results
@@ -1356,27 +1374,25 @@ def _goal_scoped_verification_results(
         and (item.get("_goal_id") == goal_id or item.get("_step_id") in goal_step_ids)
     ]
     results.extend(
-        item for step_id, item in state.step_execution.results.items()
+        item for step_id, item in state.invocation_batch.results.items()
         if step_id in goal_step_ids and isinstance(item, dict)
     )
     return results
 
 
-def _node_verify_completion(state: AgentGraphState, *, deps: ExecutiveContext) -> dict:
-    if state.task_spec is None or state.execution_ledger is None:
+def _node_verify_completion(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
+    if state.task_contract is None or state.task_runtime is None:
         raise RuntimeError("completion verification requires task and ledger")
     claim = state.control_decision.completion_claim if isinstance(state.control_decision, FinishDecision) else None
     report = deps.completion_verifier.verify(
-        state.task_spec,
-        state.execution_ledger,
+        state.task_contract,
+        state.task_runtime,
         claim,
         pending_confirmation=state.pending_confirmation is not None,
     )
     state.completion_report = report
     state.add_event("completion_checked", report.model_dump(mode="json"))
     if report.status == "complete":
-        state.task_spec = state.task_spec.model_copy(update={"lifecycle": "completed"})
-        state.answer_completed = True
         _append_execution_event(state, deps, "task_completed", payload={
             "verified_goal_ids": report.verified_goal_ids,
         })
@@ -1391,78 +1407,70 @@ def _node_verify_completion(state: AgentGraphState, *, deps: ExecutiveContext) -
         _append_execution_event(state, deps, "completion_rejected", payload=report.model_dump(mode="json"))
         state.add_event("completion_rejected", report.model_dump(mode="json"))
     return {
-        "task_spec": state.task_spec,
-        "procedure_id": state.procedure_id,
-        "procedure_version": state.procedure_version,
+        "task_contract": state.task_contract,
         "active_procedure": state.active_procedure,
         "completion_report": state.completion_report,
-        "answer_completed": state.answer_completed,
         "latest_observations": state.latest_observations,
-        "execution_ledger": state.execution_ledger,
+        "task_runtime": state.task_runtime,
         "execution_events": state.execution_events,
         "events": state.events,
     }
 
 
 def _verifier_profiles(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     deps: ExecutiveContext,
     goal,
 ) -> tuple[str, ...]:
     profiles = []
-    if state.execution_ledger is None or state.task_spec is None:
+    if state.task_runtime is None or state.task_contract is None:
         return ()
     domains = {
         item.semantic_domain
-        for item in state.task_spec.resource_requirements
-        if item.goal_id == goal.goal_id
+        for item in state.task_contract.resources_for_goal(goal.goal_id)
     }
-    for skill_id in state.execution_ledger.active_skill_ids:
+    for skill_id in state.task_runtime.active_skill_ids:
         try:
             skill = deps.controller.skills.get(deps.controller.tenant_id, skill_id)
         except (KeyError, PermissionError):
             continue
         if (
             domains.intersection(skill.manifest.applicability.semantic_domains)
-            or state.task_spec.result_contract in skill.manifest.applicability.result_contracts
+            or state.task_contract.result_contract in skill.manifest.applicability.result_contracts
         ):
             profiles.append(skill.manifest.verifier_profile)
     return tuple(dict.fromkeys(item for item in profiles if item))
 
 
-def _after_apply_decision(state: AgentGraphState) -> str:
+def _after_apply_decision(state: RunCheckpoint) -> str:
     return state.control_route or "loop"
 
 
-def _after_completion(state: AgentGraphState) -> str:
+def _after_completion(state: RunCheckpoint) -> str:
     if state.completion_report and state.completion_report.status == "complete":
         return "complete"
     return "loop"
 
 
-def _route_update(state: AgentGraphState, route: str) -> dict:
+def _route_update(state: RunCheckpoint, route: ControlPhase) -> dict:
     state.control_route = route
     return {
         "control_route": state.control_route,
-        "current_action": state.current_action,
         "current_actions": state.current_actions,
         "current_action_outcome": state.current_action_outcome,
-        "step_execution": state.step_execution,
-        "execution_ledger": state.execution_ledger,
+        "invocation_batch": state.invocation_batch,
+        "task_runtime": state.task_runtime,
         "execution_events": state.execution_events,
-        "context_envelope": state.context_envelope,
+        "context_inventory": state.context_inventory,
         "latest_observations": state.latest_observations,
-        "task_spec": state.task_spec,
-        "procedure_id": state.procedure_id,
-        "procedure_version": state.procedure_version,
+        "task_contract": state.task_contract,
         "active_procedure": state.active_procedure,
         "answer": state.answer,
-        "answer_completed": state.answer_completed,
         "events": state.events,
     }
 
 
-def _step_for_action(state: AgentGraphState, action: BoundedAction) -> ExecutionStep:
+def _step_for_action(state: RunCheckpoint, action: BoundedAction) -> ExecutableInvocation:
     domains = set(action.requirement.semantic_domains) if action.requirement else set()
     external_acquire = bool(domains - {"knowledge", "conversation"})
     action_type = {
@@ -1485,8 +1493,8 @@ def _step_for_action(state: AgentGraphState, action: BoundedAction) -> Execution
     ) else "deterministic"
     requirements = []
     if action.requirement is not None:
-        requirements = [action.requirement.model_dump(mode="json")]
-    return ExecutionStep(
+        requirements = [action.requirement]
+    return ExecutableInvocation(
         step_id=action.action_id,
         action_type=action_type,
         description=action.description,
@@ -1498,24 +1506,24 @@ def _step_for_action(state: AgentGraphState, action: BoundedAction) -> Execution
         execution_mode=execution_mode,
         max_iterations=action.max_iterations,
         projection_kind="bounded_action",
-        task_id=action.goal_id,
+        goal_id=action.goal_id,
         task_input=action.payload.get("task_text", action.description),
         meta_capability=action.meta_capability,
         output_contract=action.output_contract,
         capability_requirements=requirements,
-        skill_ids=list(state.execution_ledger.active_skill_ids) if state.execution_ledger else [],
+        skill_ids=list(state.task_runtime.active_skill_ids) if state.task_runtime else [],
         execution_guidance=list(action.payload.get("execution_guidance", ())),
     )
 
 
 def _steps_for_action(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     action: BoundedAction,
-) -> tuple[ExecutionStep, ...]:
+) -> tuple[ExecutableInvocation, ...]:
     commit = _step_for_action(state, action)
     if action.meta_capability != "commit":
         return (commit,)
-    proposal = ExecutionStep(
+    proposal = ExecutableInvocation(
         step_id=f"{action.action_id}:proposal",
         action_type="resolve",
         description=f"Propose a scoped mutation for: {action.description}",
@@ -1524,11 +1532,11 @@ def _steps_for_action(
         execution_mode="react",
         max_iterations=action.max_iterations,
         projection_kind="bounded_action",
-        task_id=action.goal_id,
+        goal_id=action.goal_id,
         task_input=action.payload.get("task_text", action.description),
         meta_capability="explore",
         output_contract="ProposedCommit",
-        skill_ids=list(state.execution_ledger.active_skill_ids) if state.execution_ledger else [],
+        skill_ids=list(state.task_runtime.active_skill_ids) if state.task_runtime else [],
         execution_guidance=list(action.payload.get("execution_guidance", ())),
     )
     commit.depends_on = [proposal.step_id]
@@ -1537,10 +1545,10 @@ def _steps_for_action(
 
 
 def _materialize_delegate(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     deps: ExecutiveContext,
     decision: DelegateDecision,
-) -> tuple[BoundedAction, ExecutionStep, CapabilityGapObservation | None]:
+) -> tuple[BoundedAction, ExecutableInvocation, CapabilityGapObservation | None]:
     requirement = decision.subtask.required_capability
     registry = build_capability_registry(agents=deps.agent_gateway.profiles())
     resolution = CapabilityResolver(
@@ -1549,7 +1557,7 @@ def _materialize_delegate(
         ranker=deps.capability_ranker,
     ).resolve(
         CapabilityResolutionRequest(
-            task_id=state.task_spec.task_id if state.task_spec else "",
+            task_id=state.task_contract.task_id if state.task_contract else "",
             goal_id=decision.target_goal_id,
             action_id=decision.subtask.subtask_id,
             meta_capability="delegate",
@@ -1578,7 +1586,10 @@ def _materialize_delegate(
             output_contract=decision.subtask.expected_artifact_contract,
             requirement=requirement,
         )
-        return empty_action, ExecutionStep(), gap
+        return empty_action, ExecutableInvocation(
+            action_type="agent_call",
+            description=decision.subtask.goal,
+        ), gap
     agent_id = resolution.allowed_agents[0]
     profile = deps.agent_gateway.profile(agent_id)
     if profile is None:
@@ -1599,8 +1610,8 @@ def _materialize_delegate(
         child_run_id=decision.subtask.subtask_id,
         subtask=decision.subtask,
         parent_token_remaining=(
-            state.task_spec.constraints.token_budget
-            if state.task_spec and state.task_spec.constraints.token_budget
+            state.task_contract.constraints.token_budget
+            if state.task_contract and state.task_contract.constraints.token_budget
             else decision.subtask.token_budget
         ),
         parent_cost_remaining=decision.subtask.cost_budget,
@@ -1631,19 +1642,23 @@ def _materialize_delegate(
     )
     step = _step_for_action(state, action)
     step.agent_id = agent_id
-    step.subtask_spec = {
-        "goal": decision.subtask.goal,
-        "verification_policy": decision.subtask.verification_policy,
-        "expected_artifact_contract": decision.subtask.expected_artifact_contract,
-        "max_provider_calls": decision.subtask.max_provider_calls,
-    }
-    step.capability_requirements = [requirement.model_dump(mode="json")]
+    step.subtask = DelegatedSubtaskInvocation(
+        goal=decision.subtask.goal,
+        parent_goal_id=decision.subtask.parent_goal_id,
+        context_projection_ids=decision.subtask.context_projection_ids,
+        required_capability=requirement,
+        expected_artifact_contract=decision.subtask.expected_artifact_contract,
+        verification_policy=decision.subtask.verification_policy,
+        max_provider_calls=decision.subtask.max_provider_calls,
+        requested_operations=decision.subtask.requested_operations,
+    )
+    step.capability_requirements = [requirement]
     return action, step, None
 
 
-def _action_summary(state: AgentGraphState) -> str:
+def _action_summary(state: RunCheckpoint) -> str:
     results = [
-        value for value in state.step_execution.results.values()
+        value for value in state.invocation_batch.results.values()
         if value is not None
     ]
     for result in reversed(results):
@@ -1654,13 +1669,13 @@ def _action_summary(state: AgentGraphState) -> str:
     return str(results[-1])[:1500] if results else "action completed"
 
 
-def _action_closes_goal(state: AgentGraphState, action: BoundedAction) -> bool:
+def _action_closes_goal(state: RunCheckpoint, action: BoundedAction) -> bool:
     if action.payload.get("procedure_id"):
         return True
-    if state.execution_ledger is None:
+    if state.task_runtime is None:
         return False
     goal = next(
-        (item for item in state.execution_ledger.items if item.goal_id == action.goal_id),
+        (item for item in state.goals if item.goal_id == action.goal_id),
         None,
     )
     if goal is None:
@@ -1668,120 +1683,111 @@ def _action_closes_goal(state: AgentGraphState, action: BoundedAction) -> bool:
     return action.output_contract == goal.output_contract
 
 
-def _context_items(state: AgentGraphState):
-    envelope = state.context_envelope
-    items = (
-        *envelope.run_context,
-        *envelope.working_memory,
-        *envelope.trusted_memory,
-        *envelope.evidence_context,
-        *envelope.untrusted_observations,
-    )
-    priority = {"runtime": 0, "trusted": 1, "evidence": 2, "working": 3, "untrusted": 4}
-    by_ref: dict[str, ContextItem] = {}
-    for item in items:
-        current = by_ref.get(item.ref_id)
-        if current is None or priority[item.trust_tier] < priority[current.trust_tier]:
-            by_ref[item.ref_id] = item
-    return tuple(by_ref.values())
+def _context_items(state: RunCheckpoint):
+    return tuple(state.context_inventory.items.values())
 
 
-def _planning_context_items(state: AgentGraphState, procedures) -> tuple[ContextItem, ...]:
-    if state.task_spec is None or state.execution_ledger is None:
+def _planning_context_items(state: RunCheckpoint, procedures) -> tuple[ContextItem, ...]:
+    if state.task_contract is None or state.task_runtime is None:
         return _context_items(state)
     runtime = ContextItem(
-        ref_id=(
-            f"planning:{state.task_spec.task_id}:{state.task_spec.revision}:"
-            f"{state.execution_ledger.goal_graph_revision}"
+        item_id=(
+            f"planning:{state.task_contract.task_id}:{state.task_contract.revision}:"
+            f"{state.task_runtime.goal_graph_revision}"
         ),
+        category="run",
         kind="planning_state",
         provenance="runtime",
-        trust_tier="runtime",
-        summary=state.task_spec.user_goal,
+        trust="runtime",
+        summary=state.task_contract.user_goal,
         payload={
-            "task": state.task_spec.model_dump(mode="json"),
-            "goal_graph": [item.model_dump(mode="json") for item in state.execution_ledger.items],
+            "task": state.task_contract.model_dump(mode="json"),
+            "goal_graph": [item.model_dump(mode="json") for item in state.goals],
             "procedures": [
                 item.model_dump(mode="json") for item in procedures
                 if item.status in {"eligible", "mandatory"}
             ],
-            "budget": state.planning_budget.model_dump(mode="json"),
+            "budget": state.planning_usage.model_dump(mode="json"),
             "active_plan": (
-                state.plan_ledger.plan.model_dump(mode="json")
-                if state.plan_ledger.plan is not None else None
+                state.plan_definition.model_dump(mode="json")
+                if state.plan_definition is not None else None
             ),
-            "plan_step_statuses": state.plan_ledger.step_statuses,
+            "plan_step_statuses": state.plan_runtime.step_statuses,
             "replan_request": (
                 state.replan_request.model_dump(mode="json")
                 if state.replan_request is not None else None
             ),
         },
-        admitted=True,
+        admission="admitted",
     )
     observations = tuple(ContextItem(
-        ref_id=f"observation:{item.observation_id}",
+        item_id=f"observation:{item.observation_id}",
+        category="observation",
         kind="observation",
         provenance=item.provenance,
-        trust_tier="untrusted",
+        trust="untrusted",
         summary=item.summary,
         payload=item.model_dump(mode="json"),
-        admitted=False,
+        admission="candidate",
     ) for item in state.latest_observations[-8:])
     return (*_context_items(state), runtime, *observations)
 
 
-def _monitor_context_items(state: AgentGraphState) -> tuple[ContextItem, ...]:
-    if state.task_spec is None or state.execution_ledger is None:
+def _monitor_context_items(state: RunCheckpoint) -> tuple[ContextItem, ...]:
+    if state.task_contract is None or state.task_runtime is None:
         return _context_items(state)
     runtime = ContextItem(
-        ref_id=f"monitor:{state.task_spec.task_id}:{state.plan_ledger.last_event_sequence}",
+        item_id=f"monitor:{state.task_contract.task_id}:{state.plan_runtime.last_event_sequence}",
+        category="run",
         kind="plan_monitor_state",
         provenance="runtime",
-        trust_tier="runtime",
-        summary=state.task_spec.user_goal,
+        trust="runtime",
+        summary=state.task_contract.user_goal,
         payload={
-            "task_revision": state.task_spec.revision,
-            "goal_graph_revision": state.execution_ledger.goal_graph_revision,
+            "task_revision": state.task_contract.revision,
+            "goal_graph_revision": state.task_runtime.goal_graph_revision,
             "active_plan": (
-                state.plan_ledger.plan.model_dump(mode="json")
-                if state.plan_ledger.plan is not None else None
+                state.plan_definition.model_dump(mode="json")
+                if state.plan_definition is not None else None
             ),
-            "step_statuses": state.plan_ledger.step_statuses,
+            "step_statuses": state.plan_runtime.step_statuses,
             "selected_step_ids": tuple(state.selected_plan_step_ids),
             "authority_tier": "system_policy",
         },
-        admitted=True,
+        admission="admitted",
     )
     observations = tuple(ContextItem(
-        ref_id=f"monitor-observation:{item.observation_id}",
+        item_id=f"monitor-observation:{item.observation_id}",
+        category="observation",
         kind="observation",
         provenance=item.provenance,
-        trust_tier="untrusted",
+        trust="untrusted",
         summary=item.summary,
         payload=item.model_dump(mode="json"),
-        admitted=False,
+        admission="candidate",
     ) for item in state.latest_observations[-6:])
     return (*_context_items(state), runtime, *observations)
 
 
 def _verification_context_items(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     goal,
     tool_results: list[dict],
     evidence_refs: tuple[str, ...],
     verifier_profiles: tuple[str, ...],
 ) -> tuple[ContextItem, ...]:
-    assert state.task_spec is not None
+    assert state.task_contract is not None
     criteria = tuple(
         item.model_dump(mode="json")
-        for item in state.task_spec.success_criteria
+        for item in state.task_contract.success_criteria
         if item.criterion_id in goal.success_criterion_ids
     )
     runtime = ContextItem(
-        ref_id=f"verification:{state.task_spec.task_id}:{goal.goal_id}",
+        item_id=f"verification:{state.task_contract.task_id}:{goal.goal_id}",
+        category="run",
         kind="verification_contract",
         provenance="runtime",
-        trust_tier="runtime",
+        trust="runtime",
         summary=goal.description,
         payload={
             "goal": goal.description,
@@ -1790,25 +1796,27 @@ def _verification_context_items(
             "verifier_profiles": verifier_profiles,
             "authority_tier": "system_policy",
         },
-        admitted=True,
+        admission="admitted",
     )
     answer = ContextItem(
-        ref_id=f"verification-answer:{goal.goal_id}",
+        item_id=f"verification-answer:{goal.goal_id}",
+        category="observation",
         kind="candidate_answer",
         provenance="agent_runtime",
-        trust_tier="untrusted",
+        trust="untrusted",
         summary=(state.answer or "")[:2000],
         payload={"answer": (state.answer or "")[:12000]},
-        admitted=False,
+        admission="candidate",
     )
     evidence = tuple(ContextItem(
-        ref_id=f"verification-evidence:{goal.goal_id}:{index}",
+        item_id=f"verification-evidence:{goal.goal_id}:{index}",
+        category="evidence",
         kind="goal_evidence",
         provenance="action_execution",
-        trust_tier="untrusted",
+        trust="untrusted",
         summary=_safe_context_summary(item),
         payload={"evidence": item},
-        admitted=False,
+        admission="candidate",
     ) for index, item in enumerate(tool_results[:8]))
     return (runtime, answer, *evidence)
 
@@ -1817,29 +1825,30 @@ def _safe_context_summary(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)[:2000]
 
 
-def _control_context_items(state: AgentGraphState) -> tuple[ContextItem, ...]:
-    if state.task_spec is None or state.execution_ledger is None or state.control_state is None:
+def _control_context_items(state: RunCheckpoint) -> tuple[ContextItem, ...]:
+    if state.task_contract is None or state.task_runtime is None or state.control_state is None:
         return _context_items(state)
     runtime = ContextItem(
-        ref_id=(
-            f"control:{state.task_spec.task_id}:{state.task_spec.revision}:"
-            f"{state.execution_ledger.revision}"
+        item_id=(
+            f"control:{state.task_contract.task_id}:{state.task_contract.revision}:"
+            f"{state.task_runtime.revision}"
         ),
+        category="run",
         kind="control_state",
         provenance="runtime",
-        trust_tier="runtime",
-        summary=state.task_spec.user_goal,
+        trust="runtime",
+        summary=state.task_contract.user_goal,
         payload={
-            "task": state.task_spec.model_dump(mode="json"),
-            "goal_graph": [item.model_dump(mode="json") for item in state.execution_ledger.items],
+            "task": state.task_contract.model_dump(mode="json"),
+            "goal_graph": [item.model_dump(mode="json") for item in state.goals],
             "control": state.control_state.model_dump(mode="json"),
         },
-        admitted=True,
+        admission="admitted",
     )
     return (*_context_items(state), runtime)
 
 
-def _context_budget(state: AgentGraphState) -> ContextBudget:
+def _context_budget(state: RunCheckpoint) -> ContextBudget:
     model_profile = "runtime-default"
     return ContextBudget(
         model_profile=model_profile,
@@ -1863,7 +1872,7 @@ def _decision_semantic_hash(decision) -> str:
             if decision.bounded_action.requirement else ""
         )
     elif isinstance(decision, InvokeProcedureDecision):
-        payload["procedure_id"] = decision.procedure_call.procedure_id
+        payload["procedure_id"] = decision.procedure_invocation.procedure.procedure_id
     elif isinstance(decision, DelegateDecision):
         payload["subtask_goal"] = decision.subtask.goal
     elif isinstance(decision, ActivateSkillDecision):

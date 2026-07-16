@@ -7,8 +7,9 @@ from personal_agent.application.research.models import (
     DigestClaim,
     IntelligenceDigest,
     IntelligenceDigestItem,
-    ResearchEvent,
-    ResearchRun,
+    ResearchEventRecord,
+    ResearchRunRecord,
+    ResearchRunDefinition,
     ResearchSource,
 )
 
@@ -45,16 +46,16 @@ class _Tools:
         return {"ok": False}
 
 
-def _run_with_digest(event: ResearchEvent, item: IntelligenceDigestItem):
+def _run_with_digest(event: ResearchEventRecord, item: IntelligenceDigestItem):
     store = _Store()
-    run = ResearchRun(
+    definition = ResearchRunDefinition(
         id="run-1",
         user_id="alice",
         topic="AI Agent",
         window_start=datetime(2026, 6, 29, 0, 0, tzinfo=UTC),
         window_end=datetime(2026, 6, 29, 1, 0, tzinfo=UTC),
-        digest_id="digest-1",
     )
+    run = ResearchRunRecord.create(definition).with_projection_updates(digest_id="digest-1")
     digest = IntelligenceDigest(
         id="digest-1",
         run_id=run.id,
@@ -87,7 +88,7 @@ def _source() -> ResearchSource:
 
 def test_verify_digest_marks_unsupported_claim_without_trusting_url():
     source = _source()
-    event = ResearchEvent(
+    event = ResearchEventRecord.create(
         id="event-1",
         canonical_key="agent-model",
         title="OpenAI releases Agent Model",
@@ -127,7 +128,7 @@ def test_verify_digest_marks_unsupported_claim_without_trusting_url():
 
 def test_verify_digest_removes_contradicted_item():
     source = _source()
-    event = ResearchEvent(
+    event = ResearchEventRecord.create(
         id="event-1",
         canonical_key="agent-model",
         title="OpenAI releases Agent Model",
@@ -157,7 +158,7 @@ def test_verify_digest_removes_contradicted_item():
 
 def test_verify_digest_does_not_upgrade_reported_to_verified():
     source = _source()
-    event = ResearchEvent(
+    event = ResearchEventRecord.create(
         id="event-1",
         canonical_key="agent-model",
         title="OpenAI releases Agent Model",

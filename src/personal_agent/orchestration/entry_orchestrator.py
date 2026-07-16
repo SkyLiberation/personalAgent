@@ -16,7 +16,7 @@ from personal_agent.kernel.langsmith_tracing import langsmith_trace_context
 from personal_agent.kernel.models import Citation, EntryInput
 from personal_agent.kernel.observability import RunMetrics
 from personal_agent.orchestration.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
-from personal_agent.orchestration.orchestration_models import AgentEvent, AgentGraphState, AgentRunSnapshot, StepRunState
+from personal_agent.orchestration.orchestration_models import AgentEvent, RunCheckpoint, AgentRunSnapshot, ExecutableInvocation
 from personal_agent.application.runtime_results import AskResult, CaptureResult, EntryResult
 from personal_agent.planning.task_analyzer import describe_task_analysis
 
@@ -40,7 +40,7 @@ ALLOWED_REPLAY_UPDATE_KEYS = {
     "procedure_id",
     "procedure_version",
     "react",
-    "step_execution",
+    "invocation_batch",
     "tool_tracking",
     "tool_messages",
     "tool_results",
@@ -80,12 +80,12 @@ def _durable_interrupt_status(interrupt_data: dict) -> str:
 
 
 def _steps_from_snapshot(snapshot: dict) -> list:
-    """Extract projected step list from a checkpoint snapshot."""
-    step_execution = snapshot.get("step_execution")
-    if isinstance(step_execution, dict) and "steps" in step_execution:
-        return step_execution.get("steps") or []
-    if step_execution is not None and hasattr(step_execution, "steps"):
-        return getattr(step_execution, "steps") or []
+    """Extract canonical invocations from a checkpoint snapshot."""
+    invocation_batch = snapshot.get("invocation_batch")
+    if isinstance(invocation_batch, dict):
+        return invocation_batch.get("invocations") or []
+    if invocation_batch is not None:
+        return getattr(invocation_batch, "invocations", []) or []
     return []
 
 
@@ -125,16 +125,16 @@ def _checkpoint_id_from_config(config: dict | None) -> str | None:
     return str(checkpoint_id) if checkpoint_id else None
 
 
-def _step_execution_summary(state: AgentGraphState) -> dict[str, object]:
+def _invocation_batch_summary(state: RunCheckpoint) -> dict[str, object]:
     statuses: dict[str, int] = {}
-    for step in state.step_execution.steps:
+    for step in state.invocation_batch.invocations:
         statuses[step.status] = statuses.get(step.status, 0) + 1
     return {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
-        "step_count": len(state.step_execution.steps),
-        "current_step_index": state.step_execution.current_step_index,
-        "aborted": state.step_execution.aborted,
-        "result_keys": sorted(state.step_execution.results.keys()),
+        "step_count": len(state.invocation_batch.invocations),
+        "current_step_index": state.invocation_batch.current_step_index,
+        "aborted": state.invocation_batch.aborted,
+        "result_keys": sorted(state.invocation_batch.results.keys()),
         "statuses": statuses,
     }
 
@@ -146,7 +146,7 @@ def _validate_replay_updates(updates: dict[str, object]) -> None:
         raise ValueError(
             "Replay updates use legacy checkpoint fields that are no longer supported: "
             + ", ".join(legacy)
-            + ". Use step_execution-based fields."
+            + ". Use invocation_batch-based fields."
         )
     if invalid:
         raise ValueError(
@@ -163,9 +163,9 @@ def _ensure_checkpoint_schema_supported(values: dict[str, object], checkpoint_id
             f"Checkpoint {checkpoint_id} uses legacy plan schema and cannot be replayed. "
             "Clear or migrate old LangGraph checkpoints before using replay_from_checkpoint."
         )
-    if "step_execution" not in values:
+    if "invocation_batch" not in values:
         raise ValueError(
-            f"Checkpoint {checkpoint_id} does not contain step_execution state and cannot be replayed "
+            f"Checkpoint {checkpoint_id} does not contain invocation_batch state and cannot be replayed "
             f"as {CHECKPOINT_SCHEMA_VERSION}."
         )
 
@@ -175,7 +175,7 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
     if not isinstance(values, dict):
         return None
     try:
-        state = AgentGraphState.model_validate(values)
+        state = RunCheckpoint.model_validate(values)
     except Exception:
         return None
     config = getattr(snapshot, "config", None)
@@ -200,9 +200,12 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
         "event_count": len(state.events),
         "tool_result_count": len(state.tool_results),
-        "step_execution": _step_execution_summary(state),
+        "invocation_batch": _invocation_batch_summary(state),
         "answer_completed": state.answer_completed,
-        "pending_confirmation": state.pending_confirmation,
+        "pending_confirmation": (
+            state.pending_confirmation.model_dump(mode="json")
+            if state.pending_confirmation else None
+        ),
     }
 
 
@@ -278,7 +281,7 @@ class EntryOrchestrator:
     ) -> EntryResult:
         """Execute an entry through the LangGraph orchestration graph."""
         graph = self._get_orch_graph()
-        from personal_agent.orchestration.orchestration_models import AgentGraphState, _new_run_id, _new_thread_id
+        from personal_agent.orchestration.orchestration_models import RunCheckpoint, _new_run_id, _new_thread_id
 
         normalized_user = entry_input.user_id or self.settings.default_user
         normalized_session = entry_input.session_id or "default"
@@ -290,7 +293,7 @@ class EntryOrchestrator:
         run_manager.transition(run_id, "queued", fencing_token=lease.fencing_token)
         run_manager.transition(run_id, "running", fencing_token=lease.fencing_token)
 
-        initial_state = AgentGraphState(
+        initial_state = RunCheckpoint(
             run_id=run_id,
             thread_id=thread_id,
             user_id=normalized_user,
@@ -367,7 +370,7 @@ class EntryOrchestrator:
             self._record_execution_events(result.events)
             return result
 
-        result_state = AgentGraphState.model_validate(invoke_result)
+        result_state = RunCheckpoint.model_validate(invoke_result)
         current = run_manager.get(run_id)
         durable_result = run_manager.admit_external_completion(
             run_id,
@@ -385,8 +388,8 @@ class EntryOrchestrator:
         capture_result = None
         ask_result = None
         if (
-            result_state.task_spec is not None
-            and result_state.task_spec.result_contract == "external_state"
+            result_state.task_contract is not None
+            and result_state.task_contract.result_contract == "external_state"
         ):
             for item in reversed(result_state.tool_results):
                 capture_payload = item.get("capture_result") if isinstance(item, dict) else None
@@ -394,8 +397,8 @@ class EntryOrchestrator:
                     capture_result = CaptureResult.model_validate(capture_payload)
                     break
         if (
-            result_state.task_spec is not None
-            and result_state.task_spec.result_contract in {"response", "artifact", "compound"}
+            result_state.task_contract is not None
+            and result_state.task_contract.result_contract in {"response", "artifact", "compound"}
         ):
             # Full KnowledgeNote matches are not checkpointed onto the state
             # (only summary dicts, to avoid checkpoint bloat). Surface them as
@@ -462,7 +465,7 @@ class EntryOrchestrator:
         run_metrics.result_contracts = ",".join(result_contracts)
         run_metrics.complete(
             status="completed",
-            step_count=len(result_state.step_execution.steps),
+            step_count=len(result_state.invocation_batch.invocations),
             tool_result_count=len(result_state.tool_results),
             event_count=len(result_state.events),
         )
@@ -473,7 +476,7 @@ class EntryOrchestrator:
             capture_result=capture_result,
             ask_result=ask_result,
             plan=None,
-            steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
+            steps=[s.model_dump(mode="json") for s in result_state.invocation_batch.invocations],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
             run_id=run_id,
@@ -554,7 +557,7 @@ class EntryOrchestrator:
             reason=reason,
             reply_text=str(interrupt_data.get("message", default_message)),
             steps=[
-                s.model_dump(mode="json") if isinstance(s, StepRunState) else s
+                s.model_dump(mode="json") if isinstance(s, ExecutableInvocation) else s
                 for s in (_steps_from_snapshot(state_snapshot))
             ],
             execution_trace=list(state_snapshot.get("execution_trace") or []),
@@ -661,7 +664,7 @@ class EntryOrchestrator:
             self._record_execution_events(result.events)
             return result
 
-        result_state = AgentGraphState.model_validate(invoke_result)
+        result_state = RunCheckpoint.model_validate(invoke_result)
         current_run = run_manager.get(run_id)
         durable_result = run_manager.admit_external_completion(
             run_id,
@@ -679,7 +682,7 @@ class EntryOrchestrator:
         run_metrics.complete(
             status="completed",
             resume_decision=decision,
-            step_count=len(result_state.step_execution.steps),
+            step_count=len(result_state.invocation_batch.invocations),
             tool_result_count=len(result_state.tool_results),
             event_count=len(result_state.events),
         )
@@ -689,7 +692,7 @@ class EntryOrchestrator:
             reason=describe_task_analysis(result_state.task_analysis),
             reply_text=reply_text,
             plan=None,
-            steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
+            steps=[s.model_dump(mode="json") for s in result_state.invocation_batch.invocations],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
             run_id=run_id,
@@ -703,7 +706,7 @@ class EntryOrchestrator:
         state = self.get_run_state(run_id)
         return state.to_run_snapshot() if state is not None else None
 
-    def get_run_state(self, run_id: str) -> AgentGraphState | None:
+    def get_run_state(self, run_id: str) -> RunCheckpoint | None:
         """Return the newest full checkpoint state for internal platform APIs."""
         try:
             checkpointer = self._get_orch_graph().checkpointer
@@ -712,7 +715,7 @@ class EntryOrchestrator:
             for ct in checkpointer.list(None, filter={"run_id": run_id}, limit=500):
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
-                    state = AgentGraphState.model_validate(cv)
+                    state = RunCheckpoint.model_validate(cv)
                     if state.run_id == run_id:
                         return state
         except Exception:
@@ -739,7 +742,7 @@ class EntryOrchestrator:
             for ct in checkpointer.list(None, filter=metadata_filter, limit=500):
                 if ct.checkpoint and "channel_values" in ct.checkpoint:
                     cv = ct.checkpoint["channel_values"]
-                    state = AgentGraphState.model_validate(cv)
+                    state = RunCheckpoint.model_validate(cv)
                     if user_id and state.user_id != user_id:
                         continue
                     if state.run_id in newest_by_run:
@@ -849,7 +852,7 @@ class EntryOrchestrator:
             )
             return result
 
-        result_state = AgentGraphState.model_validate(invoke_result)
+        result_state = RunCheckpoint.model_validate(invoke_result)
         requested_run_id = str(updates.get("run_id") or "")
         if requested_run_id and result_state.run_id != requested_run_id:
             # Nested subgraphs can return the parent checkpoint identity even
@@ -884,7 +887,7 @@ class EntryOrchestrator:
             reason=describe_task_analysis(result_state.task_analysis),
             reply_text=result_state.answer or "回放已完成。",
             plan=None,
-            steps=[s.model_dump(mode="json") for s in result_state.step_execution.steps],
+            steps=[s.model_dump(mode="json") for s in result_state.invocation_batch.invocations],
             execution_trace=result_state.execution_trace,
             applied_reflection_ids=list(result_state.applied_reflection_ids),
             run_id=result_state.run_id,
@@ -913,7 +916,6 @@ class EntryOrchestrator:
         fork_updates.update({
             "run_id": new_run_id,
             "events": [],
-            "answer_completed": False,
         })
         result = self.replay_from_checkpoint(
             thread_id=thread_id,
@@ -935,8 +937,8 @@ class EntryOrchestrator:
         result.events.append(fork_event.model_dump(mode="json"))
         return result
 
-def _latest_workspace_ask_payload(state: AgentGraphState) -> dict[str, object] | None:
-    for data in reversed(list(state.step_execution.results.values())):
+def _latest_workspace_ask_payload(state: RunCheckpoint) -> dict[str, object] | None:
+    for data in reversed(list(state.invocation_batch.results.values())):
         if not isinstance(data, dict) or not data.get("workspace_ask"):
             continue
         payload = data.get("workspace_answer")

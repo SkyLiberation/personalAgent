@@ -7,12 +7,15 @@ from dataclasses import dataclass
 from personal_agent.kernel.contracts.agentic import (
     AttemptRef,
     ExecutionEvent,
-    ExecutionLedger,
-    ExecutionLedgerItem,
+    GoalDefinition,
     GoalDependency,
+    GoalGraphDefinition,
+    GoalRuntimeState,
     ResourceRequirement,
     SuccessCriterion,
-    TaskSpec,
+    TaskContract,
+    TaskRuntimeProjection,
+    materialize_goals,
 )
 from personal_agent.kernel.contracts.capability import CapabilityCoverage
 from personal_agent.kernel.contracts.executive import VerificationReport
@@ -38,8 +41,8 @@ _ALLOWED_TRANSITIONS = {
 
 @dataclass(frozen=True)
 class PreparedGoalDecomposition:
-    task_spec: TaskSpec
-    ledger: ExecutionLedger
+    task_contract: TaskContract
+    runtime: TaskRuntimeProjection
     events: tuple[tuple[str, str | None, dict], ...]
 
 
@@ -48,26 +51,27 @@ class GoalDecompositionValidator:
 
     def prepare(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        runtime: TaskRuntimeProjection,
         proposal: GoalDecompositionProposal,
         *,
         available_observation_ids: set[str],
     ) -> PreparedGoalDecomposition:
         if proposal.base_task_revision != task.revision:
             raise LedgerTransitionError("goal decomposition has stale task revision")
-        if proposal.base_goal_graph_revision != ledger.goal_graph_revision:
+        if proposal.base_goal_graph_revision != runtime.goal_graph_revision:
             raise LedgerTransitionError("goal decomposition has stale goal graph revision")
         source_ids = set(proposal.derived_from_observation_ids)
         if not source_ids.issubset(available_observation_ids):
             raise LedgerTransitionError("goal decomposition references unknown observations")
-        item_by_id = {item.goal_id: item for item in ledger.items}
-        parent = item_by_id.get(proposal.parent_goal_id)
+        views = materialize_goals(task, runtime)
+        view_by_id = {item.goal_id: item for item in views}
+        parent = view_by_id.get(proposal.parent_goal_id)
         if parent is None:
             raise LedgerTransitionError("goal decomposition parent does not exist")
         if parent.status in {"verified", "degraded", "abandoned"}:
             raise LedgerTransitionError("terminal goal cannot be decomposed")
-        runtime_count = sum(item.origin == "runtime_derived" for item in ledger.items)
+        runtime_count = sum(item.origin == "runtime_derived" for item in views)
         if runtime_count + len(proposal.children) > task.constraints.goal_expansion_budget:
             raise LedgerTransitionError("runtime goal budget exceeded")
         allowed_domains = {item.semantic_domain for item in task.resource_requirements}
@@ -76,16 +80,17 @@ class GoalDecompositionValidator:
             for item in task.resource_requirements
             for operation in item.required_operations
         )
-        criteria = list(task.success_criteria)
-        resources = list(task.resource_requirements)
+        definitions = task.goal_graph.by_id()
+        states = dict(runtime.goal_states)
         events: list[tuple[str, str | None, dict]] = []
         child_ids: list[str] = []
         for child in proposal.children:
-            if child.goal_id in item_by_id:
+            if child.goal_id in definitions:
                 raise LedgerTransitionError("derived goal id already exists")
             depth = parent.decomposition_depth + 1
             if depth > task.constraints.max_derived_goal_depth:
                 raise LedgerTransitionError("derived goal exceeds maximum decomposition depth")
+            child_resources: list[ResourceRequirement] = []
             for requirement in child.resource_requirements:
                 if requirement.side_effect_class != "none":
                     raise LedgerTransitionError("derived goals cannot introduce side effects")
@@ -93,9 +98,8 @@ class GoalDecompositionValidator:
                     raise LedgerTransitionError("derived goal expands semantic resource scope")
                 if allowed_operations and not set(requirement.operations).issubset(allowed_operations):
                     raise LedgerTransitionError("derived goal expands operation scope")
-                resources.extend(
-                    ResourceRequirement(
-                        goal_id=child.goal_id,
+                child_resources.extend(
+                    ResourceRequirement.from_dimensions(
                         semantic_domain=domain,
                         locator=requirement.resource_locator,
                         resource_types=requirement.resource_types,
@@ -116,21 +120,22 @@ class GoalDecompositionValidator:
                 )
                 for value in child.criteria
             )
-            criteria.extend(child_criteria)
-            item = ExecutionLedgerItem(
+            definition = GoalDefinition(
                 goal_id=child.goal_id,
                 parent_goal_id=parent.goal_id,
                 description=child.description,
                 result_contract=child.result_contract,
                 origin="runtime_derived",
                 decomposition_depth=depth,
-                status="active",
-                success_criterion_ids=tuple(value.criterion_id for value in child_criteria),
+                resources=tuple(child_resources),
+                criteria=child_criteria,
                 output_contract=child.output_contract,
             )
-            item_by_id[item.goal_id] = item
-            child_ids.append(item.goal_id)
-            events.append(("goal_added", item.goal_id, {"goal": item.model_dump(mode="json")}))
+            state = GoalRuntimeState(status="active")
+            definitions[child.goal_id] = definition
+            states[child.goal_id] = state
+            child_ids.append(child.goal_id)
+            events.append(("goal_added", child.goal_id, {"runtime": state.model_dump(mode="json")}))
         dependencies = (*parent.dependencies, *(
             GoalDependency(
                 dependency_goal_id=child_id,
@@ -140,7 +145,9 @@ class GoalDecompositionValidator:
             )
             for child_id in child_ids
         ))
-        item_by_id[parent.goal_id] = parent.model_copy(update={"dependencies": dependencies})
+        definitions[parent.goal_id] = parent.definition.model_copy(
+            update={"dependencies": dependencies}
+        )
         for child_id in child_ids:
             dependency = next(
                 item for item in dependencies if item.dependency_goal_id == child_id
@@ -153,20 +160,30 @@ class GoalDecompositionValidator:
                     "dependency": dependency.model_dump(mode="json"),
                 },
             ))
-        projected = ledger.model_copy(update={"items": tuple(item_by_id.values())})
-        GoalGraphValidator().validate_ledger(projected)
+        graph_revision = task.goal_graph.revision + len(events)
+        new_task_revision = task.revision + 1
+        updated_task = task.model_copy(update={
+            "revision": new_task_revision,
+            "goal_graph": GoalGraphDefinition(
+                revision=graph_revision,
+                goals=tuple(definitions.values()),
+            ),
+        })
+        projected = runtime.model_copy(update={
+            "task_revision": new_task_revision,
+            "goal_graph_revision": graph_revision,
+            "goal_states": states,
+        })
+        GoalGraphValidator().validate_runtime(updated_task, projected)
         return PreparedGoalDecomposition(
-            task_spec=task.model_copy(update={
-                "success_criteria": tuple(criteria),
-                "resource_requirements": tuple(resources),
-            }),
-            ledger=projected,
+            task_contract=updated_task,
+            runtime=projected,
             events=tuple(events),
         )
 
 
-class ExecutionLedgerProjector:
-    def project(self, ledger: ExecutionLedger, events: tuple[ExecutionEvent, ...]) -> ExecutionLedger:
+class TaskRuntimeProjector:
+    def project(self, ledger: TaskRuntimeProjection, events: tuple[ExecutionEvent, ...]) -> TaskRuntimeProjection:
         current = ledger
         expected = current.last_event_sequence + 1
         for event in events:
@@ -178,9 +195,9 @@ class ExecutionLedgerProjector:
             expected += 1
         return current
 
-    def _apply(self, ledger: ExecutionLedger, event: ExecutionEvent) -> ExecutionLedger:
-        items = list(ledger.items)
-        index = next((i for i, item in enumerate(items) if item.goal_id == event.goal_id), None)
+    def _apply(self, ledger: TaskRuntimeProjection, event: ExecutionEvent) -> TaskRuntimeProjection:
+        states = dict(ledger.goal_states)
+        state = states.get(event.goal_id or "")
         status_by_event = {
             "goal_activated": "active",
             "goal_blocked": "blocked",
@@ -190,14 +207,18 @@ class ExecutionLedgerProjector:
             "goal_abandoned": "abandoned",
         }
         if event.event_type == "goal_added":
-            items.append(ExecutionLedgerItem.model_validate(event.payload["goal"]))
+            if event.goal_id is None:
+                raise LedgerTransitionError("goal_added requires goal_id")
+            added = GoalRuntimeState.model_validate(event.payload["runtime"])
+            if event.goal_id in states:
+                raise LedgerTransitionError(f"goal already exists {event.goal_id}")
+            states[event.goal_id] = added
         elif event.event_type in status_by_event:
-            if index is None:
+            if state is None:
                 raise LedgerTransitionError(f"event references unknown goal {event.goal_id}")
-            item = items[index]
             target = status_by_event[event.event_type]
-            if target != item.status and target not in _ALLOWED_TRANSITIONS[item.status]:
-                raise LedgerTransitionError(f"illegal goal transition {item.status}->{target}")
+            if target != state.status and target not in _ALLOWED_TRANSITIONS[state.status]:
+                raise LedgerTransitionError(f"illegal goal transition {state.status}->{target}")
             update = {"status": target}
             if "evidence_gaps" in event.payload:
                 update["evidence_gaps"] = tuple(event.payload["evidence_gaps"])
@@ -205,59 +226,46 @@ class ExecutionLedgerProjector:
                 update["verification"] = VerificationReport.model_validate(
                     event.payload["verification"]
                 )
-            items[index] = item.model_copy(update=update)
+            states[event.goal_id] = state.model_copy(update=update)
         elif event.event_type == "attempt_recorded":
-            if index is None:
+            if state is None:
                 raise LedgerTransitionError(f"event references unknown goal {event.goal_id}")
-            item = items[index]
             attempt = AttemptRef.model_validate(event.payload["attempt"])
-            items[index] = item.model_copy(update={"attempts": (*item.attempts, attempt)})
+            states[event.goal_id] = state.model_copy(
+                update={"attempts": (*state.attempts, attempt)}
+            )
         elif event.event_type == "coverage_recorded":
-            if index is None:
+            if state is None:
                 raise LedgerTransitionError(f"event references unknown goal {event.goal_id}")
-            item = items[index]
-            items[index] = item.model_copy(update={
+            states[event.goal_id] = state.model_copy(update={
                 "coverage": tuple(
                     CapabilityCoverage.model_validate(value)
                     for value in event.payload.get("coverage", ())
                 ),
-                "evidence_gaps": tuple(event.payload.get("evidence_gaps", item.evidence_gaps)),
+                "evidence_gaps": tuple(event.payload.get("evidence_gaps", state.evidence_gaps)),
             })
-        elif event.event_type in {
-            "goal_dependency_added", "goal_dependency_removed", "goal_dependency_updated",
-        }:
-            if index is None:
+        elif event.event_type == "verification_recorded":
+            if state is None:
                 raise LedgerTransitionError(f"event references unknown goal {event.goal_id}")
-            item = items[index]
-            dependency_id = str(event.payload["dependency_goal_id"])
-            if event.event_type == "goal_dependency_removed":
-                dependencies = tuple(
-                    value for value in item.dependencies
-                    if value.dependency_goal_id != dependency_id
-                )
-            else:
-                dependency = GoalDependency.model_validate(event.payload["dependency"])
-                dependencies = tuple(
-                    value for value in item.dependencies
-                    if value.dependency_goal_id != dependency_id
-                ) + (dependency,)
-            items[index] = item.model_copy(update={"dependencies": dependencies})
+            states[event.goal_id] = state.model_copy(update={
+                "verification": VerificationReport.model_validate(event.payload["verification"]),
+            })
         elif event.event_type == "skill_activated":
             skill_id = str(event.payload["skill_id"])
             if skill_id not in ledger.active_skill_ids:
                 ledger = ledger.model_copy(update={
                     "active_skill_ids": (*ledger.active_skill_ids, skill_id),
                 })
-        active = tuple(item.goal_id for item in items if item.status in {
-            "pending", "active", "blocked", "awaiting_input", "candidate_complete",
-        })
+        elif event.event_type == "task_completed":
+            ledger = ledger.model_copy(update={"lifecycle": "completed"})
+        elif event.event_type == "task_stopped":
+            ledger = ledger.model_copy(update={"lifecycle": "stopped"})
         graph_events = {
             "goal_added", "goal_dependency_added", "goal_dependency_removed",
             "goal_dependency_updated", "goal_abandoned",
         }
         return ledger.model_copy(update={
-            "items": tuple(items),
-            "active_goal_ids": active,
+            "goal_states": states,
             "revision": ledger.revision + 1,
             "goal_graph_revision": (
                 ledger.goal_graph_revision + 1
@@ -268,7 +276,7 @@ class ExecutionLedgerProjector:
 
 
 def next_execution_event(
-    ledger: ExecutionLedger,
+    ledger: TaskRuntimeProjection,
     event_type: str,
     *,
     goal_id: str | None = None,
@@ -284,6 +292,6 @@ def next_execution_event(
 
 
 __all__ = [
-    "ExecutionLedgerProjector", "GoalDecompositionValidator", "LedgerTransitionError",
+    "TaskRuntimeProjector", "GoalDecompositionValidator", "LedgerTransitionError",
     "PreparedGoalDecomposition", "next_execution_event",
 ]

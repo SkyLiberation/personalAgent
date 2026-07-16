@@ -9,16 +9,21 @@ from personal_agent.context.projection import ContextManager
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     AgentGatewayContext,
-    AgentRun,
+    ChildAgentArtifactIndex,
+    ChildAgentRunDefinition,
+    ChildAgentRunProjection,
+    ChildAgentRunRecord,
     AgentTask,
     SubagentProfile,
 )
 from personal_agent.kernel.contracts.agentic import (
     ContextBudget,
     ContextItem,
+    RuntimeSnapshotRef,
     SuccessCriterion,
 )
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
+from personal_agent.kernel.contracts.execution import InvocationAttemptState
 from personal_agent.kernel.contracts.executive import (
     BoundedAction,
     ProposedResourceAccessPlan,
@@ -33,9 +38,9 @@ from personal_agent.runtime.run_manager import DurableRunManager, RunStateError
 from personal_agent.runtime.scheduler import RunScheduler
 from personal_agent.skills.registry import SkillRegistry
 from personal_agent.orchestration.orchestration_models import (
-    AgentGraphState,
-    StepExecutionState,
-    StepRunState,
+    RunCheckpoint,
+    InvocationBatchState,
+    ExecutableInvocation,
 )
 from personal_agent.orchestration.orchestration_nodes._steps import (
     _execute_agent_call_step,
@@ -46,18 +51,20 @@ from personal_agent.orchestration.orchestration_nodes._steps import (
 def test_context_projection_prefers_authority_and_respects_budget() -> None:
     items = (
         ContextItem(
-            ref_id="untrusted",
+                item_id="untrusted",
+                category="observation",
             kind="web",
             provenance="web",
-            trust_tier="untrusted",
+                trust="untrusted",
             summary="x" * 200,
             payload={"authority_tier": "untrusted_content"},
         ),
         ContextItem(
-            ref_id="policy",
+                item_id="policy",
+                category="run",
             kind="policy",
             provenance="runtime",
-            trust_tier="runtime",
+                trust="runtime",
             summary="required policy",
             payload={"authority_tier": "system_policy"},
         ),
@@ -72,12 +79,14 @@ def test_context_projection_prefers_authority_and_respects_budget() -> None:
             safety_margin=5,
             reserved_output_tokens=10,
         ),
-        ledger_revision=3,
-        event_cursor="7",
+        source_snapshot=RuntimeSnapshotRef(
+            run_id="run", task_id="task", task_revision=1,
+            runtime_revision=3, event_sequence=7,
+        ),
     )
 
-    assert projection.item_refs == ("policy",)
-    assert projection.omitted_refs == ("untrusted",)
+    assert projection.selected_item_ids == ("policy",)
+    assert tuple(item.item_id for item in projection.omitted) == ("untrusted",)
     assert projection.token_estimate <= 25
 
 
@@ -171,7 +180,7 @@ def test_subagent_scope_is_strict_intersection_and_budget_is_parent_owned() -> N
         capability_ids=("agent:researcher", "tool:web"),
         allowed_operations=("delegate", "read"),
     )
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="delegate",
         purpose="research",
         operations=("delegate",),
@@ -234,17 +243,19 @@ def test_agent_step_uses_durable_submit_then_poll() -> None:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        def submit(self, agent_id: str, task: AgentTask, context: AgentGatewayContext) -> AgentRun:
+        def submit(self, agent_id: str, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
             self.calls.append("submit")
-            return AgentRun(
-                agent_run_id="child-1",
-                agent_id=agent_id,
-                status="running",
-                task=task,
-                context=context,
+            return ChildAgentRunRecord(
+                definition=ChildAgentRunDefinition(
+                    agent_run_id="child-1", agent_id=agent_id, task=task, context=context,
+                ),
+                projection=ChildAgentRunProjection(
+                    agent_run_id="child-1", status="running",
+                ),
+                artifact_index=ChildAgentArtifactIndex(agent_run_id="child-1"),
             )
 
-        def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
+        def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
             self.calls.append("poll")
             artifact = AgentArtifact(
                 artifact_id="artifact-1",
@@ -252,14 +263,21 @@ def test_agent_step_uses_durable_submit_then_poll() -> None:
                 kind="report",
                 content="verified later by parent",
             )
-            return AgentRun(
-                agent_run_id=agent_run_id,
-                agent_id="researcher",
-                status="completed",
-                task=AgentTask("research"),
-                context=context,
-                result={"report": artifact.content},
-                artifacts=(artifact,),
+            return ChildAgentRunRecord(
+                definition=ChildAgentRunDefinition(
+                    agent_run_id=agent_run_id,
+                    agent_id="researcher",
+                    task=AgentTask("research"),
+                    context=context,
+                ),
+                projection=ChildAgentRunProjection(
+                    agent_run_id=agent_run_id,
+                    status="completed",
+                    result={"report": artifact.content},
+                ),
+                artifact_index=ChildAgentArtifactIndex(
+                    agent_run_id=agent_run_id, artifacts=(artifact,),
+                ),
             )
 
     class ArtifactStore:
@@ -271,44 +289,51 @@ def test_agent_step_uses_durable_submit_then_poll() -> None:
         agent_gateway=gateway,
         execution_artifact_store=ArtifactStore(),
     )
-    step = StepRunState(
+    step = ExecutableInvocation(
         step_id="delegate-1",
         action_type="agent_call",
+        description="delegate research",
         agent_id="researcher",
         task_id="goal-1",
         task_input="research topic",
-        status="running",
+        attempt=InvocationAttemptState(status="running"),
     )
-    state = AgentGraphState(
+    state = RunCheckpoint(
         run_id="parent-1",
         user_id="tenant",
         session_id="session",
-        step_execution=StepExecutionState(steps=[step]),
+        invocation_batch=InvocationBatchState(invocations=[step]),
     )
 
-    assert not _execute_agent_call_step(step.to_execution_step(), step, state, deps)
+    assert not _execute_agent_call_step(step, step, state, deps)
     assert gateway.calls == ["submit"]
-    assert state.step_execution.results[step.step_id]["status"] == "running"
+    assert state.invocation_batch.results[step.step_id]["status"] == "running"
 
-    assert _execute_agent_call_step(step.to_execution_step(), step, state, deps)
+    assert _execute_agent_call_step(step, step, state, deps)
     assert gateway.calls == ["submit", "poll"]
-    assert state.step_execution.results[step.step_id]["report"] == "verified later by parent"
-    assert state.context_envelope.untrusted_observations[0].ref_id == "agent:artifact-1"
+    assert state.invocation_batch.results[step.step_id]["report"] == "verified later by parent"
+    assert state.context_inventory.selected(category="observation")[0].item_id == "agent:artifact-1"
 
 
 def test_submitted_child_polling_is_round_robin() -> None:
-    state = AgentGraphState(
-        step_execution=StepExecutionState(
-            steps=[
-                StepRunState(step_id="child-a", action_type="agent_call", status="submitted"),
-                StepRunState(step_id="child-b", action_type="agent_call", status="submitted"),
+    state = RunCheckpoint(
+        invocation_batch=InvocationBatchState(
+            invocations=[
+                ExecutableInvocation(
+                    step_id="child-a", action_type="agent_call", description="child a",
+                    attempt=InvocationAttemptState(status="submitted"),
+                ),
+                ExecutableInvocation(
+                    step_id="child-b", action_type="agent_call", description="child b",
+                    attempt=InvocationAttemptState(status="submitted"),
+                ),
             ],
             current_step_index=0,
         ),
     )
 
     _node_select_next_step(state)
-    assert state.step_execution.current_step_index == 1
-    state.step_execution.steps[1].status = "submitted"
+    assert state.invocation_batch.current_step_index == 1
+    state.invocation_batch.invocations[1].status = "submitted"
     _node_select_next_step(state)
-    assert state.step_execution.current_step_index == 0
+    assert state.invocation_batch.current_step_index == 0

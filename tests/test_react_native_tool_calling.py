@@ -29,9 +29,9 @@ from personal_agent.context import ContextManager, ModelContextGateway
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.orchestration.orchestration_models import (
-    AgentGraphState,
+    RunCheckpoint,
     ReactSubState,
-    StepExecutionState,
+    InvocationBatchState,
 )
 from personal_agent.tools.base import governance_extras
 
@@ -92,8 +92,8 @@ def _settings() -> Settings:
     )
 
 
-def _react_state(allowed_tools: list[str], prompt: str = "检索 X") -> AgentGraphState:
-    return AgentGraphState(
+def _react_state(allowed_tools: list[str], prompt: str = "检索 X") -> RunCheckpoint:
+    return RunCheckpoint(
         run_id="r-native",
         react=ReactSubState(
             step_id="ask-1",
@@ -103,8 +103,8 @@ def _react_state(allowed_tools: list[str], prompt: str = "检索 X") -> AgentGra
             user_prompt=prompt,
             done=False,
         ),
-        step_execution=StepExecutionState(
-            steps=[{"step_id": "ask-1", "status": "running"}],
+        invocation_batch=InvocationBatchState(
+            invocations=[{"step_id": "ask-1", "status": "running"}],
             current_step_index=0,
         ),
     )

@@ -33,8 +33,8 @@ def test_explicit_gpt_researcher_is_required_delegate_binding():
     assert hint.operations == ["delegate"]
 
     interpretation = GoalGraphCompiler().compile(decision, decision.user_goal)
-    assert interpretation.ledger.items[0].result_contract == "artifact"
-    requirement = interpretation.task_spec.resource_requirements[0]
+    assert interpretation.task_contract.goal_graph.goals[0].result_contract == "artifact"
+    requirement = interpretation.task_contract.resource_requirements[0]
     assert requirement.required_providers == ("gpt_researcher",)
 
 
@@ -55,15 +55,15 @@ def test_generic_research_is_open_but_research_procedure_is_eligible():
     )
     assert decision.goals[0].result_contract == "artifact"
     interpretation = GoalGraphCompiler().compile(decision, decision.user_goal)
-    assert interpretation.ledger.items[0].result_contract == "artifact"
+    assert interpretation.task_contract.goal_graph.goals[0].result_contract == "artifact"
     from personal_agent.planning.procedures import (
         PROCEDURE_CATALOG,
         ProcedureApplicabilityResolver,
     )
 
     candidates = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(
-        interpretation.task_spec,
-        interpretation.ledger,
+        interpretation.task_contract,
+        interpretation.runtime,
     )
     research = next(item for item in candidates if item.procedure_id == "research_run")
     assert research.status == "eligible"
@@ -77,7 +77,7 @@ def test_delegate_requirement_resolves_explicit_fresh_agent_capability():
         semantic_domains=("external_research",),
         governance=AgentGovernance(side_effects=("external_network",)),
     ))
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="delegate-research",
         purpose="delegate research",
         semantic_domains=("external_research",),

@@ -32,7 +32,7 @@ def test_routing_context_cannot_access_execution_capabilities():
 def test_executive_context_separates_decision_from_execution():
     names = _field_names(ExecutiveContext)
     assert {"goal_graph_compiler", "controller", "decision_validator"}.issubset(names)
-    assert {"ledger_projector", "goal_verifier", "completion_verifier"}.issubset(names)
+    assert {"task_runtime_projector", "goal_verifier", "completion_verifier"}.issubset(names)
     assert "replanner" not in names
 
 

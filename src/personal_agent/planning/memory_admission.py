@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from personal_agent.kernel.contracts.agentic import TaskSpec
+from personal_agent.kernel.contracts.agentic import TaskContract
 
 
 class MutationAdmissionDecision(BaseModel):
@@ -26,7 +26,7 @@ class MemoryAdmissionGate:
 
     def evaluate(
         self,
-        task: TaskSpec | None,
+        task: TaskContract | None,
         *,
         tool_name: str | None,
     ) -> MutationAdmissionDecision:
@@ -39,7 +39,7 @@ class MemoryAdmissionGate:
         if task is None or task.mutation_intent is None:
             return MutationAdmissionDecision(
                 status="denied",
-                reason="durable knowledge mutation requires an explicit TaskSpec mutation intent",
+                reason="durable knowledge mutation requires an explicit TaskContract mutation intent",
                 target_kind="knowledge",
             )
         if task.mutation_intent.requires_confirmation:

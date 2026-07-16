@@ -3,10 +3,11 @@ from __future__ import annotations
 from personal_agent.kernel.contracts.capability import (
     Capability,
     CapabilityRequirement,
-    CapabilityResolution,
+    CapabilityResolutionDecision,
     CapabilityResolutionRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
+    ResolutionConstraints,
 )
 from personal_agent.planning.capability_validation import ResolutionValidator
 from personal_agent.planning.capability_resolver import CapabilityResolver
@@ -44,7 +45,7 @@ def test_resolver_rejects_kind_outside_action_scope():
             operations=("create",),
         ),
     )))
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="evidence",
         purpose="retrieve notes",
         semantic_domains=("local_memory",),
@@ -75,7 +76,7 @@ def test_local_first_is_explicit_policy_not_text_classification():
             side_effects=("external_network",),
         ),
     )))
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="evidence",
         purpose="retrieve evidence",
         operations=("search", "read"),
@@ -111,7 +112,7 @@ def test_read_only_action_rejects_write_capability():
             operations=("create",),
         ),
     )))
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="repository",
         purpose="read repository content",
         semantic_domains=("codebase",),
@@ -148,7 +149,7 @@ def test_unreviewed_high_risk_capability_is_rejected_before_execution():
             operations=("create",),
         ),
     )))
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="issue-create",
         purpose="create issue",
         semantic_domains=("codebase",),
@@ -168,7 +169,7 @@ def test_unreviewed_high_risk_capability_is_rejected_before_execution():
 
 
 def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity():
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="search",
         purpose="search notes",
         operations=("search",),
@@ -185,7 +186,18 @@ def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity
         local_name="delete_note",
         operations=("delete",),
     ).model_copy(update={"metadata_source": "system"})
-    resolution = CapabilityResolution(request=request, selected_capabilities=(selected,))
+    resolution = CapabilityResolutionDecision(
+        request_scope_id=request.scope_id,
+        selected_capabilities=(selected,),
+        constraints=ResolutionConstraints(
+            task_id=request.task_id,
+            goal_id=request.goal_id,
+            action_id=request.action_id,
+            meta_capability=request.meta_capability,
+            allowed_kinds=request.allowed_kinds,
+            allowed_operations=request.allowed_operations,
+        ),
+    )
 
     errors = ResolutionValidator().errors(request, resolution)
 
@@ -196,7 +208,7 @@ def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity
 
 
 def test_missing_freshness_source_returns_non_authoritative_escalation_hint():
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="fresh",
         purpose="retrieve current release information",
         semantic_domains=("web",),
@@ -214,7 +226,7 @@ def test_missing_freshness_source_returns_non_authoritative_escalation_hint():
 
 
 def test_evidence_source_capability_is_a_retrieval_only_contract():
-    source = EvidenceSourceCapability(
+    source = EvidenceSourceCapability.from_dimensions(
         capability_id="source:github_repo_docs",
         provider="github",
         local_name="github_repo_docs",
@@ -263,7 +275,7 @@ def test_outcome_ranker_reorders_only_hard_eligible_candidates():
             verifier_passed=False,
             latency_ms=100,
         )
-    requirement = CapabilityRequirement(
+    requirement = CapabilityRequirement.from_dimensions(
         requirement_id="evidence",
         purpose="read evidence",
         operations=("search", "read"),
@@ -282,7 +294,7 @@ def test_outcome_ranker_reorders_only_hard_eligible_candidates():
 
     assert resolution.selected_retrievers == ("preferred",)
     assert any(item.capability_id == denied.capability_id for item in resolution.denied_capabilities)
-    assert resolution.constraints["ranking"]["feature_version"] == "capability-outcome-v1"
+    assert resolution.constraints.ranking["feature_version"] == "capability-outcome-v1"
 
 
 def _capability(
@@ -294,7 +306,7 @@ def _capability(
     operations: tuple[str, ...] = ("search", "read"),
     side_effects: tuple[str, ...] = ("none",),
 ) -> Capability:
-    return Capability(
+    return Capability.from_dimensions(
         capability_id=capability_id,
         kind=kind,  # type: ignore[arg-type]
         provider=provider,

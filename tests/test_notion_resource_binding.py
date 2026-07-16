@@ -11,7 +11,7 @@ def test_notion_read_becomes_ask_with_workspace_requirement():
     assert goal.resource_hints[0].user_required_provider == "notion"
     assert set(goal.resource_hints[0].operations) == {"search", "read"}
 
-    task = GoalGraphCompiler().compile(decision, decision.user_goal).task_spec
+    task = GoalGraphCompiler().compile(decision, decision.user_goal).task_contract
     assert task.resource_requirements[0].semantic_domain == "workspace"
     assert task.resource_requirements[0].required_providers == ("notion",)
     assert task.constraints.read_only
@@ -22,9 +22,9 @@ def test_notion_write_becomes_governed_generic_action():
     assert decision.goals[0].result_contract == "external_state"
 
     interpretation = GoalGraphCompiler().compile(decision, decision.user_goal)
-    assert interpretation.ledger.items[0].result_contract == "external_state"
-    assert interpretation.task_spec.mutation_intent is not None
-    assert not interpretation.task_spec.constraints.read_only
+    assert interpretation.task_contract.goal_graph.goals[0].result_contract == "external_state"
+    assert interpretation.task_contract.mutation_intent is not None
+    assert not interpretation.task_contract.constraints.read_only
 
 
 def _notion_analysis(result_contract, operations):

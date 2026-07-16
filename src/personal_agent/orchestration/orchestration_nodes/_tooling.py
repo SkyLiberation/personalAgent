@@ -4,7 +4,7 @@ import logging
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from personal_agent.orchestration.orchestration_models import AgentGraphState, ToolTrackingSubState
+from personal_agent.orchestration.orchestration_models import RunCheckpoint, ToolTrackingSubState
 from personal_agent.orchestration.orchestration_contexts import ToolingContext
 from personal_agent.orchestration.orchestration_nodes import _helpers
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _tool_result_event_payload(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     *,
     deps: ToolingContext | None,
     context: str,
@@ -21,7 +21,7 @@ def _tool_result_event_payload(
     artifact: dict,
 ) -> dict:
     payload = {
-        "context": "step_execution",
+        "context": "invocation_batch",
         "step_id": step_id,
         "tool_call_id": tool_call_id,
         "ok": bool(artifact.get("ok")),
@@ -62,7 +62,7 @@ def _lookup_tool_spec(deps: ToolingContext | None, tool_name: str):
 
 
 def _log_tool_invocation_event(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     deps: ToolingContext,
     artifact: dict,
     *,
@@ -88,7 +88,7 @@ def _log_tool_invocation_event(
 
 
 def _begin_tool_call(
-    state: AgentGraphState,
+    state: RunCheckpoint,
     *,
     context: str,
     tool_name: str,
@@ -100,7 +100,7 @@ def _begin_tool_call(
 ) -> AIMessage:
     resolved_call_id = call_id or f"{state.run_id}:{suffix}:{len(state.tool_results)}"
     normalized_input = dict(tool_input or {})
-    if context == "step_execution" and tool_name == "graph_search" and "user_id" not in normalized_input:
+    if context == "invocation_batch" and tool_name == "graph_search" and "user_id" not in normalized_input:
         normalized_input["user_id"] = state.user_id
     state.tool_tracking = ToolTrackingSubState(
         active_context=context,
@@ -128,7 +128,7 @@ def _begin_tool_call(
     )
 
 
-def _latest_tool_artifact(state: AgentGraphState) -> dict:
+def _latest_tool_artifact(state: RunCheckpoint) -> dict:
     expected_call_id = state.tool_tracking.pending_call_id
     if not expected_call_id:
         return {"ok": False, "data": None, "error": "缺少待处理工具调用标识。", "evidence": []}
@@ -152,9 +152,9 @@ def _latest_tool_artifact(state: AgentGraphState) -> dict:
     }
 
 
-def _clear_pending_tool_call(state: AgentGraphState) -> None:
+def _clear_pending_tool_call(state: RunCheckpoint) -> None:
     state.tool_tracking = ToolTrackingSubState()
 
 
-def _pending_tool_updates(state: AgentGraphState) -> dict:
+def _pending_tool_updates(state: RunCheckpoint) -> dict:
     return {"tool_tracking": state.tool_tracking}

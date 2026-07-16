@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from personal_agent.kernel.contracts.capability import (
     Capability,
-    CapabilityResolution,
+    CapabilityResolutionDecision,
     CapabilityResolutionRequest,
 )
+from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS, match_resource_contract
 
 
 class ResolutionValidator:
@@ -19,15 +20,15 @@ class ResolutionValidator:
     def errors(
         self,
         request: CapabilityResolutionRequest,
-        resolution: CapabilityResolution,
+        resolution: CapabilityResolutionDecision,
         *,
         hard_denied_ids: frozenset[str] = frozenset(),
     ) -> tuple[str, ...]:
         errors: list[str] = []
-        if resolution.request.scope_id != request.scope_id:
+        if resolution.request_scope_id != request.scope_id:
             errors.append("scope_id_changed")
         for field in ("task_id", "goal_id", "action_id", "meta_capability"):
-            if getattr(resolution.request, field) != getattr(request, field):
+            if getattr(resolution.constraints, field) != getattr(request, field):
                 errors.append(f"{field}_changed")
 
         selected_ids = {capability.capability_id for capability in resolution.selected_capabilities}
@@ -50,9 +51,7 @@ class ResolutionValidator:
                 for requirement in request.requirements
             ):
                 errors.append(f"requirement_outside_scope:{capability.capability_id}")
-            if request.policy.read_only and set(capability.operations) & {
-                "create", "update", "delete", "ingest", "repair",
-            }:
+            if request.policy.read_only and set(capability.operations) & MUTATING_OPERATIONS:
                 errors.append(f"write_outside_read_only:{capability.capability_id}")
         return tuple(dict.fromkeys(errors))
 
@@ -88,13 +87,14 @@ def _is_high_risk(capability: Capability) -> bool:
 
 
 def _matches_requirement(capability: Capability, requirement) -> bool:
-    if requirement.required_providers and capability.provider not in requirement.required_providers:
-        return False
-    if requirement.semantic_domains and not set(requirement.semantic_domains) & set(capability.semantic_domains):
-        return False
-    if requirement.resource_types and not set(requirement.resource_types) & set(capability.resource_types):
-        return False
-    return not requirement.operations or bool(set(requirement.operations) & set(capability.operations))
+    return match_resource_contract(
+        requirement.selector,
+        requirement.operation_scope,
+        requirement.provider_constraint,
+        capability.selector,
+        capability.operation_scope,
+        candidate_provider=capability.provider,
+    ).status == "matched"
 
 
 __all__ = ["ResolutionValidator"]

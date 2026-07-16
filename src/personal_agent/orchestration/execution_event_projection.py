@@ -41,7 +41,7 @@ def project_execution_events(
         if event.type == "entry_started":
             projection.status = AgentRunStatus.running
         elif event.type == "procedure_started":
-            call = payload.get("procedure_call") or {}
+            call = payload.get("procedure_invocation") or {}
             projection.procedure_id = str(call.get("procedure_id") or "")
             projection.procedure_version = str(call.get("procedure_version") or "")
         elif event.type == "task_analyzed":
@@ -126,4 +126,3 @@ def _display_fields(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ("description", "action_type", "output_label", "output_title", "output_preview")
         if key in payload
     }
-

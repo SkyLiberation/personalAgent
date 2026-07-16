@@ -163,13 +163,13 @@ class RetrievalStage:
             registry,
             policy_engine=svc.policy_engine,
         ).resolve(CapabilityResolutionRequest(
-            task_id="",
+            task_id=f"ask-task:{ctx.session_id}",
             goal_id=f"ask:{ctx.session_id}",
             action_id="ask-retrieve",
             meta_capability="acquire",
             allowed_kinds=("retriever",),
             allowed_operations=("search", "read"),
-            requirements=(CapabilityRequirement(
+            requirements=(CapabilityRequirement.from_dimensions(
                 requirement_id="ask:evidence",
                 purpose="retrieve evidence for the current question",
                 operations=("search", "read"),
@@ -225,9 +225,9 @@ class RetrievalStage:
             max_external_calls=1 if external_sources & set(selected_sources) else 0,
             source_priority=selected_sources,
             fallback_policy=ctx.understanding.answer_policy,
-            scope_id=resolution.request.scope_id,
+            scope_id=resolution.request_scope_id,
             resolution_id=resolution.resolution_id,
-            resolution_lifecycle_state=resolution.lifecycle_state,
+            resolution_validation_state=resolution.validation_state,
             escalation_hint=(
                 resolution.escalation_hint.model_dump(mode="json")
                 if resolution.escalation_hint is not None else None
@@ -239,7 +239,7 @@ class RetrievalStage:
             "RetrievalCapabilityPlan: "
             f"selected={selected_sources} denied={denied_sources} "
             f"external_allowed={ctx.retrieval_capability_plan.external_allowed} "
-            f"resolution={resolution.resolution_id}:{resolution.lifecycle_state}"
+            f"resolution={resolution.resolution_id}:{resolution.validation_state}"
         )
 
 
@@ -248,7 +248,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
     understanding = ctx.understanding
     planned_sources = set(plan.sources if plan is not None else [])
     capabilities = [
-        EvidenceSourceCapability(
+        EvidenceSourceCapability.from_dimensions(
             capability_id="retriever:graph",
             kind="retriever",
             provider="graph",
@@ -268,7 +268,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
             metadata_source="system",
             provider_priority=1,
         ),
-        EvidenceSourceCapability(
+        EvidenceSourceCapability.from_dimensions(
             capability_id="retriever:local",
             kind="retriever",
             provider="local",
@@ -291,7 +291,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
     ]
     workspace_default_quota = int(getattr(svc.settings.ask, "workspace_default_quota", 0) or 0)
     if bool(getattr(plan, "claim_sensitive", False)) or workspace_default_quota > 0:
-        capabilities.append(EvidenceSourceCapability(
+        capabilities.append(EvidenceSourceCapability.from_dimensions(
             capability_id="retriever:workspace",
             kind="retriever",
             provider="workspace",
@@ -312,7 +312,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
             provider_priority=2,
         ))
     if "web" in planned_sources or bool(getattr(understanding, "needs_freshness", False)):
-        capabilities.append(EvidenceSourceCapability(
+        capabilities.append(EvidenceSourceCapability.from_dimensions(
             capability_id="retriever:web",
             kind="retriever",
             provider="web",
@@ -334,7 +334,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
             provider_priority=3,
         ))
     if bool(getattr(understanding, "needs_episodic_context", False)):
-        capabilities.append(EvidenceSourceCapability(
+        capabilities.append(EvidenceSourceCapability.from_dimensions(
             capability_id="retriever:episodic",
             kind="retriever",
             provider="episodic",
@@ -354,7 +354,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
             metadata_source="system",
             provider_priority=4,
         ))
-    capabilities.append(EvidenceSourceCapability(
+    capabilities.append(EvidenceSourceCapability.from_dimensions(
         capability_id="retriever:reflection",
         kind="retriever",
         provider="reflection",

@@ -8,11 +8,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from personal_agent.orchestration.orchestration_models import (
     AgentEvent,
-    AgentGraphState,
+    RunCheckpoint,
     AgentRunSnapshot,
     AgentRunStatus,
-    StepRunState,
-    StepExecutionState,
+    ExecutableInvocation,
+    InvocationBatchState,
     ReactSubState,
     ToolTrackingSubState,
     _new_run_id,
@@ -28,6 +28,7 @@ from personal_agent.planning.task_analyzer import (
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
+from personal_agent.kernel.contracts.execution import InvocationAttemptState
 from personal_agent.runtime.run_manager import RunStateError
 
 
@@ -66,36 +67,36 @@ def TaskAnalysis(route="unknown", user_visible_message="", **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# AgentGraphState
+# RunCheckpoint
 # ---------------------------------------------------------------------------
 
 class TestAgentGraphState:
     def test_default_state_has_run_id(self):
-        state = AgentGraphState()
+        state = RunCheckpoint()
         assert state.run_id
         assert len(state.run_id) == 12
 
     def test_state_serialization_roundtrip(self):
-        state = AgentGraphState(
+        state = RunCheckpoint(
             user_id="user-1",
             session_id="sess-1",
             entry_text="什么是服务降级？",
             task_analysis=TaskAnalysis(route="ask"),
             answer="服务降级是在系统压力过大时...",
-            step_execution=StepExecutionState(steps=[
-                {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
+            invocation_batch=InvocationBatchState(invocations=[
+                {"step_id": "s1", "action_type": "retrieve", "attempt": {"status": "completed"}},
             ]),
             execution_trace=["检索知识库", "生成回答"],
             messages=[HumanMessage(content="你好"), AIMessage(content="你好，有什么可以帮你的？")],
             tool_tracking=ToolTrackingSubState(pending_step_id="s1", pending_call_id="r1:s1:0"),
         )
         data = state.model_dump(mode="json")
-        restored = AgentGraphState.model_validate(data)
+        restored = RunCheckpoint.model_validate(data)
         assert restored.run_id == state.run_id
         assert restored.user_id == "user-1"
         assert restored.answer == state.answer
-        assert len(restored.step_execution.steps) == 1
-        assert restored.step_execution.steps[0].step_id == "s1"
+        assert len(restored.invocation_batch.invocations) == 1
+        assert restored.invocation_batch.invocations[0].step_id == "s1"
         assert [message.content for message in restored.messages] == [
             "你好",
             "你好，有什么可以帮你的？",
@@ -104,7 +105,7 @@ class TestAgentGraphState:
         assert restored.tool_tracking.pending_call_id == "r1:s1:0"
 
     def test_add_event_appends_and_updates_timestamp(self):
-        state = AgentGraphState(run_id="r1")
+        state = RunCheckpoint(run_id="r1")
         event = state.add_event("entry_started", {"text": "hello"})
         assert len(state.events) == 1
         assert state.events[0].type == "entry_started"
@@ -112,24 +113,25 @@ class TestAgentGraphState:
         assert event.run_id == "r1"
 
     def test_update_step_status(self):
-        state = AgentGraphState(
-            step_execution=StepExecutionState(steps=[
-                {"step_id": "s1", "status": "running"},
-                {"step_id": "s2", "status": "planned"},
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(invocations=[
+                {"step_id": "s1", "attempt": {"status": "running"}},
+                {"step_id": "s2", "attempt": {"status": "planned"}},
             ])
         )
         state.update_step_status("s1", "completed")
-        assert state.step_execution.steps[0].status == "completed"
-        assert state.step_execution.steps[1].status == "planned"
+        assert state.invocation_batch.invocations[0].status == "completed"
+        assert state.invocation_batch.invocations[1].status == "planned"
 
     def test_to_run_snapshot_pending(self):
-        state = AgentGraphState()
+        state = RunCheckpoint()
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.created
         assert snap.run_id == state.run_id
 
     def test_to_run_snapshot_completed(self):
-        state = AgentGraphState(task_analysis=TaskAnalysis(route="ask"), answer="42", answer_completed=True)
+        state = RunCheckpoint(task_analysis=TaskAnalysis(route="ask"), answer="42")
+        state.add_event("answer_completed", {"answer": "42"})
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.completed
         assert snap.answer == "42"
@@ -209,13 +211,16 @@ class TestNormalizeEntry:
     def test_new_run_clears_previous_thread_progress(self):
         from personal_agent.orchestration.orchestration_graph import _node_normalize_entry
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="new-run",
             entry_input=EntryInput(text="什么是DNS", user_id="u1", session_id="s1"),
             task_analysis=TaskAnalysis(route="ask"),
             answer="上一轮天气回答",
-            answer_completed=True,
-            pending_confirmation={"kind": "clarification_required"},
+            pending_confirmation={
+                "kind": "clarification_required",
+                "action_type": "clarify_entry",
+                "step_id": "clarify_entry",
+            },
             execution_trace=["上一轮轨迹"],
             citations=[{"note_id": "old", "title": "旧证据", "snippet": "旧"}],
             errors=["上一轮错误"],
@@ -235,9 +240,9 @@ class TestNormalizeEntry:
         assert result["thread_id"] == "u1:s1"
         assert result["task_analysis"] is None
         assert result["answer"] is None
-        assert result["answer_completed"] is False
+        assert state.answer_completed is False
         assert result["pending_confirmation"] is None
-        assert result["execution_trace"] == []
+        assert state.execution_trace == []
         assert result["citations"] == []
         assert result["errors"] == []
         assert result["tool_messages"] == []
@@ -697,8 +702,8 @@ class TestOrchestrationGraphIntegration:
         assert all(item["thread_id"] == result.thread_id for item in history)
         assert any(item["checkpoint_id"] for item in history)
         assert all(item["checkpoint_schema_version"] == "executive_v1" for item in history)
-        assert all("step_execution" in item for item in history)
-        assert all("step_count" in item["step_execution"] for item in history)
+        assert all("invocation_batch" in item for item in history)
+        assert all("step_count" in item["invocation_batch"] for item in history)
 
     def test_replay_rejects_legacy_update_fields(self, runtime):
         entry = EntryInput(text="你好", user_id="test-user", session_id="replay-legacy-update")
@@ -719,7 +724,7 @@ class TestOrchestrationGraphIntegration:
         with pytest.raises(ValueError, match="legacy plan schema"):
             _ensure_checkpoint_schema_supported({"plan": {"steps": []}}, "old-ckpt")
 
-        with pytest.raises(ValueError, match="does not contain step_execution"):
+        with pytest.raises(ValueError, match="does not contain invocation_batch"):
             _ensure_checkpoint_schema_supported({"run_id": "abc"}, "partial-ckpt")
 
     def test_persisted_snapshots_are_visible_before_new_execution(self, temp_dir):
@@ -821,7 +826,7 @@ class TestOrchestrationGraphIntegration:
         for checkpoint in runtime._entry._get_orch_graph().checkpointer.list(config):
             values = checkpoint.checkpoint.get("channel_values", {})
             if values.get("run_id") == second.run_id:
-                second_run_states.append(AgentGraphState.model_validate(values))
+                second_run_states.append(RunCheckpoint.model_validate(values))
 
         assert second_run_states
         assert any(state.answer is None for state in second_run_states)
@@ -849,61 +854,61 @@ class TestOrchestrationGraphIntegration:
 class TestPhase3RoutingFunctions:
     """Unit tests for the Phase 3 conditional edge functions."""
 
-    def test_after_step_execution_routes_to_confirm_step(self):
-        from personal_agent.orchestration.orchestration_graph import _after_step_execution
+    def test_after_invocation_batch_routes_to_confirm_step(self):
+        from personal_agent.orchestration.orchestration_graph import _after_invocation_batch
 
-        state = AgentGraphState(
-            step_execution=StepExecutionState(
-                steps=[
-                    {"step_id": "s1", "action_type": "tool_call", "status": "awaiting_confirmation"},
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(
+                invocations=[
+                    {"step_id": "s1", "action_type": "tool_call", "attempt": {"status": "awaiting_confirmation"}},
                 ],
                 current_step_index=0,
             ),
         )
-        assert _after_step_execution(state) == "confirm_step"
+        assert _after_invocation_batch(state) == "confirm_step"
 
-    def test_after_step_execution_routes_to_handle_failure(self):
-        from personal_agent.orchestration.orchestration_graph import _after_step_execution
+    def test_after_invocation_batch_routes_to_handle_failure(self):
+        from personal_agent.orchestration.orchestration_graph import _after_invocation_batch
 
-        state = AgentGraphState(
-            step_execution=StepExecutionState(
-                steps=[
-                    {"step_id": "s1", "action_type": "tool_call", "status": "failed"},
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(
+                invocations=[
+                    {"step_id": "s1", "action_type": "tool_call", "attempt": {"status": "failed"}},
                 ],
                 current_step_index=0,
             ),
         )
-        assert _after_step_execution(state) == "handle_failure"
+        assert _after_invocation_batch(state) == "handle_failure"
 
-    def test_after_step_execution_routes_to_handle_success(self):
-        from personal_agent.orchestration.orchestration_graph import _after_step_execution
+    def test_after_invocation_batch_routes_to_handle_success(self):
+        from personal_agent.orchestration.orchestration_graph import _after_invocation_batch
 
-        state = AgentGraphState(
-            step_execution=StepExecutionState(
-                steps=[
-                    {"step_id": "s1", "action_type": "retrieve", "status": "completed"},
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(
+                invocations=[
+                    {"step_id": "s1", "action_type": "retrieve", "attempt": {"status": "completed"}},
                 ],
                 current_step_index=0,
             ),
         )
-        assert _after_step_execution(state) == "handle_success"
+        assert _after_invocation_batch(state) == "handle_success"
 
     def test_after_confirm_step_confirmed(self):
         from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
-        state = AgentGraphState(confirmation_decision="confirmed")
+        state = RunCheckpoint(confirmation_decision="confirmed")
         assert _after_confirm_step(state) == "tool_node"
 
     def test_after_confirm_step_rejected(self):
         from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
-        state = AgentGraphState(confirmation_decision="rejected")
+        state = RunCheckpoint(confirmation_decision="rejected")
         assert _after_confirm_step(state) == "handle_failure"
 
     def test_after_confirm_step_none_defaults_to_failure(self):
         from personal_agent.orchestration.orchestration_graph import _after_confirm_step
 
-        state = AgentGraphState()
+        state = RunCheckpoint()
         assert _after_confirm_step(state) == "handle_failure"
 
     def test_resolved_note_id_is_injected_through_verify_dependency(self):
@@ -912,19 +917,19 @@ class TestPhase3RoutingFunctions:
         )
 
         steps = [
-            StepRunState(step_id="del-1", action_type="resolve", status="completed"),
-            StepRunState(
+            ExecutableInvocation(step_id="del-1", action_type="resolve", attempt=InvocationAttemptState(status="completed")),
+            ExecutableInvocation(
                 step_id="del-2",
                 action_type="verify",
                 depends_on=["del-1"],
-                status="completed",
+                attempt=InvocationAttemptState(status="completed"),
             ),
-            StepRunState(
+            ExecutableInvocation(
                 step_id="del-3",
                 action_type="tool_call",
                 tool_name="delete_note",
                 depends_on=["del-2"],
-                status="planned",
+                attempt=InvocationAttemptState(status="planned"),
             ),
         ]
 
@@ -962,23 +967,23 @@ class TestPhase3ExecuteExecutionStep:
         from langchain_core.messages import ToolMessage
         from personal_agent.orchestration.orchestration_graph import _node_consume_step_tool_result
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             user_id="u1",
-            step_execution=StepExecutionState(
-                steps=[
+            invocation_batch=InvocationBatchState(
+                invocations=[
                     {
                         "step_id": "s1",
                         "action_type": "tool_call",
                         "tool_name": "capture_text",
-                        "status": "running",
+                        "attempt": {"status": "running"},
                     },
                 ],
                 current_step_index=0,
             ),
             entry_text="test",
             tool_tracking=ToolTrackingSubState(
-                active_context="step_execution",
+                active_context="invocation_batch",
                 pending_step_id="s1",
                 pending_call_id="r1:s1:0",
                 pending_tool_name="capture_text",
@@ -1004,7 +1009,7 @@ class TestPhase3ExecuteExecutionStep:
             ],
         )
         result = _node_consume_step_tool_result(state, deps=runtime.graph_contexts.steps)
-        assert result["step_execution"].steps[0].status == "awaiting_confirmation"
+        assert result["invocation_batch"].invocations[0].status == "awaiting_confirmation"
         assert state.events[-1].type == "confirmation_required"
         tool_result_event = next(event for event in state.events if event.type == "tool_result")
         assert tool_result_event.payload["tool_name"] == "capture_text"
@@ -1017,13 +1022,13 @@ class TestPhase3ExecuteExecutionStep:
         from langchain_core.messages import ToolMessage
         from personal_agent.orchestration.orchestration_graph import _node_consume_step_tool_result
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
-            step_execution=StepExecutionState(steps=[StepRunState(
-                step_id="s1", action_type="tool_call", tool_name="graph_search", status="running",
+            invocation_batch=InvocationBatchState(invocations=[ExecutableInvocation(
+                step_id="s1", action_type="tool_call", tool_name="graph_search", attempt=InvocationAttemptState(status="running"),
             )]),
             tool_tracking=ToolTrackingSubState(
-                active_context="step_execution",
+                active_context="invocation_batch",
                 pending_step_id="s1",
                 pending_call_id="r1:s1:expected",
             ),
@@ -1036,23 +1041,23 @@ class TestPhase3ExecuteExecutionStep:
 
         _node_consume_step_tool_result(state)
 
-        assert state.step_execution.steps[0].status == "failed"
+        assert state.invocation_batch.invocations[0].status == "failed"
         assert "未返回匹配当前调用的结果" in state.errors[-1]
 
     def test_node_completes_normally_when_no_pending_confirmation(self, runtime):
         """Without pending_confirmation, the step should complete normally."""
         from personal_agent.orchestration.orchestration_graph import _node_execute_step
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             user_id="u1",
-            step_execution=StepExecutionState(
-                steps=[
+            invocation_batch=InvocationBatchState(
+                invocations=[
                     {
                         "step_id": "s1",
                         "action_type": "retrieve",
                         "description": "检索",
-                        "status": "running",
+                        "attempt": {"status": "running"},
                     },
                 ],
                 current_step_index=0,
@@ -1061,20 +1066,19 @@ class TestPhase3ExecuteExecutionStep:
         )
 
         result = _node_execute_step(state, deps=runtime.graph_contexts.steps)
-        assert result["step_execution"].steps[0].status == "completed"
+        assert result["invocation_batch"].invocations[0].status == "completed"
 
     def test_failure_records_step_retry_budget_and_reason(self, runtime):
         from personal_agent.orchestration.orchestration_graph import _node_execute_step
 
-        state = AgentGraphState(
-            step_execution=StepExecutionState(
-                steps=[
-                    StepRunState(
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(
+                invocations=[
+                    ExecutableInvocation(
                         step_id="bad-1",
                         action_type="unsupported",
-                        status="running",
+                        attempt=InvocationAttemptState(status="running", max_retries=1),
                         on_failure="retry",
-                        max_retries=1,
                     ),
                 ],
                 current_step_index=0,
@@ -1083,7 +1087,7 @@ class TestPhase3ExecuteExecutionStep:
 
         _node_execute_step(state, deps=runtime.graph_contexts.steps)
 
-        step = state.step_execution.steps[0]
+        step = state.invocation_batch.invocations[0]
         assert step.status == "failed"
         assert step.retry_count == 1
         assert step.max_retries == 1
@@ -1110,14 +1114,14 @@ class TestPhase3ExecuteExecutionStep:
                 '"result":{"note_id":"note-dns"}}'
             ),
         )
-        state = AgentGraphState(user_id="u1", entry_text="删除关于DNS的知识")
+        state = RunCheckpoint(user_id="u1", entry_text="删除关于DNS的知识")
 
         result = _execute_resolve_step(
-            StepRunState(
+            ExecutableInvocation(
                 step_id="resolve-1",
                 action_type="resolve",
                 llm_decision_node="delete_target_resolve",
-            ).to_execution_step(),
+            ),
             state,
             runtime.graph_contexts.steps,
         )
@@ -1145,18 +1149,18 @@ class TestPhase3ExecuteExecutionStep:
                 '"result":{"note_id":null}}'
             ),
         )
-        state = AgentGraphState(
+        state = RunCheckpoint(
             user_id="u1",
             entry_text="删除关于DNS的知识",
-            step_execution=StepExecutionState(
-                steps=[
-                    StepRunState(
+            invocation_batch=InvocationBatchState(
+                invocations=[
+                    ExecutableInvocation(
                         step_id="resolve-1",
                         action_type="resolve",
-                        status="running",
+                        attempt=InvocationAttemptState(status="running"),
                         on_failure="skip",
                     ),
-                    StepRunState(
+                    ExecutableInvocation(
                         step_id="delete-1",
                         action_type="tool_call",
                         tool_name="delete_note",
@@ -1170,8 +1174,8 @@ class TestPhase3ExecuteExecutionStep:
 
         _node_execute_step(state, deps=deps)
 
-        assert state.step_execution.steps[0].status == "failed"
-        assert state.step_execution.steps[1].status == "planned"
+        assert state.invocation_batch.invocations[0].status == "failed"
+        assert state.invocation_batch.invocations[1].status == "planned"
         assert not state.tool_results
 
 
@@ -1222,32 +1226,35 @@ class TestPhase3InterruptResumeIntegration:
             )
 
     def test_confirmation_decision_field_roundtrip(self):
-        """AgentGraphState.confirmation_decision should survive serialization."""
-        state = AgentGraphState(
+        """RunCheckpoint.confirmation_decision should survive serialization."""
+        state = RunCheckpoint(
             confirmation_decision="confirmed",
-            pending_confirmation={"step_id": "s1"},
+            pending_confirmation={
+                "kind": "confirmation_required", "action_type": "test", "step_id": "s1",
+            },
         )
         data = state.model_dump(mode="json")
-        restored = AgentGraphState.model_validate(data)
+        restored = RunCheckpoint.model_validate(data)
         assert restored.confirmation_decision == "confirmed"
 
     def test_to_run_snapshot_blocked_approval(self):
         """When pending_confirmation is set, _infer_status returns blocked_approval."""
-        state = AgentGraphState(
+        state = RunCheckpoint(
             task_analysis=TaskAnalysis(route="delete_knowledge"),
-            pending_confirmation={"step_id": "s1", "action_type": "delete_note"},
-            answer_completed=False,
+            pending_confirmation={
+                "kind": "confirmation_required", "step_id": "s1", "action_type": "delete_note",
+            },
         )
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.blocked_approval
 
     def test_to_run_snapshot_keeps_resolved_confirmation_decision(self):
-        state = AgentGraphState(
+        state = RunCheckpoint(
             task_analysis=TaskAnalysis(route="delete_knowledge"),
             confirmation_decision="confirmed",
             answer="已删除。",
-            answer_completed=True,
         )
+        state.add_event("answer_completed", {"answer": "已删除。"})
 
         snap = state.to_run_snapshot()
 
@@ -1297,8 +1304,8 @@ class TestPhase4ReActHelpers:
     def test_react_consumes_pre_resolved_tool_scope(self, runtime):
         from personal_agent.orchestration.orchestration_nodes._react import _node_react_init
 
-        state = AgentGraphState(
-            step_execution=StepExecutionState(steps=[StepRunState(
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(invocations=[ExecutableInvocation(
                 step_id="s1",
                 action_type="retrieve",
                 allowed_tools=["graph_search"],
@@ -1359,10 +1366,10 @@ class TestPhase4ReActNodes:
     def test_react_init_seeds_state(self, runtime):
         from personal_agent.orchestration.orchestration_graph import _node_react_init
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
-            step_execution=StepExecutionState(
-                steps=[
+            invocation_batch=InvocationBatchState(
+                invocations=[
                     {
                         "step_id": "ask-1",
                         "action_type": "retrieve",
@@ -1370,7 +1377,7 @@ class TestPhase4ReActNodes:
                         "execution_mode": "react",
                         "allowed_tools": ["graph_search"],
                         "max_iterations": 3,
-                        "status": "running",
+                        "attempt": {"status": "running"},
                     },
                 ],
                 current_step_index=0,
@@ -1388,25 +1395,25 @@ class TestPhase4ReActNodes:
     def test_should_continue_react_when_not_done(self):
         from personal_agent.orchestration.orchestration_graph import _should_continue_react
 
-        state = AgentGraphState(react=ReactSubState(done=False, iteration_index=0, max_iterations=3))
+        state = RunCheckpoint(react=ReactSubState(done=False, iteration_index=0, max_iterations=3))
         assert _should_continue_react(state) == "iterate"
 
     def test_should_continue_react_when_done(self):
         from personal_agent.orchestration.orchestration_graph import _should_continue_react
 
-        state = AgentGraphState(react=ReactSubState(done=True, iteration_index=0, max_iterations=3))
+        state = RunCheckpoint(react=ReactSubState(done=True, iteration_index=0, max_iterations=3))
         assert _should_continue_react(state) == "finalize"
 
     def test_should_continue_react_when_exhausted(self):
         from personal_agent.orchestration.orchestration_graph import _should_continue_react
 
-        state = AgentGraphState(react=ReactSubState(done=False, iteration_index=3, max_iterations=3))
+        state = RunCheckpoint(react=ReactSubState(done=False, iteration_index=3, max_iterations=3))
         assert _should_continue_react(state) == "finalize"
 
     def test_react_finalize_writes_result_and_clears_state(self):
         from personal_agent.orchestration.orchestration_graph import _node_react_finalize
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1419,17 +1426,17 @@ class TestPhase4ReActNodes:
                 max_iterations=3,
                 allowed_tools=["graph_search"],
             ),
-            step_execution=StepExecutionState(
-                steps=[
-                    {"step_id": "ask-1", "action_type": "retrieve", "status": "running"},
+            invocation_batch=InvocationBatchState(
+                invocations=[
+                    {"step_id": "ask-1", "action_type": "retrieve", "attempt": {"status": "running"}},
                 ],
                 current_step_index=0,
             ),
         )
         result = _node_react_finalize(state)
-        assert state.step_execution.results["ask-1"]["answer"] == "42"
-        assert state.step_execution.results["ask-1"]["evidence_pack"]["evidence_sufficiency"] == "insufficient"
-        assert state.step_execution.steps[0].status == "completed"
+        assert state.invocation_batch.results["ask-1"]["answer"] == "42"
+        assert state.invocation_batch.results["ask-1"]["evidence_pack"]["evidence_sufficiency"] == "insufficient"
+        assert state.invocation_batch.invocations[0].status == "completed"
         assert result["react"].step_id == ""
         assert result["react"].done is True
         assert result["react"].result == {"answer": "42", "react_iterations": 2}
@@ -1442,7 +1449,7 @@ class TestPhase4ReActNodes:
             _node_react_finalize,
         )
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             react=ReactSubState(
                 step_id="ask-1",
                 result={"answer": "", "error": "LLM returned nothing"},
@@ -1450,22 +1457,21 @@ class TestPhase4ReActNodes:
                 status="failed",
                 stop_reason="llm_unavailable",
             ),
-            step_execution=StepExecutionState(steps=[
-                StepRunState(
+            invocation_batch=InvocationBatchState(invocations=[
+                ExecutableInvocation(
                     step_id="ask-1",
                     action_type="retrieve",
-                    status="running",
+                    attempt=InvocationAttemptState(status="running", max_retries=1),
                     on_failure="retry",
-                    max_retries=1,
                 ),
             ]),
         )
 
         _node_react_finalize(state)
 
-        assert state.step_execution.steps[0].status == "failed"
-        assert state.step_execution.steps[0].failure_reason == "LLM returned nothing"
-        assert state.step_execution.steps[0].recoverable is False
+        assert state.invocation_batch.invocations[0].status == "failed"
+        assert state.invocation_batch.invocations[0].failure_reason == "LLM returned nothing"
+        assert state.invocation_batch.invocations[0].recoverable is False
         assert state.errors == ["[ask-1] LLM returned nothing"]
         assert _after_react_graph(state) == "action_done"
 
@@ -1497,7 +1503,7 @@ class TestPhase4ReActIterateNode:
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
         from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1507,8 +1513,8 @@ class TestPhase4ReActIterateNode:
                 user_prompt="搜索X相关的内容",
                 done=False,
             ),
-            step_execution=StepExecutionState(
-                steps=[{"step_id": "ask-1", "status": "running"}],
+            invocation_batch=InvocationBatchState(
+                invocations=[{"step_id": "ask-1", "attempt": {"status": "running"}}],
                 current_step_index=0,
             ),
         )
@@ -1536,7 +1542,7 @@ class TestPhase4ReActIterateNode:
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
         from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1546,8 +1552,8 @@ class TestPhase4ReActIterateNode:
                 user_prompt="搜索",
                 done=False,
             ),
-            step_execution=StepExecutionState(
-                steps=[{"step_id": "ask-1", "status": "running"}],
+            invocation_batch=InvocationBatchState(
+                invocations=[{"step_id": "ask-1", "attempt": {"status": "running"}}],
                 current_step_index=0,
             ),
         )
@@ -1567,7 +1573,7 @@ class TestPhase4ReActIterateNode:
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
         from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1577,8 +1583,8 @@ class TestPhase4ReActIterateNode:
                 user_prompt="搜索",
                 done=False,
             ),
-            step_execution=StepExecutionState(
-                steps=[{"step_id": "ask-1", "status": "running"}],
+            invocation_batch=InvocationBatchState(
+                invocations=[{"step_id": "ask-1", "attempt": {"status": "running"}}],
                 current_step_index=0,
             ),
         )
@@ -1597,7 +1603,7 @@ class TestPhase4ReActIterateNode:
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
         from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1607,8 +1613,8 @@ class TestPhase4ReActIterateNode:
                 user_prompt="删除笔记",
                 done=False,
             ),
-            step_execution=StepExecutionState(
-                steps=[{"step_id": "ask-1", "status": "running"}],
+            invocation_batch=InvocationBatchState(
+                invocations=[{"step_id": "ask-1", "attempt": {"status": "running"}}],
                 current_step_index=0,
             ),
         )
@@ -1633,7 +1639,7 @@ class TestPhase4ReActIterateNode:
     def test_react_iterate_llm_returns_none(self, runtime, monkeypatch):
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1643,8 +1649,8 @@ class TestPhase4ReActIterateNode:
                 user_prompt="搜索",
                 done=False,
             ),
-            step_execution=StepExecutionState(
-                steps=[{"step_id": "ask-1", "status": "running"}],
+            invocation_batch=InvocationBatchState(
+                invocations=[{"step_id": "ask-1", "attempt": {"status": "running"}}],
                 current_step_index=0,
             ),
         )
@@ -1700,7 +1706,7 @@ class TestPhase4ReActMainGraphIntegration:
                 native_call_id="c-native-1",
             ),
         )
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="r1",
             react=ReactSubState(
                 step_id="ask-1",
@@ -1708,7 +1714,7 @@ class TestPhase4ReActMainGraphIntegration:
                 allowed_tools=["graph_search"],
                 user_prompt="检索",
             ),
-            step_execution=StepExecutionState(steps=[{"step_id": "ask-1", "status": "running"}]),
+            invocation_batch=InvocationBatchState(invocations=[{"step_id": "ask-1", "attempt": {"status": "running"}}]),
         )
 
         result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
@@ -1726,7 +1732,7 @@ class TestPhase4ReActMainGraphIntegration:
         from langchain_core.messages import ToolMessage
         from personal_agent.orchestration.orchestration_graph import _node_consume_react_tool_result
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             react=ReactSubState(
                 step_id="ask-1",
                 max_iterations=2,
@@ -1760,26 +1766,26 @@ class TestPhase4ReActMainGraphIntegration:
         assert tool_result_event.payload["invocation"]["execution_mode"] == "react"
         assert tool_result_event.payload["invocation"]["permission_scope"] == "memory:read"
 
-    def test_after_step_execution_routes_to_react_step(self):
-        from personal_agent.orchestration.orchestration_graph import _after_step_execution
+    def test_after_invocation_batch_routes_to_react_step(self):
+        from personal_agent.orchestration.orchestration_graph import _after_invocation_batch
 
-        state = AgentGraphState(
-            step_execution=StepExecutionState(
-                steps=[
+        state = RunCheckpoint(
+            invocation_batch=InvocationBatchState(
+                invocations=[
                     {
                         "step_id": "ask-1",
                         "execution_mode": "react",
-                        "status": "running",
+                        "attempt": {"status": "running"},
                     },
                 ],
                 current_step_index=0,
             ),
         )
-        assert _after_step_execution(state) == "react_step"
+        assert _after_invocation_batch(state) == "react_step"
 
     def test_react_state_serialization_roundtrip(self):
         """Verify the new ReAct fields survive JSON serialization."""
-        state = AgentGraphState(
+        state = RunCheckpoint(
             react=ReactSubState(
                 step_id="ask-1",
                 iteration_index=2,
@@ -1793,7 +1799,7 @@ class TestPhase4ReActMainGraphIntegration:
             ),
         )
         data = state.model_dump(mode="json")
-        restored = AgentGraphState.model_validate(data)
+        restored = RunCheckpoint.model_validate(data)
         assert restored.react.step_id == "ask-1"
         assert restored.react.iteration_index == 2
         assert restored.react.max_iterations == 3
@@ -1919,7 +1925,7 @@ class TestPhase5FinalizeEntryState:
     def test_successful_finalize_persists_completion_events(self):
         from personal_agent.orchestration.orchestration_graph import _node_finalize_entry_result
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="test-finalize",
             task_analysis=TaskAnalysis(route="respond"),
             answer="你好",
@@ -1927,7 +1933,7 @@ class TestPhase5FinalizeEntryState:
 
         result = _node_finalize_entry_result(state)
 
-        assert result["answer_completed"] is True
+        assert state.answer_completed is True
         assert [event.type for event in result["events"]] == [
             "answer_completed",
             "run_completed",
@@ -1938,11 +1944,10 @@ class TestPhase5FinalizeEntryState:
     def test_finalize_does_not_duplicate_existing_answer_completed_event(self):
         from personal_agent.orchestration.orchestration_graph import _node_finalize_entry_result
 
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="test-step-finalize",
             task_analysis=TaskAnalysis(route="ask"),
             answer="完成",
-            answer_completed=True,
         )
         state.add_event("answer_completed", {"answer": "完成"})
 
@@ -1958,15 +1963,14 @@ class TestPhase5GraphToEntryResultEvents:
 
     def test_graph_entry_result_has_events(self, monkeypatch):
         """Verify that execute_entry returns events when graph is enabled."""
-        from personal_agent.orchestration.orchestration_models import AgentGraphState
+        from personal_agent.orchestration.orchestration_models import RunCheckpoint
         from personal_agent.application.runtime_results import EntryResult
 
         # Simulate what happens in execute_entry after graph.invoke()
-        state = AgentGraphState(
+        state = RunCheckpoint(
             run_id="test-events",
             task_analysis=TaskAnalysis(route="respond", user_visible_message="用户打招呼"),
             answer="你好！有什么可以帮助你的？",
-            answer_completed=True,
             execution_trace=["生成直接回复"],
         )
         state.add_event("entry_started", {"text": "你好"})
@@ -2001,7 +2005,9 @@ class TestPhase5GraphToEntryResultEvents:
             reply_text="确认删除？",
             run_id="r1",
             thread_id="t1",
-            pending_confirmation={"step_id": "s2"},
+            pending_confirmation={
+                "kind": "confirmation_required", "action_type": "test", "step_id": "s2",
+            },
             run_status="blocked_approval",
             events=[
                 {"type": "entry_started", "payload": {}},

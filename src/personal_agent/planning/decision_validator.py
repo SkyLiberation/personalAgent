@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from personal_agent.kernel.contracts.agentic import ExecutionLedger, TaskSpec
+from personal_agent.kernel.contracts.agentic import (
+    TaskRuntimeProjection,
+    TaskContract,
+    materialize_goals,
+)
 from personal_agent.kernel.contracts.executive import (
     ControlState,
     ControlDecision,
@@ -10,6 +14,7 @@ from personal_agent.kernel.contracts.executive import (
     ExecuteMetaCapabilityDecision,
     InvokeProcedureDecision,
 )
+from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
 
 
 class DecisionValidationError(ValueError):
@@ -19,12 +24,14 @@ class DecisionValidationError(ValueError):
 class DecisionValidator:
     def validate(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         decision: ControlDecision,
         control_state: ControlState | None = None,
     ) -> None:
-        goals = {item.goal_id: item for item in ledger.items}
+        goals = {
+            item.goal_id: item for item in materialize_goals(task, ledger)
+        }
         if decision.target_goal_id not in goals and decision.action not in {"finish", "stop"}:
             raise DecisionValidationError("decision targets an unknown goal")
         goal = goals.get(decision.target_goal_id)
@@ -72,7 +79,7 @@ class DecisionValidator:
                 or not access.write_set
                 or action.requirement is None
                 or not set(action.requirement.operations).intersection(
-                    {"create", "update", "delete", "ingest", "repair"}
+                    MUTATING_OPERATIONS
                 )
             ):
                 raise DecisionValidationError(
@@ -86,13 +93,13 @@ class DecisionValidator:
             ):
                 raise DecisionValidationError("bounded action exceeds remaining provider-call budget")
         if isinstance(decision, InvokeProcedureDecision):
-            call = decision.procedure_call
+            call = decision.procedure_invocation
             if goal is None or call.goal_id != goal.goal_id:
                 raise DecisionValidationError("procedure call goal does not match decision target")
             candidate = next((
                 item for item in goal_procedures
-                if item.procedure_id == call.procedure_id
-                and item.version == call.procedure_version
+                if item.procedure_id == call.procedure.procedure_id
+                and item.version == call.procedure.version
             ), None)
             if candidate is None:
                 raise DecisionValidationError("procedure call is not an eligible candidate")

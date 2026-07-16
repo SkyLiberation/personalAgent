@@ -84,7 +84,7 @@ from personal_agent.planning.task_analyzer import DefaultTaskAnalyzer
 from personal_agent.planning.goal_graph import GoalGraphCompiler
 from personal_agent.planning.executive import ExecutiveController
 from personal_agent.planning.decision_validator import DecisionValidator
-from personal_agent.planning.ledger import ExecutionLedgerProjector, GoalDecompositionValidator
+from personal_agent.planning.ledger import TaskRuntimeProjector, GoalDecompositionValidator
 from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
 from personal_agent.planning.procedures import (
     PROCEDURE_CATALOG,
@@ -124,10 +124,10 @@ from personal_agent.application.runtime_results import (
 )
 from personal_agent.application.review import DigestFormatter, ReviewDigestUseCase
 from personal_agent.application.research import (
-    ResearchBudget,
+    ResearchLimits,
     ResearchFeedback,
     ResearchService,
-    ResearchSubscription,
+    ResearchSubscriptionRecord,
 )
 from personal_agent.application.workspace import (
     IngestKnowledgeResult,
@@ -356,7 +356,7 @@ class AgentRuntime:
                 settings.langextract,
                 model_client=self._research_event_client,
             ),
-            default_budget=ResearchBudget(
+            default_limits=ResearchLimits(
                 max_queries=settings.research.max_queries,
                 max_exploration_queries=settings.research.max_exploration_queries,
                 max_verification_queries=settings.research.max_verification_queries,
@@ -387,7 +387,7 @@ class AgentRuntime:
         self._goal_graph_compiler = GoalGraphCompiler()
         self._executive_controller = ExecutiveController(model_client=self._planner_client)
         self._decision_validator = DecisionValidator()
-        self._ledger_projector = ExecutionLedgerProjector()
+        self._task_runtime_projector = TaskRuntimeProjector()
         self._goal_decomposition_validator = GoalDecompositionValidator()
         self._goal_verifier = GoalVerifier(self._planner_client)
         self._completion_verifier = CompletionVerifier()
@@ -412,7 +412,7 @@ class AgentRuntime:
             BOUNDED_READ_ONLY_PROFILE,
             AdaptivePlanner,
             FrontierSelector,
-            PlanLedgerProjector,
+            PlanRuntimeProjector,
             PlanMonitor,
             PlanValidator,
             PlanningFactProjector,
@@ -422,7 +422,7 @@ class AgentRuntime:
         self._planning_mode_policy = PlanningModePolicy(self._planner_client)
         self._adaptive_planner = AdaptivePlanner(self._planner_client)
         self._plan_validator = PlanValidator()
-        self._plan_ledger_projector = PlanLedgerProjector()
+        self._plan_runtime_projector = PlanRuntimeProjector()
         self._frontier_selector = FrontierSelector()
         self._plan_monitor = PlanMonitor(self._planner_client)
         self._planner_profile = BOUNDED_READ_ONLY_PROFILE
@@ -460,7 +460,7 @@ class AgentRuntime:
                 goal_graph_compiler=self._goal_graph_compiler,
                 controller=self._executive_controller,
                 decision_validator=self._decision_validator,
-                ledger_projector=self._ledger_projector,
+                task_runtime_projector=self._task_runtime_projector,
                 goal_decomposition_validator=self._goal_decomposition_validator,
                 goal_verifier=self._goal_verifier,
                 completion_verifier=self._completion_verifier,
@@ -483,7 +483,7 @@ class AgentRuntime:
                 planning_mode_policy=self._planning_mode_policy,
                 adaptive_planner=self._adaptive_planner,
                 plan_validator=self._plan_validator,
-                plan_ledger_projector=self._plan_ledger_projector,
+                plan_runtime_projector=self._plan_runtime_projector,
                 frontier_selector=self._frontier_selector,
                 plan_monitor=self._plan_monitor,
                 planner_profile=self._planner_profile,
@@ -549,8 +549,8 @@ class AgentRuntime:
         return self._research_service
 
     def create_research_subscription(
-        self, subscription: ResearchSubscription
-    ) -> ResearchSubscription:
+        self, subscription: ResearchSubscriptionRecord
+    ) -> ResearchSubscriptionRecord:
         return self._research_service.create_subscription(subscription)
 
     def run_research_once(
@@ -596,7 +596,7 @@ class AgentRuntime:
         if result.run_id:
             state = self._entry.get_run_state(result.run_id)
             if state is not None:
-                for data in reversed(list(state.step_execution.results.values())):
+                for data in reversed(list(state.invocation_batch.results.values())):
                     if isinstance(data, dict):
                         candidate = data.get("run_id")
                         if isinstance(candidate, str) and candidate:
@@ -610,7 +610,7 @@ class AgentRuntime:
             run = self.research_store.get_run(run_id)
             if run is not None:
                 return run
-        raise RuntimeError("Research procedure completed without a persisted ResearchRun")
+        raise RuntimeError("Research procedure completed without a persisted ResearchRunRecord")
 
     def enqueue_research_subscription(self, subscription_id: str):
         subscription = self.research_store.get_subscription(subscription_id)
@@ -1267,11 +1267,11 @@ class AgentRuntime:
         """Validate and project a governed procedure without executing effects."""
         from dataclasses import asdict
 
-        from personal_agent.kernel.contracts.procedure import ProcedureSpec
+        from personal_agent.kernel.contracts.procedure import ProcedureDefinition
         from personal_agent.planning.procedures import ProcedureSpecValidator
 
         spec = (
-            ProcedureSpec.from_definition_payload(spec_payload)
+            ProcedureDefinition.from_definition_payload(spec_payload)
             if spec_payload is not None
             else self.procedure_definition_store.select_active_spec(
                 procedure_id,

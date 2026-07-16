@@ -8,6 +8,8 @@ from personal_agent.kernel.contracts.agentic import (
     ContextBudget,
     ContextItem,
     ContextProjection,
+    ProjectionExclusion,
+    RuntimeSnapshotRef,
 )
 
 
@@ -31,9 +33,7 @@ class ContextManager:
         *,
         purpose: str,
         budget: ContextBudget,
-        ledger_revision: int,
-        event_cursor: str,
-        artifact_versions: dict[str, str] | None = None,
+        source_snapshot: RuntimeSnapshotRef,
     ) -> ContextProjection:
         usable = (
             budget.max_context_tokens
@@ -46,11 +46,11 @@ class ContextManager:
             items,
             key=lambda item: (
                 _AUTHORITY.get(str(item.payload.get("authority_tier", "generated_candidate")), 9),
-                item.ref_id,
+                item.item_id,
             ),
         )
         selected: list[str] = []
-        omitted: list[str] = []
+        omitted: list[ProjectionExclusion] = []
         reasons: dict[str, str] = {}
         consumed = 0
         for item in ordered:
@@ -59,20 +59,18 @@ class ContextManager:
             )
             estimate = max(1, len(serialized) // 4)
             if consumed + estimate <= usable:
-                selected.append(item.ref_id)
+                selected.append(item.item_id)
                 consumed += estimate
-                reasons[item.ref_id] = f"selected_for:{purpose}"
+                reasons[item.item_id] = f"selected_for:{purpose}"
             else:
-                omitted.append(item.ref_id)
+                omitted.append(ProjectionExclusion(item_id=item.item_id, reason="budget"))
         return ContextProjection(
             purpose=purpose,
-            item_refs=tuple(selected),
-            omitted_refs=tuple(omitted),
+            source_snapshot=source_snapshot,
+            selected_item_ids=tuple(selected),
+            omitted=tuple(omitted),
             token_estimate=consumed,
             selection_reasons=reasons,
-            ledger_revision=ledger_revision,
-            event_cursor=event_cursor,
-            artifact_versions=artifact_versions or {},
             model_profile=budget.model_profile,
             tokenizer_profile=budget.tokenizer_profile,
         )

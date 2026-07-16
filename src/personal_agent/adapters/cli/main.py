@@ -19,7 +19,9 @@ from personal_agent.application.review import (
 )
 from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
-from personal_agent.application.research import DeliveryTarget, ResearchSubscription, SchedulePolicy
+from personal_agent.application.research import (
+    DeliveryTarget, ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
+)
 
 app = typer.Typer(help="Personal knowledge agent CLI")
 logger = logging.getLogger(__name__)
@@ -274,7 +276,8 @@ def research_subscribe(
 ) -> None:
     """Create a durable scheduled research subscription."""
     service = _build_service()
-    subscription = service.create_research_subscription(ResearchSubscription(
+    subscription = service.create_research_subscription(ResearchSubscriptionRecord.create(
+        ResearchSubscriptionSpec(
         user_id=user_id,
         name=name or f"{topic} 情报简报",
         topic=topic,
@@ -286,6 +289,7 @@ def research_subscribe(
             timezone=timezone,
         ),
         delivery=DeliveryTarget(target_id=chat_id),
+        )
     ))
     typer.echo(subscription.model_dump_json(indent=2))
 

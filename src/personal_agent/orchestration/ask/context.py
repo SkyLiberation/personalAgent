@@ -6,7 +6,7 @@ state between Executive actions within a single run.
 
 The large retrieval payload (evidence pool, context pack, scored matches) is
 stored as an execution artifact instead of on the checkpointed
-``AgentGraphState``.  This keeps LangGraph checkpoints compact while allowing
+``RunCheckpoint``.  This keeps LangGraph checkpoints compact while allowing
 compose / verify to recover the staged ask context after process restarts.
 """
 
@@ -81,7 +81,7 @@ class AskRepairTelemetry:
 
 @dataclass
 class RetrievalCapabilityPlan:
-    """Ask-specific projection of a platform CapabilityResolution."""
+    """Ask-specific projection of a platform CapabilityResolutionDecision."""
 
     selected_sources: list[str] = field(default_factory=list)
     denied_sources: list[str] = field(default_factory=list)
@@ -95,7 +95,7 @@ class RetrievalCapabilityPlan:
     fallback_policy: str = "refuse_if_insufficient"
     scope_id: str = ""
     resolution_id: str = ""
-    resolution_lifecycle_state: str = ""
+    resolution_validation_state: str = ""
     escalation_hint: dict[str, Any] | None = None
     capability_resolution: dict[str, Any] = field(default_factory=dict)
 

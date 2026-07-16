@@ -73,6 +73,7 @@
 | 统一 Agent 工作台主路径 | [future/unified-agent-workspace-main-path.md](future/unified-agent-workspace-main-path.md) |
 | 语义生命周期抽取 | [future/semantic-lifecycle-extraction-redesign.md](future/semantic-lifecycle-extraction-redesign.md) |
 | 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
+| 核心运行时模型内聚性重构 | [future/runtime-model-cohesion-redesign.md](future/runtime-model-cohesion-redesign.md) |
 
 ## 运维与参考
 

@@ -102,7 +102,10 @@ def run_snapshot_to_response(snapshot) -> RunSnapshotResponse:
         steps=snapshot.steps,
         execution_trace=snapshot.execution_trace,
         answer=snapshot.answer,
-        pending_confirmation=snapshot.pending_confirmation,
+        pending_confirmation=(
+            snapshot.pending_confirmation.model_dump(mode="json")
+            if snapshot.pending_confirmation else None
+        ),
         confirmation_decision=snapshot.confirmation_decision,
         errors=snapshot.errors,
         created_at=snapshot.created_at.isoformat() if snapshot.created_at else None,

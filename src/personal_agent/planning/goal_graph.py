@@ -5,30 +5,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from personal_agent.kernel.contracts.agentic import (
-    ContextEnvelope,
+    ContextInventory,
     ContextItem,
     EvidencePolicy,
     EvidenceRequirements,
-    ExecutionLedger,
-    ExecutionLedgerItem,
+    GoalDefinition,
     GoalDependency,
+    GoalGraphDefinition,
+    GoalRuntimeState,
     MutationIntent,
     ResourceRequirement,
     SuccessCriterion,
     TaskConstraints,
-    TaskSpec,
+    TaskContract,
+    TaskRuntimeProjection,
 )
 from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+from personal_agent.kernel.contracts.resource import mutating_operations
 
-
-_WRITE_OPERATIONS = frozenset({"create", "update", "delete", "ingest", "repair"})
 
 
 @dataclass(frozen=True, slots=True)
 class GoalCompilation:
-    task_spec: TaskSpec
-    ledger: ExecutionLedger
-    context_envelope: ContextEnvelope
+    task_contract: TaskContract
+    runtime: TaskRuntimeProjection
+    context_inventory: ContextInventory
 
 
 class GoalGraphValidator:
@@ -57,12 +58,19 @@ class GoalGraphValidator:
                 hard_graph[relation.successor_goal_id].add(relation.predecessor_goal_id)
         _validate_acyclic(hard_graph)
 
-    def validate_ledger(self, ledger: ExecutionLedger) -> None:
-        goal_ids = {item.goal_id for item in ledger.items}
-        if len(goal_ids) != len(ledger.items):
+    def validate_runtime(
+        self,
+        task: TaskContract,
+        runtime: TaskRuntimeProjection,
+    ) -> None:
+        goals = task.goal_graph.goals
+        goal_ids = {item.goal_id for item in goals}
+        if len(goal_ids) != len(goals):
             raise ValueError("goal ids must be unique")
+        if set(runtime.goal_states) != goal_ids:
+            raise ValueError("goal definition/runtime identities must match")
         hard_graph = {goal_id: set() for goal_id in goal_ids}
-        for item in ledger.items:
+        for item in goals:
             seen: set[tuple[str, str]] = set()
             for dependency in item.dependencies:
                 if dependency.dependency_goal_id not in goal_ids:
@@ -93,11 +101,7 @@ class GoalGraphCompiler:
     def compile(self, analysis: TaskAnalysis, entry_text: str) -> GoalCompilation:
         self._validator.validate_analysis(analysis)
         goals = analysis.goals
-        grouped_resources = [
-            _resources_for_goal(goal)
-            for goal in goals
-        ]
-        resources = tuple(resource for group in grouped_resources for resource in group)
+        grouped_resources = [_resources_for_goal(goal) for goal in goals]
         mutation_operations = tuple(dict.fromkeys(
             operation
             for group in grouped_resources
@@ -119,41 +123,42 @@ class GoalGraphCompiler:
                 rationale=relation.rationale,
             ))
 
-        criteria: list[SuccessCriterion] = []
-        items: list[ExecutionLedgerItem] = []
+        definitions: list[GoalDefinition] = []
+        states: dict[str, GoalRuntimeState] = {}
         for goal, group in zip(goals, grouped_resources, strict=True):
             goal_criteria = _criteria_for_goal(goal, group)
-            criteria.extend(goal_criteria)
             dependencies = tuple(dependencies_by_goal[goal.goal_id])
-            items.append(ExecutionLedgerItem(
+            definitions.append(GoalDefinition(
                 goal_id=goal.goal_id,
                 dependencies=dependencies,
                 description=goal.description or entry_text,
                 result_contract=goal.result_contract,
-                status="pending" if any(item.blocks_execution for item in dependencies) else "active",
-                success_criterion_ids=tuple(item.criterion_id for item in goal_criteria),
+                resources=group,
+                criteria=goal_criteria,
                 output_contract=_output_contract(goal, group),
+            ))
+            states[goal.goal_id] = GoalRuntimeState(
+                status="pending" if any(item.blocks_execution for item in dependencies) else "active",
                 evidence_gaps=("initial_evidence_required",)
                 if _requires_evidence(goal, group) else (),
-            ))
+            )
 
         mutation = MutationIntent(
-            operation="+".join(mutation_operations),
+            operations=mutation_operations,
             requires_confirmation=True,
         ) if mutation_operations else None
-        task = TaskSpec(
+        goal_graph_revision = 1
+        task = TaskContract(
             user_goal=analysis.user_goal or entry_text,
             result_contract=_task_result_contract(goals),
-            subjects=tuple(goal.description for goal in goals if goal.description),
-            resource_requirements=resources,
-            requested_operations=tuple(dict.fromkeys(
-                operation for resource in resources for operation in resource.required_operations
-            )),
             constraints=TaskConstraints(
                 read_only=mutation is None,
                 max_parallelism=min(max(len(goals), 1), 4),
             ),
-            success_criteria=tuple(criteria),
+            goal_graph=GoalGraphDefinition(
+                revision=goal_graph_revision,
+                goals=tuple(definitions),
+            ),
             evidence_requirements=EvidenceRequirements(
                 citation_required=evidence_required,
                 minimum_source_count=1 if evidence_required else None,
@@ -163,22 +168,25 @@ class GoalGraphCompiler:
             mutation_intent=mutation,
             clarification_needed=analysis.requires_clarification,
         )
-        ledger = ExecutionLedger(
+        runtime = TaskRuntimeProjection(
             task_id=task.task_id,
-            items=tuple(items),
-            active_goal_ids=tuple(item.goal_id for item in items),
+            task_revision=task.revision,
+            goal_graph_revision=task.goal_graph.revision,
+            goal_states=states,
         )
-        self._validator.validate_ledger(ledger)
-        context = ContextEnvelope(run_context=(ContextItem(
-            ref_id=task.task_id,
-            kind="task_spec",
+        self._validator.validate_runtime(task, runtime)
+        context_item = ContextItem(
+            item_id=task.task_id,
+            category="run",
+            kind="task_contract",
             provenance="runtime",
-            trust_tier="runtime",
+            trust="runtime",
             summary=task.user_goal[:1000],
             payload={"revision": task.revision},
-            admitted=True,
-        ),))
-        return GoalCompilation(task, ledger, context)
+            admission="admitted",
+        )
+        context = ContextInventory(items={context_item.item_id: context_item})
+        return GoalCompilation(task, runtime, context)
 
 
 def _validate_acyclic(graph: dict[str, set[str]]) -> None:
@@ -203,12 +211,11 @@ def _validate_acyclic(graph: dict[str, set[str]]) -> None:
 def _resources_for_goal(
     goal: Goal,
 ) -> tuple[ResourceRequirement, ...]:
-    return tuple(_resource_from_hint(goal.goal_id, hint) for hint in goal.resource_hints)
+    return tuple(_resource_from_hint(hint) for hint in goal.resource_hints)
 
 
-def _resource_from_hint(goal_id: str, hint: ResourceHint) -> ResourceRequirement:
-    return ResourceRequirement(
-        goal_id=goal_id,
+def _resource_from_hint(hint: ResourceHint) -> ResourceRequirement:
+    return ResourceRequirement.from_dimensions(
         semantic_domain=hint.semantic_domain,
         locator=hint.locator,
         resource_types=tuple(hint.resource_types),
@@ -223,11 +230,11 @@ def _resource_from_hint(goal_id: str, hint: ResourceHint) -> ResourceRequirement
 def _mutation_operations(
     resources: tuple[ResourceRequirement, ...],
 ) -> tuple[str, ...]:
-    operations = tuple(
-        operation for resource in resources for operation in resource.required_operations
-        if operation in _WRITE_OPERATIONS
+    return mutating_operations(
+        operation
+        for resource in resources
+        for operation in resource.required_operations
     )
-    return operations
 
 
 def _criteria_for_goal(
@@ -236,11 +243,12 @@ def _criteria_for_goal(
 ) -> tuple[SuccessCriterion, ...]:
     requires_evidence = _requires_evidence(goal, resources)
     declared = goal.success_criteria or [f"完成目标：{goal.description}"]
+    criterion_source = "user_explicit" if goal.success_criteria else "contract_derived"
     criteria = [SuccessCriterion(
         criterion_id=f"{goal.goal_id}:result:{index}",
         description=description,
         required=True,
-        source="user_explicit",
+        source=criterion_source,
         mutability="immutable",
         evidence_policy=EvidencePolicy(
             citation_required=(

@@ -4,8 +4,9 @@ from personal_agent.kernel.contracts.capability import (
     Capability,
     CapabilityCoverage,
     CapabilityRequirement,
-    CapabilityResolution,
+    CapabilityResolutionDecision,
     CapabilityResolutionRequest,
+    ResolutionConstraints,
     CapabilitySelectionPolicy,
     DeniedCapability,
     EscalationHint,
@@ -17,9 +18,7 @@ from personal_agent.planning.outcome_ranking import (
     OutcomeAwareCapabilityRanker,
 )
 from personal_agent.tools.mcp_capability import CapabilityRegistry
-
-
-_WRITE_OPERATIONS = frozenset({"create", "update", "delete", "ingest", "repair"})
+from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS, match_resource_contract
 _TRUST_ORDER = {"untrusted": 0, "external": 1, "scoped": 2, "trusted": 3}
 
 
@@ -39,7 +38,7 @@ class CapabilityResolver:
         self._validator = validator or ResolutionValidator()
         self._ranker = ranker or OutcomeAwareCapabilityRanker()
 
-    def resolve(self, request: CapabilityResolutionRequest) -> CapabilityResolution:
+    def resolve(self, request: CapabilityResolutionRequest) -> CapabilityResolutionDecision:
         denied: list[DeniedCapability] = []
         candidates: list[Capability] = []
         hard_denied_ids: set[str] = set()
@@ -95,8 +94,8 @@ class CapabilityResolver:
             request,
             self._registry.list(),
         )
-        resolution = CapabilityResolution(
-            request=request,
+        resolution = CapabilityResolutionDecision(
+            request_scope_id=request.scope_id,
             selected_capabilities=tuple(selected),
             denied_capabilities=tuple(denied),
             allowed_tools=tuple(
@@ -115,17 +114,16 @@ class CapabilityResolver:
                 if capability.kind == "agent"
             ),
             coverage=coverage,
-            constraints={
-                "task_id": request.task_id,
-                "goal_id": request.goal_id,
-                "action_id": request.action_id,
-                "meta_capability": request.meta_capability,
-                "allowed_kinds": list(request.allowed_kinds),
-                "allowed_operations": list(request.allowed_operations),
-                "hard_denied_capability_ids": sorted(hard_denied_ids),
-                "coverage": [item.model_dump(mode="json") for item in coverage],
-                "ranking": ranking_audit,
-            },
+            constraints=ResolutionConstraints(
+                task_id=request.task_id,
+                goal_id=request.goal_id,
+                action_id=request.action_id,
+                meta_capability=request.meta_capability,
+                allowed_kinds=request.allowed_kinds,
+                allowed_operations=request.allowed_operations,
+                hard_denied_capability_ids=tuple(sorted(hard_denied_ids)),
+                ranking=ranking_audit,
+            ),
             escalation_hint=_escalation_hint(request, selected),
             rationale=(
                 "selected " + ", ".join(item.capability_id for item in selected)
@@ -133,7 +131,7 @@ class CapabilityResolver:
                 else "no capability satisfies the current action contract"
             ),
             confidence=0.85 if selected else 0.4,
-        ).transition("resolved", reason="structured_filter_and_lexicographic_rank")
+        )
 
         errors = self._validator.errors(
             request,
@@ -146,6 +144,7 @@ class CapabilityResolver:
                 for capability in resolution.selected_capabilities
             )
             return resolution.model_copy(update={
+                "validation_state": "rejected",
                 "selected_capabilities": (),
                 "allowed_tools": (),
                 "selected_retrievers": (),
@@ -158,13 +157,13 @@ class CapabilityResolver:
                     self._registry.list(),
                 ),
                 "denied_capabilities": (*resolution.denied_capabilities, *selected_denials),
-                "constraints": {**resolution.constraints, "validator_errors": list(errors)},
+                "constraints": resolution.constraints.model_copy(update={
+                    "validator_errors": errors,
+                }),
                 "rationale": "resolution rejected by invariant validator",
                 "confidence": 0.0,
-            }).transition("rejected", reason=";".join(errors))
-        return resolution.transition(
-            "validated", reason="resolution_invariants_valid"
-        ).transition("policy_clamped", reason="policy_prefilter_and_clamp_applied")
+            })
+        return resolution
 
     def _ineligibility_reason(
         self,
@@ -196,7 +195,7 @@ class CapabilityResolver:
         # the granted intersection without widening the action scope.
         if allowed_operations and not set(capability.operations).intersection(allowed_operations):
             return "operation_not_allowed"
-        if request.policy.read_only and set(capability.operations) & _WRITE_OPERATIONS:
+        if request.policy.read_only and set(capability.operations) & MUTATING_OPERATIONS:
             return "read_only_policy"
         if _metadata_requires_review(capability, request.policy):
             return "unreviewed_high_risk_metadata"
@@ -350,7 +349,7 @@ def _metadata_requires_review(
     high_risk = (
         capability.risk_level == "high"
         or capability.data_egress_class == "sensitive"
-        or bool(set(capability.operations) & _WRITE_OPERATIONS)
+        or bool(set(capability.operations) & MUTATING_OPERATIONS)
         or any("write" in effect or "delete" in effect for effect in capability.side_effects)
     )
     return high_risk and capability.metadata_source not in {"system", "human_reviewed"}
@@ -360,21 +359,14 @@ def _matches_requirement(
     capability: Capability,
     requirement: CapabilityRequirement,
 ) -> bool:
-    if requirement.required_providers and capability.provider not in requirement.required_providers:
-        return False
-    if (
-        requirement.semantic_domains
-        and not set(requirement.semantic_domains).intersection(capability.semantic_domains)
-    ):
-        return False
-    if (
-        requirement.resource_types
-        and not set(requirement.resource_types).intersection(capability.resource_types)
-    ):
-        return False
-    if requirement.operations and not set(requirement.operations).intersection(capability.operations):
-        return False
-    return True
+    return match_resource_contract(
+        requirement.selector,
+        requirement.operation_scope,
+        requirement.provider_constraint,
+        capability.selector,
+        capability.operation_scope,
+        candidate_provider=capability.provider,
+    ).status == "matched"
 
 
 def _coverage_for_requirements(

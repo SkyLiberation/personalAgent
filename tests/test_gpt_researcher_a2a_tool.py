@@ -46,10 +46,10 @@ def test_gpt_researcher_a2a_adapter_returns_agent_run_result():
 
     result = adapter.invoke(AgentTask("Agent2Agent protocol adoption"), _ctx())
 
-    assert result.run.agent_id == "gpt_researcher"
-    assert result.run.status == "completed"
+    assert result.run.definition.agent_id == "gpt_researcher"
+    assert result.run.projection.status == "completed"
     assert "Agent2Agent" in result.output_text
-    assert result.artifacts[0].producer_verification_status == "unverified"
+    assert result.run.artifact_index.artifacts[0].producer_verification_status == "unverified"
     assert client.calls[0]["topic"] == "Agent2Agent protocol adoption"
 
 

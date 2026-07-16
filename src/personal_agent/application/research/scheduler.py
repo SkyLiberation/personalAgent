@@ -5,12 +5,12 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from personal_agent.application.research.models import ResearchSubscription, utc_now
+from personal_agent.application.research.models import ResearchSubscriptionRecord, utc_now
 
 logger = logging.getLogger(__name__)
 
 
-def subscription_due(subscription: ResearchSubscription, now: datetime | None = None) -> bool:
+def subscription_due(subscription: ResearchSubscriptionRecord, now: datetime | None = None) -> bool:
     if not subscription.enabled:
         return False
     try:
@@ -33,7 +33,7 @@ def subscription_due(subscription: ResearchSubscription, now: datetime | None = 
 
 
 def scheduled_window_end(
-    subscription: ResearchSubscription, now: datetime | None = None
+    subscription: ResearchSubscriptionRecord, now: datetime | None = None
 ) -> datetime:
     current = now or utc_now()
     local = current.astimezone(ZoneInfo(subscription.schedule.timezone))

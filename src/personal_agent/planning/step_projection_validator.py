@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from personal_agent.tools import tool_governance
-from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.kernel.contracts.execution import ExecutableInvocation
 
 if TYPE_CHECKING:
     from personal_agent.governance import ToolExecutor
@@ -23,7 +23,7 @@ class StepProjectionValidationResult:
     valid: bool
     issues: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    corrected_steps: list[ExecutionStep] | None = None
+    corrected_steps: list[ExecutableInvocation] | None = None
     replanned: bool = False
 
     @property
@@ -37,7 +37,7 @@ class StepProjectionValidationResult:
 
 
 def _has_upstream_action_type(
-    steps: list[ExecutionStep], step: ExecutionStep, action_type: str,
+    steps: list[ExecutableInvocation], step: ExecutableInvocation, action_type: str,
 ) -> bool:
     """Return whether a step transitively depends on an action type."""
     by_id = {candidate.step_id: candidate for candidate in steps}
@@ -58,7 +58,7 @@ def _has_upstream_action_type(
 
 
 def _has_upstream_tool(
-    steps: list[ExecutionStep], step: ExecutionStep, tool_names: set[str],
+    steps: list[ExecutableInvocation], step: ExecutableInvocation, tool_names: set[str],
 ) -> bool:
     """Return whether a step transitively depends on one of the given tools."""
     by_id = {candidate.step_id: candidate for candidate in steps}
@@ -103,7 +103,7 @@ class StepProjectionValidator:
 
     def validate(
         self,
-        steps: list[ExecutionStep],
+        steps: list[ExecutableInvocation],
     ) -> StepProjectionValidationResult:
         issues: list[str] = []
         warnings: list[str] = []

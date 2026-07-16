@@ -5,12 +5,12 @@ from typing import Any, Iterator, Literal, Protocol
 from uuid import uuid4
 
 AgentProtocol = Literal["a2a_jsonrpc", "local", "http"]
-AgentRunStatus = Literal[
+ChildAgentRunStatus = Literal[
     "created", "queued", "running", "waiting", "blocked_approval",
     "cancel_requested", "cancelling", "completed", "completed_degraded",
     "cancelled", "failed", "timed_out",
 ]
-AgentEventType = Literal[
+ChildAgentRunEventType = Literal[
     "submitted",
     "status_changed",
     "stream_delta",
@@ -65,10 +65,10 @@ class AgentGatewayContext:
     user_id: str
     session_id: str
     run_id: str
-    thread_id: str = ""
-    task_id: str = ""
-    goal_id: str = ""
-    action_id: str = ""
+    thread_id: str | None = None
+    task_id: str | None = None
+    goal_id: str | None = None
+    action_id: str | None = None
     source_platform: str = ""
     confirmed: bool = False
 
@@ -84,47 +84,63 @@ class AgentArtifact:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentEvent:
+class ChildAgentRunEvent:
     event_id: str
     agent_run_id: str
-    type: AgentEventType
+    type: ChildAgentRunEventType
     payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
-class AgentRun:
+class ChildAgentRunDefinition:
     agent_run_id: str
     agent_id: str
-    status: AgentRunStatus
     task: AgentTask
     context: AgentGatewayContext
-    external_task_id: str = ""
-    result: dict[str, Any] = field(default_factory=dict)
-    error: str = ""
-    artifacts: tuple[AgentArtifact, ...] = ()
-    events: tuple[AgentEvent, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class AgentRunResult:
-    run: AgentRun
-    output_text: str = ""
+class ChildAgentRunProjection:
+    agent_run_id: str
+    status: ChildAgentRunStatus
+    external_task_id: str | None = None
+    result: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChildAgentArtifactIndex:
+    agent_run_id: str
     artifacts: tuple[AgentArtifact, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ChildAgentRunRecord:
+    definition: ChildAgentRunDefinition
+    projection: ChildAgentRunProjection
+    artifact_index: ChildAgentArtifactIndex
+    events: tuple[ChildAgentRunEvent, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ChildAgentRunOutcome:
+    run: ChildAgentRunRecord
+    output_text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentAdapter(Protocol):
     profile: SubagentProfile
 
-    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> AgentRunResult: ...
+    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome: ...
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> AgentRun: ...
+    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord: ...
 
-    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun: ...
+    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord: ...
 
-    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun: ...
+    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord: ...
 
-    def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[AgentEvent]: ...
+    def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[ChildAgentRunEvent]: ...
 
 
 def new_agent_run_id() -> str:
@@ -142,14 +158,17 @@ def new_agent_artifact_id() -> str:
 __all__ = [
     "AgentAdapter",
     "AgentArtifact",
-    "AgentEvent",
-    "AgentEventType",
+    "ChildAgentArtifactIndex",
+    "ChildAgentRunDefinition",
+    "ChildAgentRunEvent",
+    "ChildAgentRunEventType",
     "AgentGatewayContext",
     "AgentGovernance",
     "AgentProtocol",
-    "AgentRun",
-    "AgentRunResult",
-    "AgentRunStatus",
+    "ChildAgentRunProjection",
+    "ChildAgentRunRecord",
+    "ChildAgentRunOutcome",
+    "ChildAgentRunStatus",
     "AgentTask",
     "SubagentProfile",
     "new_agent_artifact_id",

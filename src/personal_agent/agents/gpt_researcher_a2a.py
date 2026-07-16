@@ -7,12 +7,15 @@ from personal_agent.infra.a2a import A2AResearchResponse, GPTResearcherA2AClient
 from personal_agent.kernel.config_models import GPTResearcherA2AConfig
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
+    ChildAgentArtifactIndex,
+    ChildAgentRunDefinition,
+    ChildAgentRunRecord,
     SubagentProfile,
-    AgentEvent,
+    ChildAgentRunEvent,
     AgentGatewayContext,
     AgentGovernance,
-    AgentRun,
-    AgentRunResult,
+    ChildAgentRunProjection,
+    ChildAgentRunOutcome,
     AgentTask,
     new_agent_artifact_id,
     new_agent_event_id,
@@ -78,43 +81,41 @@ class GPTResearcherA2AAdapter:
             ),
         )
 
-    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> AgentRunResult:
+    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
         response = self._client.research(**self._request_kwargs(task), blocking=True)
         run = self._run_from_response(task, context, response)
         output_text = response.report
-        return AgentRunResult(
+        return ChildAgentRunOutcome(
             run=run,
             output_text=output_text,
-            artifacts=run.artifacts,
             metadata=response.metadata,
         )
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> AgentRun:
+    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
         response = self._client.submit_research(**self._request_kwargs(task))
         status = _status_from_a2a(response.state)
         if status == "completed":
             status = "running"
-        return replace(self._run_from_response(task, context, response), status=status)
+        run = self._run_from_response(task, context, response)
+        return replace(run, projection=replace(run.projection, status=status))
 
-    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
+    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         task_id = _external_task_id(agent_run_id)
         response = self._client.get_task(task_id)
         task = AgentTask(task_text="", task_type="research")
         return self._run_from_response(task, context, response, agent_run_id=agent_run_id)
 
-    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
+    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         task_id = _external_task_id(agent_run_id)
         response = self._client.cancel_task(task_id)
         task = AgentTask(task_text="", task_type="research")
-        return replace(
-            self._run_from_response(task, context, response, agent_run_id=agent_run_id),
-            status="cancelled",
-        )
+        run = self._run_from_response(task, context, response, agent_run_id=agent_run_id)
+        return replace(run, projection=replace(run.projection, status="cancelled"))
 
-    def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[AgentEvent]:
+    def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[ChildAgentRunEvent]:
         task_id = _external_task_id(agent_run_id)
         for item in self._client.stream_task(task_id):
-            yield AgentEvent(
+            yield ChildAgentRunEvent(
                 event_id=new_agent_event_id(),
                 agent_run_id=agent_run_id,
                 type="stream_delta",
@@ -137,7 +138,7 @@ class GPTResearcherA2AAdapter:
         response: A2AResearchResponse,
         *,
         agent_run_id: str | None = None,
-    ) -> AgentRun:
+    ) -> ChildAgentRunRecord:
         resolved_run_id = agent_run_id or _agent_run_id(response.task_id)
         artifacts = tuple(_artifact_from_a2a(resolved_run_id, item, response.report) for item in response.artifacts)
         if not artifacts and response.report:
@@ -153,21 +154,25 @@ class GPTResearcherA2AAdapter:
             )
         status = _status_from_a2a(response.state)
         events = (
-            AgentEvent(
+            ChildAgentRunEvent(
                 event_id=new_agent_event_id(),
                 agent_run_id=resolved_run_id,
                 type="status_changed",
                 payload={"state": response.state, "status": status},
             ),
         )
-        return AgentRun(
-            agent_run_id=resolved_run_id,
-            agent_id=self.profile.agent_id,
-            status=status,
-            task=task,
-            context=context,
-            external_task_id=response.task_id,
-            result={
+        return ChildAgentRunRecord(
+            definition=ChildAgentRunDefinition(
+                agent_run_id=resolved_run_id,
+                agent_id=self.profile.agent_id,
+                task=task,
+                context=context,
+            ),
+            projection=ChildAgentRunProjection(
+                agent_run_id=resolved_run_id,
+                status=status,
+                external_task_id=response.task_id,
+                result={
                 "provider": "gpt_researcher_a2a",
                 "task_id": response.task_id,
                 "context_id": response.context_id,
@@ -175,8 +180,12 @@ class GPTResearcherA2AAdapter:
                 "report": response.report,
                 "metadata": response.metadata,
                 "raw": response.raw,
-            },
-            artifacts=artifacts,
+                },
+            ),
+            artifact_index=ChildAgentArtifactIndex(
+                agent_run_id=resolved_run_id,
+                artifacts=artifacts,
+            ),
             events=events,
         )
 

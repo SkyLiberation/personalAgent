@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.planning.step_projection_validator import StepProjectionValidationResult, StepProjectionValidator
-from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.kernel.contracts.execution import ExecutableInvocation
 from langchain_core.tools import tool
 
 from personal_agent.governance import ToolExecutor
@@ -85,7 +85,7 @@ def _read_only_graph_search(query: str = ""):
 
 @tool(
     "research_prepare_run",
-    description="创建 ResearchRun",
+    description="创建 ResearchRunRecord",
     response_format="content_and_artifact",
     extras=governance_extras(side_effects=("write_longterm",)),
 )
@@ -95,7 +95,7 @@ def _research_prepare_run(topic: str, user_id: str = "default"):
 
 @tool(
     "research_initialize_state",
-    description="初始化 ResearchState",
+    description="初始化 ResearchRunProjection",
     response_format="content_and_artifact",
     extras=governance_extras(side_effects=("write_longterm",)),
 )
@@ -149,13 +149,13 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_call_missing_tool_name_is_blocking(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="调用工具"),
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="调用工具"),
         ]
         result = validator.validate(steps)
         assert any("tool_name" in issue for issue in result.issues)
 
     def test_dynamic_tool_call_accepts_capability_requirement(self):
-        step = ExecutionStep(
+        step = ExecutableInvocation(
             action_type="tool_call",
             description="resolve at runtime",
             capability_requirements=[{
@@ -173,7 +173,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_unregistered_tool_is_blocking_when_executor_is_available(self, validator):
         steps = [
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="s1",
                 action_type="tool_call",
                 description="调用工具",
@@ -185,7 +185,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_requires_confirmation_but_step_does_not_warns(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="high"),
         ]
         result = validator.validate(steps)
@@ -193,7 +193,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_requires_confirmation_and_step_has_it_passes(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="high",
                      requires_confirmation=True),
         ]
@@ -202,7 +202,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_writes_longterm_without_confirmation_warns(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="写入操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="写入操作",
                      tool_name="write_op", risk_level="low"),
         ]
         result = validator.validate(steps)
@@ -210,7 +210,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_writes_longterm_with_high_risk_no_warning(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="写入操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="写入操作",
                      tool_name="write_op", risk_level="high"),
         ]
         result = validator.validate(steps)
@@ -218,7 +218,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_accesses_external_warns(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="外部操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="外部操作",
                      tool_name="external_op", risk_level="low"),
         ]
         result = validator.validate(steps)
@@ -226,7 +226,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_tool_risk_higher_than_step_warns(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", risk_level="low"),
         ]
         result = validator.validate(steps)
@@ -234,7 +234,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_deep_param_validation_missing_required(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op", tool_input={}, risk_level="high"),
         ]
         result = validator.validate(steps)
@@ -242,7 +242,7 @@ class TestStepProjectionValidatorGovernance:
 
     def test_deep_param_validation_passes_with_valid_input(self, validator):
         steps = [
-            ExecutionStep(step_id="s1", action_type="tool_call", description="高风险操作",
+            ExecutableInvocation(step_id="s1", action_type="tool_call", description="高风险操作",
                      tool_name="dangerous_op",
                      tool_input={"target": "note-123"}, risk_level="high"),
         ]
@@ -251,8 +251,8 @@ class TestStepProjectionValidatorGovernance:
 
     def test_capture_text_may_receive_text_from_upstream_compose(self, validator):
         steps = [
-            ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
-            ExecutionStep(
+            ExecutableInvocation(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            ExecutableInvocation(
                 step_id="sol-2", action_type="tool_call", description="保存草稿",
                 tool_name="capture_text", depends_on=["sol-1"],
             ),
@@ -265,10 +265,10 @@ class TestStepProjectionValidatorGovernance:
 
     def test_solidify_allows_intermediate_verify_step_when_dag_is_valid(self, validator):
         steps = [
-            ExecutionStep(step_id="sol-1", action_type="compose", description="生成知识草稿"),
-            ExecutionStep(step_id="sol-2", action_type="verify", description="校验是否已写入",
+            ExecutableInvocation(step_id="sol-1", action_type="compose", description="生成知识草稿"),
+            ExecutableInvocation(step_id="sol-2", action_type="verify", description="校验是否已写入",
                      depends_on=["sol-1"]),
-            ExecutionStep(step_id="sol-3", action_type="tool_call", description="保存草稿",
+            ExecutableInvocation(step_id="sol-3", action_type="tool_call", description="保存草稿",
                      tool_name="capture_text", depends_on=["sol-2"]),
         ]
 
@@ -294,22 +294,22 @@ class TestStepProjectionValidatorResearch:
 
     def test_research_projection_requires_explicit_root_input_and_allows_dependency_outputs(self, validator):
         steps = [
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="research-prepare",
                 action_type="tool_call",
-                description="创建 ResearchRun",
+                description="创建 ResearchRunRecord",
                 tool_name="research_prepare_run",
                 tool_input={"topic": "agent planning"},
             ),
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="research-initialize",
                 action_type="tool_call",
-                description="初始化 ResearchState",
+                description="初始化 ResearchRunProjection",
                 tool_name="research_initialize_state",
                 depends_on=["research-prepare"],
                 tool_input={},
             ),
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="research-loop",
                 action_type="tool_call",
                 description="运行 Research 循环",
@@ -317,7 +317,7 @@ class TestStepProjectionValidatorResearch:
                 depends_on=["research-initialize"],
                 tool_input={},
             ),
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="research-synthesize",
                 action_type="tool_call",
                 description="生成简报",
@@ -325,7 +325,7 @@ class TestStepProjectionValidatorResearch:
                 depends_on=["research-loop"],
                 tool_input={},
             ),
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="research-verify",
                 action_type="tool_call",
                 description="校验简报",
@@ -368,7 +368,7 @@ class TestReActValidation:
 
     def test_react_validates_allowed_tools_registered(self, validator):
         steps = [
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="react",
                 allowed_tools=["graph_search", "nonexistent_tool"],
@@ -380,7 +380,7 @@ class TestReActValidation:
 
     def test_react_warns_max_iterations_over_cap(self, validator):
         steps = [
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="s1", action_type="retrieve", description="test",
                 execution_mode="react",
                 allowed_tools=["graph_search"],
@@ -392,7 +392,7 @@ class TestReActValidation:
 
     def test_react_valid_step_passes(self, validator):
         steps = [
-            ExecutionStep(
+            ExecutableInvocation(
                 step_id="s1", action_type="retrieve", description="检索",
                 execution_mode="react",
                 allowed_tools=["graph_search"],

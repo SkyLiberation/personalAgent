@@ -13,6 +13,11 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
+from personal_agent.kernel.contracts.resource import (
+    OperationScope,
+    ProviderConstraint,
+    ResourceSelector,
+)
 
 CapabilityKind = Literal[
     "local_tool",
@@ -53,16 +58,83 @@ class CapabilityRequirement(BaseModel):
 
     requirement_id: str
     purpose: str
-    semantic_domains: tuple[str, ...] = ()
-    resource_types: tuple[str, ...] = ()
-    operations: tuple[CapabilityOperation, ...] = ()
-    resource_locator: str | None = None
-    minimum_trust_level: CapabilityTrustLevel = "external"
-    freshness_required: bool = False
-    preferred_providers: tuple[str, ...] = ()
-    required_providers: tuple[str, ...] = ()
+    selector: ResourceSelector = Field(default_factory=ResourceSelector)
+    operation_scope: OperationScope = Field(default_factory=OperationScope)
+    provider_constraint: ProviderConstraint = Field(default_factory=ProviderConstraint)
     output_contract: str = "ToolResult"
-    side_effect_class: str = "none"
+
+    @classmethod
+    def from_dimensions(
+        cls,
+        *,
+        requirement_id: str,
+        purpose: str,
+        semantic_domains: tuple[str, ...] = (),
+        resource_types: tuple[str, ...] = (),
+        operations: tuple[CapabilityOperation, ...] = (),
+        resource_locator: str | None = None,
+        minimum_trust_level: CapabilityTrustLevel = "external",
+        freshness_required: bool = False,
+        preferred_providers: tuple[str, ...] = (),
+        required_providers: tuple[str, ...] = (),
+        output_contract: str = "ToolResult",
+        side_effect_class: str = "none",
+    ) -> "CapabilityRequirement":
+        return cls(
+            requirement_id=requirement_id,
+            purpose=purpose,
+            selector=ResourceSelector(
+                semantic_domains=frozenset(semantic_domains),
+                resource_types=frozenset(resource_types),
+                locator=resource_locator,
+            ),
+            operation_scope=OperationScope(
+                operations=frozenset(operations), side_effect_class=side_effect_class,
+            ),
+            provider_constraint=ProviderConstraint(
+                required=frozenset(required_providers),
+                preferred=preferred_providers,
+                freshness_required=freshness_required,
+                minimum_trust=minimum_trust_level,
+            ),
+            output_contract=output_contract,
+        )
+
+    @property
+    def semantic_domains(self) -> tuple[str, ...]:
+        return tuple(sorted(self.selector.semantic_domains))
+
+    @property
+    def resource_types(self) -> tuple[str, ...]:
+        return tuple(sorted(self.selector.resource_types))
+
+    @property
+    def operations(self) -> tuple[CapabilityOperation, ...]:
+        return tuple(sorted(self.operation_scope.operations))  # type: ignore[return-value]
+
+    @property
+    def resource_locator(self) -> str | None:
+        return self.selector.locator
+
+    @property
+    def minimum_trust_level(self) -> CapabilityTrustLevel:
+        return self.provider_constraint.minimum_trust  # type: ignore[return-value]
+
+    @property
+    def freshness_required(self) -> bool:
+        return self.provider_constraint.freshness_required
+
+    @property
+    def preferred_providers(self) -> tuple[str, ...]:
+        return self.provider_constraint.preferred
+
+    @property
+    def required_providers(self) -> tuple[str, ...]:
+        return tuple(sorted(self.provider_constraint.required))
+
+    @property
+    def side_effect_class(self) -> str:
+        return self.operation_scope.side_effect_class
 
 
 class CapabilityCoverage(BaseModel):
@@ -84,9 +156,8 @@ class Capability(BaseModel):
     provider: str
     local_name: str | None = None
     description: str = ""
-    semantic_domains: tuple[str, ...] = ()
-    resource_types: tuple[str, ...] = ()
-    operations: tuple[CapabilityOperation, ...] = ()
+    selector: ResourceSelector = Field(default_factory=ResourceSelector)
+    operation_scope: OperationScope = Field(default_factory=OperationScope)
     risk_level: str = "low"
     side_effects: tuple[str, ...] = ("none",)
     auth_scope: str = "mcp:tool"
@@ -103,6 +174,34 @@ class Capability(BaseModel):
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] | None = None
     examples: tuple[dict[str, Any], ...] = ()
+
+    @classmethod
+    def from_dimensions(cls, **values: Any) -> "Capability":
+        semantic_domains = tuple(values.pop("semantic_domains", ()))
+        resource_types = tuple(values.pop("resource_types", ()))
+        operations = tuple(values.pop("operations", ()))
+        side_effects = tuple(values.get("side_effects", ("none",)))
+        values["selector"] = ResourceSelector(
+            semantic_domains=frozenset(semantic_domains),
+            resource_types=frozenset(resource_types),
+        )
+        values["operation_scope"] = OperationScope(
+            operations=frozenset(operations),
+            side_effect_class=next((item for item in side_effects if item != "none"), "none"),
+        )
+        return cls(**values)
+
+    @property
+    def semantic_domains(self) -> tuple[str, ...]:
+        return tuple(sorted(self.selector.semantic_domains))
+
+    @property
+    def resource_types(self) -> tuple[str, ...]:
+        return tuple(sorted(self.selector.resource_types))
+
+    @property
+    def operations(self) -> tuple[CapabilityOperation, ...]:
+        return tuple(sorted(self.operation_scope.operations))  # type: ignore[return-value]
 
 
 class MCPCapability(Capability):
@@ -143,10 +242,10 @@ class CapabilitySelectionPolicy(BaseModel):
 
 
 class CapabilityResolutionRequest(BaseModel):
-    scope_id: str = ""
-    task_id: str = ""
-    goal_id: str
-    action_id: str
+    scope_id: str | None = None
+    task_id: str = Field(min_length=1)
+    goal_id: str = Field(min_length=1)
+    action_id: str = Field(min_length=1)
     meta_capability: str
     allowed_kinds: tuple[CapabilityKind, ...] = ("mcp_tool",)
     allowed_operations: tuple[CapabilityOperation, ...] = ("search", "read", "list")
@@ -156,7 +255,7 @@ class CapabilityResolutionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _assign_scope_id(self) -> "CapabilityResolutionRequest":
-        if self.scope_id:
+        if self.scope_id is not None:
             return self
         identity = ":".join((
             self.task_id,
@@ -175,10 +274,31 @@ class DeniedCapability(BaseModel):
     reason: str
 
 
-class ResolutionLifecycleEvent(BaseModel):
+class ResolutionEvent(BaseModel):
+    sequence: int = Field(ge=1)
+    resolution_id: str = Field(min_length=1)
     state: ResolutionLifecycleState
     reason: str = ""
     trace_ref: str = ""
+
+
+class ResolutionRunProjection(BaseModel):
+    resolution_id: str = Field(min_length=1)
+    lifecycle: ResolutionLifecycleState = "created"
+    last_event_sequence: int = 0
+    failure_reason: str | None = None
+
+
+class ResolutionConstraints(BaseModel):
+    task_id: str
+    goal_id: str
+    action_id: str
+    meta_capability: str
+    allowed_kinds: tuple[CapabilityKind, ...] = ()
+    allowed_operations: tuple[CapabilityOperation, ...] = ()
+    hard_denied_capability_ids: tuple[str, ...] = ()
+    ranking: dict[str, Any] = Field(default_factory=dict)
+    validator_errors: tuple[str, ...] = ()
 
 
 class CapabilityEvidencePack(BaseModel):
@@ -196,37 +316,36 @@ class CapabilityEvidencePack(BaseModel):
     unresolved_questions: tuple[str, ...] = ()
 
 
-class CapabilityResolution(BaseModel):
-    request: CapabilityResolutionRequest
+class CapabilityResolutionDecision(BaseModel):
     resolution_id: str = Field(default_factory=lambda: uuid4().hex)
-    lifecycle_state: ResolutionLifecycleState = "created"
-    lifecycle_events: tuple[ResolutionLifecycleEvent, ...] = ()
+    request_scope_id: str = Field(min_length=1)
+    validation_state: Literal["validated", "rejected"] = "validated"
     selected_capabilities: tuple[Capability, ...] = ()
     denied_capabilities: tuple[DeniedCapability, ...] = ()
     allowed_tools: tuple[str, ...] = ()
     selected_retrievers: tuple[str, ...] = ()
     allowed_agents: tuple[str, ...] = ()
     coverage: tuple[CapabilityCoverage, ...] = ()
-    constraints: dict[str, Any] = Field(default_factory=dict)
+    constraints: ResolutionConstraints
     escalation_hint: EscalationHint | None = None
     rationale: str = ""
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
-    def transition(
-        self,
-        state: ResolutionLifecycleState,
-        *,
-        reason: str = "",
-        trace_ref: str = "",
-    ) -> "CapabilityResolution":
-        return self.model_copy(update={
-            "lifecycle_state": state,
-            "lifecycle_events": (*self.lifecycle_events, ResolutionLifecycleEvent(
-                state=state,
-                reason=reason,
-                trace_ref=trace_ref,
-            )),
-        })
+
+
+def project_resolution_event(
+    projection: ResolutionRunProjection,
+    event: ResolutionEvent,
+) -> ResolutionRunProjection:
+    if event.resolution_id != projection.resolution_id:
+        raise ValueError("resolution event identity mismatch")
+    if event.sequence != projection.last_event_sequence + 1:
+        raise ValueError("resolution event sequence mismatch")
+    return projection.model_copy(update={
+        "lifecycle": event.state,
+        "last_event_sequence": event.sequence,
+        "failure_reason": event.reason if event.state in {"failed", "rejected"} else None,
+    })
 
 
 __all__ = [
@@ -235,7 +354,7 @@ __all__ = [
     "CapabilityCoverage",
     "CapabilityKind",
     "CapabilityMetadataSource",
-    "CapabilityResolution",
+    "CapabilityResolutionDecision",
     "CapabilityResolutionRequest",
     "CapabilityRequirement",
     "CapabilityOperation",
@@ -249,6 +368,9 @@ __all__ = [
     "EvidenceSourceCapability",
     "FreshnessProfile",
     "MCPCapability",
-    "ResolutionLifecycleEvent",
     "ResolutionLifecycleState",
+    "ResolutionConstraints",
+    "ResolutionEvent",
+    "ResolutionRunProjection",
+    "project_resolution_event",
 ]

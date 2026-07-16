@@ -4,12 +4,15 @@ from personal_agent.agents import AgentGateway
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
+    ChildAgentArtifactIndex,
+    ChildAgentRunDefinition,
+    ChildAgentRunRecord,
     SubagentProfile,
-    AgentEvent,
+    ChildAgentRunEvent,
     AgentGatewayContext,
     AgentGovernance,
-    AgentRun,
-    AgentRunResult,
+    ChildAgentRunProjection,
+    ChildAgentRunOutcome,
     AgentTask,
     new_agent_artifact_id,
     new_agent_event_id,
@@ -23,10 +26,10 @@ def test_agent_gateway_invoke_records_unverified_artifact():
 
     result = gateway.invoke("researcher", AgentTask("topic"), _ctx())
 
-    assert result.run.status == "completed"
-    assert result.run.agent_id == "researcher"
-    assert result.artifacts[0].producer_verification_status == "unverified"
-    assert gateway.get_run(result.run.agent_run_id) is not None
+    assert result.run.projection.status == "completed"
+    assert result.run.definition.agent_id == "researcher"
+    assert result.run.artifact_index.artifacts[0].producer_verification_status == "unverified"
+    assert gateway.get_run(result.run.definition.agent_run_id) is not None
 
 
 def test_agent_gateway_submit_poll_cancel_and_stream():
@@ -34,16 +37,16 @@ def test_agent_gateway_submit_poll_cancel_and_stream():
     gateway.register(_FakeAgent("researcher", output="report"))
 
     submitted = gateway.submit("researcher", AgentTask("topic"), _ctx())
-    assert submitted.status == "running"
+    assert submitted.projection.status == "running"
 
-    polled = gateway.poll(submitted.agent_run_id, _ctx())
-    assert polled.status == "completed"
+    polled = gateway.poll(submitted.definition.agent_run_id, _ctx())
+    assert polled.projection.status == "completed"
 
-    stream = list(gateway.stream(submitted.agent_run_id, _ctx()))
+    stream = list(gateway.stream(submitted.definition.agent_run_id, _ctx()))
     assert [event.type for event in stream] == ["stream_delta"]
 
-    canceled = gateway.cancel(submitted.agent_run_id, _ctx())
-    assert canceled.status == "cancelled"
+    canceled = gateway.cancel(submitted.definition.agent_run_id, _ctx())
+    assert canceled.projection.status == "cancelled"
 
 
 def test_agent_gateway_keeps_multiple_agent_definitions_separate():
@@ -54,7 +57,7 @@ def test_agent_gateway_keeps_multiple_agent_definitions_separate():
     assert {item.agent_id for item in gateway.profiles()} == {"researcher", "writer"}
     result = gateway.invoke("writer", AgentTask("draft"), _ctx())
 
-    assert result.run.agent_id == "writer"
+    assert result.run.definition.agent_id == "writer"
     assert result.output_text == "write"
 
 
@@ -81,21 +84,21 @@ class _FakeAgent:
         )
         self._output = output
 
-    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> AgentRunResult:
+    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
         run = self._run(task, context, status="completed")
-        return AgentRunResult(run=run, output_text=self._output, artifacts=run.artifacts)
+        return ChildAgentRunOutcome(run=run, output_text=self._output)
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> AgentRun:
+    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
         return self._run(task, context, status="running")
 
-    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
+    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         return self._run(AgentTask("topic"), context, status="completed", agent_run_id=agent_run_id)
 
-    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> AgentRun:
+    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         return self._run(AgentTask("topic"), context, status="cancelled", agent_run_id=agent_run_id)
 
     def stream(self, agent_run_id: str, context: AgentGatewayContext):
-        yield AgentEvent(
+        yield ChildAgentRunEvent(
             event_id=new_agent_event_id(),
             agent_run_id=agent_run_id,
             type="stream_delta",
@@ -109,7 +112,7 @@ class _FakeAgent:
         *,
         status: str,
         agent_run_id: str | None = None,
-    ) -> AgentRun:
+    ) -> ChildAgentRunRecord:
         run_id = agent_run_id or new_agent_run_id()
         artifact = AgentArtifact(
             artifact_id=new_agent_artifact_id(),
@@ -117,13 +120,21 @@ class _FakeAgent:
             kind="markdown_report",
             content=self._output,
         )
-        return AgentRun(
-            agent_run_id=run_id,
-            agent_id=self.profile.agent_id,
-            status=status,  # type: ignore[arg-type]
-            task=task,
-            context=context,
-            external_task_id="task-1",
-            result={"answer": self._output},
-            artifacts=(artifact,),
+        return ChildAgentRunRecord(
+            definition=ChildAgentRunDefinition(
+                agent_run_id=run_id,
+                agent_id=self.profile.agent_id,
+                task=task,
+                context=context,
+            ),
+            projection=ChildAgentRunProjection(
+                agent_run_id=run_id,
+                status=status,  # type: ignore[arg-type]
+                external_task_id="task-1",
+                result={"answer": self._output},
+            ),
+            artifact_index=ChildAgentArtifactIndex(
+                agent_run_id=run_id,
+                artifacts=(artifact,),
+            ),
         )

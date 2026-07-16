@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from personal_agent.kernel.contracts.agentic import (
-    ExecutionLedger,
-    ExecutionLedgerItem,
-    TaskSpec,
+    TaskRuntimeProjection,
+    MaterializedGoalView,
+    TaskContract,
+    materialize_goals,
 )
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
 from personal_agent.kernel.contracts.executive import (
@@ -29,13 +30,15 @@ from personal_agent.kernel.contracts.executive import (
     InvokeProcedureDecision,
     ObservationRef,
     ProposedResourceAccessPlan,
-    ProcedureCall,
+    ProcedureInvocation,
+    ProcedureRef,
     RequestConfirmationDecision,
     StopDecision,
     SubtaskSpec,
 )
 from personal_agent.kernel.contracts.procedure import ProcedureCandidate
 from personal_agent.kernel.contracts.planning import PlanStep
+from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
 from personal_agent.skills import SkillRegistry
 
 if TYPE_CHECKING:
@@ -72,16 +75,17 @@ class ExecutiveController:
 
     def decide(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         *,
         observations: tuple[ObservationRef, ...] = (),
         capability_classes: tuple[CapabilityClassSummary, ...] = (),
         control_state: ControlState | None = None,
         model_context: dict[str, object] | None = None,
     ) -> ControlDecision:
+        goals = materialize_goals(task, ledger)
         open_goals = [
-            item for item in ledger.items
+            item for item in goals
             if item.status not in {"verified", "degraded", "abandoned"}
         ]
         if not open_goals:
@@ -156,14 +160,17 @@ class ExecutiveController:
 
     def decide_plan_step(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         step: PlanStep,
         *,
         observations: tuple[ObservationRef, ...] = (),
         control_state: ControlState | None = None,
     ) -> ControlDecision:
-        goal = next((item for item in ledger.items if item.goal_id == step.goal_id), None)
+        goal = next(
+            (item for item in materialize_goals(task, ledger) if item.goal_id == step.goal_id),
+            None,
+        )
         if goal is None:
             return StopDecision(
                 target_goal_id=step.goal_id,
@@ -207,9 +214,9 @@ class ExecutiveController:
 
     def _action_from_plan_step(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
-        goal: ExecutionLedgerItem,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
+        goal: MaterializedGoalView,
         basis: DecisionBasis,
         step: PlanStep,
     ) -> ControlDecision:
@@ -219,11 +226,11 @@ class ExecutiveController:
             meta = "verify"
         elif step.kind == "synthesize":
             meta = "transform"
-        elif operations.intersection({"create", "update", "delete", "ingest", "repair"}):
+        elif operations.intersection(MUTATING_OPERATIONS):
             meta = "commit"
         else:
             meta = "acquire"
-        resources = _resources_for_goal(task, goal.goal_id)
+        resources = task.resources_for_goal(goal.goal_id)
         bounded = BoundedAction(
             goal_id=goal.goal_id,
             meta_capability=meta,
@@ -261,20 +268,20 @@ class ExecutiveController:
 
     def _materialize_contract_action(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
-        goal: ExecutionLedgerItem,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
+        goal: MaterializedGoalView,
         basis: DecisionBasis,
     ) -> ControlDecision | None:
         """Compile one declared result contract; never infer a multi-action sequence."""
-        resources = _resources_for_goal(task, goal.goal_id)
+        resources = task.resources_for_goal(goal.goal_id)
         operations = tuple(dict.fromkeys(
             operation for item in resources for operation in item.required_operations
         ))
-        if set(operations).intersection({"create", "update", "delete", "ingest", "repair"}):
+        if set(operations).intersection(MUTATING_OPERATIONS):
             return None
         if operations:
-            requirement = CapabilityRequirement(
+            requirement = CapabilityRequirement.from_dimensions(
                 requirement_id=f"{goal.goal_id}:reactive",
                 purpose=f"satisfy_goal_{goal.goal_id}",
                 semantic_domains=tuple(dict.fromkeys(item.semantic_domain for item in resources)),
@@ -314,8 +321,8 @@ class ExecutiveController:
 
     @staticmethod
     def _procedure_decision(
-        task: TaskSpec,
-        goal: ExecutionLedgerItem,
+        task: TaskContract,
+        goal: MaterializedGoalView,
         basis: DecisionBasis,
         candidate: ProcedureCandidate,
         observations: tuple[ObservationRef, ...] = (),
@@ -334,7 +341,7 @@ class ExecutiveController:
                 reason_code="procedure_result_inconclusive",
                 user_message="受治理过程已执行，但结果不足以证明目标完成；未重复执行可能产生副作用的操作。",
             )
-        resources = _resources_for_goal(task, goal.goal_id)
+        resources = task.resources_for_goal(goal.goal_id)
         procedure_text = goal.description
         if has_new_user_input:
             procedure_text = f"{procedure_text}\n补充信息：{observations[-1].summary}"
@@ -342,9 +349,11 @@ class ExecutiveController:
             target_goal_id=goal.goal_id,
             basis=basis,
             expected_progress="execute_governed_procedure",
-            procedure_call=ProcedureCall(
-                procedure_id=candidate.procedure_id,
-                procedure_version=candidate.version,
+            procedure_invocation=ProcedureInvocation(
+                procedure=ProcedureRef(
+                    procedure_id=candidate.procedure_id,
+                    version=candidate.version,
+                ),
                 goal_id=goal.goal_id,
                 input={
                     "text": procedure_text,
@@ -359,9 +368,9 @@ class ExecutiveController:
 
     def _model_choice(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
-        goals: list[ExecutionLedgerItem],
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
+        goals: list[MaterializedGoalView],
         observations: tuple[ObservationRef, ...],
         capability_classes: tuple[CapabilityClassSummary, ...],
         control_state: ControlState | None,
@@ -409,9 +418,9 @@ class ExecutiveController:
 
     def _materialize_choice(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
-        goal: ExecutionLedgerItem,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
+        goal: MaterializedGoalView,
         basis: DecisionBasis,
         choice: _ModelExecutiveDecision | None,
         capability_classes: tuple[CapabilityClassSummary, ...],
@@ -490,7 +499,7 @@ class ExecutiveController:
         if meta == "commit" and task.mutation_intent is None:
             return None
         requirement = _requirement(task, goal, meta)
-        resources = _resources_for_goal(task, goal.goal_id)
+        resources = task.resources_for_goal(goal.goal_id)
         bounded = BoundedAction(
             goal_id=goal.goal_id,
             meta_capability=meta,
@@ -526,25 +535,28 @@ class ExecutiveController:
         )
 
     @staticmethod
-    def _finish(task: TaskSpec, ledger: ExecutionLedger) -> FinishDecision:
+    def _finish(task: TaskContract, ledger: TaskRuntimeProjection) -> FinishDecision:
+        goals = materialize_goals(task, ledger)
         return FinishDecision(
-            target_goal_id=ledger.items[-1].goal_id if ledger.items else "task",
+            target_goal_id=goals[-1].goal_id,
             basis=DecisionBasis(expected_state_change="task_completed"),
             expected_progress="verified_completion",
             completion_claim=CompletionClaim(
-                goal_ids=tuple(item.goal_id for item in ledger.items),
+                goal_ids=tuple(item.goal_id for item in goals),
                 criterion_ids=tuple(item.criterion_id for item in task.success_criteria),
             ),
         )
 
 
-def _select_goal(goals: list[ExecutionLedgerItem]) -> ExecutionLedgerItem:
+def _select_goal(goals: list[MaterializedGoalView]) -> MaterializedGoalView:
     priority = {"active": 0, "blocked": 1, "candidate_complete": 2, "awaiting_input": 3, "pending": 4}
     return sorted(goals, key=lambda item: (priority.get(item.status, 9), item.goal_id))[0]
 
 
-def _dependencies_satisfied(goal: ExecutionLedgerItem, ledger: ExecutionLedger) -> bool:
-    status_by_id = {item.goal_id: item.status for item in ledger.items}
+def _dependencies_satisfied(goal: MaterializedGoalView, ledger: TaskRuntimeProjection) -> bool:
+    status_by_id = {
+        goal_id: state.status for goal_id, state in ledger.goal_states.items()
+    }
     return all(
         status_by_id.get(dependency.dependency_goal_id) in {"verified", "degraded"}
         for dependency in goal.dependencies
@@ -553,15 +565,15 @@ def _dependencies_satisfied(goal: ExecutionLedgerItem, ledger: ExecutionLedger) 
 
 
 def _observations_for_goal(
-    goal: ExecutionLedgerItem,
+    goal: MaterializedGoalView,
     observations: tuple[ObservationRef, ...],
 ) -> tuple[ObservationRef, ...]:
     scoped = tuple(item for item in observations if item.goal_id == goal.goal_id)
     return scoped or tuple(item for item in observations if not item.goal_id)
 
 
-def _skill_candidates(catalog: SkillRegistry, task: TaskSpec, goal: ExecutionLedgerItem) -> tuple:
-    domains = {item.semantic_domain for item in _resources_for_goal(task, goal.goal_id)}
+def _skill_candidates(catalog: SkillRegistry, task: TaskContract, goal: MaterializedGoalView) -> tuple:
+    domains = {item.semantic_domain for item in task.resources_for_goal(goal.goal_id)}
     return tuple(
         skill for skill in catalog.candidates(task)
         if domains.intersection(skill.applicability.semantic_domains)
@@ -569,9 +581,9 @@ def _skill_candidates(catalog: SkillRegistry, task: TaskSpec, goal: ExecutionLed
     )
 def _execution_guidance(
     controller: ExecutiveController,
-    task: TaskSpec,
-    ledger: ExecutionLedger,
-    goal: ExecutionLedgerItem,
+    task: TaskContract,
+    ledger: TaskRuntimeProjection,
+    goal: MaterializedGoalView,
 ) -> list[str]:
     guidance = []
     relevant_skill_ids = {
@@ -592,8 +604,8 @@ def _execution_guidance(
 
 
 def _has_exact_delegate(
-    task: TaskSpec,
-    goal: ExecutionLedgerItem,
+    task: TaskContract,
+    goal: MaterializedGoalView,
     capability_classes: tuple[CapabilityClassSummary, ...],
 ) -> bool:
     requirement = _requirement(task, goal, "delegate")
@@ -608,7 +620,7 @@ def _has_exact_delegate(
     )
 
 
-def _basis(goal: ExecutionLedgerItem, observations: tuple[ObservationRef, ...]) -> DecisionBasis:
+def _basis(goal: MaterializedGoalView, observations: tuple[ObservationRef, ...]) -> DecisionBasis:
     return DecisionBasis(
         unmet_criterion_ids=goal.success_criterion_ids,
         triggering_observation_ids=tuple(item.observation_id for item in observations[-3:]),
@@ -617,8 +629,8 @@ def _basis(goal: ExecutionLedgerItem, observations: tuple[ObservationRef, ...]) 
     )
 
 
-def _requirement(task: TaskSpec, goal: ExecutionLedgerItem, meta: str) -> CapabilityRequirement:
-    resources = _resources_for_goal(task, goal.goal_id)
+def _requirement(task: TaskContract, goal: MaterializedGoalView, meta: str) -> CapabilityRequirement:
+    resources = task.resources_for_goal(goal.goal_id)
     domains = tuple(dict.fromkeys(item.semantic_domain for item in resources))
     resource_types = tuple(dict.fromkeys(value for item in resources for value in item.resource_types))
     locator = next((item.locator for item in resources if item.locator), None)
@@ -634,11 +646,11 @@ def _requirement(task: TaskSpec, goal: ExecutionLedgerItem, meta: str) -> Capabi
     elif meta == "commit":
         operations = tuple(dict.fromkeys(
             operation for item in resources for operation in item.required_operations
-            if operation in {"create", "update", "delete", "ingest", "repair"}
+            if operation in MUTATING_OPERATIONS
         ))
     else:
         operations = ()
-    return CapabilityRequirement(
+    return CapabilityRequirement.from_dimensions(
         requirement_id=f"{goal.goal_id}:{meta}",
         purpose=f"{meta}_{goal.result_contract}",
         semantic_domains=domains,
@@ -656,11 +668,6 @@ def _requirement(task: TaskSpec, goal: ExecutionLedgerItem, meta: str) -> Capabi
         output_contract=_action_output_contract(meta),
         side_effect_class="none",
     )
-
-
-def _resources_for_goal(task: TaskSpec, goal_id: str):
-    scoped = tuple(item for item in task.resource_requirements if item.goal_id == goal_id)
-    return scoped or task.resource_requirements
 
 
 def _action_output_contract(meta: str) -> str:

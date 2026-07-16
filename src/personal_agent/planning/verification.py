@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
-from personal_agent.kernel.contracts.agentic import ExecutionLedger, ExecutionLedgerItem, TaskSpec
+from personal_agent.kernel.contracts.agentic import (
+    TaskRuntimeProjection,
+    MaterializedGoalView,
+    TaskContract,
+    materialize_goals,
+)
 from personal_agent.kernel.contracts.executive import (
     CompletionClaim,
     CompletionReport,
@@ -43,8 +48,8 @@ class GoalVerifier:
 
     def verify(
         self,
-        task: TaskSpec,
-        goal: ExecutionLedgerItem,
+        task: TaskContract,
+        goal: MaterializedGoalView,
         *,
         answer: str | None,
         citation_count: int,
@@ -143,8 +148,8 @@ class GoalVerifier:
 
     def _semantic_judgments(
         self,
-        task: TaskSpec,
-        goal: ExecutionLedgerItem,
+        task: TaskContract,
+        goal: MaterializedGoalView,
         *,
         model_context: dict[str, object] | None,
     ) -> dict[str, _CriterionJudgment]:
@@ -184,20 +189,21 @@ class GoalVerifier:
 class CompletionVerifier:
     def verify(
         self,
-        task: TaskSpec,
-        ledger: ExecutionLedger,
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
         claim: CompletionClaim | None,
         *,
         pending_confirmation: bool,
     ) -> CompletionReport:
-        verified = tuple(item.goal_id for item in ledger.items if item.status == "verified")
+        goals = materialize_goals(task, ledger)
+        verified = tuple(item.goal_id for item in goals if item.status == "verified")
         unresolved = tuple(
-            item.goal_id for item in ledger.items
+            item.goal_id for item in goals
             if item.status not in {"verified", "degraded", "abandoned"}
         )
         checked = {
             result.criterion_id
-            for item in ledger.items
+            for item in goals
             if item.verification is not None
             for result in item.verification.checked_criteria
             if result.status == "passed"

@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from personal_agent.planning.goal_graph import GoalGraphCompiler
     from personal_agent.planning.executive import ExecutiveController
     from personal_agent.planning.decision_validator import DecisionValidator
-    from personal_agent.planning.ledger import ExecutionLedgerProjector, GoalDecompositionValidator
+    from personal_agent.planning.ledger import TaskRuntimeProjector, GoalDecompositionValidator
     from personal_agent.planning.verification import CompletionVerifier, GoalVerifier
     from personal_agent.application.workspace import WorkspaceService
     from personal_agent.agents.gateway import AgentGateway
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from personal_agent.planning.adaptive import (
         AdaptivePlanner,
         FrontierSelector,
-        PlanLedgerProjector,
+        PlanRuntimeProjector,
         PlanMonitor,
         PlanValidator,
         PlanningFactProjector,
@@ -65,7 +65,7 @@ class ExecutiveContext:
     goal_graph_compiler: "GoalGraphCompiler"
     controller: "ExecutiveController"
     decision_validator: "DecisionValidator"
-    ledger_projector: "ExecutionLedgerProjector"
+    task_runtime_projector: "TaskRuntimeProjector"
     goal_decomposition_validator: "GoalDecompositionValidator"
     goal_verifier: "GoalVerifier"
     completion_verifier: "CompletionVerifier"
@@ -88,7 +88,7 @@ class ExecutiveContext:
     planning_mode_policy: "PlanningModePolicy"
     adaptive_planner: "AdaptivePlanner"
     plan_validator: "PlanValidator"
-    plan_ledger_projector: "PlanLedgerProjector"
+    plan_runtime_projector: "PlanRuntimeProjector"
     frontier_selector: "FrontierSelector"
     plan_monitor: "PlanMonitor"
     planner_profile: "PlannerExecutionProfile"

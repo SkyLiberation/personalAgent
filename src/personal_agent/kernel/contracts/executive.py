@@ -9,7 +9,11 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
-from personal_agent.kernel.contracts.procedure import ProcedureCall, ProcedureCandidate
+from personal_agent.kernel.contracts.procedure import (
+    ProcedureCandidate,
+    ProcedureInvocation,
+    ProcedureRef,
+)
 
 
 def _short_id() -> str:
@@ -116,7 +120,7 @@ class DelegateDecision(DecisionBase):
 
 class InvokeProcedureDecision(DecisionBase):
     action: Literal["invoke_procedure"] = "invoke_procedure"
-    procedure_call: ProcedureCall
+    procedure_invocation: ProcedureInvocation
 
 
 class RequestConfirmationDecision(DecisionBase):
@@ -158,7 +162,7 @@ class CapabilityClassSummary(BaseModel):
 
 class ObservationRef(BaseModel):
     observation_id: str = Field(default_factory=_short_id)
-    goal_id: str = ""
+    goal_id: str | None = None
     kind: str
     provenance: str
     summary: str
@@ -302,7 +306,8 @@ __all__ = [
     "InvokeProcedureDecision",
     "ObservationRef",
     "ProposedResourceAccessPlan",
-    "ProcedureCall",
+    "ProcedureInvocation",
+    "ProcedureRef",
     "RequestConfirmationDecision",
     "ResourceAccess",
     "ResolvedActionSpec",

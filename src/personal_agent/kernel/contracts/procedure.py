@@ -10,10 +10,14 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.contracts.capability import CapabilityRequirement
-from personal_agent.kernel.contracts.execution import ExecutionStep
+from personal_agent.kernel.contracts.execution import (
+    ConditionalTransition,
+    ExecutableInvocation,
+    ProcedureNodeInvocation,
+)
 
 ProcedureStatus = Literal["eligible", "mandatory", "ineligible"]
 ProcedureRunStatus = Literal[
@@ -70,9 +74,9 @@ class ProcedureNodeSpec:
     branch_policy: ProcedureBranchPolicy = "continue"
     conditional_edges: tuple[ProcedureCondition, ...] = ()
 
-    def to_execution_step(self, procedure_id: str, version: str, goal_id: str) -> ExecutionStep:
+    def to_invocation(self, procedure_id: str, version: str, goal_id: str) -> ExecutableInvocation:
         requirement = self.capability_requirement
-        return ExecutionStep(
+        return ExecutableInvocation(
             step_id=self.node_id,
             action_type=self.kind,
             description=self.description,
@@ -87,24 +91,29 @@ class ProcedureNodeSpec:
             execution_mode=self.execution_mode,
             max_iterations=self.max_iterations,
             llm_decision_node=self.llm_decision_node or "",
-            procedure_id=procedure_id,
-            procedure_version=version,
-            procedure_node_id=self.node_id,
-            procedure_recovery_policy=self.recovery_policy,
-            procedure_branch_policy=self.branch_policy,
-            conditional_edges=[asdict(edge) for edge in self.conditional_edges],
+            procedure=ProcedureNodeInvocation(
+                procedure_id=procedure_id,
+                procedure_version=version,
+                node_id=self.node_id,
+                recovery_policy=self.recovery_policy,
+                branch_policy=self.branch_policy,
+                transitions=tuple(
+                    ConditionalTransition(condition=edge.condition, target=edge.target)
+                    for edge in self.conditional_edges
+                ),
+            ),
             projection_kind="procedure_node",
-            task_id=goal_id,
+            goal_id=goal_id,
             meta_capability="commit" if self.side_effects else self.kind,
             output_contract=requirement.output_contract if requirement else "ToolResult",
             capability_requirements=(
-                [requirement.model_dump(mode="json")] if requirement is not None else []
+                [requirement] if requirement is not None else []
             ),
         )
 
 
 @dataclass(frozen=True, slots=True)
-class ProcedureSpec:
+class ProcedureDefinition:
     procedure_id: str
     version: str
     purpose: str
@@ -118,8 +127,8 @@ class ProcedureSpec:
     recovery_policy: str = "branch"
     evidence_required: bool = False
 
-    def project(self, goal_id: str) -> list[ExecutionStep]:
-        return [node.to_execution_step(self.procedure_id, self.version, goal_id) for node in self.nodes]
+    def project(self, goal_id: str) -> list[ExecutableInvocation]:
+        return [node.to_invocation(self.procedure_id, self.version, goal_id) for node in self.nodes]
 
     def to_definition_payload(self) -> dict[str, object]:
         nodes: list[dict[str, object]] = []
@@ -146,7 +155,7 @@ class ProcedureSpec:
         }
 
     @classmethod
-    def from_definition_payload(cls, payload: dict[str, object]) -> "ProcedureSpec":
+    def from_definition_payload(cls, payload: dict[str, object]) -> "ProcedureDefinition":
         applicability = ProcedureApplicability(**dict(payload.get("applicability") or {}))
         nodes = []
         for raw in payload.get("nodes") or ():
@@ -193,13 +202,21 @@ class ProcedureCandidate(BaseModel):
     requires_confirmation: bool = False
 
 
-class ProcedureCall(BaseModel):
-    procedure_call_id: str = Field(default_factory=_short_id)
-    procedure_id: str
-    procedure_version: str
-    goal_id: str
+class ProcedureRef(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    procedure_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+
+
+class ProcedureInvocation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    invocation_id: str = Field(default_factory=_short_id, min_length=1)
+    procedure: ProcedureRef
+    goal_id: str = Field(min_length=1)
     input: dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: str
+    idempotency_key: str = Field(min_length=1)
     expected_output_contract: str = "ProcedureOutcome"
 
 
@@ -210,16 +227,13 @@ class ProcedureNodeState(BaseModel):
     artifact_ids: tuple[str, ...] = ()
 
 
-class ProcedureInstance(BaseModel):
-    procedure_run_id: str = Field(default_factory=_short_id)
-    procedure_id: str
-    version: str
-    task_id: str
-    goal_id: str
+class ProcedureRunProjection(BaseModel):
+    procedure_run_id: str = Field(default_factory=_short_id, min_length=1)
+    invocation_id: str = Field(min_length=1)
+    procedure: ProcedureRef
     status: ProcedureRunStatus = "created"
     active_node_ids: tuple[str, ...] = ()
     node_states: tuple[ProcedureNodeState, ...] = ()
-    input: dict[str, Any] = Field(default_factory=dict)
     artifact_ids: tuple[str, ...] = ()
     receipt_ids: tuple[str, ...] = ()
     revision: int = 1
@@ -240,8 +254,8 @@ class ProcedureEvent(BaseModel):
 
 
 class ProcedureOutcome(BaseModel):
-    procedure_call_id: str
-    procedure_id: str
+    invocation_id: str
+    procedure: ProcedureRef
     status: Literal["completed", "degraded", "cancelled", "failed"]
     artifact_ids: tuple[str, ...] = ()
     mutation_receipt_ids: tuple[str, ...] = ()
@@ -250,13 +264,14 @@ class ProcedureOutcome(BaseModel):
 
 
 class ProcedureCatalogPort(Protocol):
-    def get(self, procedure_id: str, version: str | None = None) -> ProcedureSpec: ...
-    def all_specs(self) -> tuple[ProcedureSpec, ...]: ...
+    def get(self, procedure_id: str, version: str | None = None) -> ProcedureDefinition: ...
+    def all_specs(self) -> tuple[ProcedureDefinition, ...]: ...
 
 
 __all__ = [
     "PROCEDURE_ABORT", "PROCEDURE_CLARIFY", "PROCEDURE_END", "PROCEDURE_SENTINELS",
-    "ProcedureApplicability", "ProcedureCall", "ProcedureCandidate", "ProcedureCatalogPort",
-    "ProcedureCondition", "ProcedureEvent", "ProcedureInstance", "ProcedureNodeSpec",
-    "ProcedureNodeState", "ProcedureOutcome", "ProcedureSpec",
+    "ProcedureApplicability", "ProcedureCandidate", "ProcedureCatalogPort",
+    "ProcedureCondition", "ProcedureEvent", "ProcedureInvocation", "ProcedureNodeSpec",
+    "ProcedureNodeState", "ProcedureOutcome", "ProcedureRef", "ProcedureRunProjection",
+    "ProcedureDefinition",
 ]

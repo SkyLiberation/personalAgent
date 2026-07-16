@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import KnowledgeNote, ReviewCard, local_now
+from personal_agent.kernel.contracts.delivery import DeliveryTarget
 
 ReviewFeedbackOutcome = Literal["remembered", "forgotten", "later"]
 
@@ -43,12 +44,6 @@ class DigestSubscription(BaseModel):
     schedule_time: str = "09:00"
     timezone: str = "Asia/Shanghai"
     enabled: bool = True
-
-
-class DeliveryTarget(BaseModel):
-    channel: str
-    target_type: str
-    target_id: str
 
 
 class DeliveryMessage(BaseModel):
