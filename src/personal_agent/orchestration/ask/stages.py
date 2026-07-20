@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING
 
 from personal_agent.application.evidence_engine import EvidenceAssemblyRequest
 from personal_agent.capabilities.contracts.execution import (
+    CapabilityEquivalenceClass,
     CapabilityRequirement,
+    CapabilityRuntimeContext,
     ExecutionCapabilityRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
@@ -159,6 +161,10 @@ class RetrievalStage:
         if ctx.understanding.needs_episodic_context:
             preferred.append("episodic")
         preferred.extend(["reflection"])
+        external_retrieval = (
+            ctx.understanding.needs_freshness
+            or "web" in ctx.retrieval_plan.sources
+        )
         resolution = CapabilityResolver(
             registry,
             policy_engine=svc.policy_engine,
@@ -187,13 +193,22 @@ class RetrievalStage:
                 max_providers_per_action=6,
                 preferred_providers=tuple(dict.fromkeys(preferred)),
             ),
-            runtime_context={
-                "user_id": ctx.user_id,
-                "session_id": ctx.session_id,
-                "needs_freshness": ctx.understanding.needs_freshness,
-                "claim_sensitive": ctx.retrieval_plan.claim_sensitive,
-                "planned_sources": list(ctx.retrieval_plan.sources),
-            },
+            runtime_context=CapabilityRuntimeContext(
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                equivalence_class=CapabilityEquivalenceClass(
+                    required_output_contract="EvidenceItem",
+                    allowed_side_effect_class=(
+                        "external_network" if external_retrieval else "none"
+                    ),
+                    authority_scope=("web:search" if external_retrieval else "ask:read"),
+                    trust_floor="external",
+                    freshness_contract="fresh" if external_retrieval else "static",
+                    evidence_contract="provider_output",
+                    data_egress_class="content" if external_retrieval else "none",
+                    failure_semantics="return_typed_failure",
+                ),
+            ),
         ))
         selected = resolution.selected_definition
         selected_sources = (

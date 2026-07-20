@@ -25,6 +25,7 @@ from personal_agent.orchestration.orchestration_nodes._entry import (
 from personal_agent.orchestration.orchestration_nodes._executive import (
     _after_action_resolution,
     _after_decision_admission,
+    _after_decision_feedback,
     _after_apply_decision,
     _after_completion,
     _node_apply_decision,
@@ -66,13 +67,18 @@ logger = logging.getLogger(__name__)
 
 
 def _after_entry_route(state: RunCheckpoint) -> str:
-    if state.task_analysis and state.task_analysis.requires_clarification:
+    if state.accepted_task_analysis is None:
+        return "return_to_parent"
+    if (
+        state.accepted_task_analysis
+        and state.accepted_task_analysis.analysis.requires_clarification
+    ):
         return "prepare_clarify_entry"
     return "return_to_parent"
 
 
 def _after_entry_graph(state: RunCheckpoint) -> str:
-    return "finalize" if state.answer_completed else "executive"
+    return "finalize" if state.answer_completed or state.accepted_task_analysis is None else "executive"
 
 
 def _after_react_graph(state: RunCheckpoint) -> str:
@@ -88,12 +94,16 @@ def _after_goal_compile(state: RunCheckpoint) -> str:
 
 
 def _after_coordination(state: RunCheckpoint) -> str:
+    if state.control.disposition == "terminate":
+        return "stop"
     if state.coordination is not None and state.coordination.mode == "deliberative":
         return "plan"
     return "control"
 
 
 def _after_plan_creation(state: RunCheckpoint) -> str:
+    if state.control.disposition == "replace_plan":
+        return "replan"
     return "stop" if state.control.disposition == "terminate" else "control"
 
 
@@ -250,21 +260,25 @@ def build_executive_graph(contexts: GraphContexts):
     builder.add_conditional_edges(
         "assess_coordination",
         _after_coordination,
-        {"plan": "create_or_revise_plan", "control": "project_control_state"},
+        {"plan": "create_or_revise_plan", "control": "project_control_state", "stop": END},
     )
     builder.add_conditional_edges(
         "create_or_revise_plan",
         _after_plan_creation,
-        {"control": "project_control_state", "stop": END},
+        {"control": "project_control_state", "replan": "create_or_revise_plan", "stop": END},
     )
     builder.add_edge("project_control_state", "decide")
     builder.add_edge("decide", "admit_decision")
     builder.add_conditional_edges(
         "admit_decision",
         _after_decision_admission,
-        {"route": "admit_execution_route", "deny": "handle_decision_denial"},
+        {"route": "admit_execution_route", "feedback": "handle_decision_denial"},
     )
-    builder.add_edge("handle_decision_denial", END)
+    builder.add_conditional_edges(
+        "handle_decision_denial",
+        _after_decision_feedback,
+        {"revise": "project_control_state", "stop": END},
+    )
     builder.add_edge("admit_execution_route", "apply_decision")
     builder.add_conditional_edges(
         "apply_decision",
@@ -316,7 +330,10 @@ def build_entry_orchestration_graph(contexts: GraphContexts, checkpointer=None):
     builder = StateGraph(RunCheckpoint)
     builder.add_node("entry_graph", build_entry_graph(contexts))
     builder.add_node("executive_graph", build_executive_graph(contexts))
-    builder.add_node("finalize_entry_result", _node_finalize_entry_result)
+    builder.add_node(
+        "finalize_entry_result",
+        lambda state: _node_finalize_entry_result(state, deps=contexts.steps),
+    )
     builder.add_edge(START, "entry_graph")
     builder.add_conditional_edges(
         "entry_graph",

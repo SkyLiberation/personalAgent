@@ -149,6 +149,9 @@ class MCPToolConfig(_StrictBase):
     data_egress_class: DataEgressClass
     attestation_status: AttestationStatus
     freshness_profile: FreshnessProfile
+    output_contract: str = Field(min_length=1)
+    evidence_contract: str = Field(min_length=1)
+    failure_semantics: str = Field(min_length=1)
     provider_priority: int | None = None
     output_schema: dict[str, Any] | None = None
     examples: tuple[dict[str, Any], ...] = ()

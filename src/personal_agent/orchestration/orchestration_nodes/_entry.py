@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.models import EntryInput, local_now
 from personal_agent.runtime.contracts.task import ContextInventory
 from personal_agent.runtime.contracts.intake import TaskIntakeState
 from personal_agent.kernel.contracts.interaction import InteractionOption, InteractionRequest
 from personal_agent.governance.guardrails import get_content_guard
+from personal_agent.verification.output_admission import FinalAnswerAdmission
 from personal_agent.orchestration.orchestration_models import (
     RunCheckpoint,
     InvocationBatchState,
@@ -20,7 +23,12 @@ from personal_agent.orchestration.orchestration_models import (
     _new_run_id,
     _new_thread_id,
 )
-from personal_agent.orchestration.orchestration_contexts import ConversationContext, RoutingContext
+from personal_agent.orchestration.orchestration_contexts import (
+    ConversationContext,
+    RoutingContext,
+    StepExecutionContext,
+)
+from personal_agent.runtime.contracts.control import FinalAnswerProposal
 from personal_agent.orchestration.orchestration_nodes._helpers import (
     _clarification_payload_parts,
     _dialogue_prompt_messages,
@@ -29,6 +37,13 @@ from personal_agent.orchestration.orchestration_nodes._helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _FinalAnswerBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(min_length=1)
+    citation_refs: tuple[str, ...] = ()
 
 def _node_normalize_entry(state: RunCheckpoint) -> dict:
     if state.run_id is None or state.run_id == "":
@@ -52,7 +67,8 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
         original_input_ref=f"entry:{state.run_id}",
         source_message_refs=(f"{state.run_id}:user",),
     )
-    state.task_analysis = None
+    state.task_analysis_attempts = []
+    state.accepted_task_analysis = None
     state.task_contract = None
     state.task_runtime = None
     state.context_inventory = ContextInventory()
@@ -60,12 +76,19 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
     state.control.state = None
     state.control.proposal = None
     state.decision_admission = None
-    state.control.accepted_command = None
+    state.decision_feedback = []
+    state.decision_audit = []
+    state.control.accepted_intent = None
+    state.control.resolved_command = None
     state.control.actions = []
     state.control.action_outcome = None
     state.control.observations = []
+    state.execution_fact_reports = {}
     state.verification_reports = {}
+    state.verification_feedback = {}
     state.completion_report = None
+    state.final_answer_proposal = None
+    state.final_answer_admission = None
     state.execution_events = []
     state.execution_grants = {}
     from personal_agent.execution.contracts.journal import InvocationJournalProjection
@@ -78,8 +101,13 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
     state.task_compilation_commit = None
     state.control_commits = []
     state.control.turn_index = 0
-    state.control.last_decision_hash = ""
-    state.control.repeated_decision_count = 0
+    state.control.last_intent_semantic_hash = ""
+    state.control.last_submission_hash = ""
+    state.control.seen_decision_cycle_keys = ()
+    state.control.active_revision_lineage_id = None
+    state.control.active_feedback_ref = None
+    state.control.revision_attempt = 0
+    state.control.cross_stage_revision_cycles = 0
     state.control.phase = "preparing_model_call"
     state.control.disposition = "continue_control"
     state.context_projections = []
@@ -120,7 +148,8 @@ def _node_normalize_entry(state: RunCheckpoint) -> dict:
         "entry_text": text,
         "messages": [HumanMessage(content=text, id=f"{state.run_id}:user")],
         "tool_messages": [],
-        "task_analysis": None,
+        "task_analysis_attempts": [],
+        "accepted_task_analysis": None,
         "intake": state.intake,
         "task_contract": None,
         "task_runtime": None,
@@ -162,7 +191,8 @@ def _node_prepare_clarify(state: RunCheckpoint) -> dict:
     node writes the payload first so the checkpoint records exactly what the
     UI should present before ``interrupt()`` pauses execution.
     """
-    decision = state.task_analysis
+    accepted = state.accepted_task_analysis
+    decision = accepted.analysis if accepted is not None else None
     if decision is None or not decision.requires_clarification:
         return {}
 
@@ -263,7 +293,8 @@ def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
         "option_id": option_id,
         "text_preview": clarified_text[:120],
     })
-    state.task_analysis = None
+    state.task_analysis_attempts = []
+    state.accepted_task_analysis = None
     state.control.pending_interaction = None
     if state.intake is not None:
         state.intake = state.intake.model_copy(update={
@@ -276,7 +307,8 @@ def _node_interrupt_clarify(state: RunCheckpoint) -> dict:
         "messages": [HumanMessage(content=supplemental, id=f"{state.run_id}:clarification")],
         "control": state.control,
         "intake": state.intake,
-        "task_analysis": None,
+        "task_analysis_attempts": [],
+        "accepted_task_analysis": None,
         "events": state.events,
     }
 
@@ -309,25 +341,39 @@ def _node_analyze_task(state: RunCheckpoint, *, deps: RoutingContext) -> dict:
 
     deps.memory.bind_session(state.user_id, state.session_id)
     conversation_messages = _entry_conversation_messages(state, exclude_latest=True, deps=deps)
-    supplied_analysis = (state.entry_input.metadata or {}).get("task_analysis")
-    trusted_internal_entry = state.entry_input.source_platform in {"worker", "runtime"}
-    if trusted_internal_entry and isinstance(supplied_analysis, dict):
-        from personal_agent.planning.task_analyzer import TaskAnalysis
-
-        decision = TaskAnalysis.model_validate(supplied_analysis)
-    else:
-        decision = deps.task_analyzer.analyze(
-            state.entry_input,
-            conversation_messages=conversation_messages,
-        )
-
-    state.task_analysis = decision
+    result = deps.task_analyzer.analyze(
+        state.entry_input,
+        conversation_messages=conversation_messages,
+    )
+    state.task_analysis_attempts = list(result.attempts)
+    state.accepted_task_analysis = result.accepted
+    latest = result.attempts[-1]
+    if result.accepted is None:
+        state.answer = "任务理解提案未通过确定性准入。"
+        state.add_event("answer_completed", {
+            "reason": "task_analysis_not_admitted",
+            "business_result": False,
+        })
+        state.add_event("task_analysis_denied", {
+            "attempts": [item.model_dump(mode="json") for item in result.attempts],
+        })
+        return {
+            "task_analysis_attempts": state.task_analysis_attempts,
+            "accepted_task_analysis": None,
+            "answer": state.answer,
+            "events": state.events,
+        }
+    decision = result.accepted.analysis
     if decision.outcome == "rejected":
         state.answer = decision.rejection_reason
         state.add_event("answer_completed", {"reason": "task_rejected"})
     state.invocation_batch.invocations = []
 
     event = state.add_event("task_analyzed", {
+        "proposal": latest.proposal.model_dump(mode="json"),
+        "admission": latest.admission.model_dump(mode="json"),
+        "attempts": [item.model_dump(mode="json") for item in result.attempts],
+        "accepted_analysis_ref": result.accepted.accepted_analysis_id,
         "result_contracts": [goal.result_contract for goal in decision.goals],
         "goals": [goal.model_dump(mode="json") for goal in decision.goals],
         "relations": [item.model_dump(mode="json") for item in decision.relations],
@@ -362,7 +408,8 @@ def _node_analyze_task(state: RunCheckpoint, *, deps: RoutingContext) -> dict:
     )
 
     return {
-        "task_analysis": state.task_analysis,
+        "task_analysis_attempts": state.task_analysis_attempts,
+        "accepted_task_analysis": state.accepted_task_analysis,
         "intake": state.intake,
         "answer": state.answer,
         "invocation_batch": state.invocation_batch,
@@ -412,55 +459,177 @@ def _entry_conversation_messages(
 
 
 def _analysis_reason(decision) -> str:
-    from personal_agent.planning.task_analyzer import describe_task_analysis
+    if decision is None:
+        return "未提供任务理解结果。"
+    if decision.error == "analyzer_unavailable" or decision.requires_clarification:
+        return decision.clarification_prompt
+    if decision.outcome == "rejected":
+        return decision.rejection_reason
+    return "已识别目标：" + "；".join(goal.description for goal in decision.goals)
 
-    return describe_task_analysis(decision)
 
-
-def _node_finalize_entry_result(state: RunCheckpoint) -> dict:
+def _node_finalize_entry_result(
+    state: RunCheckpoint,
+    *,
+    deps: StepExecutionContext,
+) -> dict:
     if (
         state.task_runtime is not None
-        and state.task_runtime.lifecycle not in {"completed", "stopped"}
+        and state.task_runtime.lifecycle not in {"completed", "terminated"}
         and not state.answer_completed
     ):
         state.errors.append("completion_verifier_did_not_accept_task")
     if state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:
-        if state.answer:
-            output_guard = get_content_guard().check_output(state.answer)
-            if output_guard.changed:
-                state.answer = output_guard.text
-                state.add_event(
-                    "guardrail_sanitized",
-                    {
-                        "stage": "output",
-                        "categories": list(output_guard.categories),
-                        "reason": output_guard.reason,
-                    },
-                )
+        if state.completion_report is not None and state.completion_report.status == "complete":
+            proposal = _compose_final_answer(state, deps)
+            if proposal is None:
+                state.answer = "模型暂不可用，已验证结果暂时无法生成业务答复。"
+                state.add_event("final_answer_model_unavailable", {
+                    "status": "terminal_control_message",
+                })
+            else:
+                state.final_answer_proposal = proposal
+                state.answer = proposal.answer
+                state.add_event("final_answer_admitted", {
+                    "proposal": proposal.model_dump(mode="json"),
+                    "admission": (
+                        state.final_answer_admission.model_dump(mode="json")
+                        if state.final_answer_admission else None
+                    ),
+                })
         if not any(event.type == "answer_completed" for event in state.events):
             state.add_event("answer_completed", {"answer": state.answer})
         state.add_event("run_completed", {
             "answer": state.answer,
-            "result_contracts": [goal.result_contract for goal in state.task_analysis.goals] if state.task_analysis else [],
+            "result_contracts": [
+                goal.result_contract for goal in state.accepted_task_analysis.analysis.goals
+            ] if state.accepted_task_analysis else [],
         })
         logger.info(
             "finalize_entry_result relies on checkpoint messages run_id=%s intent=%s answer_len=%d",
             state.run_id,
-            _primary_result_contract(state.task_analysis),
+            _primary_result_contract(
+                state.accepted_task_analysis.analysis if state.accepted_task_analysis else None
+            ),
             len(state.answer or ""),
         )
     logger.info(
         "finalize_entry_result run_id=%s intent=%s errors=%d",
-        state.run_id, _primary_result_contract(state.task_analysis), len(state.errors),
+        state.run_id,
+        _primary_result_contract(
+            state.accepted_task_analysis.analysis if state.accepted_task_analysis else None
+        ),
+        len(state.errors),
     )
     result = {
         "events": state.events,
         "updated_at": state.updated_at,
+        "final_answer_proposal": state.final_answer_proposal,
+        "final_answer_admission": state.final_answer_admission,
+        "answer": state.answer,
     }
     if not state.errors and state.answer:
         result["messages"] = [
             AIMessage(content=state.answer, id=f"{state.run_id}:assistant")
         ]
     return result
+
+
+def _compose_final_answer(
+    state: RunCheckpoint,
+    deps: StepExecutionContext,
+) -> FinalAnswerProposal | None:
+    if state.task_contract is None or deps.model_client is None:
+        return None
+    from personal_agent.capabilities.contracts.model import StructuredModelRequest
+
+    if state.completion_report is None:
+        return None
+    verified_goal_refs = state.completion_report.verified_goal_ids
+    report_refs = tuple(
+        report.report_id for report in state.verification_reports.values()
+    )
+    allowed_citations = tuple(
+        str(getattr(item, "id", None) or getattr(item, "url", None) or index)
+        for index, item in enumerate(state.citations)
+    )
+    feedback: dict[str, object] | None = None
+    prior_proposal: FinalAnswerProposal | None = None
+    for attempt in range(2):
+        try:
+            response = deps.model_client.generate(StructuredModelRequest(
+                operation="final_answer_composition",
+                version="v1",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Compose the final business answer using only verified goals, admitted evidence, "
+                            "execution facts, and receipts in the supplied context. Do not claim an unverified "
+                            "outcome, invent citations, or copy a tool title as the answer. Return only the "
+                            "structured object. If output feedback is supplied, revise only the rejected output."
+                        ),
+                    },
+                    {"role": "user", "content": json.dumps({
+                        "task": state.task_contract.model_dump(mode="json"),
+                        "verified_goals": verified_goal_refs,
+                        "goal_verification_reports": {
+                            key: value.model_dump(mode="json")
+                            for key, value in state.verification_reports.items()
+                        },
+                        "execution_fact_reports": {
+                            key: value.model_dump(mode="json")
+                            for key, value in state.execution_fact_reports.items()
+                        },
+                        "tool_results": state.tool_results[-12:],
+                        "invocation_results": state.invocation_batch.results,
+                        "draft_answer": state.answer,
+                        "allowed_citation_refs": allowed_citations,
+                        "output_feedback": feedback,
+                    }, ensure_ascii=False, default=str)},
+                ],
+                output_type=_FinalAnswerBody,
+                context_projection_ref=f"final:{state.run_id}:{state.task_contract.revision}",
+                temperature=0,
+                max_tokens=1200,
+                kind="structured",
+                metadata={"task_id": state.task_contract.task_id, "attempt": attempt},
+            ))
+        except Exception:
+            logger.exception("Final answer composition failed")
+            return None
+        body = response.value
+        proposal = FinalAnswerProposal(
+            task_ref=state.task_contract.task_id,
+            task_revision=state.task_contract.revision,
+            verified_goal_refs=verified_goal_refs,
+            verification_report_refs=report_refs,
+            answer=body.answer,
+            citation_refs=body.citation_refs,
+            supersedes_proposal_ref=(prior_proposal.proposal_id if prior_proposal else None),
+            revision_feedback_ref=(
+                state.decision_feedback[-1].feedback_id
+                if prior_proposal is not None and state.decision_feedback else None
+            ),
+            revision_attempt=attempt,
+        )
+        admission = FinalAnswerAdmission().admit(
+            state.task_contract,
+            state.task_runtime.revision if state.task_runtime is not None else 0,
+            state.completion_report,
+            proposal,
+            required_report_refs=report_refs,
+            allowed_citation_refs=allowed_citations,
+        )
+        state.final_answer_admission = admission
+        if admission.verdict == "accepted":
+            return proposal
+        if admission.feedback is None:
+            return None
+        state.decision_feedback.append(admission.feedback)
+        feedback = admission.feedback.model_dump(mode="json")
+        prior_proposal = proposal
+        state.add_event("final_answer_feedback_created", feedback)
+    return None

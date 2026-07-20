@@ -24,6 +24,7 @@ class InvocationJournal:
         expected_revision: int,
         invocation_id: str,
         grant_ref: str,
+        execution_command_digest: str,
         idempotency_key: str,
         provider_ref: str,
         payload_ref: str,
@@ -32,7 +33,11 @@ class InvocationJournal:
             raise InvocationJournalConflict("invocation journal revision changed")
         existing = projection.entries.get(invocation_id)
         if existing is not None:
-            if existing.grant_ref != grant_ref or existing.idempotency_key != idempotency_key:
+            if (
+                existing.grant_ref != grant_ref
+                or existing.idempotency_key != idempotency_key
+                or existing.execution_command_digest != execution_command_digest
+            ):
                 raise InvocationJournalConflict("invocation identity was rebound")
             return projection, DispatchCommit(
                 invocation_id=invocation_id,
@@ -47,6 +52,7 @@ class InvocationJournal:
         entries[invocation_id] = InvocationJournalEntry(
             invocation_id=invocation_id,
             grant_ref=grant_ref,
+            execution_command_digest=execution_command_digest,
             idempotency_key=idempotency_key,
             provider_ref=provider_ref,
             updated_at=datetime.now(UTC),
@@ -54,6 +60,7 @@ class InvocationJournal:
         outbox[invocation_id] = InvocationOutboxEntry(
             invocation_id=invocation_id,
             grant_ref=grant_ref,
+            execution_command_digest=execution_command_digest,
             provider_ref=provider_ref,
             idempotency_key=idempotency_key,
             payload_ref=payload_ref,

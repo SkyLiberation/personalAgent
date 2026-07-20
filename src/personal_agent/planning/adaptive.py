@@ -14,9 +14,8 @@ from personal_agent.runtime.contracts.task import (
     TaskContract,
     materialize_goals,
 )
-from personal_agent.capabilities.contracts.execution import CapabilityRequirement
-from personal_agent.runtime.contracts.control import ObservationRef
-from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
+from personal_agent.runtime.contracts.control import ObservationRef, canonical_digest
+from personal_agent.governance.contracts.admission import DecisionFeedback
 from personal_agent.runtime.contracts.planning import (
     PlanDefinition,
     AddPlanStep,
@@ -91,6 +90,10 @@ class PlanningValidationError(ValueError):
 
 
 class PlanningConflictError(PlanningValidationError):
+    pass
+
+
+class CoordinationDecisionUnavailable(RuntimeError):
     pass
 
 
@@ -221,12 +224,7 @@ class CoordinationModePolicy:
             return assessed, usage.model_copy(update={
                 "mode_assessor_calls": usage.mode_assessor_calls + 1,
             })
-        return CoordinationAssessment(
-            mode="deliberative",
-            reason_codes=("strategy_ambiguous_model_unavailable",),
-            target_goal_ids=target_goal_ids,
-            uncertainty_summary="No safe deterministic admission applies.",
-        ), usage
+        raise CoordinationDecisionUnavailable("strategy_ambiguous_model_unavailable")
 
     def _assess_with_model(
         self,
@@ -338,7 +336,7 @@ class PlanValidator:
 
 
 class AdaptivePlanner:
-    """Planning port adapter: semantic model first, contract compiler as safe fallback."""
+    """Planning port adapter; invalid or unavailable model output never gets a business fallback."""
 
     def __init__(self, model_client: "StructuredModelClient | None" = None) -> None:
         self._model_client = model_client
@@ -356,28 +354,80 @@ class AdaptivePlanner:
         observation_ids: tuple[str, ...] = (),
         gap_ids: tuple[str, ...] = (),
         capability_registry_revision: str = "",
-    ) -> tuple[PlanDefinition | None, PlanningUsage]:
+    ) -> tuple[PlanDefinition | None, PlanningUsage, DecisionFeedback | None]:
         if usage.planner_calls >= limits.max_planner_calls:
-            return None, usage
-        snapshot = PlanningSnapshot(
-            task_revision=task.revision,
-            goal_graph_revision=ledger.goal_graph_revision,
-            ledger_event_cursor=ledger.last_event_sequence,
-            capability_registry_revision=capability_registry_revision,
-        )
+            return None, usage, _planning_feedback(
+                task,
+                ledger,
+                reason_code="planner_revision_budget_exhausted",
+                revision_attempt=usage.planner_calls,
+                revision_budget_remaining=0,
+                disposition="terminal",
+            )
         proposal = self._with_model(
             task, ledger, assessment, procedures, model_context=model_context,
         )
         calls = usage.planner_calls
         if proposal is not None:
             calls += 1
-        else:
-            proposal = self._compile_contract_plan(task, ledger, procedures)
         if proposal is None or not proposal.steps:
-            return None, usage.model_copy(update={"planner_calls": calls})
-        plan = PlanDefinition(
+            return None, usage.model_copy(update={"planner_calls": calls}), _planning_feedback(
+                task,
+                ledger,
+                reason_code="planner_model_unavailable",
+                revision_attempt=calls,
+                revision_budget_remaining=max(limits.max_planner_calls - calls, 0),
+                disposition="await_environment_change",
+            )
+        plan = self._materialize_plan(
+            task,
+            ledger,
+            assessment,
+            proposal,
+            observation_ids=observation_ids,
+            gap_ids=gap_ids,
+            capability_registry_revision=capability_registry_revision,
+        )
+        try:
+            PlanValidator().validate(
+                plan,
+                task,
+                ledger,
+                profile_for_task(task, procedures),
+            )
+        except PlanningValidationError as exc:
+            logger.warning("Adaptive planner proposal rejected: %s", exc)
+            remaining = max(limits.max_planner_calls - calls, 0)
+            return None, usage.model_copy(update={"planner_calls": calls}), _planning_feedback(
+                task,
+                ledger,
+                reason_code="plan_proposal_invalid",
+                revision_attempt=calls,
+                revision_budget_remaining=remaining,
+                disposition="revise_model" if remaining else "terminal",
+                required_repair=str(exc),
+            )
+        return plan, usage.model_copy(update={"planner_calls": calls}), None
+
+    @staticmethod
+    def _materialize_plan(
+        task: TaskContract,
+        ledger: TaskRuntimeProjection,
+        assessment: CoordinationAssessment,
+        proposal: _ModelPlanProposal,
+        *,
+        observation_ids: tuple[str, ...],
+        gap_ids: tuple[str, ...],
+        capability_registry_revision: str,
+    ) -> PlanDefinition:
+        return PlanDefinition(
             task_id=task.task_id,
-            planning_snapshot=snapshot,
+            planning_snapshot=PlanningSnapshot(
+                task_revision=task.revision,
+                goal_graph_revision=ledger.goal_graph_revision,
+                ledger_event_cursor=ledger.last_event_sequence,
+                capability_registry_revision=capability_registry_revision,
+            ),
             planning_horizon=min(max(len(proposal.steps), 1), 5),
             strategy_summary=proposal.strategy_summary,
             target_goal_ids=assessment.target_goal_ids,
@@ -387,7 +437,6 @@ class AdaptivePlanner:
             created_from_observation_ids=observation_ids,
             created_from_gap_ids=gap_ids,
         )
-        return plan, usage.model_copy(update={"planner_calls": calls})
 
     def create_patch(
         self,
@@ -511,99 +560,41 @@ class AdaptivePlanner:
             logger.exception("Adaptive planner model call failed")
             return None
 
-    @staticmethod
-    def _compile_contract_plan(
-        task: TaskContract,
-        ledger: TaskRuntimeProjection,
-        procedures: tuple[ProcedureCandidate, ...],
-    ) -> _ModelPlanProposal | None:
-        """Compile only explicit task contracts; never infer a semantic action sequence."""
-        steps: list[PlanStep] = []
-        procedure_by_goal = {
-            item.goal_id: item for item in procedures if item.status == "mandatory"
-        }
-        goals = materialize_goals(task, ledger)
-        status_by_goal = {item.goal_id: item.status for item in goals}
-        for goal in goals:
-            if goal.status in {"verified", "degraded", "abandoned"}:
-                continue
-            if any(
-                dependency.blocks_execution
-                and status_by_goal.get(dependency.dependency_goal_id) not in {"verified", "degraded"}
-                for dependency in goal.dependencies
-            ):
-                continue
-            procedure = procedure_by_goal.get(goal.goal_id)
-            if procedure is not None:
-                steps.append(PlanStep(
-                    goal_id=goal.goal_id,
-                    kind="procedure",
-                    objective=goal.description,
-                    supports_criterion_ids=goal.success_criterion_ids,
-                    procedure_id=procedure.procedure_id,
-                    success_observation_contract="ProcedureOutcome",
-                    failure_classes=("procedure_failed", "confirmation_missing"),
-                    replan_policy="request_input",
-                    side_effect_intent=procedure.side_effect_class,
-                ))
-                continue
-            resources = task.resources_for_goal(goal.goal_id)
-            operations = tuple(dict.fromkeys(
-                operation for item in resources for operation in item.required_operations
-            ))
-            if goal.result_contract == "external_state" or set(operations).intersection(
-                MUTATING_OPERATIONS
-            ):
-                continue
-            if operations:
-                requirement = CapabilityRequirement.from_dimensions(
-                    requirement_id=f"{goal.goal_id}:plan",
-                    purpose=f"satisfy_goal_{goal.goal_id}",
-                    semantic_domains=tuple(dict.fromkeys(
-                        item.semantic_domain for item in resources
-                    )),
-                    resource_types=tuple(dict.fromkeys(
-                        value for item in resources for value in item.resource_types
-                    )),
-                    operations=operations,
-                    resource_locator=next((item.locator for item in resources if item.locator), None),
-                    freshness_required=any(item.freshness_required for item in resources),
-                    required_providers=tuple(dict.fromkeys(
-                        provider for item in resources for provider in item.required_providers
-                    )),
-                    output_contract=goal.output_contract,
-                )
-                steps.append(PlanStep(
-                    goal_id=goal.goal_id,
-                    kind="capability",
-                    objective=goal.description,
-                    supports_criterion_ids=goal.success_criterion_ids,
-                    information_goal=goal.description,
-                    capability_requirement=requirement,
-                    success_observation_contract=goal.output_contract,
-                    verification_requirement="goal_criteria",
-                    failure_classes=("capability_unavailable", "evidence_insufficient"),
-                    replan_policy="patch",
-                ))
-            else:
-                steps.append(PlanStep(
-                    goal_id=goal.goal_id,
-                    kind="synthesize",
-                    objective=goal.description,
-                    supports_criterion_ids=goal.success_criterion_ids,
-                    success_observation_contract=goal.output_contract,
-                    verification_requirement="goal_criteria",
-                    failure_classes=("insufficient_context",),
-                    replan_policy="request_input",
-                ))
-        if not steps:
-            return None
-        return _ModelPlanProposal(
-            strategy_summary="Advance ready goals from their declared result and resource contracts.",
-            steps=tuple(steps[:5]),
-            replan_triggers=("capability_gap", "verification_gap", "task_revision_changed"),
-        )
 
+def _planning_feedback(
+    task: TaskContract,
+    ledger: TaskRuntimeProjection,
+    *,
+    reason_code: str,
+    revision_attempt: int,
+    revision_budget_remaining: int,
+    disposition: Literal["revise_model", "await_environment_change", "terminal"],
+    required_repair: str | None = None,
+) -> DecisionFeedback:
+    snapshot_ref = canonical_digest({
+        "task_revision": task.revision,
+        "runtime_revision": ledger.revision,
+        "policy_revision": "plan-admission:v1",
+    })
+    return DecisionFeedback(
+        stage="planning",
+        rejected_proposal_ref=f"plan:{task.task_id}:{revision_attempt}",
+        reason_codes=(reason_code,),
+        violated_constraint_refs=(f"task:{task.task_id}:revision:{task.revision}",),
+        rejected_field_refs=("plan",),
+        mutable_field_refs=("plan",) if disposition == "revise_model" else (),
+        immutable_field_refs=("task", "goals", "criteria"),
+        required_repairs=((required_repair or reason_code),),
+        revision_scope="semantic_revision",
+        disposition=disposition,
+        revision_budget_remaining=revision_budget_remaining,
+        governance_snapshot_ref=snapshot_ref,
+        rejection_equivalence_hash=canonical_digest({
+            "stage": "planning",
+            "reason": reason_code,
+            "snapshot": snapshot_ref,
+        }),
+    )
 
 class PlanRuntimeProjector:
     """Event-sourced projection for plan state; PlanStep itself has no status field."""
@@ -780,7 +771,7 @@ class PlanRuntimeProjector:
 
 
 class FrontierSelector:
-    """Policy selecting semantic work; physical concurrency remains Scheduler-owned."""
+    """Derive a frontier only when Plan contracts make the semantic result unique."""
 
     def select(
         self,
@@ -789,13 +780,45 @@ class FrontierSelector:
     ) -> FrontierDecision | None:
         if not frontier:
             return None
-        selected = tuple(step.step_id for step in frontier[:profile.max_frontier_width])
+        if len(frontier) == 1:
+            selected = (frontier[0].step_id,)
+            rationale = "single_ready_frontier_after_constraints"
+        else:
+            prioritized = [item for item in frontier if item.declared_priority is not None]
+            if prioritized:
+                best = min(item.declared_priority for item in prioritized)
+                winners = [item for item in prioritized if item.declared_priority == best]
+                if len(winners) != 1:
+                    return None
+                selected = (winners[0].step_id,)
+                rationale = "single_declared_priority_winner"
+            elif _frontier_semantically_equivalent(frontier):
+                selected = tuple(
+                    item.step_id for item in sorted(frontier, key=lambda value: value.step_id)
+                )[:profile.max_frontier_width]
+                rationale = "equivalent_frontier_scheduler_optimization"
+            else:
+                return None
         return FrontierDecision(
             selected_step_ids=selected,
             priority_order=selected,
             requested_join_policy="all",
-            rationale="highest-priority ready plan frontier",
+            rationale=rationale,
         )
+
+
+def _frontier_semantically_equivalent(frontier: tuple[PlanStep, ...]) -> bool:
+    signatures = {
+        (
+            item.goal_id,
+            item.kind,
+            item.supports_criterion_ids,
+            item.success_observation_contract,
+            item.side_effect_intent,
+        )
+        for item in frontier
+    }
+    return len(signatures) == 1
 
 
 class PlanMonitor:
@@ -1047,7 +1070,7 @@ def _descendants(steps: tuple[PlanStep, ...], root_step_id: str) -> set[str]:
 __all__ = [
     "ADVISORY_READ_ONLY_PROFILE", "BOUNDED_READ_ONLY_PROFILE", "AdaptivePlanner",
     "GOVERNED_MIXED_PROFILE",
-    "FrontierSelector", "PlanRuntimeProjector", "PlanMonitor", "PlanValidator",
+    "CoordinationDecisionUnavailable", "FrontierSelector", "PlanRuntimeProjector", "PlanMonitor", "PlanValidator",
     "PlanningConflictError", "PlanningFactProjector", "CoordinationModePolicy",
     "PlanningValidationError", "profile_for_task",
 ]

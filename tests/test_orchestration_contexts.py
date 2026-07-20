@@ -33,7 +33,8 @@ def test_executive_context_separates_decision_from_execution():
     names = _field_names(ExecutiveContext)
     assert {
         "goal_graph_compiler", "controller", "decision_admission",
-        "accepted_command_compiler",
+        "accepted_intent_compiler", "execution_command_resolver",
+        "control_plane_store",
     }.issubset(names)
     assert {"task_runtime_projector", "goal_verifier", "completion_verifier"}.issubset(names)
     assert "replanner" not in names

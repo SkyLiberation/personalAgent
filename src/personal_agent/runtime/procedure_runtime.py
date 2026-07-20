@@ -26,6 +26,8 @@ from personal_agent.capabilities.contracts.procedure import (
     ProcedureNodeSpec,
     ProcedureNodeState,
     ProcedureDefinition,
+    KnowledgeIngestInput,
+    ResearchRunInput,
 )
 
 
@@ -185,7 +187,7 @@ class ProcedureMaterializer:
         step_ids = {
             node.node_id: f"{invocation.invocation_id}:{node.node_id}" for node in nodes
         }
-        task_input = str(invocation.input.get("text") or "")
+        task_input = _procedure_task_input(invocation)
         for step in steps:
             step.step_id = step_ids[step.procedure_node_id]
             step.depends_on = [step_ids[node_id] for node_id in step.depends_on]
@@ -211,14 +213,20 @@ class ProcedureMaterializer:
         definition: ProcedureDefinition,
         invocation: ProcedureInvocation,
     ) -> tuple[ProcedureNodeSpec, ...]:
-        if definition.procedure_id == "research_run" and invocation.input.get("locator"):
+        if (
+            definition.procedure_id == "research_run"
+            and isinstance(invocation.input, ResearchRunInput)
+            and invocation.input.locator
+        ):
             return tuple(
                 replace(node, depends_on=()) if node.node_id == "initialize" else node
                 for node in definition.nodes if node.node_id != "prepare"
             )
         if definition.procedure_id != "knowledge_ingest":
             return definition.nodes
-        resource_types = {str(item) for item in invocation.input.get("resource_types", [])}
+        if not isinstance(invocation.input, KnowledgeIngestInput):
+            raise ProcedureDefinitionError("knowledge_ingest requires KnowledgeIngestInput")
+        resource_types = set(invocation.input.resource_types)
         if not resource_types.intersection({"url", "link", "file", "artifact", "document"}):
             return tuple(
                 replace(node, depends_on=()) if node.node_id == "ingest" else node
@@ -231,7 +239,7 @@ class ProcedureMaterializer:
         adapted = replace(acquire, capability_requirement=requirement.model_copy(update={
             "semantic_domains": (acquire_domain,),
             "resource_types": tuple(sorted(resource_types)),
-            "resource_locator": str(invocation.input.get("locator") or "") or None,
+            "resource_locator": invocation.input.locator,
         }))
         return tuple(
             adapted if node.node_id == "acquire-source" else node
@@ -278,6 +286,23 @@ def _node_to_invocation(
         output_contract=requirement.output_contract if requirement else "ToolResult",
         capability_requirements=[requirement] if requirement is not None else [],
     )
+
+
+def _procedure_task_input(invocation: ProcedureInvocation) -> str:
+    value = invocation.input
+    if isinstance(value, KnowledgeIngestInput):
+        return value.text
+    if isinstance(value, ResearchRunInput):
+        return value.question
+    if hasattr(value, "target_ref"):
+        return str(value.target_ref)
+    if hasattr(value, "target_refs"):
+        return "\n".join(value.target_refs)
+    if hasattr(value, "conversation_scope_ref"):
+        return str(value.conversation_scope_ref)
+    if hasattr(value, "question"):
+        return str(value.question)
+    raise ProcedureDefinitionError(f"unsupported procedure input: {value.kind}")
 
 
 class ProcedureEventProjector:
@@ -540,7 +565,7 @@ def _catalog() -> ProcedureCatalog:
                     capability_requirement=_requirement(
                         "research-verify", "Verify research evidence coverage",
                         ("research",), ("report", "evidence"),
-                        ("verify", "update"), "VerificationReport",
+                        ("verify", "update"), "GoalVerificationReport",
                     ),
                     side_effects=("write_longterm",), recovery_policy="abort",
                 ),

@@ -19,6 +19,7 @@ class InvocationJournalEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invocation_id: str
     grant_ref: str
+    execution_command_digest: str = Field(min_length=1)
     idempotency_key: str
     status: InvocationJournalStatus = "reserved"
     provider_ref: str
@@ -39,6 +40,7 @@ class InvocationOutboxEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invocation_id: str
     grant_ref: str
+    execution_command_digest: str = Field(min_length=1)
     provider_ref: str
     idempotency_key: str
     payload_ref: str

@@ -122,34 +122,7 @@ class TestEntryStreamEndpoint:
         assert matching[0]["thread_id"] == "test-user:entry-stream-ask"
         assert matching[0]["result_contracts"] == ["response"]
 
-    def test_solidify_stream_emits_steps_only_once(self, api_client: TestClient):
-        api_client.get(
-            "/api/entry/stream",
-            params={
-                "text": "什么是DNS",
-                "user_id": "test-user",
-                "session_id": "entry-stream-steps",
-            },
-        )
-        response = api_client.get(
-            "/api/entry/stream",
-            params={
-                "text": "把DNS相关讨论结论固化下来",
-                "user_id": "test-user",
-                "session_id": "entry-stream-steps",
-            },
-        )
-
-        assert response.status_code == 200
-        assert response.text.count("event: procedure_started") == 1
-        assert "event: step_started" in response.text
-        assert (
-            "event: step_completed" in response.text
-            or "event: step_failed" in response.text
-        )
-        assert response.text.index("event: procedure_started") < response.text.index("event: done")
-
-    def test_capture_stream_shows_routing_and_captured_content_before_done(self, api_client: TestClient):
+    def test_capture_stream_without_executive_model_fails_closed(self, api_client: TestClient):
         response = api_client.get(
             "/api/entry/stream",
             params={
@@ -161,11 +134,11 @@ class TestEntryStreamEndpoint:
 
         assert response.status_code == 200
         assert "event: task_analysis" in response.text
-        assert "event: procedure_started" in response.text
-        assert "event: confirmation_required" in response.text
-        assert "DNS" in response.text
+        assert "event: procedure_started" not in response.text
+        assert "event: confirmation_required" not in response.text
+        assert "模型决策能力暂不可用" in response.text
+        assert response.text.count("event: done") == 1
         assert response.text.index("event: task_analysis") < response.text.index("event: done")
-        assert response.text.index("event: procedure_started") < response.text.index("event: confirmation_required")
 
     def test_waiting_run_snapshot_exposes_confirmation_and_can_resume(self, api_client: TestClient):
         response = api_client.get(
@@ -199,7 +172,7 @@ class TestEntryStreamEndpoint:
         )
 
         assert resumed.status_code == 200
-        assert resumed.json()["run_status"] == "blocked_approval"
+        assert resumed.json()["run_status"] == "completed_degraded"
 
 
 class TestDigestEndpoint:

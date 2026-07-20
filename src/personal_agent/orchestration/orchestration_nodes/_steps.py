@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from langgraph.types import interrupt
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.models import Citation
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
@@ -25,7 +26,6 @@ from personal_agent.orchestration.orchestration_models import (
 from personal_agent.orchestration.orchestration_contexts import StepExecutionContext
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import (
     _REACT_MAX_ITERATIONS_CAP,
-    _default_step_answer,
     _inject_draft_text_into_steps,
     _inject_note_id_into_steps,
     _skip_step_dependents,
@@ -48,6 +48,14 @@ from personal_agent.capabilities.contracts.grants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _BoundedActionComposition(BaseModel):
+    """Typed result for a model-owned internal reason/transform action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(min_length=1)
 
 
 def _update_task_runtime(
@@ -363,13 +371,20 @@ def _node_execute_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
                 deps=deps,
             )
         if admission.status == "requires_confirmation" and state.control.confirmed_invocation_id != step.step_id:
+            content_preview = str((step.tool_input or {}).get("text") or "").strip()
+            confirmation_description = step.description
+            if content_preview:
+                confirmation_description = (
+                    f"{step.description}\n待写入内容：{content_preview[:1000]}"
+                )
             state.control.pending_interaction = InteractionRequest(
                 kind="confirmation_required",
                 action_type="memory_admission",
                 step_id=step.step_id,
                 title="确认知识变更",
                 summary=admission.reason,
-                description=step.description,
+                description=confirmation_description,
+                authorization_digest=_authorization_digest_for_step(state, step),
             )
             sd.status = "awaiting_confirmation"
             state.add_event(
@@ -502,6 +517,16 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
     artifact = dict(_latest_tool_artifact(state))
     artifact["_step_id"] = step.step_id
     artifact["_goal_id"] = step.goal_id
+    grant = state.execution_grants.get(step.execution_grant_ref or "")
+    if grant is None:
+        return _fail_current_step(
+            state,
+            step,
+            PermissionError("tool result has no bound ExecutionGrant"),
+            deps=deps,
+        )
+    artifact["_authorization_digest"] = grant.authorization_digest
+    artifact["_execution_command_digest"] = grant.execution_command_digest
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     state.add_event("tool_result", _tool_result_event_payload(
@@ -540,7 +565,6 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
 
     result_data = artifact.get("data") if artifact.get("data") is not None else {"ok": True}
     state.invocation_batch.results[step.step_id] = result_data
-    _apply_tool_result_to_state(step, result_data, state)
     if isinstance(result_data, dict) and result_data.get("pending_confirmation"):
         state.control.pending_interaction = InteractionRequest(
             kind="confirmation_required",
@@ -550,6 +574,7 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
             title=str(result_data.get("title") or ""),
             summary=str(result_data.get("summary") or ""),
             description=str(result_data.get("description") or ""),
+            authorization_digest=_authorization_digest_for_step(state, step),
         )
     else:
         state.control.pending_interaction = None
@@ -587,6 +612,7 @@ def _reserve_dispatch(
         expected_revision=state.invocation_journal.revision,
         invocation_id=step.step_id,
         grant_ref=grant_ref,
+        execution_command_digest=grant.execution_command_digest,
         idempotency_key=step.step_id,
         provider_ref=provider_ref,
         payload_ref="sha256:" + sha256(
@@ -803,7 +829,7 @@ def _record_capability_execution(
             continue
         state.add_event("capability_execution", {
             "request_id": payload.get("request_id", ""),
-            "execution_grant_ref": payload.get("selected_execution_grant_ref"),
+            "execution_grant_ref": payload.get("execution_grant_ref"),
             "resolution_id": payload.get("resolution_id", ""),
             "step_id": step_id,
             "lifecycle_state": "executed" if artifact.get("ok") else "failed",
@@ -937,6 +963,7 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
         "title": pending.title if pending else "",
         "summary": pending.summary if pending else "",
         "description": pending.description if pending else "",
+        "authorization_digest": pending.authorization_digest if pending else None,
         "message": (
             step.description
             or f"确认执行 {pending.action_type if pending else step.action_type} 操作？"
@@ -962,6 +989,28 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
         state.control.pending_interaction = None
         state.control.interaction_decision = "confirmed"
         state.control.confirmed_invocation_id = step.step_id
+        try:
+            resolved_spec = _resolved_spec_for_step(state, step)
+            grant_ref = step.execution_grant_ref or (
+                resolved_spec.execution_grant_ref if resolved_spec else None
+            )
+            grant = state.execution_grants.get(grant_ref or "")
+            if grant is None:
+                raise PermissionError(
+                    "confirmed mutation requires the exact invocation-bound grant"
+                )
+            if pending is None or pending.authorization_digest != grant.authorization_digest:
+                raise PermissionError("confirmation AuthorizationDigest does not match execution grant")
+            confirmed_grant = deps.procedure_grant_issuer.bind_confirmation(
+                grant,
+                step.step_id,
+            )
+            state.execution_grants[confirmed_grant.grant_id] = confirmed_grant
+            step.execution_grant_ref = confirmed_grant.grant_id
+            _reserve_dispatch(state, step, deps, provider_ref=step.tool_name or "")
+            _reserve_provider_call(state)
+        except Exception as exc:
+            return _fail_current_step(state, step, exc, deps=deps)
         state.add_event("confirmation_resumed", {
             "step_id": step.step_id,
             "decision": "confirmed",
@@ -979,6 +1028,9 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
             "tool_tracking": state.tool_tracking,
             "invocation_batch": state.invocation_batch,
             "control": state.control,
+            "provider_call_count": state.provider_call_count,
+            "invocation_journal": state.invocation_journal,
+            "execution_grants": state.execution_grants,
             "events": state.events,
         }
 
@@ -987,8 +1039,6 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
     _skip_step_dependents(step.step_id, state.invocation_batch.invocations)
     state.control.interaction_decision = "rejected"
     state.control.pending_interaction = None
-    if not state.answer:
-        state.answer = f"操作已取消：{step.description or (pending.action_type if pending else '')}"
 
     state.add_event("confirmation_resumed", {
         "step_id": step.step_id,
@@ -1006,11 +1056,10 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
 
 
 def _node_finalize_invocation_batch(state: RunCheckpoint, *, deps: StepExecutionContext | None = None) -> dict:
-    """Compose default answer if none was set, mark execution complete."""
-    if not state.answer:
-        state.answer = _default_step_answer(state.invocation_batch.invocations)
-
-    state.add_event("invocation_batch_completed", {"answer_candidate": state.answer})
+    """Mark execution complete; final business composition is a separate model proposal."""
+    state.add_event("invocation_batch_completed", {
+        "result_refs": tuple(state.invocation_batch.results),
+    })
     logger.info(
         "finalize_invocation_batch run_id=%s answer_len=%d trace_items=%d",
         state.run_id, len(state.answer or ""), len(state.execution_trace),
@@ -1219,19 +1268,6 @@ def _inject_research_pipeline_inputs(
                 break
 
 
-def _apply_tool_result_to_state(step: "ExecutableInvocation", result_data: object, state: RunCheckpoint) -> None:
-    if step.tool_name in {"research_synthesize_digest", "research_verify_digest"} and isinstance(result_data, dict):
-        answer = str(result_data.get("answer") or "").strip()
-        if answer:
-            state.answer = answer
-        return
-    if step.tool_name != "capture_text" or not isinstance(result_data, dict):
-        return
-    title = str(result_data.get("title") or "").strip()
-    if title and not state.answer:
-        state.answer = f"已收进知识库：{title}"
-
-
 def _inject_capture_text_from_tool_result(
     source_step_id: str,
     text: str,
@@ -1290,7 +1326,6 @@ def _dispatch_step(
     if step.action_type == "retrieve":
         result_data = _execute_retrieve_step(step, state, deps)
         results[step.step_id] = result_data
-        _apply_declared_result_to_state(step, result_data, state)
 
     elif step.action_type == "tool_call":
         raise RuntimeError("tool_call must be executed by the main graph ToolGateway")
@@ -1298,14 +1333,12 @@ def _dispatch_step(
     elif step.action_type == "resolve":
         result_data = _execute_resolve_step(step, state, deps)
         results[step.step_id] = result_data
-        _apply_declared_result_to_state(step, result_data, state)
 
     elif step.action_type == "commit":
         _execute_commit_step(step, sd, state, deps)
 
     elif step.action_type == "compose":
         answer = _execute_compose_step(step, state, deps)
-        state.answer = answer
         results[step.step_id] = {"answer": answer, "draft": True}
         if answer:
             state.add_event("draft_ready", {
@@ -1321,19 +1354,6 @@ def _dispatch_step(
 
     else:
         raise ValueError(f"未知的 action_type: {step.action_type}")
-
-
-def _apply_declared_result_to_state(
-    step: "ExecutableInvocation",
-    result_data: object,
-    state: RunCheckpoint,
-) -> None:
-    """Project a step result through its declared output contract."""
-    if step.output_contract not in {"Answer", "Response"} or not isinstance(result_data, dict):
-        return
-    answer = str(result_data.get("answer") or "").strip()
-    if answer:
-        state.answer = answer
 
 
 def _execute_commit_step(
@@ -1381,6 +1401,7 @@ def _execute_commit_step(
         title="确认状态变更",
         summary=f"将执行 {tool_name}",
         description=step.description,
+        authorization_digest=_authorization_digest_for_step(state, step),
     )
     state.invocation_batch.results[step.step_id] = {
         "committed": False,
@@ -1575,6 +1596,17 @@ def _resolved_spec_for_step(state: RunCheckpoint, step) -> ResolvedActionSpec | 
     )
 
 
+def _authorization_digest_for_step(state: RunCheckpoint, step) -> str:
+    spec = _resolved_spec_for_step(state, step)
+    grant_ref = step.execution_grant_ref or (spec.execution_grant_ref if spec else None)
+    grant = state.execution_grants.get(grant_ref or "")
+    if grant is not None:
+        return grant.authorization_digest
+    if state.control.resolved_command is not None:
+        return state.control.resolved_command.authorization_digest
+    raise PermissionError("confirmation requires a resolved AuthorizationDigest")
+
+
 def _execute_retrieve_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> object:
     question = step.tool_input.get("question") if step.tool_input else None
     question = str(question or step.task_input or state.entry_text or step.description or "")
@@ -1684,8 +1716,7 @@ def _execute_resolve_step(step, state: RunCheckpoint, deps: StepExecutionContext
         )
 
     if not candidates:
-        state.answer = "未找到可删除的知识笔记，请提供更具体的标题或内容描述。"
-        raise RuntimeError(state.answer)
+        raise RuntimeError("deletion_target_resolution_required")
 
     best = candidates[0]
     return {
@@ -1820,6 +1851,48 @@ def _execute_compose_step(step, state: RunCheckpoint, deps: StepExecutionContext
         if not answer:
             raise RuntimeError("模型未生成符合本次固化范围的知识草稿，未写入知识库。")
         return answer
+
+    if (
+        step.projection_kind == "bounded_action"
+        and step.execution_intent in {"reason", "transform"}
+        and not step.capability_requirements
+    ):
+        if deps.model_client is None:
+            raise RuntimeError("internal bounded-action composition requires an admitted model client")
+        from personal_agent.capabilities.contracts.model import StructuredModelRequest
+
+        action_spec = next(
+            (item for item in state.control.resolved_actions if item.action_id == step.step_id),
+            None,
+        )
+        if action_spec is None:
+            raise RuntimeError("bounded-action composition requires its resolved action specification")
+        response = deps.model_client.generate(StructuredModelRequest(
+            operation="bounded_action_composition",
+            version="v1",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Produce only the requested user-visible answer. Follow the supplied execution "
+                        "guidance exactly. Do not retrieve, cite, invoke tools, or describe internal reasoning."
+                    ),
+                },
+                {"role": "user", "content": json.dumps({
+                    "task_text": step.task_input,
+                    "information_goal": step.description,
+                    "execution_guidance": step.execution_guidance,
+                    "output_contract": step.output_contract,
+                }, ensure_ascii=False)},
+            ],
+            output_type=_BoundedActionComposition,
+            context_projection_ref=action_spec.context_projection_ref,
+            temperature=0,
+            max_tokens=600,
+            kind="structured",
+            metadata={"task_id": state.task_contract.task_id if state.task_contract else "", "step_id": step.step_id},
+        ))
+        return response.value.answer.strip()
 
     # ask flow: the retrieve step assembled the ContextPack onto the run-scoped
     # AskRunContext. Compose runs pure generation from it, then backfills
@@ -2028,7 +2101,6 @@ def _execute_verify_step(step, state: RunCheckpoint, deps: StepExecutionContext)
             ask_service = deps.ask_service_factory()
             ask_service.run_verification_stage(ctx)
             deps.ask_run_context_store.put(state.run_id, ctx)
-            state.answer = ctx.answer
             state.citations = list(ctx.selected_citations or [])
             state.matches = [
                 {"id": m.id, "title": m.body.title, "summary": m.body.summary}
@@ -2047,20 +2119,22 @@ def _execute_verify_step(step, state: RunCheckpoint, deps: StepExecutionContext)
                 ),
                 "citation_count": len(ctx.selected_citations or []),
                 "match_count": len(ctx.selected_matches or []),
+                "answer": ctx.answer,
                 "repair": ctx.repair_payload(),
             }
         except Exception:
             logger.exception("Ask verify stage %s error", step.step_id)
         return
 
-    if not state.answer:
+    candidate = _latest_invocation_answer(state)
+    if not candidate:
         return
     try:
         verifier = deps.verifier
         if verifier:
             verifier.verify(
                 question=step.task_input or state.entry_text or "",
-                answer=state.answer,
+                answer=candidate,
                 citations=state.citations,
                 matches=[],
                 run_id=state.run_id,
@@ -2080,7 +2154,6 @@ def _execute_repair_step(step, state: RunCheckpoint, deps: StepExecutionContext)
         ask_service = deps.ask_service_factory()
         ask_service.run_repair_stage(ctx)
         deps.ask_run_context_store.put(state.run_id, ctx)
-        state.answer = ctx.answer
         state.citations = list(ctx.selected_citations or [])
         state.matches = [
             {"id": m.id, "title": m.body.title, "summary": m.body.summary}
@@ -2100,10 +2173,20 @@ def _execute_repair_step(step, state: RunCheckpoint, deps: StepExecutionContext)
             ),
             "citation_count": len(ctx.selected_citations or []),
             "match_count": len(ctx.selected_matches or []),
+            "answer": ctx.answer,
             "repair": ctx.repair_payload(),
         }
     except Exception:
         logger.exception("Ask repair stage %s error", step.step_id)
+
+
+def _latest_invocation_answer(state: RunCheckpoint) -> str:
+    for result in reversed(tuple(state.invocation_batch.results.values())):
+        if isinstance(result, dict) and isinstance(result.get("answer"), str):
+            answer = result["answer"].strip()
+            if answer:
+                return answer
+    return ""
 
 
 # ---------------------------------------------------------------------------

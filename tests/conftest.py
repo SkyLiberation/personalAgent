@@ -10,7 +10,12 @@ from psycopg import connect
 from psycopg import sql
 
 from personal_agent.kernel.config import OpenAIConfig, Settings
-from personal_agent.kernel.models import Citation, KnowledgeNote
+from personal_agent.kernel.models import Citation, EntryInput, KnowledgeNote
+from personal_agent.planning.task_analysis_admission import (
+    AcceptedTaskAnalysisCompiler,
+    TaskAnalysisAdmission,
+    task_analysis_input_digest,
+)
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.planning.task_analyzer import (
     ClarificationDraft,
@@ -18,7 +23,11 @@ from personal_agent.planning.task_analyzer import (
     GoalDraft,
     GoalRelationDraft,
     ResourceHint,
-    TaskAnalysisOutput,
+    SuccessCriterionDraft,
+    TaskAnalysisProposalBody,
+    TaskAnalysisProposal,
+    TaskAnalysisAttempt,
+    TaskAnalysisResult,
 )
 from tests.note_factory import make_note
 
@@ -69,10 +78,14 @@ def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_config_env_module, "load_dotenv", lambda override=True: False)
 
 
-def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None) -> TaskAnalysisOutput:
+def stub_task_analysis(
+    text: str,
+    _messages: list[dict[str, str]] | None = None,
+    **_kwargs: object,
+) -> TaskAnalysisProposalBody:
     """Deterministic LLM stand-in for integration tests exercising routed branches."""
     stripped = text.strip()
-    def decision(intent: str, message: str, **kwargs) -> TaskAnalysisOutput:
+    def decision(intent: str, message: str, **kwargs) -> TaskAnalysisProposalBody:
         clarify = bool(kwargs.get("requires_clarification", False))
         resource_hints = list(kwargs.get("resource_hints", []))
         semantic_defaults = {
@@ -119,12 +132,16 @@ def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None)
             )]
         mutation = result_contract == "external_state"
         evidence = bool(resource_hints) and not mutation
-        return TaskAnalysisOutput(
+        return TaskAnalysisProposalBody(
             user_goal=str(kwargs.get("user_goal") or message),
             outcome="clarify" if clarify else "ready",
             goals=[] if clarify else [GoalDraft(
                 result_contract=result_contract,
                 description=stripped,
+                success_criteria=[SuccessCriterionDraft(
+                    description=f"完成请求：{stripped}",
+                    origin="model_inferred",
+                )],
                 side_effect_intent="mutation" if mutation else "none",
                 evidence_requirement=(
                     EvidenceRequirement(citation_required=True)
@@ -163,13 +180,17 @@ def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None)
     if any(word in stripped for word in ("记住", "记一下")) and any(
         word in stripped for word in ("然后回答", "再回答", "并回答")
     ):
-        return TaskAnalysisOutput(
+        return TaskAnalysisProposalBody(
             user_goal="记录一条知识并基于该主题回答后续问题",
             outcome="ready",
             goals=[
                 GoalDraft(
                     result_contract="external_state",
                     description=stripped,
+                    success_criteria=[SuccessCriterionDraft(
+                        description="指定知识已写入",
+                        origin="model_inferred",
+                    )],
                     side_effect_intent="mutation",
                     resource_hints=[ResourceHint(
                         semantic_domain="knowledge",
@@ -181,6 +202,10 @@ def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None)
                 GoalDraft(
                     result_contract="response",
                     description=stripped,
+                    success_criteria=[SuccessCriterionDraft(
+                        description="回答后续问题",
+                        origin="model_inferred",
+                    )],
                     evidence_requirement=EvidenceRequirement(citation_required=True),
                     resource_hints=[ResourceHint(
                         semantic_domain="knowledge",
@@ -194,7 +219,7 @@ def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None)
                 predecessor=1,
                 successor=2,
                 kind="consumes_output",
-                origin="user_explicit",
+                origin="model_inferred",
                 rationale="后续回答明确基于刚记录的内容",
             )],
             clarification=None,
@@ -264,6 +289,24 @@ def stub_task_analysis(text: str, _messages: list[dict[str, str]] | None = None)
     if any(word in stripped for word in ("你好", "谢谢", "你是谁")):
         return decision("respond", "直接回答。")
     return decision("ask", "回答问题。")
+
+
+def admitted_task_analysis_result(
+    text: str,
+    body: TaskAnalysisProposalBody | None = None,
+) -> TaskAnalysisResult:
+    entry = EntryInput(text=text)
+    proposal = TaskAnalysisProposal(
+        input_ref="test-entry",
+        input_digest=task_analysis_input_digest(entry),
+        body=body or stub_task_analysis(text),
+    )
+    admission = TaskAnalysisAdmission().admit(entry, proposal)
+    accepted = AcceptedTaskAnalysisCompiler().compile(proposal, admission)
+    return TaskAnalysisResult(
+        attempts=(TaskAnalysisAttempt(proposal=proposal, admission=admission),),
+        accepted=accepted,
+    )
 
 
 def _ensure_test_database() -> None:
@@ -460,7 +503,7 @@ def clean_postgres_business_tables():
                     expires_at TIMESTAMPTZ,
                     redacted_at TIMESTAMPTZ
                 );
-                CREATE TABLE IF NOT EXISTS execution_events (
+                CREATE TABLE IF NOT EXISTS agent_trace_events (
                     event_id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
@@ -469,6 +512,36 @@ def clean_postgres_business_tables():
                     payload JSONB NOT NULL,
                     timestamp TIMESTAMPTZ NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS resolved_execution_commands (
+                    command_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    accepted_intent_ref TEXT NOT NULL,
+                    supersedes_command_ref TEXT,
+                    authorization_digest TEXT NOT NULL,
+                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE TABLE IF NOT EXISTS canonical_domain_events (
+                    event_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (run_id, task_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS decision_audit_records (
+                    audit_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    turn_ref TEXT NOT NULL,
+                    proposal_ref TEXT NOT NULL,
+                    admission_ref TEXT NOT NULL,
+                    verdict TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    recorded_at TIMESTAMPTZ NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS procedure_definitions (
                     procedure_id TEXT NOT NULL,
@@ -689,7 +762,8 @@ def clean_postgres_business_tables():
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
                 TRUNCATE knowledge_gap_deliveries;
                 TRUNCATE execution_artifacts;
-                TRUNCATE execution_events;
+                TRUNCATE agent_trace_events;
+                TRUNCATE resolved_execution_commands, canonical_domain_events, decision_audit_records;
                 TRUNCATE procedure_definitions;
                 TRUNCATE procedure_deployments;
                 TRUNCATE execution_replay_runs;

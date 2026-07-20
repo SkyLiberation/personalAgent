@@ -15,8 +15,8 @@ baseline 是不得下降的地板，不是质量目标。降低 baseline 必须�
 ## 设计原则
 
 1. case 标注用户可观察行为和架构不变式，不锁定无意义的内部实现细节。
-2. scorer 只消费 thin `RunOutput`，不直接依赖 runtime 对象。
-3. 离线 deterministic gate 与真实模型/真实 provider gate 分开报告。
+2. 专项 quality scorer 只消费 thin `RunOutput`；核心 E2E 例外地读取 durable checkpoint 的 canonical state，用于证明跨边界一致性。
+3. 离线 deterministic gate 与真实模型/真实 provider gate 分开报告；只有后者可以命名为 E2E，前者属于 contract/integration test。
 4. 副作用、权限、幂等、HITL 和完成条件使用硬断言，不能被平均分掩盖。
 5. 每套 suite 只拥有一个清晰决策边界，避免同一个语义在 TaskAnalyzer、Executive、Protocol 和 E2E 重复打分。
 6. Observation 驱动的计划修订必须评估触发证据、Patch 合法性和最终效果，不能只评估初始计划。
@@ -33,7 +33,7 @@ baseline 是不得下降的地板，不是质量目标。降低 baseline 必须�
 | RAG quality | retrieval + answer run | recall、ranking、faithfulness、citation、contradiction | 顶层控制决策 |
 | Orchestration quality | 单次 entry 到 terminal | 关键事件、禁止事件、终态、不挂死、事故回归 | 跨 turn 状态继承 |
 | Conversation quality | 完整多轮轨迹 | thread 连续性、clarification/confirmation resume、状态 delta | 单点组件指标 |
-| E2E quality | 真实环境完整任务 | 用户目标、provider、数据与终态的综合结果 | 组件级精确归因 |
+| Core E2E | 原始 EntryInput 到 durable terminal | 真实 Task Analysis、TaskContract、Goal dependency、HITL、执行、逐 Goal verification、Task completion 的跨边界闭环 | 专项统计指标和所有 provider 的穷举覆盖 |
 
 ## Task Analysis 金标
 
@@ -88,7 +88,7 @@ Procedure 编译由 `tests/test_agentic_planning.py` 与入口级 case 共同覆
 - tool sequence 与 forbidden tool；
 - risk、confirmation 和 projection contract。
 
-开放式 answer、investigation、summarize 不属于 Procedure 编译门禁。它们由 Executive 组合 BoundedAction，并在 Executive、RAG 和 E2E suites 中评估。
+开放式 answer、investigation、summarize 不属于 Procedure 编译门禁。它们由 Executive 组合 BoundedAction，并在 Executive、RAG 和少量核心 E2E 场景中评估。
 
 ## Capability 与外部 Agent
 
@@ -117,7 +117,9 @@ Orchestration case 一次只执行一个 entry，重点检查事件子序列、�
 | L0 pure scorer | 无 DB/LLM | 指标数学与边界 |
 | L1 hermetic contract | fake model/provider | schema、validator、投影与事故复现 |
 | L2 real model | 真实模型，可隔离 DB/provider | prompt 与语义决策质量 |
-| L3 live E2E | 真实 DB、模型、MCP/A2A/provider | 部署可用性与综合任务成功 |
+| L3 live E2E | 原始输入、真实 DB、模型与场景所需 provider | 用户结果、跨边界一致性、部署可用性与环境漂移 |
+
+核心 E2E 必须从原始 `EntryInput` 开始，不得固定或注入 Task Analysis。确定性模型输出只能用于 L1 contract/integration test，不能命名为 E2E。核心 E2E 使用隔离测试库和独立资源 namespace，避免污染业务数据，但模型、规划、治理、Gateway、Verification 和场景所需 provider 都使用正式装配。
 
 报告必须标明层级。fixture 通过不能被表述为真实 Agent 质量通过；live provider 波动也不能替代 hermetic contract gate。
 

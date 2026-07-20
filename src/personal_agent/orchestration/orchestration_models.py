@@ -18,7 +18,7 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import Citation, EntryInput, ThreadSummary, local_now
-from personal_agent.planning.task_analyzer import TaskAnalysis
+from personal_agent.planning.task_analyzer import AcceptedTaskAnalysis, TaskAnalysisAttempt
 from personal_agent.kernel.contracts.events import AgentEvent, AgentEventType
 from personal_agent.runtime.contracts.task import (
     ContextInventory,
@@ -33,15 +33,22 @@ from personal_agent.runtime.contracts.intake import TaskIntakeState
 from personal_agent.runtime.contracts.control import (
     BoundedAction,
     ControlTurnState,
+    FinalAnswerProposal,
     ResolvedActionSpec,
 )
-from personal_agent.verification.contracts.reports import CompletionReport, VerificationReport
+from personal_agent.verification.contracts.reports import (
+    CompletionReport,
+    ExecutionFactReport,
+    GoalVerificationReport,
+    VerificationFeedback,
+)
 from personal_agent.execution.contracts.invocation import ExecutableInvocation
 from personal_agent.execution.contracts.journal import InvocationJournalProjection
 from personal_agent.capabilities.contracts.grants import ExecutionGrant
 from personal_agent.capabilities.contracts.acquisition import CapabilityAcquisitionProjection
 from personal_agent.governance.contracts.evidence import EvidenceAdmissionDecision
-from personal_agent.governance.contracts.admission import StageAdmissionDecision
+from personal_agent.governance.contracts.admission import DecisionFeedback, StageAdmissionDecision
+from personal_agent.governance.contracts.audit import DecisionAuditRecord
 from personal_agent.runtime.contracts.commits import ControlCommit, TaskCompilationCommit
 from personal_agent.capabilities.contracts.outcomes import (
     CapabilityEffectivenessEvent,
@@ -195,7 +202,8 @@ class RunCheckpoint(BaseModel):
 
     # Routing
     intake: TaskIntakeState | None = None
-    task_analysis: TaskAnalysis | None = None
+    task_analysis_attempts: list[TaskAnalysisAttempt] = Field(default_factory=list)
+    accepted_task_analysis: AcceptedTaskAnalysis | None = None
     task_contract: TaskContract | None = None
     task_runtime: TaskRuntimeProjection | None = None
     context_inventory: ContextInventory = Field(default_factory=ContextInventory)
@@ -218,8 +226,14 @@ class RunCheckpoint(BaseModel):
     # facts remain in Task/Plan/Invocation/Observation aggregates.
     control: ControlTurnState = Field(default_factory=ControlTurnState)
     decision_admission: StageAdmissionDecision | None = None
-    verification_reports: dict[str, VerificationReport] = Field(default_factory=dict)
+    decision_feedback: list[DecisionFeedback] = Field(default_factory=list)
+    decision_audit: list[DecisionAuditRecord] = Field(default_factory=list)
+    execution_fact_reports: dict[str, ExecutionFactReport] = Field(default_factory=dict)
+    verification_reports: dict[str, GoalVerificationReport] = Field(default_factory=dict)
+    verification_feedback: dict[str, VerificationFeedback] = Field(default_factory=dict)
     completion_report: CompletionReport | None = None
+    final_answer_proposal: FinalAnswerProposal | None = None
+    final_answer_admission: StageAdmissionDecision | None = None
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
     execution_grants: dict[str, ExecutionGrant] = Field(default_factory=dict)
     invocation_journal: InvocationJournalProjection = Field(default_factory=InvocationJournalProjection)
@@ -334,8 +348,10 @@ class RunCheckpoint(BaseModel):
             session_id=self.session_id,
             status=resolved_status,
             result_contracts=(
-                [goal.result_contract for goal in self.task_analysis.goals]
-                if self.task_analysis else []
+                [
+                    goal.result_contract
+                    for goal in self.accepted_task_analysis.analysis.goals
+                ] if self.accepted_task_analysis else []
             ),
             procedure_id=self.procedure_id,
             procedure_version=self.procedure_version,
@@ -362,7 +378,7 @@ def _infer_status(state: RunCheckpoint) -> AgentRunStatus:
         if state.control.pending_interaction.kind == "clarification_required":
             return AgentRunStatus.waiting
         return AgentRunStatus.blocked_approval
-    if state.task_analysis is not None:
+    if state.accepted_task_analysis is not None:
         return AgentRunStatus.running
     return AgentRunStatus.created
 

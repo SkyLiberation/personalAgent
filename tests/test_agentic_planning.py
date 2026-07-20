@@ -16,19 +16,21 @@ from personal_agent.runtime.contracts.task import (
     TaskRuntimeProjection,
     MutationIntent,
     ResourceRequirement,
-    SuccessCriterion,
-    TaskConstraints,
     TaskContract,
     materialize_goals,
 )
 from personal_agent.capabilities.contracts.execution import CapabilityRequirement
 from personal_agent.runtime.contracts.control import (
     BoundedAction,
+    CapabilityActionInput,
     ControlProposal,
     ExecuteBoundedActionDecision,
-    InvokeProcedureDecision,
+    ModelGroundingClaim,
     ObservationRef,
+    ProposedResourceAccessPlan,
+    ResourceAccess,
     observation_provenance,
+    canonical_digest,
 )
 from personal_agent.runtime.contracts.planning import (
     PlanDefinition,
@@ -42,11 +44,21 @@ from personal_agent.runtime.contracts.planning import (
     ReplacePlanStep,
     RuntimeGoalCriterion,
 )
-from personal_agent.capabilities.contracts.procedure import ProcedureInvocation, ProcedureRef
+from personal_agent.capabilities.contracts.procedure import (
+    KnowledgeDeleteInput,
+    KnowledgeIngestInput,
+    ProcedureInvocation,
+    ProcedureRef,
+)
 from personal_agent.orchestration.orchestration_models import RunCheckpoint
-from personal_agent.orchestration.orchestration_nodes._executive import _steps_for_action
+from personal_agent.orchestration.orchestration_nodes._executive import (
+    _monitor_context_items,
+    _route_update,
+    _steps_for_action,
+)
 from personal_agent.planning.adaptive import (
     BOUNDED_READ_ONLY_PROFILE,
+    GOVERNED_MIXED_PROFILE,
     AdaptivePlanner,
     FrontierSelector,
     PlanRuntimeProjector,
@@ -56,8 +68,11 @@ from personal_agent.planning.adaptive import (
     CoordinationModePolicy,
     PlanningValidationError,
 )
-from personal_agent.governance.decision_admission import DecisionValidator
-from personal_agent.runtime.control_runtime import ExecutiveController
+from personal_agent.governance.decision_admission import (
+    AcceptedIntentCompiler,
+    DecisionValidator,
+    ExecutionCommandResolver,
+)
 from personal_agent.planning.task_compiler import GoalGraphCompiler
 from personal_agent.runtime.task_runtime import (
     TaskRuntimeProjector,
@@ -69,8 +84,18 @@ from personal_agent.runtime.procedure_runtime import (
     ProcedureApplicabilityResolver,
     ProcedureMaterializer,
 )
-from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+from personal_agent.planning.task_analyzer import (
+    Goal,
+    GoalConstraintDraft,
+    ResourceHint,
+    SuccessCriterionDraft,
+    TaskAnalysis,
+)
 from personal_agent.context import ContextMaterializationError, ModelContextGateway
+
+
+def _criterion(description: str) -> SuccessCriterionDraft:
+    return SuccessCriterionDraft(description=description, origin="model_inferred")
 
 
 def _knowledge_task(*, operation: str = "ingest") -> tuple[TaskContract, TaskRuntimeProjection]:
@@ -132,7 +157,10 @@ def _read_plan(task: TaskContract, ledger: TaskRuntimeProjection) -> PlanDefinit
 def test_goal_compiler_does_not_invent_a_default_resource() -> None:
     compilation = GoalGraphCompiler().compile(TaskAnalysis(
         user_goal="解释递归",
-        goals=[Goal(goal_id="goal_1", description="解释递归", result_contract="response")],
+        goals=[Goal(
+            goal_id="goal_1", description="解释递归", result_contract="response",
+            success_criteria=[_criterion("解释递归的核心机制")],
+        )],
     ), "解释递归")
 
     assert compilation.task_contract.resource_requirements == ()
@@ -174,16 +202,19 @@ def test_goal_compiler_uses_definition_revision_and_criterion_provenance() -> No
                 goal_id="explicit",
                 description="解释",
                 result_contract="response",
-                success_criteria=["解释核心机制"],
+                success_criteria=[_criterion("解释核心机制")],
             ),
-            Goal(goal_id="derived", description="总结", result_contract="response"),
+            Goal(
+                goal_id="summary", description="总结", result_contract="response",
+                success_criteria=[_criterion("总结覆盖核心机制")],
+            ),
         ],
     ), "解释并总结")
     goals = compilation.task_contract.goal_graph.by_id()
 
     assert compilation.task_contract.goal_graph.revision == 1
-    assert goals["explicit"].criteria[0].source == "user_explicit"
-    assert goals["derived"].criteria[0].source == "contract_derived"
+    assert goals["explicit"].criteria[0].source == "model_derived"
+    assert goals["summary"].criteria[0].source == "model_derived"
 
 
 def test_goal_compiler_preserves_mutation_operations_as_typed_collection() -> None:
@@ -193,6 +224,7 @@ def test_goal_compiler_preserves_mutation_operations_as_typed_collection() -> No
             Goal(
                 goal_id="create",
                 description="创建记录",
+                success_criteria=[_criterion("新记录已创建")],
                 result_contract="external_state",
                 side_effect_intent="mutation",
                 resource_hints=[ResourceHint(
@@ -204,6 +236,7 @@ def test_goal_compiler_preserves_mutation_operations_as_typed_collection() -> No
             Goal(
                 goal_id="delete",
                 description="删除旧记录",
+                success_criteria=[_criterion("旧记录已删除")],
                 result_contract="external_state",
                 side_effect_intent="mutation",
                 resource_hints=[ResourceHint(
@@ -221,21 +254,7 @@ def test_goal_compiler_preserves_mutation_operations_as_typed_collection() -> No
 
 
 def test_open_commit_is_materialized_as_read_only_proposal_then_governed_commit() -> None:
-    state = RunCheckpoint(task_analysis=TaskAnalysis(
-        user_goal="更新外部记录",
-        goals=[Goal(
-            goal_id="goal_1",
-            description="更新外部记录",
-            result_contract="external_state",
-            side_effect_intent="mutation",
-            resource_hints=[ResourceHint(
-                semantic_domain="external_system",
-                resource_types=["record"],
-                operations=["update"],
-                origin="user_explicit",
-            )],
-        )],
-    ))
+    state = RunCheckpoint()
     action = BoundedAction(
         goal_id="goal_1",
         execution_intent="commit",
@@ -249,6 +268,17 @@ def test_open_commit_is_materialized_as_read_only_proposal_then_governed_commit(
             operations=("update",),
             output_contract="MutationReceipt",
         ),
+        proposed_resource_access=ProposedResourceAccessPlan(
+            write_set=(ResourceAccess(semantic_domain="external_system", locator="record:1"),),
+            side_effect_class="mutation",
+            authority_scope="test:scope",
+            data_egress_class="content",
+            trust_floor="scoped",
+            freshness_contract="current",
+            evidence_contract="MutationReceipt",
+            failure_semantics="return_typed_failure",
+        ),
+        input=CapabilityActionInput(task_text="更新外部记录"),
     )
 
     proposal, commit = _steps_for_action(state, action)
@@ -279,13 +309,13 @@ def test_procedure_materialization_isolated_by_call_identity() -> None:
     first = materializer.materialize(ProcedureInvocation(
         procedure=ProcedureRef(procedure_id="knowledge_ingest", version="1"),
         goal_id="goal_1",
-        input={"text": "A", "resource_types": ["text"]},
+        input=KnowledgeIngestInput(text="A"),
         idempotency_key="first",
     ))
     second = materializer.materialize(ProcedureInvocation(
         procedure=ProcedureRef(procedure_id="knowledge_ingest", version="1"),
         goal_id="goal_1",
-        input={"text": "B", "resource_types": ["text"]},
+        input=KnowledgeIngestInput(text="B"),
         idempotency_key="second",
     ))
     assert first.steps[0].procedure_node_id == "ingest"
@@ -296,19 +326,41 @@ def test_procedure_recovery_policy_is_projected_to_runtime_step() -> None:
     materialized = ProcedureMaterializer(PROCEDURE_CATALOG).materialize(ProcedureInvocation(
         procedure=ProcedureRef(procedure_id="knowledge_delete", version="1"),
         goal_id="goal_1",
-        input={"text": "删除目标"},
+        input=KnowledgeDeleteInput(target_ref="note:target"),
         idempotency_key="delete",
     ))
     resolve = next(step for step in materialized.steps if step.procedure_node_id == "resolve-target")
     assert resolve.procedure_recovery_policy == "clarify"
 
 
-def test_executive_invokes_a_mandatory_procedure_before_open_action() -> None:
+def test_accepted_mutation_intent_compiles_to_the_unique_mandatory_route() -> None:
     from personal_agent.runtime.contracts.control import ControlState
 
-    task, ledger = _knowledge_task()
+    release_fact = "Gamma-Live-E2E-7319 的发布窗口是周五 20:00"
+    compilation = GoalGraphCompiler().compile(TaskAnalysis(
+        user_goal=f"把“{release_fact}”记入知识库",
+        goals=[Goal(
+            goal_id="goal_1",
+            description="把指定信息写入知识库",
+            result_contract="external_state",
+            success_criteria=[_criterion(f"知识库记录包含 {release_fact}")],
+            constraints=[GoalConstraintDraft(
+                description=release_fact,
+                origin="user_explicit",
+            )],
+            side_effect_intent="mutation",
+            resource_hints=[ResourceHint(
+                semantic_domain="knowledge",
+                resource_types=["text"],
+                operations=["ingest"],
+            )],
+        )],
+    ), f"把“{release_fact}”记入知识库")
+    task = compilation.task_contract
+    ledger = compilation.runtime
     candidates = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(task, ledger)
-    decision = ExecutiveController().decide(task, ledger, control_state=ControlState(
+
+    control = ControlState(
         task_id=task.task_id,
         task_revision=task.revision,
         task_goal=task.user_goal,
@@ -316,9 +368,88 @@ def test_executive_invokes_a_mandatory_procedure_before_open_action() -> None:
         procedure_candidates=candidates,
         remaining_provider_calls=8,
         remaining_executive_turns=8,
-    ))
-    assert isinstance(decision, InvokeProcedureDecision)
-    assert decision.procedure_invocation.procedure.procedure_id == "knowledge_ingest"
+    )
+    action = BoundedAction(
+        goal_id="goal_1",
+        execution_intent="commit",
+        description="写入用户明确提供的事实",
+        output_contract="MutationReceipt",
+        requirement=CapabilityRequirement.from_dimensions(
+            requirement_id="goal_1:commit",
+            purpose="ingest_exact_user_fact",
+            semantic_domains=("knowledge",),
+            resource_types=("text",),
+            operations=("ingest",),
+            output_contract="MutationReceipt",
+        ),
+        proposed_resource_access=ProposedResourceAccessPlan(
+            write_set=(ResourceAccess(semantic_domain="knowledge"),),
+            side_effect_class="mutation",
+            authority_scope="test:scope",
+            data_egress_class="content",
+            trust_floor="scoped",
+            freshness_contract="current",
+            evidence_contract="MutationReceipt",
+            failure_semantics="return_typed_failure",
+        ),
+        input=CapabilityActionInput(task_text=release_fact),
+    )
+    proposal = ControlProposal(
+        base_task_revision=task.revision,
+        base_runtime_revision=ledger.revision,
+        decision=ExecuteBoundedActionDecision(
+            target_goal_id="goal_1",
+            bounded_action=action,
+        ),
+        grounding_claims=(ModelGroundingClaim(
+            source_ref="constraint:goal_1:constraint:1",
+            transform="identity",
+            origin="source_identity",
+            output_field_ref="bounded_action.input.task_text",
+            source_digest=canonical_digest(release_fact),
+        ),),
+    )
+    admission = DecisionValidator().admit(task, ledger, proposal, control)
+    intent = AcceptedIntentCompiler().compile(task, ledger, proposal, admission)
+    command = ExecutionCommandResolver().resolve(
+        task,
+        intent,
+        mandatory_procedure=next(item for item in candidates if item.status == "mandatory"),
+    )
+
+    assert command.route == "procedure"
+    assert command.procedure_id == "knowledge_ingest"
+    assert isinstance(command.procedure_invocation.input, KnowledgeIngestInput)
+    assert command.procedure_invocation.input.text == release_fact
+    assert command.derivation_record.uniqueness_kind == "single_policy_allowed_route"
+
+
+def test_action_route_persists_procedure_grants_for_resolution() -> None:
+    state = RunCheckpoint()
+    state.control = state.control.model_copy(update={"phase": "routing"})
+    state.execution_grants = {"procedure-grant": SimpleNamespace(grant_id="procedure-grant")}
+
+    update = _route_update(state, "action")
+
+    assert update["execution_grants"] is state.execution_grants
+
+
+def test_plan_monitor_projects_typed_observation_provenance() -> None:
+    task, ledger = _knowledge_task(operation="read")
+    observation = ObservationRef(
+        goal_id="goal_1",
+        kind="tool_result",
+        provenance=observation_provenance("tool", "graph_search", "found note"),
+        summary="found note",
+    )
+    state = RunCheckpoint(task_contract=task, task_runtime=ledger)
+    state.control.observations = [observation]
+
+    items = _monitor_context_items(state)
+
+    projected = next(item for item in items if item.item_id.startswith("monitor-observation:"))
+    assert projected.provenance == "graph_search"
+    assert projected.payload["provenance"]["source_type"] == "tool"
 
 
 def test_decision_validator_rejects_mandatory_procedure_bypass() -> None:
@@ -329,9 +460,34 @@ def test_decision_validator_rejects_mandatory_procedure_bypass() -> None:
     decision = ExecuteBoundedActionDecision(
         target_goal_id="goal_1",
         basis=DecisionBasis(),
-        bounded_action=BoundedAction(goal_id="goal_1", execution_intent="transform", description="bypass"),
+        bounded_action=BoundedAction(
+            goal_id="goal_1",
+            execution_intent="transform",
+            description="bypass",
+            proposed_resource_access=ProposedResourceAccessPlan(
+                side_effect_class="none",
+                authority_scope="test:scope",
+                data_egress_class="none",
+                trust_floor="trusted",
+                freshness_contract="current",
+                evidence_contract="Answer",
+                failure_semantics="return_typed_failure",
+            ),
+            input=CapabilityActionInput(task_text="bypass"),
+        ),
     )
-    admission = DecisionValidator().admit(task, ledger, ControlProposal(decision=decision), ControlState(
+    admission = DecisionValidator().admit(task, ledger, ControlProposal(
+        base_task_revision=task.revision,
+        base_runtime_revision=ledger.revision,
+        decision=decision,
+        grounding_claims=(ModelGroundingClaim(
+            source_ref="goal:goal_1:description",
+            transform="none",
+            origin="model_inference",
+            output_field_ref="bounded_action.input.task_text",
+            source_digest=canonical_digest(task.goal_graph.goals[0].description),
+        ),),
+    ), ControlState(
             task_id=task.task_id,
             task_revision=task.revision,
             task_goal=task.user_goal,
@@ -340,41 +496,10 @@ def test_decision_validator_rejects_mandatory_procedure_bypass() -> None:
             remaining_provider_calls=8,
             remaining_executive_turns=8,
         ))
-    assert admission.verdict == "denied"
+    assert admission.verdict == "not_accepted"
     assert admission.reason_codes == ("mandatory_procedure_bypass",)
-
-
-def test_procedure_clarifies_then_retries_only_with_new_user_input() -> None:
-    from personal_agent.runtime.contracts.control import ControlState
-
-    task, ledger = _knowledge_task(operation="delete")
-    runtime = ledger.goal_states["goal_1"].model_copy(update={
-        "attempts": (AttemptRef(action_id="delete-attempt", execution_intent="commit", status="failed"),),
-    })
-    ledger = ledger.model_copy(update={"goal_states": {"goal_1": runtime}})
-    candidates = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(task, ledger)
-    control = ControlState(
-        task_id=task.task_id,
-        task_revision=task.revision,
-        task_goal=task.user_goal,
-        ledger_revision=ledger.revision,
-        procedure_candidates=candidates,
-        remaining_provider_calls=8,
-        remaining_executive_turns=8,
-    )
-    clarification = ExecutiveController().decide(task, ledger, observations=(ObservationRef(
-        goal_id="goal_1", kind="procedure_clarification",
-        provenance=observation_provenance("runtime", "knowledge_delete", "请提供准确标题"),
-        summary="请提供准确标题",
-    ),), control_state=control)
-    assert clarification.action == "terminate"
-    retried = ExecutiveController().decide(task, ledger, observations=(ObservationRef(
-        goal_id="goal_1", kind="user_clarification",
-        provenance=observation_provenance("user", "user", "标题是 DNS 记录"),
-        summary="标题是 DNS 记录",
-    ),), control_state=control)
-    assert isinstance(retried, InvokeProcedureDecision)
-    assert "DNS 记录" in retried.procedure_invocation.input["text"]
+    assert admission.feedback is not None
+    assert admission.feedback.disposition == "revise_model"
 
 
 def test_goal_decomposition_is_observation_derived_and_cannot_expand_authority() -> None:
@@ -460,21 +585,60 @@ def test_coordination_uses_contract_facts_not_goal_labels() -> None:
     assert assessment.mode == "reactive"
 
 
-def test_contract_planner_creates_provider_neutral_short_plan() -> None:
+def test_model_unavailable_does_not_create_a_contract_fallback_plan() -> None:
     task, ledger = _knowledge_task(operation="read")
     assessment = CoordinationAssessment(
         mode="deliberative",
         reason_codes=("ambiguous_strategy",),
         target_goal_ids=("goal_1",),
     )
-    plan, budget = AdaptivePlanner().create_plan(
+    plan, budget, feedback = AdaptivePlanner().create_plan(
         task, ledger, assessment, (), BOUNDED_READ_ONLY_PROFILE.limits, PlanningUsage(),
     )
-    assert plan is not None
-    assert plan.steps[0].capability_requirement is not None
-    assert plan.steps[0].capability_requirement.required_providers == ()
+    assert plan is None
     assert budget.planner_calls == 0
-    PlanValidator().validate(plan, task, ledger, BOUNDED_READ_ONLY_PROFILE)
+    assert feedback is not None
+    assert feedback.disposition == "await_environment_change"
+
+
+def test_invalid_model_plan_returns_decision_feedback_without_fallback() -> None:
+    class UnsafePlannerClient:
+        def generate(self, request):
+            return SimpleNamespace(value=request.output_type(
+                strategy_summary="perform an ungoverned write",
+                steps=(PlanStep(
+                    goal_id="goal_1",
+                    kind="procedure",
+                    objective="记录知识",
+                    procedure_id="knowledge_ingest",
+                    success_observation_contract="ProcedureOutcome",
+                    side_effect_intent="unbounded_external_write",
+                ),),
+            ))
+
+    task, ledger = _knowledge_task()
+    procedures = ProcedureApplicabilityResolver(PROCEDURE_CATALOG).resolve(task, ledger)
+    assessment = CoordinationAssessment(
+        mode="deliberative",
+        reason_codes=("mutation",),
+        target_goal_ids=("goal_1",),
+    )
+
+    plan, usage, feedback = AdaptivePlanner(UnsafePlannerClient()).create_plan(
+        task,
+        ledger,
+        assessment,
+        procedures,
+        GOVERNED_MIXED_PROFILE.limits,
+        PlanningUsage(),
+        model_context={"projection_id": "planning-context"},
+    )
+
+    assert plan is None
+    assert usage.planner_calls == 1
+    assert feedback is not None
+    assert feedback.reason_codes == ("plan_proposal_invalid",)
+    assert feedback.disposition == "revise_model"
 
 
 def test_plan_snapshot_ignores_unrelated_execution_events_but_fences_goal_graph_changes() -> None:
@@ -666,18 +830,3 @@ def test_model_context_gateway_enforces_projection_and_untrusted_authority() -> 
     })
     with pytest.raises(ContextMaterializationError, match="redacted"):
         ModelContextGateway().open(invalid, (trusted, untrusted), purpose="planning")
-
-
-def test_task_analysis_uses_result_contract_without_requiring_execution_class() -> None:
-    goal = Goal(
-        goal_id="goal_1",
-        description="搜索资料并形成报告",
-        result_contract="artifact",
-        resource_hints=[ResourceHint(
-            semantic_domain="web",
-            resource_types=["page"],
-            operations=["search", "read"],
-        )],
-    )
-    assert goal.result_contract == "artifact"
-    assert goal.resource_hints[0].operations == ["search", "read"]

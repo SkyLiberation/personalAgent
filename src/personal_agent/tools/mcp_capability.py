@@ -44,6 +44,7 @@ def capability_from_tool(tool: BaseTool) -> Capability:
         risk_level=governance.risk_level,
         side_effects=tuple(governance.side_effects),
         auth_scope=governance.permission_scope,
+        output_contract="ToolResult",
         trust_level="trusted",
         credential_mode="none",
         data_egress_class="content" if "external_network" in governance.side_effects else "none",
@@ -54,6 +55,12 @@ def capability_from_tool(tool: BaseTool) -> Capability:
             else "unknown"
         ),
         metadata_source="system",
+        evidence_contract=(
+            "mutation_receipt"
+            if any(effect.startswith(("write", "delete")) for effect in governance.side_effects)
+            else "provider_output"
+        ),
+        failure_semantics="return_typed_failure",
         input_schema=getattr(tool, "args", {}) if isinstance(getattr(tool, "args", {}), dict) else {},
         provider_priority=provider_priority,
     )
@@ -73,6 +80,7 @@ def capability_from_subagent_profile(definition: SubagentProfile) -> Capability:
         risk_level=governance.risk_level,
         side_effects=tuple(governance.side_effects),
         auth_scope=governance.permission_scope,
+        output_contract="AgentArtifact",
         trust_level=governance.trust_level,  # type: ignore[arg-type]
         credential_mode="delegated_token",
         data_egress_class=governance.data_egress_class,  # type: ignore[arg-type]
@@ -83,6 +91,8 @@ def capability_from_subagent_profile(definition: SubagentProfile) -> Capability:
             else "unknown"
         ),
         metadata_source="system",
+        evidence_contract="provider_output",
+        failure_semantics="return_typed_failure",
     )
 
 

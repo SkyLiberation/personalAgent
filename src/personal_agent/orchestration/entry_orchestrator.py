@@ -16,13 +16,19 @@ from personal_agent.kernel.langsmith_tracing import langsmith_trace_context
 from personal_agent.kernel.models import Citation, EntryInput
 from personal_agent.kernel.observability import RunMetrics
 from personal_agent.orchestration.orchestration_graph import _build_checkpointer, build_entry_orchestration_graph
-from personal_agent.orchestration.orchestration_models import AgentEvent, RunCheckpoint, AgentRunSnapshot, ExecutableInvocation
+from personal_agent.orchestration.orchestration_models import (
+    AgentEvent,
+    AgentRunSnapshot,
+    AgentRunStatus,
+    ExecutableInvocation,
+    RunCheckpoint,
+)
 from personal_agent.application.runtime_results import AskResult, CaptureResult, EntryResult
 from personal_agent.planning.task_analyzer import describe_task_analysis
 
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_SCHEMA_VERSION = "executive_v1"
+CHECKPOINT_SCHEMA_VERSION = "agentic_control_v2"
 LEGACY_REPLAY_UPDATE_KEYS = {
     "plan",
     "plan" + "_steps",
@@ -36,7 +42,8 @@ ALLOWED_REPLAY_UPDATE_KEYS = {
     "entry_text",
     "messages",
     "thread_summary",
-    "task_analysis",
+    "task_analysis_attempts",
+    "accepted_task_analysis",
     "procedure_id",
     "procedure_version",
     "react",
@@ -79,6 +86,38 @@ def _durable_interrupt_status(interrupt_data: dict) -> str:
     )
 
 
+def _admit_terminal_run(run_manager, run_id: str, state: RunCheckpoint):
+    """Map graph termination to a truthful durable run status.
+
+    A LangGraph invocation returning is not proof that the business Task
+    completed. Active Tasks with no interrupt are failed runs; explicitly
+    terminated Tasks are degraded completions.
+    """
+    current = run_manager.get(run_id)
+    if current.status in {"cancel_requested", "cancelling", "cancelled"}:
+        return run_manager.admit_external_completion(
+            run_id,
+            fencing_token=current.fencing_token,
+        )
+    lifecycle = state.task_runtime.lifecycle if state.task_runtime is not None else None
+    if state.errors or lifecycle == "active":
+        return run_manager.transition(
+            run_id,
+            "failed",
+            fencing_token=current.fencing_token,
+        )
+    if lifecycle == "terminated":
+        return run_manager.transition(
+            run_id,
+            "completed_degraded",
+            fencing_token=current.fencing_token,
+        )
+    return run_manager.admit_external_completion(
+        run_id,
+        fencing_token=current.fencing_token,
+    )
+
+
 def _steps_from_snapshot(snapshot: dict) -> list:
     """Extract canonical invocations from a checkpoint snapshot."""
     invocation_batch = snapshot.get("invocation_batch")
@@ -91,16 +130,18 @@ def _steps_from_snapshot(snapshot: dict) -> list:
 
 def _snapshot_result_contracts(snapshot: dict) -> list[str]:
     """Extract analyzed result contracts from a raw state snapshot."""
-    rd = snapshot.get("task_analysis")
+    rd = snapshot.get("accepted_task_analysis")
     if rd is None:
         return []
     if isinstance(rd, dict):
+        analysis = rd.get("analysis", {})
         return [
             str(item.get("result_contract", "unknown"))
-            for item in rd.get("goals", [])
+            for item in analysis.get("goals", [])
             if isinstance(item, dict)
         ]
-    return [goal.result_contract for goal in getattr(rd, "goals", [])]
+    analysis = getattr(rd, "analysis", None)
+    return [goal.result_contract for goal in getattr(analysis, "goals", [])]
 
 
 def _checkpoint_values_after_interrupt(graph, config: dict, fallback: object) -> dict:
@@ -191,7 +232,9 @@ def _snapshot_to_history_item(snapshot: object) -> dict[str, object] | None:
         "user_id": state.user_id,
         "session_id": state.session_id,
         "status": state.to_run_snapshot().status.value,
-        "result_contracts": [goal.result_contract for goal in state.task_analysis.goals] if state.task_analysis else [],
+        "result_contracts": [
+            goal.result_contract for goal in state.accepted_task_analysis.analysis.goals
+        ] if state.accepted_task_analysis else [],
         "procedure_id": state.procedure_id,
         "procedure_version": state.procedure_version,
         "next": list(getattr(snapshot, "next", ()) or ()),
@@ -272,7 +315,7 @@ class EntryOrchestrator:
                 event if isinstance(event, AgentEvent) else AgentEvent.model_validate(event)
                 for event in events
             ]
-            self._runtime.execution_event_store.record_agent_events(parsed)
+            self._runtime.agent_trace_store.record(parsed)
         except Exception:
             logger.exception("Failed to persist execution events")
 
@@ -371,18 +414,16 @@ class EntryOrchestrator:
             return result
 
         result_state = RunCheckpoint.model_validate(invoke_result)
-        current = run_manager.get(run_id)
-        durable_result = run_manager.admit_external_completion(
-            run_id,
-            fencing_token=current.fencing_token,
-        )
+        durable_result = _admit_terminal_run(run_manager, run_id, result_state)
         self._record_execution_events(result_state.events)
 
         # Map graph state back to the multi-intent entry result.
         reply_text = result_state.answer or "暂时没有可执行的结果。"
         result_contracts = (
-            [goal.result_contract for goal in result_state.task_analysis.goals]
-            if result_state.task_analysis else []
+            [
+                goal.result_contract
+                for goal in result_state.accepted_task_analysis.analysis.goals
+            ] if result_state.accepted_task_analysis else []
         )
 
         capture_result = None
@@ -464,14 +505,14 @@ class EntryOrchestrator:
 
         run_metrics.result_contracts = ",".join(result_contracts)
         run_metrics.complete(
-            status="completed",
+            status=durable_result.status,
             step_count=len(result_state.invocation_batch.invocations),
             tool_result_count=len(result_state.tool_results),
             event_count=len(result_state.events),
         )
         return EntryResult(
             result_contracts=result_contracts,
-            reason=describe_task_analysis(result_state.task_analysis),
+            reason=describe_task_analysis(result_state.accepted_task_analysis),
             reply_text=reply_text,
             capture_result=capture_result,
             ask_result=ask_result,
@@ -665,22 +706,20 @@ class EntryOrchestrator:
             return result
 
         result_state = RunCheckpoint.model_validate(invoke_result)
-        current_run = run_manager.get(run_id)
-        durable_result = run_manager.admit_external_completion(
-            run_id,
-            fencing_token=current_run.fencing_token,
-        )
+        durable_result = _admit_terminal_run(run_manager, run_id, result_state)
         self._record_execution_events(result_state.events)
 
         reply_text = result_state.answer or "操作已完成。"
         result_contracts = (
-            [goal.result_contract for goal in result_state.task_analysis.goals]
-            if result_state.task_analysis else []
+            [
+                goal.result_contract
+                for goal in result_state.accepted_task_analysis.analysis.goals
+            ] if result_state.accepted_task_analysis else []
         )
         run_metrics.result_contracts = ",".join(result_contracts)
         run_metrics.session_id = result_state.session_id
         run_metrics.complete(
-            status="completed",
+            status=durable_result.status,
             resume_decision=decision,
             step_count=len(result_state.invocation_batch.invocations),
             tool_result_count=len(result_state.tool_results),
@@ -689,7 +728,7 @@ class EntryOrchestrator:
 
         return EntryResult(
             result_contracts=result_contracts,
-            reason=describe_task_analysis(result_state.task_analysis),
+            reason=describe_task_analysis(result_state.accepted_task_analysis),
             reply_text=reply_text,
             plan=None,
             steps=[s.model_dump(mode="json") for s in result_state.invocation_batch.invocations],
@@ -704,7 +743,14 @@ class EntryOrchestrator:
     def get_run_snapshot(self, run_id: str) -> AgentRunSnapshot | None:
         """Return a read-only snapshot for the most recent checkpoint of a run."""
         state = self.get_run_state(run_id)
-        return state.to_run_snapshot() if state is not None else None
+        if state is None:
+            return None
+        try:
+            durable = self._runtime.durable_run_manager.get(run_id)
+            status = AgentRunStatus(durable.status)
+        except (KeyError, ValueError):
+            status = None
+        return state.to_run_snapshot(status=status)
 
     def get_run_state(self, run_id: str) -> RunCheckpoint | None:
         """Return the newest full checkpoint state for internal platform APIs."""
@@ -862,8 +908,10 @@ class EntryOrchestrator:
                 event.run_id = requested_run_id
         self._record_execution_events(result_state.events)
         result_contracts = (
-            [goal.result_contract for goal in result_state.task_analysis.goals]
-            if result_state.task_analysis else []
+            [
+                goal.result_contract
+                for goal in result_state.accepted_task_analysis.analysis.goals
+            ] if result_state.accepted_task_analysis else []
         )
         replay_event = AgentEvent(
             run_id=result_state.run_id,
@@ -884,7 +932,7 @@ class EntryOrchestrator:
         )
         return EntryResult(
             result_contracts=result_contracts,
-            reason=describe_task_analysis(result_state.task_analysis),
+            reason=describe_task_analysis(result_state.accepted_task_analysis),
             reply_text=result_state.answer or "回放已完成。",
             plan=None,
             steps=[s.model_dump(mode="json") for s in result_state.invocation_batch.invocations],

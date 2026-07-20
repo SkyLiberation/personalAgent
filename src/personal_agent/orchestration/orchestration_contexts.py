@@ -25,16 +25,21 @@ if TYPE_CHECKING:
     )
     from personal_agent.planning.task_compiler import GoalGraphCompiler
     from personal_agent.runtime.control_runtime import ExecutiveController
-    from personal_agent.governance.decision_admission import AcceptedCommandCompiler, DecisionValidator
+    from personal_agent.governance.decision_admission import (
+        AcceptedIntentCompiler,
+        DecisionValidator,
+        ExecutionCommandResolver,
+    )
     from personal_agent.governance.route_admission import ExecutionRoutePolicy
     from personal_agent.runtime.task_runtime import TaskRuntimeProjector, GoalDecompositionValidator
-    from personal_agent.verification.runtime import CompletionVerifier, GoalVerifier
+    from personal_agent.verification.runtime import CompletionVerifier, ExecutionFactVerifier, GoalVerifier
     from personal_agent.application.workspace import WorkspaceService
     from personal_agent.agents.gateway import AgentGateway
     from personal_agent.agents.runtime import SubagentRuntime
     from personal_agent.context import ContextManager, ModelContextGateway
     from personal_agent.runtime.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
     from personal_agent.capabilities.outcomes import OutcomeAwareCapabilityRanker
+    from personal_agent.runtime.capability_grants import CapabilityGrantIssuer
     from personal_agent.runtime.procedure_grants import ProcedureGrantIssuer
     from personal_agent.capabilities.acquisition import CapabilityAcquisitionManager
     from personal_agent.governance.evidence_admission import EvidenceAdmission
@@ -51,6 +56,7 @@ if TYPE_CHECKING:
     from personal_agent.runtime import ResolvedActionBuilder, ResourceAccessResolver, RunScheduler
     from personal_agent.execution.invocation_journal import InvocationJournal
     from personal_agent.runtime.commits import ControlCommitter, TaskCompilationCommitter
+    from personal_agent.infra.storage.postgres_control_plane_store import PostgresControlPlaneStore
 
 
 class ToolingContext(Protocol):
@@ -71,11 +77,13 @@ class ExecutiveContext:
     goal_graph_compiler: "GoalGraphCompiler"
     controller: "ExecutiveController"
     decision_admission: "DecisionValidator"
-    accepted_command_compiler: "AcceptedCommandCompiler"
+    accepted_intent_compiler: "AcceptedIntentCompiler"
+    execution_command_resolver: "ExecutionCommandResolver"
     route_policy: "ExecutionRoutePolicy"
     task_runtime_projector: "TaskRuntimeProjector"
     goal_decomposition_validator: "GoalDecompositionValidator"
     goal_verifier: "GoalVerifier"
+    execution_fact_verifier: "ExecutionFactVerifier"
     completion_verifier: "CompletionVerifier"
     procedure_applicability_resolver: "ProcedureApplicabilityResolver"
     procedure_runtime: "ProcedureRuntime"
@@ -92,6 +100,7 @@ class ExecutiveContext:
     scheduler: "RunScheduler"
     subagent_runtime: "SubagentRuntime"
     capability_ranker: "OutcomeAwareCapabilityRanker"
+    capability_grant_issuer: "CapabilityGrantIssuer"
     procedure_grant_issuer: "ProcedureGrantIssuer"
     capability_acquisition_manager: "CapabilityAcquisitionManager"
     evidence_admission: "EvidenceAdmission"
@@ -105,6 +114,7 @@ class ExecutiveContext:
     planner_profile: "PlannerExecutionProfile"
     task_compilation_committer: "TaskCompilationCommitter"
     control_committer: "ControlCommitter"
+    control_plane_store: "PostgresControlPlaneStore"
 
 
 @dataclass(frozen=True, slots=True)

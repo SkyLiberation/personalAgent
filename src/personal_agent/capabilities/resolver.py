@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 from personal_agent.capabilities.contracts.execution import (
     Capability,
+    CapabilityEquivalenceClass,
     CapabilityCoverage,
     CapabilityRequirement,
     ExecutionResolutionResult,
@@ -14,11 +14,10 @@ from personal_agent.capabilities.contracts.execution import (
     DeniedCapability,
     EscalationHint,
 )
-from personal_agent.capabilities.contracts.grants import (
-    AtomicCapabilityGrant,
-    AvailabilityDependency,
-    DelegationGrant,
-    GrantDependencySet,
+from personal_agent.kernel.contracts.derivation import (
+    DerivationInvariantResults,
+    DerivationRecord,
+    canonical_digest,
 )
 from personal_agent.kernel.contracts.policy import PolicyEvaluator, PolicyInput
 from personal_agent.capabilities.admission import ResolutionValidator
@@ -29,6 +28,10 @@ from personal_agent.capabilities.outcomes import (
 from personal_agent.capabilities.portfolio import CapabilityPortfolio
 from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS, match_resource_contract
 _TRUST_ORDER = {"untrusted": 0, "external": 1, "scoped": 2, "trusted": 3}
+
+
+class CapabilityResolutionError(ValueError):
+    pass
 
 
 class CapabilityResolver:
@@ -55,7 +58,7 @@ class CapabilityResolver:
         allowed_operations = set(request.allowed_operations)
         expected_names = {
             str(item)
-            for item in request.runtime_context.get("expected_local_names", ())
+            for item in request.runtime_context.expected_local_names
             if str(item)
         }
 
@@ -77,6 +80,20 @@ class CapabilityResolver:
                     hard_denied_ids.add(capability.capability_id)
                 continue
             candidates.append(capability)
+
+        equivalence = request.runtime_context.equivalence_class
+        if equivalence is None:
+            denied.extend(_deny(item, "equivalence_contract_missing") for item in candidates)
+            candidates = []
+        else:
+            equivalent: list[Capability] = []
+            for capability in candidates:
+                mismatch = _equivalence_mismatch(capability, equivalence)
+                if mismatch is None:
+                    equivalent.append(capability)
+                else:
+                    denied.append(_deny(capability, f"equivalence_mismatch:{mismatch}"))
+            candidates = equivalent
 
         candidates, local_denials = _apply_local_first(candidates, request)
         denied.extend(local_denials)
@@ -118,23 +135,56 @@ class CapabilityResolver:
                 request.requirements, [], denied, request, self._registry.list(),
             )
         selected_definition = selected[0] if selected else None
-        grant = _grant_for(request, selected_definition) if selected_definition else None
         decision = CapabilityResolutionDecision(
             request_id=str(request.request_id),
             discovery_snapshot_ref=_discovery_snapshot_ref(self._registry.list()),
             considered_candidate_refs=tuple(item.capability_id for item in self._registry.list()),
             hard_denial_refs=tuple(sorted(hard_denied_ids)),
-            selected_execution_grant_ref=grant.grant_id if grant else None,
             reason_codes=(
                 ("resolution_validator_rejected",) if errors else
-                ("capability_selected",) if grant else ("capability_unavailable",)
+                ("capability_selected",) if selected_definition else ("capability_unavailable",)
             ),
             validation_state="rejected" if errors else "validated",
+            equivalence_class=equivalence,
+            derivation_record=DerivationRecord(
+                derivation_kind="provider_binding",
+                source_contract_refs=(str(request.request_id),),
+                rule_id="capability-equivalence-binding",
+                rule_version="v1",
+                policy_snapshot_ref=request.policy_profile_ref,
+                input_fact_refs=(
+                    f"availability-revision:{request.runtime_context.availability_revision}",
+                    f"provider-binding-revision:{request.runtime_context.provider_binding_revision}",
+                ),
+                source_digests=(
+                    canonical_digest(request),
+                    canonical_digest(equivalence) if equivalence is not None else canonical_digest(None),
+                ),
+                output_ref=(
+                    f"{selected_definition.provider}:{_capability_local_name(selected_definition)}"
+                    if selected_definition else "unresolved"
+                ),
+                output_digest=canonical_digest({
+                    "selected_capability": (
+                        selected_definition.model_dump(mode="json")
+                        if selected_definition else None
+                    ),
+                    "denials": [item.model_dump(mode="json") for item in denied],
+                }),
+                invariant_results=DerivationInvariantResults(
+                    scope_subset="passed" if selected_definition else "not_applicable",
+                    provider_equivalence="passed" if selected_definition else "not_applicable",
+                ),
+                uniqueness_kind=(
+                    "single_active_equivalent_provider"
+                    if selected_definition is not None and len(candidates) == 1
+                    else "not_applicable"
+                ),
+            ),
         )
         return ExecutionResolutionResult(
             decision=decision,
             selected_definition=selected_definition,
-            execution_grant=grant,
             denials=tuple(denied),
             coverage=coverage,
             escalation_hint=_escalation_hint(request, selected),
@@ -218,7 +268,7 @@ class CapabilityResolver:
             side_effects=capability.side_effects,  # type: ignore[arg-type]
             permission_scope=capability.auth_scope,
             react_allowed_tools=frozenset(
-                request.runtime_context.get("react_allowed_tools", ())
+                request.runtime_context.react_allowed_tools
             ),
         ))
 
@@ -392,7 +442,7 @@ def _coverage_for_requirements(
                 for capability in matches
             )
         )
-        bound_locator = str(request.runtime_context.get("resource_locator", ""))
+        bound_locator = str(request.runtime_context.resource_locator or "")
         resource_bound = (
             not requirement.resource_locator
             or requirement.resource_locator == bound_locator
@@ -477,7 +527,7 @@ def _is_local_capability(capability: Capability) -> bool:
 
 
 def _context_str(request: ExecutionCapabilityRequest, key: str) -> str | None:
-    value = request.runtime_context.get(key)
+    value = getattr(request.runtime_context, key)
     return str(value) if value is not None and str(value) else None
 
 
@@ -489,65 +539,32 @@ def _discovery_snapshot_ref(capabilities: tuple[Capability, ...]) -> str:
     return "discovery:" + sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _grant_for(request: ExecutionCapabilityRequest, capability: Capability):
-    requirement = request.requirements[0] if request.requirements else None
-    selector = requirement.selector if requirement is not None else capability.selector
-    requested_operations = set(request.allowed_operations)
-    if requirement is not None:
-        requested_operations &= set(requirement.operation_scope.operations)
-    granted_operations = capability.operation_scope.model_copy(update={
-        "operations": frozenset(set(capability.operations) & requested_operations),
-        "side_effect_class": (
-            requirement.operation_scope.side_effect_class
-            if requirement is not None else capability.operation_scope.side_effect_class
-        ),
-    })
-    availability_revision = int(request.runtime_context.get("availability_revision", 1))
-    valid_until = datetime.now(UTC) + timedelta(minutes=10)
-    dependencies = GrantDependencySet(
-        task_revision=request.task_revision,
-        goal_definition_fingerprint=sha256(request.goal_id.encode()).hexdigest()[:16],
-        action_fingerprint=sha256(
-            f"{request.action_id}:{request.execution_intent}".encode()
-        ).hexdigest()[:16],
-        capability_definition_revision=capability.definition_revision,
-        provider_binding_revision=int(request.runtime_context.get("provider_binding_revision", 1)),
-        availability_dependencies=(AvailabilityDependency(
-            capability_ref=capability.capability_id,
-            availability_revision=availability_revision,
-            valid_until=valid_until,
-        ),),
-        authority_revision=int(request.runtime_context.get("authority_revision", 1)),
-        policy_bundle_hash=sha256(request.policy_profile_ref.encode()).hexdigest()[:16],
-    )
-    common = dict(
-        request_id=str(request.request_id),
-        action_ref=request.action_id,
-        granted_resource_selector=selector,
-        granted_operation_scope=granted_operations,
-        granted_data_egress=capability.data_egress_class,
-        granted_credential_mode=capability.credential_mode,
-        retry_family_id=f"retry:{request.action_id}",
-        dependency_set=dependencies,
-        expires_at=valid_until,
-    )
-    if capability.kind == "agent":
-        return DelegationGrant(
-            **common,
-            agent_binding_ref=f"{capability.provider}:{_capability_local_name(capability)}",
-            bounded_sub_goal=str(request.runtime_context.get("bounded_sub_goal", request.execution_intent)),
-            context_projection_refs=tuple(request.runtime_context.get("context_projection_refs", ())),
-            token_budget=int(request.runtime_context.get("token_budget", 4096)),
-            cost_budget=float(request.runtime_context.get("cost_budget", 1.0)),
-            time_budget_seconds=int(request.runtime_context.get("time_budget_seconds", 120)),
-            max_delegation_depth=int(request.runtime_context.get("max_delegation_depth", 0)),
-            completion_contract=str(request.runtime_context.get("completion_contract", "AgentArtifact")),
-        )
-    return AtomicCapabilityGrant(
-        **common,
-        capability_ref=capability.capability_id,
-        provider_binding_ref=f"{capability.provider}:{_capability_local_name(capability)}",
-    )
+def _equivalence_mismatch(
+    capability: Capability,
+    contract: CapabilityEquivalenceClass,
+) -> str | None:
+    if capability.output_contract != contract.required_output_contract:
+        return "required_output_contract"
+    candidate_effect = capability.operation_scope.side_effect_class
+    if candidate_effect != contract.allowed_side_effect_class:
+        return "side_effect_class"
+    if capability.auth_scope != contract.authority_scope:
+        return "authority_scope"
+    if capability.data_egress_class != contract.data_egress_class:
+        return "data_egress_class"
+    if capability.failure_semantics != contract.failure_semantics:
+        return "failure_semantics"
+    if capability.evidence_contract != contract.evidence_contract:
+        return "evidence_contract"
+    trust_order = {"untrusted": 0, "external": 1, "scoped": 2, "trusted": 3}
+    if trust_order[capability.trust_level] < trust_order[contract.trust_floor]:
+        return "trust_floor"
+    if (
+        contract.freshness_contract == "fresh"
+        and capability.freshness_profile not in {"near_realtime", "realtime"}
+    ):
+        return "freshness_contract"
+    return None
 
 
-__all__ = ["CapabilityResolver", "default_capability_policy"]
+__all__ = ["CapabilityResolutionError", "CapabilityResolver", "default_capability_policy"]

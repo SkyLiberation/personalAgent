@@ -13,7 +13,6 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from personal_agent.capabilities.contracts.grants import ExecutionGrant
 from personal_agent.kernel.contracts.resource import (
     OperationScope,
     ProviderConstraint,
@@ -29,6 +28,7 @@ from personal_agent.kernel.contracts.capability_values import (
     DataEgressClass,
     FreshnessProfile,
 )
+from personal_agent.kernel.contracts.derivation import DerivationRecord
 ResolutionLifecycleState = Literal[
     "created", "resolved", "validated", "policy_clamped", "executed",
     "audited", "rejected", "failed", "superseded",
@@ -146,12 +146,15 @@ class Capability(BaseModel):
     operation_scope: OperationScope = Field(default_factory=OperationScope)
     risk_level: str = "low"
     side_effects: tuple[str, ...] = ("none",)
-    auth_scope: str = "mcp:tool"
+    output_contract: str = Field(min_length=1)
+    auth_scope: str = Field(min_length=1)
     trust_level: CapabilityTrustLevel = "external"
     credential_mode: CredentialMode = "delegated_token"
     data_egress_class: DataEgressClass = "content"
     attestation_status: AttestationStatus = "self_claimed"
     freshness_profile: FreshnessProfile = "unknown"
+    evidence_contract: str = Field(min_length=1)
+    failure_semantics: str = Field(min_length=1)
     metadata_source: CapabilityMetadataSource = "provider"
     metadata_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     selectable: bool = True
@@ -194,6 +197,9 @@ class Capability(BaseModel):
 
 class MCPCapability(Capability):
     kind: CapabilityKind = "mcp_tool"
+    output_contract: str = "ToolResult"
+    evidence_contract: str = "provider_output"
+    failure_semantics: str = "return_typed_failure"
     server_id: str
     remote_tool_name: str
     credential_mode: CredentialMode = "delegated_token"
@@ -208,6 +214,9 @@ class EvidenceSourceCapability(Capability):
     """
 
     kind: CapabilityKind = "retriever"
+    output_contract: str = "EvidenceItem"
+    evidence_contract: str = "provider_output"
+    failure_semantics: str = "return_typed_failure"
     exposed_as: Literal["retrieval_source"] = "retrieval_source"
     underlying_execution: Literal["retriever", "tool_gateway", "agent_gateway"] = "retriever"
 
@@ -229,6 +238,41 @@ class CapabilitySelectionPolicy(BaseModel):
     preferred_providers: tuple[str, ...] = ()
 
 
+class CapabilityEquivalenceClass(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    required_output_contract: str
+    allowed_side_effect_class: str
+    authority_scope: str
+    trust_floor: CapabilityTrustLevel
+    freshness_contract: str
+    evidence_contract: str
+    data_egress_class: DataEgressClass
+    failure_semantics: str
+
+
+class CapabilityRuntimeContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_local_names: tuple[str, ...] = ()
+    react_allowed_tools: tuple[str, ...] = ()
+    resource_locator: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    source_platform: str | None = None
+    availability_revision: int = Field(default=1, ge=1)
+    provider_binding_revision: int = Field(default=1, ge=1)
+    authority_revision: int = Field(default=1, ge=1)
+    bounded_sub_goal: str | None = None
+    context_projection_refs: tuple[str, ...] = ()
+    token_budget: int = Field(default=4096, ge=1)
+    cost_budget: float = Field(default=1.0, ge=0)
+    time_budget_seconds: int = Field(default=120, ge=1)
+    max_delegation_depth: int = Field(default=0, ge=0)
+    completion_contract: str = "AgentArtifact"
+    equivalence_class: CapabilityEquivalenceClass
+
+
 class ExecutionCapabilityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -245,7 +289,7 @@ class ExecutionCapabilityRequest(BaseModel):
     policy: CapabilitySelectionPolicy = Field(default_factory=CapabilitySelectionPolicy)
     parent_grant_ref: str | None = None
     policy_profile_ref: str = "capability-policy:v1"
-    runtime_context: dict[str, Any] = Field(default_factory=dict)
+    runtime_context: CapabilityRuntimeContext
 
     @model_validator(mode="after")
     def _assign_request_id(self) -> "ExecutionCapabilityRequest":
@@ -304,17 +348,17 @@ class CapabilityResolutionDecision(BaseModel):
     discovery_snapshot_ref: str
     considered_candidate_refs: tuple[str, ...] = ()
     hard_denial_refs: tuple[str, ...] = ()
-    selected_execution_grant_ref: str | None = None
     reason_codes: tuple[str, ...] = ()
     validation_state: Literal["validated", "rejected"] = "validated"
+    equivalence_class: CapabilityEquivalenceClass | None = None
+    derivation_record: DerivationRecord
 
 
 class ExecutionResolutionResult(BaseModel):
-    """Resolver result: audit decision plus the separately typed leaf grant."""
+    """Provider-equivalence decision; it never grants execution authority."""
 
     decision: CapabilityResolutionDecision
     selected_definition: Capability | None = None
-    execution_grant: ExecutionGrant | None = None
     denials: tuple[DeniedCapability, ...] = ()
     coverage: tuple[CapabilityCoverage, ...] = ()
     escalation_hint: EscalationHint | None = None
@@ -343,10 +387,12 @@ def project_resolution_event(
 __all__ = [
     "Capability",
     "CapabilityCoverage",
+    "CapabilityEquivalenceClass",
     "CapabilityResolutionDecision",
     "ExecutionResolutionResult",
     "ExecutionCapabilityRequest",
     "CapabilityRequirement",
+    "CapabilityRuntimeContext",
     "CapabilitySelectionPolicy",
     "DeniedCapability",
     "EscalationHint",

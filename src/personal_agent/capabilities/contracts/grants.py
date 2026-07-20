@@ -40,6 +40,8 @@ class AtomicCapabilityGrant(BaseModel):
     grant_id: str = Field(default_factory=lambda: uuid4().hex)
     request_id: str
     action_ref: str
+    authorization_digest: str = Field(min_length=1)
+    execution_command_digest: str = Field(min_length=1)
     granted_resource_selector: ResourceSelector
     granted_operation_scope: OperationScope
     granted_data_egress: str
@@ -58,6 +60,8 @@ class ProcedureGrant(BaseModel):
     grant_id: str = Field(default_factory=lambda: uuid4().hex)
     request_id: str
     action_ref: str
+    authorization_digest: str = Field(min_length=1)
+    execution_command_digest: str = Field(min_length=1)
     granted_resource_selector: ResourceSelector
     granted_operation_scope: OperationScope
     granted_data_egress: str
@@ -78,6 +82,8 @@ class ProcedureNodeGrant(BaseModel):
     grant_id: str = Field(default_factory=lambda: uuid4().hex)
     request_id: str
     action_ref: str
+    authorization_digest: str = Field(min_length=1)
+    execution_command_digest: str = Field(min_length=1)
     granted_resource_selector: ResourceSelector
     granted_operation_scope: OperationScope
     granted_data_egress: str
@@ -98,6 +104,8 @@ class DelegationGrant(BaseModel):
     grant_id: str = Field(default_factory=lambda: uuid4().hex)
     request_id: str
     action_ref: str
+    authorization_digest: str = Field(min_length=1)
+    execution_command_digest: str = Field(min_length=1)
     granted_resource_selector: ResourceSelector
     granted_operation_scope: OperationScope
     granted_data_egress: str
@@ -126,4 +134,3 @@ __all__ = [
     "AtomicCapabilityGrant", "AvailabilityDependency", "DelegationGrant", "ExecutionGrant",
     "GrantDependencySet", "ProcedureGrant", "ProcedureNodeGrant",
 ]
-

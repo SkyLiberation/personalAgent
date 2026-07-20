@@ -140,6 +140,9 @@ def _mcp_capability(
         data_egress_class=mapping.data_egress_class,  # type: ignore[arg-type]
         attestation_status=mapping.attestation_status,  # type: ignore[arg-type]
         freshness_profile=mapping.freshness_profile,  # type: ignore[arg-type]
+        output_contract=mapping.output_contract,
+        evidence_contract=mapping.evidence_contract,
+        failure_semantics=mapping.failure_semantics,
         provider_priority=mapping.provider_priority,
         input_schema=remote.input_schema,
         output_schema=mapping.output_schema,

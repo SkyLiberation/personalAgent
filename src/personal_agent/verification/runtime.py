@@ -15,11 +15,13 @@ from personal_agent.runtime.contracts.task import (
     materialize_goals,
 )
 from personal_agent.runtime.contracts.control import CompletionClaim
+from personal_agent.runtime.contracts.control import ResolvedExecutionCommand
 from personal_agent.governance.contracts.evidence import EvidenceRef
 from personal_agent.verification.contracts.reports import (
     CompletionReport,
     CriterionResult,
-    VerificationReport,
+    ExecutionFactReport,
+    GoalVerificationReport,
     VerificationGap,
 )
 
@@ -56,8 +58,9 @@ class GoalVerifier:
         citation_count: int,
         tool_results: tuple[dict, ...],
         evidence: tuple[EvidenceRef, ...] = (),
+        execution_fact_report: ExecutionFactReport | None = None,
         model_context: dict[str, object] | None = None,
-    ) -> VerificationReport:
+    ) -> GoalVerificationReport:
         criteria_by_id = {item.criterion_id: item for item in task.success_criteria}
         results: list[CriterionResult] = []
         result_refs = tuple(
@@ -71,10 +74,14 @@ class GoalVerifier:
         for criterion_id in goal.success_criterion_ids:
             criterion = criteria_by_id[criterion_id]
             if criterion.acceptance_contract == "MutationReceipt":
-                passed = any(_looks_like_receipt(item) for item in tool_results)
+                passed = (
+                    execution_fact_report is not None
+                    and execution_fact_report.status == "passed"
+                    and bool(execution_fact_report.receipt_refs)
+                )
                 status = "passed" if passed else "inconclusive"
-                reason = "mutation_receipt_present" if passed else "mutation_receipt_missing"
-                criterion_evidence_refs = result_refs if passed else ()
+                reason = "execution_fact_and_receipt_passed" if passed else "mutation_receipt_missing"
+                criterion_evidence_refs = execution_fact_report.receipt_refs if passed else ()
             elif criterion.evidence_policy.citation_required:
                 passed = bool(answer and answer.strip()) and (
                     citation_count + source_count >= (criterion.evidence_policy.minimum_source_count or 1)
@@ -137,7 +144,7 @@ class GoalVerifier:
             )
             for item in required_results if item.status != "passed"
         )
-        return VerificationReport(
+        return GoalVerificationReport(
             subject_id=goal.goal_id,
             status=status,
             checked_criteria=tuple(results),
@@ -198,7 +205,7 @@ class CompletionVerifier:
         ledger: TaskRuntimeProjection,
         claim: CompletionClaim | None,
         *,
-        verification_reports: dict[str, VerificationReport],
+        verification_reports: dict[str, GoalVerificationReport],
         pending_confirmation: bool,
     ) -> CompletionReport:
         goals = materialize_goals(task, ledger)
@@ -212,7 +219,7 @@ class CompletionVerifier:
             for goal_id in (item.goal_id for item in goals)
             for result in verification_reports.get(
                 goal_id,
-                VerificationReport(subject_id=goal_id, status="inconclusive"),
+                GoalVerificationReport(subject_id=goal_id, status="inconclusive"),
             ).checked_criteria
             if result.status == "passed"
         }
@@ -237,6 +244,59 @@ class CompletionVerifier:
         )
 
 
+class ExecutionFactVerifier:
+    def verify(
+        self,
+        command: ResolvedExecutionCommand,
+        tool_results: tuple[dict, ...],
+    ) -> ExecutionFactReport:
+        if not tool_results:
+            return ExecutionFactReport(
+                command_ref=command.command_id,
+                execution_command_digest=command.execution_command_digest,
+                status="unknown",
+                reason_codes=("provider_result_missing",),
+            )
+        matched = tuple(
+            item for item in tool_results
+            if item.get("_execution_command_digest") == command.execution_command_digest
+        )
+        if not matched:
+            return ExecutionFactReport(
+                command_ref=command.command_id,
+                execution_command_digest=command.execution_command_digest,
+                status="failed",
+                provider_invoked=True,
+                reason_codes=("execution_command_digest_mismatch",),
+            )
+        failed = any(not item.get("ok", True) for item in matched)
+        receipts = tuple(
+            ref
+            for item in matched if _looks_like_receipt(item)
+            for ref in _result_refs(item)
+        )
+        resources = tuple(ref for item in matched for ref in _result_refs(item))
+        return ExecutionFactReport(
+            command_ref=command.command_id,
+            execution_command_digest=command.execution_command_digest,
+            status="failed" if failed else "passed",
+            provider_invoked=True,
+            receipt_refs=tuple(dict.fromkeys(receipts)),
+            resource_refs=tuple(dict.fromkeys(resources)),
+            reason_codes=("provider_reported_failure",) if failed else ("command_digest_matched",),
+        )
+
+
+def _result_refs(item: dict) -> tuple[str, ...]:
+    refs = (
+        item.get("mutation_receipt_id"), item.get("note_id"), item.get("artifact_id"),
+        item.get("run_id"), item.get("subscription_id"),
+    )
+    data = item.get("data")
+    nested = _result_refs(data) if isinstance(data, dict) else ()
+    return tuple(str(value) for value in (*refs, *nested) if value)
+
+
 def _looks_like_receipt(item: dict) -> bool:
     if not isinstance(item, dict) or not item.get("ok", True):
         return False
@@ -247,6 +307,4 @@ def _looks_like_receipt(item: dict) -> bool:
         return True
     data = item.get("data")
     return isinstance(data, dict) and _looks_like_receipt(data)
-
-
-__all__ = ["CompletionVerifier", "GoalVerifier"]
+__all__ = ["CompletionVerifier", "ExecutionFactVerifier", "GoalVerifier"]

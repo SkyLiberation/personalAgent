@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from personal_agent.capabilities.contracts.execution import (
     Capability,
+    CapabilityEquivalenceClass,
     CapabilityRequirement,
+    CapabilityRuntimeContext,
     ExecutionCapabilityRequest,
 )
 from personal_agent.capabilities.resolver import CapabilityResolver
 from personal_agent.planning.task_compiler import GoalGraphCompiler
-from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+from personal_agent.planning.task_analyzer import (
+    Goal,
+    ResourceHint,
+    SuccessCriterionDraft,
+    TaskAnalysis,
+)
 from datetime import UTC, datetime
 from personal_agent.capabilities.portfolio import (
     CapabilityPortfolio,
@@ -22,6 +29,10 @@ def test_github_question_becomes_provider_neutral_goal_with_required_binding():
             goal_id="goal_1",
             result_contract="response",
             description="查找 search_code 实现",
+            success_criteria=[SuccessCriterionDraft(
+                description="定位 search_code 的实现位置",
+                origin="model_inferred",
+            )],
             resource_hints=[ResourceHint(
                 semantic_domain="codebase",
                 resource_types=["repository", "code"],
@@ -53,6 +64,7 @@ def test_required_provider_binding_filters_other_codebase_providers():
         semantic_domains=("codebase",),
         resource_types=("repository",),
         operations=("search", "read"),
+        output_contract="ToolResult",
         required_providers=("github",),
     )
     portfolio = CapabilityPortfolio((gitlab, github))
@@ -74,6 +86,18 @@ def test_required_provider_binding_filters_other_codebase_providers():
             allowed_kinds=("mcp_tool",),
             allowed_operations=("search", "read"),
             requirements=(requirement,),
+            runtime_context=CapabilityRuntimeContext(
+                equivalence_class=CapabilityEquivalenceClass(
+                    required_output_contract="ToolResult",
+                    allowed_side_effect_class="none",
+                    authority_scope="mcp:tool",
+                    trust_floor="external",
+                    freshness_contract="static",
+                    evidence_contract="provider_output",
+                    data_egress_class="content",
+                    failure_semantics="return_typed_failure",
+                ),
+            ),
         )
     )
     assert resolution.selected_definition.provider == "github"
@@ -89,6 +113,10 @@ def _repo_capability(provider: str) -> Capability:
         semantic_domains=("codebase",),
         resource_types=("repository", "code"),
         operations=("search", "read"),
+        output_contract="ToolResult",
+        auth_scope="mcp:tool",
         trust_level="scoped",
         metadata_source="human_reviewed",
+        evidence_contract="provider_output",
+        failure_semantics="return_typed_failure",
     )

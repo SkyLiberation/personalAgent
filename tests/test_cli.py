@@ -28,7 +28,9 @@ def cli_runner(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setattr(
         DefaultTaskAnalyzer,
         "_analyze_with_model",
-        lambda _self, text, messages=None: stub_task_analysis(text, messages),
+        lambda _self, text, messages=None, **kwargs: stub_task_analysis(
+            text, messages, **kwargs,
+        ),
     )
     return CliRunner()
 

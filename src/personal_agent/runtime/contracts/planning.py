@@ -114,6 +114,7 @@ class PlanStep(BaseModel):
     supports_criterion_ids: tuple[str, ...] = ()
     information_goal: str | None = None
     depends_on_step_ids: tuple[str, ...] = ()
+    declared_priority: int | None = Field(default=None, ge=0)
     capability_requirement: CapabilityRequirement | None = None
     procedure_id: str | None = None
     success_observation_contract: str

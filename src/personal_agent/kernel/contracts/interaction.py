@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class InteractionOption(BaseModel):
@@ -31,6 +31,15 @@ class InteractionRequest(BaseModel):
     original_text: str | None = None
     missing_information: tuple[str, ...] = ()
     options: tuple[InteractionOption, ...] = ()
+    authorization_digest: str | None = None
+
+    @model_validator(mode="after")
+    def _confirmation_binds_authorization(self) -> "InteractionRequest":
+        if self.kind == "confirmation_required" and not self.authorization_digest:
+            raise ValueError("confirmation request requires AuthorizationDigest")
+        if self.kind == "clarification_required" and self.authorization_digest is not None:
+            raise ValueError("clarification request cannot carry AuthorizationDigest")
+        return self
 
 
 InteractionDecision = Literal["confirmed", "rejected"]

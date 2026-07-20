@@ -7,7 +7,7 @@ task routes and never infer intent from raw user text.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -163,13 +163,81 @@ class ProcedureRef(BaseModel):
     version: str = Field(min_length=1)
 
 
+class KnowledgeIngestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["knowledge_ingest"] = "knowledge_ingest"
+    text: str = Field(min_length=1)
+    resource_types: tuple[str, ...] = ("text",)
+    operations: tuple[str, ...] = ("ingest",)
+    locator: str | None = None
+    provenance_refs: tuple[str, ...] = ()
+    requested_result_contract: str = "MutationReceipt"
+
+
+class KnowledgeDeleteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["knowledge_delete"] = "knowledge_delete"
+    target_ref: str = Field(min_length=1)
+    selection_evidence_refs: tuple[str, ...] = ()
+    requested_result_contract: str = "MutationReceipt"
+
+
+class ConversationSolidifyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["conversation_solidify"] = "conversation_solidify"
+    conversation_scope_ref: str = Field(min_length=1)
+    requested_result_contract: str = "MutationReceipt"
+
+
+class KnowledgeConsolidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["knowledge_consolidate"] = "knowledge_consolidate"
+    target_refs: tuple[str, ...] = Field(min_length=1)
+    requested_result_contract: str = "MutationReceipt"
+
+
+class ResearchRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["research_run"] = "research_run"
+    question: str = Field(min_length=1)
+    evidence_policy: str = Field(min_length=1)
+    freshness_requirement: str = Field(min_length=1)
+    locator: str | None = None
+    requested_result_contract: str = "ResearchDigest"
+
+
+class ResearchSubscriptionCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["research_subscription_create"] = "research_subscription_create"
+    question: str = Field(min_length=1)
+    schedule: str = Field(min_length=1)
+    requested_result_contract: str = "MutationReceipt"
+
+
+ProcedureInput = Annotated[
+    KnowledgeIngestInput
+    | KnowledgeDeleteInput
+    | ConversationSolidifyInput
+    | KnowledgeConsolidateInput
+    | ResearchRunInput
+    | ResearchSubscriptionCreateInput,
+    Field(discriminator="kind"),
+]
+
+
 class ProcedureInvocation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     invocation_id: str = Field(default_factory=_short_id, min_length=1)
     procedure: ProcedureRef
     goal_id: str = Field(min_length=1)
-    input: dict[str, Any] = Field(default_factory=dict)
+    input: ProcedureInput
     idempotency_key: str = Field(min_length=1)
     expected_output_contract: str = "ProcedureOutcome"
 
@@ -223,9 +291,11 @@ class ProcedureCatalogPort(Protocol):
 
 
 __all__ = [
+    "ConversationSolidifyInput", "KnowledgeConsolidateInput", "KnowledgeDeleteInput",
+    "KnowledgeIngestInput",
     "PROCEDURE_ABORT", "PROCEDURE_CLARIFY", "PROCEDURE_END", "PROCEDURE_SENTINELS",
     "ProcedureApplicability", "ProcedureCandidate", "ProcedureCatalogPort",
-    "ProcedureCondition", "ProcedureEvent", "ProcedureInvocation", "ProcedureNodeSpec",
+    "ProcedureCondition", "ProcedureEvent", "ProcedureInput", "ProcedureInvocation", "ProcedureNodeSpec",
     "ProcedureNodeState", "ProcedureOutcome", "ProcedureRef", "ProcedureRunProjection",
-    "ProcedureDefinition",
+    "ProcedureDefinition", "ResearchRunInput", "ResearchSubscriptionCreateInput",
 ]

@@ -27,7 +27,10 @@ class ControlCommit(BaseModel):
     turn_ref: str
     proposal_ref: str
     admission_ref: str
+    accepted_intent_ref: str
     command_ref: str
+    authorization_digest: str
+    execution_command_digest: str
     expected_task_revision: int = Field(ge=1)
     expected_event_cursor: int = Field(ge=0)
     committed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

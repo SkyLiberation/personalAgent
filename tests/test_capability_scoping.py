@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 
 from personal_agent.capabilities.contracts.execution import (
     Capability,
+    CapabilityEquivalenceClass,
     CapabilityRequirement,
+    CapabilityRuntimeContext,
     ExecutionCapabilityRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
@@ -25,6 +27,7 @@ def _request(
     kinds=("mcp_tool",),
     operations=("search", "read"),
     policy: CapabilitySelectionPolicy | None = None,
+    data_egress_class: str = "none",
 ) -> ExecutionCapabilityRequest:
     return ExecutionCapabilityRequest(
         task_id="task-1",
@@ -35,6 +38,18 @@ def _request(
         allowed_operations=operations,
         requirements=(requirement,),
         policy=policy or CapabilitySelectionPolicy(),
+        runtime_context=CapabilityRuntimeContext(
+            equivalence_class=CapabilityEquivalenceClass(
+                required_output_contract=requirement.output_contract,
+                allowed_side_effect_class=requirement.side_effect_class,
+                authority_scope="test:scope",
+                trust_floor=requirement.minimum_trust_level,
+                freshness_contract="fresh" if requirement.freshness_required else "static",
+                evidence_contract="provider_output",
+                data_egress_class=data_egress_class,
+                failure_semantics="return_typed_failure",
+            ),
+        ),
     )
 
 
@@ -71,7 +86,13 @@ def test_resolver_rejects_kind_outside_action_scope():
 
 def test_local_first_is_explicit_policy_not_text_classification():
     resolver = CapabilityResolver(CapabilityPortfolio((
-        _capability("retriever:local", kind="retriever", provider="local", local_name="local"),
+        _capability(
+            "retriever:local",
+            kind="retriever",
+            provider="local",
+            local_name="local",
+            side_effects=("external_network",),
+        ),
         _capability(
             "retriever:web",
             kind="retriever",
@@ -84,11 +105,13 @@ def test_local_first_is_explicit_policy_not_text_classification():
         requirement_id="evidence",
         purpose="retrieve evidence",
         operations=("search", "read"),
+        side_effect_class="external_network",
     )
 
     resolution = resolver.resolve(_request(
         requirement=requirement,
         kinds=("retriever",),
+        data_egress_class="content",
         policy=CapabilitySelectionPolicy(
             local_first=True,
             max_providers_per_action=4,
@@ -231,6 +254,7 @@ def test_evidence_source_capability_is_a_retrieval_only_contract():
         local_name="github_repo_docs",
         operations=("search", "read"),
         semantic_domains=("codebase",),
+        auth_scope="test:scope",
         metadata_source="human_reviewed",
         underlying_execution="tool_gateway",
     )
@@ -326,6 +350,7 @@ def _capability(
         operations=operations,  # type: ignore[arg-type]
         risk_level="low",
         side_effects=side_effects,
+        output_contract="ToolResult",
         auth_scope="test:scope",
         trust_level="trusted" if side_effects == ("none",) else "external",
         credential_mode="none",
@@ -334,4 +359,6 @@ def _capability(
         freshness_profile="static",
         metadata_source="system",
         provider_priority=1,
+        evidence_contract="provider_output",
+        failure_semantics="return_typed_failure",
     )

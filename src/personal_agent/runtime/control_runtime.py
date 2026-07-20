@@ -1,4 +1,4 @@
-"""Task-level executive decision policy with deterministic safety clamps."""
+"""Task-level semantic proposal port; deterministic code never synthesizes business actions."""
 
 from __future__ import annotations
 
@@ -6,39 +6,36 @@ import json
 import logging
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from personal_agent.runtime.contracts.task import (
-    TaskRuntimeProjection,
     MaterializedGoalView,
     TaskContract,
+    TaskRuntimeProjection,
     materialize_goals,
 )
-from personal_agent.capabilities.contracts.execution import CapabilityRequirement
 from personal_agent.runtime.contracts.control import (
-    BoundedAction,
     CapabilityClassSummary,
+    BoundedAction,
+    CapabilityActionInput,
     ClarifyDecision,
     CompletionClaim,
     ControlDecision,
+    ControlProposal,
     ControlState,
     DecisionBasis,
     DelegateDecision,
     ExecuteBoundedActionDecision,
     FinishDecision,
     InvokeProcedureDecision,
+    ModelGroundingClaim,
     ObservationRef,
     ProposedResourceAccessPlan,
-    ProcedureInvocation,
-    ProcedureRef,
-    RequestConfirmationDecision,
     RequestCapabilityAcquisitionDecision,
+    RequestConfirmationDecision,
     TerminateDecision,
-    SubtaskSpec,
+    canonical_digest,
 )
-from personal_agent.capabilities.contracts.procedure import ProcedureCandidate
-from personal_agent.runtime.contracts.planning import PlanStep
-from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
 from personal_agent.skills import SkillRegistry
 
 if TYPE_CHECKING:
@@ -47,21 +44,268 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _ModelExecutiveDecision(BaseModel):
-    action: Literal[
-        "acquire", "explore", "reason", "transform",
-        "verify", "commit", "delegate", "clarify", "request_confirmation",
-        "invoke_procedure", "finish", "terminate",
-    ]
+ExecutiveAction = Literal[
+    "clarify",
+    "execute_bounded_action",
+    "delegate",
+    "invoke_procedure",
+    "request_confirmation",
+    "request_capability_acquisition",
+    "finish",
+    "terminate",
+]
+
+
+class _ExecutiveDecisionKindProposal(BaseModel):
+    """Model-owned action/schema choice; it contains no business payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: ExecutiveAction
     target_goal_id: str
-    skill_id: str = ""
-    procedure_id: str = ""
-    question: str = ""
-    reason_code: str = ""
-    expected_progress: str = ""
+
+
+class _ClarifyProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ClarifyDecision
+
+
+class _ExecuteBoundedActionProposalBody(BaseModel):
+    """Provider-portable model form for the capability-action branch.
+
+    The public ``BoundedAction`` includes an input union used by procedure
+    runtime internals. A model executive chooses procedure/delegation through
+    their own decision kinds, so its atomic-action schema is intentionally a
+    single capability-input shape. Conversion below is field-preserving.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: "_ModelExecuteBoundedActionDecision"
+    grounding_claim: "_ModelExecuteGroundingClaim"
+
+
+class _ModelResourceAccess(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    semantic_domain: str
+    locator: str = ""
+
+
+class _ModelExecuteGroundingClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str
+    source_ref: str
+    source_locator: str = ""
+    transform: Literal["identity"] = "identity"
+    origin: Literal["source_identity"] = "source_identity"
+    output_field_ref: Literal["decision.target_goal_id"] = "decision.target_goal_id"
+    source_digest: str
+
+
+class _ModelCapabilityAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    execution_intent: Literal[
+        "acquire", "explore", "reason", "verify", "transform", "commit", "remember",
+    ]
+    description: str
+    output_contract: str
+    requirement_id: str = ""
+    requirement_purpose: str = ""
+    requirement_semantic_domains: tuple[str, ...] = ()
+    requirement_resource_types: tuple[str, ...] = ()
+    requirement_operations: tuple[str, ...] = ()
+    requirement_resource_locator: str = ""
+    requirement_minimum_trust: Literal["trusted", "scoped", "external", "untrusted"] = "external"
+    requirement_freshness_required: bool = False
+    read_set: tuple[_ModelResourceAccess, ...] = ()
+    write_set: tuple[_ModelResourceAccess, ...] = ()
+    side_effect_class: str
+    authority_scope: str
+    data_egress_class: Literal["none", "metadata", "content", "sensitive"]
+    trust_floor: Literal["trusted", "scoped", "external", "untrusted"]
+    freshness_contract: str
+    evidence_contract: str
+    failure_semantics: str
+    max_tool_calls: int
+    max_model_calls: int
+    max_iterations: int
+    task_text: str
+    plan_step_ref: str = ""
+    information_goal: str = ""
+    execution_guidance: tuple[str, ...] = ()
+    agentic_synthesis: bool = False
+
+
+class _ModelDecisionBasis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    unmet_criterion_ids: tuple[str, ...] = ()
+    triggering_observation_ids: tuple[str, ...] = ()
+    evidence_gap_ids: tuple[str, ...] = ()
+    expected_state_change: str = ""
+    rejected_action_codes: tuple[str, ...] = ()
+
+
+class _ModelExecuteBoundedActionDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["execute_bounded_action"] = "execute_bounded_action"
+    target_goal_id: str
+    basis: _ModelDecisionBasis
+    expected_progress: str
+    bounded_action: _ModelCapabilityAction
+
+
+class _DelegateProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: DelegateDecision
+    grounding_claims: tuple[ModelGroundingClaim, ...] = ()
+
+
+class _InvokeProcedureProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: InvokeProcedureDecision
+    grounding_claims: tuple[ModelGroundingClaim, ...] = ()
+
+
+class _RequestConfirmationProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: RequestConfirmationDecision
+
+
+class _RequestCapabilityAcquisitionProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: RequestCapabilityAcquisitionDecision
+
+
+class _FinishProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: FinishDecision
+
+
+class _TerminateProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: TerminateDecision
+
+
+_ACTION_PROPOSAL_TYPES: dict[ExecutiveAction, type[BaseModel]] = {
+    "clarify": _ClarifyProposalBody,
+    "execute_bounded_action": _ExecuteBoundedActionProposalBody,
+    "delegate": _DelegateProposalBody,
+    "invoke_procedure": _InvokeProcedureProposalBody,
+    "request_confirmation": _RequestConfirmationProposalBody,
+    "request_capability_acquisition": _RequestCapabilityAcquisitionProposalBody,
+    "finish": _FinishProposalBody,
+    "terminate": _TerminateProposalBody,
+}
+
+
+def _normalize_execute_proposal(
+    body: _ExecuteBoundedActionProposalBody,
+) -> _ExecutiveProposalBody:
+    """Field-preserving conversion from the flat model contract to runtime types."""
+
+    from personal_agent.capabilities.contracts.execution import CapabilityRequirement
+
+    proposed = body.decision.bounded_action
+    requirement = None
+    if proposed.requirement_operations:
+        requirement = CapabilityRequirement.from_dimensions(
+            requirement_id=proposed.requirement_id,
+            purpose=proposed.requirement_purpose,
+            semantic_domains=proposed.requirement_semantic_domains,
+            resource_types=proposed.requirement_resource_types,
+            operations=proposed.requirement_operations,
+            resource_locator=proposed.requirement_resource_locator or None,
+            minimum_trust_level=proposed.requirement_minimum_trust,
+            freshness_required=proposed.requirement_freshness_required,
+            output_contract=proposed.output_contract,
+            side_effect_class=proposed.side_effect_class,
+        )
+    action = BoundedAction(
+        goal_id=body.decision.target_goal_id,
+        execution_intent=proposed.execution_intent,
+        description=proposed.description,
+        output_contract=proposed.output_contract,
+        requirement=requirement,
+        max_tool_calls=proposed.max_tool_calls,
+        max_model_calls=proposed.max_model_calls,
+        max_iterations=proposed.max_iterations,
+        proposed_resource_access=ProposedResourceAccessPlan(
+            read_set=tuple({
+                "semantic_domain": item.semantic_domain,
+                "locator": item.locator or None,
+            } for item in proposed.read_set),
+            write_set=tuple({
+                "semantic_domain": item.semantic_domain,
+                "locator": item.locator or None,
+            } for item in proposed.write_set),
+            side_effect_class=proposed.side_effect_class,
+            authority_scope=proposed.authority_scope,
+            data_egress_class=proposed.data_egress_class,
+            trust_floor=proposed.trust_floor,
+            freshness_contract=proposed.freshness_contract,
+            evidence_contract=proposed.evidence_contract,
+            failure_semantics=proposed.failure_semantics,
+        ),
+        input=CapabilityActionInput(
+            task_text=proposed.task_text,
+            plan_step_ref=proposed.plan_step_ref or None,
+            information_goal=proposed.information_goal or None,
+            execution_guidance=proposed.execution_guidance,
+            agentic_synthesis=proposed.agentic_synthesis,
+        ),
+    )
+    decision = ExecuteBoundedActionDecision(
+        target_goal_id=body.decision.target_goal_id,
+        basis=DecisionBasis(**body.decision.basis.model_dump()),
+        expected_progress=body.decision.expected_progress,
+        bounded_action=action,
+    )
+    return _ExecutiveProposalBody(
+        decision=decision,
+        grounding_claims=(ModelGroundingClaim(
+            claim_id=body.grounding_claim.claim_id,
+            source_ref=body.grounding_claim.source_ref,
+            source_locator=body.grounding_claim.source_locator or None,
+            transform=body.grounding_claim.transform,
+            origin=body.grounding_claim.origin,
+            output_field_ref=body.grounding_claim.output_field_ref,
+            source_digest=body.grounding_claim.source_digest,
+        ),),
+    )
+
+
+class _ExecutiveProposalBody(BaseModel):
+    """Normalized internal result after both model-owned proposal stages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ControlDecision
+    grounding_claims: tuple[ModelGroundingClaim, ...] = ()
+
+
+class _GroundingRevisionBody(BaseModel):
+    """The only model-mutable payload for a grounding-only revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    grounding_claims: tuple[ModelGroundingClaim, ...] = ()
 
 
 class ExecutiveController:
+    """Ask the model for a complete semantic proposal or emit a typed control terminal."""
+
     def __init__(
         self,
         model_client: "StructuredModelClient | None" = None,
@@ -73,7 +317,7 @@ class ExecutiveController:
         self.tenant_id = tenant_id
         self.skills = skills or SkillRegistry.with_builtin_trust(tenant_id)
 
-    def decide(
+    def propose(
         self,
         task: TaskContract,
         ledger: TaskRuntimeProjection,
@@ -82,455 +326,366 @@ class ExecutiveController:
         capability_classes: tuple[CapabilityClassSummary, ...] = (),
         control_state: ControlState | None = None,
         model_context: dict[str, object] | None = None,
-    ) -> ControlDecision:
+        supersedes_proposal_ref: str | None = None,
+        revision_feedback_ref: str | None = None,
+        revision_attempt: int = 0,
+        prior_decision: ControlDecision | None = None,
+        revision_scope: str | None = None,
+    ) -> ControlProposal:
         goals = materialize_goals(task, ledger)
         open_goals = [
             item for item in goals
             if item.status not in {"verified", "degraded", "abandoned"}
         ]
         if not open_goals:
-            return self._finish(task, ledger)
+            return self._proposal(
+                task,
+                ledger,
+                self._finish(task, ledger),
+                source="contract_derivation",
+                model_context=model_context,
+                supersedes_proposal_ref=supersedes_proposal_ref,
+                revision_feedback_ref=revision_feedback_ref,
+                revision_attempt=revision_attempt,
+            )
         ready_goals = [item for item in open_goals if _dependencies_satisfied(item, ledger)]
-        procedure_candidates = (
-            control_state.procedure_candidates if control_state is not None else ()
+        if not ready_goals:
+            return self._proposal(
+                task,
+                ledger,
+                TerminateDecision(
+                    target_goal_id=open_goals[0].goal_id,
+                    basis=DecisionBasis(expected_state_change="task_terminated"),
+                    expected_progress="stop_dependency_deadlock",
+                    reason_code="goal_dependency_deadlock",
+                    user_message="目标依赖未满足，运行已停止。",
+                ),
+                source="contract_derivation",
+                model_context=model_context,
+                supersedes_proposal_ref=supersedes_proposal_ref,
+                revision_feedback_ref=revision_feedback_ref,
+                revision_attempt=revision_attempt,
+            )
+        gap = next(
+            (item for item in reversed(observations) if item.kind == "capability_gap"),
+            None,
         )
-        model_choice = self._model_choice(
+        if gap is not None and control_state is not None:
+            goal = next((item for item in ready_goals if item.goal_id == gap.goal_id), ready_goals[0])
+            resources = task.resources_for_goal(goal.goal_id)
+            from personal_agent.capabilities.contracts.execution import CapabilityRequirement
+
+            requirement = CapabilityRequirement.from_dimensions(
+                requirement_id=getattr(gap, "requirement_id", f"{goal.goal_id}:capability-gap"),
+                purpose="satisfy_declared_capability_gap",
+                semantic_domains=tuple(dict.fromkeys(item.semantic_domain for item in resources)),
+                resource_types=tuple(dict.fromkeys(
+                    value for item in resources for value in item.resource_types
+                )),
+                operations=tuple(dict.fromkeys(
+                    operation for item in resources for operation in item.required_operations
+                )),
+                output_contract=goal.output_contract,
+            )
+            return self._proposal(
+                task,
+                ledger,
+                RequestCapabilityAcquisitionDecision(
+                    target_goal_id=goal.goal_id,
+                    basis=_basis(goal, observations),
+                    expected_progress="request_missing_capability",
+                    requirement=requirement,
+                ),
+                source="contract_derivation",
+                model_context=model_context,
+                supersedes_proposal_ref=supersedes_proposal_ref,
+                revision_feedback_ref=revision_feedback_ref,
+                revision_attempt=revision_attempt,
+            )
+        body = self._model_proposal(
             task,
-            ledger,
             ready_goals,
             observations,
             capability_classes,
             control_state,
             model_context,
+            prior_decision=prior_decision,
+            revision_scope=revision_scope,
         )
-        if not ready_goals:
-            return TerminateDecision(
-                target_goal_id=open_goals[0].goal_id,
-                basis=DecisionBasis(expected_state_change="task_terminated"),
-                expected_progress="stop_dependency_deadlock",
-                reason_code="goal_dependency_deadlock",
-                user_message="目标依赖未完成，且当前没有可继续推进的独立目标。",
-            )
-        fallback_goal = _select_goal(ready_goals)
-        goal = next(
-            (item for item in ready_goals if model_choice and item.goal_id == model_choice.target_goal_id),
-            fallback_goal,
-        )
-        goal_observations = _observations_for_goal(goal, observations)
-        basis = _basis(goal, goal_observations)
-        capability_gap = next(
-            (item for item in reversed(goal_observations) if item.kind == "capability_gap"),
-            None,
-        )
-        if capability_gap is not None:
-            return RequestCapabilityAcquisitionDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress="request_missing_capability",
-                requirement=_requirement(task, goal, "acquire"),
-            )
-        goal_procedures = tuple(
-            item for item in procedure_candidates
-            if item.goal_id == goal.goal_id and item.status in {"eligible", "mandatory"}
-        )
-        mandatory = tuple(item for item in goal_procedures if item.status == "mandatory")
-        if mandatory:
-            return self._procedure_decision(
-                task, goal, basis, mandatory[0], goal_observations,
-            )
-
-        if model_choice is not None:
-            materialized = self._materialize_choice(
+        if body is None:
+            return self._proposal(
                 task,
                 ledger,
-                goal,
-                basis,
-                model_choice,
-                capability_classes,
-                goal_procedures,
+                TerminateDecision(
+                    target_goal_id=ready_goals[0].goal_id,
+                    basis=_basis(ready_goals[0], observations),
+                    expected_progress="model_unavailable_stop",
+                    reason_code="executive_model_unavailable",
+                    user_message="模型决策能力暂不可用，运行已安全停止。",
+                ),
+                source="contract_derivation",
+                model_context=model_context,
+                supersedes_proposal_ref=supersedes_proposal_ref,
+                revision_feedback_ref=revision_feedback_ref,
+                revision_attempt=revision_attempt,
             )
-            if materialized is not None:
-                return materialized
-
-        if goal_procedures and not goal.attempts:
-            return self._procedure_decision(task, goal, basis, goal_procedures[0])
-        fallback = self._materialize_contract_action(task, ledger, goal, basis)
-        if fallback is not None:
-            return fallback
-        return TerminateDecision(
-            target_goal_id=goal.goal_id,
-            basis=basis.model_copy(update={
-                "rejected_action_codes": ("no_safe_contract_action",),
-            }),
-            expected_progress="stop_without_inventing_action_sequence",
-            reason_code="executive_model_unavailable",
-            user_message="当前没有足够信息生成安全的下一步动作，任务已停止。",
+        return ControlProposal(
+            base_task_revision=task.revision,
+            base_runtime_revision=ledger.revision,
+            model_invocation_ref="executive_decision",
+            context_projection_ref=str((model_context or {}).get("projection_id") or "") or None,
+            source="model",
+            decision=body.decision,
+            grounding_claims=body.grounding_claims,
+            supersedes_proposal_ref=supersedes_proposal_ref,
+            revision_feedback_ref=revision_feedback_ref,
+            revision_attempt=revision_attempt,
         )
 
-    def decide_plan_step(
+    def terminal_proposal(
         self,
         task: TaskContract,
         ledger: TaskRuntimeProjection,
-        step: PlanStep,
         *,
-        observations: tuple[ObservationRef, ...] = (),
-        control_state: ControlState | None = None,
-    ) -> ControlDecision:
-        goal = next(
-            (item for item in materialize_goals(task, ledger) if item.goal_id == step.goal_id),
-            None,
-        )
-        if goal is None:
-            return TerminateDecision(
-                target_goal_id=step.goal_id,
-                reason_code="plan_step_goal_missing",
-                user_message="计划引用的目标已失效，任务已安全停止。",
-            )
-        basis = _basis(goal, _observations_for_goal(goal, observations))
-        procedures = tuple(
-            item for item in (control_state.procedure_candidates if control_state else ())
-            if item.goal_id == goal.goal_id and item.status in {"eligible", "mandatory"}
-        )
-        mandatory = next((item for item in procedures if item.status == "mandatory"), None)
-        if mandatory is not None:
-            return self._procedure_decision(task, goal, basis, mandatory, observations)
-        if step.kind == "procedure":
-            candidate = next((item for item in procedures if item.procedure_id == step.procedure_id), None)
-            if candidate is None:
-                return TerminateDecision(
-                    target_goal_id=goal.goal_id,
-                    basis=basis,
-                    reason_code="planned_procedure_ineligible",
-                    user_message="计划要求的受治理过程当前不可用，任务已安全停止。",
-                )
-            return self._procedure_decision(task, goal, basis, candidate, observations)
-        if step.kind == "delegate":
-            requirement = step.capability_requirement
-            assert requirement is not None
-            return DelegateDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress=step.objective,
-                subtask=SubtaskSpec(
-                    goal=step.objective,
-                    parent_goal_id=goal.goal_id,
-                    required_capability=requirement,
-                    requested_operations=requirement.operations,
-                    expected_artifact_contract=step.success_observation_contract,
-                ),
-            )
-        return self._action_from_plan_step(task, ledger, goal, basis, step)
-
-    def _action_from_plan_step(
-        self,
-        task: TaskContract,
-        ledger: TaskRuntimeProjection,
-        goal: MaterializedGoalView,
-        basis: DecisionBasis,
-        step: PlanStep,
-    ) -> ControlDecision:
-        requirement = step.capability_requirement
-        operations = set(requirement.operations if requirement is not None else ())
-        if step.kind == "verify":
-            meta = "verify"
-        elif step.kind == "synthesize":
-            meta = "transform"
-        elif operations.intersection(MUTATING_OPERATIONS):
-            meta = "commit"
-        else:
-            meta = "acquire"
-        resources = task.resources_for_goal(goal.goal_id)
-        bounded = BoundedAction(
-            goal_id=goal.goal_id,
-            execution_intent=meta,
-            description=step.objective,
-            output_contract=step.success_observation_contract,
-            requirement=requirement,
-            max_tool_calls=2 if requirement is not None else 0,
-            max_model_calls=1,
-            max_iterations=task.constraints.max_iterations,
-            proposed_resource_access=ProposedResourceAccessPlan(
-                read_set=tuple(
-                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
-                    for item in resources
-                ),
-                write_set=tuple(
-                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
-                    for item in resources
-                ) if meta == "commit" else (),
-                side_effect_class=step.side_effect_intent,
+        reason_code: str,
+        user_message: str,
+    ) -> ControlProposal:
+        goal_id = ledger.active_goal_ids[0] if ledger.active_goal_ids else task.goal_graph.goals[0].goal_id
+        return self._proposal(
+            task,
+            ledger,
+            TerminateDecision(
+                target_goal_id=goal_id,
+                basis=DecisionBasis(expected_state_change="task_terminated"),
+                expected_progress="control_terminal",
+                reason_code=reason_code,
+                user_message=user_message,
             ),
-            payload={
-                "task_text": step.objective,
-                "plan_step_id": step.step_id,
-                "information_goal": step.information_goal,
-                "execution_guidance": _execution_guidance(self, task, ledger, goal),
-                "agentic_synthesis": self._model_client is not None,
-            },
-        )
-        return ExecuteBoundedActionDecision(
-            target_goal_id=goal.goal_id,
-            basis=basis,
-            expected_progress=step.objective,
-            bounded_action=bounded,
+            source="contract_derivation",
+            model_context=None,
         )
 
-    def _materialize_contract_action(
+    def _model_proposal(
         self,
         task: TaskContract,
-        ledger: TaskRuntimeProjection,
-        goal: MaterializedGoalView,
-        basis: DecisionBasis,
-    ) -> ControlDecision | None:
-        """Compile one declared result contract; never infer a multi-action sequence."""
-        resources = task.resources_for_goal(goal.goal_id)
-        operations = tuple(dict.fromkeys(
-            operation for item in resources for operation in item.required_operations
-        ))
-        if set(operations).intersection(MUTATING_OPERATIONS):
-            return None
-        if operations:
-            requirement = CapabilityRequirement.from_dimensions(
-                requirement_id=f"{goal.goal_id}:reactive",
-                purpose=f"satisfy_goal_{goal.goal_id}",
-                semantic_domains=tuple(dict.fromkeys(item.semantic_domain for item in resources)),
-                resource_types=tuple(dict.fromkeys(
-                    value for item in resources for value in item.resource_types
-                )),
-                operations=operations,
-                resource_locator=next((item.locator for item in resources if item.locator), None),
-                freshness_required=any(item.freshness_required for item in resources),
-                required_providers=tuple(dict.fromkeys(
-                    provider for item in resources for provider in item.required_providers
-                )),
-                output_contract=goal.output_contract,
-            )
-            step = PlanStep(
-                goal_id=goal.goal_id,
-                kind="capability",
-                objective=goal.description,
-                supports_criterion_ids=goal.success_criterion_ids,
-                capability_requirement=requirement,
-                success_observation_contract=goal.output_contract,
-                failure_classes=("capability_unavailable",),
-            )
-        elif goal.result_contract in {"response", "artifact"}:
-            step = PlanStep(
-                goal_id=goal.goal_id,
-                kind="synthesize",
-                objective=goal.description,
-                supports_criterion_ids=goal.success_criterion_ids,
-                success_observation_contract=goal.output_contract,
-                failure_classes=("insufficient_context",),
-                replan_policy="request_input",
-            )
-        else:
-            return None
-        return self._action_from_plan_step(task, ledger, goal, basis, step)
-
-    @staticmethod
-    def _procedure_decision(
-        task: TaskContract,
-        goal: MaterializedGoalView,
-        basis: DecisionBasis,
-        candidate: ProcedureCandidate,
-        observations: tuple[ObservationRef, ...] = (),
-    ) -> ControlDecision:
-        has_new_user_input = bool(observations) and observations[-1].kind in {
-            "user_clarification", "user_confirmation",
-        }
-        if goal.attempts and not has_new_user_input:
-            return TerminateDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis.model_copy(update={
-                    "expected_state_change": "task_terminated",
-                    "rejected_action_codes": ("repeat_procedure_without_new_input",),
-                }),
-                expected_progress="stop_without_repeating_side_effect_procedure",
-                reason_code="procedure_result_inconclusive",
-                user_message="受治理过程已执行，但结果不足以证明目标完成；未重复执行可能产生副作用的操作。",
-            )
-        resources = task.resources_for_goal(goal.goal_id)
-        procedure_text = goal.description
-        if has_new_user_input:
-            procedure_text = f"{procedure_text}\n补充信息：{observations[-1].summary}"
-        return InvokeProcedureDecision(
-            target_goal_id=goal.goal_id,
-            basis=basis,
-            expected_progress="execute_governed_procedure",
-            procedure_invocation=ProcedureInvocation(
-                procedure=ProcedureRef(
-                    procedure_id=candidate.procedure_id,
-                    version=candidate.version,
-                ),
-                goal_id=goal.goal_id,
-                input={
-                    "text": procedure_text,
-                    "resource_types": sorted({value for item in resources for value in item.resource_types}),
-                    "operations": sorted({value for item in resources for value in item.required_operations}),
-                    "locator": next((item.locator for item in resources if item.locator), None),
-                },
-                idempotency_key=f"{task.task_id}:{goal.goal_id}:{candidate.procedure_id}",
-                expected_output_contract="ProcedureOutcome",
-            ),
-        )
-
-    def _model_choice(
-        self,
-        task: TaskContract,
-        ledger: TaskRuntimeProjection,
-        goals: list[MaterializedGoalView],
+        ready_goals: list[MaterializedGoalView],
         observations: tuple[ObservationRef, ...],
         capability_classes: tuple[CapabilityClassSummary, ...],
         control_state: ControlState | None,
         model_context: dict[str, object] | None,
-    ) -> _ModelExecutiveDecision | None:
+        *,
+        prior_decision: ControlDecision | None,
+        revision_scope: str | None,
+    ) -> _ExecutiveProposalBody | None:
         if self._model_client is None or model_context is None:
             return None
+        selected_action: ExecutiveAction | None = None
         try:
             from personal_agent.capabilities.contracts.model import StructuredModelRequest
 
-            ready_goal_ids = {item.goal_id for item in goals}
-            state = model_context
-            response = self._model_client.generate(StructuredModelRequest(
-                operation="executive_decision",
-                version="v1",
-                messages=[
+            ready_ids = {item.goal_id for item in ready_goals}
+            context_payload = {
+                "model_context": model_context,
+                "ready_goal_ids": sorted(ready_ids),
+                "observations": [item.model_dump(mode="json") for item in observations[-6:]],
+                "capability_classes": [item.model_dump(mode="json") for item in capability_classes],
+                "procedure_candidates": [
+                    item.model_dump(mode="json")
+                    for item in (control_state.procedure_candidates if control_state else ())
+                ],
+                "grounding_sources": _grounding_source_payload(task, control_state),
+            }
+            if revision_scope == "grounding_only":
+                if prior_decision is None:
+                    return None
+                if isinstance(prior_decision, ExecuteBoundedActionDecision):
+                    source_ref = f"goal:{prior_decision.target_goal_id}:goal_id"
+                    source = next(
+                        (item for item in context_payload["grounding_sources"]
+                         if item["source_ref"] == source_ref),
+                        None,
+                    )
+                    if source is None:
+                        return None
+                    grounding_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Revise exactly one immutable target-binding grounding claim. "
+                                "Return the supplied source_ref, source_digest and source_locator unchanged. "
+                                "The output field is fixed by the schema. Return only the structured object."
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps({
+                            "required_source": source,
+                            "immutable_decision": prior_decision.model_dump(mode="json"),
+                        }, ensure_ascii=False)},
+                    ]
+                    grounding_response = self._model_client.generate(StructuredModelRequest(
+                        operation="executive_execute_grounding_revision",
+                        version="v3",
+                        messages=grounding_messages,
+                        output_type=_ModelExecuteGroundingClaim,
+                        context_projection_ref=str(model_context.get("projection_id") or ""),
+                        temperature=0,
+                        max_tokens=280,
+                        kind="structured",
+                        metadata={"task_id": task.task_id, "revision_scope": revision_scope},
+                    ))
+                    claim = grounding_response.value
+                    return _ExecutiveProposalBody(
+                        decision=prior_decision,
+                        grounding_claims=(ModelGroundingClaim(
+                            claim_id=claim.claim_id,
+                            source_ref=claim.source_ref,
+                            source_locator=claim.source_locator or None,
+                            transform=claim.transform,
+                            origin=claim.origin,
+                            output_field_ref=claim.output_field_ref,
+                            source_digest=claim.source_digest,
+                        ),),
+                    )
+                grounding_messages = [
                     {
                         "role": "system",
                         "content": (
-                            "Choose one bounded control action with the best expected progress and target a ready goal. "
-                            "Do not revise goals, criteria, dependencies, or the active plan; those belong to the planning layer. "
-                            "Skills and their playbooks are optional methods; procedures are governed transactions, "
-                            "and observations are feedback. Choose invoke_procedure only from eligible candidates and never "
-                            "bypass a mandatory procedure. "
-                            "Use their full contracts, respect budgets, avoid failed paths, and clarify when a resource binding "
-                            "or authorization is required. Never choose finish unless the goal is verified. "
-                            "Return only the requested structured object; do not reveal chain-of-thought."
+                            "Revise only the grounding claims for the immutable prior decision. "
+                            "Do not restate or change the decision. Use only supplied grounding_sources. "
+                            "Identity claims require exact value equality; omit unsupported optional claims. "
+                            "Return only the structured object."
                         ),
                     },
-                    {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
-                ],
-                output_type=_ModelExecutiveDecision,
-                context_projection_ref=str(state.get("projection_id") or ""),
+                    {"role": "user", "content": json.dumps({
+                        "immutable_decision": prior_decision.model_dump(mode="json"),
+                        **context_payload,
+                    }, ensure_ascii=False)},
+                ]
+                grounding_response = self._model_client.generate(StructuredModelRequest(
+                    operation="executive_grounding_revision",
+                    version="v3",
+                    messages=grounding_messages,
+                    output_type=_GroundingRevisionBody,
+                    context_projection_ref=str(model_context.get("projection_id") or ""),
+                    temperature=0,
+                    max_tokens=900,
+                    kind="structured",
+                    metadata={"task_id": task.task_id, "revision_scope": revision_scope},
+                ))
+                return _ExecutiveProposalBody(
+                    decision=prior_decision,
+                    grounding_claims=grounding_response.value.grounding_claims,
+                )
+            selection_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Choose exactly one executive action and one ready target goal. You own this "
+                        "semantic choice. Do not produce the action payload yet. Do not claim execution "
+                        "success or completion without verified reports. A finish decision only closes work "
+                        "already verified in model_context; it never creates an answer. For a self-contained "
+                        "response that still needs to be produced, select execute_bounded_action. "
+                        "Return only the structured object."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(context_payload, ensure_ascii=False)},
+            ]
+            selection_response = self._model_client.generate(StructuredModelRequest(
+                operation="executive_decision_kind",
+                version="v3",
+                messages=selection_messages,
+                output_type=_ExecutiveDecisionKindProposal,
+                context_projection_ref=str(model_context.get("projection_id") or ""),
                 temperature=0,
-                max_tokens=300,
+                max_tokens=240,
                 kind="structured",
-                metadata={"task_id": task.task_id, "ready_goal_ids": sorted(ready_goal_ids)},
+                metadata={"task_id": task.task_id, "ready_goal_ids": sorted(ready_ids)},
             ))
-            choice = response.value
-            if choice.target_goal_id not in ready_goal_ids:
+            selection = selection_response.value
+            selected_action = selection.action
+            if selection.target_goal_id not in ready_ids:
                 return None
-            return choice
+
+            proposal_type = _ACTION_PROPOSAL_TYPES[selection.action]
+            proposal_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Produce the complete typed executive decision for the selected action and goal. "
+                        "The selected action and target are immutable. You own all remaining semantic "
+                        "choices: typed business payload, "
+                        "requested result contract, grounding claims, and semantic recovery intent. "
+                        "Choose procedures only from the supplied candidates; for a mandatory procedure, "
+                        "provide its complete typed input rather than asking runtime to synthesize it. "
+                        "Do not bind a concrete provider unless the user contract already requires it. "
+                        "Do not claim execution success or completion without verified reports. "
+                        "When revising, obey DecisionFeedback mutable/immutable fields and revision scope. "
+                        "For execute_bounded_action, provide exactly one target-binding grounding_claim: "
+                        "source_ref must be goal:<selected_target_goal_id>:goal_id, use its supplied digest, "
+                        "and do not create any other grounding assertions. For other actions, provide grounding "
+                        "claims only where their output schema requires them. "
+                        "For a self-contained response, choose reason or transform with max_tool_calls=0 and "
+                        "an empty requirement_operations list: composing the response uses the admitted model "
+                        "call, not an external capability provider. "
+                        "Return only the structured object and never reveal chain-of-thought."
+                    ),
+                },
+                {"role": "user", "content": json.dumps({
+                    "selected_action": selection.action,
+                    "selected_target_goal_id": selection.target_goal_id,
+                    **context_payload,
+                }, ensure_ascii=False)},
+            ]
+            response = self._model_client.generate(StructuredModelRequest(
+                operation=f"executive_{selection.action}_proposal",
+                version="v3",
+                messages=proposal_messages,
+                output_type=proposal_type,
+                context_projection_ref=str(model_context.get("projection_id") or ""),
+                temperature=0,
+                max_tokens=1800,
+                kind="structured",
+                metadata={"task_id": task.task_id, "ready_goal_ids": sorted(ready_ids)},
+            ))
+            body = (
+                _normalize_execute_proposal(response.value)
+                if isinstance(response.value, _ExecuteBoundedActionProposalBody)
+                else _ExecutiveProposalBody(
+                    decision=response.value.decision,
+                    grounding_claims=getattr(response.value, "grounding_claims", ()),
+                )
+            )
+            decision = body.decision
+            if (
+                decision.action != selection.action
+                or decision.target_goal_id != selection.target_goal_id
+            ):
+                return None
+            return body
         except Exception:
-            logger.exception("Executive model decision failed; using deterministic policy")
+            logger.exception("Executive proposal generation failed action=%s", selected_action)
             return None
 
-    def _materialize_choice(
-        self,
+    @staticmethod
+    def _proposal(
         task: TaskContract,
         ledger: TaskRuntimeProjection,
-        goal: MaterializedGoalView,
-        basis: DecisionBasis,
-        choice: _ModelExecutiveDecision | None,
-        capability_classes: tuple[CapabilityClassSummary, ...],
-        procedure_candidates: tuple[ProcedureCandidate, ...],
-    ) -> ControlDecision | None:
-        if choice is None:
-            return None
-        action = choice.action
-        if action == "invoke_procedure":
-            candidate = next((
-                item for item in procedure_candidates
-                if choice is not None and item.procedure_id == choice.procedure_id
-            ), None)
-            return self._procedure_decision(task, goal, basis, candidate) if candidate else None
-        if action == "clarify":
-            if choice is None or not choice.question.strip():
-                return None
-            return ClarifyDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress=choice.expected_progress or "obtain_missing_input",
-                question=choice.question.strip(),
-            )
-        if action == "request_confirmation":
-            if choice is None or task.mutation_intent is None:
-                return None
-            return RequestConfirmationDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress=choice.expected_progress or "obtain_mutation_confirmation",
-                title="确认执行变更",
-                summary=choice.question.strip() or goal.description,
-            )
-        if action == "finish":
-            if goal.status == "verified":
-                return self._finish(task, ledger)
-            return None if choice is not None else self._finish(task, ledger)
-        if action == "terminate":
-            return TerminateDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress="stop_without_unsafe_guessing",
-                reason_code=choice.reason_code if choice and choice.reason_code else "executive_no_safe_progress",
-                user_message="当前能力或证据不足，任务已停止。",
-            )
-        if action == "delegate":
-            if not _has_exact_delegate(task, goal, capability_classes):
-                return None
-            requirement = _requirement(task, goal, "delegate")
-            return DelegateDecision(
-                target_goal_id=goal.goal_id,
-                basis=basis,
-                expected_progress="obtain_specialist_artifact",
-                subtask=SubtaskSpec(
-                    goal=goal.description,
-                    parent_goal_id=goal.goal_id,
-                    required_capability=requirement,
-                    requested_operations=requirement.operations,
-                    expected_artifact_contract="ResearchReport",
-                ),
-            )
-        meta = action if action in {
-            "acquire", "explore", "reason", "transform", "verify", "commit",
-        } else "transform"
-        if meta == "commit" and task.mutation_intent is None:
-            return None
-        requirement = _requirement(task, goal, meta)
-        resources = task.resources_for_goal(goal.goal_id)
-        bounded = BoundedAction(
-            goal_id=goal.goal_id,
-            execution_intent=meta,
-            description=f"{meta}: {goal.description}",
-            output_contract=_action_output_contract(meta),
-            requirement=requirement,
-            max_tool_calls=(6 if meta == "explore" else 2)
-            if meta in {"acquire", "explore", "commit"} else 0,
-            max_model_calls=1,
-            max_iterations=task.constraints.max_iterations,
-            proposed_resource_access=ProposedResourceAccessPlan(
-                read_set=tuple(
-                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
-                    for item in resources
-                ),
-                write_set=tuple(
-                    {"semantic_domain": item.semantic_domain, "locator": item.locator}
-                    for item in resources
-                ) if meta == "commit" else (),
-                side_effect_class="mutation" if meta == "commit" else "none",
-            ),
-            payload={
-                "task_text": goal.description,
-                "execution_guidance": _execution_guidance(self, task, ledger, goal),
-                "agentic_synthesis": self._model_client is not None,
-            },
-        )
-        return ExecuteBoundedActionDecision(
-            target_goal_id=goal.goal_id,
-            basis=basis,
-            expected_progress=choice.expected_progress if choice and choice.expected_progress else f"complete_{meta}",
-            bounded_action=bounded,
+        decision: ControlDecision,
+        *,
+        source: str,
+        model_context: dict[str, object] | None,
+        supersedes_proposal_ref: str | None = None,
+        revision_feedback_ref: str | None = None,
+        revision_attempt: int = 0,
+    ) -> ControlProposal:
+        return ControlProposal(
+            base_task_revision=task.revision,
+            base_runtime_revision=ledger.revision,
+            context_projection_ref=str((model_context or {}).get("projection_id") or "") or None,
+            source=source,
+            decision=decision,
+            supersedes_proposal_ref=supersedes_proposal_ref,
+            revision_feedback_ref=revision_feedback_ref,
+            revision_attempt=revision_attempt,
         )
 
     @staticmethod
@@ -547,144 +702,52 @@ class ExecutiveController:
         )
 
 
-def _select_goal(goals: list[MaterializedGoalView]) -> MaterializedGoalView:
-    priority = {"active": 0, "blocked": 1, "candidate_complete": 2, "awaiting_input": 3, "pending": 4}
-    return sorted(goals, key=lambda item: (priority.get(item.status, 9), item.goal_id))[0]
-
-
 def _dependencies_satisfied(goal: MaterializedGoalView, ledger: TaskRuntimeProjection) -> bool:
-    status_by_id = {
-        goal_id: state.status for goal_id, state in ledger.goal_states.items()
-    }
     return all(
-        status_by_id.get(dependency.dependency_goal_id) in {"verified", "degraded"}
+        ledger.goal_states.get(dependency.dependency_goal_id) is not None
+        and ledger.goal_states[dependency.dependency_goal_id].status in {"verified", "degraded"}
         for dependency in goal.dependencies
         if dependency.blocks_execution
     )
 
 
-def _observations_for_goal(
+def _basis(
     goal: MaterializedGoalView,
     observations: tuple[ObservationRef, ...],
-) -> tuple[ObservationRef, ...]:
-    scoped = tuple(item for item in observations if item.goal_id == goal.goal_id)
-    return scoped or tuple(item for item in observations if not item.goal_id)
-
-
-def _skill_candidates(catalog: SkillRegistry, task: TaskContract, goal: MaterializedGoalView) -> tuple:
-    domains = {item.semantic_domain for item in task.resources_for_goal(goal.goal_id)}
-    return tuple(
-        skill for skill in catalog.candidates(
-            semantic_domains=frozenset(
-                item.semantic_domain for item in task.resource_requirements
-            ),
-            operations=frozenset(task.requested_operations),
-            result_contract=task.result_contract,
-        )
-        if domains.intersection(skill.applicability.semantic_domains)
-        or task.result_contract in skill.applicability.result_contracts
-    )
-def _execution_guidance(
-    controller: ExecutiveController,
-    task: TaskContract,
-    ledger: TaskRuntimeProjection,
-    goal: MaterializedGoalView,
-) -> list[str]:
-    guidance = []
-    relevant_skill_ids = {
-        item.skill_id for item in _skill_candidates(controller.skills, task, goal)
-    }
-    for skill_id in ledger.active_skill_ids:
-        if skill_id not in relevant_skill_ids:
-            continue
-        # Active skills are task-scoped; only inject methods applicable to this goal.
-        try:
-            skill = controller.skills.get(controller.tenant_id, skill_id)
-        except (KeyError, PermissionError):
-            continue
-        instructions = skill.instructions.strip()
-        if instructions:
-            guidance.append(instructions)
-    return guidance
-
-
-def _has_exact_delegate(
-    task: TaskContract,
-    goal: MaterializedGoalView,
-    capability_classes: tuple[CapabilityClassSummary, ...],
-) -> bool:
-    requirement = _requirement(task, goal, "delegate")
-    domains = set(requirement.semantic_domains)
-    required_providers = set(requirement.required_providers)
-    return any(
-        item.kind == "agent"
-        and "delegate" in item.operations
-        and (not domains or bool(domains.intersection(item.semantic_domains)))
-        and (not required_providers or bool(required_providers.intersection(item.providers)))
-        for item in capability_classes
-    )
-
-
-def _basis(goal: MaterializedGoalView, observations: tuple[ObservationRef, ...]) -> DecisionBasis:
+) -> DecisionBasis:
+    scoped = tuple(item for item in observations if not item.goal_id or item.goal_id == goal.goal_id)
     return DecisionBasis(
         unmet_criterion_ids=goal.success_criterion_ids,
-        triggering_observation_ids=tuple(item.observation_id for item in observations[-3:]),
+        triggering_observation_ids=tuple(item.observation_id for item in scoped[-3:]),
         evidence_gap_ids=goal.evidence_gaps,
         expected_state_change="advance_goal",
     )
 
 
-def _requirement(task: TaskContract, goal: MaterializedGoalView, meta: str) -> CapabilityRequirement:
-    resources = task.resources_for_goal(goal.goal_id)
-    domains = tuple(dict.fromkeys(item.semantic_domain for item in resources))
-    resource_types = tuple(dict.fromkeys(value for item in resources for value in item.resource_types))
-    locator = next((item.locator for item in resources if item.locator), None)
-    if meta == "delegate":
-        operations = ("delegate",)
-    elif meta == "verify":
-        operations = ("verify",)
-    elif meta in {"acquire", "explore"}:
-        operations = tuple(dict.fromkeys(
-            operation for item in resources for operation in item.required_operations
-            if operation in {"search", "read", "list"}
-        )) or ("read",)
-    elif meta == "commit":
-        operations = tuple(dict.fromkeys(
-            operation for item in resources for operation in item.required_operations
-            if operation in MUTATING_OPERATIONS
-        ))
-    else:
-        operations = ()
-    return CapabilityRequirement.from_dimensions(
-        requirement_id=f"{goal.goal_id}:{meta}",
-        purpose=f"{meta}_{goal.result_contract}",
-        semantic_domains=domains,
-        resource_types=resource_types,
-        operations=operations,
-        resource_locator=locator,
-        minimum_trust_level="external",
-        freshness_required=any(item.freshness_required for item in resources),
-        preferred_providers=tuple(dict.fromkeys(
-            provider for item in resources for provider in item.preferred_providers
-        )),
-        required_providers=tuple(dict.fromkeys(
-            provider for item in resources for provider in item.required_providers
-        )),
-        output_contract=_action_output_contract(meta),
-        side_effect_class="none",
-    )
-
-
-def _action_output_contract(meta: str) -> str:
-    return {
-        "acquire": "ContextPack",
-        "explore": "EvidencePack",
-        "reason": "DraftAnswer",
-        "transform": "Answer",
-        "verify": "VerificationReport",
-        "delegate": "AgentArtifact",
-        "commit": "MutationReceipt",
-    }.get(meta, "ToolResult")
+def _grounding_source_payload(
+    task: TaskContract,
+    control_state: ControlState | None,
+) -> list[dict[str, object]]:
+    values: dict[str, object] = {f"task:{task.task_id}:user_goal": task.user_goal}
+    for goal in task.goal_graph.goals:
+        values[f"goal:{goal.goal_id}:goal_id"] = goal.goal_id
+        values[f"goal:{goal.goal_id}:description"] = goal.description
+        for criterion in goal.criteria:
+            values[f"criterion:{criterion.criterion_id}:criterion_id"] = criterion.criterion_id
+            values[f"criterion:{criterion.criterion_id}:description"] = criterion.description
+        for constraint in goal.constraints:
+            values[f"constraint:{constraint.constraint_id}"] = constraint.description
+    if control_state is not None:
+        for observation in control_state.latest_observations:
+            values[f"observation:{observation.observation_id}"] = observation.summary
+    return [
+        {
+            "source_ref": source_ref,
+            "value": value,
+            "source_digest": canonical_digest(value),
+        }
+        for source_ref, value in values.items()
+    ]
 
 
 __all__ = ["ExecutiveController"]

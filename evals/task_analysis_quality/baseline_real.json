@@ -1,7 +1,0 @@
-{
-  "_comment": "Regression floors for the real-environment TaskAnalyzer golden set.",
-  "outcome_accuracy": 0.75,
-  "result_contract_f1": 0.7,
-  "result_contract_sequence_exact": 0.6,
-  "clarify_field_precision": 0.0
-}

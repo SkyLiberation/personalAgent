@@ -18,7 +18,10 @@ _EXPORTS = {
     "TaskAnalyzer": ("personal_agent.planning.task_analyzer", "TaskAnalyzer"),
     "ResetResult": ("personal_agent.application.runtime_results", "ResetResult"),
     "TaskAnalysis": ("personal_agent.planning.task_analyzer", "TaskAnalysis"),
-    "TaskAnalysisOutput": ("personal_agent.planning.task_analyzer", "TaskAnalysisOutput"),
+    "TaskAnalysisProposalBody": (
+        "personal_agent.planning.task_analyzer",
+        "TaskAnalysisProposalBody",
+    ),
     "VerificationResult": ("personal_agent.application.verifier", "VerificationResult"),
     "PROCEDURE_CATALOG": ("personal_agent.runtime.procedure_runtime", "PROCEDURE_CATALOG"),
     "ProcedureApplicabilityResolver": (

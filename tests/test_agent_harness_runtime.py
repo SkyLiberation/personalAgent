@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 from personal_agent.agents.runtime import SubagentRuntime
-from personal_agent.context.projection import ContextManager
+from personal_agent.context.projection import (
+    ContextManager,
+    ContextRequirement,
+    ContextSelectionProposal,
+    ContextSelectionRequired,
+)
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     AgentGatewayContext,
@@ -21,6 +26,7 @@ from personal_agent.runtime.contracts.task import (
     ContextItem,
     RuntimeSnapshotRef,
     SuccessCriterion,
+    TaskRuntimeProjection,
 )
 from personal_agent.capabilities.contracts.execution import CapabilityRequirement
 from personal_agent.capabilities.contracts.grants import DelegationGrant, GrantDependencySet
@@ -28,14 +34,17 @@ from personal_agent.kernel.contracts.resource import OperationScope, ResourceSel
 from personal_agent.execution.contracts.invocation import InvocationAttemptState
 from personal_agent.runtime.contracts.control import (
     BoundedAction,
+    CapabilityActionInput,
     ProposedResourceAccessPlan,
     ResourceAccess,
     SubtaskSpec,
 )
-from personal_agent.runtime.direct import DirectAdmission, DirectCandidate
 from personal_agent.runtime.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
 from personal_agent.runtime.action_spec import ResolvedActionBuilder
-from personal_agent.runtime.resource_access import ResourceAccessResolver
+from personal_agent.runtime.resource_access import (
+    ResourceAccessResolutionError,
+    ResourceAccessResolver,
+)
 from personal_agent.runtime.run_manager import DurableRunManager, RunStateError
 from personal_agent.runtime.scheduler import RunScheduler
 from personal_agent.skills.registry import SkillRegistry
@@ -44,13 +53,14 @@ from personal_agent.orchestration.orchestration_models import (
     InvocationBatchState,
     ExecutableInvocation,
 )
+from personal_agent.orchestration.entry_orchestrator import _admit_terminal_run
 from personal_agent.orchestration.orchestration_nodes._steps import (
     _execute_agent_call_step,
     _node_select_next_step,
 )
 
 
-def test_context_projection_prefers_authority_and_respects_budget() -> None:
+def test_open_context_requires_model_selection_and_respects_budget() -> None:
     items = (
         ContextItem(
                 item_id="untrusted",
@@ -71,20 +81,44 @@ def test_context_projection_prefers_authority_and_respects_budget() -> None:
             payload={"authority_tier": "system_policy"},
         ),
     )
-    projection = ContextManager().project(
-        items,
+    requirement = ContextRequirement(
         purpose="executive_decision",
-        budget=ContextBudget(
-            model_profile="test",
-            tokenizer_profile="test",
-            max_context_tokens=40,
-            safety_margin=5,
-            reserved_output_tokens=10,
+        semantic_query="select policy and relevant observations",
+    )
+    manager = ContextManager()
+    budget = ContextBudget(
+        model_profile="test",
+        tokenizer_profile="test",
+        max_context_tokens=40,
+        safety_margin=5,
+        reserved_output_tokens=10,
+    )
+    snapshot = RuntimeSnapshotRef(
+        run_id="run", task_id="task", task_revision=1,
+        runtime_revision=3, event_sequence=7,
+    )
+
+    with pytest.raises(ContextSelectionRequired):
+        manager.project(
+            items,
+            requirement=requirement,
+            selection=None,
+            budget=budget,
+            source_snapshot=snapshot,
+        )
+
+    projection = manager.project(
+        items,
+        requirement=requirement,
+        selection=ContextSelectionProposal(
+            requirement_ref=requirement.requirement_id,
+            source="model",
+            required_item_ids=("policy",),
+            optional_item_ids=("untrusted",),
+            optional_priority=("untrusted",),
         ),
-        source_snapshot=RuntimeSnapshotRef(
-            run_id="run", task_id="task", task_revision=1,
-            runtime_revision=3, event_sequence=7,
-        ),
+        budget=budget,
+        source_snapshot=snapshot,
     )
 
     assert projection.selected_item_ids == ("policy",)
@@ -92,34 +126,53 @@ def test_context_projection_prefers_authority_and_respects_budget() -> None:
     assert projection.token_estimate <= 25
 
 
-def test_direct_admission_rejects_weakened_criterion() -> None:
-    required = SuccessCriterion(
-        criterion_id="criterion",
-        description="answer the exact user question",
-        source="user_explicit",
-        mutability="immutable",
-    )
-    weakened = required.model_copy(update={"mutability": "runtime_derived"})
-
-    assert not DirectAdmission().admit(
-        DirectCandidate(goal="answer", criteria=(weakened,), answer="done"),
-        required_criteria=(required,),
-    )
-
-
-def test_resource_resolution_is_conservative_and_scheduler_is_physical_only() -> None:
+def test_resource_resolution_rejects_silent_scope_expansion() -> None:
     resolver = ResourceAccessResolver()
     proposed = ProposedResourceAccessPlan(
         read_set=(ResourceAccess(semantic_domain="knowledge", locator="note:1"),),
+        side_effect_class="none",
+        authority_scope="memory:read",
+        data_egress_class="none",
+        trust_floor="trusted",
+        freshness_contract="current_snapshot",
+        evidence_contract="resource_read",
+        failure_semantics="return_typed_failure",
     )
     authoritative = ProposedResourceAccessPlan(
         write_set=(ResourceAccess(semantic_domain="knowledge", locator="note:1"),),
         side_effect_class="mutation",
+        authority_scope="memory:write",
+        data_egress_class="none",
+        trust_floor="trusted",
+        freshness_contract="current_snapshot",
+        evidence_contract="mutation_receipt",
+        failure_semantics="return_typed_failure",
+    )
+    with pytest.raises(ResourceAccessResolutionError, match="undeclared write access"):
+        resolver.resolve(
+            proposed,
+            procedure_contract=authoritative,
+            runtime_preflight=authoritative,
+        )
+
+
+def test_resource_resolution_preserves_proposal_and_scheduler_is_physical_only() -> None:
+    resolver = ResourceAccessResolver()
+    proposed = ProposedResourceAccessPlan(
+        read_set=(ResourceAccess(semantic_domain="knowledge", locator="note:1"),),
+        write_set=(ResourceAccess(semantic_domain="knowledge", locator="note:1"),),
+        side_effect_class="mutation",
+        authority_scope="memory:write",
+        data_egress_class="none",
+        trust_floor="trusted",
+        freshness_contract="current_snapshot",
+        evidence_contract="mutation_receipt",
+        failure_semantics="return_typed_failure",
     )
     resolved = resolver.resolve(
         proposed,
-        procedure_contract=authoritative,
-        runtime_preflight=authoritative,
+        procedure_contract=proposed,
+        runtime_preflight=proposed,
     )
     spec = ResolvedActionBuilder().build(
         decision_ref="decision",
@@ -129,6 +182,7 @@ def test_resource_resolution_is_conservative_and_scheduler_is_physical_only() ->
             execution_intent="commit",
             description="update note",
             proposed_resource_access=proposed,
+            input=CapabilityActionInput(task_text="update note:1"),
         ),
         context_projection_ref="projection",
         access_plan=resolved,
@@ -136,7 +190,7 @@ def test_resource_resolution_is_conservative_and_scheduler_is_physical_only() ->
 
     RunScheduler().validate_dispatch(spec)
     assert resolved.read_set == proposed.read_set
-    assert resolved.write_set == authoritative.write_set
+    assert resolved.write_set == proposed.write_set
     assert resolved.source_refs[0] == "procedure_contract"
 
 
@@ -240,6 +294,41 @@ def test_run_manager_fences_old_worker_and_quarantines_cancel_race() -> None:
     assert completed.orphan_artifact_refs == ("artifact:late",)
 
 
+@pytest.mark.parametrize(
+    ("lifecycle", "errors", "expected_status"),
+    [
+        ("active", [], "failed"),
+        ("terminated", [], "completed_degraded"),
+        ("completed", [], "completed"),
+        ("completed", ["completion rejected"], "failed"),
+    ],
+)
+def test_graph_return_does_not_fabricate_run_completion(
+    lifecycle: str,
+    errors: list[str],
+    expected_status: str,
+) -> None:
+    manager = DurableRunManager()
+    manager.submit("terminal-run", idempotency_key="terminal-submit")
+    lease = manager.acquire_lease("terminal-run")
+    manager.transition("terminal-run", "queued", fencing_token=lease.fencing_token)
+    manager.transition("terminal-run", "running", fencing_token=lease.fencing_token)
+    state = RunCheckpoint(
+        task_runtime=TaskRuntimeProjection(
+            task_id="task",
+            lifecycle=lifecycle,
+            termination_reason=(
+                "unrecoverable_failure" if lifecycle == "terminated" else None
+            ),
+        ),
+        errors=errors,
+    )
+
+    result = _admit_terminal_run(manager, "terminal-run", state)
+
+    assert result.status == expected_status
+
+
 def test_agent_step_uses_durable_submit_then_poll() -> None:
     class Gateway:
         def __init__(self) -> None:
@@ -311,6 +400,8 @@ def test_agent_step_uses_durable_submit_then_poll() -> None:
         grant_id="grant-delegate-1",
         request_id="request-delegate-1",
         action_ref="delegate-1",
+        authorization_digest="authorization-digest",
+        execution_command_digest="execution-command-digest",
         granted_resource_selector=ResourceSelector(),
         granted_operation_scope=OperationScope(operations=frozenset({"delegate"})),
         granted_data_egress="content",

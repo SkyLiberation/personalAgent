@@ -110,57 +110,6 @@ class TestBestSnippet:
         assert len(snippet) > 0
 
 
-class TestGraphRefModels:
-    def test_graph_node_ref_construction(self):
-        ref = GraphNodeRef(uuid="node-1", name="Redis", labels=["Entity", "Technology"], summary="In-memory data store")
-        assert ref.uuid == "node-1"
-        assert ref.name == "Redis"
-        assert ref.labels == ["Entity", "Technology"]
-        assert ref.summary == "In-memory data store"
-
-    def test_graph_node_ref_defaults(self):
-        ref = GraphNodeRef(uuid="n1", name="Test")
-        assert ref.labels == []
-        assert ref.summary == ""
-
-    def test_graph_edge_ref_construction(self):
-        ref = GraphEdgeRef(
-            uuid="edge-1",
-            fact="Redis supports caching",
-            source_node_uuid="n1",
-            target_node_uuid="n2",
-            source_node_name="Redis",
-            target_node_name="Caching",
-            episodes=["ep1", "ep2"],
-        )
-        assert ref.uuid == "edge-1"
-        assert ref.source_node_name == "Redis"
-        assert ref.target_node_name == "Caching"
-        assert len(ref.episodes) == 2
-
-    def test_graph_edge_ref_defaults(self):
-        ref = GraphEdgeRef(uuid="e1", fact="some fact")
-        assert ref.source_node_uuid == ""
-        assert ref.episodes == []
-
-    def test_graph_fact_ref_construction(self):
-        ref = GraphFactRef(
-            fact="Redis uses TTL for expiration",
-            edge_uuid="e1",
-            source_node_name="Redis",
-            target_node_name="TTL",
-            episode_uuids=["ep1"],
-        )
-        assert ref.fact == "Redis uses TTL for expiration"
-        assert ref.edge_uuid == "e1"
-        assert len(ref.episode_uuids) == 1
-
-    def test_graph_fact_ref_defaults(self):
-        ref = GraphFactRef(fact="test")
-        assert ref.edge_uuid == ""
-        assert ref.episode_uuids == []
-
-
 class TestMergeGraphCaptureRefs:
     def test_merge_populates_refs(self):
         note = make_note(title="test", content="c", summary="s", user_id="u1")

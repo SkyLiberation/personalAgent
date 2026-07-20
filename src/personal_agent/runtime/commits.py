@@ -60,20 +60,26 @@ class ControlCommitter:
         if runtime.last_event_sequence != expected_event_cursor:
             raise RuntimeCommitConflict("task event cursor changed before control commit")
         proposal = control.proposal
-        command = control.accepted_command
-        if proposal is None or command is None:
+        intent = control.accepted_intent
+        command = control.resolved_command
+        if proposal is None or intent is None or command is None:
             raise RuntimeCommitConflict("control chain is incomplete")
         if admission_verdict != "accepted":
             raise RuntimeCommitConflict("denied proposal cannot be committed")
         if admission_proposal_ref != proposal.proposal_id:
             raise RuntimeCommitConflict("admission does not reference the proposal")
-        if command.proposal_ref != proposal.proposal_id or command.admission_ref != admission_ref:
+        if intent.proposal_ref != proposal.proposal_id or intent.admission_ref != admission_ref:
             raise RuntimeCommitConflict("control references do not form one chain")
+        if command.accepted_intent_ref != intent.accepted_intent_id:
+            raise RuntimeCommitConflict("execution command does not reference the accepted intent")
         return ControlCommit(
             turn_ref=control.turn_id,
             proposal_ref=proposal.proposal_id,
             admission_ref=admission_ref,
+            accepted_intent_ref=intent.accepted_intent_id,
             command_ref=command.command_id,
+            authorization_digest=command.authorization_digest,
+            execution_command_digest=command.execution_command_digest,
             expected_task_revision=expected_task_revision,
             expected_event_cursor=expected_event_cursor,
         )

@@ -10,6 +10,7 @@ from personal_agent.runtime.contracts.task import (
     EvidencePolicy,
     EvidenceRequirements,
     GoalDefinition,
+    GoalConstraint,
     GoalDependency,
     GoalGraphDefinition,
     GoalRuntimeState,
@@ -97,14 +98,26 @@ class GoalGraphCompiler:
         states: dict[str, GoalRuntimeState] = {}
         for goal, group in zip(goals, grouped_resources, strict=True):
             goal_criteria = _criteria_for_goal(goal, group)
+            goal_constraints = tuple(
+                GoalConstraint(
+                    constraint_id=f"{goal.goal_id}:constraint:{index}",
+                    description=constraint.description,
+                    source="user" if constraint.origin == "user_explicit" else "model",
+                    mutability=(
+                        "immutable" if constraint.origin == "user_explicit" else "model_revisable"
+                    ),
+                )
+                for index, constraint in enumerate(goal.constraints, start=1)
+            )
             dependencies = tuple(dependencies_by_goal[goal.goal_id])
             definitions.append(GoalDefinition(
                 goal_id=goal.goal_id,
                 dependencies=dependencies,
-                description=goal.description or entry_text,
+                description=goal.description,
                 result_contract=goal.result_contract,
                 resources=group,
                 criteria=goal_criteria,
+                constraints=goal_constraints,
                 output_contract=_output_contract(goal, group),
             ))
             states[goal.goal_id] = GoalRuntimeState(
@@ -119,7 +132,7 @@ class GoalGraphCompiler:
         ) if mutation_operations else None
         goal_graph_revision = 1
         task = TaskContract(
-            user_goal=analysis.user_goal or entry_text,
+            user_goal=analysis.user_goal,
             result_contract=_task_result_contract(goals),
             constraints=TaskConstraints(
                 read_only=mutation is None,
@@ -212,14 +225,13 @@ def _criteria_for_goal(
     resources: tuple[ResourceRequirement, ...],
 ) -> tuple[SuccessCriterion, ...]:
     requires_evidence = _requires_evidence(goal, resources)
-    declared = goal.success_criteria or [f"完成目标：{goal.description}"]
-    criterion_source = "user_explicit" if goal.success_criteria else "contract_derived"
+    declared = goal.success_criteria
     criteria = [SuccessCriterion(
         criterion_id=f"{goal.goal_id}:result:{index}",
-        description=description,
+        description=criterion.description,
         required=True,
-        source=criterion_source,
-        mutability="immutable",
+        source=("user_explicit" if criterion.origin == "user_explicit" else "model_derived"),
+        mutability=("user_revisable" if criterion.origin == "user_explicit" else "immutable"),
         evidence_policy=EvidencePolicy(
             citation_required=(
                 goal.evidence_requirement.citation_required
@@ -235,7 +247,7 @@ def _criteria_for_goal(
             ),
         ),
         acceptance_contract="VerifiedAnswer" if requires_evidence else "UserVisibleResult",
-    ) for index, description in enumerate(declared, start=1)]
+    ) for index, criterion in enumerate(declared, start=1)]
     if _mutation_operations(resources):
         criteria.append(SuccessCriterion(
             criterion_id=f"{goal.goal_id}:receipt",

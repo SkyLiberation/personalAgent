@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from personal_agent.planning.task_compiler import GoalGraphCompiler
-from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+from personal_agent.planning.task_analyzer import (
+    Goal,
+    ResourceHint,
+    SuccessCriterionDraft,
+    TaskAnalysis,
+)
 
 
 def test_notion_read_becomes_ask_with_workspace_requirement():
@@ -34,6 +39,10 @@ def _notion_analysis(result_contract, operations):
             goal_id="goal_1",
             result_contract=result_contract,
             description="处理 Orion 项目页面",
+            success_criteria=[SuccessCriterionDraft(
+                description="Orion 项目页面已按请求处理",
+                origin="model_inferred",
+            )],
             side_effect_intent="mutation" if result_contract == "external_state" else "none",
             resource_hints=[ResourceHint(
                 semantic_domain="workspace",

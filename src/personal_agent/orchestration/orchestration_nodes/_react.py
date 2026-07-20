@@ -189,6 +189,9 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
             expected_revision=state.invocation_journal.revision,
             invocation_id=call_id,
             grant_ref=step.execution_grant_ref,
+            execution_command_digest=state.execution_grants[
+                step.execution_grant_ref
+            ].execution_command_digest,
             idempotency_key=call_id,
             provider_ref=tool_name,
             payload_ref="sha256:" + sha256(
@@ -512,7 +515,7 @@ def _record_capability_execution(state: RunCheckpoint, step_id: str, artifact: d
             continue
         state.add_event("capability_execution", {
             "request_id": payload.get("request_id", ""),
-            "execution_grant_ref": payload.get("selected_execution_grant_ref"),
+            "execution_grant_ref": payload.get("execution_grant_ref"),
             "resolution_id": payload.get("resolution_id", ""),
             "step_id": step_id,
             "lifecycle_state": "executed" if artifact.get("ok") else "failed",
@@ -576,7 +579,7 @@ def _materialize_react_prompt(state: RunCheckpoint, deps: ReactContext) -> str:
     items = (runtime, *prior_results, *observations)
     task_contract = state.task_contract
     task_runtime = state.task_runtime
-    projection = deps.context_manager.project(
+    projection = deps.context_manager.project_contract(
         items,
         purpose="bounded_react",
         budget=ContextBudget(

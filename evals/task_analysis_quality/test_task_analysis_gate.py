@@ -5,7 +5,7 @@ It asserts the aggregate means clear the frozen baseline. Fully
 offline: no Postgres, no LLM.
 
 Driving deterministic paths keeps the gate reproducible. Plain text cases pin
-the TaskAnalysisOutput contract + stub semantic contract table; artifact cases pin the
+the TaskAnalysisProposalBody contract + stub semantic contract table; artifact cases pin the
 Artifact-first boundary on ``DefaultTaskAnalyzer`` itself, because the stub only
 accepts text and cannot model EntryInput.artifacts.
 
@@ -15,18 +15,18 @@ Run explicitly (evals/ is outside the default testpaths):
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from tests.conftest import stub_task_analysis
 
-from personal_agent.planning.task_analyzer import GoalDraft, TaskAnalysisOutput
+from personal_agent.planning.task_analyzer import (
+    GoalDraft,
+    SuccessCriterionDraft,
+    TaskAnalysisProposalBody,
+)
 
 from .dataset import TaskAnalysisRunOutput, default_cases_path, load_cases
 from .runner import run_output_from_model_output
-from .scorer import score_all
 
 
 def _build_runs() -> dict[str, TaskAnalysisRunOutput]:
@@ -36,11 +36,15 @@ def _build_runs() -> dict[str, TaskAnalysisRunOutput]:
     for case in cases:
         if case.artifacts:
             result_contract = case.expected_result_contracts[0]
-            output = TaskAnalysisOutput(
+            output = TaskAnalysisProposalBody(
                 user_goal=case.text or "概述附件",
                 outcome="ready",
                 goals=[GoalDraft(
                     description=case.text or "概述附件",
+                    success_criteria=[SuccessCriterionDraft(
+                        description="附件请求已按要求完成",
+                        origin="model_inferred",
+                    )],
                     result_contract=result_contract,
                     side_effect_intent=(
                         "mutation" if result_contract == "external_state" else "none"
@@ -70,27 +74,17 @@ def runs():
     return _build_runs()
 
 
-@pytest.fixture(scope="module")
-def baseline():
-    path = Path(__file__).parent / "baseline.json"
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
-
-
 class TestTaskAnalysisQualityGate:
     def test_dataset_and_runs_align(self, cases, runs):
         case_ids = {c.id for c in cases}
         assert set(runs) == case_ids, "every case needs a routed run"
 
-    def test_aggregate_meets_baseline(self, cases, runs, baseline):
-        report = score_all(cases, runs)
-        failures = report.check_thresholds(baseline)
-        assert not failures, f"regression:\n{report.summary()}\nfailures={failures}"
-
-    def test_clarify_cases_raise_clarification(self, cases, runs):
+    def test_each_case_has_exact_outcome_and_contracts(self, cases, runs):
         for case in cases:
+            run = runs[case.id]
+            assert run.outcome == case.expected_outcome, case.id
+            assert run.result_contracts == case.expected_result_contracts, case.id
             if case.expected_outcome == "clarify":
-                run = runs[case.id]
                 assert run.raised_clarification, f"{case.id}: expected clarify, got ready"
                 assert not run.result_contracts, f"{case.id}: clarify must carry no goals"
 
@@ -99,12 +93,3 @@ class TestTaskAnalysisQualityGate:
             if case.expected_outcome == "ready":
                 run = runs[case.id]
                 assert run.result_contracts, f"{case.id}: ready must contain >=1 goal"
-
-    def test_primary_result_contract_matches_gold_tail(self, cases, runs):
-        for case in cases:
-            if case.expected_result_contracts:
-                run = runs[case.id]
-                assert run.result_contracts[-1] == case.expected_result_contracts[-1], (
-                    f"{case.id}: primary result contract {run.result_contracts[-1]} != "
-                    f"gold {case.expected_result_contracts[-1]}"
-                )

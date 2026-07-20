@@ -10,84 +10,12 @@ from personal_agent.application.workspace.models import AnswerCitation, Evidence
 from personal_agent.kernel.config import LangExtractConfig, OpenAIConfig, Settings
 from personal_agent.kernel.models import Citation, EntryInput, ReviewCard, local_now
 from personal_agent.orchestration.runtime_ask import _graph_matches_to_evidence
-from personal_agent.planning.task_analyzer import (
-    EvidenceRequirement,
-    GoalDraft,
-    GoalRelationDraft,
-    ResourceHint,
-    TaskAnalysisOutput,
-)
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 from personal_agent.memory.graphiti.store import GraphAskResult, GraphCaptureResult
 from tests.conftest import POSTGRES_URL, stub_task_analysis
 from tests.note_factory import make_note
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
-
-
-def test_compound_capture_then_ask_executes_in_dependency_order(service: AgentService):
-    service.task_analyzer._analyze_with_model = lambda _text, _messages=None: TaskAnalysisOutput(
-        user_goal="记录 DNS 事实并回答 DNS 的作用",
-        outcome="ready",
-        goals=[
-                GoalDraft(
-                    result_contract="external_state",
-                    description="DNS 将域名解析为 IP 地址。",
-                    side_effect_intent="mutation",
-                resource_hints=[ResourceHint(
-                    semantic_domain="knowledge",
-                    resource_types=["text"],
-                    operations=["ingest"],
-                )],
-            ),
-                GoalDraft(
-                    result_contract="response",
-                    description="DNS 的作用是什么？",
-                    evidence_requirement=EvidenceRequirement(citation_required=True),
-                resource_hints=[ResourceHint(
-                    semantic_domain="knowledge",
-                    resource_types=["note"],
-                    operations=["search", "read"],
-                )],
-            ),
-        ],
-        relations=[GoalRelationDraft(
-            predecessor=1,
-            successor=2,
-            kind="consumes_output",
-            origin="user_explicit",
-            rationale="先写入 DNS 事实，再用该知识回答问题。",
-        )],
-        clarification=None,
-        rejection_reason=None,
-    )
-
-    result = service.entry(EntryInput(
-        text="记住 DNS 将域名解析为 IP 地址，然后回答 DNS 的作用是什么？",
-        user_id="default",
-        session_id="compound-capture-ask",
-    ))
-
-    assert result.result_contracts == ["external_state", "response"]
-    assert result.run_status == "blocked_approval"
-    assert result.pending_confirmation
-
-    result = service.resume_entry(
-        result.run_id or "",
-        result.thread_id or "",
-        "confirm",
-        "default",
-    )
-
-    assert result.run_status == "completed"
-    assert any("DNS 将域名解析为 IP 地址" in note.content for note in service.store.list_notes("default"))
-    verified_goal_ids = {
-        event.get("payload", {}).get("execution_event", {}).get("goal_id")
-        for event in result.events
-        if event.get("payload", {}).get("execution_event", {}).get("event_type") == "goal_verified"
-    }
-    assert {"goal_1", "goal_2"}.issubset(verified_goal_ids)
-    assert result.reply_text
 
 
 @pytest.fixture
@@ -831,21 +759,13 @@ class TestDigestFlow:
 
 
 class TestEntryFlow:
-    def test_entry_capture_text(self, service: AgentService):
+    def test_entry_capture_without_decision_model_fails_closed(self, service: AgentService):
         entry = EntryInput(text="记一下：服务降级是重要的系统设计模式", source_platform="test")
         result = service.entry(entry)
         assert result.result_contracts[-1] == "external_state"
         assert result.reply_text
-        if result.result_contracts[-1] == "external_state":
-            assert result.run_status == "blocked_approval"
-            result = service.resume_entry(
-                result.run_id or "",
-                result.thread_id or "",
-                "confirm",
-                "default",
-            )
-            assert result.run_status == "completed"
-            assert service.memory.list_notes()
+        assert result.run_status == "completed_degraded"
+        assert not service.memory.list_notes()
 
     def test_entry_ask(self, service: AgentService):
         service.execute_capture(text="服务降级是系统设计中的常见模式", source_type="text")

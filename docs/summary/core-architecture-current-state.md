@@ -38,18 +38,18 @@ View        读取时组合多个 owner，不保存新事实
 
 ## 3. Task Analysis：只理解，不执行
 
-`TaskAnalyzer` 位于用户自然语言和正式任务契约之间，输出 provider-neutral 的 `TaskAnalysis`。它识别：用户希望得到什么、可能包含哪些 Goal、资源语义、成功标准、Goal 关系，以及是否需要澄清。
+`TaskAnalyzer` 位于用户自然语言和正式任务契约之间，输出 provider-neutral 的 `TaskAnalysisProposalBody`。系统将它封装为绑定输入摘要的 `TaskAnalysisProposal`，经 `TaskAnalysisAdmission` 检查 provenance、revision lineage 和 user-explicit identity grounding，只有 accepted proposal 才编译为 `AcceptedTaskAnalysis`。
 
-它的业务价值是把开放语言问题变成结构化语义提案；它不选择 Tool、MCP server、Procedure 或 child Agent，也不产生可执行权限。LLM 可能生成重复 ID、悬空依赖、错误副作用或缺失标准，因此 `TaskAnalysis` 不能直接进入运行时。
+criterion 和 constraint 都显式携带 `user_explicit/model_inferred` origin；模型声称 user-explicit 时必须给出逐字 source、digest 和字段引用。准入只拒绝并产生 `DecisionFeedback`，不会替模型补语义；grounding-only 修订不得改变 Goal、criterion、constraint 或 relation。完整尝试链保存在 `TaskAnalysisAttempt[]`，最终唯一语义 owner 是 `AcceptedTaskAnalysis.analysis`。
 
 实现：`planning/task_analyzer.py`。
 
 ## 4. GoalGraphCompiler：把概率提案变成可信任务定义
 
-`GoalGraphCompiler` 是语义理解与确定性运行时之间的编译边界。输入是 `TaskAnalysis`，输出是 `GoalCompilation`：
+`GoalGraphCompiler` 是已接受语义与确定性运行时之间的编译边界。输入是 `AcceptedTaskAnalysis.analysis`，输出是 `GoalCompilation`：
 
 ```text
-TaskAnalysis
+AcceptedTaskAnalysis.analysis
   -> TaskContract
   -> 初始 TaskRuntimeProjection
   -> ContextInventory
@@ -69,7 +69,7 @@ LLM 擅长理解语义，但不适合拥有身份分配、依赖合法性、Muta
 
 **建立 canonical Mutation taxonomy。** Compiler 将 create、update、delete、ingest、repair 归一为 Mutation operations。这不是为了多做一次标签转换，而是让 Confirmation、Procedure、Policy、Receipt 和 Verifier 使用同一套副作用语言。如果跳过归一化，每个 Tool 的 `save/write/persist/apply` 都会各自解释风险，治理无法统一。taxonomy 在这里表示“受控分类体系”。
 
-**派生不可降低的成功标准。** 用户明确提出的标准标记为 `user_explicit`。用户没有逐条写标准时，Compiler 根据 Goal 的 `result_contract`、Mutation 和 evidence requirement 生成最小 `contract_derived` criterion。例如 Mutation 至少要求目标操作完成并有 `MutationReceipt`；需证据的回答至少要求证据覆盖。它不是启发式地宣布成功，而是建立 Verifier 后续必须检查的底线。模型可以提出更细的 `model_derived` 标准，但不能削弱用户标准和契约底线。
+**保留成功标准 provenance。** Analyzer 必须显式提出至少一条 success criterion，Compiler 不再从 description/user_goal 拼接业务标准。`user_explicit` 与 `model_inferred` 分别编译为 `user_explicit` 与 `model_derived`；只有 mutation receipt 这类稳定协议不变量由 Compiler 追加为 `contract_derived` criterion。
 
 **确定结果契约。** 单 Goal 使用其结果类型；多种结果并存时，Task 的 `result_contract=compound`，表示任务只有在多个 Goal 各自满足其输出与 criteria 后才完成，而不是返回一个任意字符串就算结束。
 
@@ -135,9 +135,9 @@ Procedure、native tool、ReAct 和 delegation 属于 `ExecutionRoute`，不再�
 
 可提议的决策包括 clarify、execute bounded action、delegate、invoke procedure、request confirmation、request capability acquisition、finish 和 terminate。
 
-模型只能产生 Proposal。`DecisionValidator` 根据 Task revision、Goal 状态、资源范围、Mutation/confirmation、预算和 route 约束生成 `StageAdmissionDecision`。只有 accepted admission 才能由 `AcceptedCommandCompiler` 生成新的 `AcceptedControlCommand`；拒绝不会通过修改原 Proposal 来“修正”它。
+模型只能产生 `ControlProposal`。`DecisionValidator` 根据 Task revision、Goal 状态、grounding、资源范围、Mutation/confirmation、预算和 route 约束生成 `StageAdmissionDecision`。拒绝产生限制 mutable/immutable fields 与 revision scope 的 `DecisionFeedback`；只有 accepted proposal 才由 `AcceptedIntentCompiler` 逐字冻结为 `AcceptedIntent`，再由 `ExecutionCommandResolver` 推导 immutable `ResolvedExecutionCommand`。
 
-`ControlCommitter` 将 proposal、admission、accepted command 与 runtime cursor 作为同一条 CAS 链提交。这样恢复时可以证明“执行的是哪一个提案、依据哪一次治理决定”，不会出现 decision 已变但审计仍指向旧值。
+`ControlCommitter` 将 proposal、admission、AcceptedIntent、初始 Command 与 runtime cursor 作为同一条 CAS 链提交。Command 不可覆盖；provider rebinding 必须创建 superseding Command。Confirmation 绑定 `AuthorizationDigest`，Grant、Journal 和 Receipt 绑定更细的 `ExecutionCommandDigest`。
 
 实现：`runtime/control_runtime.py`、`governance/decision_admission.py`、`runtime/commits.py`。
 
@@ -148,9 +148,9 @@ Capability Plane 分成四层：
 1. `Capability` 描述能力是什么，包括 kind、operations、semantic domain、resource types、provider、风险和 binding metadata。
 2. `ExecutionCapabilityAvailability` 描述此刻是否可用、credential 是否就绪、provider binding revision 和健康观测时间。
 3. `CapabilityResolver` 将 `CapabilityRequirement` 与资源范围、Policy、实时可用性和历史结果比对，生成显式 resolution decision。
-4. Resolver 只为本次 invocation 签发精确 `ExecutionGrant`，授权具体 capability、Goal、资源、操作、provider binding 和有效期。
+4. `CapabilityGrantIssuer` 只在 provider-bound superseding Command 已持久化后签发 `ExecutionGrant`。
 
-`semantic_domain`、`resource_types`、`required_operations` 在能力匹配与 Procedure applicability 时使用：它们把“对哪个业务对象做什么”与具体工具解耦。`origin` 表示要求来自用户、任务编译、Plan 还是恢复逻辑，用于审计和优先级判断；即使所有输入经过 LLM Analysis，后续由 Compiler、Planner 或 Recovery 新增的要求也不是同一来源。
+Resolver 只有在 output contract、side-effect class、authority scope、data egress、evidence contract、failure semantics、trust floor 和 freshness contract 全部满足同一 `CapabilityEquivalenceClass` 时才允许绑定。排名只能在该等价类内部优化成本、延迟或健康度；语义不同候选不能用 aggregate score 选“最接近”的一个。
 
 远程、MCP 和 Agent 能力在没有实时 availability observation 时 fail closed。只有 system metadata 且无需 credential 的本地能力可在无观测时视为可用。能力缺失不会硬选最相似工具，而是产生 `CapabilityGapObservation`，由 Executive 请求 acquisition、clarification 或终止。
 
@@ -160,7 +160,7 @@ Capability Plane 分成四层：
 
 ## 9. Execution Route 与 Gateway：授权和执行分开
 
-Route admission 在 accepted command 后选择原子 Tool、Procedure、ReAct 或 child Agent。Route 只决定执行机制，不改变 Goal 和成功标准。
+Route admission 只校验 AcceptedIntent 推导出的原子 Tool、Procedure、ReAct 或 child Agent route，不重新解释业务语义。能力选择先产生 provider-binding `DerivationRecord`，随后生成并持久化 superseding Command，最后才签 Grant；Procedure node 也拥有自己的 provider-bound Command 和 digest。
 
 `ToolGateway` 和 `AgentGateway` 是最终执行门：它们要求 invocation/node 与 grant 精确绑定，复核 capability/provider/resource/operation，执行 commit-time policy，并记录审计。Procedure 的 Mutation node 在用户确认后会获得新的 confirmation-bound grant；幂等键不能冒充 confirmation reference。
 
@@ -186,7 +186,8 @@ Agent 主链的模型调用使用审计后的 `ContextProjection.projection_id`�
 
 - `ObservationRef`：发生了什么。它包含 goal、provenance、trust、taint、summary 和 artifact refs，是运行反馈事实。
 - `PlanMonitor`：这件事是否使当前短期计划失效。它可以维持、重试或触发局部 patch，但无权宣布 Goal 完成。
-- `GoalVerifier`：证据是否满足 SuccessCriterion。它输出独立 `VerificationReport`。
+- `ExecutionFactVerifier`：receipt、provider、command digest 等机械事实是否成立，输出 `ExecutionFactReport`。
+- `GoalVerifier`：已准入证据是否满足 SuccessCriterion，输出独立 `GoalVerificationReport`。
 
 外部 Observation 默认带 `external_content` taint，不能作为 system instruction。进入 semantic verification 前必须经过 `EvidenceAdmission`，得到 purpose 和 criterion scope 有界的 `EvidenceRef`；带不可信 instruction taint 的内容会被拒绝。
 
@@ -200,7 +201,7 @@ Mutation 不能靠模型文字自证：Verifier 确定性检查 Tool result 中�
 
 Orchestration graph 串联 compile、coordinate、control、admit、resolve、dispatch、observe、monitor 和 verify 节点。`RunCheckpoint` 保存恢复所需的引用和子状态，包括 Task definition/runtime、control commits、invocation journal/outbox、evidence admissions、verification reports、Procedure/Agent run 和 interrupt 信息。
 
-Checkpoint 是运行容器，不应复制 Goal definition。Runtime 更新通常指通过 typed `ExecutionEvent` 更新 `TaskRuntimeProjection`；verification report、admission 和 outcome event 各自由自己的集合保存，Runtime 只持有引用。
+Checkpoint 是恢复容器，不应复制 Goal definition。`Decision Audit Store` 保存 Proposal/Admission/Feedback，`Command Store` 保存 immutable Command，`canonical_domain_events` 保存已提交执行事实，`agent_trace_events` 只保存运行解释；四者不能互相冒充 canonical owner。
 
 Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gateway 交给 Tool executor、Procedure runtime、ReAct loop 或 Agent provider 执行。Graph 本身不绕过 Gateway 直接调用 provider。
 
@@ -210,18 +211,22 @@ Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gatew
 
 ```text
 用户输入
-  -> TaskAnalyzer 产生语义提案
+  -> TaskAnalyzer 产生 TaskAnalysisProposalBody
+  -> TaskAnalysisAdmission -> AcceptedTaskAnalysis
   -> GoalGraphCompiler 建立 TaskContract + 初始 Runtime
   -> CoordinationMode 决定 reactive 或 deliberative
   -> Executive 产生 ControlProposal
-  -> Governance admission 产生 AcceptedControlCommand
-  -> CapabilityResolver 选择能力并签发精确 Grant
+  -> Governance admission -> AcceptedIntent -> 初始 ResolvedExecutionCommand
+  -> CapabilityResolver 仅选择完整等价 provider
+  -> superseding provider-bound Command 持久化
+  -> CapabilityGrantIssuer 按最终 ExecutionCommandDigest 签 Grant
   -> Gateway + InvocationJournal 执行
-  -> Observation 记录发生的事实
-  -> EvidenceAdmission 限定可用于验收的证据
-  -> PlanMonitor 调整短期策略
-  -> GoalVerifier 检查 criteria
-  -> CompletionVerifier 决定继续、降级、澄清或完成
+  -> Receipt / Observation 记录发生的事实
+  -> EvidenceAdmission 限定可用于语义验收的证据
+  -> ExecutionFactReport 与 GoalVerificationReport 分层验收
+  -> PlanMonitor 根据 Observation 调整短期策略
+  -> CompletionReport
+  -> FinalAnswerProposal / Admission
 ```
 
 这不是固定流水线：reactive 可跳过 Plan；Capability gap 会回到 Executive；Mutation 进入 confirmation-bound Procedure；Observation 可触发局部 replan；interrupt 后从 Checkpoint 恢复。但任何分支都不能跳过 Proposal/Admission/Grant/Gateway/Verification 的权责边界。
@@ -232,7 +237,7 @@ Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gatew
 - Definition 与 Runtime 的 task identity、revision、Goal 集合必须一致。
 - `goal_id` 是跨模块关联键，但不是所有叶子模型都重复保存的字段。
 - 模型输出永远是 proposal，不是权限、事实或完成证明。
-- ExecutionGrant 只能缩小，不能在下游扩权。
+- ExecutionGrant 只能缩小，且必须绑定最终 provider-bound `ExecutionCommandDigest`。
 - 无实时可用性证据的远程能力 fail closed。
 - Mutation 必须有 confirmation、commit-time policy 和 receipt。
 - Observation 必须带 typed provenance/trust/taint；Evidence 必须经过 purpose-scoped admission。
@@ -255,4 +260,4 @@ Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gatew
 | Context boundary | `context/` |
 | Verification | `verification/runtime.py` |
 | Graph / checkpoint | `orchestration/` |
-| Architecture gate | `scripts/check_layers.py`、`.github/workflows/architecture.yml` |
+| Architecture gate | `scripts/check_layers.py`、`scripts/check_agentic_architecture.py`、`.github/workflows/architecture.yml` |

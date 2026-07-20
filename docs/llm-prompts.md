@@ -17,13 +17,13 @@
 
 | Prompt / 决策点 | 输出 | 职责 | 确定性边界 |
 | --- | --- | --- | --- |
-| `task_analyzer.system/user` | `TaskAnalysisOutput` | 理解用户目标，拆分 Goal，提出初始 typed relation 和资源提示 | 不选择 tool、MCP、A2A、Skill、Macro、workflow 或 coverage |
+| `task_analyzer.system/user` | `TaskAnalysisProposalBody` | 理解用户目标，拆分 Goal，提出带 provenance 的 criterion、constraint、relation 和资源提示 | 经 `TaskAnalysisAdmission` 后才形成 `AcceptedTaskAnalysis`；不选择 tool、MCP、A2A、Skill、Macro、workflow 或 coverage |
 | Executive structured decision | `_ModelExecutiveDecision` | 比较 ready Goal、Observation、Skill、Macro 和 capability class，提出下一步控制决策 | Runtime 物化判别联合并经 `DecisionValidator`；Ledger 修订另经 Patch validator |
 | Goal verification structured decision | verifier schema | 在确定性证据门槛之后判断 criterion 是否满足 | 模型不能跳过 provenance、receipt、citation 和 source-count 门槛 |
 | `react.system` | tool call | 在当前 BoundedAction 或 Protocol step 的 allowlist 内探索 | 受 allowed tools、迭代、token、deadline 和 side-effect 边界约束 |
 | `structured.system` | `json_schema` | 通用严格结构化输出约束 | schema 解析失败即显式失败或领域降级 |
 
-Task Analyzer 不存在关键词式离线语义路由。模型未配置或调用失败时返回 `analyzer_unavailable` 澄清，不恢复已删除的 Router 菜单。
+Task Analyzer 不存在关键词式离线语义路由。模型输出进入 `TaskAnalysisProposal → TaskAnalysisAdmission → AcceptedTaskAnalysis`；缺少 user-explicit grounding 时受限修订。模型未配置或调用失败时返回 `analyzer_unavailable` 控制性澄清，不恢复已删除的 Router 菜单。
 
 Executive 和 verifier 的任务态 prompt 在各自模块中动态组装，因为它们需要完整 Goal Graph、Ledger revision、Observation provenance、候选 capability 和预算；它们仍通过 `StructuredModelRequest` 记录 schema 与调用元数据。
 
@@ -52,7 +52,6 @@ Executive 和 verifier 的任务态 prompt 在各自模块中动态组装，因�
 
 ### Runtime 与 Protocol
 
-- `direct_answer.system`
 - `react.system`
 - `structured.system`
 - `delete_candidate_resolve.user`

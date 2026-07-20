@@ -17,7 +17,10 @@ from personal_agent.runtime.contracts.task import (
 )
 from personal_agent.capabilities.contracts.execution import (
     CapabilityRequirement,
+    CapabilityEquivalenceClass,
+    CapabilityRuntimeContext,
     ExecutionCapabilityRequest,
+    ExecutionResolutionResult,
     CapabilitySelectionPolicy,
 )
 from personal_agent.execution.contracts.invocation import (
@@ -25,25 +28,30 @@ from personal_agent.execution.contracts.invocation import (
     ExecutableInvocation,
 )
 from personal_agent.capabilities.contracts.grants import AtomicCapabilityGrant, ProcedureGrant
+from personal_agent.governance.contracts.audit import DecisionAuditRecord
 from personal_agent.runtime.contracts.control import (
     ActionOutcome,
     BoundedAction,
+    CapabilityActionInput,
     CapabilityClassSummary,
     CapabilityGapObservation,
     ClarifyDecision,
     CompletionClaim,
     ControlProposal,
     DecisionBasis,
+    DelegateActionInput,
     DelegateDecision,
     ExecuteBoundedActionDecision,
     FinishDecision,
     InvokeProcedureDecision,
     ObservationRef,
     ProposedResourceAccessPlan,
+    ProcedureActionInput,
     RequestConfirmationDecision,
     RequestCapabilityAcquisitionDecision,
     TerminateDecision,
     observation_provenance,
+    canonical_digest,
 )
 from personal_agent.capabilities.contracts.acquisition import CapabilityAcquisitionRequest
 from personal_agent.runtime.contracts.planning import PlanRuntimeProjection
@@ -54,7 +62,6 @@ from personal_agent.capabilities.contracts.outcomes import (
 from personal_agent.orchestration.orchestration_contexts import ExecutiveContext
 from personal_agent.orchestration.orchestration_models import RunCheckpoint, InvocationBatchState
 from personal_agent.capabilities.resolver import CapabilityResolver
-from personal_agent.runtime.direct import DirectAdmission, DirectCandidate
 from personal_agent.runtime.task_runtime import next_execution_event
 from personal_agent.runtime.recovery import classify_failure
 from personal_agent.tools.mcp_capability import build_capability_portfolio
@@ -92,6 +99,7 @@ def _append_execution_event(
     )
     state.task_runtime = deps.task_runtime_projector.project(state.task_runtime, (event,))
     state.execution_events.append(event)
+    deps.control_plane_store.append_domain_event(state.run_id, event)
     state.add_event("plan_runtime_updated", {
         "execution_event": event.model_dump(mode="json"),
         "ledger_revision": state.task_runtime.revision,
@@ -99,9 +107,12 @@ def _append_execution_event(
 
 
 def _node_compile_goal_graph(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
-    if state.task_analysis is None:
+    if state.accepted_task_analysis is None:
         raise RuntimeError("goal graph compilation requires task analysis")
-    compilation = deps.goal_graph_compiler.compile(state.task_analysis, state.entry_text)
+    compilation = deps.goal_graph_compiler.compile(
+        state.accepted_task_analysis.analysis,
+        state.entry_text,
+    )
     state.task_contract = compilation.task_contract
     state.context_inventory = compilation.context_inventory
     state.task_runtime = TaskRuntimeProjection(
@@ -127,11 +138,17 @@ def _node_compile_goal_graph(state: RunCheckpoint, *, deps: ExecutiveContext) ->
     state.control.turn_index = 0
     state.control.proposal = None
     state.decision_admission = None
-    state.control.accepted_command = None
+    state.decision_feedback = []
+    state.control.accepted_intent = None
+    state.control.resolved_command = None
     state.control.actions = []
     state.control.action_outcome = None
+    state.execution_fact_reports = {}
     state.verification_reports = {}
+    state.verification_feedback = {}
     state.completion_report = None
+    state.final_answer_proposal = None
+    state.final_answer_admission = None
     state.control.observations = []
     from personal_agent.runtime.contracts.planning import PlanRuntimeProjection, PlanningUsage
     state.planning_facts = None
@@ -149,29 +166,6 @@ def _node_compile_goal_graph(state: RunCheckpoint, *, deps: ExecutiveContext) ->
         "revision": state.task_contract.revision,
         "goal_ids": [item.goal_id for item in state.goals],
     })
-    if (
-        state.task_analysis.direct_answer
-        and len(state.goals) == 1
-        and state.goals[0].result_contract == "response"
-    ):
-        candidate = DirectCandidate(
-            goal=state.goals[0].description,
-            criteria=state.task_contract.success_criteria,
-            answer=state.task_analysis.direct_answer,
-        )
-        if DirectAdmission().admit(candidate, required_criteria=state.task_contract.success_criteria):
-            state.answer = candidate.answer
-            _append_execution_event(
-                state,
-                deps,
-                "goal_candidate_complete",
-                goal_id=state.goals[0].goal_id,
-            )
-            state.control.advance_phase("accepting_result")
-            state.add_event("direct_candidate_admitted", {
-                "goal_id": state.goals[0].goal_id,
-                "criterion_ids": [item.criterion_id for item in state.task_contract.success_criteria],
-            })
     return {
         "task_contract": state.task_contract,
         "intake": state.intake,
@@ -202,7 +196,7 @@ def _node_project_planning_facts(state: RunCheckpoint, *, deps: ExecutiveContext
         state.task_runtime,
     )
     planning_items = _planning_context_items(state, procedures)
-    projection = deps.context_manager.project(
+    projection = deps.context_manager.project_contract(
         planning_items,
         purpose="planning",
         budget=_context_budget(state),
@@ -243,12 +237,31 @@ def _node_assess_coordination(state: RunCheckpoint, *, deps: ExecutiveContext) -
         item.goal_id for item in state.goals
         if item.status not in {"verified", "degraded", "abandoned"}
     )
-    state.coordination, state.planning_usage = deps.coordination_policy.assess(
-        state.planning_facts,
-        target_goal_ids=target_goal_ids,
-        limits=state.planner_profile.limits,
-        usage=state.planning_usage,
-    )
+    from personal_agent.planning.adaptive import CoordinationDecisionUnavailable
+
+    try:
+        state.coordination, state.planning_usage = deps.coordination_policy.assess(
+            state.planning_facts,
+            target_goal_ids=target_goal_ids,
+            limits=state.planner_profile.limits,
+            usage=state.planning_usage,
+        )
+    except CoordinationDecisionUnavailable as exc:
+        state.coordination = None
+        state.control.advance_phase("closed")
+        state.control.disposition = "terminate"
+        state.answer = _render_control_status("terminal", (str(exc),))
+        state.add_event("coordination_decision_unavailable", {
+            "reason_code": str(exc),
+            "disposition": "terminal",
+        })
+        return {
+            "coordination": None,
+            "planning_usage": state.planning_usage,
+            "control": state.control,
+            "answer": state.answer,
+            "events": state.events,
+        }
     state.add_event("coordination_assessed", {
         **state.coordination.model_dump(mode="json"),
         "profile_id": state.planner_profile.profile_id,
@@ -273,7 +286,7 @@ def _node_create_or_revise_plan(state: RunCheckpoint, *, deps: ExecutiveContext)
         state.task_runtime,
     )
     planning_items = _planning_context_items(state, procedures)
-    projection = deps.context_manager.project(
+    projection = deps.context_manager.project_contract(
         planning_items,
         purpose="planning",
         budget=_context_budget(state),
@@ -363,7 +376,7 @@ def _node_create_or_revise_plan(state: RunCheckpoint, *, deps: ExecutiveContext)
             "events": state.events,
             "context_projections": state.context_projections,
         }
-    plan, state.planning_usage = deps.adaptive_planner.create_plan(
+    plan, state.planning_usage, planning_feedback = deps.adaptive_planner.create_plan(
         state.task_contract,
         state.task_runtime,
         state.coordination,
@@ -379,14 +392,17 @@ def _node_create_or_revise_plan(state: RunCheckpoint, *, deps: ExecutiveContext)
         ),
     )
     if plan is None:
+        if planning_feedback is None:
+            raise RuntimeError("planner returned neither a plan nor DecisionFeedback")
+        state.decision_feedback.append(planning_feedback)
         state.plan_definition = None
         state.plan_runtime = PlanRuntimeProjection()
-        state.control.advance_phase("closed")
-        state.control.disposition = "terminate"
-        state.add_event("adaptive_plan_unavailable", {
-            "reason_code": "planner_could_not_produce_safe_plan",
-            "budget": state.planning_usage.model_dump(mode="json"),
-        })
+        if planning_feedback.disposition == "revise_model":
+            state.control.disposition = "replace_plan"
+        else:
+            state.control.advance_phase("closed")
+            state.control.disposition = "terminate"
+        state.add_event("planning_feedback_created", planning_feedback.model_dump(mode="json"))
     else:
         deps.plan_validator.validate(
             plan,
@@ -456,7 +472,7 @@ def _node_monitor_plan(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
                         observation_ids=(latest.observation_id,),
                     )
     monitor_items = _monitor_context_items(state)
-    projection = deps.context_manager.project(
+    projection = deps.context_manager.project_contract(
         monitor_items,
         purpose="plan_monitoring",
         budget=_context_budget(state),
@@ -571,14 +587,14 @@ def _node_project_control_state(state: RunCheckpoint, *, deps: ExecutiveContext)
         "remaining_executive_turns": state.control.state.remaining_executive_turns,
     })
     control_items = _control_context_items(state)
-    projection = deps.context_manager.project(
+    projection = deps.context_manager.project_contract(
         control_items,
         purpose="executive_decision",
         budget=_context_budget(state),
         source_snapshot=_context_snapshot(state),
     )
     state.context_projections.append(projection)
-    materialized = deps.context_gateway.open(
+    deps.context_gateway.open(
         projection, control_items, purpose="executive_decision",
     )
     state.add_event("context_projected", projection.model_dump(mode="json"))
@@ -608,114 +624,89 @@ def _node_decide(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
         ).model_payload()
         if control_projection is not None else None
     )
+    revision_feedback = (
+        state.decision_admission.feedback
+        if state.decision_admission is not None else None
+    )
+    previous_proposal_ref = (
+        state.control.proposal.proposal_id
+        if state.control.proposal is not None and revision_feedback is not None else None
+    )
+    prior_decision = (
+        state.control.proposal.decision
+        if state.control.proposal is not None and revision_feedback is not None else None
+    )
     if state.control.state.remaining_executive_turns <= 0:
-        goal_id = state.task_runtime.active_goal_ids[0] if state.task_runtime.active_goal_ids else "task"
-        from personal_agent.runtime.contracts.control import DecisionBasis
-
-        decision = TerminateDecision(
-            target_goal_id=goal_id,
-            basis=DecisionBasis(expected_state_change="task_terminated"),
-            expected_progress="budget_stop",
+        proposal = deps.controller.terminal_proposal(
+            state.task_contract,
+            state.task_runtime,
             reason_code="executive_turn_budget_exhausted",
-            user_message="任务达到最大决策轮数，已停止并保留当前结果。",
+            user_message="任务达到最大决策轮数，运行已停止。",
         )
     else:
-        open_goals = tuple(
-            item for item in state.goals
-            if item.status not in {"verified", "degraded", "abandoned"}
-        )
-        if not open_goals:
-            # Completion preempts frontier selection. The controller only
-            # proposes Finish; CompletionVerifier remains the sole authority.
-            decision = deps.controller.decide(
-                state.task_contract,
-                state.task_runtime,
-                observations=tuple(state.control.observations),
-                capability_classes=state.control.state.available_capability_classes,
-                control_state=state.control.state,
-                model_context=control_model_context,
-            )
-        elif state.coordination is not None and state.coordination.mode == "deliberative":
+        state.frontier_decision = None
+        if state.coordination is not None and state.coordination.mode == "deliberative":
             if state.plan_definition is None:
                 raise RuntimeError("deliberative control requires an active plan definition")
-            frontier = deps.plan_runtime_projector.frontier(
-                state.plan_definition, state.plan_runtime,
-            )
-            state.frontier_decision = deps.frontier_selector.select(
-                frontier,
-                state.planner_profile,
-            )
-            if state.frontier_decision is None:
-                decision = TerminateDecision(
-                    target_goal_id=(
-                        state.task_runtime.active_goal_ids[0]
-                        if state.task_runtime.active_goal_ids else "task"
-                    ),
-                    reason_code="plan_frontier_empty",
-                    user_message="当前计划没有可安全执行的步骤，任务已停止。",
-                )
-            elif len(state.frontier_decision.selected_step_ids) != 1:
-                decision = TerminateDecision(
-                    target_goal_id=frontier[0].goal_id,
-                    reason_code="parallel_profile_not_enabled",
-                    user_message="当前执行 profile 尚未开放并行调度，任务已停止。",
-                )
-            else:
-                selected_id = state.frontier_decision.selected_step_ids[0]
-                step = next(item for item in frontier if item.step_id == selected_id)
-                state.plan_runtime = deps.plan_runtime_projector.append(
-                    state.plan_definition,
-                    state.plan_runtime,
-                    "frontier_selected",
-                    step_ids=(selected_id,),
-                    payload={
-                        "decision": state.frontier_decision.model_dump(mode="json"),
-                    },
-                )
-                decision = deps.controller.decide_plan_step(
+            frontier = deps.plan_runtime_projector.frontier(state.plan_definition, state.plan_runtime)
+            if not frontier:
+                proposal = deps.controller.terminal_proposal(
                     state.task_contract,
                     state.task_runtime,
-                    step,
+                    reason_code="plan_frontier_empty",
+                    user_message="当前计划没有 ready step，运行已停止。",
+                )
+            else:
+                state.frontier_decision = deps.frontier_selector.select(
+                    frontier,
+                    state.planner_profile,
+                )
+                if state.frontier_decision is not None:
+                    state.plan_runtime = deps.plan_runtime_projector.append(
+                        state.plan_definition,
+                        state.plan_runtime,
+                        "frontier_selected",
+                        step_ids=state.frontier_decision.selected_step_ids,
+                        payload={"decision": state.frontier_decision.model_dump(mode="json")},
+                    )
+                proposal = deps.controller.propose(
+                    state.task_contract,
+                    state.task_runtime,
                     observations=tuple(state.control.observations),
+                    capability_classes=state.control.state.available_capability_classes,
                     control_state=state.control.state,
+                    model_context=control_model_context,
+                    supersedes_proposal_ref=previous_proposal_ref,
+                    revision_feedback_ref=state.control.active_feedback_ref,
+                    revision_attempt=state.control.revision_attempt,
+                    prior_decision=prior_decision,
+                    revision_scope=(revision_feedback.revision_scope if revision_feedback else None),
                 )
         else:
-            state.frontier_decision = None
-            decision = deps.controller.decide(
+            proposal = deps.controller.propose(
                 state.task_contract,
                 state.task_runtime,
                 observations=tuple(state.control.observations),
                 capability_classes=state.control.state.available_capability_classes,
                 control_state=state.control.state,
                 model_context=control_model_context,
+                supersedes_proposal_ref=previous_proposal_ref,
+                revision_feedback_ref=state.control.active_feedback_ref,
+                revision_attempt=state.control.revision_attempt,
+                prior_decision=prior_decision,
+                revision_scope=(revision_feedback.revision_scope if revision_feedback else None),
             )
     state.control.turn_index += 1
-    semantic_hash = _decision_semantic_hash(decision)
-    if semantic_hash == state.control.last_decision_hash:
-        state.control.repeated_decision_count += 1
-    else:
-        state.control.repeated_decision_count = 0
-    state.control.last_decision_hash = semantic_hash
-    if state.control.repeated_decision_count >= 2:
-        from personal_agent.runtime.contracts.control import DecisionBasis
-
-        decision = TerminateDecision(
-            target_goal_id=decision.target_goal_id,
-            basis=DecisionBasis(
-                triggering_observation_ids=decision.basis.triggering_observation_ids,
-                expected_state_change="task_terminated",
-                rejected_action_codes=("repeated_decision",),
-            ),
-            expected_progress="loop_guard_stop",
-            reason_code="no_progress_loop_detected",
-            user_message="连续决策没有产生新进展，任务已停止。",
-        )
-    state.control.proposal = ControlProposal(decision=decision)
+    semantic_hash = proposal.intent_semantic_hash
+    state.control.last_intent_semantic_hash = semantic_hash
+    state.control.proposal = proposal
+    state.control.last_submission_hash = state.control.proposal.submission_hash
     state.decision_admission = None
-    state.control.accepted_command = None
+    state.control.accepted_intent = None
+    state.control.resolved_command = None
     state.add_event("executive_decision", {
         "turn": state.control.turn_index,
-        "decision": decision.model_dump(mode="json"),
+        "proposal": proposal.model_dump(mode="json"),
         "semantic_hash": semantic_hash,
     })
     return {
@@ -730,18 +721,48 @@ def _node_admit_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
     if state.task_contract is None or state.task_runtime is None or state.control.proposal is None:
         raise RuntimeError("decision admission requires task, runtime, and proposal")
     state.control.advance_phase("admitting")
+    prior_proposal = next((
+        record.proposal for record in reversed(state.decision_audit)
+        if record.proposal.proposal_id == state.control.proposal.supersedes_proposal_ref
+    ), None)
+    revision_feedback = next((
+        feedback for feedback in reversed(state.decision_feedback)
+        if feedback.feedback_id == state.control.proposal.revision_feedback_ref
+    ), None)
     admission = deps.decision_admission.admit(
         state.task_contract,
         state.task_runtime,
         state.control.proposal,
         state.control.state,
+        prior_proposal=prior_proposal,
+        revision_feedback=revision_feedback,
     )
     state.decision_admission = admission
+    audit = DecisionAuditRecord(
+        run_id=state.run_id,
+        turn_ref=state.control.turn_id,
+        proposal=state.control.proposal,
+        admission=admission,
+    )
+    state.decision_audit.append(audit)
+    deps.control_plane_store.append_decision_audit(audit)
     if admission.verdict == "accepted":
-        state.control.accepted_command = deps.accepted_command_compiler.compile(
+        state.control.accepted_intent = deps.accepted_intent_compiler.compile(
+            state.task_contract,
+            state.task_runtime,
             state.control.proposal,
             admission,
         )
+        state.control.resolved_command = deps.execution_command_resolver.resolve(
+            state.task_contract,
+            state.control.accepted_intent,
+            mandatory_procedure=next((
+                item for item in (state.control.state.procedure_candidates if state.control.state else ())
+                if item.goal_id == state.control.accepted_intent.goal_id
+                and item.status == "mandatory"
+            ), None),
+        )
+        deps.control_plane_store.put_command(state.run_id, state.control.resolved_command)
         state.control_commits.append(deps.control_committer.commit(
             state.control,
             state.task_runtime,
@@ -755,12 +776,22 @@ def _node_admit_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             "turn": state.control.turn_index,
             "proposal_ref": state.control.proposal.proposal_id,
             "admission": admission.model_dump(mode="json"),
-            "command_ref": state.control.accepted_command.command_id,
+            "accepted_intent_ref": state.control.accepted_intent.accepted_intent_id,
+            "command_ref": state.control.resolved_command.command_id,
+            "authorization_digest": state.control.resolved_command.authorization_digest,
+            "execution_command_digest": state.control.resolved_command.execution_command_digest,
         })
+        _append_execution_event(state, deps, "accepted_intent_created", payload={
+            "accepted_intent": state.control.accepted_intent.model_dump(mode="json"),
+        })
+        _append_execution_event(state, deps, "execution_command_resolved", payload={
+            "resolved_command": state.control.resolved_command.model_dump(mode="json"),
+        })
+        state.control.active_feedback_ref = None
+        state.control.revision_attempt = 0
     else:
-        state.control.accepted_command = None
-        state.control.advance_phase("closed")
-        state.control.disposition = "terminate"
+        state.control.accepted_intent = None
+        state.control.resolved_command = None
         state.add_event("decision_rejected", {
             "turn": state.control.turn_index,
             "proposal_ref": state.control.proposal.proposal_id,
@@ -769,17 +800,28 @@ def _node_admit_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
     return {
         "control": state.control,
         "decision_admission": state.decision_admission,
+        "decision_audit": state.decision_audit,
         "control_commits": state.control_commits,
+        "task_runtime": state.task_runtime,
+        "execution_events": state.execution_events,
         "events": state.events,
     }
 
 
 def _node_admit_execution_route(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
-    command = state.control.accepted_command
-    if command is None:
+    intent = state.control.accepted_intent
+    command = state.control.resolved_command
+    if intent is None or command is None:
         raise RuntimeError("route admission requires an accepted control decision")
     state.control.advance_phase("routing")
-    decision = command.decision
+    decision = intent.decision
+    if command.procedure_invocation is not None and not isinstance(decision, InvokeProcedureDecision):
+        decision = InvokeProcedureDecision(
+            target_goal_id=decision.target_goal_id,
+            basis=decision.basis,
+            expected_progress=decision.expected_progress,
+            procedure_invocation=command.procedure_invocation,
+        )
     if not isinstance(decision, (ExecuteBoundedActionDecision, DelegateDecision, InvokeProcedureDecision)):
         state.control.execution_route_decision = None
         return {"control": state.control}
@@ -789,6 +831,8 @@ def _node_admit_execution_route(state: RunCheckpoint, *, deps: ExecutiveContext)
         decision,
         state.control.state,
     )
+    if state.control.execution_route_decision.accepted_route != command.route:
+        raise RuntimeError("route admission disagrees with the immutable execution command")
     state.add_event("execution_route_admitted", {
         "proposal": proposal.model_dump(mode="json"),
         "decision": state.control.execution_route_decision.model_dump(mode="json"),
@@ -800,15 +844,68 @@ def _node_handle_decision_denial(state: RunCheckpoint, *, deps: ExecutiveContext
     admission = state.decision_admission
     if admission is None or admission.verdict == "accepted":
         raise RuntimeError("decision denial handler requires a rejected admission")
-    state.answer = "执行提议未通过治理准入。"
-    _append_execution_event(state, deps, "task_terminated", payload={
-        "reason": "policy_denied",
-        "reason_code": admission.reason_codes[0] if admission.reason_codes else "decision_denied",
-        "admission_ref": admission.admission_id,
+    feedback = admission.feedback
+    if feedback is None:
+        raise RuntimeError("non-accepted admission must include DecisionFeedback")
+    state.control.active_feedback_ref = feedback.feedback_id
+    state.decision_feedback.append(feedback)
+    cycle_key = canonical_digest({
+        "task_revision": admission.snapshot.task_revision,
+        "stage": feedback.stage,
+        "reason_codes": feedback.reason_codes,
+        "rejection_equivalence_hash": feedback.rejection_equivalence_hash,
+        "governance_snapshot_ref": feedback.governance_snapshot_ref,
+        "upstream_intent_hash": state.control.last_intent_semantic_hash,
     })
+    repeated = cycle_key in state.control.seen_decision_cycle_keys
+    state.control.seen_decision_cycle_keys = (*state.control.seen_decision_cycle_keys, cycle_key)[-32:]
+    if repeated:
+        state.control.cross_stage_revision_cycles += 1
+    disposition = feedback.disposition
+    if (
+        disposition == "revise_model"
+        and feedback.revision_budget_remaining > 0
+        and state.control.cross_stage_revision_cycles < state.task_contract.constraints.revision_budget
+    ):
+        state.control.revision_attempt += 1
+        state.control.advance_phase("preparing_model_call")
+        state.control.disposition = "continue_control"
+        state.add_event("decision_feedback_created", feedback.model_dump(mode="json"))
+    elif disposition == "request_external_input":
+        from personal_agent.kernel.contracts.interaction import InteractionRequest
+
+        state.control.pending_interaction = InteractionRequest(
+            kind="clarification_required",
+            action_type="decision_revision",
+            step_id=feedback.feedback_id,
+            title="需要外部输入",
+            message=feedback.reason_codes[0],
+            missing_information=feedback.required_repairs,
+        )
+        state.control.advance_phase("awaiting_input")
+        state.control.disposition = "await_input"
+        state.add_event("decision_feedback_external_input_required", feedback.model_dump(mode="json"))
+    elif disposition == "request_capability_acquisition":
+        state.control.advance_phase("awaiting_input")
+        state.control.disposition = "pause"
+        state.add_event("decision_feedback_capability_acquisition_required", feedback.model_dump(mode="json"))
+    elif disposition == "await_environment_change":
+        state.control.advance_phase("awaiting_input")
+        state.control.disposition = "pause"
+        state.add_event("decision_feedback_environment_wait", feedback.model_dump(mode="json"))
+    else:
+        state.control.advance_phase("closed")
+        state.control.disposition = "terminate"
+        state.answer = _render_control_status("terminal", feedback.reason_codes)
+        _append_execution_event(state, deps, "task_terminated", payload={
+            "reason": "policy_denied",
+            "reason_code": feedback.reason_codes[0],
+            "admission_ref": admission.admission_id,
+        })
     return {
         "answer": state.answer,
         "control": state.control,
+        "decision_feedback": state.decision_feedback,
         "task_runtime": state.task_runtime,
         "task_compilation_commit": state.task_compilation_commit,
         "execution_events": state.execution_events,
@@ -818,14 +915,26 @@ def _node_handle_decision_denial(state: RunCheckpoint, *, deps: ExecutiveContext
 
 def _after_decision_admission(state: RunCheckpoint) -> str:
     admission = state.decision_admission
-    return "route" if admission is not None and admission.verdict == "accepted" else "deny"
+    return "route" if admission is not None and admission.verdict == "accepted" else "feedback"
+
+
+def _after_decision_feedback(state: RunCheckpoint) -> str:
+    return "revise" if state.control.disposition == "continue_control" else "stop"
 
 
 def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
-    command = state.control.accepted_command
-    if command is None or state.task_runtime is None or state.task_contract is None:
+    intent = state.control.accepted_intent
+    command = state.control.resolved_command
+    if intent is None or command is None or state.task_runtime is None or state.task_contract is None:
         raise RuntimeError("cannot apply an empty executive decision")
-    decision = command.decision
+    decision = intent.decision
+    if command.procedure_invocation is not None and not isinstance(decision, InvokeProcedureDecision):
+        decision = InvokeProcedureDecision(
+            target_goal_id=decision.target_goal_id,
+            basis=decision.basis,
+            expected_progress=decision.expected_progress,
+            procedure_invocation=command.procedure_invocation,
+        )
     state.control.actions = []
     state.control.action_outcome = None
     state.invocation_batch = InvocationBatchState()
@@ -877,6 +986,7 @@ def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             decision.procedure_invocation,
             materialized.projection,
             materialized.definition,
+            command,
         )
         state.execution_grants[procedure_grant.grant_id] = procedure_grant
         procedure_action = BoundedAction(
@@ -887,16 +997,22 @@ def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             output_contract="ProcedureOutcome",
             proposed_resource_access=ProposedResourceAccessPlan(
                 side_effect_class="procedure",
+                authority_scope="procedure:execute",
+                data_egress_class="content",
+                trust_floor="scoped",
+                freshness_contract="current_command_snapshot",
+                evidence_contract="MutationReceipt",
+                failure_semantics="fail_closed",
                 write_set=({
                     "semantic_domain": "procedure",
                     "locator": decision.procedure_invocation.procedure.procedure_id,
                 },),
             ),
-            payload={
-                "procedure_id": decision.procedure_invocation.procedure.procedure_id,
-                "procedure_run_id": materialized.projection.procedure_run_id,
-                "procedure_grant_ref": procedure_grant.grant_id,
-            },
+            input=ProcedureActionInput(
+                procedure_id=decision.procedure_invocation.procedure.procedure_id,
+                procedure_run_id=materialized.projection.procedure_run_id,
+                procedure_grant_ref=procedure_grant.grant_id,
+            ),
         )
         state.control.actions = [procedure_action]
         state.active_procedure = materialized.projection
@@ -934,6 +1050,7 @@ def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             "title": decision.title,
             "summary": decision.summary,
             "task_id": state.task_contract.task_id,
+            "authorization_digest": command.authorization_digest,
         })
         observation = ObservationRef(
             goal_id=decision.target_goal_id,
@@ -1021,7 +1138,7 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
     if state.task_contract is None or state.task_runtime is None or not state.control.actions:
         raise RuntimeError("action resolution requires materialized actions")
     state.control.advance_phase("resolving_execution")
-    projection = deps.context_manager.project(
+    projection = deps.context_manager.project_contract(
         _context_items(state),
         purpose="action_execution",
         budget=_context_budget(state),
@@ -1032,32 +1149,54 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
         tools=deps.tool_executor.list_tools(exposures={"public_agent", "scoped_agent", "admin"}),
         agents=deps.agent_gateway.profiles(),
     )
-    specs = []
-    resolution_blocked = False
+    procedure_registry = None
+    resolved: list[tuple[
+        BoundedAction,
+        ExecutionCapabilityRequest | None,
+        ExecutionResolutionResult | None,
+        list[ExecutableInvocation],
+    ]] = []
     for action in state.control.actions:
+        request = None
         resolution = None
         if action.requirement is not None and action.requirement.operations:
+            request = ExecutionCapabilityRequest(
+                task_id=state.task_contract.task_id,
+                task_revision=state.task_contract.revision,
+                goal_id=action.goal_id,
+                action_id=action.action_id,
+                execution_intent=action.execution_intent,
+                allowed_kinds=("agent",) if "delegate" in action.requirement.operations else (
+                    "local_tool", "mcp_tool", "retriever",
+                ),
+                allowed_operations=action.requirement.operations,
+                requirements=(action.requirement,),
+                policy=CapabilitySelectionPolicy(
+                    read_only=action.proposed_resource_access.side_effect_class == "none",
+                ),
+                runtime_context=CapabilityRuntimeContext(
+                    expected_local_names=(
+                        (action.input.agent_id,)
+                        if isinstance(action.input, DelegateActionInput) else ()
+                    ),
+                    equivalence_class=CapabilityEquivalenceClass(
+                        required_output_contract=action.output_contract,
+                        allowed_side_effect_class=action.proposed_resource_access.side_effect_class,
+                        authority_scope=action.proposed_resource_access.authority_scope,
+                        trust_floor=action.proposed_resource_access.trust_floor,
+                        freshness_contract=action.proposed_resource_access.freshness_contract,
+                        evidence_contract=action.proposed_resource_access.evidence_contract,
+                        data_egress_class=action.proposed_resource_access.data_egress_class,
+                        failure_semantics=action.proposed_resource_access.failure_semantics,
+                    ),
+                ),
+            )
             resolution = CapabilityResolver(
                 registry,
                 policy_engine=deps.policy_engine,
                 ranker=deps.capability_ranker,
-            ).resolve(
-                ExecutionCapabilityRequest(
-                    task_id=state.task_contract.task_id,
-                    goal_id=action.goal_id,
-                    action_id=action.action_id,
-                    execution_intent=action.execution_intent,
-                    allowed_kinds=("agent",) if "delegate" in action.requirement.operations else (
-                        "local_tool", "mcp_tool", "retriever",
-                    ),
-                    allowed_operations=action.requirement.operations,
-                    requirements=(action.requirement,),
-                    policy=CapabilitySelectionPolicy(
-                        read_only=action.proposed_resource_access.side_effect_class == "none",
-                    ),
-                )
-            )
-            if resolution.execution_grant is None:
+            ).resolve(request)
+            if resolution.selected_definition is None:
                 coverage = resolution.coverage[0] if resolution.coverage else None
                 summary = coverage.rationale if coverage is not None else "no executable capability available"
                 gap = CapabilityGapObservation(
@@ -1082,8 +1221,69 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                 )
                 state.control.observations.append(gap)
                 state.add_event("capability_gap", gap.model_dump(mode="json"))
-                resolution_blocked = True
-                break
+                state.control.resolved_actions = []
+                state.control.advance_phase("preparing_model_call")
+                state.control.disposition = "continue_control"
+                return {
+                    "control": state.control,
+                    "context_projections": state.context_projections,
+                    "invocation_batch": state.invocation_batch,
+                    "execution_grants": state.execution_grants,
+                    "events": state.events,
+                }
+        matching_steps = [
+            step for step in state.invocation_batch.invocations
+            if step.step_id == action.action_id or step.goal_id == action.goal_id
+        ]
+        resolved.append((action, request, resolution, matching_steps))
+
+    selected_bindings = tuple(sorted({
+        f"{item.selected_definition.provider}:"
+        f"{item.selected_definition.local_name or item.selected_definition.capability_id}"
+        for _, _, item, _ in resolved
+        if item is not None and item.selected_definition is not None
+    }))
+    if selected_bindings:
+        prior_command = state.control.resolved_command
+        accepted_intent = state.control.accepted_intent
+        if prior_command is None or accepted_intent is None:
+            raise RuntimeError("provider binding requires an accepted command lineage")
+        state.control.resolved_command = deps.execution_command_resolver.resolve(
+            state.task_contract,
+            accepted_intent,
+            provider_binding_refs=selected_bindings,
+            provider_binding_derivations=tuple(
+                item.decision.derivation_record
+                for _, _, item, _ in resolved
+                if item is not None and item.selected_definition is not None
+            ),
+            supersedes_command_ref=prior_command.command_id,
+        )
+        deps.control_plane_store.put_command(state.run_id, state.control.resolved_command)
+        _append_execution_event(state, deps, "execution_command_resolved", payload={
+            "resolved_command": state.control.resolved_command.model_dump(mode="json"),
+        })
+        state.add_event("provider_bound_command_resolved", {
+            "command_ref": state.control.resolved_command.command_id,
+            "supersedes_command_ref": prior_command.command_id,
+            "provider_binding_refs": selected_bindings,
+            "authorization_digest": state.control.resolved_command.authorization_digest,
+            "execution_command_digest": state.control.resolved_command.execution_command_digest,
+        })
+
+    specs = []
+    for action, request, resolution, matching_steps in resolved:
+        grant = None
+        if request is not None and resolution is not None:
+            selected = resolution.selected_definition
+            if selected is None or state.control.resolved_command is None:
+                raise RuntimeError("selected capability requires a provider-bound command")
+            grant = deps.capability_grant_issuer.issue(
+                request,
+                selected,
+                state.control.resolved_command,
+            )
+            state.execution_grants[grant.grant_id] = grant
         access = deps.resource_access_resolver.resolve(
             action.proposed_resource_access,
             runtime_preflight=action.proposed_resource_access,
@@ -1093,27 +1293,38 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             ),
         )
         spec = deps.action_builder.build(
-            decision_ref=state.control.accepted_command.command_id,
+            decision_ref=state.control.resolved_command.command_id,
             action=action,
             context_projection_ref=projection.projection_id,
             access_plan=access,
-            capability_resolution=resolution,
+            execution_grant_ref=grant.grant_id if grant is not None else None,
             retry_directive=state.control.retry_directive,
         )
-        matching_steps = [
-            step for step in state.invocation_batch.invocations
-            if step.step_id == action.action_id or step.goal_id == action.goal_id
-        ]
-        procedure_grant_ref = str(action.payload.get("procedure_grant_ref") or "")
+        procedure_grant_ref = (
+            action.input.procedure_grant_ref
+            if isinstance(action.input, ProcedureActionInput) else ""
+        )
         if procedure_grant_ref:
             parent_grant = state.execution_grants.get(procedure_grant_ref)
             if not isinstance(parent_grant, ProcedureGrant) or state.active_procedure is None:
                 raise RuntimeError("procedure action requires its exact ProcedureGrant")
             spec = spec.model_copy(update={"execution_grant_ref": procedure_grant_ref})
+            if procedure_registry is None:
+                # Workflow-only handlers are not exposed to open model actions,
+                # but a governed ProcedureGrant may resolve its declared nodes.
+                procedure_registry = build_capability_portfolio(
+                    tools=deps.tool_executor.list_tools(exposures={
+                        "public_agent",
+                        "scoped_agent",
+                        "workflow_activity",
+                        "admin",
+                    }),
+                    agents=deps.agent_gateway.profiles(),
+                )
             _resolve_procedure_nodes(
                 state,
                 deps,
-                portfolio=registry,
+                portfolio=procedure_registry,
                 parent_grant=parent_grant,
                 steps=matching_steps,
             )
@@ -1124,20 +1335,18 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             selected_name = (
                 str(selected.local_name or selected.capability_id) if selected is not None else ""
             )
-            if resolution.execution_grant is not None:
-                state.execution_grants[resolution.execution_grant.grant_id] = resolution.execution_grant
             state.add_event("capability_resolution", {
                 "resolution_id": resolution.decision.resolution_id,
                 "request_id": resolution.decision.request_id,
                 "goal_id": action.goal_id,
                 "action_id": action.action_id,
                 "step_id": matching_steps[0].step_id if matching_steps else action.action_id,
-                "selected_execution_grant_ref": resolution.decision.selected_execution_grant_ref,
+                "execution_grant_ref": grant.grant_id if grant is not None else None,
                 "selected_capability_ref": selected.capability_id if selected else None,
                 "coverage": [item.model_dump(mode="json") for item in resolution.coverage],
             })
             for step in matching_steps:
-                step.execution_grant_ref = resolution.decision.selected_execution_grant_ref
+                step.execution_grant_ref = grant.grant_id if grant is not None else None
                 step.allowed_tools = (
                     [selected_name]
                     if selected is not None and selected.kind in {"local_tool", "mcp_tool"}
@@ -1152,17 +1361,6 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                     step.tool_name = step.allowed_tools[0]
                 if selected is not None and selected.kind == "agent" and not step.agent_id:
                     step.agent_id = selected_name
-    if resolution_blocked:
-        state.control.resolved_actions = []
-        state.control.advance_phase("preparing_model_call")
-        state.control.disposition = "continue_control"
-        return {
-            "control": state.control,
-            "context_projections": state.context_projections,
-            "invocation_batch": state.invocation_batch,
-            "execution_grants": state.execution_grants,
-            "events": state.events,
-        }
     state.control.resolved_actions = specs
     state.control.dispatch_groups = list(deps.scheduler.create_dispatch_groups(
         tuple(specs),
@@ -1217,8 +1415,8 @@ def _resolve_procedure_nodes(
             continue
         requirement = step.capability_requirements[0] if step.capability_requirements else None
         expected_names = (step.tool_name,) if step.tool_name else ()
+        definition = portfolio.get_by_name(step.tool_name) if step.tool_name else None
         if requirement is None and step.tool_name:
-            definition = portfolio.get_by_name(step.tool_name)
             if definition is None:
                 raise RuntimeError(f"procedure tool has no capability definition: {step.tool_name}")
             requirement = CapabilityRequirement.from_dimensions(
@@ -1232,11 +1430,11 @@ def _resolve_procedure_nodes(
             step.capability_requirements = [requirement]
         if requirement is None:
             continue
-        resolution = CapabilityResolver(
-            portfolio,
-            policy_engine=deps.policy_engine,
-            ranker=deps.capability_ranker,
-        ).resolve(ExecutionCapabilityRequest(
+        if definition is None:
+            raise RuntimeError(
+                f"procedure node requires an explicit capability contract: {step.step_id}"
+            )
+        request = ExecutionCapabilityRequest(
             task_id=state.task_contract.task_id,
             task_revision=state.task_contract.revision,
             goal_id=step.goal_id or parent_grant.action_ref,
@@ -1248,19 +1446,58 @@ def _resolve_procedure_nodes(
             requirements=(requirement,),
             policy=CapabilitySelectionPolicy(read_only=step.execution_intent != "commit"),
             parent_grant_ref=parent_grant.grant_id,
-            runtime_context={"expected_local_names": expected_names},
-        ))
-        if not isinstance(resolution.execution_grant, AtomicCapabilityGrant):
+            runtime_context=CapabilityRuntimeContext(
+                expected_local_names=expected_names,
+                equivalence_class=CapabilityEquivalenceClass(
+                    required_output_contract=definition.output_contract,
+                    allowed_side_effect_class=definition.operation_scope.side_effect_class,
+                    authority_scope=definition.auth_scope,
+                    trust_floor=requirement.minimum_trust_level,
+                    freshness_contract="fresh" if requirement.freshness_required else "current",
+                    evidence_contract=definition.evidence_contract,
+                    data_egress_class=definition.data_egress_class,
+                    failure_semantics=definition.failure_semantics,
+                ),
+            ),
+        )
+        resolution = CapabilityResolver(
+            portfolio,
+            policy_engine=deps.policy_engine,
+            ranker=deps.capability_ranker,
+        ).resolve(request)
+        selected = resolution.selected_definition
+        if selected is None:
             raise RuntimeError(f"procedure node capability unavailable: {step.step_id}")
+        accepted_intent = state.control.accepted_intent
+        prior_command = state.control.resolved_command
+        if accepted_intent is None or prior_command is None:
+            raise RuntimeError("procedure node provider binding requires a command lineage")
+        provider_binding_ref = f"{selected.provider}:{selected.local_name or selected.capability_id}"
+        node_command = deps.execution_command_resolver.resolve(
+            state.task_contract,
+            accepted_intent,
+            provider_binding_refs=(provider_binding_ref,),
+            provider_binding_derivations=(resolution.decision.derivation_record,),
+            supersedes_command_ref=prior_command.command_id,
+        )
+        deps.control_plane_store.put_command(state.run_id, node_command)
+        state.control.resolved_command = node_command
+        _append_execution_event(state, deps, "execution_command_resolved", payload={
+            "resolved_command": node_command.model_dump(mode="json"),
+            "procedure_node_id": step.procedure_node_id or step.step_id,
+        })
+        atomic_grant = deps.capability_grant_issuer.issue(request, selected, node_command)
+        if not isinstance(atomic_grant, AtomicCapabilityGrant):
+            raise RuntimeError(f"procedure node did not resolve an atomic capability: {step.step_id}")
         node_grant = deps.procedure_grant_issuer.derive_node(
             parent_grant,
             state.active_procedure,
             step,
-            resolution.execution_grant,
+            atomic_grant,
+            node_command,
         )
         state.execution_grants[node_grant.grant_id] = node_grant
         step.execution_grant_ref = node_grant.grant_id
-        selected = resolution.selected_definition
         if selected is not None and selected.kind in {"local_tool", "mcp_tool"}:
             selected_name = str(selected.local_name or selected.capability_id)
             step.allowed_tools = [selected_name]
@@ -1271,6 +1508,8 @@ def _resolve_procedure_nodes(
             "node_id": step.procedure_node_id or step.step_id,
             "procedure_node_grant_ref": node_grant.grant_id,
             "capability_ref": node_grant.capability_ref,
+            "command_ref": node_command.command_id,
+            "execution_command_digest": node_command.execution_command_digest,
         })
 
 
@@ -1327,7 +1566,7 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             )
             state.add_event("capability_gap", observation.model_dump(mode="json"))
         elif (
-            state.current_action.payload.get("procedure_id")
+            isinstance(state.current_action.input, ProcedureActionInput)
             and failed.procedure_recovery_policy == "clarify"
         ):
             observation = ObservationRef(
@@ -1335,14 +1574,14 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                 kind="procedure_clarification",
                 provenance=observation_provenance(
                     "runtime",
-                    str(state.current_action.payload["procedure_id"]),
+                    state.current_action.input.procedure_id,
                     summary,
                 ),
                 trust="scoped",
                 taint=frozenset({"derived"}),
                 summary=summary,
                 payload={
-                    "procedure_id": state.current_action.payload["procedure_id"],
+                    "procedure_id": state.current_action.input.procedure_id,
                     "procedure_node_id": failed.procedure_node_id,
                     "recovery_policy": failed.procedure_recovery_policy,
                 },
@@ -1408,10 +1647,10 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             })
             state.control.advance_phase("accepting_result")
             state.control.disposition = "continue_control"
-        if state.current_action.payload.get("procedure_id"):
+        if isinstance(state.current_action.input, ProcedureActionInput):
             state.add_event("procedure_failed", {
-                "procedure_id": state.current_action.payload["procedure_id"],
-                "procedure_run_id": state.current_action.payload.get("procedure_run_id"),
+                "procedure_id": state.current_action.input.procedure_id,
+                "procedure_run_id": state.current_action.input.procedure_run_id,
                 "procedure_node_id": failed.procedure_node_id,
                 "recovery_policy": failed.procedure_recovery_policy,
                 "error": summary,
@@ -1437,6 +1676,8 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             step.output_artifact_id for step in state.invocation_batch.invocations if step.output_artifact_id
         )
         action_summary = _action_summary(state)
+        if state.current_action.output_contract == "Answer":
+            state.answer = action_summary
         observation = ObservationRef(
             goal_id=state.current_action.goal_id,
             kind="action_result",
@@ -1490,7 +1731,7 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
         elif state.current_action.output_contract == "AgentArtifact":
             # Delegated artifacts require synthesis by the parent before completion.
             _append_execution_event(state, deps, "goal_activated", goal_id=state.current_action.goal_id)
-        if state.current_action.payload.get("procedure_id"):
+        if isinstance(state.current_action.input, ProcedureActionInput):
             from personal_agent.runtime.contracts.task import ContextItem
 
             receipt_items = []
@@ -1502,7 +1743,7 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                     item_id=note_id,
                     category="evidence",
                     kind="mutation_receipt",
-                    provenance=str(state.current_action.payload["procedure_id"]),
+                    provenance=state.current_action.input.procedure_id,
                     trust="evidence",
                     summary=str(result.get("summary") or result.get("title") or "")[:1000],
                     payload={
@@ -1527,8 +1768,8 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                     "admitted_as_instruction": False,
                 })
             state.add_event("procedure_completed", {
-                "procedure_id": state.current_action.payload["procedure_id"],
-                "procedure_run_id": state.current_action.payload.get("procedure_run_id"),
+                "procedure_id": state.current_action.input.procedure_id,
+                "procedure_run_id": state.current_action.input.procedure_run_id,
                 "goal_id": state.current_action.goal_id,
             })
     state.control.action_outcome = outcome
@@ -1544,8 +1785,11 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
         state.evidence_admissions[admission.admission_id] = admission
         state.add_event("evidence_admission_decided", admission.model_dump(mode="json"))
     state.add_event("action_outcome", outcome.model_dump(mode="json"))
+    if outcome.status == "succeeded":
+        state.control.actions = []
     return {
         "control": state.control,
+        "answer": state.answer,
         "task_runtime": state.task_runtime,
         "execution_events": state.execution_events,
         "context_inventory": state.context_inventory,
@@ -1563,6 +1807,14 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
     candidates = [item for item in state.goals if item.status == "candidate_complete"]
     for goal in candidates:
         verification_results = _goal_scoped_verification_results(state, goal.goal_id)
+        execution_fact = None
+        if state.control.resolved_command is not None:
+            execution_fact = deps.execution_fact_verifier.verify(
+                state.control.resolved_command,
+                tuple(verification_results),
+            )
+            state.execution_fact_reports[goal.goal_id] = execution_fact
+            state.add_event("execution_fact_verified", execution_fact.model_dump(mode="json"))
         evidence = tuple(
             decision.evidence
             for decision in state.evidence_admissions.values()
@@ -1580,7 +1832,7 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
             evidence_refs,
             verifier_profiles,
         )
-        projection = deps.context_manager.project(
+        projection = deps.context_manager.project_contract(
             verification_items,
             purpose="semantic_verification",
             budget=_context_budget(state),
@@ -1607,6 +1859,7 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
             citation_count=len(state.citations) if len(state.goals) == 1 else 0,
             tool_results=tuple(verification_results),
             evidence=evidence,
+            execution_fact_report=execution_fact,
             model_context=semantic_context,
         )
         state.verification_reports[goal.goal_id] = report
@@ -1626,22 +1879,24 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
                 "verification_ref": report.report_id,
                 "evidence_gaps": report.unresolved_gaps,
             })
-            state.control.observations.append(ObservationRef(
-                goal_id=goal.goal_id,
-                kind="verification_gap",
-                provenance=observation_provenance(
-                    "runtime",
-                    "goal_verifier",
-                    "; ".join(report.unresolved_gaps) or "goal verification did not pass",
+            from personal_agent.verification.contracts.reports import VerificationFeedback
+
+            feedback = VerificationFeedback(
+                verification_report_ref=report.report_id,
+                unsatisfied_criterion_refs=tuple(
+                    item.criterion_id for item in report.checked_criteria
+                    if item.status != "passed"
                 ),
-                trust="trusted",
-                taint=frozenset({"derived"}),
-                summary="; ".join(report.unresolved_gaps) or "goal verification did not pass",
-                payload={
-                    "gap_ids": list(report.unresolved_gaps),
-                    "recommended_next_actions": list(report.recommended_next_actions),
-                },
-            ))
+                evidence_gaps=report.gaps,
+                deterministic_fact_refs=(execution_fact.report_id,) if execution_fact else (),
+                recovery_budget_remaining=max(
+                    state.task_contract.constraints.revision_budget
+                    - state.control.cross_stage_revision_cycles,
+                    0,
+                ),
+            )
+            state.verification_feedback[goal.goal_id] = feedback
+            state.add_event("verification_feedback_created", feedback.model_dump(mode="json"))
         state.add_event("goal_verification", report.model_dump(mode="json"))
         for execution_outcome in state.capability_execution_outcomes:
             if execution_outcome.goal_id != goal.goal_id or execution_outcome.outcome != "succeeded":
@@ -1666,23 +1921,35 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
         if state.goals and all(
             item.status == "verified" for item in state.goals
         ):
-            finish_proposal = ControlProposal(decision=FinishDecision(
-                target_goal_id=state.goals[-1].goal_id,
-                basis=DecisionBasis(expected_state_change="task_completed"),
-                expected_progress="verified_direct_completion",
-                completion_claim=CompletionClaim(
-                    goal_ids=tuple(item.goal_id for item in state.goals),
-                    criterion_ids=tuple(
-                        item.criterion_id for item in state.task_contract.success_criteria
+            finish_proposal = ControlProposal(
+                base_task_revision=state.task_contract.revision,
+                base_runtime_revision=state.task_runtime.revision,
+                source="contract_derivation",
+                decision=FinishDecision(
+                    target_goal_id=state.goals[-1].goal_id,
+                    basis=DecisionBasis(expected_state_change="task_completed"),
+                    expected_progress="verified_direct_completion",
+                    completion_claim=CompletionClaim(
+                        goal_ids=tuple(item.goal_id for item in state.goals),
+                        criterion_ids=tuple(
+                            item.criterion_id for item in state.task_contract.success_criteria
+                        ),
                     ),
                 ),
-            ))
+            )
             state.control.proposal = finish_proposal
             state.decision_admission = deps.decision_admission.admit(
                 state.task_contract, state.task_runtime, finish_proposal, state.control.state,
             )
-            state.control.accepted_command = deps.accepted_command_compiler.compile(
-                finish_proposal, state.decision_admission,
+            state.control.accepted_intent = deps.accepted_intent_compiler.compile(
+                state.task_contract,
+                state.task_runtime,
+                finish_proposal,
+                state.decision_admission,
+            )
+            state.control.resolved_command = deps.execution_command_resolver.resolve(
+                state.task_contract,
+                state.control.accepted_intent,
             )
             state.control_commits.append(deps.control_committer.commit(
                 state.control,
@@ -1693,7 +1960,7 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
                 expected_task_revision=state.task_contract.revision,
                 expected_event_cursor=state.task_runtime.last_event_sequence,
             ))
-            state.control.advance_phase("closed")
+            state.control.advance_phase("accepting_result")
             state.control.disposition = "propose_completion"
         else:
             state.control.advance_phase("accepting_result")
@@ -1706,7 +1973,9 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
         "planning_usage": state.planning_usage,
         "context_projections": state.context_projections,
         "capability_effectiveness_outcomes": state.capability_effectiveness_outcomes,
+        "execution_fact_reports": state.execution_fact_reports,
         "verification_reports": state.verification_reports,
+        "verification_feedback": state.verification_feedback,
         "decision_admission": state.decision_admission,
         "control_commits": state.control_commits,
     }
@@ -1786,8 +2055,8 @@ def _node_verify_completion(state: RunCheckpoint, *, deps: ExecutiveContext) -> 
     if state.task_contract is None or state.task_runtime is None:
         raise RuntimeError("completion verification requires task and ledger")
     decision = (
-        state.control.accepted_command.decision
-        if state.control.accepted_command is not None else None
+        state.control.accepted_intent.decision
+        if state.control.accepted_intent is not None else None
     )
     claim = decision.completion_claim if isinstance(decision, FinishDecision) else None
     report = deps.completion_verifier.verify(
@@ -1800,10 +2069,13 @@ def _node_verify_completion(state: RunCheckpoint, *, deps: ExecutiveContext) -> 
     state.completion_report = report
     state.add_event("completion_checked", report.model_dump(mode="json"))
     if report.status == "complete":
+        state.control.advance_phase("closed")
         _append_execution_event(state, deps, "task_completed", payload={
             "verified_goal_ids": report.verified_goal_ids,
         })
     else:
+        state.control.advance_phase("preparing_model_call")
+        state.control.disposition = "continue_control"
         observation = ObservationRef(
             kind="completion_gap",
             provenance=observation_provenance(
@@ -1858,8 +2130,8 @@ def _verifier_profiles(
 
 def _after_apply_decision(state: RunCheckpoint) -> str:
     decision = (
-        state.control.accepted_command.decision
-        if state.control.accepted_command is not None else None
+        state.control.accepted_intent.decision
+        if state.control.accepted_intent is not None else None
     )
     if isinstance(decision, (ExecuteBoundedActionDecision, DelegateDecision, InvokeProcedureDecision)):
         return "action"
@@ -1885,7 +2157,7 @@ def _route_update(
     phase, disposition = {
         "loop": ("preparing_model_call", "continue_control"),
         "action": ("routing", "continue_control"),
-        "completion": ("closed", "propose_completion"),
+        "completion": ("accepting_result", "propose_completion"),
         "stop": ("closed", "terminate"),
     }[route]
     state.control.advance_phase(phase)
@@ -1898,6 +2170,7 @@ def _route_update(
         "context_inventory": state.context_inventory,
         "task_contract": state.task_contract,
         "active_procedure": state.active_procedure,
+        "execution_grants": state.execution_grants,
         "answer": state.answer,
         "events": state.events,
     }
@@ -1915,7 +2188,10 @@ def _step_for_action(state: RunCheckpoint, action: BoundedAction) -> ExecutableI
         "delegate": "agent_call",
         "commit": "commit",
     }.get(action.execution_intent, "compose")
-    use_agentic_synthesis = bool(action.payload.get("agentic_synthesis"))
+    use_agentic_synthesis = (
+        action.input.agentic_synthesis
+        if isinstance(action.input, CapabilityActionInput) else False
+    )
     execution_mode = "react" if (
         action.execution_intent == "explore"
         or (action.execution_intent == "acquire" and external_acquire)
@@ -1940,12 +2216,15 @@ def _step_for_action(state: RunCheckpoint, action: BoundedAction) -> ExecutableI
         max_iterations=action.max_iterations,
         projection_kind="bounded_action",
         goal_id=action.goal_id,
-        task_input=action.payload.get("task_text", action.description),
+        task_input=(action.input.task_text if hasattr(action.input, "task_text") else action.description),
         execution_intent=action.execution_intent,
         output_contract=action.output_contract,
         capability_requirements=requirements,
         skill_ids=list(state.task_runtime.active_skill_ids) if state.task_runtime else [],
-        execution_guidance=list(action.payload.get("execution_guidance", ())),
+        execution_guidance=list(
+            action.input.execution_guidance
+            if isinstance(action.input, CapabilityActionInput) else ()
+        ),
     )
 
 
@@ -1966,11 +2245,14 @@ def _steps_for_action(
         max_iterations=action.max_iterations,
         projection_kind="bounded_action",
         goal_id=action.goal_id,
-        task_input=action.payload.get("task_text", action.description),
+        task_input=(action.input.task_text if hasattr(action.input, "task_text") else action.description),
         execution_intent="explore",
         output_contract="ProposedCommit",
         skill_ids=list(state.task_runtime.active_skill_ids) if state.task_runtime else [],
-        execution_guidance=list(action.payload.get("execution_guidance", ())),
+        execution_guidance=list(
+            action.input.execution_guidance
+            if isinstance(action.input, CapabilityActionInput) else ()
+        ),
     )
     commit.depends_on = [proposal.step_id]
     commit.execution_mode = "deterministic"
@@ -1998,6 +2280,21 @@ def _materialize_delegate(
             allowed_operations=("delegate",),
             requirements=(requirement,),
             policy=CapabilitySelectionPolicy(read_only=True),
+            runtime_context=CapabilityRuntimeContext(
+                equivalence_class=CapabilityEquivalenceClass(
+                    required_output_contract=decision.subtask.expected_artifact_contract,
+                    allowed_side_effect_class="none",
+                    authority_scope=canonical_digest({
+                        "selector": requirement.selector,
+                        "operations": requirement.operations,
+                    }),
+                    trust_floor=requirement.minimum_trust_level,
+                    freshness_contract="fresh" if requirement.freshness_required else "current",
+                    evidence_contract=decision.subtask.expected_artifact_contract,
+                    data_egress_class="content",
+                    failure_semantics="return_typed_failure",
+                ),
+            ),
         )
     )
     selected = resolution.selected_definition
@@ -2027,6 +2324,7 @@ def _materialize_delegate(
             description=decision.subtask.goal,
             output_contract=decision.subtask.expected_artifact_contract,
             requirement=requirement,
+            input=CapabilityActionInput(task_text=decision.subtask.goal),
         )
         return empty_action, ExecutableInvocation(
             action_type="agent_call",
@@ -2068,22 +2366,17 @@ def _materialize_delegate(
         requirement=requirement,
         max_tool_calls=decision.subtask.max_provider_calls,
         max_model_calls=0,
-        payload={
-            "task_text": decision.subtask.goal,
-            "agent_id": agent_id,
-            "effective_scope": {
-                "capability_ids": effective_scope.capability_ids,
-                "operations": effective_scope.operations,
-            },
-            "budget_reservation": {
-                "token_budget": reservation.token_budget,
-                "cost_budget": reservation.cost_budget,
-                "time_budget_seconds": reservation.time_budget_seconds,
-            },
-        },
+        input=DelegateActionInput(
+            task_text=decision.subtask.goal,
+            agent_id=agent_id,
+            capability_ids=effective_scope.capability_ids,
+            operations=effective_scope.operations,
+            token_budget=reservation.token_budget,
+            cost_budget=reservation.cost_budget,
+            time_budget_seconds=reservation.time_budget_seconds,
+        ),
     )
     step = _step_for_action(state, action)
-    step.execution_grant_ref = resolution.decision.selected_execution_grant_ref
     step.agent_id = agent_id
     step.subtask = DelegatedSubtaskInvocation(
         goal=decision.subtask.goal,
@@ -2113,7 +2406,7 @@ def _action_summary(state: RunCheckpoint) -> str:
 
 
 def _action_closes_goal(state: RunCheckpoint, action: BoundedAction) -> bool:
-    if action.payload.get("procedure_id"):
+    if isinstance(action.input, ProcedureActionInput):
         return True
     if state.task_runtime is None:
         return False
@@ -2167,7 +2460,7 @@ def _planning_context_items(state: RunCheckpoint, procedures) -> tuple[ContextIt
         item_id=f"observation:{item.observation_id}",
         category="observation",
         kind="observation",
-        provenance=item.provenance,
+        provenance=item.provenance.source_ref,
         trust="untrusted",
         summary=item.summary,
         payload=item.model_dump(mode="json"),
@@ -2203,13 +2496,23 @@ def _monitor_context_items(state: RunCheckpoint) -> tuple[ContextItem, ...]:
         item_id=f"monitor-observation:{item.observation_id}",
         category="observation",
         kind="observation",
-        provenance=item.provenance,
+        provenance=item.provenance.source_ref,
         trust="untrusted",
         summary=item.summary,
         payload=item.model_dump(mode="json"),
         admission="candidate",
     ) for item in state.control.observations[-6:])
-    return (*_context_items(state), runtime, *observations)
+    verification_feedback = tuple(ContextItem(
+        item_id=f"verification-feedback:{goal_id}:{item.feedback_id}",
+        category="observation",
+        kind="verification_feedback",
+        provenance="goal_verifier",
+        trust="runtime",
+        summary="; ".join(item.unsatisfied_criterion_refs),
+        payload=item.model_dump(mode="json"),
+        admission="admitted",
+    ) for goal_id, item in state.verification_feedback.items())
+    return (*_context_items(state), runtime, *observations, *verification_feedback)
 
 
 def _verification_context_items(
@@ -2285,6 +2588,23 @@ def _control_context_items(state: RunCheckpoint) -> tuple[ContextItem, ...]:
             "task": state.task_contract.model_dump(mode="json"),
             "goal_graph": [item.model_dump(mode="json") for item in state.goals],
             "control": state.control.state.model_dump(mode="json"),
+            "active_plan": (
+                state.plan_definition.model_dump(mode="json")
+                if state.plan_definition is not None else None
+            ),
+            "ready_frontier": (
+                state.frontier_decision.model_dump(mode="json")
+                if state.frontier_decision is not None else None
+            ),
+            "decision_feedback": (
+                state.decision_admission.feedback.model_dump(mode="json")
+                if state.decision_admission is not None
+                and state.decision_admission.feedback is not None else None
+            ),
+            "verification_feedback": {
+                goal_id: feedback.model_dump(mode="json")
+                for goal_id, feedback in state.verification_feedback.items()
+            },
         },
         admission="admitted",
     )
@@ -2321,9 +2641,21 @@ def _decision_semantic_hash(decision) -> str:
     return sha256(json.dumps(payload, sort_keys=True, ensure_ascii=True).encode()).hexdigest()[:16]
 
 
+def _render_control_status(status: str, reason_codes: tuple[str, ...]) -> str:
+    """Render canonical governance state without inventing a business answer."""
+    reason = reason_codes[0] if reason_codes else "unspecified"
+    messages = {
+        "terminal": f"请求未通过治理管控，运行已停止（{reason}）。",
+        "await_environment_change": f"当前环境暂不满足执行条件，运行已暂停（{reason}）。",
+        "request_capability_acquisition": f"需要先补齐执行能力（{reason}）。",
+    }
+    return messages.get(status, f"运行状态已更新（{reason}）。")
+
+
 __all__ = [
     "_after_action_resolution",
     "_after_decision_admission",
+    "_after_decision_feedback",
     "_after_apply_decision",
     "_after_completion",
     "_node_apply_decision",

@@ -33,7 +33,18 @@ class VerificationGap(BaseModel):
     calibration_profile: str
 
 
-class VerificationReport(BaseModel):
+class ExecutionFactReport(BaseModel):
+    report_id: str = Field(default_factory=_short_id)
+    command_ref: str
+    execution_command_digest: str
+    status: Literal["passed", "failed", "unknown"]
+    provider_invoked: bool = False
+    receipt_refs: tuple[str, ...] = ()
+    resource_refs: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+
+
+class GoalVerificationReport(BaseModel):
     report_id: str = Field(default_factory=_short_id)
     subject_id: str
     status: Literal["passed", "failed", "inconclusive"]
@@ -42,6 +53,15 @@ class VerificationReport(BaseModel):
     unresolved_gaps: tuple[str, ...] = ()
     recommended_next_actions: tuple[str, ...] = ()
     gaps: tuple[VerificationGap, ...] = ()
+
+
+class VerificationFeedback(BaseModel):
+    feedback_id: str = Field(default_factory=_short_id)
+    verification_report_ref: str
+    unsatisfied_criterion_refs: tuple[str, ...]
+    evidence_gaps: tuple[VerificationGap, ...] = ()
+    deterministic_fact_refs: tuple[str, ...] = ()
+    recovery_budget_remaining: int = Field(ge=0)
 
 
 class CompletionReport(BaseModel):
@@ -53,4 +73,7 @@ class CompletionReport(BaseModel):
     reason_codes: tuple[str, ...] = ()
 
 
-__all__ = ["CompletionReport", "CriterionResult", "VerificationGap", "VerificationReport"]
+__all__ = [
+    "CompletionReport", "CriterionResult", "ExecutionFactReport", "GoalVerificationReport",
+    "VerificationFeedback", "VerificationGap",
+]

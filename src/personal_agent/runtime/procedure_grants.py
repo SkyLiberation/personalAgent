@@ -20,6 +20,7 @@ from personal_agent.capabilities.contracts.procedure import (
 from personal_agent.execution.contracts.invocation import ExecutableInvocation
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.runtime.contracts.task import TaskContract
+from personal_agent.runtime.contracts.control import ResolvedExecutionCommand
 
 
 class ProcedureGrantIssuer:
@@ -29,6 +30,7 @@ class ProcedureGrantIssuer:
         invocation: ProcedureInvocation,
         projection: ProcedureRunProjection,
         definition: ProcedureDefinition,
+        command: ResolvedExecutionCommand,
     ) -> ProcedureGrant:
         resources = task.resources_for_goal(invocation.goal_id)
         selector = ResourceSelector(
@@ -73,6 +75,8 @@ class ProcedureGrantIssuer:
         return ProcedureGrant(
             request_id=f"procedure:{invocation.invocation_id}",
             action_ref=invocation.invocation_id,
+            authorization_digest=command.authorization_digest,
+            execution_command_digest=command.execution_command_digest,
             granted_resource_selector=selector,
             granted_operation_scope=operation_scope,
             granted_data_egress="content",
@@ -95,7 +99,12 @@ class ProcedureGrantIssuer:
         projection: ProcedureRunProjection,
         step: ExecutableInvocation,
         atomic: AtomicCapabilityGrant,
+        command: ResolvedExecutionCommand,
     ) -> ProcedureNodeGrant:
+        if command.authorization_digest != parent.authorization_digest:
+            raise PermissionError("procedure node command expands the parent authorization")
+        if atomic.execution_command_digest != command.execution_command_digest:
+            raise PermissionError("atomic grant is not bound to the procedure node command")
         child_operations = (
             parent.granted_operation_scope.operations
             & atomic.granted_operation_scope.operations
@@ -126,6 +135,8 @@ class ProcedureGrantIssuer:
         return ProcedureNodeGrant(
             request_id=atomic.request_id,
             action_ref=parent.action_ref,
+            authorization_digest=command.authorization_digest,
+            execution_command_digest=command.execution_command_digest,
             granted_resource_selector=child_selector,
             granted_operation_scope=atomic.granted_operation_scope.model_copy(update={
                 "operations": child_operations,

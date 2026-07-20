@@ -1,122 +1,68 @@
-# E2E Live Behavioral Diagnostics
+# Live Core User-Outcome E2E
 
-This suite exercises open goals, governed protocols, artifact/multimodal input,
-MCP tools, and A2A delegation in the real configured environment. It is a
-live diagnostic / release-confidence gate, not a deterministic golden gate:
-real LLM and real web providers can drift, so the baseline uses soft aggregate
-floors plus a small set of strict critical cases.
+This suite starts from raw user input and drives the production
+`AgentService.execute_entry` / `resume_entry` boundary with the model and
+provider configuration loaded by `Settings.from_env()`.
 
-- `ask` seeds the test knowledge store first, then runs
-  `execute_entry -> TaskAnalyzer -> GoalGraph -> Executive`, including retrieval planning,
-  answer generation, verification, repair telemetry, and Evidence Engine. It
-  covers evidence-grounded answers, no-local-evidence conservative answers, and
-  bounded web fallback that stays in the ask branch.
-- `research_once` runs the workflow-backed Research pipeline with the real
-  configured `web_search`, `capture_url`, and `graph_search` tools. It covers
-  source collection, verification queries, evidence gaps, URL canonicalization,
-  event clustering, budget exhaustion, satisfaction stopping, digest generation,
-  and traced tool failures.
-- `analyze_artifact` runs text and image artifact inputs through the real
-  `inspect_artifact -> artifact-compose` workflow. Text files are interpreted
-  from uploaded bytes; images degrade to metadata-only context when no vision
-  model is configured.
-- `workflow` covers explicit non-ask workflows and complex intent
-  understanding: direct answers, text/file capture, thread summaries,
-  solidification, review digest, consolidation, knowledge gap inspection,
-  workflow inspection, delete confirmation diagnostics, and compound
-  capture-then-ask requests.
-- `github_mcp` registers local read-only fake GitHub tools with governed names
-  and MCP capability metadata, then drives the full
-  `execute_entry -> TaskAnalyzer -> Executive -> capability_resolution ->
-  ReAct -> ToolGateway -> audit trace` path. The
-  deterministic mock is only the ReAct model decision, so the test still
-  verifies resource binding, resolver participation, action scope,
-  gateway call, and audit record.
-- `notion_mcp` mirrors the same full-chain checks for read-only Notion MCP
-  prompts. It registers local fake Notion tools with governed names and
-  capability metadata, drives the full
-  `execute_entry -> TaskAnalyzer -> Executive -> capability_resolution ->
-  ReAct -> ToolGateway -> audit trace` path, and verifies Notion write
-  requests stay outside the read-only action scope.
-- `gpt_researcher_a2a` checks the AgentGateway external-agent delegation path
-  for a deployed GPT Researcher A2A backend. It registers a local fake
-  `gpt_researcher` Agent adapter, then drives the full
-  `execute_entry -> TaskAnalyzer -> Executive delegate -> capability_resolution ->
-  AgentGateway -> AgentRun / AgentArtifact`
-  path. The e2e assertion verifies AgentRun creation and unverified artifact
-  handling instead of tool audit.
+No E2E case may replace `_analyze_with_model`, inject `TaskAnalysis`, mock a
+store, or supply a precomputed plan. The only isolation is infrastructure
+namespacing: business persistence uses `personal_agent_test`, temporary files
+use a per-test directory, and Graphiti receives a unique E2E group prefix.
 
-The goal is to catch behavioral regressions and environment drift across
-task analysis, GoalGraph compilation, Executive decisions, evidence selection, answer grounding, conservative no-evidence
-behavior, artifact interpretation and degradation, Research source collection,
-satisfaction stopping, digest generation, non-ask workflow routing, complex
-intent decomposition, tool failure degradation, latency, and observability.
-Except for the GitHub/Notion MCP branches' deterministic ReAct tool-choice
-mocks and the GPT Researcher A2A branch's fake Agent adapter, the core
-LLM and external tools are not stubbed.
-`OPENAI_API_KEY` / `OPENAI_BASE_URL` and structured-model config must be
-present, otherwise the gate skips. Other provider failures or degradations must
-be diagnosed by the run output rather than bypassed in the test.
+The verified boundary is:
 
-Stable algorithmic behavior such as Research clustering, URL canonicalization,
-and controlled failure degrade should be covered by fixture/replay quality gates
-with `baseline=1.0`. This live suite keeps those cases visible, but evaluates
-them with diagnostic floors because live web results may contain different
-events on different days.
-
-Run:
-
-```powershell
-uv run pytest evals/e2e_quality -v
+```text
+raw EntryInput
+  -> live Task Analysis
+  -> TaskContract + TaskRuntimeProjection
+  -> live planning / executive control
+  -> Governance admission / confirmation
+  -> capability grant and real gateway execution
+  -> Observation
+  -> per-Goal VerificationReport
+  -> CompletionReport
+  -> EntryResult + durable terminal checkpoint
 ```
 
-Run selected cases:
+The cases prove:
+
+1. A low-risk response request is understood by the live analyzer, answered,
+   verified, and completed without a fabricated capability grant.
+2. A write-then-answer request is decomposed by the live analyzer, preserves
+   the output dependency, pauses before mutation, resumes with the exact grant,
+   writes real test data, answers from that result, and completes only after
+   both Goals are verified.
+3. A mutation request whose required input is absent never fabricates a side
+   effect, verification report, or completed Task.
+
+Every case prints `LIVE_E2E_TRACE=<json>` and writes the same evidence under
+`data/e2e_traces/<archive-run-id>/` by default. The archive contains:
+
+- `manifest.json`: Git commit/dirty state, runtime fingerprint, model and prompt version;
+- `*.trace.json`: input, model calls, TaskAnalysis, TaskContract, TaskRuntime,
+  AgentEvents, ExecutionEvents, verification, completion and output;
+- `summary.json`: pytest outcome, phase duration and failure detail for every case;
+- `checksums.sha256`: integrity hashes for every JSON evidence file.
+
+Set `PERSONAL_AGENT_E2E_TRACE_DIR` to choose another local root. The archive
+stays in the E2E layer and does not change production checkpoints or business
+storage. CI uploads both the structured archive and the pytest stream.
+
+Requirements:
+
+- PostgreSQL on `127.0.0.1:5432`, user/password `postgres/postgres`.
+- A real structured model configured through `STRUCTURED_*`, `ROUTER_*`, or
+  `OPENAI_*` environment variables.
+- Any provider required by the scenario under test.
+
+Run against the configured environment:
 
 ```powershell
-$env:E2E_QUALITY_CASES="E2E-ASK-002,E2E-ART-001"
-uv run pytest evals/e2e_quality -v
-Remove-Item Env:\E2E_QUALITY_CASES
+$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
+uv run pytest evals/e2e_quality -v -s
 ```
 
-Run selected branches:
-
-```powershell
-$env:E2E_QUALITY_BRANCHES="ask,artifact"
-uv run pytest evals/e2e_quality -v
-Remove-Item Env:\E2E_QUALITY_BRANCHES
-```
-
-Run only GitHub MCP tool-call plumbing:
-
-```powershell
-$env:E2E_QUALITY_BRANCHES="github_mcp"
-$env:E2E_QUALITY_ENFORCE_BASELINE="true"
-uv run pytest evals/e2e_quality -v
-Remove-Item Env:\E2E_QUALITY_BRANCHES
-Remove-Item Env:\E2E_QUALITY_ENFORCE_BASELINE
-```
-
-Run only Notion MCP tool-call plumbing:
-
-```powershell
-$env:E2E_QUALITY_BRANCHES="notion_mcp"
-$env:E2E_QUALITY_ENFORCE_BASELINE="true"
-uv run pytest evals/e2e_quality -v
-Remove-Item Env:\E2E_QUALITY_BRANCHES
-Remove-Item Env:\E2E_QUALITY_ENFORCE_BASELINE
-```
-
-When `E2E_QUALITY_CASES` or `E2E_QUALITY_BRANCHES` is set, the suite records
-scores and baseline diagnostics but does not fail the pytest run on baseline by
-default. This keeps local debugging cheap when intentionally running a single
-known-drifting live case. Set `E2E_QUALITY_ENFORCE_BASELINE=true` to force the
-same threshold assertion for a selected subset.
-
-Trace output:
-
-- `data/e2e_quality_traces/latest.jsonl` records the latest run as streaming
-  JSONL, including `case.started`, `case.completed`, `case.failed`, and
-  `suite.scored` events.
-- If pytest times out, inspect the last `case.started` event to identify the
-  active case, then use its diagnostic logs and LLM usage fields to locate the
-  provider, task-analysis, artifact, or research degradation point.
+Without PostgreSQL or a structured model, an ordinary local run skips. When
+`PERSONAL_AGENT_REQUIRE_LIVE_E2E=true`, missing infrastructure is a hard
+failure; CI uses this mode so an unconfigured job cannot report a false pass.

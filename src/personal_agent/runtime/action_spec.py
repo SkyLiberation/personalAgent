@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from personal_agent.capabilities.contracts.execution import ExecutionResolutionResult
 from personal_agent.runtime.contracts.control import (
     BoundedAction,
     BudgetReservation,
@@ -29,19 +28,14 @@ class ResolvedActionBuilder:
         action: BoundedAction,
         context_projection_ref: str,
         access_plan: ResolvedResourceAccessPlan,
-        capability_resolution: ExecutionResolutionResult | None = None,
+        execution_grant_ref: str | None = None,
         retry_directive: RetryDirective | None = None,
     ) -> ResolvedActionSpec:
-        grant_ref = (
-            capability_resolution.execution_grant.grant_id
-            if capability_resolution is not None and capability_resolution.execution_grant is not None
-            else None
-        )
         return ResolvedActionSpec(
             action_id=action.action_id,
             decision_ref=decision_ref,
             goal_id=action.goal_id,
-            execution_grant_ref=grant_ref,
+            execution_grant_ref=execution_grant_ref,
             context_projection_ref=context_projection_ref,
             resource_access_plan=access_plan,
             retry_directive=retry_directive,

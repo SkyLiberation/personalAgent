@@ -5,12 +5,15 @@ from __future__ import annotations
 from personal_agent.runtime.contracts.control import (
     ProposedResourceAccessPlan,
     ResolvedResourceAccessPlan,
-    ResourceAccess,
 )
 
 
+class ResourceAccessResolutionError(ValueError):
+    """An authoritative declaration conflicts with the accepted action scope."""
+
+
 class ResourceAccessResolver:
-    """Conservative resolver: every declared access is retained, never weakened."""
+    """Validate authoritative declarations without rewriting the accepted scope."""
 
     def resolve(
         self,
@@ -29,26 +32,20 @@ class ResourceAccessResolver:
             ("runtime_preflight", runtime_preflight),
             ("model_proposal", proposed),
         )
-        read_set: list[ResourceAccess] = []
-        write_set: list[ResourceAccess] = []
         source_refs: list[str] = []
-        side_effect = "none"
         for source, plan in ordered:
             if plan is None:
                 continue
             source_refs.append(source)
-            _extend_unique(read_set, plan.read_set)
-            _extend_unique(write_set, plan.write_set)
-            if plan.side_effect_class != "none":
-                side_effect = plan.side_effect_class
+            if source != "model_proposal":
+                _validate_no_scope_rewrite(proposed, plan, source=source)
         complete = preflight_complete and not (
-            side_effect != "none" and runtime_preflight is None and tool_schema is None
+            proposed.side_effect_class != "none"
+            and runtime_preflight is None and tool_schema is None
             and capability_manifest is None and procedure_contract is None
         )
         return ResolvedResourceAccessPlan(
-            read_set=tuple(read_set),
-            write_set=tuple(write_set),
-            side_effect_class=side_effect,
+            **proposed.model_dump(mode="python"),
             source_refs=tuple(source_refs),
             resolution_evidence=tuple(
                 f"{source}:declared" for source in source_refs
@@ -57,13 +54,41 @@ class ResourceAccessResolver:
         )
 
 
-def _extend_unique(target: list[ResourceAccess], values: tuple[ResourceAccess, ...]) -> None:
-    seen = {(item.semantic_domain, item.locator) for item in target}
-    for value in values:
-        key = (value.semantic_domain, value.locator)
-        if key not in seen:
-            target.append(value)
-            seen.add(key)
+def _validate_no_scope_rewrite(
+    proposed: ProposedResourceAccessPlan,
+    authoritative: ProposedResourceAccessPlan,
+    *,
+    source: str,
+) -> None:
+    proposed_reads = {(item.semantic_domain, item.locator) for item in proposed.read_set}
+    proposed_writes = {(item.semantic_domain, item.locator) for item in proposed.write_set}
+    authoritative_reads = {
+        (item.semantic_domain, item.locator) for item in authoritative.read_set
+    }
+    authoritative_writes = {
+        (item.semantic_domain, item.locator) for item in authoritative.write_set
+    }
+    if not authoritative_reads.issubset(proposed_reads):
+        raise ResourceAccessResolutionError(f"{source} requires undeclared read access")
+    if not authoritative_writes.issubset(proposed_writes):
+        raise ResourceAccessResolutionError(f"{source} requires undeclared write access")
+    boundary_fields = (
+        "side_effect_class",
+        "authority_scope",
+        "data_egress_class",
+        "trust_floor",
+        "freshness_contract",
+        "evidence_contract",
+        "failure_semantics",
+    )
+    conflicts = tuple(
+        field for field in boundary_fields
+        if getattr(authoritative, field) != getattr(proposed, field)
+    )
+    if conflicts:
+        raise ResourceAccessResolutionError(
+            f"{source} conflicts with proposed boundaries: {','.join(conflicts)}"
+        )
 
 
-__all__ = ["ResourceAccessResolver"]
+__all__ = ["ResourceAccessResolutionError", "ResourceAccessResolver"]

@@ -136,17 +136,6 @@ def _skip_step_dependents(failed_step_id: str, steps: list) -> None:
             _skip_step_dependents(s.step_id, steps)
 
 
-def _default_step_answer(steps: list) -> str:
-    completed = sum(1 for s in steps if s.status == "completed")
-    failed = sum(1 for s in steps if s.status == "failed")
-    skipped = sum(1 for s in steps if s.status == "skipped")
-    return f"步骤执行完成：{completed} 步成功" + (
-        f"，{failed} 步失败" if failed else ""
-    ) + (
-        f"，{skipped} 步跳过" if skipped else ""
-    ) + "。"
-
-
 # ---------------------------------------------------------------------------
 # ReAct helper functions used by the graph-native ReAct nodes.
 # ---------------------------------------------------------------------------

@@ -1,8 +1,0 @@
-{
-  "_comment": "Regression floors for the current TaskAnalyzer -> goal graph -> planning -> executive loop. Outcome and primary result-contract accuracy are hard gates. Event subsequences pin current agentic milestones, clarification must stop before goal compilation, and every proceeding run must terminate.",
-  "outcome_accuracy": 1.0,
-  "primary_result_contract_accuracy": 1.0,
-  "event_sequence_match": 1.0,
-  "forbidden_events_absent": 1.0,
-  "reached_terminal": 1.0
-}

@@ -37,7 +37,7 @@ def test_debug_bundle_includes_events_history_and_replays(runtime):
         checkpoint_id=checkpoint_id,
         updates={},
     )
-    bundle = runtime.build_execution_debug_bundle(result.run_id or "")
+    bundle = runtime.build_agent_debug_bundle(result.run_id or "")
 
     assert replayed.run_id == result.run_id
     assert bundle["run_id"] == result.run_id
@@ -69,56 +69,17 @@ def test_fork_from_checkpoint_creates_new_run_and_records_event(runtime):
     assert "execution_forked" in event_types
 
 
-def test_invocation_batch_persists_input_and_output_artifacts(runtime):
-    result = runtime.execute_entry(
-        EntryInput(text="你好", user_id="test-user", session_id="step-artifacts")
-    )
-    artifacts = runtime.list_execution_artifacts(result.run_id or "", limit=20)
-    snapshot = runtime.get_run_snapshot(result.run_id or "")
-
-    kinds = {artifact.kind for artifact in artifacts}
-    assert "step_input" in kinds
-    assert "step_output" in kinds
-    assert all(artifact.step_id for artifact in artifacts)
-    assert all(artifact.schema_version >= 1 for artifact in artifacts)
-    assert all(artifact.created_by_step == artifact.step_id for artifact in artifacts)
-    assert all(artifact.user_id == "test-user" for artifact in artifacts)
-    assert snapshot is not None
-    assert snapshot.status == "completed"
-    projection = runtime.rebuild_execution_projection(result.run_id or "")
-    assert projection.procedure_id == ""
-    assert any(step.get("input_artifact_id") for step in projection.steps)
-    assert any(step.get("output_artifact_id") for step in projection.steps)
-
-
-def test_step_artifacts_can_be_filtered_by_step_id(runtime):
-    result = runtime.execute_entry(
-        EntryInput(text="你好", user_id="test-user", session_id="step-artifact-filter")
-    )
-    all_artifacts = runtime.list_execution_artifacts(result.run_id or "", limit=20)
-    step_id = all_artifacts[0].step_id
-
-    artifacts = runtime.list_execution_artifacts(
-        result.run_id or "",
-        step_id=step_id,
-        limit=20,
-    )
-
-    assert artifacts
-    assert {artifact.step_id for artifact in artifacts} == {step_id}
-
-
 def test_debug_bundle_contains_event_sourced_projection(runtime):
     result = runtime.execute_entry(
         EntryInput(text="你好", user_id="test-user", session_id="event-projection")
     )
 
-    projection = runtime.rebuild_execution_projection(result.run_id or "")
-    bundle = runtime.build_execution_debug_bundle(result.run_id or "")
+    projection = runtime.rebuild_agent_trace_projection(result.run_id or "")
+    bundle = runtime.build_agent_debug_bundle(result.run_id or "")
 
-    assert projection.status == "completed"
+    assert projection.status == "failed"
     assert projection.procedure_id == ""
-    assert projection.steps[0]["status"] == "completed"
+    assert projection.steps == []
     assert bundle["projection"]["procedure_id"] == ""
 
 

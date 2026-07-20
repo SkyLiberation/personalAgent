@@ -22,7 +22,8 @@ from personal_agent.infra.storage.postgres_tool_governance_store import Postgres
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
 from personal_agent.infra.storage.postgres_procedure_definition_store import PostgresProcedureDefinitionStore
-from personal_agent.infra.storage.postgres_execution_event_store import PostgresExecutionEventStore
+from personal_agent.infra.storage.postgres_agent_trace_store import PostgresAgentTraceStore
+from personal_agent.infra.storage.postgres_control_plane_store import PostgresControlPlaneStore
 from personal_agent.infra.storage.postgres_execution_replay_store import PostgresExecutionReplayStore
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from personal_agent.governance import ToolExecutor
@@ -83,10 +84,14 @@ from personal_agent.planning.step_projection_validator import StepProjectionVali
 from personal_agent.planning.task_analyzer import DefaultTaskAnalyzer
 from personal_agent.planning.task_compiler import GoalGraphCompiler
 from personal_agent.runtime.control_runtime import ExecutiveController
-from personal_agent.governance.decision_admission import AcceptedCommandCompiler, DecisionValidator
+from personal_agent.governance.decision_admission import (
+    AcceptedIntentCompiler,
+    DecisionValidator,
+    ExecutionCommandResolver,
+)
 from personal_agent.governance.route_admission import ExecutionRoutePolicy
 from personal_agent.runtime.task_runtime import TaskRuntimeProjector, GoalDecompositionValidator
-from personal_agent.verification.runtime import CompletionVerifier, GoalVerifier
+from personal_agent.verification.runtime import CompletionVerifier, ExecutionFactVerifier, GoalVerifier
 from personal_agent.execution.invocation_journal import InvocationJournal
 from personal_agent.runtime.procedure_runtime import (
     PROCEDURE_CATALOG,
@@ -267,7 +272,8 @@ class AgentRuntime:
         self._content_guard = configure_guardrails(settings.guardrails)
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
         self.procedure_definition_store = PostgresProcedureDefinitionStore(settings.postgres_url)
-        self.execution_event_store = PostgresExecutionEventStore(settings.postgres_url)
+        self.agent_trace_store = PostgresAgentTraceStore(settings.postgres_url)
+        self.control_plane_store = PostgresControlPlaneStore(settings.postgres_url)
         self.execution_replay_store = PostgresExecutionReplayStore(settings.postgres_url)
         self.worker_queue_store = PostgresWorkerQueueStore(settings.postgres_url)
         self.research_store = PostgresResearchStore(
@@ -390,10 +396,14 @@ class AgentRuntime:
         self._goal_graph_compiler = GoalGraphCompiler()
         self._executive_controller = ExecutiveController(model_client=self._planner_client)
         self._decision_admission = DecisionValidator()
-        self._accepted_command_compiler = AcceptedCommandCompiler()
+        self._accepted_intent_compiler = AcceptedIntentCompiler()
+        self._execution_command_resolver = ExecutionCommandResolver()
+        from personal_agent.runtime.capability_grants import CapabilityGrantIssuer
+        self._capability_grant_issuer = CapabilityGrantIssuer()
         self._task_runtime_projector = TaskRuntimeProjector()
         self._goal_decomposition_validator = GoalDecompositionValidator()
         self._goal_verifier = GoalVerifier(self._planner_client)
+        self._execution_fact_verifier = ExecutionFactVerifier()
         self._completion_verifier = CompletionVerifier()
         from personal_agent.governance.evidence_admission import EvidenceAdmission
         self._evidence_admission = EvidenceAdmission()
@@ -470,11 +480,14 @@ class AgentRuntime:
                 goal_graph_compiler=self._goal_graph_compiler,
                 controller=self._executive_controller,
                 decision_admission=self._decision_admission,
-                accepted_command_compiler=self._accepted_command_compiler,
+                accepted_intent_compiler=self._accepted_intent_compiler,
+                execution_command_resolver=self._execution_command_resolver,
+                capability_grant_issuer=self._capability_grant_issuer,
                 route_policy=ExecutionRoutePolicy(),
                 task_runtime_projector=self._task_runtime_projector,
                 goal_decomposition_validator=self._goal_decomposition_validator,
                 goal_verifier=self._goal_verifier,
+                execution_fact_verifier=self._execution_fact_verifier,
                 completion_verifier=self._completion_verifier,
                 procedure_applicability_resolver=self._procedure_applicability_resolver,
                 procedure_runtime=self._procedure_runtime,
@@ -504,6 +517,7 @@ class AgentRuntime:
                 planner_profile=self._planner_profile,
                 task_compilation_committer=self._task_compilation_committer,
                 control_committer=self._control_committer,
+                control_plane_store=self.control_plane_store,
             ),
             steps=StepExecutionContext(
                 settings=self.settings,
@@ -584,29 +598,12 @@ class AgentRuntime:
         **_: object,
     ):
         """Execute one-shot research through the agent control loop."""
-        from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
-
-        analysis = TaskAnalysis(
-            user_goal=topic,
-            goals=[Goal(
-                goal_id="goal_1",
-                description=topic,
-                result_contract="artifact",
-                resource_hints=[ResourceHint(
-                    semantic_domain="external_research",
-                    resource_types=["research", "report", "evidence"],
-                    operations=["search", "read", "verify"],
-                    freshness_required=True,
-                )],
-            )],
-        )
         result = self.execute_entry(EntryInput(
             text=topic,
             user_id=user_id,
             session_id=f"research-once:{uuid4().hex}",
             source_platform="runtime",
             metadata={
-                "task_analysis": analysis.model_dump(mode="json"),
                 "instructions": instructions,
                 "max_items": str(max_items),
                 "lookback_hours": str(lookback_hours),
@@ -1353,25 +1350,25 @@ class AgentRuntime:
     def list_replay_runs(self, run_id: str, limit: int = 50):
         return self.execution_replay_store.list_replay_runs(run_id, limit=limit)
 
-    def rebuild_execution_projection(self, run_id: str):
+    def rebuild_agent_trace_projection(self, run_id: str):
         from personal_agent.orchestration.execution_event_projection import project_execution_events
 
         return project_execution_events(
             run_id,
-            self.execution_event_store.list_events(run_id),
+            self.agent_trace_store.list_events(run_id),
         )
 
-    def build_execution_debug_bundle(self, run_id: str) -> dict[str, object]:
+    def build_agent_debug_bundle(self, run_id: str) -> dict[str, object]:
         events = [
             event.model_dump(mode="json")
-            for event in self.execution_event_store.list_events(run_id)
+            for event in self.agent_trace_store.list_events(run_id)
         ]
         history = self.list_run_history(run_id, limit=100)
         return self.execution_replay_store.build_debug_bundle(
             run_id=run_id,
             events=events,
             history=history,
-            projection=self.rebuild_execution_projection(run_id).model_dump(mode="json"),
+            projection=self.rebuild_agent_trace_projection(run_id).model_dump(mode="json"),
         )
 
     def replay_from_checkpoint(

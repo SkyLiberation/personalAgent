@@ -1,1 +1,1 @@
-"""End-to-end quality gates for routed workflow branches."""
+"""Live user-outcome proofs through the production Agent runtime."""

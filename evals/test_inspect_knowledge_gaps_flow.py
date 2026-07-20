@@ -39,7 +39,7 @@ import pytest
 from personal_agent.kernel.models import EntryInput
 from tests.note_factory import make_note
 
-from .orchestration_quality.real_runner import build_real_service
+from .live_service import build_real_service
 
 _SERVICE = build_real_service()
 _SKIP_REASON = (

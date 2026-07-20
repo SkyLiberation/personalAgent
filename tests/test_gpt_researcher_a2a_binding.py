@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from personal_agent.kernel.contracts.agent import AgentGovernance, SubagentProfile
-from personal_agent.capabilities.contracts.execution import CapabilityRequirement, ExecutionCapabilityRequest
+from personal_agent.capabilities.contracts.execution import (
+    CapabilityEquivalenceClass,
+    CapabilityRequirement,
+    CapabilityRuntimeContext,
+    ExecutionCapabilityRequest,
+)
 from personal_agent.capabilities.resolver import CapabilityResolver
 from personal_agent.planning.task_compiler import GoalGraphCompiler
-from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+from personal_agent.planning.task_analyzer import (
+    Goal,
+    ResourceHint,
+    SuccessCriterionDraft,
+    TaskAnalysis,
+)
 from personal_agent.tools.mcp_capability import build_capability_portfolio
 
 
@@ -15,6 +25,10 @@ def test_explicit_gpt_researcher_is_required_delegate_binding():
             goal_id="goal_1",
             result_contract="artifact",
             description="调研 A2A 协议采用情况",
+            success_criteria=[SuccessCriterionDraft(
+                description="产出 A2A 协议采用情况报告",
+                origin="model_inferred",
+            )],
             resource_hints=[ResourceHint(
                 semantic_domain="external_research",
                 resource_types=["agent"],
@@ -45,6 +59,10 @@ def test_generic_research_is_open_but_research_procedure_is_eligible():
             goal_id="goal_1",
             result_contract="artifact",
             description="调研最近一个月 Agent 工具调用的发展",
+            success_criteria=[SuccessCriterionDraft(
+                description="报告覆盖最近一个月的发展",
+                origin="model_inferred",
+            )],
             resource_hints=[ResourceHint(
                 semantic_domain="external_research",
                 resource_types=["research", "report"],
@@ -85,6 +103,7 @@ def test_delegate_requirement_resolves_explicit_fresh_agent_capability():
         operations=("delegate",),
         freshness_required=True,
         required_providers=("gpt_researcher",),
+        side_effect_class="external_network",
     )
     resolution = CapabilityResolver(build_capability_portfolio(agents=(profile,))).resolve(
         ExecutionCapabilityRequest(
@@ -95,6 +114,18 @@ def test_delegate_requirement_resolves_explicit_fresh_agent_capability():
             allowed_kinds=("agent",),
             allowed_operations=("delegate",),
             requirements=(requirement,),
+            runtime_context=CapabilityRuntimeContext(
+                equivalence_class=CapabilityEquivalenceClass(
+                    required_output_contract="AgentArtifact",
+                    allowed_side_effect_class="external_network",
+                    authority_scope="agent:invoke",
+                    trust_floor="external",
+                    freshness_contract="fresh",
+                    evidence_contract="provider_output",
+                    data_egress_class="content",
+                    failure_semantics="return_typed_failure",
+                ),
+            ),
         )
     )
     assert resolution.selected_definition.local_name == "gpt_researcher"

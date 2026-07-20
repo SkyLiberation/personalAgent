@@ -1,65 +1,73 @@
-# E2E Quality 用例
+# 正式环境核心用户结果 E2E
 
-`evals/e2e_quality/` 是真实环境 behavioral diagnostic。它运行生产入口、Task Analyzer、Executive Loop、Postgres、Evidence Engine、Tool/Agent Gateway，以及当前环境中可用的模型、web、Graph、MCP 和 A2A provider。
+`evals/e2e_quality/` 从原始 `EntryInput` 开始，使用 `Settings.from_env()`
+装配的真实模型与正式运行时，验证用户请求能否形成真实、可验证、可恢复的结果。
 
-这不是完全确定性的 merge gate。真实模型和外部 provider 会漂移，因此稳定的 schema、Graph/Patch invariant、scope、HITL、幂等和失败恢复必须由 hermetic suite 以硬阈值保护；E2E 用于发现组合行为与环境漂移。
+这里禁止替换 `_analyze_with_model`、注入 `TaskAnalysis`、Mock Store 或预先提供
+Plan。PostgreSQL 测试库、临时目录和 Graphiti 独立 group prefix 只负责数据隔离，
+不替换业务组件。
+
+## 验证链路
+
+```text
+raw EntryInput
+  -> live Task Analysis
+  -> TaskContract / GoalGraph
+  -> TaskRuntimeProjection
+  -> live Planning / Executive Proposal
+  -> Governance Admission
+  -> Confirmation / ExecutionGrant
+  -> Gateway Execution
+  -> Observation
+  -> Goal VerificationReport
+  -> CompletionReport
+  -> EntryResult + durable terminal checkpoint
+```
+
+E2E 直接读取生产 checkpoint 中的 canonical state，并输出
+`LIVE_E2E_TRACE=<json>`，同时默认落盘到 `data/e2e_traces/<archive-run-id>/`。
+归档包含输入、模型调用次数、Task Analysis、Contract、Runtime、AgentEvent、
+ExecutionEvent、Verification、Completion、最终输出和 pytest 断言结果。
+
+每次归档包含：
+
+- `manifest.json`：Git commit/dirty state、Python/平台、模型和 Prompt 版本；
+- `*.trace.json`：逐用例、逐阶段 canonical trace；
+- `summary.json`：通过/失败/跳过数、各阶段耗时和失败 traceback；
+- `checksums.sha256`：全部 JSON 文件的 SHA-256 完整性校验。
+
+归档器只存在于 `evals/e2e_quality`，不修改生产 checkpoint、业务 Model 或
+Store。输出目录位于已有 `.gitignore` 覆盖的 `data/` 下，CI 将整个目录上传为
+Artifact。
+
+## 当前用例
+
+| 场景 | 必须证明 |
+| --- | --- |
+| 简单回答 | 真实模型参与 Task Analysis；生成单 response Goal；返回非空回答；Goal verified 后 Task 才完成；没有伪造 ExecutionGrant |
+| 复合写入再回答 | 真实模型拆出 external_state + response；第二 Goal consumes 第一 Goal 输出；确认前零写入；确认后使用精确 Grant 写入测试库；两个 Goal verified 后才完成 |
+| 缺少输入的不支持副作用 | 真实模型可以 clarify、reject、暂停等待能力/输入，或交给能力边界终止；无论路径如何都不得产生写入、VerificationReport 或 `task_completed` |
+
+专项 Task Analysis、RAG、Research、MCP、A2A 等 suite 仍负责各自的统计指标；
+但不能代替本套从原始输入贯穿最终结果的 live E2E。
 
 ## 运行
 
 ```powershell
-uv run pytest evals/e2e_quality -v
+$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
+uv run pytest evals/e2e_quality -v -s
 ```
 
-按 case 或 branch 运行：
+普通本地运行在缺少 PostgreSQL 或正式 structured model 时会 skip。设置
+`PERSONAL_AGENT_REQUIRE_LIVE_E2E=true` 后，缺失配置必须失败；CI 使用强制模式，
+不能再以打桩或全部 skip 冒充 E2E 通过。
 
-```powershell
-$env:E2E_QUALITY_CASES="E2E-ASK-002,E2E-ART-001"
-$env:E2E_QUALITY_BRANCHES="ask,artifact"
-uv run pytest evals/e2e_quality -v
-```
+## 失败归因
 
-子集默认记录 diagnostics，但不强制整体 baseline；需要强制时设置 `E2E_QUALITY_ENFORCE_BASELINE=true`。
-
-未配置真实 structured model 时，依赖 Task Analyzer 的 live case 应 skip，不允许注入关键词 Router 伪装真实通过。其他 provider 缺失或降级应体现在 capability resolution、tool/agent trace、Observation、verification 或最终分数中。
-
-## 当前边界
-
-| 层 | 真实执行内容 |
-| --- | --- |
-| 任务理解 | `DefaultTaskAnalyzer` 输出 Goal、Relation 与 ResourceHint |
-| 控制 | Executive decide/validate/act/observe/verify 循环 |
-| Protocol | capture、artifact、solidify、delete、knowledge/research lifecycle |
-| 开放式工作 | ask、direct response、summarize 等 BoundedAction 组合 |
-| Capability | native/MCP/A2A resolution、scope、provider binding 与拒绝原因 |
-| 工具 | ToolGateway、PolicyEngine、HITL、幂等和审计 |
-| 证据 | ContextPack、citation、grounding、contradiction 与 verifier |
-| 状态 | Postgres、LangGraph checkpoint、resume 和 run snapshot |
-
-开放式 Goal 不通过 Procedure identity 评分。`procedure_id` 只对实际 Procedure invocation 有意义；E2E runner 不用 goal kind 冒充 Procedure。MCP/A2A case 通过 `expected_capability_ids`、`expected_agent_ids`、provider artifact 与 verification 状态评分。
-
-## 评分维度
-
-- Task intent hints 与显式 Goal dependency；
-- terminal/run status 和 confirmation interrupt；
-- Protocol ID 与内部 step，仅适用于 Protocol；
-- tool/capability/agent 选择及 forbidden provider；
-- answer、citation、evidence、grounding 与 verification；
-- Research source/event/digest 与 stop reason；
-- tool error kind、失败次数、预算和 stage timing；
-- Workspace claim/admission/relation/projection 的持久化结果。
-
-每个 case 同时声明正向期望和必要的 forbidden invariant。权限绕过、错误副作用、伪 workflow、未验证 A2A artifact、无 evidence 完成等问题使用硬失败，不被 branch 平均分抵消。
-
-## 结果解释
-
-失败应先按边界定位：
-
-- Goal 或 relation 错误：Task Analysis；
-- 有正确 Observation 但下一动作不合理：Executive；
-- requirement 正确但 provider 错：Capability Resolver；
-- provider 正确但调用被拒或越权：Gateway/Policy；
-- Protocol 内部 step 错：Protocol compilation/execution；
-- action 成功但 Goal 错误完成：Verification；
-- 单次正确但 resume 丢失：checkpoint/conversation。
-
-Live 网络和模型措辞波动不应通过硬编码关键词 fallback 修复。应优先补 replay fixture、改进 prompt/schema/decision policy，或把不稳定指标留在 diagnostic 层。
+- Task Analysis 输出错误 Goal、依赖或资源语义：真实模型 / Prompt / Schema。
+- ProcedureGrant、InvocationJournal 跨 checkpoint 丢失：Runtime state update。
+- 未确认就产生写入：Governance / Procedure / Gateway。
+- Action 成功但 Goal 未验证：GoalVerifier。
+- Run 结束但 Task 仍 active：Executive loop / EntryResult 状态映射。
+- 缺少能力或输入却产生成功：Capability / completion boundary。

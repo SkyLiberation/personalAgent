@@ -183,6 +183,8 @@ class MutationIntent(BaseModel):
 
 
 class GoalConstraint(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     constraint_id: str = Field(default_factory=_short_id)
     description: str
     source: ConstraintSource
@@ -311,6 +313,7 @@ class GoalDefinition(BaseModel):
     decomposition_depth: int = Field(default=0, ge=0)
     resources: tuple[ResourceRequirement, ...] = ()
     criteria: tuple[SuccessCriterion, ...] = ()
+    constraints: tuple[GoalConstraint, ...] = ()
     output_contract: str = "ToolResult"
 
     @property
@@ -464,6 +467,10 @@ class MaterializedGoalView(BaseModel):
         return self.definition.success_criterion_ids
 
     @property
+    def constraints(self) -> tuple[GoalConstraint, ...]:
+        return self.definition.constraints
+
+    @property
     def output_contract(self) -> str:
         return self.definition.output_contract
 
@@ -527,6 +534,7 @@ class ExecutionEvent(BaseModel):
         "goal_dependency_added", "goal_dependency_removed", "goal_dependency_updated",
         "skill_activated", "attempt_recorded", "coverage_recorded",
         "verification_recorded", "plan_revised", "completion_rejected", "task_completed",
+        "accepted_intent_created", "execution_command_resolved",
         "task_paused", "task_resumed", "task_terminated",
     ]
     goal_id: str | None = None
