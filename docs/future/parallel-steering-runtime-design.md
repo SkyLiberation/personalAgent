@@ -4,7 +4,7 @@
 
 Agent Harness 的 Goal、Executive、Resolution、Context、Skill、Durable Run、异步 Subagent、Verification 和 outcome-aware ranking 具有不同接入程度，当前事实以 [核心架构与主链接入状态](../summary/core-architecture-current-state.md) 为准。
 
-本文只保留尚未落地的两项能力，不重复历史 Phase，也不提供旧 Router、Workflow、Protocol、Pattern 或同步 A2A 兼容设计：
+本文只服务已经由具体领域 Aggregate 或 `ChildAgentRun` 证明需要长生命周期控制的运行，不让简单 Message 或普通 ToolCall 为未来并行/steering 承担额外状态。能力边界和主运行循环见 [Capability-first Knowledge Agent Runtime](adaptive-agent-runtime-design.md)。本文只保留尚未落地的两项能力，不重复历史 Phase，也不提供旧 Router、Workflow、Protocol、Pattern 或同步 A2A 兼容设计：
 
 1. 独立本地 read action 的真正并发执行与显式 join；
 2. 用户在运行中改变重点、追加目标或调整输出形式的语义 steering。

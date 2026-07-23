@@ -203,6 +203,245 @@ def test_identity_grounding_mismatch_fails_before_execution() -> None:
     assert admission.reason_codes == ("grounding_identity_mismatch",)
 
 
+def test_scope_expanded_model_decision_is_denied_without_resource_rewrite() -> None:
+    payload, task, runtime, decision = _mutation_chain()
+    expanded = decision.model_copy(update={
+        "bounded_action": decision.bounded_action.model_copy(update={
+            "proposed_resource_access": (
+                decision.bounded_action.proposed_resource_access.model_copy(update={
+                    "write_set": (ResourceAccess(
+                        semantic_domain="private_admin",
+                        locator="tenant:other",
+                    ),),
+                })
+            ),
+        }),
+    })
+    proposal = ControlProposal(
+        base_task_revision=task.revision,
+        base_runtime_revision=runtime.revision,
+        decision=expanded,
+        grounding_claims=(_claim(task, payload),),
+    )
+
+    admission = DecisionValidator().admit(task, runtime, proposal)
+
+    assert admission.verdict == "not_accepted"
+    assert admission.reason_codes == ("resource_scope_expanded",)
+    assert admission.feedback is not None
+    assert admission.feedback.disposition == "revise_model"
+    assert expanded.bounded_action.proposed_resource_access.write_set == (
+        ResourceAccess(semantic_domain="private_admin", locator="tenant:other"),
+    )
+
+
+def test_user_explicit_read_locator_cannot_be_omitted_by_control_proposal() -> None:
+    note_id = str(uuid4())
+    compilation = GoalGraphCompiler().compile(TaskAnalysis(
+        user_goal=f"read note {note_id}",
+        goals=[Goal(
+            goal_id="goal_1",
+            description="read the specified note",
+            result_contract="response",
+            success_criteria=[SuccessCriterionDraft(
+                description="return the note fact",
+                origin="model_inferred",
+            )],
+            resource_hints=[ResourceHint(
+                semantic_domain="knowledge",
+                resource_types=["note"],
+                operations=["read"],
+                locator=note_id,
+                origin="user_explicit",
+            )],
+        )],
+    ), f"read note {note_id}")
+    action = BoundedAction(
+        goal_id="goal_1",
+        execution_intent="reason",
+        description="answer without reading",
+        output_contract="VerifiedAnswer",
+        proposed_resource_access=ProposedResourceAccessPlan(
+            side_effect_class="none",
+            authority_scope="response",
+            data_egress_class="content",
+            trust_floor="external",
+            freshness_contract="current",
+            evidence_contract="none",
+            failure_semantics="return_typed_failure",
+        ),
+        input=CapabilityActionInput(task_text="answer"),
+    )
+    proposal = ControlProposal(
+        base_task_revision=compilation.task_contract.revision,
+        base_runtime_revision=compilation.runtime.revision,
+        decision=ExecuteBoundedActionDecision(
+            target_goal_id="goal_1",
+            bounded_action=action,
+        ),
+        grounding_claims=(ModelGroundingClaim(
+            source_ref="goal:goal_1:goal_id",
+            transform="identity",
+            origin="source_identity",
+            output_field_ref="decision.target_goal_id",
+            source_digest=canonical_digest("goal_1"),
+        ),),
+    )
+
+    admission = DecisionValidator().admit(
+        compilation.task_contract, compilation.runtime, proposal,
+    )
+
+    assert admission.verdict == "not_accepted"
+    assert admission.reason_codes == ("required_resource_scope_missing",)
+    assert action.proposed_resource_access.read_set == ()
+
+
+def test_resource_access_without_capability_is_denied_without_internal_routing() -> None:
+    note_id = str(uuid4())
+    compilation = GoalGraphCompiler().compile(TaskAnalysis(
+        user_goal=f"read note {note_id}",
+        goals=[Goal(
+            goal_id="goal_1",
+            description="read the specified note",
+            result_contract="response",
+            success_criteria=[SuccessCriterionDraft(
+                description="return the note fact",
+                origin="model_inferred",
+            )],
+            resource_hints=[ResourceHint(
+                semantic_domain="knowledge",
+                resource_types=["note"],
+                operations=["read"],
+                locator=note_id,
+                origin="user_explicit",
+            )],
+        )],
+    ), f"read note {note_id}")
+    action = BoundedAction(
+        goal_id="goal_1",
+        execution_intent="reason",
+        description="claim to read without a provider",
+        output_contract="VerifiedAnswer",
+        requirement=None,
+        max_tool_calls=0,
+        proposed_resource_access=ProposedResourceAccessPlan(
+            read_set=(ResourceAccess(semantic_domain="knowledge", locator=note_id),),
+            side_effect_class="none",
+            authority_scope="goal:goal_1",
+            data_egress_class="content",
+            trust_floor="external",
+            freshness_contract="current",
+            evidence_contract="provider_result",
+            failure_semantics="return_typed_failure",
+        ),
+        input=CapabilityActionInput(task_text="read the note"),
+    )
+    proposal = ControlProposal(
+        base_task_revision=compilation.task_contract.revision,
+        base_runtime_revision=compilation.runtime.revision,
+        decision=ExecuteBoundedActionDecision(
+            target_goal_id="goal_1",
+            bounded_action=action,
+        ),
+        grounding_claims=(ModelGroundingClaim(
+            source_ref="goal:goal_1:goal_id",
+            transform="identity",
+            origin="source_identity",
+            output_field_ref="decision.target_goal_id",
+            source_digest=canonical_digest("goal_1"),
+        ),),
+    )
+
+    admission = DecisionValidator().admit(
+        compilation.task_contract, compilation.runtime, proposal,
+    )
+
+    assert admission.verdict == "not_accepted"
+    assert admission.reason_codes == ("resource_access_requires_capability",)
+    assert admission.feedback is not None
+    assert admission.feedback.disposition == "revise_model"
+    assert action.requirement is None
+    assert action.proposed_resource_access.read_set == (
+        ResourceAccess(semantic_domain="knowledge", locator=note_id),
+    )
+
+
+def test_user_required_provider_cannot_be_omitted_by_control_proposal() -> None:
+    compilation = GoalGraphCompiler().compile(TaskAnalysis(
+        user_goal="通过 provider ZetaCloud 读取 Q-7319",
+        goals=[Goal(
+            goal_id="goal_1",
+            description="读取指定实验记录",
+            result_contract="response",
+            success_criteria=[SuccessCriterionDraft(
+                description="返回实验记录原文",
+                origin="model_inferred",
+            )],
+            resource_hints=[ResourceHint(
+                semantic_domain="experiment",
+                resource_types=["record"],
+                operations=["search", "read"],
+                locator="Q-7319",
+                user_required_provider="ZetaCloud",
+                origin="user_explicit",
+                freshness_required=True,
+            )],
+        )],
+    ), "通过 provider ZetaCloud 读取 Q-7319")
+    action = BoundedAction(
+        goal_id="goal_1",
+        execution_intent="verify",
+        description="读取指定实验记录",
+        output_contract="VerifiedAnswer",
+        requirement=CapabilityRequirement.from_dimensions(
+            requirement_id="goal_1",
+            purpose="读取指定实验记录",
+            semantic_domains=("experiment",),
+            resource_types=("record",),
+            operations=("search", "read"),
+            resource_locator="Q-7319",
+            freshness_required=True,
+            output_contract="VerifiedAnswer",
+        ),
+        proposed_resource_access=ProposedResourceAccessPlan(
+            read_set=(ResourceAccess(semantic_domain="experiment", locator="Q-7319"),),
+            side_effect_class="none",
+            authority_scope="goal:goal_1",
+            data_egress_class="content",
+            trust_floor="external",
+            freshness_contract="current",
+            evidence_contract="VerifiedAnswer",
+            failure_semantics="return_typed_failure",
+        ),
+        input=CapabilityActionInput(task_text="读取 Q-7319", agentic_synthesis=True),
+    )
+    proposal = ControlProposal(
+        base_task_revision=compilation.task_contract.revision,
+        base_runtime_revision=compilation.runtime.revision,
+        decision=ExecuteBoundedActionDecision(
+            target_goal_id="goal_1",
+            bounded_action=action,
+        ),
+        grounding_claims=(ModelGroundingClaim(
+            source_ref="goal:goal_1:goal_id",
+            transform="identity",
+            origin="source_identity",
+            output_field_ref="decision.target_goal_id",
+            source_digest=canonical_digest("goal_1"),
+        ),),
+    )
+
+    admission = DecisionValidator().admit(
+        compilation.task_contract, compilation.runtime, proposal,
+    )
+
+    assert admission.verdict == "not_accepted"
+    assert admission.reason_codes == ("required_provider_scope_missing",)
+    assert action.requirement is not None
+    assert action.requirement.required_providers == ()
+
+
 def test_admission_accepts_full_decision_root_for_goal_identity_grounding() -> None:
     _payload, task, runtime, decision = _mutation_chain()
     claim = ModelGroundingClaim(

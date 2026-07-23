@@ -1,68 +1,73 @@
-# Live Core User-Outcome E2E
+# 架构 E2E 证据分层
 
-This suite starts from raw user input and drives the production
-`AgentService.execute_entry` / `resume_entry` boundary with the model and
-provider configuration loaded by `Settings.from_env()`.
+本目录同时保存两类测试代码，但二者的证据等级严格分开：
 
-No E2E case may replace `_analyze_with_model`, inject `TaskAnalysis`, mock a
-store, or supply a precomputed plan. The only isolation is infrastructure
-namespacing: business persistence uses `personal_agent_test`, temporary files
-use a per-test directory, and Graphiti receives a unique E2E group prefix.
+- `release`：从真实 HTTP 用户入口进入独立 Web 进程，使用真实模型、真实
+  PostgreSQL 和场景所需的真实 provider，走到 `completed` 或该反事实规定的
+  fail-closed 终态。测试不得注入业务对象、调用内部 Service 推进流程、替换
+  Gateway/Store/Model，也不得使用测试 hook 制造状态窗口。
+- `diagnostic`：允许从进程内 `AgentService` 边界读取更细的内部状态；用于定位
+  Contract、Grant、Journal、Verification 等不变量。它即使通过，也不能计入
+  发布级架构证明。
 
-The verified boundary is:
+唯一分类来源是
+[`evidence_catalog.py`](evidence_catalog.py)。测试文件不另存一份 layer/status，
+pytest 收集阶段会拒绝未登记用例，并按 catalog 自动添加 marker。业务事实仍由
+生产代码中的 canonical owner 持有；catalog 只拥有“某测试证明什么”的元数据。
 
-```text
-raw EntryInput
-  -> live Task Analysis
-  -> TaskContract + TaskRuntimeProjection
-  -> live planning / executive control
-  -> Governance admission / confirmation
-  -> capability grant and real gateway execution
-  -> Observation
-  -> per-Goal VerificationReport
-  -> CompletionReport
-  -> EntryResult + durable terminal checkpoint
-```
+## 五个证据层
 
-The cases prove:
+| layer | 读取的主要 canonical owner | 证明目标 |
+| --- | --- | --- |
+| `understanding` | Analysis Proposal、Admission、Accepted Analysis、TaskContract | 用户语义不被 validator 静默改写，Definition 编译正确 |
+| `planning_control` | Plan Proposal、DecisionFeedback、AcceptedIntent、Command | 模型提案与确定性管控边界正确，无业务 fallback |
+| `authority_gateway` | Confirmation、Grant、Gateway、Provider result/receipt | 未授权不调用，授权只缩权，执行只能经过 Gateway |
+| `journal_recovery` | InvocationJournal、outbox、checkpoint、domain event | 崩溃恢复不重复副作用，不重新决定已冻结 Command |
+| `verification_completion` | Observation、EvidenceAdmission、VerificationReport、CompletionReport | 执行事实不冒充 Goal 成功，报告齐全后才完成 |
 
-1. A low-risk response request is understood by the live analyzer, answered,
-   verified, and completed without a fabricated capability grant.
-2. A write-then-answer request is decomposed by the live analyzer, preserves
-   the output dependency, pauses before mutation, resumes with the exact grant,
-   writes real test data, answers from that result, and completes only after
-   both Goals are verified.
-3. A mutation request whose required input is absent never fabricates a side
-   effect, verification report, or completed Task.
+layer 是断言焦点，不是缩短流程的许可。任何 `release` 用例仍必须从用户输入走完整
+链路；负向用例可以结束在明确的 denied、waiting、terminated 等合法终态，但不得
+伪造 `completed`。
 
-Every case prints `LIVE_E2E_TRACE=<json>` and writes the same evidence under
-`data/e2e_traces/<archive-run-id>/` by default. The archive contains:
+## 当前基线
 
-- `manifest.json`: Git commit/dirty state, runtime fingerprint, model and prompt version;
-- `*.trace.json`: input, model calls, TaskAnalysis, TaskContract, TaskRuntime,
-  AgentEvents, ExecutionEvents, verification, completion and output;
-- `summary.json`: pytest outcome, phase duration and failure detail for every case;
-- `checksums.sha256`: integrity hashes for every JSON evidence file.
+- 旧 E01–E15 是 `architecture` 证据；E16/E17 是 MCP/A2A
+  `capability_profile` 证据。
+- Phase 0 产品能力要求新的 `product_capability` E01–E13，组合能力要求
+  `composite_capability` C01–C04；当前 catalog 尚无这些条目。
+- `--e2e-require-complete-matrix` 现在检查产品能力 E01–E13，会在收集阶段诚实列出
+  缺失项，而不会因旧编号相同而通过。
+- 发布能力由 `release_gate.py` 对机器声明、catalog eligibility、clean 同 revision
+  trace、test outcome 和 checksum 求交集；历史 trace、skip 或 dirty 工作树均不可信。
 
-Set `PERSONAL_AGENT_E2E_TRACE_DIR` to choose another local root. The archive
-stays in the E2E layer and does not change production checkpoints or business
-storage. CI uploads both the structured archive and the pytest stream.
+## 运行
 
-Requirements:
-
-- PostgreSQL on `127.0.0.1:5432`, user/password `postgres/postgres`.
-- A real structured model configured through `STRUCTURED_*`, `ROUTER_*`, or
-  `OPENAI_*` environment variables.
-- Any provider required by the scenario under test.
-
-Run against the configured environment:
+运行现有架构/Profile release 用例：
 
 ```powershell
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
 $env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
-uv run pytest evals/e2e_quality -v -s
+uv run pytest evals/e2e_quality --e2e-scope=release -v -s
 ```
 
-Without PostgreSQL or a structured model, an ordinary local run skips. When
-`PERSONAL_AGENT_REQUIRE_LIVE_E2E=true`, missing infrastructure is a hard
-failure; CI uses this mode so an unconfigured job cannot report a false pass.
+该命令只运行已有架构/Profile 用例，不产生产品能力声明。
+加入 `--e2e-require-complete-matrix` 后会检查产品 E01–E13；当前会于收集阶段列出
+全部缺失项。
+
+按证据层运行：
+
+```powershell
+uv run pytest evals/e2e_quality --e2e-scope=release --e2e-layer=authority_gateway -v -s
+uv run pytest evals/e2e_quality --e2e-scope=diagnostic --e2e-layer=journal_recovery -v -s
+```
+
+每次执行会生成 trace archive，包括环境指纹、HTTP 事件、canonical state 证据、
+pytest 结果和校验和。API key 不写入归档。
+
+发布投影：
+
+```powershell
+uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
+```
+
+任一 E/C 声明不可信时返回非零。

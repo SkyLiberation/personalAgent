@@ -10,7 +10,12 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.models import EntryInput, local_now
-from personal_agent.runtime.contracts.task import ContextInventory
+from personal_agent.runtime.contracts.task import (
+    ContextBudget,
+    ContextInventory,
+    ContextItem,
+    RuntimeSnapshotRef,
+)
 from personal_agent.runtime.contracts.intake import TaskIntakeState
 from personal_agent.kernel.contracts.interaction import InteractionOption, InteractionRequest
 from personal_agent.governance.guardrails import get_content_guard
@@ -44,6 +49,19 @@ class _FinalAnswerBody(BaseModel):
 
     answer: str = Field(min_length=1)
     citation_refs: tuple[str, ...] = ()
+
+
+class _FinalAnswerWithoutCitations(BaseModel):
+    """Model contract when the completed task exposes no citation identities.
+
+    Citation absence is a closed-world fact from the final composition
+    projection. Selecting this narrower contract cannot alter the business
+    answer; it only makes an invalid citation field unrepresentable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(min_length=1)
 
 def _node_normalize_entry(state: RunCheckpoint) -> dict:
     if state.run_id is None or state.run_id == "":
@@ -473,32 +491,45 @@ def _node_finalize_entry_result(
     *,
     deps: StepExecutionContext,
 ) -> dict:
+    waiting_for_environment = bool(
+        state.task_runtime is not None
+        and state.task_runtime.lifecycle in {"awaiting_input", "paused"}
+        and not state.errors
+    )
     if (
         state.task_runtime is not None
-        and state.task_runtime.lifecycle not in {"completed", "terminated"}
+        and state.task_runtime.lifecycle not in {
+            "completed", "terminated", "awaiting_input", "paused",
+        }
         and not state.answer_completed
     ):
         state.errors.append("completion_verifier_did_not_accept_task")
-    if state.errors:
+    if not state.errors and state.completion_report is not None and state.completion_report.status == "complete":
+        proposal = _compose_final_answer(state, deps)
+        if proposal is None:
+            state.errors.append("final_answer_composition_unavailable")
+            state.answer = ""
+            state.add_event("final_answer_composition_unavailable", {
+                "status": "failed_closed",
+            })
+        else:
+            state.final_answer_proposal = proposal
+            state.answer = proposal.answer
+            state.add_event("final_answer_admitted", {
+                "proposal": proposal.model_dump(mode="json"),
+                "admission": (
+                    state.final_answer_admission.model_dump(mode="json")
+                    if state.final_answer_admission else None
+                ),
+            })
+    if waiting_for_environment:
+        state.add_event("agent_run_waiting", {
+            "lifecycle": state.task_runtime.lifecycle if state.task_runtime else None,
+            "reason": "awaiting_environment_change",
+        })
+    elif state.errors:
         state.add_event("run_failed", {"errors": state.errors})
     else:
-        if state.completion_report is not None and state.completion_report.status == "complete":
-            proposal = _compose_final_answer(state, deps)
-            if proposal is None:
-                state.answer = "模型暂不可用，已验证结果暂时无法生成业务答复。"
-                state.add_event("final_answer_model_unavailable", {
-                    "status": "terminal_control_message",
-                })
-            else:
-                state.final_answer_proposal = proposal
-                state.answer = proposal.answer
-                state.add_event("final_answer_admitted", {
-                    "proposal": proposal.model_dump(mode="json"),
-                    "admission": (
-                        state.final_answer_admission.model_dump(mode="json")
-                        if state.final_answer_admission else None
-                    ),
-                })
         if not any(event.type == "answer_completed" for event in state.events):
             state.add_event("answer_completed", {"answer": state.answer})
         state.add_event("run_completed", {
@@ -526,9 +557,11 @@ def _node_finalize_entry_result(
     result = {
         "events": state.events,
         "updated_at": state.updated_at,
+        "context_projections": state.context_projections,
         "final_answer_proposal": state.final_answer_proposal,
         "final_answer_admission": state.final_answer_admission,
         "answer": state.answer,
+        "errors": state.errors,
     }
     if not state.errors and state.answer:
         result["messages"] = [
@@ -547,6 +580,7 @@ def _compose_final_answer(
 
     if state.completion_report is None:
         return None
+    materialized = _materialize_final_answer_context(state, deps)
     verified_goal_refs = state.completion_report.verified_goal_ids
     report_refs = tuple(
         report.report_id for report in state.verification_reports.values()
@@ -557,6 +591,7 @@ def _compose_final_answer(
     )
     feedback: dict[str, object] | None = None
     prior_proposal: FinalAnswerProposal | None = None
+    output_type = _FinalAnswerBody if allowed_citations else _FinalAnswerWithoutCitations
     for attempt in range(2):
         try:
             response = deps.model_client.generate(StructuredModelRequest(
@@ -569,29 +604,19 @@ def _compose_final_answer(
                             "Compose the final business answer using only verified goals, admitted evidence, "
                             "execution facts, and receipts in the supplied context. Do not claim an unverified "
                             "outcome, invent citations, or copy a tool title as the answer. Return only the "
-                            "structured object. If output feedback is supplied, revise only the rejected output."
+                            "structured object. When allowed_citation_refs is empty, the output schema deliberately "
+                            "has no citation field: do not mention or invent citations. If output feedback is supplied, "
+                            "revise only the rejected output."
                         ),
                     },
                     {"role": "user", "content": json.dumps({
-                        "task": state.task_contract.model_dump(mode="json"),
-                        "verified_goals": verified_goal_refs,
-                        "goal_verification_reports": {
-                            key: value.model_dump(mode="json")
-                            for key, value in state.verification_reports.items()
-                        },
-                        "execution_fact_reports": {
-                            key: value.model_dump(mode="json")
-                            for key, value in state.execution_fact_reports.items()
-                        },
-                        "tool_results": state.tool_results[-12:],
-                        "invocation_results": state.invocation_batch.results,
-                        "draft_answer": state.answer,
+                        "context": materialized.model_payload(),
                         "allowed_citation_refs": allowed_citations,
                         "output_feedback": feedback,
                     }, ensure_ascii=False, default=str)},
                 ],
-                output_type=_FinalAnswerBody,
-                context_projection_ref=f"final:{state.run_id}:{state.task_contract.revision}",
+                output_type=output_type,
+                context_projection_ref=materialized.projection_id,
                 temperature=0,
                 max_tokens=1200,
                 kind="structured",
@@ -607,7 +632,10 @@ def _compose_final_answer(
             verified_goal_refs=verified_goal_refs,
             verification_report_refs=report_refs,
             answer=body.answer,
-            citation_refs=body.citation_refs,
+            citation_refs=(
+                body.citation_refs
+                if isinstance(body, _FinalAnswerBody) else ()
+            ),
             supersedes_proposal_ref=(prior_proposal.proposal_id if prior_proposal else None),
             revision_feedback_ref=(
                 state.decision_feedback[-1].feedback_id
@@ -633,3 +661,78 @@ def _compose_final_answer(
         prior_proposal = proposal
         state.add_event("final_answer_feedback_created", feedback)
     return None
+
+
+def _materialize_final_answer_context(
+    state: RunCheckpoint,
+    deps: StepExecutionContext,
+):
+    """Create the only input surface for final answer composition.
+
+    Decision ownership: this is a closed-world context derivation.  Its only
+    inputs are the completed contract, admitted verification facts and the
+    already-produced draft.  It never selects a new goal, evidence item, or
+    business result.
+    """
+    if state.task_contract is None or state.task_runtime is None or state.completion_report is None:
+        raise ValueError("final composition requires completed task state")
+    item = ContextItem(
+        item_id=(
+            f"final-composition:{state.task_contract.task_id}:"
+            f"{state.task_contract.revision}:{state.task_runtime.revision}"
+        ),
+        category="run",
+        kind="final_composition_contract",
+        provenance="runtime",
+        trust="runtime",
+        admission="admitted",
+        summary=state.task_contract.user_goal,
+        payload={
+            "authority_tier": "system_policy",
+            "task": state.task_contract.model_dump(mode="json"),
+            "completion_report": state.completion_report.model_dump(mode="json"),
+            "goal_verification_reports": {
+                key: value.model_dump(mode="json")
+                for key, value in state.verification_reports.items()
+            },
+            "execution_fact_reports": {
+                key: value.model_dump(mode="json")
+                for key, value in state.execution_fact_reports.items()
+            },
+            "tool_results": state.tool_results[-12:],
+            "invocation_results": state.invocation_batch.results,
+            "draft_answer": state.answer,
+        },
+    )
+    budget = ContextBudget(
+        model_profile="runtime-default",
+        tokenizer_profile="runtime-default",
+        max_context_tokens=16_384,
+        safety_margin=512,
+        reserved_output_tokens=2_048,
+    )
+    projection = deps.context_manager.project_contract(
+        (item,),
+        purpose="final_composition",
+        budget=budget,
+        source_snapshot=RuntimeSnapshotRef(
+            run_id=state.run_id,
+            task_id=state.task_contract.task_id,
+            task_revision=state.task_contract.revision,
+            runtime_revision=state.task_runtime.revision,
+            event_sequence=state.task_runtime.last_event_sequence,
+        ),
+    )
+    materialized = deps.context_gateway.open(
+        projection,
+        (item,),
+        purpose="final_composition",
+    )
+    state.context_projections.append(projection)
+    state.add_event("context_projected", projection.model_dump(mode="json"))
+    state.add_event("context_materialized", {
+        "projection_id": projection.projection_id,
+        "purpose": "final_composition",
+        "materialized_refs": materialized.materialized_refs,
+    })
+    return materialized

@@ -25,7 +25,7 @@ def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
         args_schema=InspectArtifactArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
-            exposure="workflow_activity",
+            exposure="public_agent",
             risk_level="low",
             side_effects=(),
             permission_scope="artifact:read",

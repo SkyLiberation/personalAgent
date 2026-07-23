@@ -17,15 +17,18 @@ ReAct 迭代节点本身的单元测试在 ``test_orchestration.py::TestPhase4Re
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from personal_agent.governance import ToolExecutor
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.context import ContextManager, ModelContextGateway
+from personal_agent.execution.invocation_journal import InvocationJournal
 from personal_agent.kernel.config import OpenAIConfig, Settings
 from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.orchestration.orchestration_models import (
@@ -70,6 +73,17 @@ def _build_fake_graph_search_tool():
     return graph_search
 
 
+def _build_dotted_mcp_tool():
+    @tool(
+        "filesystem_release.read_text_file",
+        description="Read a release document.",
+    )
+    def read_text_file(path: str):
+        return path
+
+    return read_text_file
+
+
 def _react_context(settings: Settings, tool_executor: ToolExecutor) -> ReactContext:
     return ReactContext(
         settings=settings,
@@ -77,6 +91,7 @@ def _react_context(settings: Settings, tool_executor: ToolExecutor) -> ReactCont
         policy_engine=PolicyEngine(),
         context_manager=ContextManager(),
         context_gateway=ModelContextGateway(),
+        invocation_journal=InvocationJournal(),
     )
 
 
@@ -314,3 +329,51 @@ class TestBeginToolCallNativeId:
 
         assert aim.tool_calls[0]["id"].startswith("r-native:")
         assert state.tool_tracking.pending_call_id == aim.tool_calls[0]["id"]
+
+
+class TestModelToolWireIdentity:
+    def test_dotted_canonical_tool_is_encoded_and_mapped_back(self):
+        from personal_agent.orchestration.orchestration_nodes._helpers import (
+            _react_llm_native,
+        )
+
+        executor = ToolExecutor(policy_engine=PolicyEngine())
+        executor.register(_build_dotted_mcp_tool())
+        requests = []
+
+        class EmptyResponse(BaseModel):
+            pass
+
+        class ModelClient:
+            def generate(self, request):
+                requests.append(request)
+                wire_name = request.tools[0]["function"]["name"]
+                return StructuredModelResponse(
+                    value=EmptyResponse(),
+                    model="test",
+                    latency_ms=1,
+                    tool_calls=[{
+                        "id": "call-mcp",
+                        "function": {
+                            "name": wire_name,
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }],
+                )
+
+        context = replace(
+            _react_context(_settings(), executor),
+            model_client=ModelClient(),
+        )
+        outcome = _react_llm_native(
+            "Read the file",
+            context,
+            {"filesystem_release.read_text_file"},
+        )
+
+        assert outcome is not None
+        assert outcome.tool_name == "filesystem_release.read_text_file"
+        assert outcome.tool_input == {"path": "README.md"}
+        wire_name = requests[0].tools[0]["function"]["name"]
+        assert wire_name != outcome.tool_name
+        assert wire_name.replace("_", "").isalnum()

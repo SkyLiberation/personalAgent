@@ -6,7 +6,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.runtime.contracts.task import (
     MaterializedGoalView,
@@ -113,6 +113,7 @@ class _ModelCapabilityAction(BaseModel):
     ]
     description: str
     output_contract: str
+    requirement_output_contract: str
     requirement_id: str = ""
     requirement_purpose: str = ""
     requirement_semantic_domains: tuple[str, ...] = ()
@@ -121,6 +122,7 @@ class _ModelCapabilityAction(BaseModel):
     requirement_resource_locator: str = ""
     requirement_minimum_trust: Literal["trusted", "scoped", "external", "untrusted"] = "external"
     requirement_freshness_required: bool = False
+    requirement_required_providers: tuple[str, ...] = ()
     read_set: tuple[_ModelResourceAccess, ...] = ()
     write_set: tuple[_ModelResourceAccess, ...] = ()
     side_effect_class: str
@@ -130,9 +132,9 @@ class _ModelCapabilityAction(BaseModel):
     freshness_contract: str
     evidence_contract: str
     failure_semantics: str
-    max_tool_calls: int
-    max_model_calls: int
-    max_iterations: int
+    max_tool_calls: int = Field(ge=0, le=64)
+    max_model_calls: int = Field(ge=0, le=16)
+    max_iterations: int = Field(ge=1, le=12)
     task_text: str
     plan_step_ref: str = ""
     information_goal: str = ""
@@ -229,7 +231,8 @@ def _normalize_execute_proposal(
             resource_locator=proposed.requirement_resource_locator or None,
             minimum_trust_level=proposed.requirement_minimum_trust,
             freshness_required=proposed.requirement_freshness_required,
-            output_contract=proposed.output_contract,
+            required_providers=proposed.requirement_required_providers,
+            output_contract=proposed.requirement_output_contract,
             side_effect_class=proposed.side_effect_class,
         )
     action = BoundedAction(
@@ -487,6 +490,17 @@ class ExecutiveController:
             context_payload = {
                 "model_context": model_context,
                 "ready_goal_ids": sorted(ready_ids),
+                "ready_goal_contracts": {
+                    item.goal_id: {
+                        "result_contract": item.result_contract,
+                        "output_contract": item.output_contract,
+                    }
+                    for item in ready_goals
+                },
+                "accepted_resource_ceiling": _accepted_resource_ceiling(
+                    task,
+                    ready_ids,
+                ),
                 "observations": [item.model_dump(mode="json") for item in observations[-6:]],
                 "capability_classes": [item.model_dump(mode="json") for item in capability_classes],
                 "procedure_candidates": [
@@ -583,7 +597,25 @@ class ExecutiveController:
                         "semantic choice. Do not produce the action payload yet. Do not claim execution "
                         "success or completion without verified reports. A finish decision only closes work "
                         "already verified in model_context; it never creates an answer. For a self-contained "
-                        "response that still needs to be produced, select execute_bounded_action. "
+                        "response that still needs to be produced, select execute_bounded_action. If the selected "
+                        "Goal has a mandatory procedure candidate, select execute_bounded_action rather than "
+                        "invoke_procedure: your complete commit Proposal is later compiled into that unique "
+                        "procedure by policy, and the procedure never creates the business intent. Do not select "
+                        "request_confirmation for that Goal: the mandatory procedure owns the confirmation pause "
+                        "after the complete mutation has been accepted and resolved to its immutable Command. "
+                        "For a Goal without a mandatory procedure and with a non-empty accepted resource ceiling, "
+                        "select execute_bounded_action only when at least one supplied capability_classes entry "
+                        "covers its domain, resource types, operations, freshness floor, trust floor, and every "
+                        "explicitly required provider. If no complete available class exists, select "
+                        "request_capability_acquisition for that non-procedure Goal; do not weaken or remove the "
+                        "accepted provider constraint. This capability-class precondition does not apply to a "
+                        "mandatory procedure Goal: its workflow-only leaf capabilities are resolved and admitted "
+                        "inside the procedure after the complete business mutation is frozen. For that Goal, do "
+                        "not select request_capability_acquisition at this boundary. Capability acquisition is a "
+                        "control pause, not Goal progress or execution success. When the accepted resource "
+                        "ceiling requires operation delegate and a supplied capability_classes entry has "
+                        "kind=agent covering that operation and required provider, select delegate; never put "
+                        "delegate inside execute_bounded_action. "
                         "Return only the structured object."
                     ),
                 },
@@ -591,7 +623,7 @@ class ExecutiveController:
             ]
             selection_response = self._model_client.generate(StructuredModelRequest(
                 operation="executive_decision_kind",
-                version="v3",
+                version="v7",
                 messages=selection_messages,
                 output_type=_ExecutiveDecisionKindProposal,
                 context_projection_ref=str(model_context.get("projection_id") or ""),
@@ -606,6 +638,19 @@ class ExecutiveController:
                 return None
 
             proposal_type = _ACTION_PROPOSAL_TYPES[selection.action]
+            goal_resources = task.resources_for_goal(selection.target_goal_id)
+            relevant_capability_classes = tuple(
+                item for item in capability_classes
+                if not goal_resources or any(
+                    resource.semantic_domain in item.semantic_domains
+                    and (
+                        not resource.resource_types
+                        or bool(set(resource.resource_types).intersection(item.resource_types))
+                    )
+                    and set(resource.required_operations).issubset(item.operations)
+                    for resource in goal_resources
+                )
+            )
             proposal_messages = [
                 {
                     "role": "system",
@@ -614,30 +659,88 @@ class ExecutiveController:
                         "The selected action and target are immutable. You own all remaining semantic "
                         "choices: typed business payload, "
                         "requested result contract, grounding claims, and semantic recovery intent. "
+                        "For execute_bounded_action, bounded_action.output_contract MUST be an exact "
+                        "byte-for-byte copy of ready_goal_contracts[selected_target_goal_id].output_contract; "
+                        "never replace it with a prose description of the desired answer. "
+                        "For delegate, subtask.required_capability must copy the matching kind=agent "
+                        "capability class dimensions, preserve the accepted required provider, and agent_id "
+                        "must name that provider. The bounded_sub_goal/task text is model-owned but must stay "
+                        "within the selected Goal; the child Artifact remains unverified until parent verification. "
+                        "max_tool_calls and max_model_calls may be zero, but max_iterations MUST be an "
+                        "integer from 1 through 12 even for a one-shot self-contained response. "
+                        "When a capability is required by a non-procedure action, requirement_output_contract, authority_scope, "
+                        "side_effect_class, data_egress_class, trust_floor, freshness_contract, "
+                        "evidence_contract, and failure_semantics MUST describe one supplied "
+                        "capability_classes entry that covers the requested domain/resource/operations. "
+                        "Copy those eight class fields exactly; do not reinterpret them. In particular, "
+                        "data_egress_class describes data sent out of this process to the provider, so a "
+                        "local artifact reader whose class says none remains none even though its result "
+                        "contains content. capability_classes.providers describes availability only: keep "
+                        "requirement_required_providers empty unless the accepted resource ceiling itself "
+                        "contains an explicit required provider. "
+                        "The capability's immediate output contract may be ToolResult or EvidenceItem "
+                        "while bounded_action.output_contract remains the Goal's final Answer contract. "
                         "Choose procedures only from the supplied candidates; for a mandatory procedure, "
                         "provide its complete typed input rather than asking runtime to synthesize it. "
                         "Do not bind a concrete provider unless the user contract already requires it. "
+                        "If accepted_resource_ceiling[selected_target_goal_id] contains non-empty "
+                        "provider_constraint.required, capability requirement.provider_constraint.required "
+                        "MUST preserve that exact set; omission is forbidden. Do not add any required "
+                        "provider absent from that ceiling. Also preserve its freshness_required floor. "
+                        "For a mandatory procedure commit, declare the accepted Goal's mutation operations and "
+                        "resource boundary completely, but do not claim agentic synthesis and do not require a "
+                        "top-level capability class: leaf capability binding belongs to the procedure nodes. "
+                        "For execute_bounded_action, read_set and write_set MUST remain within "
+                        "accepted_resource_ceiling[selected_target_goal_id]. An empty ceiling requires "
+                        "both sets to be empty; consuming an admitted predecessor output is not a new "
+                        "resource access. Any non-empty read_set or write_set requires a non-empty "
+                        "capability requirement_operations list and max_tool_calls >= 1; it can never "
+                        "use the internal self-contained reasoning path. Never invent a semantic domain "
+                        "or locator. "
                         "Do not claim execution success or completion without verified reports. "
                         "When revising, obey DecisionFeedback mutable/immutable fields and revision scope. "
                         "For execute_bounded_action, provide exactly one target-binding grounding_claim: "
                         "source_ref must be goal:<selected_target_goal_id>:goal_id, use its supplied digest, "
                         "and do not create any other grounding assertions. For other actions, provide grounding "
                         "claims only where their output schema requires them. "
+                        "For a Goal whose result contract is external_state, its mutation Proposal must be complete: "
+                        "use execution_intent=commit, a non-none side_effect_class, a non-empty write_set, and a "
+                        "non-empty requirement_operations set drawn only from that Goal's declared resource operations. "
+                        "The task_text is the exact business content to be written, never the surrounding user "
+                        "instruction. For example, for ‘把“事实 X”记入知识库，然后回答问题’, task_text must be ‘事实 X’, "
+                        "not the full sentence containing ‘记入’、‘然后’ or the follow-up question. Do not add facts "
+                        "or targets that are absent from the accepted Goal. If a mandatory procedure candidate applies, "
+                        "this complete accepted commit is compiled to that procedure by policy; do not omit its mutation "
+                        "fields in expectation that runtime will fill them. "
                         "For a self-contained response, choose reason or transform with max_tool_calls=0 and "
                         "an empty requirement_operations list: composing the response uses the admitted model "
-                        "call, not an external capability provider. "
+                        "call, not an external capability provider. Set agentic_synthesis=false for that path; "
+                        "agentic_synthesis=true is only valid when a non-empty capability requirement and at "
+                        "least one tool call are necessary for the selected semantic result. "
+                        "When agentic_synthesis=true with a capability requirement, max_iterations and "
+                        "max_model_calls must both be at least 2: the first turn must call an allowed tool, "
+                        "and finish_react is valid only after the governed Observation has been consumed. "
                         "Return only the structured object and never reveal chain-of-thought."
                     ),
                 },
                 {"role": "user", "content": json.dumps({
                     "selected_action": selection.action,
                     "selected_target_goal_id": selection.target_goal_id,
+                    "revision_scope": revision_scope,
+                    "rejected_prior_decision": (
+                        prior_decision.model_dump(mode="json")
+                        if prior_decision is not None else None
+                    ),
                     **context_payload,
+                    "capability_classes": [
+                        item.model_dump(mode="json")
+                        for item in relevant_capability_classes
+                    ],
                 }, ensure_ascii=False)},
             ]
             response = self._model_client.generate(StructuredModelRequest(
                 operation=f"executive_{selection.action}_proposal",
-                version="v3",
+                version="v10",
                 messages=proposal_messages,
                 output_type=proposal_type,
                 context_projection_ref=str(model_context.get("projection_id") or ""),
@@ -664,6 +767,7 @@ class ExecutiveController:
         except Exception:
             logger.exception("Executive proposal generation failed action=%s", selected_action)
             return None
+
 
     @staticmethod
     def _proposal(
@@ -700,6 +804,20 @@ class ExecutiveController:
                 criterion_ids=tuple(item.criterion_id for item in task.success_criteria),
             ),
         )
+
+
+def _accepted_resource_ceiling(
+    task: TaskContract,
+    goal_ids: set[str],
+) -> dict[str, list[dict[str, object]]]:
+    """Serialize the immutable TaskContract resource ceiling for model proposals."""
+    return {
+        goal_id: [
+            resource.model_dump(mode="json")
+            for resource in task.resources_for_goal(goal_id)
+        ]
+        for goal_id in sorted(goal_ids)
+    }
 
 
 def _dependencies_satisfied(goal: MaterializedGoalView, ledger: TaskRuntimeProjection) -> bool:

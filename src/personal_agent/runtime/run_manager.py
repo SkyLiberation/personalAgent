@@ -69,6 +69,8 @@ class DurableRunRepository(Protocol):
 
     def get_lease(self, run_id: str) -> RunLease | None: ...
 
+    def renew_lease(self, run_id: str, lease: RunLease) -> bool: ...
+
 
 class InMemoryDurableRunRepository:
     def __init__(self) -> None:
@@ -114,6 +116,17 @@ class InMemoryDurableRunRepository:
     def get_lease(self, run_id: str) -> RunLease | None:
         with self._lock:
             return self._leases.get(run_id)
+
+    def renew_lease(self, run_id: str, lease: RunLease) -> bool:
+        with self._lock:
+            current = self._leases.get(run_id)
+            if current is None or (
+                current.lease_id != lease.lease_id
+                or current.fencing_token != lease.fencing_token
+            ):
+                return False
+            self._leases[run_id] = lease
+            return True
 
 
 class DurableRunManager:
@@ -178,6 +191,26 @@ class DurableRunManager:
                 raise RunStateError(f"illegal run transition {run.status}->{status}")
             updated = replace(run, status=status, revision=run.revision + 1)
             return self._repository.compare_and_set(updated, expected_revision=run.revision)
+
+    def renew_lease(
+        self,
+        run_id: str,
+        lease: RunLease,
+        *,
+        ttl_seconds: int = 300,
+    ) -> RunLease:
+        """Extend only the exact lease identity currently owning the run."""
+        with self._lock:
+            run = self.get(run_id)
+            if run.fencing_token != lease.fencing_token:
+                raise RunStateError("stale fencing token")
+            renewed = replace(
+                lease,
+                expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+            )
+            if not self._repository.renew_lease(run_id, renewed):
+                raise RunStateError("stale run lease")
+            return renewed
 
     def request_cancel(self, run_id: str, *, fencing_token: int) -> DurableRun:
         run = self.get(run_id)

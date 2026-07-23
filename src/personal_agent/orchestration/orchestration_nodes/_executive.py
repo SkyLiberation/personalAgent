@@ -8,6 +8,7 @@ import logging
 
 from langgraph.types import interrupt
 
+from personal_agent.kernel.contracts.interaction import InteractionRequest
 from personal_agent.runtime.contracts.task import (
     AttemptRef,
     ContextBudget,
@@ -191,6 +192,10 @@ def _node_compile_goal_graph(state: RunCheckpoint, *, deps: ExecutiveContext) ->
 def _node_project_planning_facts(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
     if state.task_contract is None or state.task_runtime is None:
         raise RuntimeError("planning facts require task and goal graph")
+    if state.task_compilation_commit is None:
+        raise RuntimeError("planning facts require an atomic task compilation commit")
+    if deps.post_task_compilation_commit_hook is not None:
+        deps.post_task_compilation_commit_hook(state.run_id)
     procedures = deps.procedure_applicability_resolver.resolve(
         state.task_contract,
         state.task_runtime,
@@ -347,32 +352,66 @@ def _node_create_or_revise_plan(state: RunCheckpoint, *, deps: ExecutiveContext)
                 "request": state.replan_request.model_dump(mode="json"),
             })
         else:
-            candidate_plan, candidate_ledger = deps.plan_runtime_projector.apply_patch(
-                state.plan_definition,
-                state.plan_runtime,
-                patch,
+            from personal_agent.planning.adaptive import (
+                PlanningValidationError,
+                planning_rejection_feedback,
             )
-            deps.plan_validator.validate(
-                candidate_plan,
-                state.task_contract,
-                state.task_runtime,
-                state.planner_profile,
-            )
-            state.plan_definition = candidate_plan
-            state.plan_runtime = candidate_ledger
-            state.planning_usage = state.planning_usage.model_copy(update={
-                "applied_patches": state.planning_usage.applied_patches + 1,
-            })
-            state.control.advance_phase("preparing_model_call")
-            state.control.disposition = "continue_control"
-            state.add_event("adaptive_plan_patched", patch.model_dump(mode="json"))
-        state.replan_request = None
+
+            try:
+                candidate_plan, candidate_ledger = deps.plan_runtime_projector.apply_patch(
+                    state.plan_definition,
+                    state.plan_runtime,
+                    patch,
+                )
+                deps.plan_validator.validate(
+                    candidate_plan,
+                    state.task_contract,
+                    state.task_runtime,
+                    state.planner_profile,
+                )
+            except PlanningValidationError as exc:
+                remaining = max(
+                    state.planner_profile.limits.max_planner_calls
+                    - state.planning_usage.planner_calls,
+                    0,
+                )
+                feedback = planning_rejection_feedback(
+                    state.task_contract,
+                    state.task_runtime,
+                    reason_code="plan_patch_invalid",
+                    revision_attempt=state.planning_usage.planner_calls,
+                    revision_budget_remaining=remaining,
+                    disposition="revise_model" if remaining else "terminal",
+                    required_repair=str(exc),
+                )
+                state.decision_feedback.append(feedback)
+                if feedback.disposition == "revise_model":
+                    state.control.disposition = "replace_plan"
+                else:
+                    state.control.advance_phase("closed")
+                    state.control.disposition = "terminate"
+                    state.replan_request = None
+                state.add_event(
+                    "planning_feedback_created",
+                    feedback.model_dump(mode="json"),
+                )
+            else:
+                state.plan_definition = candidate_plan
+                state.plan_runtime = candidate_ledger
+                state.planning_usage = state.planning_usage.model_copy(update={
+                    "applied_patches": state.planning_usage.applied_patches + 1,
+                })
+                state.control.advance_phase("preparing_model_call")
+                state.control.disposition = "continue_control"
+                state.add_event("adaptive_plan_patched", patch.model_dump(mode="json"))
+                state.replan_request = None
         return {
             "plan_definition": state.plan_definition,
             "plan_runtime": state.plan_runtime,
             "planning_usage": state.planning_usage,
             "replan_request": state.replan_request,
             "control": state.control,
+            "decision_feedback": state.decision_feedback,
             "events": state.events,
             "context_projections": state.context_projections,
         }
@@ -434,6 +473,7 @@ def _node_create_or_revise_plan(state: RunCheckpoint, *, deps: ExecutiveContext)
         "planning_usage": state.planning_usage,
         "replan_request": state.replan_request,
         "control": state.control,
+        "decision_feedback": state.decision_feedback,
         "events": state.events,
         "context_projections": state.context_projections,
     }
@@ -540,20 +580,42 @@ def _node_project_control_state(state: RunCheckpoint, *, deps: ExecutiveContext)
         tools=deps.tool_executor.list_tools(exposures={"public_agent", "scoped_agent", "admin"}),
         agents=deps.agent_gateway.profiles(),
     )
-    grouped: dict[str, dict[str, set[str]]] = {}
+    grouped: dict[tuple[str, ...], dict[str, set[str]]] = {}
     for capability in registry.list():
-        bucket = grouped.setdefault(capability.kind, {
-            "domains": set(), "operations": set(), "providers": set(),
+        class_key = (
+            capability.kind,
+            capability.output_contract,
+            capability.operation_scope.side_effect_class,
+            capability.auth_scope,
+            capability.trust_level,
+            capability.freshness_profile,
+            capability.evidence_contract,
+            capability.data_egress_class,
+            capability.failure_semantics,
+        )
+        bucket = grouped.setdefault(class_key, {
+            "domains": set(), "resource_types": set(),
+            "operations": set(), "providers": set(),
         })
         bucket["domains"].update(capability.semantic_domains)
+        bucket["resource_types"].update(capability.resource_types)
         bucket["operations"].update(capability.operations)
         bucket["providers"].add(capability.provider)
     summaries = tuple(CapabilityClassSummary(
-        kind=kind,
+        kind=class_key[0],
         semantic_domains=tuple(sorted(values["domains"])),
+        resource_types=tuple(sorted(values["resource_types"])),
         operations=tuple(sorted(values["operations"])),
         providers=tuple(sorted(values["providers"])),
-    ) for kind, values in sorted(grouped.items()))
+        output_contract=class_key[1],
+        side_effect_class=class_key[2],
+        authority_scope=class_key[3],
+        trust_level=class_key[4],
+        freshness_profile=class_key[5],
+        evidence_contract=class_key[6],
+        data_egress_class=class_key[7],
+        failure_semantics=class_key[8],
+    ) for class_key, values in sorted(grouped.items()))
     from personal_agent.runtime.contracts.control import ControlState
 
     state.control.state = ControlState(
@@ -645,7 +707,15 @@ def _node_decide(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
         )
     else:
         state.frontier_decision = None
-        if state.coordination is not None and state.coordination.mode == "deliberative":
+        capability_recovery_turn = bool(
+            state.control.observations
+            and state.control.observations[-1].kind == "capability_gap"
+        )
+        if (
+            state.coordination is not None
+            and state.coordination.mode == "deliberative"
+            and not capability_recovery_turn
+        ):
             if state.plan_definition is None:
                 raise RuntimeError("deliberative control requires an active plan definition")
             frontier = deps.plan_runtime_projector.frontier(state.plan_definition, state.plan_runtime)
@@ -661,14 +731,11 @@ def _node_decide(state: RunCheckpoint, *, deps: ExecutiveContext) -> dict:
                     frontier,
                     state.planner_profile,
                 )
-                if state.frontier_decision is not None:
-                    state.plan_runtime = deps.plan_runtime_projector.append(
-                        state.plan_definition,
-                        state.plan_runtime,
-                        "frontier_selected",
-                        step_ids=state.frontier_decision.selected_step_ids,
-                        payload={"decision": state.frontier_decision.model_dump(mode="json")},
-                    )
+                # A frontier is a deterministic scheduling candidate, not an
+                # accepted execution fact.  Do not advance the Plan Runtime
+                # until the model proposal has passed Admission; otherwise a
+                # rejected proposal consumes the only ready step and the next
+                # turn falsely derives ``plan_frontier_empty``.
                 proposal = deps.controller.propose(
                     state.task_contract,
                     state.task_runtime,
@@ -787,6 +854,14 @@ def _node_admit_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
         _append_execution_event(state, deps, "execution_command_resolved", payload={
             "resolved_command": state.control.resolved_command.model_dump(mode="json"),
         })
+        if state.plan_definition is not None and state.frontier_decision is not None:
+            state.plan_runtime = deps.plan_runtime_projector.append(
+                state.plan_definition,
+                state.plan_runtime,
+                "frontier_selected",
+                step_ids=state.frontier_decision.selected_step_ids,
+                payload={"decision": state.frontier_decision.model_dump(mode="json")},
+            )
         state.control.active_feedback_ref = None
         state.control.revision_attempt = 0
     else:
@@ -802,6 +877,7 @@ def _node_admit_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
         "decision_admission": state.decision_admission,
         "decision_audit": state.decision_audit,
         "control_commits": state.control_commits,
+        "plan_runtime": state.plan_runtime,
         "task_runtime": state.task_runtime,
         "execution_events": state.execution_events,
         "events": state.events,
@@ -1045,23 +1121,24 @@ def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
         return _route_update(state, "loop")
 
     if isinstance(decision, RequestConfirmationDecision):
-        response = interrupt({
-            "kind": "confirmation",
-            "title": decision.title,
-            "summary": decision.summary,
-            "task_id": state.task_contract.task_id,
-            "authorization_digest": command.authorization_digest,
-        })
-        observation = ObservationRef(
-            goal_id=decision.target_goal_id,
-            kind="user_confirmation",
-            provenance=observation_provenance("user", "user", str(response)),
-            trust="scoped",
-            summary=str(response),
-            payload={"response": response},
+        # Persist the request before pausing.  State mutations made in an
+        # interrupting node are not durable until a node boundary is crossed.
+        state.control.pending_interaction = InteractionRequest(
+            kind="confirmation_required",
+            action_type="request_confirmation",
+            step_id=command.command_id,
+            title=decision.title,
+            message="此操作需要您的确认。",
+            summary=decision.summary,
+            authorization_digest=command.authorization_digest,
         )
-        state.control.observations.append(observation)
-        return _route_update(state, "loop")
+        state.control.advance_phase("awaiting_input")
+        state.control.disposition = "await_input"
+        state.add_event("confirmation_required", {
+            "interaction": state.control.pending_interaction.model_dump(mode="json"),
+            "task_id": state.task_contract.task_id,
+        })
+        return {"control": state.control, "events": state.events}
 
     if isinstance(decision, RequestCapabilityAcquisitionDecision):
         request = CapabilityAcquisitionRequest(
@@ -1078,45 +1155,24 @@ def _node_apply_decision(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             state.capability_acquisition,
             request,
         )
-        response = interrupt({
-            "kind": "capability_acquisition_required",
+        state.control.pending_interaction = InteractionRequest(
+            kind="capability_acquisition_required",
+            action_type="request_capability_acquisition",
+            step_id=request.request_id,
+            title="需要补充执行能力",
+            message="需要用户批准能力获取请求。",
+            summary=decision.requirement.purpose,
+            resource_id=request.request_id,
+        )
+        state.control.advance_phase("awaiting_input")
+        state.control.disposition = "await_input"
+        state.add_event("capability_acquisition_requested", {
             "request_id": request.request_id,
-            "title": "需要补充执行能力",
-            "summary": decision.requirement.purpose,
             "method": request.method,
-        })
-        approved = isinstance(response, dict) and str(response.get("decision", "")).lower() in {
-            "confirm", "confirmed", "approve", "approved",
-        }
-        state.capability_acquisition = deps.capability_acquisition_manager.decide(
-            state.capability_acquisition,
-            request.request_id,
-            approved=approved,
-        )
-        state.answer = (
-            "能力获取请求已批准；任务已暂停，待环境能力更新后可重新执行。"
-            if approved else "能力获取请求已取消。"
-        )
-        state.control.advance_phase("closed")
-        state.control.disposition = "pause" if approved else "terminate"
-        if approved:
-            _append_execution_event(state, deps, "task_paused", payload={
-                "reason": "capability_acquisition_pending",
-            })
-        else:
-            _append_execution_event(state, deps, "task_terminated", payload={
-                "reason": "user_cancelled",
-                "reason_code": "capability_acquisition_denied",
-            })
-        state.add_event("capability_acquisition_decided", {
-            "request_id": request.request_id,
-            "approved": approved,
-            "goal_progress": False,
         })
         return {
             "capability_acquisition": state.capability_acquisition,
             "control": state.control,
-            "answer": state.answer,
             "events": state.events,
         }
 
@@ -1179,8 +1235,15 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                         (action.input.agent_id,)
                         if isinstance(action.input, DelegateActionInput) else ()
                     ),
+                    resource_locator=action.requirement.resource_locator,
+                    user_id=state.user_id,
+                    session_id=state.session_id,
+                    source_platform=(
+                        state.entry_input.source_platform
+                        if state.entry_input is not None else None
+                    ),
                     equivalence_class=CapabilityEquivalenceClass(
-                        required_output_contract=action.output_contract,
+                        required_output_contract=action.requirement.output_contract,
                         allowed_side_effect_class=action.proposed_resource_access.side_effect_class,
                         authority_scope=action.proposed_resource_access.authority_scope,
                         trust_floor=action.proposed_resource_access.trust_floor,
@@ -1222,7 +1285,13 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                 state.control.observations.append(gap)
                 state.add_event("capability_gap", gap.model_dump(mode="json"))
                 state.control.resolved_actions = []
-                state.control.advance_phase("preparing_model_call")
+                # The capability resolver produced a typed accepted result.
+                # Deliberative control sends it to plan monitoring; reactive
+                # control has no monitor node, so close the acceptance boundary
+                # before the graph re-enters model preparation.
+                state.control.advance_phase("accepting_result")
+                if state.plan_definition is None:
+                    state.control.advance_phase("preparing_model_call")
                 state.control.disposition = "continue_control"
                 return {
                     "control": state.control,
@@ -1353,6 +1422,21 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
                     else []
                 )
                 if (
+                    selected is not None
+                    and step.execution_mode != "react"
+                    and action.execution_intent != "commit"
+                ):
+                    # Decision ownership: the accepted Action owns why the
+                    # capability is invoked (for example ``verify``).  Once a
+                    # provider kind is bound, its graph execution shape is a
+                    # closed-world mechanical projection of that binding.
+                    step.action_type = {
+                        "local_tool": "tool_call",
+                        "mcp_tool": "tool_call",
+                        "retriever": "retrieve",
+                        "agent": "agent_call",
+                    }[selected.kind]
+                if (
                     step.execution_mode != "react"
                     and step.action_type == "tool_call"
                     and not step.tool_name
@@ -1389,15 +1473,26 @@ def _node_resolve_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
     return {
         "control": state.control,
         "plan_runtime": state.plan_runtime,
+        "task_runtime": state.task_runtime,
+        "execution_events": state.execution_events,
         "context_projections": state.context_projections,
         "invocation_batch": state.invocation_batch,
         "execution_grants": state.execution_grants,
+        "active_procedure": state.active_procedure,
         "events": state.events,
     }
 
 
 def _after_action_resolution(state: RunCheckpoint) -> str:
-    return "dispatch" if state.control.resolved_actions else "control"
+    if state.control.resolved_actions:
+        return "dispatch"
+    if (
+        state.plan_definition is not None
+        and state.control.observations
+        and state.control.observations[-1].kind in {"capability_gap", "verification_gap"}
+    ):
+        return "monitor"
+    return "control"
 
 
 def _resolve_procedure_nodes(
@@ -1676,6 +1771,14 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             step.output_artifact_id for step in state.invocation_batch.invocations if step.output_artifact_id
         )
         action_summary = _action_summary(state)
+        action_step_ids = {
+            step.step_id for step in state.invocation_batch.invocations
+        }
+        carries_instruction_taint = any(
+            "instruction" in item.taint
+            and str(item.payload.get("step_id") or "") in action_step_ids
+            for item in state.context_inventory.items.values()
+        )
         if state.current_action.output_contract == "Answer":
             state.answer = action_summary
         observation = ObservationRef(
@@ -1683,7 +1786,11 @@ def _node_observe_action(state: RunCheckpoint, *, deps: ExecutiveContext) -> dic
             kind="action_result",
             provenance=observation_provenance("runtime", "executor", action_summary),
             trust="external",
-            taint=frozenset({"external_content", "derived"}),
+            taint=frozenset({
+                "external_content",
+                "derived",
+                *({"instruction"} if carries_instruction_taint else set()),
+            }),
             summary=action_summary,
             payload={
                 "action_id": state.current_action.action_id,
@@ -1808,7 +1915,24 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
     for goal in candidates:
         verification_results = _goal_scoped_verification_results(state, goal.goal_id)
         execution_fact = None
-        if state.control.resolved_command is not None:
+        receipt_required = any(
+            criterion.criterion_id in goal.success_criterion_ids
+            and criterion.acceptance_contract == "MutationReceipt"
+            for criterion in state.task_contract.success_criteria
+        )
+        resource_execution_required = any(
+            resource.required_operations
+            for resource in state.task_contract.resources_for_goal(goal.goal_id)
+        )
+        if (
+            (receipt_required or resource_execution_required)
+            and state.control.resolved_command is not None
+            and state.control.resolved_command.route != "internal_reasoning"
+        ):
+            # Decision ownership: the immutable criterion/resource contract
+            # uniquely determines whether a provider execution fact is needed.
+            # Verification only checks the current immutable Command lineage;
+            # it never treats the fact as semantic Goal success.
             execution_fact = deps.execution_fact_verifier.verify(
                 state.control.resolved_command,
                 tuple(verification_results),
@@ -1824,13 +1948,45 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
             and set(decision.evidence.criterion_scope).intersection(goal.success_criterion_ids)
         )
         evidence_refs = tuple(item.evidence_ref for item in evidence)
+        accepted_observation_refs = {
+            decision.observation_ref
+            for decision in state.evidence_admissions.values()
+            if decision.verdict == "accepted"
+        }
+        rejected_observation_refs = {
+            decision.observation_ref
+            for decision in state.evidence_admissions.values()
+            if decision.verdict == "rejected"
+        }
+        rejected_step_ids = {
+            str(step_id)
+            for observation in state.control.observations
+            if observation.observation_id in rejected_observation_refs
+            for step_id in observation.payload.get("step_ids", ())
+        }
+        semantic_verification_results = [
+            item for item in verification_results
+            if str(item.get("_step_id") or "") not in rejected_step_ids
+        ]
+        action_observation = (
+            state.control.action_outcome.observation
+            if state.control.action_outcome is not None
+            and state.control.action_outcome.goal_id == goal.goal_id
+            else None
+        )
+        action_semantically_admitted = (
+            action_observation is None
+            or action_observation.observation_id in accepted_observation_refs
+        )
+        semantic_answer = state.answer if action_semantically_admitted else None
         verifier_profiles = _verifier_profiles(state, deps, goal)
         verification_items = _verification_context_items(
             state,
             goal,
-            verification_results,
+            semantic_verification_results,
             evidence_refs,
             verifier_profiles,
+            candidate_answer=semantic_answer,
         )
         projection = deps.context_manager.project_contract(
             verification_items,
@@ -1848,16 +2004,41 @@ def _node_verify_goal_progress(state: RunCheckpoint, *, deps: ExecutiveContext) 
             and state.planning_usage.semantic_verifier_calls
             < state.planner_profile.limits.max_semantic_verifier_calls
         ):
-            semantic_context = materialized.model_payload()
+            # Decision ownership: this is a transient projection of already
+            # recorded execution facts for the model-owned semantic verifier.
+            # It does not derive a Goal result or alter the Receipt report. In
+            # particular, an external-state Goal has no user-facing answer by
+            # design, so its semantics must be judged from its scoped outcome
+            # and evidence rather than an empty answer slot.
+            semantic_context = {
+                **materialized.model_payload(),
+                "goal_verification_input": {
+                    "goal_id": goal.goal_id,
+                    "result_contract": goal.result_contract,
+                    "output_contract": goal.output_contract,
+                    "candidate_answer": semantic_answer,
+                    "action_outcome": (
+                        state.control.action_outcome.model_dump(mode="json")
+                        if state.control.action_outcome is not None
+                        and state.control.action_outcome.goal_id == goal.goal_id
+                        and action_semantically_admitted
+                        else None
+                    ),
+                    "execution_fact_report": (
+                        execution_fact.model_dump(mode="json")
+                        if execution_fact is not None else None
+                    ),
+                },
+            }
             state.planning_usage = state.planning_usage.model_copy(update={
                 "semantic_verifier_calls": state.planning_usage.semantic_verifier_calls + 1,
             })
         report = deps.goal_verifier.verify(
             state.task_contract,
             goal,
-            answer=state.answer,
+            answer=semantic_answer,
             citation_count=len(state.citations) if len(state.goals) == 1 else 0,
-            tool_results=tuple(verification_results),
+            tool_results=tuple(semantic_verification_results),
             evidence=evidence,
             execution_fact_report=execution_fact,
             model_context=semantic_context,
@@ -2044,9 +2225,14 @@ def _goal_scoped_verification_results(
         if isinstance(item, dict)
         and (item.get("_goal_id") == goal_id or item.get("_step_id") in goal_step_ids)
     ]
+    tool_step_ids = {
+        str(item.get("_step_id")) for item in results if item.get("_step_id")
+    }
     results.extend(
         item for step_id, item in state.invocation_batch.results.items()
-        if step_id in goal_step_ids and isinstance(item, dict)
+        if step_id in goal_step_ids
+        and step_id not in tool_step_ids
+        and isinstance(item, dict)
     )
     return results
 
@@ -2140,8 +2326,111 @@ def _after_apply_decision(state: RunCheckpoint) -> str:
     if isinstance(decision, TerminateDecision):
         return "stop"
     if isinstance(decision, RequestCapabilityAcquisitionDecision):
-        return "stop"
+        return "interrupt_capability_acquisition"
+    if isinstance(decision, RequestConfirmationDecision):
+        return "interrupt_confirmation"
     return "loop"
+
+
+def _node_interrupt_confirmation(state: RunCheckpoint) -> dict:
+    """Resume a persisted confirmation and append only the user decision fact.
+
+    Decision ownership: this node cannot select a route or an intent.  The
+    next turn remains a model Proposal subject to ordinary admission.
+    """
+    pending = state.control.pending_interaction
+    intent = state.control.accepted_intent
+    if pending is None or intent is None:
+        raise RuntimeError("confirmation interrupt requires a persisted interaction and intent")
+    if not isinstance(intent.decision, RequestConfirmationDecision):
+        raise RuntimeError("confirmation interrupt requires a confirmation intent")
+
+    resume_value = interrupt(pending.model_dump(mode="json"))
+    requested = (
+        str(resume_value.get("decision", "reject")).lower()
+        if isinstance(resume_value, dict) else "reject"
+    )
+    decision = "confirmed" if requested in {"confirm", "confirmed", "approve", "approved"} else "rejected"
+    state.control.pending_interaction = None
+    state.control.interaction_decision = decision
+    state.control.observations.append(ObservationRef(
+        goal_id=intent.goal_id,
+        kind="user_confirmation",
+        provenance=observation_provenance("user", "user", str(resume_value)),
+        trust="scoped",
+        summary=decision,
+        payload={
+            "decision": decision,
+            "authorization_digest": pending.authorization_digest,
+        },
+    ))
+    state.control.advance_phase("preparing_model_call")
+    state.control.disposition = "continue_control"
+    state.add_event("confirmation_resumed", {
+        "step_id": pending.step_id,
+        "decision": decision,
+        "authorization_digest": pending.authorization_digest,
+    })
+    return {"control": state.control, "events": state.events}
+
+
+def _node_interrupt_capability_acquisition(
+    state: RunCheckpoint,
+    *,
+    deps: ExecutiveContext,
+) -> dict:
+    """Resume one persisted acquisition request without claiming capability."""
+    pending = state.control.pending_interaction
+    intent = state.control.accepted_intent
+    if pending is None or intent is None:
+        raise RuntimeError("capability acquisition interrupt requires persisted state")
+    if not isinstance(intent.decision, RequestCapabilityAcquisitionDecision):
+        raise RuntimeError("capability acquisition interrupt requires acquisition intent")
+    request_id = pending.step_id
+    if request_id not in state.capability_acquisition.requests:
+        raise RuntimeError("capability acquisition request is not checkpointed")
+
+    response = interrupt(pending.model_dump(mode="json"))
+    requested = (
+        str(response.get("decision", "reject")).lower()
+        if isinstance(response, dict) else "reject"
+    )
+    approved = requested in {"confirm", "confirmed", "approve", "approved"}
+    state.capability_acquisition = deps.capability_acquisition_manager.decide(
+        state.capability_acquisition,
+        request_id,
+        approved=approved,
+    )
+    state.control.pending_interaction = None
+    state.control.interaction_decision = "confirmed" if approved else "rejected"
+    state.answer = (
+        "能力获取请求已批准；任务已暂停，待环境能力更新后可重新执行。"
+        if approved else "能力获取请求已取消。"
+    )
+    state.control.advance_phase("closed")
+    state.control.disposition = "pause" if approved else "terminate"
+    if approved:
+        _append_execution_event(state, deps, "task_paused", payload={
+            "reason": "capability_acquisition_pending",
+        })
+    else:
+        _append_execution_event(state, deps, "task_terminated", payload={
+            "reason": "user_cancelled",
+            "reason_code": "capability_acquisition_denied",
+        })
+    state.add_event("capability_acquisition_decided", {
+        "request_id": request_id,
+        "approved": approved,
+        "goal_progress": False,
+    })
+    return {
+        "capability_acquisition": state.capability_acquisition,
+        "control": state.control,
+        "task_runtime": state.task_runtime,
+        "execution_events": state.execution_events,
+        "answer": state.answer,
+        "events": state.events,
+    }
 
 
 def _after_completion(state: RunCheckpoint) -> str:
@@ -2448,6 +2737,11 @@ def _planning_context_items(state: RunCheckpoint, procedures) -> tuple[ContextIt
                 state.plan_definition.model_dump(mode="json")
                 if state.plan_definition is not None else None
             ),
+            "decision_feedback": [
+                item.model_dump(mode="json")
+                for item in state.decision_feedback[-4:]
+                if item.stage == "planning"
+            ],
             "plan_step_statuses": state.plan_runtime.step_statuses,
             "replan_request": (
                 state.replan_request.model_dump(mode="json")
@@ -2521,6 +2815,8 @@ def _verification_context_items(
     tool_results: list[dict],
     evidence_refs: tuple[str, ...],
     verifier_profiles: tuple[str, ...],
+    *,
+    candidate_answer: str | None,
 ) -> tuple[ContextItem, ...]:
     assert state.task_contract is not None
     criteria = tuple(
@@ -2538,6 +2834,10 @@ def _verification_context_items(
         payload={
             "goal": goal.description,
             "criteria": criteria,
+            "constraints": [
+                item.model_dump(mode="json")
+                for item in goal.constraints
+            ],
             "evidence_refs": evidence_refs,
             "verifier_profiles": verifier_profiles,
             "authority_tier": "system_policy",
@@ -2550,8 +2850,8 @@ def _verification_context_items(
         kind="candidate_answer",
         provenance="agent_runtime",
         trust="untrusted",
-        summary=(state.answer or "")[:2000],
-        payload={"answer": (state.answer or "")[:12000]},
+        summary=(candidate_answer or "")[:2000],
+        payload={"answer": (candidate_answer or "")[:12000]},
         admission="candidate",
     )
     evidence = tuple(ContextItem(
@@ -2667,6 +2967,8 @@ __all__ = [
     "_node_project_control_state",
     "_node_resolve_action",
     "_node_handle_decision_denial",
+    "_node_interrupt_capability_acquisition",
+    "_node_interrupt_confirmation",
     "_node_verify_completion",
     "_node_verify_goal_progress",
 ]

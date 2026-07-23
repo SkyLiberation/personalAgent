@@ -20,7 +20,11 @@ class InteractionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["clarification_required", "confirmation_required"]
+    kind: Literal[
+        "clarification_required",
+        "confirmation_required",
+        "capability_acquisition_required",
+    ]
     action_type: str = Field(min_length=1)
     step_id: str = Field(min_length=1)
     title: str = ""
@@ -39,6 +43,11 @@ class InteractionRequest(BaseModel):
             raise ValueError("confirmation request requires AuthorizationDigest")
         if self.kind == "clarification_required" and self.authorization_digest is not None:
             raise ValueError("clarification request cannot carry AuthorizationDigest")
+        if (
+            self.kind == "capability_acquisition_required"
+            and self.authorization_digest is not None
+        ):
+            raise ValueError("capability acquisition binds request id, not AuthorizationDigest")
         return self
 
 

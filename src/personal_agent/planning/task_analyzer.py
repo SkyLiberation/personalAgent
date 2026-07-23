@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from typing import Literal, Protocol
 from uuid import uuid4
 
@@ -55,6 +56,41 @@ class TaskAnalysisGroundingClaim(BaseModel):
     source_text: str = Field(min_length=1)
     output_field_ref: str = Field(min_length=1)
     transform: Literal["identity"] = "identity"
+
+
+class _GroundingClaimRepair(BaseModel):
+    """Model-owned replacement for one rejected grounding field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    output_field_ref: str = Field(min_length=1)
+    include_identity_claim: bool
+
+
+class _TaskAnalysisGroundingRevision(BaseModel):
+    """Closed patch shape for a grounding-only rejection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    repairs: tuple[_GroundingClaimRepair, ...] = Field(min_length=1)
+
+
+class _GoalClassificationRepair(BaseModel):
+    """Model-owned semantic delta for one deterministically rejected Goal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    goal_index: int = Field(ge=0)
+    result_contract: Literal["response", "artifact"]
+    side_effect_intent: Literal["none"] = "none"
+
+
+class _TaskAnalysisMutationClassificationRevision(BaseModel):
+    """Closed patch shape; it cannot rewrite unrelated task semantics."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    repairs: tuple[_GoalClassificationRepair, ...] = Field(min_length=1)
 
 
 class ResourceHint(BaseModel):
@@ -325,6 +361,7 @@ class DefaultTaskAnalyzer:
                 _analysis_text(entry_input),
                 conversation_messages or [],
                 feedback=feedback,
+                prior_proposal=prior,
             )
             if body is None:
                 break
@@ -382,10 +419,171 @@ class DefaultTaskAnalyzer:
         conversation_messages: list[ConversationMessage] | None = None,
         *,
         feedback: object | None = None,
+        prior_proposal: TaskAnalysisProposal | None = None,
     ) -> TaskAnalysisProposalBody | None:
         if self._model_client is None:
             return None
         prompt = get_prompt("task_analyzer.system")
+        revision_scope = getattr(feedback, "revision_scope", None)
+        reason_codes = set(getattr(feedback, "reason_codes", ()))
+        if (
+            revision_scope == "semantic_revision"
+            and prior_proposal is not None
+            and "task_analysis_mutation_operation_required" in reason_codes
+        ):
+            rejected_refs = tuple(getattr(feedback, "rejected_field_refs", ()))
+            goal_indexes = tuple(dict.fromkeys(
+                int(match.group(1))
+                for field_ref in rejected_refs
+                if (match := re.fullmatch(r"goals\.(\d+)", field_ref)) is not None
+            ))
+            if not goal_indexes or any(index >= len(prior_proposal.body.goals) for index in goal_indexes):
+                return None
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Revise only the result classification for each supplied rejected Goal. "
+                        "The operation set has no create/update/delete/ingest/repair operation, so "
+                        "side_effect_intent must be none and result_contract must be response or "
+                        "artifact according to the requested result. Return exactly one repair for "
+                        "each supplied zero-based goal_index. You cannot revise descriptions, success "
+                        "criteria, constraints, resource hints, relations, providers, or grounding. "
+                        "Return only the structured patch."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps({
+                        "current_input": text,
+                        "rejected_goals": [
+                            {
+                                "goal_index": index,
+                                "description": prior_proposal.body.goals[index].description,
+                                "current_result_contract": (
+                                    prior_proposal.body.goals[index].result_contract
+                                ),
+                                "current_side_effect_intent": (
+                                    prior_proposal.body.goals[index].side_effect_intent
+                                ),
+                                "operations": sorted({
+                                    str(operation)
+                                    for hint in prior_proposal.body.goals[index].resource_hints
+                                    for operation in hint.operations
+                                }),
+                            }
+                            for index in goal_indexes
+                        ],
+                    }, ensure_ascii=False),
+                },
+            ]
+            try:
+                from personal_agent.capabilities.contracts.model import (
+                    sealed_context_projection_ref,
+                )
+
+                response = self._model_client.generate(StructuredModelRequest(
+                    operation="task_analysis_mutation_classification_revision",
+                    version="v1",
+                    messages=messages,
+                    output_type=_TaskAnalysisMutationClassificationRevision,
+                    context_projection_ref=sealed_context_projection_ref(
+                        purpose="task_analysis_mutation_classification_revision",
+                        messages=messages,
+                    ),
+                    temperature=0,
+                    max_tokens=400,
+                ))
+                repairs = response.value.repairs
+                if (
+                    len(repairs) != len(goal_indexes)
+                    or {item.goal_index for item in repairs} != set(goal_indexes)
+                ):
+                    return None
+                goals = list(prior_proposal.body.goals)
+                for repair in repairs:
+                    goals[repair.goal_index] = goals[repair.goal_index].model_copy(update={
+                        "result_contract": repair.result_contract,
+                        "side_effect_intent": repair.side_effect_intent,
+                    })
+                return prior_proposal.body.model_copy(update={"goals": goals})
+            except Exception:
+                logger.exception("Task analysis mutation-classification revision failed")
+                return None
+        if revision_scope == "grounding_only" and prior_proposal is not None:
+            rejected_refs = tuple(getattr(feedback, "rejected_field_refs", ()))
+            if not rejected_refs:
+                return None
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Repair only the supplied rejected grounding fields of an immutable task-analysis "
+                        "proposal. Return exactly one repair for every rejected_field_ref and no others. "
+                        "Copy output_field_ref exactly. Resolve that dotted path against "
+                        "immutable_proposal_body. If it resolves to a string and that exact complete value "
+                        "appears in current_input, set include_identity_claim=true. Otherwise set it to "
+                        "false, which deletes the invalid claim. You do not copy or rewrite source text; "
+                        "the compiler materializes the exact existing field value after your decision. "
+                        "Do not return the full proposal or any unrequested claim."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps({
+                        "current_input": text,
+                        "rejected_field_refs": rejected_refs,
+                        "immutable_proposal_body": prior_proposal.body.model_dump(mode="json"),
+                    }, ensure_ascii=False),
+                },
+            ]
+            try:
+                from personal_agent.capabilities.contracts.model import (
+                    sealed_context_projection_ref,
+                )
+
+                response = self._model_client.generate(StructuredModelRequest(
+                    operation="task_analysis_grounding_revision",
+                    version="v2",
+                    messages=messages,
+                    output_type=_TaskAnalysisGroundingRevision,
+                    context_projection_ref=sealed_context_projection_ref(
+                        purpose="task_analysis_grounding_revision",
+                        messages=messages,
+                    ),
+                    temperature=0,
+                    max_tokens=600,
+                ))
+                repairs = response.value.repairs
+                if (
+                    len(repairs) != len(rejected_refs)
+                    or {item.output_field_ref for item in repairs} != set(rejected_refs)
+                ):
+                    return None
+                retained_claims = tuple(
+                    claim for claim in prior_proposal.body.grounding_claims
+                    if claim.output_field_ref not in set(rejected_refs)
+                )
+                repaired_claims: list[TaskAnalysisGroundingClaim] = []
+                for repair in repairs:
+                    if not repair.include_identity_claim:
+                        continue
+                    source_text = task_analysis_field_value(
+                        prior_proposal.body.model_dump(mode="json"),
+                        repair.output_field_ref,
+                    )
+                    if source_text is None:
+                        return None
+                    repaired_claims.append(TaskAnalysisGroundingClaim(
+                        source_text=source_text,
+                        output_field_ref=repair.output_field_ref,
+                    ))
+                return prior_proposal.body.model_copy(update={
+                    "grounding_claims": retained_claims + tuple(repaired_claims),
+                })
+            except Exception:
+                logger.exception("Task analysis grounding revision failed")
+                return None
         messages = [{"role": "system", "content": prompt.template}]
         for message in conversation_messages or []:
             role = message.get("role")
@@ -399,13 +597,40 @@ class DefaultTaskAnalyzer:
                 "\n\n严格按以下 DecisionFeedback 修订。grounding_only 时必须逐字段复现上次"
                 "业务提案，只能修改 grounding_claims；semantic_revision 时，user_explicit"
                 "字段必须改为用户输入中的逐字片段，否则将 origin 改为 model_inferred。"
-                "对 DecisionFeedback.rejected_field_refs 中的 criterion/constraint，优先直接将"
-                "origin 改为 model_inferred，并删除对应 grounding_claim；不要再次尝试伪造逐字引用。"
+                "对 DecisionFeedback.rejected_field_refs 中的 criterion/constraint：若 reason_codes"
+                "包含 task_analysis_duplicate_resource_identity，必须删除整个重复 constraint；"
+                "其他原因才优先将 origin 改为 model_inferred，并删除对应 grounding_claim。"
+                "若反馈为 task_analysis_grounding_field_unknown，只删除该 output_field_ref 对应的"
+                "grounding_claim；不得恢复已删除字段，也不得改变任何 Goal、constraint、relation、"
+                "resource_hints 或其他业务语义。grounding_only 修订中所有剩余 claim 都必须指向"
+                "当前 proposal 中实际存在且与 source_text 完全相同的字符串字段。"
+                "若反馈为 task_analysis_duplicate_resource_identity，删除 rejected_field_refs 指向的"
+                "重复 constraint，保留 ResourceHint.locator 作为资源身份的唯一 owner，并删除该"
+                "constraint 原有的 grounding_claim。"
+                "若反馈为 task_analysis_mutation_operation_required，且该 Goal 的 operations 不包含"
+                "create/update/delete/ingest/repair（包括只有 search/read/list/delegate 的情况），"
+                "必须将 result_contract 改为 response、"
+                "side_effect_intent 改为 none；除此之外不得修改或删除该 Goal 的 description、"
+                "success_criteria、constraints、resource_hints 及其 grounding_claims，也不得修改其他"
+                "Goal；绝不能为了保留 mutation 而把只读操作改成写操作。"
+                "必须逐一遍历 DecisionFeedback.rejected_field_refs：若被拒字段是当前 proposal 中"
+                "存在、来自用户输入的逐字字符串，就为该字段新增一条独立 identity grounding_claim，"
+                "其 output_field_ref 必须与 rejected_field_refs 中的点号路径完全一致。"
+                "一条 claim 只能证明一个字段；同一个 source_text 若逐字填入多个受保护字段，"
+                "必须为每个 output_field_ref 分别输出 claim。"
                 "output_field_ref 只能使用 goals.0.constraints.0.description 这种点号路径，"
                 "禁止方括号路径。\n"
                 + json.dumps(
-                    feedback.model_dump(mode="json")
-                    if isinstance(feedback, BaseModel) else feedback,
+                    {
+                        "feedback": (
+                            feedback.model_dump(mode="json")
+                            if isinstance(feedback, BaseModel) else feedback
+                        ),
+                        "prior_proposal": (
+                            prior_proposal.model_dump(mode="json")
+                            if prior_proposal is not None else None
+                        ),
+                    },
                     ensure_ascii=False,
                     default=str,
                 )
@@ -495,13 +720,31 @@ def _analysis_text(entry_input: EntryInput) -> str:
     if not entry_input.artifacts:
         return text
     artifact_lines = [
-        f"- {artifact.filename} ({artifact.source_type}, {artifact.content_type or 'unknown'})"
+        (
+            f"- artifact_id={artifact.artifact_id}; filename={artifact.filename}; "
+            f"source_type={artifact.source_type}; content_type={artifact.content_type or 'unknown'}"
+        )
         for artifact in entry_input.artifacts
     ]
     return (
         f"{text or '用户上传了附件，但没有额外文字说明。'}\n\n"
         "当前请求附带 artifacts：\n" + "\n".join(artifact_lines)
     )
+
+
+def task_analysis_field_value(payload: object, field_ref: str) -> str | None:
+    """Resolve one dotted TaskAnalysis field path without inferring a value."""
+
+    current = payload
+    for segment in field_ref.split("."):
+        if isinstance(current, dict):
+            current = current.get(segment)
+        elif isinstance(current, list) and segment.isdigit():
+            index = int(segment)
+            current = current[index] if index < len(current) else None
+        else:
+            return None
+    return current if isinstance(current, str) else None
 
 
 __all__ = [

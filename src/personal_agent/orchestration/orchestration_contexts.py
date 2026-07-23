@@ -115,6 +115,10 @@ class ExecutiveContext:
     task_compilation_committer: "TaskCompilationCommitter"
     control_committer: "ControlCommitter"
     control_plane_store: "PostgresControlPlaneStore"
+    # Test/chaos-only hook at the durable node boundary immediately after the
+    # atomic TaskContract + initial Runtime + TaskCompilationCommit checkpoint.
+    # It cannot modify the compiled contracts and is never model-visible.
+    post_task_compilation_commit_hook: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,13 +147,20 @@ class StepExecutionContext:
     ask_service_factory: Callable[[], "AskService"]
     ask_run_context_store: "AskRunContextStore"
     execution_artifact_store: object
+    control_plane_store: "PostgresControlPlaneStore"
     invocation_journal: "InvocationJournal"
     procedure_grant_issuer: "ProcedureGrantIssuer"
     workspace_service: "WorkspaceService"
     summary: SummaryContext
     conversation: ConversationContext
+    context_manager: "ContextManager"
+    context_gateway: "ModelContextGateway"
     model_client: "StructuredModelClient | None" = None
     structured_client: "StructuredModelClient | None" = None
+    # Test/chaos-only hook for the durable boundary after a real Gateway call
+    # and before its result is consumed. It is never model-visible and cannot
+    # change an invocation, grant, command, or journal entry.
+    post_gateway_dispatch_hook: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

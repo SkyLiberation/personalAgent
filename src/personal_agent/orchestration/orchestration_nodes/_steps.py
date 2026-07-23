@@ -8,13 +8,18 @@ import re
 from hashlib import sha256
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.models import Citation
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
-from personal_agent.runtime.contracts.control import ResolvedActionSpec
+from personal_agent.runtime.contracts.control import (
+    ObservationRef,
+    ResolvedActionSpec,
+    observation_provenance,
+)
 from personal_agent.kernel.contracts.interaction import InteractionRequest
 from personal_agent.kernel.prompts import render_prompt
 from personal_agent.orchestration.orchestration_models import (
@@ -62,6 +67,7 @@ def _update_task_runtime(
     state: RunCheckpoint,
     *,
     goal_id: str,
+    deps: StepExecutionContext | None = None,
     status: str | None = None,
     coverage: tuple = (),
     evidence_gaps: tuple[str, ...] | None = None,
@@ -84,6 +90,8 @@ def _update_task_runtime(
         )
         state.task_runtime = projector.project(state.task_runtime, (event,))
         state.execution_events.append(event)
+        if deps is not None:
+            deps.control_plane_store.append_domain_event(state.run_id, event)
         state.add_event("plan_runtime_updated", {
             "execution_event": event.model_dump(mode="json"),
             "ledger_revision": state.task_runtime.revision,
@@ -122,6 +130,7 @@ def _admit_untrusted_observation(
     provenance: str,
     summary: str,
     payload: dict | None = None,
+    taint_source: str | None = None,
 ) -> None:
     """Record provider output as an observation, never as an instruction."""
     from personal_agent.planning.agentic import ContextAdmission
@@ -133,6 +142,7 @@ def _admit_untrusted_observation(
         provenance=provenance,
         summary=summary,
         payload=payload,
+        taint_source=taint_source,
     )
     state.add_event("context_admitted", {
         "ref_id": ref_id,
@@ -158,16 +168,6 @@ def _reserve_provider_call(state: RunCheckpoint) -> None:
 # artifact payload, so only summary counts go into RunCheckpoint and compose /
 # verify can recover without bloating LangGraph checkpoints.
 
-
-_DELETE_CANDIDATE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "thought": {"type": "string"},
-        "note_id": {"type": ["string", "null"]},
-    },
-    "required": ["thought", "note_id"],
-    "additionalProperties": False,
-}
 
 _SOLIDIFY_DRAFT_SCHEMA = {
     "type": "object",
@@ -217,7 +217,11 @@ def _node_prepare_invocation_batch(state: RunCheckpoint) -> dict:
     }
 
 
-def _node_select_next_step(state: RunCheckpoint) -> dict:
+def _node_select_next_step(
+    state: RunCheckpoint,
+    *,
+    deps: StepExecutionContext | None = None,
+) -> dict:
     """Find the next unexecuted step and set current_step_index.
 
     Skips steps with status 'skipped' or 'completed'.
@@ -228,7 +232,7 @@ def _node_select_next_step(state: RunCheckpoint) -> dict:
         if sd.status in ("planned",):
             state.invocation_batch.current_step_index = i
             sd.status = "running"
-            _update_task_runtime(state, goal_id=sd.goal_id, status="running")
+            _update_task_runtime(state, goal_id=sd.goal_id, deps=deps, status="running")
             state.add_event("step_started", {
                 "step_id": sd.step_id,
                 "action_type": sd.action_type,
@@ -240,6 +244,8 @@ def _node_select_next_step(state: RunCheckpoint) -> dict:
             )
             return {
                 "invocation_batch": state.invocation_batch,
+                "task_runtime": state.task_runtime,
+                "execution_events": state.execution_events,
                 "events": state.events,
             }
 
@@ -551,6 +557,9 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
         provenance=str(step.tool_name or "tool"),
         summary=_helpers._summarize_result(artifact.get("data")),
         payload={"step_id": step.step_id, "ok": bool(artifact.get("ok"))},
+        taint_source=json.dumps(
+            artifact.get("data"), ensure_ascii=False, default=str,
+        ),
     )
     if deps is not None:
         _log_tool_invocation_event(state, deps, artifact, execution_mode="deterministic")
@@ -579,6 +588,30 @@ def _node_consume_step_tool_result(state: RunCheckpoint, *, deps: StepExecutionC
     else:
         state.control.pending_interaction = None
     return _complete_current_step(state, step, deps=deps)
+
+
+def _node_after_gateway_dispatch(
+    state: RunCheckpoint,
+    *,
+    deps: StepExecutionContext,
+) -> dict:
+    """Fence the durable Gateway-result window before result consumption.
+
+    The preceding Gateway node has already run and LangGraph has checkpointed
+    its result. The journal must therefore still be ``dispatched`` until the
+    following consumer records the observation. This node owns no business
+    decision; it exposes the exact recovery boundary and optional chaos hook
+    used to prove that recovery does not issue a second provider call.
+    """
+    step_id = state.tool_tracking.pending_step_id
+    if not step_id:
+        return {}
+    entry = state.invocation_journal.entries.get(step_id)
+    if entry is None or entry.status != "dispatched":
+        raise RuntimeError("gateway result requires a dispatched invocation journal entry")
+    if deps.post_gateway_dispatch_hook is not None:
+        deps.post_gateway_dispatch_hook(state.run_id)
+    return {}
 
 
 def _reserve_dispatch(
@@ -661,6 +694,7 @@ def _fail_current_step(
     _update_task_runtime(
         state,
         goal_id=step.goal_id,
+        deps=deps,
         status="blocked",
         replan_reason=err_msg,
     )
@@ -678,7 +712,9 @@ def _fail_current_step(
         )
     result = {
         "invocation_batch": state.invocation_batch,
+        "tool_results": state.tool_results,
         "task_runtime": state.task_runtime,
+        "execution_events": state.execution_events,
         "provider_call_count": state.provider_call_count,
         "context_inventory": state.context_inventory,
         "invocation_journal": state.invocation_journal,
@@ -705,6 +741,7 @@ def _complete_current_step(
         result = {
             "invocation_batch": state.invocation_batch,
             "invocation_journal": state.invocation_journal,
+            "tool_results": state.tool_results,
             "answer": state.answer,
             "control": state.control,
             "events": state.events,
@@ -716,6 +753,7 @@ def _complete_current_step(
     _update_task_runtime(
         state,
         goal_id=step.goal_id,
+        deps=deps,
         status="candidate_complete" if step.action_type == "verify" else "active",
     )
     display_output = _step_display_output(step, state.invocation_batch.results.get(step.step_id))
@@ -757,7 +795,9 @@ def _complete_current_step(
     result = {
         "invocation_batch": state.invocation_batch,
         "invocation_journal": state.invocation_journal,
+        "tool_results": state.tool_results,
         "task_runtime": state.task_runtime,
+        "execution_events": state.execution_events,
         "provider_call_count": state.provider_call_count,
         "context_inventory": state.context_inventory,
         "answer": state.answer,
@@ -1039,6 +1079,17 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
     _skip_step_dependents(step.step_id, state.invocation_batch.invocations)
     state.control.interaction_decision = "rejected"
     state.control.pending_interaction = None
+    state.control.observations.append(ObservationRef(
+        goal_id=step.goal_id,
+        kind="user_confirmation",
+        provenance=observation_provenance("user", "user", str(resume_value)),
+        trust="scoped",
+        summary="rejected",
+        payload={
+            "decision": "rejected",
+            "authorization_digest": pending.authorization_digest if pending else None,
+        },
+    ))
 
     state.add_event("confirmation_resumed", {
         "step_id": step.step_id,
@@ -1052,6 +1103,7 @@ def _node_confirm_step(state: RunCheckpoint, *, deps: StepExecutionContext) -> d
     return {
         "invocation_batch": state.invocation_batch,
         "control": state.control,
+        "events": state.events,
     }
 
 
@@ -1561,6 +1613,9 @@ def _execute_agent_call_step(
             for artifact in artifacts
         ],
     })
+    grant = state.execution_grants.get(step.execution_grant_ref or "")
+    if not isinstance(grant, DelegationGrant):
+        raise PermissionError("completed agent result has no bound DelegationGrant")
     state.invocation_batch.results[step.step_id] = {
         "provider": run.definition.agent_id,
         "agent_run_id": run.definition.agent_run_id,
@@ -1579,6 +1634,10 @@ def _execute_agent_call_step(
         ],
         "metadata": dict(projection.result.get("metadata") or {}),
         "seen_event_ids": sorted(seen_event_ids),
+        "_authorization_digest": grant.authorization_digest,
+        "_execution_command_digest": grant.execution_command_digest,
+        "_step_id": step.step_id,
+        "_goal_id": step.goal_id,
     }
     return True
 
@@ -1684,97 +1743,27 @@ def _execute_retrieve_step(step, state: RunCheckpoint, deps: StepExecutionContex
 
 
 def _execute_resolve_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> object:
-    if step.llm_decision_node != "delete_target_resolve":
-        raise ValueError(f"unsupported deterministic decision node: {step.llm_decision_node or 'missing'}")
+    if step.procedure_id != "knowledge_delete" or step.procedure_node_id != "resolve-target":
+        raise ValueError(f"unsupported deterministic resolution node: {step.procedure_node_id or 'missing'}")
     user_id = state.user_id
-    original_query = step.task_input or state.entry_text or ""
-
-    candidates: list[dict] = []
-
-    # 1. Graph episode UUID mapping
-    for sid, data in state.invocation_batch.results.items():
-        if not isinstance(data, dict):
-            continue
-        episode_uuids = data.get("related_episode_uuids")
-        if isinstance(episode_uuids, list) and episode_uuids:
-            str_uuids = [str(u) for u in episode_uuids if u]
-            if str_uuids:
-                try:
-                    matched = deps.memory.find_by_graph_episodes(user_id, str_uuids)
-                    for note in matched:
-                        candidates.append({
-                            "note_id": note.id, "title": note.body.title,
-                            "summary": note.body.summary, "source": "graph_episode",
-                        })
-                except Exception:
-                    logger.exception("Episode UUID lookup failed in resolve")
-
-    # 2. Let the LLM select a local candidate when graph mapping is unavailable.
-    if not candidates and original_query:
-        candidates = _select_local_delete_candidate_with_llm(
-            original_query, user_id, deps,
-        )
-
-    if not candidates:
-        raise RuntimeError("deletion_target_resolution_required")
-
-    best = candidates[0]
-    return {
-        "note_id": best["note_id"],
-        "title": best.get("title"),
-        "summary": best.get("summary"),
-        "source": best.get("source"),
-        "candidates": candidates,
-    }
-
-
-def _select_local_delete_candidate_with_llm(
-    delete_request: str, user_id: str, deps: StepExecutionContext,
-) -> list[dict]:
+    target_ref = (step.task_input or "").strip()
     try:
-        notes = deps.memory.list_notes(user_id, include_chunks=False)
-    except Exception:
-        logger.exception("Local note listing failed in resolve")
-        return []
-    if not notes:
-        return []
+        canonical_note_id = str(UUID(target_ref))
+    except ValueError as exc:
+        raise RuntimeError("canonical_delete_target_required") from exc
 
-    selectable_notes = list(reversed(notes))[:100]
-    candidate_by_id = {
-        note.id: {
-            "note_id": note.id,
-            "title": note.body.title,
-            "summary": note.body.summary,
-            "source": "llm_candidate_selection",
-        }
-        for note in selectable_notes
+    # Decision ownership: closed-world identity and ownership validation uses
+    # only the frozen procedure input and the local note aggregate. It cannot
+    # choose another target, synthesize a candidate, or create an intent.
+    note = deps.memory.get_note(canonical_note_id, user_id=user_id)
+    if note is None:
+        raise RuntimeError("canonical_delete_target_not_found")
+    return {
+        "note_id": note.id,
+        "title": note.body.title,
+        "summary": note.body.summary,
+        "source": "canonical_user_scoped_identity",
     }
-    prompt_candidates = [
-        {
-            "note_id": note.id,
-            "title": note.body.title[:200],
-            "summary": (note.body.summary or "")[:300],
-        }
-        for note in selectable_notes
-    ]
-    prompt = render_prompt(
-        "delete_candidate_resolve.user",
-        delete_request=delete_request,
-        prompt_candidates=json.dumps(prompt_candidates, ensure_ascii=False),
-    )
-    raw = _helpers._structured_llm_respond(
-        "delete_candidate_resolve",
-        prompt,
-        deps,
-        _DELETE_CANDIDATE_SCHEMA,
-    )
-    parsed = _helpers._react_parse_response(raw) if raw else None
-    note_id = parsed.get("note_id") if isinstance(parsed, dict) else None
-    if note_id is None and isinstance(parsed, dict) and isinstance(parsed.get("result"), dict):
-        note_id = parsed["result"].get("note_id")
-    if isinstance(note_id, str) and note_id in candidate_by_id:
-        return [candidate_by_id[note_id]]
-    return []
 
 
 def _execute_compose_step(step, state: RunCheckpoint, deps: StepExecutionContext) -> str:
@@ -1867,6 +1856,7 @@ def _execute_compose_step(step, state: RunCheckpoint, deps: StepExecutionContext
         )
         if action_spec is None:
             raise RuntimeError("bounded-action composition requires its resolved action specification")
+        consumed_outputs = _consumed_goal_outputs(state, step.goal_id)
         response = deps.model_client.generate(StructuredModelRequest(
             operation="bounded_action_composition",
             version="v1",
@@ -1883,6 +1873,7 @@ def _execute_compose_step(step, state: RunCheckpoint, deps: StepExecutionContext
                     "information_goal": step.description,
                     "execution_guidance": step.execution_guidance,
                     "output_contract": step.output_contract,
+                    "consumed_goal_outputs": consumed_outputs,
                 }, ensure_ascii=False)},
             ],
             output_type=_BoundedActionComposition,
@@ -2187,6 +2178,49 @@ def _latest_invocation_answer(state: RunCheckpoint) -> str:
             if answer:
                 return answer
     return ""
+
+
+def _consumed_goal_outputs(state: RunCheckpoint, goal_id: str) -> list[dict[str, object]]:
+    """Materialize only verified outputs required by accepted consumes_output edges."""
+    if state.task_contract is None or state.context_inventory is None:
+        return []
+    goal = state.task_contract.goal_graph.by_id().get(goal_id)
+    if goal is None:
+        return []
+    predecessor_ids = {
+        dependency.dependency_goal_id
+        for dependency in goal.dependencies
+        if dependency.kind == "consumes_output"
+    }
+    if not predecessor_ids:
+        return []
+    evidence_refs = {
+        evidence_ref
+        for predecessor_id in predecessor_ids
+        for evidence_ref in (
+            state.verification_reports[predecessor_id].evidence_refs
+            if predecessor_id in state.verification_reports
+            and state.verification_reports[predecessor_id].status == "passed"
+            else ()
+        )
+    }
+    selected = [
+        item for item in state.context_inventory.selected(category="evidence")
+        if item.admission == "admitted" and item.item_id in evidence_refs
+    ]
+    if predecessor_ids and not selected:
+        raise RuntimeError("consumes_output composition requires admitted predecessor evidence")
+    return [
+        {
+            "item_id": item.item_id,
+            "kind": item.kind,
+            "provenance": item.provenance,
+            "summary": item.summary,
+            "payload": item.payload,
+            "artifact_ref": item.artifact_ref,
+        }
+        for item in selected
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import get_args
 
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel
 from psycopg import connect
 from psycopg.rows import dict_row
 
@@ -41,6 +44,8 @@ from personal_agent.orchestration.orchestration_nodes._executive import (
     _node_project_control_state,
     _node_resolve_action,
     _node_handle_decision_denial,
+    _node_interrupt_capability_acquisition,
+    _node_interrupt_confirmation,
     _node_verify_completion,
     _node_verify_goal_progress,
 )
@@ -54,6 +59,7 @@ from personal_agent.orchestration.orchestration_nodes._react import (
 from personal_agent.orchestration.orchestration_nodes._steps import (
     _after_confirm_step,
     _after_invocation_batch,
+    _node_after_gateway_dispatch,
     _node_confirm_step,
     _node_consume_step_tool_result,
     _node_execute_step,
@@ -64,6 +70,31 @@ from personal_agent.orchestration.orchestration_nodes._steps import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _declared_checkpoint_model_types() -> tuple[type[BaseModel], ...]:
+    """Return only project models explicitly reachable from RunCheckpoint fields.
+
+    Checkpoint persistence is an untrusted boundary. Deriving this allowlist
+    from the canonical state schema avoids both arbitrary imports and the
+    former hand-maintained list drifting behind newly persisted field types.
+    """
+    found: set[type[BaseModel]] = set()
+
+    def visit(annotation: object) -> None:
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if annotation.__module__.startswith("personal_agent."):
+                found.add(annotation)
+            return
+        for argument in get_args(annotation):
+            visit(argument)
+
+    for field in RunCheckpoint.model_fields.values():
+        visit(field.annotation)
+    return tuple(sorted(found, key=lambda item: (item.__module__, item.__name__)))
+
+
+_CHECKPOINT_MSGPACK_TYPES = _declared_checkpoint_model_types()
 
 
 def _after_entry_route(state: RunCheckpoint) -> str:
@@ -180,11 +211,18 @@ def build_action_execution_graph(contexts: GraphContexts):
     """Execute only the current bounded action or one deterministic protocol."""
     builder = StateGraph(RunCheckpoint)
     builder.add_node("prepare_action", _node_prepare_invocation_batch)
-    builder.add_node("select_action_step", _node_select_next_step)
+    builder.add_node(
+        "select_action_step",
+        lambda state: _node_select_next_step(state, deps=contexts.steps),
+    )
     builder.add_node("execute_action_step", lambda state: _node_execute_step(state, deps=contexts.steps))
     builder.add_node("handle_action_success", lambda state: _node_handle_step_success(state, deps=contexts.steps))
     builder.add_node("confirm_action_step", lambda state: _node_confirm_step(state, deps=contexts.steps))
     builder.add_node("action_tool_node", contexts.steps.tool_executor.graph_node())
+    builder.add_node(
+        "after_gateway_dispatch",
+        lambda state: _node_after_gateway_dispatch(state, deps=contexts.steps),
+    )
     builder.add_node(
         "consume_action_tool_result",
         lambda state: _node_consume_step_tool_result(state, deps=contexts.steps),
@@ -210,7 +248,8 @@ def build_action_execution_graph(contexts: GraphContexts):
                 "handle_failure": END,
             },
         )
-    builder.add_edge("action_tool_node", "consume_action_tool_result")
+    builder.add_edge("action_tool_node", "after_gateway_dispatch")
+    builder.add_edge("after_gateway_dispatch", "consume_action_tool_result")
     builder.add_conditional_edges(
         "react_action",
         _after_react_graph,
@@ -243,6 +282,11 @@ def build_executive_graph(contexts: GraphContexts):
     builder.add_node("handle_decision_denial", lambda state: _node_handle_decision_denial(state, deps=deps))
     builder.add_node("admit_execution_route", lambda state: _node_admit_execution_route(state, deps=deps))
     builder.add_node("apply_decision", lambda state: _node_apply_decision(state, deps=deps))
+    builder.add_node(
+        "interrupt_capability_acquisition",
+        lambda state: _node_interrupt_capability_acquisition(state, deps=deps),
+    )
+    builder.add_node("interrupt_confirmation", _node_interrupt_confirmation)
     builder.add_node("resolve_action", lambda state: _node_resolve_action(state, deps=deps))
     builder.add_node("action_execution", build_action_execution_graph(contexts))
     builder.add_node("observe_action", lambda state: _node_observe_action(state, deps=deps))
@@ -287,13 +331,21 @@ def build_executive_graph(contexts: GraphContexts):
             "loop": "project_control_state",
             "action": "resolve_action",
             "completion": "verify_completion",
+            "interrupt_capability_acquisition": "interrupt_capability_acquisition",
+            "interrupt_confirmation": "interrupt_confirmation",
             "stop": END,
         },
     )
+    builder.add_edge("interrupt_capability_acquisition", END)
+    builder.add_edge("interrupt_confirmation", "project_control_state")
     builder.add_conditional_edges(
         "resolve_action",
         _after_action_resolution,
-        {"dispatch": "action_execution", "control": "project_control_state"},
+        {
+            "dispatch": "action_execution",
+            "monitor": "monitor_plan",
+            "control": "project_control_state",
+        },
     )
     builder.add_edge("action_execution", "observe_action")
     builder.add_conditional_edges(
@@ -352,7 +404,12 @@ def _build_checkpointer(settings: Settings):
         prepare_threshold=0,
         row_factory=dict_row,
     )
-    checkpointer = PostgresSaver(connection)
+    checkpointer = PostgresSaver(
+        connection,
+        serde=JsonPlusSerializer(
+            allowed_msgpack_modules=_CHECKPOINT_MSGPACK_TYPES,
+        ),
+    )
     try:
         checkpointer.setup()
     except Exception:

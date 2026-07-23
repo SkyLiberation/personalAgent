@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -9,7 +10,9 @@ from langchain_core.tools import tool
 from pydantic import ValidationError
 
 from personal_agent.orchestration.orchestration_models import RunCheckpoint, ReactSubState, ToolTrackingSubState
-from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
+from personal_agent.capabilities.contracts.grants import GrantDependencySet, ProcedureNodeGrant
+from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor, ToolGateway, ToolGatewayContext
+from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.tools import (
     ToolError,
     governance_extras,
@@ -270,6 +273,58 @@ class TestToolExecutor:
         assert result["ok"] is False
         assert "leaf execution grant" in result["error"]
         assert sink.events[0].execution_mode == "react"
+
+    def test_gateway_requires_confirmation_bound_grant_for_confirmed_high_risk_tool(self):
+        gateway = ToolGateway()
+        gateway.register(dangerous)
+        context = ToolGatewayContext(
+            execution_mode="invocation_batch",
+            tool_call_id="call-confirm",
+            step_id="step-confirm",
+        )
+        grant = ProcedureNodeGrant(
+            request_id="request-confirm",
+            action_ref="action-confirm",
+            authorization_digest="authorization-digest",
+            execution_command_digest="command-digest",
+            granted_resource_selector=ResourceSelector(),
+            granted_operation_scope=OperationScope(operations=frozenset({"delete"})),
+            granted_data_egress="none",
+            granted_credential_mode="none",
+            retry_family_id="retry-confirm",
+            dependency_set=GrantDependencySet(
+                task_revision=1,
+                goal_definition_fingerprint="goal-fingerprint",
+                action_fingerprint="action-fingerprint",
+                capability_definition_revision=1,
+                authority_revision=1,
+                policy_bundle_hash="policy-hash",
+            ),
+            expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            procedure_run_id="procedure-run",
+            node_id="step-confirm",
+            capability_ref="capability-dangerous",
+            provider_binding_ref="test:dangerous",
+        )
+
+        rejected = gateway.invoke(
+            "dangerous",
+            {"target": "note-1", "confirmed": True, "idempotency_key": "idem-1"},
+            context,
+            grant=grant,
+        )
+
+        assert rejected["ok"] is False
+        assert "confirmation-bound grant" in rejected["error"]
+
+        confirmed = gateway.invoke(
+            "dangerous",
+            {"target": "note-1", "confirmed": True, "idempotency_key": "idem-2"},
+            context,
+            grant=grant.model_copy(update={"required_confirmation_ref": "step-confirm"}),
+        )
+
+        assert confirmed["ok"] is True
 
     def test_gateway_rate_limits_per_user_and_tool(self):
         sink = InMemoryToolAuditSink()

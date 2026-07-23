@@ -55,7 +55,7 @@ External Cron / Manual Research
 | `记忆层` | [memory/](src/personal_agent/memory), [infra/storage/](src/personal_agent/infra/storage), [kernel/models.py](src/personal_agent/kernel/models.py) | 有受限会话线索、Postgres 长期记忆、Research 数据、LangGraph checkpoint、run snapshot 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
 | `检索与推理层` | [orchestration/ask/](src/personal_agent/orchestration/ask), [application/verifier.py](src/personal_agent/application/verifier.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 支持图谱、结构、本地、网络、情景和反思多路召回，RRF/MMR、上下文压缩、反证检索、引用生成和蕴含级校验 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
 | `主动知识循环` | [application/review/](src/personal_agent/application/review), [application/insight/](src/personal_agent/application/insight), [application/knowledge/](src/personal_agent/application/knowledge) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
-| `持续研究层` | [application/research/](src/personal_agent/application/research), [infra/storage/postgres_research_store.py](src/personal_agent/infra/storage/postgres_research_store.py), [adapters/web/routes/research.py](src/personal_agent/adapters/web/routes/research.py) | 支持一次性研究、定时订阅、来源归一、事件聚类、可信度、个人关联、情报简报、反馈偏好和确认入库 | [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) |
+| `持续研究层` | [application/research/](src/personal_agent/application/research), [infra/storage/postgres_research_store.py](src/personal_agent/infra/storage/postgres_research_store.py), [adapters/web/routes/research.py](src/personal_agent/adapters/web/routes/research.py) | 支持一次性研究、定时订阅、来源归一、事件聚类、可信度、个人关联、情报简报、反馈偏好和确认入库 | [docs/workflow/research-once-workflow.md](docs/workflow/research-once-workflow.md)、[docs/env.md](docs/env.md#research--定时情报简报) |
 | `后台任务 / 调度层` | [orchestration/worker.py](src/personal_agent/orchestration/worker.py), [application/worker_queue.py](src/personal_agent/application/worker_queue.py), [infra/storage/postgres_worker_queue_store.py](src/personal_agent/infra/storage/postgres_worker_queue_store.py) | 应用层定义 queue port，Postgres adapter 提供 lease、heartbeat、重试和 dead-letter，orchestration worker 组合 handler | [docs/deploy.md](docs/deploy.md) |
 | `执行与反馈层` | [adapters/web/routes/](src/personal_agent/adapters/web/routes), [orchestration/runtime.py](src/personal_agent/orchestration/runtime.py), [orchestration/orchestration_models.py](src/personal_agent/orchestration/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、失败降级、异步任务和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测、治理与评测层` | [kernel/observability.py](src/personal_agent/kernel/observability.py), [adapters/web/auth.py](src/personal_agent/adapters/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、执行回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
@@ -182,7 +182,7 @@ README 只保留最短路径：
 - 飞书条目支持 `N1 展开 / 有用 / 不感兴趣 / 收藏 / 入库`
 - 用户反馈会更新订阅内容偏好；“入库”会保存事件摘要、可信度与来源
 
-详见 [持续研究与定时情报简报](docs/future/scheduled-intelligence-research.md)。
+当前一次性研究流程见 [research_once workflow](docs/workflow/research-once-workflow.md)，订阅、调度和运行配置见 [Research环境配置](docs/env.md#research--定时情报简报)；尚未落地的来源验证与事件触发能力见 [持续研究 P1/P2](docs/future/scheduled-intelligence-research.md)。
 
 ### 10. Agent Harness, Capability & Durable Execution
 
@@ -284,7 +284,8 @@ personalAgent/                  # 项目根目录
 - [docs/topics/memory.md](docs/topics/memory.md) - 记忆层存储职责与读写路径
 - [docs/review-digest.md](docs/review-digest.md) - 知识简报、订阅投递和复习反馈
 - [docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) - 自动整理与知识缺口主动追问
-- [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 一次性研究、定时情报、durable worker 和反馈闭环
+- [docs/future/adaptive-agent-runtime-design.md](docs/future/adaptive-agent-runtime-design.md) - 知识 Agent 原生能力、MCP/A2A 扩展与 Runtime 管控目标
+- [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 持续研究尚未落地的来源验证、connector 和事件触发 P1/P2
 - [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 系统分层、Agent 主链、Capability、Procedure、知识与运行时当前事实
 - [docs/future/parallel-steering-runtime-design.md](docs/future/parallel-steering-runtime-design.md) - 本地并行 join 与语义 steering 后续设计
 

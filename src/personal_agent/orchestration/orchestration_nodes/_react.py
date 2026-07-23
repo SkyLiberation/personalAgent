@@ -97,6 +97,7 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
                 "\n\n## 执行方法与停止条件\n- "
                 + "\n- ".join(step.execution_guidance)
             )
+        state.react.user_prompt += _react_execution_scope_prompt(state, step, deps)
         if _has_downstream_commit(state, step_id):
             state.react.user_prompt += (
                 "\n\n本步骤只允许读取和诊断，绝不能直接修改状态。"
@@ -106,7 +107,15 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
 
     # ---- Call LLM (native tool calling) ----
     model_prompt = _materialize_react_prompt(state, deps)
-    outcome = _helpers._react_llm_native(model_prompt, deps, allowed)
+    remaining_tool_calls = _react_remaining_tool_budget(state, step_id)
+    model_allowed = allowed
+    if remaining_tool_calls == 0:
+        model_allowed = set()
+        model_prompt += (
+            "\n\n本动作已达到已接受契约中的工具调用上限。"
+            "不得再次调用 provider；请基于已有 Observation 调用 finish_react。"
+        )
+    outcome = _helpers._react_llm_native(model_prompt, deps, model_allowed)
     if outcome is None:
         logger.warning("ReAct LLM returned nothing at iteration %d for step %s", idx, step_id)
         state.react.done = True
@@ -124,6 +133,34 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
 
     # ---- LLM declared done ----
     if outcome.done:
+        step = next(
+            (
+                item for item in state.invocation_batch.invocations
+                if item.step_id == step_id
+            ),
+            None,
+        )
+        provider_observed = any(
+            item.get("action_tool") and item.get("observation")
+            for item in state.react.iterations
+        )
+        if step is not None and step.execution_grant_ref and not provider_observed:
+            state.react.done = True
+            state.react.status = "failed"
+            state.react.stop_reason = "required_capability_not_executed"
+            state.react.result = {
+                "answer": "",
+                "react_iterations": len(state.react.iterations),
+                "error": "required capability produced no governed Observation",
+            }
+            state.add_event("react_iteration", {
+                "step_id": step_id,
+                "iteration": idx,
+                "thought": outcome.thought[:200],
+                "done": False,
+                "error": state.react.stop_reason,
+            })
+            return {"react": state.react, "events": state.events}
         result = outcome.result if isinstance(outcome.result, dict) else {"answer": str(outcome.result or "")}
         state.react.done = True
         state.react.status = "completed"
@@ -173,6 +210,8 @@ def _node_react_iterate(state: RunCheckpoint, *, deps: ReactContext) -> dict:
         observation = f"错误：工具 '{tool_name}' 是高风险/写操作工具，不允许在 ReAct 中调用。"
     elif state.task_contract is not None and state.provider_call_count >= state.task_contract.constraints.max_provider_calls:
         observation = "错误：本任务的 provider 调用预算已耗尽。"
+    elif _react_remaining_tool_budget(state, step_id) == 0:
+        observation = "错误：本动作的工具调用预算已耗尽，必须基于已有 Observation 完成。"
     else:
         step = next(
             (item for item in state.invocation_batch.invocations if item.step_id == step_id),
@@ -256,6 +295,12 @@ def _node_consume_react_tool_result(state: RunCheckpoint, *, deps: ReactContext 
     )
     artifact["_step_id"] = state.react.step_id
     artifact["_goal_id"] = step.goal_id if step is not None else ""
+    grant = state.execution_grants.get(
+        step.execution_grant_ref if step is not None and step.execution_grant_ref else ""
+    )
+    if grant is not None:
+        artifact["_authorization_digest"] = grant.authorization_digest
+        artifact["_execution_command_digest"] = grant.execution_command_digest
     tool_call_id = state.tool_tracking.pending_call_id
     state.tool_results.append(artifact)
     if (
@@ -459,6 +504,70 @@ def _has_downstream_commit(state: RunCheckpoint, step_id: str) -> bool:
             item for item in by_id.values() if candidate.step_id in item.depends_on
         )
     return False
+
+
+def _react_remaining_tool_budget(
+    state: RunCheckpoint,
+    step_id: str,
+) -> int | None:
+    step = next(
+        (item for item in state.invocation_batch.invocations if item.step_id == step_id),
+        None,
+    )
+    spec = next(
+        (item for item in state.control.resolved_actions if item.action_id == step_id),
+        None,
+    )
+    if spec is None and step is not None:
+        spec = next(
+            (
+                item for item in state.control.resolved_actions
+                if item.goal_id == step.goal_id
+            ),
+            None,
+        )
+    if spec is None:
+        return None
+    used = sum(
+        1 for item in state.react.iterations
+        if item.get("action_tool")
+    )
+    return max(spec.budget_reservation.provider_call_budget - used, 0)
+
+
+def _react_execution_scope_prompt(
+    state: RunCheckpoint,
+    step: object,
+    deps: ReactContext,
+) -> str:
+    grant_ref = getattr(step, "execution_grant_ref", None)
+    grant = state.execution_grants.get(grant_ref or "")
+    selector = getattr(grant, "granted_resource_selector", None)
+    locator = getattr(selector, "locator", None)
+    if not isinstance(locator, str) or not locator:
+        return ""
+    bindings: list[tuple[str, str]] = []
+    for tool_name in state.react.allowed_tools:
+        tool = deps.tool_executor.get(tool_name)
+        mcp = (tool.extras or {}).get("mcp") if tool is not None else None
+        locator_arg = mcp.get("resource_locator_arg") if isinstance(mcp, dict) else None
+        if isinstance(locator_arg, str) and locator_arg:
+            bindings.append((tool_name, locator_arg))
+    if not bindings:
+        return (
+            "\n\n## 不可变执行范围\n"
+            f"授权资源 locator：{json.dumps(locator, ensure_ascii=False)}。"
+            "不得替换为其他资源。"
+        )
+    rendered = "\n".join(
+        f"- 工具 {tool_name} 的参数 {arg_name} 必须精确等于 "
+        f"{json.dumps(locator, ensure_ascii=False)}"
+        for tool_name, arg_name in bindings
+    )
+    return (
+        "\n\n## 不可变执行范围\n"
+        f"{rendered}\n不得改写、推断或替换该 locator。"
+    )
 
 
 def _build_evidence_pack(state: RunCheckpoint, step_id: str) -> CapabilityEvidencePack:

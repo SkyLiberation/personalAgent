@@ -25,7 +25,6 @@ from personal_agent.runtime.contracts.task import (
     ContextBudget,
     ContextItem,
     RuntimeSnapshotRef,
-    SuccessCriterion,
     TaskRuntimeProjection,
 )
 from personal_agent.capabilities.contracts.execution import CapabilityRequirement
@@ -292,6 +291,22 @@ def test_run_manager_fences_old_worker_and_quarantines_cancel_race() -> None:
     )
     assert completed.status == "cancelled"
     assert completed.orphan_artifact_refs == ("artifact:late",)
+
+
+def test_run_manager_renews_only_the_current_lease_identity() -> None:
+    manager = DurableRunManager()
+    manager.submit("renew-run", idempotency_key="renew-submit")
+    first = manager.acquire_lease("renew-run", ttl_seconds=1)
+    renewed = manager.renew_lease("renew-run", first, ttl_seconds=60)
+
+    assert renewed.lease_id == first.lease_id
+    assert renewed.fencing_token == first.fencing_token
+    assert renewed.expires_at > first.expires_at
+
+    current = manager.acquire_lease("renew-run")
+    with pytest.raises(RunStateError, match="stale fencing"):
+        manager.renew_lease("renew-run", first)
+    assert manager.renew_lease("renew-run", current).lease_id == current.lease_id
 
 
 @pytest.mark.parametrize(

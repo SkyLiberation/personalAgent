@@ -38,6 +38,7 @@
 | 主题 | 权威文档 |
 | --- | --- |
 | 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
+| Phase 0 能力目录、运行时清单与发布基线 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Procedure / Step Projection 架构总览 | [workflow/workflow-framework.md](workflow/workflow-framework.md) |
 | Entry → Executive Agent Loop 端到端流程 | [workflow/entry-executive-agent-loop.md](workflow/entry-executive-agent-loop.md) |
 | Capture 摄取 + Ask RAG 流水线 | [workflow/capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) |
@@ -68,11 +69,10 @@
 
 | 主题 | 文档 |
 | --- | --- |
+| Capability-first Knowledge Agent Runtime | [future/adaptive-agent-runtime-design.md](future/adaptive-agent-runtime-design.md) |
 | 并行 Join 与语义 Steering | [future/parallel-steering-runtime-design.md](future/parallel-steering-runtime-design.md) |
-| 统一 Agent 工作台主路径 | [future/unified-agent-workspace-main-path.md](future/unified-agent-workspace-main-path.md) |
 | 语义生命周期抽取 | [future/semantic-lifecycle-extraction-redesign.md](future/semantic-lifecycle-extraction-redesign.md) |
 | 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
-| 核心运行时模型内聚性重构 | [future/runtime-model-cohesion-redesign.md](future/runtime-model-cohesion-redesign.md) |
 
 ## 运维与参考
 

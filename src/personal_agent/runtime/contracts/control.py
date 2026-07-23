@@ -262,8 +262,17 @@ ControlDecision = Annotated[
 class CapabilityClassSummary(BaseModel):
     kind: str
     semantic_domains: tuple[str, ...] = ()
+    resource_types: tuple[str, ...] = ()
     operations: tuple[str, ...] = ()
     providers: tuple[str, ...] = ()
+    output_contract: str
+    side_effect_class: str
+    authority_scope: str
+    trust_level: str
+    freshness_profile: str
+    evidence_contract: str
+    data_egress_class: str
+    failure_semantics: str
 
 
 class ObservationProvenance(BaseModel):
@@ -312,13 +321,16 @@ class CapabilityGapObservation(ObservationRef):
     suggested_capability_classes: tuple[str, ...] = ()
 
 
+ControlObservation = CapabilityGapObservation | ObservationRef
+
+
 class ActionOutcome(BaseModel):
     action_id: str
     goal_id: str
     status: Literal["succeeded", "failed", "blocked", "awaiting_input"]
     output_contract: str = "ToolResult"
     artifact_ids: tuple[str, ...] = ()
-    observation: ObservationRef | None = None
+    observation: ControlObservation | None = None
     error_code: str | None = None
     retryable: bool = False
     provider_calls: int = 0
@@ -372,7 +384,7 @@ class ControlState(BaseModel):
     procedure_candidates: tuple[ProcedureCandidate, ...] = ()
     outstanding_evidence_gaps: tuple[str, ...] = ()
     pending_approval_ids: tuple[str, ...] = ()
-    latest_observations: tuple[ObservationRef, ...] = ()
+    latest_observations: tuple[ControlObservation, ...] = ()
     remaining_provider_calls: int = 0
     remaining_executive_turns: int = 0
 
@@ -390,7 +402,8 @@ _CONTROL_PHASE_TRANSITIONS: dict[ControlPhase, frozenset[ControlPhase]] = {
         "routing", "preparing_model_call", "awaiting_input", "closed",
     }),
     "routing": frozenset({
-        "resolving_execution", "preparing_model_call", "awaiting_input", "closed",
+        "resolving_execution", "preparing_model_call", "accepting_result",
+        "awaiting_input", "closed",
     }),
     "resolving_execution": frozenset({
         "preparing_dispatch", "preparing_model_call", "accepting_result", "closed",
@@ -454,7 +467,7 @@ class ControlTurnState(BaseModel):
     resolved_actions: list[ResolvedActionSpec] = Field(default_factory=list)
     dispatch_groups: list[DispatchGroup] = Field(default_factory=list)
     retry_directive: RetryDirective | None = None
-    observations: list[ObservationRef] = Field(default_factory=list)
+    observations: list[ControlObservation] = Field(default_factory=list)
     turn_index: int = 0
     last_intent_semantic_hash: str = ""
     last_submission_hash: str = ""

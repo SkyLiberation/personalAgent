@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
+import re
 from typing import Any
 
 from langchain_core.tools import BaseTool
 
 _SYSTEM_TOOL_ARGS = {"user_id"}
+_MODEL_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def strict_json_schema_response(name: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -55,6 +58,20 @@ def strict_tool_definition(tool: BaseTool) -> dict[str, Any]:
             "strict": True,
         },
     }
+
+
+def model_tool_wire_name(canonical_name: str) -> str:
+    """Project a canonical tool id to a valid model-provider function name.
+
+    The returned value is a transport-only alias. Callers must map it back to
+    the canonical Tool id before authorization, journaling, or dispatch.
+    """
+    if len(canonical_name) <= 64 and _MODEL_TOOL_NAME.fullmatch(canonical_name):
+        return canonical_name
+    readable = re.sub(r"[^a-zA-Z0-9_-]", "_", canonical_name).strip("_")
+    prefix = (readable or "tool")[:40]
+    digest = sha256(canonical_name.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
 
 
 def _model_visible_tool_schema(tool: BaseTool) -> dict[str, Any]:

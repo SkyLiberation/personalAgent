@@ -71,6 +71,15 @@ class GoalVerifier:
         result_refs = tuple(item for item in result_refs if item)
         evidence_refs = tuple(dict.fromkeys(item.evidence_ref for item in evidence))
         source_count = len(evidence_refs)
+        execution_fact_required = any(
+            resource.required_operations
+            for resource in task.resources_for_goal(goal.goal_id)
+        )
+        execution_fact_passed = (
+            execution_fact_report is not None
+            and execution_fact_report.status == "passed"
+            and execution_fact_report.provider_invoked
+        )
         for criterion_id in goal.success_criterion_ids:
             criterion = criteria_by_id[criterion_id]
             if criterion.acceptance_contract == "MutationReceipt":
@@ -82,6 +91,14 @@ class GoalVerifier:
                 status = "passed" if passed else "inconclusive"
                 reason = "execution_fact_and_receipt_passed" if passed else "mutation_receipt_missing"
                 criterion_evidence_refs = execution_fact_report.receipt_refs if passed else ()
+            elif execution_fact_required and not execution_fact_passed:
+                # Execution fact is only a prerequisite here: it proves that
+                # the frozen provider command ran, never that the semantic Goal
+                # succeeded. The model verifier may still downgrade a result
+                # after this gate passes, but it cannot waive a missing fact.
+                status = "inconclusive"
+                reason = "execution_fact_required"
+                criterion_evidence_refs = ()
             elif criterion.evidence_policy.citation_required:
                 passed = bool(answer and answer.strip()) and (
                     citation_count + source_count >= (criterion.evidence_policy.minimum_source_count or 1)
@@ -171,13 +188,21 @@ class GoalVerifier:
 
             response = self._model_client.generate(StructuredModelRequest(
                 operation="goal_semantic_verification",
-                version="v1",
+                version="v3",
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "Judge whether the supplied answer and goal-scoped evidence support each success criterion. "
+                            "Judge whether the supplied typed goal result and goal-scoped evidence support each success criterion. "
                             "Do not infer missing evidence. Return passed, failed, or inconclusive for every criterion. "
+                            "A missing citation, source count, or external evidence may make a criterion inconclusive "
+                            "only when that criterion's supplied evidence_policy explicitly requires it. For a response "
+                            "criterion without such a requirement, judge the answer's semantic content against the criterion "
+                            "and any admitted prerequisite result; do not invent a citation requirement. For an external_state "
+                            "Goal, candidate_answer is normally null: judge its non-receipt criteria from its goal-scoped "
+                            "action_outcome, execution_fact_report, and admitted evidence instead, and never fail it merely "
+                            "because no user-facing answer exists. A MutationReceipt criterion is mechanical execution fact; "
+                            "do not use semantic judgment to contradict its deterministic receipt status. "
                             "Return only the structured object and no chain-of-thought."
                         ),
                     },

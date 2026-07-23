@@ -2,6 +2,15 @@
 
 本文描述已经落地的 Agent 主链。组织方式是先说明每个模块解决什么业务问题，再说明模块之间通过什么协议协作；它不是代码调用顺序的逐行翻译。
 
+架构声明的 live E2E 证据、边界和暂不纳入核心主链的集成，见
+[`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md)。产品能力目录、Tool /
+MCP / A2A 当前事实和可信发布基线见
+[`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md)。
+
+旧 E01–E17 只证明其 catalog 标注的架构边界或 Capability Profile，不等于新产品能力
+E01–E13。当前可信原生产品能力与组合能力基线均为空；任何实现、配置或历史 trace 都
+不能绕过同 revision release gate 扩大该声明。
+
 ## 1. 架构要回答的三个问题
 
 一个可持续演进的 Agent 必须同时回答：
@@ -152,7 +161,7 @@ Capability Plane 分成四层：
 
 Resolver 只有在 output contract、side-effect class、authority scope、data egress、evidence contract、failure semantics、trust floor 和 freshness contract 全部满足同一 `CapabilityEquivalenceClass` 时才允许绑定。排名只能在该等价类内部优化成本、延迟或健康度；语义不同候选不能用 aggregate score 选“最接近”的一个。
 
-远程、MCP 和 Agent 能力在没有实时 availability observation 时 fail closed。只有 system metadata 且无需 credential 的本地能力可在无观测时视为可用。能力缺失不会硬选最相似工具，而是产生 `CapabilityGapObservation`，由 Executive 请求 acquisition、clarification 或终止。
+远程能力在没有实时 availability observation 时 fail closed。只有 system metadata 且无需 credential 的本地能力可在无观测时视为可用。能力缺失不会硬选最相似工具：尚未形成可执行 Proposal 时，Executive 直接提出并持久化 `CapabilityAcquisitionRequest`；已接受 Action 在解析时发现缺口，则产生 `CapabilityGapObservation` 再回到控制面。批准 acquisition 只表示允许获取，不能冒充新的 availability 或 provider binding。MCP、A2A 等具体远程 adapter 的生产主链资格仍取决于各自的 live E2E。
 
 `runtime_meta` 是 Capability 的运行约束，不是业务能力本身：它描述 provider binding revision、credential mode、执行环境、并发/超时、成本和健康信息，供 Resolver 与 Gateway 在执行前再次核对。
 
@@ -165,6 +174,8 @@ Route admission 只校验 AcceptedIntent 推导出的原子 Tool、Procedure、R
 `ToolGateway` 和 `AgentGateway` 是最终执行门：它们要求 invocation/node 与 grant 精确绑定，复核 capability/provider/resource/operation，执行 commit-time policy，并记录审计。Procedure 的 Mutation node 在用户确认后会获得新的 confirmation-bound grant；幂等键不能冒充 confirmation reference。
 
 Procedure 用于封装稳定事务不变量，例如 prepare、confirm、commit、receipt。它不是 Planning mode，也不是普通 prompt 模板。`ProcedureApplicabilityResolver` 比较当前 Goal 的有效资源与 Procedure 声明的 domain/type/operation：只有能覆盖要求的 Procedure 才是 candidate，mandatory Procedure 会阻止 Executive 绕过事务路径。
+
+当前 `knowledge_delete` 核心路径只接受用户输入中已显式给出的 canonical note ID：Procedure 只校验该 ID 在当前用户 scope 内存在，再等待 confirmation。按标题、相似度或图谱候选选择删除目标的旧路径已移除；在存在可 Gateway 绑定的 `DeletionCandidates` provider、完整等价类和专项 live E2E 前，它不能作为删除主链能力。
 
 `InvocationJournal` 在 provider 调用前原子写入 reserved journal entry 与 prepared outbox；dispatch 后转为 dispatched，观察结果后转为 observed。相同 idempotency key 和 revision 通过 CAS 防止重复副作用。一次任务会有多个 invocation，因此 Journal 保存多个 item；每个 Goal 也可能经历搜索、转换、写入和验证等多次执行。
 
@@ -203,7 +214,7 @@ Orchestration graph 串联 compile、coordinate、control、admit、resolve、di
 
 Checkpoint 是恢复容器，不应复制 Goal definition。`Decision Audit Store` 保存 Proposal/Admission/Feedback，`Command Store` 保存 immutable Command，`canonical_domain_events` 保存已提交执行事实，`agent_trace_events` 只保存运行解释；四者不能互相冒充 canonical owner。
 
-Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gateway 交给 Tool executor、Procedure runtime、ReAct loop 或 Agent provider 执行。Graph 本身不绕过 Gateway 直接调用 provider。
+Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gateway 交给 Tool executor、Procedure runtime 或已获得专项 live E2E 的 provider route 执行。Graph 本身不绕过 Gateway 直接调用 provider。没有专项 live E2E 的 ReAct、Agent provider、MCP route 和 capability acquisition 不应视为主链组成部分。
 
 实现：`orchestration/orchestration_graph.py`、`orchestration/orchestration_nodes/`、`orchestration/orchestration_models.py`。
 
@@ -229,7 +240,7 @@ Action 由 Executive 提出，经 admission 和 resolution 后，由对应 Gatew
   -> FinalAnswerProposal / Admission
 ```
 
-这不是固定流水线：reactive 可跳过 Plan；Capability gap 会回到 Executive；Mutation 进入 confirmation-bound Procedure；Observation 可触发局部 replan；interrupt 后从 Checkpoint 恢复。但任何分支都不能跳过 Proposal/Admission/Grant/Gateway/Verification 的权责边界。
+这不是固定流水线：reactive 可跳过 Plan；缺少完整能力等价类会进入 acquisition pause 或由 Capability gap 回到 Executive；Mutation 进入 confirmation-bound Procedure；Observation 可触发局部 replan；interrupt 后从 Checkpoint 恢复。但任何执行分支都不能跳过 Proposal/Admission/Grant/Gateway/Verification 的权责边界。
 
 ## 14. 当前架构不变量
 

@@ -22,6 +22,7 @@ from personal_agent.runtime.contracts.task import (
     TaskRuntimeProjection,
 )
 from personal_agent.planning.task_analyzer import Goal, ResourceHint, TaskAnalysis
+from personal_agent.kernel.contracts.derivation import canonical_digest
 from personal_agent.kernel.contracts.resource import mutating_operations
 from personal_agent.runtime.task_validation import TaskContractValidator
 
@@ -73,13 +74,16 @@ class GoalGraphCompiler:
         self._validator.validate_analysis(analysis)
         goals = analysis.goals
         grouped_resources = [_resources_for_goal(goal) for goal in goals]
+        shared_resources, grouped_resources = _partition_resource_ownership(
+            grouped_resources,
+        )
         mutation_operations = tuple(dict.fromkeys(
             operation
-            for group in grouped_resources
+            for group in (shared_resources, *grouped_resources)
             for operation in _mutation_operations(group)
         ))
         evidence_required = any(
-            _requires_evidence(goal, group)
+            _requires_evidence(goal, (*shared_resources, *group))
             for goal, group in zip(goals, grouped_resources, strict=True)
         )
 
@@ -97,7 +101,8 @@ class GoalGraphCompiler:
         definitions: list[GoalDefinition] = []
         states: dict[str, GoalRuntimeState] = {}
         for goal, group in zip(goals, grouped_resources, strict=True):
-            goal_criteria = _criteria_for_goal(goal, group)
+            effective_resources = (*shared_resources, *group)
+            goal_criteria = _criteria_for_goal(goal, effective_resources)
             goal_constraints = tuple(
                 GoalConstraint(
                     constraint_id=f"{goal.goal_id}:constraint:{index}",
@@ -118,12 +123,12 @@ class GoalGraphCompiler:
                 resources=group,
                 criteria=goal_criteria,
                 constraints=goal_constraints,
-                output_contract=_output_contract(goal, group),
+                output_contract=_output_contract(goal, effective_resources),
             ))
             states[goal.goal_id] = GoalRuntimeState(
                 status="pending" if any(item.blocks_execution for item in dependencies) else "active",
                 evidence_gaps=("initial_evidence_required",)
-                if _requires_evidence(goal, group) else (),
+                if _requires_evidence(goal, effective_resources) else (),
             )
 
         mutation = MutationIntent(
@@ -138,6 +143,7 @@ class GoalGraphCompiler:
                 read_only=mutation is None,
                 max_parallelism=min(max(len(goals), 1), 4),
             ),
+            shared_resources=shared_resources,
             goal_graph=GoalGraphDefinition(
                 revision=goal_graph_revision,
                 goals=tuple(definitions),
@@ -195,6 +201,44 @@ def _resources_for_goal(
     goal: Goal,
 ) -> tuple[ResourceRequirement, ...]:
     return tuple(_resource_from_hint(hint) for hint in goal.resource_hints)
+
+
+def _partition_resource_ownership(
+    grouped: list[tuple[ResourceRequirement, ...]],
+) -> tuple[tuple[ResourceRequirement, ...], list[tuple[ResourceRequirement, ...]]]:
+    """Lift repeated accepted requirements to the task-owned shared scope.
+
+    Sharing is a closed-world derivation: only byte-equivalent canonical
+    requirements present on at least two distinct Goals are lifted.  The
+    compiler does not infer semantic similarity, widen operations, or invent a
+    locator.  A lifted requirement has one owner and is removed from every
+    Goal-local collection.
+    """
+    goal_refs_by_digest: dict[str, set[int]] = {}
+    first_by_digest: dict[str, ResourceRequirement] = {}
+    order: list[str] = []
+    for goal_index, resources in enumerate(grouped):
+        for resource in resources:
+            digest = canonical_digest(resource)
+            if digest not in first_by_digest:
+                first_by_digest[digest] = resource
+                order.append(digest)
+            goal_refs_by_digest.setdefault(digest, set()).add(goal_index)
+    shared_digests = {
+        digest for digest, goal_indexes in goal_refs_by_digest.items()
+        if len(goal_indexes) >= 2
+    }
+    shared = tuple(
+        first_by_digest[digest] for digest in order if digest in shared_digests
+    )
+    local = [
+        tuple(
+            resource for resource in resources
+            if canonical_digest(resource) not in shared_digests
+        )
+        for resources in grouped
+    ]
+    return shared, local
 
 
 def _resource_from_hint(hint: ResourceHint) -> ResourceRequirement:

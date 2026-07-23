@@ -372,12 +372,22 @@ class RunCheckpoint(BaseModel):
 def _infer_status(state: RunCheckpoint) -> AgentRunStatus:
     if state.errors:
         return AgentRunStatus.failed
-    if state.answer_completed:
-        return AgentRunStatus.completed
+    if state.task_runtime is not None:
+        lifecycle = state.task_runtime.lifecycle
+        if lifecycle in {"awaiting_input", "paused"}:
+            return AgentRunStatus.waiting
+        if lifecycle == "terminated":
+            return AgentRunStatus.completed_degraded
+        if lifecycle == "completed":
+            return AgentRunStatus.completed
     if state.control.pending_interaction is not None:
         if state.control.pending_interaction.kind == "clarification_required":
             return AgentRunStatus.waiting
         return AgentRunStatus.blocked_approval
+    if state.answer_completed:
+        # Legacy/task-analysis-only checkpoints have no runtime aggregate. In
+        # that narrow case answer completion remains the only terminal fact.
+        return AgentRunStatus.completed
     if state.accepted_task_analysis is not None:
         return AgentRunStatus.running
     return AgentRunStatus.created

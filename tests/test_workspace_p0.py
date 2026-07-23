@@ -58,6 +58,13 @@ def test_ingest_text_creates_p0_chain_and_admits_supported_claims():
     assert result.state_events
     assert result.knowledge_items
     assert result.knowledge_items[0].claim_ids
+    active_items = store.list_knowledge_items("w1", state="active")
+    deprecated_items = store.list_knowledge_items("w1", state="deprecated")
+    assert [item.knowledge_item_id for item in active_items] == [
+        item.knowledge_item_id for item in result.knowledge_items
+    ]
+    assert len(deprecated_items) == 1
+    assert deprecated_items[0].claim_ids == []
 
 
 def test_assistant_inference_never_becomes_active_even_when_grounded():

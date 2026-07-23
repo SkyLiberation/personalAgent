@@ -450,6 +450,9 @@ def test_durable_run_repository_fences_workers_across_managers():
 
     with pytest.raises(RunStateError, match="stale fencing"):
         first.transition(run_id, "running", fencing_token=old_lease.fencing_token)
+    with pytest.raises(RunStateError, match="stale fencing"):
+        first.renew_lease(run_id, old_lease)
+    assert second.renew_lease(run_id, new_lease).lease_id == new_lease.lease_id
     assert second.transition(
         run_id,
         "running",

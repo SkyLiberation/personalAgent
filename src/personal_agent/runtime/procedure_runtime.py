@@ -20,7 +20,6 @@ from personal_agent.capabilities.contracts.procedure import (
     ProcedureApplicability,
     ProcedureInvocation,
     ProcedureCandidate,
-    ProcedureCondition,
     ProcedureEvent,
     ProcedureRunProjection,
     ProcedureNodeSpec,
@@ -429,18 +428,7 @@ def _catalog() -> ProcedureCatalog:
             ),
             nodes=(
                 ProcedureNodeSpec(
-                    "resolve-candidates", "retrieve", "Find deletion candidates.",
-                    execution_mode="deterministic",
-                    capability_requirement=_requirement(
-                        "delete-candidates", "Find candidate knowledge", ("knowledge",),
-                        ("note",), ("search", "read"), "DeletionCandidates",
-                    ),
-                    recovery_policy="clarify",
-                    conditional_edges=(ProcedureCondition("no_candidate", "clarify"),),
-                ),
-                ProcedureNodeSpec(
-                    "resolve-target", "resolve", "Resolve the exact deletion target.",
-                    depends_on=("resolve-candidates",), llm_decision_node="delete_target_resolve",
+                    "resolve-target", "resolve", "Validate the user-grounded canonical deletion target.",
                     recovery_policy="clarify",
                 ),
                 ProcedureNodeSpec(

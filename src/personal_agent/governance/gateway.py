@@ -150,7 +150,18 @@ class ToolGateway:
         timed_out = False
         rate_limited = False
         try:
-            grant_violation = self._validate_execution_grant(name, context, grant)
+            governance = tool_governance(tool)
+            grant_violation = self._validate_execution_grant(
+                tool,
+                args,
+                context,
+                grant,
+                confirmation_required=(
+                    governance.requires_confirmation
+                    and governance.risk_level == "high"
+                    and bool(args.get("confirmed"))
+                ),
+            )
             violation = grant_violation or self._validate_policy(tool, args, context)
             if violation is not None:
                 output = tool_failure(violation.message, error_kind=violation.kind)
@@ -354,14 +365,18 @@ class ToolGateway:
 
     @staticmethod
     def _validate_execution_grant(
-        tool_name: str,
+        tool: BaseTool,
+        args: dict[str, Any],
         context: ToolGatewayContext,
         grant: AtomicCapabilityGrant | ProcedureNodeGrant | None,
+        *,
+        confirmation_required: bool = False,
     ) -> _PolicyViolation | None:
         if context.execution_mode == "direct":
             return None
         if grant is None:
             return _PolicyViolation("agent tool dispatch requires a leaf execution grant")
+        tool_name = tool.name
         bound_name = grant.provider_binding_ref.rsplit(":", 1)[-1]
         if bound_name != tool_name:
             return _PolicyViolation("execution grant is bound to a different tool")
@@ -371,6 +386,22 @@ class ToolGateway:
             and grant.action_ref != context.step_id
         ):
             return _PolicyViolation("execution grant is bound to a different invocation")
+        if confirmation_required and grant.required_confirmation_ref != context.step_id:
+            return _PolicyViolation(
+                "confirmed high-risk execution requires a confirmation-bound grant"
+            )
+        locator = grant.granted_resource_selector.locator
+        mcp = (tool.extras or {}).get("mcp")
+        if locator is not None and isinstance(mcp, dict):
+            locator_arg = mcp.get("resource_locator_arg")
+            if not isinstance(locator_arg, str) or not locator_arg:
+                return _PolicyViolation(
+                    "scoped MCP dispatch has no declared resource locator binding"
+                )
+            if args.get(locator_arg) != locator:
+                return _PolicyViolation(
+                    "MCP tool input does not match the resource locator frozen by the grant"
+                )
         return None
 
     @staticmethod

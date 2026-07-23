@@ -362,6 +362,17 @@ class WorkspaceService:
                 item.model_copy(update={"flags": sorted({*item.flags, *flags})})
                 for item in ingest.knowledge_items
             ]
+        else:
+            # The evidence-first item is a provisional projection. Once
+            # claim-backed projections exist it must leave the active view;
+            # keeping both would expose one canonical artifact as two notes.
+            self.store.save_knowledge_items(
+                item.model_copy(update={
+                    "state": "deprecated",
+                    "flags": sorted({*item.flags, "claims_pending"}),
+                })
+                for item in ingest.knowledge_items
+            )
         self.store.save_evidence_spans(spans)
         self.store.save_extraction_run(ingest.extraction_run)
         self.store.save_claims(claims)

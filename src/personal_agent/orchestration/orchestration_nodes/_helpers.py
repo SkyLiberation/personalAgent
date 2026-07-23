@@ -11,7 +11,12 @@ from langchain_core.messages import BaseMessage
 
 from personal_agent.orchestration.orchestration_contexts import ReactContext
 from personal_agent.orchestration.orchestration_nodes._graph_helpers import _REACT_SYSTEM_PROMPT
-from personal_agent.kernel.llm_schemas import structured_response_format, strict_tool_definition, strip_json_fence
+from personal_agent.kernel.llm_schemas import (
+    model_tool_wire_name,
+    structured_response_format,
+    strict_tool_definition,
+    strip_json_fence,
+)
 from personal_agent.kernel.prompts import get_prompt
 
 if TYPE_CHECKING:
@@ -117,11 +122,25 @@ def _react_llm_native(
     if deps.model_client is None:
         return None
 
-    tool_defs = [
-        strict_tool_definition(spec)
-        for spec in deps.tool_executor.list_tools()
-        if spec.name in allowed_tools
+    selected_specs = [
+        spec for spec in deps.tool_executor.list_tools() if spec.name in allowed_tools
     ]
+    wire_to_canonical = {
+        model_tool_wire_name(spec.name): spec.name for spec in selected_specs
+    }
+    if len(wire_to_canonical) != len(selected_specs):
+        raise ValueError("model tool wire-name collision")
+    tool_defs = []
+    for spec in selected_specs:
+        definition = strict_tool_definition(spec)
+        function = definition["function"]
+        wire_name = model_tool_wire_name(spec.name)
+        function["name"] = wire_name
+        if wire_name != spec.name:
+            function["description"] = (
+                f"Canonical tool: {spec.name}. {function['description']}"
+            )
+        tool_defs.append(definition)
     tools = tool_defs + [_FINISH_REACT_TOOL]
     try:
         react_prompt = get_prompt("react.system")
@@ -154,13 +173,13 @@ def _react_llm_native(
         function = call.get("function") if isinstance(call, dict) else None
         if not isinstance(function, dict):
             return _NativeReactOutcome(parse_failed=True)
-        name = str(function.get("name") or "")
+        wire_name = str(function.get("name") or "")
         try:
             arguments = json.loads(str(function.get("arguments") or "{}"))
         except json.JSONDecodeError:
             arguments = {}
         native_id = str(call.get("id") or "")
-        if name == "finish_react":
+        if wire_name == "finish_react":
             return _NativeReactOutcome(
                 done=True,
                 thought=str(arguments.get("thought") or ""),
@@ -169,12 +188,15 @@ def _react_llm_native(
                     "proposed_commit": arguments.get("proposed_commit"),
                 },
             )
+        canonical_name = wire_to_canonical.get(wire_name)
+        if canonical_name is None:
+            return _NativeReactOutcome(parse_failed=True)
         if not isinstance(arguments, dict):
             arguments = {}
         thought = str(arguments.pop("thought", ""))
         return _NativeReactOutcome(
             thought=thought,
-            tool_name=name,
+            tool_name=canonical_name,
             tool_input=arguments,
             native_call_id=native_id or None,
         )

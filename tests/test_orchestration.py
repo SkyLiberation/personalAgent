@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from tests.conftest import (
     POSTGRES_URL,
@@ -10,6 +12,8 @@ from tests.conftest import (
 )
 from langchain_core.messages import AIMessage, HumanMessage
 
+from personal_agent.capabilities.contracts.grants import AtomicCapabilityGrant, GrantDependencySet
+from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.orchestration.orchestration_models import (
     AgentEvent,
     RunCheckpoint,
@@ -22,6 +26,7 @@ from personal_agent.orchestration.orchestration_models import (
     _new_thread_id,
     execution_trace_to_events,
 )
+from personal_agent.orchestration.orchestration_graph import _CHECKPOINT_MSGPACK_TYPES
 from personal_agent.orchestration.orchestration_nodes._helpers import _dialogue_prompt_messages
 from personal_agent.planning.task_analyzer import (
     GoalDraft,
@@ -33,7 +38,203 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import EntryInput
 from personal_agent.execution.contracts.invocation import InvocationAttemptState
 from personal_agent.runtime.contracts.control import ControlTurnState
+from personal_agent.runtime.contracts.task import (
+    ContextInventory,
+    ContextItem,
+    GoalConstraint,
+    GoalDefinition,
+    GoalDependency,
+    GoalGraphDefinition,
+    GoalRuntimeState,
+    TaskContract,
+    TaskRuntimeProjection,
+    materialize_goals,
+)
+from personal_agent.verification.contracts.reports import GoalVerificationReport
 from personal_agent.runtime.run_manager import RunStateError
+
+
+def test_final_answer_without_available_citations_has_no_citation_field() -> None:
+    from personal_agent.orchestration.orchestration_nodes._entry import (
+        _FinalAnswerWithoutCitations,
+    )
+
+    body = _FinalAnswerWithoutCitations(answer="已完成。")
+
+    assert body.answer == "已完成。"
+    assert "citation_refs" not in body.model_dump(mode="json")
+
+
+def test_consumes_output_composition_materializes_only_verified_predecessor_evidence() -> None:
+    from personal_agent.orchestration.orchestration_nodes._steps import (
+        _consumed_goal_outputs,
+    )
+
+    task = TaskContract(
+        user_goal="先写入再回答",
+        result_contract="compound",
+        goal_graph=GoalGraphDefinition(goals=(
+            GoalDefinition(
+                goal_id="goal_1",
+                description="写入事实",
+                result_contract="external_state",
+            ),
+            GoalDefinition(
+                goal_id="goal_2",
+                description="回答事实",
+                dependencies=(GoalDependency(
+                    dependency_goal_id="goal_1",
+                    kind="consumes_output",
+                    origin="model_inferred",
+                    rationale="回答依赖写入结果",
+                ),),
+            ),
+        )),
+    )
+    admitted = ContextItem(
+        item_id="receipt-1",
+        category="evidence",
+        kind="mutation_receipt",
+        provenance="knowledge_ingest",
+        trust="evidence",
+        admission="admitted",
+        summary="发布窗口是周五 20:00",
+    )
+    unrelated = admitted.model_copy(update={"item_id": "unrelated"})
+    state = RunCheckpoint(
+        task_contract=task,
+        context_inventory=ContextInventory(items={
+            admitted.item_id: admitted,
+            unrelated.item_id: unrelated,
+        }),
+        verification_reports={
+            "goal_1": GoalVerificationReport(
+                subject_id="goal_1",
+                status="passed",
+                evidence_refs=("receipt-1",),
+            ),
+        },
+    )
+
+    outputs = _consumed_goal_outputs(state, "goal_2")
+
+    assert [item["item_id"] for item in outputs] == ["receipt-1"]
+    assert outputs[0]["summary"] == "发布窗口是周五 20:00"
+
+
+def test_semantic_verification_context_includes_accepted_goal_constraints() -> None:
+    from personal_agent.orchestration.orchestration_nodes._executive import (
+        _verification_context_items,
+    )
+
+    constraint = GoalConstraint(
+        constraint_id="goal_1:constraint:1",
+        description="exact user payload",
+        source="user",
+        mutability="immutable",
+    )
+    task = TaskContract(
+        user_goal="写入内容",
+        result_contract="external_state",
+        goal_graph=GoalGraphDefinition(goals=(GoalDefinition(
+            goal_id="goal_1",
+            description="写入内容",
+            result_contract="external_state",
+            constraints=(constraint,),
+        ),)),
+    )
+    state = RunCheckpoint(task_contract=task)
+    goal = materialize_goals(task, TaskRuntimeProjection(
+        task_id=task.task_id,
+        task_revision=task.revision,
+        goal_states={"goal_1": GoalRuntimeState(status="candidate_complete")},
+    ))[0]
+
+    items = _verification_context_items(
+        state, goal, [], (), (), candidate_answer=None,
+    )
+    contract = next(item for item in items if item.kind == "verification_contract")
+
+    assert contract.payload["constraints"] == [constraint.model_dump(mode="json")]
+
+
+def test_finalization_fails_closed_when_final_answer_cannot_be_admitted() -> None:
+    from personal_agent.orchestration.orchestration_nodes._entry import (
+        _node_finalize_entry_result,
+    )
+    from personal_agent.verification.contracts.reports import CompletionReport
+
+    task = TaskContract(
+        user_goal="回答问题",
+        result_contract="response",
+        goal_graph=GoalGraphDefinition(goals=(GoalDefinition(
+            goal_id="goal_1",
+            description="回答问题",
+            result_contract="response",
+            output_contract="Answer",
+        ),)),
+    )
+    runtime = TaskRuntimeProjection(
+        task_id=task.task_id,
+        task_revision=task.revision,
+        lifecycle="completed",
+        goal_states={"goal_1": GoalRuntimeState(status="verified")},
+    )
+    state = RunCheckpoint(
+        task_contract=task,
+        task_runtime=runtime,
+        completion_report=CompletionReport(
+            status="complete",
+            verified_goal_ids=("goal_1",),
+        ),
+    )
+
+    update = _node_finalize_entry_result(
+        state,
+        deps=SimpleNamespace(model_client=None),
+    )
+
+    assert update["errors"] == ["final_answer_composition_unavailable"]
+    assert state.answer == ""
+    assert any(event.type == "run_failed" for event in state.events)
+    assert not any(event.type == "run_completed" for event in state.events)
+
+
+def test_finalization_preserves_paused_task_as_waiting_not_failed() -> None:
+    from personal_agent.orchestration.orchestration_nodes._entry import (
+        _node_finalize_entry_result,
+    )
+
+    task = TaskContract(
+        user_goal="等待外部能力",
+        result_contract="response",
+        goal_graph=GoalGraphDefinition(goals=(GoalDefinition(
+            goal_id="goal_1",
+            description="等待外部能力",
+            result_contract="response",
+        ),)),
+    )
+    runtime = TaskRuntimeProjection(
+        task_id=task.task_id,
+        task_revision=task.revision,
+        lifecycle="paused",
+        goal_states={"goal_1": GoalRuntimeState(status="active")},
+    )
+    state = RunCheckpoint(
+        task_contract=task,
+        task_runtime=runtime,
+        answer="任务已暂停，等待环境能力更新。",
+    )
+
+    update = _node_finalize_entry_result(
+        state,
+        deps=SimpleNamespace(model_client=None),
+    )
+
+    assert update["errors"] == []
+    assert state.to_run_snapshot().status == AgentRunStatus.waiting
+    assert any(event.type == "agent_run_waiting" for event in state.events)
+    assert not any(event.type in {"run_failed", "run_completed"} for event in state.events)
 
 
 def _make_task_analysis_result(route="unknown", user_visible_message="", **kwargs):
@@ -94,6 +295,28 @@ def TaskAnalysisResult(route="unknown", user_visible_message="", **kwargs):
 # ---------------------------------------------------------------------------
 
 class TestAgentGraphState:
+    def test_checkpoint_deserialization_allowlist_is_exactly_checkpoint_state_types(self):
+        """Recovery permits only the concrete typed fields stored by RunCheckpoint."""
+        allowed = {
+            (item.__module__, item.__name__)
+            for item in _CHECKPOINT_MSGPACK_TYPES
+        }
+        assert allowed
+        assert all(module.startswith("personal_agent.") for module, _ in allowed)
+        assert (RunCheckpoint.__module__, RunCheckpoint.__name__) not in allowed
+        assert {
+            ("personal_agent.kernel.models", "EntryInput"),
+            ("personal_agent.runtime.contracts.task", "TaskContract"),
+            ("personal_agent.runtime.contracts.task", "TaskRuntimeProjection"),
+            ("personal_agent.runtime.contracts.control", "ControlTurnState"),
+            ("personal_agent.execution.contracts.journal", "InvocationJournalProjection"),
+            (
+                "personal_agent.capabilities.contracts.acquisition",
+                "CapabilityAcquisitionProjection",
+            ),
+            ("personal_agent.verification.contracts.reports", "CompletionReport"),
+        }.issubset(allowed)
+
     def test_default_state_has_run_id(self):
         state = RunCheckpoint()
         assert state.run_id
@@ -158,6 +381,20 @@ class TestAgentGraphState:
         snap = state.to_run_snapshot()
         assert snap.status == AgentRunStatus.completed
         assert snap.answer == "42"
+
+    def test_to_run_snapshot_does_not_hide_terminated_lifecycle_with_answer(self):
+        state = RunCheckpoint(
+            accepted_task_analysis=TaskAnalysis(route="ask"),
+            task_runtime=TaskRuntimeProjection(
+                task_id="task-terminated",
+                lifecycle="terminated",
+                termination_reason="unrecoverable_failure",
+            ),
+            answer="未完成。",
+        )
+        state.add_event("answer_completed", {"answer": "未完成。"})
+
+        assert state.to_run_snapshot().status == AgentRunStatus.completed_degraded
 
 
 # ---------------------------------------------------------------------------
@@ -900,43 +1137,44 @@ class TestPhase3ExecuteExecutionStep:
         assert step.failure_reason
         assert step.recoverable is False
 
-    def test_resolve_uses_llm_to_select_local_delete_candidate(self, runtime, monkeypatch):
+    def test_resolve_validates_user_scoped_canonical_delete_target(self, runtime):
         from personal_agent.orchestration.orchestration_nodes._steps import _execute_resolve_step
+        from personal_agent.execution.contracts.invocation import ProcedureNodeInvocation
         from tests.note_factory import make_note
 
+        note_id = "d6113b10-29d9-4d77-bfae-31e49106dfd6"
         runtime.store.add_note(
             make_note(
-                id="note-dns",
+                id=note_id,
                 user_id="u1",
                 title="DNS 基础概念",
                 content="DNS 将域名解析为 IP 地址。",
                 summary="DNS 说明",
             )
         )
-        monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
-            lambda *_args, **_kwargs: (
-                '{"thought":"匹配 DNS 主题","done":true,'
-                '"result":{"note_id":"note-dns"}}'
-            ),
-        )
-        state = RunCheckpoint(user_id="u1", entry_text="删除关于DNS的知识")
+        state = RunCheckpoint(user_id="u1")
 
         result = _execute_resolve_step(
             ExecutableInvocation(
                 step_id="resolve-1",
                 action_type="resolve",
-                llm_decision_node="delete_target_resolve",
+                task_input=note_id,
+                procedure=ProcedureNodeInvocation(
+                    procedure_id="knowledge_delete",
+                    procedure_version="1",
+                    node_id="resolve-target",
+                ),
             ),
             state,
             runtime.graph_contexts.steps,
         )
 
-        assert result["note_id"] == "note-dns"
-        assert result["source"] == "llm_candidate_selection"
+        assert result["note_id"] == note_id
+        assert result["source"] == "canonical_user_scoped_identity"
 
-    def test_unresolved_delete_target_fails_before_tool_call(self, runtime, monkeypatch):
+    def test_unresolved_delete_target_fails_before_tool_call(self, runtime):
         from personal_agent.orchestration.orchestration_nodes._steps import _node_execute_step
+        from personal_agent.execution.contracts.invocation import ProcedureNodeInvocation
         from tests.note_factory import make_note
 
         runtime.store.add_note(
@@ -948,22 +1186,20 @@ class TestPhase3ExecuteExecutionStep:
                 summary="其他知识",
             )
         )
-        monkeypatch.setattr(
-            "personal_agent.orchestration.orchestration_nodes._helpers._structured_llm_respond",
-            lambda *_args, **_kwargs: (
-                '{"thought":"无明显匹配","done":true,'
-                '"result":{"note_id":null}}'
-            ),
-        )
         state = RunCheckpoint(
             user_id="u1",
-            entry_text="删除关于DNS的知识",
             control=ControlTurnState(phase="preparing_dispatch"),
             invocation_batch=InvocationBatchState(
                 invocations=[
                     ExecutableInvocation(
                         step_id="resolve-1",
                         action_type="resolve",
+                        task_input="f4a6c29e-47bf-4cd5-9fc9-685f9dc0d28f",
+                        procedure=ProcedureNodeInvocation(
+                            procedure_id="knowledge_delete",
+                            procedure_version="1",
+                            node_id="resolve-target",
+                        ),
                         attempt=InvocationAttemptState(status="running"),
                         on_failure="skip",
                     ),
@@ -1350,6 +1586,150 @@ class TestPhase4ReActIterateNode:
         assert result["react"].iterations[-1]["done"] is True
         assert result["react"].status == "completed"
 
+    def test_react_cannot_finish_before_granted_provider_observation(
+        self, runtime, monkeypatch,
+    ):
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
+
+        state = RunCheckpoint(
+            run_id="r-required-tool",
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=0,
+                max_iterations=2,
+                allowed_tools=["graph_search"],
+                user_prompt="必须检索 X",
+                done=False,
+            ),
+            invocation_batch=InvocationBatchState(
+                invocations=[{
+                    "step_id": "ask-1",
+                    "attempt": {"status": "running"},
+                    "execution_grant_ref": "grant-1",
+                }],
+                current_step_index=0,
+            ),
+        )
+        monkeypatch.setattr(
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            lambda prompt, deps, allowed: _NativeReactOutcome(
+                done=True,
+                thought="跳过检索",
+                result={"answer": "猜测答案"},
+            ),
+        )
+
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
+
+        assert result["react"].status == "failed"
+        assert result["react"].stop_reason == "required_capability_not_executed"
+        assert result["react"].result["answer"] == ""
+
+    def test_react_prompt_materializes_immutable_mcp_locator_binding(self):
+        from personal_agent.orchestration.orchestration_nodes._react import (
+            _react_execution_scope_prompt,
+        )
+
+        grant = AtomicCapabilityGrant(
+            grant_id="grant-1",
+            request_id="request-1",
+            action_ref="step-1",
+            authorization_digest="authorization-digest",
+            execution_command_digest="command-digest",
+            granted_resource_selector=ResourceSelector(
+                locator="D:/docs/architecture.md",
+            ),
+            granted_operation_scope=OperationScope(operations=frozenset({"read"})),
+            granted_data_egress="none",
+            granted_credential_mode="none",
+            retry_family_id="retry-1",
+            dependency_set=GrantDependencySet(
+                task_revision=1,
+                goal_definition_fingerprint="goal",
+                action_fingerprint="action",
+                capability_definition_revision=1,
+                authority_revision=1,
+                policy_bundle_hash="policy",
+            ),
+            capability_ref="mcp:filesystem:read_text_file",
+            provider_binding_ref="mcp:filesystem.read_text_file",
+        )
+        state = RunCheckpoint(
+            react=ReactSubState(allowed_tools=["filesystem.read_text_file"]),
+            execution_grants={grant.grant_id: grant},
+        )
+        step = SimpleNamespace(execution_grant_ref=grant.grant_id)
+        registered = SimpleNamespace(
+            extras={"mcp": {"resource_locator_arg": "path"}},
+        )
+        deps = SimpleNamespace(
+            tool_executor=SimpleNamespace(get=lambda name: registered),
+        )
+
+        prompt = _react_execution_scope_prompt(state, step, deps)
+
+        assert "参数 path 必须精确等于" in prompt
+        assert '"D:/docs/architecture.md"' in prompt
+        assert "不得改写、推断或替换" in prompt
+
+    def test_react_tool_budget_exhaustion_allows_only_finish(
+        self, runtime, monkeypatch,
+    ):
+        from personal_agent.orchestration.orchestration_graph import _node_react_iterate
+        from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
+
+        state = RunCheckpoint(
+            run_id="r-budget",
+            react=ReactSubState(
+                step_id="ask-1",
+                iteration_index=1,
+                max_iterations=2,
+                allowed_tools=["graph_search"],
+                user_prompt="读取目标并回答",
+                iterations=[{
+                    "iteration": 0,
+                    "action_tool": "graph_search",
+                    "observation": "已取得目标标题",
+                }],
+            ),
+            invocation_batch=InvocationBatchState(
+                invocations=[{
+                    "step_id": "ask-1",
+                    "goal_id": "goal-1",
+                    "attempt": {"status": "running"},
+                }],
+                current_step_index=0,
+            ),
+        )
+        state.control.resolved_actions = [SimpleNamespace(
+            action_id="ask-1",
+            goal_id="goal-1",
+            budget_reservation=SimpleNamespace(provider_call_budget=1),
+        )]
+        captured: dict[str, object] = {}
+
+        def _mock_native(prompt, deps, allowed):
+            captured["prompt"] = prompt
+            captured["allowed"] = allowed
+            return _NativeReactOutcome(
+                done=True,
+                thought="已有足够证据",
+                result={"answer": "目标标题"},
+            )
+
+        monkeypatch.setattr(
+            "personal_agent.orchestration.orchestration_nodes._helpers._react_llm_native",
+            _mock_native,
+        )
+
+        result = _node_react_iterate(state, deps=runtime.graph_contexts.react)
+
+        assert captured["allowed"] == set()
+        assert "工具调用上限" in str(captured["prompt"])
+        assert "调用 finish_react" in str(captured["prompt"])
+        assert result["react"].status == "completed"
+
     def test_react_iterate_parse_failure_increments_index(self, runtime, monkeypatch):
         from personal_agent.orchestration.orchestration_graph import _node_react_iterate
         from personal_agent.orchestration.orchestration_nodes._helpers import _NativeReactOutcome
@@ -1506,6 +1886,28 @@ class TestPhase4ReActMainGraphIntegration:
         from langchain_core.messages import ToolMessage
         from personal_agent.orchestration.orchestration_graph import _node_consume_react_tool_result
 
+        grant = AtomicCapabilityGrant(
+            grant_id="grant-react-result",
+            request_id="request-react-result",
+            action_ref="ask-1",
+            authorization_digest="authorization-react-result",
+            execution_command_digest="command-react-result",
+            granted_resource_selector=ResourceSelector(),
+            granted_operation_scope=OperationScope(operations=frozenset({"search"})),
+            granted_data_egress="none",
+            granted_credential_mode="none",
+            retry_family_id="retry-react-result",
+            dependency_set=GrantDependencySet(
+                task_revision=1,
+                goal_definition_fingerprint="goal",
+                action_fingerprint="action",
+                capability_definition_revision=1,
+                authority_revision=1,
+                policy_bundle_hash="policy",
+            ),
+            capability_ref="capability-graph-search",
+            provider_binding_ref="local:graph_search",
+        )
         state = RunCheckpoint(
             react=ReactSubState(
                 step_id="ask-1",
@@ -1527,6 +1929,13 @@ class TestPhase4ReActMainGraphIntegration:
                 tool_call_id="r1:react:ask-1:0:0",
                 artifact={"ok": True, "data": {"answer": "X是..."}, "error": None, "evidence": []},
             )],
+            invocation_batch=InvocationBatchState(invocations=[{
+                "step_id": "ask-1",
+                "goal_id": "goal-1",
+                "execution_grant_ref": grant.grant_id,
+                "attempt": {"status": "running"},
+            }]),
+            execution_grants={grant.grant_id: grant},
         )
 
         result = _node_consume_react_tool_result(state, deps=runtime.graph_contexts.react)
@@ -1535,6 +1944,8 @@ class TestPhase4ReActMainGraphIntegration:
         assert result["tool_tracking"].pending_call_id == ""
         assert state.react.iteration_index == 1
         assert "X是" in state.react.iterations[0]["observation"]
+        assert state.tool_results[0]["_authorization_digest"] == grant.authorization_digest
+        assert state.tool_results[0]["_execution_command_digest"] == grant.execution_command_digest
         tool_result_event = next(event for event in state.events if event.type == "tool_result")
         assert tool_result_event.payload["context"] == "react"
         assert tool_result_event.payload["invocation"]["execution_mode"] == "react"

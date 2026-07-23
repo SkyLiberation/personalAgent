@@ -51,6 +51,7 @@ def test_step_and_react_contexts_have_distinct_boundaries():
     react_names = _field_names(ReactContext)
     assert "replanner" not in step_names
     assert "agent_gateway" in step_names
+    assert {"context_manager", "context_gateway", "control_plane_store"}.issubset(step_names)
     assert react_names == {
         "settings", "tool_executor", "policy_engine", "context_manager", "context_gateway",
         "invocation_journal", "model_client", "structured_client",

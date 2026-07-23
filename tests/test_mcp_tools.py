@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+from personal_agent.capabilities.contracts.grants import AtomicCapabilityGrant, GrantDependencySet
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
+from personal_agent.governance import ToolGateway, ToolGatewayContext
 from personal_agent.infra import mcp as mcp_module
 from personal_agent.infra.mcp import MCPToolDefinition
 from personal_agent.kernel.config_env import (
@@ -15,6 +17,7 @@ from personal_agent.kernel.config_env import (
     _parse_mcp_config,
 )
 from personal_agent.kernel.config_models import EnterpriseKnowledgeConfig, MCPServerConfig
+from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
     build_mcp_capability_portfolio,
@@ -27,6 +30,7 @@ from personal_agent.tools import (
     tool_schema,
     tool_success,
 )
+from personal_agent.tools.mcp import build_mcp_tool
 from langchain_core.tools import tool
 
 
@@ -332,6 +336,170 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
         "tools/list",
         "tools/call",
     ]
+
+
+def test_mcp_optional_non_nullable_argument_accepts_none_and_omits_it():
+    calls: list[dict] = []
+
+    class RecordingClient:
+        def call_tool(self, remote_name: str, arguments: dict):
+            calls.append({"remote_name": remote_name, "arguments": arguments})
+            return {"content": [{"type": "text", "text": "document"}]}
+
+    mapping = _parse_mcp_config(json.dumps({
+        "enabled": True,
+        "servers": [{
+            "server_id": "filesystem",
+            "endpoint": "https://mcp.example/rpc",
+            "tools": [{
+                "remote_name": "read_text_file",
+                "name": "filesystem.read_text_file",
+                "semantic_domains": ["docs"],
+                "resource_types": ["file"],
+                "operations": ["read"],
+                "trust_level": "scoped",
+                "credential_mode": "none",
+                "data_egress_class": "none",
+                "attestation_status": "pinned",
+                "freshness_profile": "realtime",
+                "output_contract": "ToolResult",
+                "evidence_contract": "provider_output",
+                "failure_semantics": "return_typed_failure"
+            }]
+        }]
+    })).servers[0].tools[0]
+    server = MCPServerConfig(
+        server_id="filesystem",
+        endpoint="https://mcp.example/rpc",
+    )
+    remote = MCPToolDefinition(
+        name="read_text_file",
+        description="Read one text file",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "tail": {"type": "number"},
+            },
+            "required": ["path"],
+        },
+        raw={},
+    )
+    built = build_mcp_tool(RecordingClient(), server, mapping, remote)
+
+    # Invoke the LangChain tool directly so its dynamically generated Pydantic
+    # model validates the explicit null before the MCP adapter sees it.
+    message = built.invoke({
+        "name": built.name,
+        "args": {"path": "D:/docs/architecture.md", "tail": None},
+        "id": "call-1",
+        "type": "tool_call",
+    })
+
+    assert message.artifact.ok is True
+    assert calls == [{
+        "remote_name": "read_text_file",
+        "arguments": {"path": "D:/docs/architecture.md"},
+    }]
+
+
+def test_mcp_gateway_enforces_grant_resource_locator_binding():
+    calls: list[dict] = []
+
+    class RecordingClient:
+        def call_tool(self, remote_name: str, arguments: dict):
+            calls.append(arguments)
+            return {"content": [{"type": "text", "text": "document"}]}
+
+    mapping = _parse_mcp_config(json.dumps({
+        "enabled": True,
+        "servers": [{
+            "server_id": "filesystem",
+            "endpoint": "https://mcp.example/rpc",
+            "tools": [{
+                "remote_name": "read_text_file",
+                "name": "filesystem.read_text_file",
+                "resource_locator_arg": "path",
+                "semantic_domains": ["docs"],
+                "resource_types": ["file"],
+                "operations": ["read"],
+                "trust_level": "scoped",
+                "credential_mode": "none",
+                "data_egress_class": "none",
+                "attestation_status": "pinned",
+                "freshness_profile": "realtime",
+                "output_contract": "ToolResult",
+                "evidence_contract": "provider_output",
+                "failure_semantics": "return_typed_failure"
+            }]
+        }]
+    })).servers[0].tools[0]
+    tool = build_mcp_tool(
+        RecordingClient(),
+        MCPServerConfig(server_id="filesystem", endpoint="https://mcp.example/rpc"),
+        mapping,
+        MCPToolDefinition(
+            name="read_text_file",
+            description="Read one text file",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+            raw={},
+        ),
+    )
+    grant = AtomicCapabilityGrant(
+        request_id="request-1",
+        action_ref="step-1",
+        authorization_digest="authorization-digest",
+        execution_command_digest="command-digest",
+        granted_resource_selector=ResourceSelector(
+            semantic_domains=frozenset({"docs"}),
+            resource_types=frozenset({"file"}),
+            locator="D:/docs/architecture.md",
+        ),
+        granted_operation_scope=OperationScope(operations=frozenset({"read"})),
+        granted_data_egress="none",
+        granted_credential_mode="none",
+        retry_family_id="retry-1",
+        dependency_set=GrantDependencySet(
+            task_revision=1,
+            goal_definition_fingerprint="goal",
+            action_fingerprint="action",
+            capability_definition_revision=1,
+            authority_revision=1,
+            policy_bundle_hash="policy",
+        ),
+        capability_ref="mcp:filesystem:read_text_file",
+        provider_binding_ref="mcp:filesystem.read_text_file",
+    )
+    gateway = ToolGateway()
+    gateway.register(tool)
+    context = ToolGatewayContext(
+        execution_mode="react",
+        tool_call_id="call-1",
+        step_id="step-1",
+        react_allowed_tools=("filesystem.read_text_file",),
+    )
+
+    rejected = gateway.invoke(
+        tool.name,
+        {"path": "D:/docs/other.md"},
+        context,
+        grant=grant,
+    )
+    accepted = gateway.invoke(
+        tool.name,
+        {"path": "D:/docs/architecture.md"},
+        context,
+        grant=grant,
+    )
+
+    assert rejected["ok"] is False
+    assert "resource locator" in rejected["error"]
+    assert accepted["ok"] is True
+    assert calls == [{"path": "D:/docs/architecture.md"}]
 
 
 def test_mcp_capability_registry_indexes_governed_tools():

@@ -52,7 +52,24 @@ def build_mcp_tool(
 ) -> BaseTool:
     tool_name = mapping.name or f"mcp.{server.server_id}.{remote.name}"
     description = mapping.description or remote.description
-    args_schema, allowed_arg_names, additional_properties = _json_schema_to_args_model(
+    properties = remote.input_schema.get("properties", {})
+    if (
+        mapping.resource_locator_arg is not None
+        and (
+            not isinstance(properties, dict)
+            or mapping.resource_locator_arg not in properties
+        )
+    ):
+        raise MCPError(
+            f"MCP tool {server.server_id}.{remote.name} declares unknown "
+            f"resource locator argument {mapping.resource_locator_arg!r}."
+        )
+    (
+        args_schema,
+        allowed_arg_names,
+        additional_properties,
+        omit_none_arg_names,
+    ) = _json_schema_to_args_model(
         tool_name,
         remote.input_schema,
     )
@@ -70,6 +87,7 @@ def build_mcp_tool(
             kwargs,
             allowed_arg_names=allowed_arg_names,
             additional_properties=additional_properties,
+            omit_none_arg_names=omit_none_arg_names,
         )
         result = client.call_tool(mapping.remote_name, arguments)
         return tool_response(tool_success(_normalize_mcp_result(
@@ -105,6 +123,7 @@ def build_mcp_tool(
                 "server_id": server.server_id,
                 "remote_name": mapping.remote_name,
                 "business_role": mapping.business_role,
+                "resource_locator_arg": mapping.resource_locator_arg,
                 "input_schema": remote.input_schema,
             },
             "mcp_capability": capability.model_dump(mode="json"),
@@ -156,12 +175,22 @@ def _json_schema_to_args_model(tool_name: str, schema: dict[str, Any]):
     additional = bool(schema.get("additionalProperties", False))
     model_name = _safe_model_name(tool_name)
     fields: dict[str, tuple[Any, Any]] = {}
+    omit_none_arg_names: set[str] = set()
     if isinstance(properties, dict):
         for name, prop_schema in properties.items():
             if not isinstance(name, str) or not isinstance(prop_schema, dict):
                 continue
             annotation = _annotation_from_json_schema(prop_schema)
-            default_value = ... if name in required else prop_schema.get("default", None)
+            is_required = name in required
+            if not is_required:
+                # An absent JSON property and an explicit JSON null are distinct
+                # at the MCP boundary. Pydantic still has to accept ``None`` when
+                # a model emits null for an optional tool parameter; the adapter
+                # then omits it unless the remote schema explicitly permits null.
+                annotation = annotation | None
+                if not _json_schema_permits_null(prop_schema):
+                    omit_none_arg_names.add(name)
+            default_value = ... if is_required else prop_schema.get("default", None)
             fields[name] = (
                 annotation,
                 Field(
@@ -178,7 +207,12 @@ def _json_schema_to_args_model(tool_name: str, schema: dict[str, Any]):
         __config__=ConfigDict(extra="allow"),
         **fields,
     )
-    return model, frozenset(fields.keys()), additional
+    return (
+        model,
+        frozenset(fields.keys()),
+        additional,
+        frozenset(omit_none_arg_names),
+    )
 
 
 def _remote_arguments(
@@ -186,6 +220,7 @@ def _remote_arguments(
     *,
     allowed_arg_names: frozenset[str],
     additional_properties: bool,
+    omit_none_arg_names: frozenset[str],
 ) -> dict[str, Any]:
     unknown = set(kwargs) - allowed_arg_names - _GATEWAY_CONTEXT_ARG_NAMES
     if unknown and not additional_properties:
@@ -196,12 +231,30 @@ def _remote_arguments(
             key: value
             for key, value in kwargs.items()
             if key not in _GATEWAY_CONTEXT_ARG_NAMES
+            and not (key in omit_none_arg_names and value is None)
         }
     return {
         key: value
         for key, value in kwargs.items()
         if key in allowed_arg_names
+        and not (key in omit_none_arg_names and value is None)
     }
+
+
+def _json_schema_permits_null(schema: dict[str, Any]) -> bool:
+    schema_type = schema.get("type")
+    if schema_type == "null":
+        return True
+    if isinstance(schema_type, list) and "null" in schema_type:
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        alternatives = schema.get(keyword)
+        if isinstance(alternatives, list) and any(
+            isinstance(item, dict) and _json_schema_permits_null(item)
+            for item in alternatives
+        ):
+            return True
+    return False
 
 
 def _annotation_from_json_schema(schema: dict[str, Any]) -> Any:

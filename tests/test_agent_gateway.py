@@ -98,6 +98,8 @@ def _grant(agent_id: str) -> DelegationGrant:
         cost_budget=1,
         time_budget_seconds=60,
         completion_contract="AgentArtifact",
+        authorization_digest="authorization-digest",
+        execution_command_digest="execution-command-digest",
     )
 
 

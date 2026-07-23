@@ -178,6 +178,27 @@ class PostgresDurableRunRepository(PostgresStoreBase):
             expires_at=row["expires_at"],
         )
 
+    def renew_lease(self, run_id: str, lease: RunLease) -> bool:
+        self.ensure_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE durable_run_leases
+                    SET expires_at = %s
+                    WHERE run_id = %s
+                      AND lease_id = %s
+                      AND fencing_token = %s
+                    """,
+                    (
+                        lease.expires_at,
+                        run_id,
+                        lease.lease_id,
+                        lease.fencing_token,
+                    ),
+                )
+                return cur.rowcount == 1
+
 
 def _run_from_row(row) -> DurableRun:
     return DurableRun(

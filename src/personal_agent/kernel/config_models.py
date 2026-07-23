@@ -141,6 +141,7 @@ class MCPToolConfig(_StrictBase):
     name: str | None = None
     description: str | None = None
     business_role: str | None = None
+    resource_locator_arg: str | None = None
     semantic_domains: tuple[str, ...] = Field(min_length=1)
     resource_types: tuple[str, ...] = Field(min_length=1)
     operations: tuple[CapabilityOperation, ...] = Field(min_length=1)

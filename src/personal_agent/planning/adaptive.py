@@ -97,6 +97,10 @@ class CoordinationDecisionUnavailable(RuntimeError):
     pass
 
 
+class PlanningProposalParseError(ValueError):
+    """The provider returned a response that cannot satisfy the plan contract."""
+
+
 class _ModelPlanProposal(BaseModel):
     strategy_summary: str
     steps: tuple[PlanStep, ...]
@@ -356,7 +360,7 @@ class AdaptivePlanner:
         capability_registry_revision: str = "",
     ) -> tuple[PlanDefinition | None, PlanningUsage, DecisionFeedback | None]:
         if usage.planner_calls >= limits.max_planner_calls:
-            return None, usage, _planning_feedback(
+            return None, usage, planning_rejection_feedback(
                 task,
                 ledger,
                 reason_code="planner_revision_budget_exhausted",
@@ -364,14 +368,25 @@ class AdaptivePlanner:
                 revision_budget_remaining=0,
                 disposition="terminal",
             )
-        proposal = self._with_model(
-            task, ledger, assessment, procedures, model_context=model_context,
-        )
+        try:
+            proposal = self._with_model(
+                task, ledger, assessment, procedures, model_context=model_context,
+            )
+        except PlanningProposalParseError as exc:
+            return None, usage.model_copy(update={"planner_calls": usage.planner_calls + 1}), planning_rejection_feedback(
+                task,
+                ledger,
+                reason_code="plan_proposal_invalid",
+                revision_attempt=usage.planner_calls + 1,
+                revision_budget_remaining=max(limits.max_planner_calls - usage.planner_calls - 1, 0),
+                disposition="revise_model" if usage.planner_calls + 1 < limits.max_planner_calls else "terminal",
+                required_repair=str(exc),
+            )
         calls = usage.planner_calls
         if proposal is not None:
             calls += 1
         if proposal is None or not proposal.steps:
-            return None, usage.model_copy(update={"planner_calls": calls}), _planning_feedback(
+            return None, usage.model_copy(update={"planner_calls": calls}), planning_rejection_feedback(
                 task,
                 ledger,
                 reason_code="planner_model_unavailable",
@@ -398,7 +413,7 @@ class AdaptivePlanner:
         except PlanningValidationError as exc:
             logger.warning("Adaptive planner proposal rejected: %s", exc)
             remaining = max(limits.max_planner_calls - calls, 0)
-            return None, usage.model_copy(update={"planner_calls": calls}), _planning_feedback(
+            return None, usage.model_copy(update={"planner_calls": calls}), planning_rejection_feedback(
                 task,
                 ledger,
                 reason_code="plan_proposal_invalid",
@@ -530,21 +545,43 @@ class AdaptivePlanner:
         try:
             from personal_agent.capabilities.contracts.model import StructuredModelRequest
 
+            profile = profile_for_task(task, procedures)
             state = {
                 "model_context": model_context,
                 "mode": assessment.model_dump(mode="json"),
+                "plan_policy": {
+                    "allowed_step_kinds": profile.allowed_step_kinds,
+                    "allowed_side_effect_classes": profile.allowed_side_effect_classes,
+                    "mandatory_procedures": [
+                        {
+                            "procedure_id": item.procedure_id,
+                            "goal_id": item.goal_id,
+                            "side_effect_class": item.side_effect_class,
+                        }
+                        for item in procedures
+                        if item.status == "mandatory"
+                    ],
+                },
             }
             response = self._model_client.generate(StructuredModelRequest(
                 operation="adaptive_plan",
-                version="v1",
+                version="v2",
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "Create a provider-neutral plan of at most five semantic steps. "
-                            "Every step must support existing criteria, declare expected observation and failure classes, "
-                            "and use CapabilityRequirement rather than concrete tools. Treat procedures as atomic. "
-                            "Do not weaken goals, invent providers, expose chain-of-thought, or pre-generate alternative branches."
+                        "Create a provider-neutral plan of at most five semantic steps. "
+                        "Every step must support existing criteria, declare expected observation and failure classes, "
+                        "and use CapabilityRequirement rather than concrete tools. Treat procedures as atomic. "
+                        "When the context lists a mandatory procedure, the matching step MUST have kind='procedure' "
+                        "and copy that exact procedure_id; never omit or invent a procedure_id. "
+                        "Every step's side_effect_intent must be exactly one value listed in "
+                        "plan_policy.allowed_side_effect_classes. For a mandatory procedure, copy the matching "
+                        "plan_policy.mandatory_procedures.side_effect_class exactly; do not use natural-language "
+                        "variants such as write, save, send, or commit. "
+                        "Only capability and delegate steps may include capability_requirement; procedure, reason, "
+                        "transform, verify, and finish steps must omit it. "
+                        "Do not weaken goals, invent providers, expose chain-of-thought, or pre-generate alternative branches."
                         ),
                     },
                     {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
@@ -556,12 +593,15 @@ class AdaptivePlanner:
                 metadata={"task_id": task.task_id},
             ))
             return response.value
+        except ValueError as exc:
+            logger.warning("Adaptive planner returned an invalid structured proposal: %s", exc)
+            raise PlanningProposalParseError(str(exc)) from exc
         except Exception:
             logger.exception("Adaptive planner model call failed")
             return None
 
 
-def _planning_feedback(
+def planning_rejection_feedback(
     task: TaskContract,
     ledger: TaskRuntimeProjection,
     *,
@@ -878,7 +918,18 @@ class PlanMonitor:
             step_id for step_id, status in plan_runtime.step_statuses.items()
             if status in {"selected", "running", "observed"}
         )
-        if latest.kind in {"capability_gap", "verification_gap"}:
+        if latest.kind == "capability_gap":
+            # Decision ownership: a plan cannot create an unavailable
+            # capability or choose the semantic recovery policy. Preserve the
+            # plan and return the typed gap to Executive, where the model may
+            # propose acquisition, waiting, or termination under Admission.
+            return PlanMonitorDecision(
+                impact="none",
+                action="keep",
+                affected_step_ids=selected,
+                reason_code="capability_gap_requires_control_decision",
+            ), plan_runtime
+        if latest.kind == "verification_gap":
             if usage.applied_patches >= limits.max_plan_patches_per_horizon:
                 return PlanMonitorDecision(
                     impact="branch_invalidated",
@@ -1072,5 +1123,5 @@ __all__ = [
     "GOVERNED_MIXED_PROFILE",
     "CoordinationDecisionUnavailable", "FrontierSelector", "PlanRuntimeProjector", "PlanMonitor", "PlanValidator",
     "PlanningConflictError", "PlanningFactProjector", "CoordinationModePolicy",
-    "PlanningValidationError", "profile_for_task",
+    "PlanningValidationError", "planning_rejection_feedback", "profile_for_task",
 ]

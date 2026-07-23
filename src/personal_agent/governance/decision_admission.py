@@ -54,14 +54,60 @@ class _DecisionDenied(ValueError):
     pass
 
 
+_TRUST_ORDER = {"untrusted": 0, "external": 1, "scoped": 2, "trusted": 3}
+
+
+def _capability_class_covers(capability_class, requirement) -> bool:
+    required_domains = set(requirement.semantic_domains)
+    required_types = set(requirement.resource_types)
+    required_operations = set(requirement.operations)
+    required_providers = set(requirement.required_providers)
+    if required_domains and not required_domains.intersection(
+        capability_class.semantic_domains
+    ):
+        return False
+    if required_types and not required_types.intersection(
+        capability_class.resource_types
+    ):
+        return False
+    if not required_operations.issubset(capability_class.operations):
+        return False
+    if required_providers and not required_providers.intersection(
+        capability_class.providers
+    ):
+        return False
+    if capability_class.output_contract != requirement.output_contract:
+        return False
+    if capability_class.side_effect_class != requirement.side_effect_class:
+        return False
+    if _TRUST_ORDER[capability_class.trust_level] < _TRUST_ORDER[
+        requirement.minimum_trust_level
+    ]:
+        return False
+    if requirement.freshness_required and capability_class.freshness_profile not in {
+        "realtime", "near_realtime",
+    }:
+        return False
+    return True
+
+
 class DispositionPolicy:
     """Map a typed denial and current environment to its only control consequence."""
 
     _MODEL_REVISABLE = frozenset({
         "mandatory_procedure_bypass", "action_goal_mismatch", "mutation_authority_incomplete",
+        "action_output_contract_mismatch",
         "procedure_goal_mismatch", "procedure_not_eligible", "terminal_goal_targeted",
         "procedure_parameters_incomplete", "procedure_input_kind_mismatch",
         "remaining_provider_budget_exceeded", "task_provider_budget_exceeded",
+        "agentic_synthesis_without_capability",
+        "resource_access_requires_capability",
+        "capability_class_mismatch",
+        "delegation_route_required",
+        "resource_scope_expanded", "required_resource_scope_missing",
+        "provider_scope_expanded", "required_provider_scope_missing",
+        "agentic_synthesis_iteration_budget_insufficient",
+        "capability_already_available", "capability_acquisition_method_not_allowed",
     })
     _EXTERNAL_INPUT = frozenset({"unknown_goal", "goal_dependencies_unmet", "ambiguous_resolution"})
     _ACQUISITION = frozenset({"capability_unavailable", "credential_missing", "plugin_not_installed"})
@@ -119,7 +165,7 @@ class DecisionValidator:
         snapshot = GovernanceSnapshotRef(
             task_revision=task.revision,
             runtime_revision=ledger.revision,
-            policy_revision="decision-admission:v3",
+            policy_revision="decision-admission:v4",
         )
         stale = (
             proposal.base_task_revision != task.revision
@@ -257,14 +303,37 @@ class DecisionValidator:
         if len(mandatory) > 1 and not isinstance(decision, InvokeProcedureDecision):
             raise _DecisionDenied("ambiguous_resolution")
         if (
+            goal is not None
+            and decision.action != "terminate"
+            and any(
+                observation.goal_id == goal.goal_id
+                and observation.kind == "user_confirmation"
+                and observation.payload.get("decision") == "rejected"
+                for observation in (control_state.latest_observations if control_state else ())
+            )
+        ):
+            # Decision ownership: this closed-world denial uses only the
+            # user-scoped rejection Observation and the proposal target. It
+            # cannot select a replacement goal, payload, or execution route;
+            # the sole permitted continuation is an explicit Terminate proposal.
+            raise _DecisionDenied("authorization_rejected")
+        if (
             any(candidate.status == "mandatory" for candidate in goal_procedures)
             and not isinstance(decision, InvokeProcedureDecision)
             and not (
                 isinstance(decision, ExecuteBoundedActionDecision)
                 and decision.bounded_action.execution_intent == "commit"
             )
-            and decision.action not in {"terminate", "clarify", "request_confirmation"}
+            and decision.action not in {"terminate", "clarify"}
         ):
+            # Decision ownership: an applicable mandatory Procedure is the
+            # unique policy-owned transaction route.  It owns its confirmation
+            # boundary after the model has proposed the complete mutation and
+            # that intent has been frozen into a Command.  A standalone
+            # request_confirmation here would confirm a different interaction
+            # Command, then force the model to recreate the mutation after the
+            # confirmation.  Reject that bypass instead of treating the
+            # interaction as authority for a not-yet-resolved mutation.
             raise _DecisionDenied("mandatory_procedure_bypass")
         if goal is not None and decision.action not in {"finish", "terminate"}:
             unmet = tuple(
@@ -284,8 +353,58 @@ class DecisionValidator:
         if isinstance(decision, ExecuteBoundedActionDecision):
             action = decision.bounded_action
             access = action.proposed_resource_access
+            if (
+                action.requirement is not None
+                and "delegate" in action.requirement.operations
+            ):
+                # Decision ownership: a typed delegate operation targets the
+                # AgentGateway route and its DelegationGrant. Admission rejects
+                # an atomic capability Proposal but never fabricates the
+                # DelegateDecision or child-task payload for the model.
+                raise _DecisionDenied("delegation_route_required")
+            self._validate_resource_scope(task, decision.target_goal_id, access)
+            self._validate_provider_scope(task, decision.target_goal_id, action.requirement)
+            if not (mandatory and action.execution_intent == "commit"):
+                # Mandatory Procedure selection is already unique at this
+                # boundary. Its workflow-only leaf capabilities are resolved
+                # and checked against their own immediate output contracts at
+                # each Procedure node, after the business intent is frozen.
+                self._validate_capability_class(action, control_state)
+            if (access.read_set or access.write_set) and action.requirement is None:
+                # Decision ownership: a non-empty proposed resource boundary is
+                # a closed-world declaration that execution crosses the model
+                # boundary. Admission may reject a missing capability contract,
+                # but it must not manufacture one or silently erase the access.
+                raise _DecisionDenied("resource_access_requires_capability")
+            # Decision ownership: route admission.  This closed-world check
+            # uses only the proposed route flag, declared capability need, and
+            # requested tool budget; it cannot invent an action, provider, or
+            # payload.  A tool-less action has no executable ReAct frontier.
+            if (
+                isinstance(action.input, CapabilityActionInput)
+                and action.input.agentic_synthesis
+                and (action.requirement is None or action.max_tool_calls < 1)
+            ):
+                raise _DecisionDenied("agentic_synthesis_without_capability")
+            if (
+                isinstance(action.input, CapabilityActionInput)
+                and action.input.agentic_synthesis
+                and action.requirement is not None
+                and (action.max_iterations < 2 or action.max_model_calls < 2)
+            ):
+                # Decision ownership: one model turn is needed to select the
+                # governed provider and another to consume its Observation.
+                # Admission rejects an impossible budget; it does not enlarge
+                # the model-proposed budget.
+                raise _DecisionDenied("agentic_synthesis_iteration_budget_insufficient")
             if action.goal_id != decision.target_goal_id:
                 raise _DecisionDenied("action_goal_mismatch")
+            # Decision ownership: the compiled Goal owns the result contract.
+            # This is a closed-world equality check over the selected Goal and
+            # model Proposal; it neither interprets semantic equivalence nor
+            # rewrites the model's requested result.
+            if goal is not None and action.output_contract != goal.output_contract:
+                raise _DecisionDenied("action_output_contract_mismatch")
             if access.side_effect_class != "none" and (
                 action.execution_intent != "commit"
                 or task.mutation_intent is None
@@ -326,6 +445,8 @@ class DecisionValidator:
             if control_state is not None and control_state.remaining_provider_calls < 1:
                 raise _DecisionDenied("procedure_provider_budget_exhausted")
         if isinstance(decision, RequestCapabilityAcquisitionDecision):
+            if any(method != "suggest" for method in decision.allowed_methods):
+                raise _DecisionDenied("capability_acquisition_method_not_allowed")
             allowed = {
                 operation
                 for resource in task.resources_for_goal(decision.target_goal_id)
@@ -333,9 +454,121 @@ class DecisionValidator:
             }
             if allowed and not set(decision.requirement.operations).issubset(allowed):
                 raise _DecisionDenied("capability_acquisition_expands_operations")
+            if control_state is not None and any(
+                _capability_class_covers(item, decision.requirement)
+                for item in control_state.available_capability_classes
+            ):
+                # Decision ownership: the current capability projection and
+                # requested requirement form a closed-world availability
+                # check. Existing coverage cannot justify acquiring a new
+                # capability, but Admission does not choose a replacement
+                # action for the model.
+                raise _DecisionDenied("capability_already_available")
         if isinstance(decision, DelegateDecision) and control_state is not None:
             if decision.subtask.max_provider_calls > control_state.remaining_provider_calls:
                 raise _DecisionDenied("delegation_provider_budget_exceeded")
+
+    @staticmethod
+    def _validate_resource_scope(
+        task: TaskContract,
+        goal_id: str,
+        access,
+    ) -> None:
+        """Reject model-proposed access outside the compiled Goal ceiling.
+
+        Decision ownership is closed-world: the accepted TaskContract supplies
+        the only allowed semantic domains and any explicit locators.  This
+        check never adds a resource, substitutes a locator, or narrows a
+        proposal into an executable action; it emits typed feedback instead.
+        """
+        allowed = task.resources_for_goal(goal_id)
+        proposed = (*access.read_set, *access.write_set)
+        required_reads = tuple(
+            resource for resource in allowed
+            if resource.origin == "user_explicit"
+            and resource.locator
+            and set(resource.required_operations).intersection({"read", "search"})
+        )
+        proposed_reads = {
+            (item.semantic_domain, item.locator) for item in access.read_set
+        }
+        if any(
+            (resource.semantic_domain, resource.locator) not in proposed_reads
+            for resource in required_reads
+        ):
+            # Decision ownership: accepted user-explicit resource requirements
+            # are a closed-world minimum.  Admission rejects omission; it does
+            # not copy the missing locator into the model Proposal.
+            raise _DecisionDenied("required_resource_scope_missing")
+        if not proposed:
+            return
+        if not allowed:
+            raise _DecisionDenied("resource_scope_expanded")
+        allowed_by_domain: dict[str, set[str]] = {}
+        for resource in allowed:
+            locators = allowed_by_domain.setdefault(resource.semantic_domain, set())
+            if resource.locator:
+                locators.add(resource.locator)
+        for item in proposed:
+            if item.semantic_domain not in allowed_by_domain:
+                raise _DecisionDenied("resource_scope_expanded")
+            explicit_locators = allowed_by_domain[item.semantic_domain]
+            if item.locator and explicit_locators and item.locator not in explicit_locators:
+                raise _DecisionDenied("resource_scope_expanded")
+
+    @staticmethod
+    def _validate_capability_class(action, control_state: ControlState | None) -> None:
+        requirement = action.requirement
+        if requirement is None or control_state is None:
+            return
+        access = action.proposed_resource_access
+        matching = any(
+            set(requirement.semantic_domains).issubset(item.semantic_domains)
+            and set(requirement.resource_types).issubset(item.resource_types)
+            and set(requirement.operations).issubset(item.operations)
+            and requirement.output_contract == item.output_contract
+            and access.side_effect_class == item.side_effect_class
+            and access.authority_scope == item.authority_scope
+            and access.trust_floor == item.trust_level
+            and access.freshness_contract == item.freshness_profile
+            and access.evidence_contract == item.evidence_contract
+            and access.data_egress_class == item.data_egress_class
+            and access.failure_semantics == item.failure_semantics
+            and (
+                not requirement.required_providers
+                or set(requirement.required_providers).issubset(item.providers)
+            )
+            for item in control_state.available_capability_classes
+        )
+        if not matching:
+            # Decision ownership: the capability portfolio supplies typed,
+            # currently observable equivalence classes. Admission rejects a
+            # Proposal that matches none; it does not choose or copy a class.
+            raise _DecisionDenied("capability_class_mismatch")
+
+    @staticmethod
+    def _validate_provider_scope(
+        task: TaskContract,
+        goal_id: str,
+        requirement,
+    ) -> None:
+        """Preserve user-required provider identity without selecting a provider.
+
+        The TaskContract is the canonical semantic ceiling. Admission can prove
+        exact set inclusion over its typed provider constraints, but it cannot
+        copy a missing provider into a model Proposal or bind an implementation.
+        """
+        allowed_resources = task.resources_for_goal(goal_id)
+        contract_required = {
+            provider
+            for resource in allowed_resources
+            for provider in resource.required_providers
+        }
+        proposed_required = set(requirement.required_providers) if requirement else set()
+        if contract_required - proposed_required:
+            raise _DecisionDenied("required_provider_scope_missing")
+        if proposed_required - contract_required:
+            raise _DecisionDenied("provider_scope_expanded")
 
 
 class AcceptedIntentCompiler:
@@ -496,6 +729,8 @@ def _route_for(decision: ControlDecision) -> str:
             action.requirement is None
             and action.execution_intent in {"reason", "transform", "verify"}
             and action.proposed_resource_access.side_effect_class == "none"
+            and not action.proposed_resource_access.read_set
+            and not action.proposed_resource_access.write_set
         ):
             return "internal_reasoning"
         return "atomic"

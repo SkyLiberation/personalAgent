@@ -101,6 +101,10 @@ from personal_agent.runtime.procedure_runtime import (
 )
 from personal_agent.runtime.procedure_grants import ProcedureGrantIssuer
 from personal_agent.capabilities.acquisition import CapabilityAcquisitionManager
+from personal_agent.capabilities.inventory import (
+    A2AAssemblyDefinition,
+    build_runtime_capability_inventory,
+)
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
@@ -534,11 +538,14 @@ class AgentRuntime:
                     self.settings.postgres_url
                 ),
                 execution_artifact_store=self.execution_replay_store,
+                control_plane_store=self.control_plane_store,
                 invocation_journal=self._invocation_journal,
                 procedure_grant_issuer=ProcedureGrantIssuer(),
                 workspace_service=self.workspace_service,
                 summary=summary_context,
                 conversation=conversation_context,
+                context_manager=self._context_manager,
+                context_gateway=self._context_gateway,
                 model_client=self._model_client,
                 structured_client=self._structured_client,
             ),
@@ -714,6 +721,24 @@ class AgentRuntime:
             return self._tool_executor.list_tools()
         return self._tool_executor.list_tools(
             exposures={"public_agent", "scoped_agent", "admin"}
+        )
+
+    def capability_inventory(self):
+        return build_runtime_capability_inventory(
+            tools=self._tool_executor.list_tools(),
+            mcp_config=self.settings.mcp,
+            agent_profiles=self._agent_gateway.profiles(),
+            a2a_assembly=(
+                A2AAssemblyDefinition(
+                    agent_id="gpt_researcher",
+                    implementation_present=True,
+                    configuration_state=(
+                        "enabled"
+                        if self.settings.gpt_researcher_a2a.enabled
+                        else "disabled"
+                    ),
+                ),
+            ),
         )
 
     def execute_tool(self, name: str, **kwargs: object):
@@ -1215,6 +1240,11 @@ class AgentRuntime:
         result = self._entry.resume_entry(
             run_id, thread_id, decision, user_id, text=text, option_id=option_id,
         )
+        record_entry_episode(self.memory, result, settings=self.settings)
+        return result
+
+    def recover_entry(self, run_id: str, user_id: str) -> EntryResult:
+        result = self._entry.recover_entry(run_id, user_id)
         record_entry_episode(self.memory, result, settings=self.settings)
         return result
 

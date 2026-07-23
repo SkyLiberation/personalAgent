@@ -107,6 +107,9 @@ class AgentService:
     def list_tools(self, *, include_internal: bool = False):
         return self.runtime.list_tools(include_internal=include_internal)
 
+    def capability_inventory(self):
+        return self.runtime.capability_inventory()
+
     def execute_tool(self, name: str, **kwargs: object):
         return self.runtime.execute_tool(name, **kwargs)
 
@@ -203,6 +206,9 @@ class AgentService:
 
     def resume_entry(self, *args, **kwargs):
         return self.runtime.resume_entry(*args, **kwargs)
+
+    def recover_entry(self, *args, **kwargs):
+        return self.runtime.recover_entry(*args, **kwargs)
 
     def control_run(self, run_id: str, command: str):
         manager = self.runtime.durable_run_manager

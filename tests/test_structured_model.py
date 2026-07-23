@@ -77,6 +77,110 @@ def test_openai_adapter_uses_chat_completions_json_schema(monkeypatch):
     assert captured["create"]["response_format"]["json_schema"]["strict"] is True
 
 
+def test_openai_adapter_falls_back_to_json_object_when_json_schema_is_unavailable(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("response_format type is unavailable now")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
+                model="structured-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert len(calls) == 2
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert "output schema" in calls[1]["messages"][-1]["content"]
+
+
+def test_openai_adapter_retries_plain_text_json_after_incomplete_json_object(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("response_format type is unavailable now")
+            content = "{}" if len(calls) == 2 else '{"ok":true}'
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+                model="structured-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert len(calls) == 3
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[2]
+    assert "output schema" in calls[2]["messages"][-1]["content"]
+
+
+def test_openai_adapter_asks_model_to_reauthor_cross_field_invalid_json(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            content = '{"ok":"not-a-bool"}' if len(calls) == 1 else '{"ok":true}'
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+                model="structured-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert len(calls) == 2
+    assert calls[1]["response_format"]["type"] == "json_schema"
+    assert "previous structured response was rejected" in calls[1]["messages"][-1]["content"]
+
+
 def test_redacted_policy_removes_message_and_response_bodies():
     policy = RedactedTracePayloadPolicy()
     request = _request("private prompt")

@@ -43,6 +43,10 @@ markers = [
     "db: tests that require a running Postgres database",
     "slow: tests that take longer than 1 second",
     "integration: integration tests that exercise multiple components",
+    "architecture_e2e: test is classified by evals/e2e_quality/evidence_catalog.py",
+    "release_e2e: black-box process test eligible to produce release evidence",
+    "diagnostic_e2e: live in-process test used to locate architecture failures",
+    "e2e_layer(name): architecture evidence layer assigned by the canonical catalog",
 ]
 
 [build-system]

@@ -8,7 +8,9 @@ the graph from contexts assembled by the runtime composition root.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
+from threading import Event, Thread
 
 from langgraph.types import Command
 
@@ -27,6 +29,9 @@ from personal_agent.application.runtime_results import AskResult, CaptureResult,
 from personal_agent.planning.task_analyzer import describe_task_analysis
 
 logger = logging.getLogger(__name__)
+
+_RUN_LEASE_TTL_SECONDS = 300
+_RUN_LEASE_HEARTBEAT_SECONDS = 60
 
 CHECKPOINT_SCHEMA_VERSION = "agentic_control_v2"
 LEGACY_REPLAY_UPDATE_KEYS = {
@@ -100,10 +105,16 @@ def _admit_terminal_run(run_manager, run_id: str, state: RunCheckpoint):
             fencing_token=current.fencing_token,
         )
     lifecycle = state.task_runtime.lifecycle if state.task_runtime is not None else None
-    if state.errors or lifecycle == "active":
+    if state.accepted_task_analysis is None or state.errors or lifecycle == "active":
         return run_manager.transition(
             run_id,
             "failed",
+            fencing_token=current.fencing_token,
+        )
+    if lifecycle in {"awaiting_input", "paused"}:
+        return run_manager.transition(
+            run_id,
+            "waiting",
             fencing_token=current.fencing_token,
         )
     if lifecycle == "terminated":
@@ -116,6 +127,36 @@ def _admit_terminal_run(run_manager, run_id: str, state: RunCheckpoint):
         run_id,
         fencing_token=current.fencing_token,
     )
+
+
+@contextmanager
+def _maintain_run_lease(run_manager, run_id: str, lease):
+    """Keep a foreground graph's exact fenced lease alive while it executes."""
+    stop = Event()
+
+    def heartbeat() -> None:
+        while not stop.wait(_RUN_LEASE_HEARTBEAT_SECONDS):
+            try:
+                run_manager.renew_lease(
+                    run_id,
+                    lease,
+                    ttl_seconds=_RUN_LEASE_TTL_SECONDS,
+                )
+            except Exception:
+                logger.exception("Run lease heartbeat failed run_id=%s", run_id)
+                return
+
+    thread = Thread(
+        target=heartbeat,
+        name=f"run-lease-{run_id}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=1)
 
 
 def _steps_from_snapshot(snapshot: dict) -> list:
@@ -376,17 +417,18 @@ class EntryOrchestrator:
         # resuming an existing thread, leaving prior-run transient values in
         # the input checkpoint until the first node resets them.
         try:
-            with langsmith_trace_context(
-                self.settings.langsmith,
-                metadata=metadata,
-                tags=["entry", f"source:{metadata['source_platform']}"],
-            ):
-                invoke_result = self._stream_entry_graph(
-                    graph,
-                    initial_state.model_dump(),
-                    config,
-                    on_progress or (lambda _event_type, _payload: None),
-                )
+            with _maintain_run_lease(run_manager, run_id, lease):
+                with langsmith_trace_context(
+                    self.settings.langsmith,
+                    metadata=metadata,
+                    tags=["entry", f"source:{metadata['source_platform']}"],
+                ):
+                    invoke_result = self._stream_entry_graph(
+                        graph,
+                        initial_state.model_dump(),
+                        config,
+                        on_progress or (lambda _event_type, _payload: None),
+                    )
         except Exception as exc:
             current = run_manager.get(run_id)
             if current.status not in {"cancelled", "completed", "failed", "timed_out"}:
@@ -656,7 +698,9 @@ class EntryOrchestrator:
         )
         run_manager = self._runtime.durable_run_manager
         lease = run_manager.acquire_lease(run_id)
-        run_manager.transition(run_id, "running", fencing_token=lease.fencing_token)
+        current_run = run_manager.get(run_id)
+        if current_run.status != "running":
+            run_manager.transition(run_id, "running", fencing_token=lease.fencing_token)
 
         logger.info(
             "Resuming graph run_id=%s thread_id=%s decision=%s",
@@ -664,18 +708,23 @@ class EntryOrchestrator:
         )
 
         try:
-            with langsmith_trace_context(
-                self.settings.langsmith,
-                metadata={
-                    "app": "personal-agent",
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "user_id": user_id,
-                    "resume_decision": decision,
-                },
-                tags=["entry", "resume"],
-            ):
-                invoke_result = graph.invoke(Command(resume=resume_value), config)
+            with _maintain_run_lease(run_manager, run_id, lease):
+                with langsmith_trace_context(
+                    self.settings.langsmith,
+                    metadata={
+                        "app": "personal-agent",
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "user_id": user_id,
+                        "resume_decision": decision,
+                    },
+                    tags=["entry", "resume"],
+                ):
+                    invoke_result = (
+                        graph.invoke(None, config)
+                        if decision == "recover"
+                        else graph.invoke(Command(resume=resume_value), config)
+                    )
         except Exception as exc:
             current_run = run_manager.get(run_id)
             if current_run.status not in {"cancelled", "completed", "failed", "timed_out"}:
@@ -739,6 +788,51 @@ class EntryOrchestrator:
             run_status=durable_result.status,
             events=[e.model_dump(mode="json") for e in result_state.events],
         )
+
+    def recover_entry(self, run_id: str, user_id: str) -> EntryResult:
+        """Resume one of the two policy-proven technical recovery boundaries.
+
+        An in-flight provider recovery continues an already-frozen invocation.
+        A pre-execution compilation recovery continues only when TaskContract,
+        initial Runtime, and TaskCompilationCommit form one coherent lineage
+        and no Command, Grant, or Journal entry exists yet. Derived planning
+        projections may already exist; they add no execution authority. Neither
+        path creates a deterministic business fallback; normal model
+        proposal/admission resumes from the accepted user contract.
+        """
+        state = self.get_run_state(run_id)
+        if state is None or not state.thread_id:
+            raise ValueError("recovery requires a persisted run checkpoint")
+        in_flight_invocation = any(
+            entry.status in {"reserved", "dispatched", "acknowledged"}
+            for entry in state.invocation_journal.entries.values()
+        )
+        commit = state.task_compilation_commit
+        task = state.task_contract
+        runtime = state.task_runtime
+        compilation_boundary = bool(
+            commit is not None
+            and task is not None
+            and runtime is not None
+            and commit.task_ref == task.task_id
+            and commit.task_revision == task.revision
+            and commit.initial_runtime_ref == runtime.ledger_id
+            and commit.runtime_revision == runtime.revision
+            and runtime.task_id == task.task_id
+            and runtime.task_revision == task.revision
+            and not state.execution_grants
+            and not state.invocation_journal.entries
+            and not state.invocation_journal.outbox
+            and not self._runtime.control_plane_store.list_commands(run_id)
+        )
+        if not in_flight_invocation and not compilation_boundary:
+            raise ValueError(
+                "recovery requires an in-flight invocation or coherent compilation boundary"
+            )
+        durable = self._runtime.durable_run_manager.get(run_id)
+        if durable.status not in {"running", "waiting"}:
+            raise ValueError("only an interrupted running invocation may be recovered")
+        return self.resume_entry(run_id, state.thread_id, "recover", user_id)
 
     def get_run_snapshot(self, run_id: str) -> AgentRunSnapshot | None:
         """Return a read-only snapshot for the most recent checkpoint of a run."""

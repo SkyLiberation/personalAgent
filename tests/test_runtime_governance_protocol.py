@@ -24,6 +24,7 @@ from personal_agent.runtime.commits import (
 from personal_agent.runtime.contracts.control import (
     BoundedAction,
     CapabilityActionInput,
+    CapabilityGapObservation,
     ControlPhase,
     ControlProposal,
     ControlTurnState,
@@ -85,6 +86,25 @@ def test_evidence_admission_is_bounded_and_rejects_instruction_taint() -> None:
     assert "untrusted_instruction_taint" in decision.reason_codes
 
 
+def test_capability_gap_observation_survives_checkpoint_model_roundtrip() -> None:
+    gap = CapabilityGapObservation(
+        goal_id="goal",
+        provenance=observation_provenance("runtime", "resolver", "missing read"),
+        trust="trusted",
+        summary="missing read",
+        requirement_id="goal:read",
+        status="unavailable",
+        missing_operations=("read",),
+    )
+
+    restored = ControlTurnState.model_validate(
+        ControlTurnState(observations=[gap]).model_dump(mode="json")
+    )
+
+    assert isinstance(restored.observations[0], CapabilityGapObservation)
+    assert restored.observations[0].missing_operations == ("read",)
+
+
 def _finish_proposal(task: TaskContract, runtime: TaskRuntimeProjection) -> ControlProposal:
     return ControlProposal(
         base_task_revision=task.revision,
@@ -125,7 +145,7 @@ def test_internal_reasoning_command_agrees_with_route_admission() -> None:
                 goal_id="goal",
                 execution_intent="reason",
                 description="compose answer",
-                output_contract="Answer",
+                output_contract=task.goal_graph.goals[0].output_contract,
                 proposed_resource_access=ProposedResourceAccessPlan(
                     side_effect_class="none",
                     authority_scope="answer",
@@ -338,3 +358,11 @@ def test_control_phase_allows_admission_denial_dispositions(next_phase: ControlP
     control.advance_phase(next_phase)
 
     assert control.phase == next_phase
+
+
+def test_control_phase_allows_routed_finish_to_enter_result_acceptance() -> None:
+    control = ControlTurnState(phase="routing")
+
+    control.advance_phase("accepting_result")
+
+    assert control.phase == "accepting_result"

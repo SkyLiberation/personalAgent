@@ -1,5 +1,7 @@
 # 语义生命周期抽取非兼容改造设计
 
+> 边界说明：本文的 Claim 是知识领域中可长期使用、冲突、替代并回链 Evidence 的语义对象，不是模型为 ToolCall/AgentDelegation Proposal 字段自证来源的 `GroundingClaim`。Proposal 来源声明不进入本设计，Agent 能力和运行边界以 [Capability-first Knowledge Agent Runtime](adaptive-agent-runtime-design.md) 为准。
+
 本文设计 Capture / Workspace 生命周期中“业务证据源如何抽取”的目标态。设计采用 **不考虑兼容性** 的口径：不保留当前规则 Claim 抽取、term-overlap grounding、启发式 coverage 作为主路径；它们只允许作为降级诊断或 fixture baseline。目标是让 LLM / structured judge 处理语义不确定性，代码继续控制流程、状态机、副作用和审计。
 
 ## 当前问题

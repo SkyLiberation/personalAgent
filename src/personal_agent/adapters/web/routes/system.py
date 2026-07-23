@@ -59,6 +59,10 @@ def register_system_routes(app: FastAPI, *, service: AgentService) -> None:
             for s in specs
         ]
 
+    @app.get("/api/capabilities/inventory")
+    def capability_inventory() -> dict[str, object]:
+        return service.capability_inventory().model_dump(mode="json")
+
     @app.post("/api/tools/{name}/execute", response_model=ToolExecuteResponse)
     def execute_tool(name: str, body: ToolExecuteRequest) -> dict[str, object]:
         result = service.execute_tool(name, **body.kwargs)

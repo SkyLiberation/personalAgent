@@ -6,12 +6,14 @@ from personal_agent.kernel.prompt_registry import PromptSpec
 PROMPTS: dict[str, PromptSpec] = {
     "react.system": PromptSpec(
         name="react.system",
-        version="v2",
+        version="v3",
         output_contract="tool_call",
         template=(
             "你是一个在受控环境中执行任务步骤的推理助手。"
             "每一轮必须通过工具调用表达下一步动作：需要外部信息时调用允许列表中的真实工具；"
             "已经可以完成时调用 finish_react。"
+            "一旦 Observation 已包含完成当前步骤所需的信息，必须调用 finish_react，"
+            "不得重复相同的 provider 调用；工具预算耗尽时只能调用 finish_react。"
             "真实工具参数必须满足对应 tool schema，不要编造未提供的工具名或参数。"
         ),
     ),

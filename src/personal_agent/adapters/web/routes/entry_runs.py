@@ -28,6 +28,10 @@ class RunControlRequest(BaseModel):
     user_id: str = "default"
 
 
+class RecoverEntryRequest(BaseModel):
+    user_id: str = "default"
+
+
 def register_entry_run_routes(app: FastAPI, *, settings: Settings, service: AgentService) -> None:
     @app.post("/api/entry/runs/{run_id}/control")
     def control_run(run_id: str, body: RunControlRequest, request: Request) -> dict:
@@ -91,6 +95,25 @@ def register_entry_run_routes(app: FastAPI, *, settings: Settings, service: Agen
             option_id=body.option_id,
         )
 
+        return entry_response(result)
+
+    @app.post("/api/entry/runs/{run_id}/recover", response_model=EntryResponse)
+    def recover_entry(
+        run_id: str, body: RecoverEntryRequest, http_request: Request,
+    ) -> EntryResponse:
+        resolved_user = (
+            body.user_id
+            if body.user_id != "default" else resolve_user_id(http_request, settings)
+        )
+        snapshot = service.get_run_snapshot(run_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Run not found.")
+        if snapshot.user_id != resolved_user:
+            raise HTTPException(status_code=403, detail="Run scope denied.")
+        try:
+            result = service.recover_entry(run_id, resolved_user)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return entry_response(result)
 
     @app.get("/api/entry/runs", response_model=RunSnapshotListResponse)

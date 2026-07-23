@@ -17,6 +17,7 @@ added, removed or swapped without touching the adapter.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from time import perf_counter, sleep
@@ -204,9 +205,10 @@ class OpenAIModelClient:
     ) -> StructuredModelResponse[StructuredOutputT]:
         start = perf_counter()
         client = self._client()
+        schema = request.output_type.model_json_schema()
         response_format = request.response_format or structured_response_format(
             request.operation,
-            request.output_type.model_json_schema(),
+            schema,
         )
         chat_request = request.__class__(
             operation=request.operation,
@@ -221,7 +223,23 @@ class OpenAIModelClient:
             extra_body=request.extra_body,
             metadata=request.metadata,
         )
-        response = client.chat.completions.create(**self._chat_kwargs(chat_request))
+        transport = "strict_json_schema"
+        try:
+            response = client.chat.completions.create(**self._chat_kwargs(chat_request))
+        except Exception as exc:
+            if not _response_format_unavailable(exc):
+                raise
+            # Transport compatibility only: the same model still authors the
+            # same typed Proposal.  We change neither its semantic input nor
+            # the output contract, merely fall back from provider-native JSON
+            # Schema to JSON-object / plain-text transport and fail closed if
+            # Pydantic cannot parse the returned object.
+            response, transport = self._create_structured_transport_fallback(
+                client,
+                request,
+                schema,
+                primary_error=exc,
+            )
         latency_ms = round((perf_counter() - start) * 1000, 2)
         message = response.choices[0].message
         content = (message.content or "").strip()
@@ -236,8 +254,61 @@ class OpenAIModelClient:
                 model_name=getattr(response, "model", None) or self._resolved_model,
                 latency_ms=latency_ms,
             )
+            if not parse_result.ok and transport == "json_object":
+                # Some OpenAI-compatible providers accept ``json_object`` but
+                # reply with an empty or schema-incomplete object.  This is
+                # still a transport failure, not permission to invent the
+                # typed value. Retry once with the same model, messages, and
+                # Pydantic contract but no response_format transport hint.
+                response = self._create_plain_text_structured_transport(
+                    client,
+                    request,
+                    schema,
+                    primary_error=ValueError(parse_result.error or "invalid json_object response"),
+                )
+                transport = "plain_text_json"
+                latency_ms = round((perf_counter() - start) * 1000, 2)
+                message = response.choices[0].message
+                content = (message.content or "").strip()
+                parse_result = parse_structured(
+                    content or "{}",
+                    request.output_type,
+                    operation=request.operation,
+                    version=request.version,
+                    model_name=getattr(response, "model", None) or self._resolved_model,
+                    latency_ms=latency_ms,
+                )
             if not parse_result.ok:
-                raise ValueError(f"{request.operation} structured parse failed: {parse_result.error}")
+                # A schema-valid JSON transport can still violate a cross-field
+                # Pydantic invariant (for example a ``clarify`` TaskAnalysis
+                # that also contains Goals).  This is not a deterministic
+                # repair: ask the same model to author a fresh value against
+                # the exact same typed contract and report its validation
+                # feedback.  If it remains invalid, fail closed.
+                response = self._create_structured_schema_repair(
+                    client,
+                    request,
+                    schema,
+                    parse_error=parse_result.error or "invalid structured response",
+                    response_format=(
+                        response_format if transport == "strict_json_schema"
+                        else ({"type": "json_object"} if transport == "json_object" else None)
+                    ),
+                )
+                transport = f"{transport}_schema_repair"
+                latency_ms = round((perf_counter() - start) * 1000, 2)
+                message = response.choices[0].message
+                content = (message.content or "").strip()
+                parse_result = parse_structured(
+                    content or "{}",
+                    request.output_type,
+                    operation=request.operation,
+                    version=request.version,
+                    model_name=getattr(response, "model", None) or self._resolved_model,
+                    latency_ms=latency_ms,
+                )
+                if not parse_result.ok:
+                    raise ValueError(f"{request.operation} structured parse failed: {parse_result.error}")
             parsed = parse_result.value
         usage = _usage(response)
         return StructuredModelResponse(
@@ -250,6 +321,153 @@ class OpenAIModelClient:
             total_tokens=usage.get("total_tokens"),
             raw_response=response,
         )
+
+    def _create_structured_transport_fallback(
+        self,
+        client: OpenAI,
+        request: StructuredModelRequest[StructuredOutputT],
+        schema: dict[str, Any],
+        *,
+        primary_error: Exception,
+    ) -> tuple[Any, str]:
+        schema_instruction = {
+            "role": "system",
+            "content": (
+                "Return only one JSON object that conforms exactly to this output schema. "
+                "Do not add Markdown, explanation, or fields not in the schema.\n"
+                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+            ),
+        }
+        messages = [*request.messages, schema_instruction]
+        log_event(
+            logger,
+            logging.WARNING,
+            "llm.structured_transport_fallback",
+            operation=request.operation,
+            version=request.version,
+            primary_error=str(primary_error)[:240],
+            fallback="json_object",
+        )
+        json_object_request = request.__class__(
+            operation=request.operation,
+            version=request.version,
+            messages=messages,
+            output_type=request.output_type,
+            context_projection_ref=request.context_projection_ref,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            kind="text",
+            response_format={"type": "json_object"},
+            extra_body=request.extra_body,
+            metadata=request.metadata,
+        )
+        try:
+            return (
+                client.chat.completions.create(**self._chat_kwargs(json_object_request)),
+                "json_object",
+            )
+        except Exception as fallback_error:
+            if not _response_format_unavailable(fallback_error):
+                raise
+            return (
+                self._create_plain_text_structured_transport(
+                    client,
+                    request,
+                    schema,
+                    primary_error=fallback_error,
+                ),
+                "plain_text_json",
+            )
+
+    def _create_plain_text_structured_transport(
+        self,
+        client: OpenAI,
+        request: StructuredModelRequest[StructuredOutputT],
+        schema: dict[str, Any],
+        *,
+        primary_error: Exception,
+    ) -> Any:
+        schema_instruction = {
+            "role": "system",
+            "content": (
+                "Return only one JSON object that conforms exactly to this output schema. "
+                "Do not add Markdown, explanation, or fields not in the schema.\n"
+                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+            ),
+        }
+        log_event(
+            logger,
+            logging.WARNING,
+            "llm.structured_transport_fallback",
+            operation=request.operation,
+            version=request.version,
+            primary_error=str(primary_error)[:240],
+            fallback="plain_text_json",
+        )
+        plain_text_request = request.__class__(
+            operation=request.operation,
+            version=request.version,
+            messages=[*request.messages, schema_instruction],
+            output_type=request.output_type,
+            context_projection_ref=request.context_projection_ref,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            kind="text",
+            extra_body=request.extra_body,
+            metadata=request.metadata,
+        )
+        return client.chat.completions.create(**self._chat_kwargs(plain_text_request))
+
+    def _create_structured_schema_repair(
+        self,
+        client: OpenAI,
+        request: StructuredModelRequest[StructuredOutputT],
+        schema: dict[str, Any],
+        *,
+        parse_error: str,
+        response_format: dict[str, Any] | None,
+    ) -> Any:
+        """Request a new model-authored value after typed output rejection.
+
+        The prior bytes are intentionally not copied into the repair request:
+        they are neither canonical facts nor a mutable state to be patched.
+        Pydantic's contract error is the only feedback, and the returned value
+        must independently satisfy the original schema.
+        """
+        log_event(
+            logger,
+            logging.WARNING,
+            "llm.structured_schema_repair",
+            operation=request.operation,
+            version=request.version,
+            parse_error=parse_error[:500],
+        )
+        repair_instruction = {
+            "role": "system",
+            "content": (
+                "Your previous structured response was rejected by the typed output contract. "
+                "Author a complete new JSON object for the original request; do not explain, patch, "
+                "or refer to the rejected response. Respect all mutually exclusive fields and return "
+                "only JSON. Validation feedback:\n"
+                + parse_error[:2000]
+                + "\nOutput schema:\n"
+                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+            ),
+        }
+        repair_request = request.__class__(
+            operation=request.operation,
+            version=request.version,
+            messages=[*request.messages, repair_instruction],
+            output_type=request.output_type,
+            context_projection_ref=request.context_projection_ref,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            kind="text",
+            response_format=response_format,
+            extra_body=request.extra_body,
+            metadata=request.metadata,
+        )
+        return client.chat.completions.create(**self._chat_kwargs(repair_request))
 
     def _generate_chat(
         self,
@@ -398,6 +616,16 @@ def _is_retryable_model_error(exc: Exception) -> bool:
         "service unavailable",
     )
     return any(token in message for token in retryable_messages)
+
+
+def _response_format_unavailable(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "response_format" in message
+        and any(token in message for token in (
+            "unavailable", "unsupported", "not supported", "invalid_request",
+        ))
+    )
 
 
 class TracePayloadPolicy(Protocol):

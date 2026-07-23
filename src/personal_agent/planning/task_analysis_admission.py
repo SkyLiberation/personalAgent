@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
+from uuid import UUID
+
 from personal_agent.governance.contracts.admission import (
     DecisionFeedback,
     GovernanceSnapshotRef,
     StageAdmissionDecision,
 )
 from personal_agent.kernel.contracts.derivation import canonical_digest
+from personal_agent.kernel.contracts.resource import MUTATING_OPERATIONS
 from personal_agent.kernel.models import EntryInput
 from personal_agent.planning.task_analyzer import (
     AcceptedTaskAnalysis,
@@ -16,6 +20,7 @@ from personal_agent.planning.task_analyzer import (
     TaskAnalysis,
     TaskAnalysisProvenanceRecord,
     TaskAnalysisProposal,
+    task_analysis_field_value,
 )
 
 
@@ -49,18 +54,29 @@ class TaskAnalysisAdmission:
                     _semantic_body(proposal) != _semantic_body(prior_proposal)
                 ):
                     reasons.append("task_analysis_revision_scope_exceeded")
+                if (
+                    revision_feedback.revision_scope == "semantic_revision"
+                    and "task_analysis_mutation_operation_required"
+                    in revision_feedback.reason_codes
+                    and not _read_only_mutation_revision_is_scoped(
+                        prior_proposal,
+                        proposal,
+                        revision_feedback,
+                    )
+                ):
+                    reasons.append("task_analysis_revision_scope_exceeded")
         if proposal.input_digest != task_analysis_input_digest(entry_input):
             reasons.append("task_analysis_input_digest_mismatch")
             rejected_fields.append("input_digest")
         payload = proposal.body.model_dump(mode="json")
         known_claims: dict[str, str] = {}
         for claim in proposal.body.grounding_claims:
-            value = _field_value(payload, claim.output_field_ref)
+            value = task_analysis_field_value(payload, claim.output_field_ref)
             if value is None:
                 reasons.append("task_analysis_grounding_field_unknown")
                 rejected_fields.append(claim.output_field_ref)
                 continue
-            if claim.source_text not in entry_input.text:
+            if not _is_identity_source(entry_input, claim.source_text):
                 reasons.append("task_analysis_grounding_source_unknown")
                 rejected_fields.append(claim.output_field_ref)
                 continue
@@ -70,13 +86,104 @@ class TaskAnalysisAdmission:
                 continue
             known_claims[claim.output_field_ref] = claim.source_text
         for field_ref in _user_explicit_field_refs(proposal):
-            value = _field_value(payload, field_ref)
-            if value is None or value not in entry_input.text:
+            value = task_analysis_field_value(payload, field_ref)
+            if value is None or not _is_identity_source(entry_input, value):
                 reasons.append("task_analysis_user_explicit_value_not_source")
                 rejected_fields.append(field_ref)
             if field_ref not in known_claims:
                 reasons.append("task_analysis_grounding_required")
                 rejected_fields.append(field_ref)
+        explicit_ids = _canonical_identity_values(entry_input.text)
+        if explicit_ids:
+            for goal_index, goal in enumerate(proposal.body.goals):
+                delete_hints = [
+                    (hint_index, hint)
+                    for hint_index, hint in enumerate(goal.resource_hints)
+                    if "delete" in hint.operations
+                ]
+                if not delete_hints:
+                    continue
+                if any(
+                    hint.origin == "user_explicit" and hint.locator in explicit_ids
+                    for _, hint in delete_hints
+                ):
+                    continue
+                # Decision ownership: canonical identity extraction is a
+                # closed-world input check. Admission can require the model to
+                # preserve it, but cannot add the locator or choose a target.
+                reasons.append("task_analysis_explicit_identity_required")
+                if delete_hints:
+                    rejected_fields.append(
+                        f"goals.{goal_index}.resource_hints.{delete_hints[0][0]}.locator"
+                    )
+                else:
+                    rejected_fields.append(f"goals.{goal_index}.resource_hints")
+        artifact_ids = {item.artifact_id for item in entry_input.artifacts}
+        if artifact_ids:
+            for goal_index, goal in enumerate(proposal.body.goals):
+                artifact_hints = [
+                    (hint_index, hint)
+                    for hint_index, hint in enumerate(goal.resource_hints)
+                    if hint.semantic_domain == "artifact" and "read" in hint.operations
+                ]
+                if not artifact_hints:
+                    continue
+                if any(
+                    hint.origin == "user_explicit" and hint.locator in artifact_ids
+                    for _, hint in artifact_hints
+                ):
+                    continue
+                # Decision ownership: EntryInput.artifacts owns attachment
+                # identity. Admission requires an exact model-preserved id; it
+                # never substitutes a filename/path or fills the locator.
+                reasons.append("task_analysis_artifact_identity_required")
+                rejected_fields.append(
+                    f"goals.{goal_index}.resource_hints.{artifact_hints[0][0]}.locator"
+                )
+        for goal_index, goal in enumerate(proposal.body.goals):
+            locators = {
+                hint.locator for hint in goal.resource_hints if hint.locator is not None
+            }
+            for constraint_index, constraint in enumerate(goal.constraints):
+                if constraint.description not in locators:
+                    continue
+                # Decision ownership: ResourceHint.locator is the canonical
+                # owner of resource identity. Repeating the same identity in a
+                # constraint creates a second semantic write surface, so
+                # Admission rejects the Proposal instead of synchronizing it.
+                reasons.append("task_analysis_duplicate_resource_identity")
+                rejected_fields.append(
+                    f"goals.{goal_index}.constraints.{constraint_index}"
+                )
+        for goal_index, goal in enumerate(proposal.body.goals):
+            mutating = {
+                str(operation)
+                for hint in goal.resource_hints
+                for operation in hint.operations
+                if str(operation) in MUTATING_OPERATIONS
+            }
+            if (
+                goal.result_contract == "external_state"
+                or goal.side_effect_intent == "mutation"
+            ) and not mutating:
+                # Decision ownership: external-state classification has a
+                # closed-world dependency on the model-proposed operations.
+                # Admission rejects an impossible classification and asks the
+                # model to revise; it does not rewrite the Goal or invent an
+                # operation on the model's behalf.
+                reasons.append("task_analysis_mutation_operation_required")
+                rejected_fields.append(f"goals.{goal_index}")
+            if mutating and (
+                goal.result_contract != "external_state"
+                or goal.side_effect_intent != "mutation"
+            ):
+                # Decision ownership: mutation classification is a
+                # closed-world consequence of model-supplied operations.  The
+                # admission boundary rejects the inconsistent proposal rather
+                # than splitting Goals, adding a mutation flag, or choosing a
+                # different operation on the model's behalf.
+                reasons.append("task_analysis_mutation_contract_required")
+                rejected_fields.append(f"goals.{goal_index}")
         reason_codes = tuple(dict.fromkeys(reasons))
         snapshot = GovernanceSnapshotRef(
             task_revision=1,
@@ -176,17 +283,10 @@ class AcceptedTaskAnalysisCompiler:
         )
 
 
-def _field_value(payload: object, field_ref: str) -> str | None:
-    current = payload
-    for segment in field_ref.split("."):
-        if isinstance(current, dict):
-            current = current.get(segment)
-        elif isinstance(current, list) and segment.isdigit():
-            index = int(segment)
-            current = current[index] if index < len(current) else None
-        else:
-            return None
-    return current if isinstance(current, str) else None
+def _is_identity_source(entry_input: EntryInput, value: str) -> bool:
+    return value in entry_input.text or value in {
+        artifact.artifact_id for artifact in entry_input.artifacts
+    }
 
 
 def _user_explicit_field_refs(proposal: TaskAnalysisProposal) -> tuple[str, ...]:
@@ -199,6 +299,8 @@ def _user_explicit_field_refs(proposal: TaskAnalysisProposal) -> tuple[str, ...]
             if constraint.origin == "user_explicit":
                 refs.append(f"goals.{goal_index}.constraints.{constraint_index}.description")
         for hint_index, hint in enumerate(goal.resource_hints):
+            if hint.origin == "user_explicit" and hint.locator:
+                refs.append(f"goals.{goal_index}.resource_hints.{hint_index}.locator")
             if hint.origin == "user_explicit" and hint.user_required_provider:
                 refs.append(f"goals.{goal_index}.resource_hints.{hint_index}.user_required_provider")
     for relation_index, relation in enumerate(proposal.body.relations):
@@ -209,6 +311,52 @@ def _user_explicit_field_refs(proposal: TaskAnalysisProposal) -> tuple[str, ...]
 
 def _semantic_body(proposal: TaskAnalysisProposal) -> dict:
     return proposal.body.model_dump(mode="json", exclude={"grounding_claims"})
+
+
+def _read_only_mutation_revision_is_scoped(
+    prior: TaskAnalysisProposal,
+    revised: TaskAnalysisProposal,
+    feedback: DecisionFeedback,
+) -> bool:
+    before = _semantic_body(prior)
+    after = _semantic_body(revised)
+    allowed_goal_indexes = {
+        int(match.group(1))
+        for field_ref in feedback.rejected_field_refs
+        if (match := re.fullmatch(r"goals\.(\d+)", field_ref)) is not None
+    }
+    if not allowed_goal_indexes:
+        return False
+    before_goals = before.get("goals")
+    after_goals = after.get("goals")
+    if not isinstance(before_goals, list) or not isinstance(after_goals, list):
+        return False
+    if len(before_goals) != len(after_goals):
+        return False
+    for index in allowed_goal_indexes:
+        if index >= len(before_goals):
+            return False
+        for goal in (before_goals[index], after_goals[index]):
+            if not isinstance(goal, dict):
+                return False
+            goal.pop("result_contract", None)
+            goal.pop("side_effect_intent", None)
+    return before == after
+
+
+_UUID_PATTERN = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+
+
+def _canonical_identity_values(text: str) -> frozenset[str]:
+    values: set[str] = set()
+    for candidate in _UUID_PATTERN.findall(text):
+        try:
+            values.add(str(UUID(candidate)))
+        except ValueError:
+            continue
+    return frozenset(values)
 
 
 __all__ = [

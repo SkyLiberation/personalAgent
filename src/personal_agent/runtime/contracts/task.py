@@ -197,6 +197,9 @@ class ContextItem(BaseModel):
     kind: str
     provenance: str
     trust: TrustTier
+    taint: frozenset[
+        Literal["external_content", "instruction", "sensitive", "derived"]
+    ] = frozenset()
     admission: AdmissionState = "candidate"
     summary: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
