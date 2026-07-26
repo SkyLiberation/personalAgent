@@ -1,4 +1,4 @@
-# 架构 E2E 证据分层
+# 能力 E2E 与发布证据
 
 本目录同时保存两类测试代码，但二者的证据等级严格分开：
 
@@ -6,9 +6,9 @@
   PostgreSQL 和场景所需的真实 provider，走到 `completed` 或该反事实规定的
   fail-closed 终态。测试不得注入业务对象、调用内部 Service 推进流程、替换
   Gateway/Store/Model，也不得使用测试 hook 制造状态窗口。
-- `diagnostic`：允许从进程内 `AgentService` 边界读取更细的内部状态；用于定位
-  Contract、Grant、Journal、Verification 等不变量。它即使通过，也不能计入
-  发布级架构证明。
+- `diagnostic`：用于真实外部 Profile 和专项定位；即使通过，也不能单独产生产品、
+  组合或复杂主循环的发布声明。当前 E16–E19 分别验证 GitHub、GPT Researcher、
+  Notion 和 capability-unavailable Profile，并由相应产品用例从正式入口消费。
 
 唯一分类来源是
 [`evidence_catalog.py`](evidence_catalog.py)。测试文件不另存一份 layer/status，
@@ -31,28 +31,36 @@ layer 是断言焦点，不是缩短流程的许可。任何 `release` 用例仍
 
 ## 当前基线
 
-- 旧 E01–E15 是 `architecture` 证据；E16/E17 是 MCP/A2A
-  `capability_profile` 证据。
-- Phase 0 产品能力要求新的 `product_capability` E01–E13，组合能力要求
-  `composite_capability` C01–C04；当前 catalog 尚无这些条目。
-- `--e2e-require-complete-matrix` 现在检查产品能力 E01–E13，会在收集阶段诚实列出
-  缺失项，而不会因旧编号相同而通过。
+- `product_capability`：E01–E13，共 13 个正式用户旅程；
+- `composite_capability`：C01–C04，共 4 个组合能力旅程；
+- `complex_loop`：L01–L06，共 6 个主循环、恢复和验证旅程；
+- `capability_profile`：E16–E19，共 4 个真实外部能力专项证据，不直接产生发布声明；
+- `--e2e-require-complete-matrix` 会同时检查 E、C、L 三组 catalog 条目及对应测试节点，
+  缺少任何条目或节点都会在收集阶段失败。
 - 发布能力由 `release_gate.py` 对机器声明、catalog eligibility、clean 同 revision
   trace、test outcome 和 checksum 求交集；历史 trace、skip 或 dirty 工作树均不可信。
 
 ## 运行
 
-运行现有架构/Profile release 用例：
+运行完整 release 矩阵：
 
 ```powershell
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
 $env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
-uv run pytest evals/e2e_quality --e2e-scope=release -v -s
+uv run pytest evals/e2e_quality --e2e-scope=release `
+  --e2e-require-complete-matrix -q -s
 ```
 
-该命令只运行已有架构/Profile 用例，不产生产品能力声明。
-加入 `--e2e-require-complete-matrix` 后会检查产品 E01–E13；当前会于收集阶段列出
-全部缺失项。
+当前命令收集 23 个 release 用例。测试进程会复用正式 Web 服务，但每个用户旅程开始前
+通过正式 debug reset 清理业务事实；失败时保留服务临时目录并输出 trace archive 路径。
+
+运行真实外部 Profile 专项用例：
+
+```powershell
+$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
+uv run pytest evals/e2e_quality/test_release_user_outcomes.py `
+  --e2e-scope=diagnostic -q -s
+```
 
 按证据层运行：
 
@@ -70,4 +78,5 @@ pytest 结果和校验和。API key 不写入归档。
 uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 ```
 
-任一 E/C 声明不可信时返回非零。
+任一 E/C/L 声明不可信时返回非零。当前 gate 还要求目标 revision 与 archive revision
+一致，且两者均为 clean；dirty 工作树下通过测试只能作为工程证据，不能成为发布证据。

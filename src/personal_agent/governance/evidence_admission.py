@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from personal_agent.governance.contracts.evidence import EvidenceAdmissionDecision, EvidenceRef
+from personal_agent.governance.contracts.evidence import (
+    AdmittedEvidenceRef,
+    EvidenceAdmissionDecision,
+)
 from personal_agent.runtime.contracts.control import ObservationRef
 
 
@@ -29,7 +32,7 @@ class EvidenceAdmission:
                 verdict="rejected",
                 reason_codes=tuple(reasons),
             )
-        evidence = EvidenceRef(
+        evidence = AdmittedEvidenceRef(
             observation_ref=observation.observation_id,
             admitted_purpose=purpose,
             criterion_scope=criterion_scope,
@@ -46,4 +49,3 @@ class EvidenceAdmission:
 
 
 __all__ = ["EvidenceAdmission"]
-

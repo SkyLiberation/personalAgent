@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+from threading import Event
+from time import perf_counter
 from types import SimpleNamespace
 
+import pytest
 from pydantic import BaseModel
 
 from personal_agent.kernel.config_models import LangSmithConfig, StructuredConfig
 from personal_agent.infra.structured_model import (
     FullTracePayloadPolicy,
+    ModelCallDeadlineExceeded,
     ObservedStructuredModelClient,
     OpenAIModelClient,
     RedactedTracePayloadPolicy,
@@ -73,8 +79,393 @@ def test_openai_adapter_uses_chat_completions_json_schema(monkeypatch):
     assert result.value == ExampleOutput(ok=True)
     assert result.input_tokens == 5
     assert result.output_tokens == 3
+    assert captured["init"]["max_retries"] == 0
     assert captured["create"]["response_format"]["type"] == "json_schema"
     assert captured["create"]["response_format"]["json_schema"]["strict"] is True
+
+
+def test_openai_adapter_enforces_total_provider_deadline(monkeypatch):
+    closed = Event()
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **_kwargs):
+            closed.wait(timeout=2)
+            raise RuntimeError("provider connection closed")
+
+        def close(self):
+            closed.set()
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+        timeout_seconds=0.05,
+        max_retries=0,
+    ))
+
+    started = perf_counter()
+    with pytest.raises(ModelCallDeadlineExceeded, match="router provider call exceeded"):
+        client.generate(_request())
+
+    assert perf_counter() - started < 0.5
+    assert closed.wait(timeout=0.5)
+
+
+def test_openai_adapter_sends_typed_effort_only_to_reasoning_models(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **_):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
+                model=kwargs["model"],
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    request = replace(_request(), max_tokens=6000, reasoning_effort="low")
+
+    OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="gpt-5.4-mini",
+    )).generate(request)
+    OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="non-reasoning-model",
+    )).generate(request)
+
+    assert calls[0]["max_completion_tokens"] == 6000
+    assert calls[0]["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in calls[1]
+
+
+def test_openai_adapter_accepts_direct_structured_content_transport(monkeypatch):
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_: '{"ok":true}')
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+        max_retries=7,
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert result.content == '{"ok":true}'
+
+
+def test_openai_adapter_unwraps_nested_chat_completion_envelope(monkeypatch):
+    nested_envelope = json.dumps({
+        "id": "nested-completion",
+        "object": "chat.completion",
+        "model": "provider-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": '{"ok":true}'},
+            "finish_reason": "stop",
+        }],
+    })
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_: SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(
+                        content=nested_envelope,
+                        tool_calls=None,
+                    ))],
+                    model="structured-model",
+                    usage=None,
+                ))
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert result.content == '{"ok":true}'
+
+
+def test_openai_adapter_retries_json_transport_after_empty_nested_completion(monkeypatch):
+    calls: list[dict[str, object]] = []
+    empty_nested_envelope = json.dumps({
+        "id": "nested-completion",
+        "object": "chat.completion",
+        "choices": [],
+    })
+
+    class FakeOpenAI:
+        def __init__(self, **_):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            content = empty_nested_envelope if len(calls) == 1 else '{"ok":true}'
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=content,
+                    tool_calls=None,
+                ))],
+                model="structured-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+    cached_result = client.generate(_request("second request"))
+
+    assert result.value == ExampleOutput(ok=True)
+    assert cached_result.value == ExampleOutput(ok=True)
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert calls[2]["response_format"] == {"type": "json_object"}
+    assert len(calls) == 3
+
+
+def test_openai_adapter_removes_response_format_after_two_empty_nested_completions(monkeypatch):
+    calls: list[dict[str, object]] = []
+    empty_nested_envelope = json.dumps({
+        "id": "nested-completion",
+        "object": "chat.completion",
+        "choices": [],
+    })
+
+    class FakeOpenAI:
+        def __init__(self, **_):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            content = empty_nested_envelope if len(calls) <= 2 else '{"ok":true}'
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=content,
+                    tool_calls=None,
+                ))],
+                model="structured-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+    cached_result = client.generate(_request("second request"))
+
+    assert result.value == ExampleOutput(ok=True)
+    assert cached_result.value == ExampleOutput(ok=True)
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[2]
+    assert "response_format" not in calls[3]
+    assert len(calls) == 4
+
+
+def test_openai_adapter_switches_to_streaming_after_provider_returns_sse(monkeypatch):
+    calls: list[dict[str, object]] = []
+    sse_without_content = (
+        'data: {"object":"chat.completion.chunk","choices":[]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    class FakeOpenAI:
+        def __init__(self, **_):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            if not kwargs.get("stream"):
+                return sse_without_content
+            return iter([
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content='{"ok":'))],
+                    model="structured-model",
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="true}"))],
+                    model="structured-model",
+                    usage=None,
+                ),
+            ])
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+    cached_result = client.generate(_request("second request"))
+
+    assert result.value == ExampleOutput(ok=True)
+    assert cached_result.value == ExampleOutput(ok=True)
+    assert calls[0].get("stream") is None
+    assert calls[1]["stream"] is True
+    assert calls[2]["stream"] is True
+    assert len(calls) == 3
+
+
+def test_openai_adapter_deadline_covers_structured_stream_consumption(monkeypatch):
+    closed = Event()
+    sse_without_content = (
+        'data: {"object":"chat.completion.chunk","choices":[]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            if not kwargs.get("stream"):
+                return sse_without_content
+
+            def drip_chunks():
+                while not closed.wait(timeout=0.005):
+                    yield SimpleNamespace(
+                        choices=[],
+                        model="structured-model",
+                        usage=None,
+                    )
+
+            return drip_chunks()
+
+        def close(self):
+            closed.set()
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+        timeout_seconds=0.05,
+        max_retries=0,
+    ))
+
+    started = perf_counter()
+    with pytest.raises(ModelCallDeadlineExceeded, match="router provider call exceeded"):
+        client.generate(_request())
+
+    assert perf_counter() - started < 0.5
+    assert closed.wait(timeout=0.5)
+
+
+def test_openai_adapter_unwraps_string_encoded_nested_choice_and_message(monkeypatch):
+    nested_envelope = json.dumps({
+        "id": "nested-completion",
+        "object": "chat.completion",
+        "model": "provider-model",
+        "choices": json.dumps([json.dumps({
+            "index": 0,
+            "message": json.dumps({
+                "role": "assistant",
+                "content": '{"ok":true}',
+            }),
+            "finish_reason": "stop",
+        })]),
+    })
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_: nested_envelope)
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert result.content == '{"ok":true}'
+
+
+def test_openai_adapter_unwraps_fenced_nested_completion_envelope(monkeypatch):
+    nested_envelope = "```json\n" + json.dumps({
+        "id": "nested-completion",
+        "object": "chat.completion",
+        "model": "provider-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": '{"ok":true}'},
+            "finish_reason": "stop",
+        }],
+    }) + "\n```"
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_: SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(
+                        content=nested_envelope,
+                        tool_calls=None,
+                    ))],
+                    model="structured-model",
+                    usage=None,
+                ))
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+    ))
+
+    result = client.generate(_request())
+
+    assert result.value == ExampleOutput(ok=True)
+    assert result.content == '{"ok":true}'
 
 
 def test_openai_adapter_falls_back_to_json_object_when_json_schema_is_unavailable(monkeypatch):
@@ -279,6 +670,7 @@ def test_composition_omits_observer_when_tracing_is_disabled():
     assert isinstance(client, GovernedModelClient)
     assert isinstance(client.transport, UsageRecordingStructuredModelClient)
     assert isinstance(client.transport._delegate, RetryingStructuredModelClient)
+    assert client.transport._delegate._backoff_seconds == 2.0
     assert isinstance(client.transport._delegate._delegate, OpenAIModelClient)
 
 
@@ -316,6 +708,35 @@ def test_retrying_client_retries_transient_failures():
     assert result.value.ok is True
     assert result.retry_attempts == 1
     assert result.retry_errors == ["Connection error."]
+
+
+def test_retrying_client_retries_malformed_success_transport():
+    calls = 0
+
+    class Delegate:
+        def generate(self, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError(
+                    "invalid provider response: missing chat completion choices"
+                )
+            return StructuredModelResponse(
+                value=ExampleOutput(ok=True),
+                model="model",
+                latency_ms=1.0,
+            )
+
+    client = RetryingStructuredModelClient(
+        Delegate(),
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    result = client.generate(_request())
+
+    assert calls == 2
+    assert result.retry_attempts == 1
 
 
 def test_retrying_client_does_not_retry_non_transient_failures():

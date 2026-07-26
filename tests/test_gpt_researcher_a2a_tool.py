@@ -40,16 +40,18 @@ class FakeGPTResearcherA2AClient:
         )
 
 
-def test_gpt_researcher_a2a_adapter_returns_agent_run_result():
+def test_gpt_researcher_a2a_adapter_uses_canonical_async_run_identity():
     client = FakeGPTResearcherA2AClient()
     adapter = GPTResearcherA2AAdapter(GPTResearcherA2AConfig(), client)
 
-    result = adapter.invoke(AgentTask("Agent2Agent protocol adoption"), _ctx())
+    submitted = adapter.submit(AgentTask("Agent2Agent protocol adoption"), _ctx())
+    result = adapter.poll(submitted, _ctx())
 
-    assert result.run.definition.agent_id == "gpt_researcher"
-    assert result.run.projection.status == "completed"
-    assert "Agent2Agent" in result.output_text
-    assert result.run.artifact_index.artifacts[0].producer_verification_status == "unverified"
+    assert result.definition.agent_id == "gpt_researcher"
+    assert result.projection.status == "completed"
+    assert result.projection.external_task_id == "task-1"
+    assert "Agent2Agent" in result.artifact_index.artifacts[0].content
+    assert result.artifact_index.artifacts[0].producer_verification_status == "unverified"
     assert client.calls[0]["topic"] == "Agent2Agent protocol adoption"
 
 

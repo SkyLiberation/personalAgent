@@ -300,7 +300,7 @@ class ClaimAdmissionDecision(BaseModel):
 class KnowledgeStateEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: new_id("kst"))
     workspace_id: str = "default"
-    target_type: Literal["claim"] = "claim"
+    target_type: Literal["claim", "knowledge_item"] = "claim"
     target_id: str
     from_state: KnowledgeState | None = None
     to_state: KnowledgeState

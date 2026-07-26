@@ -2,7 +2,7 @@
 
 ## 文档定位
 
-本文是知识 Agent 产品能力、MCP/A2A 扩展边界、Agent 主循环和运行时治理的目标设计 owner。它描述破坏性目标态，不代表当前代码已经具备全部能力。当前实现事实和已通过的 release 证据仍以
+本文是知识 Agent 产品能力、MCP/A2A 扩展边界、Agent 主循环和运行时治理的目标设计 owner。它描述破坏性目标态，并记录目标态的实际落地边界；当前实现事实和已执行的工程 E2E 证据仍以
 [当前核心架构](../summary/core-architecture-current-state.md)、
 [Phase 0 能力目录与发布基线](../summary/phase0-capability-release-baseline.md)、
 [当前 E2E 审计](../summary/core-architecture-e2e-audit.md) 和
@@ -24,6 +24,94 @@
 能力尚未定义、Provider 尚不存在或用户结果尚未闭合时，不得先创建 Proposal、Contract、Command、Event、Projection 或 E2E 来证明框架对象存在。
 
 目标态不考虑旧调用方兼容性。每个事实只有一个 owner 和一个写入口；派生的有效能力集合、候选排名和上下文物化默认不持久化。
+
+## 当前落地与验证状态（2026-07-26）
+
+正式 Web、CLI、飞书入口已经统一进入 `ConversationService` 主循环；旧
+`Task/GoalGraph/AdaptivePlanner/ExecutiveController` 正式入口、编排图、兼容 API 和
+相应用例已删除。模型输出已收敛为 `FinalMessage | ContinueTurnProposal`，后者只携带
+model-owned `WorkingPlanSnapshot` 与复数 `actions`。Tool 和 Agent 分别通过
+`InteractionToolPort`、`InteractionAgentPort` 交接，校验、权限和执行事实由
+`ToolExecutor` / `AgentGateway` 拥有。
+
+2026-07-24 曾对当时的 dirty worktree 完成一次正式 HTTP 工程验收：E01–E13、
+C01–C04、L01–L06 共 23 个选中用例全部通过，0 failed、0 skipped，耗时
+1506.36 秒，trace archive 为
+`data/e2e_traces/20260724T144409.800183Z-53716-a052c7cd`。该历史证据证明目标主路径能够
+闭合，但不能替代 2026-07-25 Provider 和 E2E harness 变更后的同 revision 全矩阵。
+
+2026-07-25 已补齐真实 GitHub/Notion MCP：E06 从正式 HTTP 入口依次执行 E16 GitHub、
+E18 Notion 和 E19 capability-unavailable，1 passed，67.77 秒，trace archive 为
+`data/e2e_traces/20260725T064548.518818Z-19688-d08d031f`。GPT Researcher 已从异常 endpoint
+切换到与本工程相同的 tokeness 配置源，E17 单跑 223.32 秒通过，trace archive 为
+`data/e2e_traces/20260725T084944.789762Z-42408-b3b97220`；L04 单跑 228.40 秒通过，trace
+archive 为 `data/e2e_traces/20260725T085407.393906Z-28364-8e0c1122`。
+
+当前所有生成式 Adapter 已收敛到唯一 `STRUCTURED_*` 配置，默认及当前部署模型为
+`gpt-5.4-mini`；直接回答、结构化决策、Graphiti、LangExtract、MS GraphRAG completion
+与 GPT Researcher FAST/SMART/STRATEGIC 不再各自绑定旧模型或旧 endpoint。embedding 与
+transcription 保持独立。配置 contract 证明 7 个生成式 model 槽位、endpoint 和 credential
+解析一致，GPT Researcher 重建后的容器环境也显示三个 LLM role 均为
+`openai:gpt-5.4-mini`。
+
+先前 luna 目标不可执行：2026-07-25 最小真实请求收到 tokeness HTTP 404
+`No available providers at the moment: gpt-5.6-luna`。正式 E01 和 E17 HTTP 用例分别在
+archive `data/e2e_traces/20260725T103220.452113Z-33916-bfee7860` 与
+`data/e2e_traces/20260725T103256.131272Z-18620-12399836` 中于首个父模型调用 fail closed，
+没有产生用户答案或 A2A 委托。因此旧模型下通过的 E17/L04 只能作为历史链路证据，不能
+证明当前 luna revision 可执行；该错误是 Provider capability missing，不是 Prompt 或
+请求参数导致。
+
+切换到 `gpt-5.6-terra` 后，普通 completion、简单 strict object schema 和正式 E01 均
+通过；E01 archive 为 `data/e2e_traces/20260725T105453.855639Z-13220-97005757`，1 passed，
+110.30 秒。E17 archive `data/e2e_traces/20260725T105653.520780Z-15632-42038654`
+在 300 秒正式 HTTP 上限处失败。根因不是 A2A endpoint：父模型的
+`AgentTurnDecision` 是顶层 `oneOf` RootModel，而 OpenAI Structured Outputs 要求根 schema
+必须是 object；tokeness 没有对不支持的 schema fail-fast，反而返回 HTTP 200 和使用
+`type` 而非 `kind` 的无效 JSON。一次 schema repair 超时、另一次仍无效，直到约第 259 秒
+才产生合法委托，导致 GPT Researcher 已开始检索但没有足够时间返回 Artifact。
+
+该 schema contract 已修复：`AgentTurnDecision` 现在是唯一 object-root envelope，`decision`
+属性和 `actions[]` 使用 nested `anyOf`；wire schema 为 `type=object` 且不再包含 `oneOf`。
+生产代码只读取 `decision`，没有保留 `.root` 兼容入口，也没有把 `type` 改写为 `kind`。
+canonical model 随后收敛到满足延迟与 typed Proposal contract 的 `gpt-5.4-mini`。正式 E01
+以 77.16 秒通过，archive 为
+`data/e2e_traces/20260725T112537.098216Z-42664-7dfeb33d`；正式 E17 以 171.31 秒通过，
+archive 为 `data/e2e_traces/20260725T112710.958169Z-32852-e10b7352`，并断言单次委托、
+有效 AgentArtifact、父级 FinalMessage 以及 child completed 不自动完成父级。
+
+2026-07-26 已建立当前 worktree 的单一完整工程矩阵：E01–E13、C01–C04、L01–L06
+共 23 个 release 用例全部通过，0 failed、0 skipped，耗时 1777.44 秒；trace archive 为
+`data/e2e_traces/20260726T011631.187395Z-20684-4a62da6a`，同时包含 E16–E19 四个真实
+Provider profile trace。该 archive 的 `summary.exit_status=0`，27 个 trace envelope 和
+checksum 均已生成。它证明 Phase 1–5 的生产主路径在当前工程状态可执行，但 manifest
+明确记录 `dirty=true`，因此不能产生 clean-revision 发布资格。
+
+此前 E09 曾在 `workspace_candidate_claim_extraction` 单次调用中等待约 6 小时。根因不是
+Prompt 或 JSON Schema，而是 httpx timeout 只限制单次 I/O 空闲时间；异常 SSE endpoint
+持续发送零星 chunk 会反复重置 read timeout。唯一 OpenAI Adapter 现在同时执行 SDK
+connect/read/write/pool timeout 与整次 Provider 调用的 wall-clock deadline，deadline
+覆盖 structured SSE 的完整消费；超时后关闭 client 并交给唯一 typed-operation retry
+owner，不生成业务 fallback。对应 contract/interaction 回归 39 passed；E09 定向用例
+92.27 秒通过，完整矩阵中的 E09 也在约 92 秒内通过。准确基线见
+[Phase 0 能力目录与发布基线](../summary/phase0-capability-release-baseline.md)。
+
+阶段状态如下：
+
+| Phase | 当前状态 | 可执行证据 / 未闭合项 |
+| --- | --- | --- |
+| Phase 1 主循环 | 已落地并完成工程 E2E | L01–L06 与 E01 在单一 23/23 archive 中通过 |
+| Phase 2 原生知识能力 | 已落地并完成工程 E2E | E01–E05、E08–E13 与 C01–C03 在单一 archive 中通过；delete/restore 走 governed command 和 digest/receipt |
+| Phase 3 MCP | 已落地并完成真实 Provider E2E | E06/E16/E18/E19 使用真实 GitHub/Notion MCP 通过，包含用户结果与 capability-unavailable 反事实 |
+| Phase 4 A2A | 已落地并完成真实 Provider E2E | E07/E17/C04/L04 通过；Artifact/status/父级 FinalMessage 分离，trace 断言单次委托 |
+| Phase 5 测试层级 | 已落地并完成 23/23 工程矩阵 | catalog、archive、checksum 与 gate 可执行；仅 clean-revision 发布资格待提交后复验 |
+
+本次 A2A 修复把最新 WorkingPlan 和 AgentArtifact 正确送回下一模型轮，保留 cancelled
+run 已产生的 Artifact，并拒绝 Artifact 返回后的同 Agent 重复委托。E17 现自动断言
+`agent_calls == 1`。GPT Researcher 的 OpenAI-compatible Adapter 现在支持 tokeness SSE，
+空 SSE/`[DONE]` 明确拒绝；Embedding 使用容器内 384 维多语种模型，研究工作量限制为
+1 次迭代、1 个子主题、每查询 1 个结果和 400 字报告。Research E2E 也不再把 `running`
+当成功，必须观察终态并取得 digest 或明确 limitation。
 
 ## 1. 从成熟 Agent 设计吸收什么
 
@@ -423,7 +511,14 @@ Tool/Agent，或 Artifact 是否真正回答了用户问题。
 - `checkpoint_thread_ref` 是技术恢复键，不是用户业务会话；
 - `child_agent_run_ref` 是被委托 Agent 的生命周期，不是父交互的生命周期。
 
-当前工程中的 `EntryInput.session_id` 承担了部分 `conversation_ref` 的作用；入口会为每次请求生成 `run_id`，并由 Runtime 根据用户和会话生成 checkpoint `thread_id`，可见 [entry_orchestrator.py](../../src/personal_agent/orchestration/entry_orchestrator.py:368)。目标态应将这一层次改成 typed refs，而不是继续扩散 `session_id`、`thread_id`、`run_id` 的同义或可写副本。
+当前工程已删除 `EntryInput` 与 `entry_orchestrator.py`。正式 HTTP 入口
+[`conversation.py`](../../src/personal_agent/adapters/web/routes/conversation.py) 接收
+`conversation_id` 和可选 `interaction_run_ref`；`ConversationService` 为新请求创建唯一
+`irun_` 引用，并拒绝把同一引用绑定到不同用户输入；`AgentGateway` 独立拥有 child run
+identity。底层 Research/Checkpoint adapter 仍有 `session_id`、`run_id` 等技术字符串，
+部分 Interface/Application 引用也仍以受格式约束的字符串传递，因此 typed Value Object
+目标尚未完全闭合。后续应沿 owner 边界收敛这些引用，而不是恢复通用 `session_ref` 或
+创建可写镜像字段。
 
 设计 `conversation_ref` 的唯一理由是跨请求延续用户明确选择的对话上下文；它不用于决定 Tool、证明事实、授予权限或表示任务完成。如果产品不提供跨请求对话，输入就不应携带该引用。
 
@@ -628,14 +723,17 @@ Schema validator、字段 immutable、digest 计算、候选过滤和单个状�
 
 ### 8.3 原生能力证据闭环
 
-Phase 0 已将 E01–E13、C01–C04 的声明映射收敛到 `release_gate.py`，并以
+E01–E13、C01–C04、L01–L06 的声明映射已经收敛到 `release_gate.py`，并以
 `evidence_catalog.py` 和同 revision trace archive 的交集 fail closed。该投影不持久化，
-也不读取 Runtime availability 来证明发布可信。L01–L06 仍是 Phase 1 目标，待主循环
-落地时再进入同一机器门禁。
+也不读取 Runtime availability 来证明发布可信。L01–L06 已进入同一机器门禁，并在
+2026-07-26 的当前完整工程矩阵中与 E/C 系列一起通过；单一 archive
+`20260726T011631.187395Z-20684-4a62da6a` 记录 23/23 passed、0 failed、0 skipped。
+定向 E06、E17 或 L04 证据仍不能替代该完整矩阵。
 
 “代码已有”、对象存在、旧架构用例、Capability Profile、专项 suite、skip、dirty
 revision 或 Fake Provider 均不能产生发布声明。组合证据不能替代基础证据，基础证据也
-不能替代组合证据。当前实现与实际基线见 Phase 0 总结。
+不能替代组合证据。当前完整 23/23 archive 来自 dirty worktree；它是可信的工程执行
+证据，但仍不能产生 clean-revision 发布声明。当前实现与实际基线见 Phase 0 总结。
 
 ### 8.4 最小 Release E2E 集合
 
@@ -677,7 +775,8 @@ Profile：`baseline`，但只有 Artifact ResourceRef、scope admission 和 cita
 
 结果：最终引用只来自所选 Artifact；`inspect_artifact` 不接收模型任意生成的服务器 `file_path`；Ask 不保存长期 Claim。
 
-当前状态：capability acceptance scenario，不是当前 release E2E。
+当前状态：已进入 release catalog，并在 2026-07-26 完整矩阵中从正式 upload/ask 入口
+通过；断言引用只绑定所选 Artifact，且 Ask 不新增长期 Claim。
 
 证明：这是知识 Agent 原生能力缺口，而不是 MCP/A2A 能力。
 
@@ -1162,6 +1261,9 @@ Journal 是 dispatch canonical owner。恢复消费冻结调用，不重新请�
 
 ### Phase 1：收敛模型输出和主循环
 
+落地状态：正式入口和 L01–L06 已完成工程 E2E；发布可信度仍等待 clean matching
+revision。以下条目保留为代码审查和回归验收约束。
+
 1. 模型每轮输出收敛为 `FinalMessage | ContinueTurnProposal`，后者只含可选
    `WorkingPlanSnapshot` 和唯一复数 `actions`；
 2. `actions` 的业务动作只保留 `ToolCallProposal | AgentDelegationProposal`，删除
@@ -1185,6 +1287,10 @@ Journal 是 dispatch canonical owner。恢复消费冻结调用，不重新请�
 
 ### Phase 2：闭合原生知识能力
 
+落地状态：E01–E05、E08–E13 与 C01–C03 已从正式入口完成工程 E2E；Artifact ask、
+Ask/Save 分离、Knowledge Lifecycle governed command、Review/Maintenance/Scheduled
+Intelligence 均已进入产品矩阵。
+
 1. Artifact upload 创建 application-owned ResourceRef，不向模型暴露服务器裸 `file_path`；
 2. `inspect_artifact` 按 ArtifactRef 解析并返回可引用 Evidence；
 3. Grounded Ask 绑定 Resource scope 和 citation identity；
@@ -1198,6 +1304,11 @@ Journal 是 dispatch canonical owner。恢复消费冻结调用，不重新请�
 
 ### Phase 3：收敛 MCP
 
+落地状态：Host mapping、ToolGateway 边界和 GitHub/Notion 具体 Connector 均已落地。
+2026-07-25 的 E06 从正式 HTTP 入口使用真实 GitHub/Notion 凭据执行 E16、E18，并以 E19
+反证 capability unavailable 不会被伪装为成功；对应 archive 为
+`data/e2e_traces/20260725T064548.518818Z-19688-d08d031f`。
+
 1. MCP discovery 声明与 Host approved mapping 分离；
 2. 远端 schema 由 Server 拥有，风险/权限/数据出域由 Host 拥有；
 3. 删除从 semantic tags 推导 Provider 等价的分支；
@@ -1206,6 +1317,12 @@ Journal 是 dispatch canonical owner。恢复消费冻结调用，不重新请�
 
 ### Phase 4：A2A 一等化
 
+落地状态：E07/E17/C04/L04 主路径已落地，并在 2026-07-26 当前完整矩阵中通过。
+`AgentGateway` submit/poll/cancel、
+ChildAgentRun、Artifact 和父级 FinalMessage 已分离，远端 completed 不直接完成父级
+结果，重复同 Agent 委托由主循环 Admission 拒绝。GPT Researcher 使用与主工程相同的
+tokeness Provider 配置，非 streaming endpoint profile 已在真实 8001 容器中验证。
+
 1. 长时 GPT Researcher 调用从阻塞 Tool wrapper 迁移到 AgentGateway submit/poll/stream/cancel；
 2. Agent Card/Profile、ChildAgentRun 和 Artifact 分清 Definition、Projection、Event 与结果；
 3. 父 Agent 只持有 bounded delegation 和最小 Context refs；
@@ -1213,6 +1330,11 @@ Journal 是 dispatch canonical owner。恢复消费冻结调用，不重新请�
 5. 完成真实 A2A Profile E2E。
 
 ### Phase 5：重建测试层级
+
+落地状态：catalog 已收敛为 13 个产品能力、4 个组合能力、6 个复杂主循环用例；
+2026-07-26 当前工程矩阵 23/23 passed，archive、summary、manifest、trace envelope 和
+checksum 均可重复生成。clean-revision release trust 仍由 gate 独立判定，Provider
+不可用或 dirty archive 均不产生发布声明。
 
 1. 基础能力 Release E2E 只保留 E01–E13，组合强能力只保留 C01–C04，复杂任务主循环只
    保留 L01–L06，每条都必须证明用户可见结果；

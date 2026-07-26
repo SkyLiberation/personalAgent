@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 ModelRequestKind = Literal["structured", "tool_calling", "text"]
+ModelReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,7 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
     temperature: float = 0
     max_tokens: int = 500
+    reasoning_effort: ModelReasoningEffort | None = None
     kind: ModelRequestKind = "structured"
     tools: list[dict[str, object]] = field(default_factory=list)
     tool_choice: str | dict[str, object] | None = None
@@ -140,7 +142,8 @@ class ModelInvocationDenial(BaseModel):
 
 
 __all__ = [
-    "ModelCallIntent", "ModelInvocationDenial", "ModelInvocationGrant", "ModelRequestKind",
+    "ModelCallIntent", "ModelInvocationDenial", "ModelInvocationGrant", "ModelReasoningEffort",
+    "ModelRequestKind",
     "SkillActivationDecision", "SkillContextGrant", "StreamChunk", "StreamingModelClient",
     "StructuredModelClient", "StructuredModelRequest", "StructuredModelResponse", "StructuredOutputT",
     "sealed_context_projection_ref",

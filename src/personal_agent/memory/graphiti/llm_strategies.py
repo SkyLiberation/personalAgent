@@ -342,8 +342,8 @@ def _traceable_graphiti_completion(fn):
 class GraphitiOpenAIClient(OpenAIGenericClient):
     """OpenAI-compatible client with rate limiting and field normalization.
 
-    Uses structured output schemas for Graphiti response models and disables
-    Kimi thinking so extraction output remains machine-readable.
+    Uses structured output schemas for Graphiti response models and normalizes
+    provider-specific reasoning output so extraction remains machine-readable.
     """
 
     def __init__(self, *args, upload_inputs_outputs: bool = False, **kwargs) -> None:

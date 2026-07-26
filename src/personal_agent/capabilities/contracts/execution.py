@@ -251,6 +251,16 @@ class CapabilityEquivalenceClass(BaseModel):
     failure_semantics: str
 
 
+class HostCapabilityBindingGroup(BaseModel):
+    """Host-owned allowlist for providers that may be compared deterministically."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    group_ref: str = Field(min_length=1)
+    member_capability_refs: tuple[str, ...] = Field(min_length=2)
+    revision: int = Field(default=1, ge=1)
+
+
 class CapabilityRuntimeContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -270,7 +280,7 @@ class CapabilityRuntimeContext(BaseModel):
     time_budget_seconds: int = Field(default=120, ge=1)
     max_delegation_depth: int = Field(default=0, ge=0)
     completion_contract: str = "AgentArtifact"
-    equivalence_class: CapabilityEquivalenceClass
+    binding_group_ref: str | None = None
 
 
 class ExecutionCapabilityRequest(BaseModel):
@@ -398,6 +408,7 @@ __all__ = [
     "EscalationHint",
     "CapabilityEvidencePack",
     "EvidenceSourceCapability",
+    "HostCapabilityBindingGroup",
     "MCPCapability",
     "ResolutionLifecycleState",
     "ResolutionEvent",

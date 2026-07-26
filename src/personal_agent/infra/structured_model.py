@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import json
 import logging
+from queue import Empty, Queue
+from threading import Thread
 from dataclasses import replace
 from time import perf_counter, sleep
-from typing import Any, Iterator, Protocol
+from types import SimpleNamespace
+from typing import Any, Callable, Iterator, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel
@@ -34,13 +37,79 @@ from personal_agent.capabilities.contracts.model import (
     StructuredOutputT,
 )
 
-from personal_agent.kernel.structured_parse import parse_structured
+from personal_agent.kernel.structured_parse import load_json_lenient, parse_structured
 from personal_agent.kernel.config_models import LangSmithConfig, OpenAIConfig, StructuredConfig
 from personal_agent.kernel.llm_schemas import structured_response_format
 from personal_agent.kernel.llm_telemetry import record_llm_usage
 from personal_agent.kernel.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
+
+
+class _EmptyNestedCompletionError(RuntimeError):
+    """A provider accepted the request but returned no nested completion."""
+
+
+class ModelCallDeadlineExceeded(TimeoutError):
+    """A provider call exceeded its configured wall-clock deadline."""
+
+
+def _close_provider_client(client: OpenAI) -> None:
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        logger.debug("failed to close timed-out model provider client", exc_info=True)
+
+
+def _run_with_deadline(
+    call: Callable[[], Any],
+    *,
+    client: OpenAI,
+    operation: str,
+    timeout_seconds: float,
+) -> Any:
+    """Bound total provider time, including endpoints that drip response bytes.
+
+    httpx timeouts limit individual connect/read/write/pool operations. They do
+    not cap total response time, so a broken endpoint can keep a request alive
+    indefinitely by sending one chunk before each read timeout. The adapter owns
+    this transport fact and enforces the configured deadline around the complete
+    SDK call.
+    """
+    outcomes: Queue[tuple[bool, Any]] = Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            outcomes.put((True, call()))
+        except BaseException as exc:
+            outcomes.put((False, exc))
+
+    worker = Thread(
+        target=invoke,
+        name=f"model-provider-{operation}",
+        daemon=True,
+    )
+    worker.start()
+    try:
+        succeeded, value = outcomes.get(timeout=timeout_seconds)
+    except Empty as exc:
+        Thread(
+            target=_close_provider_client,
+            args=(client,),
+            name=f"model-provider-cancel-{operation}",
+            daemon=True,
+        ).start()
+        raise ModelCallDeadlineExceeded(
+            f"{operation} provider call exceeded {timeout_seconds:g}s wall-clock deadline"
+        ) from exc
+    if succeeded:
+        return value
+    raise value
+
+
 def _is_reasoning_model(model: str) -> bool:
     name = model.lower()
     return name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3")
@@ -62,6 +131,157 @@ def _usage(response: Any) -> dict[str, int]:
                 values[key] = value
                 break
     return values
+
+
+def _require_chat_choices(response: Any) -> Any:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise RuntimeError("invalid provider response: missing chat completion choices")
+    return choices
+
+
+def _structured_chat_message(response: Any) -> Any:
+    """Normalize provider-native and direct structured-content transports."""
+    choices = getattr(response, "choices", None)
+    if choices:
+        message = choices[0].message
+        return SimpleNamespace(
+            content=_unwrap_structured_content(getattr(message, "content", "")),
+            tool_calls=getattr(message, "tool_calls", None) or [],
+        )
+    if isinstance(response, str) and response.strip():
+        return SimpleNamespace(
+            content=_unwrap_structured_content(response),
+            tool_calls=[],
+        )
+    if isinstance(response, dict):
+        raw_choices = response.get("choices")
+        if isinstance(raw_choices, list) and raw_choices:
+            message = raw_choices[0].get("message", {})
+            if isinstance(message, dict):
+                return SimpleNamespace(
+                    content=_unwrap_structured_content(message.get("content")),
+                    tool_calls=message.get("tool_calls") or [],
+                )
+        return SimpleNamespace(
+            content=json.dumps(response, ensure_ascii=False),
+            tool_calls=[],
+        )
+    raise RuntimeError("invalid provider response: missing structured completion content")
+
+
+def _unwrap_structured_content(content: Any) -> str:
+    """Unwrap OpenAI-compatible providers that nest a completion envelope."""
+    if isinstance(content, dict):
+        candidate = json.dumps(content, ensure_ascii=False)
+    else:
+        candidate = str(content or "").strip()
+    for _ in range(6):
+        if not candidate:
+            return ""
+        try:
+            decoded = load_json_lenient(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return candidate
+        if isinstance(decoded, str):
+            candidate = decoded.strip()
+            continue
+        if not _is_chat_completion_envelope(decoded):
+            return candidate
+        # Decision Ownership Taxonomy: provider transport normalization.
+        # Envelope structure uniquely identifies the nested content field;
+        # this branch does not create or repair any Proposal semantics.
+        nested = _chat_completion_envelope_content(decoded)
+        candidate = (
+            json.dumps(nested, ensure_ascii=False)
+            if isinstance(nested, dict)
+            else str(nested).strip()
+        )
+    return candidate
+
+
+def _is_chat_completion_envelope(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    object_type = str(value.get("object") or "")
+    return (
+        object_type.startswith("chat.completion")
+        and "choices" in value
+    )
+
+
+def _chat_completion_envelope_content(envelope: dict[str, Any]) -> Any:
+    choices: Any = envelope.get("choices")
+    if isinstance(choices, str):
+        try:
+            choices = load_json_lenient(choices)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                "invalid provider response: nested chat completion choices are malformed"
+            ) from exc
+    if not isinstance(choices, list) or not choices:
+        raise _EmptyNestedCompletionError(
+            "invalid provider response: nested chat completion choices are missing"
+        )
+    choice = choices[0]
+    if isinstance(choice, str):
+        try:
+            choice = load_json_lenient(choice)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                "invalid provider response: nested chat completion choice is malformed"
+            ) from exc
+    if not isinstance(choice, dict):
+        raise RuntimeError(
+            "invalid provider response: nested chat completion choice is invalid"
+        )
+    message: Any = choice.get("message") or choice.get("delta")
+    if isinstance(message, str):
+        try:
+            message = load_json_lenient(message)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                "invalid provider response: nested chat completion message is malformed"
+            ) from exc
+    if isinstance(message, dict):
+        nested = message.get("content")
+        if nested is None:
+            nested = message.get("parsed")
+        if nested is not None:
+            return nested
+    if choice.get("text") is not None:
+        return choice["text"]
+    raise RuntimeError(
+        "invalid provider response: nested chat completion content is missing"
+    )
+
+
+def _is_sse_payload(response: Any) -> bool:
+    return isinstance(response, str) and response.lstrip().startswith("data:")
+
+
+def _collect_streamed_chat_response(stream: Any) -> Any:
+    content_parts: list[str] = []
+    model = ""
+    usage = None
+    for chunk in stream:
+        model = getattr(chunk, "model", None) or model
+        usage = getattr(chunk, "usage", None) or usage
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+        delta = getattr(choices[0], "delta", None)
+        content = getattr(delta, "content", None)
+        if isinstance(content, str):
+            content_parts.append(content)
+    content = "".join(content_parts)
+    if not content:
+        raise RuntimeError("invalid provider response: missing streamed completion content")
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=[]))],
+        model=model,
+        usage=usage,
+    )
 
 
 def _report_usage_to_run_tree(response: StructuredModelResponse[Any]) -> None:
@@ -127,7 +347,12 @@ class OpenAIModelClient:
 
     ``config`` may be an ``OpenAIConfig`` or ``StructuredConfig`` (both expose
     ``api_key`` / ``base_url`` / ``timeout_seconds`` / ``max_retries``; the
-    resolved model is ``model_override`` or ``config.model``).
+    resolved model is ``model_override`` or ``config.model``). The SDK retry
+    loop is disabled here: ``config.max_retries`` belongs to the typed-operation
+    retry decorator assembled in the composition root. Keeping one retry owner
+    prevents one configured budget from multiplying into nested provider
+    requests. Streaming calls also fail closed because replaying a partially
+    observed stream is not generally safe.
     """
 
     def __init__(
@@ -138,6 +363,8 @@ class OpenAIModelClient:
     ) -> None:
         self._config = config
         self._model_override = model_override
+        self._structured_transport = "strict_json_schema"
+        self._structured_streaming = False
 
     # -- shared helpers --------------------------------------------------
 
@@ -150,7 +377,7 @@ class OpenAIModelClient:
             api_key=self._config.api_key,
             base_url=self._config.base_url,
             timeout=self._config.timeout_seconds,
-            max_retries=self._config.max_retries,
+            max_retries=0,
         )
 
     def _chat_kwargs(
@@ -166,6 +393,8 @@ class OpenAIModelClient:
             kwargs["stream_options"] = {"include_usage": True}
         if _is_reasoning_model(model):
             kwargs["max_completion_tokens"] = request.max_tokens
+            if request.reasoning_effort is not None:
+                kwargs["reasoning_effort"] = request.reasoning_effort
         else:
             kwargs["temperature"] = request.temperature
             kwargs["max_tokens"] = request.max_tokens
@@ -188,6 +417,41 @@ class OpenAIModelClient:
             return request.output_type()  # type: ignore[call-arg]
         except Exception:
             return None
+
+    def _create_structured_completion(
+        self,
+        client: OpenAI,
+        request: StructuredModelRequest[Any],
+    ) -> Any:
+        kwargs = self._chat_kwargs(request)
+        if not self._structured_streaming:
+            return self._create_chat_completion(client, request.operation, kwargs)
+        streaming_kwargs = {
+            **kwargs,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        return _run_with_deadline(
+            lambda: _collect_streamed_chat_response(
+                client.chat.completions.create(**streaming_kwargs)
+            ),
+            client=client,
+            operation=request.operation,
+            timeout_seconds=self._config.timeout_seconds,
+        )
+
+    def _create_chat_completion(
+        self,
+        client: OpenAI,
+        operation: str,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        return _run_with_deadline(
+            lambda: client.chat.completions.create(**kwargs),
+            client=client,
+            operation=operation,
+            timeout_seconds=self._config.timeout_seconds,
+        )
 
     # -- unified non-streaming entrypoint -------------------------------
 
@@ -218,30 +482,92 @@ class OpenAIModelClient:
             context_projection_ref=request.context_projection_ref,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            reasoning_effort=request.reasoning_effort,
             kind="text",
             response_format=response_format,
             extra_body=request.extra_body,
             metadata=request.metadata,
         )
-        transport = "strict_json_schema"
-        try:
-            response = client.chat.completions.create(**self._chat_kwargs(chat_request))
-        except Exception as exc:
-            if not _response_format_unavailable(exc):
-                raise
-            # Transport compatibility only: the same model still authors the
-            # same typed Proposal.  We change neither its semantic input nor
-            # the output contract, merely fall back from provider-native JSON
-            # Schema to JSON-object / plain-text transport and fail closed if
-            # Pydantic cannot parse the returned object.
+        transport = self._structured_transport
+        if transport == "strict_json_schema":
+            try:
+                response = self._create_structured_completion(client, chat_request)
+            except Exception as exc:
+                if not _response_format_unavailable(exc):
+                    raise
+                # Transport compatibility only: the same model still authors the
+                # same typed Proposal.  We change neither its semantic input nor
+                # the output contract, merely fall back from provider-native JSON
+                # Schema to JSON-object / plain-text transport and fail closed if
+                # Pydantic cannot parse the returned object.
+                response, transport = self._create_structured_transport_fallback(
+                    client,
+                    request,
+                    schema,
+                    primary_error=exc,
+                )
+                self._structured_transport = transport
+        elif transport == "json_object":
             response, transport = self._create_structured_transport_fallback(
                 client,
                 request,
                 schema,
-                primary_error=exc,
+                primary_error=None,
+            )
+            self._structured_transport = transport
+        else:
+            response = self._create_plain_text_structured_transport(
+                client,
+                request,
+                schema,
+                primary_error=None,
             )
         latency_ms = round((perf_counter() - start) * 1000, 2)
-        message = response.choices[0].message
+        while True:
+            try:
+                message = _structured_chat_message(response)
+                break
+            except _EmptyNestedCompletionError as exc:
+                # Decision Ownership Taxonomy: provider transport compatibility.
+                # Each retry preserves the same model input and typed contract;
+                # only the unsupported response-format hint is removed.
+                if not self._structured_streaming and _is_sse_payload(response):
+                    self._structured_streaming = True
+                    if transport == "strict_json_schema":
+                        response = self._create_structured_completion(client, chat_request)
+                    elif transport == "json_object":
+                        response, transport = self._create_structured_transport_fallback(
+                            client,
+                            request,
+                            schema,
+                            primary_error=None,
+                        )
+                    else:
+                        response = self._create_plain_text_structured_transport(
+                            client,
+                            request,
+                            schema,
+                            primary_error=None,
+                        )
+                elif transport == "strict_json_schema":
+                    response, transport = self._create_structured_transport_fallback(
+                        client,
+                        request,
+                        schema,
+                        primary_error=exc,
+                    )
+                elif transport == "json_object":
+                    response = self._create_plain_text_structured_transport(
+                        client,
+                        request,
+                        schema,
+                        primary_error=exc,
+                    )
+                    transport = "plain_text_json"
+                else:
+                    raise
+                self._structured_transport = transport
+                latency_ms = round((perf_counter() - start) * 1000, 2)
         content = (message.content or "").strip()
         if request.output_type is BaseModel:
             parsed = self._default_value(request)
@@ -267,8 +593,9 @@ class OpenAIModelClient:
                     primary_error=ValueError(parse_result.error or "invalid json_object response"),
                 )
                 transport = "plain_text_json"
+                self._structured_transport = transport
                 latency_ms = round((perf_counter() - start) * 1000, 2)
-                message = response.choices[0].message
+                message = _structured_chat_message(response)
                 content = (message.content or "").strip()
                 parse_result = parse_structured(
                     content or "{}",
@@ -297,7 +624,7 @@ class OpenAIModelClient:
                 )
                 transport = f"{transport}_schema_repair"
                 latency_ms = round((perf_counter() - start) * 1000, 2)
-                message = response.choices[0].message
+                message = _structured_chat_message(response)
                 content = (message.content or "").strip()
                 parse_result = parse_structured(
                     content or "{}",
@@ -328,7 +655,7 @@ class OpenAIModelClient:
         request: StructuredModelRequest[StructuredOutputT],
         schema: dict[str, Any],
         *,
-        primary_error: Exception,
+        primary_error: Exception | None,
     ) -> tuple[Any, str]:
         schema_instruction = {
             "role": "system",
@@ -339,15 +666,16 @@ class OpenAIModelClient:
             ),
         }
         messages = [*request.messages, schema_instruction]
-        log_event(
-            logger,
-            logging.WARNING,
-            "llm.structured_transport_fallback",
-            operation=request.operation,
-            version=request.version,
-            primary_error=str(primary_error)[:240],
-            fallback="json_object",
-        )
+        if primary_error is not None:
+            log_event(
+                logger,
+                logging.WARNING,
+                "llm.structured_transport_fallback",
+                operation=request.operation,
+                version=request.version,
+                primary_error=str(primary_error)[:240],
+                fallback="json_object",
+            )
         json_object_request = request.__class__(
             operation=request.operation,
             version=request.version,
@@ -356,6 +684,7 @@ class OpenAIModelClient:
             context_projection_ref=request.context_projection_ref,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            reasoning_effort=request.reasoning_effort,
             kind="text",
             response_format={"type": "json_object"},
             extra_body=request.extra_body,
@@ -363,7 +692,7 @@ class OpenAIModelClient:
         )
         try:
             return (
-                client.chat.completions.create(**self._chat_kwargs(json_object_request)),
+                self._create_structured_completion(client, json_object_request),
                 "json_object",
             )
         except Exception as fallback_error:
@@ -385,7 +714,7 @@ class OpenAIModelClient:
         request: StructuredModelRequest[StructuredOutputT],
         schema: dict[str, Any],
         *,
-        primary_error: Exception,
+        primary_error: Exception | None,
     ) -> Any:
         schema_instruction = {
             "role": "system",
@@ -395,15 +724,16 @@ class OpenAIModelClient:
                 + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
             ),
         }
-        log_event(
-            logger,
-            logging.WARNING,
-            "llm.structured_transport_fallback",
-            operation=request.operation,
-            version=request.version,
-            primary_error=str(primary_error)[:240],
-            fallback="plain_text_json",
-        )
+        if primary_error is not None:
+            log_event(
+                logger,
+                logging.WARNING,
+                "llm.structured_transport_fallback",
+                operation=request.operation,
+                version=request.version,
+                primary_error=str(primary_error)[:240],
+                fallback="plain_text_json",
+            )
         plain_text_request = request.__class__(
             operation=request.operation,
             version=request.version,
@@ -412,11 +742,12 @@ class OpenAIModelClient:
             context_projection_ref=request.context_projection_ref,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            reasoning_effort=request.reasoning_effort,
             kind="text",
             extra_body=request.extra_body,
             metadata=request.metadata,
         )
-        return client.chat.completions.create(**self._chat_kwargs(plain_text_request))
+        return self._create_structured_completion(client, plain_text_request)
 
     def _create_structured_schema_repair(
         self,
@@ -462,12 +793,13 @@ class OpenAIModelClient:
             context_projection_ref=request.context_projection_ref,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            reasoning_effort=request.reasoning_effort,
             kind="text",
             response_format=response_format,
             extra_body=request.extra_body,
             metadata=request.metadata,
         )
-        return client.chat.completions.create(**self._chat_kwargs(repair_request))
+        return self._create_structured_completion(client, repair_request)
 
     def _generate_chat(
         self,
@@ -475,9 +807,13 @@ class OpenAIModelClient:
     ) -> StructuredModelResponse[StructuredOutputT]:
         start = perf_counter()
         client = self._client()
-        response = client.chat.completions.create(**self._chat_kwargs(request))
+        response = self._create_chat_completion(
+            client,
+            request.operation,
+            self._chat_kwargs(request),
+        )
         latency_ms = round((perf_counter() - start) * 1000, 2)
-        message = response.choices[0].message
+        message = _require_chat_choices(response)[0].message
         content = (message.content or "").strip()
         tool_calls = _extract_tool_calls(message)
         usage = _usage(response)
@@ -526,10 +862,10 @@ class OpenAIModelClient:
 class RetryingStructuredModelClient:
     """Decorator for retrying transient structured model failures.
 
-    This sits at the model-port boundary rather than in callers. The OpenAI SDK
-    may already retry inside one provider request, but this wrapper retries the
-    whole typed operation after transient transport/server failures so parsing,
-    usage recording, tracing, and application code stay uniform.
+    This is the sole retry owner at the model-port boundary. The OpenAI SDK
+    transport retry is disabled by ``OpenAIModelClient``; this wrapper retries
+    the whole typed operation after transient transport/server failures so
+    parsing, usage recording, tracing, and application code stay uniform.
     """
 
     def __init__(
@@ -537,7 +873,7 @@ class RetryingStructuredModelClient:
         delegate: StructuredModelClient,
         *,
         max_retries: int,
-        backoff_seconds: float = 0.5,
+        backoff_seconds: float = 2.0,
     ) -> None:
         self._delegate = delegate
         self._max_retries = max(0, int(max_retries))
@@ -614,6 +950,7 @@ def _is_retryable_model_error(exc: Exception) -> bool:
         "504",
         "temporarily unavailable",
         "service unavailable",
+        "invalid provider response",
     )
     return any(token in message for token in retryable_messages)
 

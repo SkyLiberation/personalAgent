@@ -21,7 +21,11 @@ from personal_agent.application.review import (
     ReviewFeedbackUseCase,
     subscriptions_from_settings,
 )
-from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from personal_agent.application.review.delivery import (
+    DeliveryRouter,
+    FeishuDeliveryProvider,
+    InAppDeliveryProvider,
+)
 from personal_agent.application.research import ResearchScheduler, ResearchSchedulerRunner
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from personal_agent.application.workspace import WorkspaceService
@@ -97,7 +101,10 @@ def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
         review_feedback_use_case=review_feedback_use_case,
         review_digest_store=review_digest_store,
     )
-    review_digest_delivery_router = DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
+    review_digest_delivery_router = DeliveryRouter({
+        "feishu": FeishuDeliveryProvider(feishu_service),
+        "in_app": InAppDeliveryProvider(),
+    })
     service.research_service.set_delivery_router(review_digest_delivery_router)
     review_digest_job = ReviewDigestJob(
         service.review_digest_use_case,

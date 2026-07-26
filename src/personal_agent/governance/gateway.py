@@ -74,22 +74,27 @@ class InMemoryIdempotencyStore:
     backend can replace this without changing the gateway contract.
     """
 
-    _committed: set[str] = field(default_factory=set)
+    _entries: dict[str, dict[str, Any] | None] = field(default_factory=dict)
 
     def seen(self, key: str) -> bool:
-        return key in self._committed
+        return key in self._entries
 
     def reserve(self, key: str, *, context: ToolGatewayContext, tool_name: str) -> bool:
         if self.seen(key):
             return False
-        self._committed.add(key)
+        self._entries[key] = None
         return True
 
-    def commit(self, key: str) -> None:
-        self._committed.add(key)
+    def get_receipt(self, key: str) -> dict | None:
+        receipt = self._entries.get(key)
+        return dict(receipt) if receipt is not None else None
+
+    def commit(self, key: str, receipt: dict | None = None) -> None:
+        self._entries[key] = dict(receipt) if receipt is not None else {}
 
     def release(self, key: str) -> None:
-        self._committed.discard(key)
+        if self._entries.get(key) is None:
+            self._entries.pop(key, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,9 +176,22 @@ class ToolGateway:
                     f"工具 {tool.name} 触发速率限制，请稍后再试。", error_kind="transient"
                 )
             else:
-                idempotency_key = self._reserve_idempotency(tool, args, context)
+                idempotency_key, replayed_output = self._reserve_idempotency(
+                    tool,
+                    args,
+                    context,
+                )
                 try:
-                    output, attempts, timed_out = self._invoke_with_strategy(tool, name, args, context)
+                    if replayed_output is not None:
+                        output = replayed_output
+                        attempts = 0
+                    else:
+                        output, attempts, timed_out = self._invoke_with_strategy(
+                            tool,
+                            name,
+                            args,
+                            context,
+                        )
                     self._commit_idempotency(tool, args, output)
                     if idempotency_key and not output.ok:
                         self._idempotency.release(idempotency_key)
@@ -444,19 +462,22 @@ class ToolGateway:
         tool: BaseTool,
         args: dict[str, Any],
         context: ToolGatewayContext,
-    ) -> str | None:
+    ) -> tuple[str | None, ToolArtifact | None]:
         governance = tool_governance(tool)
         if not (governance.idempotency_key_required and bool(args.get("confirmed"))):
-            return None
+            return None, None
         key = str(args.get("idempotency_key", "")).strip()
         if not key:
-            return None
+            return None, None
         if not self._idempotency.reserve(key, context=context, tool_name=tool.name):
+            receipt = self._idempotency.get_receipt(key)
+            if receipt is not None:
+                return key, ToolArtifact.model_validate(receipt)
             raise ToolError(
-                f"工具 {tool.name} 的确认动作已执行过或正在执行（idempotency_key={key}），已跳过重复副作用。",
-                kind="unrecoverable",
+                f"工具 {tool.name} 的同一幂等调用正在执行且尚无可重放 receipt（idempotency_key={key}）。",
+                kind="transient",
             )
-        return key
+        return key, None
 
     def _record_policy_decision(
         self,
@@ -514,7 +535,7 @@ class ToolGateway:
             return
         key = str(args.get("idempotency_key", "")).strip()
         if key:
-            self._idempotency.commit(key)
+            self._idempotency.commit(key, output.model_dump(mode="json"))
 
     def _record_invocation(
         self,

@@ -454,6 +454,37 @@ class PostgresResearchStore(PostgresStoreBase):
                 )
             conn.commit()
 
+    def list_deliveries(
+        self,
+        *,
+        user_id: str,
+        subscription_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        self.ensure_schema()
+        clauses = ["d.user_id = %s"]
+        params: list[object] = [user_id]
+        if subscription_id:
+            clauses.append("rd.subscription_id = %s")
+            params.append(subscription_id)
+        params.append(limit)
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT rd.id, rd.digest_id, rd.subscription_id, rd.channel,
+                           rd.target_id, rd.status, rd.provider_message_id,
+                           rd.error, rd.created_at, rd.sent_at, d.run_id
+                    FROM research_deliveries rd
+                    JOIN intelligence_digests d ON d.id = rd.digest_id
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY rd.created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
     def add_feedback(self, feedback: ResearchFeedback) -> None:
         self.ensure_schema()
         with self._connect() as conn:

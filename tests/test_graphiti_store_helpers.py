@@ -67,6 +67,83 @@ def test_settings_prefers_structured_llm_over_router_env(monkeypatch):
     assert settings.structured.extra_body == {"reasoning": {"effort": "minimal"}}
 
 
+def test_settings_preserves_injected_environment_when_dotenv_is_disabled(monkeypatch):
+    def forbidden_load(*, override):
+        raise AssertionError(f"load_dotenv must not run with override={override}")
+
+    monkeypatch.setattr(config_env_module, "load_dotenv", forbidden_load)
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "true")
+    monkeypatch.setenv("STRUCTURED_API_KEY", "isolated-key")
+    monkeypatch.setenv("STRUCTURED_BASE_URL", "https://isolated.example/v1")
+    monkeypatch.setenv("STRUCTURED_MODEL", "isolated-model")
+
+    settings = Settings.from_env()
+
+    assert settings.structured.api_key == "isolated-key"
+    assert settings.structured.base_url == "https://isolated.example/v1"
+    assert settings.structured.model == "isolated-model"
+
+
+def test_structured_provider_is_default_for_every_generative_adapter(monkeypatch):
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
+    monkeypatch.setenv("STRUCTURED_API_KEY", "canonical-key")
+    monkeypatch.setenv("STRUCTURED_BASE_URL", "https://canonical.example/v1")
+    monkeypatch.setenv("STRUCTURED_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-key")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://embedding.example/v1")
+    monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "local-multilingual-384")
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "OPENAI_SMALL_MODEL",
+        "PERSONAL_AGENT_GRAPHITI_LLM_API_KEY",
+        "PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL",
+        "PERSONAL_AGENT_GRAPHITI_LLM_MODEL",
+        "PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL",
+        "PERSONAL_AGENT_EXTRACT_API_KEY",
+        "PERSONAL_AGENT_EXTRACT_BASE_URL",
+        "PERSONAL_AGENT_EXTRACT_MODEL",
+        "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY",
+        "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE",
+        "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings.from_env()
+
+    expected_provider = (
+        "canonical-key",
+        "https://canonical.example/v1",
+        "gpt-5.6-terra",
+    )
+    assert (
+        settings.openai.api_key,
+        settings.openai.base_url,
+        settings.openai.model,
+    ) == expected_provider
+    assert settings.openai.small_model == "gpt-5.6-terra"
+    assert (
+        settings.graphiti.llm_api_key,
+        settings.graphiti.llm_base_url,
+        settings.graphiti.llm_model,
+    ) == expected_provider
+    assert settings.graphiti.llm_small_model == "gpt-5.6-terra"
+    assert (
+        settings.langextract.api_key,
+        settings.langextract.base_url,
+        settings.langextract.model_id,
+    ) == expected_provider
+    assert (
+        settings.ms_graphrag.completion_api_key,
+        settings.ms_graphrag.completion_api_base,
+        settings.ms_graphrag.completion_model,
+    ) == expected_provider
+    assert settings.openai.embedding_api_key == "embedding-key"
+    assert settings.openai.embedding_base_url == "https://embedding.example/v1"
+    assert settings.openai.embedding_model == "local-multilingual-384"
+
+
 def test_settings_reads_graphiti_llm_override_env(monkeypatch):
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
     monkeypatch.setenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY", "graph-key")

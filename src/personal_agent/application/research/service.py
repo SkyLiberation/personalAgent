@@ -573,6 +573,35 @@ class ResearchService:
         self.store.update_run(created.with_projection_updates(status="running"))
         return created
 
+    def execute_run(
+        self,
+        run_id: str,
+        *,
+        max_items: int | None = None,
+    ) -> ResearchRunRecord:
+        """Execute the versioned ResearchRun procedure for an existing run."""
+        try:
+            run = self.store.get_run(run_id)
+            if run is None:
+                raise KeyError(f"unknown ResearchRun: {run_id}")
+            if not run.projection.initialized:
+                self.initialize_state(run_id)
+            self.run_research_loop(run_id)
+            self.synthesize_digest(run_id, max_items=max_items)
+            self.verify_digest(run_id)
+        except Exception as exc:
+            current = self.store.get_run(run_id)
+            if current is not None:
+                self.store.update_run(current.with_projection_updates(
+                    status="failed",
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                ))
+            raise
+        completed = self.store.get_run(run_id)
+        if completed is None:
+            raise RuntimeError("ResearchRun disappeared after its mandatory procedure")
+        return completed
+
     def enqueue_subscription_run(
         self,
         subscription: ResearchSubscriptionRecord,

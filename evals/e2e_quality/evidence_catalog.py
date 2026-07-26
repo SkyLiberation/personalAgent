@@ -1,8 +1,4 @@
-"""Canonical classification for architecture E2E evidence.
-
-The catalog owns only test-evidence metadata. Business facts remain owned by
-the production contracts and stores that each test asserts against.
-"""
+"""Canonical release and external-profile E2E classification."""
 
 from __future__ import annotations
 
@@ -41,8 +37,10 @@ class CapabilityProfile(str, Enum):
     BASELINE = "baseline"
     WEB_READER = "baseline+web_reader"
     WEB_SEARCH = "baseline+web_search"
+    FILESYSTEM_MCP = "baseline+filesystem_mcp"
     GITHUB_MCP = "baseline+github_mcp"
     NOTION_MCP = "baseline+notion_mcp"
+    GITHUB_NOTION_MCP = "baseline+github_mcp+notion_mcp"
     GPT_RESEARCHER_A2A = "baseline+gpt_researcher_a2a"
     WEB_SEARCH_DELIVERY = "baseline+web_search+delivery"
 
@@ -68,9 +66,13 @@ class EvidenceCase:
 
     @property
     def release_eligible(self) -> bool:
-        """Whether a passing trace is allowed to count toward release evidence."""
         return (
-            self.entry_boundary is EntryBoundary.HTTP_PROCESS
+            self.claim_kind in {
+                EvidenceClaimKind.PRODUCT_CAPABILITY,
+                EvidenceClaimKind.COMPOSITE_CAPABILITY,
+                EvidenceClaimKind.COMPLEX_LOOP,
+            }
+            and self.entry_boundary is EntryBoundary.HTTP_PROCESS
             and self.fault_mechanism is not FaultMechanism.IN_PROCESS_HOOK
             and self.raw_user_input
             and self.real_model_required
@@ -83,358 +85,120 @@ class EvidenceCase:
         return self.module, self.test_name
 
 
-def _diagnostic(
+def _product(
     case_id: str,
     test_name: str,
     *layers: EvidenceLayer,
+    capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
     fault_mechanism: FaultMechanism = FaultMechanism.NONE,
+    real_provider_required: bool = True,
     expected_terminal: str = "completed",
-    limitation: str = "进程内 AgentService 入口，不计发布级黑盒证据。",
 ) -> EvidenceCase:
     return EvidenceCase(
-        evidence_id=f"{case_id}.diagnostic",
+        evidence_id=f"{case_id}.product_http",
         case_id=case_id,
-        module="test_core_user_outcomes.py",
+        module="test_product_capability_outcomes.py",
         test_name=test_name,
         layers=frozenset(layers),
-        entry_boundary=EntryBoundary.IN_PROCESS_SERVICE,
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
         fault_mechanism=fault_mechanism,
+        real_provider_required=real_provider_required,
         expected_terminal=expected_terminal,
-        limitation=limitation,
+        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        capability_profile=capability_profile,
+    )
+
+
+def _composite(
+    case_id: str,
+    test_name: str,
+    *,
+    capability_profile: CapabilityProfile,
+) -> EvidenceCase:
+    return EvidenceCase(
+        evidence_id=f"{case_id}.composite_http",
+        case_id=case_id,
+        module="test_product_capability_outcomes.py",
+        test_name=test_name,
+        layers=frozenset(EvidenceLayer),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        claim_kind=EvidenceClaimKind.COMPOSITE_CAPABILITY,
+        capability_profile=capability_profile,
+    )
+
+
+def _loop(
+    case_id: str,
+    test_name: str,
+    *,
+    fault_mechanism: FaultMechanism = FaultMechanism.NONE,
+    capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
+    expected_terminal: str = "completed",
+) -> EvidenceCase:
+    return EvidenceCase(
+        evidence_id=f"{case_id}.complex_loop_http",
+        case_id=case_id,
+        module="test_complex_loop_outcomes.py",
+        test_name=test_name,
+        layers=frozenset(EvidenceLayer),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        fault_mechanism=fault_mechanism,
+        claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
+        capability_profile=capability_profile,
+        expected_terminal=expected_terminal,
+    )
+
+
+def _profile(
+    case_id: str,
+    test_name: str,
+    capability_profile: CapabilityProfile,
+) -> EvidenceCase:
+    return EvidenceCase(
+        evidence_id=f"{case_id}.capability_profile",
+        case_id=case_id,
+        module="test_release_user_outcomes.py",
+        test_name=test_name,
+        layers=frozenset({
+            EvidenceLayer.AUTHORITY_GATEWAY,
+            EvidenceLayer.VERIFICATION_COMPLETION,
+        }),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
+        capability_profile=capability_profile,
+        limitation="Connector profile evidence; product release claims are owned by E01-E13.",
     )
 
 
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
-    _diagnostic(
-        "E01",
-        "test_simple_request_is_understood_answered_and_verified_live",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.PLANNING_CONTROL,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-    ),
-    _diagnostic(
-        "E02",
-        "test_compound_write_then_answer_runs_from_live_understanding",
-        *EvidenceLayer,
-    ),
-    _diagnostic(
-        "E03",
-        "test_missing_unsupported_mutation_input_never_fabricates_success_live",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        expected_terminal="fail_closed",
-    ),
-    _diagnostic(
-        "E04",
-        "test_live_delete_request_never_mutates_before_confirmation",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        expected_terminal="waiting_confirmation",
-    ),
-    _diagnostic(
-        "E06",
-        "test_live_user_rejection_of_delete_never_mutates",
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.JOURNAL_RECOVERY,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        expected_terminal="rejected",
-    ),
-    _diagnostic(
-        "E07",
-        "test_live_dispatch_window_recovers_without_replaying_provider_call",
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.JOURNAL_RECOVERY,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        fault_mechanism=FaultMechanism.IN_PROCESS_HOOK,
-        limitation="使用 post_gateway_dispatch_hook，定位恢复不变量但不计发布级故障证据。",
-    ),
-    _diagnostic(
-        "E10",
-        "test_live_task_compilation_commit_is_atomic_across_recovery",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.PLANNING_CONTROL,
-        EvidenceLayer.JOURNAL_RECOVERY,
-        fault_mechanism=FaultMechanism.IN_PROCESS_HOOK,
-        limitation="使用 post_task_compilation_commit_hook，不计真实进程故障证据。",
-    ),
-    _diagnostic(
-        "E08",
-        "test_live_explicit_task_analysis_is_accepted_without_rewrite",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        expected_terminal="waiting_confirmation",
-    ),
-    _diagnostic(
-        "E05",
-        "test_live_missing_remote_capability_fails_closed_before_grant",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        expected_terminal="capability_gap",
-    ),
-    _diagnostic(
-        "E14",
-        "test_live_capability_acquisition_approval_never_fabricates_provider",
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.JOURNAL_RECOVERY,
-        expected_terminal="awaiting_environment_change",
-    ),
-    _diagnostic(
-        "E09",
-        "test_live_compiler_owns_shared_and_goal_local_resource_scope",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.PLANNING_CONTROL,
-    ),
-    _diagnostic(
-        "E11",
-        "test_live_plan_monitor_only_patches_the_capability_gap_branch",
-        EvidenceLayer.PLANNING_CONTROL,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        expected_terminal="capability_gap",
-    ),
-    _diagnostic(
-        "E12",
-        "test_live_planner_admission_has_no_deterministic_repair",
-        EvidenceLayer.PLANNING_CONTROL,
-        expected_terminal="revised_or_fail_closed",
-    ),
-    _diagnostic(
-        "E13",
-        "test_live_scope_expanded_control_proposal_has_no_execution_facts",
-        EvidenceLayer.PLANNING_CONTROL,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        expected_terminal="denied",
-    ),
-    _diagnostic(
-        "E15",
-        "test_live_untrusted_retrieval_instruction_is_never_verification_evidence",
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        expected_terminal="verified_without_tainted_evidence_or_fail_closed",
-    ),
-    EvidenceCase(
-        evidence_id="E01.release_http",
-        case_id="E01",
-        module="test_release_user_outcomes.py",
-        test_name="test_e01_http_process_completes_verified_response",
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.PLANNING_CONTROL,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        real_provider_required=False,
-        expected_terminal="completed",
-    ),
-    EvidenceCase(
-        evidence_id="E02.release_http_restart_confirm",
-        case_id="E02",
-        module="test_release_user_outcomes.py",
-        test_name="test_e02_http_process_restart_confirm_completes_compound_task",
-        layers=frozenset(EvidenceLayer),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        expected_terminal="completed",
-    ),
-    EvidenceCase(
-        evidence_id="E03.release_http_fail_closed",
-        case_id="E03",
-        module="test_release_user_outcomes.py",
-        test_name="test_e03_http_process_missing_mutation_input_fails_closed",
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        real_provider_required=False,
-        expected_terminal="fail_closed",
-    ),
-    EvidenceCase(
-        evidence_id="E04.release_http_confirmation_boundary",
-        case_id="E04",
-        module="test_release_user_outcomes.py",
-        test_name="test_e04_http_process_delete_waits_for_confirmation_without_effect",
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.AUTHORITY_GATEWAY,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="waiting_confirmation",
-    ),
-    EvidenceCase(
-        evidence_id="E06.release_http_restart_reject",
-        case_id="E06",
-        module="test_release_user_outcomes.py",
-        test_name="test_e06_http_process_restart_rejects_delete_without_effect",
-        layers=frozenset({
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.JOURNAL_RECOVERY,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        expected_terminal="rejected",
-    ),
-    EvidenceCase(
-        evidence_id="E07.release_http_process_dispatch_recovery",
-        case_id="E07",
-        module="test_release_user_outcomes.py",
-        test_name="test_e07_http_process_recovers_dispatched_result_without_duplicate_effect",
-        layers=frozenset({
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.JOURNAL_RECOVERY,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        expected_terminal="completed",
-    ),
-    EvidenceCase(
-        evidence_id="E10.release_http_process_compilation_recovery",
-        case_id="E10",
-        module="test_release_user_outcomes.py",
-        test_name="test_e10_http_process_recovers_atomic_compilation_commit",
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.PLANNING_CONTROL,
-            EvidenceLayer.JOURNAL_RECOVERY,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        real_provider_required=False,
-        expected_terminal="completed",
-    ),
-    EvidenceCase(
-        evidence_id="E08.release_http_analysis_freeze",
-        case_id="E08",
-        module="test_release_user_outcomes.py",
-        test_name="test_e08_http_process_accepts_explicit_analysis_without_rewrite",
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.AUTHORITY_GATEWAY,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="waiting_confirmation",
-    ),
-    EvidenceCase(
-        evidence_id="E05.release_http_capability_gap",
-        case_id="E05",
-        module="test_release_user_outcomes.py",
-        test_name="test_e05_http_process_missing_provider_fails_closed_before_grant",
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.AUTHORITY_GATEWAY,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        real_provider_required=False,
-        expected_terminal="capability_gap",
-    ),
-    EvidenceCase(
-        evidence_id="E14.release_http_acquisition_approval",
-        case_id="E14",
-        module="test_release_user_outcomes.py",
-        test_name=(
-            "test_e14_http_process_acquisition_approval_awaits_real_environment_change"
-        ),
-        layers=frozenset({
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.JOURNAL_RECOVERY,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        real_provider_required=False,
-        expected_terminal="awaiting_environment_change",
-    ),
-    EvidenceCase(
-        evidence_id="E09.release_http_resource_ownership",
-        case_id="E09",
-        module="test_release_user_outcomes.py",
-        test_name=(
-            "test_e09_http_process_compiler_owns_shared_and_goal_local_resources"
-        ),
-        layers=frozenset({
-            EvidenceLayer.UNDERSTANDING,
-            EvidenceLayer.PLANNING_CONTROL,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        real_provider_required=False,
-        expected_terminal="compiled_resource_ownership",
-    ),
-    EvidenceCase(
-        evidence_id="E11.release_http_required_provider_acquisition",
-        case_id="E11",
-        module="test_release_user_outcomes.py",
-        test_name="test_e11_http_process_unavailable_required_provider_requests_acquisition",
-        layers=frozenset({
-            EvidenceLayer.PLANNING_CONTROL,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="capability_acquisition_required",
-    ),
-    EvidenceCase(
-        evidence_id="E12.release_http_planner_admission",
-        case_id="E12",
-        module="test_release_user_outcomes.py",
-        test_name="test_e12_http_process_planner_admission_has_no_code_repair",
-        layers=frozenset({EvidenceLayer.PLANNING_CONTROL}),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        real_provider_required=False,
-        expected_terminal="accepted_or_feedback_without_fallback",
-    ),
-    EvidenceCase(
-        evidence_id="E13.release_http_cross_user_scope",
-        case_id="E13",
-        module="test_release_user_outcomes.py",
-        test_name="test_e13_http_process_cross_user_note_scope_fails_closed",
-        layers=frozenset({
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="cross_user_scope_denied",
-    ),
-    EvidenceCase(
-        evidence_id="E15.release_http_untrusted_evidence",
-        case_id="E15",
-        module="test_release_user_outcomes.py",
-        test_name=(
-            "test_e15_http_process_rejects_retrieved_instruction_as_verification_evidence"
-        ),
-        layers=frozenset({
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="verified_without_tainted_evidence_or_fail_closed",
-    ),
-    EvidenceCase(
-        evidence_id="E16.release_http_real_mcp_gateway",
-        case_id="E16",
-        module="test_release_user_outcomes.py",
-        test_name="test_e16_http_process_reads_through_real_mcp_gateway_and_verifies",
-        layers=frozenset(EvidenceLayer),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="completed",
-        claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
-        capability_profile=CapabilityProfile.GITHUB_MCP,
-    ),
-    EvidenceCase(
-        evidence_id="E17.release_http_real_a2a_delegation",
-        case_id="E17",
-        module="test_release_user_outcomes.py",
-        test_name=(
-            "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result"
-        ),
-        layers=frozenset(EvidenceLayer),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        expected_terminal="completed",
-        claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
+    _product("E01", "test_product_e01_conversation_journey", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
+    _product("E02", "test_product_e02_grounded_workspace_ask", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
+    _product("E03", "test_product_e03_selected_upload_artifact_ask", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
+    _product("E04", "test_product_e04_governed_delete_recovery", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
+    _product("E05", "test_product_e05_research_run_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH),
+    _product("E06", "test_product_e06_mcp_read_extension", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.GITHUB_NOTION_MCP),
+    _product("E07", "test_product_e07_a2a_research_delegation", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
+    _product("E08", "test_product_e08_ask_then_explicit_save", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
+    _product("E09", "test_product_e09_multi_source_capture", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_READER),
+    _product("E10", "test_product_e10_knowledge_lifecycle", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
+    _product("E11", "test_product_e11_review_feedback_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
+    _product("E12", "test_product_e12_knowledge_maintenance_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
+    _product("E13", "test_product_e13_scheduled_intelligence_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
+    _composite("C01", "test_composite_c01_personal_research_analyst", capability_profile=CapabilityProfile.WEB_SEARCH),
+    _composite("C02", "test_composite_c02_continuous_knowledge_steward", capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY),
+    _composite("C03", "test_composite_c03_personalized_learning_agent", capability_profile=CapabilityProfile.WEB_SEARCH),
+    _composite("C04", "test_composite_c04_expert_collaboration_agent", capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
+    _loop("L01", "test_l01_http_observation_revises_working_plan"),
+    _loop("L02", "test_l02_http_independent_reads_use_safe_concurrency"),
+    _loop("L03", "test_l03_http_process_restart_rebuilds_from_committed_facts", fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
+    _loop("L04", "test_l04_http_manager_synthesizes_bounded_specialist_artifact", capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
+    _loop("L05", "test_l05_http_budget_exhaustion_fails_closed", expected_terminal="limitation"),
+    _loop("L06", "test_l06_http_verifier_feedback_revises_result"),
+    _profile("E16", "test_e16_http_process_reads_github_through_real_mcp_gateway", CapabilityProfile.GITHUB_MCP),
+    _profile("E17", "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result", CapabilityProfile.GPT_RESEARCHER_A2A),
+    _profile("E18", "test_e18_http_process_reads_notion_through_real_mcp_gateway", CapabilityProfile.NOTION_MCP),
+    _profile("E19", "test_e19_http_process_mcp_capability_unavailable_fails_closed", CapabilityProfile.BASELINE),
 )
-
 
 EVIDENCE_BY_NODE = {case.node_key: case for case in EVIDENCE_CASES}
 
@@ -446,10 +210,31 @@ def validate_catalog() -> None:
         raise ValueError("duplicate evidence_id in E2E evidence catalog")
     if len(node_keys) != len(set(node_keys)):
         raise ValueError("one E2E test node cannot own multiple evidence classifications")
-    covered = {case.case_id for case in EVIDENCE_CASES}
-    expected = {f"E{index:02d}" for index in range(1, 18)}
-    if covered != expected:
-        raise ValueError(f"E2E catalog coverage mismatch: {sorted(covered ^ expected)}")
+    expected = {
+        EvidenceClaimKind.PRODUCT_CAPABILITY: {f"E{index:02d}" for index in range(1, 14)},
+        EvidenceClaimKind.COMPOSITE_CAPABILITY: {f"C{index:02d}" for index in range(1, 5)},
+        EvidenceClaimKind.COMPLEX_LOOP: {f"L{index:02d}" for index in range(1, 7)},
+        EvidenceClaimKind.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19"},
+    }
+    for kind, case_ids in expected.items():
+        actual = {case.case_id for case in EVIDENCE_CASES if case.claim_kind is kind}
+        if actual != case_ids:
+            raise ValueError(f"{kind.value} E2E catalog coverage mismatch: {sorted(actual ^ case_ids)}")
+    if any(case.claim_kind is EvidenceClaimKind.ARCHITECTURE for case in EVIDENCE_CASES):
+        raise ValueError("legacy architecture cases are not allowed in the release catalog")
 
 
 validate_catalog()
+
+
+__all__ = [
+    "CapabilityProfile",
+    "EVIDENCE_BY_NODE",
+    "EVIDENCE_CASES",
+    "EntryBoundary",
+    "EvidenceCase",
+    "EvidenceClaimKind",
+    "EvidenceLayer",
+    "FaultMechanism",
+    "validate_catalog",
+]

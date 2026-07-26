@@ -43,7 +43,7 @@
     "expected_permission_scope": "memory:write",
     "expected_idempotency_key_required": false,
     "expected_audit_required": true,
-    "expected_timeout_seconds": 60.0,
+    "expected_timeout_seconds": 180.0,
     "expected_max_retries": 0,
     "expected_rate_limit_per_minute": 30
   },
@@ -71,7 +71,7 @@
     "expected_exposure": "workflow_activity",
     "expected_risk_level": "low",
     "expected_requires_confirmation": false,
-    "expected_side_effects": [],
+      "expected_side_effects": ["read_local"],
     "expected_permission_scope": "artifact:read",
     "expected_idempotency_key_required": false,
     "expected_audit_required": true,

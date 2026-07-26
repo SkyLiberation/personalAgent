@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from personal_agent.kernel.config import Settings
+from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from tests.note_factory import make_note
 from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
@@ -21,7 +22,9 @@ from evals.open_ragbench.runner import (
     SharedEvidenceSelectorStrategy,
     StructuralRetrieverStrategy,
     _EvidenceSelectionPolicy,
+    _EvidenceSelectionPolicyResult,
     _EvidenceSelectionJudgment,
+    _EvidenceSelectionResult,
     _NoteScoreItem,
     _apply_semantic_policy,
     _build_structural_index,
@@ -962,17 +965,10 @@ def test_semantic_selector_strategy_records_judgments_and_rank_delta(monkeypatch
                 ),
             ]
 
-    class FakeResponse:
-        def __init__(self, value):
-            self.value = value
-            self.model = "fake-semantic-model"
-            self.retry_attempts = 1
-            self.retry_errors = ["transient"]
-
     class FakeModelClient:
         def generate(self, request):
-            return FakeResponse(type("Value", (), {
-                "judgments": [
+            return StructuredModelResponse(
+                value=_EvidenceSelectionResult(judgments=[
                     _EvidenceSelectionJudgment(
                         candidate_id="ragbench_paper-a_sec_1",
                         direct_answer_score=5,
@@ -990,8 +986,12 @@ def test_semantic_selector_strategy_records_judgments_and_rank_delta(monkeypatch
                         answer_type_match="unclear",
                         should_be_primary_evidence=False,
                     ),
-                ]
-            })())
+                ]),
+                model="fake-semantic-model",
+                latency_ms=1,
+                retry_attempts=1,
+                retry_errors=["transient"],
+            )
 
     def fake_load_benchmark(*, num_queries, seed, corpus_mode):
         return queries, docs
@@ -1218,25 +1218,20 @@ def test_semantic_policy_selector_records_policy_and_rank_delta(monkeypatch):
                 ),
             ]
 
-    class FakeResponse:
-        def __init__(self, value):
-            self.value = value
-            self.model = "fake-policy-model"
-            self.retry_attempts = 0
-            self.retry_errors = []
-
     class FakeModelClient:
         def generate(self, request):
-            return FakeResponse(type("Value", (), {
-                "policy": _EvidenceSelectionPolicy(
+            return StructuredModelResponse(
+                value=_EvidenceSelectionPolicyResult(policy=_EvidenceSelectionPolicy(
                     should_intervene=True,
                     ambiguity_type="direct_answer_vs_background",
                     action="reorder_within_top5",
                     primary_candidate_id="ragbench_paper-a_sec_1",
                     confidence=0.91,
                     rationale="Result section directly answers.",
-                )
-            })())
+                )),
+                model="fake-policy-model",
+                latency_ms=1,
+            )
 
     def fake_load_benchmark(*, num_queries, seed, corpus_mode):
         return queries, docs

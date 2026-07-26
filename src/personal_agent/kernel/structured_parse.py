@@ -92,14 +92,34 @@ def load_json_lenient(content: str) -> object:
         raise ValueError("empty content")
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as primary_error:
+        try:
+            decoder = json.JSONDecoder()
+            values: list[object] = []
+            cursor = 0
+            while cursor < len(text):
+                while cursor < len(text) and text[cursor].isspace():
+                    cursor += 1
+                if cursor >= len(text):
+                    break
+                value, cursor = decoder.raw_decode(text, cursor)
+                values.append(value)
+            if len(values) > 1:
+                if all(value == values[0] for value in values[1:]):
+                    return values[0]
+                raise ValueError("multiple distinct JSON values in one structured response")
+        except json.JSONDecodeError:
+            pass
         extracted = extract_json_object(text)
         if extracted is not None:
             try:
                 return json.loads(extracted)
             except json.JSONDecodeError:
                 text = extracted
-        return json.loads(repair_truncated_json(text))
+        try:
+            return json.loads(repair_truncated_json(text))
+        except json.JSONDecodeError:
+            raise primary_error
 
 
 def parse_structured(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.contracts.resource import side_effect_requires_write_set
 from personal_agent.runtime.contracts.control import ResolvedActionSpec
 from personal_agent.runtime.contracts.planning import DispatchGroup, JoinPolicy
 
@@ -15,8 +16,8 @@ class RunScheduler:
         plan = action.resource_access_plan
         if not plan.complete:
             raise SchedulingError("resource access plan is incomplete")
-        if plan.side_effect_class != "none" and not plan.write_set:
-            raise SchedulingError("side effects require a resolved write set")
+        if side_effect_requires_write_set(plan.side_effect_class) and not plan.write_set:
+            raise SchedulingError("resource-changing side effects require a resolved write set")
 
     def can_run_concurrently(self, left: ResolvedActionSpec, right: ResolvedActionSpec) -> bool:
         self.validate_dispatch(left)

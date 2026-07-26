@@ -66,6 +66,10 @@ class AgentService:
         return self.runtime.workspace_service
 
     @property
+    def knowledge_lifecycle_service(self):
+        return self.runtime.knowledge_lifecycle_service
+
+    @property
     def graph_store(self):
         return self.runtime.graph_store
 
@@ -82,10 +86,6 @@ class AgentService:
         return self.runtime.tool_governance_store
 
     @property
-    def task_analyzer(self):
-        return self.runtime.task_analyzer
-
-    @property
     def tool_executor(self):
         return self.runtime.tool_executor
 
@@ -96,10 +96,6 @@ class AgentService:
     @property
     def artifact_service(self):
         return self.runtime.artifact_service
-
-    @property
-    def step_projection_validator(self):
-        return self.runtime.step_projection_validator
 
     def health(self):
         return self.runtime.health()
@@ -195,42 +191,11 @@ class AgentService:
     def compress_context(self, messages_text: str, user_id: str = "default") -> str:
         return self.runtime.compress_context(messages_text, user_id)
 
-    def set_thread_message_loader(self, loader):
-        self.runtime.set_thread_message_loader(loader)
+    def converse(self, *args, **kwargs):
+        return self.runtime.converse(*args, **kwargs)
 
-    def load_thread_messages(self, *args, **kwargs):
-        return self.runtime.load_thread_messages(*args, **kwargs)
-
-    def execute_entry(self, *args, **kwargs):
-        return self.runtime.execute_entry(*args, **kwargs)
-
-    def resume_entry(self, *args, **kwargs):
-        return self.runtime.resume_entry(*args, **kwargs)
-
-    def recover_entry(self, *args, **kwargs):
-        return self.runtime.recover_entry(*args, **kwargs)
-
-    def control_run(self, run_id: str, command: str):
-        manager = self.runtime.durable_run_manager
-        run = manager.get(run_id)
-        if run.status in {"completed", "completed_degraded", "cancelled", "failed", "timed_out"}:
-            return run
-        token = manager.acquire_lease(run_id).fencing_token
-        if command == "cancel":
-            return manager.request_cancel(run_id, fencing_token=token)
-        target = {"pause": "waiting", "resume": "running"}.get(command)
-        if target is None:
-            raise ValueError(f"unsupported control command: {command}")
-        return manager.transition(run_id, target, fencing_token=token)
-
-    def get_run_snapshot(self, run_id: str):
-        return self.runtime.get_run_snapshot(run_id)
-
-    def list_run_snapshots(self, user_id: str | None = None, limit: int = 50):
-        return self.runtime.list_run_snapshots(user_id=user_id, limit=limit)
-
-    def list_run_history(self, run_id: str, limit: int = 100):
-        return self.runtime.list_run_history(run_id, limit=limit)
+    def conversation_trace(self, *args, **kwargs):
+        return self.runtime.conversation_trace(*args, **kwargs)
 
     def list_procedure_definitions(self):
         return self.runtime.list_procedure_definitions()
@@ -281,12 +246,6 @@ class AgentService:
     def build_execution_debug_bundle(self, run_id: str):
         return self.runtime.build_execution_debug_bundle(run_id)
 
-    def replay_from_checkpoint(self, **kwargs):
-        return self.runtime.replay_from_checkpoint(**kwargs)
-
-    def fork_from_checkpoint(self, **kwargs):
-        return self.runtime.fork_from_checkpoint(**kwargs)
-
     def execute_digest(self, user_id: str | None = None):
         return self.runtime.execute_digest(user_id=user_id)
 
@@ -296,5 +255,3 @@ class AgentService:
     def digest(self, user_id: str | None = None):
         return self.runtime.digest(user_id=user_id)
 
-    def entry(self, *args, **kwargs):
-        return self.runtime.entry(*args, **kwargs)

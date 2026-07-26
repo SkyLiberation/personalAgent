@@ -37,6 +37,11 @@ class CompositeCapabilityDefinition(_GateModel):
     required_native_capability_ids: tuple[str, ...]
 
 
+class LoopCapabilityDefinition(_GateModel):
+    capability_id: str
+    required_evidence_id: str
+
+
 class EvidenceGateResult(_GateModel):
     evidence_id: str
     claim_kind: EvidenceClaimKind
@@ -57,8 +62,10 @@ class ReleaseCapabilityReport(_GateModel):
     target_dirty: bool
     native_evidence: tuple[EvidenceGateResult, ...]
     composite_evidence: tuple[EvidenceGateResult, ...]
+    loop_evidence: tuple[EvidenceGateResult, ...]
     native_capabilities: tuple[CapabilityGateResult, ...]
     composite_capabilities: tuple[CapabilityGateResult, ...]
+    loop_capabilities: tuple[CapabilityGateResult, ...]
 
     @property
     def trusted_native_capability_ids(self) -> tuple[str, ...]:
@@ -73,6 +80,14 @@ class ReleaseCapabilityReport(_GateModel):
         return tuple(
             result.capability_id
             for result in self.composite_capabilities
+            if result.status == "trusted"
+        )
+
+    @property
+    def trusted_loop_capability_ids(self) -> tuple[str, ...]:
+        return tuple(
+            result.capability_id
+            for result in self.loop_capabilities
             if result.status == "trusted"
         )
 
@@ -158,8 +173,18 @@ COMPOSITE_CAPABILITIES: tuple[CompositeCapabilityDefinition, ...] = (
     ),
 )
 
+LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
+    LoopCapabilityDefinition(capability_id="observation_replanning", required_evidence_id="L01"),
+    LoopCapabilityDefinition(capability_id="safe_action_concurrency", required_evidence_id="L02"),
+    LoopCapabilityDefinition(capability_id="canonical_fact_recovery", required_evidence_id="L03"),
+    LoopCapabilityDefinition(capability_id="manager_specialists", required_evidence_id="L04"),
+    LoopCapabilityDefinition(capability_id="budget_fail_closed", required_evidence_id="L05"),
+    LoopCapabilityDefinition(capability_id="evaluator_optimizer", required_evidence_id="L06"),
+)
+
 REQUIRED_NATIVE_EVIDENCE_IDS = tuple(f"E{index:02d}" for index in range(1, 14))
 REQUIRED_COMPOSITE_EVIDENCE_IDS = tuple(f"C{index:02d}" for index in range(1, 5))
+REQUIRED_LOOP_EVIDENCE_IDS = tuple(f"L{index:02d}" for index in range(1, 7))
 
 
 def evaluate_release_capabilities(
@@ -204,9 +229,19 @@ def evaluate_release_capabilities(
         )
         for evidence_id in REQUIRED_COMPOSITE_EVIDENCE_IDS
     )
+    loop_evidence = tuple(
+        _evaluate_evidence(
+            evidence_id=evidence_id,
+            claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
+            catalog=catalog,
+            passing=passing,
+            target_dirty=target_dirty,
+        )
+        for evidence_id in REQUIRED_LOOP_EVIDENCE_IDS
+    )
     evidence_by_id = {
         result.evidence_id: result
-        for result in (*native_evidence, *composite_evidence)
+        for result in (*native_evidence, *composite_evidence, *loop_evidence)
     }
 
     native_capabilities = tuple(
@@ -220,13 +255,19 @@ def evaluate_release_capabilities(
         _composite_result(definition, evidence_by_id, native_by_id)
         for definition in COMPOSITE_CAPABILITIES
     )
+    loop_capabilities = tuple(
+        _loop_result(definition, evidence_by_id)
+        for definition in LOOP_CAPABILITIES
+    )
     return ReleaseCapabilityReport(
         revision=revision,
         target_dirty=target_dirty,
         native_evidence=native_evidence,
         composite_evidence=composite_evidence,
+        loop_evidence=loop_evidence,
         native_capabilities=native_capabilities,
         composite_capabilities=composite_capabilities,
+        loop_capabilities=loop_capabilities,
     )
 
 
@@ -296,6 +337,19 @@ def _composite_result(
         status="trusted" if not reasons else "unverified",
         required_evidence_ids=(definition.required_evidence_id,),
         reasons=tuple(reasons),
+    )
+
+
+def _loop_result(
+    definition: LoopCapabilityDefinition,
+    evidence_by_id: dict[str, EvidenceGateResult],
+) -> CapabilityGateResult:
+    trusted = evidence_by_id[definition.required_evidence_id].status == "trusted"
+    return CapabilityGateResult(
+        capability_id=definition.capability_id,
+        status="trusted" if trusted else "unverified",
+        required_evidence_ids=(definition.required_evidence_id,),
+        reasons=() if trusted else (f"untrusted_evidence:{definition.required_evidence_id}",),
     )
 
 
@@ -435,6 +489,7 @@ def main() -> int:
     return 0 if (
         len(report.trusted_native_capability_ids) == len(NATIVE_CAPABILITIES)
         and len(report.trusted_composite_capability_ids) == len(COMPOSITE_CAPABILITIES)
+        and len(report.trusted_loop_capability_ids) == len(LOOP_CAPABILITIES)
     ) else 1
 
 
@@ -445,12 +500,15 @@ if __name__ == "__main__":
 __all__ = [
     "COMPOSITE_CAPABILITIES",
     "NATIVE_CAPABILITIES",
+    "LOOP_CAPABILITIES",
     "REQUIRED_COMPOSITE_EVIDENCE_IDS",
     "REQUIRED_NATIVE_EVIDENCE_IDS",
+    "REQUIRED_LOOP_EVIDENCE_IDS",
     "CapabilityGateResult",
     "CompositeCapabilityDefinition",
     "EvidenceGateResult",
     "NativeCapabilityDefinition",
+    "LoopCapabilityDefinition",
     "ReleaseCapabilityReport",
     "evaluate_release_capabilities",
 ]

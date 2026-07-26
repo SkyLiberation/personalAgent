@@ -175,6 +175,14 @@ def test_solidify_conversation_only_persists_user_claims():
     assert result.rejected_assistant_claim_count == result.assistant_candidate_count
     assert all(claim.created_by == "user" for claim in result.ingest_result.claims)
     assert all(claim.state == "active" for claim in result.ingest_result.claims)
+    evidence_span_ids = {
+        span.evidence_span_id for span in result.ingest_result.evidence_spans
+    }
+    assert evidence_span_ids
+    assert all(
+        evidence_span_ids.intersection(item.evidence_span_ids)
+        for item in result.ingest_result.knowledge_items
+    )
 
 
 def test_correct_claim_supersedes_old_claim_and_creates_relation():

@@ -65,8 +65,8 @@ class GPTResearcherA2AAdapter:
             provider="gpt_researcher",
             protocol="a2a_jsonrpc",
             description="GPT Researcher A2A deep research agent.",
-            semantic_domains=("external_research", "web_research"),
-            task_types=("research",),
+            semantic_domains=("external", "external_research", "web_research"),
+            task_types=("research", "report"),
             capability_ids=("agent:gpt_researcher",),
             allowed_operations=("delegate",),
             governance=AgentGovernance(
@@ -82,14 +82,7 @@ class GPTResearcherA2AAdapter:
         )
 
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
-        response = self._client.research(**self._request_kwargs(task), blocking=True)
-        run = self._run_from_response(task, context, response)
-        output_text = response.report
-        return ChildAgentRunOutcome(
-            run=run,
-            output_text=output_text,
-            metadata=response.metadata,
-        )
+        raise RuntimeError("GPT Researcher is asynchronous; use AgentGateway.submit/poll")
 
     def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
         response = self._client.submit_research(**self._request_kwargs(task))
@@ -99,25 +92,29 @@ class GPTResearcherA2AAdapter:
         run = self._run_from_response(task, context, response)
         return replace(run, projection=replace(run.projection, status=status))
 
-    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
-        task_id = _external_task_id(agent_run_id)
+    def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
+        task_id = _required_external_task_id(run)
         response = self._client.get_task(task_id)
-        task = AgentTask(task_text="", task_type="research")
-        return self._run_from_response(task, context, response, agent_run_id=agent_run_id)
+        return self._run_from_response(
+            run.definition.task, context, response,
+            agent_run_id=run.definition.agent_run_id,
+        )
 
-    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
-        task_id = _external_task_id(agent_run_id)
+    def cancel(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
+        task_id = _required_external_task_id(run)
         response = self._client.cancel_task(task_id)
-        task = AgentTask(task_text="", task_type="research")
-        run = self._run_from_response(task, context, response, agent_run_id=agent_run_id)
-        return replace(run, projection=replace(run.projection, status="cancelled"))
+        refreshed = self._run_from_response(
+            run.definition.task, context, response,
+            agent_run_id=run.definition.agent_run_id,
+        )
+        return replace(refreshed, projection=replace(refreshed.projection, status="cancelled"))
 
-    def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[ChildAgentRunEvent]:
-        task_id = _external_task_id(agent_run_id)
+    def stream(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> Iterator[ChildAgentRunEvent]:
+        task_id = _required_external_task_id(run)
         for item in self._client.stream_task(task_id):
             yield ChildAgentRunEvent(
                 event_id=new_agent_event_id(),
-                agent_run_id=agent_run_id,
+                agent_run_id=run.definition.agent_run_id,
                 type="stream_delta",
                 payload=dict(item),
             )
@@ -222,8 +219,11 @@ def _agent_run_id(task_id: str) -> str:
     return f"arun_{safe}" if safe else new_agent_run_id()
 
 
-def _external_task_id(agent_run_id: str) -> str:
-    return agent_run_id.removeprefix("arun_").replace("_", "-")
+def _required_external_task_id(run: ChildAgentRunRecord) -> str:
+    task_id = run.projection.external_task_id
+    if not task_id:
+        raise RuntimeError("ChildAgentRun has no canonical external_task_id")
+    return task_id
 
 
 __all__ = ["GPTResearcherA2AAdapter", "GPTResearcherA2AProtocol"]

@@ -1,16 +1,15 @@
 import { FormEvent, type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
+  askWorkspace,
   buildEntryStreamUrl,
   confirmPendingAction,
   fetchDigest,
-  fetchEntryRuns,
   fetchGraphTopology,
   fetchNotes,
   fetchPendingActions,
   getApiKey,
   rejectPendingAction,
   resetDebugData,
-  resumeEntryRun,
   retryGraphSync,
   setApiKey,
   submitReviewFeedback,
@@ -18,9 +17,6 @@ import {
   type AskHistoryItem,
   type Citation,
   type DigestResponse,
-  type EntryPendingConfirmation,
-  type EntryResponse,
-  type EntryRunSnapshot,
   type GraphTopology,
   type Note,
   type PendingActionItem,
@@ -78,13 +74,10 @@ type TimelineEvent = {
 };
 
 type AskHistoryView = AskHistoryItem & {
-  status: "streaming" | "waiting_confirmation" | "done" | "error";
+  status: "streaming" | "done" | "error";
   error?: string;
   steps?: ExecutionStep[];
   execution_trace?: string[];
-  run_id?: string | null;
-  pending_confirmation?: EntryPendingConfirmation | null;
-  confirmation_decision?: "confirmed" | "rejected" | null;
   intents?: string[];
   intent_reason?: string;
   captured_title?: string;
@@ -129,8 +122,6 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
   const [, setPendingActions] = useState<PendingActionItem[]>([]);
-  const [isConfirmingAction, setIsConfirmingAction] = useState(false);
-  const [clarificationInputs, setClarificationInputs] = useState<Record<string, { text: string; optionId: string }>>({});
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
@@ -204,15 +195,11 @@ export default function App() {
     // history from rendering when the user opens a session.
     void refreshDigest();
     try {
-      const [noteItems, runResult] = await Promise.all([
-        fetchNotes(userId),
-        fetchEntryRuns(userId, 100),
-      ]);
+      const noteItems = await fetchNotes(userId);
       setNotes(noteItems);
-      const allHistoryItems = mergeRunBackedHistory([], runResult.items);
       setAllAskHistory((current) => {
         const merged = new Map<string, AskHistoryView>();
-        for (const item of [...allHistoryItems, ...current]) {
+        for (const item of current) {
           merged.set(item.id, item);
         }
         return [...merged.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -220,9 +207,7 @@ export default function App() {
       // Only apply session-scoped state if the user is still on this session;
       // a refresh started before a session switch must not overwrite the thread.
       if (activeSessionRef.current === requestedSession) {
-        const historyItems = mergeRunBackedHistory([], runResult.items, requestedSession);
-        setAskHistory((current) => mergeAskHistory(historyItems, current));
-        setSelectedAskId((current) => current ?? historyItems[0]?.id ?? null);
+        setSelectedAskId((current) => current ?? askHistory[0]?.id ?? null);
       }
       if (!options?.silent) {
         setStatus("知识库已就绪。");
@@ -260,156 +245,23 @@ export default function App() {
   }
 
   async function handleConfirmPending(action: PendingActionItem) {
-    if (action.source === "langgraph_run" && action.run_id) {
-      if (action.pending_confirmation?.kind === "clarification_required") {
-        await handleSubmitClarification(action);
-        return;
-      }
-      await handleResumeEntryRun(action, "confirm");
-      return;
-    }
     if (!action.token) return;
-    setIsConfirmingAction(true);
     try {
       await confirmPendingAction(action.id, action.token, userId);
       setPendingActions((current) => current.filter((a) => a.id !== action.id));
       void refreshAll();
     } catch (error) {
       console.error("Failed to confirm pending action:", error);
-    } finally {
-      setIsConfirmingAction(false);
     }
   }
 
   async function handleRejectPending(action: PendingActionItem, reason = "") {
-    if (action.source === "langgraph_run" && action.run_id) {
-      await handleResumeEntryRun(action, "reject");
-      return;
-    }
     try {
       await rejectPendingAction(action.id, userId, reason);
       setPendingActions((current) => current.filter((a) => a.id !== action.id));
     } catch (error) {
       console.error("Failed to reject pending action:", error);
     }
-  }
-
-  async function handleResumeEntryRun(
-    action: PendingActionItem,
-    decision: "confirm" | "reject" | "clarify",
-    text = "",
-    optionId = "",
-  ) {
-    if (!action.run_id) return;
-    setIsConfirmingAction(true);
-    setStatus(
-      decision === "clarify"
-        ? "正在提交补充信息..."
-        : decision === "confirm"
-          ? "正在继续执行已确认的任务..."
-          : "正在取消该任务..."
-    );
-    try {
-      const result = await resumeEntryRun(action.run_id, decision, userId, text, optionId);
-      applyEntryResponseToHistory(
-        action.local_history_id ?? null,
-        result,
-        decision === "confirm" ? "confirmed" : decision === "reject" ? "rejected" : null,
-      );
-      if (result.pending_confirmation && result.run_id) {
-        const nextAction = pendingActionFromConfirmation(result.run_id, result.pending_confirmation, action.local_history_id);
-        setPendingActions((current) => current.map((a) => (a.id === action.id ? nextAction : a)));
-        setStatus(result.reply_text || result.pending_confirmation.message || "还需要继续补充信息。");
-      } else {
-        setPendingActions((current) => current.filter((a) => a.id !== action.id));
-        setClarificationInputs((current) => {
-          const next = { ...current };
-          delete next[action.id];
-          return next;
-        });
-        setStatus(result.reply_text || (decision === "confirm" ? "操作已完成。" : "操作已取消。"));
-        void refreshAll();
-      }
-    } catch (error) {
-      console.error("Failed to resume entry run:", error);
-      setStatus("恢复 LangGraph 任务失败，请检查后端日志。");
-      if (action.local_history_id) {
-        setAskHistory((current) =>
-          current.map((item) =>
-            item.id === action.local_history_id
-              ? { ...item, status: "error" as const, error: "恢复任务失败，请重试。" }
-              : item
-          )
-        );
-      }
-    } finally {
-      setIsConfirmingAction(false);
-    }
-  }
-
-  async function handleSubmitClarification(action: PendingActionItem) {
-    const input = clarificationInputs[action.id] ?? { text: "", optionId: "" };
-    if (!input.text.trim()) {
-      setStatus("请先补充具体内容。");
-      return;
-    }
-    await handleResumeEntryRun(action, "clarify", input.text.trim(), input.optionId);
-  }
-
-  function pendingActionFromConfirmation(
-    runId: string,
-    confirmation: EntryPendingConfirmation,
-    localHistoryId?: string,
-  ): PendingActionItem {
-    const isClarification = confirmation.kind === "clarification_required";
-    return {
-      id: `run-${runId}-${confirmation.step_id ?? (isClarification ? "clarify" : "confirm")}`,
-      user_id: userId,
-      action_type: String(confirmation.action_type ?? (isClarification ? "clarify_entry" : "langgraph_confirm")),
-      target_id: String(confirmation.note_id ?? confirmation.step_id ?? runId),
-      title: confirmation.title || (isClarification ? "需要补充信息" : "需要确认的任务"),
-      description: confirmation.message || confirmation.summary || "该 LangGraph run 已暂停，等待你的处理。",
-      status: "pending",
-      token: typeof confirmation.token === "string" ? confirmation.token : undefined,
-      source: "langgraph_run",
-      run_id: runId,
-      local_history_id: localHistoryId,
-      pending_confirmation: confirmation,
-      created_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 3600000).toISOString(),
-      resolved_at: null,
-    };
-  }
-
-  function pendingActionFromHistoryItem(item: AskHistoryView): PendingActionItem | null {
-    if (!item.run_id || !item.pending_confirmation) return null;
-    return pendingActionFromConfirmation(item.run_id, item.pending_confirmation, item.id);
-  }
-
-  function applyEntryResponseToHistory(
-    localHistoryId: string | null,
-    result: EntryResponse,
-    confirmationDecision: "confirmed" | "rejected" | null = null,
-  ) {
-    if (!localHistoryId) return;
-    setAskHistory((current) =>
-      current.map((item) =>
-        item.id === localHistoryId
-          ? {
-              ...item,
-              answer: result.reply_text || item.answer,
-              steps: result.steps?.length ? result.steps : item.steps,
-              execution_trace: result.execution_trace?.length ? result.execution_trace : item.execution_trace,
-              run_id: result.run_id ?? item.run_id,
-              pending_confirmation: result.pending_confirmation ?? null,
-              confirmation_decision: result.pending_confirmation
-                ? null
-                : confirmationDecision ?? item.confirmation_decision ?? null,
-              status: result.run_status === "waiting_confirmation" ? "waiting_confirmation" as const : "done" as const,
-            }
-          : item
-      )
-    );
   }
 
   async function handleSearchHistory(query: string) {
@@ -419,21 +271,12 @@ export default function App() {
       return;
     }
     setIsSearchingHistory(true);
-    try {
-      const runResult = await fetchEntryRuns(userId, 100);
-      const normalizedQuery = query.trim().toLowerCase();
-      const matchingRuns = runResult.items.filter(
-        (run) =>
-          run.entry_text.toLowerCase().includes(normalizedQuery) ||
-          (run.answer ?? "").toLowerCase().includes(normalizedQuery),
-      );
-      const items = mergeRunBackedHistory([], matchingRuns);
-      setAskHistory(items);
-    } catch (error) {
-      console.error("Failed to search ask history:", error);
-    } finally {
-      setIsSearchingHistory(false);
-    }
+    const normalizedQuery = query.trim().toLowerCase();
+    setAskHistory(allAskHistory.filter(
+      (item) => item.question.toLowerCase().includes(normalizedQuery)
+        || item.answer.toLowerCase().includes(normalizedQuery),
+    ));
+    setIsSearchingHistory(false);
   }
 
   function onEntry(event: FormEvent) {
@@ -472,11 +315,8 @@ export default function App() {
     const source = new EventSource(buildEntryStreamUrl(prompt, userId, sessionId));
     eventSourceRef.current = source;
 
-    let entryIntent = "";
-
     source.addEventListener("intent", (streamEvent) => {
       const payload = parseSsePayload<{ intents?: string[]; reason?: string }>(streamEvent);
-      entryIntent = payload.intents?.join(" → ") ?? "";
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id
@@ -613,52 +453,6 @@ export default function App() {
       void refreshPendingActions();
     });
 
-    source.addEventListener("confirmation_required", (streamEvent) => {
-      const payload = parseSsePayload<{
-        run_id?: string;
-        pending_confirmation?: EntryPendingConfirmation;
-      }>(streamEvent);
-      const confirmation = payload.pending_confirmation;
-      if (!payload.run_id || !confirmation) {
-        return;
-      }
-      const newAction: PendingActionItem = {
-        id: `run-${payload.run_id}-${confirmation.step_id ?? "confirm"}`,
-        user_id: userId,
-        action_type: String(confirmation.action_type ?? "langgraph_confirm"),
-        target_id: String(confirmation.note_id ?? confirmation.step_id ?? payload.run_id),
-        title: confirmation.title || "需要确认的任务",
-        description: confirmation.message || confirmation.summary || "该 LangGraph run 已暂停，等待你的确认。",
-        status: "pending",
-        token: typeof confirmation.token === "string" ? confirmation.token : undefined,
-        source: "langgraph_run",
-        run_id: payload.run_id,
-        local_history_id: historyItem.id,
-        pending_confirmation: confirmation,
-        created_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 3600000).toISOString(),
-        resolved_at: null,
-      };
-      setPendingActions((current) => {
-        if (current.some((a) => a.id === newAction.id)) return current;
-        return [newAction, ...current];
-      });
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                answer: confirmation.message || "任务已暂停，等待你的确认。",
-                run_id: payload.run_id,
-                pending_confirmation: confirmation,
-                status: "waiting_confirmation" as const,
-              }
-            : item
-        )
-      );
-      setStatus(confirmation.message || "有 LangGraph 任务需要你的确认。");
-    });
-
     source.addEventListener("draft_ready", (streamEvent) => {
       const payload = parseSsePayload<{ step_id?: string; draft_text?: string }>(streamEvent);
       if (payload.draft_text) {
@@ -769,28 +563,7 @@ export default function App() {
         reply?: string;
         citations?: Citation[];
         graph_enabled?: boolean;
-        waiting_confirmation?: boolean;
-        run_id?: string;
       }>(streamEvent);
-      if (payload.waiting_confirmation) {
-        setAskHistory((current) =>
-          current.map((item) =>
-            item.id === historyItem.id
-              ? {
-                  ...item,
-                  answer: payload.reply ?? item.answer,
-                  run_id: payload.run_id ?? item.run_id,
-                  status: "waiting_confirmation" as const,
-                }
-              : item
-          )
-        );
-        setSelectedAskId(historyItem.id);
-        setStatus("等待你确认后继续执行。");
-        source.close();
-        eventSourceRef.current = null;
-        return;
-      }
       const finalAnswer = payload.answer ?? payload.reply ?? historyItem.answer;
       setAskHistory((current) =>
         current.map((item) =>
@@ -800,25 +573,14 @@ export default function App() {
                 answer: finalAnswer,
                 citations: payload.citations ?? item.citations,
                 graph_enabled: payload.graph_enabled ?? item.graph_enabled,
-                run_id: payload.run_id ?? item.run_id,
                 status: "done",
               }
             : item
         )
       );
       setSelectedAskId(historyItem.id);
-      if (
-        entryIntent.startsWith("capture_") ||
-        entryIntent === "summarize_thread" ||
-        entryIntent === "unknown" ||
-        finalAnswer.includes("模型当前不可用")
-      ) {
-        setStatus(finalAnswer);
-        void refreshAll();
-      } else {
-        setStatus("已根据你的笔记生成回答。");
-        void refreshAskHistorySelection();
-      }
+      setStatus(finalAnswer);
+      void refreshAskHistorySelection(historyItem);
       source.close();
       eventSourceRef.current = null;
     });
@@ -841,27 +603,17 @@ export default function App() {
     };
   }
 
-  async function refreshAskHistorySelection(fallbackItem?: AskHistoryView) {
-    try {
-      const runResult = await fetchEntryRuns(userId, 100);
-      const serverItems = mergeRunBackedHistory([], runResult.items, sessionId);
-      setAskHistory((currentHistory) => {
-        const merged = mergeAskHistory(serverItems, currentHistory, fallbackItem);
-        setSelectedAskId((currentSelectedId) => {
-          if (currentSelectedId && merged.some((item) => item.id === currentSelectedId)) {
-            return currentSelectedId;
-          }
-          if (fallbackItem && merged.some((item) => item.id === fallbackItem.id)) {
-            return fallbackItem.id;
-          }
-          return merged[0]?.id ?? null;
-        });
-        return merged;
-      });
-      setAllAskHistory(mergeRunBackedHistory([], runResult.items));
-    } catch (error) {
-      console.error(error);
-    }
+  function refreshAskHistorySelection(fallbackItem?: AskHistoryView) {
+    setAskHistory((currentHistory) => {
+      const merged = mergeAskHistory([], currentHistory, fallbackItem);
+      setAllAskHistory((allHistory) => mergeAskHistory([], allHistory, fallbackItem));
+      setSelectedAskId((currentSelectedId) =>
+        currentSelectedId && merged.some((item) => item.id === currentSelectedId)
+          ? currentSelectedId
+          : fallbackItem?.id ?? merged[0]?.id ?? null
+      );
+      return merged;
+    });
   }
 
   function startNewDialog() {
@@ -929,49 +681,11 @@ export default function App() {
     setSelectedAskId(historyItem.id);
     setStatus(`正在上传 ${file.name} 并交给 Agent 处理...`);
     try {
-      const entryResult = await uploadEntryFile(file, userId, sessionId, text);
-      if (entryResult.pending_confirmation && entryResult.run_id) {
-        const confirmation = entryResult.pending_confirmation;
-        const action: PendingActionItem = {
-          id: `run-${entryResult.run_id}-${confirmation.step_id ?? "confirm"}`,
-          user_id: userId,
-          action_type: String(confirmation.action_type ?? "langgraph_confirm"),
-          target_id: String(confirmation.note_id ?? confirmation.step_id ?? entryResult.run_id),
-          title: confirmation.title || "需要确认的任务",
-          description: confirmation.message || confirmation.summary || "该 LangGraph run 已暂停，等待你的确认。",
-          status: "pending",
-          token: typeof confirmation.token === "string" ? confirmation.token : undefined,
-          source: "langgraph_run",
-          run_id: entryResult.run_id,
-          local_history_id: historyItem.id,
-          pending_confirmation: confirmation,
-          created_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 3600000).toISOString(),
-          resolved_at: null,
-        };
-        setPendingActions((current) => {
-          if (current.some((a) => a.id === action.id)) return current;
-          return [action, ...current];
-        });
-        setAskHistory((current) =>
-          current.map((item) =>
-            item.id === historyItem.id
-              ? {
-                  ...item,
-                  answer: entryResult.reply_text || "任务已暂停，等待你的确认。",
-                  steps: entryResult.steps ?? item.steps,
-                  execution_trace: entryResult.execution_trace ?? item.execution_trace,
-                  run_id: entryResult.run_id,
-                  pending_confirmation: confirmation,
-                  status: "waiting_confirmation" as const,
-                }
-              : item
-          )
-        );
-        setStatus(confirmation.message || "有 LangGraph 任务需要你的确认。");
-        return;
-      }
-      const reply = entryResult.reply_text || "附件已处理完成。";
+      const captured = await uploadEntryFile(file, userId);
+      const artifactId = captured.ingest_result.artifact.artifact_id;
+      const questionForArtifact = text?.trim() || `请概述刚上传的文件 ${file.name}`;
+      const grounded = await askWorkspace(questionForArtifact, userId);
+      const reply = grounded.answer || `附件已入库（${artifactId}）。`;
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id
@@ -1206,11 +920,6 @@ export default function App() {
                   <div className="ask-chat-thread">
                   {orderedAskHistory.length ? (
                     orderedAskHistory.map((item) => {
-                      const inlineAction = pendingActionFromHistoryItem(item);
-                      const isInlineClarification = item.pending_confirmation?.kind === "clarification_required" && inlineAction;
-                      const inlineClarificationInput = inlineAction
-                        ? clarificationInputs[inlineAction.id] ?? { text: "", optionId: "" }
-                        : { text: "", optionId: "" };
                       return (
                       <div key={item.id} className="chat-turn">
                         <article className="chat-bubble chat-bubble-user">
@@ -1245,87 +954,6 @@ export default function App() {
                               <span>已采集内容</span>
                               {item.captured_title ? <strong>{item.captured_title}</strong> : null}
                               <p>{item.captured_preview}</p>
-                            </div>
-                          ) : null}
-                          {item.pending_confirmation ? (
-                            <div className="inline-confirmation">
-                              <span>{item.pending_confirmation.action_type ?? "confirm"}</span>
-                              <strong>{item.pending_confirmation.title || item.pending_confirmation.step_id || "等待确认"}</strong>
-                              {isInlineClarification && inlineAction ? (
-                                <div className="inline-clarification-box">
-                                  <div className="clarification-options">
-                                    {(item.pending_confirmation.options ?? []).map((option) => (
-                                      <button
-                                        key={option.id}
-                                        type="button"
-                                        className="secondary-button"
-                                        data-active={inlineClarificationInput.optionId === option.id}
-                                        onClick={() =>
-                                          setClarificationInputs((current) => ({
-                                            ...current,
-                                            [inlineAction.id]: { ...inlineClarificationInput, optionId: option.id },
-                                          }))
-                                        }
-                                        title={option.prompt}
-                                      >
-                                        {option.label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <textarea
-                                    value={inlineClarificationInput.text}
-                                    onChange={(event) =>
-                                      setClarificationInputs((current) => ({
-                                        ...current,
-                                        [inlineAction.id]: { ...inlineClarificationInput, text: event.target.value },
-                                      }))
-                                    }
-                                    placeholder="补充具体内容、问题、总结范围或操作对象..."
-                                    rows={3}
-                                  />
-                                  <div className="inline-clarification-actions">
-                                    <button
-                                      type="button"
-                                      className="confirm-button"
-                                      disabled={isConfirmingAction}
-                                      onClick={() => void handleSubmitClarification(inlineAction)}
-                                    >
-                                      提交补充
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="secondary-button"
-                                      disabled={isConfirmingAction}
-                                      onClick={() => void handleRejectPending(inlineAction, "用户取消补充")}
-                                    >
-                                      取消
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : inlineAction ? (
-                                <div className="inline-confirmation-actions">
-                                  <button
-                                    type="button"
-                                    className="confirm-button"
-                                    disabled={isConfirmingAction}
-                                    onClick={() => void handleConfirmPending(inlineAction)}
-                                  >
-                                    确认
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="secondary-button"
-                                    disabled={isConfirmingAction}
-                                    onClick={() => void handleRejectPending(inlineAction, "用户拒绝")}
-                                  >
-                                    拒绝
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : item.confirmation_decision ? (
-                            <div className={`inline-confirmation-resolution resolution-${item.confirmation_decision}`}>
-                              {item.confirmation_decision === "confirmed" ? "用户已确认" : "用户已取消"}
                             </div>
                           ) : null}
                           {item.error ? <p className="sync-error">{item.error}</p> : null}
@@ -1871,9 +1499,6 @@ function translateAskStatus(status: AskHistoryView["status"]): string {
   if (status === "streaming") {
     return "生成中";
   }
-  if (status === "waiting_confirmation") {
-    return "待确认";
-  }
   if (status === "done") {
     return "已完成";
   }
@@ -2010,76 +1635,6 @@ function summarizeSessionsFromHistory(history: AskHistoryView[]): SessionSummary
   });
 }
 
-function attachRunSnapshots(
-  items: AskHistoryView[],
-  runs: EntryRunSnapshot[],
-): AskHistoryView[] {
-  return items.map((item) => {
-    const run = runs.find(
-      (candidate) =>
-        candidate.session_id === item.session_id &&
-        candidate.entry_text === item.question &&
-        (candidate.steps.length > 0 || candidate.execution_trace.length > 0),
-    );
-    if (!run) return item;
-    return {
-      ...item,
-      steps: run.steps.length ? run.steps : item.steps,
-      execution_trace: run.execution_trace.length ? run.execution_trace : item.execution_trace,
-      run_id: run.run_id,
-      pending_confirmation: run.pending_confirmation ?? item.pending_confirmation,
-      confirmation_decision: run.confirmation_decision === "confirmed" || run.confirmation_decision === "rejected"
-        ? run.confirmation_decision
-        : item.confirmation_decision,
-      status: run.status === "waiting_confirmation" ? "waiting_confirmation" : item.status,
-    };
-  });
-}
-
-function mergeRunBackedHistory(
-  items: AskHistoryView[],
-  runs: EntryRunSnapshot[],
-  sessionId?: string,
-): AskHistoryView[] {
-  const merged = attachRunSnapshots(items, runs);
-  const representedKeys = new Set(merged.flatMap(historyIdentityKeys));
-  const latestRuns = [...runs].sort((left, right) =>
-    String(right.updated_at ?? right.created_at ?? "").localeCompare(
-      String(left.updated_at ?? left.created_at ?? ""),
-    )
-  );
-
-  for (const run of latestRuns) {
-    if (sessionId && run.session_id !== sessionId) continue;
-    if (
-      (run.status !== "waiting_confirmation" && !run.answer) ||
-      (!run.steps.length && !run.execution_trace.length)
-    ) continue;
-    const runKeys = runIdentityKeys(run);
-    if (runKeys.some((key) => representedKeys.has(key))) continue;
-    merged.push({
-      id: `run-${run.run_id}`,
-      user_id: run.user_id,
-      session_id: run.session_id,
-      question: run.entry_text,
-      answer: run.answer || "任务已暂停，等待你的确认。",
-      citations: [],
-      graph_enabled: false,
-      created_at: run.created_at ?? run.updated_at ?? new Date().toISOString(),
-      status: run.status === "waiting_confirmation" ? "waiting_confirmation" : "done",
-      steps: run.steps,
-      execution_trace: run.execution_trace,
-      run_id: run.run_id,
-      pending_confirmation: run.pending_confirmation ?? null,
-      confirmation_decision: run.confirmation_decision === "confirmed" || run.confirmation_decision === "rejected"
-        ? run.confirmation_decision
-        : null,
-    });
-    for (const key of runKeys) representedKeys.add(key);
-  }
-  return merged;
-}
-
 function mergeAskHistory(
   serverItems: AskHistoryView[],
   currentItems: AskHistoryView[],
@@ -2100,11 +1655,6 @@ function mergeAskHistory(
             ...item,
             steps: item.steps?.length ? item.steps : localItem.steps,
             execution_trace: item.execution_trace?.length ? item.execution_trace : localItem.execution_trace,
-            run_id: item.run_id ?? localItem.run_id,
-            pending_confirmation: item.status === "waiting_confirmation"
-              ? item.pending_confirmation ?? localItem.pending_confirmation
-              : null,
-            confirmation_decision: item.confirmation_decision ?? localItem.confirmation_decision,
           }
         : item,
     );
@@ -2132,22 +1682,8 @@ function mergeAskHistory(
     .slice(0, 20);
 }
 
-function historyIdentityKeys(item: AskHistoryView): string[] {
-  const keys = [`prompt:${item.session_id}\u0000${item.question}`];
-  if (item.run_id) keys.push(`run:${item.run_id}`);
-  return keys;
-}
-
-function runIdentityKeys(run: EntryRunSnapshot): string[] {
-  return [
-    `run:${run.run_id}`,
-    `prompt:${run.session_id}\u0000${run.entry_text}`,
-  ];
-}
-
 function sameHistoryItem(left: AskHistoryView, right: AskHistoryView): boolean {
   if (left.id === right.id) return true;
-  if (left.run_id && right.run_id && left.run_id === right.run_id) return true;
   return left.session_id === right.session_id && left.question === right.question;
 }
 

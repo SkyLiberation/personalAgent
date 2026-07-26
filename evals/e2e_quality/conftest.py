@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
+import tempfile
 
 import pytest
 
@@ -10,7 +12,11 @@ from evals.e2e_quality.evidence_catalog import (
     EVIDENCE_BY_NODE,
     EvidenceClaimKind,
 )
-from evals.e2e_quality.release_gate import REQUIRED_NATIVE_EVIDENCE_IDS
+from evals.e2e_quality.release_gate import (
+    REQUIRED_COMPOSITE_EVIDENCE_IDS,
+    REQUIRED_NATIVE_EVIDENCE_IDS,
+    REQUIRED_LOOP_EVIDENCE_IDS,
+)
 # Re-export only infrastructure fixtures. Importing the test-suite-wide
 # autouse fixture would deliberately disable live providers, which is invalid
 # for this suite.
@@ -18,6 +24,22 @@ from tests.conftest import clean_postgres_business_tables, temp_dir  # noqa: F40
 
 
 _ARCHIVE: TraceArchive | None = None
+
+
+@pytest.fixture(scope="module")
+def server_temp_dir(request: pytest.FixtureRequest) -> Path:
+    path = Path(tempfile.mkdtemp(prefix="e2e-server-"))
+    yield path
+    if request.session.testsfailed:
+        print(f"FAILED_E2E_SERVER_TEMP_DIR={path}")
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def clean_e2e_database(request: pytest.FixtureRequest) -> None:
+    """Reset canonical tables per journey while application processes are reused."""
+    request.getfixturevalue("clean_postgres_business_tables")
 
 
 def pytest_addoption(parser) -> None:
@@ -52,6 +74,12 @@ def pytest_collection_modifyitems(config, items) -> None:
     selected_scope = config.getoption("--e2e-scope")
     selected_layers = set(config.getoption("--e2e-layer") or ())
     deselected = []
+    collected_node_keys = {
+        (Path(str(item.path)).name, item.name.split("[")[0])
+        for item in items
+        if Path(str(item.path)).parent.name == "e2e_quality"
+        and Path(str(item.path)).name.startswith("test_")
+    }
     if config.getoption("--e2e-require-complete-matrix"):
         if selected_scope != "release":
             raise pytest.UsageError(
@@ -69,6 +97,44 @@ def pytest_collection_modifyitems(config, items) -> None:
             raise pytest.UsageError(
                 "release E2E matrix is incomplete; missing: "
                 + ", ".join(sorted(missing_release))
+            )
+        composite_case_ids = {
+            case.case_id for case in EVIDENCE_BY_NODE.values()
+            if (
+                case.release_eligible
+                and case.claim_kind is EvidenceClaimKind.COMPOSITE_CAPABILITY
+            )
+        }
+        missing_composite = set(REQUIRED_COMPOSITE_EVIDENCE_IDS) - composite_case_ids
+        if missing_composite:
+            raise pytest.UsageError(
+                "composite release E2E matrix is incomplete; missing: "
+                + ", ".join(sorted(missing_composite))
+            )
+        loop_case_ids = {
+            case.case_id for case in EVIDENCE_BY_NODE.values()
+            if case.release_eligible and case.claim_kind is EvidenceClaimKind.COMPLEX_LOOP
+        }
+        missing_loop = set(REQUIRED_LOOP_EVIDENCE_IDS) - loop_case_ids
+        if missing_loop:
+            raise pytest.UsageError(
+                "complex-loop release E2E matrix is incomplete; missing: "
+                + ", ".join(sorted(missing_loop))
+            )
+        required_catalog_nodes = {
+            case.node_key
+            for case in EVIDENCE_BY_NODE.values()
+            if case.claim_kind in {
+                EvidenceClaimKind.PRODUCT_CAPABILITY,
+                EvidenceClaimKind.COMPOSITE_CAPABILITY,
+                EvidenceClaimKind.COMPLEX_LOOP,
+            }
+        }
+        missing_nodes = required_catalog_nodes - collected_node_keys
+        if missing_nodes:
+            raise pytest.UsageError(
+                "release catalog references tests that were not collected: "
+                + ", ".join(f"{module}::{name}" for module, name in sorted(missing_nodes))
             )
     for item in items:
         path = Path(str(item.path))

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from personal_agent.kernel.evidence import (
     EvidenceItem,
+    evidence_reference,
     graph_result_to_evidence,
     notes_to_evidence,
 )
@@ -165,7 +166,7 @@ class AskService(AskPromptMixin):
             citations=result_citations,
             matches=ordered_matches,
             match_refs=_match_refs(ordered_matches),
-            evidence=ctx.context_pack.evidence,
+            evidence_refs=[evidence_reference(item) for item in ctx.context_pack.evidence],
             session_id=ctx.session_id,
             repair_telemetry=ctx.repair_payload(),
         )

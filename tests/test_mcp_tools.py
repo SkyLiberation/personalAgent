@@ -31,6 +31,7 @@ from personal_agent.tools import (
     tool_success,
 )
 from personal_agent.tools.mcp import build_mcp_tool
+from personal_agent.tools.mcp_capability import capability_from_tool
 from langchain_core.tools import tool
 
 
@@ -46,6 +47,24 @@ class DummyResponse:
 
     def read(self):
         return json.dumps(self.payload).encode("utf-8")
+
+
+def test_capture_url_capability_is_read_only() -> None:
+    @tool(
+        "capture_url",
+        extras=governance_extras(
+            side_effects=("external_network",),
+            permission_scope="network:read",
+        ),
+    )
+    def capture_url(url: str) -> str:
+        """Read one URL and return its content."""
+        return url
+
+    capability = capability_from_tool(capture_url)
+
+    assert capability.operations == ("read",)
+    assert "ingest" not in capability.operations
 
 
 def test_parse_mcp_config_from_env_json():
@@ -205,12 +224,12 @@ def test_notion_mcp_preset_from_env(monkeypatch):
     server = config.servers[0]
     assert server.server_id == "notion"
     assert server.transport == "stdio"
-    assert server.command == "npx"
+    assert Path(server.command).name in {"npx", "npx.cmd"}
     assert server.args == ("-y", "@notionhq/notion-mcp-server")
     assert server.env["NOTION_TOKEN"] == "${NOTION_TOKEN}"
     assert [(tool.remote_name, tool.name) for tool in server.tools] == [
-        ("post-search", "notion.search"),
-        ("retrieve-page-markdown", "notion.retrieve_page_markdown"),
+        ("API-post-search", "notion.search"),
+        ("API-retrieve-page-markdown", "notion.retrieve_page_markdown"),
     ]
     assert all(tool.permission_scope == "notion:workspace:read" for tool in server.tools)
     assert server.tools[0].semantic_domains == ("workspace_knowledge", "docs")

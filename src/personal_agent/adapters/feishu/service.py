@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 import threading
 
@@ -8,7 +9,8 @@ import lark_oapi as lark
 
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.models import EntryInput
+from personal_agent.application.conversation import ConversationMessage
+from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.application.review import ReviewFeedbackUseCase
 from personal_agent.application.research import ResearchFeedback
 from personal_agent.adapters.feishu.client import FeishuClientMixin
@@ -35,7 +37,6 @@ class FeishuService(FeishuClientMixin):
         self.agent_service = agent_service
         self.review_feedback_use_case = review_feedback_use_case
         self.review_digest_store = review_digest_store
-        self.agent_service.set_thread_message_loader(self._load_thread_messages_for_entry)
         self._client: lark.Client | None = None
         self._ws_client: lark.ws.Client | None = None
         self._ws_thread: threading.Thread | None = None
@@ -58,21 +59,36 @@ class FeishuService(FeishuClientMixin):
             if command_reply is not None:
                 return command_reply
 
+        artifacts: list[ResourceRef] = []
         if incoming_message.message_type == "file":
-            self._attach_downloaded_file(incoming_message, metadata)
+            artifact = self._attach_downloaded_file(incoming_message, metadata)
+            if artifact is not None:
+                artifacts.append(artifact)
 
-        entry_result = self.agent_service.entry(
-            EntryInput(
-                text=incoming_message.text,
-                user_id=incoming_message.user_id,
-                session_id=incoming_message.session_id,
-                source_platform="feishu",
-                source_type=incoming_message.message_type,
-                source_ref=incoming_message.message_id,
-                metadata=metadata,
+        history = self.fetch_recent_messages(
+            incoming_message.chat_id or metadata.get("chat_id", ""),
+            limit=20,
+        ) if (incoming_message.chat_id or metadata.get("chat_id")) else []
+        messages = [
+            ConversationMessage(role=item["role"], content=item["content"])
+            for item in history
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        current_text = incoming_message.text.strip()
+        if artifacts:
+            current_text += "\n\n附件 ResourceRef：" + json.dumps(
+                [item.model_dump(mode="json") for item in artifacts],
+                ensure_ascii=False,
             )
+        if not messages or messages[-1].role != "user" or messages[-1].content != current_text:
+            messages.append(ConversationMessage(role="user", content=current_text))
+        conversation_result = self.agent_service.converse(
+            conversation_id=incoming_message.session_id,
+            messages=messages,
+            user_id=incoming_message.user_id,
+            source_platform="feishu",
         )
-        reply_text = entry_result.reply_text
+        reply_text = conversation_result.message.content
         self._reply_to_message(incoming_message, reply_text)
         logger.info(
             "Feishu message processed event_id=%s message_id=%s reply_length=%s",
@@ -183,46 +199,31 @@ class FeishuService(FeishuClientMixin):
         self,
         incoming_message: FeishuIncomingMessage,
         metadata: dict[str, str],
-    ) -> None:
+    ) -> ResourceRef | None:
         file_key = metadata.get("file_key", "")
         if not (file_key and incoming_message.message_id):
-            return
+            return None
         downloaded = self.download_file(incoming_message.message_id, file_key)
         if not downloaded:
-            return
+            return None
         file_bytes, filename = downloaded
         upload_dir = self.settings.data_dir / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        file_path = upload_dir / f"feishu_{incoming_message.message_id}_{filename}"
-        file_path.write_bytes(file_bytes)
-        metadata["file_path"] = str(file_path)
-        metadata["original_filename"] = filename
+        artifact = self.agent_service.artifact_service.save_upload(
+            filename=filename,
+            content_type=None,
+            file_bytes=file_bytes,
+            uploads_dir=upload_dir,
+            user_id=incoming_message.user_id,
+            workspace_id=incoming_message.user_id,
+        )
+        metadata["artifact_id"] = artifact.resource_id
         logger.info(
-            "Feishu file downloaded event_id=%s file_key=%s path=%s",
+            "Feishu file downloaded event_id=%s file_key=%s artifact_id=%s",
             incoming_message.event_id,
             file_key,
-            file_path,
+            artifact.resource_id,
         )
-
-    def _load_thread_messages_for_entry(
-        self, entry_input: EntryInput, limit: int = 20
-    ) -> list[dict[str, str]]:
-        """Load Feishu chat context after the entry graph selects summarization."""
-        if entry_input.source_platform != "feishu":
-            return []
-        chat_id = entry_input.metadata.get("chat_id", "")
-        if not chat_id:
-            return []
-        messages = self.fetch_recent_messages(chat_id, limit=limit)
-        if messages:
-            logger.info(
-                "Feishu thread messages loaded for summarize session_id=%s chat_id=%s count=%s",
-                entry_input.session_id,
-                chat_id,
-                len(messages),
-            )
-        return messages
-
+        return artifact
 
 def _parse_research_feedback(text: str):
     match = re.fullmatch(

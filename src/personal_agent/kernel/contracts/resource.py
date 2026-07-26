@@ -5,10 +5,43 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ResourceRef(BaseModel):
+    """Application-owned identity passed across capability boundaries."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    resource_id: str = Field(min_length=1)
+    resource_type: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    revision: int = Field(default=1, ge=1)
+
+
+class ResourceEvidenceRef(BaseModel):
+    """Stable citation identity derived from an inspected Resource revision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evidence_ref: str = Field(min_length=1)
+    resource_ref: ResourceRef
+    locator: str = Field(min_length=1)
+    content_hash: str = Field(min_length=1)
 
 
 MUTATING_OPERATIONS = frozenset({"create", "update", "delete", "ingest", "repair"})
+
+# These effects observe or transport data but do not, by themselves, mutate a
+# resource represented by ResourceAccess.write_set. Unknown effect classes stay
+# fail-closed because the scheduler cannot prove that no write target is needed.
+NON_WRITING_SIDE_EFFECT_CLASSES = frozenset({
+    "none",
+    "read_local",
+    "read_longterm",
+    "external_network",
+})
 
 
 def mutating_operations(operations: Iterable[object]) -> tuple[str, ...]:
@@ -18,6 +51,11 @@ def mutating_operations(operations: Iterable[object]) -> tuple[str, ...]:
         for operation in operations
         if str(operation) in MUTATING_OPERATIONS
     ))
+
+
+def side_effect_requires_write_set(side_effect_class: str) -> bool:
+    """Return whether physical dispatch requires a resolved write target."""
+    return side_effect_class not in NON_WRITING_SIDE_EFFECT_CLASSES
 
 
 class ResourceSelector(BaseModel):
@@ -85,6 +123,8 @@ def match_resource_contract(
 
 
 __all__ = [
-    "MUTATING_OPERATIONS", "OperationScope", "ProviderConstraint", "ResourceMatchResult",
-    "ResourceSelector", "match_resource_contract", "mutating_operations",
+    "MUTATING_OPERATIONS", "NON_WRITING_SIDE_EFFECT_CLASSES", "OperationScope",
+    "ProviderConstraint", "ResourceMatchResult",
+    "ResourceEvidenceRef", "ResourceRef", "ResourceSelector", "match_resource_contract",
+    "mutating_operations", "side_effect_requires_write_set",
 ]

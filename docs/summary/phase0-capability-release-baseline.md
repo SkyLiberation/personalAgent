@@ -1,115 +1,194 @@
 # Phase 0 能力目录与发布基线
 
-本文记录 Phase 0 落地后的当前事实。目标能力语义仍由
+本文记录 capability-first 重构后的当前实现和验证事实。目标语义仍由
 [`adaptive-agent-runtime-design.md`](../future/adaptive-agent-runtime-design.md) 定义；
-机器可执行的 E/C 映射由
-[`release_gate.py`](../../evals/e2e_quality/release_gate.py) 唯一拥有。
+E01–E13、C01–C04、L01–L06 与发布声明的唯一机器映射由
+[`release_gate.py`](../../evals/e2e_quality/release_gate.py) 拥有。
 
 ## 当前结论
 
-截至 2026-07-23，当前工作树的可信原生产品能力基线为空，可信组合强能力基线也为空。
-这不是说仓库没有实现，而是说当前还没有新产品语义下的 E01–E13/C01–C04 release
-catalog 条目和同 revision 通过 trace；工作树本身也处于 dirty revision。
+截至 2026-07-26，Phase 1–5 的生产主路径代码和当前工程 E2E 已落地；发布资格仍未
+建立。必须区分当前完整工程证据和 clean-revision release gate：
 
-因此 Conversation、Capture、Grounded Ask、Knowledge Lifecycle、Review、Knowledge
-Maintenance、Research、Scheduled Intelligence 目前均为 `unverified`/capability
-acceptance。Personal Research Analyst、Continuous Knowledge Steward、Personalized
-Learning Agent、Expert Collaboration Agent 同样不得作为发布能力声明。
+| 结论 | 状态 | 依据 |
+| --- | --- | --- |
+| 2026-07-24 历史工程 E2E | `passed` | 23/23 selected passed，1506.36 秒，archive `20260724T144409.800183Z-53716-a052c7cd` |
+| 当前 GitHub/Notion MCP | `passed` | E06 内真实 E16/E18/E19 通过，67.77 秒，archive `20260725T064548.518818Z-19688-d08d031f` |
+| 历史 tokeness GPT Researcher A2A | `passed`（旧模型定向） | E17 223.32 秒、L04 228.40 秒，分别为 archive `20260725T084944.789762Z-42408-b3b97220`、`20260725T085407.393906Z-28364-8e0c1122` |
+| 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
+| `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
+| 当前 `gpt-5.4-mini` 配置 | `passed`（定向） | 复杂 typed Proposal contract 通过；E01 77.16 秒、E17 171.31 秒均通过 |
+| 当前低层与架构门禁 | `passed` | 637 tests passed；`cycles=[]`、`forbidden_edges=[]`；变更范围 Ruff passed |
+| 当前完整 release E2E | `passed_engineering_evidence` | E01–E13/C01–C04/L01–L06 共 23/23 passed，0 failed、0 skipped，1777.44 秒，archive `20260726T011631.187395Z-20684-4a62da6a` |
+| 当前 Provider profile | `passed` | 同一 archive 内 E16–E19 真实 GitHub、Notion、GPT Researcher A2A 与 unavailable trace 均已生成 |
+| Clean revision 发布资格 | `not_established` | 完整 archive 与目标 worktree 均为 dirty；gate 必须 fail closed |
 
-旧 catalog 中的 E01–E15 证明的是 Task/Plan/Governance/Recovery 等架构边界，E16/E17
-是 MCP/A2A Profile 证据。它们已经通过 `EvidenceClaimKind` 与产品能力证据分开，不能
-因为编号相同或对象可连接而授信原生产品能力。
+GPT Researcher 已不再依赖原异常 endpoint。正式 `8001` 服务从相邻 `personalAgent/.env`
+读取 `STRUCTURED_API_KEY`、`STRUCTURED_BASE_URL` 和 `STRUCTURED_MODEL`，映射到唯一
+OpenAI-compatible tokeness Provider；凭据不复制到 GPT Researcher 仓库。当前外部
+tokeness 容量故障会使主 Agent 与 GPT Researcher 同时 fail closed。当前可以声明完整
+工程矩阵已通过，但不能写成已发布或可上线。
+
+2026-07-25 已将生成式模型 canonical fact 更新为 `STRUCTURED_MODEL=gpt-5.4-mini`。
+Conversation、Structured decision、Graphiti、LangExtract、MS GraphRAG completion 以及
+GPT Researcher FAST/SMART/STRATEGIC 均从该配置解析；旧 DeepSeek/highway/uuapi 运行绑定
+已移除。embedding 仍是独立的本地/多语种 384 维契约，transcription 也未改变。当前
+tokeness 对先前 luna 请求返回 HTTP 404；terra 暴露复杂 RootModel union 与延迟问题。
+当前 object-root schema 与 `gpt-5.4-mini` 已通过完整 23/23 工程矩阵；dirty manifest
+仍阻止 clean-revision 发布声明。
+
+## 本次链路收敛
+
+- Web、CLI、飞书等正式入口统一进入 `ConversationService`，旧
+  `Task/GoalGraph/AdaptivePlanner/ExecutiveController` 入口和相应用例已删除，不保留
+  alias、fallback 或双轨写入。
+- 模型每轮只产生 `FinalMessage | ContinueTurnProposal`；最新 `WorkingPlanSnapshot`、
+  typed ToolResult、Agent status/Artifact 和 `DecisionFeedback` 回到下一轮模型上下文。
+- Tool 校验、权限和执行统一经过 `ToolExecutor`；Application 通过
+  `InteractionToolPort` / `InteractionAgentPort` 依赖执行能力。
+- Knowledge delete/restore 使用 immutable governed command、双 digest、receipt 和
+  restart/replay 约束，错误 digest 与重复副作用均由 E04/E10 反事实覆盖。
+- A2A Artifact 不再误路由到 upload-only `inspect_artifact`；cancelled status 不抹除已返回
+  Artifact；同一 Agent 已返回 Artifact 后的重复委托被拒绝。最终 E17 trace 自动断言
+  `agent_calls == 1`，历史问题链路约 4 分钟，修复后目标用例约 2 分钟，完整矩阵中的
+  C04 call 为 87.7 秒。
+- Research 成功断言不再接受 `running`；E05/C01/E13 只接受终态，并要求 digest 或明确
+  limitation。最近单跑 C01 为 `completed_with_limitations` 且 `digest != null`，160.60 秒。
+- GPT Researcher OpenAI-compatible Adapter 支持 tokeness SSE；空 SSE、`[DONE]` 和
+  cancellation 文本不能成为成功 Artifact。本地多语种 embedding contract 为 384 维，
+  research workload 限制为 1 iteration、1 subtopic、1 result/query 和 400 words。
+- OpenAI SDK 内部 retry 已关闭，`max_retries` 的唯一 owner 是
+  `RetryingStructuredModelClient` 的 typed-operation retry；release fixture 同时物化
+  OpenAI/Structured timeout 与 retry，避免父进程 120 秒 profile 在子进程退回 30 秒。
+- OpenAI/httpx 的 connect/read/write/pool timeout 不是整次响应 deadline；持续发送 SSE
+  chunk 会重置 read timeout。`OpenAIModelClient` 现对完整 Provider 调用和 structured
+  stream 消费执行 wall-clock deadline，超时关闭 client 并返回 typed timeout。E09 从旧
+  archive 的 21702.94 秒降至定向 92.27 秒，并在完整矩阵中再次通过。
+- debug reset 不再截断 `checkpoint_migrations`；schema migration 事实由迁移器唯一拥有，
+  业务/runtime 数据仍按正式 debug API 清理。
 
 ## 事实与所有权
 
-| 事实 | Canonical owner / 唯一写入口 | Phase 0 处理 |
+| 事实 | Canonical owner / 唯一写入口 | 当前处理 |
 | --- | --- | --- |
-| 本地 Tool 定义 | `AgentRuntime._register_tools` → `ToolExecutor.register` | 从实际 registry 派生，不维护第二份 Tool 表 |
-| MCP 远端名称/schema | MCP `tools/list` discovery | 只报告 discovery 事实 |
-| MCP 本地名称、风险、权限、出域 | `MCPConfig` / Host policy | 与远端声明分开 |
-| A2A 当前 profile | `AgentGateway.register` 后的 `SubagentProfile` | 当前 GPT Researcher 为本地 adapter profile，不冒充 Agent Card discovery |
-| 配置是否启用 | `Settings` | 与实现存在、provider health 分开 |
-| Provider 当前健康 | 实时 credential/health observation | 未观察时固定为 `not_observed` |
+| Interaction 执行与 trace | `ConversationService` / Interaction journal | 正式入口唯一主循环；WorkingPlan 仅为 transient projection |
+| 本地 Tool 定义 | composition root → `ToolExecutor.register` | 从实际 registry 派生，不维护第二份 Tool 表 |
+| Tool 调用治理与执行事实 | `ToolExecutor` | Application 只依赖 `InteractionToolPort` |
+| MCP 远端名称/schema | MCP `tools/list` discovery | 与 Host mapping、风险和权限分开 |
+| A2A profile 与 child lifecycle | `AgentGateway` | status、Artifact 和父级 FinalMessage 分离 |
+| Knowledge revision/delete/restore | Knowledge lifecycle aggregate/service | governed command 是唯一副作用写入口 |
+| Provider 当前健康 | 实时 credential/health observation | 未观察时不得根据配置推断健康 |
+| 生成式模型部署选择 | `STRUCTURED_MODEL` / deployment config | Adapter-specific 值默认确定性派生；当前为 `gpt-5.4-mini` |
 | Release eligibility | `evidence_catalog.py` | `claim_kind` 与 `release_eligible` 共同判定 |
-| 同 revision 实际通过 | trace `manifest.json`、`summary.json`、trace envelope 和 checksum | dirty、commit 不同、skip、失败、无 trace 或 checksum 错误均 fail closed |
+| 同 revision 实际通过 | trace manifest/summary/envelope/checksum | dirty、commit 不同、skip、失败或校验错误均 fail closed |
 | 发布能力基线 | `release_gate.py` 派生投影 | 不进入数据库、checkpoint 或 Runtime capability state |
 
-`src/personal_agent/capabilities/inventory.py` 只消费上述 canonical sources，返回 typed
-`RuntimeCapabilityInventory`。`GET /api/capabilities/inventory` 暴露当前进程事实；它
-不会根据配置开启或曾经 discovery 成功推断 provider 仍健康，也不包含 Release trust。
+`src/personal_agent/orchestration/capability_inventory.py` 只消费 application assembly、
+registry、accepted MCP mapping 和 registered Agent profile，返回临时有效能力集合；它不
+创造 semantic intent，也不提供 Release trust。
 
-## 当前实现与配置清单
+## E2E 验收矩阵
 
-本地 Tool 组装当前包括以下无条件注册组：
-
-- Artifact/Knowledge read：`inspect_artifact`、`graph_search`、`list_recent_notes`、
-  `get_note`、`find_similar_notes`；
-- Capture/Lifecycle：`capture_text`、`delete_note`、`restore_note`、`update_note`、
-  `supersede_note`、`mark_note_deprecated`、`mark_notes_conflicted`；
-- Maintenance/Review：`consolidate_knowledge`、`review_digest`、
-  `inspect_knowledge_gaps`；
-- Scheduled Research 管理：subscription list/update/pause/resume/run-now、run list、
-  digest read、feedback、save event；
-- Operations：worker queue inspect/retry、workflow run inspect；
-- Enterprise：已配置 raw wiki roots 时生成对应只读 Tool，并注册统一
-  `enterprise_knowledge_search`。
-
-`capture_url`、`capture_upload` 只有注入 `CaptureService` 时注册；`web_search` 只有 API
-key 存在时注册；MCP Tool 只有 Host 启用 server、mapping 存在且真实 discovery 成功时
-注册。具体进程的权威列表必须读取 inventory API，不能从本段反推。
-
-本次 `Settings.from_env()` 快照：
-
-| 扩展 | 实现 | 配置 | discovery / provider |
-| --- | --- | --- | --- |
-| Web Search | 有 adapter | API key 已配置 | health 未观察 |
-| Raw Wiki | 有 adapter | `D:\mySoft\workspace\personalWiki\raw` 存在 | 本地文件源，运行调用结果未观察 |
-| MCP | 有通用 adapter | `enabled=false`，0 server | 未 discovery |
-| GPT Researcher A2A | 有 adapter | `enabled=false` | 未注册 profile，provider 未观察 |
-
-## Release Gate
-
-机器声明目录绑定：
-
-| 原生能力 | 最低证据 | 当前 |
+| 分组 | 当前声明 | 当前完整矩阵证据 |
 | --- | --- | --- |
-| Conversation | E01 | `unverified` |
-| Capture | E08、E09 | `unverified` |
-| Grounded Ask | E02、E03、E08 | `unverified` |
-| Knowledge Lifecycle | E04、E10 | `unverified` |
-| Review | E11 | `unverified` |
-| Knowledge Maintenance | E12 | `unverified` |
-| Research | E05 | `unverified` |
-| Scheduled Intelligence | E13 | `unverified` |
+| 原生产品能力 E01–E13 | 13/13 passed | 当前单一 archive 13/13 passed |
+| 组合强能力 C01–C04 | 4/4 passed | 当前单一 archive 4/4 passed |
+| 复杂主循环 L01–L06 | 6/6 passed | 当前单一 archive 6/6 passed |
+| 外部 Profile | E16–E19 passed | 真实 GitHub、Notion、tokeness GPT Researcher 与 unavailable 反事实均在同一 archive 中 |
 
-C01–C04 分别绑定四项组合声明，并额外要求其依赖的全部原生能力先可信。基础 E 系列全部
-通过也不能替代任一 C 系列。
+其中：
 
-门禁只接受同时满足以下条件的交集：
+- E01 覆盖直接回答、澄清、连续会话，并反证没有无意义 Task/Receipt；
+- E04/E10 覆盖 governed delete/restore、错误 digest 拒绝、重启恢复和不重复副作用；
+- E05/C01/E13 覆盖 Research 终态、digest/source 和 limitation，不把 `running` 当成功；
+- E06/E16/E18 使用真实 GitHub/Notion MCP gateway，E19 覆盖能力不可用；
+- E07/E17/C04/L04 使用真实 GPT Researcher adapter/profile，并断言远端 completed 不自动
+  完成父级回答、Artifact 返回后不重复委托；
+- L01–L06 覆盖 Observation 后修订 WorkingPlan、安全并发、崩溃后从 canonical facts
+  重建、manager-specialist、budget fail-closed 和 verifier feedback 修订。
 
-1. catalog 条目具有正确 `claim_kind` 且 `release_eligible=true`；
-2. 不含 test double，走真实 HTTP 进程和场景要求的真实依赖；
-3. manifest commit 等于目标 revision，manifest 与目标工作树均为 clean；
-4. summary `exit_status=0`，具体 test outcome 为 `passed`，不是 skip；
-5. 对应用例至少有一个 passed trace envelope；
-6. archive run identity 一致且全部 JSON checksum 有效。
+Phase 3 的通用 MCP Host 边界以及 GitHub/Notion 真实 Profile 已在完整矩阵的 E06 中
+执行，Connector 主路径与 unavailable 反事实均有同一 archive 证据。
 
-执行：
+## 架构与专项门禁
+
+截至 2026-07-26 的实际执行结果：
+
+```text
+scripts/check_layers.py: cycles=none, forbidden_edges=0
+tests/: 637 passed
+Generative provider config contract: passed, 7/7 model slots resolve to gpt-5.4-mini
+Minimal luna provider probe: failed, HTTP 404 no available providers
+Formal luna E01/E17: failed closed before user result / A2A delegation
+Minimal terra plain/strict-object probes: passed
+Formal terra E01: passed, 110.30 seconds
+Formal terra E17: failed, HTTP client timeout at 300 seconds after schema retries
+AgentTurnDecision schema: passed, object root with nested anyOf and no oneOf
+Formal gpt-5.4-mini E01: passed, 77.16 seconds
+Formal gpt-5.4-mini E17: passed, 171.31 seconds
+GPT Researcher scoped Ruff: passed
+GPT Researcher unit tests: not executed; host dependency resolution requires MSVC link.exe
+GPT Researcher container SSE: passed; empty SSE rejection: passed
+GPT Researcher local embedding: passed, dimensions=384
+Scoped Ruff for changed Provider/E2E/runtime files: passed
+Provider wall-clock deadline + interaction regression: 39 passed
+Formal E09 after deadline fix: passed, 92.27 seconds
+Current full release engineering matrix: 23 passed, 0 failed, 0 skipped, 1777.44 seconds
+Current full archive: 20260726T011631.187395Z-20684-4a62da6a, exit_status=0
+Full-repository Ruff: 13 pre-existing findings outside this change scope
+```
+
+架构检查说明依赖图没有循环或已知 forbidden edge；它不能替代上面的用户结果 E2E。
+本次 GPT Researcher 修复只改变 compose Provider 配置，通过 `--no-build --force-recreate`
+重建容器，没有产生冗余镜像。当前 8001 容器的 non-streaming tokeness 路径已由 E17、
+E07 和 C04 验证。此前 clean build 在 Docker Hub base-image metadata 阶段超时，因此
+clean build reproducibility 尚未建立，但不影响本次已执行容器 profile 的工程证据。
+
+## 执行命令与发布门禁
+
+完整工程验收命令：
+
+```powershell
+$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
+uv run pytest evals/e2e_quality --e2e-scope=release `
+  --e2e-require-complete-matrix -q -s
+```
+
+发布投影命令：
 
 ```powershell
 uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 ```
 
-当任一原生或组合声明不可信时命令返回非零。完整产品 E2E 尚未加入 catalog 前，
-`--e2e-require-complete-matrix` 也会在 pytest 收集阶段列出缺少的 E01–E13，而不是运行
-旧架构用例后误报完整。
+门禁只接受同时满足以下条件的交集：
+
+1. catalog 条目分类正确且 `release_eligible=true`；
+2. 从真实 HTTP 进程进入，使用真实模型、PostgreSQL 和场景要求的真实 Provider；
+3. manifest commit 等于目标 revision，manifest 与目标工作树均为 clean；
+4. summary `exit_status=0`，具体 test outcome 为 `passed`，不是 skip；
+5. 对应用例至少有一个 passed trace envelope；
+6. archive run identity 一致且全部 JSON checksum 有效。
+
+当前第 2、4 条已经由完整工程矩阵满足；第 3 条不满足，因为 archive manifest 与目标
+工作树均为 dirty。gate 实际返回 `target_revision_dirty` 和由 dirty archive 不可采信所
+派生的 `missing_same_revision_passing_trace`，因此 fail-closed 是预期结果。
+
+## 剩余风险
+
+1. 必须在提交后的 clean revision 重跑完整矩阵，才能建立发布资格；当前 23/23 只构成
+   dirty worktree 的工程执行证据；
+2. Docker Hub metadata 网络恢复后应按当前 Dockerfile clean build GPT Researcher，
+   重建正式 8001 容器并至少重跑 E17；
+3. 全仓 Ruff 仍有 13 个范围外历史问题；变更范围 Ruff 通过不能写成全仓 lint 通过；
+4. GPT Researcher PDF 生成日志有中文字体 `.notdef` 警告；文本 Artifact 与 E2E 断言通过，
+   但 PDF 中文视觉可读性尚未验证；
+5. `conversation_id`、`interaction_run_ref` 等仍在部分 Interface/Application 边界以受格式
+   约束的字符串传递，尚未全部收敛为独立 Value Object；不得把当前实现描述成 typed
+   identity 目标已经完全闭合。
 
 ## 决策所有权
 
-Inventory 是确定性 Runtime Projection：唯一性来自已注册 Tool、accepted MCP config、
-registered Agent profiles 和 application assembly facts。它不新增 semantic intent。
-
-Release gate 是确定性 Admission：唯一性来自目标 revision、catalog metadata、archive
-checksum、manifest identity 和 test outcome。它只接受或拒绝发布声明；缺证据时返回
-typed reason，不补 catalog、不重写 trace、不使用 Runtime availability 兜底。
-
+Capability inventory 是确定性 Runtime Projection，只反映实际注册与观察事实，不新增
+intent。Release gate 是确定性 Completion/Admission：它只接受或拒绝能力发布声明，缺
+证据时返回原因，不补 catalog、不重写 trace，也不使用 Runtime availability 兜底。

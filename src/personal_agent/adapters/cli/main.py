@@ -5,11 +5,10 @@ import logging
 
 import typer
 
-from personal_agent.application.runtime_results import EntryResult
+from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import setup_logging
-from personal_agent.kernel.models import EntryInput
 from personal_agent.adapters.feishu import FeishuService
 from personal_agent.application.review import (
     DigestSubscription,
@@ -17,7 +16,11 @@ from personal_agent.application.review import (
     ReviewDigestScheduler,
     subscriptions_from_settings,
 )
-from personal_agent.application.review.delivery import DeliveryRouter, FeishuDeliveryProvider
+from personal_agent.application.review.delivery import (
+    DeliveryRouter,
+    FeishuDeliveryProvider,
+    InAppDeliveryProvider,
+)
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
 from personal_agent.application.research import (
     ResearchSubscriptionRecord, ResearchSubscriptionSpec, SchedulePolicy,
@@ -40,26 +43,8 @@ def _build_service() -> AgentService:
     return AgentService(settings)
 
 
-def _format_entry_result(result: EntryResult) -> str:
-    """Format an EntryResult as JSON for CLI output."""
-    output: dict = {
-        "result_contracts": result.result_contracts,
-        "reason": result.reason,
-        "reply": result.reply_text,
-        "run_id": result.run_id,
-        "run_status": result.run_status,
-    }
-    if result.steps:
-        output["steps"] = result.steps
-    if result.execution_trace:
-        output["execution_trace"] = result.execution_trace
-    if result.capture_result:
-        output["note_id"] = result.capture_result.note.id
-    if result.ask_result:
-        output["citations"] = [
-            c.model_dump(mode="json") for c in result.ask_result.citations
-        ]
-    return json.dumps(output, ensure_ascii=False, indent=2)
+def _format_conversation_result(result: ConversationTurnView) -> str:
+    return result.model_dump_json(indent=2)
 
 
 @app.command()
@@ -68,16 +53,16 @@ def entry(
     user_id: str = "default",
     session_id: str = "default",
 ) -> None:
-    """通过统一 Agent 入口处理文本，走完整的意图路由→规划→执行链路。"""
+    """通过 canonical interaction loop 处理一轮用户消息。"""
     service = _build_service()
     logger.info("CLI entry invoked user=%s session=%s", user_id, session_id)
-    result = service.entry(EntryInput(
-        text=text.strip(),
+    result = service.converse(
+        conversation_id=session_id,
+        messages=[ConversationMessage(role="user", content=text.strip())],
         user_id=user_id,
-        session_id=session_id,
         source_platform="cli",
-    ))
-    typer.echo(_format_entry_result(result))
+    )
+    typer.echo(_format_conversation_result(result))
 
 
 @app.command("worker")
@@ -95,9 +80,10 @@ def worker(
     service = _build_service()
     if queue == "research":
         feishu_service = FeishuService(service.settings, service)
-        service.research_service.set_delivery_router(
-            DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)})
-        )
+        service.research_service.set_delivery_router(DeliveryRouter({
+            "feishu": FeishuDeliveryProvider(feishu_service),
+            "in_app": InAppDeliveryProvider(),
+        }))
     runner = WorkflowWorker(
         service.runtime,
         queue=queue,

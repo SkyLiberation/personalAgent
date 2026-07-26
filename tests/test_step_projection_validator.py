@@ -9,7 +9,6 @@ from langchain_core.tools import tool
 from personal_agent.governance import ToolExecutor
 
 from personal_agent.tools import governance_extras, tool_response, tool_success
-from personal_agent.orchestration.orchestration_nodes._steps import _infer_research_max_items
 
 
 class TestStepProjectionValidationResult:
@@ -339,19 +338,6 @@ class TestStepProjectionValidatorResearch:
 
         assert result.valid
         assert not any("tool_input 参数校验失败" in issue for issue in result.issues)
-
-    @pytest.mark.parametrize(
-        ("text", "expected"),
-        [
-            ("最多整理 1 条高可信事件", 1),
-            ("至多两项更新", 2),
-            ("不超过3个来源", 3),
-            ("整理近期动态", None),
-        ],
-    )
-    def test_research_max_items_can_be_inferred_from_entry_text(self, text, expected):
-        assert _infer_research_max_items(text) == expected
-
 
 class TestReActValidation:
     """Validate ReAct-specific checks in StepProjectionValidator."""

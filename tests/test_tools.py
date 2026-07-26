@@ -3,18 +3,19 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from pydantic import ValidationError
 
-from personal_agent.orchestration.orchestration_models import RunCheckpoint, ReactSubState, ToolTrackingSubState
 from personal_agent.capabilities.contracts.grants import GrantDependencySet, ProcedureNodeGrant
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.tools import (
     ToolError,
+    build_capture_text_tool,
+    build_inspect_knowledge_gaps_tool,
     governance_extras,
     tool_failure,
     tool_governance,
@@ -23,6 +24,21 @@ from personal_agent.tools import (
     tool_schema,
     tool_success,
 )
+
+
+def test_capture_text_timeout_covers_complete_ingestion_transaction() -> None:
+    capture_text = build_capture_text_tool(lambda **_kwargs: None)
+
+    assert tool_governance(capture_text).timeout_seconds == 180.0
+    assert tool_governance(capture_text).idempotency_key_required is True
+
+
+def test_inspect_knowledge_gaps_is_available_to_public_agent() -> None:
+    inspect_knowledge_gaps = build_inspect_knowledge_gaps_tool(SimpleNamespace())
+
+    governance = tool_governance(inspect_knowledge_gaps)
+    assert governance.exposure == "public_agent"
+    assert governance.side_effects == ("read_longterm",)
 
 
 @tool(
@@ -128,6 +144,24 @@ def slow():
 )
 def workflow_only():
     return tool_response(tool_success("workflow"))
+
+
+idempotent_write_calls = {"count": 0}
+
+
+@tool(
+    "idempotent_write",
+    description="可重放 receipt 的写入测试工具",
+    response_format="content_and_artifact",
+    extras=governance_extras(
+        side_effects=("write_longterm",),
+        permission_scope="test:write",
+        idempotency_key_required=True,
+    ),
+)
+def idempotent_write(target: str):
+    idempotent_write_calls["count"] += 1
+    return tool_response(tool_success({"target": target, "receipt": "receipt-1"}))
 
 
 class TestToolExecutor:
@@ -250,29 +284,26 @@ class TestToolExecutor:
         assert "idempotency_key" in result["error"]
         assert sink.events[0].artifact_ok is False
 
-    def test_gateway_blocks_react_write_tool_even_if_prompt_allows_it(self):
-        sink = InMemoryToolAuditSink()
-        executor = ToolExecutor(audit_sink=sink)
-        executor.register(dangerous)
+    def test_gateway_replays_committed_receipt_without_duplicate_side_effect(self):
+        idempotent_write_calls["count"] = 0
+        executor = ToolExecutor()
+        executor.register(idempotent_write)
 
-        state = RunCheckpoint(
-            react=ReactSubState(allowed_tools=["dangerous"]),
-            tool_tracking=ToolTrackingSubState(active_context="react", pending_call_id="call-1"),
-            tool_messages=[
-                AIMessage(content="", tool_calls=[{
-                    "name": "dangerous",
-                    "args": {"target": "note-1", "confirmed": True, "idempotency_key": "idem-1"},
-                    "id": "call-1",
-                    "type": "tool_call",
-                }])
-            ],
+        first = executor.invoke_direct(
+            "idempotent_write",
+            target="note-1",
+            confirmed=True,
+            idempotency_key="idem-write-1",
         )
-        message = executor.graph_node()(state)["tool_messages"][0]
-        result = message.artifact
+        replayed = executor.invoke_direct(
+            "idempotent_write",
+            target="note-1",
+            confirmed=True,
+            idempotency_key="idem-write-1",
+        )
 
-        assert result["ok"] is False
-        assert "leaf execution grant" in result["error"]
-        assert sink.events[0].execution_mode == "react"
+        assert first == replayed
+        assert idempotent_write_calls["count"] == 1
 
     def test_gateway_requires_confirmation_bound_grant_for_confirmed_high_risk_tool(self):
         gateway = ToolGateway()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Protocol
 
 from personal_agent.kernel.contracts.review import DeliveryMessage, DeliveryResult
@@ -27,6 +28,18 @@ class FeishuDeliveryProvider:
         except Exception as exc:
             return DeliveryResult(ok=False, error=str(exc))
         return DeliveryResult(ok=True)
+
+
+class InAppDeliveryProvider:
+    """A production delivery channel surfaced by the application's inbox API."""
+
+    def send(self, target: DeliveryTarget, message: DeliveryMessage) -> DeliveryResult:
+        if target.channel != "in_app":
+            return DeliveryResult(ok=False, error=f"unsupported channel: {target.channel}")
+        if target.target_type != "user_id":
+            return DeliveryResult(ok=False, error=f"unsupported in-app target type: {target.target_type}")
+        digest = sha256(f"{target.target_id}\0{message.text}".encode("utf-8")).hexdigest()
+        return DeliveryResult(ok=True, provider_message_id=f"in_app_{digest[:20]}")
 
 
 class DeliveryRouter:

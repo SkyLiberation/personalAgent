@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Callable
 from uuid import uuid4
 
-from personal_agent.kernel.models import EntryInput
 from personal_agent.application.worker_queue import WorkerTask
 
 logger = logging.getLogger(__name__)
@@ -118,20 +117,7 @@ class WorkflowWorker:
         run = self.runtime.research_store.get_run(run_id)
         if run is None:
             return False
-        result = self.runtime.execute_entry(EntryInput(
-            text=f"执行 Research run {run_id}: {run.topic}",
-            user_id=run.user_id,
-            session_id=f"research:{run_id}",
-            source_platform="worker",
-            metadata={
-                "research_run_id": run_id,
-            },
-        ))
-        if getattr(result, "run_status", "") not in {"completed", ""}:
-            return False
-        run = self.runtime.research_store.get_run(run_id)
-        if run is None:
-            return False
+        run = self.runtime.research_service.execute_run(run_id)
         if run.status not in {
             "completed_verified",
             "completed_with_limitations",

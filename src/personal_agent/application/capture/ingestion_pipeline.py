@@ -137,7 +137,7 @@ class IngestionPipeline:
     def _run_local_pipeline(self, state: AgentState) -> AgentState:
         """Run the capture branch without compiling a standalone LangGraph.
 
-        Entry orchestration is owned by ``orchestration_graph``. Capture stays
+        Interaction orchestration is owned by ``ConversationService``. Capture stays
         a deterministic branch workflow here so direct API calls and
         entry-driven capture share the same behavior without creating a second
         graph layer. Document structure and chunking are owned by

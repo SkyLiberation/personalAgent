@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import KnowledgeNote, NoteBody
-from personal_agent.application.workspace.models import KnowledgeStateEvent
+from personal_agent.application.knowledge_lifecycle import (
+    KnowledgeDeleteConflict,
+    KnowledgeDeleteNotFound,
+    KnowledgeDeleteOperationView,
+    KnowledgeRestoreOperationView,
+)
 from personal_agent.adapters.web.routes._shared import resolve_user_id
 
 logger = logging.getLogger(__name__)
@@ -19,10 +25,34 @@ class GraphSyncResponse(BaseModel):
     queued: bool = False
 
 
-class RestoreNoteRequest(BaseModel):
+class PrepareKnowledgeDeleteRequest(BaseModel):
     user_id: str | None = None
-    snapshot_id: str = ""
-    idempotency_key: str = ""
+    workspace_id: str | None = None
+    reason: str = ""
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class DecideKnowledgeDeleteRequest(BaseModel):
+    user_id: str | None = None
+    decision: Literal["confirm", "reject"]
+    authorization_digest: str = Field(min_length=64, max_length=64)
+    execution_command_digest: str = Field(min_length=64, max_length=64)
+    confirmation_ref: str = Field(default="", max_length=200)
+
+
+class PrepareKnowledgeRestoreRequest(BaseModel):
+    user_id: str | None = None
+    workspace_id: str | None = None
+    reason: str = ""
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class DecideKnowledgeRestoreRequest(BaseModel):
+    user_id: str | None = None
+    decision: Literal["confirm", "reject"]
+    authorization_digest: str = Field(min_length=64, max_length=64)
+    execution_command_digest: str = Field(min_length=64, max_length=64)
+    confirmation_ref: str = Field(default="", max_length=200)
 
 
 def register_note_routes(
@@ -46,95 +76,137 @@ def register_note_routes(
         )
         return [_workspace_note_response(item) for item in items]
 
-    @app.delete("/api/notes/{note_id}")
-    def delete_note(
+    @app.post(
+        "/api/notes/{note_id}/delete-commands",
+        response_model=KnowledgeDeleteOperationView,
+    )
+    def prepare_note_delete(
         note_id: str,
+        body: PrepareKnowledgeDeleteRequest,
+        request: Request,
+    ) -> KnowledgeDeleteOperationView:
+        resolved_user = body.user_id or resolve_user_id(request, settings)
+        workspace_id = body.workspace_id or resolved_user
+        try:
+            return service.knowledge_lifecycle_service.prepare_delete(
+                workspace_id=workspace_id,
+                user_id=resolved_user,
+                target_note_id=note_id,
+                reason=body.reason,
+                idempotency_key=body.idempotency_key,
+            )
+        except KnowledgeDeleteNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except KnowledgeDeleteConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/knowledge-delete-commands/{command_id}/decision",
+        response_model=KnowledgeDeleteOperationView,
+    )
+    def decide_note_delete(
+        command_id: str,
+        body: DecideKnowledgeDeleteRequest,
+        request: Request,
+    ) -> KnowledgeDeleteOperationView:
+        resolved_user = body.user_id or resolve_user_id(request, settings)
+        try:
+            return service.knowledge_lifecycle_service.decide_delete(
+                command_id=command_id,
+                user_id=resolved_user,
+                decision=body.decision,
+                authorization_digest=body.authorization_digest,
+                execution_command_digest=body.execution_command_digest,
+                confirmation_ref=body.confirmation_ref,
+            )
+        except KnowledgeDeleteNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (KnowledgeDeleteConflict, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/knowledge-delete-commands/{command_id}",
+        response_model=KnowledgeDeleteOperationView,
+    )
+    def get_note_delete(
+        command_id: str,
         request: Request,
         user_id: str | None = None,
-        cascade: bool = False,
-        delete_reason: str = "",
-    ) -> dict[str, object]:
+    ) -> KnowledgeDeleteOperationView:
         resolved_user = user_id or resolve_user_id(request, settings)
-        logger.info("Delete note id=%s user=%s cascade=%s", note_id, resolved_user, cascade)
-        items = service.workspace_service.store.list_knowledge_items(resolved_user, limit=500)
-        item = next((candidate for candidate in items if candidate.knowledge_item_id == note_id), None)
-        if item is None:
-            raise HTTPException(status_code=404, detail="Note not found or not owned by user.")
-        previous_state = item.state
-        item.state = "deleted"
-        claims = []
-        events = []
-        for claim_id in item.claim_ids:
-            claim = service.workspace_service.store.get_claim(claim_id)
-            if claim is None:
-                continue
-            previous = claim.state
-            claim.state = "deleted"
-            claims.append(claim)
-            events.append(KnowledgeStateEvent(
-                workspace_id=resolved_user,
-                target_id=claim.claim_id,
-                from_state=previous,
-                to_state="deleted",
-                reason=delete_reason or "deleted from notes API",
-                actor="user",
-                evidence_span_ids=list(claim.evidence_span_ids),
-                policy_result="user_delete",
-            ))
-        service.workspace_service.store.save_knowledge_items([item])
-        if claims:
-            service.workspace_service.store.save_claims(claims)
-        if events:
-            service.workspace_service.store.save_knowledge_state_events(events)
-        return {
-            "ok": True,
-            "deleted_note_id": note_id,
-            "snapshot_id": f"workspace:{resolved_user}:{note_id}:{previous_state}",
-            "graph_cleaned": False,
-            "graph_failed": False,
-        }
-
-    @app.post("/api/memory/notes/{note_id}/restore")
-    def restore_note(
-        note_id: str,
-        body: RestoreNoteRequest,
-        request: Request,
-    ) -> dict[str, object]:
-        resolved_user = body.user_id or resolve_user_id(request, settings)
-        idempotency_key = body.idempotency_key or f"api-restore:{resolved_user}:{body.snapshot_id or note_id}"
-        logger.info(
-            "Restore note requested note_id=%s snapshot_id=%s user=%s",
-            note_id,
-            body.snapshot_id,
-            resolved_user,
+        result = service.knowledge_lifecycle_service.get_delete(
+            command_id,
+            user_id=resolved_user,
         )
-        items = service.workspace_service.store.list_knowledge_items(resolved_user, limit=500)
-        item = next((candidate for candidate in items if candidate.knowledge_item_id == note_id), None)
-        if item is None:
-            raise HTTPException(status_code=404, detail="Restore failed.")
-        item.state = "active"
-        service.workspace_service.store.save_knowledge_items([item])
-        return {"ok": True, "data": _workspace_note_response(item)}
+        if result is None:
+            raise HTTPException(status_code=404, detail="delete command not found")
+        return result
 
-    @app.post("/api/memory/delete-snapshots/{snapshot_id}/restore")
-    def restore_note_snapshot(
-        snapshot_id: str,
-        body: RestoreNoteRequest,
+    @app.post(
+        "/api/knowledge-delete-commands/{delete_command_id}/restore-commands",
+        response_model=KnowledgeRestoreOperationView,
+    )
+    def prepare_note_restore(
+        delete_command_id: str,
+        body: PrepareKnowledgeRestoreRequest,
         request: Request,
-    ) -> dict[str, object]:
+    ) -> KnowledgeRestoreOperationView:
         resolved_user = body.user_id or resolve_user_id(request, settings)
-        idempotency_key = body.idempotency_key or f"api-restore:{resolved_user}:{snapshot_id}"
-        logger.info("Restore snapshot requested snapshot_id=%s user=%s", snapshot_id, resolved_user)
-        parts = snapshot_id.split(":")
-        if len(parts) >= 3 and parts[0] == "workspace":
-            note_id = parts[2]
-            items = service.workspace_service.store.list_knowledge_items(resolved_user, limit=500)
-            item = next((candidate for candidate in items if candidate.knowledge_item_id == note_id), None)
-            if item is not None:
-                item.state = "active"
-                service.workspace_service.store.save_knowledge_items([item])
-                return {"ok": True, "data": _workspace_note_response(item)}
-        raise HTTPException(status_code=404, detail="Restore failed.")
+        workspace_id = body.workspace_id or resolved_user
+        try:
+            return service.knowledge_lifecycle_service.prepare_restore(
+                workspace_id=workspace_id,
+                user_id=resolved_user,
+                delete_command_id=delete_command_id,
+                reason=body.reason,
+                idempotency_key=body.idempotency_key,
+            )
+        except KnowledgeDeleteNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (KnowledgeDeleteConflict, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/knowledge-restore-commands/{command_id}/decision",
+        response_model=KnowledgeRestoreOperationView,
+    )
+    def decide_note_restore(
+        command_id: str,
+        body: DecideKnowledgeRestoreRequest,
+        request: Request,
+    ) -> KnowledgeRestoreOperationView:
+        resolved_user = body.user_id or resolve_user_id(request, settings)
+        try:
+            return service.knowledge_lifecycle_service.decide_restore(
+                command_id=command_id,
+                user_id=resolved_user,
+                decision=body.decision,
+                authorization_digest=body.authorization_digest,
+                execution_command_digest=body.execution_command_digest,
+                confirmation_ref=body.confirmation_ref,
+            )
+        except KnowledgeDeleteNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (KnowledgeDeleteConflict, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/knowledge-restore-commands/{command_id}",
+        response_model=KnowledgeRestoreOperationView,
+    )
+    def get_note_restore(
+        command_id: str,
+        request: Request,
+        user_id: str | None = None,
+    ) -> KnowledgeRestoreOperationView:
+        resolved_user = user_id or resolve_user_id(request, settings)
+        result = service.knowledge_lifecycle_service.get_restore(
+            command_id,
+            user_id=resolved_user,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="restore command not found")
+        return result
 
     @app.get("/api/notes/{note_id}/chunks", response_model=list[KnowledgeNote])
     def get_note_chunks(note_id: str, request: Request) -> list[KnowledgeNote]:

@@ -3526,32 +3526,38 @@ def _llm_rerank_note_ids(
     model_client: object,
 ) -> list[str]:
     from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import sealed_context_projection_ref
 
     valid_ids = [note_id for note_id in candidate_ids if note_id in note_by_id]
     if len(valid_ids) <= 1:
         return valid_ids
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Rank candidate evidence sections for answering the question. "
+                "Prefer the section that directly answers the question over "
+                "background, parent abstracts, adjacent sections, or broad topical matches. "
+                "Return JSON only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": _note_rerank_prompt(question, valid_ids, note_by_id),
+        },
+    ]
     response = model_client.generate(StructuredModelRequest(
         operation="open_ragbench_note_rerank",
         version="v1",
         temperature=0,
         max_tokens=900,
         kind="structured",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Rank candidate evidence sections for answering the question. "
-                    "Prefer the section that directly answers the question over "
-                    "background, parent abstracts, adjacent sections, or broad topical matches. "
-                    "Return JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _note_rerank_prompt(question, valid_ids, note_by_id),
-            },
-        ],
+        messages=messages,
         output_type=_NoteRerankResult,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="open_ragbench_note_rerank",
+            messages=messages,
+        ),
         metadata={"component": "open_ragbench_controlled_rerank", "candidate_count": len(valid_ids)},
     ))
     valid = set(valid_ids)
@@ -3565,32 +3571,38 @@ def _llm_score_note_ids(
     model_client: object,
 ) -> dict[str, float]:
     from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import sealed_context_projection_ref
 
     valid_ids = [note_id for note_id in candidate_ids if note_id in note_by_id]
     if len(valid_ids) <= 1:
         return {note_id: 1.0 for note_id in valid_ids}
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Score candidate evidence sections for answering the question. "
+                "Use calibrated numeric scores from 0 to 1. Prefer sections that "
+                "directly answer the question. Penalize broad background, adjacent "
+                "sections, parent abstracts, and merely topical matches. Return JSON only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": _note_score_prompt(question, valid_ids, note_by_id),
+        },
+    ]
     response = model_client.generate(StructuredModelRequest(
         operation="open_ragbench_note_score_rerank",
         version="v1",
         temperature=0,
         max_tokens=1400,
         kind="structured",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Score candidate evidence sections for answering the question. "
-                    "Use calibrated numeric scores from 0 to 1. Prefer sections that "
-                    "directly answer the question. Penalize broad background, adjacent "
-                    "sections, parent abstracts, and merely topical matches. Return JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _note_score_prompt(question, valid_ids, note_by_id),
-            },
-        ],
+        messages=messages,
         output_type=_NoteScoreResult,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="open_ragbench_note_score_rerank",
+            messages=messages,
+        ),
         metadata={"component": "open_ragbench_score_rerank", "candidate_count": len(valid_ids)},
     ))
     valid = set(valid_ids)
@@ -3609,32 +3621,38 @@ def _llm_select_evidence(
     model_client: object,
 ) -> tuple[dict[str, _EvidenceSelectionJudgment], int, list[str], str | None]:
     from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import sealed_context_projection_ref
 
     valid_ids = [note_id for note_id in candidate_ids if note_id in note_by_id]
     if len(valid_ids) <= 1:
         return {}, 0, [], None
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Judge whether each candidate evidence item directly answers the question. "
+                "Do not rerank globally. Do not invent ids. Prefer precise answer sections "
+                "over background, parent abstracts, neighboring context, or merely topical text. "
+                "Return JSON only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": _semantic_selector_prompt(question, valid_ids, note_by_id),
+        },
+    ]
     response = model_client.generate(StructuredModelRequest(
         operation="open_ragbench_semantic_evidence_selector",
         version="v1",
         temperature=0,
         max_tokens=1800,
         kind="structured",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Judge whether each candidate evidence item directly answers the question. "
-                    "Do not rerank globally. Do not invent ids. Prefer precise answer sections "
-                    "over background, parent abstracts, neighboring context, or merely topical text. "
-                    "Return JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _semantic_selector_prompt(question, valid_ids, note_by_id),
-            },
-        ],
+        messages=messages,
         output_type=_EvidenceSelectionResult,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="open_ragbench_semantic_evidence_selector",
+            messages=messages,
+        ),
         metadata={"component": "open_ragbench_semantic_selector", "candidate_count": len(valid_ids)},
     ))
     valid = set(valid_ids)
@@ -3658,33 +3676,39 @@ def _llm_select_evidence_policy(
     model_client: object,
 ) -> tuple[_EvidenceSelectionPolicy, int, list[str], str | None]:
     from personal_agent.infra.structured_model import StructuredModelRequest
+    from personal_agent.capabilities.contracts.model import sealed_context_projection_ref
 
     valid_ids = [note_id for note_id in candidate_ids if note_id in note_by_id]
     if len(valid_ids) <= 1:
         return _EvidenceSelectionPolicy(), 0, [], None
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Decide whether retrieval evidence needs semantic intervention. "
+                "Do not invent ids. Prefer no_op when the current top evidence is already specific. "
+                "Use promote_primary_evidence only for a clearly better candidate, reorder_within_top5 "
+                "only when the best candidate is already in the original top five, and request_more_retrieval "
+                "only when none of the candidates is sufficient. Return JSON only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": _semantic_policy_prompt(question, valid_ids, note_by_id),
+        },
+    ]
     response = model_client.generate(StructuredModelRequest(
         operation="open_ragbench_semantic_policy_selector",
         version="v1",
         temperature=0,
         max_tokens=1200,
         kind="structured",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Decide whether retrieval evidence needs semantic intervention. "
-                    "Do not invent ids. Prefer no_op when the current top evidence is already specific. "
-                    "Use promote_primary_evidence only for a clearly better candidate, reorder_within_top5 "
-                    "only when the best candidate is already in the original top five, and request_more_retrieval "
-                    "only when none of the candidates is sufficient. Return JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _semantic_policy_prompt(question, valid_ids, note_by_id),
-            },
-        ],
+        messages=messages,
         output_type=_EvidenceSelectionPolicyResult,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="open_ragbench_semantic_policy_selector",
+            messages=messages,
+        ),
         metadata={"component": "open_ragbench_semantic_policy_selector", "candidate_count": len(valid_ids)},
     ))
     return (

@@ -3,19 +3,29 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from personal_agent.application.runtime_results import DigestResult
+from personal_agent.application.conversation import (
+    ConversationMessage,
+    ConversationTurnView,
+)
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.models import EntryInput
 from personal_agent.adapters.feishu.models import FeishuIncomingMessage
 from personal_agent.adapters.feishu.service import FeishuService
 from personal_agent.application.review import DigestSubscription
 from personal_agent.kernel.contracts.review import ReviewFeedbackResult
 
 
-def test_feishu_entry_does_not_preclassify_or_prefetch_thread_messages(temp_dir):
+def test_feishu_text_enters_canonical_conversation_with_visible_thread_context(temp_dir):
     agent_service = MagicMock()
-    agent_service.entry.return_value.reply_text = "完成"
+    agent_service.converse.return_value = ConversationTurnView(
+        interaction_run_ref="irun-feishu",
+        conversation_id="chat-1",
+        disposition="answer",
+        message=ConversationMessage(role="assistant", content="完成"),
+    )
     service = FeishuService(Settings(data_dir=temp_dir), agent_service)
-    service.fetch_recent_messages = MagicMock(return_value=[])
+    service.fetch_recent_messages = MagicMock(
+        return_value=[{"role": "user", "content": "前文"}]
+    )
 
     service.process_incoming_message(
         FeishuIncomingMessage(
@@ -27,40 +37,12 @@ def test_feishu_entry_does_not_preclassify_or_prefetch_thread_messages(temp_dir)
         )
     )
 
-    service.fetch_recent_messages.assert_not_called()
-    entry_input = agent_service.entry.call_args.args[0]
-    assert entry_input.source_platform == "feishu"
-    assert entry_input.metadata == {"chat_id": "chat-1"}
-
-
-def test_feishu_registered_thread_loader_fetches_only_feishu_chat_context(temp_dir):
-    agent_service = MagicMock()
-    service = FeishuService(Settings(data_dir=temp_dir), agent_service)
-    service.fetch_recent_messages = MagicMock(
-        return_value=[{"role": "user", "content": "待总结内容"}]
-    )
-    loader = agent_service.set_thread_message_loader.call_args.args[0]
-
-    messages = loader(
-        EntryInput(
-            text="总结群聊",
-            source_platform="feishu",
-            metadata={"chat_id": "chat-1"},
-        ),
-        20,
-    )
-    not_feishu = loader(
-        EntryInput(
-            text="总结群聊",
-            source_platform="web",
-            metadata={"chat_id": "chat-1"},
-        ),
-        20,
-    )
-
-    assert messages == [{"role": "user", "content": "待总结内容"}]
-    assert not_feishu == []
     service.fetch_recent_messages.assert_called_once_with("chat-1", limit=20)
+    call = agent_service.converse.call_args.kwargs
+    assert call["conversation_id"] == "chat-1"
+    assert call["user_id"] == "default"
+    assert call["source_platform"] == "feishu"
+    assert [item.content for item in call["messages"]] == ["前文", "帮我总结一下群聊"]
 
 
 def test_feishu_digest_command_short_circuits_entry(temp_dir):
@@ -80,7 +62,7 @@ def test_feishu_digest_command_short_circuits_entry(temp_dir):
 
     assert reply == "今日知识简报\n- A"
     agent_service.digest.assert_called_once_with("alice")
-    agent_service.entry.assert_not_called()
+    agent_service.converse.assert_not_called()
 
 
 def test_feishu_review_feedback_short_circuits_entry(temp_dir):
@@ -120,7 +102,7 @@ def test_feishu_review_feedback_short_circuits_entry(temp_dir):
         source_channel="feishu",
         source_message_id="msg-1",
     )
-    agent_service.entry.assert_not_called()
+    agent_service.converse.assert_not_called()
 
 
 def test_feishu_digest_subscription_command_upserts_current_chat(temp_dir):
@@ -159,4 +141,4 @@ def test_feishu_digest_subscription_command_upserts_current_chat(temp_dir):
     assert subscription.enabled is True
     assert subscription.target_id == "chat-1"
     assert subscription.schedule_time == "08:30"
-    agent_service.entry.assert_not_called()
+    agent_service.converse.assert_not_called()

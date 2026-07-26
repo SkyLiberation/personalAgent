@@ -10,25 +10,8 @@ from psycopg import connect
 from psycopg import sql
 
 from personal_agent.kernel.config import OpenAIConfig, Settings
-from personal_agent.kernel.models import Citation, EntryInput, KnowledgeNote
-from personal_agent.planning.task_analysis_admission import (
-    AcceptedTaskAnalysisCompiler,
-    TaskAnalysisAdmission,
-    task_analysis_input_digest,
-)
+from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.planning.task_analyzer import (
-    ClarificationDraft,
-    EvidenceRequirement,
-    GoalDraft,
-    GoalRelationDraft,
-    ResourceHint,
-    SuccessCriterionDraft,
-    TaskAnalysisProposalBody,
-    TaskAnalysisProposal,
-    TaskAnalysisAttempt,
-    TaskAnalysisResult,
-)
 from tests.note_factory import make_note
 
 POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_test?sslmode=disable"
@@ -76,237 +59,6 @@ def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     from personal_agent.kernel import config_env as _config_env_module
 
     monkeypatch.setattr(_config_env_module, "load_dotenv", lambda override=True: False)
-
-
-def stub_task_analysis(
-    text: str,
-    _messages: list[dict[str, str]] | None = None,
-    **_kwargs: object,
-) -> TaskAnalysisProposalBody:
-    """Deterministic LLM stand-in for integration tests exercising routed branches."""
-    stripped = text.strip()
-    def decision(intent: str, message: str, **kwargs) -> TaskAnalysisProposalBody:
-        clarify = bool(kwargs.get("requires_clarification", False))
-        resource_hints = list(kwargs.get("resource_hints", []))
-        semantic_defaults = {
-            "capture_text": ("external_state", "knowledge", ["text"], ["ingest"]),
-            "capture_link": ("external_state", "knowledge", ["url"], ["ingest"]),
-            "solidify_conversation": ("external_state", "conversation", ["thread"], ["ingest"]),
-            "delete_knowledge": ("external_state", "knowledge", ["note"], ["delete"]),
-            "consolidate_knowledge": ("external_state", "knowledge", ["note"], ["repair"]),
-            "create_research_subscription": (
-                "external_state", "external_research", ["subscription"], ["create"],
-            ),
-            "research_once": (
-                "artifact", "external_research", ["research", "report"],
-                ["search", "read", "verify"],
-            ),
-            "ask": ("response", "knowledge", ["note", "evidence"], ["search", "read"]),
-            "summarize_thread": ("response", "conversation", ["thread"], ["read"]),
-            "review_digest": ("response", "knowledge", ["note"], ["list", "read"]),
-            "inspect_knowledge_gaps": (
-                "artifact", "knowledge", ["note", "relation"], ["search", "read"],
-            ),
-            "inspect_operations": (
-                "artifact", "operations", ["task"], ["list", "read"],
-            ),
-            "inspect_workflow": (
-                "artifact", "operations", ["execution"], ["read"],
-            ),
-            "manage_research": (
-                "external_state", "external_research", ["subscription", "run"], ["update"],
-            ),
-            "maintain_knowledge": ("external_state", "knowledge", ["note"], ["update"]),
-            "act": ("external_state", "external", ["artifact"], ["update"]),
-        }
-        result_contract, domain, resource_types, operations = semantic_defaults.get(
-            intent,
-            ("response", "", [], []),
-        )
-        if not resource_hints and operations:
-            resource_hints = [ResourceHint(
-                semantic_domain=domain,
-                resource_types=resource_types,
-                operations=operations,
-                origin="user_explicit",
-            )]
-        mutation = result_contract == "external_state"
-        evidence = bool(resource_hints) and not mutation
-        return TaskAnalysisProposalBody(
-            user_goal=str(kwargs.get("user_goal") or message),
-            outcome="clarify" if clarify else "ready",
-            goals=[] if clarify else [GoalDraft(
-                result_contract=result_contract,
-                description=stripped,
-                success_criteria=[SuccessCriterionDraft(
-                    description=f"完成请求：{stripped}",
-                    origin="model_inferred",
-                )],
-                side_effect_intent="mutation" if mutation else "none",
-                evidence_requirement=(
-                    EvidenceRequirement(citation_required=True)
-                    if evidence else None
-                ),
-                resource_hints=resource_hints,
-            )],
-            clarification=(
-                ClarificationDraft(
-                    missing_information=list(
-                        kwargs.get(
-                            "missing_information",
-                            ["明确的目标、问题或操作对象"],
-                        )
-                    ),
-                    prompt=str(kwargs.get("clarification_prompt", message)),
-                )
-                if clarify else None
-            ),
-            rejection_reason=None,
-        )
-    if not stripped:
-        return decision(
-            "unknown",
-            "消息内容为空。",
-            requires_clarification=True,
-        )
-    if stripped == "帮我":
-        return decision(
-            "unknown",
-            "需要补充信息。",
-            requires_clarification=True,
-            missing_information=["具体目标或待处理内容"],
-            clarification_prompt="请补充具体内容。",
-        )
-    if any(word in stripped for word in ("记住", "记一下")) and any(
-        word in stripped for word in ("然后回答", "再回答", "并回答")
-    ):
-        return TaskAnalysisProposalBody(
-            user_goal="记录一条知识并基于该主题回答后续问题",
-            outcome="ready",
-            goals=[
-                GoalDraft(
-                    result_contract="external_state",
-                    description=stripped,
-                    success_criteria=[SuccessCriterionDraft(
-                        description="指定知识已写入",
-                        origin="model_inferred",
-                    )],
-                    side_effect_intent="mutation",
-                    resource_hints=[ResourceHint(
-                        semantic_domain="knowledge",
-                        resource_types=["text"],
-                        operations=["ingest"],
-                        origin="user_explicit",
-                    )],
-                ),
-                GoalDraft(
-                    result_contract="response",
-                    description=stripped,
-                    success_criteria=[SuccessCriterionDraft(
-                        description="回答后续问题",
-                        origin="model_inferred",
-                    )],
-                    evidence_requirement=EvidenceRequirement(citation_required=True),
-                    resource_hints=[ResourceHint(
-                        semantic_domain="knowledge",
-                        resource_types=["note", "evidence"],
-                        operations=["search", "read"],
-                        origin="user_explicit",
-                    )],
-                ),
-            ],
-            relations=[GoalRelationDraft(
-                predecessor=1,
-                successor=2,
-                kind="consumes_output",
-                origin="model_inferred",
-                rationale="后续回答明确基于刚记录的内容",
-            )],
-            clarification=None,
-            rejection_reason=None,
-        )
-    if any(word in stripped for word in ("固化下来", "沉淀下来", "沉淀成", "记下来")):
-        return decision("solidify_conversation", "沉淀会话结论。")
-    if "删除" in stripped:
-        return decision(
-            "delete_knowledge",
-            "删除知识。",
-            risk_level="high",
-            requires_confirmation=True,
-        )
-    if "总结" in stripped:
-        return decision("summarize_thread", "总结内容。")
-    if "知识简报" in stripped or "复习简报" in stripped:
-        return decision("review_digest", "生成知识简报。")
-    if any(word in stripped for word in ("整理成综述", "合并笔记", "整理知识")):
-        return decision("consolidate_knowledge", "按主题整理知识。")
-    if any(word in stripped for word in ("知识缺口", "知识孤岛", "检查缺口")):
-        return decision("inspect_knowledge_gaps", "检查知识缺口。")
-    if any(word in stripped for word in ("暂停订阅", "恢复订阅", "修改订阅", "改成每天", "马上跑一次", "最近几次简报")):
-        return decision("manage_research", "管理研究订阅。")
-    if any(word in stripped for word in ("知识过期", "替换这条", "冲突", "修正笔记", "更新笔记")):
-        return decision("maintain_knowledge", "维护已有知识。")
-    if any(word in stripped for word in ("worker", "队列", "失败任务", "没发", "重试任务")):
-        return decision("inspect_operations", "诊断后台任务。")
-    if any(word in stripped for word in ("run_id", "执行历史", "哪一步失败", "workflow")):
-        return decision("inspect_workflow", "诊断 workflow。")
-    if any(word in stripped for word in ("发到邮箱", "发送邮件", "剪成短视频", "生成PPT", "生成 PPT")):
-        return decision(
-            "act",
-            "完成跨应用处理",
-            resource_hints=[ResourceHint(
-                semantic_domain="communication",
-                resource_types=["email", "artifact"],
-                operations=["create"],
-            )],
-        )
-    if any(word in stripped for word in ("每天", "每周", "工作日")) and any(
-        word in stripped for word in ("新闻", "资讯", "动态", "简报", "跟踪")
-    ):
-        return decision("create_research_subscription", "创建研究订阅。")
-    research_cues = (
-        "最新", "最近", "多来源", "多源", "高可信", "官方", "整理", "最多",
-        "不超过", "简报", "动态", "发布", "趋势", "发展", "进展", "新闻",
-        "公告", "论文", "开源", "财报", "报告", "GitHub", "github",
-    )
-    simple_qa_cues = (
-        "什么是", "什么叫", "是什么", "是多少", "解释一下", "介绍一下",
-        "如何", "怎么", "为什么", "是否", "区别",
-    )
-    if (
-        any(word in stripped for word in ("调研", "研究一下", "研究最近", "搜集最新", "搜集最近", "收集最新", "收集最近", "关注"))
-        and any(word in stripped for word in research_cues)
-    ) or (
-        any(word in stripped for word in ("查一下", "帮我查", "查询"))
-        and any(word in stripped for word in research_cues)
-        and not any(word in stripped for word in simple_qa_cues)
-    ):
-        return decision("research_once", "执行一次研究。")
-    if stripped.startswith(("http://", "https://")):
-        return decision("capture_link", "采集链接。")
-    if any(word in stripped for word in ("记一下", "记住")):
-        return decision("capture_text", "记录内容。")
-    if any(word in stripped for word in ("你好", "谢谢", "你是谁")):
-        return decision("respond", "直接回答。")
-    return decision("ask", "回答问题。")
-
-
-def admitted_task_analysis_result(
-    text: str,
-    body: TaskAnalysisProposalBody | None = None,
-) -> TaskAnalysisResult:
-    entry = EntryInput(text=text)
-    proposal = TaskAnalysisProposal(
-        input_ref="test-entry",
-        input_digest=task_analysis_input_digest(entry),
-        body=body or stub_task_analysis(text),
-    )
-    admission = TaskAnalysisAdmission().admit(entry, proposal)
-    accepted = AcceptedTaskAnalysisCompiler().compile(proposal, admission)
-    return TaskAnalysisResult(
-        attempts=(TaskAnalysisAttempt(proposal=proposal, admission=admission),),
-        accepted=accepted,
-    )
 
 
 def _ensure_test_database() -> None:
@@ -757,6 +509,60 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS knowledge_delete_commands (
+                    command_id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    target_note_id TEXT NOT NULL,
+                    authorization_digest TEXT NOT NULL,
+                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (user_id, idempotency_key)
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_delete_events (
+                    event_id TEXT PRIMARY KEY,
+                    command_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (command_id, event_type)
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_delete_receipts (
+                    receipt_id TEXT PRIMARY KEY,
+                    command_id TEXT NOT NULL UNIQUE,
+                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_restore_commands (
+                    command_id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    delete_command_id TEXT NOT NULL,
+                    authorization_digest TEXT NOT NULL,
+                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (user_id, idempotency_key)
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_restore_events (
+                    event_id TEXT PRIMARY KEY,
+                    command_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (command_id, event_type)
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_restore_receipts (
+                    receipt_id TEXT PRIMARY KEY,
+                    command_id TEXT NOT NULL UNIQUE,
+                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
                 TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
@@ -770,6 +576,10 @@ def clean_postgres_business_tables():
                 TRUNCATE procedure_eval_runs;
                 TRUNCATE procedure_eval_policies;
                 TRUNCATE worker_queue_tasks;
+                TRUNCATE knowledge_delete_commands, knowledge_delete_events,
+                    knowledge_delete_receipts;
+                TRUNCATE knowledge_restore_commands, knowledge_restore_events,
+                    knowledge_restore_receipts;
                 TRUNCATE workspace_artifacts, workspace_extraction_runs, workspace_evidence_blocks,
                     workspace_evidence_spans, workspace_claims, workspace_grounding_runs,
                     workspace_claim_support_events, workspace_claim_admission_decisions,
@@ -857,3 +667,4 @@ def sample_citation_factory():
 @pytest.fixture
 def sample_citation(sample_citation_factory) -> Citation:
     return sample_citation_factory()
+

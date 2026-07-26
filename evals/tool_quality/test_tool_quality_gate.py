@@ -82,7 +82,7 @@ def _notion_mcp_governance_tools():
     )
     client = _MCPClientNotInvoked()
     tools = []
-    for remote_name in ("post-search", "retrieve-page-markdown"):
+    for remote_name in ("API-post-search", "API-retrieve-page-markdown"):
         tools.append(build_mcp_tool(
             client,
             server,
@@ -104,7 +104,7 @@ def _build_registered_tools():
         build_web_search_tool(Settings(), dependency, dependency),
         build_capture_text_tool(lambda **kwargs: dependency.capture_text(**kwargs)),
         build_capture_url_tool(dependency),
-        build_capture_upload_tool(dependency),
+        build_capture_upload_tool(dependency, dependency),
         build_delete_note_tool(dependency),
         build_restore_note_tool(dependency),
         build_update_note_tool(dependency),

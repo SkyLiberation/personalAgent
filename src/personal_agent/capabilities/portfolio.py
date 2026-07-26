@@ -7,7 +7,11 @@ from typing import Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.capabilities.contracts.execution import Capability, MCPCapability
+from personal_agent.capabilities.contracts.execution import (
+    Capability,
+    HostCapabilityBindingGroup,
+    MCPCapability,
+)
 
 
 class ContextCapabilityAvailability(BaseModel):
@@ -50,6 +54,7 @@ class CapabilityPortfolio:
     def __init__(self, capabilities: Iterable[Capability] = ()) -> None:
         self._definitions: dict[str, Capability] = {}
         self._by_name: dict[str, str] = {}
+        self._binding_groups: dict[str, HostCapabilityBindingGroup] = {}
         self.availability = ExecutionCapabilityAvailabilityProjection()
         for capability in capabilities:
             self.register(capability)
@@ -68,6 +73,15 @@ class CapabilityPortfolio:
         observations = dict(self.availability.observations)
         observations[observation.capability_ref] = observation
         self.availability = self.availability.model_copy(update={"observations": observations})
+
+    def register_binding_group(self, group: HostCapabilityBindingGroup) -> None:
+        missing = set(group.member_capability_refs) - set(self._definitions)
+        if missing:
+            raise ValueError(f"binding group references unknown capabilities: {sorted(missing)}")
+        self._binding_groups[group.group_ref] = group
+
+    def binding_group(self, group_ref: str) -> HostCapabilityBindingGroup | None:
+        return self._binding_groups.get(group_ref)
 
     def get(self, capability_id: str) -> Capability | None:
         return self._definitions.get(capability_id)

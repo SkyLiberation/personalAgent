@@ -10,6 +10,7 @@ from evals.e2e_quality.evidence_catalog import (
 from evals.e2e_quality.release_gate import (
     REQUIRED_COMPOSITE_EVIDENCE_IDS,
     REQUIRED_NATIVE_EVIDENCE_IDS,
+    REQUIRED_LOOP_EVIDENCE_IDS,
     evaluate_release_capabilities,
 )
 from evals.e2e_quality.trace_archive import TraceArchive
@@ -45,7 +46,11 @@ def _catalog(*, include_composites: bool = True) -> tuple[EvidenceCase, ...]:
         _case(evidence_id, EvidenceClaimKind.COMPOSITE_CAPABILITY)
         for evidence_id in REQUIRED_COMPOSITE_EVIDENCE_IDS
     )
-    return native + (composite if include_composites else ())
+    loops = tuple(
+        _case(evidence_id, EvidenceClaimKind.COMPLEX_LOOP)
+        for evidence_id in REQUIRED_LOOP_EVIDENCE_IDS
+    )
+    return native + (composite if include_composites else ()) + loops
 
 
 def _write_passing_archive(temp_dir, cases: tuple[EvidenceCase, ...]) -> None:
@@ -90,6 +95,7 @@ def test_gate_trusts_only_same_revision_catalog_and_trace_intersection(temp_dir)
 
     assert len(report.trusted_native_capability_ids) == 8
     assert len(report.trusted_composite_capability_ids) == 4
+    assert len(report.trusted_loop_capability_ids) == 6
 
 
 def test_catalog_or_implementation_presence_without_trace_is_unverified(temp_dir) -> None:
@@ -160,4 +166,3 @@ def test_test_double_cannot_become_release_evidence(temp_dir) -> None:
     e01 = next(item for item in report.native_evidence if item.evidence_id == "E01")
     assert e01.status == "unverified"
     assert "release_catalog_entry_ineligible" in e01.reasons
-

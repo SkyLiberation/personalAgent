@@ -522,6 +522,33 @@ class PostgresWorkspaceStore(PostgresStoreBase):
         row = self._fetch_payload("workspace_artifacts", "artifact_id", artifact_id)
         return Artifact.model_validate(row) if row else None
 
+    def list_artifacts(
+        self,
+        workspace_id: str,
+        *,
+        source_type: str | None = None,
+        limit: int = 100,
+    ) -> list[Artifact]:
+        self.ensure_schema()
+        clauses = ["workspace_id = %s"]
+        params: list[object] = [workspace_id]
+        if source_type:
+            clauses.append("payload ->> 'source_type' = %s")
+            params.append(source_type)
+        params.append(max(1, limit))
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM workspace_artifacts
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                return [Artifact.model_validate(row["payload"]) for row in cur.fetchall()]
+
     def get_extraction_run(self, extraction_run_id: str) -> ExtractionRun | None:
         row = self._fetch_payload("workspace_extraction_runs", "extraction_run_id", extraction_run_id)
         return ExtractionRun.model_validate(row) if row else None

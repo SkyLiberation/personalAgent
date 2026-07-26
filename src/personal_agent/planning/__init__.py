@@ -1,1 +1,1 @@
-"""Task analysis, goal compilation, executive control, and bounded adaptation."""
+"""Semantic planning helpers used by active product use cases."""

@@ -13,8 +13,21 @@ from personal_agent.application.review import (
     subscriptions_from_settings,
 )
 from personal_agent.kernel.contracts.delivery import DeliveryTarget
-from personal_agent.application.review.delivery import DeliveryRouter
+from personal_agent.application.review.delivery import DeliveryRouter, InAppDeliveryProvider
 from tests.note_factory import make_note
+
+
+def test_in_app_delivery_provider_returns_a_stable_provider_receipt() -> None:
+    provider = InAppDeliveryProvider()
+    target = DeliveryTarget(channel="in_app", target_type="user_id", target_id="alice")
+    message = DeliveryMessage(title="Digest", text="A sourced update")
+
+    first = provider.send(target, message)
+    second = provider.send(target, message)
+
+    assert first.ok is True
+    assert first.provider_message_id == second.provider_message_id
+    assert first.provider_message_id.startswith("in_app_")
 
 
 class FakeMemory:

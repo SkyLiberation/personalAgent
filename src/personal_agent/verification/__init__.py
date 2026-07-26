@@ -1,2 +1,1 @@
-"""Goal and task completion verification."""
-
+"""Output and interaction verification."""

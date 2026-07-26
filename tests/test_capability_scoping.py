@@ -4,12 +4,12 @@ from datetime import UTC, datetime
 
 from personal_agent.capabilities.contracts.execution import (
     Capability,
-    CapabilityEquivalenceClass,
     CapabilityRequirement,
     CapabilityRuntimeContext,
     ExecutionCapabilityRequest,
     CapabilitySelectionPolicy,
     EvidenceSourceCapability,
+    HostCapabilityBindingGroup,
 )
 from personal_agent.capabilities.admission import ResolutionValidator
 from personal_agent.capabilities.resolver import CapabilityResolver
@@ -27,7 +27,7 @@ def _request(
     kinds=("mcp_tool",),
     operations=("search", "read"),
     policy: CapabilitySelectionPolicy | None = None,
-    data_egress_class: str = "none",
+    binding_group_ref: str | None = None,
 ) -> ExecutionCapabilityRequest:
     return ExecutionCapabilityRequest(
         task_id="task-1",
@@ -38,18 +38,7 @@ def _request(
         allowed_operations=operations,
         requirements=(requirement,),
         policy=policy or CapabilitySelectionPolicy(),
-        runtime_context=CapabilityRuntimeContext(
-            equivalence_class=CapabilityEquivalenceClass(
-                required_output_contract=requirement.output_contract,
-                allowed_side_effect_class=requirement.side_effect_class,
-                authority_scope="test:scope",
-                trust_floor=requirement.minimum_trust_level,
-                freshness_contract="fresh" if requirement.freshness_required else "static",
-                evidence_contract="provider_output",
-                data_egress_class=data_egress_class,
-                failure_semantics="return_typed_failure",
-            ),
-        ),
+        runtime_context=CapabilityRuntimeContext(binding_group_ref=binding_group_ref),
     )
 
 
@@ -85,22 +74,26 @@ def test_resolver_rejects_kind_outside_action_scope():
 
 
 def test_local_first_is_explicit_policy_not_text_classification():
-    resolver = CapabilityResolver(CapabilityPortfolio((
-        _capability(
+    local = _capability(
             "retriever:local",
             kind="retriever",
             provider="local",
             local_name="local",
             side_effects=("external_network",),
-        ),
-        _capability(
+        )
+    web = _capability(
             "retriever:web",
             kind="retriever",
             provider="web",
             local_name="web",
             side_effects=("external_network",),
-        ),
-    )))
+        )
+    portfolio = CapabilityPortfolio((local, web))
+    portfolio.register_binding_group(HostCapabilityBindingGroup(
+        group_ref="host:retrieval",
+        member_capability_refs=(local.capability_id, web.capability_id),
+    ))
+    resolver = CapabilityResolver(portfolio)
     requirement = CapabilityRequirement.from_dimensions(
         requirement_id="evidence",
         purpose="retrieve evidence",
@@ -111,11 +104,11 @@ def test_local_first_is_explicit_policy_not_text_classification():
     resolution = resolver.resolve(_request(
         requirement=requirement,
         kinds=("retriever",),
-        data_egress_class="content",
         policy=CapabilitySelectionPolicy(
             local_first=True,
             max_providers_per_action=4,
         ),
+        binding_group_ref="host:retrieval",
     ))
 
     assert resolution.selected_definition.local_name == "local"
@@ -313,8 +306,13 @@ def test_outcome_ranker_reorders_only_hard_eligible_candidates():
         purpose="read evidence",
         operations=("search", "read"),
     )
+    portfolio = CapabilityPortfolio((baseline, preferred, denied))
+    portfolio.register_binding_group(HostCapabilityBindingGroup(
+        group_ref="host:ranked-retrieval",
+        member_capability_refs=(baseline.capability_id, preferred.capability_id),
+    ))
     resolution = CapabilityResolver(
-        CapabilityPortfolio((baseline, preferred, denied)),
+        portfolio,
         ranker=ranker,
     ).resolve(_request(
         requirement=requirement,
@@ -323,6 +321,7 @@ def test_outcome_ranker_reorders_only_hard_eligible_candidates():
             max_capabilities_per_action=1,
             max_providers_per_action=1,
         ),
+        binding_group_ref="host:ranked-retrieval",
     ))
 
     assert resolution.selected_definition.local_name == "preferred"

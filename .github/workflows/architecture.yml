@@ -19,8 +19,6 @@ jobs:
           python-version: "3.12"
       - name: Enforce explicit package DAG (fail closed)
         run: python scripts/check_layers.py
-      - name: Enforce Agentic decision/control boundary
-        run: python scripts/check_agentic_architecture.py
 
   lint-imports:
     name: Ruff + import health

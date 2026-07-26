@@ -176,6 +176,7 @@ class SubtaskSpec(BaseModel):
     parent_goal_id: str
     context_projection_ids: tuple[str, ...] = ()
     required_capability: CapabilityRequirement
+    proposed_resource_access: ProposedResourceAccessPlan
     expected_artifact_contract: str = "AgentArtifact"
     verification_policy: str = "required"
     max_provider_calls: int = Field(default=1, ge=1, le=16)

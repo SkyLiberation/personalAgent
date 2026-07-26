@@ -14,6 +14,8 @@ from personal_agent.kernel.contracts.capability_values import (
     FreshnessProfile,
 )
 
+DEFAULT_GENERATIVE_MODEL = "gpt-5.4-mini"
+
 
 class _StrictBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -78,8 +80,8 @@ class MicrosoftGraphRagConfig(_StrictBase):
 class OpenAIConfig(_StrictBase):
     api_key: str | None = None
     base_url: str | None = None
-    model: str = "gpt-4.1-mini"
-    small_model: str = "deepseek-v4-flash"
+    model: str = DEFAULT_GENERATIVE_MODEL
+    small_model: str = DEFAULT_GENERATIVE_MODEL
     vision_model: str = ""
     transcription_model: str = "whisper-1"
     embedding_model: str = "BAAI/bge-m3"
@@ -94,8 +96,8 @@ class StructuredConfig(_StrictBase):
 
     api_key: str | None = None
     base_url: str | None = None
-    model: str = "gpt-5.4-mini"
-    timeout_seconds: float = 30.0
+    model: str = DEFAULT_GENERATIVE_MODEL
+    timeout_seconds: float = 60.0
     max_retries: int = 2
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
@@ -130,6 +132,15 @@ class GPTResearcherA2AConfig(_StrictBase):
     max_search_results: int | None = None
 
 
+class InteractionLoopConfig(_StrictBase):
+    policy_revision: str = "interaction-loop-v1"
+    max_model_turns: int = Field(default=8, ge=1)
+    max_tool_calls: int = Field(default=12, ge=0)
+    max_agent_calls: int = Field(default=4, ge=0)
+    max_total_tokens: int = Field(default=32_000, ge=1)
+    max_concurrency: int = Field(default=4, ge=1)
+
+
 class MCPToolConfig(_StrictBase):
     """Business-facing registration for one remote MCP tool.
 
@@ -141,6 +152,7 @@ class MCPToolConfig(_StrictBase):
     name: str | None = None
     description: str | None = None
     business_role: str | None = None
+    binding_group_ref: str | None = None
     resource_locator_arg: str | None = None
     semantic_domains: tuple[str, ...] = Field(min_length=1)
     resource_types: tuple[str, ...] = Field(min_length=1)
@@ -266,9 +278,8 @@ class LangSmithConfig(_StrictBase):
 class LangExtractConfig(_StrictBase):
     """LangExtract layer config.
 
-    Decoupled from OpenAIConfig (DeepSeek) and GraphitiConfig (Kimi) so the
-    extraction layer can target a model that supports OpenAI-style structured
-    outputs (e.g. qwen3-coder-flash) without disturbing the other LLM paths.
+    Provider-specific overrides remain available, while the environment loader
+    defaults this adapter to the canonical structured generation provider.
 
     This config drives only the optional LangExtract pre-extraction layer
     (``extract/``), which is currently dormant in the production capture/ask
@@ -277,8 +288,8 @@ class LangExtractConfig(_StrictBase):
     """
 
     api_key: str | None = None
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model_id: str = "qwen3-coder-flash"
+    base_url: str = "https://n.tokeness.io/v1"
+    model_id: str = DEFAULT_GENERATIVE_MODEL
     max_char_buffer: int = 6000
     extraction_passes: int = 1
     max_workers: int = 4

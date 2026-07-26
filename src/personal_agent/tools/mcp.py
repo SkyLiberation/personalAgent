@@ -123,6 +123,7 @@ def build_mcp_tool(
                 "server_id": server.server_id,
                 "remote_name": mapping.remote_name,
                 "business_role": mapping.business_role,
+                "binding_group_ref": mapping.binding_group_ref,
                 "resource_locator_arg": mapping.resource_locator_arg,
                 "input_schema": remote.input_schema,
             },

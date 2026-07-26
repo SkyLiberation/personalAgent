@@ -795,6 +795,26 @@ def test_research_pipeline_persists_events_and_digest(postgres_url):
     assert set(digest.items[0].claims[0].decision_ids).issubset(decision_ids)
 
 
+def test_one_shot_research_uses_the_mandatory_domain_procedure(postgres_url):
+    from personal_agent.orchestration.runtime import AgentRuntime
+
+    service, store, _ = _service(postgres_url)
+    runtime = SimpleNamespace(_research_service=service, research_store=store)
+
+    run = AgentRuntime.run_research_once(
+        runtime,
+        user_id="alice",
+        topic="AI Agent",
+        instructions="只看重要技术发布",
+        max_items=3,
+        lookback_hours=24,
+    )
+
+    assert run.id
+    assert run.status == "completed_verified"
+    assert store.get_run(run.id).digest_id == run.digest_id
+
+
 def test_subscription_run_is_durable_and_idempotent(postgres_url):
     service, store, queue = _service(postgres_url)
     subscription = store.upsert_subscription(ResearchSubscriptionRecord.create(ResearchSubscriptionSpec(

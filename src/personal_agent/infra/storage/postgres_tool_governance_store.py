@@ -40,8 +40,15 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                         reserved_at TIMESTAMPTZ NOT NULL,
                         committed_at TIMESTAMPTZ,
                         updated_at TIMESTAMPTZ NOT NULL,
+                        receipt JSONB,
                         metadata JSONB NOT NULL DEFAULT '{}'::jsonb
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE tool_idempotency_ledger
+                    ADD COLUMN IF NOT EXISTS receipt JSONB
                     """
                 )
                 cur.execute(
@@ -211,7 +218,23 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
             conn.commit()
         return inserted
 
-    def commit(self, key: str) -> None:
+    def get_receipt(self, key: str) -> dict | None:
+        self.ensure_schema()
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT receipt
+                    FROM tool_idempotency_ledger
+                    WHERE idempotency_key = %s AND status = 'committed'
+                    """,
+                    (key,),
+                )
+                row = cur.fetchone()
+        receipt = row.get("receipt") if row else None
+        return dict(receipt) if isinstance(receipt, dict) else None
+
+    def commit(self, key: str, receipt: dict | None = None) -> None:
         self.ensure_schema()
         now = datetime.now(UTC)
         with self._connect() as conn:
@@ -221,10 +244,11 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                     UPDATE tool_idempotency_ledger
                     SET status = 'committed',
                         committed_at = COALESCE(committed_at, %s),
+                        receipt = COALESCE(%s, receipt),
                         updated_at = %s
                     WHERE idempotency_key = %s
                     """,
-                    (now, now, key),
+                    (now, Jsonb(receipt) if receipt is not None else None, now, key),
                 )
             conn.commit()
 

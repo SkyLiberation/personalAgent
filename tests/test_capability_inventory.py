@@ -5,8 +5,8 @@ from langchain_core.tools import tool
 from personal_agent.adapters.web.routes.system import register_system_routes
 from personal_agent.capabilities.inventory import (
     A2AAssemblyDefinition,
-    build_runtime_capability_inventory,
 )
+from personal_agent.orchestration.capability_inventory import build_runtime_capability_inventory
 from personal_agent.kernel.config_models import (
     MCPConfig,
     MCPServerConfig,

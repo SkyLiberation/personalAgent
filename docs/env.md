@@ -113,17 +113,43 @@ PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
 ## LLM 配置
 
 ```env
-OPENAI_BASE_URL=https://api.deepseek.com
-OPENAI_API_KEY=your_llm_key
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_SMALL_MODEL=gpt-4.1-nano
+STRUCTURED_BASE_URL=https://n.tokeness.io/v1
+STRUCTURED_API_KEY=your_tokeness_key
+STRUCTURED_MODEL=gpt-5.4-mini
+PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS=60
+PERSONAL_AGENT_STRUCTURED_MAX_RETRIES=2
+
+OPENAI_BASE_URL=${STRUCTURED_BASE_URL}
+OPENAI_API_KEY=${STRUCTURED_API_KEY}
+OPENAI_MODEL=${STRUCTURED_MODEL}
+OPENAI_SMALL_MODEL=${STRUCTURED_MODEL}
+PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL=${STRUCTURED_BASE_URL}
+PERSONAL_AGENT_GRAPHITI_LLM_API_KEY=${STRUCTURED_API_KEY}
+PERSONAL_AGENT_GRAPHITI_LLM_MODEL=${STRUCTURED_MODEL}
+PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=${STRUCTURED_MODEL}
+PERSONAL_AGENT_EXTRACT_BASE_URL=${STRUCTURED_BASE_URL}
+PERSONAL_AGENT_EXTRACT_API_KEY=${STRUCTURED_API_KEY}
+PERSONAL_AGENT_EXTRACT_MODEL=${STRUCTURED_MODEL}
+PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE=${STRUCTURED_BASE_URL}
+PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY=${STRUCTURED_API_KEY}
+PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL=${STRUCTURED_MODEL}
 ```
 
-`OPENAI_*` 用于直接回答、ReAct/tool-calling、答案生成等自然语言/工具调用 LLM。入口路由、query planner、重规划、evidence rerank、workspace 语义抽取/裁决等 strict `json_schema` 调用统一走 `StructuredConfig`（`STRUCTURED_*`，兼容读取既有 `ROUTER_*` env 作为实际 endpoint 来源）。Graphiti 抽取模型使用下方独立的 `PERSONAL_AGENT_GRAPHITI_LLM_*` 配置，不受这组配置影响。
+`STRUCTURED_*` 是生成式模型的 canonical 配置。直接回答、结构化决策、Graphiti 生成、
+LangExtract 和 MS GraphRAG completion 在没有显式 Adapter override 时均从这里解析；当前
+部署统一使用 `gpt-5.4-mini`。embedding 和 transcription 不属于生成式模型切换，继续使用
+`EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
+
+`STRUCTURED_*` 也是相邻 GPT Researcher `docker-compose.tokeness.yml` 的唯一配置源；通过
+`docker compose --env-file ../personalAgent/.env` 注入，不复制令牌。OpenAI SDK transport
+不做隐式 retry，`*_MAX_RETRIES` 由 typed model-operation decorator 唯一执行；流式响应
+在出现部分输出后不会自动重放。release E2E 默认使用
+`PERSONAL_AGENT_E2E_MODEL_PROFILE=configured` 和 120 秒单请求 timeout。
 
 默认值（不设环境变量时）：
-- `OPENAI_MODEL`：`gpt-4.1-mini`
-- `OPENAI_SMALL_MODEL`：`gpt-4.1-nano`
+- 所有生成式 Adapter：`gpt-5.4-mini`
+- `OPENAI_EMBEDDING_MODEL`：`BAAI/bge-m3`
+- `OPENAI_TRANSCRIPTION_MODEL`：`whisper-1`
 
 可选调参：
 
@@ -202,22 +228,22 @@ PERSONAL_AGENT_EMBEDDING_PROVIDER=local  # embedding provider，默认 "local"
 当前工程默认以 Graphiti 为核心能力，不再提供图谱启停开关。需要同时满足下面条件，图谱链路才可正常工作：
 
 1. Neo4j 可连接
-2. `PERSONAL_AGENT_GRAPHITI_LLM_*` 或回退使用的 `OPENAI_*` 模型配置已齐全
+2. canonical `STRUCTURED_*` 或显式 `PERSONAL_AGENT_GRAPHITI_LLM_*` override 已齐全
 3. `EMBEDDING_API_KEY` 或 `OPENAI_API_KEY` 可用
 4. `EMBEDDING_BASE_URL` 或 `OPENAI_BASE_URL` 可用
 
 补充说明：
 
-- Graphiti 抽取模型可单独覆盖；未设置以下变量时才回退使用 `OPENAI_*`：
+- Graphiti 抽取模型可单独覆盖；当前部署直接引用 canonical `STRUCTURED_*`：
 
 ```env
-PERSONAL_AGENT_GRAPHITI_LLM_API_KEY=your_graphiti_llm_key
-PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL=https://api.moonshot.cn/v1
-PERSONAL_AGENT_GRAPHITI_LLM_MODEL=kimi-k2.5
-PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=kimi-k2.5
+PERSONAL_AGENT_GRAPHITI_LLM_API_KEY=${STRUCTURED_API_KEY}
+PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL=${STRUCTURED_BASE_URL}
+PERSONAL_AGENT_GRAPHITI_LLM_MODEL=${STRUCTURED_MODEL}
+PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=${STRUCTURED_MODEL}
 ```
 
-- Kimi Graphiti 客户端会发送关闭 thinking 的参数，并在 Graphiti 提供响应模型时使用 `json_schema` 结构化输出
+- Graphiti OpenAI-compatible Adapter 会归一化 reasoning 字段，并在 Graphiti 提供响应模型时使用 `json_schema` 结构化输出
 - `PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY` 用于切换图谱检索策略，当前可选：
   - `hybrid_rrf`：默认策略，Graphiti combined hybrid search + RRF
   - `hybrid_mmr`：Graphiti combined hybrid search + MMR
@@ -271,7 +297,9 @@ Notion MCP 也有一组一等配置，默认只映射 workspace 只读能力：
 PERSONAL_AGENT_NOTION_MCP_ENABLED=true
 NOTION_TOKEN=your_notion_integration_token_here
 PERSONAL_AGENT_NOTION_MCP_TOKEN_ENV=NOTION_TOKEN
-PERSONAL_AGENT_NOTION_MCP_TOOLS=post-search,retrieve-page-markdown
+PERSONAL_AGENT_NOTION_MCP_TOOLS=API-post-search,API-retrieve-page-markdown
+PERSONAL_AGENT_E2E_NOTION_PAGE_ID=<explicit non-sensitive test page id>
+PERSONAL_AGENT_E2E_NOTION_EXPECTED_TEXT=PERSONAL_AGENT_NOTION_E18_MARKER
 ```
 
 启用后会注册：

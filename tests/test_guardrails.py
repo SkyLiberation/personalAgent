@@ -3,6 +3,8 @@ content guard, and the shared rate limiter."""
 
 from __future__ import annotations
 
+import pytest
+
 from personal_agent.kernel.config_models import GuardrailsConfig
 from personal_agent.kernel.rate_limit import InMemoryRateLimiter
 from personal_agent.kernel.structured_parse import (
@@ -31,6 +33,15 @@ def test_load_json_lenient_strips_fence():
 
 def test_load_json_lenient_repairs_truncation():
     assert load_json_lenient('{"a": [1, 2') == {"a": [1, 2]}
+
+
+def test_load_json_lenient_accepts_only_identical_repeated_objects():
+    assert load_json_lenient('{"a": 1}\n{"a": 1}') == {"a": 1}
+
+
+def test_load_json_lenient_rejects_conflicting_repeated_objects():
+    with pytest.raises(ValueError, match="multiple distinct JSON values"):
+        load_json_lenient('{"a": 1}\n{"a": 2}')
 
 
 def test_extract_json_object_from_prose():

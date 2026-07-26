@@ -10,18 +10,10 @@ _EXPORTS = {
     "AnswerVerifier": ("personal_agent.application.verifier", "AnswerVerifier"),
     "AskResult": ("personal_agent.application.runtime_results", "AskResult"),
     "CaptureResult": ("personal_agent.application.runtime_results", "CaptureResult"),
-    "DefaultTaskAnalyzer": ("personal_agent.planning.task_analyzer", "DefaultTaskAnalyzer"),
     "DigestResult": ("personal_agent.application.runtime_results", "DigestResult"),
     "EntryResult": ("personal_agent.application.runtime_results", "EntryResult"),
     "ExecutableInvocation": ("personal_agent.execution.contracts.invocation", "ExecutableInvocation"),
-    "Goal": ("personal_agent.planning.task_analyzer", "Goal"),
-    "TaskAnalyzer": ("personal_agent.planning.task_analyzer", "TaskAnalyzer"),
     "ResetResult": ("personal_agent.application.runtime_results", "ResetResult"),
-    "TaskAnalysis": ("personal_agent.planning.task_analyzer", "TaskAnalysis"),
-    "TaskAnalysisProposalBody": (
-        "personal_agent.planning.task_analyzer",
-        "TaskAnalysisProposalBody",
-    ),
     "VerificationResult": ("personal_agent.application.verifier", "VerificationResult"),
     "PROCEDURE_CATALOG": ("personal_agent.runtime.procedure_runtime", "PROCEDURE_CATALOG"),
     "ProcedureApplicabilityResolver": (

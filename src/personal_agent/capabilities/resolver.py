@@ -81,19 +81,30 @@ class CapabilityResolver:
                 continue
             candidates.append(capability)
 
-        equivalence = request.runtime_context.equivalence_class
-        if equivalence is None:
-            denied.extend(_deny(item, "equivalence_contract_missing") for item in candidates)
-            candidates = []
-        else:
-            equivalent: list[Capability] = []
-            for capability in candidates:
-                mismatch = _equivalence_mismatch(capability, equivalence)
-                if mismatch is None:
-                    equivalent.append(capability)
-                else:
-                    denied.append(_deny(capability, f"equivalence_mismatch:{mismatch}"))
-            candidates = equivalent
+        equivalence: CapabilityEquivalenceClass | None = None
+        if len(candidates) == 1:
+            equivalence = _equivalence_contract(candidates[0])
+        elif len(candidates) > 1:
+            group_ref = request.runtime_context.binding_group_ref
+            group = self._registry.binding_group(group_ref) if group_ref else None
+            if group is None:
+                denied.extend(_deny(item, "host_binding_group_missing") for item in candidates)
+                candidates = []
+            else:
+                members = set(group.member_capability_refs)
+                outside = [item for item in candidates if item.capability_id not in members]
+                denied.extend(_deny(item, "host_binding_group_member_missing") for item in outside)
+                candidates = [item for item in candidates if item.capability_id in members]
+                if candidates:
+                    equivalence = _equivalence_contract(candidates[0])
+                    equivalent: list[Capability] = []
+                    for capability in candidates:
+                        mismatch = _equivalence_mismatch(capability, equivalence)
+                        if mismatch is None:
+                            equivalent.append(capability)
+                        else:
+                            denied.append(_deny(capability, f"host_binding_group_contract_mismatch:{mismatch}"))
+                    candidates = equivalent
 
         candidates, local_denials = _apply_local_first(candidates, request)
         denied.extend(local_denials)
@@ -565,6 +576,21 @@ def _equivalence_mismatch(
     ):
         return "freshness_contract"
     return None
+
+
+def _equivalence_contract(capability: Capability) -> CapabilityEquivalenceClass:
+    return CapabilityEquivalenceClass(
+        required_output_contract=capability.output_contract,
+        allowed_side_effect_class=capability.operation_scope.side_effect_class,
+        authority_scope=capability.auth_scope,
+        trust_floor=capability.trust_level,
+        freshness_contract=(
+            "fresh" if capability.freshness_profile in {"near_realtime", "realtime"} else "static"
+        ),
+        evidence_contract=capability.evidence_contract,
+        data_egress_class=capability.data_egress_class,
+        failure_semantics=capability.failure_semantics,
+    )
 
 
 __all__ = ["CapabilityResolutionError", "CapabilityResolver", "default_capability_policy"]

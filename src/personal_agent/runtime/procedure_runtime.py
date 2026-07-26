@@ -192,6 +192,15 @@ class ProcedureMaterializer:
             step.depends_on = [step_ids[node_id] for node_id in step.depends_on]
             step.task_input = task_input
             if (
+                isinstance(invocation.input, KnowledgeIngestInput)
+                and step.tool_name == "capture_url"
+                and invocation.input.locator is not None
+            ):
+                # Decision Ownership Taxonomy: deterministic parameter
+                # compilation from the accepted canonical locator. Parsing the
+                # task description here would create a second identity source.
+                step.tool_input["url"] = invocation.input.locator
+            if (
                 definition.procedure_id == "knowledge_ingest"
                 and step.tool_name == "capture_text"
                 and not step.depends_on
@@ -231,15 +240,31 @@ class ProcedureMaterializer:
                 replace(node, depends_on=()) if node.node_id == "ingest" else node
                 for node in definition.nodes if node.node_id != "acquire-source"
             )
-        acquire_domain = "web" if resource_types.intersection({"url", "link"}) else "artifact"
+        is_web_source = bool(resource_types.intersection({"url", "link"}))
+        acquire_domain = "web" if is_web_source else "artifact"
+        domain_handler = "capture_url" if is_web_source else "inspect_artifact"
+        # Decision Ownership Taxonomy: deterministic capability-contract
+        # projection. The accepted resource type selects the unique built-in
+        # reader contract, including its declared technical side-effect class;
+        # no target, payload, or provider is introduced here.
+        side_effect_class = "external_network" if is_web_source else "none"
         acquire = next(node for node in definition.nodes if node.node_id == "acquire-source")
         requirement = acquire.capability_requirement
         assert requirement is not None
-        adapted = replace(acquire, capability_requirement=requirement.model_copy(update={
-            "semantic_domains": (acquire_domain,),
-            "resource_types": tuple(sorted(resource_types)),
-            "resource_locator": invocation.input.locator,
-        }))
+        adapted = replace(
+            acquire,
+            domain_handler=domain_handler,
+            capability_requirement=CapabilityRequirement.from_dimensions(
+                requirement_id=requirement.requirement_id,
+                purpose=requirement.purpose,
+                semantic_domains=(acquire_domain,),
+                resource_types=tuple(sorted(resource_types)),
+                operations=("read",),
+                resource_locator=invocation.input.locator,
+                output_contract="ToolResult",
+                side_effect_class=side_effect_class,
+            ),
+        )
         return tuple(
             adapted if node.node_id == "acquire-source" else node
             for node in definition.nodes

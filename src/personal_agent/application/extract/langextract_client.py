@@ -1,10 +1,7 @@
 """Thin LangExtract client wrapper.
 
-Pinned to qwen3-coder-flash on Aliyun DashScope's OpenAI-compatible endpoint
-because that is the cheapest model we tested that supports OpenAI-style
-``response_format = json_schema``. DeepSeek and qwen3.6-flash do NOT support
-json_schema and would require ``use_schema_constraints=False`` plus fence
-output, which weakens schema enforcement.
+The adapter uses the canonical OpenAI-compatible generation provider by
+default and can still be explicitly overridden for provider contract tests.
 
 Schema is constructed by hand (see :mod:`.openai_schema`) and bound to the
 language model directly so it cannot be overridden by LangExtract's
@@ -40,8 +37,8 @@ def build_language_model(
     """Construct an OpenAILanguageModel pre-bound to our custom strict schema."""
     if not config.api_key:
         raise LangExtractMisconfiguredError(
-            "LangExtractConfig.api_key is empty; set PERSONAL_AGENT_EXTRACT_API_KEY "
-            "or EMBEDDING_API_KEY in the environment."
+            "LangExtractConfig.api_key is empty; set STRUCTURED_API_KEY or "
+            "PERSONAL_AGENT_EXTRACT_API_KEY in the environment."
         )
     return OpenAILanguageModel(
         model_id=config.model_id,

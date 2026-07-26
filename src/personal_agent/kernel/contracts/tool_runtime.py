@@ -26,8 +26,11 @@ class IdempotencyStore(Protocol):
     def reserve(self, key: str, *, context: "ToolGatewayContext", tool_name: str) -> bool:
         """Atomically reserve a key before executing a side effect."""
 
-    def commit(self, key: str) -> None:
-        """Mark an idempotency key as committed so replays are rejected."""
+    def get_receipt(self, key: str) -> dict | None:
+        """Return the committed typed tool receipt, if one exists."""
+
+    def commit(self, key: str, receipt: dict | None = None) -> None:
+        """Commit a key and its receipt so replays reuse the execution fact."""
 
     def release(self, key: str) -> None:
         """Release a reserved key when execution did not complete."""

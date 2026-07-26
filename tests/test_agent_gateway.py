@@ -121,16 +121,16 @@ class _FakeAgent:
     def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
         return self._run(task, context, status="running")
 
-    def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
-        return self._run(AgentTask("topic"), context, status="completed", agent_run_id=agent_run_id)
+    def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
+        return self._run(run.definition.task, context, status="completed", agent_run_id=run.definition.agent_run_id)
 
-    def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
-        return self._run(AgentTask("topic"), context, status="cancelled", agent_run_id=agent_run_id)
+    def cancel(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
+        return self._run(run.definition.task, context, status="cancelled", agent_run_id=run.definition.agent_run_id)
 
-    def stream(self, agent_run_id: str, context: AgentGatewayContext):
+    def stream(self, run: ChildAgentRunRecord, context: AgentGatewayContext):
         yield ChildAgentRunEvent(
             event_id=new_agent_event_id(),
-            agent_run_id=agent_run_id,
+            agent_run_id=run.definition.agent_run_id,
             type="stream_delta",
             payload={"delta": self._output},
         )

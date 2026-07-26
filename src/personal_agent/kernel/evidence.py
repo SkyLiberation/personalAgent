@@ -79,6 +79,26 @@ class EvidenceItem(BaseModel):
         }
 
 
+class EvidenceReference(BaseModel):
+    """Typed identity exported by Ask without copying evidence content."""
+
+    evidence_id: str
+    source_type: str
+    source_id: str
+    source_ref: str | None = None
+    source_fingerprint: str | None = None
+
+
+def evidence_reference(item: EvidenceItem) -> EvidenceReference:
+    return EvidenceReference(
+        evidence_id=item.evidence_id,
+        source_type=item.source_type,
+        source_id=item.source_id,
+        source_ref=item.source_ref,
+        source_fingerprint=item.source_fingerprint,
+    )
+
+
 class Candidate(BaseModel):
     """Retriever-neutral candidate used before final evidence reranking.
 

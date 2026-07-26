@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 from psycopg import connect
 from unittest.mock import MagicMock
 
-from personal_agent.kernel.models import EntryInput
 from personal_agent.application.review.delivery import DeliveryRouter
+from personal_agent.kernel.contracts.research import ResearchRunDefinition, ResearchRunRecord
 from personal_agent.kernel.contracts.review import DeliveryResult
-from tests.conftest import POSTGRES_URL, stub_task_analysis
+from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
+from personal_agent.application.workspace import Artifact
+from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -26,7 +29,6 @@ def api_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     from personal_agent.adapters.web.api import create_app
     app = create_app()
-    app.state.service.task_analyzer._analyze_with_model = stub_task_analysis
     app.state.review_digest_delivery_router = DeliveryRouter({"feishu": _FakeDigestProvider()})
     return TestClient(app)
 
@@ -60,6 +62,30 @@ class TestHealthEndpoint:
 
 
 class TestResearchEndpoints:
+    def test_run_once_preserves_explicit_user_in_auth_disabled_mode(
+        self, api_client: TestClient, monkeypatch
+    ):
+        captured = {}
+
+        def run_once(**kwargs):
+            captured.update(kwargs)
+            return ResearchRunRecord.create(ResearchRunDefinition(
+                user_id=kwargs["user_id"],
+                topic=kwargs["topic"],
+                window_start=datetime.now(UTC) - timedelta(hours=1),
+                window_end=datetime.now(UTC),
+            ))
+
+        monkeypatch.setattr(api_client.app.state.service, "run_research_once", run_once)
+        response = api_client.post(
+            "/api/research/once",
+            json={"user_id": "alice", "topic": "Agent protocols"},
+        )
+
+        assert response.status_code == 200
+        assert captured["user_id"] == "alice"
+        assert response.json()["user_id"] == "alice"
+
     def test_subscription_crud_and_run_now(self, api_client: TestClient):
         created = api_client.post("/api/research/subscriptions", json={
             "name": "AI 日报",
@@ -95,9 +121,76 @@ class TestResearchEndpoints:
         )
         assert deleted.json() == {"ok": True}
 
+    def test_explicit_subscription_owner_can_run_in_auth_disabled_mode(
+        self, api_client: TestClient
+    ):
+        created = api_client.post(
+            "/api/research/subscriptions",
+            json={
+                "user_id": "alice",
+                "name": "Alice research",
+                "topic": "Agent protocols",
+                "delivery": {
+                    "channel": "in_app",
+                    "target_type": "user_id",
+                    "target_id": "alice",
+                },
+            },
+        )
+
+        queued = api_client.post(
+            f"/api/research/subscriptions/{created.json()['id']}/run-now"
+        )
+
+        assert created.json()["user_id"] == "alice"
+        assert queued.status_code == 200
+        assert queued.json()["user_id"] == "alice"
+
 
 class TestEntryStreamEndpoint:
-    def test_ask_stream_entry_creates_langgraph_run_snapshot(self, api_client: TestClient):
+    def test_stream_reports_background_execution_failure_as_sse(
+        self,
+        api_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail_conversation(*_args, **_kwargs):
+            raise RuntimeError("internal provider detail")
+
+        monkeypatch.setattr(api_client.app.state.service, "converse", fail_conversation)
+
+        response = api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "执行请求",
+                "user_id": "test-user",
+                "session_id": "entry-stream-error",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
+        assert "conversation_execution_failed" in response.text
+        assert "internal provider detail" not in response.text
+
+    def test_stream_uses_conversation_without_creating_langgraph_run(
+        self,
+        api_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        def converse(*, conversation_id, messages, user_id, source_platform):
+            assert conversation_id == "entry-stream-ask"
+            assert messages[-1].content == "什么是API测试？"
+            assert user_id == "test-user"
+            assert source_platform == "web"
+            return ConversationTurnView(
+                interaction_run_ref="irun-stream",
+                conversation_id=conversation_id,
+                disposition="answer",
+                message=ConversationMessage(role="assistant", content="API测试验证接口行为。"),
+            )
+
+        monkeypatch.setattr(api_client.app.state.service, "converse", converse)
+        legacy_runs = api_client.get("/api/entry/runs", params={"user_id": "test-user"})
         response = api_client.get(
             "/api/entry/stream",
             params={
@@ -108,71 +201,235 @@ class TestEntryStreamEndpoint:
         )
 
         assert response.status_code == 200
-        assert "正在理解并执行请求" in response.text
+        assert "正在处理请求" in response.text
         assert "event: done" in response.text
         assert response.text.count("event: done") == 1
+        assert "irun-stream" in response.text
+        assert legacy_runs.status_code == 404
+        assert api_client.get("/api/entry/runs", params={"user_id": "test-user"}).status_code == 404
 
-        runs = api_client.get(
-            "/api/entry/runs",
-            params={"user_id": "test-user"},
-        ).json()["items"]
-        matching = [run for run in runs if run["session_id"] == "entry-stream-ask"]
 
-        assert matching
-        assert matching[0]["thread_id"] == "test-user:entry-stream-ask"
-        assert matching[0]["result_contracts"] == ["response"]
+class TestConversationEndpoint:
+    def test_direct_turn_returns_typed_message_without_durable_run(
+        self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        def converse(
+            *, conversation_id, messages, interaction_run_ref=None,
+            user_id, source_platform,
+        ):
+            assert interaction_run_ref is None
+            assert conversation_id == "conversation-1"
+            assert messages[-1].content == "解释幂等性"
+            assert user_id == "default"
+            assert source_platform == "web"
+            return ConversationTurnView(
+                interaction_run_ref="irun-test",
+                conversation_id=conversation_id,
+                disposition="answer",
+                message=ConversationMessage(role="assistant", content="重复调用产生相同效果。"),
+            )
 
-    def test_capture_stream_without_executive_model_fails_closed(self, api_client: TestClient):
-        response = api_client.get(
-            "/api/entry/stream",
-            params={
-                "text": "记一下：DNS 将域名解析为 IP 地址。",
-                "user_id": "test-user",
-                "session_id": "entry-stream-capture",
-            },
-        )
-
-        assert response.status_code == 200
-        assert "event: task_analysis" in response.text
-        assert "event: procedure_started" not in response.text
-        assert "event: confirmation_required" not in response.text
-        assert "模型决策能力暂不可用" in response.text
-        assert response.text.count("event: done") == 1
-        assert response.text.index("event: task_analysis") < response.text.index("event: done")
-
-    def test_waiting_run_snapshot_exposes_confirmation_and_can_resume(self, api_client: TestClient):
-        response = api_client.get(
-            "/api/entry/stream",
-            params={
-                "text": "帮我",
-                "user_id": "test-user",
-                "session_id": "entry-stream-resume",
-            },
-        )
-
-        assert response.status_code == 200
-        assert "event: confirmation_required" in response.text
-
-        runs = api_client.get(
-            "/api/entry/runs",
-            params={"user_id": "test-user"},
-        ).json()["items"]
-        run = next(item for item in runs if item["session_id"] == "entry-stream-resume")
-
-        assert run["status"] == "waiting"
-        assert run["pending_confirmation"]["kind"] == "clarification_required"
-
-        resumed = api_client.post(
-            f"/api/entry/runs/{run['run_id']}/resume",
+        monkeypatch.setattr(api_client.app.state.service, "converse", converse)
+        legacy_runs = api_client.get("/api/entry/runs", params={"user_id": "default"})
+        response = api_client.post(
+            "/api/conversation/turn",
             json={
-                "decision": "clarify",
-                "user_id": "test-user",
-                "text": "记一下：确认操作应在原对话中完成。",
+                "conversation_id": "conversation-1",
+                "messages": [{"role": "user", "content": "解释幂等性"}],
             },
         )
 
-        assert resumed.status_code == 200
-        assert resumed.json()["run_status"] == "completed_degraded"
+        assert response.status_code == 200
+        assert response.json() == {
+            "interaction_run_ref": "irun-test",
+            "conversation_id": "conversation-1",
+            "disposition": "answer",
+            "message": {"role": "assistant", "content": "重复调用产生相同效果。"},
+        }
+        assert legacy_runs.status_code == 404
+        assert api_client.get("/api/entry/runs", params={"user_id": "default"}).status_code == 404
+
+    def test_direct_turn_rejects_non_user_terminal_message(self, api_client: TestClient):
+        response = api_client.post(
+            "/api/conversation/turn",
+            json={
+                "conversation_id": "conversation-1",
+                "messages": [{"role": "assistant", "content": "上一条回答"}],
+            },
+        )
+
+        assert response.status_code == 422
+
+
+class TestWorkspaceCaptureEndpoints:
+    def test_upload_uses_one_resource_and_workspace_artifact_identity(
+        self,
+        api_client: TestClient,
+    ) -> None:
+        response = api_client.post(
+            "/api/workspace/ingest-upload",
+            data={"user_id": "alice", "workspace_id": "alice"},
+            files={"file": ("fact.txt", b"Atlas window is Friday 20:00.", "text/plain")},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["resource_ref"]["resource_id"] == body["ingest_result"]["artifact"]["artifact_id"]
+        assert "Atlas window" in body["ingest_result"]["artifact"]["text"]
+        assert api_client.post(
+            "/api/entry/upload",
+            files={"file": ("legacy.txt", b"legacy", "text/plain")},
+        ).status_code in {404, 405}
+
+    def test_url_capture_enters_workspace_without_generic_entry_task(
+        self,
+        api_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            api_client.app.state.context.capture_service,
+            "capture_text_from_url",
+            lambda url: f"Captured from {url}: canonical body",
+        )
+        response = api_client.post(
+            "/api/workspace/ingest-url",
+            json={
+                "url": "https://example.com/source",
+                "user_id": "alice",
+                "workspace_id": "alice",
+            },
+        )
+
+        assert response.status_code == 200
+        artifact = response.json()["ingest_result"]["artifact"]
+        assert artifact["source_ref"] == "https://example.com/source"
+        assert artifact["source_type"] == "link"
+        assert api_client.get("/api/entry/runs", params={"user_id": "alice"}).status_code == 404
+
+
+class TestGovernedKnowledgeDelete:
+    def test_confirmed_command_executes_exactly_once_and_binds_digests(
+        self,
+        api_client: TestClient,
+    ) -> None:
+        user_id = "delete-owner"
+        ingested = api_client.post(
+            "/api/workspace/ingest-text",
+            json={
+                "text": "Atlas 的维护窗口是周五。",
+                "user_id": user_id,
+                "workspace_id": user_id,
+                "source_type": "document",
+            },
+        ).json()
+        note_id = ingested["knowledge_items"][0]["knowledge_item_id"]
+        prepared = api_client.post(
+            f"/api/notes/{note_id}/delete-commands",
+            json={
+                "user_id": user_id,
+                "workspace_id": user_id,
+                "reason": "obsolete",
+                "idempotency_key": "delete-atlas-once",
+            },
+        )
+        assert prepared.status_code == 200
+        operation = prepared.json()
+        assert operation["status"] == "awaiting_confirmation"
+        assert operation["receipt"] is None
+        assert any(item["id"] == note_id for item in api_client.get(
+            "/api/notes", params={"user_id": user_id}
+        ).json())
+
+        command = operation["command"]
+        invalid = api_client.post(
+            f"/api/knowledge-delete-commands/{command['command_id']}/decision",
+            json={
+                "user_id": user_id,
+                "decision": "confirm",
+                "authorization_digest": "0" * 64,
+                "execution_command_digest": command["execution_command_digest"],
+                "confirmation_ref": "user-confirmation-1",
+            },
+        )
+        assert invalid.status_code == 409
+        assert any(item["id"] == note_id for item in api_client.get(
+            "/api/notes", params={"user_id": user_id}
+        ).json())
+
+        decision = {
+            "user_id": user_id,
+            "decision": "confirm",
+            "authorization_digest": command["authorization_digest"],
+            "execution_command_digest": command["execution_command_digest"],
+            "confirmation_ref": "user-confirmation-1",
+        }
+        first = api_client.post(
+            f"/api/knowledge-delete-commands/{command['command_id']}/decision",
+            json=decision,
+        )
+        replay = api_client.post(
+            f"/api/knowledge-delete-commands/{command['command_id']}/decision",
+            json=decision,
+        )
+        assert first.status_code == 200, first.text
+        assert replay.status_code == 200, replay.text
+        assert first.json()["status"] == "executed"
+        assert first.json()["receipt"] == replay.json()["receipt"]
+        assert [event["event_type"] for event in replay.json()["events"]].count("executed") == 1
+        assert note_id not in {
+            item["id"] for item in api_client.get(
+                "/api/notes", params={"user_id": user_id}
+            ).json()
+        }
+
+    def test_rejected_or_cross_scope_command_never_deletes(
+        self,
+        api_client: TestClient,
+    ) -> None:
+        user_id = "delete-reject-owner"
+        ingested = api_client.post(
+            "/api/workspace/ingest-text",
+            json={
+                "text": "保留这条知识。",
+                "user_id": user_id,
+                "workspace_id": user_id,
+            },
+        ).json()
+        note_id = ingested["knowledge_items"][0]["knowledge_item_id"]
+        denied = api_client.post(
+            f"/api/notes/{note_id}/delete-commands",
+            json={
+                "user_id": "other-user",
+                "workspace_id": "other-user",
+                "idempotency_key": "cross-scope-delete",
+            },
+        )
+        assert denied.status_code == 404
+
+        operation = api_client.post(
+            f"/api/notes/{note_id}/delete-commands",
+            json={
+                "user_id": user_id,
+                "workspace_id": user_id,
+                "idempotency_key": "reject-delete",
+            },
+        ).json()
+        command = operation["command"]
+        rejected = api_client.post(
+            f"/api/knowledge-delete-commands/{command['command_id']}/decision",
+            json={
+                "user_id": user_id,
+                "decision": "reject",
+                "authorization_digest": command["authorization_digest"],
+                "execution_command_digest": command["execution_command_digest"],
+            },
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["status"] == "rejected"
+        assert rejected.json()["receipt"] is None
+        assert any(item["id"] == note_id for item in api_client.get(
+            "/api/notes", params={"user_id": user_id}
+        ).json())
 
 
 class TestDigestEndpoint:
@@ -309,35 +566,148 @@ class TestNotesEndpoint:
         assert "Alice的笔记" in alice_titles
         assert "Bob的笔记" in bob_titles
 
-    def test_restore_deleted_note_from_snapshot(self, api_client: TestClient):
-        service = api_client.app.state.service
-        service.execute_capture("DNS 是域名系统", source_type="text", user_id="restore-user")
-        note_id = api_client.get(
-            "/api/notes", params={"user_id": "restore-user"},
-        ).json()[0]["id"]
-
-        deleted = api_client.delete("/api/notes/{note_id}".format(note_id=note_id), params={"user_id": "restore-user"})
-
-        assert deleted.status_code == 200
-        snapshot_id = deleted.json()["snapshot_id"]
-        assert snapshot_id
-        listed_after_delete = api_client.get("/api/notes", params={"user_id": "restore-user"}).json()
-        assert all(item["id"] != note_id for item in listed_after_delete)
-
-        restored = api_client.post(
-            f"/api/memory/notes/{note_id}/restore",
+    def test_restore_uses_delete_receipt_and_replays_exactly_once(
+        self,
+        api_client: TestClient,
+    ) -> None:
+        user_id = "restore-user"
+        ingested = api_client.post(
+            "/api/workspace/ingest-text",
             json={
-                "user_id": "restore-user",
-                "snapshot_id": snapshot_id,
-                "idempotency_key": f"restore:{snapshot_id}",
+                "text": "DNS 是域名系统。",
+                "user_id": user_id,
+                "workspace_id": user_id,
+                "source_type": "document",
+            },
+        ).json()
+        note_id = ingested["knowledge_items"][0]["knowledge_item_id"]
+        claim_ids = {
+            claim["claim_id"] for claim in ingested["claims"]
+            if claim["claim_id"] in ingested["knowledge_items"][0]["claim_ids"]
+        }
+        prepared_delete = api_client.post(
+            f"/api/notes/{note_id}/delete-commands",
+            json={
+                "user_id": user_id,
+                "workspace_id": user_id,
+                "idempotency_key": "delete-before-restore",
+            },
+        ).json()
+        delete_command = prepared_delete["command"]
+        deleted = api_client.post(
+            f"/api/knowledge-delete-commands/{delete_command['command_id']}/decision",
+            json={
+                "user_id": user_id,
+                "decision": "confirm",
+                "authorization_digest": delete_command["authorization_digest"],
+                "execution_command_digest": delete_command["execution_command_digest"],
+                "confirmation_ref": "delete-confirmation",
+            },
+        ).json()
+        assert deleted["status"] == "executed"
+        assert all(item["id"] != note_id for item in api_client.get(
+            "/api/notes", params={"user_id": user_id}
+        ).json())
+
+        cross_scope = api_client.post(
+            f"/api/knowledge-delete-commands/{delete_command['command_id']}/restore-commands",
+            json={
+                "user_id": "other-user",
+                "workspace_id": "other-user",
+                "idempotency_key": "cross-scope-restore",
             },
         )
+        assert cross_scope.status_code == 404
 
-        assert restored.status_code == 200
-        data = restored.json()["data"]
-        assert data["id"] == note_id
-        listed_after_restore = api_client.get("/api/notes", params={"user_id": "restore-user"}).json()
-        assert any(item["id"] == note_id for item in listed_after_restore)
+        prepared_restore = api_client.post(
+            f"/api/knowledge-delete-commands/{delete_command['command_id']}/restore-commands",
+            json={
+                "user_id": user_id,
+                "workspace_id": user_id,
+                "idempotency_key": "restore-dns-once",
+                "reason": "user requested restoration",
+            },
+        )
+        assert prepared_restore.status_code == 200, prepared_restore.text
+        operation = prepared_restore.json()
+        assert operation["status"] == "awaiting_confirmation"
+        restore_command = operation["command"]
+        decision = {
+            "user_id": user_id,
+            "decision": "confirm",
+            "authorization_digest": restore_command["authorization_digest"],
+            "execution_command_digest": restore_command["execution_command_digest"],
+            "confirmation_ref": "restore-confirmation",
+        }
+        first = api_client.post(
+            f"/api/knowledge-restore-commands/{restore_command['command_id']}/decision",
+            json=decision,
+        )
+        replay = api_client.post(
+            f"/api/knowledge-restore-commands/{restore_command['command_id']}/decision",
+            json=decision,
+        )
+        assert first.status_code == 200, first.text
+        assert replay.status_code == 200, replay.text
+        assert first.json()["receipt"] == replay.json()["receipt"]
+        assert first.json()["receipt"]["restored_note_id"] == note_id
+        assert set(first.json()["receipt"]["affected_claim_ids"]) == claim_ids
+        assert [event["event_type"] for event in replay.json()["events"]].count("executed") == 1
+        assert any(item["id"] == note_id for item in api_client.get(
+            "/api/notes", params={"user_id": user_id}
+        ).json())
+        claims = api_client.get(
+            "/api/workspace/claims", params={"workspace_id": user_id}
+        ).json()
+        assert all(
+            claim["state"] != "deleted"
+            for claim in claims
+            if claim["claim_id"] in claim_ids
+        )
+        assert api_client.post(
+            f"/api/memory/notes/{note_id}/restore",
+            json={"user_id": user_id, "snapshot_id": "legacy"},
+        ).status_code in {404, 405}
+        assert api_client.post(
+            "/api/memory/delete-snapshots/legacy/restore",
+            json={"user_id": user_id},
+        ).status_code in {404, 405}
+
+
+class TestWorkspaceArtifactsEndpoint:
+    def test_lists_only_requested_workspace_and_source_type(self, api_client: TestClient):
+        store = api_client.app.state.service.workspace_service.store
+        expected = Artifact(
+            workspace_id="artifact-api",
+            user_id="artifact-api",
+            source_type="conversation",
+            content_hash="expected-hash",
+            text="canonical conversation content",
+        )
+        store.save_artifact(expected)
+        store.save_artifact(Artifact(
+            workspace_id="artifact-api",
+            user_id="artifact-api",
+            source_type="text",
+            content_hash="other-type-hash",
+            text="other source type",
+        ))
+        store.save_artifact(Artifact(
+            workspace_id="other-workspace",
+            user_id="other-workspace",
+            source_type="conversation",
+            content_hash="other-workspace-hash",
+            text="other workspace",
+        ))
+
+        response = api_client.get(
+            "/api/workspace/artifacts",
+            params={"workspace_id": "artifact-api", "source_type": "conversation"},
+        )
+
+        assert response.status_code == 200
+        assert [item["artifact_id"] for item in response.json()] == [expected.artifact_id]
+        assert response.json()[0]["text"] == "canonical conversation content"
 
 
 class TestDebugEndpoints:
@@ -346,7 +716,6 @@ class TestDebugEndpoints:
         service.graph_store.clear_all_data = MagicMock(return_value=7)
         service.execute_capture("用户A笔记", source_type="text", user_id="reset-a")
         service.execute_capture("用户B笔记", source_type="text", user_id="reset-b")
-        service.execute_entry(EntryInput(text="你好", user_id="reset-a", session_id="checkpoint"))
         uploads_dir = temp_dir / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
         (uploads_dir / "orphan.txt").write_text("debug", encoding="utf-8")
@@ -363,8 +732,6 @@ class TestDebugEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["deleted_notes"] >= 2
-        assert data["deleted_checkpoints"] >= 1
-        assert data["deleted_checkpoint_migrations"] >= 1
         assert data["truncated_postgres_tables"] >= 7
         assert data["deleted_postgres_rows"] >= data["deleted_notes"]
         assert data["deleted_upload_files"] == 1

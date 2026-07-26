@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class EvidenceRef(BaseModel):
+class AdmittedEvidenceRef(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     evidence_ref: str = Field(default_factory=lambda: uuid4().hex[:12])
     observation_ref: str
@@ -26,10 +26,9 @@ class EvidenceAdmissionDecision(BaseModel):
     admission_id: str = Field(default_factory=lambda: uuid4().hex[:12])
     observation_ref: str
     verdict: Literal["accepted", "rejected"]
-    evidence: EvidenceRef | None = None
+    evidence: AdmittedEvidenceRef | None = None
     reason_codes: tuple[str, ...] = ()
     policy_revision: str = "evidence-policy:v1"
 
 
-__all__ = ["EvidenceAdmissionDecision", "EvidenceRef"]
-
+__all__ = ["AdmittedEvidenceRef", "EvidenceAdmissionDecision"]

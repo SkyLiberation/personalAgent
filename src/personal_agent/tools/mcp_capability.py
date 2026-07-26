@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool
 
 from personal_agent.kernel.contracts.agent import SubagentProfile
 from personal_agent.capabilities.contracts.execution import Capability, MCPCapability
+from personal_agent.capabilities.contracts.execution import HostCapabilityBindingGroup
 from personal_agent.capabilities.portfolio import (
     CapabilityPortfolio,
     ExecutionCapabilityAvailability,
@@ -75,7 +76,7 @@ def capability_from_subagent_profile(definition: SubagentProfile) -> Capability:
         local_name=definition.agent_id,
         description=definition.description,
         semantic_domains=tuple(definition.semantic_domains),
-        resource_types=("agent",),
+        resource_types=tuple(dict.fromkeys(("agent", *definition.task_types))),
         operations=("delegate",),
         risk_level=governance.risk_level,
         side_effects=tuple(governance.side_effects),
@@ -102,14 +103,24 @@ def build_capability_portfolio(
     extra: Iterable[Capability] = (),
 ) -> CapabilityPortfolio:
     registry = CapabilityPortfolio((*builtin_atomic_capabilities(), *extra))
+    binding_members: dict[str, list[str]] = {}
     for tool in tools:
         capability = capability_from_tool(tool)
         registry.register(capability)
         _observe_live_binding(registry, capability)
+        mcp = (tool.extras or {}).get("mcp")
+        if isinstance(mcp, dict) and isinstance(mcp.get("binding_group_ref"), str):
+            binding_members.setdefault(mcp["binding_group_ref"], []).append(capability.capability_id)
     for definition in agents:
         capability = capability_from_subagent_profile(definition)
         registry.register(capability)
         _observe_live_binding(registry, capability)
+    for group_ref, members in binding_members.items():
+        if len(members) >= 2:
+            registry.register_binding_group(HostCapabilityBindingGroup(
+                group_ref=group_ref,
+                member_capability_refs=tuple(members),
+            ))
     return registry
 
 
@@ -129,11 +140,21 @@ def build_execution_capability_portfolio(
 
 def build_mcp_capability_portfolio(tools: Iterable[BaseTool]) -> MCPCapabilityPortfolio:
     registry = MCPCapabilityPortfolio()
+    binding_members: dict[str, list[str]] = {}
     for tool in tools:
         capability = mcp_capability_from_tool(tool)
         if capability is not None:
             registry.register(capability)
             _observe_live_binding(registry, capability)
+            mcp = (tool.extras or {}).get("mcp")
+            if isinstance(mcp, dict) and isinstance(mcp.get("binding_group_ref"), str):
+                binding_members.setdefault(mcp["binding_group_ref"], []).append(capability.capability_id)
+    for group_ref, members in binding_members.items():
+        if len(members) >= 2:
+            registry.register_binding_group(HostCapabilityBindingGroup(
+                group_ref=group_ref,
+                member_capability_refs=tuple(members),
+            ))
     return registry
 
 
@@ -167,9 +188,10 @@ def _local_tool_capability_shape(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], int]:
     shapes: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], int]] = {
         "capture_text": (("capture", "knowledge_lifecycle"), ("text", "claim", "note"), ("ingest", "create"), 1),
-        "capture_url": (("capture", "web"), ("url", "web_page", "artifact"), ("read", "ingest"), 1),
+        "capture_url": (("capture", "web"), ("url", "web_page", "artifact"), ("read",), 1),
         "capture_upload": (("capture", "artifact"), ("file", "artifact"), ("ingest", "create"), 1),
         "inspect_artifact": (("capture", "artifact"), ("file", "artifact"), ("read",), 1),
+        "verify_interaction_draft": (("verification",), ("draft", "evidence"), ("verify",), 1),
         "graph_search": (("local_memory", "graph"), ("note", "claim", "relation"), ("search", "read"), 1),
         "web_search": (("web", "docs"), ("web_page",), ("search", "read"), 2),
         "delete_note": (("knowledge_lifecycle",), ("note",), ("delete",), 1),

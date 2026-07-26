@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,7 @@ from personal_agent.infra.storage.audit_redaction import redact_audit_payload
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.tools.base import ToolArtifact, ToolInvocationEvent
 from personal_agent.governance.gateway import ToolGatewayContext
-from tests.conftest import POSTGRES_URL, stub_task_analysis
+from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
@@ -134,6 +133,22 @@ class TestGovernanceStoreQueries:
         assert trace["ledger"]["user_id"] == "dave"
         assert len(trace["events"]) == 1
 
+    def test_idempotency_store_persists_committed_receipt(self, store: PostgresToolGovernanceStore):
+        ctx = ToolGatewayContext(
+            execution_mode="invocation_batch",
+            tool_call_id="call-receipt",
+            thread_id="thread-receipt",
+            run_id="run-receipt",
+            user_id="receipt-user",
+        )
+        receipt = {"ok": True, "data": {"note_id": "note-1"}, "evidence": []}
+
+        assert store.reserve("idem-receipt", context=ctx, tool_name="capture_text")
+        store.commit("idem-receipt", receipt)
+
+        assert store.get_receipt("idem-receipt") == receipt
+        assert not store.reserve("idem-receipt", context=ctx, tool_name="capture_text")
+
     def test_trace_idempotency_missing_returns_none(self, store: PostgresToolGovernanceStore):
         assert store.trace_idempotency("nope") is None
 
@@ -177,7 +192,6 @@ def admin_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     from personal_agent.adapters.web.api import create_app
     app = create_app()
-    app.state.service.task_analyzer._analyze_with_model = stub_task_analysis
     return TestClient(app)
 
 

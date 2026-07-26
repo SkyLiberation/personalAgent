@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, TYPE_CHECKING
-from uuid import uuid4
+from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
-from personal_agent.kernel.models import Citation, EntryInput, KnowledgeNote, NoteBody, NoteSource, ReviewCard
+from personal_agent.kernel.models import Citation, KnowledgeNote, NoteBody, NoteSource, ReviewCard
 from personal_agent.kernel.observability import set_policy_decision_sink
 from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.memory.graphiti.store import GraphitiStore
@@ -21,6 +20,9 @@ from personal_agent.infra.storage.postgres_research_store import PostgresResearc
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
 from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
+from personal_agent.infra.storage.postgres_knowledge_lifecycle_store import (
+    PostgresKnowledgeLifecycleStore,
+)
 from personal_agent.infra.storage.postgres_procedure_definition_store import PostgresProcedureDefinitionStore
 from personal_agent.infra.storage.postgres_agent_trace_store import PostgresAgentTraceStore
 from personal_agent.infra.storage.postgres_control_plane_store import PostgresControlPlaneStore
@@ -32,12 +34,11 @@ from personal_agent.tools import (
     build_capture_upload_tool,
     build_capture_url_tool,
     build_consolidate_knowledge_tool,
-    build_delete_note_tool,
     build_enterprise_knowledge_search_tool,
-    build_restore_note_tool,
     build_graph_search_tool,
     build_inspect_artifact_tool,
     build_inspect_knowledge_gaps_tool,
+    build_verify_interaction_draft_tool,
     build_list_recent_notes_tool,
     build_get_note_tool,
     build_find_similar_notes_tool,
@@ -48,7 +49,6 @@ from personal_agent.tools import (
     build_mcp_tools,
     build_raw_wiki_search_tools,
     build_inspect_worker_queue_tool,
-    build_inspect_workflow_run_tool,
     build_retry_worker_task_tool,
     build_review_digest_tool,
     build_create_research_subscription_tool,
@@ -69,45 +69,24 @@ from personal_agent.tools import (
     build_web_search_tool,
 )
 from personal_agent.agents import AgentGateway, GPTResearcherA2AAdapter
-from personal_agent.orchestration.entry_orchestrator import EntryOrchestrator
-from personal_agent.application.episodic_memory import record_entry_episode
-from personal_agent.orchestration.orchestration_contexts import (
-    ConversationContext,
-    GraphContexts,
-    ExecutiveContext,
-    ReactContext,
-    RoutingContext,
-    SummaryContext,
-    StepExecutionContext,
-)
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
-from personal_agent.planning.task_analyzer import DefaultTaskAnalyzer
-from personal_agent.planning.task_compiler import GoalGraphCompiler
-from personal_agent.runtime.control_runtime import ExecutiveController
-from personal_agent.governance.decision_admission import (
-    AcceptedIntentCompiler,
-    DecisionValidator,
-    ExecutionCommandResolver,
-)
-from personal_agent.governance.route_admission import ExecutionRoutePolicy
-from personal_agent.runtime.task_runtime import TaskRuntimeProjector, GoalDecompositionValidator
-from personal_agent.verification.runtime import CompletionVerifier, ExecutionFactVerifier, GoalVerifier
-from personal_agent.execution.invocation_journal import InvocationJournal
 from personal_agent.runtime.procedure_runtime import (
     PROCEDURE_CATALOG,
-    ProcedureApplicabilityResolver,
     ProcedureMaterializer,
     ProcedureRuntime,
 )
-from personal_agent.runtime.procedure_grants import ProcedureGrantIssuer
-from personal_agent.capabilities.acquisition import CapabilityAcquisitionManager
 from personal_agent.capabilities.inventory import (
     A2AAssemblyDefinition,
-    build_runtime_capability_inventory,
 )
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
+from personal_agent.application.conversation import (
+    ConversationService,
+    FileInteractionJournal,
+    LoopBudgetPolicy,
+)
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
+from personal_agent.orchestration.capability_inventory import build_runtime_capability_inventory
 from personal_agent.orchestration.runtime_ask import AskService
 from personal_agent.orchestration.runtime_helpers import (
     _annotate_answer,
@@ -130,11 +109,11 @@ from personal_agent.application.runtime_results import (
     AskResult,
     CaptureResult,
     DigestResult,
-    EntryResult,
     ResetResult,
     RetryResult,
 )
 from personal_agent.application.review import DigestFormatter, ReviewDigestUseCase
+from personal_agent.application.knowledge_lifecycle import KnowledgeLifecycleService
 from personal_agent.application.research import (
     ResearchLimits,
     ResearchFeedback,
@@ -150,7 +129,7 @@ from personal_agent.application.workspace import (
     LLMSemanticEvidenceExtractor,
     WorkspaceService,
 )
-from personal_agent.kernel.evidence import EvidenceItem
+from personal_agent.kernel.evidence import EvidenceItem, evidence_reference
 from personal_agent.application.research.extraction import StructuredResearchEventExtractor
 from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
 from personal_agent.application.verifier import create_answer_verifier
@@ -246,14 +225,7 @@ def _policy_rules_from_settings(settings: Settings) -> PolicyRules:
 
 
 class AgentRuntime:
-    """Composition root for capture / ask / digest / entry operations.
-
-    Owns the stores and wires explicit collaborators — ``LlmClient``,
-    ``ThreadSummarizer``, ``AskService`` (answering) and ``EntryOrchestrator``
-    (LangGraph entry flow) — and exposes thin delegating methods. No behavior
-    is inherited via mixins; everything here is either local glue over the
-    shared stores or a one-line delegation to a collaborator.
-    """
+    """Composition root for conversation and domain application services."""
 
     def __init__(
         self,
@@ -287,6 +259,9 @@ class AgentRuntime:
         self.workspace_service = WorkspaceService(
             PostgresWorkspaceStore(settings.postgres_url, settings.data_dir)
         )
+        self.knowledge_lifecycle_service = KnowledgeLifecycleService(
+            PostgresKnowledgeLifecycleStore(settings.postgres_url)
+        )
         # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
         set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
         self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
@@ -297,7 +272,6 @@ class AgentRuntime:
             settings.structured,
             settings.langsmith,
         )
-        self._task_analyzer = DefaultTaskAnalyzer(self._structured_client)
         # Unified LLM ports: every application caller depends on these instead of
         # ``OpenAI`` / ``traced_chat_completion``. ``model_client`` serves
         # tool_calling + free-form text; ``structured_client`` serves every
@@ -328,6 +302,13 @@ class AgentRuntime:
         self._agent_gateway = AgentGateway(policy_engine=self._policy_engine)
         if self.settings.gpt_researcher_a2a.enabled:
             self._agent_gateway.register(GPTResearcherA2AAdapter(self.settings.gpt_researcher_a2a))
+        self._conversation_service = ConversationService(
+            self._model_client,
+            tool_port=self._tool_executor,
+            agent_port=self._agent_gateway,
+            budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
+            journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
+        )
         self._llm = LlmClient(
             settings,
             model_client=self._model_client,
@@ -389,189 +370,12 @@ class AgentRuntime:
         self._tool_executor.register(build_research_verify_digest_tool(self._research_service))
         self._register_tools()
         self._sync_procedure_definitions()
-        self._procedure_applicability_resolver = ProcedureApplicabilityResolver(
-            PROCEDURE_CATALOG,
-        )
         self._procedure_runtime = ProcedureRuntime(
             ProcedureMaterializer(PROCEDURE_CATALOG),
         )
         self._verifier = create_answer_verifier(settings)
         self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
-        self._goal_graph_compiler = GoalGraphCompiler()
-        self._executive_controller = ExecutiveController(model_client=self._planner_client)
-        self._decision_admission = DecisionValidator()
-        self._accepted_intent_compiler = AcceptedIntentCompiler()
-        self._execution_command_resolver = ExecutionCommandResolver()
-        from personal_agent.runtime.capability_grants import CapabilityGrantIssuer
-        self._capability_grant_issuer = CapabilityGrantIssuer()
-        self._task_runtime_projector = TaskRuntimeProjector()
-        self._goal_decomposition_validator = GoalDecompositionValidator()
-        self._goal_verifier = GoalVerifier(self._planner_client)
-        self._execution_fact_verifier = ExecutionFactVerifier()
-        self._completion_verifier = CompletionVerifier()
-        from personal_agent.governance.evidence_admission import EvidenceAdmission
-        self._evidence_admission = EvidenceAdmission()
-        from personal_agent.runtime.commits import ControlCommitter, TaskCompilationCommitter
-        self._task_compilation_committer = TaskCompilationCommitter()
-        self._control_committer = ControlCommitter()
-        from personal_agent.context import ContextManager, ModelContextGateway
-        from personal_agent.runtime.recovery import ObservationNormalizer, TechnicalRecoveryPolicy
-        from personal_agent.runtime import (
-            DurableRunManager,
-            ResolvedActionBuilder,
-            ResourceAccessResolver,
-            RunScheduler,
-        )
-        self._context_manager = ContextManager()
-        self._context_gateway = ModelContextGateway()
-        self._observation_normalizer = ObservationNormalizer()
-        self._technical_recovery_policy = TechnicalRecoveryPolicy()
-        from personal_agent.capabilities.outcomes import OutcomeAwareCapabilityRanker
-        self._capability_ranker = OutcomeAwareCapabilityRanker()
-        self._resource_access_resolver = ResourceAccessResolver()
-        self._resolved_action_builder = ResolvedActionBuilder()
-        self._run_scheduler = RunScheduler()
-        from personal_agent.planning.adaptive import (
-            BOUNDED_READ_ONLY_PROFILE,
-            AdaptivePlanner,
-            FrontierSelector,
-            PlanRuntimeProjector,
-            PlanMonitor,
-            PlanValidator,
-            PlanningFactProjector,
-            CoordinationModePolicy,
-        )
-        self._planning_fact_projector = PlanningFactProjector()
-        self._coordination_policy = CoordinationModePolicy(self._planner_client)
-        self._adaptive_planner = AdaptivePlanner(self._planner_client)
-        self._plan_validator = PlanValidator()
-        self._plan_runtime_projector = PlanRuntimeProjector()
-        self._frontier_selector = FrontierSelector()
-        self._plan_monitor = PlanMonitor(self._planner_client)
-        self._planner_profile = BOUNDED_READ_ONLY_PROFILE
-        from personal_agent.infra.storage import PostgresDurableRunRepository
-
-        self._durable_run_manager = DurableRunManager(
-            PostgresDurableRunRepository(settings.postgres_url)
-        )
-        from personal_agent.agents.runtime import SubagentRuntime
-        self._subagent_runtime = SubagentRuntime()
-        # Explicit collaborators.
         self._summarizer = ThreadSummarizer(self._llm)
-        from personal_agent.orchestration.ask import PostgresAskRunContextStore
-
-        conversation_context = ConversationContext(
-            settings=self.settings,
-            compress_context=lambda text, user_id: self.compress_context(text, user_id),
-        )
-        summary_context = SummaryContext(
-            summarize_chat=lambda text, user_id: self.summarize_chat(text, user_id),
-            load_thread_messages=lambda entry_input, limit: self.load_thread_messages(
-                entry_input,
-                limit,
-            ),
-        )
-        self._invocation_journal = InvocationJournal()
-        self._graph_contexts = GraphContexts(
-            routing=RoutingContext(
-                settings=self.settings,
-                memory=self.memory,
-                task_analyzer=self._task_analyzer,
-                compress_context=lambda text, user_id: self.compress_context(text, user_id),
-            ),
-            executive=ExecutiveContext(
-                settings=self.settings,
-                goal_graph_compiler=self._goal_graph_compiler,
-                controller=self._executive_controller,
-                decision_admission=self._decision_admission,
-                accepted_intent_compiler=self._accepted_intent_compiler,
-                execution_command_resolver=self._execution_command_resolver,
-                capability_grant_issuer=self._capability_grant_issuer,
-                route_policy=ExecutionRoutePolicy(),
-                task_runtime_projector=self._task_runtime_projector,
-                goal_decomposition_validator=self._goal_decomposition_validator,
-                goal_verifier=self._goal_verifier,
-                execution_fact_verifier=self._execution_fact_verifier,
-                completion_verifier=self._completion_verifier,
-                procedure_applicability_resolver=self._procedure_applicability_resolver,
-                procedure_runtime=self._procedure_runtime,
-                step_projection_validator=self._step_projection_validator,
-                tool_executor=self._tool_executor,
-                policy_engine=self._policy_engine,
-                agent_gateway=self._agent_gateway,
-                context_manager=self._context_manager,
-                context_gateway=self._context_gateway,
-                observation_normalizer=self._observation_normalizer,
-                recovery_policy=self._technical_recovery_policy,
-                resource_access_resolver=self._resource_access_resolver,
-                action_builder=self._resolved_action_builder,
-                scheduler=self._run_scheduler,
-                subagent_runtime=self._subagent_runtime,
-                capability_ranker=self._capability_ranker,
-                procedure_grant_issuer=ProcedureGrantIssuer(),
-                capability_acquisition_manager=CapabilityAcquisitionManager(),
-                evidence_admission=self._evidence_admission,
-                planning_fact_projector=self._planning_fact_projector,
-                coordination_policy=self._coordination_policy,
-                adaptive_planner=self._adaptive_planner,
-                plan_validator=self._plan_validator,
-                plan_runtime_projector=self._plan_runtime_projector,
-                frontier_selector=self._frontier_selector,
-                plan_monitor=self._plan_monitor,
-                planner_profile=self._planner_profile,
-                task_compilation_committer=self._task_compilation_committer,
-                control_committer=self._control_committer,
-                control_plane_store=self.control_plane_store,
-            ),
-            steps=StepExecutionContext(
-                settings=self.settings,
-                memory=self.memory,
-                verifier=self._verifier,
-                step_projection_validator=self._step_projection_validator,
-                tool_executor=self._tool_executor,
-                policy_engine=self._policy_engine,
-                agent_gateway=self._agent_gateway,
-                graph_store=self.graph_store,
-                execute_ask=lambda *args, **kwargs: self.execute_ask(*args, **kwargs),
-                ask_service_factory=lambda: self._ask_service(),
-                ask_run_context_store=PostgresAskRunContextStore(
-                    self.settings.postgres_url
-                ),
-                execution_artifact_store=self.execution_replay_store,
-                control_plane_store=self.control_plane_store,
-                invocation_journal=self._invocation_journal,
-                procedure_grant_issuer=ProcedureGrantIssuer(),
-                workspace_service=self.workspace_service,
-                summary=summary_context,
-                conversation=conversation_context,
-                context_manager=self._context_manager,
-                context_gateway=self._context_gateway,
-                model_client=self._model_client,
-                structured_client=self._structured_client,
-            ),
-            react=ReactContext(
-                settings=self.settings,
-                tool_executor=self._tool_executor,
-                policy_engine=self._policy_engine,
-                context_manager=self._context_manager,
-                context_gateway=self._context_gateway,
-                invocation_journal=self._invocation_journal,
-                model_client=self._model_client,
-                structured_client=self._structured_client,
-            ),
-        )
-        self._entry = EntryOrchestrator(self)
-        self._thread_message_loader: (
-            Callable[[EntryInput, int], list[dict[str, str]]] | None
-        ) = None
-
-    @property
-    def graph_contexts(self) -> GraphContexts:
-        return self._graph_contexts
-
-    @property
-    def durable_run_manager(self):
-        return self._durable_run_manager
 
     @property
     def agent_gateway(self) -> AgentGateway:
@@ -604,37 +408,25 @@ class AgentRuntime:
         lookback_hours: int = 24,
         **_: object,
     ):
-        """Execute one-shot research through the agent control loop."""
-        result = self.execute_entry(EntryInput(
-            text=topic,
+        """Execute the mandatory one-shot ResearchRun procedure.
+
+        Decision Ownership Taxonomy: deterministic mandatory route.  The
+        accepted HTTP command owns topic, instructions, limits, and user
+        scope; the versioned Research procedure uniquely fixes the transaction
+        order.  This code introduces no intent or replacement payload.
+        """
+        run = self._research_service.prepare_run(
             user_id=user_id,
-            session_id=f"research-once:{uuid4().hex}",
-            source_platform="runtime",
-            metadata={
-                "instructions": instructions,
-                "max_items": str(max_items),
-                "lookback_hours": str(lookback_hours),
-            },
-        ))
-        run_id: str | None = None
-        if result.run_id:
-            state = self._entry.get_run_state(result.run_id)
-            if state is not None:
-                for data in reversed(list(state.invocation_batch.results.values())):
-                    if isinstance(data, dict):
-                        candidate = data.get("run_id")
-                        if isinstance(candidate, str) and candidate:
-                            run_id = candidate
-                            break
-                        run_data = data.get("run")
-                        if isinstance(run_data, dict) and isinstance(run_data.get("id"), str):
-                            run_id = run_data["id"]
-                            break
-        if run_id:
-            run = self.research_store.get_run(run_id)
-            if run is not None:
-                return run
-        raise RuntimeError("Research procedure completed without a persisted ResearchRunRecord")
+            topic=topic,
+            instructions=instructions,
+            max_items=max_items,
+            lookback_hours=lookback_hours,
+        )
+        try:
+            return self._research_service.execute_run(run.id, max_items=max_items)
+        except Exception:
+            logger.exception("One-shot ResearchRun failed run_id=%s", run.id)
+            return self.research_store.get_run(run.id) or run
 
     def enqueue_research_subscription(self, subscription_id: str):
         subscription = self.research_store.get_subscription(subscription_id)
@@ -663,17 +455,17 @@ class AgentRuntime:
         if self.capture_service is not None:
             self._tool_executor.register(build_capture_url_tool(self.capture_service))
             self._tool_executor.register(
-                build_capture_upload_tool(self.capture_service, self.settings.data_dir / "uploads")
+                build_capture_upload_tool(self.capture_service, self.artifact_service)
             )
         self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service))
+        if self._model_client is not None:
+            self._tool_executor.register(build_verify_interaction_draft_tool(self._model_client))
         self._tool_executor.register(build_graph_search_tool(self._active_graph_store()))
         self._tool_executor.register(build_capture_text_tool(
             lambda text, source_type="text", user_id="default": self.execute_capture(
                 text=text, source_type=source_type, user_id=user_id,
             )
         ))
-        self._tool_executor.register(build_delete_note_tool(self.memory))
-        self._tool_executor.register(build_restore_note_tool(self.memory))
         self._tool_executor.register(build_list_recent_notes_tool(self.memory))
         self._tool_executor.register(build_get_note_tool(self.memory))
         self._tool_executor.register(build_find_similar_notes_tool(self.memory))
@@ -699,7 +491,6 @@ class AgentRuntime:
         self._tool_executor.register(build_save_research_event_tool(self._research_service))
         self._tool_executor.register(build_inspect_worker_queue_tool(self))
         self._tool_executor.register(build_retry_worker_task_tool(self))
-        self._tool_executor.register(build_inspect_workflow_run_tool(self))
         if self.settings.web_search.api_key:
             from personal_agent.application.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
@@ -1095,7 +886,7 @@ class AgentRuntime:
             citations=citations,
             matches=matches,
             match_refs=[MatchRef(id=match.id, title=match.body.title) for match in matches],
-            evidence=evidence,
+            evidence_refs=[evidence_reference(item) for item in evidence],
             session_id=session_id or "default",
             repair_telemetry={
                 "workspace": True,
@@ -1198,10 +989,6 @@ class AgentRuntime:
     # ---- public properties (delegate to private fields so test mocks are visible) ----
 
     @property
-    def task_analyzer(self):
-        return self._task_analyzer
-
-    @property
     def tool_executor(self):
         return self._tool_executor
 
@@ -1213,49 +1000,11 @@ class AgentRuntime:
     def step_projection_validator(self):
         return self._step_projection_validator
 
-    def set_thread_message_loader(
-        self, loader: Callable[[EntryInput, int], list[dict[str, str]]] | None
-    ) -> None:
-        """Register a platform adapter used only after the graph selects summary."""
-        self._thread_message_loader = loader
+    def converse(self, *args, **kwargs):
+        return self._conversation_service.respond(*args, **kwargs)
 
-    def load_thread_messages(
-        self, entry_input: EntryInput, limit: int = 20
-    ) -> list[dict[str, str]]:
-        if self._thread_message_loader is None:
-            return []
-        return self._thread_message_loader(entry_input, limit)
-
-    # ---- entry orchestration (delegated to EntryOrchestrator) ----
-
-    def execute_entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
-        result = self._entry.execute_entry(entry_input, on_progress=on_progress)
-        record_entry_episode(self.memory, result, entry_input, settings=self.settings)
-        return result
-
-    def resume_entry(
-        self, run_id: str, thread_id: str, decision: str, user_id: str,
-        text: str | None = None, option_id: str | None = None,
-    ) -> EntryResult:
-        result = self._entry.resume_entry(
-            run_id, thread_id, decision, user_id, text=text, option_id=option_id,
-        )
-        record_entry_episode(self.memory, result, settings=self.settings)
-        return result
-
-    def recover_entry(self, run_id: str, user_id: str) -> EntryResult:
-        result = self._entry.recover_entry(run_id, user_id)
-        record_entry_episode(self.memory, result, settings=self.settings)
-        return result
-
-    def get_run_snapshot(self, run_id: str):
-        return self._entry.get_run_snapshot(run_id)
-
-    def list_run_snapshots(self, user_id: str | None = None, limit: int = 50):
-        return self._entry.list_run_snapshots(user_id=user_id, limit=limit)
-
-    def list_run_history(self, run_id: str, limit: int = 100):
-        return self._entry.list_run_history(run_id, limit=limit)
+    def conversation_trace(self, interaction_run_ref: str):
+        return self._conversation_service.trace(interaction_run_ref)
 
     def list_procedure_definitions(self):
         return self.procedure_definition_store.list_definitions()
@@ -1380,65 +1129,6 @@ class AgentRuntime:
     def list_replay_runs(self, run_id: str, limit: int = 50):
         return self.execution_replay_store.list_replay_runs(run_id, limit=limit)
 
-    def rebuild_agent_trace_projection(self, run_id: str):
-        from personal_agent.orchestration.execution_event_projection import project_execution_events
-
-        return project_execution_events(
-            run_id,
-            self.agent_trace_store.list_events(run_id),
-        )
-
-    def build_agent_debug_bundle(self, run_id: str) -> dict[str, object]:
-        events = [
-            event.model_dump(mode="json")
-            for event in self.agent_trace_store.list_events(run_id)
-        ]
-        history = self.list_run_history(run_id, limit=100)
-        return self.execution_replay_store.build_debug_bundle(
-            run_id=run_id,
-            events=events,
-            history=history,
-            projection=self.rebuild_agent_trace_projection(run_id).model_dump(mode="json"),
-        )
-
-    def replay_from_checkpoint(
-        self,
-        *,
-        thread_id: str,
-        checkpoint_id: str,
-        updates: dict[str, object],
-        checkpoint_ns: str | None = None,
-        as_node: str | None = None,
-    ) -> EntryResult:
-        result = self._entry.replay_from_checkpoint(
-            thread_id=thread_id,
-            checkpoint_id=checkpoint_id,
-            updates=updates,
-            checkpoint_ns=checkpoint_ns,
-            as_node=as_node,
-        )
-        record_entry_episode(self.memory, result, settings=self.settings)
-        return result
-
-    def fork_from_checkpoint(
-        self,
-        *,
-        thread_id: str,
-        checkpoint_id: str,
-        updates: dict[str, object] | None = None,
-        checkpoint_ns: str | None = None,
-        as_node: str | None = None,
-    ) -> EntryResult:
-        result = self._entry.fork_from_checkpoint(
-            thread_id=thread_id,
-            checkpoint_id=checkpoint_id,
-            updates=updates or {},
-            checkpoint_ns=checkpoint_ns,
-            as_node=as_node,
-        )
-        record_entry_episode(self.memory, result, settings=self.settings)
-        return result
-
     # ---- digest / intent (formerly RuntimeEntryMixin) ----
 
     def execute_digest(self, user_id: str | None = None) -> DigestResult:
@@ -1470,9 +1160,7 @@ class AgentRuntime:
             preserve_group_ids=protected_eval_groups
         )
         self.memory.ensure_schema()
-        checkpointer = self._entry._get_orch_graph().checkpointer
         counts = PostgresDebugResetStore(self.settings.postgres_url).clear_all_data()
-        checkpointer.setup()
         deleted_upload_files = clear_upload_files(self.settings.data_dir)
         return ResetResult(
             deleted_notes=counts["notes"],
@@ -1492,16 +1180,12 @@ class AgentRuntime:
     def digest(self, user_id: str | None = None) -> DigestResult:
         return self.execute_digest(user_id=user_id)
 
-    def entry(self, entry_input: EntryInput, on_progress=None) -> EntryResult:
-        return self.execute_entry(entry_input, on_progress=on_progress)
-
 
 __all__ = [
     "AgentRuntime",
     "AskResult",
     "CaptureResult",
     "DigestResult",
-    "EntryResult",
     "ResetResult",
     "RetryResult",
     "_annotate_answer",

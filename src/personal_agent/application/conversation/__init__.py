@@ -1,0 +1,41 @@
+from personal_agent.application.conversation.models import (
+    ActionObservation,
+    AgentDelegationProposal,
+    AgentTurnDecision,
+    ContinueTurnProposal,
+    ConversationMessage,
+    ConversationTurnView,
+    DecisionFeedback,
+    EffectiveCapabilities,
+    FinalMessage,
+    InteractionTrace,
+    LoopBudgetPolicy,
+    ToolCallProposal,
+    WorkingPlanSnapshot,
+)
+from personal_agent.application.conversation.service import (
+    ConversationService,
+    ConversationUnavailable,
+    FileInteractionJournal,
+    InMemoryInteractionJournal,
+)
+
+__all__ = [
+    "ActionObservation",
+    "AgentDelegationProposal",
+    "AgentTurnDecision",
+    "ContinueTurnProposal",
+    "ConversationMessage",
+    "ConversationService",
+    "ConversationTurnView",
+    "ConversationUnavailable",
+    "DecisionFeedback",
+    "EffectiveCapabilities",
+    "FinalMessage",
+    "FileInteractionJournal",
+    "InMemoryInteractionJournal",
+    "InteractionTrace",
+    "LoopBudgetPolicy",
+    "ToolCallProposal",
+    "WorkingPlanSnapshot",
+]

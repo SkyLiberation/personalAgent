@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from typing import Any
 
 from dotenv import load_dotenv
 
 from personal_agent.kernel.config_models import (
+    DEFAULT_GENERATIVE_MODEL,
     AskConfig,
     EnterpriseKnowledgeConfig,
     FeishuConfig,
@@ -15,6 +17,7 @@ from personal_agent.kernel.config_models import (
     LangExtractConfig,
     LangSmithConfig,
     KnowledgeGapConfig,
+    InteractionLoopConfig,
     MCPConfig,
     MCPServerConfig,
     MCPToolConfig,
@@ -34,7 +37,23 @@ from personal_agent.kernel.config_models import (
 def settings_from_env(settings_cls: type):
     import os
 
-    load_dotenv(override=True)
+    if not _as_bool(os.getenv("PYTHON_DOTENV_DISABLED", "false")):
+        load_dotenv(override=True)
+    structured_api_key = (
+        os.getenv("STRUCTURED_API_KEY")
+        or os.getenv("ROUTER_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    structured_base_url = (
+        os.getenv("STRUCTURED_BASE_URL")
+        or os.getenv("ROUTER_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+    )
+    structured_model = (
+        os.getenv("STRUCTURED_MODEL")
+        or os.getenv("ROUTER_MODEL")
+        or DEFAULT_GENERATIVE_MODEL
+    )
     return settings_cls(
         data_dir=Path(os.getenv("PERSONAL_AGENT_DATA_DIR", "./data")),
         log_level=os.getenv("PERSONAL_AGENT_LOG_LEVEL", "INFO"),
@@ -43,6 +62,14 @@ def settings_from_env(settings_cls: type):
         default_user=os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
         postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
         max_verify_retries=int(os.getenv("AGENT_MAX_VERIFY_RETRIES", "1")),
+        interaction_loop=InteractionLoopConfig(
+            policy_revision=os.getenv("PERSONAL_AGENT_INTERACTION_POLICY_REVISION", "interaction-loop-v1"),
+            max_model_turns=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS", "8")),
+            max_tool_calls=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS", "12")),
+            max_agent_calls=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS", "4")),
+            max_total_tokens=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS", "32000")),
+            max_concurrency=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_CONCURRENCY", "4")),
+        ),
         graphiti=GraphitiConfig(
             uri=os.getenv("PERSONAL_AGENT_GRAPHITI_URI", "bolt://localhost:7687"),
             user=os.getenv("PERSONAL_AGENT_GRAPHITI_USER", "neo4j"),
@@ -65,10 +92,14 @@ def settings_from_env(settings_cls: type):
             search_min_score=float(
                 os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_MIN_SCORE", "0.0")
             ),
-            llm_api_key=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY"),
-            llm_base_url=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL"),
-            llm_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_MODEL"),
-            llm_small_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL"),
+            llm_api_key=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY")
+            or structured_api_key,
+            llm_base_url=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL")
+            or structured_base_url,
+            llm_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_MODEL")
+            or structured_model,
+            llm_small_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL")
+            or structured_model,
             sync_max_attempts=int(
                 os.getenv("PERSONAL_AGENT_GRAPH_SYNC_MAX_ATTEMPTS", "3")
             ),
@@ -107,9 +138,12 @@ def settings_from_env(settings_cls: type):
             completion_model_provider=os.getenv(
                 "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL_PROVIDER", "openai"
             ),
-            completion_model=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL"),
-            completion_api_key=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY"),
-            completion_api_base=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE"),
+            completion_model=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL")
+            or structured_model,
+            completion_api_key=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY")
+            or structured_api_key,
+            completion_api_base=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE")
+            or structured_base_url,
             embedding_model_provider=os.getenv(
                 "PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_MODEL_PROVIDER", "openai"
             ),
@@ -125,10 +159,10 @@ def settings_from_env(settings_cls: type):
             ),
         ),
         openai=OpenAIConfig(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL"),
-            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-            small_model=os.getenv("OPENAI_SMALL_MODEL", "deepseek-v4-flash"),
+            api_key=os.getenv("OPENAI_API_KEY") or structured_api_key,
+            base_url=os.getenv("OPENAI_BASE_URL") or structured_base_url,
+            model=os.getenv("OPENAI_MODEL") or structured_model,
+            small_model=os.getenv("OPENAI_SMALL_MODEL") or structured_model,
             vision_model=os.getenv("OPENAI_VISION_MODEL", ""),
             transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1"),
             embedding_model=os.getenv(
@@ -142,17 +176,12 @@ def settings_from_env(settings_cls: type):
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
         ),
         structured=StructuredConfig(
-            api_key=os.getenv("STRUCTURED_API_KEY")
-            or os.getenv("ROUTER_API_KEY")
-            or os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("STRUCTURED_BASE_URL")
-            or os.getenv("ROUTER_BASE_URL")
-            or os.getenv("OPENAI_BASE_URL"),
-            model=os.getenv("STRUCTURED_MODEL")
-            or os.getenv("ROUTER_MODEL", "gpt-5.4-mini"),
+            api_key=structured_api_key,
+            base_url=structured_base_url,
+            model=structured_model,
             timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS")
-                or os.getenv("PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS", "30")
+                or os.getenv("PERSONAL_AGENT_ROUTER_TIMEOUT_SECONDS", "60")
             ),
             max_retries=int(
                 os.getenv("PERSONAL_AGENT_STRUCTURED_MAX_RETRIES")
@@ -298,14 +327,12 @@ def settings_from_env(settings_cls: type):
         ),
         langextract=LangExtractConfig(
             api_key=os.getenv("PERSONAL_AGENT_EXTRACT_API_KEY")
-            or os.getenv("EMBEDDING_API_KEY"),
-            base_url=os.getenv(
-                "PERSONAL_AGENT_EXTRACT_BASE_URL",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            ),
-            model_id=os.getenv(
-                "PERSONAL_AGENT_EXTRACT_MODEL", "qwen3-coder-flash"
-            ),
+            or structured_api_key,
+            base_url=os.getenv("PERSONAL_AGENT_EXTRACT_BASE_URL")
+            or structured_base_url
+            or "https://n.tokeness.io/v1",
+            model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL")
+            or structured_model,
             max_char_buffer=int(
                 os.getenv("PERSONAL_AGENT_EXTRACT_MAX_CHAR_BUFFER", "6000")
             ),
@@ -742,7 +769,9 @@ def _notion_mcp_server_from_env() -> MCPServerConfig | None:
     if not _as_bool(os.getenv("PERSONAL_AGENT_NOTION_MCP_ENABLED", "false")):
         return None
     token_env = os.getenv("PERSONAL_AGENT_NOTION_MCP_TOKEN_ENV", "NOTION_TOKEN")
-    command = os.getenv("PERSONAL_AGENT_NOTION_MCP_COMMAND", "npx")
+    command = os.getenv("PERSONAL_AGENT_NOTION_MCP_COMMAND") or (
+        shutil.which("npx.cmd") or shutil.which("npx") or "npx"
+    )
     args = _parse_json_list_env("PERSONAL_AGENT_NOTION_MCP_ARGS")
     if not args:
         args = ("-y", "@notionhq/notion-mcp-server")
@@ -751,7 +780,7 @@ def _notion_mcp_server_from_env() -> MCPServerConfig | None:
         for name in _parse_csv(
             os.getenv(
                 "PERSONAL_AGENT_NOTION_MCP_TOOLS",
-                "post-search,retrieve-page-markdown",
+                "API-post-search,API-retrieve-page-markdown",
             )
         )
     )
@@ -770,15 +799,15 @@ def _notion_mcp_server_from_env() -> MCPServerConfig | None:
 
 def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
     public_name_by_remote = {
-        "post-search": "notion.search",
-        "retrieve-page-markdown": "notion.retrieve_page_markdown",
+        "API-post-search": "notion.search",
+        "API-retrieve-page-markdown": "notion.retrieve_page_markdown",
     }
     descriptions = {
-        "post-search": "Search pages and data sources visible to the configured Notion integration.",
-        "retrieve-page-markdown": "Read a Notion page's full content as Markdown.",
+        "API-post-search": "Search pages and data sources visible to the configured Notion token.",
+        "API-retrieve-page-markdown": "Read a Notion page's full content as Markdown.",
     }
     capability_by_remote = {
-        "post-search": {
+        "API-post-search": {
             "semantic_domains": ("workspace_knowledge", "docs"),
             "resource_types": ("page", "data_source"),
             "operations": ("search",),
@@ -788,7 +817,7 @@ def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
                 "tool": "notion.search",
             },),
         },
-        "retrieve-page-markdown": {
+        "API-retrieve-page-markdown": {
             "semantic_domains": ("workspace_knowledge", "docs"),
             "resource_types": ("page",),
             "operations": ("read",),

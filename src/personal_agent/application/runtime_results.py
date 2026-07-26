@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from personal_agent.kernel.evidence import EvidenceReference
 from personal_agent.kernel.models import Citation, KnowledgeNote, ReviewCard
 from personal_agent.kernel.projections import MatchRef
 from personal_agent.application.verifier import VerificationResult
@@ -19,7 +20,7 @@ class AskResult(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     matches: list[KnowledgeNote] = Field(default_factory=list)
     match_refs: list[MatchRef] = Field(default_factory=list)
-    evidence: list = Field(default_factory=list)
+    evidence_refs: list[EvidenceReference] = Field(default_factory=list)
     session_id: str = "default"
     repair_telemetry: dict[str, object] = Field(default_factory=dict)
 

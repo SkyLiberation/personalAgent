@@ -21,6 +21,7 @@ from personal_agent.tools.restore_note import build_restore_note_tool
 from personal_agent.tools.graph_search import build_graph_search_tool
 from personal_agent.tools.inspect_artifact import build_inspect_artifact_tool
 from personal_agent.tools.inspect_knowledge_gaps import build_inspect_knowledge_gaps_tool
+from personal_agent.tools.interaction_verifier import build_verify_interaction_draft_tool
 from personal_agent.tools.knowledge_lifecycle import (
     build_find_similar_notes_tool,
     build_get_note_tool,
@@ -41,7 +42,6 @@ from personal_agent.tools.mcp_capability import (
 )
 from personal_agent.tools.operations import (
     build_inspect_worker_queue_tool,
-    build_inspect_workflow_run_tool,
     build_retry_worker_task_tool,
 )
 from personal_agent.tools.raw_wiki import build_raw_wiki_search_tools
@@ -80,6 +80,7 @@ __all__ = [
     "build_graph_search_tool",
     "build_inspect_artifact_tool",
     "build_inspect_knowledge_gaps_tool",
+    "build_verify_interaction_draft_tool",
     "build_list_recent_notes_tool",
     "build_get_note_tool",
     "build_find_similar_notes_tool",
@@ -113,7 +114,6 @@ __all__ = [
     "build_save_research_event_tool",
     "build_inspect_worker_queue_tool",
     "build_retry_worker_task_tool",
-    "build_inspect_workflow_run_tool",
     "build_web_search_tool",
     "governance_extras",
     "ToolGovernance",

@@ -43,6 +43,13 @@ class WorkspaceStore(Protocol):
     def save_graph_projections(self, projections: Iterable[GraphProjection]) -> None: ...
     def save_projection_jobs(self, jobs: Iterable[ProjectionJob]) -> None: ...
     def get_artifact(self, artifact_id: str) -> Artifact | None: ...
+    def list_artifacts(
+        self,
+        workspace_id: str,
+        *,
+        source_type: str | None = None,
+        limit: int = 100,
+    ) -> list[Artifact]: ...
     def get_extraction_run(self, extraction_run_id: str) -> ExtractionRun | None: ...
     def get_claim(self, claim_id: str) -> Claim | None: ...
     def get_research_event(self, research_event_id: str) -> ResearchEvent | None: ...
@@ -163,6 +170,21 @@ class InMemoryWorkspaceStore:
 
     def get_artifact(self, artifact_id: str) -> Artifact | None:
         return self.artifacts.get(artifact_id)
+
+    def list_artifacts(
+        self,
+        workspace_id: str,
+        *,
+        source_type: str | None = None,
+        limit: int = 100,
+    ) -> list[Artifact]:
+        artifacts = [
+            artifact for artifact in self.artifacts.values()
+            if artifact.workspace_id == workspace_id
+            and (source_type is None or artifact.source_type == source_type)
+        ]
+        artifacts.sort(key=lambda item: item.created_at, reverse=True)
+        return artifacts[:max(1, limit)]
 
     def get_extraction_run(self, extraction_run_id: str) -> ExtractionRun | None:
         return self.extraction_runs.get(extraction_run_id)

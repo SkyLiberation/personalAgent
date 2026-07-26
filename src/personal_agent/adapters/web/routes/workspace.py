@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from personal_agent.adapters.web.routes._shared import resolve_user_id
 from personal_agent.application.workspace import (
+    Artifact,
     Claim,
     ClaimCorrectionResult,
     ConversationMessage,
@@ -22,6 +23,9 @@ from personal_agent.application.workspace import (
     ReviewPlanResult,
     WorkspaceService,
 )
+from personal_agent.application.artifacts import ArtifactService
+from personal_agent.application.capture import CaptureService
+from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.config import Settings
 
 
@@ -75,11 +79,24 @@ class GraphProjectionRequest(BaseModel):
     limit: int = 100
 
 
+class IngestUrlRequest(BaseModel):
+    url: str
+    user_id: str | None = None
+    workspace_id: str = "default"
+
+
+class CapturedResourceResult(BaseModel):
+    resource_ref: ResourceRef | None = None
+    ingest_result: IngestKnowledgeResult
+
+
 def register_workspace_routes(
     app: FastAPI,
     *,
     settings: Settings,
     workspace_service: WorkspaceService,
+    artifact_service: ArtifactService,
+    capture_service: CaptureService,
 ) -> None:
     @app.post("/api/workspace/ingest-text", response_model=IngestKnowledgeResult)
     def ingest_text(body: IngestTextRequest, request: Request) -> IngestKnowledgeResult:
@@ -92,6 +109,61 @@ def register_workspace_routes(
             source_ref=body.source_ref,
             raw_location=body.raw_location,
         )
+
+    @app.post("/api/workspace/ingest-upload", response_model=CapturedResourceResult)
+    def ingest_upload(
+        request: Request,
+        file: UploadFile = File(...),
+        user_id: str = Form("default"),
+        workspace_id: str = Form("default"),
+    ) -> CapturedResourceResult:
+        resolved_user = user_id if user_id != "default" else resolve_user_id(request, settings)
+        resolved_workspace = workspace_id if workspace_id != "default" else resolved_user
+        file_bytes = file.file.read()
+        resource_ref = artifact_service.save_upload(
+            filename=file.filename or "upload",
+            content_type=file.content_type,
+            file_bytes=file_bytes,
+            uploads_dir=settings.data_dir / "uploads",
+            user_id=resolved_user,
+            workspace_id=resolved_workspace,
+        )
+        source_type = capture_service.source_type_from_upload(
+            file.filename or "upload",
+            file.content_type,
+        )
+        text = capture_service.capture_text_from_upload(
+            file.filename or "upload",
+            file.content_type,
+            file_bytes,
+            source_type,
+        )
+        ingest = workspace_service.ingest_text(
+            text,
+            user_id=resolved_user,
+            workspace_id=resolved_workspace,
+            source_type=source_type,
+            source_ref=resource_ref.resource_id,
+            artifact_id=resource_ref.resource_id,
+            artifact_metadata={
+                "filename": file.filename or "upload",
+                "content_type": file.content_type or "",
+            },
+        )
+        return CapturedResourceResult(resource_ref=resource_ref, ingest_result=ingest)
+
+    @app.post("/api/workspace/ingest-url", response_model=CapturedResourceResult)
+    def ingest_url(body: IngestUrlRequest, request: Request) -> CapturedResourceResult:
+        resolved_user = body.user_id or resolve_user_id(request, settings)
+        text = capture_service.capture_text_from_url(body.url)
+        ingest = workspace_service.ingest_text(
+            text,
+            user_id=resolved_user,
+            workspace_id=body.workspace_id,
+            source_type="link",
+            source_ref=body.url,
+        )
+        return CapturedResourceResult(ingest_result=ingest)
 
     @app.post("/api/workspace/ask", response_model=EvidenceGroundedAnswer)
     def ask_workspace(body: AskWorkspaceRequest) -> EvidenceGroundedAnswer:
@@ -148,6 +220,17 @@ def register_workspace_routes(
     @app.get("/api/workspace/knowledge-items", response_model=list[KnowledgeItem])
     def list_knowledge_items(workspace_id: str = "default", state: str | None = None) -> list[KnowledgeItem]:
         return workspace_service.store.list_knowledge_items(workspace_id, state=state, limit=200)
+
+    @app.get("/api/workspace/artifacts", response_model=list[Artifact])
+    def list_artifacts(
+        workspace_id: str = "default",
+        source_type: str | None = None,
+    ) -> list[Artifact]:
+        return workspace_service.store.list_artifacts(
+            workspace_id,
+            source_type=source_type,
+            limit=200,
+        )
 
     @app.get("/api/workspace/decisions", response_model=list[DecisionCard])
     def list_decisions(workspace_id: str = "default", status: str | None = None) -> list[DecisionCard]:

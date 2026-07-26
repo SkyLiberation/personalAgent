@@ -14,6 +14,7 @@ from personal_agent.application.research import (
     SourcePreferences,
 )
 from personal_agent.adapters.web.routes._shared import (
+    auth_is_disabled,
     is_admin,
     resolve_query_user_id,
     resolve_user_id,
@@ -83,7 +84,11 @@ def register_research_routes(
     @app.post("/api/research/subscriptions")
     def create_subscription(body: ResearchSubscriptionRequest, request: Request):
         caller = resolve_user_id(request, settings)
-        user_id = body.user_id if is_admin(request) and body.user_id else caller
+        user_id = (
+            body.user_id
+            if body.user_id and (is_admin(request) or auth_is_disabled(settings))
+            else caller
+        )
         saved = service.create_research_subscription(ResearchSubscriptionRecord.create(
             ResearchSubscriptionSpec(
             user_id=user_id,
@@ -119,7 +124,11 @@ def register_research_routes(
     @app.post("/api/research/once")
     def run_once(body: ResearchOnceRequest, request: Request):
         caller = resolve_user_id(request, settings)
-        user_id = body.user_id if is_admin(request) and body.user_id else caller
+        user_id = (
+            body.user_id
+            if body.user_id and (is_admin(request) or auth_is_disabled(settings))
+            else caller
+        )
         run = service.run_research_once(
             user_id=user_id,
             topic=body.topic,
@@ -150,6 +159,25 @@ def register_research_routes(
         return {
             "run": _run_payload(run),
             "digest": digest.model_dump(mode="json") if digest else None,
+        }
+
+    @app.get("/api/research/deliveries")
+    def list_deliveries(
+        request: Request,
+        subscription_id: str | None = None,
+        user_id: str | None = None,
+        limit: int = 50,
+    ):
+        resolved_user = resolve_query_user_id(request, settings, user_id)
+        return {
+            "items": [
+                _jsonable_delivery(item)
+                for item in store.list_deliveries(
+                    user_id=resolved_user,
+                    subscription_id=subscription_id,
+                    limit=limit,
+                )
+            ]
         }
 
     @app.post("/api/research/feedback")
@@ -219,7 +247,16 @@ def _check_user(
 ) -> None:
     if owner is None:
         return
+    if auth_is_disabled(settings):
+        return
     caller = resolved_user_id or resolve_user_id(request, settings)
     if not is_admin(request) and owner != caller:
         raise HTTPException(status_code=404, detail="Resource not found.")
+
+
+def _jsonable_delivery(item: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value.isoformat() if hasattr(value, "isoformat") else value
+        for key, value in item.items()
+    }
 

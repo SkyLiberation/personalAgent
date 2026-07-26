@@ -246,89 +246,6 @@ export type ExecutionStep = {
   output_preview?: string;
 };
 
-export type EntryPendingConfirmation = {
-  kind?: string;
-  step_id?: string;
-  action_type?: string;
-  action_id?: string | null;
-  token?: string | null;
-  note_id?: string | null;
-  title?: string;
-  summary?: string;
-  message?: string;
-  original_text?: string;
-  options?: Array<{ id: string; label: string; prompt?: string }>;
-  [key: string]: unknown;
-};
-
-export type EntryResponse = {
-  intents: string[];
-  reason: string;
-  reply_text: string;
-  plan?: { tasks?: unknown[]; steps?: ExecutionStep[] } | null;
-  steps?: ExecutionStep[];
-  execution_trace?: string[];
-  run_id?: string | null;
-  pending_confirmation?: EntryPendingConfirmation | null;
-  run_status?: "completed" | "waiting_confirmation" | string | null;
-  capture_result: {
-    note: Note;
-    related_notes: Note[];
-    review_card: ReviewCard | null;
-    graph_enabled: boolean;
-  } | null;
-  ask_result: {
-    answer: string;
-    citations: Citation[];
-    matches: Note[];
-    graph_enabled: boolean;
-    session_id: string;
-  } | null;
-};
-
-export type EntryRunSnapshot = {
-  run_id: string;
-  thread_id: string;
-  user_id: string;
-  session_id: string;
-  status: string;
-  intents: string[];
-  entry_text: string;
-  steps: ExecutionStep[];
-  execution_trace: string[];
-  answer?: string | null;
-  pending_confirmation?: EntryPendingConfirmation | null;
-  confirmation_decision?: "confirmed" | "rejected" | string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type EntryRunSnapshotResponse = {
-  items: EntryRunSnapshot[];
-};
-
-export function fetchEntryRuns(
-  userId = "default",
-  limit = 100,
-): Promise<EntryRunSnapshotResponse> {
-  return requestJson<EntryRunSnapshotResponse>(
-    `/api/entry/runs?user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(String(limit))}`
-  );
-}
-
-export function resumeEntryRun(
-  runId: string,
-  decision: "confirm" | "reject" | "clarify",
-  userId = "default",
-  text = "",
-  optionId = ""
-): Promise<EntryResponse> {
-  return requestJson<EntryResponse>(`/api/entry/runs/${encodeURIComponent(runId)}/resume`, {
-    method: "POST",
-    body: JSON.stringify({ decision, user_id: userId, text, option_id: optionId }),
-  });
-}
-
 export function buildEntryStreamUrl(text: string, userId = "default", sessionId = "default"): string {
   const params = new URLSearchParams({
     text,
@@ -345,19 +262,36 @@ export function buildEntryStreamUrl(text: string, userId = "default", sessionId 
 export function uploadEntryFile(
   file: File,
   userId = "default",
-  sessionId = "default",
-  text?: string
-): Promise<EntryResponse> {
+): Promise<WorkspaceCapturedResource> {
   const body = new FormData();
   body.append("file", file);
   body.append("user_id", userId);
-  body.append("session_id", sessionId);
-  if (text) {
-    body.append("text", text);
-  }
-  return requestFormData<EntryResponse>("/api/entry/upload", {
+  body.append("workspace_id", userId);
+  return requestFormData<WorkspaceCapturedResource>("/api/workspace/ingest-upload", {
     method: "POST",
     body,
+  });
+}
+
+export type WorkspaceCapturedResource = {
+  resource_ref: { resource_id: string } | null;
+  ingest_result: {
+    artifact: { artifact_id: string; text: string };
+  };
+};
+
+export type WorkspaceGroundedAnswer = {
+  answer: string;
+  grounding_status: "supported" | "weak_evidence" | "unsupported";
+};
+
+export function askWorkspace(
+  question: string,
+  workspaceId = "default",
+): Promise<WorkspaceGroundedAnswer> {
+  return requestJson<WorkspaceGroundedAnswer>("/api/workspace/ask", {
+    method: "POST",
+    body: JSON.stringify({ question, workspace_id: workspaceId }),
   });
 }
 
@@ -385,10 +319,7 @@ export type PendingActionItem = {
   status: "pending" | "confirmed" | "rejected" | "expired" | "executed";
   payload?: Record<string, unknown>;
   token?: string;
-  source?: "pending_action" | "langgraph_run";
-  run_id?: string;
-  local_history_id?: string;
-  pending_confirmation?: EntryPendingConfirmation;
+  source?: "pending_action";
   created_at: string;
   expires_at: string;
   resolved_at: string | null;

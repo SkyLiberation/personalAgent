@@ -10,8 +10,6 @@ def test_core_prompts_are_registered_with_versions() -> None:
         "ask.graph_answer.user",
         "ask.local_answer.user",
         "ask.correction.user",
-        "task_analyzer.system",
-        "task_analyzer.user",
         "query_planner.system",
         "query_planner.user",
         "evidence_rerank.system",
@@ -31,24 +29,6 @@ def test_core_prompts_are_registered_with_versions() -> None:
         assert prompt.version.startswith("v")
         assert prompt.output_contract
         assert prompt.template.strip()
-
-
-def test_task_analyzer_user_prompt_renders_current_input() -> None:
-    rendered = render_prompt("task_analyzer.user", text="删除关于 DNS 的知识")
-
-    assert "分析下面的当前请求：\n删除关于 DNS 的知识" == rendered
-
-
-def test_task_analyzer_distinguishes_ingest_payload_from_resource_locator() -> None:
-    prompt = get_prompt("task_analyzer.system")
-
-    assert prompt.version == "v18"
-    assert "只有 search、read 或 list 等只读操作" in prompt.template
-    assert "文件路径也属于资源定位符" in prompt.template
-    assert "ResourceHint.locator 必须为 null" in prompt.template
-    assert "constraint.description=事实 X" in prompt.template
-    assert "ResourceHint.origin=user_explicit" in prompt.template
-    assert "goals.0.resource_hints.0.user_required_provider" in prompt.template
 
 
 def test_expanded_registry_prompts_render_with_sample_variables() -> None:

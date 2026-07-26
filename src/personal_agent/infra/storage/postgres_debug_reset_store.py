@@ -23,9 +23,11 @@ _NAMED_TABLES = {
     "review_feedback_events": "review_feedback_events",
 }
 
+_PRESERVED_SCHEMA_FACT_TABLES = frozenset({"checkpoint_migrations"})
+
 
 class PostgresDebugResetStore(PostgresStoreBase):
-    """Destructive development-only reset for every table in the Postgres schema."""
+    """Reset business/runtime rows while preserving schema migration facts."""
 
     def clear_all_data(self) -> dict[str, int]:
         with self._connect() as conn:
@@ -38,7 +40,11 @@ class PostgresDebugResetStore(PostgresStoreBase):
                     ORDER BY tablename
                     """
                 )
-                tables = [row[0] for row in cur.fetchall()]
+                tables = [
+                    row[0]
+                    for row in cur.fetchall()
+                    if row[0] not in _PRESERVED_SCHEMA_FACT_TABLES
+                ]
                 counts_by_table = {
                     table: _count_rows(cur, table)
                     for table in tables

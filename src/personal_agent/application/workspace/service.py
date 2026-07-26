@@ -89,6 +89,8 @@ class WorkspaceService:
         source_type: str = "text",
         source_ref: str | None = None,
         raw_location: str = "",
+        artifact_id: str | None = None,
+        artifact_metadata: dict[str, object] | None = None,
         created_by: str = "user",
         extract_claim_limit: int = 12,
     ) -> IngestKnowledgeResult:
@@ -101,6 +103,8 @@ class WorkspaceService:
             source_type=source_type,
             source_ref=source_ref,
             raw_location=raw_location,
+            artifact_id=artifact_id,
+            artifact_metadata=artifact_metadata,
         )
         return self.enhance_claim_lifecycle(
             ingest,
@@ -117,12 +121,15 @@ class WorkspaceService:
         source_type: str = "text",
         source_ref: str | None = None,
         raw_location: str = "",
+        artifact_id: str | None = None,
+        artifact_metadata: dict[str, object] | None = None,
     ) -> IngestKnowledgeResult:
         """Evidence-first ingest: Artifact/Evidence is the success boundary."""
         normalized = _normalize_text(text)
         if not normalized:
             raise ValueError("text is required")
         artifact = Artifact(
+            **({"artifact_id": artifact_id} if artifact_id else {}),
             workspace_id=workspace_id,
             user_id=user_id,
             source_type=source_type,
@@ -130,6 +137,7 @@ class WorkspaceService:
             content_hash=stable_hash(normalized),
             raw_location=raw_location or source_ref or "",
             text=normalized,
+            metadata=artifact_metadata or {},
         )
         extraction_run = ExtractionRun(
             artifact_id=artifact.artifact_id,
@@ -1448,7 +1456,10 @@ class WorkspaceService:
             ref_id for ref_id in judgment.supporting_evidence_ref_ids
             if ref_id in refs_by_id
         ]
-        if judgment.support_status == "supported" and not supporting_ref_ids:
+        if (
+            judgment.support_status in {"supported", "user_asserted"}
+            and not supporting_ref_ids
+        ):
             supporting_ref_ids = [ref.source_id for ref in claim.evidence_refs if ref.health_status == "valid"]
         contradicting_ref_ids = [
             ref_id for ref_id in judgment.contradicting_evidence_ref_ids

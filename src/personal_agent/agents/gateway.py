@@ -103,16 +103,18 @@ class AgentGateway:
 
     def poll(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         stored = self._require_run(agent_run_id)
+        self._authorize_context(stored, context)
         adapter = self._adapter(stored.definition.agent_id)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
-        run = adapter.poll(agent_run_id, context)
-        return self._store.put(_merge_events(stored, run))
+        run = adapter.poll(stored, context)
+        return self._store.put(_unverified_artifacts(_merge_events(stored, run)))
 
     def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         stored = self._require_run(agent_run_id)
+        self._authorize_context(stored, context)
         adapter = self._adapter(stored.definition.agent_id)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
-        run = adapter.cancel(agent_run_id, context)
+        run = adapter.cancel(stored, context)
         run = self._append_event(
             _merge_events(stored, run), "cancelled", {"status": run.projection.status},
         )
@@ -120,9 +122,10 @@ class AgentGateway:
 
     def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[ChildAgentRunEvent]:
         stored = self._require_run(agent_run_id)
+        self._authorize_context(stored, context)
         adapter = self._adapter(stored.definition.agent_id)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
-        for event in adapter.stream(agent_run_id, context):
+        for event in adapter.stream(stored, context):
             current = self._store.get(agent_run_id) or stored
             self._store.put(replace(current, events=(*current.events, event)))
             yield event
@@ -144,6 +147,14 @@ class AgentGateway:
         if run is None:
             raise KeyError(f"Unknown agent_run_id={agent_run_id!r}.")
         return run
+
+    @staticmethod
+    def _authorize_context(run: ChildAgentRunRecord, context: AgentGatewayContext) -> None:
+        owner = run.definition.context
+        if (owner.user_id, owner.session_id, owner.run_id) != (
+            context.user_id, context.session_id, context.run_id,
+        ):
+            raise PermissionError("child agent run belongs to a different parent scope")
 
     def _authorize(
         self,
@@ -202,6 +213,13 @@ def _merge_events(stored: ChildAgentRunRecord, fresh: ChildAgentRunRecord) -> Ch
 
 def _unverified(artifact: AgentArtifact) -> AgentArtifact:
     return replace(artifact, producer_verification_status="unverified")
+
+
+def _unverified_artifacts(run: ChildAgentRunRecord) -> ChildAgentRunRecord:
+    return replace(run, artifact_index=ChildAgentArtifactIndex(
+        agent_run_id=run.definition.agent_run_id,
+        artifacts=tuple(_unverified(item) for item in run.artifact_index.artifacts),
+    ))
 
 
 __all__ = ["AgentGateway", "InMemoryAgentRunStore"]

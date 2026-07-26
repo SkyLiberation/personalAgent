@@ -5,8 +5,12 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
+from personal_agent.capabilities.contracts.interaction import (
+    InteractionToolCallValidation,
+    InteractionToolDefinition,
+)
 from personal_agent.governance.policy import PolicyEngine
-from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance
+from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance, tool_schema
 from personal_agent.governance.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,52 @@ class ToolExecutor:
     def get(self, name: str) -> BaseTool | None:
         return self._gateway.get(name)
 
+    def list_interaction_tools(self) -> tuple[InteractionToolDefinition, ...]:
+        definitions: list[InteractionToolDefinition] = []
+        for tool in self.list_tools(exposures={"public_agent"}):
+            governance = tool_governance(tool)
+            side_effects = set(governance.side_effects) - {
+                "none", "read_local", "read_longterm",
+            }
+            definitions.append(InteractionToolDefinition(
+                name=tool.name,
+                description=tool.description or tool.name,
+                input_schema=tool_schema(tool),
+                read_only=not side_effects,
+                safely_retryable=not side_effects,
+            ))
+        return tuple(definitions)
+
+    def validate_interaction_call(
+        self,
+        name: str,
+        arguments: dict[str, object],
+    ) -> InteractionToolCallValidation:
+        tool = self.get(name)
+        if tool is None:
+            return InteractionToolCallValidation(
+                status="capability_missing",
+                message=f"Tool {name!r} is not currently available.",
+            )
+        try:
+            if isinstance(tool.args_schema, type):
+                tool.args_schema.model_validate(arguments)
+        except Exception as exc:
+            return InteractionToolCallValidation(
+                status="invalid_arguments",
+                message=str(exc),
+            )
+        return InteractionToolCallValidation(status="accepted")
+
+    def interaction_call_is_safe_for_concurrency(self, name: str) -> bool:
+        tool = self.get(name)
+        if tool is None:
+            return False
+        governance = tool_governance(tool)
+        return not (
+            set(governance.side_effects) - {"none", "read_local", "read_longterm"}
+        )
+
     def graph_node(self):
         return self._gateway.invoke_graph
 
@@ -66,6 +116,31 @@ class ToolExecutor:
                 user_id=kwargs.get("user_id"),
                 session_id=kwargs.get("session_id"),
                 source_platform=kwargs.get("source_platform"),
+            ),
+        )
+
+    def invoke_interaction(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        action_id: str,
+        run_id: str,
+        user_id: str,
+        conversation_id: str,
+        source_platform: str,
+    ) -> dict[str, Any]:
+        """Execute an admitted ordinary-interaction action through ToolGateway."""
+        return self._gateway.invoke(
+            name,
+            arguments,
+            ToolGatewayContext(
+                execution_mode="direct",
+                tool_call_id=action_id,
+                run_id=run_id,
+                user_id=user_id,
+                session_id=conversation_id,
+                source_platform=source_platform,
             ),
         )
 
