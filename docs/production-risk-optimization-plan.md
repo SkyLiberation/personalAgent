@@ -2,7 +2,7 @@
 
 ## 结论
 
-`docs/interview/09-tradeoffs-and-gaps.md` 中列出的生产风险是合理的。当前项目已经具备 checkpoint、tool audit、Postgres 幂等账本、删除前确认、知识版本链等基础能力，但距离生产可控仍有几个关键缺口。
+`docs/interview/06-interview-qa-and-tradeoffs.md` 中列出的生产风险与改进方向是当前面试口径。当前项目已经具备 checkpoint、tool audit、Postgres 幂等账本、删除前确认、知识版本链等基础能力，但距离生产可控仍有几个关键缺口。
 
 其中最大的生产风险曾是：**高风险知识删除一旦执行就是物理删除，缺少软删除、删除前快照、恢复接口和补偿链路**。当前 P0 已完成第一阶段落地，删除已改为软删除并生成删除快照，恢复通过 `restore_note` 工具和 API 进入 ToolGateway 治理链路。
 

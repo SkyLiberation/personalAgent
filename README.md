@@ -284,10 +284,10 @@ personalAgent/                  # 项目根目录
 - [docs/topics/memory.md](docs/topics/memory.md) - 记忆层存储职责与读写路径
 - [docs/review-digest.md](docs/review-digest.md) - 知识简报、订阅投递和复习反馈
 - [docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) - 自动整理与知识缺口主动追问
-- [docs/future/adaptive-agent-runtime-design.md](docs/future/adaptive-agent-runtime-design.md) - 知识 Agent 原生能力、MCP/A2A 扩展与 Runtime 管控目标
+- [docs/future/README.md](docs/future/README.md) - 仅包含尚未落地且由目标 E2E 驱动的未来设计
+- [docs/future/durable-investigation-project-design.md](docs/future/durable-investigation-project-design.md) - 路径动态且需跨轮次恢复的架构调查项目目标设计
 - [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 持续研究尚未落地的来源验证、connector 和事件触发 P1/P2
 - [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 系统分层、Agent 主链、Capability、Procedure、知识与运行时当前事实
-- [docs/future/parallel-steering-runtime-design.md](docs/future/parallel-steering-runtime-design.md) - 本地并行 join 与语义 steering 后续设计
 
 ## 文档导航
 

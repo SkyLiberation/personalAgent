@@ -1,5 +1,5 @@
 # Knowledge Agent 工程开发规范
-> 本文档是知识 Agent 项目的强制工程规范，适用于架构设计、开发、重构、缺陷修复、测试、评审和上线验收。
+> 本文档是知识 Agent 项目的强制工程规范，适用于业务设计、架构设计、文档规划、开发、重构、缺陷修复、测试、评审和上线验收。
 > “必须/禁止”属于合并门禁；确需例外时，必须通过 ADR 记录原因、风险、验证方案、退出条件和移除日期。
 
 ---
@@ -19,7 +19,7 @@
 4. 自动断言用户可观察结果和关键反事实；
 5. 可通过明确命令在本地或 CI 重复执行；
 6. 失败时能通过 trace、event、receipt 或 report 定位阶段。
-允许 Fake/Stub 的范围仅限不可控第三方、付费模型、危险副作用和故障注入。Fake 必须实现同一 Port，并有 contract test；不得替系统作出本应由模型、Policy 或 Admission 作出的决定。
+允许 Fake/Stub 的范围仅限不可控第三方、付费模型、危险副作用和故障注入。Fake 必须实现生产 Port 并有 contract test；不得创造生产中不存在的能力，也不得替系统作出本应由模型、Policy 或 Admission 作出的决定。
 
 ### 1.2 单一事实与单一写入口
 每个业务事实必须只有：
@@ -48,6 +48,21 @@
 重构默认允许修改全部调用方。能替换旧结构时，禁止新增 alias、fallback、双写、永久 deprecated 字段和无期限兼容层。
 兼容仅允许用于真实外部契约，并必须包含：适用范围、结束日期、迁移计划、观测指标和删除条件。
 
+### 1.5 业务、能力与证据先于架构复杂度
+**禁止为了对齐“优秀 Agent”、论文、框架范式或未来可能性而先增加抽象、状态、Planner、Workflow、Agent、缓存、持久化或治理层。**
+
+设计新产品能力或 E2E 前，必须逐项盘点其依赖的模型、Tool、Service、Agent、Provider、Gateway、权限、持久化、恢复和验证能力，并用生产代码与已执行证据区分“已有、需扩展、不存在”。依赖能力不存在时，必须在同一设计中定义其业务 owner、canonical contract、唯一入口、生产消费者、实现阶段、失败语义和 E2E/contract test；否则禁止进入实现。接口、DTO、配置、Fake、单项能力存在或未来阶段名称都不能证明能力已落地；组合能力必须在同一正式生产旅程中验证，禁止把多个独立用例的结果拼成组合能力证据。
+
+任何新增架构机制必须依次证明：
+1. 存在明确的业务扩展、当前用户错误行为或可量化工程约束；
+2. 已完成所需生产能力盘点，缺失能力具有上述完整落地设计；
+3. 已定义从正式入口验证该需求的 E2E，以及不应发生的反事实；
+4. 现有最简单生产路径已作为 baseline 被验证，并有证据表明它不能满足需求；
+5. 新机制会被生产代码实际消费，能够改变用户结果、风险、恢复、成本或延迟，而不只是出现在 Model、Trace、文档或测试中；
+6. 新增复杂度小于它消除的复杂度，旧路径和无效中间态会同步删除。
+
+外部优秀 Agent 的设计只能作为候选方案，不能作为需求来源。必须先回答“扩展什么业务、用户结果如何变化、E2E 如何失败和通过”，再决定是否引入其设计。无法提供上述证据时，默认不引入；已经存在但无法证明价值的机制，默认删除或降为非强制、非权威的可选投影。
+
 ---
 ## 2. 架构目标与依赖方向
 系统必须同时满足：
@@ -57,7 +72,10 @@
 - 可验证：核心行为能够从正式入口端到端验证；
 - 可恢复：长任务支持幂等、重放、暂停和继续；
 - 可审计：关键决策、授权、执行和完成均有证据；
-- 可演进：删除旧路径，不依靠长期双轨维持演进。
+- 可演进：删除旧路径，不依靠长期双轨维持演进；
+- 适度复杂：每一层、状态和抽象均由当前业务变化或已执行证据支撑。
+
+分层是职责和依赖方向约束，不要求每项功能机械创建八层对象。没有真实职责、变化来源或跨边界契约时，禁止为了“分层完整”新增空壳 Interface、Service、Manager、Projection 或 DTO。
 
 ### 2.1 强制分层
 1. **Domain**：领域实体、值对象、领域服务、不变量、状态机；
@@ -250,26 +268,20 @@ RAG 是检索和证据组织能力，不应成为隐藏 Router 或 Planner。
 只有完整满足同一 `CapabilityEquivalenceClass` 的 Provider 才能确定性绑定。存在语义差异时，必须由模型或外部权威选择。
 
 ---
-## 8. 设计模式与可维护性
-设计模式只用于隔离真实变化，不用于展示“架构完整性”。新增模式必须说明：变化来源、稳定边界、替换对象和测试方式。
-推荐模式：
-- **Ports and Adapters**：隔离模型、数据库、工具、MCP 和外部服务；
-- **Strategy**：存在可独立替换且契约一致的策略；
-- **State Machine**：状态集合有限、迁移可枚举；
-- **Command**：需要审批、审计、幂等或重放；
-- **Specification**：组合可机械验证的规则；
-- **Repository**：隔离领域事实与存储实现；
-- **Saga/Process Manager**：跨资源长事务与补偿；
-- **Decorator/Middleware**：统一 trace、retry、timeout、policy；
-- **Anti-Corruption Layer**：隔离外部语义和内部模型；
-- **Factory/Registry**：对象创建复杂或 Provider 需要注册发现。
+## 8. 复杂度准入、设计模式与可维护性
+设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，不用于展示“架构完整性”。新增模式必须提交 `Complexity Justification`：业务场景、简单 baseline、baseline 失败证据、生产消费者、替代方案、净删除项和验证方式。
+
+允许按需使用：Ports and Adapters 隔离外部实现；State Machine 表达可枚举迁移；Command 支持审批/审计/幂等/重放；Repository 隔离事实与存储；Saga 处理真实跨资源补偿；Decorator 统一横切能力；ACL 隔离外部语义；Registry 支持真实注册发现。
+
 禁止：
-- 每个类都创建 Interface、Factory、Manager；
-- 只有一个实现且无变化来源时提前抽象；
-- 用设计模式掩盖职责不清；
-- 让 Strategy 承担本应由模型作出的开放语义决策；
-- 用 converter 长期维护镜像模型；
-- 创建 God Service、God State、God Workflow。
+- 每个类都创建 Interface、Factory、Manager，或只有一个实现且无变化来源时提前抽象；
+- 新增只被测试、Trace、文档或 Prompt 展示、却不改变生产决策和用户结果的 Model/Projection/Plan；
+- 为未来可能使用而持久化派生状态、创建通用 Task、Event、Workflow、Planner 或兼容层；
+- 用更多字段和 Validator 维持本可删除的旧结构，或用设计模式掩盖职责不清；
+- 让 Strategy/Router 承担模型开放语义，或让 Adapter/Converter 长期维护镜像事实；
+- 创建 God Service、God State、God Workflow，或将外部优秀 Agent 的内部结构逐项复制进项目。
+
+判断机制价值必须比较“没有该机制”的最简单路径。只证明对象存在、字段被生成、计划被写入 Trace 或流程能够 fail closed，不能证明该机制合理；必须证明它改善了业务完成率、风险、恢复、成本或延迟中的至少一项，且没有破坏关键反事实。
 
 ---
 ## 9. 代码组织规范
@@ -286,6 +298,7 @@ RAG 是检索和证据组织能力，不应成为隐藏 Router 或 Planner。
 - Goal 间固定依赖由契约或 Workflow 定义；动态依赖才交给 Planner；
 - 固定流程不得为“更 Agentic”而调用 Planner；
 - Planner 不负责授权、执行和完成判定；
+- Plan 只有在生产代码实际消费其依赖、进度、预算或完成义务时才能成为强制契约；仅回注 Prompt 或展示 Trace 的计划必须保持可选或删除；
 - Workflow 内稳定低风险步骤优先 Service 化；动态或受控能力 Tool 化。
 
 ### 9.3 Error Taxonomy
@@ -301,26 +314,31 @@ RAG 是检索和证据组织能力，不应成为隐藏 Router 或 Planner。
 ---
 ## 10. 强制开发流程
 任何功能、修复或重构必须按以下顺序进行：
-1. 定义用户目标、当前错误行为和验收标准；
-2. 完成 Decision Ownership Analysis；
-3. 完成 Fact Ownership Analysis；
-4. 标明受影响模块、依赖方向和删除路径；
-5. 先定义 E2E Given/When/Then 与反事实断言；
-6. 实现最小改动；
-7. 补充必要的 Unit、Contract、Integration Test；
-8. 删除旧字段、旧入口、旧 converter 和临时 fallback；
-9. 执行 E2E、相关低层测试和 lint/type check；
-10. 记录执行命令、结果和剩余风险。
+1. 定义业务扩展或当前用户错误行为、目标和验收标准；
+2. 完成 Decision/Fact Ownership Analysis；
+3. 盘点所需生产能力，并为缺失能力定义完整落地设计；
+4. 识别无需新增架构机制的最简单生产 baseline；
+5. 先定义 baseline E2E、目标 E2E 与反事实，并用证据确认 baseline 不足；
+6. 标明受影响模块、依赖方向、复杂度预算和删除路径；
+7. 实现能够使目标 E2E 通过的最小整体改动；
+8. 补充必要的 Unit、Contract、Integration Test 和语义 Eval；
+9. 删除旧字段、旧入口、旧 converter、无消费者投影和临时 fallback；
+10. 执行 E2E、对照 Eval、相关低层测试和 lint/type check；
+11. 记录命令、结果、净复杂度变化和剩余风险。
 
 ### 10.1 变更分析最小模板
 ```markdown
 ## Goal
 ## Current Incorrect Behavior
 ## Expected User-visible Result
+## Business Expansion or Proven Constraint
 ## Out of Scope
 ## Decision Ownership
 ## Fact Owner and Write Path
+## Required Production Capabilities and Missing-capability Delivery
+## Simplest Existing Baseline and Evidence of Insufficiency
 ## Affected Modules and Dependency Direction
+## Complexity Added and Complexity Removed
 ## Removed Legacy Path
 ## Risks
 ```
@@ -333,12 +351,23 @@ When: <从正式入口执行的行为>
 Then: <用户可观察结果>
 And not: <禁止发生的副作用或错误结果>
 Path: <必须经过的生产组件>
+Required capabilities: <已有能力证据、需扩展项、缺失能力落地章节>
 Allowed fakes: <仅外部边界>
 Evidence: <trace/event/receipt/report>
+Baseline: <没有新机制时的执行结果和失败证据>
 Command: <本地或 CI 执行命令>
 ```
 
-### 10.3 AI Coding Agent 行为
+### 10.3 设计与工程文档规范
+- 文档变更前必须先通读目标文档目录结构，并确定 canonical owner、受影响章节和相关事实源；
+- 语义或架构变化禁止采用只改一个局部段落的增量补丁；必须从整篇结构重组并联动更新定位、主链、所有权、E2E、状态和风险，禁止在末尾追加“补充/最新更新”而保留冲突正文；
+- 一个事实只允许一个 canonical 文档 owner；其他文档使用链接和面向自身读者的解释，不复制可漂移的状态表；
+- 当前实现、目标设计、历史诊断和执行证据必须明确分开，禁止把未来规划写成已落地事实；
+- 修改公共术语、路径或架构后必须搜索并删除旧表述、断链、失效代码引用和重复章节；
+- 文档结构服务读者任务，不按代码包机械分章；局部错字和无语义格式修正可直接最小修改；
+- 根 `AGENTS.md` 必须保持 500 行以内；新增规则必须合并重复内容，不得依靠无限追加维持规范。
+
+### 10.4 AI Coding Agent 行为
 开始编码前必须先输出：目标、所有权、影响边界、E2E 和计划删除内容。
 编码过程中禁止：
 - 因不确定而新增 fallback；
@@ -346,6 +375,9 @@ Command: <本地或 CI 执行命令>
 - 未搜索调用方就修改公共模型；
 - 用 raw dict 绕过类型边界；
 - 新增抽象却不说明变化来源；
+- 依赖能力不存在时只写 E2E、Fake、接口或未来阶段，而不设计生产落地；
+- 复制外部优秀 Agent 设计而没有先定义业务扩展、baseline 和 E2E；
+- 用“以后可能有用”保留当前无生产消费者的字段、状态或流程；
 - 未运行测试就声称完成。
 信息不足以确认事实 owner、授权边界或外部契约时，应停止该部分实现并明确阻塞原因，不得猜测。
 
@@ -378,6 +410,7 @@ Command: <本地或 CI 执行命令>
 ### 11.3 Golden Set
 新增或改变语义决策、检索、回答、规划和验证行为时，必须先补 Golden Set。
 Golden Set 应覆盖真实用户目标、边界输入、失败路径、反事实和历史回归；禁止只增加能够证明当前实现正确的样例。
+新增 Planner、WorkingPlan、反思、记忆、路由、缓存、多 Agent 或恢复机制时，必须与最简单 baseline 做同输入对照，至少比较用户完成率、错误副作用、模型轮次、token、延迟和恢复结果；没有可观察收益时不得作为强制主链。
 
 ---
 ## 12. Observability、安全与审计
@@ -402,21 +435,25 @@ Schema 或 Model 迁移必须说明：canonical 新模型、数据迁移方式�
 以下情况必须创建 ADR：
 - 跨模块边界调整；
 - 引入新框架或基础设施；
+- 引入新的 Planner、通用状态、持久化投影、多 Agent 拓扑或其他主链复杂度；
 - 新增持久化事实；
 - 引入 Event Sourcing、Saga 或兼容窗口；
 - 改变 Command、Replay、Approval 或 Completion 语义；
 - 偏离本文档中的“必须/禁止”。
-ADR 不能代替 E2E。
+ADR 必须包含最简单 baseline、复杂度净变化、业务/E2E 证据和未采用方案；ADR 不能代替 E2E。
 
 ---
 ## 14. Review 合并门禁
 PR 合并前必须确认：
 - [ ] 用户目标和验收标准明确；
+- [ ] 业务扩展或当前错误已证明，最简单 baseline 已实际验证；
+- [ ] 所需生产能力已盘点；缺失能力具有 owner、契约、入口、消费者、阶段、失败语义和测试；
 - [ ] Decision Owner 明确；
 - [ ] Fact Owner、canonical model 和唯一写入口明确；
 - [ ] 依赖方向正确，无框架侵入 Domain；
 - [ ] Orchestrator、Validator、Adapter 未创造业务语义；
 - [ ] 无重复事实、镜像 Model、双写或隐藏 fallback；
+- [ ] 新增状态、抽象和计划均有生产消费者及对照收益证据；
 - [ ] Proposal、Command、Execution Fact、Verification、Completion 已分离；
 - [ ] 旧字段、旧路径和临时兼容已删除或有期限 ADR；
 - [ ] 正式入口 E2E 已执行并通过；
@@ -424,13 +461,14 @@ PR 合并前必须确认：
 - [ ] 至少一个失败、拒绝、恢复或重放场景通过；
 - [ ] Unit/Contract/Integration Test 按风险补齐；
 - [ ] Trace、审计和错误分类足以定位问题；
+- [ ] 设计文档已整体更新，无冲突旧正文、重复 owner 或失效链接；
 - [ ] 验证命令、结果和剩余风险已记录。
 
 ---
 ## 15. Definition of Done
 一项变更只有同时满足以下条件才算完成：
 1. 行为和架构边界符合本规范；
-2. 所有事实和决策均有唯一 owner；
+2. 所需生产能力已真实落地，且所有事实和决策均有唯一 owner；
 3. 没有新增冗余状态、静默 Proposal 改写或确定性业务 fallback；
 4. 全部调用方已迁移，旧路径已删除或有明确移除期限；
 5. E2E 从正式入口经过生产主路径并通过；
@@ -438,5 +476,7 @@ PR 合并前必须确认：
 7. 关键执行、授权、Receipt、Verification 和 Completion 可观测；
 8. 文档、Golden Set、迁移说明和测试同步更新；
 9. 实际执行过验证命令，并如实记录结果；
-10. 未验证风险被明确列出，不以“应该没问题”代替证据。
+10. 新机制相对最简单 baseline 的收益已由用户结果、反事实和成本数据证明；
+11. 文档从整体结构完成更新，旧表述和重复事实已删除；
+12. 未验证风险被明确列出，不以“应该没问题”代替证据。
 **没有可执行 E2E，就没有可信的落地设计。**

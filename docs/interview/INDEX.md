@@ -1,151 +1,52 @@
-# 当前项目面试问答准备 · 索引
+# personalAgent 面试材料索引
 
-这份文档总结面试中可能围绕当前 personal agent 项目追问的问题和参考回答。回答口径重点不是背概念，而是讲清楚项目里的真实边界：哪些已经落地，哪些是设计方向，为什么这样拆层，以及当前风险在哪里。
+本目录只描述截至 2026-07-26 已落地并有代码或 E2E 证据的当前架构，不把未来设计写成当前事实。
 
-项目最核心的一句话：
+面试时先讲一句话：
 
-> 这个项目不是简单让 LLM 多调用几个工具，而是把 Agent 的目标、行动和记忆放进可恢复、可校验、可审计、可评测的边界里：TaskAnalyzer 理解目标，GoalGraphCompiler 建立执行事实，Executive 根据 Observation 逐轮决策，CapabilityResolver 动态选择 native/MCP/A2A，Protocol 管稳定事务，Gateway 管权限和副作用，Verifier 管完成，LangGraph checkpoint 管暂停恢复，分层 eval 验证每个决策边界。
+> personalAgent 是一个面向个人知识管理和持续研究的 Agent 系统。它有两条生产主链：开放式请求进入模型驱动的 Interaction loop，保存、删除、订阅、投递等事务进入确定性 Application Workflow。模型负责理解目标和选择能力，Runtime 负责权限、预算和 Admission，Tool/Agent 产生执行事实，Verifier 与领域状态机分别负责语义验证和完成判断。
 
+最重要的当前边界：普通 Conversation 只加载 `public_agent` 能力；保存、删除、订阅变更等多数写操作仍主要通过专用 API/UI 进入。现有 E2E 分别证明 Conversation loop 和固定产品 Workflow 可执行，但尚未证明所有写流程都能由自然语言对话统一触发。
 
-本文档已按模块拆分。下面按顺序列出各模块及其覆盖的问题，点击模块标题进入对应文件。
+## 建议阅读顺序
 
-## [它解决了什么问题](01-problem-and-positioning.md)
+1. [项目介绍与面试讲稿](01-project-story.md)
+   - 项目解决什么问题；
+   - 30 秒、2 分钟和 5 分钟介绍；
+   - 为什么它不是普通聊天机器人或 RAG Demo。
 
-- 这个 Agent 面向什么场景？
-- 用户为什么不用普通 ChatGPT，而要用这个 personal agent？
-- 它具体解决了哪些用户痛点？
-- 它和普通 RAG Bot 的区别是什么？
-- 这是一个合格的 Agent 吗？
+2. [从真实请求理解架构](02-request-walkthroughs.md)
+   - 直接回答、查知识、MCP、A2A、保存、删除和周期研究分别怎么运行；
+   - 什么是固定产品操作；
+   - Agent 当前如何选择能力，以及哪些操作尚不能从 Conversation 进入。
 
-## [高频总览问题](02-overview.md)
+3. [Agent 主循环、Tool 与治理](03-agent-loop-and-governance.md)
+   - `AgentTurnDecision`、WorkingPlan、Observation 和 Feedback；
+   - ToolGateway、AgentGateway、预算、并发、恢复和 Verifier；
+   - 模型与确定性代码的决策所有权。
 
-- 这个 personal agent 的核心链路是什么？
-- 你为什么采用多层 Agent 架构？
-- LangChain 在这里承担什么价值？
-- LangGraph 在这里承担什么价值？
-- LangExtract 在这里承担什么价值？
-- LangSmith 在这里承担什么价值？
-- LangChain / LangGraph / LangExtract / LangSmith 各自的边界是什么？
-- 为什么查询理解 / 抽取要独立配置模型？
-- 这个项目最体现 Agent 工程能力的点是什么？
-- evals 模块在这里承担什么价值？
-- evals 和普通单元测试有什么区别？
+4. [知识、Research 与 Durable Workflow](04-knowledge-and-workflows.md)
+   - Artifact、Evidence、Claim、KnowledgeItem 的关系；
+   - Ask/Save 分离；
+   - Delete/Restore Command；
+   - Research、Subscription、Worker、Digest 和 Delivery。
 
-## [记忆层](03-memory.md)
+5. [E2E 与工程可信度](05-e2e-and-reliability.md)
+   - 23 个 Release E2E 如何映射架构；
+   - 为什么对象存在和数据库新增不能替代 E2E；
+   - 当前 dirty revision 证据边界。
 
-- 你怎么区分短期记忆和长期记忆？
-- 为什么 checkpoint messages 不能直接当长期事实库？
-- `knowledge_notes` 为什么要设计 parent/chunk 两层？
-- Graphiti 是不是长期事实真源？
-- EvidenceItem / ContextPack 解决了什么问题？
-- 如果历史摘要和当前证据冲突，信哪个？
-- `solidify_conversation` 如何避免把助手猜测写入长期知识？
-- 如果同一主题有新旧冲突记忆，现在怎么处理？未来怎么设计？
-- 情景记忆（MemoryEpisode）和长期 note 有什么区别？为什么不直接把对话结论 capture 成 note？
-- 情景记忆什么时候被检索？怎么判断一个问题需要它？
-- 情景记忆具体存在哪里？检索是怎么做的？
-- 为什么情景记忆不用 LLM 生成摘要？
-- 情景记忆只在 ask 分支用，如果 router 没路由到 ask 怎么办？
+6. [高频追问、取舍与改进方向](06-interview-qa-and-tradeoffs.md)
+   - 与 RAG Bot、Workflow、LangGraph 和现代 Agent Harness 的区别；
+   - 当前架构优点、缺口和下一步设计；
+   - 面试官常见追问参考回答。
 
-## [Prompt 工程](04-prompt-engineering.md)
+## 权威事实源
 
-- 项目里的 prompt 是怎么组织的？集中管理还是散落？
-- PromptSpec 上的 version 和 output_contract 各解决什么问题？
-- 结构化输出怎么约束？为什么不是所有 LLM 调用都用 json_schema？
-- evidence 是怎么注入 prompt 的？怎么防止模型引用没给它的证据？
-- prompt 里有哪些防幻觉 / 安全边界指令？
-- 回答语言和口吻是怎么控制的？
-- prompt 有没有版本管理和测试？
+- [当前核心架构](../summary/core-architecture-current-state.md)
+- [Phase 0 能力与发布基线](../summary/phase0-capability-release-baseline.md)
+- [未来设计索引](../future/README.md)
+- [动态长任务目标设计](../future/durable-investigation-project-design.md)
+- [E2E catalog](../../evals/e2e_quality/evidence_catalog.py)
 
-## [工具层](05-tools.md)
-
-- 你的工具层和直接把函数暴露给 LLM 有什么区别？
-- 为什么需要 ToolGateway？
-- `risk_level`、`side_effects`、`permission_scope` 区别是什么？
-- 为什么 `delete_note` 不能被 ReAct 自主调用？
-- 那 ReAct 还有什么使用场景？
-- ToolArtifact 为什么统一成 `ok / data / error / error_kind / evidence`？
-- 工具结果为什么不直接写入用户 messages？
-- 当前工具层最大不足是什么？
-
-## [Procedure / 步骤投影层](06-workflow-step-projection.md)
-
-- 当前 planning 是怎么落地的？
-- ProcedureSpec / ProcedureCatalog 解决了什么？
-- 步骤投影和普通 Todo list 的区别是什么？
-- 哪些任务会进入 step projection？哪些不会？
-- `delete_knowledge` 为什么是 `retrieve -> resolve -> delete_note -> compose`？
-- 为什么 `delete_note.note_id` 不能由 planner 直接填？
-- `resolve` 如何防止 LLM 编造 note id？
-- `StepProjectionValidator` 具体防住了什么？
-- `ExecutionStep` 和 `StepRunState` 区别是什么？
-- ReAct 能不能替代 planning？
-
-## [HITL 与删除恢复](07-hitl-and-delete-recovery.md)
-
-- 删除 note 的完整确认流程是什么？
-- 用户拒绝确认时会怎样？
-- 为什么确认后还需要 `idempotency_key`？
-- pending confirmation 是长期审批表吗？
-- `replay_from_checkpoint` 在删除流程里解决什么问题？
-
-## [测试与评测](08-testing-and-eval.md)
-
-- 你会怎么测试 workflow projection 不会生成危险步骤？
-- 怎么测试 `delete_note` 必须经过确认？
-- 怎么评估长期记忆召回质量？
-- 怎么评估 solidify 有没有写入错误事实？
-- 单元测试和 Agent eval 的区别是什么？
-- 线上 Agent 问题怎么复现？
-
-## [工程取舍与不足](09-tradeoffs-and-gaps.md)
-
-- 为什么没有一开始就做完整权限系统？
-- 为什么 Graphiti 不直接替代 Postgres？
-- 为什么没有所有任务都用 ReAct？
-- 如果只能优化一周，你会优先做哪三件事？
-- 当前项目最大的生产风险是什么？
-
-## [深入追问（检索 / 编排 / 治理 / 可靠性）](10-deep-dive-retrieval-orchestration.md)
-
-- evidence 的预算（char_budget 5000、max_items 12）怎么定？预算不够时会丢关键 chunk 吗？
-- evidence 排序是启发式还是 LLM？打分维度有哪些？
-- query_planner 拆出的子查询是并行还是串行检索？结果怎么合并？
-- 几路检索分别能检索什么？怎么互补？默认实际启用哪几路？
-- 这么多检索手段，不会有冗余和冲突问题吗？
-- 要加一个新 intent（比如"更新知识"），改动面有多大？
-- projection_policy 为什么只给 delete/solidify 开，ask 为什么不投影成 ExecutionStep？
-- 真要做开放式 autonomous planner，怎么加 guardrail？和 StepProjectionValidator 什么关系？
-- PolicyEngine 的规则是硬编码还是可配置？
-- owner 校验依赖 user_id，不传 user_id 就跳过，这算不算越权口子？
-- checkpoint resume 后，工具执行到一半（graph 删了 note 没删）怎么保证一致性？
-- retry 只对 transient 错误重试，怎么判定 transient？判错会怎样？
-- 幂等账本持久化后，checkpoint replay 和工具副作用怎么配合？
-
-## [情景判断追问（冲突 / 边界 / 取舍）](11-scenario-judgment.md)
-
-- 用户刚刚说“我生日是 1 月 1 日”，这算事实吗？
-- 如果 graph search 找到了关系，但 note/chunk 已经被删了，怎么办？
-- 如果 web search 和本地 memory 冲突，怎么处理？
-- 如果工具返回 `ok=false` 但 content 看起来像成功，你信哪个？
-- 如果用户说“不要确认，直接删”，系统应该听吗？
-- 如果做成多用户 SaaS，第一步改哪里？
-
-## [Loop 工程与控制论视角下的自检](13-loop-engineering-and-control-theory.md)
-
-- ask 的 verify 是「独立 checker 模型」还是「自己给自己打分」？
-- 能不能「重启一个 session、状态不丢、接着跑」？
-- 失败时生成的「反思」，下一次会用上吗？（当前的真实断点）
-- 用控制论四维（Model × Context × Loop × Evaluation）自评，本项目在谱系的什么位置？
-
-## [项目面试介绍总结稿](14-project-interview-summary.md)
-
-- 3-5 分钟介绍当前项目
-- 当前工程的优秀分层架构
-- 复杂线上问题 / 架构挑战：删除长期知识 workflow
-- Agent 工程师和传统后端 / 算法工程师的区别
-- 30 秒压缩版
-
-## [面试收尾口径](12-closing.md)
-
-- （收尾口径，无分项问题）
+若本目录与上述文档或生产代码冲突，应以生产代码、E2E catalog 和同 revision 的执行证据为准。

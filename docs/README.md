@@ -69,9 +69,8 @@
 
 | 主题 | 文档 |
 | --- | --- |
-| Capability-first Knowledge Agent Runtime | [future/adaptive-agent-runtime-design.md](future/adaptive-agent-runtime-design.md) |
-| 并行 Join 与语义 Steering | [future/parallel-steering-runtime-design.md](future/parallel-steering-runtime-design.md) |
-| 语义生命周期抽取 | [future/semantic-lifecycle-extraction-redesign.md](future/semantic-lifecycle-extraction-redesign.md) |
+| Future 范围与退出规则 | [future/README.md](future/README.md) |
+| 路径动态且需跨轮次恢复的架构调查项目 | [future/durable-investigation-project-design.md](future/durable-investigation-project-design.md) |
 | 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
 
 ## 运维与参考

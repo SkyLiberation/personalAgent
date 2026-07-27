@@ -1,8 +1,8 @@
 # Phase 0 能力目录与发布基线
 
-本文记录 capability-first 重构后的当前实现和验证事实。目标语义仍由
-[`adaptive-agent-runtime-design.md`](../future/adaptive-agent-runtime-design.md) 定义；
-E01–E13、C01–C04、L01–L06 与发布声明的唯一机器映射由
+本文记录 capability-first 重构后的当前实现和验证事实，当前架构边界由
+[`core-architecture-current-state.md`](core-architecture-current-state.md) 记录；尚未落地的设计只进入
+[future 索引](../future/README.md)。E01–E13、C01–C04、L01–L06 与发布声明的唯一机器映射由
 [`release_gate.py`](../../evals/e2e_quality/release_gate.py) 拥有。
 
 ## 当前结论
