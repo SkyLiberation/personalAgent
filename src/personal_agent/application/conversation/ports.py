@@ -13,6 +13,12 @@ from personal_agent.kernel.contracts.agent import (
     ChildAgentRunRecord,
     SubagentProfile,
 )
+from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.scope import (
+    AuthenticatedPrincipal,
+    SecurityScope,
+)
 
 
 class InteractionToolPort(Protocol):
@@ -31,10 +37,8 @@ class InteractionToolPort(Protocol):
         name: str,
         arguments: dict[str, object],
         *,
-        action_id: str,
-        run_id: str,
-        user_id: str,
-        conversation_id: str,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
         source_platform: str,
     ) -> dict[str, object]: ...
 
@@ -50,7 +54,19 @@ class InteractionAgentPort(Protocol):
         task: AgentTask,
         context: AgentGatewayContext,
         grant: DelegationGrant,
+        *,
+        submission_key: str,
     ) -> ChildAgentRunRecord: ...
+
+
+class InteractionArtifactPort(Protocol):
+    def read_text(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        security_scope: SecurityScope,
+    ) -> str: ...
 
     def poll(
         self,
@@ -65,4 +81,8 @@ class InteractionAgentPort(Protocol):
     ) -> ChildAgentRunRecord: ...
 
 
-__all__ = ["InteractionAgentPort", "InteractionToolPort"]
+__all__ = [
+    "InteractionAgentPort",
+    "InteractionArtifactPort",
+    "InteractionToolPort",
+]

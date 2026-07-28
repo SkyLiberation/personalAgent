@@ -32,6 +32,7 @@ from personal_agent.kernel.contracts.research import (
     ResearchSubscriptionRecord,
     ResearchToolCallTrace,
 )
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.application.research.extraction import (
     HeuristicResearchEventExtractor,
     ResearchEventExtractor,
@@ -1759,7 +1760,19 @@ class ResearchService:
                 }
             state.usage.tool_call_count += 1
         started = _timer_start()
-        outcome = self.tools.invoke_direct(name, **kwargs)
+        user_id = str(kwargs.get("user_id") or "research")
+        run_id = str(kwargs.get("run_id") or (state.run_id if state else name))
+        outcome = self.tools.invoke_direct(
+            name,
+            execution_scope=interaction_execution_scope(
+                tenant_id="personal-agent",
+                workspace_id=f"research:{user_id}",
+                user_id=user_id,
+                execution_id=run_id,
+                task_id=trace_decision_id or name,
+            ),
+            **kwargs,
+        )
         if state is not None:
             state.tool_call_traces.append(ResearchToolCallTrace(
                 tool_name=name,

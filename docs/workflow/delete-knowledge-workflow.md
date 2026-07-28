@@ -1,58 +1,67 @@
-# delete_knowledge Workflow
+# Knowledge Delete / Restore Workflow
 
-`delete_knowledge` 是当前项目的高风险 step projection workflow。它的目标不是让模型直接删除知识，而是把“用户想删什么”拆成可审计的步骤：先召回候选，再解析目标，最后经 HITL 确认后调用删除工具。
+知识删除不是开放式 Agent 规划问题。调用方必须先给出 canonical `note_id`；
+系统只负责确认、幂等执行、恢复和审计，因此使用固定 Application Use Case。
 
-## 固定拓扑
+## 生产主链
 
 ```text
-delete_knowledge
-  del-1 retrieve
-    -> del-2 resolve
-    -> del-3 tool_call(delete_note, high risk, HITL required)
-    -> del-4 compose
+POST /api/notes/{note_id}/delete-commands
+  -> KnowledgeLifecycleService.prepare_delete
+  -> knowledge_lifecycle_operations(awaiting_confirmation)
+
+POST /api/knowledge-delete-commands/{command_id}/decision
+  -> identity/scope + command_digest + confirmation_ref 校验
+  -> one transaction:
+       KnowledgeItem/Claim state transition
+       Workspace KnowledgeStateEvent
+       knowledge_lifecycle_receipts
+  -> KnowledgeDeleteOperationView(executed, receipt)
 ```
 
-这个拓扑来自 `knowledge_delete` 的 `ProcedureSpec`，不是 LLM 动态生成。LLM 只允许出现在执行期的语义决策节点，例如 `delete_target_resolve` 的候选选择。
+prepare 没有业务副作用。进程重启后，客户端可以 GET operation 并继续 decision。
+重复 confirm 返回同一 Receipt，不重复状态迁移。
 
-## Step 契约
+## 恢复主链
 
-| Step | 类型 | 作用 | 关键契约 |
-| --- | --- | --- | --- |
-| `del-1` | `retrieve` | 用图谱和本地语义匹配检索候选笔记 | `execution_mode=react`，只允许 `graph_search`，无候选时走 clarification |
-| `del-2` | `resolve` | 从候选中确定真实 `note_id` | 先用 graph episode 映射回本地 note；无映射时用 LLM 在本地候选中选择；不确定则不删除 |
-| `del-3` | `tool_call` | 请求确认并执行 `delete_note` | `risk_level=high`，`requires_confirmation=True`，`side_effects=delete_longterm`，用户拒绝则 abort |
-| `del-4` | `compose` | 生成删除结果摘要 | 消费工具 artifact，输出已删除、待确认、取消或失败说明 |
+```text
+executed delete command
+  -> prepare restore command
+  -> independent confirmation
+  -> read previous states from delete receipt
+  -> restore KnowledgeItem/Claim + state events + restore receipt
+```
 
-## 执行细节
+Restore 使用独立 Command/Receipt，因为 payload、前置条件和执行结果与 Delete
+不同；两者共享 operation/receipt 表，不创建通用 Workflow、Planner 或 lifecycle
+Event 体系。
 
-1. TaskAnalyzer 识别删除 Goal；GoalGraphCompiler 从 Protocol Registry 读取 `delete_knowledge` 的 mutation metadata。
-2. `WorkflowStepProjector` 从 `WORKFLOW_REGISTRY` 取出 `delete_knowledge` spec，确定性生成 4 个 `ExecutionStep`。
-3. `StepProjectionValidator` 校验必须包含 `tool_call(delete_note)`，且高风险删除必须要求确认。
-4. `del-1` 进入 retrieve，调用 graph/local 检索得到候选线索。
-5. `del-2` resolve 尝试通过 `related_episode_uuids` 反查本地 note；如果不可用，再让 LLM 在最近本地 note 列表里选择唯一候选。
-6. `del-3` 的工具输入由 `del-2` 动态注入 `note_id/title/summary/user_id`。
-7. `delete_note` 首次调用返回 `pending_confirmation=True`，图层把它转换成 `confirmation_required` 事件并进入 `interrupt()`。
-8. 用户确认后 resume，`confirm_step` 带 `confirmed=True` 和确定性 `idempotency_key` 重新调度 `delete_note`。
-9. 工具真实删除本地 note/chunk，并清理可映射的 graph episode。
-10. `del-4` 汇总结果，`finalize_step_execution` 生成最终回答和 `execution_trace`。
+## 安全边界
 
-## HITL 与安全边界
+- HTTP 入口解析 authenticated user；body 中的 user 不能扩大 scope；
+- 一个 `command_digest` 绑定 canonical command payload，不能代替身份或 Policy；
+- command owner、workspace、digest 或 confirmation 不匹配时 fail closed；
+- reject 后不能 confirm；
+- delete receipt 是恢复 previous states 的唯一依据；
+- Workspace aggregate 拥有 Item/Claim 状态，Lifecycle Service 不能复制事实；
+- 旧直接 DELETE、snapshot restore、Conversation Tool/Procedure 路径不可达。
 
-- 删除长期知识必须经过 `ToolGateway` 和 `PolicyEngine`，不是由 planner 或 LLM 直接改库。
-- `del-3` 是唯一有长期删除副作用的步骤，且被 spec、validator、tool metadata 三层标记为高风险。
-- 用户拒绝确认时，当前步骤标记为 `skipped`，依赖步骤被跳过，workflow 进入取消结果。
-- 确认 resume 会设置 `idempotency_key`，降低重复提交造成二次删除的风险。
+## 为什么不用 Agent Workflow
 
-## 失败分支
+模型可以在更上游帮助用户寻找候选知识，但候选选择不能隐式触发删除。目标
+一旦成为明确 `note_id`，后续依赖固定且无开放语义分支。Planner、LangGraph
+interrupt、ToolGateway 包装和 lifecycle Event 都不会改善确认、重启、replay
+或恢复结果，只会增加第二状态机和同步路径，因此不进入该主链。
 
-| 场景 | 处理 |
-| --- | --- |
-| 没有候选 | `del-1 / del-2` 走 clarification，提示用户提供更具体标题或内容 |
-| 多候选或不确定 | `del-2` 不生成删除目标，要求用户进一步选择 |
-| 用户拒绝确认 | `del-3` abort，返回操作已取消 |
-| 工具删除失败 | 记录 `tool_result` / `step_failed`，进入 failure handler |
-| graph 残留 | 删除工具尽力清理 graph episode；后续 graph reconcile 可继续发现 orphan |
+## E2E
 
-## 面试讲法
+Release E04/E10 和 notes API integration 覆盖：
 
-可以说：删除知识不是“LLM 判断完直接删”，而是固定 workflow：retrieve 只找候选，resolve 只解析目标，真实删除副作用必须经过 `delete_note` 工具、PolicyEngine 和 HITL 确认。确认后执行的是软删除并写入删除快照，这样把语义判断和高风险副作用隔离开，既可恢复，也可审计。
+- prepare 零副作用；
+- scope、digest、确认和 reject 反事实；
+- prepare/confirm 与 delete/restore 之间的进程重启；
+- exactly-once Receipt 和不重复状态事件；
+- Item/Claim previous states 精确恢复；
+- 旧路径不可达。
+
+详细架构理由见 [ADR 0001](../adr/0001-governed-knowledge-delete-command.md)。

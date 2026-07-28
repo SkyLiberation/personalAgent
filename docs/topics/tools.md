@@ -12,10 +12,12 @@
 | --- | --- | --- | --- |
 | `public_agent` | 公共 Agent 工具，可出现在默认动态工具面 | 是 | `graph_search`, `web_search`, `find_similar_notes`, `list_research_runs` |
 | `scoped_agent` | 只在特定 workflow 的 scoped allowed tools 内动态选择 | 局部是 | `update_note`, `pause_research_subscription`, `retry_worker_task` |
-| `workflow_activity` | 只由确定性 workflow step 调用，仍经过 ToolGateway 治理 | 否 | `delete_note`, `capture_text`, `research_run_loop` |
+| `workflow_activity` | 只由确定性 workflow step 调用，仍经过 ToolGateway 治理 | 否 | `capture_text`, `research_run_loop` |
 | `admin` | 管理 / 运维工具，需要管理入口或更高权限 | 受限 | 预留 |
 
-因此 `delete_note` 仍然是 tool，不是因为 Agent 需要动态选择它，而是因为删除长期知识必须经过统一治理边界：HITL、幂等、审计、策略拦截和恢复路径。但它的 exposure 是 `workflow_activity`，不会出现在 ReAct 默认/局部动态工具空间中。
+知识删除/恢复不属于 Tool：它没有模型动态选择或跨 workflow 复用需求，固定的
+Application Use Case 已能完成确认、幂等、审计和恢复。强行包装为 Tool 会形成
+第二套确认与幂等状态。
 
 ## 设计目标
 
@@ -69,8 +71,6 @@ Application Service: 业务规则、持久化、领域状态和协作对象
 | `capture_upload` | 写 | 提取上传文件正文 | `risk_level=low`, `side_effects=write_longterm`, `permission_scope=memory:write`, `timeout=45s`, `rate_limit=20/min` |
 | `graph_search` | 本地读 | 查询图谱知识 | `risk_level=low`, `side_effects=read_local`, `permission_scope=memory:read`, `timeout=15s`, `rate_limit=60/min` |
 | `web_search` | 外部读 | 查询公网资料 | `risk_level=low`, `side_effects=external_network`, `permission_scope=network:read`, `timeout=20s`, `max_retries=1`, `rate_limit=30/min`, `allowed_domains` |
-| `delete_note` | 删除 | 删除知识笔记 | `risk_level=high`, `requires_confirmation`, `side_effects=delete_longterm`, `permission_scope=memory:delete`, `idempotency_key_required`, `timeout=20s`, `rate_limit=10/min` |
-| `restore_note` | 恢复 | 从删除快照恢复知识笔记 | `risk_level=high`, `requires_confirmation`, `side_effects=write_longterm`, `permission_scope=memory:write`, `idempotency_key_required`, `timeout=20s`, `rate_limit=10/min` |
 
 新增工具面不再只围绕“采集 / 检索 / 删除”，而是覆盖跨 workflow 的业务动作和状态观察：
 
@@ -140,7 +140,7 @@ scheduled run 使用内部 `execute_research_run` workflow 复用已存在的 `R
 
 Agent 决策层会使用 workflow step projection 或进入 ReAct，选择工具和参数。但投影出的工具步骤不会直接执行。`StepProjectionValidator`（语义上是 StepProjectionValidator）会读取 [ArgsSchema](#显式-argsschema) 校验参数，读取 [ToolGovernance](#toolgovernance-治理契约) 校验风险等级、确认要求和 ReAct 调用边界。
 
-这一步的价值是把 prompt 或 workflow projection 中的软规则变成硬边界。比如某个步骤把 `delete_note` 标成 `risk_level=low`，校验层会用工具声明期的真实治理契约发现风险不一致。
+这一步的价值是把 prompt 或 workflow projection 中的软规则变成硬边界。比如某个外发工具被错误标成低风险时，校验层会用工具声明期的真实治理契约发现风险不一致。
 
 ### Gateway 执行
 
@@ -186,7 +186,7 @@ Agent 决策层会使用 workflow step projection 或进入 ReAct，选择工具
 | --- | --- | --- |
 | 暴露范围 | `exposure` | 区分 `public_agent / scoped_agent / workflow_activity / admin`；ReAct 动态工具选择会过滤掉 workflow-only 工具，确定性 workflow 仍可调用 activity 工具 |
 | 风险分级 | `risk_level` | 区分 `low / medium / high` 工具；`StepProjectionValidator` 用它发现计划风险不一致，`ToolGateway` 用它阻止高风险工具进入 ReAct 自主执行 |
-| 人工确认 | `requires_confirmation` | 标记工具是否必须走 HITL；`delete_note` 首次调用只返回确认 payload，确认后才允许真实执行 |
+| 人工确认 | `requires_confirmation` | 标记通用工具是否必须走 HITL；固定业务状态机可以在 Application 层直接拥有确认 |
 | 副作用建模 | `side_effects` | 标记 `read_local`、`external_network`、`write_longterm`、`delete_longterm`、`send_external`、`irreversible` 等副作用；ReAct 会阻断删除、外发、不可逆、高风险和需确认动作，scoped allowed tools 内的中风险写入可执行并被审计 |
 | 权限域 | `permission_scope` | 标记工具所需权限，例如 `memory:read`、`memory:write`、`memory:delete`、`network:read`；当前进入审计和未来权限后端输入 |
 | 幂等约束 | `idempotency_key_required` | 高风险确认执行时要求 `idempotency_key`；缺失会被 `ToolGateway` 拒绝；确认执行前通过 Postgres `INSERT ... ON CONFLICT DO NOTHING` 抢占 key，避免跨进程重复副作用 |
@@ -209,9 +209,9 @@ ToolGateway：运行时策略执行，包含 ReAct guard、确认幂等、timeou
 ToolInvocationEvent：结构化审计，记录风险、副作用、权限、耗时、错误分类、尝试次数、超时和限流结果
 ```
 
-一个典型例子是 `delete_note`：它声明 `risk_level=high` 和 `requires_confirmation=True`，因此不能进入 ReAct 自主调用；声明 `side_effects=("delete_longterm",)`，步骤投影校验和 Gateway 都会把它视为真实长期副作用；声明 `idempotency_key_required=True`，确认执行时如果没有幂等 key，Gateway 会直接拒绝；声明 `permission_scope="memory:delete"`，审计事件会保留删除权限域；声明 `timeout_seconds=20.0` 和 `rate_limit_per_minute=10`，删除动作不会无限挂起，也不会被同一用户高频触发。确认执行后，底层不是物理删除，而是写入删除快照并软删除 note/chunk。
-
-`restore_note` 是对应的恢复工具。它同样是高风险、要求确认和幂等 key，但副作用声明为 `write_longterm`，权限域为 `memory:write`。API 恢复入口不会直接改库，而是通过 `restore_note` 进入 ToolGateway，从 `knowledge_delete_snapshots` 恢复 note、chunk 和 review card。
+知识删除是这一边界的反例：固定 target 之后没有工具选择问题，因此由
+`KnowledgeLifecycleService` 直接校验 scope、Command digest 和确认，并在事务
+内写 Workspace facts 与 Receipt。ToolGateway 不应成为所有副作用的强制包装层。
 
 ### ToolGatewayContext 执行上下文
 
@@ -225,7 +225,7 @@ ToolInvocationEvent：结构化审计，记录风险、副作用、权限、耗�
 - `thread_id` / `user_id`：线程和用户归属，用于审计、限流和未来权限判断。
 - `react_allowed_tools`：ReAct 当前步骤允许调用的工具集合。
 
-因此，同一个工具在 direct、deterministic plan 和 ReAct 中会经过同一个 Gateway，但上下文不同，策略也不同。比如 `graph_search` 可以在 ReAct 中调用，`delete_note` 即使被模型选中，也会因为上下文是 react 且工具高风险 / 需要确认而被拒绝；`update_research_subscription` 这类中风险写入只有在对应管理 workflow 的 scoped allowed tools 内才可执行。
+因此，同一个工具在 direct、deterministic plan 和 ReAct 中会经过同一个 Gateway，但上下文不同，策略也不同。比如 `graph_search` 可以在 ReAct 中调用；外发、不可逆或高风险工具会在 ReAct 被拒绝；`update_research_subscription` 这类中风险写入只有在对应管理 workflow 的 scoped allowed tools 内才可执行。
 
 ### Gateway 运行时策略
 
@@ -292,13 +292,10 @@ ToolInvocationEvent：结构化审计，记录风险、副作用、权限、耗�
 
 ### PendingConfirmation / IdempotencyKey HITL 契约
 
-`PendingConfirmation` 表示工具已产生待确认动作，但真实副作用尚未执行。`delete_note` 的两阶段流程是：
-
-1. 第一次调用仅返回待确认 payload。
-2. `StepExecutionGraph` 将 payload 写入 checkpoint 的 `pending_confirmation`，并在确认节点暂停。
-3. 用户确认后，同一工具在 `confirmed=True` 和 `idempotency_key` 输入下由 `step_tool_node` 执行删除。
-4. `delete_note` 写入 `knowledge_delete_snapshots`，随后对 note/chunk 写入 `deleted_at` 等软删除字段；默认检索和复习查询会排除这些记录。
-5. 需要恢复时，`restore_note(confirmed=True, idempotency_key=...)` 通过同一个 Gateway 从快照恢复 note、chunk 和 review card。
+`PendingConfirmation` 表示通用 Tool 已产生待确认动作，但真实副作用尚未执行。
+它只适用于确实需要 ToolGateway 的动态或跨 workflow 能力，不是所有确认动作
+都必须采用的模板。固定知识删除使用 Application operation/decision 状态机，
+避免同时维护 Graph checkpoint 与业务 Command 两个确认事实。
 
 `idempotency_key` 由 thread/run/step 组合生成，用于避免用户重复确认、恢复重放或网络重试造成重复副作用。确认执行前，Gateway 调用 `IdempotencyStore.reserve()` 抢占 key；Postgres 实现会向 `tool_idempotency_ledger` 插入 `reserved` 行，成功抢占才继续执行副作用，失败会释放 reservation，成功才标记为 `committed`。
 
@@ -342,11 +339,11 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 
 | 维度 | 优秀 Agent 工具层 | 当前项目状态 |
 | --- | --- | --- |
-| 工具抽象 | 暴露 service-backed 的任务语义工具，而不是裸 API、数据库操作或算法函数 | 已按业务动作封装为 `capture_*`、`graph_search`、`web_search`、`delete_note`、Research pipeline / 管理、知识生命周期和诊断工具 |
+| 工具抽象 | 暴露 service-backed 的任务语义工具，而不是裸 API、数据库操作或算法函数 | 已按业务动作封装为 `capture_*`、`graph_search`、`web_search`、Research pipeline / 管理、知识维护和诊断工具 |
 | 输入契约 | 使用结构化 schema，参数少而明确，可在执行前校验 | 已使用 Pydantic schema，并由 `StepProjectionValidator` 校验计划参数 |
 | 输出契约 | 返回稳定机器可读结构，失败可解释，证据可追踪 | 已统一为 `ok / data / error / evidence` artifact |
 | 读写分层 | 读工具低风险开放，写工具标记副作用并受控执行 | 已用 `ToolGovernance.side_effects`、`risk_level`、`permission_scope` 表达读写和权限边界 |
-| 高风险治理 | 删除、外发、付款、生产变更等需要确认、审计、幂等和回滚 | `delete_note` 已实现确认暂停；其他高风险类别目前尚未出现 |
+| 高风险治理 | 删除、外发、付款、生产变更等需要确认、审计、幂等和回滚 | 知识删除由独立 Application 状态机覆盖；通用高风险 Tool 尚无生产实例 |
 | 执行隔离 | 内部工具消息不污染用户会话，可恢复后精确归属 | 已通过 `tool_messages` 与 pending id 做隔离和归属校验 |
 | 自主探索限制 | ReAct 只能调用允许列表内工具，并限制迭代；写入需受 scoped workflow 和治理约束 | 已禁止高风险/需确认/删除/外发/不可逆工具进入 ReAct；管理类 workflow 允许 scoped 中风险写入并审计 |
 | 观测审计 | 每次调用记录工具名、输入、输出、耗时、错误、用户/线程/副作用 id | 已提供 `tool_invocation_event()` 统一事件形状，direct 调用和图执行期工具结果都会产出审计 payload |
@@ -367,7 +364,9 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 
 3. 幂等账本已持久化，但事务边界仍可继续收敛
 
-   `delete_note` 确认执行路径已经要求 `idempotency_key`，Gateway 也会用 Postgres `tool_idempotency_ledger` 在副作用前抢占 key。当前语义已经覆盖重启、横向扩容和 checkpoint 重放下的重复执行防护；后续可继续把更多写入类工具纳入同一幂等契约，并在业务副作用与 ledger 之间收敛更强的事务边界。
+   ToolGateway 已支持 Postgres `tool_idempotency_ledger`，但目前不能据此声称所有
+   写工具 exactly-once。知识删除的幂等由业务 Operation 与 Receipt 在同一事务
+   边界内保证，不复用通用 ledger 制造双重事实。
 
 4. 回滚与补偿策略还没有形成通用模型
 
@@ -466,7 +465,7 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 3. `ToolNode` 的 `wrap_tool_call` middleware 可作为治理接入点（P6 方向）：验证已用 audit-only wrapper 拦截每次调用并记录 `tool / id / ok`，证明权限、限流、审计可从 `ToolGateway` 内部逻辑迁移为 ToolNode 前后置 middleware。
 4. 工具执行仍经过 `ToolGateway.invoke_graph`（作为 `react_tool_node`）：原生 `AIMessage` 经网关消费后返回带 `artifact` 的 `ToolMessage`，治理、HITL、幂等与审计边界完全不变。`ToolNode` 替换网关属于 P6，留作下一步。
 5. `_begin_tool_call` 增加可选 `call_id` 入参，原生路径直传模型 `call_id` 作为 `tool_call_id` 与 `pending_call_id`，不再合成 `{run_id}:{suffix}:{idx}`，下游 checkpoint 恢复按 `tool_call_id` 匹配 `ToolMessage` 的逻辑更准确。
-6. 高风险或需确认工具（如 `delete_note`、`restore_note`）仍由 `exposure` 过滤与 `_is_react_tool_blocked` 守卫保证不会在 ReAct 自主执行中被调用；低风险 capture 工具按治理元数据处理，治理边界不变。
+6. 高风险或需确认工具仍由 `exposure` 过滤与 `_is_react_tool_blocked` 守卫保证不会在 ReAct 自主执行中被调用；低风险 capture 工具按治理元数据处理，治理边界不变。
 
 胶水代码差异（相对原 JSON 信封路径删除的拼接点）：
 
@@ -534,7 +533,7 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 
 4. 编排隔离与恢复层
 
-   工具结果不会直接污染用户对话历史，而是进入 `tool_messages`。系统通过 `pending_tool_call_id`、`pending_step_id`、`pending_react_iteration` 做结果归属校验，避免恢复 checkpoint 后消费到旧 artifact。`delete_note` 这类高风险动作采用两阶段执行：第一次只生成确认 payload，用户确认后才带 `confirmed=True` 和 `idempotency_key` 真实执行。
+   工具结果不会直接污染用户对话历史，而是进入 `tool_messages`。系统通过 `pending_tool_call_id`、`pending_step_id`、`pending_react_iteration` 做结果归属校验，避免恢复 checkpoint 后消费到旧 artifact。
 
 这个项目工具层最值得强调的亮点有：
 
@@ -543,14 +542,14 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 - 显式 Pydantic `args_schema` 提供字段级描述和范围约束，提升模型参数生成质量，也让步骤投影校验能阻断无效调用。
 - `ToolGovernance` 不只做审计标签，还驱动 timeout、retry、rate limit、外部域名白名单、高风险确认和幂等校验。
 - ReAct 自主探索和确定性计划分权；高风险、需确认、删除、外发和不可逆动作不能被自主探索路径直接执行，中风险写入必须处在 scoped workflow allowed tools 内。
-- `delete_note` 采用两阶段执行：第一次只返回确认 payload，用户确认后才带 `confirmed=True` 和 `idempotency_key` 执行软删除并写入删除快照。
+- 固定高风险业务流程不机械包装为 Tool；知识删除由 durable Command/Receipt 和单 digest 约束。
 - 审计不是日志字符串，而是结构化 projection，包含工具名、输入、输出、风险等级、副作用、权限域、耗时、尝试次数、是否超时、是否限流、线程和用户归属。
 
 面试中需要注意边界表述：
 
 - 可以说“已有轻量 Tool Gateway，并已落地 timeout、retry、rate limit、幂等校验和审计”，不要说“完整生产级权限系统已落地”。
 - 可以说“已有结构化审计事件、Postgres 独立审计表，以及查询 API、字段级脱敏、指标告警和策略决策落库”，审计查询能力已产品化；可继续收敛与业务对象 ID、回滚记录的细粒度互链。
-- 可以说“确认机制、软删除快照和 `restore_note` 恢复已在删除场景落地”，不要说“所有高风险工具都有完整回滚能力”。
+- 可以说“知识删除的确认、replay 和精确恢复已在独立 Application 主链落地”，不要说“所有高风险工具都有完整回滚能力”。
 - 可以说“幂等 key 校验和 Postgres 持久账本已覆盖确认执行路径”，不要说“所有写操作都已完整幂等”。
 - 可以说“显式 args schema 已覆盖当前业务工具”，不要说“已经接入模型原生 tool calling”。
 

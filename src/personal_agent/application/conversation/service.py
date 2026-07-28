@@ -18,6 +18,11 @@ from personal_agent.capabilities.contracts.model import (
 )
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
+from personal_agent.kernel.contracts.scope import (
+    AuthenticatedPrincipal,
+    ExecutionScope,
+    SecurityScope,
+)
 
 from .models import (
     ActionObservation,
@@ -36,7 +41,11 @@ from .models import (
     LoopBudgetPolicy,
     ToolCallProposal,
 )
-from .ports import InteractionAgentPort, InteractionToolPort
+from .ports import (
+    InteractionAgentPort,
+    InteractionArtifactPort,
+    InteractionToolPort,
+)
 
 
 class ConversationUnavailable(RuntimeError):
@@ -66,7 +75,7 @@ class InMemoryInteractionJournal:
 
 
 class FileInteractionJournal(InMemoryInteractionJournal):
-    """Durable append-only fact snapshots; transient WorkingPlan is never written."""
+    """Durable append-only snapshots of committed interaction facts."""
 
     def __init__(self, root: Path) -> None:
         super().__init__()
@@ -77,13 +86,12 @@ class FileInteractionJournal(InMemoryInteractionJournal):
         super().put(trace)
         run_dir = self._root / trace.interaction_run_ref
         run_dir.mkdir(parents=True, exist_ok=True)
-        durable = trace.model_copy(update={"working_plans": ()})
         sequence = f"{trace.usage.model_turns:04d}-{len(trace.inputs):04d}"
         target = run_dir / f"{sequence}.json"
         if target.exists():
             return
         temporary = run_dir / f".{sequence}.{uuid4().hex}.tmp"
-        temporary.write_text(durable.model_dump_json(indent=2), encoding="utf-8")
+        temporary.write_text(trace.model_dump_json(indent=2), encoding="utf-8")
         os.replace(temporary, target)
 
     def get(self, interaction_run_ref: str) -> InteractionTrace | None:
@@ -108,12 +116,16 @@ class ConversationService:
         *,
         tool_port: InteractionToolPort | None = None,
         agent_port: InteractionAgentPort | None = None,
+        artifact_port: InteractionArtifactPort | None = None,
         budget_policy: LoopBudgetPolicy | None = None,
         journal: InMemoryInteractionJournal | None = None,
     ) -> None:
         self._model_client = model_client
         self._tool_port = tool_port
         self._agent_port = agent_port
+        self._artifact_port = artifact_port
+        if agent_port is not None and artifact_port is None:
+            raise ValueError("agent delegation requires the canonical Artifact read port")
         self._budget_policy = budget_policy or LoopBudgetPolicy()
         self._journal = journal or InMemoryInteractionJournal()
 
@@ -122,7 +134,8 @@ class ConversationService:
         *,
         conversation_id: str,
         messages: list[ConversationMessage],
-        user_id: str = "default",
+        principal: AuthenticatedPrincipal,
+        security_scope: SecurityScope,
         source_platform: str = "web",
         interaction_run_ref: str | None = None,
     ) -> ConversationTurnView:
@@ -130,6 +143,10 @@ class ConversationService:
             raise ValueError("conversation must end with a user message")
         if self._model_client is None:
             raise ConversationUnavailable("conversation model is not configured")
+        if (
+            principal.tenant_id != security_scope.tenant_id
+        ):
+            raise PermissionError("conversation principal and security scope mismatch")
 
         run_ref = interaction_run_ref or f"irun_{uuid4().hex[:16]}"
         capabilities = self._effective_capabilities()
@@ -144,53 +161,33 @@ class ConversationService:
                 message=ConversationMessage(role="assistant", content=prior.final_message.message),
             )
         inputs = list(prior.inputs if prior else ())
-        plans = list(prior.working_plans if prior else ())
         execution_order = list(prior.execution_order if prior else ())
         concurrent_batches = list(prior.concurrent_batches if prior else ())
         usage = prior.usage if prior else CommittedUsage()
 
         while usage.model_turns < self._budget_policy.max_model_turns:
             if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches)
-            rebuilding = prior is not None and not plans
+                return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches)
             decision, token_count = self._decide(
                 messages=messages,
                 capabilities=capabilities,
                 inputs=inputs,
-                plans=plans,
                 usage=usage,
-                rebuilding=rebuilding,
             )
             usage = usage.model_copy(update={
                 "model_turns": usage.model_turns + 1,
                 "total_tokens": usage.total_tokens + token_count,
             })
-            rebuild_feedback = self._admit_context_rebuild(decision, rebuilding=rebuilding)
-            if rebuild_feedback is not None:
-                inputs.append(rebuild_feedback)
-                self._commit(
-                    run_ref, messages, capabilities, plans, inputs, usage,
-                    execution_order, concurrent_batches,
-                )
-                continue
-            plan_feedback = self._admit_initial_working_plan(decision, has_plan=bool(plans))
-            if plan_feedback is not None:
-                inputs.append(plan_feedback)
-                self._commit(
-                    run_ref, messages, capabilities, plans, inputs, usage,
-                    execution_order, concurrent_batches,
-                )
-                continue
             verification_feedback = self._admit_final_verification(decision, inputs=inputs)
             if verification_feedback is not None:
                 inputs.append(verification_feedback)
                 self._commit(
-                    run_ref, messages, capabilities, plans, inputs, usage,
+                    run_ref, messages, capabilities, inputs, usage,
                     execution_order, concurrent_batches,
                 )
                 continue
             if isinstance(decision, FinalMessage):
-                self._commit(run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches, final_message=decision)
+                self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, final_message=decision)
                 return ConversationTurnView(
                     interaction_run_ref=run_ref,
                     conversation_id=conversation_id,
@@ -198,13 +195,12 @@ class ConversationService:
                     message=ConversationMessage(role="assistant", content=decision.message.strip()),
                 )
 
-            if decision.working_plan is not None:
-                plans.append(decision.working_plan)
             results, usage, concurrent = self._execute_actions(
                 decision,
                 conversation_id=conversation_id,
                 run_ref=run_ref,
-                user_id=user_id,
+                principal=principal,
+                security_scope=security_scope,
                 source_platform=source_platform,
                 usage=usage,
                 committed_action_ids=frozenset(execution_order),
@@ -214,16 +210,16 @@ class ConversationService:
             execution_order.extend(item.action_id for item in results)
             if concurrent:
                 concurrent_batches.append(tuple(item.action_id for item in results))
-            self._commit(run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches)
+            self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches)
 
-        return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches)
+        return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches)
 
     def trace(self, interaction_run_ref: str) -> InteractionTrace | None:
         return self._journal.get(interaction_run_ref)
 
-    def _decide(self, *, messages, capabilities, inputs, plans, usage, rebuilding):
+    def _decide(self, *, messages, capabilities, inputs, usage):
         visible_messages = [
-            {"role": "system", "content": self._system_prompt(capabilities, usage, rebuilding)},
+            {"role": "system", "content": self._system_prompt(capabilities, usage)},
             *(item.model_dump(mode="json") for item in messages),
         ]
         if inputs:
@@ -231,14 +227,6 @@ class ConversationService:
                 "role": "system",
                 "content": "Typed execution inputs:\n" + json.dumps(
                     [item.model_dump(mode="json") for item in inputs], ensure_ascii=False, default=str
-                ),
-            })
-        if plans:
-            visible_messages.append({
-                "role": "system",
-                "content": (
-                    "Current model-authored working plan (transient; not an execution fact):\n"
-                    + plans[-1].model_dump_json()
                 ),
             })
         response = self._model_client.generate(StructuredModelRequest(
@@ -258,50 +246,6 @@ class ConversationService:
             (response.input_tokens or 0) + (response.output_tokens or 0)
         )
         return decision, token_count
-
-    @staticmethod
-    def _admit_context_rebuild(decision, *, rebuilding: bool) -> DecisionFeedback | None:
-        if not rebuilding:
-            return None
-        if (
-            isinstance(decision, ContinueTurnProposal)
-            and decision.working_plan is not None
-            and decision.working_plan.revision_reason == "context_rebuild"
-        ):
-            return None
-        return DecisionFeedback(
-            action_id="interaction_turn",
-            reason_code="context_rebuild_plan_required",
-            message=(
-                "Recovered committed inputs require a model-owned WorkingPlanSnapshot "
-                "with revision_reason=context_rebuild before another action or final message."
-            ),
-            repairable_fields=("working_plan", "actions"),
-            immutable_fields=("messages", "inputs", "usage", "execution_order"),
-            required_repair=(
-                "Return ContinueTurnProposal with a context_rebuild working plan. "
-                "Actions may be empty when committed observations already support the next decision."
-            ),
-        )
-
-    @staticmethod
-    def _admit_initial_working_plan(decision, *, has_plan: bool) -> DecisionFeedback | None:
-        if (
-            not isinstance(decision, ContinueTurnProposal)
-            or has_plan
-            or decision.working_plan is not None
-        ):
-            return None
-        return DecisionFeedback(
-            action_id="interaction_turn",
-            reason_code="working_plan_required",
-            message="A ContinueTurnProposal requires a model-authored initial WorkingPlanSnapshot.",
-            repairable_fields=("working_plan", "actions"),
-            immutable_fields=("messages", "inputs", "usage", "execution_order"),
-            required_repair=(
-                "Return a new ContinueTurnProposal with an initial working plan before proposing actions."
-            ),
-        )
 
     @staticmethod
     def _admit_final_verification(decision, *, inputs) -> DecisionFeedback | None:
@@ -354,7 +298,7 @@ class ConversationService:
                 "An answer must reuse the exact draft bound to the latest passed "
                 "verify_interaction_draft receipt."
             ),
-            repairable_fields=("actions", "working_plan"),
+            repairable_fields=("actions",),
             immutable_fields=("messages", "inputs", "execution_order"),
             required_repair=(
                 "Submit the exact revised final text to verify_interaction_draft using the original "
@@ -399,7 +343,8 @@ class ConversationService:
         *,
         conversation_id,
         run_ref,
-        user_id,
+        principal,
+        security_scope,
         source_platform,
         usage,
         committed_action_ids,
@@ -428,7 +373,13 @@ class ConversationService:
             else:
                 runnable.append(action)
         concurrent = len(runnable) > 1 and all(self._safe_for_concurrency(item) for item in runnable)
-        context = (conversation_id, run_ref, user_id, source_platform)
+        context = (
+            conversation_id,
+            run_ref,
+            principal,
+            security_scope,
+            source_platform,
+        )
         if concurrent:
             with ThreadPoolExecutor(max_workers=min(len(runnable), self._budget_policy.max_concurrency)) as pool:
                 futures = [pool.submit(self._execute_one, item, context) for item in runnable]
@@ -558,11 +509,20 @@ class ConversationService:
         return bool(profile and set(profile.allowed_operations) <= {"delegate", "read"})
 
     def _execute_one(self, action, context):
-        conversation_id, run_ref, user_id, source_platform = context
+        conversation_id, run_ref, principal, security_scope, source_platform = context
+        execution_scope = ExecutionScope(
+            security_scope=security_scope,
+            principal_id=principal.principal_id,
+            execution_id=run_ref,
+            thread_id=conversation_id,
+            task_id=action.action_id,
+        )
         if isinstance(action, ToolCallProposal):
             result = self._tool_port.invoke_interaction(
-                action.tool_name, action.arguments, action_id=action.action_id,
-                run_id=run_ref, user_id=user_id, conversation_id=conversation_id,
+                action.tool_name,
+                action.arguments,
+                execution_scope=execution_scope,
+                tool_call_id=action.action_id,
                 source_platform=source_platform,
             )
             return _ActionResult(action.action_id, ActionObservation(
@@ -570,8 +530,8 @@ class ConversationService:
                 status="succeeded" if result.get("ok") else "failed", payload=result,
             ))
         gateway_context = AgentGatewayContext(
-            user_id=user_id, session_id=conversation_id, run_id=run_ref,
-            action_id=action.action_id, source_platform=source_platform,
+            execution_scope=execution_scope,
+            source_platform=source_platform,
         )
         grant = self._delegation_grant(action, run_ref)
         try:
@@ -584,6 +544,9 @@ class ConversationService:
                 ),
                 gateway_context,
                 grant,
+                submission_key=sha256(
+                    f"{run_ref}:{action.action_id}".encode("utf-8")
+                ).hexdigest(),
             )
             deadline = monotonic() + action.time_budget_seconds
             while run.projection.status in {"created", "queued", "running"}:
@@ -599,18 +562,25 @@ class ConversationService:
             payload = {
                 "child_agent_run_ref": run.definition.agent_run_id,
                 "status": run.projection.status,
-                "artifact_refs": [item.artifact_id for item in run.artifact_index.artifacts],
-                "artifacts": [
-                    {
-                        "artifact_id": item.artifact_id,
-                        "kind": item.kind,
-                        "content_excerpt": item.content[:6_000],
-                        "content_length": len(item.content),
-                        "content_sha256": sha256(item.content.encode("utf-8")).hexdigest(),
-                    }
+                "artifact_refs": [
+                    item.artifact_ref.model_dump(mode="json")
                     for item in run.artifact_index.artifacts
                 ],
+                "artifacts": [],
             }
+            for item in run.artifact_index.artifacts:
+                content = self._artifact_port.read_text(
+                    item.artifact_ref,
+                    principal=principal,
+                    security_scope=security_scope,
+                )
+                payload["artifacts"].append({
+                    "artifact_ref": item.artifact_ref.model_dump(mode="json"),
+                    "kind": item.kind,
+                    "content_excerpt": content[:6_000],
+                    "content_length": len(content),
+                    "content_sha256": sha256(content.encode("utf-8")).hexdigest(),
+                })
             status = {
                 "completed": "succeeded",
                 "completed_degraded": "succeeded",
@@ -651,7 +621,7 @@ class ConversationService:
             completion_contract="return typed status and artifact refs to parent",
         )
 
-    def _system_prompt(self, capabilities, usage, rebuilding):
+    def _system_prompt(self, capabilities, usage):
         remaining = {
             "model_turns": self._budget_policy.max_model_turns - usage.model_turns,
             "tool_calls": self._budget_policy.max_tool_calls - usage.tool_calls,
@@ -662,11 +632,11 @@ class ConversationService:
             "You are the interaction runtime's semantic decision maker. Return one root JSON object with "
             "exactly the key decision: {\"decision\": <FinalMessage | ContinueTurnProposal>}. Put the "
             "lowercase schema kind inside decision and inside each action. Never place kind, type, "
-            "working_plan, actions, disposition, or message at the root, and never emit model class names. "
+            "actions, disposition, or message at the root, and never emit model class names. "
             "A final decision has exactly this shape: {\"decision\": {\"kind\": \"final_message\", "
             "\"disposition\": \"answer|clarification_required|limitation|failed\", \"message\": \"...\"}}. "
             "A continuing decision has this shape: {\"decision\": {\"kind\": \"continue_turn\", "
-            "\"working_plan\": <object or null>, \"actions\": [<typed action>, ...]}}. "
+            "\"actions\": [<typed action>, ...]}}. "
             "Use only listed effective capabilities. Never claim a tool result "
             "before receiving its typed observation. Admission feedback must be repaired by a new proposal; "
             "do not assume rejected actions ran. A remote agent completion is evidence for you to assess, "
@@ -679,16 +649,21 @@ class ConversationService:
             "context_projection_refs. AgentArtifact payloads already contain the parent-visible evidence "
             "excerpt. The inspect_artifact tool is only for application-owned uploaded ResourceRef values; "
             "never pass an AgentArtifact aart_* reference to it. "
-            "When the user explicitly requests multiple named available read-only capabilities in one round, "
-            "propose all independent calls together in one actions list and wait for every observation before "
-            "answering; lack of prior observations is not a capability limitation. After verifier feedback, "
+            "Use an available deep-research agent for a user-requested comprehensive external research report "
+            "that requires multi-source synthesis, comparison, or analysis. Use a read-only search tool for "
+            "narrow lookups; do not replace a requested deep-research deliverable with a superficial lookup. "
+            "When the user's goal requires multiple independent read-only results, propose the necessary "
+            "independent calls together in one actions list and wait for every observation before answering; "
+            "the user does not need to know or name internal capabilities. Lack of prior observations is not a "
+            "capability limitation. When the user explicitly asks to review or revise a draft against stated "
+            "success criteria, use an available semantic verifier before returning the reviewed text. After "
+            "verifier feedback, "
             "revise unsupported or prohibited claims, and do not repeat a rejected claim verbatim in the final "
             "answer, including as a quotation or explanation. If a criterion prohibits asserting that an event "
             "occurred, remove every positive or presupposed occurrence claim; a minimal draft that makes no claim "
             "about that event is valid repair material. Submit the exact revised final text to the verifier "
             "again and, after a passed receipt, return verified_draft unchanged without another verifier call. "
             "Ask for clarification only when user input is missing. "
-            + ("Rebuild any working plan from canonical inputs with revision_reason=context_rebuild. " if rebuilding else "")
             + "Effective capabilities: " + capabilities.model_dump_json()
             + " Remaining budget: " + json.dumps(remaining)
         )
@@ -702,12 +677,12 @@ class ConversationService:
             disposition="fail_closed",
         )
 
-    def _budget_exhausted(self, conversation_id, run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches):
+    def _budget_exhausted(self, conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches):
         final = FinalMessage(
             disposition="limitation",
             message="本次交互已达到执行预算上限，未生成替代答案。可增加预算后基于已提交结果继续。",
         )
-        self._commit(run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches, final_message=final)
+        self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, final_message=final)
         return ConversationTurnView(
             interaction_run_ref=run_ref,
             conversation_id=conversation_id,
@@ -718,11 +693,11 @@ class ConversationService:
             ),
         )
 
-    def _commit(self, run_ref, messages, capabilities, plans, inputs, usage, execution_order, concurrent_batches, final_message=None):
+    def _commit(self, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, final_message=None):
         self._journal.put(InteractionTrace(
             interaction_run_ref=run_ref, capability_revision=capabilities.revision,
             messages=tuple(messages),
-            working_plans=tuple(plans), inputs=tuple(inputs), usage=usage,
+            inputs=tuple(inputs), usage=usage,
             execution_order=tuple(execution_order), concurrent_batches=tuple(concurrent_batches),
             final_message=final_message,
         ))

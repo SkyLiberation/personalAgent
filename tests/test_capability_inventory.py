@@ -7,6 +7,7 @@ from personal_agent.capabilities.inventory import (
     A2AAssemblyDefinition,
 )
 from personal_agent.orchestration.capability_inventory import build_runtime_capability_inventory
+from personal_agent.kernel.config import Settings
 from personal_agent.kernel.config_models import (
     MCPConfig,
     MCPServerConfig,
@@ -153,7 +154,11 @@ def test_system_inventory_endpoint_exposes_the_derived_projection() -> None:
             return inventory
 
     app = FastAPI()
-    register_system_routes(app, service=InventoryService())  # type: ignore[arg-type]
+    register_system_routes(
+        app,
+        settings=Settings(),
+        service=InventoryService(),  # type: ignore[arg-type]
+    )
 
     response = TestClient(app).get("/api/capabilities/inventory")
 

@@ -47,8 +47,9 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
     @tool(
         "verify_interaction_draft",
         description=(
-            "Evaluate a draft only against caller-supplied success criteria and visible evidence refs. "
-            "Returns a typed SemanticVerificationReceipt; it cannot execute effects or mark completion."
+            "Use when the user asks to review, validate, or revise a draft against explicit success criteria. "
+            "Evaluate only against caller-supplied criteria and visible evidence refs. Returns a typed "
+            "SemanticVerificationReceipt; it cannot execute effects or mark completion."
         ),
         args_schema=VerifyInteractionDraftArgs,
         response_format="content_and_artifact",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Protocol
 
 from personal_agent.kernel.models import (
@@ -41,40 +40,6 @@ _MEMORY_SCOPES: dict[str, str] = {
     "memory_delete": "memory:delete",
     "memory_graph_sync": "memory:write",
 }
-
-
-@dataclass(frozen=True)
-class DeleteMemoryResult:
-    """Result of a long-term memory delete use case."""
-
-    ok: bool
-    note_id: str
-    title: str = ""
-    summary: str = ""
-    message: str = ""
-    description: str = ""
-    deleted_note: KnowledgeNote | None = None
-    chunks: list[KnowledgeNote] = field(default_factory=list)
-    snapshot_id: str = ""
-    graph_cleaned: int = 0
-    graph_failed: int = 0
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class RestoreMemoryResult:
-    """Result of a long-term memory restore use case."""
-
-    ok: bool
-    note_id: str
-    title: str = ""
-    summary: str = ""
-    message: str = ""
-    restored_note: KnowledgeNote | None = None
-    restored_notes: list[KnowledgeNote] = field(default_factory=list)
-    restored_reviews: list[ReviewCard] = field(default_factory=list)
-    snapshot_id: str = ""
-    error: str | None = None
 
 
 def _graph_sync_task_from_note(note: KnowledgeNote) -> GraphSyncTask:
@@ -744,117 +709,3 @@ class MemoryFacade:
             issue_count=len(report.issues),
         )
         return report
-
-    # -- deletion -----------------------------------------------------------
-
-    def build_delete_confirmation(self, note_id: str, user_id: str) -> DeleteMemoryResult:
-        note = self.get_note(note_id, user_id=user_id)
-        if note is None:
-            return DeleteMemoryResult(
-                ok=False,
-                note_id=note_id,
-                error=f"笔记 {note_id} 不存在或不属于用户 {user_id}。",
-            )
-        chunks = self.list_chunks(note_id, user_id=user_id)
-        cascade_note = "及其所有子章节笔记" if chunks else ""
-        description = (
-            f"将删除笔记「{note.body.title}」{cascade_note}"
-            + (f"（共 {len(chunks) + 1} 条笔记）" if chunks else "")
-            + "及其关联的复习卡片"
-            + ("和图谱映射。" if note.graph.episode_uuid else "。")
-        )
-        return DeleteMemoryResult(
-            ok=True,
-            note_id=note_id,
-            title=note.body.title,
-            summary=note.body.summary,
-            description=description,
-            message=f"确认删除笔记「{note.body.title}」？",
-            chunks=chunks,
-        )
-
-    def delete_note_confirmed(
-        self,
-        note_id: str,
-        user_id: str,
-        *,
-        delete_reason: str = "",
-        run_id: str | None = None,
-        checkpoint_id: str | None = None,
-    ) -> DeleteMemoryResult:
-        decision = self._enforce(
-            "memory_delete", subject=user_id, owner=user_id, resource=note_id, confirmed=True,
-        )
-        if not decision.allowed:
-            return DeleteMemoryResult(ok=False, note_id=note_id, error=decision.reason)
-        note = self.get_note(note_id, user_id=user_id)
-        if note is None:
-            return DeleteMemoryResult(
-                ok=False,
-                note_id=note_id,
-                error=f"笔记 {note_id} 不存在或不属于用户 {user_id}。",
-            )
-        chunks_before = self.list_chunks(note_id, user_id=user_id)
-        deleted = self.local.delete_note(
-            note_id,
-            user_id,
-            cascade_chunks=bool(chunks_before),
-            deleted_by=user_id,
-            delete_reason=delete_reason,
-            run_id=run_id,
-            checkpoint_id=checkpoint_id,
-        )
-        if deleted is None:
-            return DeleteMemoryResult(ok=False, note_id=note_id, error=f"删除失败：笔记 {note_id} 不存在。")
-        deleted_note = deleted.target
-
-        graph_cleaned = 0
-        graph_failed = 0
-        return DeleteMemoryResult(
-            ok=True,
-            note_id=note_id,
-            title=deleted_note.body.title,
-            summary=deleted_note.body.summary,
-            message=f"已删除笔记「{deleted_note.body.title}」，可通过删除快照恢复。",
-            deleted_note=deleted_note,
-            chunks=[note for note in deleted.notes if note.id != deleted_note.id],
-            snapshot_id=deleted.snapshot_id,
-            graph_cleaned=graph_cleaned,
-            graph_failed=graph_failed,
-        )
-
-    def restore_note_confirmed(
-        self,
-        *,
-        note_id: str | None = None,
-        snapshot_id: str | None = None,
-        user_id: str,
-    ) -> RestoreMemoryResult:
-        resource = snapshot_id or note_id or "memory_restore"
-        decision = self._enforce(
-            "memory_write", subject=user_id, owner=user_id, resource=resource, confirmed=True,
-        )
-        if not decision.allowed:
-            return RestoreMemoryResult(ok=False, note_id=note_id or "", error=decision.reason)
-        try:
-            restored = self.local.restore_note(user_id=user_id, note_id=note_id, snapshot_id=snapshot_id)
-        except ValueError as exc:
-            return RestoreMemoryResult(ok=False, note_id=note_id or "", error=str(exc))
-        if restored is None:
-            return RestoreMemoryResult(
-                ok=False,
-                note_id=note_id or "",
-                snapshot_id=snapshot_id or "",
-                error="未找到可恢复的删除快照。",
-            )
-        return RestoreMemoryResult(
-            ok=True,
-            note_id=restored.target.id,
-            title=restored.target.body.title,
-            summary=restored.target.body.summary,
-            message=f"已恢复笔记「{restored.target.body.title}」。",
-            restored_note=restored.target,
-            restored_notes=restored.notes,
-            restored_reviews=restored.review_cards,
-            snapshot_id=restored.snapshot_id,
-        )

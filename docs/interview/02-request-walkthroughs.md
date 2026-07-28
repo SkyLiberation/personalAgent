@@ -159,17 +159,16 @@ list_tools(exposures={"public_agent"})
 生产路径：
 
 ```text
-POST /api/knowledge-delete-commands
+POST /api/notes/{note_id}/delete-commands
   -> KnowledgeLifecycleService.prepare_delete
   -> immutable DeleteCommand
   -> awaiting_confirmation
-  -> AuthorizationDigest
+  -> command_digest
 
 POST /api/knowledge-delete-commands/{id}/decision
   -> 校验用户/scope/digest/decision
-  -> ExecutionCommandDigest
   -> execute once
-  -> DeleteEvent + Receipt
+  -> Workspace state event + DeleteReceipt
 ```
 
 关键反事实：
@@ -211,7 +210,41 @@ ResearchRun 可以在内部调用模型和 Web Search，但状态机是确定性
 
 对应入口：[Research routes](../../src/personal_agent/adapters/web/routes/research.py)。
 
-## 8. 什么是“Agent 选择固定产品操作”
+## 8. 请求八：创建动态长调查
+
+用户通过 Investigation Project 产品入口提交目标、required result contract、scope 和预算。它不是普通 Conversation 自动升级出来的隐藏 Task。
+
+```text
+POST /api/investigation-projects
+  -> persist immutable Project definition
+  -> enqueue investigation worker task
+  -> 202 + project_id
+
+investigation worker
+  -> rehydrate append-only journal
+  -> Planner Proposal
+  -> Plan Admission
+  -> accepted Plan
+  -> deterministic ready set
+  -> ToolGateway / durable AgentGateway / synthesis
+  -> Evidence Admission
+  -> semantic Verification
+  -> Completion Gate
+  -> final ArtifactRef + CompletionReport
+```
+
+这条路径同时满足两个条件：
+
+1. 下一步依赖新 Observation，无法完全预定义；
+2. 任务跨越进程、用户轮次、审批或长时间运行边界，需要 durable completion obligation。
+
+`GET /api/investigation-projects/{id}` 只读取 projection，不调用模型或推进状态。steering 只修订未冻结 SubGoal；恢复复用 accepted Plan、稳定 submission key 和已提交执行事实，不重新生成冻结 Command。
+
+当前 LT01-LT13 已覆盖生产 Domain/Application/PostgreSQL/Worker 路径，但 semantic model 和外部 Provider 使用 scripted/frozen Port，因此属于诊断证据，不是 live model/provider release evidence。
+
+对应入口：[Investigation project routes](../../src/personal_agent/adapters/web/routes/investigation_projects.py)。
+
+## 9. 什么是“Agent 选择固定产品操作”
 
 正确含义是：
 
@@ -246,7 +279,7 @@ research_verify_digest
 
 前者表达用户级能力，后者是内部事务 Activity。模型可以决定“做什么”，不能随意改写“事务如何保证一致性”。
 
-## 9. 当前能力进入方式总表
+## 10. 当前能力进入方式总表
 
 | 用户目标 | 谁选择路径 | 当前入口 | Conversation 是否已贯通 |
 | --- | --- | --- | --- |
@@ -260,8 +293,9 @@ research_verify_digest
 | 删除/恢复 | 产品 UI/API + 用户确认 | lifecycle API | 否 |
 | 创建/修改订阅 | 产品 UI/API | Research API | 否 |
 | 定时运行 | Scheduler/Worker | Queue | 不应由每轮对话决定 |
+| 动态 durable 调查 | 用户显式创建 Project；模型在 Project 内规划 | Investigation API + Worker | 不会从 Conversation 隐式创建 |
 
-## 10. 为什么不加关键词 Router
+## 11. 为什么不加关键词 Router
 
 禁止写成：
 

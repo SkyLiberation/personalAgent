@@ -3,7 +3,14 @@ from __future__ import annotations
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from personal_agent.adapters.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes._shared import (
+    auth_is_disabled,
+    resolve_principal,
+    resolve_user_id,
+)
+from personal_agent.kernel.contracts.scope import (
+    SecurityScope,
+)
 from personal_agent.application.workspace import (
     Artifact,
     Claim,
@@ -117,7 +124,12 @@ def register_workspace_routes(
         user_id: str = Form("default"),
         workspace_id: str = Form("default"),
     ) -> CapturedResourceResult:
-        resolved_user = user_id if user_id != "default" else resolve_user_id(request, settings)
+        principal = resolve_principal(request, settings)
+        resolved_user = (
+            user_id
+            if user_id != "default" and auth_is_disabled(settings)
+            else principal.user_id
+        )
         resolved_workspace = workspace_id if workspace_id != "default" else resolved_user
         file_bytes = file.file.read()
         resource_ref = artifact_service.save_upload(
@@ -125,8 +137,11 @@ def register_workspace_routes(
             content_type=file.content_type,
             file_bytes=file_bytes,
             uploads_dir=settings.data_dir / "uploads",
-            user_id=resolved_user,
-            workspace_id=resolved_workspace,
+            principal=principal.model_copy(update={"user_id": resolved_user}),
+            security_scope=SecurityScope(
+                tenant_id=principal.tenant_id,
+                workspace_id=resolved_workspace,
+            ),
         )
         source_type = capture_service.source_type_from_upload(
             file.filename or "upload",

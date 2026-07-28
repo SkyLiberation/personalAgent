@@ -13,12 +13,11 @@ from types import SimpleNamespace
 
 from personal_agent.governance import ToolExecutor
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.kernel.models import WebSearchResult
 from personal_agent.tools import (
     build_capture_text_tool,
-    build_delete_note_tool,
     build_graph_search_tool,
-    build_restore_note_tool,
     build_web_search_tool,
 )
 
@@ -86,65 +85,12 @@ class FakeCaptureResultFactory:
         )
 
 
-class FakeMemory:
-    def __init__(self, calls: CountingCalls) -> None:
-        self._calls = calls
-
-    def build_delete_confirmation(self, note_id: str, user_id: str):
-        self._calls.bump("memory.build_delete_confirmation")
-        return SimpleNamespace(
-            ok=True,
-            title="DNS note",
-            summary="DNS summary",
-            description="Delete DNS note?",
-            message="请确认删除。",
-        )
-
-    def delete_note_confirmed(
-        self,
-        note_id: str,
-        user_id: str,
-        *,
-        delete_reason: str = "",
-    ):
-        self._calls.bump("memory.delete_note_confirmed")
-        return SimpleNamespace(
-            ok=True,
-            snapshot_id="snapshot-1",
-            title="DNS note",
-            message="已删除。",
-            graph_cleaned=True,
-            graph_failed=False,
-        )
-
-    def restore_note_confirmed(
-        self,
-        *,
-        note_id: str | None = None,
-        snapshot_id: str | None = None,
-        user_id: str = "default",
-    ):
-        self._calls.bump("memory.restore_note_confirmed")
-        return SimpleNamespace(
-            ok=True,
-            note_id=note_id or "note-1",
-            snapshot_id=snapshot_id or "snapshot-1",
-            title="DNS note",
-            message="已恢复。",
-            restored_notes=[],
-            restored_reviews=[],
-        )
-
-
 def _executor_and_calls() -> tuple[ToolExecutor, CountingCalls]:
     calls = CountingCalls()
     executor = ToolExecutor()
     executor.register(build_graph_search_tool(FakeGraphStore(calls)))
     executor.register(build_web_search_tool(Settings(), FakeWebProvider(calls)))
     executor.register(build_capture_text_tool(FakeCaptureResultFactory(calls)))
-    memory = FakeMemory(calls)
-    executor.register(build_delete_note_tool(memory))
-    executor.register(build_restore_note_tool(memory))
     return executor, calls
 
 
@@ -180,9 +126,24 @@ def test_tool_execution_contract_meets_quality_baseline():
 
     for case in cases:
         executor, calls = _executor_and_calls()
-        first = executor.invoke_direct(case.tool_name, **case.args)
+        execution_scope = interaction_execution_scope(
+            tenant_id="tool-quality",
+            workspace_id="tool-quality",
+            user_id="alice",
+            execution_id=case.id,
+            thread_id=case.id,
+        )
+        first = executor.invoke_direct(
+            case.tool_name,
+            execution_scope=execution_scope,
+            **case.args,
+        )
         repeat = (
-            executor.invoke_direct(case.tool_name, **case.args)
+            executor.invoke_direct(
+                case.tool_name,
+                execution_scope=execution_scope,
+                **case.args,
+            )
             if case.repeat_same_call else None
         )
         runs[case.id] = _project_result(

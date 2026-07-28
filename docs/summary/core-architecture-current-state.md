@@ -1,14 +1,16 @@
 # personalAgent 当前核心架构
 
-本文记录截至 2026-07-26 已落地的生产架构事实。尚未落地的设计只进入
+本文记录截至 2026-07-27 已落地的生产架构事实。尚未落地的设计只进入
 [future 索引](../future/README.md)，不能反向定义当前架构；产品能力、E2E 和发布可信度的当前事实由
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md) 拥有。
 [`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 只保存已删除旧架构的历史诊断
 证据，不再描述当前主链。
 
-当前工程矩阵 E01–E13、C01–C04、L01–L06 共 23/23 passed、0 failed、0 skipped，archive 为
-`data/e2e_traces/20260726T011631.187395Z-20684-4a62da6a`。该 archive 与工作树均为 dirty，
-所以它证明当前工程主路径可执行，但不产生 clean-revision 发布资格。
+上一版工程矩阵 E01–E13、C01–C04、L01–L06 共 23/23 passed，archive 为
+`data/e2e_traces/20260726T011631.187395Z-20684-4a62da6a`。L01–L06 与 E16–E19 现已改为
+不泄漏内部 Tool、Agent、Artifact、verdict 或执行顺序的自然用户场景；当前定向证据见
+`phase0-capability-release-baseline.md`。旧完整 archive 不再匹配当前 catalog，当前完整矩阵
+和 clean-revision 发布资格都尚未建立。
 
 ## 1. 架构边界与依赖方向
 
@@ -63,6 +65,13 @@ forbidden_edges=0
 Lifecycle、Research subscription/run、Review feedback 和 Artifact 操作不必伪装成一次通用
 Conversation Task。固定、稳定的产品流程优先直接调用相应 Use Case。
 
+路径动态且需要跨进程、用户轮次或审批边界维持交付契约的任务，使用显式
+`POST /api/investigation-projects` 创建 Investigation Project。创建先持久化 immutable
+definition，再异步入队并返回 `202`；查询只读取 projection，不调用模型或推进状态。该能力的
+当前事实与发布证据边界由
+[`durable-investigation-project-current-state.md`](durable-investigation-project-current-state.md)
+记录。
+
 装配关系为：
 
 ```text
@@ -72,12 +81,17 @@ WebAppContext / CLI / Feishu
      -> ConversationService
      -> WorkspaceService
      -> KnowledgeLifecycleService
+     -> InvestigationProjectService
      -> ResearchService
      -> Review / KnowledgeGap use cases
      -> ToolExecutor / ToolGateway
      -> AgentGateway
      -> Model Ports and persistence adapters
 ```
+
+Investigation Project 使用 PostgreSQL append-only journal 和现有 worker queue；AgentGateway
+的生产 run store 为 PostgreSQL。普通 Conversation 不生成 Project，也不再拥有
+`WorkingPlanSnapshot`。
 
 `AgentRuntime` 是唯一集中装配点，但 Workspace、Research、Interaction、Tool audit 等事实仍由
 各自 Store/Service 拥有；Composition Root 不通过字段镜像成为第二事实源。
@@ -94,7 +108,6 @@ ConversationMessage[]
   -> Model returns AgentTurnDecision
      -> FinalMessage
      -> ContinueTurnProposal
-        -> optional WorkingPlanSnapshot
         -> actions[]
            -> ToolCallProposal | AgentDelegationProposal
   -> deterministic admission and budget checks
@@ -108,7 +121,6 @@ ConversationMessage[]
 
 - 模型负责开放语义：是否直接回答、是否需要计划、选择哪个语义能力、委托什么 bounded
   sub-goal、如何根据 Observation 修订下一步；
-- `WorkingPlanSnapshot` 由模型生成，只是当前 Interaction 的 transient projection；
 - Runtime 负责 schema、重复 action、预算、并发安全、scope 和能力存在性等机械判断；
 - Admission 只能接受或返回 typed `DecisionFeedback`，不得补业务参数、改写 plan 或替换目标；
 - Tool/Agent 执行产生 execution fact；模型或领域 Verifier 判断语义结果；领域状态机判断完成。
@@ -132,9 +144,8 @@ AgentTurnDecision
 写状态、审批或结果依赖的动作保持串行，并把 Observation 返回下一模型轮。
 
 `InteractionTrace` 保存输入消息、能力 revision、已提交 Observation/Feedback、usage、执行
-顺序、并发批次和最终消息。`FileInteractionJournal` 持久化时主动移除 WorkingPlan；恢复后
-模型必须基于已提交事实生成 `revision_reason=context_rebuild` 的新计划。恢复不会重复已提交
-action，也不把旧 WorkingPlan 升格为 durable fact。
+顺序、并发批次和最终消息。恢复后模型直接读取 committed typed inputs；恢复不会重复已提交
+action，也不要求生成一个没有生产调度消费者的中间 Plan。
 
 ## 4. Capability、Tool、MCP 与 A2A
 
@@ -199,7 +210,7 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 | Artifact | `ArtifactService` | application-owned ArtifactRef 和 Artifact Store |
 | Capture | `CaptureService` + Workspace ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
 | Grounded Ask | `WorkspaceService` | Workspace/Evidence 只读；Answer 不隐式写 Claim |
-| Knowledge Lifecycle | `KnowledgeLifecycleService` | immutable delete/restore Command、Event、Receipt |
+| Knowledge Lifecycle | `KnowledgeLifecycleService` | immutable delete/restore Command、operation status、Receipt |
 | Workspace Knowledge | `WorkspaceService` | Artifact、EvidenceBlock/Span、Claim、Relation、KnowledgeItem |
 | Review | `ReviewDigestUseCase` / feedback use case | review content、feedback fact、schedule projection 分离 |
 | Knowledge Gap | `KnowledgeGapUseCase` | gap analysis result；不成为知识事实写入口 |
@@ -210,10 +221,10 @@ Workspace 的 PostgreSQL Store 是结构化知识事实 owner。Graphiti、embed
 MS GraphRAG 是检索/图投影，不是事实权威源；投影失败不能覆盖或删除 Workspace canonical
 facts。大型正文和上传文件由 Artifact Store 持有，运行状态优先保存 ref 而不是复制内容。
 
-Knowledge delete/restore 不使用通用 Planner 猜测目标。Application 根据明确的 user/scope/
-note identity 创建 immutable Command；confirmation、AuthorizationDigest、
-ExecutionCommandDigest、Event 和 Receipt 绑定同一操作链路，错误 digest 或 replay 不重复副
-作用。
+Knowledge delete/restore 不使用通用 Planner 猜测目标。Application 根据明确的
+user/scope/note identity 创建 immutable Command；一个 `command_digest` 绑定
+confirmation、Operation 和 Receipt，错误 digest 或 replay 不重复副作用。只有 Workspace
+Item/Claim 的真实迁移产生状态事件，生命周期本身不复制 Event。
 
 ## 6. Model Port 与 Provider 边界
 
@@ -286,20 +297,27 @@ E2E 分类的唯一 owner 是 `evals/e2e_quality/evidence_catalog.py`：
 
 - E01–E13：原生产品能力；
 - C01–C04：组合产品能力；
-- L01–L06：复杂主循环、恢复和 verifier feedback；
+- L01–L06：自然复杂主循环、恢复、fail-closed 和 receipt-bound semantic revision；
 - E16–E19：真实外部 Provider profile，只作为相应产品旅程的组成证据。
 
 完整矩阵必须从真实 HTTP 入口进入独立 Web 进程，使用真实模型、PostgreSQL 和场景需要的
 真实 Provider，并同时断言用户结果和关键反事实。`release_gate.py` 只接受 catalog、clean
 matching revision、passed summary、trace envelope 和 checksum 的交集。
 
-当前工程证据：
+上一完整矩阵与当前定向证据：
 
 ```text
-23 passed, 0 failed, 0 skipped
-duration = 1777.44 seconds
-archive = 20260726T011631.187395Z-20684-4a62da6a
-archive exit_status = 0
+previous full matrix = 23 passed, 0 failed, 0 skipped
+previous archive = 20260726T011631.187395Z-20684-4a62da6a
+natural L01-L05 batch = passed
+corrected natural L06 = passed
+natural E17/E19 plus L04 = passed
+answer-free-prompt E16/E18 = passed
+targeted archives = 20260727T163802.147366Z-12512-71873e6b,
+                    20260727T164815.081968Z-14456-e1196ad4,
+                    20260727T162913.553817Z-9428-c723ad92,
+                    20260727T165211.554901Z-17344-3e4bc060
+current complete matrix = not rerun
 release eligibility = not established (dirty revision)
 ```
 
@@ -335,10 +353,10 @@ Product API / CLI
 ## 11. 当前架构不变量
 
 - 普通请求不强制创建 Task、GoalGraph、Command、Receipt 或 CompletionReport；
-- 模型拥有开放语义和 WorkingPlan，Runtime 不从字符串或相似度猜业务下一步；
+- 模型拥有开放语义和下一步 Proposal，Runtime 不从字符串或相似度猜业务下一步；
 - Proposal 不是权限、执行事实或完成证明；
 - Admission 只接受/拒绝，不静默修复 Proposal；
-- WorkingPlan 是 transient projection，不持久化为业务事实；
+- 普通 Conversation 不创建强制 Plan；durable Plan 只属于显式 Investigation Project；
 - 普通只读 ToolCall 与 governed side effect 使用不同执行边界；
 - Tool 和 Agent 必须经过对应 Gateway，Adapter 不决定授权；
 - Agent Artifact、Tool Receipt、Semantic Verification 和 Domain Completion 互不冒充；
@@ -387,8 +405,8 @@ Product API / CLI
 
 ## 14. 未闭合风险
 
-1. 当前 23/23 archive 为 dirty engineering evidence；提交后必须在 clean revision 重跑，
-   才能建立发布资格；
+1. 旧 23/23 archive 不匹配新版自然 E2E；提交后必须在 clean revision 重跑当前完整矩阵，才能
+   建立发布资格；
 2. `conversation_id`、`interaction_run_ref` 等部分 Interface/Application identity 仍以受格式
    约束的字符串传递，尚未全部收敛为 Value Object；
 3. 全仓 Ruff 仍有范围外历史问题，变更范围 Ruff 通过不能写成全仓 lint 通过；

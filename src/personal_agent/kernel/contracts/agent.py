@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Literal, Protocol
 from uuid import uuid4
 
+from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.contracts.resource import ResourceRef
 AgentProtocol = Literal["a2a_jsonrpc", "local", "http"]
 ChildAgentRunStatus = Literal[
     "created", "queued", "running", "waiting", "blocked_approval",
@@ -62,24 +64,16 @@ class AgentTask:
 
 @dataclass(frozen=True, slots=True)
 class AgentGatewayContext:
-    user_id: str
-    session_id: str
-    run_id: str
-    thread_id: str | None = None
-    task_id: str | None = None
-    goal_id: str | None = None
-    action_id: str | None = None
+    execution_scope: ExecutionScope
     source_platform: str = ""
     confirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class AgentArtifact:
-    artifact_id: str
     agent_run_id: str
     kind: str
-    content: str = ""
-    payload: dict[str, Any] = field(default_factory=dict)
+    artifact_ref: ResourceRef
     producer_verification_status: Literal["unverified", "verified", "rejected"] = "unverified"
 
 
@@ -97,6 +91,9 @@ class ChildAgentRunDefinition:
     agent_id: str
     task: AgentTask
     context: AgentGatewayContext
+    submission_key: str = ""
+    authorization_digest: str = ""
+    execution_command_digest: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +120,12 @@ class ChildAgentRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ReservedAgentSubmission:
+    run: ChildAgentRunRecord
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ChildAgentRunOutcome:
     run: ChildAgentRunRecord
     output_text: str = ""
@@ -134,7 +137,20 @@ class AgentAdapter(Protocol):
 
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome: ...
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord: ...
+    def submit(
+        self,
+        task: AgentTask,
+        context: AgentGatewayContext,
+        *,
+        submission_key: str,
+    ) -> ChildAgentRunRecord: ...
+
+    def lookup_submission(
+        self,
+        submission_key: str,
+        task: AgentTask,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord | None: ...
 
     def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord: ...
 
@@ -167,6 +183,7 @@ __all__ = [
     "AgentProtocol",
     "ChildAgentRunProjection",
     "ChildAgentRunRecord",
+    "ReservedAgentSubmission",
     "ChildAgentRunOutcome",
     "ChildAgentRunStatus",
     "AgentTask",

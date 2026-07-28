@@ -18,19 +18,7 @@ class KnowledgeDeleteCommand(BaseModel):
     target_note_id: str
     reason: str
     policy_revision: str = "knowledge-delete-v1"
-    authorization_digest: str
-    execution_command_digest: str
-    created_at: datetime = Field(default_factory=local_now)
-
-
-class KnowledgeDeleteEvent(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    event_id: str
-    command_id: str
-    event_type: Literal["prepared", "confirmed", "rejected", "executed"]
-    actor_user_id: str
-    confirmation_ref: str = ""
+    command_digest: str
     created_at: datetime = Field(default_factory=local_now)
 
 
@@ -39,7 +27,7 @@ class KnowledgeDeleteReceipt(BaseModel):
 
     receipt_id: str
     command_id: str
-    execution_command_digest: str
+    command_digest: str
     confirmation_ref: str
     deleted_note_id: str
     affected_claim_ids: tuple[str, ...] = ()
@@ -52,7 +40,6 @@ class KnowledgeDeleteReceipt(BaseModel):
 class KnowledgeDeleteOperationView(BaseModel):
     command: KnowledgeDeleteCommand
     status: Literal["awaiting_confirmation", "rejected", "executed"]
-    events: tuple[KnowledgeDeleteEvent, ...] = ()
     receipt: KnowledgeDeleteReceipt | None = None
 
 
@@ -66,19 +53,7 @@ class KnowledgeRestoreCommand(BaseModel):
     delete_command_id: str
     reason: str
     policy_revision: str = "knowledge-restore-v1"
-    authorization_digest: str
-    execution_command_digest: str
-    created_at: datetime = Field(default_factory=local_now)
-
-
-class KnowledgeRestoreEvent(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    event_id: str
-    command_id: str
-    event_type: Literal["prepared", "confirmed", "rejected", "executed"]
-    actor_user_id: str
-    confirmation_ref: str = ""
+    command_digest: str
     created_at: datetime = Field(default_factory=local_now)
 
 
@@ -87,7 +62,7 @@ class KnowledgeRestoreReceipt(BaseModel):
 
     receipt_id: str
     command_id: str
-    execution_command_digest: str
+    command_digest: str
     confirmation_ref: str
     restored_note_id: str
     affected_claim_ids: tuple[str, ...] = ()
@@ -98,17 +73,14 @@ class KnowledgeRestoreReceipt(BaseModel):
 class KnowledgeRestoreOperationView(BaseModel):
     command: KnowledgeRestoreCommand
     status: Literal["awaiting_confirmation", "rejected", "executed"]
-    events: tuple[KnowledgeRestoreEvent, ...] = ()
     receipt: KnowledgeRestoreReceipt | None = None
 
 
 __all__ = [
     "KnowledgeDeleteCommand",
-    "KnowledgeDeleteEvent",
     "KnowledgeDeleteOperationView",
     "KnowledgeDeleteReceipt",
     "KnowledgeRestoreCommand",
-    "KnowledgeRestoreEvent",
     "KnowledgeRestoreOperationView",
     "KnowledgeRestoreReceipt",
 ]

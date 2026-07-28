@@ -16,8 +16,8 @@ class MutationAdmissionDecision(BaseModel):
 
 
 _MEMORY_WRITE_TOOLS = frozenset({
-    "capture_text", "delete_note", "update_note", "supersede_note",
-    "mark_note_deprecated", "mark_notes_conflicted", "restore_note",
+    "capture_text", "update_note", "supersede_note",
+    "mark_note_deprecated", "mark_notes_conflicted",
 })
 
 

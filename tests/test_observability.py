@@ -5,7 +5,7 @@ import logging
 from personal_agent.application.verifier import AnswerVerifier
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 
-from tests.test_tools import echo
+from tests.test_tools import _scope, echo
 
 
 def test_verifier_emits_structured_observability(caplog):
@@ -39,7 +39,11 @@ def test_tool_gateway_emits_audit_event(caplog):
     executor.register(echo)
 
     with caplog.at_level(logging.INFO, logger="personal_agent.kernel.observability"):
-        result = executor.invoke_direct("echo", message="hello", user_id="u1")
+        result = executor.invoke_direct(
+            "echo",
+            execution_scope=_scope(),
+            message="hello",
+        )
 
     assert result["ok"] is True
     assert len(sink.events) == 1

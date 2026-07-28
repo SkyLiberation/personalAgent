@@ -7,11 +7,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from personal_agent.adapters.web.input_normalization import normalize_entry_text
-from personal_agent.adapters.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes._shared import resolve_requested_principal
 from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, sse_event
 from personal_agent.application.conversation import ConversationMessage, ConversationUnavailable
 from personal_agent.kernel.config import Settings
 from personal_agent.orchestration.service import AgentService
+from personal_agent.kernel.contracts.scope import (
+    SecurityScope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,15 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
         normalized_text = normalize_entry_text(text)
         if not normalized_text:
             raise HTTPException(status_code=400, detail="Text is required.")
-        resolved_user = user_id if user_id != "default" else resolve_user_id(request, settings)
+        try:
+            principal = resolve_requested_principal(
+                request,
+                settings,
+                user_id if user_id != "default" else None,
+            )
+        except PermissionError:
+            raise HTTPException(status_code=404, detail="Resource not found.")
+        resolved_user = principal.user_id
 
         async def event_generator():
             yield sse_event("status", {"message": "正在处理请求..."})
@@ -38,7 +49,11 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                     service.converse,
                     conversation_id=session_id,
                     messages=[ConversationMessage(role="user", content=normalized_text)],
-                    user_id=resolved_user,
+                    principal=principal,
+                    security_scope=SecurityScope(
+                        tenant_id=principal.tenant_id,
+                        workspace_id=session_id,
+                    ),
                     source_platform="web",
                 )
             except ConversationUnavailable:

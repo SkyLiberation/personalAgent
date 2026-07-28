@@ -15,18 +15,6 @@ class ConversationMessage(_StrictModel):
     content: str = Field(min_length=1, max_length=20_000)
 
 
-class WorkingPlanSnapshot(_StrictModel):
-    """Model-owned, transient plan display; never an execution fact."""
-
-    summary: str = Field(min_length=1, max_length=2_000)
-    constraints: tuple[str, ...] = ()
-    remaining_work: tuple[str, ...] = ()
-    open_questions: tuple[str, ...] = ()
-    revision_reason: Literal[
-        "initial", "observation", "decision_feedback", "user_input", "context_rebuild"
-    ] = "initial"
-
-
 class ToolCallProposal(_StrictModel):
     kind: Literal["tool_call"] = "tool_call"
     action_id: str = Field(default_factory=lambda: f"act_{uuid4().hex[:16]}", min_length=1)
@@ -59,7 +47,6 @@ class FinalMessage(_StrictModel):
 
 class ContinueTurnProposal(_StrictModel):
     kind: Literal["continue_turn"] = "continue_turn"
-    working_plan: WorkingPlanSnapshot | None = None
     actions: tuple[ActionProposal, ...] = ()
 
     @model_validator(mode="after")
@@ -141,7 +128,6 @@ class InteractionTrace(_StrictModel):
     interaction_run_ref: str
     capability_revision: str
     messages: tuple[ConversationMessage, ...]
-    working_plans: tuple[WorkingPlanSnapshot, ...] = ()
     inputs: tuple[InteractionInput, ...] = ()
     usage: CommittedUsage = Field(default_factory=CommittedUsage)
     execution_order: tuple[str, ...] = ()
@@ -161,5 +147,5 @@ __all__ = [
     "CommittedUsage", "ContinueTurnProposal", "ConversationMessage", "ConversationTurnView",
     "DecisionFeedback", "EffectiveAgentCapability", "EffectiveCapabilities",
     "EffectiveToolCapability", "FinalMessage", "InteractionTrace", "LoopBudgetPolicy",
-    "ToolCallProposal", "WorkingPlanSnapshot",
+    "ToolCallProposal",
 ]

@@ -55,7 +55,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 测试文件名、Markdown 表格和归档文件不能各自发明分类，否则会产生“同一个 E17 在不同地方代表不同能力”的双轨事实。
 
-## 4. 23 个产品/主循环 E2E
+## 4. Conversation 与产品 Release E2E
 
 ### E01-E13：原生产品能力
 
@@ -86,45 +86,60 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 ### L01-L06：复杂 Interaction loop
 
-#### L01 Observation-driven replanning
+#### L01 Natural personal-knowledge recall
 
-先调用 `list_recent_notes`，模型收到 Observation 后修改 WorkingPlan，再回答。
+用户只询问此前记录的随机项目代号，不知道 Tool 名称或执行顺序。Agent 必须自行选择当前
+可用的知识读取能力；最终回答必须包含本用户事实、排除另一用户的冲突事实，并且 Trace 中
+必须存在包含正确事实的已提交 Observation。
 
-证明：主循环不是一次性静态脚本。
+证明：自然用户目标可以驱动真实能力选择，主循环基于 Observation 回答，而不是由测试
+Prompt 替 Agent 指定执行方案。
 
 #### L02 Safe concurrency
 
-同一 turn 的两个独立只读能力进入长度为 2 的 concurrent batch。
+用户自然询问“最近记录了什么”和“当前有哪些知识缺口或冲突”，不知道对应 Tool。最终回答
+必须同时包含随机最近记录和缺口结论；执行后的 trace 才检查两个独立只读 action 进入同一
+concurrent batch。
 
-证明：并发有 trace 事实，而且只用于可机械证明安全的 action。
+证明：多目标用户结果完整，并发是 Agent 自主选择后的安全执行事实，不是用户提示制造的路径。
 
 #### L03 Process restart recovery
 
-两步 Tool 调用在第一步事实提交后真实终止进程。恢复后执行顺序前缀不变，旧 action 不重复，新 WorkingPlan 标记 `context_rebuild`。
+用户只询问此前保存的随机项目验收代号。测试在观察到第一个 committed input、最终回答尚未
+产生时真实终止进程；恢复后必须回答本用户随机事实、排除另一用户冲突事实，且执行顺序前缀
+不变、旧 action 不重复。
 
 证明：恢复依据 committed facts，不把旧 Plan 当作 durable authority。
 
 #### L04 Manager + Specialist
 
-父 Agent 委托 GPT Researcher bounded sub-goal，得到一个干净 Artifact 后继续综合。
+用户要求面向架构评审的 A2A delegation grant 深度研究，覆盖授权、数据外发、重放、完成
+判定和来源，不知道 specialist 的身份。执行后的 trace 必须出现一个干净的深度研究 Artifact，
+父 Agent 再交付覆盖上述维度的结构化结论。
 
 证明：子 Agent 执行与父级完成分离。
 
 #### L05 Budget fail closed
 
-预算不足以让模型在 Observation 后继续时，返回 limitation 和“未生成替代答案”。
+用户自然询问随机个人知识。预算足以完成读取、但不足以让模型在 Observation 后继续时，返回
+limitation 和“未生成替代答案”；最终消息不得泄漏或猜出随机答案，trace 中必须已有真实读取结果。
 
 证明：Runtime 不生成确定性业务 fallback。
 
-#### L06 Verifier feedback
+#### L06 Receipt-bound semantic revision
 
-首次 draft 被判 `needs_revision`，模型修订后再次验证，最终文本逐字等于 passed receipt 的 `verified_draft`。
+用户要求审查并修订一段缺少执行证据却声称“已完成所有写入”的答复。最终文本不能保留该
+无证据声明，必须经过至少一次语义验证，并逐字等于最新 passed receipt 的 `verified_draft`。
 
-证明：Verifier 可以反馈，但 Runtime 不改写模型答案。
+证明：用户收到的是经过验证且与 receipt 绑定的安全文本，Runtime 不改写模型答案。真实用户
+不关心模型在验证前还是验证后先自行修订，因此 release E2E 不规定 verifier 调用次数；两轮
+`needs_revision -> passed` 的反馈状态机由 scripted Runtime Conformance 测试验证。
 
 ## 5. E16-E19 外部 Profile 证据
 
-E16-E19 是 connector/provider profile，不单独产生产品发布声明：
+E16-E19 是 connector/provider profile，不单独产生产品发布声明。用户输入仍必须是自然场景：
+GitHub/Notion 是用户选择的数据源，深度研究是用户目标；MCP Tool 名、Agent ID、Artifact
+类型和内部终态只允许在执行后的 trace 断言中出现。
 
 - E16：真实 GitHub MCP；
 - E17：真实 GPT Researcher A2A；
@@ -135,7 +150,24 @@ E16-E19 是 connector/provider profile，不单独产生产品发布声明：
 
 这样避免“GitHub Tool 能调用”被错误解释为“完整用户产品旅程已经完成”。
 
-## 6. E04 如何定位删除链路问题
+## 6. LT01-LT13 为什么不是 Release E2E
+
+LT01-LT13 验证 Investigation Project 的 durable runtime：
+
+- accepted Plan 驱动 ready set、parallel join 和 coverage；
+- approval 绑定 digest；
+- steering 不覆盖冻结工作；
+- budget/capability missing 进入 typed pause；
+- cancel quarantine late Artifact；
+- stable submission key 避免重复 child submit；
+- worker 重启从 PostgreSQL journal 恢复；
+- Completion Gate 不把 Tool/Agent success 当成 Project 完成。
+
+这些用例使用生产 Domain、Application、PostgreSQL Store、Worker Queue、ToolGateway、AgentGateway 和 Artifact owner，但 semantic model 与外部 Provider 是 scripted/frozen Port，而且从 in-process service 进入。因此它们属于 diagnostic/runtime conformance evidence，只能证明状态机和恢复协议，不能证明 live model/provider 的正式用户结果。
+
+要升级为 release evidence，仍需从正式 HTTP 入口进入独立 Web/worker 进程，使用真实模型、真实 PostgreSQL 和场景需要的真实 Provider，以自然用户输入断言最终 Artifact、关键反事实、成本、延迟和恢复结果。
+
+## 7. E04 如何定位删除链路问题
 
 E04 的证据链包括：
 
@@ -162,7 +194,7 @@ HTTP request
 
 这比只断言“note 最后不存在”更可诊断。
 
-## 7. E2E 与低层测试如何分工
+## 8. E2E 与低层测试如何分工
 
 | 测试层 | 负责证明 |
 | --- | --- |
@@ -175,23 +207,33 @@ HTTP request
 
 Unit 和 Contract 可以快速定位，E2E 负责防止“每个零件都对，但整体用户结果不对”。
 
-## 8. 当前执行证据
+## 9. 当前执行证据
 
-截至 2026-07-26：
+截至 2026-07-27：
 
 ```text
-E01-E13 = 13/13 passed
-C01-C04 = 4/4 passed
-L01-L06 = 6/6 passed
-total = 23 passed, 0 failed, 0 skipped
-duration = 1777.44 seconds
-archive exit_status = 0
+previous full matrix = 23/23 passed (historical catalog)
+natural L01-L05 batch = passed
+corrected natural L06 = passed
+natural E17/E19 plus L04 = passed
+answer-free-prompt E16/E18 = 2/2 passed
+current complete matrix = not rerun
+LT01-LT13 diagnostic matrix = 13/13 passed
+Investigation live model/provider release matrix = not run
 ```
 
-Archive：
+Evidence archives：
 
 ```text
-data/e2e_traces/20260726T011631.187395Z-20684-4a62da6a
+previous full: data/e2e_traces/20260726T011631.187395Z-20684-4a62da6a
+natural L01-L05 plus obsolete L06 assertion:
+  data/e2e_traces/20260727T163802.147366Z-12512-71873e6b
+corrected L06:
+  data/e2e_traces/20260727T164815.081968Z-14456-e1196ad4
+natural E17/E19 plus L04:
+  data/e2e_traces/20260727T162913.553817Z-9428-c723ad92
+answer-free-prompt E16/E18:
+  data/e2e_traces/20260727T165211.554901Z-17344-3e4bc060
 ```
 
 架构依赖检查：
@@ -203,7 +245,7 @@ cycles = none
 forbidden_edges = 0
 ```
 
-## 9. 为什么还不能说“可发布”
+## 10. 为什么还不能说“可发布”
 
 Release gate 要求：
 
@@ -214,15 +256,18 @@ Release gate 要求：
 5. archive 和目标工作树都是 clean；
 6. summary exit status 为 0。
 
-当前 archive 和工作树是 dirty，所以 23/23 只能证明该工程现场主路径可执行。它不能建立 clean matching revision 的发布资格。
+旧完整 archive 已不匹配新版自然 E2E；当前定向 archive 和工作树也是 dirty。因此它们只能
+作为对应工程现场的定向证据，不能建立当前完整矩阵或 clean matching revision 发布资格。
 
 面试时应说：
 
-> 我把“测试通过”和“具备发布证据”分开。测试结果属于一个具体 archive，只有 archive、commit、工作树和 checksum 都匹配时，release gate 才派生发布资格。当前完整矩阵通过，但由于 revision dirty，门禁按设计 fail closed。
+> 我把“测试通过”和“具备发布证据”分开。测试结果属于一个具体 archive，只有 archive、
+> catalog、commit、工作树和 checksum 都匹配时，release gate 才派生发布资格。新版自然
+> 复杂场景和外部场景已定向通过，但当前完整矩阵尚未重跑，门禁按设计 fail closed。
 
-## 10. 当前 E2E 覆盖缺口
+## 11. 当前 E2E 覆盖缺口
 
-现有 E2E 分别证明了 Conversation 和固定产品 Workflow，但还缺少统一自然语言写操作链路：
+现有 release E2E 分别证明了 Conversation 和固定产品 Workflow，但还缺少统一自然语言写操作链路：
 
 ```text
 Conversation message
@@ -242,3 +287,9 @@ Conversation message
 - 对话创建订阅：确认后 Worker、Digest、Delivery 闭环；
 - scope denied 时零副作用；
 - capability unavailable 时不走替代写路径。
+
+Investigation Project 还缺少：
+
+- live structured model + live GitHub/Notion/Web/A2A 的正式 HTTP/worker E2E；
+- LT09 同输入 paired baseline，对比 Conversation 的完成率、错误副作用、模型轮次、token、延迟和恢复结果；
+- clean matching revision 的 release archive。

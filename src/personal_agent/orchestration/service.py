@@ -106,8 +106,40 @@ class AgentService:
     def capability_inventory(self):
         return self.runtime.capability_inventory()
 
-    def execute_tool(self, name: str, **kwargs: object):
-        return self.runtime.execute_tool(name, **kwargs)
+    @property
+    def investigation_project_service(self):
+        return self.runtime.investigation_project_service
+
+    def create_investigation_project(self, command):
+        return self.runtime.investigation_project_service.create(command)
+
+    def get_investigation_project(self, query):
+        return self.runtime.investigation_project_service.get(query)
+
+    def process_investigation_project(self, command):
+        return self.runtime.investigation_project_service.process(command)
+
+    def steer_investigation_project(self, command):
+        return self.runtime.investigation_project_service.steer(command)
+
+    def approve_investigation_command(self, command):
+        return self.runtime.investigation_project_service.approve(command)
+
+    def cancel_investigation_project(self, command):
+        return self.runtime.investigation_project_service.cancel(command)
+
+    def pause_investigation_project(self, command):
+        return self.runtime.investigation_project_service.pause(command)
+
+    def resume_investigation_project(self, command):
+        return self.runtime.investigation_project_service.resume(command)
+
+    def execute_tool(self, name: str, *, execution_scope, **kwargs: object):
+        return self.runtime.execute_tool(
+            name,
+            execution_scope=execution_scope,
+            **kwargs,
+        )
 
     def query_tool_audit(self, **filters):
         return self.runtime.query_tool_audit(**filters)

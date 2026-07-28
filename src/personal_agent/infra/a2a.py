@@ -50,6 +50,7 @@ class GPTResearcherA2AClient:
         report_source: str | None = None,
         tone: str | None = None,
         max_search_results: int | None = None,
+        submission_key: str | None = None,
         blocking: bool = True,
     ) -> A2AResearchResponse:
         topic = topic.strip()
@@ -64,6 +65,8 @@ class GPTResearcherA2AClient:
             metadata["max_search_results"] = max_search_results
         elif self.config.max_search_results is not None:
             metadata["max_search_results"] = self.config.max_search_results
+        if submission_key:
+            metadata["submission_key"] = submission_key
         result = self._rpc("message/send", {
             "message": {
                 "role": "user",
@@ -84,6 +87,7 @@ class GPTResearcherA2AClient:
         report_source: str | None = None,
         tone: str | None = None,
         max_search_results: int | None = None,
+        submission_key: str | None = None,
     ) -> A2AResearchResponse:
         return self.research(
             topic=topic,
@@ -91,6 +95,7 @@ class GPTResearcherA2AClient:
             report_source=report_source,
             tone=tone,
             max_search_results=max_search_results,
+            submission_key=submission_key,
             blocking=False,
         )
 

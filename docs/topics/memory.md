@@ -97,13 +97,17 @@ Ask 路径不会直接把所有 note 塞进 prompt，而是先从本地长期知
 
 ### HITL 与删除恢复
 
-高风险删除不是直接物理删除长期存储，而是软删除。`delete_note` 的两阶段确认执行（首次返回确认 payload、interrupt 暂停、确认后带 `confirmed=True` 和 `idempotency_key` 重新调度）属工具层契约，见 [tools.md 的 PendingConfirmation / IdempotencyKey 契约](tools.md#pendingconfirmation--idempotencykey-hitl-契约)；整条删除 workflow 见 [delete_knowledge Workflow](../workflow/delete-knowledge-workflow.md)。本节聚焦确认通过后对长期记忆的影响。
+高风险删除由固定的 `KnowledgeLifecycleService` 两阶段 Use Case 处理，不进入
+Conversation Tool 或 LangGraph。prepare 只保存 immutable Command；decision
+校验当前用户、scope、一个 `command_digest` 和 confirmation reference。
 
-确认删除时，Postgres 会在 `knowledge_delete_snapshots` 写入删除前快照，保存目标 note、子 chunk 和关联 review card payload；随后给 `knowledge_notes` 写入 `deleted_at / deleted_by / delete_reason / delete_snapshot_id` 等删除元数据。默认列表、检索、chunk 查询和复习卡查询都会排除 `deleted_at IS NOT NULL` 的记录。
+确认执行时，Postgres 在同一事务中更新 Workspace Knowledge Item/Claim、写
+Workspace `KnowledgeStateEvent` 和 `KnowledgeDeleteReceipt`。Receipt 保存恢复
+所需 previous states。业务恢复创建独立 Restore Command，并只从 delete
+receipt 读取恢复依据；相同 Command replay 返回同一 Receipt。
 
-删除后的业务恢复由 `restore_note` 工具负责。它必须带 `confirmed=True` 和 `idempotency_key`，并通过 ToolGateway、PolicyEngine、Postgres 幂等账本和工具审计，再从 `snapshot_id` 或 note 最近删除快照恢复 note、chunk 和 review card。
-
-用户拒绝时，Graph 会把当前步骤标记为 skipped，递归跳过依赖它的后续步骤，清空 `pending_confirmation`，并返回取消说明。
+用户拒绝时，Operation 进入 `rejected`，不能再执行。完整主链见
+[Knowledge Delete / Restore Workflow](../workflow/delete-knowledge-workflow.md)。
 
 ### 复习材料
 
@@ -188,7 +192,10 @@ assistant_assumptions、unverified_claims、open_questions 不能作为事实使
 - 给 `AgentService` 提供统一 memory 入口。
 - 明确长期知识和短期 checkpoint 的边界。
 
-当前已经完成 P0 收敛：`AgentRuntime`、`ingestion_pipeline`、`runtime_ask`、`web/api`、`delete_note` 工具、structural retriever 和编排删除解析都通过 `MemoryFacade` 访问长期记忆，不再直接操作 `PostgresMemoryStore`。外部层只表达“我要做什么记忆操作”，不直接拼装 `knowledge_notes`、`review_cards`、chunk 或 graph mapping 这些内部结构。
+普通记忆读写通过 `MemoryFacade` 访问长期记忆，不直接操作
+`PostgresMemoryStore`。知识删除/恢复是例外的独立 aggregate use case：它通过
+`KnowledgeLifecycleService` 协调 Workspace canonical facts 与 durable
+operation/receipt，避免让 Facade 成为第二写入口。
 
 这个类的设计价值在于隔离调用方：未来即使增加多个长期存储后端、权限过滤、用户画像、workspace 策略、审计或记忆压缩，也可以在 facade 层收敛。
 
@@ -248,22 +255,12 @@ assistant_assumptions、unverified_claims、open_questions 不能作为事实使
 
 `ContextPack` 保存 selected / dropped 两组 evidence，并记录 `char_budget` 与 `used_chars`。只有 selected evidence 会进入 prompt；citations 也由 selected evidence 派生，避免引用和上下文不一致。
 
-### PendingConfirmation HITL 暂停状态
+### Knowledge lifecycle confirmation
 
-`pending_confirmation` 是 checkpoint 中的高风险动作暂停状态。以删除笔记为例，payload 通常包含：
-
-```json
-{
-  "step_id": "del-3",
-  "action_type": "delete_note",
-  "note_id": "note-123",
-  "title": "DNS",
-  "summary": "DNS 是域名系统...",
-  "description": "将删除笔记「DNS」及其关联的复习卡片和图谱映射。"
-}
-```
-
-它不是长期知识，也不是业务审批表。它属于当前 thread/run 的可恢复执行现场。
+知识删除确认不是 Graph checkpoint 中的 `pending_confirmation`。它是
+`knowledge_lifecycle_operations` 上的 durable business state，包含 immutable
+Command、`awaiting_confirmation/rejected/executed` 状态和 confirmation reference。
+因此 Web 进程重启不依赖恢复某个 Conversation run，也不会产生两个确认事实源。
 
 ## Typed Long-Term Memory 与 Episodic Memory 设计
 

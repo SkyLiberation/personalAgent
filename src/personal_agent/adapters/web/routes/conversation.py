@@ -10,7 +10,10 @@ from personal_agent.application.conversation import (
 )
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
-from personal_agent.adapters.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes._shared import resolve_requested_principal
+from personal_agent.kernel.contracts.scope import (
+    SecurityScope,
+)
 
 
 class ConversationTurnRequest(BaseModel):
@@ -35,15 +38,26 @@ def register_conversation_routes(
         # is the accepted semantic input. The model alone owns answer-vs-
         # clarification semantics; this boundary only admits or rejects.
         try:
+            principal = resolve_requested_principal(
+                request,
+                settings,
+                body.user_id,
+            )
             return service.converse(
                 conversation_id=body.conversation_id,
                 messages=body.messages,
                 interaction_run_ref=body.interaction_run_ref,
-                user_id=body.user_id or resolve_user_id(request, settings),
+                principal=principal,
+                security_scope=SecurityScope(
+                    tenant_id=principal.tenant_id,
+                    workspace_id=body.conversation_id,
+                ),
                 source_platform="web",
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PermissionError:
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
         except ConversationUnavailable as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

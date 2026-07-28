@@ -15,9 +15,7 @@ from personal_agent.tools.capture_text import build_capture_text_tool
 from personal_agent.tools.capture_upload import build_capture_upload_tool
 from personal_agent.tools.capture_url import build_capture_url_tool
 from personal_agent.tools.consolidate_knowledge import build_consolidate_knowledge_tool
-from personal_agent.tools.delete_note import build_delete_note_tool
 from personal_agent.tools.enterprise_knowledge import build_enterprise_knowledge_search_tool
-from personal_agent.tools.restore_note import build_restore_note_tool
 from personal_agent.tools.graph_search import build_graph_search_tool
 from personal_agent.tools.inspect_artifact import build_inspect_artifact_tool
 from personal_agent.tools.inspect_knowledge_gaps import build_inspect_knowledge_gaps_tool
@@ -74,9 +72,7 @@ __all__ = [
     "build_capture_upload_tool",
     "build_capture_url_tool",
     "build_consolidate_knowledge_tool",
-    "build_delete_note_tool",
     "build_enterprise_knowledge_search_tool",
-    "build_restore_note_tool",
     "build_graph_search_tool",
     "build_inspect_artifact_tool",
     "build_inspect_knowledge_gaps_tool",

@@ -208,11 +208,11 @@ def test_resolution_validator_rejects_scope_expansion_and_tracks_action_identity
         operations=("search", "read"),
     )
     selected = _capability(
-        "tool:delete_note",
+        "tool:external_publish",
         kind="local_tool",
         provider="internal",
-        local_name="delete_note",
-        operations=("delete",),
+        local_name="external_publish",
+        operations=("publish",),
     ).model_copy(update={"metadata_source": "system"})
     errors = ResolutionValidator().errors(request, selected, ())
 

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
@@ -23,7 +24,15 @@ def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
         extras=governance_extras(exposure="public_agent", risk_level="low", side_effects=("read_local",), permission_scope="artifact:read", timeout_seconds=60.0, max_retries=0, rate_limit_per_minute=20),
     )
     def inspect_artifact(resource_ref: ResourceRef, user_id: str, question: str = ""):
-        result = artifact_service.inspect_upload(resource_ref=resource_ref, user_id=user_id, question=question)
+        result = artifact_service.inspect_upload(
+            resource_ref=resource_ref,
+            principal=AuthenticatedPrincipal(
+                tenant_id=resource_ref.owner_scope.tenant_id,
+                user_id=user_id,
+            ),
+            security_scope=resource_ref.owner_scope,
+            question=question,
+        )
         return tool_response(tool_success(result, evidence=result["evidence_refs"]))
 
     return inspect_artifact

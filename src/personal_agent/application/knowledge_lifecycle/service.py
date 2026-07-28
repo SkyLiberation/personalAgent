@@ -37,18 +37,12 @@ class KnowledgeLifecycleService:
             "user_id": user_id,
             "idempotency_key": normalized_key,
         })[:20]
-        authorized = {
+        command_digest = _command_digest(command_id, "delete_knowledge_item", {
             "workspace_id": workspace_id,
             "user_id": user_id,
             "target_note_id": target_note_id,
             "reason": normalized_reason,
             "policy_revision": self.POLICY_REVISION,
-        }
-        authorization_digest = _digest(authorized)
-        execution_command_digest = _digest({
-            "command_id": command_id,
-            "authorization_digest": authorization_digest,
-            "operation": "delete_knowledge_item",
         })
         return self._store.prepare_delete(KnowledgeDeleteCommand(
             command_id=command_id,
@@ -58,8 +52,7 @@ class KnowledgeLifecycleService:
             target_note_id=target_note_id,
             reason=normalized_reason,
             policy_revision=self.POLICY_REVISION,
-            authorization_digest=authorization_digest,
-            execution_command_digest=execution_command_digest,
+            command_digest=command_digest,
         ))
 
     def decide_delete(
@@ -68,8 +61,7 @@ class KnowledgeLifecycleService:
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        authorization_digest: str,
-        execution_command_digest: str,
+        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeDeleteOperationView:
         if decision == "confirm" and not confirmation_ref.strip():
@@ -78,8 +70,7 @@ class KnowledgeLifecycleService:
             command_id=command_id,
             user_id=user_id,
             decision=decision,
-            authorization_digest=authorization_digest,
-            execution_command_digest=execution_command_digest,
+            command_digest=command_digest,
             confirmation_ref=confirmation_ref.strip(),
         )
 
@@ -108,18 +99,12 @@ class KnowledgeLifecycleService:
             "user_id": user_id,
             "idempotency_key": normalized_key,
         })[:20]
-        authorized = {
+        command_digest = _command_digest(command_id, "restore_knowledge_item", {
             "workspace_id": workspace_id,
             "user_id": user_id,
             "delete_command_id": delete_command_id,
             "reason": normalized_reason,
             "policy_revision": self.RESTORE_POLICY_REVISION,
-        }
-        authorization_digest = _digest(authorized)
-        execution_command_digest = _digest({
-            "command_id": command_id,
-            "authorization_digest": authorization_digest,
-            "operation": "restore_knowledge_item",
         })
         return self._store.prepare_restore(KnowledgeRestoreCommand(
             command_id=command_id,
@@ -129,8 +114,7 @@ class KnowledgeLifecycleService:
             delete_command_id=delete_command_id,
             reason=normalized_reason,
             policy_revision=self.RESTORE_POLICY_REVISION,
-            authorization_digest=authorization_digest,
-            execution_command_digest=execution_command_digest,
+            command_digest=command_digest,
         ))
 
     def decide_restore(
@@ -139,8 +123,7 @@ class KnowledgeLifecycleService:
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        authorization_digest: str,
-        execution_command_digest: str,
+        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeRestoreOperationView:
         if decision == "confirm" and not confirmation_ref.strip():
@@ -149,8 +132,7 @@ class KnowledgeLifecycleService:
             command_id=command_id,
             user_id=user_id,
             decision=decision,
-            authorization_digest=authorization_digest,
-            execution_command_digest=execution_command_digest,
+            command_digest=command_digest,
             confirmation_ref=confirmation_ref.strip(),
         )
 
@@ -166,6 +148,18 @@ class KnowledgeLifecycleService:
 def _digest(payload: dict[str, str]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _command_digest(
+    command_id: str,
+    operation: str,
+    canonical_payload: dict[str, str],
+) -> str:
+    return _digest({
+        "command_id": command_id,
+        "operation": operation,
+        **canonical_payload,
+    })
 
 
 __all__ = ["KnowledgeLifecycleService"]

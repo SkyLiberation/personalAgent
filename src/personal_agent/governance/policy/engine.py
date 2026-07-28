@@ -1,7 +1,7 @@
 """Unified policy engine.
 
 Consolidates the governance decisions that used to be scattered across the tool
-gateway (``_validate_policy``), the ``delete_note`` tool (hardcoded confirmation)
+gateway (``_validate_policy``), individual tools (hardcoded confirmation)
 and the memory facade (ad-hoc ``user_id`` checks) into one evaluator.
 
 Rules are code-internal by default. A small set of programmable allow/deny

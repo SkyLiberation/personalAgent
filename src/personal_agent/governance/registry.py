@@ -12,6 +12,7 @@ from personal_agent.capabilities.contracts.interaction import (
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance, tool_schema
 from personal_agent.governance.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
+from personal_agent.kernel.contracts.scope import ExecutionScope
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,13 @@ class ToolExecutor:
     def graph_node(self):
         return self._gateway.invoke_graph
 
-    def invoke_direct(self, name: str, **kwargs: Any) -> dict[str, Any]:
+    def invoke_direct(
+        self,
+        name: str,
+        *,
+        execution_scope: ExecutionScope,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         if name not in self:
             return tool_failure(f"未找到工具：{name}").model_dump(mode="json")
         tool_call_id = f"direct-{name}"
@@ -110,11 +117,9 @@ class ToolExecutor:
             name,
             kwargs,
             ToolGatewayContext(
+                execution_scope=execution_scope,
                 execution_mode="direct",
                 tool_call_id=tool_call_id,
-                run_id=kwargs.get("run_id"),
-                user_id=kwargs.get("user_id"),
-                session_id=kwargs.get("session_id"),
                 source_platform=kwargs.get("source_platform"),
             ),
         )
@@ -124,10 +129,8 @@ class ToolExecutor:
         name: str,
         arguments: dict[str, Any],
         *,
-        action_id: str,
-        run_id: str,
-        user_id: str,
-        conversation_id: str,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
         source_platform: str,
     ) -> dict[str, Any]:
         """Execute an admitted ordinary-interaction action through ToolGateway."""
@@ -135,12 +138,33 @@ class ToolExecutor:
             name,
             arguments,
             ToolGatewayContext(
+                execution_scope=execution_scope,
                 execution_mode="direct",
-                tool_call_id=action_id,
-                run_id=run_id,
-                user_id=user_id,
-                session_id=conversation_id,
+                tool_call_id=tool_call_id,
                 source_platform=source_platform,
+            ),
+        )
+
+    def invoke_project(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+    ) -> dict[str, Any]:
+        """Execute an admitted Project proposal through the canonical gateway."""
+
+        if name not in self:
+            return tool_failure(f"未找到工具：{name}").model_dump(mode="json")
+        return self._gateway.invoke(
+            name,
+            arguments,
+            ToolGatewayContext(
+                execution_scope=execution_scope,
+                execution_mode="deterministic",
+                tool_call_id=tool_call_id,
+                source_platform="investigation_project",
             ),
         )
 

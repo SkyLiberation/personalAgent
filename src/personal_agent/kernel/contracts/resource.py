@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from personal_agent.kernel.contracts.scope import SecurityScope
+
 
 class ResourceRef(BaseModel):
     """Application-owned identity passed across capability boundaries."""
@@ -15,8 +17,7 @@ class ResourceRef(BaseModel):
 
     resource_id: str = Field(min_length=1)
     resource_type: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1)
-    user_id: str = Field(min_length=1)
+    owner_scope: SecurityScope
     revision: int = Field(default=1, ge=1)
 
 
@@ -29,6 +30,17 @@ class ResourceEvidenceRef(BaseModel):
     resource_ref: ResourceRef
     locator: str = Field(min_length=1)
     content_hash: str = Field(min_length=1)
+
+
+class GeneratedArtifactContent(BaseModel):
+    """Typed content materialized through the canonical Artifact owner."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    content: str
+    content_digest: str = Field(min_length=1)
+    evidence_refs: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
 
 
 MUTATING_OPERATIONS = frozenset({"create", "update", "delete", "ingest", "repair"})
@@ -124,7 +136,7 @@ def match_resource_contract(
 
 __all__ = [
     "MUTATING_OPERATIONS", "NON_WRITING_SIDE_EFFECT_CLASSES", "OperationScope",
-    "ProviderConstraint", "ResourceMatchResult",
+    "GeneratedArtifactContent", "ProviderConstraint", "ResourceMatchResult",
     "ResourceEvidenceRef", "ResourceRef", "ResourceSelector", "match_resource_contract",
     "mutating_operations", "side_effect_requires_write_set",
 ]

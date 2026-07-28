@@ -18,14 +18,15 @@ ROOT_PKG = "personal_agent"
 # into every row: adding an edge requires an explicit architecture decision.
 ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "kernel": frozenset(),
+    "domain": frozenset({"kernel"}),
     "capabilities": frozenset({"kernel"}),
     "execution": frozenset({"capabilities", "kernel"}),
     "skills": frozenset({"kernel"}),
     "runtime": frozenset({"capabilities", "execution", "kernel", "skills"}),
     "context": frozenset({"kernel", "runtime"}),
     "memory": frozenset({"kernel"}),
-    "application": frozenset({"capabilities", "kernel", "memory"}),
-    "infra": frozenset({"application", "capabilities", "kernel", "runtime"}),
+    "application": frozenset({"capabilities", "domain", "kernel", "memory"}),
+    "infra": frozenset({"application", "capabilities", "domain", "kernel", "runtime"}),
     "tools": frozenset({"application", "capabilities", "infra", "kernel", "memory"}),
     "governance": frozenset({"capabilities", "kernel", "runtime", "tools"}),
     "planning": frozenset({"capabilities", "execution", "governance", "kernel", "runtime", "tools"}),
@@ -33,9 +34,11 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "verification": frozenset({"capabilities", "governance", "runtime"}),
     "orchestration": frozenset({
         "agents", "application", "capabilities", "context", "execution", "governance",
-        "infra", "kernel", "memory", "planning", "runtime", "tools", "verification",
+        "domain", "infra", "kernel", "memory", "planning", "runtime", "tools", "verification",
     }),
-    "adapters": frozenset({"application", "infra", "kernel", "orchestration", "tools"}),
+    "adapters": frozenset({
+        "application", "domain", "infra", "kernel", "orchestration", "tools"
+    }),
 }
 
 

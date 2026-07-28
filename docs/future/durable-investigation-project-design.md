@@ -1,9 +1,9 @@
-# Durable Investigation Project 长任务能力目标设计
+# Durable Investigation Project 长任务能力交付设计
 
-> 状态：目标设计，尚未实现。本文不描述当前生产能力，也不构成“已验证”声明。
-> 当前事实由 [`core-architecture-current-state.md`](../summary/core-architecture-current-state.md)
-> 和 [`phase0-capability-release-baseline.md`](../summary/phase0-capability-release-baseline.md)
-> 所有。实施完成后将事实迁入 summary/workflow/API/运维文档并删除本文。
+> 状态：生产实现已装配，发布证据尚未闭环。当前事实由
+> [`durable-investigation-project-current-state.md`](../summary/durable-investigation-project-current-state.md)
+> 所有；本文只保留目标、尚未满足的发布门禁和删除条件。LT01–LT13 当前是使用 scripted
+> semantic ports/frozen providers 的诊断 E2E，不能证明真实模型和真实 Provider 可上线。
 
 ## 1. Goal
 
@@ -39,19 +39,20 @@ Agent run 的调查项目，例如：
 第一版模型、状态和存储属于 `InvestigationProject` 领域。没有第二个真实业务及同构 E2E
 前，不抽取通用 `DurableTask` framework。
 
-## 2. Current Incorrect Behavior and Simplest Baseline
+## 2. Pre-change Baseline and Proven Gap
 
 当前最简单 baseline 有三类：
 
 | 任务形态 | 当前路径 | 已知边界 |
 | --- | --- | --- |
-| 短、动态 | Conversation ReAct loop | 受单次 Interaction 预算约束；WorkingPlan 不驱动 durable 调度 |
+| 短、动态 | Conversation ReAct loop | 受单次 Interaction 预算约束；没有 durable SubGoal/交付契约 |
 | 长、固定拓扑 | ResearchRun、Scheduled Intelligence、Delete/Restore | 领域 Workflow 和状态机可以预定义 |
-| 单次外部委托 | AgentGateway + ChildAgentRun | bounded sub-goal；当前 store 和父任务依赖不是 durable Project |
+| 单次外部委托 | AgentGateway + ChildAgentRun | bounded sub-goal；旧实现先提交 Provider、后写进程内 run |
 
-`WorkingPlanSnapshot` 只回注 Prompt 和 trace，不计算 ready set、dispatch、progress、coverage 或
-Completion。当前 Conversation 崩溃恢复只重建已提交 Interaction facts，不保存 durable
-SubGoal 依赖和交付义务。
+旧 `WorkingPlanSnapshot` 只回注 Prompt 和 trace，不计算 ready set、dispatch、progress、
+coverage 或 Completion，现已从 Conversation contract 删除。Conversation 崩溃恢复只重建
+已提交 Interaction facts，仍不保存 durable SubGoal 依赖和交付义务，这是刻意保留的短任务
+边界。
 
 因此当前路径不能机械保证：
 
@@ -68,27 +69,25 @@ SubGoal 依赖和交付义务。
 
 本文和外部评估都不能替代已执行证据。
 
-## 3. Required Production Capabilities and Missing-capability Delivery
+## 3. Required Production Capabilities and Delivery Status
 
 ### 3.1 能力基线
 
 下表区分“已有基础”“需扩展”和“缺失”。“已有”只表示生产代码存在；发布可信度仍由同
 revision E2E 决定。
 
-| 所需能力 | 当前基础 | 判定 | 本设计中的落地 |
+| 所需能力 | 当前 owner | 实现状态 | 发布证据状态 |
 | --- | --- | --- | --- |
-| structured semantic decision | `StructuredModelClient` | 已有基础 | 新增 Project Planner、Execution Proposer、Verifier typed schema 与 Golden Set |
-| GitHub/Notion 读取 | MCP Host、ToolGateway、可选 profile | 已有基础 | 同一 Project capability snapshot 中联合装配并做 scope/availability admission |
-| 网页研究 | Web search/Research、GPT Researcher A2A | 已有基础 | 作为 Tool 或 registered Agent profile 使用，不创建测试专用 Provider |
-| capability resolution | Registry/Resolver、EffectiveCapabilities | 需接入 | Project 使用真实 inventory；Plan 不直接获得授权 |
-| Tool 执行 | ToolGateway policy/idempotency/audit | 需扩展 scope | 使用 typed Project scope、accepted execution proposal 和 execution ref |
-| child lifecycle | AgentGateway submit/poll/cancel | 能力不足 | 增加 durable run store、幂等 submit、reconcile、callback admission 和 late disposition |
-| governed external delegation | A2A data egress +领域专用 delete/restore approval | 缺失 | 新增 `InvestigationExternalDelegationCommand` 及 Project approval use case |
-| generated report Artifact | upload-oriented ArtifactService | 缺失 | 扩展唯一 Artifact owner，增加 scoped generated Artifact 写入口 |
-| project journal/scheduler | worker queue、durable run/journal primitives | 缺失 | 新增 Project aggregate/store/scheduler；不恢复旧通用 Task 主链 |
-| tenant/workspace/project scope | user/session 为主的现有 context | 能力不足 | 引入 typed `ExecutionScope`，非兼容迁移 Gateway、ResourceRef、Credential 和 Store |
-| semantic outcome verification | structured model、局部 verifier contracts | 需领域化 | 新增 Project SubGoal/FinalReport assessment 与 deterministic Completion Gate |
-| budget recovery | Interaction usage、worker facts | 缺失 | Project event journal 拥有 reservation/usage facts，projection 重建 ledger |
+| structured semantic decision | Project model ports | Planner、Execution Proposer、Verifier、Synthesis 已装配 | scripted ports 已覆盖；live model LT 待补 |
+| GitHub/Notion/网页读取 | Capability inventory + ToolGateway | snapshot、availability admission、typed scope 已接入 | 组合 live Provider LT 待补 |
+| Tool 执行 | ToolGateway | `ExecutionScope`、policy、idempotency、audit 主路径已接入 | Tool 单测和诊断 LT 已通过 |
+| child lifecycle | AgentGateway | PostgreSQL run、stable submission key、reserve/commit/reconcile 已接入 | 故障注入 contract 已通过；live A2A crash LT 待补 |
+| governed external delegation | Project Aggregate | immutable Command、digest approval、disclosure、late quarantine 已接入 | 诊断 LT02/LT05/LT07 已通过 |
+| generated report Artifact | ArtifactService | scoped generated write/read、producer key 幂等已接入 | 诊断 LT01/LT13 已通过 |
+| project journal/scheduler | Project Aggregate + worker queue | append-only journal、CAS、ready/join、恢复扫描已接入 | LT01–LT13 诊断矩阵通过 |
+| tenant/workspace/project scope | Scope contracts | Gateway、ResourceRef、Artifact、Store 已非兼容迁移 | 隔离诊断和低层测试已通过 |
+| semantic verification/completion | Project Verifier + Completion Gate | Execution/Evidence/Verification/Completion 已分离 | live semantic quality LT 待补 |
+| budget recovery | Project journal | category reservation/charge/release 可重建 | 诊断 LT06 已通过 |
 
 禁止把以下内容当作能力已存在的证据：
 
@@ -150,18 +149,20 @@ Completion 决策。
 实现代码前先登记并创建测试；可以先失败，但不得 skip：
 
 ```powershell
-# 开发期目标用例
-uv run pytest -q evals/e2e_quality/test_durable_investigation_project.py --e2e-scope=release
-uv run pytest -q evals/e2e_quality/test_durable_investigation_recovery.py --e2e-scope=release
+# 当前可执行的诊断矩阵
+uv run pytest -q evals/e2e_quality/test_durable_investigation_project.py --e2e-scope=diagnostic
+uv run pytest -q evals/e2e_quality/test_durable_investigation_recovery.py --e2e-scope=diagnostic
 
-# 发布矩阵
+# 现有产品发布矩阵；在新增 live Investigation HTTP/worker 用例前不包含 LT 发布证明
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
 uv run pytest -q evals/e2e_quality --e2e-scope=release --e2e-require-complete-matrix -s
 ```
 
-每个 LT 节点必须进入 `evidence_catalog.py`；release gate 的 required product evidence set 同步
-加入 LT01–LT13。未登记节点、skip、dirty/mismatched revision 或缺 trace checksum 均不能产生
-发布声明。
+LT01–LT13 已作为 `DURABLE_INVESTIGATION + IN_PROCESS_SERVICE` 进入
+`evidence_catalog.py`，只能形成诊断证据。发布前必须另建真实 HTTP/worker 进程、真实模型和
+真实 Provider 的 product evidence nodes，并把它们加入 release gate required set；不得把
+现有 LT 节点改标签冒充发布用例。未登记节点、skip、dirty/mismatched revision 或缺 trace
+checksum 均不能产生发布声明。
 
 Release E2E 从正式 HTTP 入口进入独立 Web/worker 进程，使用真实 PostgreSQL、真实领域模型、
 真实 structured model；LT01 必须使用 Composition Root 实际装配的 GitHub、Notion 和 A2A
@@ -845,7 +846,7 @@ passed。Gate 不用关键词拼报告，不补内容。部分报告必须显式
 | 查询 | `GET /api/investigation-projects/{id}` | scoped projection、Artifact refs、逐 SubGoal waiting reasons |
 | steering | `POST .../{id}/steering` | 保存 SteeringCommand |
 | 审批 | `POST .../{id}/commands/{command_id}/decision` | 绑定 Authorization/Command digest |
-| 暂停/继续 | `POST .../{id}/pause`、`resume` | 合法状态迁移 |
+| 暂停/继续 | `POST .../{id}/pause`、`resume` | 只允许恢复 `user_paused`；系统暂停必须解决 typed condition |
 | 取消 | `POST .../{id}/cancel` | cancel event + child orchestration |
 
 CLI/UI 调用相同 Application use case。Trace 至少记录 scope、project/event sequence、plan 和

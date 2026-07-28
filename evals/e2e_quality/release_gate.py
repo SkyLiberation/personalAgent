@@ -179,7 +179,7 @@ LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
     LoopCapabilityDefinition(capability_id="canonical_fact_recovery", required_evidence_id="L03"),
     LoopCapabilityDefinition(capability_id="manager_specialists", required_evidence_id="L04"),
     LoopCapabilityDefinition(capability_id="budget_fail_closed", required_evidence_id="L05"),
-    LoopCapabilityDefinition(capability_id="evaluator_optimizer", required_evidence_id="L06"),
+    LoopCapabilityDefinition(capability_id="receipt_bound_semantic_revision", required_evidence_id="L06"),
 )
 
 REQUIRED_NATIVE_EVIDENCE_IDS = tuple(f"E{index:02d}" for index in range(1, 14))

@@ -30,8 +30,7 @@ class KnowledgeLifecycleStore(Protocol):
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        authorization_digest: str,
-        execution_command_digest: str,
+        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeDeleteOperationView: ...
 
@@ -53,8 +52,7 @@ class KnowledgeLifecycleStore(Protocol):
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        authorization_digest: str,
-        execution_command_digest: str,
+        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeRestoreOperationView: ...
 

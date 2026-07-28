@@ -27,6 +27,10 @@ from personal_agent.infra.storage.postgres_procedure_definition_store import Pos
 from personal_agent.infra.storage.postgres_agent_trace_store import PostgresAgentTraceStore
 from personal_agent.infra.storage.postgres_control_plane_store import PostgresControlPlaneStore
 from personal_agent.infra.storage.postgres_execution_replay_store import PostgresExecutionReplayStore
+from personal_agent.infra.storage.postgres_investigation_project import (
+    PostgresInvestigationProjectStore,
+)
+from personal_agent.infra.storage.postgres_agent_run_store import PostgresAgentRunStore
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from personal_agent.governance import ToolExecutor
 from personal_agent.tools import (
@@ -79,6 +83,21 @@ from personal_agent.capabilities.inventory import (
     A2AAssemblyDefinition,
 )
 from personal_agent.application.artifacts import ArtifactService
+from personal_agent.application.investigation_project import (
+    InvestigationProjectService,
+    StructuredExecutionProposer,
+    StructuredInvestigationPlanner,
+    StructuredProjectSynthesis,
+    StructuredProjectVerifier,
+    UnavailableInvestigationModelPorts,
+)
+from personal_agent.orchestration.investigation_project_adapters import (
+    DurableProjectAgentAdapter,
+    PolicyEngineDelegationAdapter,
+    RuntimeCapabilitySnapshot,
+    ScopeBoundDisclosureManifest,
+    ToolExecutorProjectAdapter,
+)
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.application.conversation import (
     ConversationService,
@@ -299,13 +318,21 @@ class AgentRuntime:
             idempotency_store=self.tool_governance_store,
             policy_engine=self._policy_engine,
         )
-        self._agent_gateway = AgentGateway(policy_engine=self._policy_engine)
+        self.agent_run_store = PostgresAgentRunStore(settings.postgres_url)
+        self._agent_gateway = AgentGateway(
+            policy_engine=self._policy_engine,
+            store=self.agent_run_store,
+        )
         if self.settings.gpt_researcher_a2a.enabled:
-            self._agent_gateway.register(GPTResearcherA2AAdapter(self.settings.gpt_researcher_a2a))
+            self._agent_gateway.register(GPTResearcherA2AAdapter(
+                self.settings.gpt_researcher_a2a,
+                self.artifact_service,
+            ))
         self._conversation_service = ConversationService(
             self._model_client,
             tool_port=self._tool_executor,
             agent_port=self._agent_gateway,
+            artifact_port=self.artifact_service,
             budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
             journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
         )
@@ -369,6 +396,39 @@ class AgentRuntime:
         self._tool_executor.register(build_research_synthesize_digest_tool(self._research_service))
         self._tool_executor.register(build_research_verify_digest_tool(self._research_service))
         self._register_tools()
+        if self._structured_client is not None:
+            investigation_planner = StructuredInvestigationPlanner(self._structured_client)
+            investigation_execution_proposer = StructuredExecutionProposer(
+                self._structured_client
+            )
+            investigation_verifier = StructuredProjectVerifier(self._structured_client)
+            investigation_synthesis = StructuredProjectSynthesis(self._structured_client)
+        else:
+            unavailable_investigation_model = UnavailableInvestigationModelPorts()
+            investigation_planner = unavailable_investigation_model
+            investigation_execution_proposer = unavailable_investigation_model
+            investigation_verifier = unavailable_investigation_model
+            investigation_synthesis = unavailable_investigation_model
+        self.investigation_project_store = PostgresInvestigationProjectStore(
+            settings.postgres_url
+        )
+        self.investigation_project_service = InvestigationProjectService(
+            store=self.investigation_project_store,
+            queue=self.worker_queue_store,
+            capabilities=RuntimeCapabilitySnapshot(self.capability_inventory),
+            planner=investigation_planner,
+            execution_proposer=investigation_execution_proposer,
+            tool_port=ToolExecutorProjectAdapter(self._tool_executor),
+            agent_port=DurableProjectAgentAdapter(self._agent_gateway),
+            synthesis_port=investigation_synthesis,
+            verifier=investigation_verifier,
+            artifact_writer=self.artifact_service,
+            delegation_policy=PolicyEngineDelegationAdapter(
+                self._policy_engine,
+                self._agent_gateway.profile,
+            ),
+            disclosure_manifest=ScopeBoundDisclosureManifest(),
+        )
         self._sync_procedure_definitions()
         self._procedure_runtime = ProcedureRuntime(
             ProcedureMaterializer(PROCEDURE_CATALOG),
@@ -532,8 +592,12 @@ class AgentRuntime:
             ),
         )
 
-    def execute_tool(self, name: str, **kwargs: object):
-        return self._tool_executor.invoke_direct(name, **kwargs)
+    def execute_tool(self, name: str, *, execution_scope, **kwargs: object):
+        return self._tool_executor.invoke_direct(
+            name,
+            execution_scope=execution_scope,
+            **kwargs,
+        )
 
     # ---- tool audit query API (P1) ----
 

@@ -10,6 +10,10 @@ import lark_oapi as lark
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.application.conversation import ConversationMessage
+from personal_agent.kernel.contracts.scope import (
+    AuthenticatedPrincipal,
+    SecurityScope,
+)
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.application.review import ReviewFeedbackUseCase
 from personal_agent.application.research import ResearchFeedback
@@ -85,7 +89,14 @@ class FeishuService(FeishuClientMixin):
         conversation_result = self.agent_service.converse(
             conversation_id=incoming_message.session_id,
             messages=messages,
-            user_id=incoming_message.user_id,
+            principal=AuthenticatedPrincipal(
+                tenant_id="feishu",
+                user_id=incoming_message.user_id,
+            ),
+            security_scope=SecurityScope(
+                tenant_id="feishu",
+                workspace_id=incoming_message.session_id,
+            ),
             source_platform="feishu",
         )
         reply_text = conversation_result.message.content
@@ -213,8 +224,14 @@ class FeishuService(FeishuClientMixin):
             content_type=None,
             file_bytes=file_bytes,
             uploads_dir=upload_dir,
-            user_id=incoming_message.user_id,
-            workspace_id=incoming_message.user_id,
+            principal=AuthenticatedPrincipal(
+                tenant_id="feishu",
+                user_id=incoming_message.user_id,
+            ),
+            security_scope=SecurityScope(
+                tenant_id="feishu",
+                workspace_id=incoming_message.user_id,
+            ),
         )
         metadata["artifact_id"] = artifact.resource_id
         logger.info(

@@ -1,482 +1,408 @@
 # Knowledge Agent 工程开发规范
-> 本文档是知识 Agent 项目的强制工程规范，适用于业务设计、架构设计、文档规划、开发、重构、缺陷修复、测试、评审和上线验收。
-> “必须/禁止”属于合并门禁；确需例外时，必须通过 ADR 记录原因、风险、验证方案、退出条件和移除日期。
+
+> 本文档是知识 Agent 项目的唯一强制工程规范，适用于业务与架构设计、文档规划、开发、重构、缺陷修复、测试、评审和上线验收。
+> “必须/禁止”属于合并门禁；确需例外时，必须通过 ADR 记录原因、风险、验证、退出条件和移除日期。
 
 ---
+
 ## 1. 最高铁律
+
 ### 1.1 E2E 可执行验证
-**任何落地设计，如果没有配套可执行、可重复、可自动断言用户结果的 E2E 用例，一律视为未经验证。**
-因此：
-- 编码前必须先定义 E2E 验收场景；
-- E2E 可以先失败，但不得缺失；
-- 未执行测试时，禁止声称“已验证”“已修复”或“可上线”；
-- 单元测试、对象存在、状态为 success、数据库新增记录，均不能替代 E2E；
-- E2E 必须同时验证正确结果发生，以及错误结果没有发生。
+
+**任何优化必须先由当前最简单生产路径的 baseline E2E 证明当前 Agent 无法满足同一用户目标；没有配套可执行、可重复、可自动断言用户结果的 E2E，任何落地设计都视为未经验证。**
+
+- 优化设计前必须从正式入口以用户自然表达实际执行 baseline，自动断言缺失的用户结果或发生的关键错误结果，并保存 trace、event、receipt 或 report 证据。
+- baseline 未失败、失败源于测试/环境缺陷、或现有路径已满足目标时，必须停止优化；代码不可达、架构推断、竞品对比、文档或低层测试不能替代该证据。
+- 只有 baseline 证明不足后才能定义目标 E2E 和最小改动；目标 E2E 可以先失败，但编码前不得缺失。
+- 未实际执行测试时，禁止声称“已验证”“已修复”或“可上线”。
+- Unit 通过、对象存在、状态为 success、数据库新增记录都不能替代 E2E。
+- E2E 必须由目标用户的真实目标和自然表达驱动，同时断言正确结果发生，以及关键错误结果没有发生。
+
 合格 E2E 必须：
+
 1. 从正式 API、CLI、消息入口或 Application Use Case 进入；
 2. 经过生产主路径，而非测试专用旁路；
 3. 使用真实领域模型、状态迁移、编排和持久化协议；
 4. 自动断言用户可观察结果和关键反事实；
-5. 可通过明确命令在本地或 CI 重复执行；
-6. 失败时能通过 trace、event、receipt 或 report 定位阶段。
-允许 Fake/Stub 的范围仅限不可控第三方、付费模型、危险副作用和故障注入。Fake 必须实现生产 Port 并有 contract test；不得创造生产中不存在的能力，也不得替系统作出本应由模型、Policy 或 Admission 作出的决定。
+5. 能以明确命令在本地或 CI 重复执行；
+6. 失败时能由 trace、event、receipt 或 report 定位阶段。
+
+E2E 的输入必须符合目标用户实际掌握的信息。除非 Tool、Agent、Workflow、Model、内部 ID
+或执行顺序本身就是该用户可见的产品契约，禁止在 Given/When、Prompt 或测试指令中指定它们，
+替 Agent 完成能力选择、规划或结束判断。生产路径可以在执行后通过 Trace/Receipt 断言，不能
+通过向用户输入泄漏预期实现来制造通过。需要精确指定 Tool、步骤、并发、Checkpoint 或内部
+协议的场景属于 Integration/Runtime Conformance Test，不能单独作为用户 E2E 或产品能力证据。
+
+Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和故障注入。Fake 必须实现生产 Port 并有 contract test；不得创造生产中不存在的能力，也不得替模型、Policy、Admission 或 Verifier 作决定。
 
 ### 1.2 单一事实与单一写入口
-每个业务事实必须只有：
-- 一个权威 owner；
-- 一个 canonical model；
-- 一个合法写入口；
-- 一套生命周期、版本和失效规则。
-无法说明字段的 owner、来源、写入者、失效条件和重建方式时，禁止直接编码。
+
+每个业务事实必须只有一个权威 owner、一个 canonical model、一个合法写入口，以及一套生命周期、版本和失效规则。无法说明字段的 owner、来源、写入者、失效条件和重建方式时，禁止编码。
+
 禁止：
-- 新旧字段双写；
-- singular/plural 双轨状态；
-- 多个 Model 镜像相同业务字段；
+
+- 新旧字段双写或 singular/plural 双轨状态；
+- 多个 Model 镜像同一业务事实；
 - 用 validator、listener 或 converter 同步副本；
 - 为读取方便新增可写镜像字段；
-- 将可确定性重建的派生值持久化。
+- 持久化可由 canonical facts 确定性重建的派生值。
 
 ### 1.3 决策所有权
-- **模型或外部权威**负责开放世界中的语义判断；
-- **确定性代码**负责封闭世界中的权限、唯一推导、状态迁移和不变量；
-- **执行系统**负责产生执行事实；
-- **Verifier**负责判断 Goal 是否语义满足；
-- **Completion Gate**负责判断完成所需证据是否齐全。
-任何新增分支必须明确属于：Semantic Decision、Deterministic Derivation、Policy Decision、Environment Fact、Execution Fact、Semantic Verification 或 Completion Decision。
 
-### 1.4 删除优先
-重构默认允许修改全部调用方。能替换旧结构时，禁止新增 alias、fallback、双写、永久 deprecated 字段和无期限兼容层。
-兼容仅允许用于真实外部契约，并必须包含：适用范围、结束日期、迁移计划、观测指标和删除条件。
+- **模型或外部权威**：开放世界语义判断；
+- **确定性代码**：权限、唯一推导、状态迁移和不变量；
+- **执行系统**：产生执行事实；
+- **Verifier**：判断 Goal 是否语义满足；
+- **Completion Gate**：判断 required result contract 的证据是否齐全。
 
-### 1.5 业务、能力与证据先于架构复杂度
-**禁止为了对齐“优秀 Agent”、论文、框架范式或未来可能性而先增加抽象、状态、Planner、Workflow、Agent、缓存、持久化或治理层。**
+新增分支必须归属于 Semantic Decision、Deterministic Derivation、Policy Decision、Environment Fact、Execution Fact、Semantic Verification 或 Completion Decision 之一。
 
-设计新产品能力或 E2E 前，必须逐项盘点其依赖的模型、Tool、Service、Agent、Provider、Gateway、权限、持久化、恢复和验证能力，并用生产代码与已执行证据区分“已有、需扩展、不存在”。依赖能力不存在时，必须在同一设计中定义其业务 owner、canonical contract、唯一入口、生产消费者、实现阶段、失败语义和 E2E/contract test；否则禁止进入实现。接口、DTO、配置、Fake、单项能力存在或未来阶段名称都不能证明能力已落地；组合能力必须在同一正式生产旅程中验证，禁止把多个独立用例的结果拼成组合能力证据。
+### 1.4 删除优先与兼容边界
 
-任何新增架构机制必须依次证明：
-1. 存在明确的业务扩展、当前用户错误行为或可量化工程约束；
-2. 已完成所需生产能力盘点，缺失能力具有上述完整落地设计；
-3. 已定义从正式入口验证该需求的 E2E，以及不应发生的反事实；
-4. 现有最简单生产路径已作为 baseline 被验证，并有证据表明它不能满足需求；
-5. 新机制会被生产代码实际消费，能够改变用户结果、风险、恢复、成本或延迟，而不只是出现在 Model、Trace、文档或测试中；
-6. 新增复杂度小于它消除的复杂度，旧路径和无效中间态会同步删除。
+重构默认迁移全部调用方。能替换旧结构时，禁止新增 alias、fallback、双写、永久 deprecated 字段或无期限兼容层。
 
-外部优秀 Agent 的设计只能作为候选方案，不能作为需求来源。必须先回答“扩展什么业务、用户结果如何变化、E2E 如何失败和通过”，再决定是否引入其设计。无法提供上述证据时，默认不引入；已经存在但无法证明价值的机制，默认删除或降为非强制、非权威的可选投影。
+兼容仅用于真实外部契约，并必须记录适用范围、结束日期、迁移计划、观测指标和删除条件。
+
+### 1.5 禁止无证据优化、过度设计与能力空转
+
+**禁止为了对齐“优秀 Agent”、论文、框架范式、形式完整或未来可能性，提前增加抽象、Model、状态、digest、表、层、Planner、Workflow、Agent、缓存、持久化或治理机制。**
+
+出现以下任一情况即视为过度设计，禁止合并：
+
+- 没有明确业务扩展、当前用户错误或可量化工程约束；
+- 不满足 1.1：没有同输入 baseline E2E 的已执行失败证据，或失败根因不是当前 Agent 的产品行为；
+- 新机制只有测试、Trace、Prompt、文档或展示消费者，不改变生产行为；
+- 一个职责被拆成多个 Model、digest、表或层，却没有独立 owner、信任边界、生命周期、事务边界或保留策略；
+- 可确定性派生的状态被持久化，或固定流程被包装成通用 Planner/Task/Event 系统；
+- 只证明对象存在、字段生成、流程 fail closed，未证明用户结果、风险、恢复、成本或延迟得到改善；
+- 新增复杂度不小于被删除复杂度，或旧路径、无消费者投影和临时状态继续保留。
+
+任何新增架构机制必须先提交一份 `Complexity Justification`，并依次证明：
+
+1. 业务场景、目标用户结果和关键反事实；
+2. 最简单生产 baseline E2E、同输入执行结果、失败根因及不足；
+3. 所需生产能力盘点，以及“已有、需扩展、不存在”的代码与已执行证据；
+4. 目标 E2E、生产消费者和可观测收益；
+5. 为什么一个 Model/状态/digest/表/流程不够，拆分后的独立职责是什么；
+6. 替代方案、复杂度预算、同步删除项和退出条件。
+
+最小充分设计是默认选择：
+
+- 一个事实、状态、digest、表或流程能满足当前已证明需求时，禁止拆分；
+- 只有一个实现且没有外部边界、测试替换需求或近期第二变化来源时，禁止创建 Interface/Factory/Registry；
+- Command、Event、Receipt、Projection、View 按各自真实职责选择，禁止为“配套完整”成套创建；
+- 外部优秀 Agent 的内部结构只能作为候选方案，不能作为需求来源；
+- 已存在但无法补齐上述证据的机制，必须删除、合并，或降为非权威可选投影。
+
+设计新能力或 E2E 前，必须盘点其依赖的模型、Tool、Service、Agent、Provider、Gateway、权限、持久化、恢复和验证能力。依赖能力不存在时，必须在同一设计中定义其业务 owner、canonical contract、唯一入口、生产消费者、实现阶段、失败语义和 E2E/contract test；否则禁止进入实现。接口、DTO、配置、Fake、单项能力存在或未来阶段名称都不能证明能力已落地，多个独立用例也不能拼成组合能力证据。
 
 ---
-## 2. 架构目标与依赖方向
-系统必须同时满足：
-- 高内聚：同一业务不变量集中在同一模块；
-- 低耦合：通过稳定契约依赖，不依赖实现细节；
-- 可替换：模型、数据库、工具和框架可通过 Adapter 替换；
-- 可验证：核心行为能够从正式入口端到端验证；
-- 可恢复：长任务支持幂等、重放、暂停和继续；
-- 可审计：关键决策、授权、执行和完成均有证据；
-- 可演进：删除旧路径，不依靠长期双轨维持演进；
-- 适度复杂：每一层、状态和抽象均由当前业务变化或已执行证据支撑。
 
-分层是职责和依赖方向约束，不要求每项功能机械创建八层对象。没有真实职责、变化来源或跨边界契约时，禁止为了“分层完整”新增空壳 Interface、Service、Manager、Projection 或 DTO。
+## 2. 架构边界与事实模型
 
-### 2.1 强制分层
-1. **Domain**：领域实体、值对象、领域服务、不变量、状态机；
-2. **Application / Orchestration**：Use Case、Workflow 编排、事务边界；
+系统目标是高内聚、低耦合、可替换、可验证、可恢复、可审计和可演进；这些目标不构成创建空壳层或提前抽象的理由。
+
+### 2.1 分层与依赖方向
+
+分层用于约束职责和依赖，不要求每项功能机械创建全部层：
+
+1. **Domain**：实体、值对象、领域服务、不变量和状态机；
+2. **Application / Orchestration**：Use Case、Workflow 和事务边界；
 3. **Semantic Decision**：Router、Planner、Replanner、模型 Verifier；
-4. **Governance / Control Plane**：Policy、Admission、ToolGateway、Approval；
+4. **Governance / Control Plane**：Policy、Admission、Gateway、Approval；
 5. **Capability / Execution**：Tool、Service、MCP/A2A Adapter、Executor；
 6. **Runtime / Persistence**：Checkpoint、Repository、Event/Receipt、Artifact Store；
-7. **Interface**：API、CLI、消息入口、DTO；
-8. **Observability / Evaluation**：Trace、Metric、Golden Set、E2E、Eval。
+7. **Interface**：API、CLI、消息入口和 DTO；
+8. **Observability / Evaluation**：Trace、Metric、Golden Set、E2E 和 Eval。
 
-### 2.2 依赖规则
-依赖方向必须指向更稳定的内层：
-`Interface / Infrastructure -> Application -> Domain`
-同时遵守：
-- Domain 禁止依赖 LangGraph、数据库 ORM、模型 SDK、MCP SDK 或 Web 框架；
+依赖方向必须指向更稳定的内层：`Interface / Infrastructure -> Application -> Domain`。
+
+- Domain 禁止依赖 LangGraph、ORM、模型/MCP SDK 或 Web 框架；
 - Application 依赖 Port，不直接依赖具体 Adapter；
 - Interface 只做协议转换、身份解析和输入校验；
 - Adapter 不得补全业务语义或决定业务流程；
-- 框架对象不得跨越模块边界成为业务契约；
+- 框架对象不得跨模块成为业务契约；
 - 依赖装配集中在 Composition Root；
 - 禁止循环依赖和跨层反向调用。
 
----
-## 3. 模块职责与高内聚规则
-### 3.1 Domain
-Domain 负责：
-- canonical facts；
-- 核心不变量；
-- Entity、Value Object、Aggregate；
-- Command 可否作用于 Aggregate；
-- 确定性状态迁移。
-Domain 禁止：调用模型、访问网络、读写数据库、了解 UI、拼装 Prompt、感知 LangGraph Node。
+### 2.2 模块职责
 
-### 3.2 Application / Orchestration
-Application 负责：
-- 接收 Use Case 输入；
-- 调用 Domain、Port 和 Policy；
-- 管理事务、步骤依赖和结果组合；
-- 决定何时进入模型、工具、审批、验证和完成阶段。
-Orchestrator 只协调，不得：
-- 重新解释用户意图；
-- 通过 if/else 猜测业务 payload；
-- 修复模型 Proposal；
-- 复制领域不变量；
-- 将工具失败伪装成业务成功。
+- **Domain**：拥有 canonical facts、核心不变量、Command 适用性和确定性迁移；禁止调用模型、网络、数据库、UI 或 Prompt。
+- **Application / Orchestration**：接收 Use Case、协调 Domain/Port/Policy、管理事务和阶段；不得猜测 payload、修复 Proposal、复制领域规则或把工具失败伪装成成功。
+- **Semantic Decision**：Router 识别 Goal/Intent；Planner 仅处理无法预定义的动态依赖；Replanner 只基于新 Observation 修订未冻结计划；输出必须 typed。
+- **Governance**：负责身份、scope、授权、风险、审批、Admission、幂等和预算；不得创造 intent、target、payload、计划或业务回答。
+- **Capability / Execution**：Service 用于固定低风险调用，Tool 用于模型动态选择或统一治理，Adapter 转换协议，Executor 返回 typed result/receipt；Tool 不决定授权或 Goal 完成。
+- **Runtime / Persistence**：负责 checkpoint、恢复、幂等、重放和生命周期；Repository 只保存 Domain/Application 认可的事实，不隐式创建业务对象。
+- **Observability / Evaluation**：记录和评估事实，不改变生产业务行为。
 
-### 3.3 Semantic Decision
-- Router 识别 Goal/Intent，不执行 Workflow；
-- Planner 仅用于步骤和依赖无法预定义的任务；
-- 固定稳定流程优先使用 Workflow；
-- Replanner 只能基于新 Observation 修订尚未冻结的语义计划；
-- 模型输出必须是 typed Proposal、Assessment 或 Answer。
+### 2.3 Canonical Model 与状态
 
-### 3.4 Governance / Control Plane
-控制面负责：身份、scope、授权、风险、审批、Admission、状态合法性、幂等、预算和强制 route。
-控制面不得创造 intent、target、payload、替代计划或业务回答。
-
-### 3.5 Capability / Execution
-- Service：Workflow 内固定、低风险、确定性调用；
-- Tool：模型可动态选择，或必须经过统一治理和观测的能力；
-- Adapter：外部协议与内部 Port 的转换；
-- Executor：执行已接受调用并返回 typed result/receipt。
-Tool 本身不得决定授权，也不得直接标记 Goal 完成。
-
-### 3.6 Runtime / Persistence
-Runtime 负责 checkpoint、恢复、幂等、重放和生命周期控制，不负责开放语义决策。
-Repository 只持久化 Domain/Application 认可的事实，不返回 UI View 作为领域事实，不隐式创建业务对象。
-
-### 3.7 Observability / Evaluation
-观测层记录事实，不改变业务行为。Eval 评估结果，不成为生产分支规则引擎。
-
----
-## 4. Canonical Model 与状态规范
-### 4.1 类型必须分清
 禁止在同一 Model 混装：
+
 - Definition：不可变定义；
-- Command：请求发生什么；
-- Event/Receipt：已发生什么；
+- Proposal/Command：建议或请求发生什么；
+- Event/Receipt：已经发生什么；
 - Runtime Projection：当前执行视图；
 - View/DTO：展示结构。
 
-### 4.2 派生值默认不持久化
-只有满足以下至少一项才考虑持久化：
-- 恢复需要；
-- 审计需要；
-- 重放需要；
-- 跨授权或审批边界；
-- 长生命周期一致性需要；
-- 无法从 canonical facts 确定性重建。
-“以后可能有用”不是持久化理由。
+只有恢复、审计、重放、授权/审批边界、长生命周期一致性，或无法确定性重建时，才允许持久化派生信息。“以后可能有用”不是理由。
 
-### 4.3 Identity 与 Scope
-禁止用空字符串、裸字符串、raw dict 表示关键身份和作用域。必须使用 typed ID、Value Object 或明确 DTO。
-所有读取、检索、工具调用、Artifact 和 Memory 必须携带并校验 tenant/workspace/user/thread/task 等适用 scope。
+Event 只记录已发生事实。只有具有恢复、审计、重放或长生命周期消费者的核心 Aggregate 才使用完整 Event + Projection；固定小状态机不得默认事件化。
 
-### 4.4 Event 使用边界
-不要机械地将所有状态事件化。只有需要恢复、审计、重放或长生命周期一致性的核心 Aggregate 才使用完整 Event + Projection。
-Event 只能记录已发生事实，禁止记录愿望、建议或未执行 Proposal。
+Identity 和 scope 禁止使用空字符串、裸字符串或 raw dict。读取、检索、Tool、Artifact 和 Memory 必须携带并校验适用的 tenant/workspace/user/thread/task scope。
 
 ---
-## 5. Agentic 决策与确定性管控
-### 5.1 Proposal
-模型可以提出 Goal、Plan、ToolCall、业务参数、恢复建议或最终回答，但 Proposal 不是权限、Command、执行事实或完成证明。
-直接回答不应为形式统一伪造 Task、Command、Receipt 或 CompletionReport。
 
-### 5.2 Admission / Validator
-Admission 只能接受或拒绝 Proposal，不得：
-- 补业务字段；
-- 拼接 description/constraints；
-- 修改 payload；
-- 替换 Goal；
-- 生成或重排 Plan；
-- 静默降级为另一业务路径。
-拒绝必须返回 typed `DecisionFeedback`，至少说明：原因、可修改字段、不可修改字段、required repair、revision scope 和 disposition。
+## 3. Agentic 决策与受治理执行
 
-### 5.3 禁止确定性业务 fallback
-模型不可用或 Proposal 连续不合法时，只允许：
-- fail closed；
-- 暂停；
-- 请求用户或外部权威输入；
-- 请求缺失能力；
-- 等待环境变化；
-- 执行已冻结 Command；
-- 对同一 digest 做幂等技术重试。
-禁止生成替代 Goal、Plan、查询、写入内容或业务答复。
+### 3.1 Proposal、Admission 与 fallback
 
-### 5.4 Procedure
-Procedure 只封装稳定事务不变量，如 prepare、confirm、commit、receipt、compensate、reconcile。
-Procedure 不得选择业务目标、决定 payload 或在失败后猜测替代路径。
+模型可以提出 Goal、Plan、ToolCall、业务参数、恢复建议或最终回答，但 Proposal 不是权限、Command、执行事实或完成证明。直接回答不得为形式统一伪造 Task、Command、Receipt 或 CompletionReport。
 
-### 5.5 确定性证明边界
-确定性检查只能验证系统可机械证明的关系。禁止使用模型自述、字符串包含、相似度、排名或自然语言断言冒充语义保持、授权或唯一性证明。
+Admission 只能接受或拒绝 Proposal，禁止补业务字段、拼接约束、修改 payload、替换 Goal、生成/重排 Plan 或静默降级。拒绝必须返回 typed `DecisionFeedback`，说明原因、mutable/immutable fields、required repair、revision scope 和 disposition。
 
-### 5.6 Execution、Verification 与 Completion
+模型不可用或 Proposal 连续不合法时，只允许 fail closed、暂停、请求用户/外部权威输入、请求缺失能力、等待环境变化、执行已冻结 Command，或对同一 digest 做幂等技术重试。禁止生成替代 Goal、Plan、查询、写入内容或业务回答。
+
+Procedure 只封装 prepare、confirm、commit、receipt、compensate、reconcile 等稳定事务不变量；不得选择目标、决定 payload 或猜测失败后的替代路径。
+
+确定性检查只能证明机械关系；禁止用模型自述、字符串包含、相似度、排名或自然语言断言冒充语义保持、授权或唯一性证明。
+
+### 3.2 Execution、Verification 与 Completion
+
 必须分离：
-1. **Execution Fact**：工具或 Command 是否执行；
+
+1. **Execution Fact**：Tool 或 Command 是否执行；
 2. **Semantic Verification**：Goal 是否达到；
 3. **Completion**：required result contract 是否全部满足。
+
 Receipt 不能直接代表 Goal 完成；模型 Verifier 也不能推翻确定性执行事实。
 
----
-## 6. Tool、Command 与 Durable Execution
-### 6.1 普通 ToolCall
-只读、低风险、可安全重试的 ToolCall 在 Admission 后可直接执行，不应为形式统一持久化 Command。
+### 3.3 Tool、Command、digest 与 Receipt
 
-### 6.2 Governed Command
-以下调用必须形成 immutable Command：
-- 需要审批；
-- 有外部副作用；
-- 不可安全重试；
-- 需要 durable execution；
-- 跨越授权、持久化或恢复边界。
-Command 必须只缩权、不可覆盖。参数变化必须创建 superseding command。
-Confirmation 绑定 AuthorizationDigest；Grant、Journal、Receipt 绑定同一 ExecutionCommandDigest。
+只读、低风险、可安全重试的 ToolCall 在 Admission 后直接执行，禁止为形式统一持久化 Command。
 
-### 6.3 Durable Task
+需要审批、具有外部副作用、不可安全重试、需要 durable execution，或跨授权/恢复边界的调用，必须形成 immutable Command。Command 只能缩权、不可覆盖；参数变化必须创建 superseding command。
+
+digest 是冻结 canonical payload 的一致性指纹，不是身份、授权或执行证明。默认使用一个 canonical `CommandDigest` 绑定 Confirmation、Journal 和 Receipt。
+
+只有同时满足以下条件时，才允许拆分 `AuthorizationDigest` 与 `ExecutionCommandDigest`：
+
+- 用户授权后仍存在独立的 Command 编译、Provider binding 或 Grant 阶段；
+- 两个 digest 有不同 owner、输入字段和信任边界；
+- 系统可机械证明最终执行命令未超出授权；
+- ADR 和 E2E 覆盖重绑定、参数变化、越权拒绝与 replay。
+
+若授权内容与最终执行内容相同，禁止使用双 digest。客户端回传服务端生成的 digest 不能替代认证、Policy 或 Confirmation。
+
+Command、Event、Receipt 不得机械成套创建：
+
+- 仅当操作需跨请求、审批、重试或恢复时创建 Command；
+- 仅当已发生事实有独立审计、订阅或重放消费者时创建 Event；
+- 仅当需要 exactly-once 证明、外部结果关联或恢复依据时创建 Receipt；
+- Projection/View 必须可从 canonical facts 重建且禁止成为第二写入口。
+
+### 3.4 Durable Task
+
 Durable Task 至少支持：
+
 - 明确生命周期和合法状态迁移；
 - checkpoint 与恢复；
 - 相同 digest 的幂等执行；
-- Replay 不重新调用模型生成 Command；
-- 失败分类、retry policy、补偿或 reconcile；
+- replay 不重新调用模型生成 Command；
+- typed 失败、retry policy、补偿或 reconcile；
 - required report 缺失时 fail closed。
 
 ---
-## 7. Context、Memory、RAG 与 Capability
-### 7.1 Context 四阶段
-Context 必须按以下顺序处理：
-1. Visibility：先执行权限和 scope 过滤；
-2. Requirement Retrieval：根据当前任务需求召回；
+
+## 4. Context、Memory、RAG 与 Capability
+
+Context 必须依次经过：
+
+1. Visibility：先按权限和 scope 过滤；
+2. Requirement Retrieval：按当前需求召回；
 3. Semantic Selection：模型选择语义相关内容；
 4. Budget Materialization：压缩并注入 LLM Context。
-禁止先召回全部内容再让 Prompt 自行做权限过滤。
 
-### 7.2 存储边界
-- Agent State：当前运行所需的结构化状态；
-- LLM Context：当前模型调用实际看到的内容；
+禁止先召回全部内容再让 Prompt 过滤权限。
+
+存储边界：
+
+- Agent State：当前运行所需结构化状态；
+- LLM Context：当前模型调用实际可见内容；
 - Checkpoint：恢复执行所需快照；
 - Artifact Store：大文本、文件和中间产物；
 - Long-term Memory：跨会话可召回事实或经验；
-- Retrieval Index：用于检索，不是事实权威源。
-State 中优先保存 `artifact_id`，不要复制大型 Artifact 内容。
+- Retrieval Index：检索投影，不是事实权威源。
 
-### 7.3 RAG
-RAG 是检索和证据组织能力，不应成为隐藏 Router 或 Planner。
-检索策略应由查询需求、数据特征和评测证据驱动。禁止为单个 benchmark case 硬编码规则；中间检索指标不能替代最终回答质量和证据正确性。
+State 优先保存 ArtifactRef，不复制大型 Artifact。RAG 只负责检索和证据组织，不得成为隐藏 Router/Planner；检索策略由数据与评测驱动，禁止为单一 benchmark 硬编码，中间检索指标不能替代最终答案与证据正确性。
 
-### 7.4 Capability Binding
-只有完整满足同一 `CapabilityEquivalenceClass` 的 Provider 才能确定性绑定。存在语义差异时，必须由模型或外部权威选择。
+只有完整满足同一 `CapabilityEquivalenceClass` 的 Provider 才能确定性绑定；存在语义差异时必须由模型或外部权威选择。
 
 ---
-## 8. 复杂度准入、设计模式与可维护性
-设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，不用于展示“架构完整性”。新增模式必须提交 `Complexity Justification`：业务场景、简单 baseline、baseline 失败证据、生产消费者、替代方案、净删除项和验证方式。
 
-允许按需使用：Ports and Adapters 隔离外部实现；State Machine 表达可枚举迁移；Command 支持审批/审计/幂等/重放；Repository 隔离事实与存储；Saga 处理真实跨资源补偿；Decorator 统一横切能力；ACL 隔离外部语义；Registry 支持真实注册发现。
+## 5. 代码组织与模式使用
+
+设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，并受 1.5 的复杂度准入约束。Ports and Adapters、State Machine、Command、Repository、Saga、Decorator、ACL、Registry 均按需使用，不是默认目录模板。
 
 禁止：
-- 每个类都创建 Interface、Factory、Manager，或只有一个实现且无变化来源时提前抽象；
-- 新增只被测试、Trace、文档或 Prompt 展示、却不改变生产决策和用户结果的 Model/Projection/Plan；
-- 为未来可能使用而持久化派生状态、创建通用 Task、Event、Workflow、Planner 或兼容层；
-- 用更多字段和 Validator 维持本可删除的旧结构，或用设计模式掩盖职责不清；
-- 让 Strategy/Router 承担模型开放语义，或让 Adapter/Converter 长期维护镜像事实；
-- 创建 God Service、God State、God Workflow，或将外部优秀 Agent 的内部结构逐项复制进项目。
 
-判断机制价值必须比较“没有该机制”的最简单路径。只证明对象存在、字段被生成、计划被写入 Trace 或流程能够 fail closed，不能证明该机制合理；必须证明它改善了业务完成率、风险、恢复、成本或延迟中的至少一项，且没有破坏关键反事实。
+- 为每个类创建 Interface、Factory、Manager，或用模式掩盖职责不清；
+- 创建 God Service、God State、God Workflow；
+- 让 Strategy/Router 承担开放语义，或让 Adapter/Converter 维护镜像事实；
+- 为未来可能性创建通用 Task、Event、Workflow、Planner、Projection 或兼容层；
+- 复制外部 Agent 的对象数量、层次或拓扑来证明“先进”。
 
----
-## 9. 代码组织规范
-### 9.1 LangGraph
-- Graph 表达编排和状态迁移，不承载领域事实权威；
-- Node 必须薄，只做输入提取、Use Case 调用和结果写回；
-- 禁止在多个 Node 复制业务规则；
-- GraphState 只存运行必需状态，字段必须 typed；
-- 大对象使用 artifact reference；
-- checkpoint 恢复不得导致模型或副作用重复执行。
+### 5.1 LangGraph、Router、Planner 与 Workflow
 
-### 9.2 Router、Planner 与 Workflow
-- Router 输出 Goal 列表和必要语义参数，不输出执行完成事实；
-- Goal 间固定依赖由契约或 Workflow 定义；动态依赖才交给 Planner；
-- 固定流程不得为“更 Agentic”而调用 Planner；
-- Planner 不负责授权、执行和完成判定；
-- Plan 只有在生产代码实际消费其依赖、进度、预算或完成义务时才能成为强制契约；仅回注 Prompt 或展示 Trace 的计划必须保持可选或删除；
-- Workflow 内稳定低风险步骤优先 Service 化；动态或受控能力 Tool 化。
+- Graph 表达编排和迁移，不拥有领域事实；
+- Node 只提取输入、调用 Use Case、写回结果，不复制业务规则；
+- GraphState 仅存 typed 运行必需状态，大对象使用 ArtifactRef；
+- checkpoint 恢复不得重复模型调用或副作用；
+- Router 输出 Goal/Intent，不输出执行完成事实；
+- 固定依赖由契约或 Workflow 定义，只有动态依赖才使用 Planner；
+- Planner 不负责授权、执行或完成判定；
+- Plan 只有被生产代码消费依赖、进度、预算或完成义务时才能成为强制契约；
+- Workflow 内固定低风险步骤优先 Service 化，动态或受控能力 Tool 化。
 
-### 9.3 Error Taxonomy
-错误至少区分：Validation、Semantic Rejection、Authorization Denied、Capability Missing、Execution Failure、Transient Failure、Verification Failure、Completion Failure、Invariant Violation。
-禁止捕获异常后返回空结果、默认成功或模糊 fallback。
+### 5.2 错误、注入与命名
 
-### 9.4 依赖注入与测试性
-模型、时钟、ID、Repository、Tool、Policy 和外部 Provider 必须可通过 Port 注入。测试不得 monkey patch 生产规则来构造通过结果。
+错误至少区分 Validation、Semantic Rejection、Authorization Denied、Capability Missing、Execution Failure、Transient Failure、Verification Failure、Completion Failure 和 Invariant Violation。禁止捕获异常后返回空结果、默认成功或模糊 fallback。
 
-### 9.5 命名
-命名必须表达业务角色和生命周期。禁止使用 `data`、`info`、`manager`、`processor`、`handler` 等无法表达职责的泛化名称，除非其边界确实清晰。
+模型、时钟、ID、Repository、Tool、Policy 和外部 Provider 必须通过 Port 注入；测试不得 monkey patch 生产规则来构造通过结果。
+
+命名必须表达业务角色和生命周期。除非边界明确，禁止使用 `data`、`info`、`manager`、`processor`、`handler` 等泛化名称。
 
 ---
-## 10. 强制开发流程
-任何功能、修复或重构必须按以下顺序进行：
-1. 定义业务扩展或当前用户错误行为、目标和验收标准；
-2. 完成 Decision/Fact Ownership Analysis；
-3. 盘点所需生产能力，并为缺失能力定义完整落地设计；
-4. 识别无需新增架构机制的最简单生产 baseline；
-5. 先定义 baseline E2E、目标 E2E 与反事实，并用证据确认 baseline 不足；
-6. 标明受影响模块、依赖方向、复杂度预算和删除路径；
-7. 实现能够使目标 E2E 通过的最小整体改动；
-8. 补充必要的 Unit、Contract、Integration Test 和语义 Eval；
-9. 删除旧字段、旧入口、旧 converter、无消费者投影和临时 fallback；
-10. 执行 E2E、对照 Eval、相关低层测试和 lint/type check；
-11. 记录命令、结果、净复杂度变化和剩余风险。
 
-### 10.1 变更分析最小模板
+## 6. 强制开发与文档流程
+
+任何功能、修复或重构必须按顺序执行：
+
+1. 定义待验证的业务扩展/当前错误假设、用户结果、反事实和 Out of Scope；
+2. 编写并实际执行当前最简单生产 baseline E2E，保存不足和失败根因证据；baseline 不失败则停止优化；
+3. 基于已证明缺口完成 Decision/Fact Ownership Analysis 和所需能力盘点；
+4. 定义目标 E2E、影响边界、复杂度预算和删除路径；
+5. 实现使目标 E2E 通过的最小整体改动；
+6. 补充必要的 Unit、Contract、Integration Test 和语义 Eval；
+7. 删除旧字段、旧入口、旧 converter、无消费者投影和临时 fallback；
+8. 执行 E2E、对照 Eval、相关低层测试及 lint/type check；
+9. 记录命令、结果、净复杂度变化和剩余风险。
+
+### 6.1 变更分析最小模板
+
 ```markdown
-## Goal
-## Current Incorrect Behavior
-## Expected User-visible Result
-## Business Expansion or Proven Constraint
-## Out of Scope
-## Decision Ownership
-## Fact Owner and Write Path
+## Goal / Current Incorrect Behavior / Expected User-visible Result
+## Business Expansion or Proven Constraint / Out of Scope
+## Simplest Baseline E2E / Executed Result / Root Cause
+## Target E2E and Counterfactuals
+## Decision Ownership / Fact Owner and Write Path
 ## Required Production Capabilities and Missing-capability Delivery
-## Simplest Existing Baseline and Evidence of Insufficiency
 ## Affected Modules and Dependency Direction
-## Complexity Added and Complexity Removed
-## Removed Legacy Path
-## Risks
+## Complexity Added, Removed and Rejected Alternatives
+## Removed Legacy Path / Risks
 ```
 
-### 10.2 E2E 最小模板
+### 6.2 E2E 最小模板
+
 ```markdown
 ## E2E: <name>
-Given: <输入、身份、初始事实>
-When: <从正式入口执行的行为>
+Persona: <目标用户、其真实可见信息和公开产品契约>
+Given: <身份、初始事实和不可由模型预知的测试数据>
+When: <从正式入口以该用户的自然表达执行，不泄漏预期内部能力或步骤>
+Baseline: <相同正式入口和输入下已执行的命令、结果、失败根因与不足；未执行不得进入优化>
 Then: <用户可观察结果>
 And not: <禁止发生的副作用或错误结果>
-Path: <必须经过的生产组件>
-Required capabilities: <已有能力证据、需扩展项、缺失能力落地章节>
+Path evidence: <执行后由 trace/event/receipt/report 证明的生产组件，不注入用户输入>
+Required capabilities: <已有证据、需扩展项、缺失能力落地章节>
 Allowed fakes: <仅外部边界>
-Evidence: <trace/event/receipt/report>
-Baseline: <没有新机制时的执行结果和失败证据>
-Command: <本地或 CI 执行命令>
+Command: <本地或 CI 命令>
 ```
 
-### 10.3 设计与工程文档规范
-- 文档变更前必须先通读目标文档目录结构，并确定 canonical owner、受影响章节和相关事实源；
-- 语义或架构变化禁止采用只改一个局部段落的增量补丁；必须从整篇结构重组并联动更新定位、主链、所有权、E2E、状态和风险，禁止在末尾追加“补充/最新更新”而保留冲突正文；
-- 一个事实只允许一个 canonical 文档 owner；其他文档使用链接和面向自身读者的解释，不复制可漂移的状态表；
-- 当前实现、目标设计、历史诊断和执行证据必须明确分开，禁止把未来规划写成已落地事实；
-- 修改公共术语、路径或架构后必须搜索并删除旧表述、断链、失效代码引用和重复章节；
-- 文档结构服务读者任务，不按代码包机械分章；局部错字和无语义格式修正可直接最小修改；
-- 根 `AGENTS.md` 必须保持 500 行以内；新增规则必须合并重复内容，不得依靠无限追加维持规范。
+### 6.3 文档规范
 
-### 10.4 AI Coding Agent 行为
-开始编码前必须先输出：目标、所有权、影响边界、E2E 和计划删除内容。
-编码过程中禁止：
-- 因不确定而新增 fallback；
-- 为兼容保留新旧双轨；
+- 变更前通读目标文档结构，确认 canonical owner、相关事实源和受影响章节；
+- 语义或架构变化必须整体重组定位、主链、所有权、E2E、状态和风险，禁止末尾叠加“补充/最新更新”并保留冲突正文；
+- 一个事实只允许一个 canonical 文档 owner；其他文档链接引用，不复制可漂移状态表；
+- 当前实现、目标设计、历史诊断和执行证据必须分开；
+- 修改公共术语、路径或架构后，搜索并删除旧表述、断链、失效引用和重复章节；
+- 文档按读者任务组织，不按代码包机械分章；
+- 根 `AGENTS.md` 必须保持 500 行以内；新增规则必须合并重复内容。
+
+### 6.4 AI Coding Agent 行为
+
+编码前必须输出目标、所有权、影响边界、E2E 和计划删除内容。
+
+禁止：
+
+- 因不确定新增 fallback，或为兼容保留新旧双轨；
 - 未搜索调用方就修改公共模型；
 - 用 raw dict 绕过类型边界；
-- 新增抽象却不说明变化来源；
-- 依赖能力不存在时只写 E2E、Fake、接口或未来阶段，而不设计生产落地；
-- 复制外部优秀 Agent 设计而没有先定义业务扩展、baseline 和 E2E；
-- 用“以后可能有用”保留当前无生产消费者的字段、状态或流程；
+- 新增抽象却不说明变化来源和生产消费者；
+- 缺少能力时只写 E2E、Fake、接口或未来阶段，不设计生产落地；
 - 未运行测试就声称完成。
-信息不足以确认事实 owner、授权边界或外部契约时，应停止该部分实现并明确阻塞原因，不得猜测。
+
+无法确认事实 owner、授权边界或外部契约时，应停止相关实现并明确阻塞原因，不得猜测。
 
 ---
-## 11. 测试与评估门禁
-### 11.1 测试职责
+
+## 7. 测试、评估、观测与安全
+
+### 7.1 测试职责与覆盖
+
 - Unit：领域不变量和纯函数；
 - Contract：Port 与 Adapter 契约；
-- Integration：数据库、Checkpoint、ToolGateway 等组合；
-- E2E：正式入口到用户结果；
+- Integration / Runtime Conformance：数据库、Checkpoint、Gateway、指定 Tool/Agent、执行顺序和内部协议等白盒组合；
+- E2E：目标用户以真实场景和自然表达从正式入口获得可自动断言的用户结果；
 - Offline Eval：模型、检索和语义质量；
 - Online Evaluation：线上质量、成本、延迟和失败分布。
 
-### 11.2 E2E 最低覆盖矩阵
-核心变更按适用性至少覆盖：
-- Direct Message；
-- 普通只读 ToolCall；
-- Governed Action；
-- Durable Task；
-- Admission Denied；
-- Authorization Denied；
-- Capability Missing；
-- Execution Failure；
-- Verification Failure；
-- Replay 不重算 Command、不重复副作用；
-- Context/tenant 隔离；
-- 新路径生效且旧路径不可达。
-每项变更至少包含一个成功场景，以及一个失败、拒绝、恢复或重放场景。
+核心变更按适用性覆盖 Direct Message、只读 ToolCall、Governed Action、Durable Task、Admission/Authorization Denied、Capability Missing、Execution/Verification Failure、replay 不重算且不重复副作用、tenant/context 隔离，以及新路径生效且旧路径不可达。每项变更至少包含一个成功场景和一个失败、拒绝、恢复或重放场景。
 
-### 11.3 Golden Set
-新增或改变语义决策、检索、回答、规划和验证行为时，必须先补 Golden Set。
-Golden Set 应覆盖真实用户目标、边界输入、失败路径、反事实和历史回归；禁止只增加能够证明当前实现正确的样例。
-新增 Planner、WorkingPlan、反思、记忆、路由、缓存、多 Agent 或恢复机制时，必须与最简单 baseline 做同输入对照，至少比较用户完成率、错误副作用、模型轮次、token、延迟和恢复结果；没有可观察收益时不得作为强制主链。
+新增或改变语义决策、检索、回答、规划和验证时必须先补 Golden Set，覆盖目标用户的多种自然表达、真实目标、边界、失败、反事实和历史回归；禁止用内部 Tool/Agent 名称或预期步骤提示模型来替代能力选择评测。新增 Planner、反思、记忆、路由、缓存、多 Agent 或恢复机制时，必须与最简单 baseline 做同输入对照，比较完成率、错误副作用、模型轮次、token、延迟和恢复结果；无可观察收益时不得进入强制主链。
 
----
-## 12. Observability、安全与审计
-### 12.1 Trace 最低字段
-按适用性记录：trace_id、tenant/workspace/user、thread/task、goal、proposal/version、policy/version、authorization digest、command digest、tool/provider、attempt、latency、token/cost、receipt、verification、completion 和 error taxonomy。
-Trace 不得记录不必要的密钥、完整敏感内容或跨 scope 数据。
+### 7.2 Observability、安全与审计
 
-### 12.2 权限与风险
-- Identity 和 scope 必须在入口解析并贯穿调用链；
-- Policy Engine 决定是否允许以及是否需要审批；
-- ToolGateway 统一执行授权、风险、预算和审计；
+Trace 按适用性记录 trace_id、tenant/workspace/user、thread/task、goal、proposal/version、policy/version、command/authorization digest、tool/provider、attempt、latency、token/cost、receipt、verification、completion 和 error taxonomy；不得记录不必要的密钥、完整敏感内容或跨 scope 数据。
+
+- Identity 和 scope 在入口解析并贯穿调用链；
+- Policy 决定是否允许及是否需要审批；
+- Gateway 统一执行授权、风险、预算和审计；
 - Prompt 不能代替权限控制；
 - 高风险操作必须绑定明确 target、payload、授权和确认；
 - 批量、删除、外发、不可逆和高成本操作默认提高风险等级。
 
-### 12.3 审计事实
-审批、授权、Command、Journal、Receipt、补偿和 Completion 必须可关联到同一任务和 digest 链路。审计记录不可被普通业务更新覆盖。
+审批、授权、Command、Journal、Receipt、补偿和 Completion 必须关联到同一任务和 canonical digest 链路。审计记录不可被普通业务更新覆盖。
 
 ---
-## 13. 迁移、兼容与 ADR
-Schema 或 Model 迁移必须说明：canonical 新模型、数据迁移方式、调用方迁移、旧写入口关闭、回滚策略、E2E 验证和最终删除日期。
+
+## 8. 迁移、ADR 与完成门禁
+
+Schema 或 Model 迁移必须说明 canonical 新模型、数据迁移、调用方迁移、旧写入口关闭、回滚、E2E 和最终删除日期。
+
 以下情况必须创建 ADR：
-- 跨模块边界调整；
-- 引入新框架或基础设施；
-- 引入新的 Planner、通用状态、持久化投影、多 Agent 拓扑或其他主链复杂度；
-- 新增持久化事实；
-- 引入 Event Sourcing、Saga 或兼容窗口；
-- 改变 Command、Replay、Approval 或 Completion 语义；
+
+- 跨模块边界调整或引入新框架/基础设施；
+- 新增 Planner、通用状态、持久化投影、多 Agent 拓扑或其他主链复杂度；
+- 新增持久化事实，或引入 Event Sourcing、Saga、兼容窗口；
+- 改变 Command、digest、Replay、Approval、Verification 或 Completion 语义；
 - 偏离本文档中的“必须/禁止”。
-ADR 必须包含最简单 baseline、复杂度净变化、业务/E2E 证据和未采用方案；ADR 不能代替 E2E。
 
----
-## 14. Review 合并门禁
-PR 合并前必须确认：
-- [ ] 用户目标和验收标准明确；
-- [ ] 业务扩展或当前错误已证明，最简单 baseline 已实际验证；
-- [ ] 所需生产能力已盘点；缺失能力具有 owner、契约、入口、消费者、阶段、失败语义和测试；
-- [ ] Decision Owner 明确；
-- [ ] Fact Owner、canonical model 和唯一写入口明确；
-- [ ] 依赖方向正确，无框架侵入 Domain；
-- [ ] Orchestrator、Validator、Adapter 未创造业务语义；
-- [ ] 无重复事实、镜像 Model、双写或隐藏 fallback；
-- [ ] 新增状态、抽象和计划均有生产消费者及对照收益证据；
-- [ ] Proposal、Command、Execution Fact、Verification、Completion 已分离；
-- [ ] 旧字段、旧路径和临时兼容已删除或有期限 ADR；
-- [ ] 正式入口 E2E 已执行并通过；
-- [ ] E2E 包含用户结果和关键反事实；
-- [ ] 至少一个失败、拒绝、恢复或重放场景通过；
-- [ ] Unit/Contract/Integration Test 按风险补齐；
-- [ ] Trace、审计和错误分类足以定位问题；
-- [ ] 设计文档已整体更新，无冲突旧正文、重复 owner 或失效链接；
-- [ ] 验证命令、结果和剩余风险已记录。
+ADR 必须包含 1.5 的 `Complexity Justification`、事实/决策 owner、迁移/退出条件、未采用方案和已执行 E2E 证据；ADR 不能代替 E2E。
 
----
-## 15. Definition of Done
-一项变更只有同时满足以下条件才算完成：
-1. 行为和架构边界符合本规范；
-2. 所需生产能力已真实落地，且所有事实和决策均有唯一 owner；
-3. 没有新增冗余状态、静默 Proposal 改写或确定性业务 fallback；
-4. 全部调用方已迁移，旧路径已删除或有明确移除期限；
-5. E2E 从正式入口经过生产主路径并通过；
-6. 用户结果、失败结果和关键反事实得到自动断言；
-7. 关键执行、授权、Receipt、Verification 和 Completion 可观测；
-8. 文档、Golden Set、迁移说明和测试同步更新；
-9. 实际执行过验证命令，并如实记录结果；
-10. 新机制相对最简单 baseline 的收益已由用户结果、反事实和成本数据证明；
-11. 文档从整体结构完成更新，旧表述和重复事实已删除；
-12. 未验证风险被明确列出，不以“应该没问题”代替证据。
-**没有可执行 E2E，就没有可信的落地设计。**
+一项变更只有全部满足下列条件才可合并并视为完成：
+
+- [ ] 用户目标、错误行为、验收结果和 Out of Scope 明确；
+- [ ] 同一用户目标的最简单 baseline E2E 已实际执行，失败来自当前 Agent 产品行为且不足得到证明；
+- [ ] 所需生产能力已盘点，缺失能力有完整落地设计；
+- [ ] Decision/Fact owner、canonical model 和唯一写入口明确；
+- [ ] 新增 Model、状态、digest、表、层和模式分别具有不可合并职责及生产消费者；
+- [ ] 新增复杂度小于删除复杂度，不存在镜像事实、双写、隐藏 fallback 或无期限兼容；
+- [ ] Proposal、Command、Execution Fact、Verification 和 Completion 边界正确；
+- [ ] 依赖方向正确，Orchestrator、Validator、Adapter 未创造业务语义；
+- [ ] 旧字段、旧路径、临时状态和无消费者投影已删除或具有期限 ADR；
+- [ ] 正式入口 E2E 已由目标用户自然表达驱动，未以内部名称或步骤替用户决策，并通过用户结果、关键反事实及至少一个失败/拒绝/恢复/replay 场景；
+- [ ] Unit/Contract/Integration/Golden Set 按风险补齐，Trace 和错误分类足以定位问题；
+- [ ] 文档整体更新，无冲突正文、重复 owner、失效链接或未来设计冒充当前事实；
+- [ ] 验证命令、结果、净复杂度变化和未验证风险已如实记录。
+
+**没有 baseline E2E 证明当前 Agent 的不足，就不得优化；没有目标 E2E 证明用户结果改善，就没有可信落地。**

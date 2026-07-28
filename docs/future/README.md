@@ -8,7 +8,8 @@
 
 | 业务扩展 | 状态 | 文档 |
 | --- | --- | --- |
-| 路径动态且需跨轮次恢复的架构调查项目 | 目标设计，未实现 | [Durable Investigation Project](durable-investigation-project-design.md) |
+| 统一自然语言受治理操作、live 长任务与能力规模化 | 目标路线图，尚未实施 | [现代 Agent 能力优化路线图](modern-agent-capability-optimization-plan.md) |
+| 路径动态且需跨轮次恢复的架构调查项目 | 生产实现已装配，live 发布证据待闭环 | [Durable Investigation Project](durable-investigation-project-design.md) |
 | 持续研究的来源验证与事件触发 | P1/P2，未实现 | [持续研究 P1/P2](scheduled-intelligence-research.md) |
 
 ## 进入与退出规则

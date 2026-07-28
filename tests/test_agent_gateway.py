@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from personal_agent.agents import AgentGateway
+from personal_agent.agents import AgentGateway, InMemoryAgentRunStore
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.capabilities.contracts.grants import DelegationGrant, GrantDependencySet
-from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
+from personal_agent.kernel.contracts.resource import (
+    OperationScope,
+    ResourceRef,
+    ResourceSelector,
+)
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     ChildAgentArtifactIndex,
@@ -16,17 +20,28 @@ from personal_agent.kernel.contracts.agent import (
     ChildAgentRunProjection,
     ChildAgentRunOutcome,
     AgentTask,
-    new_agent_artifact_id,
     new_agent_event_id,
     new_agent_run_id,
+)
+from personal_agent.kernel.contracts.scope import (
+    SecurityScope,
+    interaction_execution_scope,
 )
 
 
 def test_agent_gateway_invoke_records_unverified_artifact():
-    gateway = AgentGateway(policy_engine=PolicyEngine())
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
     gateway.register(_FakeAgent("researcher", output="report"))
 
-    result = gateway.invoke("researcher", AgentTask("topic"), _ctx(), _grant("researcher"))
+    result = gateway.invoke(
+        "researcher",
+        AgentTask("topic"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="invoke-researcher",
+    )
 
     assert result.run.projection.status == "completed"
     assert result.run.definition.agent_id == "researcher"
@@ -34,11 +49,46 @@ def test_agent_gateway_invoke_records_unverified_artifact():
     assert gateway.get_run(result.run.definition.agent_run_id) is not None
 
 
+def test_agent_gateway_invoke_reuses_committed_submission_without_duplicate_call():
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
+    adapter = _FakeAgent("researcher", output="report")
+    gateway.register(adapter)
+
+    first = gateway.invoke(
+        "researcher",
+        AgentTask("topic"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="invoke-idempotent",
+    )
+    second = gateway.invoke(
+        "researcher",
+        AgentTask("topic"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="invoke-idempotent",
+    )
+
+    assert second.run.definition.agent_run_id == first.run.definition.agent_run_id
+    assert second.output_text == "report"
+    assert adapter.invoke_count == 1
+
+
 def test_agent_gateway_submit_poll_cancel_and_stream():
-    gateway = AgentGateway(policy_engine=PolicyEngine())
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
     gateway.register(_FakeAgent("researcher", output="report"))
 
-    submitted = gateway.submit("researcher", AgentTask("topic"), _ctx(), _grant("researcher"))
+    submitted = gateway.submit(
+        "researcher",
+        AgentTask("topic"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="submission-1",
+    )
     assert submitted.projection.status == "running"
 
     polled = gateway.poll(submitted.definition.agent_run_id, _ctx())
@@ -48,16 +98,35 @@ def test_agent_gateway_submit_poll_cancel_and_stream():
     assert [event.type for event in stream] == ["stream_delta"]
 
     canceled = gateway.cancel(submitted.definition.agent_run_id, _ctx())
+    assert canceled.projection.status == "completed"
+
+    cancellable = gateway.submit(
+        "researcher",
+        AgentTask("another topic"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="submission-2",
+    )
+    canceled = gateway.cancel(cancellable.definition.agent_run_id, _ctx())
     assert canceled.projection.status == "cancelled"
+    assert gateway.cancel(cancellable.definition.agent_run_id, _ctx()) == canceled
 
 
 def test_agent_gateway_keeps_multiple_agent_definitions_separate():
-    gateway = AgentGateway(policy_engine=PolicyEngine())
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
     gateway.register(_FakeAgent("researcher", output="research"))
     gateway.register(_FakeAgent("writer", output="write"))
 
     assert {item.agent_id for item in gateway.profiles()} == {"researcher", "writer"}
-    result = gateway.invoke("writer", AgentTask("draft"), _ctx(), _grant("writer"))
+    result = gateway.invoke(
+        "writer",
+        AgentTask("draft"),
+        _ctx(),
+        _grant("writer"),
+        submission_key="invoke-writer",
+    )
 
     assert result.run.definition.agent_id == "writer"
     assert result.output_text == "write"
@@ -65,12 +134,13 @@ def test_agent_gateway_keeps_multiple_agent_definitions_separate():
 
 def _ctx() -> AgentGatewayContext:
     return AgentGatewayContext(
-        user_id="u1",
-        session_id="s1",
-        run_id="entry-run-1",
-        task_id="task",
-        goal_id="goal",
-        action_id="action",
+        execution_scope=interaction_execution_scope(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            user_id="u1",
+            execution_id="entry-run-1",
+            task_id="action",
+        ),
         source_platform="test",
     )
 
@@ -113,13 +183,29 @@ class _FakeAgent:
             governance=AgentGovernance(permission_scope=f"a2a:{agent_id}:invoke"),
         )
         self._output = output
+        self.invoke_count = 0
 
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
+        self.invoke_count += 1
         run = self._run(task, context, status="completed")
         return ChildAgentRunOutcome(run=run, output_text=self._output)
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
+    def submit(
+        self,
+        task: AgentTask,
+        context: AgentGatewayContext,
+        *,
+        submission_key: str,
+    ) -> ChildAgentRunRecord:
         return self._run(task, context, status="running")
+
+    def lookup_submission(
+        self,
+        submission_key: str,
+        task: AgentTask,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord | None:
+        return None
 
     def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
         return self._run(run.definition.task, context, status="completed", agent_run_id=run.definition.agent_run_id)
@@ -145,10 +231,16 @@ class _FakeAgent:
     ) -> ChildAgentRunRecord:
         run_id = agent_run_id or new_agent_run_id()
         artifact = AgentArtifact(
-            artifact_id=new_agent_artifact_id(),
             agent_run_id=run_id,
             kind="markdown_report",
-            content=self._output,
+            artifact_ref=ResourceRef(
+                resource_id=f"artifact-{run_id}",
+                resource_type="artifact",
+                owner_scope=SecurityScope(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                ),
+            ),
         )
         return ChildAgentRunRecord(
             definition=ChildAgentRunDefinition(

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from personal_agent.kernel.contracts.tool import ToolInvocationEvent
+from personal_agent.kernel.contracts.scope import ExecutionScope
 
 
 class ToolAuditSink(Protocol):
@@ -38,13 +39,9 @@ class IdempotencyStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ToolGatewayContext:
+    execution_scope: ExecutionScope
     execution_mode: str
     tool_call_id: str
-    step_id: str | None = None
-    thread_id: str | None = None
-    run_id: str | None = None
-    user_id: str | None = None
-    session_id: str | None = None
     source_platform: str | None = None
     react_allowed_tools: frozenset[str] = frozenset()
 

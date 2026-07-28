@@ -6,7 +6,7 @@ from threading import Barrier
 import pytest
 from langchain_core.tools import StructuredTool
 
-from personal_agent.agents import AgentGateway
+from personal_agent.agents import AgentGateway, InMemoryAgentRunStore
 from personal_agent.application.conversation import (
     AgentDelegationProposal,
     AgentTurnDecision,
@@ -17,7 +17,6 @@ from personal_agent.application.conversation import (
     FinalMessage,
     LoopBudgetPolicy,
     ToolCallProposal,
-    WorkingPlanSnapshot,
 )
 from personal_agent.application.conversation.models import (
     CommittedUsage,
@@ -38,11 +37,15 @@ from personal_agent.kernel.contracts.agent import (
     ChildAgentRunProjection,
     ChildAgentRunRecord,
     SubagentProfile,
-    new_agent_artifact_id,
     new_agent_event_id,
     new_agent_run_id,
 )
 from personal_agent.kernel.llm_schemas import strictify_schema
+from personal_agent.kernel.contracts.scope import (
+    AuthenticatedPrincipal,
+    SecurityScope,
+)
+from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
@@ -87,11 +90,10 @@ def test_interaction_prompt_matches_the_object_root_wire_contract():
     prompt = ConversationService(None)._system_prompt(
         EffectiveCapabilities(revision="test"),
         CommittedUsage(),
-        False,
     )
 
     assert '{"decision": <FinalMessage | ContinueTurnProposal>}' in prompt
-    assert "Never place kind, type, working_plan, actions, disposition, or message at the root" in prompt
+    assert "Never place kind, type, actions, disposition, or message at the root" in prompt
     assert '"disposition": "answer|clarification_required|limitation|failed"' in prompt
     assert '"kind": "continue_turn"' in prompt
 
@@ -117,18 +119,24 @@ def _executor(*tools):
     return executor
 
 
-def _continue(*actions, reason="initial"):
-    return ContinueTurnProposal(
-        working_plan=WorkingPlanSnapshot(
-            summary="collect facts",
-            remaining_work=("inspect observations",),
-            revision_reason=reason,
+def _continue(*actions):
+    return ContinueTurnProposal(actions=actions)
+
+
+def _conversation_scope():
+    return {
+        "principal": AuthenticatedPrincipal(
+            tenant_id="tenant-1",
+            user_id="default",
         ),
-        actions=actions,
-    )
+        "security_scope": SecurityScope(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+        ),
+    }
 
 
-def test_l01_observation_revises_transient_plan_and_returns_user_result():
+def test_l01_observation_drives_next_react_decision_and_user_result():
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
@@ -139,6 +147,7 @@ def test_l01_observation_revises_transient_plan_and_returns_user_result():
     service = ConversationService(model, tool_port=_executor(_tool("read_fact", read_fact)))
 
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-l01",
         interaction_run_ref="irun_l01",
         messages=[ConversationMessage(role="user", content="Read the Orion fact, then answer.")],
@@ -151,12 +160,11 @@ def test_l01_observation_revises_transient_plan_and_returns_user_result():
     assert trace.inputs[0].payload["data"]["fact"] == "observed:Orion"
     next_turn_context = "\n".join(message["content"] for message in model.requests[1].messages)
     assert "Typed execution inputs" in next_turn_context
-    assert "Current model-authored working plan" in next_turn_context
-    assert '"summary":"collect facts"' in next_turn_context
+    assert "working plan" not in next_turn_context.lower()
     assert trace.final_message is not None
 
 
-def test_initial_action_without_working_plan_is_rejected_before_execution():
+def test_initial_action_executes_without_a_synthetic_working_plan_contract():
     calls = 0
 
     def read_fact(query: str):
@@ -171,12 +179,12 @@ def test_initial_action_without_working_plan_is_rejected_before_execution():
     )
     model = _Decisions(
         ContinueTurnProposal(actions=(action,)),
-        _continue(action),
         FinalMessage(disposition="answer", message="Observed Orion."),
     )
     service = ConversationService(model, tool_port=_executor(_tool("read_fact", read_fact)))
 
     service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-plan-admission",
         interaction_run_ref="irun-plan-admission",
         messages=[ConversationMessage(role="user", content="Read Orion, then answer.")],
@@ -185,11 +193,7 @@ def test_initial_action_without_working_plan_is_rejected_before_execution():
 
     assert calls == 1
     assert trace is not None
-    assert trace.working_plans
-    assert any(
-        item.kind == "decision_feedback" and item.reason_code == "working_plan_required"
-        for item in trace.inputs
-    )
+    assert [item.kind for item in trace.inputs] == ["tool_result"]
 
 
 def test_l02_only_mechanically_safe_actions_run_concurrently():
@@ -216,6 +220,7 @@ def test_l02_only_mechanically_safe_actions_run_concurrently():
     ))
 
     service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-l02",
         interaction_run_ref="irun_l02",
         messages=[ConversationMessage(role="user", content="Read both independent sources.")],
@@ -246,21 +251,13 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
     )
     with pytest.raises(RuntimeError, match="process termination"):
         first.respond(
+            **_conversation_scope(),
             conversation_id="conversation-l03",
             interaction_run_ref="irun_l03",
             messages=messages,
         )
 
     resumed_model = _Decisions(
-        FinalMessage(disposition="answer", message="Premature final without rebuilt context."),
-        ContinueTurnProposal(
-            working_plan=WorkingPlanSnapshot(
-                summary="rebuild from committed observation",
-                remaining_work=("answer from committed fact",),
-                revision_reason="context_rebuild",
-            ),
-            actions=(),
-        ),
         FinalMessage(disposition="answer", message="Recovered from the committed fact."),
     )
     resumed = ConversationService(
@@ -269,6 +266,7 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
         journal=FileInteractionJournal(temp_dir / "interaction-l03"),
     )
     result = resumed.respond(
+        **_conversation_scope(),
         conversation_id="conversation-l03",
         interaction_run_ref="irun_l03",
         messages=messages,
@@ -276,27 +274,30 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
 
     assert result.disposition == "answer"
     assert calls == 1
-    assert "revision_reason=context_rebuild" in resumed_model.requests[0].messages[0]["content"]
-    trace = resumed.trace("irun_l03")
-    assert trace.working_plans[0].revision_reason == "context_rebuild"
-    assert any(
-        item.kind == "decision_feedback"
-        and item.reason_code == "context_rebuild_plan_required"
-        for item in trace.inputs
+    resumed_context = "\n".join(
+        message["content"] for message in resumed_model.requests[0].messages
     )
+    assert "Typed execution inputs" in resumed_context
+    trace = resumed.trace("irun_l03")
+    assert [item.kind for item in trace.inputs] == ["tool_result"]
 
 
-def test_explicit_independent_read_instruction_is_visible_to_model():
+def test_independent_user_results_instruction_does_not_require_named_capabilities():
     model = _Decisions(FinalMessage(disposition="answer", message="done"))
     service = ConversationService(model, tool_port=_executor())
 
     service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-explicit-reads",
-        messages=[ConversationMessage(role="user", content="Call two named read tools together.")],
+        messages=[ConversationMessage(
+            role="user",
+            content="Summarize my recent notes and identify any knowledge gaps.",
+        )],
     )
 
     system_prompt = model.requests[0].messages[0]["content"]
-    assert "multiple named available read-only capabilities" in system_prompt
+    assert "goal requires multiple independent read-only results" in system_prompt
+    assert "user does not need to know or name internal capabilities" in system_prompt
     assert model.requests[0].temperature == 0
 
 
@@ -310,7 +311,9 @@ def test_interaction_delegation_budget_cannot_exceed_synchronous_policy_limit():
 
 
 def test_l04_parent_synthesizes_async_specialist_artifact_without_child_completion_shortcut():
-    gateway = AgentGateway(policy_engine=PolicyEngine())
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
     specialist = _AsyncSpecialist()
     gateway.register(specialist)
     model = _Decisions(
@@ -322,9 +325,14 @@ def test_l04_parent_synthesizes_async_specialist_artifact_without_child_completi
         )),
         FinalMessage(disposition="answer", message="Parent synthesis of the specialist report."),
     )
-    service = ConversationService(model, agent_port=gateway)
+    service = ConversationService(
+        model,
+        agent_port=gateway,
+        artifact_port=_ArtifactTexts(),
+    )
 
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-l04",
         interaction_run_ref="irun_l04",
         messages=[ConversationMessage(role="user", content="Delegate the bounded research and synthesize it.")],
@@ -344,7 +352,9 @@ def test_l04_parent_synthesizes_async_specialist_artifact_without_child_completi
 
 
 def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
-    gateway = AgentGateway(policy_engine=PolicyEngine())
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
     specialist = _AsyncSpecialist()
     gateway.register(specialist)
     model = _Decisions(
@@ -362,9 +372,14 @@ def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
         ),)),
         FinalMessage(disposition="answer", message="Parent synthesis from the first artifact."),
     )
-    service = ConversationService(model, agent_port=gateway)
+    service = ConversationService(
+        model,
+        agent_port=gateway,
+        artifact_port=_ArtifactTexts(),
+    )
 
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-repeat-delegation",
         interaction_run_ref="irun-repeat-delegation",
         messages=[ConversationMessage(role="user", content="Delegate once, then synthesize.")],
@@ -383,11 +398,27 @@ def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
 
 def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegation():
     class _CancelledSpecialist(_AsyncSpecialist):
-        def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
+        def submit(
+            self,
+            task: AgentTask,
+            context: AgentGatewayContext,
+            *,
+            submission_key: str,
+        ) -> ChildAgentRunRecord:
             self.submit_calls += 1
             return self._run(task, context, status="cancelled")
 
-    gateway = AgentGateway(policy_engine=PolicyEngine())
+        def lookup_submission(
+            self,
+            submission_key: str,
+            task: AgentTask,
+            context: AgentGatewayContext,
+        ) -> ChildAgentRunRecord | None:
+            return None
+
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
     specialist = _CancelledSpecialist()
     gateway.register(specialist)
     first = AgentDelegationProposal(
@@ -402,9 +433,14 @@ def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegati
         ContinueTurnProposal(actions=(repeated,)),
         FinalMessage(disposition="answer", message="Parent assessed the returned artifact."),
     )
-    service = ConversationService(model, agent_port=gateway)
+    service = ConversationService(
+        model,
+        agent_port=gateway,
+        artifact_port=_ArtifactTexts(),
+    )
 
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-cancelled-artifact",
         interaction_run_ref="irun-cancelled-artifact",
         messages=[ConversationMessage(role="user", content="Assess returned evidence without retrying." )],
@@ -434,6 +470,7 @@ def test_l05_budget_exhaustion_fails_closed_after_committed_result():
     )
 
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-l05",
         interaction_run_ref="irun_l05",
         messages=[ConversationMessage(role="user", content="Keep working past the configured budget.")],
@@ -463,6 +500,7 @@ def test_l06_verifier_feedback_revises_answer_without_rewriting_execution_fact()
     )
     service = ConversationService(model, tool_port=_executor(_tool("verify", verify)))
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-l06",
         interaction_run_ref="irun_l06",
         messages=[ConversationMessage(role="user", content="Verify and revise the draft.")],
@@ -529,6 +567,7 @@ def test_answer_is_bound_to_latest_passed_verification_receipt():
     )
 
     result = service.respond(
+        **_conversation_scope(),
         conversation_id="conversation-verification-binding",
         interaction_run_ref="irun-verification-binding",
         messages=[ConversationMessage(role="user", content="Verify the exact final draft.")],
@@ -564,9 +603,23 @@ class _AsyncSpecialist:
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
         raise AssertionError("interaction delegation must use submit/poll")
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
+    def submit(
+        self,
+        task: AgentTask,
+        context: AgentGatewayContext,
+        *,
+        submission_key: str,
+    ) -> ChildAgentRunRecord:
         self.submit_calls += 1
         return self._run(task, context, status="running")
+
+    def lookup_submission(
+        self,
+        submission_key: str,
+        task: AgentTask,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord | None:
+        return None
 
     def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
         self.poll_calls += 1
@@ -592,10 +645,13 @@ class _AsyncSpecialist:
     def _run(self, task, context, *, status, agent_run_id=None):
         run_id = agent_run_id or new_agent_run_id()
         artifacts = () if status == "running" else (AgentArtifact(
-            artifact_id=new_agent_artifact_id(),
             agent_run_id=run_id,
             kind="report",
-            content="bounded specialist evidence",
+            artifact_ref=ResourceRef(
+                resource_id=f"artifact-{run_id}",
+                resource_type="artifact",
+                owner_scope=context.execution_scope.security_scope,
+            ),
         ),)
         return ChildAgentRunRecord(
             definition=ChildAgentRunDefinition(
@@ -611,3 +667,10 @@ class _AsyncSpecialist:
             ),
             artifact_index=ChildAgentArtifactIndex(agent_run_id=run_id, artifacts=artifacts),
         )
+
+
+class _ArtifactTexts:
+    def read_text(self, resource_ref, *, principal, security_scope):
+        if resource_ref.owner_scope != security_scope:
+            raise PermissionError("cross-scope test artifact")
+        return "bounded specialist evidence"

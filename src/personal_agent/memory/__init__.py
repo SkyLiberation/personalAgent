@@ -1,3 +1,3 @@
-from personal_agent.memory.facade import DeleteMemoryResult, MemoryFacade, RestoreMemoryResult
+from personal_agent.memory.facade import MemoryFacade
 
-__all__ = ["DeleteMemoryResult", "MemoryFacade", "RestoreMemoryResult"]
+__all__ = ["MemoryFacade"]

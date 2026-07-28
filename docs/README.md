@@ -1,7 +1,8 @@
 # personalAgent 文档索引
 
-本项目是一个以 Goal-owned Agent Loop 和受治理状态机共同驱动的个人知识 Agent：开放任务由
-`TaskContract + TaskRuntimeProjection + Executive Control` 逐轮执行；能力由 Capability Plane 解析并签发精确 Grant，高风险事务由 Governed Procedure 保护，Governance Plane 负责 Admission、Policy、HITL、Evidence 与验证门禁。
+本项目以短生命周期 Conversation ReAct、确定性领域 Workflow 和显式 Durable Investigation
+Project 共同承载个人知识与持续研究能力。模型负责开放语义 Proposal/Assessment；Application、
+领域状态机和 Gateway 负责 scope、权限、预算、幂等、副作用、Evidence 与 Completion。
 
 当前系统分层、Entry 主链、LLM/确定性边界、Capability/MCP/A2A、Procedure、知识与运行时事实统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
 
@@ -15,6 +16,7 @@
 | `interview/` | 面试问答稿（同内容的 Q&A 形态，面向讲解场景） |
 | `mermaid/` | Model / Layer 依赖类图 |
 | `future/` | 未来能力与优化设想 |
+| `adr/` | 已接受的跨模块架构决策、baseline、迁移和退出条件 |
 | 顶层散文档 | API、部署、环境变量、评测、检索策略等独立主题 |
 
 ## 文档书写原则
@@ -38,6 +40,7 @@
 | 主题 | 权威文档 |
 | --- | --- |
 | 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
+| Durable Investigation Project 当前实现与证据边界 | [summary/durable-investigation-project-current-state.md](summary/durable-investigation-project-current-state.md) |
 | Phase 0 能力目录、运行时清单与发布基线 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Procedure / Step Projection 架构总览 | [workflow/workflow-framework.md](workflow/workflow-framework.md) |
 | Entry → Executive Agent Loop 端到端流程 | [workflow/entry-executive-agent-loop.md](workflow/entry-executive-agent-loop.md) |
@@ -70,7 +73,7 @@
 | 主题 | 文档 |
 | --- | --- |
 | Future 范围与退出规则 | [future/README.md](future/README.md) |
-| 路径动态且需跨轮次恢复的架构调查项目 | [future/durable-investigation-project-design.md](future/durable-investigation-project-design.md) |
+| 路径动态且需跨轮次恢复的架构调查项目（实现已装配，live 发布证据待闭环） | [future/durable-investigation-project-design.md](future/durable-investigation-project-design.md) |
 | 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
 
 ## 运维与参考

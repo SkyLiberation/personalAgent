@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture import CaptureService
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
@@ -23,7 +24,14 @@ def build_capture_upload_tool(capture_service: CaptureService, artifact_service:
         extras=governance_extras(exposure="workflow_activity", risk_level="low", side_effects=("read_local",), permission_scope="artifact:read", timeout_seconds=45.0, max_retries=0, rate_limit_per_minute=20),
     )
     def capture_upload(resource_ref: ResourceRef, user_id: str):
-        record, file_bytes = artifact_service.read_upload(resource_ref, user_id=user_id)
+        record, file_bytes = artifact_service.read_upload(
+            resource_ref,
+            principal=AuthenticatedPrincipal(
+                tenant_id=resource_ref.owner_scope.tenant_id,
+                user_id=user_id,
+            ),
+            security_scope=resource_ref.owner_scope,
+        )
         text = capture_service.capture_text_from_upload(filename=record.filename, content_type=record.content_type, file_bytes=file_bytes, source_type=record.source_type)
         return tool_response(tool_success({"resource_ref": resource_ref.model_dump(mode="json"), "filename": record.filename, "source_type": record.source_type, "text": text}))
 

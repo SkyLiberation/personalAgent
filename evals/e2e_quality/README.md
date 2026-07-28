@@ -6,6 +6,9 @@
   PostgreSQL 和场景所需的真实 provider，走到 `completed` 或该反事实规定的
   fail-closed 终态。测试不得注入业务对象、调用内部 Service 推进流程、替换
   Gateway/Store/Model，也不得使用测试 hook 制造状态窗口。
+- release 用例的用户输入必须表达目标用户会提出的目标和约束，不得点名内部 Tool、
+  Agent、Artifact、verdict、Model 或执行顺序。精确 capability、并发、receipt 和
+  provider binding 只能作为执行后的 trace/contract 证据，不能替代用户结果。
 - `diagnostic`：用于真实外部 Profile 和专项定位；即使通过，也不能单独产生产品、
   组合或复杂主循环的发布声明。当前 E16–E19 分别验证 GitHub、GPT Researcher、
   Notion 和 capability-unavailable Profile，并由相应产品用例从正式入口消费。

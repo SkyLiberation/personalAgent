@@ -11,7 +11,6 @@ from personal_agent.application.conversation.models import (
     InteractionTrace,
     LoopBudgetPolicy,
     ToolCallProposal,
-    WorkingPlanSnapshot,
 )
 from personal_agent.application.conversation.service import (
     ConversationService,
@@ -37,5 +36,4 @@ __all__ = [
     "InteractionTrace",
     "LoopBudgetPolicy",
     "ToolCallProposal",
-    "WorkingPlanSnapshot",
 ]

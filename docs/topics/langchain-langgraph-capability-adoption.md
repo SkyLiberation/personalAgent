@@ -37,7 +37,7 @@
 ### LangChain (langchain_core) 已用能力
 
 - `BaseTool`（`tools/base.py:8`、`tools/registry.py:6`、`tools/gateway.py:12`）
-- `@tool` 装饰器（各 tool 文件，如 `tools/capture_text.py:6`、`delete_note.py:5`）
+- `@tool` 装饰器（各 tool 文件，如 `tools/capture_text.py`、`tools/graph_search.py`）
 - 消息类型 `AIMessage` / `HumanMessage` / `ToolMessage` / `AnyMessage`（`orchestration_models.py:15`、`_helpers.py:9` 等）
 
 ### LangChain 明确未用能力

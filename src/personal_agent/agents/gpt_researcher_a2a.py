@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from hashlib import sha256
 from typing import Iterator, Protocol
 
 from personal_agent.infra.a2a import A2AResearchResponse, GPTResearcherA2AClient
@@ -17,10 +18,27 @@ from personal_agent.kernel.contracts.agent import (
     ChildAgentRunProjection,
     ChildAgentRunOutcome,
     AgentTask,
-    new_agent_artifact_id,
     new_agent_event_id,
     new_agent_run_id,
 )
+from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope
+
+
+class AgentArtifactWriteProtocol(Protocol):
+    def write_generated(
+        self,
+        *,
+        security_scope: SecurityScope,
+        execution_scope: ExecutionScope,
+        producer_key: str,
+        producer_ref: str,
+        kind: str,
+        content: str,
+        content_digest: str,
+        source_artifact_refs: tuple[ResourceRef, ...],
+        evidence_refs: tuple[str, ...],
+    ) -> ResourceRef: ...
 
 
 class GPTResearcherA2AProtocol(Protocol):
@@ -43,6 +61,7 @@ class GPTResearcherA2AProtocol(Protocol):
         report_source: str | None = None,
         tone: str | None = None,
         max_search_results: int | None = None,
+        submission_key: str | None = None,
     ) -> A2AResearchResponse: ...
 
     def get_task(self, task_id: str) -> A2AResearchResponse: ...
@@ -56,15 +75,20 @@ class GPTResearcherA2AAdapter:
     def __init__(
         self,
         config: GPTResearcherA2AConfig,
+        artifact_writer: AgentArtifactWriteProtocol,
         client: GPTResearcherA2AProtocol | None = None,
     ) -> None:
         self._config = config
         self._client = client or GPTResearcherA2AClient(config)
+        self._artifact_writer = artifact_writer
         self.profile = SubagentProfile(
             agent_id="gpt_researcher",
             provider="gpt_researcher",
             protocol="a2a_jsonrpc",
-            description="GPT Researcher A2A deep research agent.",
+            description=(
+                "Deep external research specialist for user requests that require researching authoritative "
+                "web sources and returning an evidence-backed report for parent synthesis."
+            ),
             semantic_domains=("external", "external_research", "web_research"),
             task_types=("research", "report"),
             capability_ids=("agent:gpt_researcher",),
@@ -84,13 +108,32 @@ class GPTResearcherA2AAdapter:
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
         raise RuntimeError("GPT Researcher is asynchronous; use AgentGateway.submit/poll")
 
-    def submit(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunRecord:
-        response = self._client.submit_research(**self._request_kwargs(task))
+    def submit(
+        self,
+        task: AgentTask,
+        context: AgentGatewayContext,
+        *,
+        submission_key: str,
+    ) -> ChildAgentRunRecord:
+        response = self._client.submit_research(
+            **self._request_kwargs(task, submission_key=submission_key)
+        )
         status = _status_from_a2a(response.state)
         if status == "completed":
             status = "running"
         run = self._run_from_response(task, context, response)
         return replace(run, projection=replace(run.projection, status=status))
+
+    def lookup_submission(
+        self,
+        submission_key: str,
+        task: AgentTask,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord | None:
+        # The current GPT Researcher A2A contract has tasks/get by provider task
+        # id, but no query by client submission key. Returning None is the
+        # explicit fail-closed contract used after an uncertain submit outcome.
+        return None
 
     def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
         task_id = _required_external_task_id(run)
@@ -119,10 +162,18 @@ class GPTResearcherA2AAdapter:
                 payload=dict(item),
             )
 
-    def _request_kwargs(self, task: AgentTask) -> dict[str, object]:
+    def _request_kwargs(
+        self,
+        task: AgentTask,
+        *,
+        submission_key: str,
+    ) -> dict[str, object]:
         data = {**task.metadata, **task.input}
         topic = str(data.get("topic") or task.task_text).strip()
-        kwargs: dict[str, object] = {"topic": topic}
+        kwargs: dict[str, object] = {
+            "topic": topic,
+            "submission_key": submission_key,
+        }
         for key in ("report_type", "report_source", "tone", "max_search_results"):
             if data.get(key) is not None:
                 kwargs[key] = data[key]
@@ -137,15 +188,38 @@ class GPTResearcherA2AAdapter:
         agent_run_id: str | None = None,
     ) -> ChildAgentRunRecord:
         resolved_run_id = agent_run_id or _agent_run_id(response.task_id)
-        artifacts = tuple(_artifact_from_a2a(resolved_run_id, item, response.report) for item in response.artifacts)
+        artifacts = tuple(
+            self._persist_artifact(
+                resolved_run_id,
+                context,
+                response.task_id,
+                item,
+                response.report,
+                index,
+            )
+            for index, item in enumerate(response.artifacts)
+        )
         if not artifacts and response.report:
+            content_digest = sha256(response.report.encode("utf-8")).hexdigest()
+            artifact_ref = self._artifact_writer.write_generated(
+                security_scope=context.execution_scope.security_scope,
+                execution_scope=context.execution_scope,
+                producer_key=(
+                    f"agent:{self.profile.agent_id}:{response.task_id}:"
+                    f"status-message:{content_digest}"
+                ),
+                producer_ref=response.task_id,
+                kind="markdown_report",
+                content=response.report,
+                content_digest=content_digest,
+                source_artifact_refs=(),
+                evidence_refs=(),
+            )
             artifacts = (
                 AgentArtifact(
-                    artifact_id=new_agent_artifact_id(),
                     agent_run_id=resolved_run_id,
                     kind="markdown_report",
-                    content=response.report,
-                    payload={"source": "status.message"},
+                    artifact_ref=artifact_ref,
                     producer_verification_status="unverified",
                 ),
             )
@@ -186,21 +260,42 @@ class GPTResearcherA2AAdapter:
             events=events,
         )
 
-
-def _artifact_from_a2a(agent_run_id: str, raw: dict, report: str) -> AgentArtifact:
-    content = report
-    for part in raw.get("parts") or []:
-        if isinstance(part, dict) and part.get("kind") == "text":
-            content = str(part.get("text") or content)
-            break
-    return AgentArtifact(
-        artifact_id=new_agent_artifact_id(),
-        agent_run_id=agent_run_id,
-        kind=str(raw.get("name") or raw.get("kind") or "a2a_artifact"),
-        content=content,
-        payload=raw,
-        producer_verification_status="unverified",
-    )
+    def _persist_artifact(
+        self,
+        agent_run_id: str,
+        context: AgentGatewayContext,
+        provider_task_id: str,
+        raw: dict,
+        report: str,
+        index: int,
+    ) -> AgentArtifact:
+        content = report
+        for part in raw.get("parts") or []:
+            if isinstance(part, dict) and part.get("kind") == "text":
+                content = str(part.get("text") or content)
+                break
+        kind = str(raw.get("name") or raw.get("kind") or "a2a_artifact")
+        content_digest = sha256(content.encode("utf-8")).hexdigest()
+        artifact_ref = self._artifact_writer.write_generated(
+            security_scope=context.execution_scope.security_scope,
+            execution_scope=context.execution_scope,
+            producer_key=(
+                f"agent:{self.profile.agent_id}:{provider_task_id}:"
+                f"{index}:{content_digest}"
+            ),
+            producer_ref=provider_task_id,
+            kind=kind,
+            content=content,
+            content_digest=content_digest,
+            source_artifact_refs=(),
+            evidence_refs=(),
+        )
+        return AgentArtifact(
+            agent_run_id=agent_run_id,
+            kind=kind,
+            artifact_ref=artifact_ref,
+            producer_verification_status="unverified",
+        )
 
 
 def _status_from_a2a(state: str) -> str:

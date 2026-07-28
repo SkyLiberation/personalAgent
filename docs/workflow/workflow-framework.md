@@ -36,13 +36,17 @@ Ask、direct response 和普通分析由开放循环逐轮决定。MCP、本地�
 | Procedure | 保护的不变量 |
 | --- | --- |
 | `knowledge_ingest` | 来源规范化、确认、durable admission、receipt |
-| `knowledge_delete` | exact target、确认、删除 receipt、审计 |
 | `conversation_solidify` | selected conversation scope、确认、durable admission |
 | `knowledge_consolidate` | provenance、supersession、receipt |
 | `research_run` | budget、evidence loop、checkpoint、verification |
 | `research_subscription_create` | schedule、idempotency、audit |
 
 GitHub、Notion 和 GPT Researcher 不在 Catalog。前两者是 MCP capability，后者是 A2A Agent capability。
+
+知识删除/恢复也不在 Catalog：其输入已经是 canonical target，后续是固定的
+确认与事务状态机，由 `KnowledgeLifecycleService` 直接拥有。为它再投影
+Procedure/ExecutionStep 会形成重复状态机，详见
+[Knowledge Delete / Restore Workflow](delete-knowledge-workflow.md)。
 
 ## 选择与物化
 

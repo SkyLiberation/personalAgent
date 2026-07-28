@@ -27,7 +27,6 @@ AgentTurnDecision
 └─ decision
    ├─ FinalMessage
    └─ ContinueTurnProposal
-      ├─ WorkingPlanSnapshot?
       └─ actions[]
          ├─ ToolCallProposal
          └─ AgentDelegationProposal
@@ -80,7 +79,6 @@ EffectiveAgentCapability
 - EffectiveCapabilities；
 - 已提交 `ActionObservation`；
 - Admission 返回的 `DecisionFeedback`；
-- 当前模型生成的 transient WorkingPlan；
 - 剩余 model/tool/agent/token budget。
 
 模型负责：
@@ -110,7 +108,6 @@ Admission 检查：
 - Tool/Agent 是否存在；
 - Tool arguments 是否满足 schema；
 - 是否超过调用预算；
-- 恢复后是否先重建 WorkingPlan；
 - 是否重复委托已返回 Artifact 的 Agent；
 - 后续 Agent 委托是否引用已有 Artifact dependency。
 
@@ -232,9 +229,7 @@ disposition = limitation
 
 Runtime 不能把最后一个 Tool Observation 拼成业务答案，因为如何解释 Observation 属于语义决策。
 
-## 10. WorkingPlan 与恢复
-
-WorkingPlan 是模型生成的 transient projection，不是业务事实，也不是执行授权。
+## 10. Conversation 恢复边界
 
 `InteractionTrace` 保存：
 
@@ -246,17 +241,35 @@ WorkingPlan 是模型生成的 transient projection，不是业务事实，也�
 - concurrent batches；
 - final message。
 
-`FileInteractionJournal` 持久化时不把旧 WorkingPlan 当作恢复权威。进程重启后，模型必须根据 committed inputs 生成：
-
-```text
-revision_reason = context_rebuild
-```
-
-恢复不会重复已有 action_id，也不会重新调用模型生成已经冻结的领域 Command。
+`FileInteractionJournal` 只保存 committed facts。进程重启后，模型直接读取 typed inputs
+继续决策；恢复不会重复已有 action_id，也不会重新调用模型生成已经冻结的领域 Command。
+普通 Conversation 没有强制 Plan，显式 Investigation Project 的 accepted Plan 才驱动
+durable ready set 和恢复。
 
 当前限制：普通 Interaction 主要使用文件 Journal，已经证明单进程重启恢复，但尚不是多实例、分布式一致的 session store。
 
-## 11. Verifier feedback loop
+## 11. Investigation Project 的 durable control
+
+普通 Conversation 的恢复目标是“不重复已提交 action，并让模型继续读取 committed inputs”；它没有 durable Plan、ready set 或 required result contract。
+
+Investigation Project 的恢复目标不同：
+
+```text
+immutable definition
+  -> Planner Proposal
+  -> Plan Admission
+  -> accepted Plan
+  -> deterministic ready set
+  -> governed dispatch / join
+  -> verified SubGoal outcomes
+  -> Completion Gate
+```
+
+accepted Plan 是 Project aggregate 的 canonical fact，并被 worker 实际消费。steering 只能修订未冻结 SubGoal；审批、预算、能力缺口和取消都是 typed Project condition。GET 只读取 projection，不借查询推进任务。
+
+因此 Project 不是给 Conversation 增加 checkpoint，而是为动态长任务增加独立 definition、生命周期、恢复和完成所有权。
+
+## 12. Verifier feedback loop
 
 如果任务需要语义验证，模型先调用 `verify_interaction_draft`：
 
@@ -272,7 +285,7 @@ draft
 
 Runtime 只验证最终文本 digest 与 passed receipt 是否匹配，不修改模型草稿。
 
-## 12. Execution、Verification 与 Completion
+## 13. Execution、Verification 与 Completion
 
 三者必须分开：
 
@@ -295,7 +308,7 @@ Domain Completion
 - Verifier 认为文本合理，不能推翻 Tool 的真实 failure；
 - ResearchRun 仍为 `running`，不能作为成功展示。
 
-## 13. 决策所有权速查
+## 14. 决策所有权速查
 
 | 问题 | Owner |
 | --- | --- |
@@ -304,9 +317,11 @@ Domain Completion
 | 选择哪个 Tool/Agent | 模型 |
 | Tool 是否存在 | Registry |
 | Proposal schema 是否合法 | Admission |
+| durable Plan 是否 accepted、哪些 SubGoal ready | InvestigationProject aggregate / Project Application |
 | 是否允许执行 | Policy/Governance |
 | Tool 实际返回什么 | Tool/Provider |
 | Command 是否已执行 | Journal/Event/Receipt |
 | Answer 是否满足证据 | Verifier |
 | Aggregate 是否完成 | Domain state machine |
+| Project required result contract 是否齐全 | Investigation Completion Gate |
 | 是否具备发布证据 | E2E catalog + release gate |

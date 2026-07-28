@@ -20,7 +20,11 @@ from evals.e2e_quality.release_gate import (
 # Re-export only infrastructure fixtures. Importing the test-suite-wide
 # autouse fixture would deliberately disable live providers, which is invalid
 # for this suite.
-from tests.conftest import clean_postgres_business_tables, temp_dir  # noqa: F401
+from tests.conftest import (  # noqa: F401
+    clean_postgres_business_tables,
+    postgres_url,
+    temp_dir,
+)
 
 
 _ARCHIVE: TraceArchive | None = None

@@ -79,14 +79,14 @@ flowchart LR
             ContextPack --> PromptLayer
         end
 
-        subgraph Hitl["HITL / 高风险恢复"]
+        subgraph Hitl["知识生命周期 / 高风险恢复"]
             direction TB
-            PendingConfirmation["pending_confirmation<br/>confirm payload<br/>checkpoint pause<br/>resume decision"]:::model
-            DeleteTool["delete_note<br/>first call returns confirm<br/>confirmed=true deletes"]:::layer
-            AgentGraphState --> PendingConfirmation
-            PendingConfirmation --> DeleteTool
-            DeleteTool --> PostgresMemoryStore
-            DeleteTool --> GraphitiStore
+            LifecycleOperation["Lifecycle Operation<br/>immutable command<br/>status / command_digest"]:::model
+            LifecycleService["KnowledgeLifecycleService<br/>prepare / decision<br/>exactly-once receipt"]:::layer
+            LifecycleReceipt["Delete / Restore Receipt<br/>previous states"]:::model
+            LifecycleOperation --> LifecycleService
+            LifecycleService --> LifecycleReceipt
+            LifecycleService --> PostgresMemoryStore
         end
 
         DurableIdempotency["Durable Idempotency Ledger<br/>跨进程幂等账本 (未落地)"]:::future

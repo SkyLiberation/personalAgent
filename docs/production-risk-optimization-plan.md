@@ -4,15 +4,16 @@
 
 `docs/interview/06-interview-qa-and-tradeoffs.md` 中列出的生产风险与改进方向是当前面试口径。当前项目已经具备 checkpoint、tool audit、Postgres 幂等账本、删除前确认、知识版本链等基础能力，但距离生产可控仍有几个关键缺口。
 
-其中最大的生产风险曾是：**高风险知识删除一旦执行就是物理删除，缺少软删除、删除前快照、恢复接口和补偿链路**。当前 P0 已完成第一阶段落地，删除已改为软删除并生成删除快照，恢复通过 `restore_note` 工具和 API 进入 ToolGateway 治理链路。
+其中最大的生产风险曾是：**高风险知识删除缺少可恢复确认、幂等执行和精确恢复依据**。当前 P0 由固定的 `KnowledgeLifecycleService` 主链承担。
 
 这个风险优先级最高的原因是：
 
 - 删除属于不可逆副作用，影响用户长期记忆和信任。
-- 当前 `delete_note_confirmed` 会调用底层存储执行软删除，Postgres 通过 `deleted_at / deleted_by / delete_snapshot_id` 等列隐藏知识。
-- 删除前会写入 `knowledge_delete_snapshots`，保存 parent note、chunk note 和 review card payload。
-- replay checkpoint 仍用于复现“当时为什么删”，业务恢复则通过删除快照和 `restore_note` 完成。
-- 幂等账本和审计能降低重复执行与事后追查成本，恢复工具也已接入同一治理链路。
+- prepare 与 confirm 分离，prepare 不产生业务副作用并可跨进程恢复。
+- 一个 canonical `command_digest` 把用户确认绑定到实际 Command payload。
+- Operation、Workspace 状态迁移和 Receipt 在事务边界内保持一致。
+- Delete Receipt 保存 Item/Claim previous states，Restore 以它作为唯一恢复依据。
+- 相同 Command replay 返回同一 Receipt，不重复删除或恢复。
 
 因此，后续优化应优先围绕“删除安全、审计可查、权限约束、事实固化、冲突治理、回放治理”逐层推进。
 
@@ -31,26 +32,20 @@
 
 ### 当前状态
 
-当前工程已具备删除前确认、工具幂等、工具审计、软删除、删除快照和恢复工具。删除确认后，默认检索、列表、chunk 查询和复习卡查询会排除软删除数据；如果用户后悔、误删、或模型选错候选知识，可以用删除快照恢复 note、chunk 和 review card。
+当前工程已具备 durable prepare/confirm、scope 校验、单 digest、事务 Receipt、
+exactly-once replay 和精确恢复。删除确认后，Workspace Knowledge Item/Claim
+进入 deleted 状态；如果用户后悔，可以基于已执行 delete command 创建独立
+restore command。
 
 剩余风险是恢复冲突处理还比较基础：如果删除后同一知识已被新版本替代，当前恢复会按快照恢复原记录，尚未进入 `pending_restore_review` 或自动冲突合并流程。
 
 ### 优化方案
 
-1. 将知识删除改为软删除。**已落地**
-   - `knowledge_notes` 增加 `deleted_at`、`deleted_by`、`delete_reason`、`delete_run_id`、`delete_checkpoint_id`。
-   - 默认检索、固化、复习查询排除软删除数据。
-   - 管理查询可以按权限查看 deleted 记录。
-
-2. 增加删除前快照。**已落地**
-   - 新增 `knowledge_delete_snapshots` 表，保存删除前 note、版本、标签、review card、相关边等信息。
-   - 快照绑定 `run_id`、`thread_id`、`checkpoint_id`、`tool_call_id`、`idempotency_key`。
-
-3. 增加恢复接口。**已落地**
-   - `POST /api/memory/notes/{note_id}/restore`
-   - `POST /api/memory/delete-snapshots/{snapshot_id}/restore`
-   - 恢复操作也必须走 ToolGateway、PolicyEngine、幂等账本和审计。
-
+1. 删除和恢复只有一个 Application 写入口。**已落地**
+2. prepare/decision 使用 `knowledge_lifecycle_operations`，执行结果使用
+   `knowledge_lifecycle_receipts`。**已落地**
+3. 双 digest、六张生命周期表、无消费者 Event、通用 Procedure/Tool 和 snapshot
+   写路径已移除。**已落地**
 4. 增加恢复冲突处理。**待落地**
    - 如果原 note 已被新 note 替代，恢复时不直接覆盖。
    - 进入 `conflicted` 或 `pending_restore_review` 状态，由人工确认是否恢复、合并或保持删除。
@@ -58,9 +53,9 @@
 ### 验收标准
 
 - 已删除知识不会出现在普通检索结果中。**已验证**
-- 删除记录会保存删除原因、执行人和快照 ID；run/checkpoint 字段已预留。**已落地**
-- 删除后的 note 可以通过 snapshot 恢复。**已验证**
-- 恢复操作通过 `restore_note` 工具进入 ToolGateway、PolicyEngine、幂等账本和审计。**已落地**
+- 删除 Command/Receipt 保存原因、执行人、确认引用和 affected facts。**已落地**
+- 删除后的 Item/Claim 可以通过 delete receipt 精确恢复。**已验证**
+- 重启与 replay 不重复副作用。**已验证**
 - 恢复冲突进入人工 review。**待落地**
 
 ## P1：工具审计产品化

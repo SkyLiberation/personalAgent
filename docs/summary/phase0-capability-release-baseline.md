@@ -7,7 +7,7 @@
 
 ## 当前结论
 
-截至 2026-07-26，Phase 1–5 的生产主路径代码和当前工程 E2E 已落地；发布资格仍未
+截至 2026-07-28，Phase 1–5 的生产主路径代码和当前定向工程 E2E 已落地；发布资格仍未
 建立。必须区分当前完整工程证据和 clean-revision release gate：
 
 | 结论 | 状态 | 依据 |
@@ -18,35 +18,37 @@
 | 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
 | `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
 | 当前 `gpt-5.4-mini` 配置 | `passed`（定向） | 复杂 typed Proposal contract 通过；E01 77.16 秒、E17 171.31 秒均通过 |
-| 当前低层与架构门禁 | `passed` | 637 tests passed；`cycles=[]`、`forbidden_edges=[]`；变更范围 Ruff passed |
-| 当前完整 release E2E | `passed_engineering_evidence` | E01–E13/C01–C04/L01–L06 共 23/23 passed，0 failed、0 skipped，1777.44 秒，archive `20260726T011631.187395Z-20684-4a62da6a` |
-| 当前 Provider profile | `passed` | 同一 archive 内 E16–E19 真实 GitHub、Notion、GPT Researcher A2A 与 unavailable trace 均已生成 |
+| 当前低层与 catalog 门禁 | `passed_targeted_engineering_evidence` | 当前变更相关 57 tests passed；变更范围 Ruff passed；完整低层套件未在本次改动后重跑 |
+| 上一完整 release E2E | `historical_passed_engineering_evidence` | 旧版 E01–E13/C01–C04/L01–L06 共 23/23 passed，archive `20260726T011631.187395Z-20684-4a62da6a`；L01–L06 语义均已改变，不能证明当前 catalog |
+| 当前自然复杂场景 | `passed_targeted_engineering_evidence` | L01–L05 在同一批次通过；L06 的用户结果和 receipt 绑定已发生，但旧“两次 verifier”白盒断言失败，archive `20260727T163802.147366Z-12512-71873e6b`；移除该错误 release claim 后 L06 定向通过，archive `20260727T164815.081968Z-14456-e1196ad4` |
+| 当前外部自然场景 | `passed_targeted_engineering_evidence` | E17/E19/L04 在 archive `20260727T162913.553817Z-9428-c723ad92` 中通过；进一步移除 Prompt 内预期答案后，E16/E18 2/2 passed，archive `20260727T165211.554901Z-17344-3e4bc060`。用户只表达数据源或深度研究结果，不指定 MCP Tool、Agent ID、Artifact、答案或执行顺序 |
 | Clean revision 发布资格 | `not_established` | 完整 archive 与目标 worktree 均为 dirty；gate 必须 fail closed |
 
 GPT Researcher 已不再依赖原异常 endpoint。正式 `8001` 服务从相邻 `personalAgent/.env`
 读取 `STRUCTURED_API_KEY`、`STRUCTURED_BASE_URL` 和 `STRUCTURED_MODEL`，映射到唯一
 OpenAI-compatible tokeness Provider；凭据不复制到 GPT Researcher 仓库。当前外部
-tokeness 容量故障会使主 Agent 与 GPT Researcher 同时 fail closed。当前可以声明完整
-工程矩阵已通过，但不能写成已发布或可上线。
+tokeness 容量故障会使主 Agent 与 GPT Researcher 同时 fail closed。当前只能声明上述
+自然用户场景的定向工程证据；完整工程矩阵与发布资格都需要在当前 catalog 上重新建立。
 
 2026-07-25 已将生成式模型 canonical fact 更新为 `STRUCTURED_MODEL=gpt-5.4-mini`。
 Conversation、Structured decision、Graphiti、LangExtract、MS GraphRAG completion 以及
 GPT Researcher FAST/SMART/STRATEGIC 均从该配置解析；旧 DeepSeek/highway/uuapi 运行绑定
 已移除。embedding 仍是独立的本地/多语种 384 维契约，transcription 也未改变。当前
 tokeness 对先前 luna 请求返回 HTTP 404；terra 暴露复杂 RootModel union 与延迟问题。
-当前 object-root schema 与 `gpt-5.4-mini` 已通过完整 23/23 工程矩阵；dirty manifest
-仍阻止 clean-revision 发布声明。
+object-root schema 与 `gpt-5.4-mini` 曾通过完整 23/23 工程矩阵；L01–L06 与 E16–E19
+自然用户场景改版后已完成上述定向验证，但当前 catalog 的完整矩阵尚未重跑，不能沿用旧
+archive 建立发布声明。
 
 ## 本次链路收敛
 
 - Web、CLI、飞书等正式入口统一进入 `ConversationService`，旧
   `Task/GoalGraph/AdaptivePlanner/ExecutiveController` 入口和相应用例已删除，不保留
   alias、fallback 或双轨写入。
-- 模型每轮只产生 `FinalMessage | ContinueTurnProposal`；最新 `WorkingPlanSnapshot`、
-  typed ToolResult、Agent status/Artifact 和 `DecisionFeedback` 回到下一轮模型上下文。
+- 模型每轮只产生 `FinalMessage | ContinueTurnProposal`；typed ToolResult、Agent
+  status/Artifact 和 `DecisionFeedback` 回到下一轮模型上下文。
 - Tool 校验、权限和执行统一经过 `ToolExecutor`；Application 通过
   `InteractionToolPort` / `InteractionAgentPort` 依赖执行能力。
-- Knowledge delete/restore 使用 immutable governed command、双 digest、receipt 和
+- Knowledge delete/restore 使用 immutable governed command、单一 command digest、receipt 和
   restart/replay 约束，错误 digest 与重复副作用均由 E04/E10 反事实覆盖。
 - A2A Artifact 不再误路由到 upload-only `inspect_artifact`；cancelled status 不抹除已返回
   Artifact；同一 Agent 已返回 Artifact 后的重复委托被拒绝。最终 E17 trace 自动断言
@@ -71,7 +73,7 @@ tokeness 对先前 luna 请求返回 HTTP 404；terra 暴露复杂 RootModel uni
 
 | 事实 | Canonical owner / 唯一写入口 | 当前处理 |
 | --- | --- | --- |
-| Interaction 执行与 trace | `ConversationService` / Interaction journal | 正式入口唯一主循环；WorkingPlan 仅为 transient projection |
+| Interaction 执行与 trace | `ConversationService` / Interaction journal | 正式入口唯一主循环；只保存 committed inputs，不创建强制 Plan |
 | 本地 Tool 定义 | composition root → `ToolExecutor.register` | 从实际 registry 派生，不维护第二份 Tool 表 |
 | Tool 调用治理与执行事实 | `ToolExecutor` | Application 只依赖 `InteractionToolPort` |
 | MCP 远端名称/schema | MCP `tools/list` discovery | 与 Host mapping、风险和权限分开 |
@@ -89,23 +91,26 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 
 ## E2E 验收矩阵
 
-| 分组 | 当前声明 | 当前完整矩阵证据 |
+| 分组 | 当前声明 | 当前证据 |
 | --- | --- | --- |
-| 原生产品能力 E01–E13 | 13/13 passed | 当前单一 archive 13/13 passed |
-| 组合强能力 C01–C04 | 4/4 passed | 当前单一 archive 4/4 passed |
-| 复杂主循环 L01–L06 | 6/6 passed | 当前单一 archive 6/6 passed |
-| 外部 Profile | E16–E19 passed | 真实 GitHub、Notion、tokeness GPT Researcher 与 unavailable 反事实均在同一 archive 中 |
+| 原生产品能力 E01–E13 | 当前完整状态未建立 | 旧 archive 13/13；E06/E07 依赖的自然外部场景已定向通过 |
+| 组合强能力 C01–C04 | 当前完整状态未建立 | 旧 archive 4/4；C04 依赖的自然 A2A 场景已定向通过 |
+| 复杂主循环 L01–L06 | 各场景定向通过，非单一完整 archive | L01–L05 同批通过；L06 修正错误白盒 claim 后单跑通过 |
+| 外部 Profile | 当前 E16–E19 定向通过 | E17/E19/L04 与最终 E16/E18 分属两个定向 archive，不是完整矩阵 |
 
 其中：
 
 - E01 覆盖直接回答、澄清、连续会话，并反证没有无意义 Task/Receipt；
 - E04/E10 覆盖 governed delete/restore、错误 digest 拒绝、重启恢复和不重复副作用；
 - E05/C01/E13 覆盖 Research 终态、digest/source 和 limitation，不把 `running` 当成功；
-- E06/E16/E18 使用真实 GitHub/Notion MCP gateway，E19 覆盖能力不可用；
-- E07/E17/C04/L04 使用真实 GPT Researcher adapter/profile，并断言远端 completed 不自动
-  完成父级回答、Artifact 返回后不重复委托；
-- L01–L06 覆盖 Observation 后修订 WorkingPlan、安全并发、崩溃后从 canonical facts
-  重建、manager-specialist、budget fail-closed 和 verifier feedback 修订。
+- E06/E16/E18 使用真实 GitHub/Notion 数据源请求和 MCP gateway，E19 以自然请求覆盖资料源
+  未连接时的 limitation；
+- E07/E17/C04/L04 使用真实深度研究请求和 GPT Researcher adapter/profile，并在执行后断言
+  child Artifact 与父级用户结果分离；
+- L01–L06 分别覆盖自然个人知识回忆、最近记录与知识缺口综合、崩溃后从 canonical facts
+  恢复、深度安全研究、budget fail-closed，以及用户要求的语义审查与 receipt-bound 修订。
+- 两轮 `needs_revision -> passed` evaluator-optimizer 状态机属于 Runtime Conformance，
+  由 scripted 低层测试验证；release E2E 不要求真实用户控制 verifier 调用次数。
 
 Phase 3 的通用 MCP Host 边界以及 GitHub/Notion 真实 Profile 已在完整矩阵的 E06 中
 执行，Connector 主路径与 unavailable 反事实均有同一 archive 证据。
@@ -133,8 +138,17 @@ GPT Researcher local embedding: passed, dimensions=384
 Scoped Ruff for changed Provider/E2E/runtime files: passed
 Provider wall-clock deadline + interaction regression: 39 passed
 Formal E09 after deadline fix: passed, 92.27 seconds
-Current full release engineering matrix: 23 passed, 0 failed, 0 skipped, 1777.44 seconds
-Current full archive: 20260726T011631.187395Z-20684-4a62da6a, exit_status=0
+Previous full release engineering matrix: 23 passed, 0 failed, 0 skipped, 1777.44 seconds
+Previous full archive: 20260726T011631.187395Z-20684-4a62da6a, exit_status=0
+Current natural L01-L05 batch: passed; L06 user result passed but obsolete two-call assertion failed
+Current L01-L06 batch archive: 20260727T163802.147366Z-12512-71873e6b, exit_status=1
+Current corrected L06: passed, 73.73 seconds
+Current corrected L06 archive: 20260727T164815.081968Z-14456-e1196ad4, exit_status=0
+Current natural E17/E19 plus L04 batch: passed within 5/5 batch
+Current external base archive: 20260727T162913.553817Z-9428-c723ad92, exit_status=0
+Current answer-free-prompt E16/E18: 2 passed, 135.43 seconds
+Current E16/E18 archive: 20260727T165211.554901Z-17344-3e4bc060, exit_status=0
+Current scoped low-level/catalog tests: 57 passed
 Full-repository Ruff: 13 pre-existing findings outside this change scope
 ```
 
@@ -170,14 +184,14 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 5. 对应用例至少有一个 passed trace envelope；
 6. archive run identity 一致且全部 JSON checksum 有效。
 
-当前第 2、4 条已经由完整工程矩阵满足；第 3 条不满足，因为 archive manifest 与目标
-工作树均为 dirty。gate 实际返回 `target_revision_dirty` 和由 dirty archive 不可采信所
-派生的 `missing_same_revision_passing_trace`，因此 fail-closed 是预期结果。
+上一完整矩阵曾满足第 2、4 条，但 L01–L06 和 E16–E19 语义改变后不再匹配当前 catalog；
+当前定向场景也不是完整矩阵。第 3 条仍不满足，因为 archive manifest 与目标工作树均为 dirty。因此
+release gate 缺少 same-revision complete matrix 并 fail closed 是预期结果。
 
 ## 剩余风险
 
-1. 必须在提交后的 clean revision 重跑完整矩阵，才能建立发布资格；当前 23/23 只构成
-   dirty worktree 的工程执行证据；
+1. 必须在提交后的 clean revision 重跑当前完整矩阵，才能建立发布资格；旧 23/23 与本次
+   自然场景定向通过都只构成各自 dirty worktree 的工程执行证据；
 2. Docker Hub metadata 网络恢复后应按当前 Dockerfile clean build GPT Researcher，
    重建正式 8001 容器并至少重跑 E17；
 3. 全仓 Ruff 仍有 13 个范围外历史问题；变更范围 Ruff 通过不能写成全仓 lint 通过；

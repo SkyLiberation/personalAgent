@@ -4,6 +4,9 @@ from personal_agent.agents.gpt_researcher_a2a import GPTResearcherA2AAdapter
 from personal_agent.infra.a2a import A2AResearchResponse
 from personal_agent.kernel.config_models import GPTResearcherA2AConfig
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
+from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.scope import SecurityScope
 
 
 class FakeGPTResearcherA2AClient:
@@ -42,21 +45,35 @@ class FakeGPTResearcherA2AClient:
 
 def test_gpt_researcher_a2a_adapter_uses_canonical_async_run_identity():
     client = FakeGPTResearcherA2AClient()
-    adapter = GPTResearcherA2AAdapter(GPTResearcherA2AConfig(), client)
+    writer = _ArtifactWriter()
+    adapter = GPTResearcherA2AAdapter(
+        GPTResearcherA2AConfig(),
+        writer,
+        client,
+    )
 
-    submitted = adapter.submit(AgentTask("Agent2Agent protocol adoption"), _ctx())
+    submitted = adapter.submit(
+        AgentTask("Agent2Agent protocol adoption"),
+        _ctx(),
+        submission_key="submission-1",
+    )
     result = adapter.poll(submitted, _ctx())
 
     assert result.definition.agent_id == "gpt_researcher"
     assert result.projection.status == "completed"
     assert result.projection.external_task_id == "task-1"
-    assert "Agent2Agent" in result.artifact_index.artifacts[0].content
+    assert "Agent2Agent" in writer.contents[
+        result.artifact_index.artifacts[0].artifact_ref.resource_id
+    ]
     assert result.artifact_index.artifacts[0].producer_verification_status == "unverified"
     assert client.calls[0]["topic"] == "Agent2Agent protocol adoption"
 
 
 def test_gpt_researcher_a2a_adapter_governance_metadata():
-    adapter = GPTResearcherA2AAdapter(GPTResearcherA2AConfig())
+    adapter = GPTResearcherA2AAdapter(
+        GPTResearcherA2AConfig(),
+        _ArtifactWriter(),
+    )
     governance = adapter.profile.governance
 
     assert adapter.profile.protocol == "a2a_jsonrpc"
@@ -68,10 +85,28 @@ def test_gpt_researcher_a2a_adapter_governance_metadata():
 
 def _ctx() -> AgentGatewayContext:
     return AgentGatewayContext(
-        user_id="alice",
-        session_id="s1",
-        run_id="entry-run",
-        task_id="task",
-        goal_id="research",
-        action_id="delegate-research",
+        execution_scope=interaction_execution_scope(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            user_id="alice",
+            execution_id="entry-run",
+            task_id="delegate-research",
+        ),
     )
+
+
+class _ArtifactWriter:
+    def __init__(self) -> None:
+        self.contents: dict[str, str] = {}
+
+    def write_generated(self, **kwargs) -> ResourceRef:
+        resource_id = f"artifact-{len(self.contents) + 1}"
+        self.contents[resource_id] = kwargs["content"]
+        return ResourceRef(
+            resource_id=resource_id,
+            resource_type="artifact",
+            owner_scope=SecurityScope(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+            ),
+        )

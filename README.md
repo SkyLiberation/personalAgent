@@ -11,7 +11,7 @@
 这个项目的目标是构建一套可持续演进的“个人知识与外部情报闭环”，让 Agent 不只回答一次问题，
 还能够长期积累知识、维护知识质量、跟踪外部变化并主动行动。当前目标能力包括：
 
-1. **统一多端入口**：Web、CLI、飞书文本/文件和 SSE 请求进入同一 Agent 入口；TaskAnalyzer 理解目标、复合关系、澄清需求和会话指代，GoalGraphCompiler 生成受验证目标图。
+1. **统一多端入口**：Web、CLI、飞书文本/文件和 SSE 请求进入同一 Conversation Use Case；模型输出 typed answer/tool/agent proposal，Application 负责预算、执行与验证。
 2. **多来源知识采集**：接收文本、网页链接、PDF/上传文件和对话结论，完成正文提取、结构化分块、来源指纹、重复检测、摘要、标签和引用定位。
 3. **长期记忆与知识连接**：以 Postgres 保存笔记、chunk、复习卡、版本关系、运行历史和 checkpoint，以 Graphiti/Neo4j 保存实体、关系、事实和 episode 映射。
 4. **多源检索与证据问答**：组合图谱、本地语义/关键词、结构化文档、情景记忆、反思记忆和公网搜索，经过融合、去冗余、上下文压缩、生成与事实校验后输出可追溯回答。
@@ -21,11 +21,12 @@
 8. **一次性外部研究**：围绕指定主题规划多个查询，调用公网搜索和网页抓取，进行来源归一、事件聚类、重复消除、可信度判断和个人知识关联，生成结构化研究简报。
 9. **周期性情报订阅**：支持“每天 9 点收集 AI 新闻”等订阅；外部 cron 负责到期扫描和入队，Postgres durable worker 负责研究与独立投递任务。
 10. **个性化情报反馈**：简报条目支持展开、有用、不感兴趣、收藏和确认入库；反馈会更新订阅偏好，外部事件可带来源和可信度保存为长期知识。
-11. **可恢复 Agent 执行**：Goal/Executive 驱动开放任务，Governed Procedure 保护稳定事务；LangGraph 提供 checkpoint、interrupt/resume、受限计划修订、事件流和回放。
+11. **分层恢复语义**：Conversation 从 committed interaction facts 恢复短 ReAct；固定长流程由领域 Workflow 恢复；动态且跨轮次的调查由 durable Investigation Project journal 恢复。
 12. **受治理的能力行动**：CapabilityResolver 统一筛选本地工具、MCP、retriever 和 Agent；ToolGateway/AgentGateway 负责权限、ReAct allowlist、超时、限流、HITL、幂等和结构化审计。
 13. **后台任务与主动触达**：具备 Postgres durable queue、lease、heartbeat、重试和 dead-letter；支持图谱异步同步、研究任务、研究投递、复习简报与知识缺口提醒，并可通过工具诊断队列与重试失败任务。
 14. **多用户安全与可观测性**：提供 API Key、管理员范围、用户数据隔离、日志、health、LangSmith 脱敏 trace、工具/策略审计、run snapshot 和调试重放。
-15. **持续质量评测**：测试和 eval 覆盖 Task Analysis、GoalGraph、Executive、Procedure、Capability Resolution、工具治理、对话、RAG 和 Research 质量。
+15. **持续质量评测**：测试和 eval 覆盖 Conversation、领域 Workflow、Investigation Project、Capability Resolution、工具治理、RAG 和 Research 质量。
+16. **Durable 架构调查**：显式创建跨进程 Investigation Project，支持动态 SubGoal、并行、steering、审批、预算、取消、Evidence Admission 和 Completion Gate。
 
 整体闭环可以概括为：
 
@@ -48,9 +49,10 @@ External Cron / Manual Research
 | 组件 | 代码落点 | 能力总结 | 文档 |
 | --- | --- | --- | --- |
 | `入口层` | [adapters/web/api.py](src/personal_agent/adapters/web/api.py), [adapters/web/routes/](src/personal_agent/adapters/web/routes), [adapters/feishu/service.py](src/personal_agent/adapters/feishu/service.py), [adapters/cli/main.py](src/personal_agent/adapters/cli/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
-| `任务理解 / Goal Graph` | [task_analyzer.py](src/personal_agent/planning/task_analyzer.py), [task_compiler.py](src/personal_agent/planning/task_compiler.py) | TaskAnalyzer 输出语义提案；确定性 Compiler 生成 TaskContract、初始 Runtime 和 ContextInventory | [docs/topics/task-analysis.md](docs/topics/task-analysis.md) |
-| `AdaptivePlanner / Executive / Procedure` | [adaptive.py](src/personal_agent/planning/adaptive.py), [control_runtime.py](src/personal_agent/runtime/control_runtime.py), [procedure_runtime.py](src/personal_agent/runtime/procedure_runtime.py) | Planner 管短视窗策略，Executive 只产生有界提案，Procedure 持有稳定事务与副作用边界 | [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) |
-| `运行时 / 编排层` | [runtime.py](src/personal_agent/orchestration/runtime.py), [orchestration_graph.py](src/personal_agent/orchestration/orchestration_graph.py), [orchestration_nodes/](src/personal_agent/orchestration/orchestration_nodes/) | `AgentRuntime` 装配窄 Graph Context；LangGraph 承载 analyze/decide/act/observe/verify、HITL 和 checkpoint | [docs/topics/runtime.md](docs/topics/runtime.md) |
+| `Conversation ReAct` | [application/conversation/](src/personal_agent/application/conversation), [orchestration/runtime.py](src/personal_agent/orchestration/runtime.py) | 短生命周期 typed answer/tool/agent loop；恢复只消费 committed messages、Observation、Feedback、usage 和 action order | [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) |
+| `领域 Workflow` | [application/](src/personal_agent/application), [orchestration/worker.py](src/personal_agent/orchestration/worker.py) | 保存、删除恢复、订阅、研究和投递等固定事务由各自 Use Case、状态机与 durable queue 拥有 | [docs/workflow/README.md](docs/workflow/README.md) |
+| `Investigation Project` | [application/investigation_project/](src/personal_agent/application/investigation_project), [domain/investigation_project/](src/personal_agent/domain/investigation_project), [infra/storage/postgres_investigation_project.py](src/personal_agent/infra/storage/postgres_investigation_project.py) | 动态路径且跨进程/轮次/审批的调查；Plan 实际驱动 ready/join/coverage，journal 支持恢复、steering、预算和 Completion | [docs/summary/durable-investigation-project-current-state.md](docs/summary/durable-investigation-project-current-state.md) |
+| `运行时 / 编排层` | [runtime.py](src/personal_agent/orchestration/runtime.py), [service.py](src/personal_agent/orchestration/service.py), [worker.py](src/personal_agent/orchestration/worker.py) | `AgentRuntime` 集中装配 Port/Adapter；`AgentService` 暴露用例 facade；worker 消费 durable queue，不成为业务事实 owner | [docs/topics/runtime.md](docs/topics/runtime.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [application/capture/service.py](src/personal_agent/application/capture/service.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、研究/订阅管理、知识生命周期、worker 诊断、run 诊断、delete/restore、consolidate 等动作 | [docs/topics/tools.md](docs/topics/tools.md) |
 | `记忆层` | [memory/](src/personal_agent/memory), [infra/storage/](src/personal_agent/infra/storage), [kernel/models.py](src/personal_agent/kernel/models.py) | 有受限会话线索、Postgres 长期记忆、Research 数据、LangGraph checkpoint、run snapshot 和图谱字段映射 | [docs/topics/memory.md](docs/topics/memory.md)、[docs/topics/context-engineering.md](docs/topics/context-engineering.md) |
 | `检索与推理层` | [orchestration/ask/](src/personal_agent/orchestration/ask), [application/verifier.py](src/personal_agent/application/verifier.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 支持图谱、结构、本地、网络、情景和反思多路召回，RRF/MMR、上下文压缩、反证检索、引用生成和蕴含级校验 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
@@ -60,9 +62,12 @@ External Cron / Manual Research
 | `执行与反馈层` | [adapters/web/routes/](src/personal_agent/adapters/web/routes), [orchestration/runtime.py](src/personal_agent/orchestration/runtime.py), [orchestration/orchestration_models.py](src/personal_agent/orchestration/orchestration_models.py) | 支持同步 API、SSE、结构化 `AgentEvent`、run snapshot、LangGraph interrupt/resume、失败降级、异步任务和前端确认面板 | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测、治理与评测层` | [kernel/observability.py](src/personal_agent/kernel/observability.py), [adapters/web/auth.py](src/personal_agent/adapters/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、执行回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
-## Entry 编排图
+## 执行主链
 
-[docs/mermaid/entry-orchestration.md](docs/mermaid/entry-orchestration.md) 是由 [scripts/draw_entry_graph.py](scripts/draw_entry_graph.py) 生成的当前 LangGraph 总编排图源，用来对齐 `analyze_task -> compile_goal_graph -> decide -> act -> observe -> verify -> finalize` 以及 clarification、ReAct 和 HITL 子图。运行 `uv run python scripts/draw_entry_graph.py` 可刷新该图；`uv run python scripts/export_thread_checkpoints.py <thread_id>` 会把持久化 checkpoint 导出到 `scripts/assets/`。
+普通输入进入 Conversation ReAct；固定事务直接进入领域 Use Case；显式 Investigation Project
+通过 HTTP 创建后由 `investigation` worker 驱动。历史 LangGraph 图不再定义这些 canonical
+主链，当前事实统一见
+[核心架构](docs/summary/core-architecture-current-state.md)。
 
 ## 当前技术栈
 
@@ -130,12 +135,11 @@ README 只保留最短路径：
 
 ### 5. Knowledge Lifecycle
 
-- 知识删除通过 mandatory `knowledge_delete` Procedure 和 LangGraph HITL 保护
-- 删除计划包含 `resolve` 步骤，可通过图谱 episode、本地相似检索和关键词匹配解析待删笔记
-- `delete_note` 工具会返回确认 payload，entry 总图通过 LangGraph interrupt/resume 完成前端确认后继续删除笔记、复习卡和可用的图谱 episode
-- 删除 parent note 时自动检测子 chunk 并级联删除
+- `KnowledgeLifecycleService` 是删除与恢复的唯一写入口，普通 Conversation Tool 和直接 DELETE API 不可执行删除
+- prepare 只创建 durable operation；确认时用一个 `command_digest` 绑定 canonical payload，重启后仍可继续
+- confirm 在单事务中更新 Knowledge Item/Claim、记录 Workspace 状态事件并写 Receipt；replay 返回同一 Receipt
+- restore 引用已执行的 delete command，并按 delete receipt 中的 previous states 精确恢复
 - `solidify_conversation` 已具备草稿生成、`draft_ready` 事件和 `capture_text` 入库工具基础
-- 删除前写入快照，`restore_note` 可在确认、幂等和审计约束下恢复 note、chunk 与 review card
 - 知识版本支持 supersede 与 conflicted 状态，为自动整理和冲突治理提供基础
 
 ### 6. Review & Knowledge Digest
@@ -308,4 +312,5 @@ uv run personal-agent research-once "AI Agent" --max-items 5
 uv run personal-agent research-subscribe "AI" --schedule-time 09:00 --chat-id oc_xxx
 uv run personal-agent research-schedule
 uv run personal-agent worker --queue research
+uv run personal-agent worker --queue investigation
 ```

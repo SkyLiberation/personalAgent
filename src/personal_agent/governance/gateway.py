@@ -26,6 +26,7 @@ from personal_agent.capabilities.contracts.grants import (
     AtomicCapabilityGrant,
     ProcedureNodeGrant,
 )
+from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -307,7 +308,7 @@ class ToolGateway:
         limit = governance.rate_limit_per_minute
         if limit is None or limit <= 0:
             return False
-        subject = context.user_id or context.thread_id or "anonymous"
+        subject = context.execution_scope.principal_id
         key = f"{tool.name}:{subject}"
         return not self._rate_limiter.allow(key, limit=limit, window_seconds=60.0)
 
@@ -329,7 +330,11 @@ class ToolGateway:
         normalized_args = args if isinstance(args, dict) else {}
         call_id = str(call.get("id", ""))
         context = self._context_from_state(state, call_id)
-        grant = self._grant_from_state(state, context.step_id)
+        grant = self._grant_from_state(
+            state,
+            context.execution_scope.logical_subgoal_id
+            or context.execution_scope.task_id,
+        )
         artifact = self.invoke(name, normalized_args, context, grant=grant)
         content = (
             str(artifact.get("data"))
@@ -352,8 +357,8 @@ class ToolGateway:
         decision = self._policy.evaluate(
             PolicyInput(
                 action="tool_call",
-                user_id=context.user_id,
-                session_id=context.session_id,
+                user_id=context.execution_scope.principal_id,
+                session_id=context.execution_scope.security_scope.workspace_id,
                 source_platform=context.source_platform,
                 execution_mode=context.execution_mode,
                 tool_name=tool.name,
@@ -399,12 +404,26 @@ class ToolGateway:
         if bound_name != tool_name:
             return _PolicyViolation("execution grant is bound to a different tool")
         if (
-            context.step_id
+            (
+                context.execution_scope.logical_subgoal_id
+                or context.execution_scope.task_id
+            )
             and isinstance(grant, AtomicCapabilityGrant)
-            and grant.action_ref != context.step_id
+            and grant.action_ref
+            != (
+                context.execution_scope.logical_subgoal_id
+                or context.execution_scope.task_id
+            )
         ):
             return _PolicyViolation("execution grant is bound to a different invocation")
-        if confirmation_required and grant.required_confirmation_ref != context.step_id:
+        if (
+            confirmation_required
+            and grant.required_confirmation_ref
+            != (
+                context.execution_scope.logical_subgoal_id
+                or context.execution_scope.task_id
+            )
+        ):
             return _PolicyViolation(
                 "confirmed high-risk execution requires a confirmation-bound grant"
             )
@@ -494,12 +513,12 @@ class ToolGateway:
             tool_name=tool.name,
             permission_scope=governance.permission_scope,
             risk_level=governance.risk_level,
-            user_id=context.user_id,
-            session_id=context.session_id,
+            user_id=context.execution_scope.principal_id,
+            session_id=context.execution_scope.security_scope.workspace_id,
             source_platform=context.source_platform,
             execution_mode=context.execution_mode,
-            thread_id=context.thread_id,
-            run_id=context.run_id,
+            thread_id=context.execution_scope.thread_id,
+            run_id=context.execution_scope.execution_id,
             audit_required=governance.audit_required,
         )
 
@@ -555,10 +574,13 @@ class ToolGateway:
             input=args,
             output=output,
             execution_mode=context.execution_mode,
-            step_id=context.step_id,
-            thread_id=context.thread_id,
-            run_id=context.run_id,
-            user_id=context.user_id,
+            step_id=(
+                context.execution_scope.logical_subgoal_id
+                or context.execution_scope.task_id
+            ),
+            thread_id=context.execution_scope.thread_id,
+            run_id=context.execution_scope.execution_id,
+            user_id=context.execution_scope.principal_id,
             latency_ms=latency_ms,
             langsmith_run_id=_current_langsmith_run_id(),
             attempts=attempts,
@@ -577,14 +599,27 @@ class ToolGateway:
         execution_mode = "react" if active_context == "react" else "deterministic"
         entry_input = getattr(state, "entry_input", None)
         source_platform = getattr(entry_input, "source_platform", None)
+        tenant_id = str(getattr(state, "tenant_id", None) or "personal-agent")
+        workspace_id = str(
+            getattr(state, "workspace_id", None)
+            or getattr(state, "session_id", None)
+            or getattr(state, "thread_id", None)
+            or "default"
+        )
+        principal_id = str(getattr(state, "user_id", None) or "anonymous")
         return ToolGatewayContext(
+            execution_scope=ExecutionScope(
+                security_scope=SecurityScope(
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                ),
+                principal_id=f"{tenant_id}:{principal_id}",
+                execution_id=str(getattr(state, "run_id", None) or call_id),
+                thread_id=getattr(state, "thread_id", None),
+                task_id=getattr(tracking, "pending_step_id", None),
+            ),
             execution_mode=execution_mode,
             tool_call_id=call_id,
-            step_id=getattr(tracking, "pending_step_id", None),
-            thread_id=getattr(state, "thread_id", None),
-            run_id=getattr(state, "run_id", None),
-            user_id=getattr(state, "user_id", None),
-            session_id=getattr(state, "session_id", None),
             source_platform=source_platform,
             react_allowed_tools=frozenset(getattr(react, "allowed_tools", []) or []),
         )

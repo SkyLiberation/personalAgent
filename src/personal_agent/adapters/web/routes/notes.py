@@ -15,7 +15,10 @@ from personal_agent.application.knowledge_lifecycle import (
     KnowledgeDeleteOperationView,
     KnowledgeRestoreOperationView,
 )
-from personal_agent.adapters.web.routes._shared import resolve_user_id
+from personal_agent.adapters.web.routes._shared import (
+    resolve_requested_principal,
+    resolve_user_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +38,7 @@ class PrepareKnowledgeDeleteRequest(BaseModel):
 class DecideKnowledgeDeleteRequest(BaseModel):
     user_id: str | None = None
     decision: Literal["confirm", "reject"]
-    authorization_digest: str = Field(min_length=64, max_length=64)
-    execution_command_digest: str = Field(min_length=64, max_length=64)
+    command_digest: str = Field(min_length=64, max_length=64)
     confirmation_ref: str = Field(default="", max_length=200)
 
 
@@ -50,8 +52,7 @@ class PrepareKnowledgeRestoreRequest(BaseModel):
 class DecideKnowledgeRestoreRequest(BaseModel):
     user_id: str | None = None
     decision: Literal["confirm", "reject"]
-    authorization_digest: str = Field(min_length=64, max_length=64)
-    execution_command_digest: str = Field(min_length=64, max_length=64)
+    command_digest: str = Field(min_length=64, max_length=64)
     confirmation_ref: str = Field(default="", max_length=200)
 
 
@@ -85,7 +86,12 @@ def register_note_routes(
         body: PrepareKnowledgeDeleteRequest,
         request: Request,
     ) -> KnowledgeDeleteOperationView:
-        resolved_user = body.user_id or resolve_user_id(request, settings)
+        try:
+            resolved_user = resolve_requested_principal(
+                request, settings, body.user_id
+            ).user_id
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         workspace_id = body.workspace_id or resolved_user
         try:
             return service.knowledge_lifecycle_service.prepare_delete(
@@ -109,14 +115,18 @@ def register_note_routes(
         body: DecideKnowledgeDeleteRequest,
         request: Request,
     ) -> KnowledgeDeleteOperationView:
-        resolved_user = body.user_id or resolve_user_id(request, settings)
+        try:
+            resolved_user = resolve_requested_principal(
+                request, settings, body.user_id
+            ).user_id
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         try:
             return service.knowledge_lifecycle_service.decide_delete(
                 command_id=command_id,
                 user_id=resolved_user,
                 decision=body.decision,
-                authorization_digest=body.authorization_digest,
-                execution_command_digest=body.execution_command_digest,
+                command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,
             )
         except KnowledgeDeleteNotFound as exc:
@@ -151,7 +161,12 @@ def register_note_routes(
         body: PrepareKnowledgeRestoreRequest,
         request: Request,
     ) -> KnowledgeRestoreOperationView:
-        resolved_user = body.user_id or resolve_user_id(request, settings)
+        try:
+            resolved_user = resolve_requested_principal(
+                request, settings, body.user_id
+            ).user_id
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         workspace_id = body.workspace_id or resolved_user
         try:
             return service.knowledge_lifecycle_service.prepare_restore(
@@ -175,14 +190,18 @@ def register_note_routes(
         body: DecideKnowledgeRestoreRequest,
         request: Request,
     ) -> KnowledgeRestoreOperationView:
-        resolved_user = body.user_id or resolve_user_id(request, settings)
+        try:
+            resolved_user = resolve_requested_principal(
+                request, settings, body.user_id
+            ).user_id
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         try:
             return service.knowledge_lifecycle_service.decide_restore(
                 command_id=command_id,
                 user_id=resolved_user,
                 decision=body.decision,
-                authorization_digest=body.authorization_digest,
-                execution_command_digest=body.execution_command_digest,
+                command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,
             )
         except KnowledgeDeleteNotFound as exc:

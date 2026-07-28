@@ -376,6 +376,10 @@ def _notion_e2e_resource() -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def live_a2a_web_process(server_temp_dir: Path) -> Iterator[LiveWebProcess]:
+    yield from _yield_live_a2a_web_process(server_temp_dir)
+
+
+def _yield_live_a2a_web_process(server_temp_dir: Path) -> Iterator[LiveWebProcess]:
     settings = _require_live_dependencies()
     endpoint = os.getenv("PERSONAL_AGENT_E2E_A2A_ENDPOINT", "http://127.0.0.1:8001/a2a")
     card_url = os.getenv(
@@ -466,6 +470,10 @@ def _post_text_attachment(
         return json.loads(response.read().decode("utf-8"))
 
 
+def _assert_natural_user_text(text: str, *internal_terms: str) -> None:
+    assert all(term not in text for term in internal_terms)
+
+
 def test_e16_http_process_reads_github_through_real_mcp_gateway(
     live_github_mcp_web_process: LiveWebProcess,
     trace_archive: TraceArchive,
@@ -475,16 +483,21 @@ def test_e16_http_process_reads_github_through_real_mcp_gateway(
     repository = os.getenv("PERSONAL_AGENT_E2E_GITHUB_REPO", "github-mcp-server")
     path = os.getenv("PERSONAL_AGENT_E2E_GITHUB_PATH", "README.md")
     expected = os.getenv("PERSONAL_AGENT_E2E_GITHUB_EXPECTED_TEXT", "GitHub MCP Server")
+    user_text = (
+        f"请查看 GitHub 仓库 {owner}/{repository} 的 {path} 文件，告诉我文件的一级标题，"
+        "并在最终回答中逐字写出。这是只读检查，不要修改仓库内容。"
+    )
+    _assert_natural_user_text(
+        user_text,
+        "github.get_file_contents",
+        "ToolResult",
+        "capability_id",
+    )
     result = _post_json(
         f"{live_github_mcp_web_process.base_url}/api/conversation/turn",
         {
             "conversation_id": f"release-e16-github-{uuid4().hex}",
-            "messages": [{"role": "user", "content": (
-                "必须只调用 github.get_file_contents，使用参数 "
-                f"owner={owner!r}, repo={repository!r}, path={path!r}。"
-                f"根据真实 ToolResult 找到准确文本 {expected!r}，并把该文本逐字抄写为最终答案；"
-                "不要只回答包含或不包含，禁止调用写工具。"
-            )}],
+            "messages": [{"role": "user", "content": user_text}],
         },
     )
     trace = _get_json(
@@ -498,6 +511,16 @@ def test_e16_http_process_reads_github_through_real_mcp_gateway(
     tool_results = [item for item in trace["inputs"] if item["kind"] == "tool_result"]
     successful_results = [item for item in mcp_results if item["status"] == "succeeded"]
     serialized_results = json.dumps(mcp_results, ensure_ascii=False, default=str)
+    trace_archive.write_trace(
+        nodeid=request.node.nodeid,
+        case_id="E16.release_http_real_github_mcp",
+        trace={
+            "natural_user_text": user_text,
+            "result": result,
+            "interaction_trace": trace,
+            "resource": {"owner": owner, "repository": repository, "path": path},
+        },
+    )
     assert result["disposition"] == "answer"
     assert tool_results == mcp_results
     assert len(successful_results) == 1
@@ -509,15 +532,6 @@ def test_e16_http_process_reads_github_through_real_mcp_gateway(
     assert expected in serialized_results
     assert expected in str(result["message"]["content"])
     assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
-    trace_archive.write_trace(
-        nodeid=request.node.nodeid,
-        case_id="E16.release_http_real_github_mcp",
-        trace={
-            "result": result,
-            "interaction_trace": trace,
-            "resource": {"owner": owner, "repository": repository, "path": path},
-        },
-    )
 
 
 def test_e18_http_process_reads_notion_through_real_mcp_gateway(
@@ -526,15 +540,21 @@ def test_e18_http_process_reads_notion_through_real_mcp_gateway(
     request: pytest.FixtureRequest,
 ) -> None:
     page_id, expected = _notion_e2e_resource()
+    user_text = (
+        f"请查看我在 Notion 中的页面 {page_id}，告诉我页面里记录的 E2E 验收标记，"
+        "并在最终回答中逐字写出。这是只读检查，不要修改页面。"
+    )
+    _assert_natural_user_text(
+        user_text,
+        "notion.retrieve_page_markdown",
+        "ToolResult",
+        "capability_id",
+    )
     result = _post_json(
         f"{live_notion_mcp_web_process.base_url}/api/conversation/turn",
         {
             "conversation_id": f"release-e18-notion-{uuid4().hex}",
-            "messages": [{"role": "user", "content": (
-                "必须只调用 notion.retrieve_page_markdown，使用参数 "
-                f"page_id={page_id!r}。根据真实 ToolResult 找到准确文本 {expected!r}，"
-                "并把该文本逐字抄写为最终答案；不要只回答包含或不包含，禁止调用任何写工具。"
-            )}],
+            "messages": [{"role": "user", "content": user_text}],
         },
     )
     trace = _get_json(
@@ -548,6 +568,16 @@ def test_e18_http_process_reads_notion_through_real_mcp_gateway(
     tool_results = [item for item in trace["inputs"] if item["kind"] == "tool_result"]
     successful_results = [item for item in mcp_results if item["status"] == "succeeded"]
     serialized_results = json.dumps(mcp_results, ensure_ascii=False, default=str)
+    trace_archive.write_trace(
+        nodeid=request.node.nodeid,
+        case_id="E18.release_http_real_notion_mcp",
+        trace={
+            "natural_user_text": user_text,
+            "result": result,
+            "interaction_trace": trace,
+            "page_id": page_id,
+        },
+    )
     assert result["disposition"] == "answer"
     assert tool_results == mcp_results
     assert len(successful_results) == 1
@@ -559,11 +589,6 @@ def test_e18_http_process_reads_notion_through_real_mcp_gateway(
     assert expected in serialized_results
     assert expected in str(result["message"]["content"])
     assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
-    trace_archive.write_trace(
-        nodeid=request.node.nodeid,
-        case_id="E18.release_http_real_notion_mcp",
-        trace={"result": result, "interaction_trace": trace, "page_id": page_id},
-    )
 
 
 def test_e19_http_process_mcp_capability_unavailable_fails_closed(
@@ -571,28 +596,40 @@ def test_e19_http_process_mcp_capability_unavailable_fails_closed(
     trace_archive: TraceArchive,
     request: pytest.FixtureRequest,
 ) -> None:
+    user_text = (
+        "请从我已连接的 GitHub 或 Notion 中读取一份外部资料并概括。"
+        "如果当前没有连接这些资料源，请直接说明无法访问，不要用常识编造内容。"
+    )
+    _assert_natural_user_text(
+        user_text,
+        "MCP",
+        "Connector",
+        "disposition=",
+        "capability",
+    )
     result = _post_json(
         f"{live_web_process.base_url}/api/conversation/turn",
         {
             "conversation_id": f"release-e19-mcp-unavailable-{uuid4().hex}",
-            "messages": [{"role": "user", "content": (
-                "必须使用 GitHub 或 Notion MCP 读取外部资料。若当前能力列表没有这两个 "
-                "Connector，返回 disposition=limitation；禁止调用其他工具或用常识替代。"
-            )}],
+            "messages": [{"role": "user", "content": user_text}],
         },
     )
     trace = _get_json(
         f"{live_web_process.base_url}/api/conversation/runs/{result['interaction_run_ref']}"
     )
+    trace_archive.write_trace(
+        nodeid=request.node.nodeid,
+        case_id="E19.release_http_mcp_capability_unavailable",
+        trace={
+            "natural_user_text": user_text,
+            "result": result,
+            "interaction_trace": trace,
+        },
+    )
     assert result["disposition"] == "limitation"
     assert trace["usage"]["tool_calls"] == 0
     assert not any(item["kind"] == "tool_result" for item in trace["inputs"])
     assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
-    trace_archive.write_trace(
-        nodeid=request.node.nodeid,
-        case_id="E19.release_http_mcp_capability_unavailable",
-        trace={"result": result, "interaction_trace": trace},
-    )
 
 
 def test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result(
@@ -600,22 +637,39 @@ def test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result(
     trace_archive: TraceArchive,
     request: pytest.FixtureRequest,
 ) -> None:
+    user_text = (
+        "请对 Agent2Agent（A2A）协议做一份深入研究，优先依据 a2a-protocol.org 的官方"
+        "协议文档，并补充其他权威来源。报告需要比较说明协议目标、核心交互机制、信任边界"
+        "和适用限制，最后给出结构化中文结论及来源依据，不要只给简短概述。"
+    )
+    _assert_natural_user_text(
+        user_text,
+        "gpt_researcher",
+        "AgentArtifact",
+        "completed",
+        "父级",
+    )
     result = _post_json(
         f"{live_a2a_web_process.base_url}/api/conversation/turn",
         {
-                "conversation_id": f"release-e17-a2a-{uuid4().hex}",
-                "messages": [{"role": "user", "content": (
-                    "请委托 gpt_researcher 研究 Agent2Agent（A2A）协议的目的，优先使用 "
-                    "a2a-protocol.org 的官方协议文档，并基于返回的 "
-                    "AgentArtifact 给出一句中文总结。唯一用户结果是总结，研究报告只是中间证据；"
-                    "远端 completed 不能自动完成你的父级回答。"
-                )}],
+            "conversation_id": f"release-e17-a2a-{uuid4().hex}",
+            "messages": [{"role": "user", "content": user_text}],
         },
     )
     trace = _get_json(
         f"{live_a2a_web_process.base_url}/api/conversation/runs/{result['interaction_run_ref']}"
     )
     agent_artifacts = [item for item in trace["inputs"] if item["kind"] == "agent_artifact"]
+    trace_archive.write_trace(
+        nodeid=request.node.nodeid,
+        case_id="E17.release_http_real_a2a_delegation",
+        trace={
+            "natural_user_text": user_text,
+            "result": result,
+            "interaction_trace": trace,
+            "agent_artifact": agent_artifacts[0] if agent_artifacts else None,
+        },
+    )
     assert result["disposition"] == "answer"
     assert len(agent_artifacts) == 1
     assert agent_artifacts[0]["capability_id"] == "gpt_researcher"
@@ -629,9 +683,15 @@ def test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result(
     assert agent_artifacts[0]["payload"]["artifact_refs"]
     assert trace["final_message"]["message"] == result["message"]["content"]
     assert trace["usage"]["agent_calls"] == 1
-    assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
-    trace_archive.write_trace(
-        nodeid=request.node.nodeid,
-        case_id="E17.release_http_real_a2a_delegation",
-        trace={"result": result, "interaction_trace": trace, "agent_artifact": agent_artifacts[0]},
+    final_message = str(result["message"]["content"])
+    assert all(
+        any(term in final_message for term in alternatives)
+        for alternatives in (
+            ("目标", "目的"),
+            ("机制", "交互"),
+            ("信任", "安全"),
+            ("限制", "边界"),
+            ("来源", "依据"),
+        )
     )
+    assert not any(key in result for key in ("task", "plan", "command", "completion_report"))

@@ -33,6 +33,7 @@ from personal_agent.tools import (
 from personal_agent.tools.mcp import build_mcp_tool
 from personal_agent.tools.mcp_capability import capability_from_tool
 from langchain_core.tools import tool
+from tests.test_tools import _scope
 
 
 class DummyResponse:
@@ -338,6 +339,7 @@ def test_build_mcp_tool_registers_governed_tool(monkeypatch):
     executor.register(tools[0])
     result = executor.invoke_direct(
         "enterprise.search_docs",
+        execution_scope=_scope(),
         query="agent",
         limit=2,
         user_id="u1",
@@ -496,9 +498,9 @@ def test_mcp_gateway_enforces_grant_resource_locator_binding():
     gateway = ToolGateway()
     gateway.register(tool)
     context = ToolGatewayContext(
+        execution_scope=_scope(task_id="step-1"),
         execution_mode="react",
         tool_call_id="call-1",
-        step_id="step-1",
         react_allowed_tools=("filesystem.read_text_file",),
     )
 
@@ -643,6 +645,7 @@ for line in sys.stdin:
         executor.register(tools[0])
         result = executor.invoke_direct(
             "github.search_code",
+            execution_scope=_scope(),
             query="repo:example/repo agent",
             perPage=1,
             user_id="u1",
@@ -692,6 +695,7 @@ def test_enterprise_knowledge_search_wraps_mcp_business_sources():
 
     result = executor.invoke_direct(
         "enterprise_knowledge_search",
+        execution_scope=_scope("alice"),
         query="Agent framework",
         limit=3,
         user_id="alice",
@@ -736,6 +740,7 @@ def test_enterprise_knowledge_search_wraps_raw_wiki_provider():
 
         result = executor.invoke_direct(
             "enterprise_knowledge_search",
+            execution_scope=_scope("alice"),
             query="Agent Framework MCP",
             limit=5,
             user_id="alice",

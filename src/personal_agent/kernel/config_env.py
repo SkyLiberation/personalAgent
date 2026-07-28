@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 from typing import Any
@@ -876,17 +877,37 @@ def _parse_json_list_env(name: str) -> tuple[str, ...]:
     return tuple(str(item) for item in parsed)
 
 
-def _parse_api_keys(raw: str) -> dict[str, str]:
-    """Parse 'key1:user1,key2:user2' into {key1: user1, key2: user2}."""
-    result: dict[str, str] = {}
+def _parse_api_keys(raw: str) -> dict[str, dict[str, str]]:
+    """Parse the canonical JSON API-key-to-principal mapping."""
+
     if not raw.strip():
-        return result
-    for pair in raw.split(","):
-        pair = pair.strip()
-        if ":" not in pair:
-            continue
-        key, user = pair.split(":", 1)
-        result[key.strip()] = user.strip()
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "API keys must be JSON mapping keys to {tenant_id,user_id}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("API key configuration must be a JSON object")
+    result: dict[str, dict[str, str]] = {}
+    for key, principal in parsed.items():
+        if (
+            not isinstance(key, str)
+            or not key
+            or not isinstance(principal, dict)
+            or not isinstance(principal.get("tenant_id"), str)
+            or not principal["tenant_id"]
+            or not isinstance(principal.get("user_id"), str)
+            or not principal["user_id"]
+        ):
+            raise ValueError(
+                "each API key must map to non-empty tenant_id and user_id"
+            )
+        result[key] = {
+            "tenant_id": principal["tenant_id"],
+            "user_id": principal["user_id"],
+        }
     return result
 
 

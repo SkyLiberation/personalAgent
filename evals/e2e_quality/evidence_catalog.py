@@ -31,6 +31,7 @@ class EvidenceClaimKind(str, Enum):
     CAPABILITY_PROFILE = "capability_profile"
     COMPOSITE_CAPABILITY = "composite_capability"
     COMPLEX_LOOP = "complex_loop"
+    DURABLE_INVESTIGATION = "durable_investigation"
 
 
 class CapabilityProfile(str, Enum):
@@ -170,6 +171,38 @@ def _profile(
     )
 
 
+def _investigation(
+    case_id: str,
+    test_name: str,
+    *,
+    module: str,
+    fault_mechanism: FaultMechanism = FaultMechanism.NONE,
+    capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
+    expected_terminal: str = "completed",
+) -> EvidenceCase:
+    return EvidenceCase(
+        evidence_id=f"{case_id}.durable_investigation",
+        case_id=case_id,
+        module=module,
+        test_name=test_name,
+        layers=frozenset(EvidenceLayer),
+        entry_boundary=EntryBoundary.IN_PROCESS_SERVICE,
+        fault_mechanism=fault_mechanism,
+        raw_user_input=False,
+        real_model_required=False,
+        real_provider_required=False,
+        test_doubles=frozenset({"scripted_model", "frozen_provider"}),
+        claim_kind=EvidenceClaimKind.DURABLE_INVESTIGATION,
+        capability_profile=capability_profile,
+        expected_terminal=expected_terminal,
+        limitation=(
+            "Diagnostic durable-project state-machine evidence. It uses the production "
+            "application/domain/persistence path with scripted semantic decisions and "
+            "frozen providers; it is not release evidence for live model/provider behavior."
+        ),
+    )
+
+
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     _product("E01", "test_product_e01_conversation_journey", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
     _product("E02", "test_product_e02_grounded_workspace_ask", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
@@ -188,16 +221,95 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     _composite("C02", "test_composite_c02_continuous_knowledge_steward", capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY),
     _composite("C03", "test_composite_c03_personalized_learning_agent", capability_profile=CapabilityProfile.WEB_SEARCH),
     _composite("C04", "test_composite_c04_expert_collaboration_agent", capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
-    _loop("L01", "test_l01_http_observation_revises_working_plan"),
+    _loop("L01", "test_l01_http_natural_recall_uses_observed_personal_knowledge"),
     _loop("L02", "test_l02_http_independent_reads_use_safe_concurrency"),
     _loop("L03", "test_l03_http_process_restart_rebuilds_from_committed_facts", fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
     _loop("L04", "test_l04_http_manager_synthesizes_bounded_specialist_artifact", capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
     _loop("L05", "test_l05_http_budget_exhaustion_fails_closed", expected_terminal="limitation"),
-    _loop("L06", "test_l06_http_verifier_feedback_revises_result"),
+    _loop("L06", "test_l06_http_user_requested_review_returns_receipt_bound_safe_revision"),
     _profile("E16", "test_e16_http_process_reads_github_through_real_mcp_gateway", CapabilityProfile.GITHUB_MCP),
     _profile("E17", "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result", CapabilityProfile.GPT_RESEARCHER_A2A),
     _profile("E18", "test_e18_http_process_reads_notion_through_real_mcp_gateway", CapabilityProfile.NOTION_MCP),
     _profile("E19", "test_e19_http_process_mcp_capability_unavailable_fails_closed", CapabilityProfile.BASELINE),
+    _investigation(
+        "LT01",
+        "test_lt01_complete_architecture_investigation",
+        module="test_durable_investigation_project.py",
+        capability_profile=CapabilityProfile.GITHUB_NOTION_MCP,
+    ),
+    _investigation(
+        "LT02",
+        "test_lt02_command_dispatch_recovers_without_duplicate",
+        module="test_durable_investigation_recovery.py",
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
+    _investigation(
+        "LT03",
+        "test_lt03_steering_preserves_frozen_work_and_user_requirements",
+        module="test_durable_investigation_project.py",
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
+    _investigation(
+        "LT04",
+        "test_lt04_parallel_children_join_only_after_verified_outcomes",
+        module="test_durable_investigation_project.py",
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
+    _investigation(
+        "LT05",
+        "test_lt05_external_delegation_waits_for_digest_bound_approval",
+        module="test_durable_investigation_project.py",
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
+    _investigation(
+        "LT06",
+        "test_lt06_budget_exhaustion_pauses_with_partial_coverage",
+        module="test_durable_investigation_project.py",
+        expected_terminal="paused",
+    ),
+    _investigation(
+        "LT07",
+        "test_lt07_cancel_quarantines_late_result",
+        module="test_durable_investigation_project.py",
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+        expected_terminal="cancelled",
+    ),
+    _investigation(
+        "LT08",
+        "test_lt08_security_scope_isolation_survives_recovery",
+        module="test_durable_investigation_project.py",
+    ),
+    _investigation(
+        "LT09",
+        "test_lt09_durable_project_beats_conversation_recovery_baseline",
+        module="test_durable_investigation_recovery.py",
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+    ),
+    _investigation(
+        "LT10",
+        "test_lt10_child_submit_reconciles_stable_submission_key",
+        module="test_durable_investigation_recovery.py",
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
+    _investigation(
+        "LT11",
+        "test_lt11_missing_capability_fails_closed_without_fallback",
+        module="test_durable_investigation_project.py",
+        expected_terminal="paused",
+    ),
+    _investigation(
+        "LT12",
+        "test_lt12_observation_revises_only_unfrozen_dynamic_plan",
+        module="test_durable_investigation_project.py",
+    ),
+    _investigation(
+        "LT13",
+        "test_lt13_async_create_and_read_only_recovery",
+        module="test_durable_investigation_recovery.py",
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+    ),
 )
 
 EVIDENCE_BY_NODE = {case.node_key: case for case in EVIDENCE_CASES}
@@ -215,6 +327,9 @@ def validate_catalog() -> None:
         EvidenceClaimKind.COMPOSITE_CAPABILITY: {f"C{index:02d}" for index in range(1, 5)},
         EvidenceClaimKind.COMPLEX_LOOP: {f"L{index:02d}" for index in range(1, 7)},
         EvidenceClaimKind.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19"},
+        EvidenceClaimKind.DURABLE_INVESTIGATION: {
+            f"LT{index:02d}" for index in range(1, 14)
+        },
     }
     for kind, case_ids in expected.items():
         actual = {case.case_id for case in EVIDENCE_CASES if case.claim_kind is kind}

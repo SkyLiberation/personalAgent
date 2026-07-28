@@ -38,7 +38,7 @@ flowchart LR
             GatewayPolicy["Gateway 内部策略<br/>timeout<br/>retry transient error<br/>rate limit<br/>domain allow-list<br/>confirmed idempotency"]:::layer
             ToolError["ToolError / ToolErrorKind<br/>transient<br/>validation / permission<br/>timeout / rate_limited<br/>business"]:::model
             IdempotencyStore["IdempotencyStore<br/>Postgres-backed ledger<br/>reserve / commit / release<br/>tool_idempotency_ledger"]:::model
-            BusinessTool["业务工具<br/>capture_* / graph_search<br/>web_search / delete_note"]:::layer
+            BusinessTool["业务工具<br/>capture_* / graph_search<br/>web_search / research_*"]:::layer
             ToolArtifact["ToolArtifact<br/>Pydantic model (landed)<br/>ok<br/>data<br/>error<br/>evidence"]:::model
             ToolGatewayContext --> GatewayLayer
             GatewayLayer -. reads .-> ToolGovernance

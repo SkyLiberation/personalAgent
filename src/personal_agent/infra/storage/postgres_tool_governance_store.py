@@ -200,17 +200,24 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                     (
                         key,
                         tool_name,
-                        context.thread_id,
-                        context.step_id,
+                        context.execution_scope.thread_id,
+                        (
+                            context.execution_scope.logical_subgoal_id
+                            or context.execution_scope.task_id
+                        ),
                         context.tool_call_id,
-                        context.user_id,
+                        context.execution_scope.principal_id,
                         now,
                         now,
                         Jsonb({
-                            "session_id": context.session_id,
+                            "security_scope": (
+                                context.execution_scope.security_scope.model_dump(
+                                    mode="json"
+                                )
+                            ),
                             "source_platform": context.source_platform,
                             "execution_mode": context.execution_mode,
-                            "run_id": context.run_id,
+                            "run_id": context.execution_scope.execution_id,
                         }),
                     ),
                 )

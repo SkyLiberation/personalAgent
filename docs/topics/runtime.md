@@ -124,16 +124,12 @@ EntryInput
   "parent_checkpoint_id": "0e9...",
   "thread_id": "user:dns-session",
   "run_id": "abc123",
-  "status": "blocked_approval",
+  "status": "running",
   "result_contracts": ["external_state"],
-  "next": ["confirm_step"],
+  "next": ["execute_step"],
   "event_count": 7,
   "tool_result_count": 1,
-  "pending_confirmation": {
-    "kind": "tool_confirmation",
-    "tool_name": "delete_note",
-    "step_id": "delete-1"
-  }
+  "pending_confirmation": null
 }
 ```
 
@@ -141,7 +137,7 @@ EntryInput
 
 ### `replay_from_checkpoint(thread_id, checkpoint_id, updates, as_node=None) -> EntryResult`
 
-基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力的核心价值是**现网问题复现**：按用户、run、thread 找到某次失败记录，再从失败前后的真实 checkpoint 分叉重放，保留当时的消息、投影步骤、工具归属、工具结果、pending confirmation 和 errors，而不是只拿用户输入重新跑一遍。对带副作用流程的重放依赖工具层的持久幂等账本保护，避免二次删除或二次写入。
+基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力的核心价值是**现网问题复现**：按用户、run、thread 找到某次失败记录，再从失败前后的真实 checkpoint 分叉重放，保留当时的消息、投影步骤、工具归属、工具结果和 errors，而不是只拿用户输入重新跑一遍。带业务副作用的固定状态机不能用 checkpoint replay 代替自身的 Command/Receipt 幂等。
 
 执行过程：
 
@@ -160,24 +156,22 @@ POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
 
 关键点是：`update_state()` 修改的是 LangGraph checkpoint 中的 `AgentGraphState`，不是业务数据库。它适合修正流程状态后重放，比如 `pending_confirmation`、`step_execution.results`、`answer`、`errors`、`tool_tracking` 等；它不等价于“恢复已删除的知识笔记”。
 
-典型应用场景：现网删除流程复现
+典型应用场景：只读问答流程复现
 
 ```text
 用户：DNS 是什么？
 系统：回答 DNS 概念。
-用户：把这段知识固化下来。
-系统：生成并写入 DNS 知识笔记。
-用户：删除刚才 DNS 这部分知识。
-系统：进入 delete_knowledge 流程，并在删除前产生 HITL 确认。
+系统：检索本地证据与公开资料。
+系统：回答缺少预期 citation。
 ```
 
-如果这时发现 planner 选错了候选 note，或者确认 payload 里的 `note_id` 不对，管理员可以：
+如果这时发现检索或 citation 组装异常，管理员可以：
 
-1. 调 `GET /api/entry/runs/{run_id}/history`，找到 `status=waiting_confirmation`、`intent=delete_knowledge`、`pending_confirmation.tool_name=delete_note` 的 checkpoint。
+1. 调 `GET /api/entry/runs/{run_id}/history`，找到回答生成前的 checkpoint。
 2. 调 replay 接口，从该 checkpoint fork。
 3. 先不改或只做最小 `updates`，重放确认是否能复现用户反馈的卡住、误选或状态异常。
 4. 修代码、prompt 或策略后，再用同一个 checkpoint 重放验证修复是否有效。
-5. 必要时在受控管理后台中用白名单 `updates` 修正候选结果或清空 transient error，让图从修正后的状态继续执行。
+5. 必要时在受控管理后台中用白名单 `updates` 清空 transient error，让图从修正后的状态继续执行。
 
 这比“拿用户那句话重新跑一遍”更可靠，因为 Agent 失败常常依赖当时的执行现场：历史 `messages`、router/projector 中间状态、`step_execution.steps`、ReAct 轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。checkpoint replay 保留的是这些现场，而不是只保留入口文本。
 

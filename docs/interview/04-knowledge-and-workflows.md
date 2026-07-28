@@ -1,4 +1,4 @@
-# 知识、Research 与 Durable Workflow
+# 知识、领域 Workflow 与 Durable Project
 
 ## 1. 知识模型为什么不只是 Document + Embedding
 
@@ -48,6 +48,7 @@ embedding index、Graphiti、MS GraphRAG 是检索投影，不是事实权威源
 | Conversation Interaction | ConversationService + Interaction journal |
 | Delete/Restore Command/Event/Receipt | KnowledgeLifecycleService + lifecycle store |
 | ResearchRun/Digest/Delivery | ResearchService + research store |
+| Investigation definition/Plan/SubGoal/Completion | InvestigationProject aggregate + InvestigationProjectService |
 | Review feedback | Review feedback use case/store |
 | Tool audit/idempotency | ToolGateway + governance store |
 | Child Agent lifecycle/Artifact | AgentGateway |
@@ -159,7 +160,7 @@ DeleteCommand
   - user/workspace scope
   - target identity
   - reason
-  - authorization digest
+  - command digest
   - lifecycle status
 ```
 
@@ -173,16 +174,14 @@ prepare 只产生待确认事实，不删除知识。
 
 执行产生：
 
-- ExecutionCommandDigest；
-- Journal record；
-- Delete Event；
+- Workspace KnowledgeStateEvent；
 - Receipt。
 
 同一 digest 再次执行时返回已有 Receipt。
 
 ### 7.4 Restore
 
-Restore 不是把 DeleteCommand 的 status 改回去，而是创建新的 RestoreCommand，执行后产生 Restore Event/Receipt。原删除事实仍保留。
+Restore 不是把 DeleteCommand 的 status 改回去，而是创建新的 RestoreCommand，执行后产生 Restore Receipt 与 Workspace 状态事件。原删除 Operation/Receipt 仍保留。
 
 ## 8. Review 与 Knowledge Maintenance
 
@@ -273,7 +272,23 @@ MCP、Web Search 和 GPT Researcher 返回的是外部 Observation 或 Artifact�
 
 同理，A2A Artifact 只能支撑父 Agent 综合；它不能替代父级 FinalMessage、Verification 或 Domain Completion。
 
-## 12. 持久化边界
+## 12. ResearchRun 与 Investigation Project 为什么分开
+
+ResearchRun 是固定产品 Workflow：Run identity、搜索阶段、预算、Digest、terminal state 和 Delivery 契约已由 Research 领域定义。模型可以决定查询和内容组织，但不能重写 ResearchRun 的生命周期。
+
+Investigation Project 则用于“路径动态且必须 durable”的长任务。它的 accepted Plan 会驱动 ready set、并行 child join、coverage、steering、审批和 Completion Gate。两者不能合并成一个通用 DurableTask：
+
+```text
+ResearchRun
+  = 固定领域生命周期 + 内部语义决策
+
+Investigation Project
+  = 动态 accepted Plan + durable completion obligation
+```
+
+Project 只保存 ArtifactRef；Artifact 正文仍由 ArtifactService 持有。Tool 执行事实仍属于 ToolGateway，child lifecycle 仍属于 AgentGateway，Project 不通过复制这些事实成为第二 owner。
+
+## 13. 持久化边界
 
 | 边界 | 当前实现 | 恢复语义 |
 | --- | --- | --- |
@@ -281,6 +296,7 @@ MCP、Web Search 和 GPT Researcher 返回的是外部 Observation 或 Artifact�
 | Workspace/Knowledge | PostgresWorkspaceStore | 从 Artifact/Evidence/Claim 恢复 |
 | Delete/Restore | PostgresKnowledgeLifecycleStore | Command/Event/Receipt digest replay |
 | Research | PostgresResearchStore + worker queue | Run/Subscription/Delivery lifecycle |
+| Investigation Project | PostgresInvestigationProjectStore + investigation queue | 从 definition/append-only journal 重建 Plan、ready set、verification 和 completion |
 | Tool governance | PostgresToolGovernanceStore | Policy、idempotency、audit |
 | Child Agent | AgentGateway store + trace | child lifecycle 与父结果分离 |
 | 大型内容 | Artifact Store | 通过 artifact ref 读取 |

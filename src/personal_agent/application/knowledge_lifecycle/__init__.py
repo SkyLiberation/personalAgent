@@ -1,10 +1,8 @@
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
-    KnowledgeDeleteEvent,
     KnowledgeDeleteOperationView,
     KnowledgeDeleteReceipt,
     KnowledgeRestoreCommand,
-    KnowledgeRestoreEvent,
     KnowledgeRestoreOperationView,
     KnowledgeRestoreReceipt,
 )
@@ -18,12 +16,10 @@ from personal_agent.application.knowledge_lifecycle.store import (
 __all__ = [
     "KnowledgeDeleteCommand",
     "KnowledgeDeleteConflict",
-    "KnowledgeDeleteEvent",
     "KnowledgeDeleteNotFound",
     "KnowledgeDeleteOperationView",
     "KnowledgeDeleteReceipt",
     "KnowledgeRestoreCommand",
-    "KnowledgeRestoreEvent",
     "KnowledgeRestoreOperationView",
     "KnowledgeRestoreReceipt",
     "KnowledgeLifecycleService",

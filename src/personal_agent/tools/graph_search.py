@@ -29,8 +29,9 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
     @tool(
         "graph_search",
         description=(
-            "在个人长期知识图谱中搜索相关实体、关系、事实和笔记。"
-            "只读本地知识，不访问外网、不写入数据；适合问答、候选定位和删除前目标解析。"
+            "在个人长期知识图谱中搜索实体关系、关联路径和已同步图事实。"
+            "只读本地图谱，不访问外网、不写入数据；适合关系问答和图候选定位。"
+            "图谱无用户数据或无结果不代表长期知识笔记不存在；按主题回忆笔记应使用笔记语义搜索。"
             "返回 artifact.data.answer/entity_names/relation_facts/node_refs/edge_refs/fact_refs，并附带 evidence。"
         ),
         args_schema=GraphSearchArgs,

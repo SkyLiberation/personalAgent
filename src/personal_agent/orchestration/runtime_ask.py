@@ -10,6 +10,7 @@ from personal_agent.kernel.evidence import (
     notes_to_evidence,
 )
 from personal_agent.kernel.models import AgentState, Citation, KnowledgeNote
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.projections import MatchRef
 from personal_agent.kernel.query_understanding import RetrievalFilters
@@ -351,7 +352,18 @@ class AskService(AskPromptMixin):
             tool = self._tool_executor.get("web_search")
             if tool is None:
                 return [], []
-            result = self._tool_executor.invoke_direct("web_search", query=question, limit=5)
+            result = self._tool_executor.invoke_direct(
+                "web_search",
+                execution_scope=interaction_execution_scope(
+                    tenant_id="personal-agent",
+                    workspace_id="ask",
+                    user_id="ask",
+                    execution_id="ask-web-search",
+                    task_id="web_search",
+                ),
+                query=question,
+                limit=5,
+            )
             if not result.get("ok") or not result.get("data"):
                 return [], []
             raw_results = result["data"].get("results", [])

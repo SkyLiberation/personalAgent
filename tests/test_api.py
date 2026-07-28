@@ -177,10 +177,19 @@ class TestEntryStreamEndpoint:
         api_client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        def converse(*, conversation_id, messages, user_id, source_platform):
+        def converse(
+            *,
+            conversation_id,
+            messages,
+            principal,
+            security_scope,
+            source_platform,
+        ):
             assert conversation_id == "entry-stream-ask"
             assert messages[-1].content == "什么是API测试？"
-            assert user_id == "test-user"
+            assert principal.user_id == "test-user"
+            assert principal.tenant_id == "personal-agent"
+            assert security_scope.workspace_id == "entry-stream-ask"
             assert source_platform == "web"
             return ConversationTurnView(
                 interaction_run_ref="irun-stream",
@@ -215,12 +224,14 @@ class TestConversationEndpoint:
     ):
         def converse(
             *, conversation_id, messages, interaction_run_ref=None,
-            user_id, source_platform,
+            principal, security_scope, source_platform,
         ):
             assert interaction_run_ref is None
             assert conversation_id == "conversation-1"
             assert messages[-1].content == "解释幂等性"
-            assert user_id == "default"
+            assert principal.user_id == "default"
+            assert principal.tenant_id == "personal-agent"
+            assert security_scope.workspace_id == "conversation-1"
             assert source_platform == "web"
             return ConversationTurnView(
                 interaction_run_ref="irun-test",
@@ -308,7 +319,7 @@ class TestWorkspaceCaptureEndpoints:
 
 
 class TestGovernedKnowledgeDelete:
-    def test_confirmed_command_executes_exactly_once_and_binds_digests(
+    def test_confirmed_command_executes_exactly_once_and_binds_command_digest(
         self,
         api_client: TestClient,
     ) -> None:
@@ -346,8 +357,7 @@ class TestGovernedKnowledgeDelete:
             json={
                 "user_id": user_id,
                 "decision": "confirm",
-                "authorization_digest": "0" * 64,
-                "execution_command_digest": command["execution_command_digest"],
+                "command_digest": "0" * 64,
                 "confirmation_ref": "user-confirmation-1",
             },
         )
@@ -359,8 +369,7 @@ class TestGovernedKnowledgeDelete:
         decision = {
             "user_id": user_id,
             "decision": "confirm",
-            "authorization_digest": command["authorization_digest"],
-            "execution_command_digest": command["execution_command_digest"],
+            "command_digest": command["command_digest"],
             "confirmation_ref": "user-confirmation-1",
         }
         first = api_client.post(
@@ -375,7 +384,8 @@ class TestGovernedKnowledgeDelete:
         assert replay.status_code == 200, replay.text
         assert first.json()["status"] == "executed"
         assert first.json()["receipt"] == replay.json()["receipt"]
-        assert [event["event_type"] for event in replay.json()["events"]].count("executed") == 1
+        assert first.json()["receipt"]["command_digest"] == command["command_digest"]
+        assert "events" not in replay.json()
         assert note_id not in {
             item["id"] for item in api_client.get(
                 "/api/notes", params={"user_id": user_id}
@@ -420,8 +430,7 @@ class TestGovernedKnowledgeDelete:
             json={
                 "user_id": user_id,
                 "decision": "reject",
-                "authorization_digest": command["authorization_digest"],
-                "execution_command_digest": command["execution_command_digest"],
+                "command_digest": command["command_digest"],
             },
         )
         assert rejected.status_code == 200
@@ -599,8 +608,7 @@ class TestNotesEndpoint:
             json={
                 "user_id": user_id,
                 "decision": "confirm",
-                "authorization_digest": delete_command["authorization_digest"],
-                "execution_command_digest": delete_command["execution_command_digest"],
+                "command_digest": delete_command["command_digest"],
                 "confirmation_ref": "delete-confirmation",
             },
         ).json()
@@ -635,8 +643,7 @@ class TestNotesEndpoint:
         decision = {
             "user_id": user_id,
             "decision": "confirm",
-            "authorization_digest": restore_command["authorization_digest"],
-            "execution_command_digest": restore_command["execution_command_digest"],
+            "command_digest": restore_command["command_digest"],
             "confirmation_ref": "restore-confirmation",
         }
         first = api_client.post(
@@ -652,7 +659,8 @@ class TestNotesEndpoint:
         assert first.json()["receipt"] == replay.json()["receipt"]
         assert first.json()["receipt"]["restored_note_id"] == note_id
         assert set(first.json()["receipt"]["affected_claim_ids"]) == claim_ids
-        assert [event["event_type"] for event in replay.json()["events"]].count("executed") == 1
+        assert first.json()["receipt"]["command_digest"] == restore_command["command_digest"]
+        assert "events" not in replay.json()
         assert any(item["id"] == note_id for item in api_client.get(
             "/api/notes", params={"user_id": user_id}
         ).json())

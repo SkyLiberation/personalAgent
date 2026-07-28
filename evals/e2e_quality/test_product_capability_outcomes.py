@@ -208,8 +208,7 @@ def _decide_delete(
         {
             "user_id": user_id,
             "decision": decision,
-            "authorization_digest": command["authorization_digest"],
-            "execution_command_digest": command["execution_command_digest"],
+            "command_digest": command["command_digest"],
             "confirmation_ref": confirmation_ref,
         },
     )
@@ -252,8 +251,7 @@ def _decide_restore(
         {
             "user_id": user_id,
             "decision": decision,
-            "authorization_digest": command["authorization_digest"],
-            "execution_command_digest": command["execution_command_digest"],
+            "command_digest": command["command_digest"],
             "confirmation_ref": confirmation_ref,
         },
     )
@@ -457,8 +455,7 @@ def test_product_e04_governed_delete_recovery(
         data=json.dumps({
             "user_id": user_id,
             "decision": "confirm",
-            "authorization_digest": "0" * 64,
-            "execution_command_digest": command["execution_command_digest"],
+            "command_digest": "0" * 64,
             "confirmation_ref": "release-user-confirmation",
         }).encode("utf-8"),
         headers={"Content-Type": "application/json"},
@@ -484,8 +481,8 @@ def test_product_e04_governed_delete_recovery(
     )
     assert confirmed["status"] == "executed"
     assert confirmed["receipt"] == replayed["receipt"]
-    assert confirmed["receipt"]["execution_command_digest"] == command["execution_command_digest"]
-    assert [event["event_type"] for event in replayed["events"]].count("executed") == 1
+    assert confirmed["receipt"]["command_digest"] == command["command_digest"]
+    assert "events" not in replayed
     assert note_id not in {
         item["id"] for item in _get_json(
             f"{live_web_process.base_url}/api/notes?" + urlencode({"user_id": user_id})

@@ -8,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from personal_agent.kernel.rate_limit import InMemoryRateLimiter
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +40,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """ASGI middleware for API key authentication and rate limiting.
 
     Reads Authorization: Bearer <key> or X-API-Key: <key>.
-    Sets request.state.user_id on success.
+    Sets one typed authenticated principal on success.
     Public paths (/api/health) are exempt.
     """
 
     def __init__(
         self,
         app,
-        api_keys: dict[str, str],
+        api_keys: dict[str, AuthenticatedPrincipal],
         rate_limiter: RateLimiter | None = None,
-        admin_api_keys: dict[str, str] | None = None,
+        admin_api_keys: dict[str, AuthenticatedPrincipal] | None = None,
     ) -> None:
         super().__init__(app)
         self._api_keys = api_keys
@@ -70,8 +71,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Look up user — admin keys also resolve to a user_id and gain admin scope.
         is_admin = api_key in self._admin_api_keys
-        user_id = self._admin_api_keys.get(api_key) or self._api_keys.get(api_key)
-        if user_id is None:
+        principal = self._admin_api_keys.get(api_key) or self._api_keys.get(api_key)
+        if principal is None:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "无效的 API Key。"},
@@ -87,7 +88,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         # Attach identity to request state
-        request.state.user_id = user_id
+        request.state.principal = principal.model_dump(mode="json")
+        request.state.user_id = principal.user_id
         request.state.is_admin = is_admin
 
         return await call_next(request)

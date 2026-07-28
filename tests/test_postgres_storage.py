@@ -416,7 +416,7 @@ def test_memory_episodes_are_persisted_and_searchable(temp_dir: Path):
         outcome="completed",
         entry_text="删除 Graphiti 笔记",
         decisions=["识别意图为 delete_knowledge，风险 high"],
-        tool_refs=["delete_note"],
+        tool_refs=["external_publish"],
         note_refs=["note-graphiti"],
     )
 

@@ -6,6 +6,10 @@ import logging
 import typer
 
 from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
+from personal_agent.kernel.contracts.scope import (
+    AuthenticatedPrincipal,
+    SecurityScope,
+)
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.logging_utils import setup_logging
@@ -59,7 +63,14 @@ def entry(
     result = service.converse(
         conversation_id=session_id,
         messages=[ConversationMessage(role="user", content=text.strip())],
-        user_id=user_id,
+        principal=AuthenticatedPrincipal(
+            tenant_id="personal-agent",
+            user_id=user_id,
+        ),
+        security_scope=SecurityScope(
+            tenant_id="personal-agent",
+            workspace_id=session_id,
+        ),
         source_platform="cli",
     )
     typer.echo(_format_conversation_result(result))

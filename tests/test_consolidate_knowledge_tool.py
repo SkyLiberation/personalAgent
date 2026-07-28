@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from personal_agent.application.knowledge import ConsolidationResult
 from personal_agent.governance import ToolExecutor
+from tests.test_tools import _scope
 from personal_agent.tools import (
     build_consolidate_knowledge_tool,
     tool_governance,
@@ -42,6 +43,7 @@ def test_consolidate_tool_delegates_selection_to_use_case():
 
     result = executor.invoke_direct(
         "consolidate_knowledge",
+        execution_scope=_scope("alice"),
         topic="向量检索",
         user_id="alice",
     )
@@ -56,7 +58,11 @@ def test_consolidate_tool_propagates_use_case_failure():
     executor = ToolExecutor()
     executor.register(build_consolidate_knowledge_tool(use_case))
 
-    result = executor.invoke_direct("consolidate_knowledge", topic="X")
+    result = executor.invoke_direct(
+        "consolidate_knowledge",
+        execution_scope=_scope(),
+        topic="X",
+    )
 
     assert result["ok"] is False
     assert "笔记不足" in (result["error"] or "")

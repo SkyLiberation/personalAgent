@@ -6,6 +6,7 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 
 
 class EnterpriseKnowledgeSearchArgs(BaseModel):
@@ -42,6 +43,13 @@ def build_enterprise_knowledge_search_tool(tool_executor) -> BaseTool:
                 break
             outcome = tool_executor.invoke_direct(
                 source_tool.name,
+                execution_scope=interaction_execution_scope(
+                    tenant_id="personal-agent",
+                    workspace_id=f"enterprise:{user_id}",
+                    user_id=user_id,
+                    execution_id=run_id or f"enterprise:{user_id}",
+                    task_id=source_tool.name,
+                ),
                 query=query,
                 limit=max(1, limit - len(results)),
                 user_id=user_id,

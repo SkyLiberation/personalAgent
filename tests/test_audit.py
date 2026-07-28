@@ -9,6 +9,7 @@ from personal_agent.infra.storage.audit_redaction import redact_audit_payload
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.tools.base import ToolArtifact, ToolInvocationEvent
 from personal_agent.governance.gateway import ToolGatewayContext
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -16,7 +17,7 @@ pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
 
 def _audit_event(
     *,
-    tool_name: str = "delete_note",
+    tool_name: str = "external_publish",
     user_id: str = "u1",
     ok: bool = True,
     risk_level: str = "high",
@@ -53,7 +54,7 @@ class TestRedaction:
         assert redacted["input"]["note_id"].startswith("<redacted:")
         assert redacted["output"]["data"].startswith("<redacted:")
         # Governance shape stays visible.
-        assert redacted["tool_name"] == "delete_note"
+        assert redacted["tool_name"] == "external_publish"
         assert redacted["risk_level"] == "high"
         assert redacted["confirmed"] is True
 
@@ -76,7 +77,7 @@ class TestGovernanceStoreQueries:
         events = store.query_audit_events(user_id="alice")
         assert len(events) == 1
         evt = events[0]
-        assert evt["tool_name"] == "delete_note"
+        assert evt["tool_name"] == "external_publish"
         assert evt["confirmed"] is True
         assert evt["risk_level"] == "high"
         assert evt["payload"]["input"]["content"].startswith("<redacted:")
@@ -87,7 +88,7 @@ class TestGovernanceStoreQueries:
         assert events[0]["payload"]["input"]["content"] == "敏感内容"
 
     def test_query_filters_by_risk_and_tool(self, store: PostgresToolGovernanceStore):
-        store.record(_audit_event(user_id="bob", tool_name="delete_note", risk_level="high"))
+        store.record(_audit_event(user_id="bob", tool_name="external_publish", risk_level="high"))
         store.record(
             _audit_event(
                 user_id="bob",
@@ -98,7 +99,7 @@ class TestGovernanceStoreQueries:
             )
         )
         high = store.query_audit_events(user_id="bob", risk_level="high")
-        assert {e["tool_name"] for e in high} == {"delete_note"}
+        assert {e["tool_name"] for e in high} == {"external_publish"}
 
     def test_record_and_query_policy_decision(self, store: PostgresToolGovernanceStore):
         store.record_policy_decision(
@@ -106,7 +107,7 @@ class TestGovernanceStoreQueries:
                 "action": "tool_call",
                 "effect": "deny",
                 "rule": "override.deny_tool",
-                "tool_name": "delete_note",
+                "tool_name": "external_publish",
                 "user_id": "carol",
                 "risk_level": "high",
             }
@@ -117,29 +118,37 @@ class TestGovernanceStoreQueries:
 
     def test_trace_idempotency_combines_ledger_and_events(self, store: PostgresToolGovernanceStore):
         ctx = ToolGatewayContext(
+            execution_scope=interaction_execution_scope(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                user_id="dave",
+                execution_id="r1",
+                thread_id="t1",
+            ),
             execution_mode="direct",
             tool_call_id="call-1",
-            thread_id="t1",
-            run_id="r1",
-            user_id="dave",
         )
-        store.reserve("idem-trace", context=ctx, tool_name="delete_note")
+        store.reserve("idem-trace", context=ctx, tool_name="external_publish")
         store.commit("idem-trace")
         store.record(_audit_event(user_id="dave", side_effect_id="idem-trace"))
 
         trace = store.trace_idempotency("idem-trace")
         assert trace is not None
         assert trace["ledger"]["status"] == "committed"
-        assert trace["ledger"]["user_id"] == "dave"
+        assert trace["ledger"]["user_id"] == "tenant-1:dave"
         assert len(trace["events"]) == 1
 
     def test_idempotency_store_persists_committed_receipt(self, store: PostgresToolGovernanceStore):
         ctx = ToolGatewayContext(
+            execution_scope=interaction_execution_scope(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                user_id="receipt-user",
+                execution_id="run-receipt",
+                thread_id="thread-receipt",
+            ),
             execution_mode="invocation_batch",
             tool_call_id="call-receipt",
-            thread_id="thread-receipt",
-            run_id="run-receipt",
-            user_id="receipt-user",
         )
         receipt = {"ok": True, "data": {"note_id": "note-1"}, "evidence": []}
 
@@ -171,7 +180,7 @@ class TestGovernanceStoreQueries:
             _audit_event(
                 user_id="frank",
                 ok=False,
-                error="工具 delete_note 的确认动作已执行过或正在执行（idempotency_key=idem-1）。",
+                error="工具 external_publish 的确认动作已执行过或正在执行（idempotency_key=idem-1）。",
             )
         )
         metrics = store.audit_metrics(window_hours=24)
@@ -185,8 +194,14 @@ def admin_client(temp_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("OPENAI_BASE_URL", "")
     monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", POSTGRES_URL)
     monkeypatch.setenv("PERSONAL_AGENT_FEISHU_ENABLED", "false")
-    monkeypatch.setenv("PERSONAL_AGENT_API_KEYS", "user-key:alice")
-    monkeypatch.setenv("PERSONAL_AGENT_ADMIN_API_KEYS", "admin-key:root")
+    monkeypatch.setenv(
+        "PERSONAL_AGENT_API_KEYS",
+        '{"user-key":{"tenant_id":"tenant-1","user_id":"alice"}}',
+    )
+    monkeypatch.setenv(
+        "PERSONAL_AGENT_ADMIN_API_KEYS",
+        '{"admin-key":{"tenant_id":"tenant-1","user_id":"root"}}',
+    )
     from personal_agent.kernel import config_env as config_env_module
     monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
 
@@ -210,6 +225,34 @@ class TestAuditApiGate:
         body = resp.json()
         assert "metrics" in body
         assert "alerts" in body
+
+    def test_regular_user_cannot_reset_debug_database(
+        self,
+        admin_client: TestClient,
+    ):
+        resp = admin_client.post(
+            "/api/debug/reset-database",
+            headers={"X-API-Key": "user-key"},
+        )
+
+        assert resp.status_code == 403
+
+    def test_direct_tool_endpoint_rejects_principal_scope_spoofing(
+        self,
+        admin_client: TestClient,
+    ):
+        resp = admin_client.post(
+            "/api/tools/search_knowledge/execute",
+            headers={"X-API-Key": "user-key"},
+            json={
+                "tenant_id": "tenant-1",
+                "workspace_id": "workspace-a",
+                "user_id": "bob",
+                "kwargs": {"query": "secret"},
+            },
+        )
+
+        assert resp.status_code == 404
 
     def test_regular_user_events_scoped_to_self_and_redacted(self, admin_client: TestClient):
         service = admin_client.app.state.service

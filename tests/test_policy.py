@@ -15,7 +15,7 @@ def _tool_input(**overrides) -> PolicyInput:
         action="tool_call",
         user_id="u1",
         execution_mode="direct",
-        tool_name="delete_note",
+        tool_name="external_publish",
         risk_level="high",
         requires_confirmation=True,
         side_effects=("delete_longterm",),
@@ -49,7 +49,7 @@ class TestToolDecisions:
             _tool_input(
                 execution_mode="react",
                 confirmed=True,
-                react_allowed_tools=frozenset({"delete_note"}),
+                react_allowed_tools=frozenset({"external_publish"}),
             )
         )
         assert decision.effect == "deny"

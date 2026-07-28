@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from personal_agent.governance import ToolExecutor
+from tests.test_tools import _scope
 from personal_agent.tools.graph_search import build_graph_search_tool
 
 
@@ -41,6 +42,7 @@ def test_graph_search_accepts_structured_context():
 
     result = executor.invoke_direct(
         "graph_search",
+        execution_scope=_scope("alice"),
         question="Agent Runtime SDK",
         user_id="alice",
         structured_context={
@@ -64,6 +66,7 @@ def test_graph_search_skips_empty_user_graph():
 
     result = executor.invoke_direct(
         "graph_search",
+        execution_scope=_scope("alice"),
         question="Agent Runtime SDK",
         user_id="alice",
     )

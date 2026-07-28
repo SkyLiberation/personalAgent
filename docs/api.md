@@ -1,6 +1,8 @@
 # 后端接口
 
-主要接口定义位于 [web/routes/](../src/personal_agent/web/routes)，应用装配位于 [api.py](../src/personal_agent/web/api.py)。
+主要接口定义位于
+[adapters/web/routes/](../src/personal_agent/adapters/web/routes)，应用装配位于
+[adapters/web/api.py](../src/personal_agent/adapters/web/api.py)。
 
 ## `GET /api/health`
 
@@ -27,6 +29,32 @@
 }
 ```
 
+## Durable Investigation Project
+
+该入口只用于“路径会根据 Observation 动态变化，并且需要跨进程、用户轮次或审批边界维持
+交付契约”的调查任务。固定长流程继续使用领域 Workflow，普通短任务继续使用 Conversation。
+
+### `POST /api/investigation-projects`
+
+持久化 immutable Project definition 和第一版 UserRequirement 后返回 `202`。Planner 和
+Provider 不在请求内执行。请求必须包含 `tenant_id`、`workspace_id`、`user_id`、`title`、
+`goal`、非空 `requirements`、`budget` 和 `idempotency_key`。鉴权启用时 tenant/user 必须与
+API key 的 typed principal 一致。
+
+### `GET /api/investigation-projects/{project_id}`
+
+按 tenant/workspace/user scope 返回只读 projection。查询不会调用模型、重新规划或推进 worker。
+
+### Project 控制入口
+
+- `POST .../{project_id}/steering`：基于 expected plan version 修改尚未冻结的工作；
+- `POST .../{project_id}/commands/{command_id}/decision`：提交绑定 AuthorizationDigest 的审批；
+- `POST .../{project_id}/pause`：记录 `user_paused`；
+- `POST .../{project_id}/resume`：只允许恢复 `user_paused`，不能绕过预算、能力、审批或修复暂停；
+- `POST .../{project_id}/cancel`：取消关联 child，并 quarantine 终态后的 late Artifact。
+
+Project worker 使用 `personal-agent worker --queue investigation` 消费 durable queue。
+
 ## `GET /api/notes`
 
 返回指定用户的知识笔记列表。
@@ -36,39 +64,60 @@
 - `user_id`
 - `flat`（bool，默认 false）：为 true 时同时返回 chunk notes
 
-## `DELETE /api/notes/{note_id}`
+## Knowledge Lifecycle
 
-软删除指定笔记。删除会生成 `knowledge_delete_snapshots` 快照，默认查询和检索不再返回该 note；如果目标是 parent note，会一并软删除其子 chunk。
+删除和恢复使用固定的两阶段 Application Use Case，不进入普通 Conversation
+Tool/Planner，也不提供直接 DELETE 或 snapshot restore 入口。
 
-查询参数：
+### `POST /api/notes/{note_id}/delete-commands`
 
-- `user_id`
-- `delete_reason`（string，可选）：删除原因，写入删除快照和删除元数据
-- `cascade`（bool，保留参数）：当前 parent note 删除会根据实际 chunk 自动级联
-
-响应：
-
-```json
-{"ok": true, "deleted_note_id": "76ac8451-...", "snapshot_id": "kdel-..."}
-```
-
-## `POST /api/memory/notes/{note_id}/restore`
-
-按 note id 或指定删除快照恢复笔记。恢复会通过 `restore_note` 工具进入 ToolGateway、PolicyEngine、幂等账本和工具审计。
-
-请求体：
+prepare 一个删除操作。此调用只持久化 immutable command，不修改 Knowledge
+Item/Claim。
 
 ```json
 {
   "user_id": "default",
-  "snapshot_id": "kdel-...",
-  "idempotency_key": "restore:kdel-..."
+  "workspace_id": "default",
+  "reason": "内容已过期",
+  "idempotency_key": "delete:note-123"
 }
 ```
 
-## `POST /api/memory/delete-snapshots/{snapshot_id}/restore`
+响应包含 `command`、`status=awaiting_confirmation` 和 `receipt=null`。
+`command.command_digest` 是 canonical command payload 的一致性指纹。
 
-按删除快照恢复 note、子 chunk 和 review card。请求体同上，`snapshot_id` 可省略，因为路径参数已指定。
+### `POST /api/knowledge-delete-commands/{command_id}/decision`
+
+```json
+{
+  "user_id": "default",
+  "decision": "confirm",
+  "command_digest": "<64-char sha256>",
+  "confirmation_ref": "ui-confirmation-123"
+}
+```
+
+`confirm` 成功后返回 `status=executed` 与唯一 Receipt；相同 command replay
+返回同一 Receipt。`reject` 不要求 `confirmation_ref`，且被拒绝的 command
+不能再次执行。错误身份、scope 或 digest 均 fail closed。
+
+### `GET /api/knowledge-delete-commands/{command_id}`
+
+按当前用户读取持久化 operation，供重启后恢复确认页面。
+
+### `POST /api/knowledge-delete-commands/{delete_command_id}/restore-commands`
+
+为一个已执行 delete command prepare restore。请求体字段与 delete prepare
+相同，`idempotency_key` 应属于 restore 操作。
+
+### `POST /api/knowledge-restore-commands/{command_id}/decision`
+
+请求体与 delete decision 相同。确认后依据 delete receipt 中的 previous
+Item/Claim states 恢复，并返回唯一 restore Receipt。
+
+### `GET /api/knowledge-restore-commands/{command_id}`
+
+按当前用户读取持久化 restore operation。
 
 ## `GET /api/notes/{note_id}/chunks`
 
@@ -179,6 +228,7 @@
 ## `POST /api/debug/reset-database`
 
 用于开发调试时清空持久化调试数据。该操作影响所有用户且不可撤销。
+鉴权启用时仅管理员 API key 可调用。
 
 会清理：
 
@@ -256,8 +306,6 @@ Neo4j 清理会读取 `evals/**/*manifest*.json` 中的 Graphiti eval manifest�
 - `graph_search` — 入参：`question` (string), `user_id` (string, 可选, 默认 "default")
 - `web_search` — 入参：`question` (string), `user_id` (string, 可选)
 - `capture_text` — 入参：`text` (string), `user_id` (string, 可选, 默认 "default")
-- `delete_note` — 入参：`note_id` (string), `user_id` (string, 可选), `confirmed` (bool), `idempotency_key` (string), `delete_reason` (string, 可选)
-- `restore_note` — 入参：`note_id` (string, 可选), `snapshot_id` (string, 可选), `user_id` (string, 可选), `confirmed` (bool), `idempotency_key` (string)
 
 ---
 
@@ -269,25 +317,12 @@ Neo4j 清理会读取 `evals/**/*manifest*.json` 中的 Graphiti eval manifest�
 
 SSE 流式入口执行，逐步返回 intent 分类、计划步骤、执行进度和最终结果。
 
-LangGraph HITL 或补充信息场景下会返回：
+需要补充信息时会返回：
 
 ```text
-event: confirmation_required
-data: {
-  "run_id": "...",
-  "pending_confirmation": {
-    "step_id": "...",
-    "action_type": "delete_note",
-    "note_id": "...",
-    "title": "...",
-    "summary": "...",
-    "message": "..."
-  }
-}
-
 event: done
 data: {
-  "waiting_confirmation": true,
+  "waiting_confirmation": false,
   "run_id": "...",
   "reply": "..."
 }
@@ -334,10 +369,10 @@ data: {
       "thread_id": "user:session",
       "user_id": "default",
       "session_id": "default",
-      "status": "blocked_approval",
+      "status": "completed",
       "result_contracts": ["external_state"],
-      "procedure_id": "knowledge_delete",
-      "entry_text": "删除过期笔记",
+      "procedure_id": null,
+      "entry_text": "保存这段知识",
       "steps": [],
       "execution_trace": [],
       "answer": null,

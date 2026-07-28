@@ -13,6 +13,7 @@ from personal_agent.kernel.contracts.capability_values import (
     DataEgressClass,
     FreshnessProfile,
 )
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 DEFAULT_GENERATIVE_MODEL = "gpt-5.4-mini"
 
@@ -257,9 +258,9 @@ class ResearchConfig(_StrictBase):
 
 
 class WebApiConfig(_StrictBase):
-    api_keys: dict[str, str] = Field(default_factory=dict)
+    api_keys: dict[str, AuthenticatedPrincipal] = Field(default_factory=dict)
     # API keys granted admin scope: cross-user audit queries and un-redacted payloads.
-    admin_api_keys: dict[str, str] = Field(default_factory=dict)
+    admin_api_keys: dict[str, AuthenticatedPrincipal] = Field(default_factory=dict)
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])

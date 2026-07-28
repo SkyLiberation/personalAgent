@@ -10,6 +10,9 @@ from personal_agent.adapters.web.routes.conversation import register_conversatio
 from personal_agent.adapters.web.routes.digest import register_digest_routes
 from personal_agent.adapters.web.routes.entry import register_entry_routes
 from personal_agent.adapters.web.routes.graph import register_graph_routes
+from personal_agent.adapters.web.routes.investigation_projects import (
+    register_investigation_project_routes,
+)
 from personal_agent.adapters.web.routes.notes import register_note_routes
 from personal_agent.adapters.web.routes.review import register_review_routes
 from personal_agent.adapters.web.routes.research import register_research_routes
@@ -19,7 +22,7 @@ from personal_agent.adapters.web.routes.workspace import register_workspace_rout
 
 def register_api_routes(app: FastAPI, context: WebAppContext) -> None:
     settings = context.settings
-    register_system_routes(app, service=context.service)
+    register_system_routes(app, settings=settings, service=context.service)
     register_note_routes(app, settings=settings, service=context.service)
     register_digest_routes(app, settings=settings, service=context.service)
     register_review_routes(
@@ -38,6 +41,11 @@ def register_api_routes(app: FastAPI, context: WebAppContext) -> None:
         service=context.service,
     )
     register_graph_routes(app, settings=settings, service=context.service)
+    register_investigation_project_routes(
+        app,
+        settings=settings,
+        service=context.service,
+    )
     register_workspace_routes(
         app,
         settings=settings,

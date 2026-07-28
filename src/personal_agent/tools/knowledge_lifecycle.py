@@ -70,7 +70,10 @@ class MarkNotesConflictedArgs(BaseModel):
 def build_list_recent_notes_tool(memory) -> BaseTool:
     @tool(
         "list_recent_notes",
-        description="列出用户最近写入或更新的知识笔记，用于判断当前知识状态。",
+        description=(
+            "列出用户最近写入或更新的知识笔记。适合用户询问“最近记录了什么”、"
+            "需要浏览近期条目或尚无主题线索时使用；按已知主题回忆内容时优先语义搜索。"
+        ),
         args_schema=ListRecentNotesArgs,
         response_format="content_and_artifact",
         extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
@@ -85,7 +88,10 @@ def build_list_recent_notes_tool(memory) -> BaseTool:
 def build_get_note_tool(memory) -> BaseTool:
     @tool(
         "get_note",
-        description="读取一条知识笔记的详情，用于更新、替换、冲突判断或回答前核实。",
+        description=(
+            "按 note_id 读取一条用户知识笔记的完整详情。适合先通过列表或语义搜索获得"
+            " note_id 后，核实精确正文再回答；也用于更新、替换和冲突判断前读取原内容。"
+        ),
         args_schema=GetNoteArgs,
         response_format="content_and_artifact",
         extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
@@ -105,7 +111,11 @@ def build_get_note_tool(memory) -> BaseTool:
 def build_find_similar_notes_tool(memory) -> BaseTool:
     @tool(
         "find_similar_notes",
-        description="按语义搜索相似知识笔记，用于查重、冲突发现、更新前定位对象。",
+        description=(
+            "按用户自然语言主题在个人长期知识笔记中进行语义和关键词搜索。适合回忆此前"
+            "记录的项目、概念或事实，也用于查重、冲突发现和更新前定位；需要精确正文时"
+            "再用返回的 note_id 读取详情。"
+        ),
         args_schema=FindSimilarNotesArgs,
         response_format="content_and_artifact",
         extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),

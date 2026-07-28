@@ -444,39 +444,6 @@ def _catalog() -> ProcedureCatalog:
             recovery_policy="checkpoint_node",
         ),
         ProcedureDefinition(
-            procedure_id="knowledge_delete",
-            version="1",
-            purpose="Resolve, confirm, delete, and audit durable knowledge.",
-            applicability=ProcedureApplicability(
-                semantic_domains=("knowledge",), resource_types=("note", "knowledge"),
-                operations=("delete",), mandatory=True,
-            ),
-            nodes=(
-                ProcedureNodeSpec(
-                    "resolve-target", "resolve", "Validate the user-grounded canonical deletion target.",
-                    recovery_policy="clarify",
-                ),
-                ProcedureNodeSpec(
-                    "commit-delete", "tool_call", "Confirm and delete the selected knowledge.",
-                    depends_on=("resolve-target",), domain_handler="delete_note",
-                    capability_requirement=_requirement(
-                        "delete-commit", "Delete the exact knowledge target",
-                        ("knowledge", "knowledge_lifecycle"), ("note",),
-                        ("delete",), "MutationReceipt",
-                    ),
-                    risk_level="high", requires_confirmation=True, side_effects=("delete_longterm",),
-                    hitl_policy="required", recovery_policy="abort",
-                ),
-                ProcedureNodeSpec(
-                    "summarize-delete", "compose", "Summarize the deletion outcome.",
-                    depends_on=("commit-delete",),
-                ),
-            ),
-            invariants=("exact target", "confirmation", "deletion receipt", "audit"),
-            confirmation_policy="required",
-            recovery_policy="checkpoint_node",
-        ),
-        ProcedureDefinition(
             procedure_id="conversation_solidify",
             version="1",
             purpose="Convert a selected conversation scope into admitted knowledge.",

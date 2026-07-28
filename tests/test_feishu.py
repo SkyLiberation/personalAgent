@@ -40,7 +40,9 @@ def test_feishu_text_enters_canonical_conversation_with_visible_thread_context(t
     service.fetch_recent_messages.assert_called_once_with("chat-1", limit=20)
     call = agent_service.converse.call_args.kwargs
     assert call["conversation_id"] == "chat-1"
-    assert call["user_id"] == "default"
+    assert call["principal"].user_id == "default"
+    assert call["principal"].tenant_id == "feishu"
+    assert call["security_scope"].workspace_id == "chat-1"
     assert call["source_platform"] == "feishu"
     assert [item.content for item in call["messages"]] == ["前文", "帮我总结一下群聊"]
 

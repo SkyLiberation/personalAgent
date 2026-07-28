@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from personal_agent.capabilities.contracts.grants import GrantDependencySet, ProcedureNodeGrant
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.tools import (
     ToolError,
     build_capture_text_tool,
@@ -24,6 +25,16 @@ from personal_agent.tools import (
     tool_schema,
     tool_success,
 )
+
+
+def _scope(user_id: str = "u1", task_id: str = "direct"):
+    return interaction_execution_scope(
+        tenant_id="tenant-1",
+        workspace_id="workspace-1",
+        user_id=user_id,
+        execution_id=f"run-{user_id}",
+        task_id=task_id,
+    )
 
 
 def test_capture_text_timeout_covers_complete_ingestion_transaction() -> None:
@@ -224,24 +235,24 @@ class TestToolExecutor:
 
     def test_invokes_directly_for_non_graph_callers(self, executor):
         executor.register(echo)
-        result = executor.invoke_direct("echo", message="hello")
+        result = executor.invoke_direct("echo", execution_scope=_scope(), message="hello")
         assert result["ok"] is True
         assert result["data"] == "echo: hello"
 
     def test_missing_tool_returns_error(self, executor):
-        result = executor.invoke_direct("nonexistent")
+        result = executor.invoke_direct("nonexistent", execution_scope=_scope())
         assert result["ok"] is False
         assert "未找到工具" in result["error"]
 
     def test_tool_failure_artifact_is_returned(self, executor):
         executor.register(failer)
-        result = executor.invoke_direct("failer")
+        result = executor.invoke_direct("failer", execution_scope=_scope())
         assert result["ok"] is False
         assert "工具执行失败" in result["error"]
 
     def test_direct_invocation_validates_required_argument(self, executor):
         executor.register(echo)
-        result = executor.invoke_direct("echo")
+        result = executor.invoke_direct("echo", execution_scope=_scope())
         assert result["ok"] is False
         assert "message" in result["error"]
 
@@ -265,20 +276,27 @@ class TestToolExecutor:
         executor = ToolExecutor(audit_sink=sink)
         executor.register(echo)
 
-        result = executor.invoke_direct("echo", message="hello", user_id="u1")
+        result = executor.invoke_direct(
+            "echo", execution_scope=_scope(), message="hello"
+        )
 
         assert result["ok"] is True
         assert len(sink.events) == 1
         assert sink.events[0].tool_name == "echo"
         assert sink.events[0].execution_mode == "direct"
-        assert sink.events[0].user_id == "u1"
+        assert sink.events[0].user_id == "tenant-1:u1"
 
     def test_high_risk_confirmed_execution_requires_idempotency_key(self):
         sink = InMemoryToolAuditSink()
         executor = ToolExecutor(audit_sink=sink)
         executor.register(dangerous)
 
-        result = executor.invoke_direct("dangerous", target="note-1", confirmed=True)
+        result = executor.invoke_direct(
+            "dangerous",
+            execution_scope=_scope(),
+            target="note-1",
+            confirmed=True,
+        )
 
         assert result["ok"] is False
         assert "idempotency_key" in result["error"]
@@ -291,12 +309,14 @@ class TestToolExecutor:
 
         first = executor.invoke_direct(
             "idempotent_write",
+            execution_scope=_scope(),
             target="note-1",
             confirmed=True,
             idempotency_key="idem-write-1",
         )
         replayed = executor.invoke_direct(
             "idempotent_write",
+            execution_scope=_scope(),
             target="note-1",
             confirmed=True,
             idempotency_key="idem-write-1",
@@ -309,9 +329,9 @@ class TestToolExecutor:
         gateway = ToolGateway()
         gateway.register(dangerous)
         context = ToolGatewayContext(
+            execution_scope=_scope(task_id="step-confirm"),
             execution_mode="invocation_batch",
             tool_call_id="call-confirm",
-            step_id="step-confirm",
         )
         grant = ProcedureNodeGrant(
             request_id="request-confirm",
@@ -362,9 +382,15 @@ class TestToolExecutor:
         executor = ToolExecutor(audit_sink=sink)
         executor.register(rate_limited)
 
-        first = executor.invoke_direct("rate_limited", message="one", user_id="u1")
-        second = executor.invoke_direct("rate_limited", message="two", user_id="u1")
-        other_user = executor.invoke_direct("rate_limited", message="three", user_id="u2")
+        first = executor.invoke_direct(
+            "rate_limited", execution_scope=_scope("u1"), message="one"
+        )
+        second = executor.invoke_direct(
+            "rate_limited", execution_scope=_scope("u1"), message="two"
+        )
+        other_user = executor.invoke_direct(
+            "rate_limited", execution_scope=_scope("u2"), message="three"
+        )
 
         assert first["ok"] is True
         assert second["ok"] is False
@@ -380,7 +406,9 @@ class TestToolExecutor:
         executor = ToolExecutor(audit_sink=sink, policy_engine=engine)
         executor.register(echo)
 
-        result = executor.invoke_direct("echo", message="hi", user_id="u1")
+        result = executor.invoke_direct(
+            "echo", execution_scope=_scope(), message="hi"
+        )
 
         assert result["ok"] is False
         assert "被策略禁止" in result["error"]
@@ -392,7 +420,7 @@ class TestToolExecutor:
         executor = ToolExecutor(audit_sink=sink)
         executor.register(flaky)
 
-        result = executor.invoke_direct("flaky")
+        result = executor.invoke_direct("flaky", execution_scope=_scope())
 
         assert result["ok"] is True
         assert result["data"] == "ok"
@@ -404,7 +432,7 @@ class TestToolExecutor:
         executor = ToolExecutor(audit_sink=sink)
         executor.register(slow)
 
-        result = executor.invoke_direct("slow")
+        result = executor.invoke_direct("slow", execution_scope=_scope())
 
         assert result["ok"] is False
         assert "超时" in result["error"]

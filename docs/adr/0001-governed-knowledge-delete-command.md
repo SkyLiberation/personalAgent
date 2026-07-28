@@ -1,43 +1,103 @@
-# ADR 0001: Governed Knowledge Delete Command
+# ADR 0001: 最小可恢复知识生命周期操作
 
-- Status: Accepted
-- Date: 2026-07-24
-- Removal review: 2027-07-24
+- 状态：Accepted
+- 日期：2026-07-24
+- 修订：2026-07-27
 
-## Context
+## 问题
 
-Knowledge deletion and restoration previously entered through the generic Task/GoalGraph/LangGraph chain or directly mutated `KnowledgeItem.state` in the notes HTTP adapter. The former created redundant ordinary-request facts; the latter had no durable confirmation binding, immutable payload, claim restoration, or exactly-once receipt.
+知识删除是需要用户确认、重启恢复和幂等执行的高风险操作，不能由普通
+Conversation Tool 或 HTTP Adapter 直接改库。恢复还必须精确还原删除前的
+Knowledge Item 与 Claim 状态。
 
-## Decision
+旧实现为此同时引入了通用 Procedure、`delete_note`/`restore_note` Tool、
+快照 Store、六张 Command/Event/Receipt 表和
+`AuthorizationDigest`/`ExecutionCommandDigest`。这些机制有多个重叠写入口，
+生命周期 Event 也没有独立订阅或重放消费者。它们增加了同步和恢复路径，
+但没有改善 E04/E10 所要求的用户结果，属于超过当前约束的设计。
 
-`KnowledgeLifecycleService` is the sole application write entry for knowledge deletion. It creates an immutable `KnowledgeDeleteCommand`, records append-only `KnowledgeDeleteEvent` facts, and atomically writes `KnowledgeDeleteReceipt` with the `KnowledgeItem` and Claim state changes.
+## 最简单 baseline 与不足
 
-Authorization and execution digests freeze workspace, user, target, reason, policy revision, and operation. Confirmation must present both digests and an external `confirmation_ref`. Replaying an executed command returns the existing receipt. A rejected command cannot later execute.
+直接软删除只需一次状态更新，但不能满足：
 
-Restore is a separate immutable `KnowledgeRestoreCommand` linked to one executed delete command. Its transaction reads the delete receipt as the sole source of the previous item and claim states, restores all affected canonical rows, and records its own events and receipt. The restore confirmation cannot reuse the delete confirmation.
+- prepare 阶段零副作用并在重启后继续确认；
+- 确认内容与实际执行内容一致；
+- 相同请求只执行一次并返回同一 Receipt；
+- 恢复 Item 和所有 Claim 的删除前状态；
+- 跨 user/workspace 操作 fail closed。
 
-The generic `delete_note` and `restore_note` tools are not exposed to the ordinary Conversation loop. The old direct `DELETE /api/notes/{note_id}` path and both snapshot-based restore paths are removed.
+因此需要 durable operation，但不需要通用 Planner、Procedure、生命周期
+Event 或两套 digest。
 
-## Ownership
+## 决策
 
-- Delete/restore command, event, and receipt facts: `KnowledgeLifecycleService` and `PostgresKnowledgeLifecycleStore`.
-- Knowledge item and claim lifecycle facts: Workspace aggregate tables.
-- Authorization digest: deterministic lifecycle policy.
-- Confirmation fact: user input at the knowledge-delete decision endpoint.
-- Execution fact: `KnowledgeDeleteReceipt` only.
+`KnowledgeLifecycleService` 是删除和恢复的唯一 Application 写入口。
 
-## Risks
+1. prepare 创建 immutable `KnowledgeDeleteCommand` 或
+   `KnowledgeRestoreCommand`，状态为 `awaiting_confirmation`，不修改业务事实；
+2. 一个 `command_digest` 对 canonical command payload 做 SHA-256，绑定确认、
+   Operation 和 Receipt；digest 是一致性指纹，不是身份或授权；
+3. decision 校验入口身份、command owner、digest 和 `confirmation_ref`；
+4. confirm 在一个数据库事务中更新 Workspace canonical facts、写 Workspace
+   `KnowledgeStateEvent` 并写 Receipt；
+5. replay 已执行 command 时直接返回原 Receipt，不再次产生副作用；
+6. restore 必须引用已执行的 delete command，并以 delete receipt 中记录的
+   previous states 为恢复依据。
 
-- The transaction updates several workspace projections; a schema mismatch must fail closed and roll back.
-- Existing rows deleted through the removed path have no new receipt and cannot be adopted silently.
-- A restore fails closed if the deleted item or any claim recorded by the delete receipt changed before confirmation.
+持久化只保留两张共享表：
 
-## Verification
+- `knowledge_lifecycle_operations`：delete/restore command、kind、status 和确认信息；
+- `knowledge_lifecycle_receipts`：不可变执行结果和恢复所需 previous states。
 
-- API integration covers prepare without mutation, scope denial, digest mismatch, rejection, confirmed execution, and exactly-once replay.
-- Release E04 restarts the production process after prepare and confirms the persisted command.
-- Release E10 restarts between delete and restore, verifies item and claim restoration, replays the restore without duplicate events, and asserts the snapshot endpoint is unreachable.
+Delete 与 Restore 保留不同的 typed Command/Receipt，因为它们的 payload、
+前置条件和恢复责任不同；它们共享表结构，不复制生命周期框架。
 
-## Exit Conditions
+不创建 `KnowledgeDeleteEvent`/`KnowledgeRestoreEvent`。Operation status 已能表达
+等待、拒绝和执行；真正的 Item/Claim 状态变化由 Workspace
+`KnowledgeStateEvent` 记录，它有审计消费者。
 
-Remove these tables only after a superseding knowledge lifecycle aggregate has migrated every command, event, and receipt and equivalent E04/E10 E2E passes. The review date is not permission to retain an unused compatibility path.
+## 所有权
+
+- Command、operation status、Receipt：`KnowledgeLifecycleService` /
+  `PostgresKnowledgeLifecycleStore`；
+- Knowledge Item、Claim 和其状态事件：Workspace aggregate；
+- 用户身份与 scope：正式 HTTP 入口解析，body 不得扩大 scope；
+- 执行事实：Receipt；完成结果：Operation View 中 `status=executed` 且 Receipt
+  存在。
+
+## 被删除的方案
+
+- 通用 `knowledge_delete` Procedure 和 LangGraph interrupt 路径；
+- `delete_note`、`restore_note` Tool 及 MemoryFacade 写入口；
+- `knowledge_delete_snapshots` 运行时读写路径；
+- 分离的 delete/restore Command、Event、Receipt 六表；
+- 无独立消费者的 lifecycle Event models；
+- 双 digest 确认协议。
+
+旧六表数据在 schema 初始化时迁入两张新表后删除。旧
+`knowledge_delete_snapshots` 不再创建、读取或写入；已有物理表仅作为待运维
+导出/清理的历史数据，不是兼容入口或权威事实。
+
+Legacy 六表迁移代码只服务本次滚动升级。所有部署环境完成一次启动并确认六个
+旧表均不存在后删除该代码及迁移测试，最晚移除日期为 2026-10-31。历史 snapshot
+表由运维在导出或确认无保留义务后清理，不得重新接入生产读取。
+
+## 目标 E2E 与反事实
+
+- prepare 返回 command 与 `command_digest`，业务事实不变；
+- 错误 user/workspace、错误 digest、缺失确认或 rejected command 均不执行；
+- 进程重启后可以确认同一个 command；
+- 同 command replay 返回同一 Receipt，状态事件不增加；
+- restore 在重启后精确恢复 Item/Claim previous states；
+- 响应不存在 lifecycle `events` 投影；
+- 旧 DELETE、snapshot restore、普通 Conversation Tool 路径不可达。
+
+对应测试为 release E04/E10 和 notes API integration。
+
+## 复杂度结论
+
+最小 durable baseline 仍需 Command、Receipt、确认状态和事务恢复依据；删除它们
+会破坏已证明的 E2E。Planner、Procedure、双 digest、生命周期 Event 与独立六表
+没有独立 owner、信任边界或生产消费者，因此移除。若未来出现独立授权编译、
+事件订阅或跨 Provider 绑定，必须以新的 baseline 失败证据和 ADR 重新准入，
+不能预留空壳。

@@ -95,17 +95,6 @@ def clean_postgres_business_tables():
                     id TEXT PRIMARY KEY, note_id TEXT NOT NULL, payload JSONB NOT NULL,
                     due_at TIMESTAMPTZ NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS knowledge_delete_snapshots (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    target_note_id TEXT NOT NULL,
-                    deleted_by TEXT NOT NULL,
-                    delete_reason TEXT NOT NULL DEFAULT '',
-                    run_id TEXT,
-                    checkpoint_id TEXT,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS memory_episodes (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -365,6 +354,26 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
+                CREATE TABLE IF NOT EXISTS investigation_projects (
+                    project_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    principal_id TEXT NOT NULL,
+                    create_idempotency_key TEXT NOT NULL,
+                    definition_digest TEXT NOT NULL,
+                    definition JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (tenant_id, workspace_id, principal_id, create_idempotency_key)
+                );
+                CREATE TABLE IF NOT EXISTS investigation_project_events (
+                    event_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES investigation_projects(project_id),
+                    sequence INTEGER NOT NULL,
+                    event_kind TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    UNIQUE (project_id, sequence)
+                );
                 CREATE TABLE IF NOT EXISTS workspace_artifacts (
                     artifact_id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -509,61 +518,41 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS knowledge_delete_commands (
+                CREATE TABLE IF NOT EXISTS knowledge_lifecycle_operations (
                     command_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL,
                     workspace_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
-                    target_note_id TEXT NOT NULL,
-                    authorization_digest TEXT NOT NULL,
-                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    target_ref TEXT NOT NULL,
+                    command_digest TEXT NOT NULL UNIQUE,
                     payload JSONB NOT NULL,
+                    status TEXT NOT NULL,
+                    confirmation_ref TEXT NOT NULL DEFAULT '',
                     created_at TIMESTAMPTZ NOT NULL,
-                    UNIQUE (user_id, idempotency_key)
+                    decided_at TIMESTAMPTZ,
+                    UNIQUE (user_id, kind, idempotency_key)
                 );
-                CREATE TABLE IF NOT EXISTS knowledge_delete_events (
-                    event_id TEXT PRIMARY KEY,
-                    command_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    UNIQUE (command_id, event_type)
-                );
-                CREATE TABLE IF NOT EXISTS knowledge_delete_receipts (
+                CREATE TABLE IF NOT EXISTS knowledge_lifecycle_receipts (
                     receipt_id TEXT PRIMARY KEY,
                     command_id TEXT NOT NULL UNIQUE,
-                    execution_command_digest TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    command_digest TEXT NOT NULL UNIQUE,
                     payload JSONB NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS knowledge_restore_commands (
-                    command_id TEXT PRIMARY KEY,
-                    idempotency_key TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    delete_command_id TEXT NOT NULL,
-                    authorization_digest TEXT NOT NULL,
-                    execution_command_digest TEXT NOT NULL UNIQUE,
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    agent_run_id TEXT PRIMARY KEY,
+                    submission_key TEXT NOT NULL UNIQUE,
+                    definition_digest TEXT NOT NULL,
+                    parent_run_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    provider_task_id TEXT,
                     payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    UNIQUE (user_id, idempotency_key)
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
-                CREATE TABLE IF NOT EXISTS knowledge_restore_events (
-                    event_id TEXT PRIMARY KEY,
-                    command_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    UNIQUE (command_id, event_type)
-                );
-                CREATE TABLE IF NOT EXISTS knowledge_restore_receipts (
-                    receipt_id TEXT PRIMARY KEY,
-                    command_id TEXT NOT NULL UNIQUE,
-                    execution_command_digest TEXT NOT NULL UNIQUE,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL
-                );
-                TRUNCATE knowledge_notes, review_cards, knowledge_delete_snapshots, memory_episodes, memory_items;
+                TRUNCATE knowledge_notes, review_cards, memory_episodes, memory_items;
                 TRUNCATE tool_idempotency_ledger, tool_audit_events, tool_policy_decisions;
                 TRUNCATE digest_subscriptions, digest_deliveries, digest_delivery_items, review_feedback_events;
                 TRUNCATE knowledge_gap_deliveries;
@@ -576,10 +565,9 @@ def clean_postgres_business_tables():
                 TRUNCATE procedure_eval_runs;
                 TRUNCATE procedure_eval_policies;
                 TRUNCATE worker_queue_tasks;
-                TRUNCATE knowledge_delete_commands, knowledge_delete_events,
-                    knowledge_delete_receipts;
-                TRUNCATE knowledge_restore_commands, knowledge_restore_events,
-                    knowledge_restore_receipts;
+                TRUNCATE investigation_project_events, investigation_projects;
+                TRUNCATE agent_runs;
+                TRUNCATE knowledge_lifecycle_receipts, knowledge_lifecycle_operations;
                 TRUNCATE workspace_artifacts, workspace_extraction_runs, workspace_evidence_blocks,
                     workspace_evidence_spans, workspace_claims, workspace_grounding_runs,
                     workspace_claim_support_events, workspace_claim_admission_decisions,
@@ -667,4 +655,3 @@ def sample_citation_factory():
 @pytest.fixture
 def sample_citation(sample_citation_factory) -> Citation:
     return sample_citation_factory()
-

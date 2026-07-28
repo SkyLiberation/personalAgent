@@ -129,27 +129,6 @@ def ensure_memory_schema(store) -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS review_cards_note_idx ON review_cards (note_id, due_at)")
             cur.execute(
                 """
-                CREATE TABLE IF NOT EXISTS knowledge_delete_snapshots (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    target_note_id TEXT NOT NULL,
-                    deleted_by TEXT NOT NULL,
-                    delete_reason TEXT NOT NULL DEFAULT '',
-                    run_id TEXT,
-                    checkpoint_id TEXT,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS knowledge_delete_snapshots_note_idx
-                ON knowledge_delete_snapshots (user_id, target_note_id, created_at DESC)
-                """
-            )
-            cur.execute(
-                """
                 CREATE TABLE IF NOT EXISTS memory_episodes (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,

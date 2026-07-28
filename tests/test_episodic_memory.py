@@ -13,7 +13,7 @@ def test_build_entry_episode_from_completed_run():
         run_id="run-123",
         thread_id="alice:s1",
         run_status="completed",
-        execution_trace=["确认删除笔记", "调用 delete_note"],
+        execution_trace=["确认外发", "调用 external_publish"],
         events=[
             {
                 "event_id": "evt-1",
@@ -27,7 +27,7 @@ def test_build_entry_episode_from_completed_run():
                 "event_id": "evt-2",
                 "type": "tool_result",
                 "payload": {
-                    "tool_name": "delete_note",
+                    "tool_name": "external_publish",
                     "output": {
                         "ok": True,
                         "data": {"note_id": "note-1"},
@@ -45,7 +45,7 @@ def test_build_entry_episode_from_completed_run():
     assert episode.session_id == "s1"
     assert episode.result_contract == "external_state"
     assert episode.outcome == "completed"
-    assert "delete_note" in episode.tool_refs
+    assert "external_publish" in episode.tool_refs
     assert "note-1" in episode.note_refs
     assert episode.decisions == ["结果契约: external_state"]
 

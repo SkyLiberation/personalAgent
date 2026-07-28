@@ -467,7 +467,9 @@ PERSONAL_AGENT_FEISHU_USE_DEFAULT_USER=true  # 飞书用户未映射时是否回
 ## 鉴权、限流与 CORS
 
 ```env
-PERSONAL_AGENT_API_KEYS=key1:user1,key2:user2  # API Key → 用户映射，多个用逗号分隔
+PERSONAL_AGENT_API_KEYS={"key1":{"tenant_id":"tenant-a","user_id":"user1"}}
+# 管理员 Key 使用相同 typed principal 格式：
+PERSONAL_AGENT_ADMIN_API_KEYS={"admin-key":{"tenant_id":"tenant-a","user_id":"admin"}}
 PERSONAL_AGENT_RATE_LIMIT_REQUESTS=60
 PERSONAL_AGENT_RATE_LIMIT_WINDOW_SECONDS=60
 PERSONAL_AGENT_CORS_ORIGINS=http://localhost:3000  # 多个用逗号分隔
