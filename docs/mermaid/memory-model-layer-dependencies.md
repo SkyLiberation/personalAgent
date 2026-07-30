@@ -1,4 +1,7 @@
-# Memory Model / Layer 依赖类图
+# Memory Model / Layer 依赖类图（历史）
+
+> 本图基于已删除的 LangGraph Entry/`AgentGraphState`，仅保留作迁移记录，不代表当前代码。
+> 当前事实边界见 [核心架构当前状态](../summary/core-architecture-current-state.md)。
 
 ```mermaid
 flowchart LR

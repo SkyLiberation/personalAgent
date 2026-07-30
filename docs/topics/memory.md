@@ -1,5 +1,10 @@
 # Agent 记忆层说明
 
+> 状态：本文混合当前长期知识概念与已经删除的 `AgentGraphState`/LangGraph checkpoint
+> 设计，不能作为当前 Memory 或 Conversation 事实 owner。当前持久化边界见
+> [核心架构当前状态](../summary/core-architecture-current-state.md)；后续重写必须分别核对
+> Conversation journal、Workspace facts、Artifact、Investigation journal 和检索投影。
+
 优秀 Agent 的记忆层不是把所有历史都塞进上下文，而是把不同生命周期、不同可信度的信息放到不同载体里，再按任务需要取回。当前项目的记忆层可以理解为“两条真源、一个证据出口”：短期执行现场由 LangGraph checkpoint 承载，长期知识由 Postgres note/chunk/review 承载，最终进入回答的是经过检索、归一、排序和预算筛选后的 evidence。
 
 ## 设计目标
@@ -17,7 +22,10 @@
 回答依据用 evidence 进入 prompt
 ```
 
-也就是说，项目里不存在独立的“会话存档表”或进程内 working memory 真源。LangGraph entry 是唯一对话入口，同一 `thread_id` 的对话历史以 checkpoint `messages` 为短期真源；长期事实只有显式 capture / solidify 后才会进入 `knowledge_notes`。
+也就是说，长期事实不会从进程内 working memory 或模型回答直接产生。LangGraph entry 的同一
+`thread_id` 对话以 checkpoint `messages` 为短期真源；轻量 Conversation Interaction 另由 journal
+保存其 message、执行输入和受治理保存状态。长期事实只有显式 capture / solidify 后才会进入
+`knowledge_notes`。
 
 ## 当前实现与能力
 
@@ -34,7 +42,10 @@
 - `messages`：同一 `thread_id` 下跨 run 累积的用户/助手对话。
 - `task_spec / execution_ledger / control_state / react / tool_tracking / events / pending_confirmation`：当前决策、执行、恢复、确认和审计需要的状态。
 
-这层的价值是保证同一 thread 内的多轮任务可连续、可暂停、可恢复。高风险确认、solidify 草稿、计划步骤结果都先保存在 checkpoint 中；只有正式写入 `knowledge_notes` 后，才算长期知识。
+这层的价值是保证同一 thread 内的多轮任务可连续、可暂停、可恢复。LangGraph 主链的高风险确认
+和计划步骤结果保存在 checkpoint；Conversation 内确认后保存使用独立 Interaction journal 冻结
+模型从 user message 中逐字选择并由 Admission 校验的知识 span、Command 和 Receipt。两者都不是长期知识，只有 Workspace canonical writer
+提交后才进入长期知识事实链。
 
 ### 短期上下文窗口
 
@@ -66,7 +77,9 @@ checkpoint `messages` 是同一 thread 内累积的全量真源，但不会原�
 - `capture_text`：把用户输入的知识沉淀为 note。
 - `capture_url`：提取链接正文后沉淀为 note。
 - `capture_upload`：提取上传文件内容或元数据后沉淀为 note。
-- `solidify_conversation`：先在 checkpoint 形成草稿，再通过 capture 写入长期知识。
+- `solidify_conversation`：把调用方已经选定的 exact user-authored knowledge span 交给
+  Workspace ingestion；它不在 checkpoint 生成或改写语义草稿。Conversation governed save
+  先机械证明 span 的消息来源，在 Interaction journal 冻结 Command，确认后复用该唯一写方法。
 
 长期知识采用 parent/chunk 双层结构：parent note 表达文档级或主题级知识，chunk note 保存原文片段、证据定位和 citation 单元。`parent_note_id / chunk_index / source_span` 用来建立文档和片段关系，避免长文直接塞进 prompt。
 
@@ -471,7 +484,9 @@ Collect thread context
 | procedural | 必须谨慎 | 多个 episode 支撑、用户确认、版本化 |
 | reflection | 可半自动 | 绑定失败 run / eval / verifier 结果 |
 
-这条 workflow 可以复用当前已有能力：checkpoint 提供短期现场，`solidify_conversation` 提供对话草稿雏形，`MemoryFacade` 提供长期入口，HITL 提供确认，Evidence/source refs 提供回溯。
+这条候选 workflow 只能复用已有的短期现场、Workspace canonical write、Command/digest/确认
+约束和 Evidence/source refs；候选抽取、分类、冲突判断和 assistant 内容所有权当前都不存在，
+不能由 `solidify_conversation` 推导出来，也不能在 baseline 失败前进入实现。
 
 ## Model / Layer 依赖类图
 
@@ -542,9 +557,10 @@ Collect thread context
 
 以下列表只保留尚未完整落地的演进项。已落地的 PolicyEngine、图谱对账基础版、知识版本/冲突状态、typed long-term memory、结构化 ThreadSummary 已经合并进上方“当前实现”和“主要差距”，不再占用待办优先级。
 
-### P0：建立 Memory Consolidation Workflow
+### 候选 P0：验证是否需要 Memory Consolidation Workflow
 
-自动从短期记忆生成长期记忆应该先进入候选区：
+先从正式入口执行“从短期对话提炼候选记忆并确认保存”的 baseline E2E。只有现有能力无法满足
+该用户目标且失败来自产品行为时，才定义以下目标能力：
 
 - 收集 checkpoint messages/events。
 - 抽取 typed memory candidates。
@@ -553,7 +569,9 @@ Collect thread context
 - 按类型决定用户确认或 policy auto-approve。
 - 再写入 `knowledge_notes`、`memory_episodes` 或 `memory_items`。
 
-这一步可以把 `solidify_conversation` 从单一“对话草稿入库”升级为更通用的 consolidation workflow，同时避免把短期摘要直接当长期事实。
+该能力若获准，应新增独立的 candidate owner 并继续复用 Workspace 唯一写入口；不得把
+`solidify_conversation` 扩成同时拥有候选抽取与长期写入的 God Service，也不得把短期摘要直接
+当长期事实。
 
 ### P1：完善 Evidence Rerank 与引用治理
 
@@ -584,7 +602,10 @@ Collect thread context
 
 面试时不要把记忆层讲成“我把聊天记录存起来了”，而要讲成：
 
-> 我把记忆层按生命周期和可信度拆开：当前执行现场放在 LangGraph checkpoint，用于多轮对话、暂停和恢复；真正长期事实必须通过 capture 或 solidify 写入 Postgres note/chunk；图谱只做语义索引和关系检索，原文证据仍回到 note/chunk；最终进入 prompt 的不是原始存储，而是统一 Evidence 和 ContextPack。
+> 我把记忆层按生命周期和可信度拆开：LangGraph 长任务现场放在 checkpoint，轻量 Conversation
+> 的执行与待确认保存放在 Interaction journal；真正长期事实必须通过 Workspace 的 capture 或
+> solidify 写入 Postgres note/chunk。图谱只做语义索引和关系检索，原文证据仍回到 note/chunk；
+> 最终进入 prompt 的不是原始存储，而是统一 Evidence 和 ContextPack。
 
 可以按四层来讲：
 

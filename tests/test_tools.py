@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 from langchain_core.tools import tool
@@ -12,7 +14,7 @@ from pydantic import ValidationError
 from personal_agent.capabilities.contracts.grants import GrantDependencySet, ProcedureNodeGrant
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
-from personal_agent.kernel.contracts.scope import interaction_execution_scope
+from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope, interaction_execution_scope
 from personal_agent.tools import (
     ToolError,
     build_capture_text_tool,
@@ -239,6 +241,32 @@ class TestToolExecutor:
         assert result["ok"] is True
         assert result["data"] == "echo: hello"
 
+    def test_project_invocation_derives_leaf_grant_from_frozen_proposal(self, executor):
+        executor.register(echo)
+        scope = ExecutionScope(
+            security_scope=SecurityScope(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+            ),
+            principal_id="tenant-1:u1",
+            execution_id="proposal-1",
+            project_id="project-1",
+            plan_version=2,
+            logical_subgoal_id="subgoal-1",
+            subgoal_version=1,
+        )
+
+        result = executor.invoke_project(
+            "echo",
+            {"message": "hello"},
+            execution_scope=scope,
+            tool_call_id="proposal-1",
+            proposal_digest="a" * 64,
+        )
+
+        assert result["ok"] is True
+        assert result["data"] == "echo: hello"
+
     def test_missing_tool_returns_error(self, executor):
         result = executor.invoke_direct("nonexistent", execution_scope=_scope())
         assert result["ok"] is False
@@ -444,8 +472,12 @@ class TestToolExecutor:
         with pytest.raises(ValidationError):
             WebSearchArgs.model_validate({"query": "agent tools", "limit": 99})
 
+        with pytest.raises(ValidationError):
+            WebSearchArgs.model_validate({"query": "x" * 401})
+
     def test_web_search_provider_factory_uses_configured_provider(self):
         from personal_agent.application.capture.providers.web_search import (
+            SerpApiWebSearchProvider,
             TavilyWebSearchProvider,
             build_web_search_provider,
         )
@@ -456,6 +488,148 @@ class TestToolExecutor:
         )
 
         assert isinstance(build_web_search_provider(settings), TavilyWebSearchProvider)
+
+        settings = Settings(
+            web_search=WebSearchConfig(provider="serpapi", api_key="test-key")
+        )
+
+        assert isinstance(build_web_search_provider(settings), SerpApiWebSearchProvider)
+
+    def test_serpapi_provider_uses_google_organic_results_contract(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from urllib.parse import parse_qs, urlparse
+
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import (
+            SerpApiWebSearchProvider,
+        )
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        captured = {}
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "search_metadata": {"status": "Success"},
+                    "organic_results": [{
+                        "title": "Official release",
+                        "link": "https://example.com/release",
+                        "snippet": "Released with typed contracts.",
+                        "date": "Jun 30, 2025",
+                    }, {
+                        "title": "Ignored overflow result",
+                        "link": "https://example.com/overflow",
+                        "snippet": "The Adapter must enforce the requested limit.",
+                    }],
+                }).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            parsed = urlparse(request.full_url)
+            captured["base_url"] = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            captured["query"] = parse_qs(parsed.query)
+            captured["headers"] = dict(request.header_items())
+            captured["timeout"] = timeout
+            return DummyResponse()
+
+        monkeypatch.setattr(web_search_module, "urlopen", fake_urlopen)
+        settings = Settings(
+            web_search=WebSearchConfig(
+                provider="serpapi",
+                api_key="serpapi-key",
+                base_url="https://serpapi.example",
+                timeout_ms=9000,
+            )
+        )
+
+        results = SerpApiWebSearchProvider(settings).search("agent tools", limit=1)
+
+        assert captured["base_url"] == "https://serpapi.example/search.json"
+        assert captured["query"] == {
+            "api_key": ["serpapi-key"],
+            "engine": ["google"],
+            "hl": ["en"],
+            "num": ["1"],
+            "q": ["agent tools"],
+        }
+        assert captured["headers"]["Accept"] == "application/json"
+        assert captured["timeout"] == 9
+        assert len(results) == 1
+        assert results[0].source == "serpapi"
+        assert results[0].url == "https://example.com/release"
+        assert results[0].published_at == "Jun 30, 2025"
+
+    def test_serpapi_provider_does_not_turn_provider_error_into_empty_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import (
+            SerpApiWebSearchProvider,
+        )
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({"error": "Invalid API key"}).encode("utf-8")
+
+        monkeypatch.setattr(
+            web_search_module,
+            "urlopen",
+            lambda *_args, **_kwargs: DummyResponse(),
+        )
+        settings = Settings(
+            web_search=WebSearchConfig(provider="serpapi", api_key="invalid-key")
+        )
+
+        with pytest.raises(RuntimeError, match="SerpAPI search failed"):
+            SerpApiWebSearchProvider(settings).search("agent tools")
+
+    def test_serpapi_provider_treats_google_no_results_as_valid_empty_result(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import (
+            SerpApiWebSearchProvider,
+        )
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "error": "Google hasn't returned any results for this query.",
+                }).encode("utf-8")
+
+        monkeypatch.setattr(
+            web_search_module,
+            "urlopen",
+            lambda *_args, **_kwargs: DummyResponse(),
+        )
+        settings = Settings(
+            web_search=WebSearchConfig(provider="serpapi", api_key="test-key")
+        )
+
+        assert SerpApiWebSearchProvider(settings).search("too narrow") == []
 
     def test_tavily_provider_uses_generic_web_search_config(self, monkeypatch: pytest.MonkeyPatch):
         from personal_agent.application.capture.providers import web_search as web_search_module
@@ -508,6 +682,35 @@ class TestToolExecutor:
         assert captured["timeout"] == 9
         assert results[0].source == "tavily"
 
+    def test_tavily_provider_does_not_turn_rejected_query_into_empty_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import TavilyWebSearchProvider
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        def rejected(*_args, **_kwargs):
+            raise HTTPError(
+                "https://search.example/search",
+                400,
+                "Bad Request",
+                None,
+                BytesIO(b'{"detail":"query too long"}'),
+            )
+
+        monkeypatch.setattr(web_search_module, "urlopen", rejected)
+        settings = Settings(
+            web_search=WebSearchConfig(
+                provider="tavily",
+                api_key="test-key",
+                base_url="https://search.example",
+            )
+        )
+
+        with pytest.raises(ValueError, match="HTTP 400"):
+            TavilyWebSearchProvider(settings).search("x" * 401)
+
     def test_web_search_scrape_respects_allowed_domains(self):
         from personal_agent.application.capture.providers.web_search import WebSearchResult
         from personal_agent.kernel.config import Settings, WebSearchConfig
@@ -551,6 +754,7 @@ class TestToolExecutor:
             DummyProvider(),
             capture_service=DummyCaptureService(),
         )
+        assert tool_governance(search_tool).timeout_seconds == 60.0
 
         message = search_tool.invoke({
             "name": "web_search",

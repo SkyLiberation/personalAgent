@@ -90,6 +90,7 @@ class ProjectBudgetLimit(DomainModel):
     max_tool_calls: int = Field(default=40, ge=0)
     max_agent_calls: int = Field(default=8, ge=0)
     max_plan_revisions: int = Field(default=4, ge=0)
+    max_evidence_repair_revisions: int = Field(default=8, ge=0)
     same_feedback_revision_limit: int = Field(default=1, ge=0)
     planning_tokens: int = Field(default=12_000, ge=0)
     execution_proposal_tokens: int = Field(default=12_000, ge=0)
@@ -142,6 +143,11 @@ class PlanAssumption(DomainModel):
     affected_logical_subgoal_ids: tuple[str, ...] = ()
 
 
+class SubGoalVersionRef(DomainModel):
+    logical_subgoal_id: str = Field(min_length=1)
+    subgoal_version: int = Field(ge=1)
+
+
 class SubGoalDefinitionVersion(DomainModel):
     logical_subgoal_id: str = Field(min_length=1)
     subgoal_version: int = Field(ge=1)
@@ -151,6 +157,7 @@ class SubGoalDefinitionVersion(DomainModel):
     depends_on: tuple[str, ...] = ()
     required_output: str = Field(min_length=1)
     capability_contract: CapabilityContract
+    repairs_frozen_subgoals: tuple[SubGoalVersionRef, ...] = ()
 
 
 class RequirementMapping(DomainModel):
@@ -257,6 +264,15 @@ class PlanObservation(DomainModel):
     observation_digest: str = Field(min_length=16)
 
 
+class DecisionFeedback(DomainModel):
+    reason: str
+    repairable_fields: tuple[str, ...] = ()
+    immutable_fields: tuple[str, ...] = ()
+    required_repair: str = ""
+    revision_scope: tuple[str, ...] = ()
+    disposition: str = "semantic_rejection"
+
+
 class SubGoalVerificationAssessment(DomainModel):
     assessment_id: str = Field(default_factory=lambda: f"ipver_{uuid4().hex[:20]}")
     logical_subgoal_id: str
@@ -311,6 +327,7 @@ class ReplanRequest(DomainModel):
     affected_requirement_ids: tuple[str, ...] = ()
     affected_logical_subgoal_ids: tuple[str, ...] = ()
     revision_scope: tuple[str, ...] = ()
+    decision_feedback: DecisionFeedback | None = None
     trigger_digest: str = Field(min_length=16)
 
 
@@ -392,6 +409,14 @@ class StateChangedData(DomainModel):
 class ExecutionProposalAcceptedData(DomainModel):
     kind: Literal["execution_proposal_accepted"] = "execution_proposal_accepted"
     proposal: SubGoalExecutionProposal
+
+
+class ExecutionProposalRejectedData(DomainModel):
+    kind: Literal["execution_proposal_rejected"] = "execution_proposal_rejected"
+    logical_subgoal_id: str = Field(min_length=1)
+    subgoal_version: int = Field(ge=1)
+    feedback: DecisionFeedback
+    rejection_digest: str = Field(min_length=16)
 
 
 class BudgetReservedData(DomainModel):
@@ -491,6 +516,7 @@ ProjectEventData = Annotated[
     PlanAcceptedData
     | StateChangedData
     | ExecutionProposalAcceptedData
+    | ExecutionProposalRejectedData
     | BudgetReservedData
     | BudgetChargedData
     | BudgetReleasedData
@@ -553,6 +579,7 @@ __all__ = [
     "CompletionCommittedData",
     "CompletionReport",
     "DerivedRequirement",
+    "DecisionFeedback",
     "DisclosureManifest",
     "EvidenceAdmissionCommittedData",
     "EvidenceAdmissionDecision",
@@ -560,6 +587,7 @@ __all__ = [
     "ExecutionCommittedData",
     "ExecutionOperation",
     "ExecutionProposalAcceptedData",
+    "ExecutionProposalRejectedData",
     "ExecutionRef",
     "ExternalDelegationCommand",
     "FailureDisposition",
@@ -583,6 +611,7 @@ __all__ = [
     "SubGoalDefinitionVersion",
     "SubGoalExecutionProposal",
     "SubGoalOutcome",
+    "SubGoalVersionRef",
     "SubGoalVerificationAssessment",
     "SynthesisOperation",
     "ToolExecutionOperation",

@@ -30,6 +30,9 @@ from .models import (
     AgentTurnDecision,
     CommittedUsage,
     ContinueTurnProposal,
+    ConversationKnowledgeSaveCommand,
+    ConversationKnowledgeSaveOperation,
+    ConversationKnowledgeSaveReceipt,
     ConversationMessage,
     ConversationTurnView,
     DecisionFeedback,
@@ -38,10 +41,12 @@ from .models import (
     EffectiveToolCapability,
     FinalMessage,
     InteractionTrace,
+    KnowledgeSaveArguments,
     LoopBudgetPolicy,
     ToolCallProposal,
 )
 from .ports import (
+    ConversationKnowledgeWriter,
     InteractionAgentPort,
     InteractionArtifactPort,
     InteractionToolPort,
@@ -50,6 +55,17 @@ from .ports import (
 
 class ConversationUnavailable(RuntimeError):
     pass
+
+
+class ConversationOperationNotFound(LookupError):
+    pass
+
+
+class ConversationOperationConflict(RuntimeError):
+    pass
+
+
+_KNOWLEDGE_SAVE_CAPABILITY = "prepare_conversation_knowledge_save"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +102,10 @@ class FileInteractionJournal(InMemoryInteractionJournal):
         super().put(trace)
         run_dir = self._root / trace.interaction_run_ref
         run_dir.mkdir(parents=True, exist_ok=True)
-        sequence = f"{trace.usage.model_turns:04d}-{len(trace.inputs):04d}"
-        target = run_dir / f"{sequence}.json"
+        target = run_dir / f"{trace.revision:04d}.json"
         if target.exists():
             return
-        temporary = run_dir / f".{sequence}.{uuid4().hex}.tmp"
+        temporary = run_dir / f".{trace.revision:04d}.{uuid4().hex}.tmp"
         temporary.write_text(trace.model_dump_json(indent=2), encoding="utf-8")
         os.replace(temporary, target)
 
@@ -117,6 +132,7 @@ class ConversationService:
         tool_port: InteractionToolPort | None = None,
         agent_port: InteractionAgentPort | None = None,
         artifact_port: InteractionArtifactPort | None = None,
+        knowledge_writer: ConversationKnowledgeWriter | None = None,
         budget_policy: LoopBudgetPolicy | None = None,
         journal: InMemoryInteractionJournal | None = None,
     ) -> None:
@@ -124,6 +140,8 @@ class ConversationService:
         self._tool_port = tool_port
         self._agent_port = agent_port
         self._artifact_port = artifact_port
+        self._knowledge_writer = knowledge_writer
+        self._confirmation_lock = RLock()
         if agent_port is not None and artifact_port is None:
             raise ValueError("agent delegation requires the canonical Artifact read port")
         self._budget_policy = budget_policy or LoopBudgetPolicy()
@@ -153,6 +171,12 @@ class ConversationService:
         prior = self._journal.get(run_ref)
         if prior is not None and tuple(messages) != prior.messages:
             raise ValueError("interaction_run_ref is already bound to different user input")
+        if prior is not None and prior.knowledge_save_operation is not None:
+            return self._knowledge_save_turn_view(
+                conversation_id,
+                run_ref,
+                prior.knowledge_save_operation,
+            )
         if prior is not None and prior.final_message is not None:
             return ConversationTurnView(
                 interaction_run_ref=run_ref,
@@ -195,6 +219,46 @@ class ConversationService:
                     message=ConversationMessage(role="assistant", content=decision.message.strip()),
                 )
 
+            save_actions = [
+                action for action in decision.actions
+                if (
+                    isinstance(action, ToolCallProposal)
+                    and action.tool_name == _KNOWLEDGE_SAVE_CAPABILITY
+                )
+            ]
+            if save_actions:
+                action = save_actions[0]
+                feedback, arguments = self._admit_knowledge_save(
+                    action,
+                    all_actions=decision.actions,
+                    messages=messages,
+                )
+                if feedback is not None:
+                    inputs.append(feedback)
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches,
+                    )
+                    continue
+                operation = self._prepare_knowledge_save(
+                    action,
+                    arguments=arguments,
+                    run_ref=run_ref,
+                    messages=messages,
+                    principal=principal,
+                    security_scope=security_scope,
+                )
+                self._commit(
+                    run_ref, messages, capabilities, inputs, usage,
+                    execution_order, concurrent_batches,
+                    knowledge_save_operation=operation,
+                )
+                return self._knowledge_save_turn_view(
+                    conversation_id,
+                    run_ref,
+                    operation,
+                )
+
             results, usage, concurrent = self._execute_actions(
                 decision,
                 conversation_id=conversation_id,
@@ -216,6 +280,213 @@ class ConversationService:
 
     def trace(self, interaction_run_ref: str) -> InteractionTrace | None:
         return self._journal.get(interaction_run_ref)
+
+    def decide_knowledge_save(
+        self,
+        *,
+        interaction_run_ref: str,
+        principal: AuthenticatedPrincipal,
+        security_scope: SecurityScope,
+        decision: str,
+        command_digest: str,
+        confirmation_ref: str,
+    ) -> ConversationKnowledgeSaveOperation:
+        if decision not in {"confirm", "reject"}:
+            raise ValueError("decision must be confirm or reject")
+        if principal.tenant_id != security_scope.tenant_id:
+            raise PermissionError("conversation principal and security scope mismatch")
+        with self._confirmation_lock:
+            trace = self._journal.get(interaction_run_ref)
+            if trace is None or trace.knowledge_save_operation is None:
+                raise ConversationOperationNotFound("knowledge save operation not found")
+            operation = trace.knowledge_save_operation
+            command = operation.command
+            if (
+                command.tenant_id != principal.tenant_id
+                or command.user_id != principal.user_id
+                or command.workspace_id != security_scope.workspace_id
+            ):
+                raise PermissionError("knowledge save operation scope mismatch")
+            if command.command_digest != command_digest:
+                raise ConversationOperationConflict("command digest mismatch")
+            if operation.status == "executed":
+                if decision != "confirm":
+                    raise ConversationOperationConflict("executed operation cannot be rejected")
+                return operation
+            if operation.status == "rejected":
+                if decision != "reject":
+                    raise ConversationOperationConflict("rejected operation cannot be confirmed")
+                return operation
+            if decision == "reject":
+                updated = ConversationKnowledgeSaveOperation(
+                    command=command,
+                    status="rejected",
+                )
+            else:
+                normalized_confirmation_ref = confirmation_ref.strip()
+                if not normalized_confirmation_ref:
+                    raise ValueError("confirmation_ref is required when confirming")
+                if self._knowledge_writer is None:
+                    raise ConversationUnavailable("conversation knowledge writer is not configured")
+                result = self._knowledge_writer.solidify_conversation(
+                    [message.model_dump(mode="json") for message in command.messages],
+                    user_id=command.user_id,
+                    workspace_id=command.workspace_id,
+                )
+                ingest = result.ingest_result
+                receipt = ConversationKnowledgeSaveReceipt(
+                    command_id=command.command_id,
+                    command_digest=command.command_digest,
+                    confirmation_ref=normalized_confirmation_ref,
+                    artifact_id=ingest.artifact.artifact_id,
+                    claim_ids=tuple(claim.claim_id for claim in ingest.claims),
+                    knowledge_item_ids=tuple(
+                        item.knowledge_item_id for item in ingest.knowledge_items
+                    ),
+                    user_claim_count=result.user_claim_count,
+                )
+                updated = ConversationKnowledgeSaveOperation(
+                    command=command,
+                    status="executed",
+                    receipt=receipt,
+                )
+            self._journal.put(trace.model_copy(update={
+                "revision": trace.revision + 1,
+                "knowledge_save_operation": updated,
+            }))
+            return updated
+
+    def _admit_knowledge_save(self, action, *, all_actions, messages):
+        if len(all_actions) != 1:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="knowledge_save_requires_independent_confirmation",
+                message="A knowledge save proposal must be the only action in its turn.",
+                repairable_fields=("actions",),
+                immutable_fields=("messages",),
+                required_repair="Propose only the knowledge_save action so its exact payload can be confirmed.",
+            ), None
+        if self._knowledge_writer is None:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="capability_missing",
+                message="The governed knowledge save capability is unavailable.",
+                immutable_fields=("messages",),
+                required_repair="Explain that saving is unavailable; do not claim that knowledge was saved.",
+                disposition="fail_closed",
+            ), None
+        try:
+            arguments = KnowledgeSaveArguments.model_validate(action.arguments)
+        except ValueError:
+            return self._knowledge_save_index_feedback(action.action_id), None
+        indexes = tuple(
+            selection.source_message_index for selection in arguments.selections
+        )
+        if len(indexes) != len(set(indexes)):
+            return self._knowledge_save_index_feedback(action.action_id), None
+        if any(
+            index < 0
+            or index >= len(messages)
+            or messages[index].role != "user"
+            for index in indexes
+        ):
+            return self._knowledge_save_index_feedback(action.action_id), None
+        if any(
+            not selection.text_span.strip()
+            or selection.text_span.strip() not in messages[
+                selection.source_message_index
+            ].content
+            for selection in arguments.selections
+        ):
+            return self._knowledge_save_index_feedback(action.action_id), None
+        return None, arguments
+
+    @staticmethod
+    def _knowledge_save_index_feedback(action_id):
+        return DecisionFeedback(
+            action_id=action_id,
+            reason_code="invalid_knowledge_save_source",
+            message=(
+                "Knowledge save selections must be exact non-empty spans from unique "
+                "existing user messages."
+            ),
+            repairable_fields=("selections",),
+            immutable_fields=("messages", "action_id"),
+            required_repair=(
+                "Select the exact user-authored knowledge span, excluding the request "
+                "to save and confirmation instructions."
+            ),
+        )
+
+    def _prepare_knowledge_save(
+        self,
+        action,
+        *,
+        arguments,
+        run_ref,
+        messages,
+        principal,
+        security_scope,
+    ):
+        selected = tuple(
+            ConversationMessage(
+                role="user",
+                content=selection.text_span.strip(),
+            )
+            for selection in arguments.selections
+        )
+        source_message_indexes = tuple(
+            selection.source_message_index for selection in arguments.selections
+        )
+        command_id = "ksave_" + sha256(run_ref.encode("utf-8")).hexdigest()[:20]
+        canonical = {
+            "command_id": command_id,
+            "action_id": action.action_id,
+            "interaction_run_ref": run_ref,
+            "tenant_id": principal.tenant_id,
+            "workspace_id": security_scope.workspace_id,
+            "user_id": principal.user_id,
+            "source_message_indexes": source_message_indexes,
+            "messages": [message.model_dump(mode="json") for message in selected],
+            "policy_revision": "conversation-knowledge-save-v1",
+        }
+        digest = sha256(json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        return ConversationKnowledgeSaveOperation(
+            command=ConversationKnowledgeSaveCommand(
+                **canonical,
+                command_digest=digest,
+            ),
+            status="awaiting_confirmation",
+        )
+
+    @staticmethod
+    def _knowledge_save_turn_view(conversation_id, run_ref, operation):
+        messages = {
+            "awaiting_confirmation": "请确认是否保存所选内容。确认前不会写入长期知识。",
+            "rejected": "已取消保存，未写入长期知识。",
+            "executed": "已保存所选内容。",
+        }
+        return ConversationTurnView(
+            interaction_run_ref=run_ref,
+            conversation_id=conversation_id,
+            disposition=(
+                "confirmation_required"
+                if operation.status == "awaiting_confirmation"
+                else "answer"
+            ),
+            message=ConversationMessage(
+                role="assistant",
+                content=messages[operation.status],
+            ),
+            pending_confirmation=(
+                operation if operation.status == "awaiting_confirmation" else None
+            ),
+        )
 
     def _decide(self, *, messages, capabilities, inputs, usage):
         visible_messages = [
@@ -309,6 +580,17 @@ class ConversationService:
 
     def _effective_capabilities(self) -> EffectiveCapabilities:
         tools: list[EffectiveToolCapability] = []
+        if self._knowledge_writer is not None:
+            tools.append(EffectiveToolCapability(
+                name=_KNOWLEDGE_SAVE_CAPABILITY,
+                description=(
+                    "Prepare an immutable, user-confirmed save of knowledge already present "
+                    "in selected user messages. This action does not write knowledge."
+                ),
+                input_schema=KnowledgeSaveArguments.model_json_schema(),
+                read_only=False,
+                safely_retryable=False,
+            ))
         if self._tool_port is not None:
             for candidate in self._tool_port.list_interaction_tools():
                 tools.append(EffectiveToolCapability(
@@ -637,6 +919,17 @@ class ConversationService:
             "\"disposition\": \"answer|clarification_required|limitation|failed\", \"message\": \"...\"}}. "
             "A continuing decision has this shape: {\"decision\": {\"kind\": \"continue_turn\", "
             "\"actions\": [<typed action>, ...]}}. "
+            "The latest user message owns the current goal. If it only says to handle, continue, improve, or "
+            "change something without identifying the target or desired result, you MUST return "
+            "clarification_required and ask one concrete question. Repeating an earlier assistant answer is "
+            "never a valid response to such a new underspecified request. "
+            "When the user explicitly asks to save knowledge already present in one or more user messages, "
+            "call the available prepare_conversation_knowledge_save capability as the only action, with "
+            "arguments {\"selections\": [{\"source_message_index\": <zero-based index>, "
+            "\"text_span\": \"<exact user-authored knowledge only>\"}]}. "
+            "Copy each text_span exactly from its user message and exclude the request to save, confirmation "
+            "instructions, and other control text. Never select assistant text or paraphrase the saved payload. "
+            "This proposal only prepares immutable confirmation; it does not claim the save happened. "
             "Use only listed effective capabilities. Never claim a tool result "
             "before receiving its typed observation. Admission feedback must be repaired by a new proposal; "
             "do not assume rejected actions ran. A remote agent completion is evidence for you to assess, "
@@ -663,7 +956,7 @@ class ConversationService:
             "occurred, remove every positive or presupposed occurrence claim; a minimal draft that makes no claim "
             "about that event is valid repair material. Submit the exact revised final text to the verifier "
             "again and, after a passed receipt, return verified_draft unchanged without another verifier call. "
-            "Ask for clarification only when user input is missing. "
+            "Ask for clarification whenever required user input is missing. "
             + "Effective capabilities: " + capabilities.model_dump_json()
             + " Remaining budget: " + json.dumps(remaining)
         )
@@ -693,17 +986,32 @@ class ConversationService:
             ),
         )
 
-    def _commit(self, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, final_message=None):
+    def _commit(
+        self,
+        run_ref,
+        messages,
+        capabilities,
+        inputs,
+        usage,
+        execution_order,
+        concurrent_batches,
+        final_message=None,
+        knowledge_save_operation=None,
+    ):
+        prior = self._journal.get(run_ref)
         self._journal.put(InteractionTrace(
+            revision=(prior.revision + 1 if prior is not None else 1),
             interaction_run_ref=run_ref, capability_revision=capabilities.revision,
             messages=tuple(messages),
             inputs=tuple(inputs), usage=usage,
             execution_order=tuple(execution_order), concurrent_batches=tuple(concurrent_batches),
             final_message=final_message,
+            knowledge_save_operation=knowledge_save_operation,
         ))
 
 
 __all__ = [
-    "ConversationService", "ConversationUnavailable", "FileInteractionJournal",
+    "ConversationOperationConflict", "ConversationOperationNotFound", "ConversationService",
+    "ConversationUnavailable", "FileInteractionJournal",
     "InMemoryInteractionJournal",
 ]

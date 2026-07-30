@@ -7,8 +7,9 @@ never persisted and does not claim release trust or live provider health.
 from __future__ import annotations
 
 from typing import Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 ConfigurationState = Literal["enabled", "disabled"]
@@ -22,9 +23,15 @@ class _InventoryModel(BaseModel):
 
 class LocalToolInventoryItem(_InventoryModel):
     tool_name: str
+    description: str = ""
+    semantic_domains: tuple[str, ...] = ()
+    resource_types: tuple[str, ...] = ()
+    operations: tuple[str, ...] = ()
+    authorization_scope: str = ""
     implementation_present: Literal[True] = True
     exposure: str
     risk_level: str
+    input_schema: dict[str, Any]
     configuration_state: ConfigurationState = "enabled"
     provider_availability: ProviderAvailability
     definition_owner: Literal["tool_registry"] = "tool_registry"
@@ -34,6 +41,11 @@ class MCPConnectorInventoryItem(_InventoryModel):
     server_id: str
     remote_tool_name: str
     local_tool_name: str
+    description: str = ""
+    semantic_domains: tuple[str, ...] = ()
+    resource_types: tuple[str, ...] = ()
+    operations: tuple[str, ...] = ()
+    input_schema: dict[str, Any] = Field(default_factory=dict)
     adapter_implemented: Literal[True] = True
     configuration_state: ConfigurationState
     discovery_state: DiscoveryState
@@ -50,6 +62,10 @@ class A2AAssemblyDefinition(_InventoryModel):
 
 class A2AAgentInventoryItem(_InventoryModel):
     agent_id: str
+    description: str = ""
+    semantic_domains: tuple[str, ...] = ()
+    resource_types: tuple[str, ...] = ()
+    operations: tuple[str, ...] = ("delegate",)
     implementation_present: bool
     configuration_state: ConfigurationState
     discovery_state: DiscoveryState

@@ -1,5 +1,9 @@
 # RAG 评估结果
 
+> 状态：本文依赖旧 Capture/Ask 与 Graphiti 路径，记录的是历史评测现场，不代表当前
+> catalog、代码或发布资格。当前能力证据以
+> [Phase 0 能力与发布基线](summary/phase0-capability-release-baseline.md) 为准。
+
 本文集中记录 Ask / 检索链路的评估结果，从 `docs/workflow/capture-ask-model-flow.md` 中拆出，便于独立维护评测口径、数据集规模和关键指标。架构设计仍以 [capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) 为准。
 
 覆盖两个评估数据集：

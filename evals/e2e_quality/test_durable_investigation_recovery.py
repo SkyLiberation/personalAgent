@@ -53,3 +53,5 @@ def test_lt13_async_create_and_read_only_recovery(postgres_url, temp_dir):
     assert result.committed_read_dispatch_count == 1
     assert result.state == "completed"
     assert result.final_artifact_ref
+    assert result.report_status_code == 200
+    assert result.report_content

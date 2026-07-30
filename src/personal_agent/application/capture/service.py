@@ -69,7 +69,6 @@ class CaptureService:
         raise RuntimeError("No URL capture provider is available.")
 
     def _build_default_url_providers(self) -> list[UrlCaptureProvider]:
-        return [
-            FirecrawlUrlCaptureProvider(self.settings, self.logger),
-            BuiltinUrlCaptureProvider(),
-        ]
+        if self.settings.url_capture_provider == "firecrawl":
+            return [FirecrawlUrlCaptureProvider(self.settings, self.logger)]
+        return [BuiltinUrlCaptureProvider()]

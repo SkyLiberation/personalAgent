@@ -1,4 +1,9 @@
-# MCP Codebase Capability
+# 历史设计：MCP Codebase Capability
+
+> 状态：本文保留旧 `TaskAnalyzer/GoalGraph/Executive` 路径的迁移记录，不能描述当前 MCP
+> 生产入口。当前 Conversation MCP 链路由 `EffectiveCapabilities -> ToolCallProposal ->
+> Admission -> ToolExecutor/ToolGateway -> ActionObservation` 拥有，事实见
+> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md)。
 
 GitHub、Notion 等 MCP provider 不拥有独立 workflow identity。它们以 capability 注册到统一 Registry，由 Executive 为当前 Goal 产生 provider-neutral requirement，CapabilityResolver 在执行前绑定具体 provider。
 

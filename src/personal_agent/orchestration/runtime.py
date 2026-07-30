@@ -329,10 +329,11 @@ class AgentRuntime:
                 self.artifact_service,
             ))
         self._conversation_service = ConversationService(
-            self._model_client,
+            self._structured_client,
             tool_port=self._tool_executor,
             agent_port=self._agent_gateway,
             artifact_port=self.artifact_service,
+            knowledge_writer=self.workspace_service,
             budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
             journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
         )
@@ -418,7 +419,10 @@ class AgentRuntime:
             capabilities=RuntimeCapabilitySnapshot(self.capability_inventory),
             planner=investigation_planner,
             execution_proposer=investigation_execution_proposer,
-            tool_port=ToolExecutorProjectAdapter(self._tool_executor),
+            tool_port=ToolExecutorProjectAdapter(
+                self._tool_executor,
+                self.artifact_service,
+            ),
             agent_port=DurableProjectAgentAdapter(self._agent_gateway),
             synthesis_port=investigation_synthesis,
             verifier=investigation_verifier,
@@ -518,8 +522,10 @@ class AgentRuntime:
                 build_capture_upload_tool(self.capture_service, self.artifact_service)
             )
         self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service))
-        if self._model_client is not None:
-            self._tool_executor.register(build_verify_interaction_draft_tool(self._model_client))
+        if self._structured_client is not None:
+            self._tool_executor.register(
+                build_verify_interaction_draft_tool(self._structured_client)
+            )
         self._tool_executor.register(build_graph_search_tool(self._active_graph_store()))
         self._tool_executor.register(build_capture_text_tool(
             lambda text, source_type="text", user_id="default": self.execute_capture(
@@ -551,7 +557,7 @@ class AgentRuntime:
         self._tool_executor.register(build_save_research_event_tool(self._research_service))
         self._tool_executor.register(build_inspect_worker_queue_tool(self))
         self._tool_executor.register(build_retry_worker_task_tool(self))
-        if self.settings.web_search.api_key:
+        if self.settings.web_search_available:
             from personal_agent.application.capture.providers.web_search import build_web_search_provider
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
@@ -565,7 +571,7 @@ class AgentRuntime:
 
     @property
     def _web_search_available(self) -> bool:
-        return bool(self.settings.web_search.api_key)
+        return self.settings.web_search_available
 
     def list_tools(self, *, include_internal: bool = False) -> list:
         if include_internal:
@@ -1069,6 +1075,9 @@ class AgentRuntime:
 
     def conversation_trace(self, interaction_run_ref: str):
         return self._conversation_service.trace(interaction_run_ref)
+
+    def decide_conversation_knowledge_save(self, **kwargs):
+        return self._conversation_service.decide_knowledge_save(**kwargs)
 
     def list_procedure_definitions(self):
         return self.procedure_definition_store.list_definitions()

@@ -116,6 +116,9 @@ class AgentService:
     def get_investigation_project(self, query):
         return self.runtime.investigation_project_service.get(query)
 
+    def get_investigation_report(self, query):
+        return self.runtime.investigation_project_service.get_report(query)
+
     def process_investigation_project(self, command):
         return self.runtime.investigation_project_service.process(command)
 
@@ -228,6 +231,9 @@ class AgentService:
 
     def conversation_trace(self, *args, **kwargs):
         return self.runtime.conversation_trace(*args, **kwargs)
+
+    def decide_conversation_knowledge_save(self, **kwargs):
+        return self.runtime.decide_conversation_knowledge_save(**kwargs)
 
     def list_procedure_definitions(self):
         return self.runtime.list_procedure_definitions()

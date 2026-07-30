@@ -5,6 +5,7 @@ import logging
 
 import typer
 
+from personal_agent.application.capture import CaptureService
 from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
@@ -44,7 +45,10 @@ def _build_service() -> AgentService:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
     logger.info("CLI logging initialized at %s", log_file)
-    return AgentService(settings)
+    return AgentService(
+        settings,
+        capture_service=CaptureService(settings, logger),
+    )
 
 
 def _format_conversation_result(result: ConversationTurnView) -> str:

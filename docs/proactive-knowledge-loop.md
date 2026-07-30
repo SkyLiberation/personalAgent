@@ -4,7 +4,9 @@
 
 三项能力共享同一应用层，并从两类入口进入：
 
-- 用户请求：`TaskAnalyzer -> GoalGraph -> Executive -> Protocol 或 BoundedAction -> use case`
+- 用户请求：只有能力被当前 Conversation 显式投影并经 Admission 时，才由
+  `Conversation -> Application Capability -> use case` 进入；当前不能把旧自然语言入口描述成
+  已全部贯通
 - 定时或管理入口：`Scheduler / CLI / API -> use case -> delivery`
 
 Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报生成逻辑；意图入口也不会触发订阅投递。
@@ -30,7 +32,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
   -> knowledge_gap_deliveries 按天原子去重（claim）
   -> DeliveryRouter / FeishuDeliveryProvider 主动提问
   -> 用户回复
-  -> 统一 entry -> Executive -> capture Protocol 将回答写回知识库
+  -> 用户通过明确 Capture/Conversation 保存入口决定是否写回知识库
 ```
 
 ### 检测逻辑（确定性）

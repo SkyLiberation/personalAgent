@@ -4459,7 +4459,7 @@ class RuntimeAskWorkspaceAblationStrategy:
                     "evidence_ids": [item.source_id for item in result.evidence[:limit]],
                     "workspace_enabled": self.include_workspace,
                     "graph_provider": settings.ask.graph_provider,
-                    "web_enabled": bool(settings.web_search.api_key),
+                    "web_enabled": settings.web_search_available,
                     "structured_enabled": bool(settings.structured.api_key),
                 },
             )
@@ -4697,7 +4697,7 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
                         ctx.retrieval_health.get("context_dropped_evidence_reasons", [])
                     ),
                     "graph_provider": settings.ask.graph_provider,
-                    "web_enabled": bool(settings.web_search.api_key),
+                    "web_enabled": settings.web_search_available,
                     "structured_enabled": bool(settings.structured.api_key),
                     "langextract_enabled": bool(settings.langextract.api_key),
                 },

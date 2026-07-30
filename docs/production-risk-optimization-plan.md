@@ -24,7 +24,7 @@
 | P0 | 删除安全与恢复 | 删除可撤销、可追踪、可补偿 |
 | P1 | 工具审计产品化 | 高风险操作可查询、可脱敏、可告警 |
 | P2 | 生产权限模型 | workspace/tenant/RBAC/ABAC 可落地 |
-| P3 | 固化事实收敛 | solidify 只消费确认事实，降低长会话噪声 |
+| P3 | 固化质量候选假设 | 先用 baseline 验证长会话噪声是否造成错误知识 |
 | P4 | 知识冲突治理 | 自动发现冲突，降低错误覆盖 |
 | P5 | replay 治理 | 保留现网问题复现价值，同时约束副作用 |
 
@@ -124,9 +124,15 @@ PolicyEngine 已有基础策略拦截，但还缺 workspace、tenant、RBAC、AB
 
 ### 当前风险
 
-结构化 `ThreadSummary` 已随 checkpoint 持久化，但 solidify 还没有强制只消费已确认字段。长会话中，用户事实、助手推断、临时偏好和误解可能混在一起，导致错误知识被固化。
+Conversation governed save 已只冻结模型从 user message 中逐字选择、由 Admission 机械校验
+来源的知识 span，确认后复用 Workspace `solidify_conversation`；assistant message 和保存/确认
+控制语义不会成为写入内容。B02 -> E14 已闭合单个明确结论场景；长 user message 中的临时假设、
+否定或修正仍未由正式入口 baseline 证明，因此以下内容只是待验证假设，不是实现授权。
 
 ### 优化方案
+
+先执行同一自然输入的 baseline E2E，自动断言错误 Claim 内容；baseline 未失败或失败来自测试/
+环境时停止。只有产品错误成立后才选择最小方案：
 
 1. 将 solidify 输入约束为确认事实。
    - 只消费 `confirmed_user_facts`、明确用户声明、明确用户修正。

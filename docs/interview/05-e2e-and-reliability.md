@@ -57,7 +57,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 ## 4. Conversation 与产品 Release E2E
 
-### E01-E13：原生产品能力
+### E01-E14：原生产品能力
 
 | ID | 用户旅程 | 关键正向结果 | 关键反事实 |
 | --- | --- | --- | --- |
@@ -209,7 +209,7 @@ Unit 和 Contract 可以快速定位，E2E 负责防止“每个零件都对，�
 
 ## 9. 当前执行证据
 
-截至 2026-07-27：
+截至 2026-07-30：
 
 ```text
 previous full matrix = 23/23 passed (historical catalog)
@@ -218,8 +218,11 @@ corrected natural L06 = passed
 natural E17/E19 plus L04 = passed
 answer-free-prompt E16/E18 = 2/2 passed
 current complete matrix = not rerun
-LT01-LT13 diagnostic matrix = 13/13 passed
-Investigation live model/provider release matrix = not run
+LT01-LT13 historical diagnostic matrix = 13/13 passed
+current Investigation lifecycle + diagnostic regression = 15 passed
+Investigation B03 live baseline = passed, product insufficiency proven
+Investigation IP01 live target = passed (3/3 outcome, 5 admitted evidence)
+current package dependency gate = failed (3 unknown packages)
 ```
 
 Evidence archives：
@@ -234,15 +237,20 @@ natural E17/E19 plus L04:
   data/e2e_traces/20260727T162913.553817Z-9428-c723ad92
 answer-free-prompt E16/E18:
   data/e2e_traces/20260727T165211.554901Z-17344-3e4bc060
+B03 live Investigation baseline:
+  data/e2e_traces/20260728T123013.176272Z-42316-76b47a9c
+IP01 live target:
+  data/e2e_traces/20260729T101501.732689Z-53628-6c5f02f2
 ```
 
 架构依赖检查：
 
 ```text
-unknown_packages = none
+unknown_packages = context, skills, verification
 missing_packages = none
 cycles = none
 forbidden_edges = 0
+result = FAIL (3 architecture violations)
 ```
 
 ## 10. 为什么还不能说“可发布”
@@ -267,28 +275,35 @@ Release gate 要求：
 
 ## 11. 当前 E2E 覆盖缺口
 
-现有 release E2E 分别证明了 Conversation 和固定产品 Workflow，但还缺少统一自然语言写操作链路：
+E14 已定向证明首条自然语言受治理保存链路：
 
 ```text
 Conversation message
-  -> 模型选择 scoped Application Capability
-  -> Prepare Command
+  -> 模型选择 prepare_conversation_knowledge_save
+  -> exact user-authored span + source index
+  -> Admission 逐字来源校验
+  -> 冻结 exact span 与单一 digest
   -> Pending Confirmation
   -> 用户确认
-  -> 固定 Workflow
-  -> Receipt Observation
-  -> parent FinalMessage
+  -> Workspace canonical write
+  -> typed Receipt
 ```
 
-未来至少应增加：
+该证据覆盖 exact span 与 Claim/Receipt 可追溯、控制语义零写入、确认前零写入、prepare 后
+重启、跨 scope 拒绝和成功 replay，但不覆盖保存 assistant candidate、多实例并发协调、
+Workspace commit 与 journal Receipt 之间的 crash window。B02 已在 archive
+`20260729T031804.415533Z-15972-214cb81c` 证明旧错误，修复后 E14 archive
+`20260729T033339.065714Z-22692-16415241` 通过。后续候选场景仍必须分别执行 baseline，只有
+当前路径确实失败才定义目标 E2E 和实现：
 
-- 对话显式保存成功，以及非显式保存零写入；
+- “只分析，不要保存”等非显式保存表达的零写入 Golden Set；
+- 冲突核对后保存 assistant candidate，并保留 Evidence 和候选版本；
 - 对话删除：含糊目标必须澄清，确认前零副作用；
 - 对话创建订阅：确认后 Worker、Digest、Delivery 闭环；
 - scope denied 时零副作用；
 - capability unavailable 时不走替代写路径。
 
-Investigation Project 还缺少：
+Investigation Project 已证明 IP01 的单次 live 目标闭环；仍缺少：
 
 - live structured model + live GitHub/Notion/Web/A2A 的正式 HTTP/worker E2E；
 - LT09 同输入 paired baseline，对比 Conversation 的完成率、错误副作用、模型轮次、token、延迟和恢复结果；

@@ -54,6 +54,7 @@ def test_settings_prefers_structured_llm_over_router_env(monkeypatch):
     monkeypatch.setenv("STRUCTURED_API_KEY", "structured-key")
     monkeypatch.setenv("STRUCTURED_BASE_URL", "https://structured.example/v1")
     monkeypatch.setenv("STRUCTURED_MODEL", "structured-model")
+    monkeypatch.setenv("STRUCTURED_OUTPUT_TRANSPORT", "json_object")
     monkeypatch.setenv(
         "STRUCTURED_EXTRA_BODY",
         '{"reasoning":{"effort":"minimal"}}',
@@ -64,6 +65,7 @@ def test_settings_prefers_structured_llm_over_router_env(monkeypatch):
     assert settings.structured.api_key == "structured-key"
     assert settings.structured.base_url == "https://structured.example/v1"
     assert settings.structured.model == "structured-model"
+    assert settings.structured.output_transport == "json_object"
     assert settings.structured.extra_body == {"reasoning": {"effort": "minimal"}}
 
 

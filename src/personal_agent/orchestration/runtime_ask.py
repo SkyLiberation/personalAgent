@@ -92,7 +92,7 @@ class AskService(AskPromptMixin):
 
     @property
     def _web_search_available(self) -> bool:
-        return bool(self.settings.web_search.api_key)
+        return self.settings.web_search_available
 
     @staticmethod
     def _match_refs(matches: list[KnowledgeNote]) -> list[MatchRef]:

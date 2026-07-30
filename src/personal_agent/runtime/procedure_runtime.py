@@ -444,34 +444,6 @@ def _catalog() -> ProcedureCatalog:
             recovery_policy="checkpoint_node",
         ),
         ProcedureDefinition(
-            procedure_id="conversation_solidify",
-            version="1",
-            purpose="Convert a selected conversation scope into admitted knowledge.",
-            applicability=ProcedureApplicability(
-                semantic_domains=("conversation", "knowledge"),
-                resource_types=("conversation", "thread"), operations=("ingest",), mandatory=True,
-            ),
-            nodes=(
-                ProcedureNodeSpec(
-                    "draft", "compose", "Create an admissible knowledge draft from the conversation.",
-                    llm_decision_node="solidify_draft", recovery_policy="abort",
-                ),
-                ProcedureNodeSpec(
-                    "ingest", "tool_call", "Admit the conversation draft into durable knowledge.",
-                    depends_on=("draft",), domain_handler="capture_text",
-                    capability_requirement=_requirement(
-                        "conversation-ingest", "Persist the admitted conversation draft",
-                        ("capture", "knowledge_lifecycle"), ("text", "note"),
-                        ("ingest", "create"), "MutationReceipt",
-                    ),
-                    side_effects=("write_longterm",), recovery_policy="abort",
-                ),
-            ),
-            invariants=("selected scope", "confirmation", "durable admission"),
-            confirmation_policy="required",
-            recovery_policy="checkpoint_node",
-        ),
-        ProcedureDefinition(
             procedure_id="knowledge_consolidate",
             version="1",
             purpose="Consolidate related knowledge and record supersession relationships.",

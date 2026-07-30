@@ -25,6 +25,7 @@ from personal_agent.application.investigation_project import (
     ApproveInvestigationCommand,
     CreateInvestigationProject,
     DelegationPolicyDecision,
+    FinalVerificationResult,
     GeneratedContent,
     InvestigationProjectService,
     ModelDecision,
@@ -59,6 +60,7 @@ from personal_agent.domain.investigation_project import (
     SubGoalDefinitionVersion,
     SubGoalExecutionProposal,
     SubGoalVerificationAssessment,
+    SubGoalVersionRef,
     SynthesisOperation,
     ToolExecutionOperation,
     UserRequirement,
@@ -92,8 +94,9 @@ def _definition_digest(
     depends_on: tuple[str, ...],
     output: str,
     contract: CapabilityContract,
+    repairs: tuple[SubGoalVersionRef, ...] = (),
 ) -> str:
-    return canonical_digest({
+    payload = {
         "logical_subgoal_id": logical_id,
         "subgoal_version": version,
         "supersedes_version": supersedes,
@@ -101,7 +104,12 @@ def _definition_digest(
         "depends_on": depends_on,
         "required_output": output,
         "capability_contract": contract.model_dump(mode="json"),
-    })
+    }
+    if repairs:
+        payload["repairs_frozen_subgoals"] = tuple(
+            item.model_dump(mode="json") for item in repairs
+        )
+    return canonical_digest(payload)
 
 
 def _subgoal(
@@ -114,6 +122,7 @@ def _subgoal(
     supersedes: int | None = None,
     objective: str | None = None,
     output: str | None = None,
+    repairs: tuple[SubGoalVersionRef, ...] = (),
 ) -> SubGoalDefinitionVersion:
     contract = CapabilityContract(
         contract_id=f"contract:{logical_id}:v{version}",
@@ -130,6 +139,7 @@ def _subgoal(
         "depends_on": depends_on,
         "output": output or f"{logical_id} evidence",
         "contract": contract,
+        "repairs": repairs,
     }
     return SubGoalDefinitionVersion(
         logical_subgoal_id=logical_id,
@@ -139,6 +149,7 @@ def _subgoal(
         depends_on=depends_on,
         required_output=values["output"],
         capability_contract=contract,
+        repairs_frozen_subgoals=repairs,
         definition_digest=_definition_digest(**values),
     )
 
@@ -189,6 +200,7 @@ class _Capabilities:
                     exposure="scoped_agent",
                     risk_level="low",
                     provider_availability="not_applicable",
+                    input_schema={"type": "object", "additionalProperties": True},
                 )
                 for name in tools
             ),
@@ -225,6 +237,7 @@ class _Planner:
         definition,
         *,
         based_on_event_sequence,
+        repair_request,
         capabilities,
         capability_revision,
     ):
@@ -244,6 +257,7 @@ class _Planner:
         project,
         request,
         *,
+        evidence_material,
         capabilities,
         capability_revision,
     ):
@@ -272,6 +286,7 @@ class _ExecutionProposer:
         project,
         subgoal,
         *,
+        evidence_material,
         execution_scope,
         capabilities,
     ):
@@ -443,7 +458,14 @@ class _Synthesis:
     def __init__(self, sequence: list[str]) -> None:
         self.sequence = sequence
 
-    def synthesize_subgoal(self, project, proposal, *, execution_scope):
+    def synthesize_subgoal(
+        self,
+        project,
+        proposal,
+        *,
+        evidence_material,
+        execution_scope,
+    ):
         self.sequence.append(f"synthesis:{proposal.logical_subgoal_id}")
         content = (
             f"Synthesis for {proposal.logical_subgoal_id}; evidence="
@@ -453,12 +475,23 @@ class _Synthesis:
             GeneratedContent(
                 content=content,
                 content_digest=canonical_digest({"content": content}),
-                evidence_refs=tuple(project.admitted_evidence),
+                evidence_refs=tuple(
+                    evidence_id
+                    for evidence_id, evidence in project.admitted_evidence.items()
+                    if evidence.source != "synthesis"
+                ),
             ),
             _model_usage("synthesis"),
         )
 
-    def synthesize_final(self, project, plan, *, execution_scope):
+    def synthesize_final(
+        self,
+        project,
+        plan,
+        *,
+        evidence_material,
+        execution_scope,
+    ):
         self.sequence.append("synthesis:final")
         coverage = project.requirement_coverage()
         content = f"Final architecture investigation report. Coverage={coverage}"
@@ -466,7 +499,11 @@ class _Synthesis:
             GeneratedContent(
                 content=content,
                 content_digest=canonical_digest({"content": content}),
-                evidence_refs=tuple(project.admitted_evidence),
+                evidence_refs=tuple(
+                    evidence_id
+                    for evidence_id, evidence in project.admitted_evidence.items()
+                    if evidence.source != "synthesis"
+                ),
             ),
             _model_usage("synthesis"),
         )
@@ -478,11 +515,15 @@ class _Verifier:
         sequence: list[str],
         *,
         observation_subgoal: str | None = None,
+        unsatisfied_subgoal: str | None = None,
         crash_final_once: bool = False,
+        final_verification_passed: bool = True,
     ) -> None:
         self.sequence = sequence
         self.observation_subgoal = observation_subgoal
+        self.unsatisfied_subgoal = unsatisfied_subgoal
         self.crash_final_once = crash_final_once
+        self.final_verification_passed = final_verification_passed
         self.final_crashed = False
 
     def verify_subgoal(
@@ -491,6 +532,7 @@ class _Verifier:
         subgoal,
         evidence,
         *,
+        evidence_material,
         execution_scope,
     ):
         self.sequence.append(f"verified:{subgoal.logical_subgoal_id}")
@@ -501,7 +543,9 @@ class _Verifier:
                     "Repository outcome proves event-driven microservices with "
                     "cross-service transaction risk."
                 ),
-                "evidence_refs": tuple(item.evidence_id for item in evidence),
+                "evidence_refs": tuple(
+                    item.reference.evidence_id for item in evidence_material
+                ),
                 "contradicted_assumption_ids": ("architecture-shape-unknown",),
                 "affected_logical_subgoal_ids": ("monolith-migration",),
             }
@@ -512,9 +556,16 @@ class _Verifier:
         payload = {
             "logical_subgoal_id": subgoal.logical_subgoal_id,
             "subgoal_version": subgoal.subgoal_version,
-            "satisfied": True,
-            "evidence_refs": tuple(item.evidence_id for item in evidence),
-            "feedback": "",
+            "satisfied": subgoal.logical_subgoal_id != self.unsatisfied_subgoal,
+            "evidence_refs": tuple(
+                item.reference.evidence_id for item in evidence_material
+            ),
+            "feedback": (
+                "Add independently runnable corroboration work and remap the "
+                "requirement away from this frozen unsatisfied execution."
+                if subgoal.logical_subgoal_id == self.unsatisfied_subgoal
+                else ""
+            ),
             "observations": [
                 item.model_dump(mode="json") for item in observations
             ],
@@ -527,11 +578,29 @@ class _Verifier:
             _model_usage("semantic_verification"),
         )
 
-    def verify_final(self, project, generated, *, execution_scope):
+    def verify_final(
+        self,
+        project,
+        generated,
+        *,
+        evidence_material,
+        execution_scope,
+    ):
+        self.sequence.append("verified:final")
         if self.crash_final_once and not self.final_crashed:
             self.final_crashed = True
             raise SystemExit("injected crash during final verification")
-        return ModelDecision(True, _model_usage("semantic_verification"))
+        return ModelDecision(
+            FinalVerificationResult(
+                passed=self.final_verification_passed,
+                feedback=(
+                    ""
+                    if self.final_verification_passed
+                    else "Report omitted required source URLs and limitations."
+                ),
+            ),
+            _model_usage("semantic_verification"),
+        )
 
 
 class _Policy:
@@ -560,6 +629,9 @@ class _Facade:
 
     def get_investigation_project(self, query):
         return self.service.get(query)
+
+    def get_investigation_report(self, query):
+        return self.service.get_report(query)
 
     def steer_investigation_project(self, command):
         return self.service.steer(command)
@@ -901,6 +973,47 @@ class InvestigationScenarioHarness:
             ),
         )
 
+    def parallel_budget_exhaustion_fails_closed(self):
+        subgoals = (
+            _subgoal("first", operation="github_read", kind="tool"),
+            _subgoal("second", operation="notion_read", kind="tool"),
+        )
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                subgoals,
+                {"architecture": ("first", "second")},
+            ),
+            tools=("github_read", "notion_read"),
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            budget=ProjectBudgetLimit(
+                total_tokens=100,
+                total_cost=20,
+                max_tool_calls=1,
+                max_agent_calls=0,
+                planning_tokens=20,
+                execution_proposal_tokens=20,
+                semantic_verification_tokens=20,
+                synthesis_tokens=20,
+                external_delegation_tokens=0,
+            ),
+        )
+        view = self._run(bundle, project_id)
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            waiting_reasons=view.waiting_reasons,
+            first_dispatches=bundle.tools.dispatch_count["first"],
+            second_dispatches=bundle.tools.dispatch_count["second"],
+            completion_report=view.completion_report,
+        )
+
     def pause_resume_boundaries(self):
         subgoals = (
             _subgoal("architecture", operation="github_read", kind="tool"),
@@ -1061,6 +1174,43 @@ class InvestigationScenarioHarness:
                 else ("missing-project",)
             ),
             planner_calls_after_restart=restarted.planner.calls,
+        )
+
+    def final_verification_failure_pauses_without_repeating(self):
+        subgoals = (
+            _subgoal("architecture", operation="github_read", kind="tool"),
+        )
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                subgoals,
+                {"architecture": ("architecture",)},
+            ),
+            tools=("github_read",),
+            requirements=("architecture",),
+            final_verification_passed=False,
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            idempotency_key="create:final-verification-failure",
+        )
+
+        paused = self._run(bundle, project_id)
+        verification_calls = bundle.sequence.count("verified:final")
+        replayed = self._run(bundle, project_id)
+
+        return SimpleNamespace(
+            state=paused.state,
+            reason=paused.last_state_reason,
+            waiting_reasons=paused.waiting_reasons,
+            verification_calls=verification_calls,
+            replayed_state=replayed.state,
+            replayed_verification_calls=bundle.sequence.count(
+                "verified:final"
+            ),
         )
 
     def cancelling_state_recovers_after_process_crash(self):
@@ -1288,6 +1438,323 @@ class InvestigationScenarioHarness:
             fixed_workflow_invalid_dispatches=1,
         )
 
+    def verification_gap_revision(self):
+        discovery = _subgoal(
+            "candidate-discovery",
+            operation="github_read",
+            kind="tool",
+        )
+
+        feedback_received = []
+
+        def revised(owner, seq, revision, request):
+            previous = next(
+                item
+                for item in owner.accepted_plan.proposal.subgoals
+                if item.logical_subgoal_id == "candidate-discovery"
+            )
+            corroboration = _subgoal(
+                "candidate-discovery-repair",
+                operation="github_read",
+                kind="tool",
+                depends_on=(
+                    ("candidate-discovery",)
+                    if request.trigger_kind == "verification_gap"
+                    else ()
+                ),
+                repairs=(
+                    SubGoalVersionRef(
+                        logical_subgoal_id=previous.logical_subgoal_id,
+                        subgoal_version=previous.subgoal_version,
+                    ),
+                ),
+            )
+            mapping = (
+                ("candidate-discovery", "candidate-discovery-repair")
+                if request.trigger_kind == "verification_gap"
+                else ("candidate-discovery-repair",)
+            )
+            if request.decision_feedback is not None:
+                feedback_received.append(request.decision_feedback)
+            return _plan(
+                owner,
+                seq,
+                revision,
+                (previous, corroboration),
+                {"architecture": mapping},
+                revision_reason=request.request_id,
+            )
+
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (discovery,),
+                {"architecture": ("candidate-discovery",)},
+            ),
+            revision=revised,
+            tools=("github_read",),
+            unsatisfied_subgoal="candidate-discovery",
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            budget=ProjectBudgetLimit(
+                max_plan_revisions=0,
+                max_evidence_repair_revisions=2,
+            ),
+        )
+        view = self._run(bundle, project_id)
+        final_mapping = next(
+            item
+            for item in view.accepted_plan.proposal.requirement_mappings
+            if item.requirement_id == "architecture"
+        )
+        return SimpleNamespace(
+            state=view.state,
+            plan_versions=view.accepted_plan.plan_version,
+            requirement_coverage=(
+                view.completion_report.coverage if view.completion_report else {}
+            ),
+            original_dispatches=bundle.tools.dispatch_count["candidate-discovery"],
+            repair_dispatches=bundle.tools.dispatch_count["candidate-discovery-repair"],
+            final_mapping=final_mapping.logical_subgoal_ids,
+            waiting_reasons=view.waiting_reasons,
+            feedback_received=tuple(feedback_received),
+        )
+
+    def repeated_verification_repair_feedback(self):
+        discovery = _subgoal(
+            "candidate-discovery",
+            operation="github_read",
+            kind="tool",
+        )
+
+        def invalid_revision(owner, seq, revision, request):
+            previous = next(
+                item
+                for item in owner.accepted_plan.proposal.subgoals
+                if item.logical_subgoal_id == "candidate-discovery"
+            )
+            repair = _subgoal(
+                "candidate-discovery-repair",
+                operation="github_read",
+                kind="tool",
+            )
+            return _plan(
+                owner,
+                seq,
+                revision,
+                (previous, repair),
+                {
+                    "architecture": (
+                        "candidate-discovery",
+                        "candidate-discovery-repair",
+                    )
+                },
+                revision_reason=request.request_id,
+            )
+
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (discovery,),
+                {"architecture": ("candidate-discovery",)},
+            ),
+            revision=invalid_revision,
+            tools=("github_read",),
+            unsatisfied_subgoal="candidate-discovery",
+            requirements=("architecture",),
+        )
+        project_id = self._create(bundle, requirements=("architecture",))
+        view = self._run(bundle, project_id, max_cycles=20)
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            planner_calls=bundle.planner.calls,
+            original_dispatches=bundle.tools.dispatch_count["candidate-discovery"],
+            repair_dispatches=bundle.tools.dispatch_count["candidate-discovery-repair"],
+        )
+
+    def execution_admission_repairs_locally(self):
+        research = _subgoal(
+            "architecture",
+            operation="github_read",
+            kind="tool",
+        )
+        proposal_attempt = 0
+
+        def operation(subgoal, _scope):
+            nonlocal proposal_attempt
+            proposal_attempt += 1
+            return ToolExecutionOperation(
+                tool_name=(
+                    "capture_url" if proposal_attempt == 1 else "github_read"
+                ),
+                typed_arguments={"query": subgoal.objective},
+                expected_artifact_type="evidence",
+            )
+
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (research,),
+                {"architecture": ("architecture",)},
+            ),
+            operation_factory=operation,
+            tools=("github_read", "capture_url"),
+            requirements=("architecture",),
+        )
+        project_id = self._create(bundle, requirements=("architecture",))
+        view = self._run(bundle, project_id)
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            plan_version=view.accepted_plan.plan_version,
+            planner_calls=bundle.planner.calls,
+            proposer_calls=bundle.proposer.calls,
+            tool_dispatches=bundle.tools.dispatch_count["architecture"],
+        )
+
+    def repeated_execution_admission_feedback_pauses_locally(self):
+        research = _subgoal(
+            "architecture",
+            operation="github_read",
+            kind="tool",
+        )
+
+        def invalid_operation(subgoal, _scope):
+            return ToolExecutionOperation(
+                tool_name="capture_url",
+                typed_arguments={"query": subgoal.objective},
+                expected_artifact_type="evidence",
+            )
+
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (research,),
+                {"architecture": ("architecture",)},
+            ),
+            operation_factory=invalid_operation,
+            tools=("github_read", "capture_url"),
+            requirements=("architecture",),
+        )
+        project_id = self._create(bundle, requirements=("architecture",))
+        view = self._run(bundle, project_id, max_cycles=20)
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            plan_version=view.accepted_plan.plan_version,
+            planner_calls=bundle.planner.calls,
+            proposer_calls=bundle.proposer.calls,
+            tool_dispatches=bundle.tools.dispatch_count["architecture"],
+            waiting_reasons=view.waiting_reasons,
+        )
+
+    def transitive_deadlock_replans_after_repair(self):
+        discovery = _subgoal(
+            "candidate-discovery",
+            operation="github_read",
+            kind="tool",
+        )
+        trigger_kinds: list[str] = []
+
+        def revised(owner, seq, revision, request):
+            trigger_kinds.append(request.trigger_kind)
+            previous = next(
+                item
+                for item in owner.accepted_plan.proposal.subgoals
+                if item.logical_subgoal_id == "candidate-discovery"
+            )
+            repair = next(
+                (
+                    item
+                    for item in owner.accepted_plan.proposal.subgoals
+                    if item.logical_subgoal_id == "candidate-discovery-repair"
+                ),
+                _subgoal(
+                    "candidate-discovery-repair",
+                    operation="github_read",
+                    kind="tool",
+                    repairs=(
+                        SubGoalVersionRef(
+                            logical_subgoal_id=previous.logical_subgoal_id,
+                            subgoal_version=previous.subgoal_version,
+                        ),
+                    ),
+                ),
+            )
+            if request.trigger_kind == "verification_gap":
+                blocked_summary = _subgoal(
+                    "blocked-summary",
+                    operation="github_read",
+                    kind="tool",
+                    depends_on=("candidate-discovery",),
+                )
+                return _plan(
+                    owner,
+                    seq,
+                    revision,
+                    (previous, repair, blocked_summary),
+                    {
+                        "architecture": (
+                            "candidate-discovery-repair",
+                            "blocked-summary",
+                        )
+                    },
+                    revision_reason=request.request_id,
+                )
+            assert request.trigger_kind == "coverage_deadlock"
+            return _plan(
+                owner,
+                seq,
+                revision,
+                (previous, repair),
+                {"architecture": ("candidate-discovery-repair",)},
+                revision_reason=request.request_id,
+            )
+
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (discovery,),
+                {"architecture": ("candidate-discovery",)},
+            ),
+            revision=revised,
+            tools=("github_read",),
+            unsatisfied_subgoal="candidate-discovery",
+            requirements=("architecture",),
+        )
+        project_id = self._create(bundle, requirements=("architecture",))
+        view = self._run(bundle, project_id)
+        final_mapping = next(
+            item.logical_subgoal_ids
+            for item in view.accepted_plan.proposal.requirement_mappings
+            if item.requirement_id == "architecture"
+        )
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            plan_version=view.accepted_plan.plan_version,
+            trigger_kinds=tuple(trigger_kinds),
+            final_mapping=final_mapping,
+            original_dispatches=bundle.tools.dispatch_count["candidate-discovery"],
+            repair_dispatches=bundle.tools.dispatch_count["candidate-discovery-repair"],
+            blocked_summary_dispatches=bundle.tools.dispatch_count["blocked-summary"],
+            waiting_reasons=view.waiting_reasons,
+        )
+
     def command_dispatch_recovery(self):
         return self._agent_recovery(governed=True)
 
@@ -1350,6 +1817,14 @@ class InvestigationScenarioHarness:
             shared_tool_port=bundle.tools,
         )
         view = self._run(restarted, project_id)
+        report = client.get(
+            f"/api/investigation-projects/{project_id}/report",
+            params={
+                "tenant_id": self.scope.tenant_id,
+                "workspace_id": self.scope.workspace_id,
+                "user_id": self.principal.user_id,
+            },
+        )
         return SimpleNamespace(
             create_status_code=first.status_code,
             initial_state=first.json()["state"],
@@ -1364,6 +1839,8 @@ class InvestigationScenarioHarness:
             committed_read_dispatch_count=restarted.tools.dispatch_count["architecture"],
             state=view.state,
             final_artifact_ref=view.completion_report.final_artifact_ref.resource_id,
+            report_status_code=report.status_code,
+            report_content=report.json().get("content", ""),
         )
 
     def _agent_recovery(self, *, governed: bool):
@@ -1455,7 +1932,9 @@ class InvestigationScenarioHarness:
         agent_port: _AgentPort | None = None,
         policy: _Policy | None = None,
         observation_subgoal: str | None = None,
+        unsatisfied_subgoal: str | None = None,
         crash_final_once: bool = False,
+        final_verification_passed: bool = True,
         requirements: tuple[str, ...] = (
             "architecture",
             "security",
@@ -1487,7 +1966,9 @@ class InvestigationScenarioHarness:
             verifier=_Verifier(
                 sequence,
                 observation_subgoal=observation_subgoal,
+                unsatisfied_subgoal=unsatisfied_subgoal,
                 crash_final_once=crash_final_once,
+                final_verification_passed=final_verification_passed,
             ),
             artifact_writer=ArtifactService(settings),
             delegation_policy=policy or _Policy(),

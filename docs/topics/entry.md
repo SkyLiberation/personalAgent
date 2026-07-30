@@ -1,6 +1,8 @@
 # 入口层说明
 
-本文汇总当前项目入口层的职责划分、已有入口、统一调用路径、现有能力、已知限制和后续改进方向。
+本文汇总当前项目入口层的职责划分、已有入口、生产调用路径、现有能力和已知限制。
+入口只做协议适配、身份解析和输入校验；开放语义由 Conversation 模型提出 typed Proposal，
+权限与机械不变量由治理代码判断，入口不得补业务语义。
 
 ## 设计目标
 
@@ -10,13 +12,16 @@
 - 前端工作台通过 Web API 使用采集、问答、图谱、记忆和确认能力
 - CLI 提供最小本地操作入口
 - 飞书长连接把 IM 事件转为内部 `EntryInput`
-- `AgentService` 保持薄 facade，最终委托 `AgentRuntime` 执行
+- `AgentService` 保持薄 facade，最终委托 `AgentRuntime` 中明确的 Conversation 或 Application
+  use case
 
 ## 组件分层
 
 ### 1. Web API
 
-代码位置：[api.py](../../src/personal_agent/web/api.py)、[routes/](../../src/personal_agent/web/routes)、[context.py](../../src/personal_agent/web/context.py)
+代码位置：[api.py](../../src/personal_agent/adapters/web/api.py)、
+[routes/](../../src/personal_agent/adapters/web/routes)、
+[context.py](../../src/personal_agent/adapters/web/context.py)
 
 作用：
 
@@ -31,12 +36,12 @@
 
 ### 2. `AgentService`
 
-代码位置：[service.py](../../src/personal_agent/agent/service.py)
+代码位置：[service.py](../../src/personal_agent/orchestration/service.py)
 
 作用：
 
 - 作为入口层和 `AgentRuntime` 之间的薄 facade
-- 负责装配 settings、store、graph store、ask history store 和 capture service
+- 由 Composition Root 注入运行依赖，不拥有领域事实
 - 暴露稳定方法给 Web、CLI、飞书等入口调用
 
 当前入口层主要通过这些方法进入运行时：
@@ -44,20 +49,20 @@
 - `execute_capture()`
 - `execute_ask()`
 - `digest()`
-- `entry()`
+- `converse()`
 - `list_notes()`
 - `list_tools()`
 - `execute_tool()`
 
 ### 3. `cli/main.py`
 
-代码位置：[cli/main.py](../../src/personal_agent/cli/main.py)
+代码位置：[cli/main.py](../../src/personal_agent/adapters/cli/main.py)
 
 作用：
 
 - 提供本地命令行入口
 - 每次命令构造 `AgentService`
-- 将命令行文本统一转换成 `EntryInput(source_platform="cli")` 并调用 `entry()`
+- 将命令行文本转换成 `ConversationMessage` 并调用 `converse()`
 - 输出 JSON 或文本结果
 
 当前 CLI 命令：
@@ -66,7 +71,7 @@
 
 ### 4. `FeishuService`
 
-代码位置：[service.py](../../src/personal_agent/feishu/service.py)
+代码位置：[service.py](../../src/personal_agent/adapters/feishu/service.py)
 
 作用：
 
@@ -74,8 +79,8 @@
 - 将飞书消息标准化为 `FeishuIncomingMessage`
 - 下载飞书文件并写入本地 uploads
 - 向 Agent 注册飞书群聊消息加载端口；线程总结 Goal 在 Action 执行阶段按需调用
-- 转换成 `EntryInput`
-- 调用 `AgentService.entry()`
+- 文本对话转换成 canonical Conversation contract；文件和固定业务命令进入对应 Application
+  use case
 - 将结果回复到飞书消息或群聊
 
 ## Web API 入口
@@ -91,12 +96,10 @@
 - `DELETE /api/notes/{note_id}`
 - `GET /api/digest`
 - `GET /api/entry/stream`
-- `POST /api/entry/upload`
-- `GET /api/entry/runs`
-- `POST /api/entry/runs/{run_id}/resume`
 - `POST /api/debug/reset-database`
 
-更完整的接口说明见 [api.md](../api.md)。
+旧 `/api/entry/runs` 与 resume 路径已经移除并返回 404。更完整的接口说明见
+[api.md](../api.md)。
 
 ## 统一入口路径
 
@@ -107,15 +110,14 @@
 ```text
 HTTP request
   -> web/routes/entry.py
-  -> EntryInput
-  -> AgentService.entry()
-  -> AgentRuntime.execute_entry()
+  -> ConversationMessage + authenticated principal + SecurityScope
+  -> AgentService.converse()
+  -> ConversationService.respond()
 ```
 
 适用于：
 
 - `GET /api/entry/stream`
-- `POST /api/entry/upload`
 
 ### 飞书 entry
 
@@ -125,31 +127,27 @@ HTTP request
 Feishu long connection event
   -> FeishuIncomingMessage
   -> optional file download
-  -> EntryInput(source_platform="feishu")
-  -> AgentService.entry()
-  -> AgentRuntime.execute_entry()
-     -> TaskAnalyzer 形成 summarize Goal；Protocol 执行时按需加载飞书群聊消息
+  -> text conversation: AgentService.converse()
+  -> file/group/business command: corresponding explicit Application use case
   -> Feishu reply
 ```
 
 ### CLI entry
 
-CLI 当前统一进入 Agent 编排：
+CLI 文本 `entry` 是 canonical Conversation contract 的适配器：
 
 ```text
 CLI command
-  -> EntryInput(source_platform="cli")
-  -> AgentService.entry()
-  -> AgentRuntime.execute_entry()
+  -> ConversationMessage
+  -> AgentService.converse(source_platform="cli")
+  -> ConversationService.respond()
 ```
 
 ## 当前能力
 
 - 已具备 FastAPI Web API
 - 已具备前端静态资源托管
-- 已具备同步问答、同步 entry 和 SSE entry
-- `entry_stream` 的所有意图已统一进入 LangGraph entry pipeline；ask 回答通过 SSE 分块输出并纳入 checkpoint
-- 已具备文件上传入口
+- 已具备 Conversation SSE 入口；当前 SSE 是对完整回复的协议分块，不声称是模型 token 原生流
 - 已具备 tools、notes、digest、ask history 等管理接口
 - 已具备 API Key 鉴权和 token bucket 限流
 - 已具备 CORS 配置
@@ -157,13 +155,15 @@ CLI command
 - 已具备飞书官方 SDK 长连接入口
 - 已具备飞书事件短时去重
 - 已具备飞书文件下载和群聊消息按需加载
-- Web、飞书、CLI 和部分上传入口已经统一进入 `AgentService.entry()`
+- Web SSE、CLI 文本和飞书文本对话进入同一个 `AgentService.converse()` 合约；固定业务能力保留
+  明确 use case，不为形式统一塞进通用图
 
 ## 已知限制
 
-### 1. 入口已基本统一
+### 1. 统一的是契约与边界，不是一个总编排图
 
-`entry()` 已成为统一的入口方向。`/api/digest` 作为独立摘要接口仍然保留，但 capture 和 ask 流程已整合进入 orchestration graph 的对应分支。
+Conversation 使用统一消息、身份、scope 与结果契约；`digest`、capture、Investigation 等固定或
+durable 产品能力拥有各自 Application 入口。不存在覆盖所有请求的 LangGraph Entry 总图。
 
 ### 2. CLI 能力仍偏基础
 
@@ -186,14 +186,16 @@ CLI 当前只覆盖：
 
 Web 侧通过 API Key 映射用户，SSE 也支持 query 参数传 key；飞书侧可配置是否使用默认用户。当前适合个人或轻量多用户场景，更复杂的组织级权限、租户隔离和审计策略还需要继续增强。
 
-### 5. 入口层和业务层边界还可以继续收敛
+### 5. 流式语义仍有限
 
-`entry_stream` 统一进入 LangGraph entry pipeline，以保证路由、事件、checkpoint 与恢复语义一致。后续可在 LangGraph 节点内引入原生流式事件，以同时保留 checkpoint 与实时 token 输出。
+`entry_stream` 当前先完成一次 Conversation turn，再将最终文本切片为 SSE。若用户 E2E 证明
+首 token 延迟或中途取消不满足要求，才应定义原生流式事件与恢复边界；不能仅为“更像现代
+Agent”引入另一套 event schema。
 
 ## 演进方向
 
-- 进一步收敛 `digest` 等专项入口到 `entry()` 编排内
-- 将流式问答、metadata、citation、plan events 和 execution trace 抽象成统一 `AgentEvent` schema
+- 先用正式入口 E2E 证明专项入口造成了用户错误，再决定是否收敛
+- 只有多个生产消费者和独立生命周期得到证明时，才抽象统一事件协议
 - 为 CLI 增加 history、upload 和 graph sync 能力
 - 为飞书入口补更清晰的处理中/失败反馈
 - 强化用户身份、权限、租户隔离和审计能力

@@ -1,6 +1,6 @@
 # Future 设计索引
 
-本目录只保存**尚未落地**、具有明确业务扩展和目标 E2E 的设计。当前生产事实归
+本目录只保存尚未落地的目标，或明确分隔“已落地前提”和“未准入候选”的路线图。当前生产事实归
 [当前核心架构](../summary/core-architecture-current-state.md) 和对应 workflow 文档所有；历史
 调试记录、已经完成的 phase、某次 archive 结果不属于 future。
 
@@ -8,17 +8,26 @@
 
 | 业务扩展 | 状态 | 文档 |
 | --- | --- | --- |
-| 统一自然语言受治理操作、live 长任务与能力规模化 | 目标路线图，尚未实施 | [现代 Agent 能力优化路线图](modern-agent-capability-optimization-plan.md) |
-| 路径动态且需跨轮次恢复的架构调查项目 | 生产实现已装配，live 发布证据待闭环 | [Durable Investigation Project](durable-investigation-project-design.md) |
+| 当前框架、文档事实源、架构门禁与 clean release 证据收敛 | D0 文档重置进行中；G0/R0/M0 待完成 | [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md) |
 | 持续研究的来源验证与事件触发 | P1/P2，未实现 | [持续研究 P1/P2](scheduled-intelligence-research.md) |
+
+以下两份文档保留历史 baseline、已接受设计和迁移诊断，不再是 active future owner：
+
+- [现代 Agent 能力优化路线图](modern-agent-capability-optimization-plan.md)：Stage 1 保存纵切与
+  Stage 2 IP01 已落地；未执行 baseline 的 Stage 3–5 候选统一受
+  [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md) 第 7 节约束；
+- [Durable Investigation Project 目标设计](durable-investigation-project-design.md)：当前实现和
+  live IP01 证据已迁入
+  [Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)；
+  本文件仅保留历史设计推导，不能反向定义生产状态。
 
 ## 进入与退出规则
 
 新文档进入本目录前必须同时给出：
 
-1. 当前最简单实现为何不能满足具体用户目标；
+1. 已实际执行的最简单生产 baseline、失败结果、trace 和产品根因；
 2. 用户可观察结果以及至少一个反事实；
-3. 从正式入口进入生产主路径的目标 E2E；
+3. baseline 失败后定义的、从正式入口进入生产主路径的目标 E2E；
 4. 所需生产能力盘点，以及每个缺失能力的 owner、契约、入口、消费者、实施阶段、失败语义和测试；
 5. Decision owner、Fact owner、唯一写入口和计划删除的旧路径；
 6. 相对 baseline 的收益证据，不能只验证新增对象存在或把独立用例拼成组合能力证据。

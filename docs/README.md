@@ -1,10 +1,13 @@
 # personalAgent 文档索引
 
-本项目以短生命周期 Conversation ReAct、确定性领域 Workflow 和显式 Durable Investigation
-Project 共同承载个人知识与持续研究能力。模型负责开放语义 Proposal/Assessment；Application、
-领域状态机和 Gateway 负责 scope、权限、预算、幂等、副作用、Evidence 与 Completion。
+本项目构建的是一套可信 Agent Runtime：模型负责开放语义 Proposal，Admission/Policy 负责
+确定性准入，Gateway/Executor 产生执行事实，Verifier 判断语义满足，Completion Gate 依据
+required result contract 关闭用户目标。短生命周期 Conversation、确定性领域 Workflow 和显式
+Durable Investigation Project 是这套框架针对不同生命周期的三种运行形态，不是三套互相竞争的
+架构。
 
-当前系统分层、Entry 主链、LLM/确定性边界、Capability/MCP/A2A、Procedure、知识与运行时事实统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
+当前系统分层、框架不变量、三条主链、LLM/确定性边界、Capability/MCP/A2A、知识与运行时事实
+统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
 
 ## 目录分工
 
@@ -25,14 +28,18 @@ Project 共同承载个人知识与持续研究能力。模型负责开放语义
 
 写文档时遵守以下约束：
 
-- **单一事实源**：不要在多个文档或多个层次重复维护同一份流程拓扑、工具契约或治理规则。Procedure 拓扑以 `ProcedureSpec / ProcedureCatalog` 为准，开放任务策略以 Executive decision/event 为准。
-- **按现有能力组织**：章节应围绕已经存在的模块边界和能力边界展开，例如声明期 `ProcedureSpecValidator` 与执行前 `StepProjectionValidator` 的职责差异。
+- **单一事实源**：不要在多个文档或多个层次重复维护同一份流程拓扑、工具契约或治理规则。
+  Conversation Proposal、领域事实、执行事实和发布证据必须分别指向其 canonical owner。
+- **按现有能力组织**：章节应围绕已经存在的模块边界和能力边界展开，不以旧类名或理想化
+  框架目录反推当前能力。
 - **避免补丁式写法**：不要在原文后面堆叠“注意 / 但是 / 其实”来修补前文。若原结构表达不准确，应重写相关小节，让最终文档读起来像一版一致的设计说明。
 - **不要路径先行**：架构文档不要在开头罗列一串文件路径。文档应先解释层级、职责、关键组件和协作关系；组件名本身足以引导读者在当前目录结构中定位代码。只有在 API、部署、故障排查这类需要精确操作的文档里，才把具体路径作为必要信息出现。
 - **区分现状和未来**：已落地能力写在 `topics/`、`workflow/` 或顶层权威文档；未来设想写入 `future/` 或明确标注为演进方向，不能把目标状态写成当前能力。
-- **先金标后能力**：每个 Agent 能力的新增、优化或修复，必须先以 golden set / eval case 的形式定义期望行为和验收标准；实现后必须验证新 case 通过，且核心回归集不退化。组件文档只描述已被代码和测试支撑的能力，不把“基于 golden set 开发”写成某个组件的局部补丁说明。
+- **先 baseline E2E 后目标能力**：每个 Agent 能力的新增、优化或修复，必须先从正式入口实际执行同一用户目标的最简单生产 baseline，证明失败来自当前产品行为；随后才定义目标 E2E 和 Golden Set。baseline 未失败就停止，实现后必须验证用户结果、关键反事实和核心回归。组件文档只描述已被代码和执行证据支撑的能力。
 - **测试新增克制**：不能因为每次小改动随意新增单测。新增测试必须服务于清晰的工程边界：新增或修复 Agent 能力边界、复现 golden set / 线上问题并提供可定位信号、保护安全/副作用/权限/幂等不变式、或锁定容易误合并/误路由的核心决策点。纯重构、实现细节调整、已被上层 golden set 清楚覆盖且定位足够明确的变化，不应再额外堆叠单测。
-- **语义判断优先 LLM**：涉及意图拆分、目标依赖、候选选择、答案组织、重规划等需要语义理解的 Agent 能力，应优先设计为结构化 LLM 决策，并用 schema、validator、fallback、policy 和 eval 约束输出。流程真源、工具执行、安全边界、幂等和审计仍由确定性系统负责，不能让 LLM 越权生成不可验证的控制流或副作用。
+- **语义判断归模型，确定性事实归代码**：涉及开放世界的目标理解、候选选择、答案组织和动态
+  修订时，模型产生 typed Proposal；Admission 只接受或拒绝，模型不可用时 fail closed 或请求
+  用户输入。权限、流程真源、工具执行、状态迁移、幂等和审计由确定性系统负责。
 - **和测试/代码同步**：如果文档声明某个模块不承担某职责，代码和测试也应体现这个边界。架构级约束优先沉到 CI 门禁；Procedure contract、Capability scope 和 trajectory eval 分别验证确定性拓扑、授权边界与开放策略质量。
 
 ## 按主题找权威文档
@@ -42,28 +49,25 @@ Project 共同承载个人知识与持续研究能力。模型负责开放语义
 | 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
 | Durable Investigation Project 当前实现与证据边界 | [summary/durable-investigation-project-current-state.md](summary/durable-investigation-project-current-state.md) |
 | Phase 0 能力目录、运行时清单与发布基线 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
-| Procedure / Step Projection 架构总览 | [workflow/workflow-framework.md](workflow/workflow-framework.md) |
-| Entry → Executive Agent Loop 端到端流程 | [workflow/entry-executive-agent-loop.md](workflow/entry-executive-agent-loop.md) |
-| Capture 摄取 + Ask RAG 流水线 | [workflow/capture-ask-model-flow.md](workflow/capture-ask-model-flow.md) |
-| 检索策略与评测口径 | [retrieval-strategies.md](retrieval-strategies.md) |
-| 检索/推理层与 verifier、统一证据模型 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
-| Task Analysis 与 Goal Graph | [topics/task-analysis.md](topics/task-analysis.md) |
+| Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
-| 运行时编排（AgentService / AgentRuntime / replay） | [topics/runtime.md](topics/runtime.md) |
-| 工具层（治理 / Gateway / Artifact / 审计） | [topics/tools.md](topics/tools.md) |
-| 记忆分层（短期 checkpoint / 长期 Postgres / typed memory） | [topics/memory.md](topics/memory.md) |
-| 上下文工程（context-rot 防御） | [topics/context-engineering.md](topics/context-engineering.md) |
-| 可观测与治理（LangSmith / PolicyEngine / 审计） | [topics/observability-governance.md](topics/observability-governance.md) |
-| 执行反馈 / SSE 事件 | [topics/execution-feedback.md](topics/execution-feedback.md) |
-| LangChain / LangGraph 能力取舍 | [topics/langchain-langgraph-capability-adoption.md](topics/langchain-langgraph-capability-adoption.md) |
-| 动态规划（未来能力，含 projection vs dynamic 对照表） | [topics/dynamic-planning.md](topics/dynamic-planning.md) |
+
+以下文档仍包含已删除 `TaskAnalyzer/GoalGraph/Executive/LangGraph` 总主链的历史设计，当前不再是
+权威事实源：`topics/task-analysis.md`、`topics/runtime.md`、`topics/context-engineering.md`、
+`topics/langchain-langgraph-capability-adoption.md`、`topics/memory.md`、`topics/tools.md`、
+`topics/observability-governance.md`、`topics/execution-feedback.md`、
+`topics/retrieval-reasoning.md`、`workflow/entry-executive-agent-loop.md`、
+`workflow/workflow-framework.md`、`workflow/capture-ask-model-flow.md` 和
+`mermaid/memory-model-layer-dependencies.md`，以及顶层
+`retrieval-strategies.md`、`rag-eval-results.md`、`ms-graphrag-provider.md`。它们只用于迁移
+审计，当前主链以 core current-state 和生产代码为准。
 
 ## 关键业务 Procedure
 
 | Procedure / 链路 | 文档 |
 | --- | --- |
 | delete_knowledge（高风险删除 + HITL） | [workflow/delete-knowledge-workflow.md](workflow/delete-knowledge-workflow.md) |
-| solidify_conversation（会话固化为长期知识） | [workflow/solidify-conversation-workflow.md](workflow/solidify-conversation-workflow.md) |
+| Conversation 内确认后保存知识 | [adr/0006-conversation-governed-knowledge-save.md](adr/0006-conversation-governed-knowledge-save.md) |
 | research_once（evidence-driven research loop） | [workflow/research-once-workflow.md](workflow/research-once-workflow.md) |
 | gpt_researcher_a2a（GPT Researcher A2A 外部研究 Agent） | [workflow/gpt-researcher-a2a-workflow.md](workflow/gpt-researcher-a2a-workflow.md) |
 | 主动知识闭环（gap 提问 / 巩固 / 简报） | [proactive-knowledge-loop.md](proactive-knowledge-loop.md) |
@@ -73,7 +77,7 @@ Project 共同承载个人知识与持续研究能力。模型负责开放语义
 | 主题 | 文档 |
 | --- | --- |
 | Future 范围与退出规则 | [future/README.md](future/README.md) |
-| 路径动态且需跨轮次恢复的架构调查项目（实现已装配，live 发布证据待闭环） | [future/durable-investigation-project-design.md](future/durable-investigation-project-design.md) |
+| 当前框架、文档、架构门禁与 clean release 收敛 | [future/trusted-agent-runtime-evolution.md](future/trusted-agent-runtime-evolution.md) |
 | 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
 
 ## 运维与参考
@@ -85,8 +89,6 @@ Project 共同承载个人知识与持续研究能力。模型负责开放语义
 | 环境变量 | [env.md](env.md) |
 | LLM 提示词清单 | [llm-prompts.md](llm-prompts.md) |
 | Golden Set 设计 | [golden-set-design.md](golden-set-design.md) |
-| RAG 评测结果 | [rag-eval-results.md](rag-eval-results.md) |
-| Microsoft GraphRAG provider | [ms-graphrag-provider.md](ms-graphrag-provider.md) |
 | 生产风险优化计划 | [production-risk-optimization-plan.md](production-risk-optimization-plan.md) |
 | Review digest | [review-digest.md](review-digest.md) |
 

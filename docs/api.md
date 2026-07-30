@@ -309,113 +309,66 @@ Neo4j 清理会读取 `evals/**/*manifest*.json` 中的 Graphiti eval manifest�
 
 ---
 
-## 入口执行（Entry）
+## Conversation
 
-统一的入口接口，支持文本、链接、文件等多类型输入，由 Agent 自动路由到合适的处理链路。
+普通开放对话使用 canonical Conversation contract；文件摄取等固定业务能力进入明确的
+Workspace API，不由一个通用 Entry 总图猜测。
+
+### `POST /api/conversation/turn`
+
+请求示例：
+
+```json
+{
+  "conversation_id": "workspace-1",
+  "messages": [
+    {"role": "user", "content": "总结我已经保存的知识"}
+  ],
+  "interaction_run_ref": null,
+  "user_id": "default"
+}
+```
+
+响应由 `ConversationTurnView` 定义，包含 `interaction_run_ref`、`conversation_id`、
+`disposition`、一条 assistant `message`，以及仅在需要受治理保存确认时出现的
+`pending_confirmation`。`disposition` 可能为 `answer`、`clarification_required`、
+`confirmation_required`、`limitation` 或 `failed`。
 
 ### `GET /api/entry/stream`
 
-SSE 流式入口执行，逐步返回 intent 分类、计划步骤、执行进度和最终结果。
+SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，再流式返回 answer delta，
+最终 `done` 事件包含 `disposition`、`interaction_run_ref` 和 `conversation_id`。它不再创建
+Task/GoalGraph，也不提供旧计划步骤和 checkpoint snapshot。
 
 需要补充信息时会返回：
 
 ```text
 event: done
 data: {
-  "waiting_confirmation": false,
-  "run_id": "...",
-  "reply": "..."
+  "reply": "...",
+  "answer": "...",
+  "disposition": "answer | clarification_required | limitation | failed",
+  "interaction_run_ref": "...",
+  "conversation_id": "..."
 }
 ```
 
-当 TaskAnalyzer 判断输入缺少完成 Goal 所需的必要信息时，`pending_confirmation` 的澄清 payload 形态如下；前端可展示 `message`、`missing_information` 与 `options`，再使用 resume API 提交用户补充内容：
+缺少必要用户信息时，`ConversationService` 返回
+`disposition="clarification_required"`，`reply/answer` 中包含一个具体问题；客户端使用下一次
+Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/step_id/options` 形态不再
+属于该入口。
 
-```json
-{
-  "kind": "clarification_required",
-  "action_type": "clarify_entry",
-  "step_id": "clarify_entry",
-  "title": "需要补充信息",
-  "message": "请补充你希望我处理的具体内容。",
-  "summary": "输入缺少明确目标。",
-  "missing_information": ["具体目标或待处理内容"],
-  "options": [
-    {"id": "capture", "label": "记录内容", "prompt": "请补充要写入知识库的具体内容。"},
-    {"id": "ask", "label": "提出问题", "prompt": "请补充你想查询或追问的问题。"}
-  ]
-}
-```
+### Conversation trace 与知识保存确认
 
-### `POST /api/entry/upload`
+- `GET /api/conversation/runs/{interaction_run_ref}` 读取已提交的 Interaction trace；
+- `POST /api/conversation/runs/{interaction_run_ref}/knowledge-save-decision` 接受或拒绝已冻结的
+  exact-span 保存 Command，确认必须绑定 `workspace_id`、`command_digest` 和
+  `confirmation_ref`。
 
-上传文件并触发入口处理。表单字段：`file`、`user_id`、`session_id`、`text`（可选）。
-
-### `GET /api/entry/runs`
-
-查询最近的 LangGraph run 快照列表。
-
-查询参数：
-
-- `user_id`（可选）：过滤用户
-- `limit`（默认 50）
-
-响应：
-
-```json
-{
-  "items": [
-    {
-      "run_id": "run_xxx",
-      "thread_id": "user:session",
-      "user_id": "default",
-      "session_id": "default",
-      "status": "completed",
-      "result_contracts": ["external_state"],
-      "procedure_id": null,
-      "entry_text": "保存这段知识",
-      "steps": [],
-      "execution_trace": [],
-      "answer": null,
-      "pending_confirmation": null,
-      "confirmation_decision": null,
-      "errors": [],
-      "created_at": "2026-05-19T00:00:00",
-      "updated_at": "2026-05-19T00:00:01",
-      "last_event": null
-    }
-  ]
-}
-```
-
-### `POST /api/entry/runs/{run_id}/resume`
-
-恢复处于 `waiting` 或 `blocked_approval` 状态的 LangGraph run。
-
-请求体：
-
-```json
-{
-  "decision": "confirm",
-  "user_id": "default",
-  "text": "",
-  "option_id": ""
-}
-```
-
-字段说明：
-
-- `decision`：必须是 `confirm`、`reject` 或 `clarify`。
-- `user_id`：当前用户，省略时使用默认用户解析逻辑。
-- `text`：`decision="clarify"` 时必填，表示用户补充的内容。
-- `option_id`：可选，表示补充类型，例如 `capture`、`ask`、`summarize`、`action`。
-
-行为：
-
-- 后端会先通过 `run_id` 查询 run snapshot。
-- 如果 run 不存在，返回 `404 Run not found.`。
-- 如果 run 不是 `waiting_confirmation`，返回 `400`。
-- 校验通过后，后端使用 snapshot 中的 `thread_id` 恢复 LangGraph run。
-- 返回恢复后的 `EntryResponse`。
+旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
+`POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用
+`POST /api/workspace/ingest-upload`；Conversation 恢复事实由 Interaction journal 与公开
+`interaction_run_ref` 合约拥有，不再暴露 LangGraph run snapshot。
 
 ---
 
@@ -428,7 +381,7 @@ data: {
 - FastAPI 启动时会自动调用飞书长连接监听器
 - 已订阅 `im.message.receive_v1`
 - 收到事件后，会把消息转成内部 `FeishuIncomingMessage`
-- 再复用统一入口 `AgentService.entry(...)`
+- 文本对话调用 `AgentService.converse(...)`，文件和固定业务命令调用对应 Application use case
 - 最终优先使用 `message_id` 回复原消息
 
 日志关键字：

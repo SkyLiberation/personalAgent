@@ -182,7 +182,10 @@ LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
     LoopCapabilityDefinition(capability_id="receipt_bound_semantic_revision", required_evidence_id="L06"),
 )
 
-REQUIRED_NATIVE_EVIDENCE_IDS = tuple(f"E{index:02d}" for index in range(1, 14))
+REQUIRED_NATIVE_EVIDENCE_IDS = (
+    *(f"E{index:02d}" for index in range(1, 15)),
+    "IP01",
+)
 REQUIRED_COMPOSITE_EVIDENCE_IDS = tuple(f"C{index:02d}" for index in range(1, 5))
 REQUIRED_LOOP_EVIDENCE_IDS = tuple(f"L{index:02d}" for index in range(1, 7))
 

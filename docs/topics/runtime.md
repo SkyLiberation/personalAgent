@@ -1,4 +1,10 @@
-# 运行时与编排层说明
+# 历史设计：运行时与 LangGraph 总编排
+
+> 状态：本文主体描述已删除的 `orchestration_graph.py`、orchestration nodes、
+> TaskAnalyzer/GoalGraph/Executive 总主链，不再代表当前 Runtime。当前 `AgentRuntime` 是
+> Composition Root；Conversation、明确 Application Workflow 和 Investigation Project 分别拥有
+> 自己的运行与恢复语义。权威事实见
+> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md)。
 
 本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。
 

@@ -252,10 +252,10 @@ class TestEvidenceRerankers:
 
         monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
 
-        from personal_agent.infra.structured_model import OpenAIModelClient
+        from personal_agent.infra.structured_model import StrictJsonSchemaAdapter
         from personal_agent.kernel.config_models import StructuredConfig
 
-        client = OpenAIModelClient(
+        client = StrictJsonSchemaAdapter(
             StructuredConfig(api_key="test-key", base_url="https://u.invalid", model="m"),
         )
 

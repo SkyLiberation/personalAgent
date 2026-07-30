@@ -1,4 +1,9 @@
-# 上下文工程与上下文管理模式
+# 迁移中：上下文工程与上下文管理模式
+
+> 状态：本文前半仍以已删除的 LangGraph Entry/`AgentGraphState` 为当前事实，不能用于描述现有
+> Conversation。当前 Interaction 从 committed messages、Observation、Feedback、usage 与 action
+> order 恢复；长期知识、Artifact、Project journal 和检索投影各有独立 owner。完成消费者级重写
+> 前，以 [personalAgent 当前核心架构](../summary/core-architecture-current-state.md) 为准。
 
 本文说明当前工程如何收集、保存、筛选并注入 Agent 上下文，以及它对上下文腐化的已有防护和仍然存在的边界。相关详细主题可继续阅读：
 

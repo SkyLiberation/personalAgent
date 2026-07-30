@@ -1,8 +1,11 @@
-# Capture / Ask 当前流程
+# Capture / Ask 历史流程
 
-本文只描述当前工程里 `capture` 和 `ask` 两条主链路的真实实现。更宽泛的 workflow 框架见 [当前 Workflow 框架总览](workflow-framework.md)。
+> 状态：本文描述迁移前的 `StepExecutionGraph` 投影实现，相关 Task/GoalGraph/LangGraph 总主链
+> 已删除，不能作为当前生产事实。当前架构见
+> [核心架构当前状态](../summary/core-architecture-current-state.md)；如需重建本文，必须从现有
+> `ConversationService`、Capture Application use case 与 Ask 实现重新取证。
 
-## 当前结论
+## 历史结论
 
 `capture_*` 和 `ask` 都属于 step projection workflow：
 

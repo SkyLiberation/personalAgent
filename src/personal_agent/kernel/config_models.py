@@ -100,6 +100,7 @@ class StructuredConfig(_StrictBase):
     model: str = DEFAULT_GENERATIVE_MODEL
     timeout_seconds: float = 60.0
     max_retries: int = 2
+    output_transport: Literal["json_schema", "json_object"] = "json_schema"
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -114,7 +115,7 @@ class FirecrawlConfig(_StrictBase):
 
 
 class WebSearchConfig(_StrictBase):
-    provider: str = "tavily"
+    provider: str = "serpapi"
     api_key: str | None = None
     base_url: str | None = None
     timeout_ms: int = 60000

@@ -25,6 +25,7 @@ from personal_agent.application.conversation.models import (
 from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from personal_agent.governance import ToolExecutor
 from personal_agent.governance.policy import PolicyEngine
+from personal_agent.application.workspace import InMemoryWorkspaceStore, WorkspaceService
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     AgentGatewayContext,
@@ -299,6 +300,7 @@ def test_independent_user_results_instruction_does_not_require_named_capabilitie
     assert "goal requires multiple independent read-only results" in system_prompt
     assert "user does not need to know or name internal capabilities" in system_prompt
     assert model.requests[0].temperature == 0
+    assert model.requests[0].max_tokens == 1_600
 
 
 def test_interaction_delegation_budget_cannot_exceed_synchronous_policy_limit():
@@ -584,6 +586,171 @@ def test_answer_is_bound_to_latest_passed_verification_receipt():
         "verified_draft_ready",
         "verified_draft_mismatch",
     ]
+
+
+def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate(
+    temp_dir,
+):
+    store = InMemoryWorkspaceStore()
+    writer = WorkspaceService(store)
+    journal_root = temp_dir / "conversation-knowledge-save"
+    messages = [ConversationMessage(
+        role="user",
+        content="Save this conclusion after confirmation: SLO budgets need weekly review.",
+    )]
+    first = ConversationService(
+        _Decisions(_continue(ToolCallProposal(
+            action_id="save-1",
+            tool_name="prepare_conversation_knowledge_save",
+            arguments={"selections": [{
+                "source_message_index": 0,
+                "text_span": "SLO budgets need weekly review.",
+            }]},
+        ))),
+        knowledge_writer=writer,
+        journal=FileInteractionJournal(journal_root),
+    )
+
+    prepared = first.respond(
+        **_conversation_scope(),
+        conversation_id="workspace-1",
+        interaction_run_ref="irun_knowledge_save",
+        messages=messages,
+    )
+
+    assert prepared.disposition == "confirmation_required"
+    assert prepared.pending_confirmation is not None
+    assert prepared.pending_confirmation.status == "awaiting_confirmation"
+    assert store.list_claims("workspace-1") == []
+    command = prepared.pending_confirmation.command
+    assert command.source_message_indexes == (0,)
+    assert command.messages == (
+        ConversationMessage(
+            role="user",
+            content="SLO budgets need weekly review.",
+        ),
+    )
+
+    resumed = ConversationService(
+        None,
+        knowledge_writer=writer,
+        journal=FileInteractionJournal(journal_root),
+    )
+    recovered = resumed.trace("irun_knowledge_save")
+    assert recovered is not None
+    assert recovered.knowledge_save_operation is not None
+    assert recovered.knowledge_save_operation.command == command
+
+    executed = resumed.decide_knowledge_save(
+        **_conversation_scope(),
+        interaction_run_ref="irun_knowledge_save",
+        decision="confirm",
+        command_digest=command.command_digest,
+        confirmation_ref="unit-user-confirmation",
+    )
+    claim_count = len(store.list_claims("workspace-1"))
+    replayed = resumed.decide_knowledge_save(
+        **_conversation_scope(),
+        interaction_run_ref="irun_knowledge_save",
+        decision="confirm",
+        command_digest=command.command_digest,
+        confirmation_ref="unit-user-confirmation",
+    )
+
+    assert executed.status == "executed"
+    assert executed.receipt is not None
+    assert replayed.receipt == executed.receipt
+    assert len(store.list_claims("workspace-1")) == claim_count
+    after_restart = ConversationService(
+        None,
+        knowledge_writer=writer,
+        journal=FileInteractionJournal(journal_root),
+    ).trace("irun_knowledge_save")
+    assert after_restart is not None
+    assert after_restart.knowledge_save_operation == executed
+
+
+def test_governed_knowledge_save_rejects_without_writing(temp_dir):
+    store = InMemoryWorkspaceStore()
+    writer = WorkspaceService(store)
+    service = ConversationService(
+        _Decisions(_continue(ToolCallProposal(
+            action_id="save-reject",
+            tool_name="prepare_conversation_knowledge_save",
+            arguments={"selections": [{
+                "source_message_index": 0,
+                "text_span": "SLO budgets need weekly review.",
+            }]},
+        ))),
+        knowledge_writer=writer,
+        journal=FileInteractionJournal(temp_dir / "conversation-knowledge-save-reject"),
+    )
+    prepared = service.respond(
+        **_conversation_scope(),
+        conversation_id="workspace-1",
+        interaction_run_ref="irun_knowledge_save_reject",
+        messages=[ConversationMessage(
+            role="user",
+            content=(
+                "Conclusion: SLO budgets need weekly review. "
+                "Save this only if I confirm."
+            ),
+        )],
+    )
+    command = prepared.pending_confirmation.command
+
+    rejected = service.decide_knowledge_save(
+        **_conversation_scope(),
+        interaction_run_ref="irun_knowledge_save_reject",
+        decision="reject",
+        command_digest=command.command_digest,
+        confirmation_ref="",
+    )
+
+    assert rejected.status == "rejected"
+    assert rejected.receipt is None
+    assert store.list_claims("workspace-1") == []
+
+
+def test_governed_knowledge_save_rejects_fabricated_selection():
+    store = InMemoryWorkspaceStore()
+    writer = WorkspaceService(store)
+    service = ConversationService(
+        _Decisions(
+            _continue(ToolCallProposal(
+                action_id="save-fabricated",
+                tool_name="prepare_conversation_knowledge_save",
+                arguments={"selections": [{
+                    "source_message_index": 0,
+                    "text_span": "A conclusion the user never wrote.",
+                }]},
+            )),
+            FinalMessage(
+                disposition="failed",
+                message="The requested knowledge span could not be selected.",
+            ),
+        ),
+        knowledge_writer=writer,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="workspace-1",
+        interaction_run_ref="irun_knowledge_save_fabricated",
+        messages=[ConversationMessage(
+            role="user",
+            content="Save my SLO conclusion after confirmation.",
+        )],
+    )
+    trace = service.trace("irun_knowledge_save_fabricated")
+
+    assert result.disposition == "failed"
+    assert trace is not None
+    assert trace.knowledge_save_operation is None
+    assert [
+        item.reason_code for item in trace.inputs if item.kind == "decision_feedback"
+    ] == ["invalid_knowledge_save_source"]
+    assert store.list_claims("workspace-1") == []
 
 
 class _AsyncSpecialist:

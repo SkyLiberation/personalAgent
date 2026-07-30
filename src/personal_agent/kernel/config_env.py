@@ -63,6 +63,14 @@ def settings_from_env(settings_cls: type):
         default_user=os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
         postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
         max_verify_retries=int(os.getenv("AGENT_MAX_VERIFY_RETRIES", "1")),
+        url_capture_provider=(
+            os.getenv("PERSONAL_AGENT_URL_CAPTURE_PROVIDER")
+            or (
+                "firecrawl"
+                if os.getenv("FIRECRAWL_API_KEY")
+                else "builtin"
+            )
+        ).strip().lower(),
         interaction_loop=InteractionLoopConfig(
             policy_revision=os.getenv("PERSONAL_AGENT_INTERACTION_POLICY_REVISION", "interaction-loop-v1"),
             max_model_turns=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS", "8")),
@@ -188,6 +196,9 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_STRUCTURED_MAX_RETRIES")
                 or os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")
             ),
+            output_transport=os.getenv(
+                "STRUCTURED_OUTPUT_TRANSPORT", "json_schema"
+            ),
             extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
             or _parse_json_env("ROUTER_EXTRA_BODY"),
         ),
@@ -214,7 +225,7 @@ def settings_from_env(settings_cls: type):
             ),
         ),
         web_search=WebSearchConfig(
-            provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "tavily"),
+            provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "serpapi"),
             api_key=os.getenv("PERSONAL_AGENT_WEB_SEARCH_API_KEY"),
             base_url=os.getenv("PERSONAL_AGENT_WEB_SEARCH_BASE_URL"),
             timeout_ms=int(

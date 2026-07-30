@@ -1,13 +1,15 @@
 # 核心架构的历史 E2E 证据矩阵
 
-本文是 [`core-architecture-current-state.md`](core-architecture-current-state.md) 中架构声明的
-发布证据索引。测试分类的唯一 owner 是
-[`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py)；业务事实仍分别由
-`TaskContract`、`TaskRuntimeProjection`、Command、Grant、Journal、VerificationReport
-和 CompletionReport 持有。
+本文是旧核心架构的历史 E2E 证据矩阵，不再是当前架构声明或发布资格的 owner。测试分类的
+唯一机器可执行 owner 是
+[`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py)；当前架构、事实 owner
+和发布边界分别见
+[`core-architecture-current-state.md`](core-architecture-current-state.md) 与
+[`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md)。
+下文的 `TaskContract`、`TaskRuntimeProjection` 等只描述当时被测架构，不能外推为现状。
 
 本文中的 E01–E17 是架构边界/Profile 证据编号，不是 Phase 0 产品能力证据。
-产品能力 E01–E13、组合 C01–C04 及当前空发布基线见
+产品能力 E01–E14、组合 C01–C04 及当前发布基线见
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md)。
 旧编号即使历史通过，也不能被 release gate 当作产品能力证明。
 
@@ -25,8 +27,8 @@
 ## 旧架构 E01–E15 实现
 
 截至 2026-07-21，旧架构 catalog 包含 15 个 release 用例。下表只保留历史诊断价值；
-它不参与 Phase 0 产品能力基线。新的完整产品矩阵会在收集阶段检查 E01–E13 的
-`product_capability` 条目，目前会按设计报告全部缺失。
+它不参与 Phase 0 产品能力基线。当前完整产品矩阵会在收集阶段检查 E01–E14 的
+`product_capability` 条目；历史架构编号不能满足这些条目。
 
 最近一次完整矩阵尝试归档为
 `20260721T170152.613415Z-16604-a4f4cc45`：15 个用例均被实际收集和执行，但在 E04

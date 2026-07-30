@@ -205,6 +205,7 @@ class ArtifactService:
         content_digest: str,
         source_artifact_refs: tuple[ResourceRef, ...],
         evidence_refs: tuple[str, ...],
+        limitations: tuple[str, ...] = (),
     ) -> ResourceRef:
         if execution_scope.security_scope != security_scope:
             raise PermissionError("generated artifact execution scope mismatch")
@@ -272,6 +273,7 @@ class ArtifactService:
                 item.model_dump(mode="json") for item in source_artifact_refs
             ],
             "evidence_refs": list(evidence_refs),
+            "limitations": list(limitations),
         }
         artifact_sidecar = root / f"{artifact_id}.json"
         artifact_tmp = root / f".{artifact_id}.json.tmp"

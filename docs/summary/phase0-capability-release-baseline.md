@@ -2,12 +2,12 @@
 
 本文记录 capability-first 重构后的当前实现和验证事实，当前架构边界由
 [`core-architecture-current-state.md`](core-architecture-current-state.md) 记录；尚未落地的设计只进入
-[future 索引](../future/README.md)。E01–E13、C01–C04、L01–L06 与发布声明的唯一机器映射由
+[future 索引](../future/README.md)。E01–E14、C01–C04、L01–L06 与发布声明的唯一机器映射由
 [`release_gate.py`](../../evals/e2e_quality/release_gate.py) 拥有。
 
 ## 当前结论
 
-截至 2026-07-28，Phase 1–5 的生产主路径代码和当前定向工程 E2E 已落地；发布资格仍未
+截至 2026-07-30，Phase 1–5 的生产主路径代码和当前定向工程 E2E 已落地；发布资格仍未
 建立。必须区分当前完整工程证据和 clean-revision release gate：
 
 | 结论 | 状态 | 依据 |
@@ -17,11 +17,14 @@
 | 历史 tokeness GPT Researcher A2A | `passed`（旧模型定向） | E17 223.32 秒、L04 228.40 秒，分别为 archive `20260725T084944.789762Z-42408-b3b97220`、`20260725T085407.393906Z-28364-8e0c1122` |
 | 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
 | `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
-| 当前 `gpt-5.4-mini` 配置 | `passed`（定向） | 复杂 typed Proposal contract 通过；E01 77.16 秒、E17 171.31 秒均通过 |
-| 当前低层与 catalog 门禁 | `passed_targeted_engineering_evidence` | 当前变更相关 57 tests passed；变更范围 Ruff passed；完整低层套件未在本次改动后重跑 |
+| 当前 `deepseek-v4-flash` 配置 | `target_completed_release_not_established` | 显式 `json_object` Adapter + 关闭 thinking 后，IP01 最终 archive 已交付报告；完整 clean-revision 矩阵仍未建立 |
+| 低层与 catalog 门禁 | `historical_passed_current_dag_failed` | 659 passed、Ruff/compileall/DAG 是历史工程证据；2026-07-30 当前 DAG gate 因三个残留 package 目录失败 |
 | 上一完整 release E2E | `historical_passed_engineering_evidence` | 旧版 E01–E13/C01–C04/L01–L06 共 23/23 passed，archive `20260726T011631.187395Z-20684-4a62da6a`；L01–L06 语义均已改变，不能证明当前 catalog |
 | 当前自然复杂场景 | `passed_targeted_engineering_evidence` | L01–L05 在同一批次通过；L06 的用户结果和 receipt 绑定已发生，但旧“两次 verifier”白盒断言失败，archive `20260727T163802.147366Z-12512-71873e6b`；移除该错误 release claim 后 L06 定向通过，archive `20260727T164815.081968Z-14456-e1196ad4` |
 | 当前外部自然场景 | `passed_targeted_engineering_evidence` | E17/E19/L04 在 archive `20260727T162913.553817Z-9428-c723ad92` 中通过；进一步移除 Prompt 内预期答案后，E16/E18 2/2 passed，archive `20260727T165211.554901Z-17344-3e4bc060`。用户只表达数据源或深度研究结果，不指定 MCP Tool、Agent ID、Artifact、答案或执行顺序 |
+| Conversation clarification | `passed_targeted_engineering_evidence` | E01 baseline `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求被旧答案冒充完成；同输入修复后通过，archive `20260729T033304.468248Z-28272-e91b6630` |
+| Conversation governed save | `passed_targeted_engineering_evidence` | B01 证明旧 Conversation 无可恢复操作；B02 archive `20260729T031804.415533Z-15972-214cb81c` 证明控制语义污染；E14 exact-span 修复后 22.00 秒通过，archive `20260729T033339.065714Z-22692-16415241` |
+| Durable Investigation live closure | `target_passed_release_not_established` | B03 证明 verification repair 死锁；IP01 archive `20260729T101501.732689Z-53628-6c5f02f2` 完成 Plan v3、3/3 outcomes、5 条 admitted evidence、可读报告与 Completion Gate |
 | Clean revision 发布资格 | `not_established` | 完整 archive 与目标 worktree 均为 dirty；gate 必须 fail closed |
 
 GPT Researcher 已不再依赖原异常 endpoint。正式 `8001` 服务从相邻 `personalAgent/.env`
@@ -30,10 +33,11 @@ OpenAI-compatible tokeness Provider；凭据不复制到 GPT Researcher 仓库�
 tokeness 容量故障会使主 Agent 与 GPT Researcher 同时 fail closed。当前只能声明上述
 自然用户场景的定向工程证据；完整工程矩阵与发布资格都需要在当前 catalog 上重新建立。
 
-2026-07-25 已将生成式模型 canonical fact 更新为 `STRUCTURED_MODEL=gpt-5.4-mini`。
+当前生成式模型 canonical fact 为 `STRUCTURED_MODEL=deepseek-v4-flash`，结构化输出 profile 为
+`json_object`；该 deployment 还需关闭 thinking 才在 IP01 复杂 typed contract 上稳定通过。
 Conversation、Structured decision、Graphiti、LangExtract、MS GraphRAG completion 以及
-GPT Researcher FAST/SMART/STRATEGIC 均从该配置解析；旧 DeepSeek/highway/uuapi 运行绑定
-已移除。embedding 仍是独立的本地/多语种 384 维契约，transcription 也未改变。当前
+GPT Researcher FAST/SMART/STRATEGIC 均从 canonical `STRUCTURED_*` 解析。embedding 仍是
+独立的本地/多语种 384 维契约，transcription 也未改变。此前
 tokeness 对先前 luna 请求返回 HTTP 404；terra 暴露复杂 RootModel union 与延迟问题。
 object-root schema 与 `gpt-5.4-mini` 曾通过完整 23/23 工程矩阵；L01–L06 与 E16–E19
 自然用户场景改版后已完成上述定向验证，但当前 catalog 的完整矩阵尚未重跑，不能沿用旧
@@ -80,7 +84,7 @@ archive 建立发布声明。
 | A2A profile 与 child lifecycle | `AgentGateway` | status、Artifact 和父级 FinalMessage 分离 |
 | Knowledge revision/delete/restore | Knowledge lifecycle aggregate/service | governed command 是唯一副作用写入口 |
 | Provider 当前健康 | 实时 credential/health observation | 未观察时不得根据配置推断健康 |
-| 生成式模型部署选择 | `STRUCTURED_MODEL` / deployment config | Adapter-specific 值默认确定性派生；当前为 `gpt-5.4-mini` |
+| 生成式模型部署选择 | `STRUCTURED_MODEL` / deployment config | Adapter-specific 值默认确定性派生；当前工作树为 `deepseek-v4-flash` + `json_object` |
 | Release eligibility | `evidence_catalog.py` | `claim_kind` 与 `release_eligible` 共同判定 |
 | 同 revision 实际通过 | trace manifest/summary/envelope/checksum | dirty、commit 不同、skip、失败或校验错误均 fail closed |
 | 发布能力基线 | `release_gate.py` 派生投影 | 不进入数据库、checkpoint 或 Runtime capability state |
@@ -93,7 +97,7 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 
 | 分组 | 当前声明 | 当前证据 |
 | --- | --- | --- |
-| 原生产品能力 E01–E13 | 当前完整状态未建立 | 旧 archive 13/13；E06/E07 依赖的自然外部场景已定向通过 |
+| 原生产品能力 E01–E14 | 当前完整状态未建立 | 旧 archive E01–E13 为 13/13；新增 E14 已定向通过 |
 | 组合强能力 C01–C04 | 当前完整状态未建立 | 旧 archive 4/4；C04 依赖的自然 A2A 场景已定向通过 |
 | 复杂主循环 L01–L06 | 各场景定向通过，非单一完整 archive | L01–L05 同批通过；L06 修正错误白盒 claim 后单跑通过 |
 | 外部 Profile | 当前 E16–E19 定向通过 | E17/E19/L04 与最终 E16/E18 分属两个定向 archive，不是完整矩阵 |
@@ -102,6 +106,8 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 
 - E01 覆盖直接回答、澄清、连续会话，并反证没有无意义 Task/Receipt；
 - E04/E10 覆盖 governed delete/restore、错误 digest 拒绝、重启恢复和不重复副作用；
+- E14 覆盖自然语言选择 user message 中的 exact knowledge span、Admission 逐字来源校验、确认前
+  零写入、Command 重启恢复、scope denied、精确结论 Claim、控制语义零写入、Receipt 和 replay；
 - E05/C01/E13 覆盖 Research 终态、digest/source 和 limitation，不把 `running` 当成功；
 - E06/E16/E18 使用真实 GitHub/Notion 数据源请求和 MCP gateway，E19 以自然请求覆盖资料源
   未连接时的 limitation；
@@ -152,7 +158,20 @@ Current scoped low-level/catalog tests: 57 passed
 Full-repository Ruff: 13 pre-existing findings outside this change scope
 ```
 
-架构检查说明依赖图没有循环或已知 forbidden edge；它不能替代上面的用户结果 E2E。
+上述命令块是截至 2026-07-26/27 的历史工程证据，不是当前工作树的实时门禁。2026-07-30
+重新执行 `uv run python scripts/check_layers.py` 得到：
+
+```text
+unknown_packages=['context', 'skills', 'verification']
+missing_packages=none
+cycles=none
+forbidden_edges=0
+FAIL: 3 architecture violation(s)
+```
+
+因此当前不能声明 package DAG gate passed。修复和退出条件见
+[可信 Agent Runtime 演进与收敛](../future/trusted-agent-runtime-evolution.md)。即使架构检查通过，
+也只说明依赖图没有循环或 forbidden edge，不能替代上面的用户结果 E2E。
 本次 GPT Researcher 修复只改变 compose Provider 配置，通过 `--no-build --force-recreate`
 重建容器，没有产生冗余镜像。当前 8001 容器的 non-streaming tokeness 路径已由 E17、
 E07 和 C04 验证。此前 clean build 在 Docker Hub base-image metadata 阶段超时，因此

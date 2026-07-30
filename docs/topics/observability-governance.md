@@ -1,12 +1,19 @@
 # 观测与治理层
 
+> 状态：本文后半仍混合迁移前 `AgentGraphState`、旧 AgentEvent 和 LangGraph 总图描述，不是
+> 当前架构的 canonical owner。当前事实与证据边界见
+> [核心架构当前状态](../summary/core-architecture-current-state.md) 和
+> [E2E 质量用例](../evals/e2e-quality-cases.md)。在完成逐项代码取证前，本文仅作历史设计参考。
+
 观测与治理层负责回答三个问题：
 
 - 系统现在是否健康？
 - 一次 Agent 运行为什么走到这个结果？
 - 哪些动作产生了副作用，是否符合权限、确认和审计要求？
 
-当前项目已经具备应用内事件、日志、checkpoint、工具治理、Postgres 工具审计、基础 Web 治理能力，并已完成 LangSmith 的基础配置与 entry 入口 trace context 接入。因此它已经可以开始使用 LangSmith 观察 LangGraph/LangChain 执行链路，同时用本地 Postgres 表承接业务副作用审计；距离生产级 Agent 可观测性仍有后续产品化空间。
+当前生产事实不能由“配置存在”推导为端到端可观测。日志、Interaction trace、工具审计、
+Investigation journal 与发布 archive 分别服务不同 owner；只有实际 trace/archive 能证明某条
+路径已被观测，不能把旧 LangGraph checkpoint 当成所有业务事实的共同真源。
 
 ## 当前基线
 

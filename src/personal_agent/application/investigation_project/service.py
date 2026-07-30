@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import json
+import re
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +15,9 @@ from personal_agent.application.investigation_project.admission import (
     ExecutionProposalAdmission,
     PlanAdmission,
     ProposalRejected,
+    execution_evidence_subgoal_keys,
+    frozen_subgoal_keys,
+    observed_url_locators,
 )
 from personal_agent.application.investigation_project.budget import (
     BudgetExceeded,
@@ -21,6 +27,7 @@ from personal_agent.application.investigation_project.budget import (
 from personal_agent.application.investigation_project.ports import (
     CapabilitySnapshotPort,
     DisclosureManifestPort,
+    EvidenceMaterial,
     GeneratedArtifactWritePort,
     GeneratedContent,
     InvestigationPlannerPort,
@@ -47,10 +54,12 @@ from personal_agent.domain.investigation_project import (
     CommandPreparedData,
     CompletionCommittedData,
     CompletionReport,
+    DecisionFeedback,
     EvidenceAdmissionCommittedData,
     EvidenceRef,
     ExecutionCommittedData,
     ExecutionProposalAcceptedData,
+    ExecutionProposalRejectedData,
     ExecutionRef,
     ExternalDelegationCommand,
     InvestigationProject,
@@ -67,6 +76,7 @@ from personal_agent.domain.investigation_project import (
     StateChangedData,
     SteeringCommand,
     SubGoalExecutionProposal,
+    SubGoalDefinitionVersion,
     SubGoalOutcome,
     UserRequirement,
     UserRequirementVersion,
@@ -98,6 +108,10 @@ class QueryInvestigationProject(ApplicationModel):
     principal: AuthenticatedPrincipal
     security_scope: SecurityScope
     project_id: str = Field(min_length=1)
+
+
+class GetInvestigationReport(QueryInvestigationProject):
+    pass
 
 
 class ProcessInvestigationProject(QueryInvestigationProject):
@@ -202,6 +216,19 @@ class InvestigationProjectService:
 
     def get(self, query: QueryInvestigationProject) -> ProjectView:
         return self._require_project(query).to_view()
+
+    def get_report(self, query: GetInvestigationReport):
+        project = self._require_project(query)
+        report = project.completion_report
+        if project.state != "completed" or report is None:
+            raise ValueError("investigation report is not available before completion")
+        if project.final_artifact_ref != report.final_artifact_ref:
+            raise RuntimeError("completion report final artifact binding is inconsistent")
+        return self.artifact_writer.read_generated(
+            report.final_artifact_ref,
+            principal=query.principal,
+            security_scope=query.security_scope,
+        )
 
     def recover(self, *, limit: int = 100) -> int:
         """Re-enqueue non-terminal projects after a queue/process outage."""
@@ -431,7 +458,14 @@ class InvestigationProjectService:
         if project.state == "completing":
             return self._complete(project)
         if project.state == "planning":
-            return self._plan(project, revision=None)
+            return self._plan(
+                project,
+                revision=(
+                    self._latest_replan_request(project)
+                    if project.replan_request_digests
+                    else None
+                ),
+            )
         if project.replan_request_digests:
             request = self._latest_replan_request(project)
             return self._plan(project, revision=request)
@@ -490,28 +524,40 @@ class InvestigationProjectService:
                 proposal.subgoal_version,
                 proposal.proposal_id,
             )
-            if operation.kind == "tool":
-                reservation = self.budget.reserve(
+            try:
+                if operation.kind == "tool":
+                    reservation = self.budget.reserve(
+                        project,
+                        category="execution_proposal",
+                        tool_calls=1,
+                    )
+                    policy_decision = None
+                else:
+                    policy_decision = self.delegation_policy.evaluate(
+                        proposal,
+                        execution_scope=scope,
+                    )
+                    reservation = self.budget.reserve(
+                        project,
+                        category="external_delegation",
+                        tokens=min(
+                            operation.token_budget,
+                            self.execution_policy.external_delegation_reservation_tokens,
+                        ),
+                        cost=operation.cost_budget,
+                        agent_calls=1,
+                        reservation_id=f"agent:{proposal.proposal_digest}",
+                    )
+            except BudgetExceeded as exc:
+                for _, _, prepared_reservation, _ in prepared:
+                    project = self._release(project, prepared_reservation)
+                return self._pause_with_wait(
                     project,
-                    category="execution_proposal",
-                    tool_calls=1,
-                )
-                policy_decision = None
-            else:
-                policy_decision = self.delegation_policy.evaluate(
-                    proposal,
-                    execution_scope=scope,
-                )
-                reservation = self.budget.reserve(
-                    project,
-                    category="external_delegation",
-                    tokens=min(
-                        operation.token_budget,
-                        self.execution_policy.external_delegation_reservation_tokens,
-                    ),
-                    cost=operation.cost_budget,
-                    agent_calls=1,
-                    reservation_id=f"agent:{proposal.proposal_digest}",
+                    logical_subgoal_id=proposal.logical_subgoal_id,
+                    subgoal_version=proposal.subgoal_version,
+                    reason="budget_exhausted",
+                    authority="user",
+                    detail=str(exc),
                 )
             project = self._append(project, BudgetReservedData(usage=reservation))
             prepared.append((proposal, scope, reservation, policy_decision))
@@ -594,19 +640,33 @@ class InvestigationProjectService:
         *,
         revision: ReplanRequest | None,
     ) -> InvestigationProject:
-        if (
-            revision is not None
-            and project.accepted_plan is not None
-            and project.accepted_plan.plan_version
-            >= project.definition.budget.max_plan_revisions + 1
+        if revision is not None and (
+            (
+                revision.trigger_kind == "verification_gap"
+                and project.evidence_repair_replan_count
+                > project.definition.budget.max_evidence_repair_revisions
+            )
+            or (
+                revision.trigger_kind not in {
+                    "verification_gap",
+                    "admission_feedback",
+                }
+                and project.semantic_replan_count
+                > project.definition.budget.max_plan_revisions
+            )
         ):
+            detail = (
+                "maximum evidence repair revisions reached"
+                if revision.trigger_kind == "verification_gap"
+                else "maximum semantic plan revisions reached"
+            )
             return self._pause_with_wait(
                 project,
                 logical_subgoal_id="planning",
                 subgoal_version=1,
                 reason="budget_exhausted",
                 authority="user",
-                detail="maximum plan revisions reached",
+                detail=detail,
             )
         inventory = self.capabilities.snapshot(project.definition.security_scope)
         capability_revision = self.capabilities.revision(inventory)
@@ -630,30 +690,35 @@ class InvestigationProjectService:
                 self.planner.propose_revision(
                     project,
                     revision,
+                    evidence_material=self._materialize_evidence(
+                        project,
+                        tuple(project.admitted_evidence.values()),
+                    ),
                     capabilities=inventory,
                     capability_revision=capability_revision,
                 )
-                if revision is not None
+                if revision is not None and project.accepted_plan is not None
                 else self.planner.propose_initial(
                     project.definition,
                     based_on_event_sequence=project.event_sequence,
+                    repair_request=revision,
                     capabilities=inventory,
                     capability_revision=capability_revision,
                 )
             )
-            accepted = self.plan_admission.accept(project, decision.value)
+            accepted = self.plan_admission.accept(
+                project,
+                decision.value,
+                capabilities=inventory,
+            )
         except ProposalRejected as exc:
             project = self._release(project, reservation)
-            request = ReplanRequest(
-                trigger_kind="admission_feedback",
+            request = self._admission_feedback_request(
+                stage="plan_admission",
                 trigger_ref=f"plan-admission:{project.event_sequence}",
-                revision_scope=exc.feedback.revision_scope,
-                trigger_digest=canonical_digest({
-                    "reason": exc.feedback.reason,
-                    "sequence": project.event_sequence,
-                }),
+                feedback=exc.feedback,
             )
-            if request.trigger_digest in project.replan_request_digests:
+            if self._feedback_retry_limit_reached(project, request):
                 return self._pause_with_wait(
                     project,
                     logical_subgoal_id="planning",
@@ -678,6 +743,23 @@ class InvestigationProjectService:
         ]
         if accepted is not None:
             data.append(PlanAcceptedData(plan=accepted))
+            mapped_subgoal_ids = {
+                logical_subgoal_id
+                for mapping in accepted.proposal.requirement_mappings
+                for logical_subgoal_id in mapping.logical_subgoal_ids
+            }
+            data.extend(
+                WaitingReasonClearedData(
+                    logical_subgoal_id=logical_subgoal_id,
+                    subgoal_version=subgoal_version,
+                )
+                for (logical_subgoal_id, subgoal_version), waiting_reason
+                in project.waiting_reasons.items()
+                if (
+                    waiting_reason.reason == "verification_repair"
+                    and logical_subgoal_id not in mapped_subgoal_ids
+                )
+            )
         if project.state == "planning":
             data.append(StateChangedData(
                 from_state="planning",
@@ -713,10 +795,15 @@ class InvestigationProjectService:
             subgoal.subgoal_version,
             f"proposal:{project.event_sequence}",
         )
+        evidence_material = self._materialize_evidence(
+            project,
+            self._execution_evidence_refs(project, subgoal),
+        )
         try:
             decision = self.execution_proposer.propose(
                 project,
                 subgoal,
+                evidence_material=evidence_material,
                 execution_scope=scope,
                 capabilities=inventory,
             )
@@ -726,12 +813,27 @@ class InvestigationProjectService:
                 decision.value,
                 execution_scope=scope,
                 capabilities=inventory,
+                observed_url_locators=observed_url_locators(
+                    project,
+                    evidence_material,
+                ),
             )
         except ProposalRejected as exc:
-            project = self._release(project, reservation)
+            rejection = ExecutionProposalRejectedData(
+                logical_subgoal_id=subgoal.logical_subgoal_id,
+                subgoal_version=subgoal.subgoal_version,
+                feedback=exc.feedback,
+                rejection_digest=canonical_digest({
+                    "logical_subgoal_id": subgoal.logical_subgoal_id,
+                    "subgoal_version": subgoal.subgoal_version,
+                    "feedback": exc.feedback.model_dump(mode="json"),
+                }),
+            )
             if exc.feedback.disposition == "capability_missing":
+                project = self._release(project, reservation)
                 return self._pause_if_globally_blocked(self._append(
                     project,
+                    rejection,
                     WaitingReasonSetData(waiting_reason=WaitingReason(
                         logical_subgoal_id=subgoal.logical_subgoal_id,
                         subgoal_version=subgoal.subgoal_version,
@@ -740,17 +842,31 @@ class InvestigationProjectService:
                         detail=exc.feedback.reason,
                     )),
                 ))
-            request = ReplanRequest(
-                trigger_kind="admission_feedback",
-                trigger_ref=f"execution-admission:{project.event_sequence}",
-                affected_logical_subgoal_ids=(subgoal.logical_subgoal_id,),
-                revision_scope=(subgoal.logical_subgoal_id,),
-                trigger_digest=canonical_digest({
-                    "reason": exc.feedback.reason,
-                    "subgoal": subgoal.logical_subgoal_id,
-                }),
+            feedback_history = project.execution_proposal_feedback.get(
+                (subgoal.logical_subgoal_id, subgoal.subgoal_version),
+                (),
             )
-            return self._append(project, ReplanRequestedData(request=request))
+            equivalent_feedback_count = sum(
+                previous == exc.feedback for previous in feedback_history
+            )
+            repair_limit = project.definition.budget.same_feedback_revision_limit
+            charged = BudgetChargedData(
+                usage=self._charged_usage(reservation, decision.usage)
+            )
+            if equivalent_feedback_count >= repair_limit:
+                project = self._append(project, charged, rejection)
+                return self._pause_with_wait(
+                    project,
+                    logical_subgoal_id=subgoal.logical_subgoal_id,
+                    subgoal_version=subgoal.subgoal_version,
+                    reason="verification_repair",
+                    authority="user",
+                    detail=(
+                        "execution proposal repair limit reached: "
+                        f"{exc.feedback.reason}"
+                    ),
+                )
+            return self._append(project, charged, rejection)
         except Exception as exc:
             project = self._release(project, reservation)
             return self._pause_with_wait(
@@ -986,10 +1102,19 @@ class InvestigationProjectService:
         proposal: SubGoalExecutionProposal,
         scope: ExecutionScope,
     ) -> ExecutionResult:
+        evidence_material = self._materialize_evidence(
+            project,
+            tuple(project.admitted_evidence.values()),
+        )
         decision = self.synthesis_port.synthesize_subgoal(
             project,
             proposal,
+            evidence_material=evidence_material,
             execution_scope=scope,
+        )
+        source_evidence = self._referenced_source_evidence(
+            project,
+            decision.value.evidence_refs,
         )
         producer_key = canonical_digest({
             "project_id": project.definition.project_id,
@@ -1006,8 +1131,9 @@ class InvestigationProjectService:
             kind="subgoal_synthesis",
             content=decision.value.content,
             content_digest=decision.value.content_digest,
-            source_artifact_refs=proposal.operation.input_artifact_refs,
+            source_artifact_refs=self._evidence_artifact_refs(source_evidence),
             evidence_refs=decision.value.evidence_refs,
+            limitations=decision.value.limitations,
         )
         execution_ref = ExecutionRef(
             execution_id=scope.execution_id,
@@ -1089,6 +1215,51 @@ class InvestigationProjectService:
             if item.logical_subgoal_id == proposal.logical_subgoal_id
             and item.subgoal_version == proposal.subgoal_version
         )
+        verification_evidence = admitted
+        if proposal.operation.kind == "synthesis":
+            generated_artifact = next(
+                (
+                    item.artifact_ref
+                    for item in admitted
+                    if item.artifact_ref is not None
+                ),
+                None,
+            )
+            if generated_artifact is None:
+                return self._pause_with_wait(
+                    project,
+                    logical_subgoal_id=proposal.logical_subgoal_id,
+                    subgoal_version=proposal.subgoal_version,
+                    reason="verification_repair",
+                    authority="runtime",
+                    detail="synthesis produced no generated artifact",
+                )
+            generated = self.artifact_writer.read_generated(
+                generated_artifact,
+                principal=project.definition.principal,
+                security_scope=project.definition.security_scope,
+            )
+            verification_evidence = (
+                *admitted,
+                *self._referenced_source_evidence(
+                    project,
+                    generated.evidence_refs,
+                ),
+            )
+        try:
+            evidence_material = self._materialize_evidence(
+                project,
+                verification_evidence,
+            )
+        except (ValueError, PermissionError, FileNotFoundError) as exc:
+            return self._pause_with_wait(
+                project,
+                logical_subgoal_id=proposal.logical_subgoal_id,
+                subgoal_version=proposal.subgoal_version,
+                reason="verification_repair",
+                authority="runtime",
+                detail=f"evidence materialization failed: {exc}",
+            )
         try:
             project, verification_reservation = self._reserve_model(
                 project,
@@ -1107,7 +1278,8 @@ class InvestigationProjectService:
         verification = self.verifier.verify_subgoal(
             project,
             subgoal,
-            admitted,
+            verification_evidence,
+            evidence_material=evidence_material,
             execution_scope=scope,
         )
         project = self._append(
@@ -1181,6 +1353,89 @@ class InvestigationProjectService:
                 )))
         return self._append(project, *data)
 
+    def _materialize_evidence(
+        self,
+        project: InvestigationProject,
+        evidence: tuple[EvidenceRef, ...],
+    ) -> tuple[EvidenceMaterial, ...]:
+        material: list[EvidenceMaterial] = []
+        for item in evidence:
+            content = item.summary
+            if item.artifact_ref is not None:
+                stored = self.artifact_writer.read_generated(
+                    item.artifact_ref,
+                    principal=project.definition.principal,
+                    security_scope=project.definition.security_scope,
+                )
+                if stored.content_digest != item.content_digest:
+                    raise ValueError("evidence artifact content digest mismatch")
+                content = stored.content
+            if item.source == "tool:web_search":
+                content = _web_search_evidence_context(content)
+            material.append(EvidenceMaterial(reference=item, content=content))
+        return tuple(material)
+
+    @staticmethod
+    def _execution_evidence_refs(
+        project: InvestigationProject,
+        subgoal: SubGoalDefinitionVersion,
+    ) -> tuple[EvidenceRef, ...]:
+        scoped_keys = execution_evidence_subgoal_keys(project, subgoal)
+        scoped_executions = {
+            (
+                execution_ref.execution_id,
+                execution_ref.execution_digest,
+            )
+            for key, execution_ref in project.execution_refs.items()
+            if key in scoped_keys
+        }
+        return tuple(
+            evidence
+            for evidence in project.admitted_evidence.values()
+            if (
+                evidence.execution_ref.execution_id,
+                evidence.execution_ref.execution_digest,
+            )
+            in scoped_executions
+        )
+
+    def _referenced_source_evidence(
+        self,
+        project: InvestigationProject,
+        evidence_refs: tuple[str, ...],
+    ) -> tuple[EvidenceRef, ...]:
+        if not evidence_refs:
+            raise ValueError("generated content requires direct admitted evidence")
+        unknown = set(evidence_refs) - set(project.admitted_evidence)
+        if unknown:
+            raise ValueError(
+                f"generated content cites unknown evidence: {sorted(unknown)}"
+            )
+        selected = tuple(
+            project.admitted_evidence[evidence_id]
+            for evidence_id in dict.fromkeys(evidence_refs)
+        )
+        derived = tuple(
+            item.evidence_id for item in selected if item.source == "synthesis"
+        )
+        if derived:
+            raise ValueError(
+                "generated content cannot use derived synthesis as source evidence: "
+                f"{list(derived)}"
+            )
+        return selected
+
+    @staticmethod
+    def _evidence_artifact_refs(
+        evidence: tuple[EvidenceRef, ...],
+    ) -> tuple[ResourceRef, ...]:
+        unique: dict[tuple[str, int], ResourceRef] = {}
+        for item in evidence:
+            if item.artifact_ref is not None:
+                key = (item.artifact_ref.resource_id, item.artifact_ref.revision)
+                unique[key] = item.artifact_ref
+        return tuple(unique.values())
+
     def _complete(self, project: InvestigationProject) -> InvestigationProject:
         if project.accepted_plan is None:
             return project
@@ -1218,12 +1473,15 @@ class InvestigationProjectService:
                 decision = self.synthesis_port.synthesize_final(
                     project,
                     project.accepted_plan,
+                    evidence_material=self._materialize_evidence(
+                        project,
+                        tuple(project.admitted_evidence.values()),
+                    ),
                     execution_scope=scope,
                 )
-                source_artifacts = tuple(
-                    artifact
-                    for outcome in project.outcomes.values()
-                    for artifact in outcome.artifact_refs
+                source_evidence = self._referenced_source_evidence(
+                    project,
+                    decision.value.evidence_refs,
                 )
                 artifact_ref = self.artifact_writer.write_generated(
                     security_scope=project.definition.security_scope,
@@ -1233,8 +1491,11 @@ class InvestigationProjectService:
                     kind="final_report",
                     content=decision.value.content,
                     content_digest=decision.value.content_digest,
-                    source_artifact_refs=source_artifacts,
+                    source_artifact_refs=self._evidence_artifact_refs(
+                        source_evidence
+                    ),
                     evidence_refs=decision.value.evidence_refs,
+                    limitations=decision.value.limitations,
                 )
                 project = self._append(
                     project,
@@ -1260,6 +1521,10 @@ class InvestigationProjectService:
                     evidence_refs=stored.evidence_refs,
                     limitations=stored.limitations,
                 )
+                source_evidence = self._referenced_source_evidence(
+                    project,
+                    generated.evidence_refs,
+                )
             project, verification_reservation = self._reserve_model(
                 project,
                 category="semantic_verification",
@@ -1271,6 +1536,10 @@ class InvestigationProjectService:
             verified = self.verifier.verify_final(
                 project,
                 generated,
+                evidence_material=self._materialize_evidence(
+                    project,
+                    source_evidence,
+                ),
                 execution_scope=scope,
             )
         except Exception as exc:
@@ -1292,16 +1561,30 @@ class InvestigationProjectService:
                 )
             ),
         )
-        if not verified.value:
-            project = self._append(
+        if not verified.value.passed:
+            return self._append(
                 project,
+                WaitingReasonSetData(waiting_reason=WaitingReason(
+                    logical_subgoal_id="final-report",
+                    subgoal_version=project.accepted_plan.plan_version,
+                    reason="verification_repair",
+                    recovery_authority="user",
+                    detail=(
+                        verified.value.feedback
+                        or "final report failed semantic verification"
+                    ),
+                )),
                 StateChangedData(
                     from_state="completing",
                     to_state="active",
                     reason="final_verification_failed",
                 ),
+                StateChangedData(
+                    from_state="active",
+                    to_state="paused",
+                    reason="final_verification_failed",
+                ),
             )
-            return project
         coverage = project.requirement_coverage()
         report = CompletionReport(
             project_id=project.definition.project_id,
@@ -1335,6 +1618,7 @@ class InvestigationProjectService:
     ) -> InvestigationProject:
         if project.state != "active":
             return project
+        ready = project.ready_subgoals()
         dispatchable = any(
             key not in project.execution_refs
             and key not in project.outcomes
@@ -1343,7 +1627,7 @@ class InvestigationProjectService:
         )
         if (
             project.waiting_reasons
-            and not project.ready_subgoals()
+            and not ready
             and not dispatchable
         ):
             return self._append(project, StateChangedData(
@@ -1351,6 +1635,53 @@ class InvestigationProjectService:
                 to_state="paused",
                 reason="all_remaining_required_work_waiting",
             ))
+        if (
+            project.accepted_plan is not None
+            and not ready
+            and not dispatchable
+        ):
+            coverage = project.requirement_coverage()
+            unmet_requirement_ids = tuple(sorted(
+                requirement_id
+                for requirement_id, status in coverage.items()
+                if status == "unmet"
+            ))
+            if unmet_requirement_ids:
+                mappings = {
+                    item.requirement_id: item.logical_subgoal_ids
+                    for item in project.accepted_plan.proposal.requirement_mappings
+                }
+                affected_logical_subgoal_ids = tuple(sorted({
+                    logical_subgoal_id
+                    for requirement_id in unmet_requirement_ids
+                    for logical_subgoal_id in mappings.get(requirement_id, ())
+                }))
+                frozen_keys = frozen_subgoal_keys(project)
+                revision_scope = tuple(
+                    item.logical_subgoal_id
+                    for item in project.accepted_plan.proposal.subgoals
+                    if (
+                        item.logical_subgoal_id,
+                        item.subgoal_version,
+                    ) not in frozen_keys
+                )
+                trigger_payload = {
+                    "plan_digest": project.accepted_plan.plan_digest,
+                    "coverage": coverage,
+                    "affected_logical_subgoal_ids": affected_logical_subgoal_ids,
+                    "revision_scope": revision_scope,
+                }
+                return self._append(
+                    project,
+                    ReplanRequestedData(request=ReplanRequest(
+                        trigger_kind="coverage_deadlock",
+                        trigger_ref=project.accepted_plan.plan_digest,
+                        affected_requirement_ids=unmet_requirement_ids,
+                        affected_logical_subgoal_ids=affected_logical_subgoal_ids,
+                        revision_scope=revision_scope,
+                        trigger_digest=canonical_digest(trigger_payload),
+                    )),
+                )
         return project
 
     def _pause_if_globally_blocked(
@@ -1552,11 +1883,101 @@ class InvestigationProjectService:
             return project.pending_replan_requests[-1]
         raise RuntimeError("project has a pending replan digest but no typed request")
 
+    @staticmethod
+    def _admission_feedback_request(
+        *,
+        stage: str,
+        trigger_ref: str,
+        feedback: DecisionFeedback,
+        affected_logical_subgoal_ids: tuple[str, ...] = (),
+        revision_scope: tuple[str, ...] | None = None,
+    ) -> ReplanRequest:
+        effective_revision_scope = (
+            feedback.revision_scope
+            if revision_scope is None
+            else revision_scope
+        )
+        return ReplanRequest(
+            trigger_kind="admission_feedback",
+            trigger_ref=trigger_ref,
+            affected_logical_subgoal_ids=affected_logical_subgoal_ids,
+            revision_scope=effective_revision_scope,
+            decision_feedback=feedback,
+            trigger_digest=canonical_digest({
+                "stage": stage,
+                "feedback": feedback.model_dump(mode="json"),
+                "affected_logical_subgoal_ids": affected_logical_subgoal_ids,
+                "revision_scope": effective_revision_scope,
+            }),
+        )
+
+    @staticmethod
+    def _feedback_retry_limit_reached(
+        project: InvestigationProject,
+        request: ReplanRequest,
+    ) -> bool:
+        equivalent_feedback_count = sum(
+            existing.trigger_kind == "admission_feedback"
+            and existing.trigger_digest == request.trigger_digest
+            for existing in project.pending_replan_requests
+        )
+        return (
+            equivalent_feedback_count
+            >= project.definition.budget.same_feedback_revision_limit
+        )
+
+
+_ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_ENGLISH_DATE_PATTERN = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+    r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},\s+\d{4}\b",
+    re.IGNORECASE,
+)
+
+
+def _web_search_evidence_context(content: str) -> str:
+    """Build a compact, lossless-for-verification view of Web search results."""
+    try:
+        payload = json.loads(content)
+        results = payload["data"]["results"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return content
+    if not isinstance(results, list):
+        return content
+    compact_results = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        title = str(result.get("title") or "")
+        url = str(result.get("url") or "")
+        snippet = str(result.get("snippet") or "")
+        searchable = "\n".join((title, snippet))
+        explicit_dates = tuple(dict.fromkeys((
+            *_ISO_DATE_PATTERN.findall(searchable),
+            *_ENGLISH_DATE_PATTERN.findall(searchable),
+        )))
+        compact_results.append({
+            "title": title,
+            "url": url,
+            "host": (urlparse(url).hostname or "").lower(),
+            "provider_published_at": result.get("published_at"),
+            "explicit_dates_in_title_or_snippet": explicit_dates,
+            "snippet": snippet,
+        })
+    return json.dumps(
+        {"data": {"results": compact_results}, "tool": "web_search"},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
 
 __all__ = [
     "ApproveInvestigationCommand",
     "CancelInvestigationProject",
     "CreateInvestigationProject",
+    "GetInvestigationReport",
     "InvestigationProjectService",
     "ProcessInvestigationProject",
     "PauseInvestigationProject",

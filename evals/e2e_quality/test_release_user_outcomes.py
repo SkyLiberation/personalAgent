@@ -84,6 +84,11 @@ def _release_profile_settings(settings: Settings) -> Settings:
             model=source.model,
             timeout_seconds=timeout_seconds,
             max_retries=source.max_retries,
+            output_transport=(
+                source.output_transport
+                if isinstance(source, StructuredConfig)
+                else "json_schema"
+            ),
             extra_body=(source.extra_body if isinstance(source, StructuredConfig) else {}),
         ),
     })
@@ -126,6 +131,16 @@ def _child_environment(settings: Settings, temp_dir: Path) -> dict[str, str]:
     _set_optional(env, "STRUCTURED_MODEL", settings.structured.model)
     _set_optional(
         env,
+        "STRUCTURED_OUTPUT_TRANSPORT",
+        settings.structured.output_transport,
+    )
+    _set_optional(
+        env,
+        "STRUCTURED_EXTRA_BODY",
+        json.dumps(settings.structured.extra_body, separators=(",", ":")),
+    )
+    _set_optional(
+        env,
         "PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS",
         settings.structured.timeout_seconds,
     )
@@ -147,6 +162,14 @@ def _child_environment(settings: Settings, temp_dir: Path) -> dict[str, str]:
         env,
         "PERSONAL_AGENT_OPENAI_MAX_RETRIES",
         settings.openai.max_retries,
+    )
+    _set_optional(env, "FIRECRAWL_API_KEY", settings.firecrawl.api_key)
+    _set_optional(env, "FIRECRAWL_BASE_URL", settings.firecrawl.base_url)
+    _set_optional(env, "FIRECRAWL_TIMEOUT_MS", settings.firecrawl.timeout_ms)
+    _set_optional(
+        env,
+        "PERSONAL_AGENT_URL_CAPTURE_PROVIDER",
+        settings.url_capture_provider,
     )
     _set_optional(env, "PERSONAL_AGENT_GRAPHITI_URI", settings.graphiti.uri)
     _set_optional(env, "PERSONAL_AGENT_GRAPHITI_USER", settings.graphiti.user)

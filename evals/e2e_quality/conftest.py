@@ -69,7 +69,7 @@ def pytest_addoption(parser) -> None:
     group.addoption(
         "--e2e-require-complete-matrix",
         action="store_true",
-        help="fail collection unless every native E01-E13 claim has release evidence",
+        help="fail collection unless every native E01-E14 claim has release evidence",
     )
 
 

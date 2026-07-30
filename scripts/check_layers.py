@@ -21,9 +21,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "domain": frozenset({"kernel"}),
     "capabilities": frozenset({"kernel"}),
     "execution": frozenset({"capabilities", "kernel"}),
-    "skills": frozenset({"kernel"}),
-    "runtime": frozenset({"capabilities", "execution", "kernel", "skills"}),
-    "context": frozenset({"kernel", "runtime"}),
+    "runtime": frozenset({"capabilities", "execution", "kernel"}),
     "memory": frozenset({"kernel"}),
     "application": frozenset({"capabilities", "domain", "kernel", "memory"}),
     "infra": frozenset({"application", "capabilities", "domain", "kernel", "runtime"}),
@@ -31,10 +29,9 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "governance": frozenset({"capabilities", "kernel", "runtime", "tools"}),
     "planning": frozenset({"capabilities", "execution", "governance", "kernel", "runtime", "tools"}),
     "agents": frozenset({"capabilities", "governance", "infra", "kernel", "runtime"}),
-    "verification": frozenset({"capabilities", "governance", "runtime"}),
     "orchestration": frozenset({
-        "agents", "application", "capabilities", "context", "execution", "governance",
-        "domain", "infra", "kernel", "memory", "planning", "runtime", "tools", "verification",
+        "agents", "application", "capabilities", "execution", "governance",
+        "domain", "infra", "kernel", "memory", "planning", "runtime", "tools",
     }),
     "adapters": frozenset({
         "application", "domain", "infra", "kernel", "orchestration", "tools"

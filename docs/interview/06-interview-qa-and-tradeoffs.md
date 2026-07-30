@@ -139,50 +139,50 @@
 - 全部 public Tool schema 每轮进入 Context，Tool 增多后会影响延迟和选择准确率；
 - 完整真实 Provider E2E 约 30 分钟，仍需更合理的快速门禁分层。
 
-## 22. 当前架构相比现代优秀 Agent Harness 的优点
+## 22. 这套框架的核心理念是什么，为什么不是照抄优秀 Agent
 
-1. 模型 loop、Tool、MCP、A2A、Observation 和 subagent 已形成统一 Interaction；
-2. 权限、预算和副作用不依赖 Prompt；
-3. typed Proposal 降低自由 JSON 解析风险；
-4. Conversation、领域 Workflow、Investigation Project 按动态性和 durable 边界分担复杂度；
-5. 只有 Project Plan 有 ready set、coverage 和恢复等生产消费者；
-6. Command/Receipt 支持真实副作用恢复；
-7. E2E 同时断言结果和反事实，并区分 release 与 diagnostic evidence；
-8. 删除旧通用 Task/GoalGraph 主链，减少双轨状态。
+参考回答：
+
+> 核心不是 object-root JSON 或某个 Agent SDK，而是“模型提议、系统裁决、执行产事实、证据关
+> 目标”。模型 loop、Tool、MCP、A2A 和 subagent 都进入 typed Interaction，但模型输出只是
+> Proposal；权限、预算和副作用不依赖 Prompt；Tool success、Agent completed、Verifier passed
+> 和 Domain Completion 互不冒充。Conversation、领域 Workflow、Investigation Project 根据路径
+> 动态性和 durable 边界分担复杂度，只有 Project Plan 有 ready set、coverage 和恢复等生产
+> 消费者。这与现代 Harness 的 typed tool loop、guardrail 和 handoff 方向一致，但当前 object-root
+> 是由本项目 terra Provider 失败证据选择的 wire format，不是从某个框架复制的顶层架构。
 
 ## 23. 当前最大的产品架构缺口
 
 参考回答：
 
-> 当前普通 Conversation 只加载 `public_agent` Tool。保存、删除、Subscription 变更等写操作属于 `scoped_agent` 或 `workflow_activity`，因此固定 Workflow 虽然可通过专用 API 执行，但还不能从自然语言对话统一进入。下一步应该增加基于身份和 Policy 的 scoped capability projection，以及对话内 Prepare Command、Pending Confirmation、Resume 和 Receipt Observation，而不是恢复关键词 Router。
+> 当前缺口已经不是“自然语言完全不能进入写操作”。B02 先证明整条 user message 固化会污染 Claim；E14 随后证明模型可逐字选择 user-authored knowledge span，Admission 机械校验来源，系统冻结 exact span，经确认、恢复、Workspace 唯一写入口保存精确结论，并反证“请求保存/先确认”控制语义没有进入 Claim。删除、订阅、“先核对冲突再保存”、assistant candidate、多实例并发和 commit/Receipt crash window 仍不能从 E14 外推。
 
-## 24. 下一步怎样补自然语言写操作
+## 24. 首条自然语言写操作怎样落地，下一步怎样扩展
 
 目标链路：
 
 ```text
 User message
-  -> model chooses typed Application Capability Proposal
-  -> CapabilityGateway checks identity/scope/policy
-  -> prepare immutable Command
+  -> model chooses prepare_conversation_knowledge_save
+  -> model copies exact user-authored knowledge span + source index
+  -> deterministic admission validates exact source membership
+  -> Conversation freezes immutable Command + one digest
   -> pending confirmation returned to Conversation
   -> user confirms
-  -> execute frozen Command
-  -> Receipt Observation
-  -> parent FinalMessage
+  -> WorkspaceService.solidify_conversation
+  -> typed Receipt
 ```
 
-只向模型暴露粗粒度能力，例如：
-
-- `prepare_conversation_solidify`；
-- `prepare_knowledge_delete`；
-- `prepare_research_subscription`。
-
-内部 Activity 继续由 Workflow 控制。
+已落地能力只接收逐字 `text_span` 与 source index；Admission 不理解或补写内容，只验证原文
+归属，Command/digest 冻结 exact span。确认前零写入，确认后也不重新调用 Conversation 模型
+生成 payload。删除和订阅是否需要类似粗粒度能力，必须由它们各自的 baseline
+E2E 证明，不能为了“统一”预先注册。固定事务不变量仍由对应 Application Workflow 或 Use Case
+控制。
 
 ## 25. Tool 很多时怎么扩展
 
-当前做法把 public Tool definitions 全部注入模型。规模扩大后应增加两阶段发现：
+当前做法把 public Tool definitions 全部注入模型。只有自然用户场景证明全量 schema 导致可重复
+误选、延迟或 context budget failure 后，才准入两阶段发现：
 
 ```text
 visible capability summary
@@ -197,15 +197,21 @@ visible capability summary
 
 参考回答：
 
-1. 打通一个端到端的 Conversation governed action，优先选择显式保存或删除：自然语言 Proposal、确认、执行、Receipt、恢复和反事实 E2E；
-2. 将 EffectiveCapabilities 改为 identity/policy-aware，并只暴露粗粒度 Application Capability；
-3. 在 clean revision 重跑完整矩阵，修复全仓历史 lint，建立可采信 release archive。
+1. 先修复当前已经实际失败的 package DAG gate，并清理会误导开发的旧主链文档；
+2. 在 clean revision 重跑当前完整 catalog 和 release gate，建立可采信的发布证据；
+3. 完成现有门禁后，再从正式入口执行“冲突核对后保存”或另一个明确用户目标的 baseline；只有
+   产品行为失败时才扩展能力。
 
 ## 27. 如何评价当前设计是否合理
 
 参考回答：
 
-> 如果目标是安全、可维护并支持动态长任务的知识产品后端，当前三主链方向合理：短请求不承担 durable 成本，固定事务不交给 Planner，只有动态长任务创建 Project。如果目标是所有产品操作都能从统一聊天入口完成，目前还不完整。判断依据不是类图：Conversation 和产品 Workflow 有 release E2E，Project 目前只有 scripted/frozen Port 的诊断证据，同时还缺少自然语言到 governed write Workflow 的整链证明。
+> 如果目标是安全、可维护并支持动态长任务的知识产品后端，当前三主链方向合理：短请求不承担
+> 完整 Project 成本，固定事务不交给 Planner，只有动态且必须 durable 的长任务创建 Project。
+> 判断依据不是类图：Conversation、固定产品 Workflow 和首条 governed save 有产品 E2E；
+> Project 除 LT01-LT13 诊断证据外，IP01 已从 live HTTP/worker/model/Web Search 路径交付报告。
+> E14 仍只证明 exact-span 保存，IP01 仍只证明一个 live 调查目标；当前 package DAG gate 失败且
+> clean complete matrix 未建立，因此合理的框架方向不能被夸大成当前已经具备发布资格。
 
 ## 28. 一个失败案例怎么定位
 
@@ -222,4 +228,8 @@ visible capability summary
 
 ## 29. 面试收尾口径
 
-> 我在这个项目里最重视的不是堆 Agent 框架，而是按业务约束选择执行拓扑：短动态请求进入 Conversation，固定事务进入领域 Workflow，动态且必须 durable 的长任务进入 Investigation Project。模型可以理解目标、选择能力和根据 Observation 调整，但权限、状态机、幂等、副作用和完成证据必须由系统拥有。历史 23/23 和当前定向 archive 证明对应产品/主循环现场可执行，LT01-LT13 证明 Project runtime 协议；我也明确区分它们与当前尚未闭合的自然语言写操作、Project live provider E2E、分布式 Interaction 恢复和 clean release evidence。
+> 我在这个项目里最重视的不是堆 Agent 框架，而是建立清晰的权力链：模型负责开放语义 Proposal，
+> Admission 和 Policy 负责准入，Gateway 产生执行事实，Verifier 与 Completion Gate 关闭用户
+> 目标。短动态请求、固定事务和 durable 动态长任务分别进入 Conversation、领域 Workflow 和
+> Investigation Project。E14 与 IP01 分别证明一个 governed save 和一个 live investigation
+> 目标，历史 23/23、LT 诊断矩阵与这些定向 archive 都不能冒充当前 clean release evidence。

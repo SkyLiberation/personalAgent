@@ -1,5 +1,8 @@
 # Microsoft GraphRAG Provider
 
+> 状态：本文引用的 Provider/Ask/Config 路径已迁移，尚未按当前生产代码与评测重新取证。
+> 仅保留作历史集成参考，不能据此声称 Microsoft GraphRAG 是当前已验证 Provider。
+
 本文记录 Microsoft GraphRAG (`microsoft/graphrag`) 在本项目中的接入方式，以及它和 Graphiti 的核心差异。
 
 ## 接入方式

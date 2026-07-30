@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 
@@ -39,6 +40,7 @@ class Settings(_StrictBase):
     default_user: str = "default"
     postgres_url: str | None = None
     max_verify_retries: int = 1
+    url_capture_provider: Literal["firecrawl", "builtin"] = "builtin"
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     ms_graphrag: MicrosoftGraphRagConfig = Field(default_factory=MicrosoftGraphRagConfig)
@@ -62,6 +64,10 @@ class Settings(_StrictBase):
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     reflection_replay: ReflectionReplaySettings = Field(default_factory=ReflectionReplaySettings)
+
+    @property
+    def web_search_available(self) -> bool:
+        return bool(self.web_search.api_key)
 
     @classmethod
     def from_env(cls) -> "Settings":

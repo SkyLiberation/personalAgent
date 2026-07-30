@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Iterator
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -55,18 +56,68 @@ def live_web_search_process(
     server_temp_dir: Path,
 ) -> Iterator[LiveWebProcess]:
     settings = _require_live_dependencies()
+    provider = settings.web_search.provider.strip().lower()
     _require_profile(
-        settings.web_search.api_key,
-        "web-search product E2E requires PERSONAL_AGENT_WEB_SEARCH_API_KEY",
+        settings.web_search_available,
+        "web-search product E2E requires the configured provider API key",
     )
     overrides = {
-        "PERSONAL_AGENT_WEB_SEARCH_PROVIDER": settings.web_search.provider,
-        "PERSONAL_AGENT_WEB_SEARCH_API_KEY": str(settings.web_search.api_key),
-        "PERSONAL_AGENT_WEB_SEARCH_BASE_URL": str(settings.web_search.base_url or ""),
+        "PERSONAL_AGENT_WEB_SEARCH_PROVIDER": provider,
+        "PERSONAL_AGENT_URL_CAPTURE_PROVIDER": "builtin",
     }
+    overrides.update({
+        "PERSONAL_AGENT_WEB_SEARCH_API_KEY": str(settings.web_search.api_key),
+        "PERSONAL_AGENT_WEB_SEARCH_BASE_URL": str(
+            settings.web_search.base_url or ""
+        ),
+    })
     yield from _yield_started_server(
         _new_live_web_process(server_temp_dir, settings, child_env_overrides=overrides)
     )
+
+
+@pytest.fixture(scope="module")
+def live_investigation_worker(
+    server_temp_dir: Path,
+    live_web_search_process: LiveWebProcess,
+) -> Iterator[tuple[subprocess.Popen[bytes], Path]]:
+    log_path = server_temp_dir / "investigation-worker.log"
+    log_handle = log_path.open("ab")
+    process = subprocess.Popen(
+        (
+            sys.executable,
+            "-m",
+            "personal_agent.adapters.cli.main",
+            "worker",
+            "--queue",
+            "investigation",
+            "--poll-seconds",
+            "0.1",
+        ),
+        cwd=live_web_search_process.cwd,
+        env=live_web_search_process.child_env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                pytest.fail(
+                    "Investigation worker exited during startup: "
+                    + log_path.read_text(encoding="utf-8", errors="replace")
+                )
+            time.sleep(0.1)
+        yield process, log_path
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        log_handle.close()
 
 
 @pytest.fixture(scope="module")
@@ -87,8 +138,8 @@ def live_delivery_process(
 ) -> Iterator[LiveWebProcess]:
     settings = _require_live_dependencies()
     _require_profile(
-        settings.web_search.api_key,
-        "scheduled-intelligence E2E requires PERSONAL_AGENT_WEB_SEARCH_API_KEY",
+        settings.web_search_available,
+        "scheduled-intelligence E2E requires the configured search provider key",
     )
     yield from _yield_started_server(_new_live_web_process(server_temp_dir, settings))
 
@@ -99,6 +150,7 @@ def _request_json(
     method: str = "GET",
     payload: dict[str, object] | None = None,
     timeout: float = 300,
+    expected_status: int = 200,
 ) -> object:
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = Request(
@@ -108,7 +160,7 @@ def _request_json(
         method=method,
     )
     with urlopen(request, timeout=timeout) as response:
-        assert response.status == 200
+        assert response.status == expected_status
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -658,6 +710,368 @@ def test_product_e08_ask_then_explicit_save(
         request,
         "E08.product_http",
         {"ask": answer, "explicit_save": saved},
+        profile="baseline",
+    )
+
+
+def _run_live_investigation_report_journey(
+    live_web_search_process: LiveWebProcess,
+    live_investigation_worker: tuple[subprocess.Popen[bytes], Path],
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+    *,
+    evidence_id: str,
+) -> dict[str, object]:
+    worker, worker_log_path = live_investigation_worker
+    marker = uuid4().hex
+    tenant_id = f"tenant-b03-{marker}"
+    workspace_id = f"workspace-b03-{marker}"
+    user_id = f"user-b03-{marker}"
+    goal = (
+        "调研 2025-03-01 至 2025-06-30 公开发布的 MCP 与 A2A "
+        "互操作规范版本或发布变化，至少比较两项；排除产品博客、非公开草案和没有正式发布说明的"
+        f"实现代码；给出来源和局限。验收标记：{marker}。"
+    )
+    created = _request_json(
+        f"{live_web_search_process.base_url}/api/investigation-projects",
+        method="POST",
+        expected_status=202,
+        payload={
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "title": "Agent 协议变化调研",
+            "goal": goal,
+            "requirements": [{
+                "requirement_id": "recent-protocol-changes",
+                "statement": (
+                    "比较至少两项指定时间窗口内公开发布的 MCP、A2A 或 "
+                    "Agent-to-Agent 互操作规范版本或发布变化。"
+                ),
+                "acceptance_contract": (
+                    "最终报告包含至少两项正式规范变化、来源、日期和明确局限，"
+                    "并遵守排除项。"
+                ),
+            }],
+            "budget": {
+                "total_tokens": 300_000,
+                "total_cost": 20,
+                "max_tool_calls": 12,
+                "max_agent_calls": 0,
+                "max_plan_revisions": 4,
+                "same_feedback_revision_limit": 1,
+                "planning_tokens": 120_000,
+                "execution_proposal_tokens": 40_000,
+                "semantic_verification_tokens": 80_000,
+                "synthesis_tokens": 60_000,
+                "external_delegation_tokens": 0,
+            },
+            "idempotency_key": f"b03-{marker}",
+        },
+    )
+    project_id = str(created["project_id"])
+    query = urlencode({
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "user_id": user_id,
+    })
+    final_view = created
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        if worker.poll() is not None:
+            pytest.fail(
+                "Investigation worker exited before terminal project state: "
+                + worker_log_path.read_text(encoding="utf-8", errors="replace")
+            )
+        final_view = _get_json(
+            f"{live_web_search_process.base_url}/api/investigation-projects/"
+            f"{project_id}?{query}"
+        )
+        if final_view["state"] in {"completed", "failed", "cancelled", "paused"}:
+            break
+        time.sleep(1)
+
+    worker_log = worker_log_path.read_text(encoding="utf-8", errors="replace")
+    completion = final_view.get("completion_report")
+    report_response = None
+    report_error = None
+    if final_view["state"] == "completed" and completion:
+        try:
+            report_response = _get_json(
+                f"{live_web_search_process.base_url}/api/investigation-projects/"
+                f"{project_id}/report?{query}"
+            )
+        except HTTPError as exc:
+            report_error = {
+                "status": exc.code,
+                "body": exc.read().decode("utf-8", errors="replace"),
+            }
+    user_readable_report = (
+        report_response.get("content")
+        if isinstance(report_response, dict)
+        else None
+    )
+    environment_failure_markers = (
+        "structured parse failed",
+        "ModelCallDeadlineExceeded",
+        "provider call exceeded",
+        "NOT_ENOUGH_BALANCE",
+        "HTTP 401",
+        "HTTP 402",
+        "HTTP 429",
+        "HTTP 432",
+        "Error code: 503",
+        "exceeds your plan's set usage limit",
+        "local_overload",
+    )
+    failure_evidence = worker_log + json.dumps(final_view, ensure_ascii=False)
+    environment_failed = any(
+        marker in failure_evidence for marker in environment_failure_markers
+    )
+    delivered = bool(
+        final_view["state"] == "completed"
+        and completion
+        and completion.get("final_artifact_ref")
+        and isinstance(user_readable_report, str)
+        and user_readable_report.strip()
+    )
+    accepted_plan = final_view.get("accepted_plan") or {}
+    accepted_proposals = final_view.get("accepted_execution_proposals") or []
+    proposal_keys = [
+        (item["logical_subgoal_id"], item["subgoal_version"])
+        for item in accepted_proposals
+    ]
+    repeated_proposal_keys = sorted({
+        key for key in proposal_keys if proposal_keys.count(key) > 1
+    })
+    repair_observation = {
+        "accepted_plan_version": int(accepted_plan.get("plan_version") or 0),
+        "verification_wait_count": sum(
+            item.get("reason") == "verification_repair"
+            for item in final_view.get("waiting_reasons") or []
+        ),
+        "repair_execution_proposal_count": sum(
+            int(item.get("plan_version") or 0) > 1
+            for item in accepted_proposals
+        ),
+        "repeated_execution_proposal_keys": [list(key) for key in repeated_proposal_keys],
+    }
+    _record(
+        trace_archive,
+        request,
+        evidence_id,
+        {
+            "natural_user_goal": goal,
+            "created": created,
+            "final_view": final_view,
+            "worker_log_tail": worker_log[-20_000:],
+            "environment_failed": environment_failed,
+            "user_readable_report_present": bool(user_readable_report),
+            "report_response": report_response,
+            "report_error": report_error,
+            "delivered": delivered,
+            "repair_observation": repair_observation,
+        },
+        profile="baseline+web_search",
+    )
+    return {
+        "final_view": final_view,
+        "environment_failed": environment_failed,
+        "report_response": report_response,
+        "delivered": delivered,
+        "repair_observation": repair_observation,
+    }
+
+
+def test_baseline_b03_live_investigation_has_no_user_readable_report(
+    live_web_search_process: LiveWebProcess,
+    live_investigation_worker: tuple[subprocess.Popen[bytes], Path],
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    journey = _run_live_investigation_report_journey(
+        live_web_search_process,
+        live_investigation_worker,
+        trace_archive,
+        request,
+        evidence_id="B03.live_investigation_report_baseline",
+    )
+    if journey["environment_failed"]:
+        pytest.fail("live Investigation baseline failed at model/provider boundary")
+    assert not journey["delivered"]
+    observation = journey["repair_observation"]
+    assert observation["verification_wait_count"] > 0
+    assert observation["repeated_execution_proposal_keys"] == []
+
+
+def test_product_ip01_live_investigation_report(
+    live_web_search_process: LiveWebProcess,
+    live_investigation_worker: tuple[subprocess.Popen[bytes], Path],
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    journey = _run_live_investigation_report_journey(
+        live_web_search_process,
+        live_investigation_worker,
+        trace_archive,
+        request,
+        evidence_id="IP01.product_http",
+    )
+    if journey["environment_failed"]:
+        pytest.fail("live Investigation target failed at model/provider boundary")
+    final_view = journey["final_view"]
+    assert isinstance(final_view, dict)
+    assert final_view["state"] == "completed"
+    assert final_view["waiting_reasons"] == []
+    observation = journey["repair_observation"]
+    assert observation["repeated_execution_proposal_keys"] == []
+    completion = final_view["completion_report"]
+    assert completion["coverage"]["recent-protocol-changes"] == "verified"
+    assert "unmet" not in completion["coverage"].values()
+    assert final_view["commands"] == []
+    report = journey["report_response"]
+    assert isinstance(report, dict)
+    content = str(report["content"])
+    assert journey["delivered"]
+    assert content.count("2025-") >= 2
+    assert content.lower().count("http") >= 2
+    assert "局限" in content or "limitation" in content.lower()
+    assert "blog.modelcontextprotocol.io" not in content.lower()
+    assert "developers.googleblog.com" not in content.lower()
+
+
+def test_product_e14_conversation_governed_save(
+    live_web_process: LiveWebProcess,
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    workspace_id = f"product-e14-{uuid4().hex}"
+    conclusion = f"SLO 预算复核标记 {uuid4().hex}"
+    user_text = f"请保存结论：{conclusion}。保存前先让我确认。"
+    before = _get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )
+
+    prepared = _post_json(
+        f"{live_web_process.base_url}/api/conversation/turn",
+        {
+            "conversation_id": workspace_id,
+            "user_id": workspace_id,
+            "messages": [{"role": "user", "content": user_text}],
+        },
+    )
+    pending = prepared["pending_confirmation"]
+    command = pending["command"]
+    after_prepare = _get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )
+    assert prepared["disposition"] == "confirmation_required"
+    assert pending["status"] == "awaiting_confirmation"
+    assert pending.get("receipt") is None
+    assert command["source_message_indexes"] == [0]
+    assert command["messages"] == [{"role": "user", "content": conclusion}]
+    assert len(after_prepare) == len(before)
+
+    live_web_process.restart()
+    recovered_trace = _get_json(
+        f"{live_web_process.base_url}/api/conversation/runs/"
+        f"{prepared['interaction_run_ref']}"
+    )
+    assert recovered_trace["knowledge_save_operation"]["command"] == command
+    assert recovered_trace["knowledge_save_operation"]["status"] == "awaiting_confirmation"
+
+    decision_url = (
+        f"{live_web_process.base_url}/api/conversation/runs/"
+        f"{prepared['interaction_run_ref']}/knowledge-save-decision"
+    )
+    unauthorized_request = Request(
+        decision_url,
+        data=json.dumps({
+            "user_id": f"attacker-{uuid4().hex}",
+            "workspace_id": workspace_id,
+            "decision": "confirm",
+            "command_digest": command["command_digest"],
+            "confirmation_ref": "e14-cross-scope",
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with pytest.raises(HTTPError) as cross_scope:
+        urlopen(unauthorized_request, timeout=30)
+    assert cross_scope.value.code == 404
+    assert len(_get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )) == len(before)
+
+    confirmed = _post_json(
+        decision_url,
+        {
+            "user_id": workspace_id,
+            "workspace_id": workspace_id,
+            "decision": "confirm",
+            "command_digest": command["command_digest"],
+            "confirmation_ref": "e14-user-confirmation",
+        },
+    )
+    after_first_confirm = _get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )
+    replayed = _post_json(
+        decision_url,
+        {
+            "user_id": workspace_id,
+            "workspace_id": workspace_id,
+            "decision": "confirm",
+            "command_digest": command["command_digest"],
+            "confirmation_ref": "e14-user-confirmation",
+        },
+    )
+    after_confirm = _get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )
+    before_claim_ids = {claim["claim_id"] for claim in before}
+    saved_claims = [
+        claim for claim in after_first_confirm
+        if claim["claim_id"] not in before_claim_ids
+    ]
+    assert confirmed["status"] == "executed"
+    assert confirmed["receipt"] == replayed["receipt"]
+    assert confirmed["receipt"]["command_digest"] == command["command_digest"]
+    assert saved_claims
+    assert any(
+        str(claim["statement"]).strip().rstrip("。") == conclusion
+        for claim in saved_claims
+    )
+    assert not any(
+        "请求保存" in str(claim["statement"])
+        or "保存前" in str(claim["statement"])
+        for claim in saved_claims
+    )
+    assert set(confirmed["receipt"]["claim_ids"]) == {
+        claim["claim_id"] for claim in saved_claims
+    }
+    assert len(after_confirm) == len(after_first_confirm)
+
+    _record(
+        trace_archive,
+        request,
+        "E14.product_http",
+        {
+            "natural_user_text": user_text,
+            "prepared": prepared,
+            "recovered_trace": recovered_trace,
+            "cross_scope_denied": True,
+            "confirmed": confirmed,
+            "replayed": replayed,
+            "saved_claims": saved_claims,
+            "claim_count_delta": len(after_first_confirm) - len(before),
+            "replay_claim_count_delta": len(after_confirm) - len(after_first_confirm),
+        },
         profile="baseline",
     )
 

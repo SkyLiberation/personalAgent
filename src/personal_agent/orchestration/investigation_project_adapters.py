@@ -10,6 +10,7 @@ from personal_agent.application.investigation_project.ports import (
     CapabilitySnapshotPort,
     DelegationPolicyDecision,
     ExecutionResult,
+    GeneratedArtifactWritePort,
     ProjectAgentOutcomeUnknown,
 )
 from personal_agent.capabilities.contracts.grants import (
@@ -51,8 +52,13 @@ class RuntimeCapabilitySnapshot(CapabilitySnapshotPort):
 
 
 class ToolExecutorProjectAdapter:
-    def __init__(self, executor: ToolExecutor) -> None:
+    def __init__(
+        self,
+        executor: ToolExecutor,
+        artifact_writer: GeneratedArtifactWritePort,
+    ) -> None:
         self._executor = executor
+        self._artifact_writer = artifact_writer
 
     def execute(
         self,
@@ -68,6 +74,7 @@ class ToolExecutorProjectAdapter:
             operation.typed_arguments,
             execution_scope=execution_scope,
             tool_call_id=proposal.proposal_id,
+            proposal_digest=proposal.proposal_digest,
         )
         if not output.get("ok"):
             raise RuntimeError(
@@ -97,10 +104,23 @@ class ToolExecutorProjectAdapter:
             default=str,
         )
         content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        evidence_artifact_ref = self._artifact_writer.write_generated(
+            security_scope=execution_scope.security_scope,
+            execution_scope=execution_scope,
+            producer_key=(
+                f"tool-evidence:{proposal.proposal_digest}:{content_digest}"
+            ),
+            producer_ref=execution_ref.execution_id,
+            kind="tool_evidence",
+            content=content,
+            content_digest=content_digest,
+            source_artifact_refs=artifact_refs,
+            evidence_refs=(),
+        )
         evidence = EvidenceRef(
             evidence_id=f"ipev_{content_digest[:20]}",
             execution_ref=execution_ref,
-            artifact_ref=artifact_refs[0] if artifact_refs else None,
+            artifact_ref=evidence_artifact_ref,
             source=f"tool:{operation.tool_name}",
             content_digest=content_digest,
             summary=content[:500],
@@ -108,7 +128,7 @@ class ToolExecutorProjectAdapter:
         return ExecutionResult(
             execution_ref=execution_ref,
             evidence=(evidence,),
-            artifact_refs=artifact_refs,
+            artifact_refs=(*artifact_refs, evidence_artifact_ref),
             usage=ProjectUsage(
                 category="execution_proposal",
                 reservation_id=f"tool:{proposal.proposal_digest}",

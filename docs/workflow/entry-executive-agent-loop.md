@@ -1,4 +1,10 @@
-# Entry 到 Executive Agent Loop
+# 历史设计：Entry 到 Executive Agent Loop
+
+> 状态：历史迁移资料，不是当前生产主链。`TaskAnalyzer`、`GoalGraphCompiler`、
+> `AdaptivePlanner`、`ExecutiveController` 和 `orchestration_graph.py` 已从正式 Conversation
+> 入口删除。当前事实见
+> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md)；不得依据本文恢复旧
+> 通用主链。
 
 本文描述当前 entry 主链。业务模块的职责和设计原因见 [当前核心架构](../summary/core-architecture-current-state.md)。
 

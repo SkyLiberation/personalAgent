@@ -9,8 +9,13 @@ from personal_agent.capabilities.contracts.interaction import (
     InteractionToolCallValidation,
     InteractionToolDefinition,
 )
+from personal_agent.capabilities.contracts.grants import (
+    AtomicCapabilityGrant,
+    GrantDependencySet,
+)
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance, tool_schema
+from personal_agent.tools.mcp_capability import capability_from_tool
 from personal_agent.governance.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.scope import ExecutionScope
 
@@ -152,11 +157,51 @@ class ToolExecutor:
         *,
         execution_scope: ExecutionScope,
         tool_call_id: str,
+        proposal_digest: str,
     ) -> dict[str, Any]:
         """Execute an admitted Project proposal through the canonical gateway."""
 
-        if name not in self:
+        tool = self.get(name)
+        if tool is None:
             return tool_failure(f"未找到工具：{name}").model_dump(mode="json")
+        capability = capability_from_tool(tool)
+        selector = capability.selector
+        mcp = (tool.extras or {}).get("mcp")
+        if isinstance(mcp, dict):
+            locator_arg = mcp.get("resource_locator_arg")
+            if isinstance(locator_arg, str) and locator_arg:
+                locator = arguments.get(locator_arg)
+                if isinstance(locator, str) and locator:
+                    selector = selector.model_copy(update={"locator": locator})
+        action_ref = (
+            execution_scope.logical_subgoal_id
+            or execution_scope.task_id
+            or tool_call_id
+        )
+        grant = AtomicCapabilityGrant(
+            request_id=tool_call_id,
+            action_ref=action_ref,
+            authorization_digest=proposal_digest,
+            execution_command_digest=proposal_digest,
+            granted_resource_selector=selector,
+            granted_operation_scope=capability.operation_scope,
+            granted_data_egress=capability.data_egress_class,
+            granted_credential_mode=capability.credential_mode,
+            retry_family_id=f"project:{proposal_digest}",
+            dependency_set=GrantDependencySet(
+                task_revision=execution_scope.plan_version or 1,
+                goal_definition_fingerprint=proposal_digest[:16],
+                action_fingerprint=proposal_digest[:16],
+                capability_definition_revision=capability.definition_revision,
+                authority_revision=1,
+                policy_bundle_hash="project-tool-policy:v1",
+            ),
+            capability_ref=capability.capability_id,
+            provider_binding_ref=(
+                f"{capability.provider}:"
+                f"{capability.local_name or capability.capability_id}"
+            ),
+        )
         return self._gateway.invoke(
             name,
             arguments,
@@ -166,6 +211,7 @@ class ToolExecutor:
                 tool_call_id=tool_call_id,
                 source_platform="investigation_project",
             ),
+            grant=grant,
         )
 
     def __len__(self) -> int:

@@ -175,14 +175,6 @@ class KnowledgeIngestInput(BaseModel):
     requested_result_contract: str = "MutationReceipt"
 
 
-class ConversationSolidifyInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    kind: Literal["conversation_solidify"] = "conversation_solidify"
-    conversation_scope_ref: str = Field(min_length=1)
-    requested_result_contract: str = "MutationReceipt"
-
-
 class KnowledgeConsolidateInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -213,7 +205,6 @@ class ResearchSubscriptionCreateInput(BaseModel):
 
 ProcedureInput = Annotated[
     KnowledgeIngestInput
-    | ConversationSolidifyInput
     | KnowledgeConsolidateInput
     | ResearchRunInput
     | ResearchSubscriptionCreateInput,
@@ -281,8 +272,7 @@ class ProcedureCatalogPort(Protocol):
 
 
 __all__ = [
-    "ConversationSolidifyInput", "KnowledgeConsolidateInput",
-    "KnowledgeIngestInput",
+    "KnowledgeConsolidateInput", "KnowledgeIngestInput",
     "PROCEDURE_ABORT", "PROCEDURE_CLARIFY", "PROCEDURE_END", "PROCEDURE_SENTINELS",
     "ProcedureApplicability", "ProcedureCandidate", "ProcedureCatalogPort",
     "ProcedureCondition", "ProcedureEvent", "ProcedureInput", "ProcedureInvocation", "ProcedureNodeSpec",

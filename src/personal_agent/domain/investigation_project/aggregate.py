@@ -16,10 +16,12 @@ from personal_agent.domain.investigation_project.models import (
     CommandPreparedData,
     CompletionCommittedData,
     CompletionReport,
+    DecisionFeedback,
     EvidenceAdmissionCommittedData,
     EvidenceRef,
     ExecutionCommittedData,
     ExecutionProposalAcceptedData,
+    ExecutionProposalRejectedData,
     ExecutionRef,
     ExternalDelegationCommand,
     InvestigationProjectDefinition,
@@ -68,6 +70,10 @@ class InvestigationProject:
     accepted_execution_proposals: dict[tuple[str, int], SubGoalExecutionProposal] = field(
         default_factory=dict
     )
+    execution_proposal_feedback: dict[
+        tuple[str, int],
+        list[DecisionFeedback],
+    ] = field(default_factory=dict)
     execution_refs: dict[tuple[str, int], ExecutionRef] = field(default_factory=dict)
     admitted_evidence: dict[str, EvidenceRef] = field(default_factory=dict)
     outcomes: dict[tuple[str, int], SubGoalOutcome] = field(default_factory=dict)
@@ -78,6 +84,8 @@ class InvestigationProject:
     final_artifact_ref: ResourceRef | None = None
     completion_report: CompletionReport | None = None
     plan_revision_count: int = 0
+    semantic_replan_count: int = 0
+    evidence_repair_replan_count: int = 0
     usages: list[ProjectUsage] = field(default_factory=list)
     active_reservations: dict[str, ProjectUsage] = field(default_factory=dict)
     replan_request_digests: set[str] = field(default_factory=set)
@@ -123,6 +131,10 @@ class InvestigationProject:
         elif isinstance(data, ExecutionProposalAcceptedData):
             key = (data.proposal.logical_subgoal_id, data.proposal.subgoal_version)
             self.accepted_execution_proposals[key] = data.proposal
+            self.execution_proposal_feedback.pop(key, None)
+        elif isinstance(data, ExecutionProposalRejectedData):
+            key = (data.logical_subgoal_id, data.subgoal_version)
+            self.execution_proposal_feedback.setdefault(key, []).append(data.feedback)
         elif isinstance(data, BudgetReservedData):
             if data.usage.reservation_id in self.active_reservations:
                 raise ValueError("budget reservation already exists")
@@ -152,6 +164,10 @@ class InvestigationProject:
         elif isinstance(data, ReplanRequestedData):
             self.replan_request_digests.add(data.request.trigger_digest)
             self.pending_replan_requests.append(data.request)
+            if data.request.trigger_kind == "verification_gap":
+                self.evidence_repair_replan_count += 1
+            elif data.request.trigger_kind not in {"admission_feedback"}:
+                self.semantic_replan_count += 1
         elif isinstance(data, UserRequirementsRevisedData):
             if data.requirements.version != self.user_requirements.version + 1:
                 raise ValueError("user requirement revision must be monotonic")

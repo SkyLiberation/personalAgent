@@ -61,6 +61,18 @@ class GeneratedContent:
     limitations: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class FinalVerificationResult:
+    passed: bool
+    feedback: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceMaterial:
+    reference: EvidenceRef
+    content: str
+
+
 class InvestigationProjectStorePort(Protocol):
     def create(self, definition: InvestigationProjectDefinition) -> InvestigationProject: ...
 
@@ -98,6 +110,7 @@ class InvestigationPlannerPort(Protocol):
         definition: InvestigationProjectDefinition,
         *,
         based_on_event_sequence: int,
+        repair_request: ReplanRequest | None,
         capabilities: RuntimeCapabilityInventory,
         capability_revision: str,
     ) -> ModelDecision[PlanProposal]: ...
@@ -107,6 +120,7 @@ class InvestigationPlannerPort(Protocol):
         project: InvestigationProject,
         request: ReplanRequest,
         *,
+        evidence_material: tuple[EvidenceMaterial, ...],
         capabilities: RuntimeCapabilityInventory,
         capability_revision: str,
     ) -> ModelDecision[PlanProposal]: ...
@@ -118,6 +132,7 @@ class ExecutionProposerPort(Protocol):
         project: InvestigationProject,
         subgoal: SubGoalDefinitionVersion,
         *,
+        evidence_material: tuple[EvidenceMaterial, ...],
         execution_scope: ExecutionScope,
         capabilities: RuntimeCapabilityInventory,
     ) -> ModelDecision[SubGoalExecutionProposal]: ...
@@ -184,6 +199,7 @@ class ProjectSynthesisPort(Protocol):
         project: InvestigationProject,
         proposal: SubGoalExecutionProposal,
         *,
+        evidence_material: tuple[EvidenceMaterial, ...],
         execution_scope: ExecutionScope,
     ) -> ModelDecision[GeneratedContent]: ...
 
@@ -192,6 +208,7 @@ class ProjectSynthesisPort(Protocol):
         project: InvestigationProject,
         plan: AcceptedPlanVersion,
         *,
+        evidence_material: tuple[EvidenceMaterial, ...],
         execution_scope: ExecutionScope,
     ) -> ModelDecision[GeneratedContent]: ...
 
@@ -203,6 +220,7 @@ class ProjectVerifierPort(Protocol):
         subgoal: SubGoalDefinitionVersion,
         evidence: tuple[EvidenceRef, ...],
         *,
+        evidence_material: tuple[EvidenceMaterial, ...],
         execution_scope: ExecutionScope,
     ) -> ModelDecision[SubGoalVerificationAssessment]: ...
 
@@ -211,8 +229,9 @@ class ProjectVerifierPort(Protocol):
         project: InvestigationProject,
         generated: GeneratedContent,
         *,
+        evidence_material: tuple[EvidenceMaterial, ...],
         execution_scope: ExecutionScope,
-    ) -> ModelDecision[bool]: ...
+    ) -> ModelDecision[FinalVerificationResult]: ...
 
 
 class GeneratedArtifactWritePort(Protocol):
@@ -228,6 +247,7 @@ class GeneratedArtifactWritePort(Protocol):
         content_digest: str,
         source_artifact_refs: tuple[ResourceRef, ...],
         evidence_refs: tuple[str, ...],
+        limitations: tuple[str, ...] = (),
     ) -> ResourceRef: ...
 
     def read_generated(
@@ -243,8 +263,10 @@ __all__ = [
     "CapabilitySnapshotPort",
     "DelegationPolicyDecision",
     "DisclosureManifestPort",
+    "EvidenceMaterial",
     "ExecutionProposerPort",
     "ExecutionResult",
+    "FinalVerificationResult",
     "GeneratedArtifactWritePort",
     "GeneratedContent",
     "InvestigationPlannerPort",

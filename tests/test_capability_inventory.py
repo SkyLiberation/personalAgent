@@ -92,7 +92,12 @@ def test_runtime_inventory_keeps_definition_configuration_and_health_separate() 
     )
 
     assert [item.tool_name for item in inventory.local_tools] == ["local_read"]
+    assert inventory.local_tools[0].description == "Read local data."
+    assert inventory.local_tools[0].semantic_domains == ("internal_tool",)
+    assert inventory.local_tools[0].operations == ("read",)
+    assert inventory.local_tools[0].authorization_scope == "agent:tool"
     assert inventory.local_tools[0].provider_availability == "not_applicable"
+    assert inventory.local_tools[0].input_schema["properties"]["query"]["type"] == "string"
     assert inventory.mcp_connectors[0].configuration_state == "enabled"
     assert inventory.mcp_connectors[0].discovery_state == "discovered"
     assert inventory.mcp_connectors[0].provider_availability == "not_observed"

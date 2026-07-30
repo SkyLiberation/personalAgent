@@ -24,7 +24,10 @@ FEISHU_BASE_URL=https://open.feishu.cn
 
 说明：
 
-- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。知识、复习、待确认操作、跨请求状态及 LangGraph checkpoint 都以 Postgres 为唯一持久化存储。
+- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。Workspace/知识、Review、受治理执行、
+  Investigation journal、worker queue 等各自通过生产 Store 使用 Postgres。普通 Conversation
+  的 Interaction trace 当前由 `PERSONAL_AGENT_DATA_DIR/interaction_runs` 下的
+  `FileInteractionJournal` 保存；历史 LangGraph checkpoint 表不是当前普通对话真源。
 - `uploads/` 仍用于保存原始上传文件；数据库保存其引用及提取后的知识内容。
 
 ## 飞书配置
@@ -255,14 +258,22 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=${STRUCTURED_MODEL}
 
 ## Web 搜索配置
 
-`web_search` 工具使用可扩展 provider 配置。当前内置 provider 为 `tavily`：
+`web_search` 工具的生产默认 Provider 是 `serpapi`，使用通用且唯一的
+`PERSONAL_AGENT_WEB_SEARCH_*` 凭据：
 
 ```env
-PERSONAL_AGENT_WEB_SEARCH_PROVIDER=tavily
-PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_web_search_key
-PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://api.tavily.com
+PERSONAL_AGENT_WEB_SEARCH_PROVIDER=serpapi
+PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_serpapi_api_key
+PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://serpapi.com
 PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS=60000
+PERSONAL_AGENT_URL_CAPTURE_PROVIDER=builtin
 ```
+
+可选的 `tavily` Adapter 使用同一组通用配置。Provider 由 Composition Root 静态绑定，
+不做运行时 fallback；已移除 Firecrawl Web Search Adapter。
+`PERSONAL_AGENT_URL_CAPTURE_PROVIDER` 独立决定 URL 正文读取使用 `firecrawl` 还是 `builtin`；
+它是一个单值绑定，不会在执行失败后自动切换 Provider。未显式设置时，有 Firecrawl key 的
+环境解析为 `firecrawl`，否则解析为 `builtin`。
 
 ## MCP 工具接入
 
@@ -432,13 +443,17 @@ PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=
 
 ## Firecrawl 配置
 
-网页抓取工具使用的 Firecrawl API；这组配置不再驱动 `web_search`：
+Firecrawl 仅作为可选的 URL 正文读取 Provider，不再提供 Web Search：
 
 ```env
 FIRECRAWL_API_KEY=your_firecrawl_key
 FIRECRAWL_BASE_URL=https://api.firecrawl.dev
 FIRECRAWL_TIMEOUT_MS=60000
+PERSONAL_AGENT_URL_CAPTURE_PROVIDER=firecrawl
 ```
+
+生产配置使用 `PERSONAL_AGENT_URL_CAPTURE_PROVIDER=builtin`；若显式选择 Firecrawl，
+它只改变 URL 正文读取，不改变 SerpAPI Web Search，也不是运行时 fallback。
 
 ## 图谱同步调参
 
@@ -513,13 +528,13 @@ LANGSMITH_WORKSPACE_ID=
 `PERSONAL_AGENT_LANGSMITH_ENABLED` 决定，采样比例由 `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 决定。
 生产环境建议保持 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false`。
 
-结构化模型调用通过 composition root 注入观测装饰器，TaskAnalyzer、Executive 等业务组件不读取该开关。
-该策略不能保证覆盖 LangGraph/LangChain 自动产生的所有节点 trace，也不能覆盖尚未迁移到统一
-Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
+结构化模型调用通过 composition root 注入观测装饰器，Conversation、Workspace、Research 和
+Investigation Application 组件不读取该开关。该策略不能保证覆盖第三方库自动产生的全部 trace，
+也不能覆盖尚未迁移到统一 Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
 文件内容或密钥。
 完整边界见 [观测与治理层](topics/observability-governance.md#7-llm-trace-脱敏策略)。
 
-## LangGraph 总编排与 Checkpoint 配置
+## PostgreSQL 与遗留 Checkpoint 配置
 
 ```env
 PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
@@ -527,10 +542,14 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 
 说明：
 
-- checkpoint 固定使用 `langgraph-checkpoint-postgres`，与业务表共享 `PERSONAL_AGENT_POSTGRES_URL`
-- 不提供内存或 SQLite fallback，也不读取原有 SQLite checkpoint 文件
-- entry 请求默认走统一的 `orchestration_graph`，并在图节点后写入 checkpoint
-- 运行 `uv run python scripts/export_thread_checkpoints.py <thread_id>` 会将该线程所有持久化 checkpoint 导出到 `scripts/assets/`
+- Workspace、Research、Knowledge Lifecycle、Tool governance、Agent run、worker queue 和
+  Investigation journal 共享该 PostgreSQL 连接，但各自拥有事实表和恢复语义；
+- 普通 Conversation 使用 `data/interaction_runs` 下的 `FileInteractionJournal`，不是 LangGraph
+  checkpoint；
+- 数据库仍可能包含历史 LangGraph checkpoint/迁移表；它们用于旧数据与运维兼容，不定义当前
+  Conversation 主链；
+- `scripts/export_thread_checkpoints.py` 只用于历史 checkpoint 诊断，不能作为当前 Interaction
+  恢复证据。
 ## Research / 定时情报简报
 
 ```env

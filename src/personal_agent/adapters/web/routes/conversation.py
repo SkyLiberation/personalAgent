@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from personal_agent.application.conversation import (
     ConversationMessage,
+    ConversationKnowledgeSaveOperation,
+    ConversationOperationConflict,
+    ConversationOperationNotFound,
     ConversationTurnView,
     ConversationUnavailable,
 )
@@ -23,13 +28,25 @@ class ConversationTurnRequest(BaseModel):
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class ConversationKnowledgeSaveDecisionRequest(BaseModel):
+    workspace_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    user_id: str | None = Field(default=None, min_length=1, max_length=200)
+    decision: Literal["confirm", "reject"]
+    command_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    confirmation_ref: str = Field(default="", max_length=500)
+
+
 def register_conversation_routes(
     app: FastAPI,
     *,
     settings: Settings,
     service: AgentService,
 ) -> None:
-    @app.post("/api/conversation/turn", response_model=ConversationTurnView)
+    @app.post(
+        "/api/conversation/turn",
+        response_model=ConversationTurnView,
+        response_model_exclude_none=True,
+    )
     def conversation_turn(
         body: ConversationTurnRequest,
         request: Request,
@@ -67,3 +84,34 @@ def register_conversation_routes(
         if trace is None:
             raise HTTPException(status_code=404, detail="interaction run not found")
         return trace
+
+    @app.post(
+        "/api/conversation/runs/{interaction_run_ref}/knowledge-save-decision",
+        response_model=ConversationKnowledgeSaveOperation,
+    )
+    def decide_conversation_knowledge_save(
+        interaction_run_ref: str,
+        body: ConversationKnowledgeSaveDecisionRequest,
+        request: Request,
+    ) -> ConversationKnowledgeSaveOperation:
+        try:
+            principal = resolve_requested_principal(request, settings, body.user_id)
+            return service.decide_conversation_knowledge_save(
+                interaction_run_ref=interaction_run_ref,
+                principal=principal,
+                security_scope=SecurityScope(
+                    tenant_id=principal.tenant_id,
+                    workspace_id=body.workspace_id,
+                ),
+                decision=body.decision,
+                command_digest=body.command_digest,
+                confirmation_ref=body.confirmation_ref,
+            )
+        except (ConversationOperationNotFound, PermissionError):
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
+        except ConversationOperationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConversationUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc

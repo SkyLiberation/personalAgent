@@ -1,5 +1,10 @@
 # 工具层
 
+> 状态：本文包含仍适用的 Tool Gateway/治理概念，也保留迁移前 Planner、ReAct 与
+> LangGraph 实现记录；它不是当前主链的 canonical owner。当前边界以
+> [核心架构当前状态](../summary/core-architecture-current-state.md) 为准，旧
+> `_react_parse_response` 等内容只说明历史迁移，不能据此描述现有代码。
+
 优秀 Agent 的工具层不是把 API 暴露给模型，而是把模型的意图转换为可理解、可组合、可控、可观测的系统动作。
 
 当前项目的工具层已经从“工具声明”推进到“轻量 Tool Runtime”：业务工具使用 LangChain `@tool` 生成标准 `BaseTool`，用显式 Pydantic `args_schema` 表达参数语义，用统一 artifact 承载业务结果，并通过 `ToolGovernance` 驱动 `ToolGateway` 执行 timeout、retry、rate limit、HITL、幂等和审计。幂等账本与工具审计已由 `PostgresToolGovernanceStore` 持久化到 Postgres，不再只是进程内记录。它不是裸露 API 集合，而是模型意图和真实系统副作用之间的执行边界。

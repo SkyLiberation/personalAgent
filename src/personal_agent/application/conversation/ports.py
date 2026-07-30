@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from personal_agent.application.workspace.models import ConversationSolidifyResult
 from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.capabilities.contracts.interaction import (
     InteractionToolCallValidation,
@@ -81,7 +82,18 @@ class InteractionArtifactPort(Protocol):
     ) -> ChildAgentRunRecord: ...
 
 
+class ConversationKnowledgeWriter(Protocol):
+    def solidify_conversation(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> ConversationSolidifyResult: ...
+
+
 __all__ = [
+    "ConversationKnowledgeWriter",
     "InteractionAgentPort",
     "InteractionArtifactPort",
     "InteractionToolPort",

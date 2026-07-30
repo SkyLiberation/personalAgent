@@ -1,11 +1,11 @@
-"""Typed model port and the single OpenAI adapter.
+"""Typed model ports and OpenAI-compatible adapters.
 
 The port (``StructuredModelClient`` / ``StreamingModelClient``) is the only LLM
-dependency application code is allowed to hold. ``OpenAIModelClient`` is the one
-adapter that maps the port to the OpenAI API — it handles all three request
-kinds (``structured`` via Chat Completions strict ``json_schema``,
-``tool_calling`` / ``text`` via Chat Completions) plus streaming, in a single
-high-cohesion class.
+dependency application code is allowed to hold. Provider/model structured-output
+capabilities are selected at composition time: ``StrictJsonSchemaAdapter`` uses
+native strict ``json_schema`` while ``JsonObjectStructuredAdapter`` uses JSON
+mode plus the same Pydantic contract in the prompt. Application code is unaware
+of that transport distinction.
 
 The adapter is **pure**: it only performs the API call and extracts
 content / tool_calls / usage / latency. No tracing (langsmith spans,
@@ -131,6 +131,14 @@ def _usage(response: Any) -> dict[str, int]:
                 values[key] = value
                 break
     return values
+
+
+def _aggregate_usage(responses: list[Any]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for response in responses:
+        for key, value in _usage(response).items():
+            totals[key] = totals.get(key, 0) + value
+    return totals
 
 
 def _require_chat_choices(response: Any) -> Any:
@@ -327,15 +335,11 @@ def _extract_tool_calls(message: Any) -> list[dict[str, Any]]:
 
 
 class OpenAIModelClient:
-    """The single OpenAI adapter for the model ports.
+    """Shared OpenAI-compatible Chat Completions adapter.
 
-    One high-cohesion class covers every request kind:
-
-    - ``structured``  → Chat Completions with strict ``json_schema`` and Pydantic parse.
-    - ``tool_calling`` → Chat Completions with ``tools`` / ``tool_choice``;
-      response carries native ``tool_calls``.
-    - ``text``        → Chat Completions, optional ``response_format`` JSON-schema.
-    - streaming        → ``stream()`` yields ``StreamChunk`` deltas + final usage.
+    Concrete structured-output adapters own request construction. This base owns
+    only common SDK invocation, response normalization, typed validation, text /
+    tool-calling requests and streaming.
 
     The adapter is **pure**: it only assembles kwargs, calls the SDK, extracts
     content / tool_calls / usage / latency, and returns structured objects. No
@@ -363,7 +367,6 @@ class OpenAIModelClient:
     ) -> None:
         self._config = config
         self._model_override = model_override
-        self._structured_transport = "strict_json_schema"
         self._structured_streaming = False
 
     # -- shared helpers --------------------------------------------------
@@ -470,174 +473,55 @@ class OpenAIModelClient:
         start = perf_counter()
         client = self._client()
         schema = request.output_type.model_json_schema()
-        response_format = request.response_format or structured_response_format(
-            request.operation,
-            schema,
+        responses: list[Any] = []
+        chat_request = self._structured_chat_request(request, schema, parse_error=None)
+        response = self._create_structured_completion(client, chat_request)
+        responses.append(response)
+        response = self._normalize_streaming_structured_response(
+            client,
+            chat_request,
+            response,
+            responses,
         )
-        chat_request = request.__class__(
-            operation=request.operation,
-            version=request.version,
-            messages=request.messages,
-            output_type=request.output_type,
-            context_projection_ref=request.context_projection_ref,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            reasoning_effort=request.reasoning_effort,
-            kind="text",
-            response_format=response_format,
-            extra_body=request.extra_body,
-            metadata=request.metadata,
-        )
-        transport = self._structured_transport
-        if transport == "strict_json_schema":
-            try:
-                response = self._create_structured_completion(client, chat_request)
-            except Exception as exc:
-                if not _response_format_unavailable(exc):
-                    raise
-                # Transport compatibility only: the same model still authors the
-                # same typed Proposal.  We change neither its semantic input nor
-                # the output contract, merely fall back from provider-native JSON
-                # Schema to JSON-object / plain-text transport and fail closed if
-                # Pydantic cannot parse the returned object.
-                response, transport = self._create_structured_transport_fallback(
-                    client,
-                    request,
-                    schema,
-                    primary_error=exc,
-                )
-                self._structured_transport = transport
-        elif transport == "json_object":
-            response, transport = self._create_structured_transport_fallback(
-                client,
-                request,
-                schema,
-                primary_error=None,
-            )
-            self._structured_transport = transport
-        else:
-            response = self._create_plain_text_structured_transport(
-                client,
-                request,
-                schema,
-                primary_error=None,
-            )
         latency_ms = round((perf_counter() - start) * 1000, 2)
-        while True:
-            try:
-                message = _structured_chat_message(response)
-                break
-            except _EmptyNestedCompletionError as exc:
-                # Decision Ownership Taxonomy: provider transport compatibility.
-                # Each retry preserves the same model input and typed contract;
-                # only the unsupported response-format hint is removed.
-                if not self._structured_streaming and _is_sse_payload(response):
-                    self._structured_streaming = True
-                    if transport == "strict_json_schema":
-                        response = self._create_structured_completion(client, chat_request)
-                    elif transport == "json_object":
-                        response, transport = self._create_structured_transport_fallback(
-                            client,
-                            request,
-                            schema,
-                            primary_error=None,
-                        )
-                    else:
-                        response = self._create_plain_text_structured_transport(
-                            client,
-                            request,
-                            schema,
-                            primary_error=None,
-                        )
-                elif transport == "strict_json_schema":
-                    response, transport = self._create_structured_transport_fallback(
-                        client,
-                        request,
-                        schema,
-                        primary_error=exc,
-                    )
-                elif transport == "json_object":
-                    response = self._create_plain_text_structured_transport(
-                        client,
-                        request,
-                        schema,
-                        primary_error=exc,
-                    )
-                    transport = "plain_text_json"
-                else:
-                    raise
-                self._structured_transport = transport
-                latency_ms = round((perf_counter() - start) * 1000, 2)
-        content = (message.content or "").strip()
-        if request.output_type is BaseModel:
-            parsed = self._default_value(request)
-        else:
-            parse_result = parse_structured(
-                content or "{}",
-                request.output_type,
+        content, parsed, parse_error = self._parse_typed_response(
+            request,
+            response,
+            latency_ms=latency_ms,
+        )
+        if parse_error is not None:
+            log_event(
+                logger,
+                logging.WARNING,
+                "llm.structured_schema_repair",
                 operation=request.operation,
                 version=request.version,
-                model_name=getattr(response, "model", None) or self._resolved_model,
+                parse_error=parse_error[:500],
+            )
+            repair_request = self._structured_chat_request(
+                request,
+                schema,
+                parse_error=parse_error,
+            )
+            response = self._create_structured_completion(client, repair_request)
+            responses.append(response)
+            response = self._normalize_streaming_structured_response(
+                client,
+                repair_request,
+                response,
+                responses,
+            )
+            latency_ms = round((perf_counter() - start) * 1000, 2)
+            content, parsed, parse_error = self._parse_typed_response(
+                request,
+                response,
                 latency_ms=latency_ms,
             )
-            if not parse_result.ok and transport == "json_object":
-                # Some OpenAI-compatible providers accept ``json_object`` but
-                # reply with an empty or schema-incomplete object.  This is
-                # still a transport failure, not permission to invent the
-                # typed value. Retry once with the same model, messages, and
-                # Pydantic contract but no response_format transport hint.
-                response = self._create_plain_text_structured_transport(
-                    client,
-                    request,
-                    schema,
-                    primary_error=ValueError(parse_result.error or "invalid json_object response"),
+            if parse_error is not None:
+                raise ValueError(
+                    f"{request.operation} structured parse failed: {parse_error}"
                 )
-                transport = "plain_text_json"
-                self._structured_transport = transport
-                latency_ms = round((perf_counter() - start) * 1000, 2)
-                message = _structured_chat_message(response)
-                content = (message.content or "").strip()
-                parse_result = parse_structured(
-                    content or "{}",
-                    request.output_type,
-                    operation=request.operation,
-                    version=request.version,
-                    model_name=getattr(response, "model", None) or self._resolved_model,
-                    latency_ms=latency_ms,
-                )
-            if not parse_result.ok:
-                # A schema-valid JSON transport can still violate a cross-field
-                # Pydantic invariant (for example a ``clarify`` TaskAnalysis
-                # that also contains Goals).  This is not a deterministic
-                # repair: ask the same model to author a fresh value against
-                # the exact same typed contract and report its validation
-                # feedback.  If it remains invalid, fail closed.
-                response = self._create_structured_schema_repair(
-                    client,
-                    request,
-                    schema,
-                    parse_error=parse_result.error or "invalid structured response",
-                    response_format=(
-                        response_format if transport == "strict_json_schema"
-                        else ({"type": "json_object"} if transport == "json_object" else None)
-                    ),
-                )
-                transport = f"{transport}_schema_repair"
-                latency_ms = round((perf_counter() - start) * 1000, 2)
-                message = _structured_chat_message(response)
-                content = (message.content or "").strip()
-                parse_result = parse_structured(
-                    content or "{}",
-                    request.output_type,
-                    operation=request.operation,
-                    version=request.version,
-                    model_name=getattr(response, "model", None) or self._resolved_model,
-                    latency_ms=latency_ms,
-                )
-                if not parse_result.ok:
-                    raise ValueError(f"{request.operation} structured parse failed: {parse_result.error}")
-            parsed = parse_result.value
-        usage = _usage(response)
+        usage = _aggregate_usage(responses)
         return StructuredModelResponse(
             value=parsed,
             model=getattr(response, "model", None) or self._resolved_model,
@@ -649,157 +533,61 @@ class OpenAIModelClient:
             raw_response=response,
         )
 
-    def _create_structured_transport_fallback(
+    def _structured_chat_request(
         self,
-        client: OpenAI,
         request: StructuredModelRequest[StructuredOutputT],
         schema: dict[str, Any],
         *,
-        primary_error: Exception | None,
-    ) -> tuple[Any, str]:
-        schema_instruction = {
-            "role": "system",
-            "content": (
-                "Return only one JSON object that conforms exactly to this output schema. "
-                "Do not add Markdown, explanation, or fields not in the schema.\n"
-                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-            ),
-        }
-        messages = [*request.messages, schema_instruction]
-        if primary_error is not None:
-            log_event(
-                logger,
-                logging.WARNING,
-                "llm.structured_transport_fallback",
-                operation=request.operation,
-                version=request.version,
-                primary_error=str(primary_error)[:240],
-                fallback="json_object",
-            )
-        json_object_request = request.__class__(
-            operation=request.operation,
-            version=request.version,
-            messages=messages,
-            output_type=request.output_type,
-            context_projection_ref=request.context_projection_ref,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            reasoning_effort=request.reasoning_effort,
-            kind="text",
-            response_format={"type": "json_object"},
-            extra_body=request.extra_body,
-            metadata=request.metadata,
+        parse_error: str | None,
+    ) -> StructuredModelRequest[StructuredOutputT]:
+        raise RuntimeError(
+            "structured requests require an explicit structured-output adapter"
         )
+
+    def _normalize_streaming_structured_response(
+        self,
+        client: OpenAI,
+        chat_request: StructuredModelRequest[StructuredOutputT],
+        response: Any,
+        responses: list[Any],
+    ) -> Any:
         try:
-            return (
-                self._create_structured_completion(client, json_object_request),
-                "json_object",
-            )
-        except Exception as fallback_error:
-            if not _response_format_unavailable(fallback_error):
-                raise
-            return (
-                self._create_plain_text_structured_transport(
-                    client,
-                    request,
-                    schema,
-                    primary_error=fallback_error,
-                ),
-                "plain_text_json",
-            )
+            _structured_chat_message(response)
+        except _EmptyNestedCompletionError:
+            if self._structured_streaming or not _is_sse_payload(response):
+                return response
+            self._structured_streaming = True
+            response = self._create_structured_completion(client, chat_request)
+            responses.append(response)
+        return response
 
-    def _create_plain_text_structured_transport(
+    def _parse_typed_response(
         self,
-        client: OpenAI,
         request: StructuredModelRequest[StructuredOutputT],
-        schema: dict[str, Any],
+        response: Any,
         *,
-        primary_error: Exception | None,
-    ) -> Any:
-        schema_instruction = {
-            "role": "system",
-            "content": (
-                "Return only one JSON object that conforms exactly to this output schema. "
-                "Do not add Markdown, explanation, or fields not in the schema.\n"
-                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-            ),
-        }
-        if primary_error is not None:
-            log_event(
-                logger,
-                logging.WARNING,
-                "llm.structured_transport_fallback",
-                operation=request.operation,
-                version=request.version,
-                primary_error=str(primary_error)[:240],
-                fallback="plain_text_json",
-            )
-        plain_text_request = request.__class__(
+        latency_ms: float,
+    ) -> tuple[str, StructuredOutputT | None, str | None]:
+        try:
+            message = _structured_chat_message(response)
+        except Exception as exc:
+            return "", None, str(exc)
+        content = (message.content or "").strip()
+        if not content:
+            return "", None, "provider returned empty structured content"
+        if request.output_type is BaseModel:
+            return content, self._default_value(request), None
+        parse_result = parse_structured(
+            content,
+            request.output_type,
             operation=request.operation,
             version=request.version,
-            messages=[*request.messages, schema_instruction],
-            output_type=request.output_type,
-            context_projection_ref=request.context_projection_ref,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            reasoning_effort=request.reasoning_effort,
-            kind="text",
-            extra_body=request.extra_body,
-            metadata=request.metadata,
+            model_name=getattr(response, "model", None) or self._resolved_model,
+            latency_ms=latency_ms,
         )
-        return self._create_structured_completion(client, plain_text_request)
-
-    def _create_structured_schema_repair(
-        self,
-        client: OpenAI,
-        request: StructuredModelRequest[StructuredOutputT],
-        schema: dict[str, Any],
-        *,
-        parse_error: str,
-        response_format: dict[str, Any] | None,
-    ) -> Any:
-        """Request a new model-authored value after typed output rejection.
-
-        The prior bytes are intentionally not copied into the repair request:
-        they are neither canonical facts nor a mutable state to be patched.
-        Pydantic's contract error is the only feedback, and the returned value
-        must independently satisfy the original schema.
-        """
-        log_event(
-            logger,
-            logging.WARNING,
-            "llm.structured_schema_repair",
-            operation=request.operation,
-            version=request.version,
-            parse_error=parse_error[:500],
-        )
-        repair_instruction = {
-            "role": "system",
-            "content": (
-                "Your previous structured response was rejected by the typed output contract. "
-                "Author a complete new JSON object for the original request; do not explain, patch, "
-                "or refer to the rejected response. Respect all mutually exclusive fields and return "
-                "only JSON. Validation feedback:\n"
-                + parse_error[:2000]
-                + "\nOutput schema:\n"
-                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-            ),
-        }
-        repair_request = request.__class__(
-            operation=request.operation,
-            version=request.version,
-            messages=[*request.messages, repair_instruction],
-            output_type=request.output_type,
-            context_projection_ref=request.context_projection_ref,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            reasoning_effort=request.reasoning_effort,
-            kind="text",
-            response_format=response_format,
-            extra_body=request.extra_body,
-            metadata=request.metadata,
-        )
-        return self._create_structured_completion(client, repair_request)
+        if not parse_result.ok:
+            return content, None, parse_result.error or "invalid structured response"
+        return content, parse_result.value, None
 
     def _generate_chat(
         self,
@@ -857,6 +645,80 @@ class OpenAIModelClient:
                 yield StreamChunk(delta=delta, accumulated=full_text)
         if usage:
             yield StreamChunk(delta="", accumulated=full_text, usage=usage)
+
+
+def _schema_repair_instruction(
+    schema: dict[str, Any],
+    parse_error: str,
+) -> dict[str, str]:
+    return {
+        "role": "system",
+        "content": (
+            "Your previous structured response was rejected by the typed output contract. "
+            "The validation feedback and schema are authoritative. Never repeat a value "
+            "identified as invalid in the feedback. For literal or enum failures, use only "
+            "a value explicitly listed by the contract. Do not relabel invalid behavior "
+            "with an allowed value merely to pass validation; when the enclosing array item "
+            "is optional and no allowed value preserves its semantics, omit that item. "
+            "Author a complete new JSON object for the original request; do not explain, "
+            "patch, or refer to the rejected response. Respect all mutually exclusive "
+            "fields and return only JSON. Validation feedback:\n"
+            + parse_error[:2000]
+            + "\nOutput schema:\n"
+            + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        ),
+    }
+
+
+class StrictJsonSchemaAdapter(OpenAIModelClient):
+    """Structured-output adapter for native strict JSON Schema providers."""
+
+    def _structured_chat_request(
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+        schema: dict[str, Any],
+        *,
+        parse_error: str | None,
+    ) -> StructuredModelRequest[StructuredOutputT]:
+        messages = request.messages
+        if parse_error is not None:
+            messages = [_schema_repair_instruction(schema, parse_error), *messages]
+        return replace(
+            request,
+            messages=messages,
+            kind="text",
+            response_format=structured_response_format(request.operation, schema),
+        )
+
+
+class JsonObjectStructuredAdapter(OpenAIModelClient):
+    """Structured-output adapter for providers that only support JSON mode."""
+
+    def _structured_chat_request(
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+        schema: dict[str, Any],
+        *,
+        parse_error: str | None,
+    ) -> StructuredModelRequest[StructuredOutputT]:
+        if parse_error is None:
+            instruction = {
+                "role": "system",
+                "content": (
+                    "Return exactly one JSON object that conforms to the output schema below. "
+                    "Do not add Markdown, explanation, or fields absent from the schema. "
+                    "Do not omit required fields.\nOutput schema:\n"
+                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                ),
+            }
+        else:
+            instruction = _schema_repair_instruction(schema, parse_error)
+        return replace(
+            request,
+            messages=[instruction, *request.messages],
+            kind="text",
+            response_format={"type": "json_object"},
+        )
 
 
 class RetryingStructuredModelClient:
@@ -953,16 +815,6 @@ def _is_retryable_model_error(exc: Exception) -> bool:
         "invalid provider response",
     )
     return any(token in message for token in retryable_messages)
-
-
-def _response_format_unavailable(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return (
-        "response_format" in message
-        and any(token in message for token in (
-            "unavailable", "unsupported", "not supported", "invalid_request",
-        ))
-    )
 
 
 class TracePayloadPolicy(Protocol):
@@ -1214,11 +1066,16 @@ def build_structured_model_client(
     config: StructuredConfig,
     observability: LangSmithConfig,
 ) -> StructuredModelClient | None:
-    """Composition helper for strict JSON-schema structured output."""
+    """Select the configured provider/model structured-output capability."""
     if not (config.api_key and config.base_url and config.model):
         return None
+    adapter: StructuredModelClient
+    if config.output_transport == "json_object":
+        adapter = JsonObjectStructuredAdapter(config)
+    else:
+        adapter = StrictJsonSchemaAdapter(config)
     client: StructuredModelClient = RetryingStructuredModelClient(
-        OpenAIModelClient(config),
+        adapter,
         max_retries=config.max_retries,
     )
     client = UsageRecordingStructuredModelClient(client)

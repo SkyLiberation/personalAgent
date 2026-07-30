@@ -2,7 +2,8 @@
 
 ## 目标
 
-工程使用多套职责互斥的 golden set 评估 Task Analysis、Goal/Procedure 编译、Executive 控制、Capability、工具治理、检索回答和多轮状态。
+工程使用多套职责互斥的 golden set 评估 Conversation 语义决策、Investigation planning、
+Capability/Tool governance、检索回答、Verifier 和多轮用户结果。
 
 统一形状为：
 
@@ -18,16 +19,17 @@ baseline 是不得下降的地板，不是质量目标。降低 baseline 必须�
 2. 专项 quality scorer 只消费 thin `RunOutput`；核心 E2E 例外地读取 durable checkpoint 的 canonical state，用于证明跨边界一致性。
 3. 离线 deterministic gate 与真实模型/真实 provider gate 分开报告；只有后者可以命名为 E2E，前者属于 contract/integration test。
 4. 副作用、权限、幂等、HITL 和完成条件使用硬断言，不能被平均分掩盖。
-5. 每套 suite 只拥有一个清晰决策边界，避免同一个语义在 TaskAnalyzer、Executive、Protocol 和 E2E 重复打分。
+5. 每套 suite 只拥有一个清晰决策边界，避免同一个语义在 Conversation、Project Planner、
+   Workflow 和 E2E 重复打分。
 6. Observation 驱动的计划修订必须评估触发证据、Patch 合法性和最终效果，不能只评估初始计划。
 
 ## 评测矩阵
 
 | Suite | 评测单元 | 负责 | 不负责 |
 | --- | --- | --- | --- |
-| `task_analysis_quality` | 单轮 EntryInput/对话上下文 | outcome、Goal 拆分、ResourceHint、typed GoalRelation、clarification | capability coverage、provider 选择、执行步骤 |
-| Goal Graph / Executive tests | TaskAnalysis + Ledger + Observation | graph 不变式、ready Goal、决策合法性、依赖修订、verification/completion | 自然语言分析质量 |
-| Procedure tests | ProcedureSpec + ProcedureCall | spec 校验、节点投影、事务不变量、版本隔离 | 开放式 Goal、语义依赖推断 |
+| Conversation decision quality | 用户消息 + committed Observation/Feedback | direct/clarification/action 选择、Tool/Agent 参数、最终回答 | 权限、执行事实 |
+| Investigation planning quality | UserRequirement + Project journal + Observation | SubGoal、依赖、repair、frozen-work 保持 | Tool 实际执行、发布资格 |
+| Workflow/Domain tests | Command + current state | 事务不变量、合法迁移、幂等、版本隔离 | 开放式语义选择 |
 | Capability quality | CapabilityRequirement + Registry/Policy | native/MCP/A2A eligibility、coverage、scope、binding、rank、拒绝原因 | 最终答案质量 |
 | Tool quality | tool definition/call | governance、schema、risk、HITL、幂等、artifact contract | 为什么选择这个工具 |
 | RAG quality | retrieval + answer run | recall、ranking、faithfulness、citation、contradiction | 顶层控制决策 |

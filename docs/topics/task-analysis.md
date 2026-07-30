@@ -1,4 +1,9 @@
-# Task Analysis 与 Goal Graph Compile
+# 历史设计：Task Analysis 与 Goal Graph Compile
+
+> 状态：`TaskAnalyzer` 与统一 `GoalGraphCompiler` 已从正式 Conversation 主链删除。本文只保留
+> 旧架构诊断价值，不是当前能力说明；当前短 Interaction 与 durable Project 的语义 owner 分别见
+> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md) 和
+> [Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)。
 
 入口不使用关键词 Intent Router。语义理解与正式任务建立分成两个权责边界：
 

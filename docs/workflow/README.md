@@ -1,31 +1,65 @@
 # Workflow 文档索引
 
-> 顶层文档总入口见 [docs/README.md](../README.md)。
+> 顶层文档总入口见 [docs/README.md](../README.md)，当前架构与三条生产主链以
+> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md) 为准。
 
-本目录只描述“请求如何被编排和执行”。数据模型、长期知识生命周期和未来规划分别放在 `docs/summary`、`docs/topics`、`docs/future`，避免同一概念在多处重复定义。
+本目录只描述请求如何进入明确 Application Use Case、领域状态机、Tool/Agent Gateway 或后台
+worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph 总图。
 
-## 阅读顺序
+## 当前运行形态
 
-1. [Entry 到 Executive Agent Loop](entry-executive-agent-loop.md)：一次 `entry` 请求如何分析、决策、执行、观察、验证、暂停、恢复并输出。
-2. [Procedure 框架总览](workflow-framework.md)：Governed Procedure、LangGraph action execution、HITL/checkpoint、ReAct 子图和运行时边界。
-3. [Workspace 生命周期 Workflow](workspace-lifecycle-workflow.md)：Artifact/Evidence 优先入库、Claim 增强、准入、冲突、ProjectionJob 和 e2e 质量口径。
-4. [Capture / Ask 当前流程](capture-ask-model-flow.md)：Capture 入库、Ask 多源证据、WorkspaceRetriever、ContextPack、verify/repair 的真实链路。
-5. [Evidence Engine](evidence-engine.md)：Ask 与 Research 共享的证据归一、装配、引用选择和 claim grounding。
+```text
+短动态请求
+  -> ConversationService Interaction loop
 
-## 单 Procedure / 能力链路文档
+固定事务
+  -> explicit Application Use Case / Domain state machine
 
-- [delete_knowledge](delete-knowledge-workflow.md)：高风险删除的候选召回、目标解析、HITL 确认和幂等执行。
-- [solidify_conversation](solidify-conversation-workflow.md)：从 checkpoint 对话生成可入库草稿，并复用 capture 主链路写入。
-- [research_once](research-once-workflow.md)：ResearchService 的 evidence-driven loop、来源聚类、个人相关性排序、digest 和 claim verification。
-- [MCP task-domain workflow](github-mcp-workflow.md)：GitHub / Notion MCP 的 capability-first task-domain workflow、Resolver、ToolGateway 治理和 e2e golden set。
-- [GPT Researcher A2A](gpt-researcher-a2a-workflow.md)：以动态 Agent capability 委派外部研究，并由主 Agent 验证结果。
+动态且必须跨进程、用户轮次或审批恢复
+  -> InvestigationProject aggregate + worker
+```
 
-## 当前架构口径
+三条路径共享“Proposal 不是权限、执行事实不是完成证明”的框架不变量，但各自拥有独立
+生命周期和恢复事实。
 
-- `TaskAnalysis + GoalRelation` 是入口语义提案，`GoalGraphCompiler` 确定性生成 `TaskContract`、初始 `TaskRuntimeProjection` 与 `ContextInventory`。
-- `ExecutiveGraph` 是唯一顶层控制器；它按 Observation 每轮选择一个动作，并可受约束修订推断关系。
-- `ProcedureSpec / ProcedureCatalog` 只承载稳定事务，不负责顶层意图路由。
-- `ActionExecutionGraph` 执行当前 `BoundedAction` 或 Procedure；局部 ReAct 不能修改任务计划。
-- Workspace 是长期知识生命周期服务边界：Artifact / EvidenceBlock / EvidenceSpan 是摄取成功边界，Claim / Grounding / Admission / Conflict 是后续增强链路，ProjectionJob 负责把知识投影到 UI、Review、Graph 和检索索引。
-- Ask 的主链路仍是 `AskService` 四阶段管线；Workspace 作为 `WorkspaceRetriever` 进入统一证据池，并把 `EvidenceRef / evidence_coverage / missing_sections` 暴露给回答质量评估。
-- Capture 仍保留 `IngestionPipeline` 的 note/chunk/review/graph sync 能力；Claim/Evidence 生命周期由 Workspace 作为业务状态真源承载。
+## 当前链路文档
+
+1. [Capture / Ask 当前流程](capture-ask-model-flow.md)：Capture ingestion、Workspace
+   Artifact/Evidence/Claim 与 Ask 多源证据、ContextPack、verify/repair；
+2. [Workspace 生命周期](workspace-lifecycle-workflow.md)：Artifact/Evidence 优先入库、
+   Claim/Grounding/Admission/Conflict 与 ProjectionJob；
+3. [Evidence Engine](evidence-engine.md)：Ask 与 Research 共享的证据归一、装配、引用选择和
+   claim grounding；
+4. [知识删除/恢复](delete-knowledge-workflow.md)：明确 Application Use Case、确认、单 digest、
+   Receipt 和 replay；
+5. [一次性研究](research-once-workflow.md)：`ResearchService` 的来源、事件、digest 与领域终态；
+6. [GPT Researcher A2A](gpt-researcher-a2a-workflow.md)：child lifecycle、Artifact 与父级综合边界。
+
+Conversation Interaction loop 不在本目录复制，统一见
+[Agent 主循环、Tool 与治理](../interview/03-agent-loop-and-governance.md)。Durable Investigation
+当前事实见
+[Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)。
+
+## 历史迁移资料
+
+以下文件仍保留旧 `TaskAnalyzer -> GoalGraph -> Executive -> LangGraph` 设计推导，已在文件顶部
+标明历史状态，不得作为当前生产事实：
+
+- [Entry 到 Executive Agent Loop](entry-executive-agent-loop.md)；
+- [Governed Procedure 与 Step Projection](workflow-framework.md)；
+- [MCP Codebase Capability](github-mcp-workflow.md)。
+
+保留它们的唯一用途是解释旧结构为何被删除或迁移。完成调用方和引用清理后，应移动到明确的
+历史归档或删除，不能长期与 current 文档并列。
+
+## 当前事实所有权
+
+- Conversation：`ConversationService` / Interaction journal；
+- Capture/Ask/Knowledge：对应 Application Service 与 Workspace canonical store；
+- Delete/Restore：`KnowledgeLifecycleService` 与 immutable Command/Receipt；
+- Research/Subscription/Delivery：`ResearchService`、worker queue 与各自 Store；
+- Investigation：`InvestigationProject` aggregate、append-only journal 与 Completion Gate；
+- Tool/Agent execution：`ToolGateway` / `AgentGateway`；
+- 产品与发布证据：`evidence_catalog.py`、trace archive 与 `release_gate.py`。
+
+Workflow 文档只能引用这些 owner，不能再创建第二套 Task、Plan、Event 或状态表。

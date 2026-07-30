@@ -1,5 +1,10 @@
 # 执行与反馈层说明
 
+> 状态：本文的 step panel、GoalGraph 事件和 HITL 图状态主要来自已删除的旧总编排链，不能
+> 作为当前 SSE 或执行事实的 canonical owner。当前 Conversation SSE 合约见
+> [入口层说明](entry.md)，运行时事实边界见
+> [核心架构当前状态](../summary/core-architecture-current-state.md)。
+
 本文汇总当前项目执行与反馈层的职责划分、当前能力、已知限制和后续改进方向。
 
 ## 设计目标

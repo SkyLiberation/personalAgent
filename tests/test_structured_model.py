@@ -12,9 +12,10 @@ from pydantic import BaseModel
 from personal_agent.kernel.config_models import LangSmithConfig, StructuredConfig
 from personal_agent.infra.structured_model import (
     FullTracePayloadPolicy,
+    JsonObjectStructuredAdapter,
     ModelCallDeadlineExceeded,
     ObservedStructuredModelClient,
-    OpenAIModelClient,
+    StrictJsonSchemaAdapter as OpenAIModelClient,
     RedactedTracePayloadPolicy,
     RetryingStructuredModelClient,
     UsageRecordingStructuredModelClient,
@@ -212,7 +213,7 @@ def test_openai_adapter_unwraps_nested_chat_completion_envelope(monkeypatch):
     assert result.content == '{"ok":true}'
 
 
-def test_openai_adapter_retries_json_transport_after_empty_nested_completion(monkeypatch):
+def test_strict_adapter_repairs_empty_nested_completion_without_downgrade(monkeypatch):
     calls: list[dict[str, object]] = []
     empty_nested_envelope = json.dumps({
         "id": "nested-completion",
@@ -251,12 +252,12 @@ def test_openai_adapter_retries_json_transport_after_empty_nested_completion(mon
     assert result.value == ExampleOutput(ok=True)
     assert cached_result.value == ExampleOutput(ok=True)
     assert calls[0]["response_format"]["type"] == "json_schema"
-    assert calls[1]["response_format"] == {"type": "json_object"}
-    assert calls[2]["response_format"] == {"type": "json_object"}
+    assert calls[1]["response_format"]["type"] == "json_schema"
+    assert calls[2]["response_format"]["type"] == "json_schema"
     assert len(calls) == 3
 
 
-def test_openai_adapter_removes_response_format_after_two_empty_nested_completions(monkeypatch):
+def test_strict_adapter_fails_closed_after_one_invalid_repair(monkeypatch):
     calls: list[dict[str, object]] = []
     empty_nested_envelope = json.dumps({
         "id": "nested-completion",
@@ -272,7 +273,7 @@ def test_openai_adapter_removes_response_format_after_two_empty_nested_completio
 
         def _create(self, **kwargs):
             calls.append(kwargs)
-            content = empty_nested_envelope if len(calls) <= 2 else '{"ok":true}'
+            content = empty_nested_envelope
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(
                     content=content,
@@ -289,16 +290,12 @@ def test_openai_adapter_removes_response_format_after_two_empty_nested_completio
         model="structured-model",
     ))
 
-    result = client.generate(_request())
-    cached_result = client.generate(_request("second request"))
+    with pytest.raises(ValueError, match="structured parse failed"):
+        client.generate(_request())
 
-    assert result.value == ExampleOutput(ok=True)
-    assert cached_result.value == ExampleOutput(ok=True)
     assert calls[0]["response_format"]["type"] == "json_schema"
-    assert calls[1]["response_format"] == {"type": "json_object"}
-    assert "response_format" not in calls[2]
-    assert "response_format" not in calls[3]
-    assert len(calls) == 4
+    assert calls[1]["response_format"]["type"] == "json_schema"
+    assert len(calls) == 2
 
 
 def test_openai_adapter_switches_to_streaming_after_provider_returns_sse(monkeypatch):
@@ -468,7 +465,7 @@ def test_openai_adapter_unwraps_fenced_nested_completion_envelope(monkeypatch):
     assert result.content == '{"ok":true}'
 
 
-def test_openai_adapter_falls_back_to_json_object_when_json_schema_is_unavailable(monkeypatch):
+def test_strict_adapter_does_not_downgrade_when_json_schema_is_unavailable(monkeypatch):
     calls: list[dict[str, object]] = []
 
     class FakeOpenAI:
@@ -479,13 +476,7 @@ def test_openai_adapter_falls_back_to_json_object_when_json_schema_is_unavailabl
 
         def _create(self, **kwargs):
             calls.append(kwargs)
-            if len(calls) == 1:
-                raise RuntimeError("response_format type is unavailable now")
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
-                model="structured-model",
-                usage=None,
-            )
+            raise RuntimeError("response_format type is unavailable now")
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     client = OpenAIModelClient(StructuredConfig(
@@ -494,16 +485,14 @@ def test_openai_adapter_falls_back_to_json_object_when_json_schema_is_unavailabl
         model="structured-model",
     ))
 
-    result = client.generate(_request())
+    with pytest.raises(RuntimeError, match="response_format type is unavailable"):
+        client.generate(_request())
 
-    assert result.value == ExampleOutput(ok=True)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0]["response_format"]["type"] == "json_schema"
-    assert calls[1]["response_format"] == {"type": "json_object"}
-    assert "output schema" in calls[1]["messages"][-1]["content"]
 
 
-def test_openai_adapter_retries_plain_text_json_after_incomplete_json_object(monkeypatch):
+def test_json_object_adapter_repairs_incomplete_json_and_aggregates_usage(monkeypatch):
     calls: list[dict[str, object]] = []
 
     class FakeOpenAI:
@@ -514,17 +503,19 @@ def test_openai_adapter_retries_plain_text_json_after_incomplete_json_object(mon
 
         def _create(self, **kwargs):
             calls.append(kwargs)
-            if len(calls) == 1:
-                raise RuntimeError("response_format type is unavailable now")
-            content = "{}" if len(calls) == 2 else '{"ok":true}'
+            content = "{}" if len(calls) == 1 else '{"ok":true}'
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
                 model="structured-model",
-                usage=None,
+                usage=SimpleNamespace(
+                    prompt_tokens=5,
+                    completion_tokens=3,
+                    total_tokens=8,
+                ),
             )
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
-    client = OpenAIModelClient(StructuredConfig(
+    client = JsonObjectStructuredAdapter(StructuredConfig(
         api_key="key",
         base_url="https://llm.invalid",
         model="structured-model",
@@ -533,10 +524,50 @@ def test_openai_adapter_retries_plain_text_json_after_incomplete_json_object(mon
     result = client.generate(_request())
 
     assert result.value == ExampleOutput(ok=True)
-    assert len(calls) == 3
+    assert result.input_tokens == 10
+    assert result.output_tokens == 6
+    assert result.total_tokens == 16
+    assert len(calls) == 2
+    assert calls[0]["response_format"] == {"type": "json_object"}
     assert calls[1]["response_format"] == {"type": "json_object"}
-    assert "response_format" not in calls[2]
-    assert "output schema" in calls[2]["messages"][-1]["content"]
+    assert "Output schema" in calls[0]["messages"][0]["content"]
+    assert "previous structured response was rejected" in calls[1]["messages"][0]["content"]
+    assert "Never repeat a value identified as invalid" in (
+        calls[1]["messages"][0]["content"]
+    )
+    assert "omit that item" in calls[1]["messages"][0]["content"]
+
+
+def test_json_object_adapter_fails_closed_after_one_empty_repair(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
+                model="structured-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = JsonObjectStructuredAdapter(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="structured-model",
+        output_transport="json_object",
+    ))
+
+    with pytest.raises(ValueError, match="empty structured content"):
+        client.generate(_request())
+
+    assert len(calls) == 2
+    assert all(call["response_format"] == {"type": "json_object"} for call in calls)
 
 
 def test_openai_adapter_asks_model_to_reauthor_cross_field_invalid_json(monkeypatch):
@@ -569,7 +600,7 @@ def test_openai_adapter_asks_model_to_reauthor_cross_field_invalid_json(monkeypa
     assert result.value == ExampleOutput(ok=True)
     assert len(calls) == 2
     assert calls[1]["response_format"]["type"] == "json_schema"
-    assert "previous structured response was rejected" in calls[1]["messages"][-1]["content"]
+    assert "previous structured response was rejected" in calls[1]["messages"][0]["content"]
 
 
 def test_redacted_policy_removes_message_and_response_bodies():
@@ -672,6 +703,25 @@ def test_composition_omits_observer_when_tracing_is_disabled():
     assert isinstance(client.transport._delegate, RetryingStructuredModelClient)
     assert client.transport._delegate._backoff_seconds == 2.0
     assert isinstance(client.transport._delegate._delegate, OpenAIModelClient)
+
+
+def test_composition_selects_json_object_adapter_from_provider_profile():
+    client = build_structured_model_client(
+        StructuredConfig(
+            api_key="key",
+            base_url="https://llm.invalid",
+            output_transport="json_object",
+        ),
+        LangSmithConfig(enabled=False),
+    )
+
+    assert isinstance(client, GovernedModelClient)
+    assert isinstance(client.transport, UsageRecordingStructuredModelClient)
+    assert isinstance(client.transport._delegate, RetryingStructuredModelClient)
+    assert isinstance(
+        client.transport._delegate._delegate,
+        JsonObjectStructuredAdapter,
+    )
 
 
 def test_composition_returns_none_when_model_is_unconfigured():

@@ -1,6 +1,12 @@
 # Durable Investigation Project 长任务能力交付设计
 
-> 状态：生产实现已装配，发布证据尚未闭环。当前事实由
+> 状态：历史目标设计。Project 生产实现与 live IP01 target 已落地，当前事实和证据边界见
+> [Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)。
+> 本文只保留 baseline、设计推导和未采用方案，不再是 active future owner，也不能反向覆盖当前
+> Aggregate、Plan、journal 或 Completion 语义。
+>
+> 原状态记录：生产实现已装配，IP01 repair target E2E 已通过；完整 live capability matrix 与方差
+> 证据尚未闭环。当前事实由
 > [`durable-investigation-project-current-state.md`](../summary/durable-investigation-project-current-state.md)
 > 所有；本文只保留目标、尚未满足的发布门禁和删除条件。LT01–LT13 当前是使用 scripted
 > semantic ports/frozen providers 的诊断 E2E，不能证明真实模型和真实 Provider 可上线。
@@ -565,8 +571,24 @@ SubGoalExecutionProposal
 
 第一版复用当前 Tool/Agent typed contract 的业务字段，但增加 Project/revision/scope binding。
 Execution Proposer 是 structured model 调用；它只能看到当前 `EffectiveCapabilities` 和 admitted
-context。Admission 验证 tool/agent 存在、schema、scope、budget、revision 和重复 action，不
-修补 arguments、AgentTask 或 context refs。
+context。它的 structured output schema 必须把 `tool_name`/`agent_id` 收窄到当前 SubGoal 经
+deterministic matching 后的 identity 集合，不能只靠 Prompt 要求模型选择正确能力。Admission
+再次验证 tool/agent 存在、schema、scope、budget、revision 和重复 action，不修补 arguments、
+AgentTask 或 context refs；当系统存在匹配能力但 Proposal 选了集合外 identity 时返回可修订的
+semantic rejection，只有匹配集合为空时才返回 `capability_missing`。
+
+repair SubGoal 还必须携带被其修复的 frozen SubGoal canonical refs。Execution Proposer 只可见
+依赖和递归 repair-lineage 闭包对应执行产生的 admitted evidence，以及用户直接提供的 locator；
+禁止把同一 Project 中其他主题的搜索候选混入 locator schema。该 lineage 是 Plan 接受事实，
+不得从 repair id、objective 字符串或 URL host 猜测。模型对 observed URL 只选择 candidate id，
+确定性代码绑定 canonical locator；来源类型、是否属于产品博客、官方性和排除项仍由 Semantic
+Admission/Verifier 判断。确定性 Admission 只校验 locator 是否来自允许的 evidence lineage，
+不能用 host 字符串规则冒充语义判断。
+
+Execution Admission 的可修订拒绝写入 Project journal，并在同一 accepted Plan/SubGoal 上局部
+重提；它不创建全局 `ReplanRequest`。只有 Plan 语义、assumption、coverage、capability 或用户
+steering 改变时才进入全局 Replan。verification gap 与这些语义变化分别消费
+`max_evidence_repair_revisions` 和 `max_plan_revisions`。
 
 accepted Tool proposal 进入 ToolGateway。accepted Agent proposal 先经过 data-egress Policy：
 无需审批时创建 DelegationGrant；需要审批时确定性复制 Proposal 字段形成 immutable
@@ -579,6 +601,7 @@ accepted Plan 绑定 `capability_snapshot_revision`，dispatch 前读取最新 i
 - Execution Proposer 根据 capability contract 选择当前具体 operation、Tool 或 Agent；
 - exact tool/agent id 存在且 contract 满足：继续 Admission；
 - 多个 Provider 完整属于同一 `CapabilityEquivalenceClass`：Resolver 可确定性绑定；
+- 同一 Tool 下语义不等价的 URL reader 使用显式单值配置绑定，不按失败结果 runtime fallback；
 - 存在语义差异：返回 feedback，由 Execution Proposer 或用户选择；
 - capability 缺失、denied 或 unhealthy：typed failure，pause/fail closed；
 - 禁止选择“最像”能力或换 Provider 冒充用户指定结果。
@@ -709,6 +732,11 @@ Tool/Agent output 先写其 owner，再经过 Evidence Admission：
 - Project Verifier 使用 admitted evidence 产生 typed `SubGoalVerificationAssessment`；
 - FinalReport Verifier 检查报告 claim、citation、limitation 与 requirement mapping；
 - Planner/Verifier schema、Prompt 和边界行为进入 Golden Set。
+
+Replanner 只读取预算化 evidence projection。Web Search projection 必须从当前 canonical
+Tool artifact `data.results` 派生候选 title、URL、host、provider date、显式日期和 bounded
+snippet。候选 URL 不是 verified evidence，但它必须作为结构化候选保留，使 Replanner 能选择
+已存在的 page-reading capability，而不是因投影丢失反复搜索。
 
 ### 10.6 Plan Quality Golden Set
 

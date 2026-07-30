@@ -117,40 +117,44 @@ AgentTurnDecision
 
 对应代码：[AgentGateway](../../src/personal_agent/agents/gateway.py)。
 
-## 5. 请求五：保存刚才的结论
+## 5. 请求五：确认后保存我明确写出的结论
 
 用户输入：
 
-> 把刚才关于 SLO 的结论保存下来。
+> 请保存结论：SLO 预算需要每周复核。保存前先让我确认。
 
 ### 5.1 产品流程如何运行
 
-当前已验证入口是：
+当前 E14 已验证 Conversation 入口：
 
 ```text
-POST /api/workspace/solidify-conversation
+POST /api/conversation/turn
+  -> 模型选择 prepare_conversation_knowledge_save
+  -> 模型逐字选择 user-authored knowledge text_span + source index
+  -> Admission 机械证明 span 存在于对应 user message
+  -> Runtime 只冻结 exact span 为 immutable Command
+  -> awaiting_confirmation + command_digest
+  -> Interaction journal
+
+POST /api/conversation/runs/{run}/knowledge-save-decision
+  -> principal/workspace/digest 校验
   -> WorkspaceService.solidify_conversation
-  -> 区分 user messages 与 assistant candidates
-  -> 只把用户明确陈述写入 ingestion transaction
-  -> assistant candidates 全部拒绝自动固化
   -> Artifact/Evidence/Claim/KnowledgeItem
+  -> Receipt
 ```
 
-E08 自动断言 Ask 前后 Claim 数不变，显式 solidify 后才写入用户 Claim，assistant candidate 不成为长期事实。
+E14 自动断言确认前 Claim 零增长、重启后 Command 不变、跨 scope 404、confirm 后只新增精确
+结论 Claim 且没有“请求保存/先确认”控制语义，Receipt 精确引用该 Claim，replay 返回同一
+Receipt 且 Claim 不再增长。E08
+继续证明专用 solidify API 不自动保存 assistant candidate。
 
-### 5.2 普通 Conversation 当前能否自动进入
+### 5.2 当前边界
 
-不能完整进入。
-
-普通 Conversation 的能力列表来自：
-
-```python
-list_tools(exposures={"public_agent"})
-```
-
-而 `capture_text` 是 `workflow_activity`。所以保存 Workflow 本身已经实现，但尚未通过 scoped capability、Command preparation 和对话内确认机制接入普通 Conversation。
-
-面试时要主动说明这个边界，不能把“产品 API 可执行”描述成“自然语言 Agent 已能保存”。
+已贯通的是“模型从 user message 逐字选择知识 span、Admission 机械校验、确认后保存精确
+结论”。B02 archive `20260729T031804.415533Z-15972-214cb81c` 证明旧整消息冻结会污染 Claim；
+E14 archive `20260729T033339.065714Z-22692-16415241` 已闭合该缺口。系统仍不把 assistant
+answer 当用户事实自动保存；assistant candidate、冲突核对和其他 governed action 需要各自
+baseline，不能从 E14 外推。`capture_text` 仍未向 Conversation 暴露。
 
 ## 6. 请求六：删除知识并支持恢复
 
@@ -260,12 +264,10 @@ investigation worker
 模型自己选择并重排 Workflow 内部所有 Activity
 ```
 
-例如未来可以向 Conversation 暴露：
+例如当前已向 Conversation 暴露：
 
 ```text
-prepare_knowledge_delete
-prepare_conversation_solidify
-prepare_research_subscription
+prepare_conversation_knowledge_save
 ```
 
 不应该暴露：
@@ -289,7 +291,8 @@ research_verify_digest
 | GitHub/Notion MCP | 模型选择 discovered Tool | Conversation | 是 |
 | GPT Researcher | 模型选择 Agent profile | Conversation | 是 |
 | Workspace Ask | 产品 UI/API | Workspace API | 不是统一 Conversation 路径 |
-| 显式保存 | 产品 UI/API | solidify API | 否 |
+| 明确 user message 的确认后保存 | 模型选择 Application Capability + 用户确认 | Conversation + Workspace solidify | 是（E14 定向通过） |
+| 保存 assistant candidate / 冲突核对后保存 | 未准入 | 无 | 否 |
 | 删除/恢复 | 产品 UI/API + 用户确认 | lifecycle API | 否 |
 | 创建/修改订阅 | 产品 UI/API | Research API | 否 |
 | 定时运行 | Scheduler/Worker | Queue | 不应由每轮对话决定 |

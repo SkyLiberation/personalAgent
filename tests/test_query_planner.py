@@ -207,9 +207,9 @@ def test_call_planner_llm_prefers_planner_json_schema(monkeypatch) -> None:
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     settings = Settings()
-    from personal_agent.infra.structured_model import OpenAIModelClient
+    from personal_agent.infra.structured_model import StrictJsonSchemaAdapter
 
-    client = OpenAIModelClient(
+    client = StrictJsonSchemaAdapter(
         StructuredConfig(
             api_key="planner-k",
             base_url="https://dashscope.invalid/compatible-mode/v1",

@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-本文记录截至 2026-07-27 已落地的生产架构事实。尚未落地的设计只进入
+本文记录截至 2026-07-30 已落地的生产架构事实。尚未落地的设计只进入
 [future 索引](../future/README.md)，不能反向定义当前架构；产品能力、E2E 和发布可信度的当前事实由
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md) 拥有。
 [`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 只保存已删除旧架构的历史诊断
@@ -11,6 +11,84 @@
 不泄漏内部 Tool、Agent、Artifact、verdict 或执行顺序的自然用户场景；当前定向证据见
 `phase0-capability-release-baseline.md`。旧完整 archive 不再匹配当前 catalog，当前完整矩阵
 和 clean-revision 发布资格都尚未建立。
+
+Conversation governed save 的 pre-change B01 archive 为
+`data/e2e_traces/20260728T083321.588087Z-48120-2ce6f484`。B02 semantic baseline
+`data/e2e_traces/20260729T031804.415533Z-15972-214cb81c` 证明整条 user message 会把保存/确认
+控制语义写成 Claim；修复后 E14 archive
+`data/e2e_traces/20260729T033339.065714Z-22692-16415241` 证明 exact-span Command、精确结论
+Claim、控制语义反事实、恢复和 replay。它们均来自 dirty worktree，只是定向工程证据，不建立
+发布资格。
+
+## 0. 框架命题：可信 Agent Runtime
+
+personalAgent 的顶层目标不是让模型“多调用几个 Tool”，也不是把自然语言机械转换成 JSON，
+而是建立一套能够长期承载知识、外部能力和真实副作用的可信 Agent Runtime：
+
+> 模型负责开放世界的语义判断；确定性系统负责准入、权限、状态迁移和执行；执行系统产生事实；
+> Verifier 判断语义结果；Completion Gate 依据 required result contract 判断用户目标是否关闭。
+
+主链可以压缩为一个稳定协议：
+
+```text
+User Goal + Visible Context + Committed Observation
+  -> Semantic Model proposes a typed Decision
+  -> Admission / Policy accepts or rejects
+  -> Gateway / Executor produces an Execution Fact
+  -> Verifier assesses evidence-backed outcome
+  -> Completion Gate closes or keeps the obligation open
+```
+
+这里的 typed JSON 是模型与 Runtime 之间的 wire representation，不是架构本身。object-root、
+Pydantic、OpenAI-compatible transport、手写 loop 或 LangGraph 都可以替换；以下权力边界不能
+随实现替换而改变：
+
+1. **Proposal 不是权限**：模型可以选择业务能力和参数，不能给自己授权；
+2. **Proposal 不是执行事实**：模型声称“已经完成”不能替代 Tool、Command、Journal 或 Receipt；
+3. **Admission 只裁决，不创作语义**：它可以拒绝并返回 typed feedback，不能补业务参数、换目标
+   或生成替代答案；
+4. **Execution、Verification、Completion 分离**：Tool `ok=true`、Agent `completed`、数据库新增
+   记录和 Verifier 通过分别只证明各自事实；
+5. **一个业务事实只有一个 owner 和写入口**：索引、Graph、Runtime projection 与 View 不成为
+   第二写源；
+6. **复杂度由生命周期而不是 Agent 术语准入**：固定事务不交给 Planner，短请求不承担 durable
+   Project 成本，没有失败 E2E 的新机制不进入主链。
+
+### 0.1 三种运行形态
+
+| 用户目标形态 | 下一步 owner | 当前运行形态 | 为什么 |
+| --- | --- | --- | --- |
+| 短、动态、无需跨请求维持交付义务 | 模型逐轮提出下一步 | Conversation Interaction loop | Observation 会改变下一步，但不需要持久化 Plan |
+| 拓扑和事务不变量固定 | Application / Domain | 明确的 Use Case / Workflow | 模型不能重排确认、写入、Receipt 或补偿顺序 |
+| 路径动态且跨进程、用户轮次或审批边界 | 模型提出 Plan，Aggregate 决定合法迁移 | Investigation Project | accepted Plan、ready set、journal 和 Completion obligation 都有生产消费者 |
+
+这三条主链共享 Proposal、Admission、Execution Fact 和 Completion 的权力观，但不共享一个
+God Task、God State 或统一 Planner。框架统一的是不变量，不是把所有生命周期塞进同一个对象。
+
+### 0.2 现实故障如何支撑框架
+
+| 已观察问题 | 执行证据 | 支撑的框架原则 |
+| --- | --- | --- |
+| 模糊新请求被旧答案冒充完成 | E01 baseline `20260729T033100.290836Z-35328-02db4988` | 生成文本不等于完成；澄清是显式终态 |
+| 整条保存请求把“请保存、先确认”等控制语义写成 Claim | B02 `20260729T031804.415533Z-15972-214cb81c` | 模型语义选择、用户授权和 canonical write 必须分离 |
+| exact-span 保存需要确认、恢复、scope 拒绝和 replay | E14 `20260729T033339.065714Z-22692-16415241` | Proposal、Command、Receipt 与知识写入口各自拥有事实 |
+| terra 在顶层 union structured schema 上 retry 超时 | Phase 0 Provider probe/E17 记录 | Provider transport 是可替换能力边界，不能污染业务 contract |
+| 子 Agent 返回 Artifact 后仍被重复委托，或 child terminal 被误当父完成 | E17/C04/L04 定向 archive | child execution fact 与父级综合、完成分离 |
+| live Investigation 有搜索结果却因 repair lineage 不闭合而无法交付报告 | B03 到 IP01 的同输入 archive 链 | Evidence Admission、Plan revision 和 Completion obligation 必须由 durable owner 维护 |
+
+这些 archive 证明的是对应工作树和输入上的工程事实，不自动建立 clean-revision 发布资格。
+框架的可信度来自“问题—owner—最小改动—目标 E2E”链路，而不是来自“对齐优秀 Agent”的类图。
+
+### 0.3 当前实现与框架原则的边界
+
+| 层次 | 当前选择 | 稳定性 |
+| --- | --- | --- |
+| 框架不变量 | Proposal → Admission → Execution Fact → Verification → Completion | 稳定，改变需 ADR 与产品 E2E |
+| 产品运行形态 | Conversation / Application Workflow / Investigation Project | 稳定，按生命周期选择 |
+| 模型协议 | `AgentTurnDecision` object-root envelope | 当前 Provider 约束下的实现，可由同等 contract 替换 |
+| Schema/transport | Pydantic + strict JSON Schema 或 JSON Object Adapter | deployment capability，集中在 Model Adapter |
+| 编排技术 | 显式 Python loop、领域状态机、worker queue | 可替换，但不能改变 canonical owner |
+| 外部能力 | Tool、MCP、A2A Adapter | 可扩展，必须先通过 visibility、Admission、Gateway 与 E2E |
 
 ## 1. 架构边界与依赖方向
 
@@ -43,14 +121,20 @@ View / DTO  读取时组合，不成为新事实 owner
 同一事实只能有一个 canonical owner 和一个合法写入口。可确定性重建的值默认不持久化，
 禁止用 alias、双写、converter 或 fallback 维护新旧事实副本。
 
-包依赖由 `scripts/check_layers.py` 的显式 DAG 检查。当前结果为：
+包依赖由 `scripts/check_layers.py` 的显式 DAG 检查。2026-07-30 在当前工作树实际执行结果为：
 
 ```text
-unknown_packages=none
+unknown_packages=['context', 'skills', 'verification']
 missing_packages=none
 cycles=none
 forbidden_edges=0
+FAIL: 3 architecture violation(s)
 ```
+
+三个目录的生产 Python 文件正在删除，但残留目录仍被 gate 发现；因此此前“当前 DAG gate
+passed”的文档声明已失效。修复必须让 package discovery 与真实 Python package 定义一致，并
+重新执行 gate；不能只在文档中忽略失败。对应退出方案见
+[可信 Agent Runtime 演进与收敛计划](../future/trusted-agent-runtime-evolution.md)。
 
 ## 2. 正式入口与 Composition Root
 
@@ -147,6 +231,16 @@ AgentTurnDecision
 顺序、并发批次和最终消息。恢复后模型直接读取 committed typed inputs；恢复不会重复已提交
 action，也不要求生成一个没有生产调度消费者的中间 Plan。
 
+显式保存用户消息是当前唯一接入 Conversation 的 governed write。模型从
+`EffectiveCapabilities` 选择 `prepare_conversation_knowledge_save`，参数只能引用现有 user
+message 索引并逐字复制其中的知识 `text_span`；Admission 机械证明 span 确实存在且来源角色为
+user。Runtime 只冻结 exact span 与 source index 并产生一个 `command_digest`，Interaction journal 保存
+`awaiting_confirmation/rejected/executed` 和 Receipt。确认入口重新校验 principal、workspace、
+digest，执行时仍复用 `WorkspaceService.solidify_conversation`，不开放 `capture_text`，确认后
+也不让模型改写 payload。E14 已覆盖 exact span、确认前零写入、prepare 后重启、跨 scope
+拒绝、精确结论 Claim、控制语义零写入、Receipt 和成功 replay。提交知识与 journal Receipt
+之间的进程终止故障注入仍未覆盖。
+
 ## 4. Capability、Tool、MCP 与 A2A
 
 ### 4.1 EffectiveCapabilities
@@ -207,6 +301,7 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 | 产品能力 | Application owner | Canonical fact / 唯一写入口 |
 | --- | --- | --- |
 | Conversation | `ConversationService` | `InteractionTrace` / Interaction journal |
+| Conversation governed save | `ConversationService` + `WorkspaceService` | journal 拥有 Command/operation/Receipt；Workspace 固化方法仍是唯一知识写入口 |
 | Artifact | `ArtifactService` | application-owned ArtifactRef 和 Artifact Store |
 | Capture | `CaptureService` + Workspace ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
 | Grounded Ask | `WorkspaceService` | Workspace/Evidence 只读；Answer 不隐式写 Claim |
@@ -229,19 +324,25 @@ Item/Claim 的真实迁移产生状态事件，生命周期本身不复制 Event
 ## 6. Model Port 与 Provider 边界
 
 Application 只依赖 `StructuredModelClient` / `StreamingModelClient`，不直接依赖 OpenAI SDK。
-`infra/structured_model.py` 是唯一 OpenAI-compatible 生成式 Adapter：
+`infra/structured_model.py` 是唯一 OpenAI-compatible 生成式边界，共享 SDK 调用与响应归一化，
+并按 Provider/model capability profile 在 Composition Root 确定性选择：
 
-- structured：Chat Completions strict `json_schema`，Pydantic typed output；
+- `StrictJsonSchemaAdapter`：Provider 原生 strict `json_schema`；
+- `JsonObjectStructuredAdapter`：`json_object` + canonical Pydantic schema instruction；
 - tool calling/text：Chat Completions 的统一请求和响应提取；
 - streaming：typed `StreamChunk`；
 - observation：usage、latency、trace 由 decorator 记录；
 - retry：SDK 隐式 retry 关闭，`RetryingStructuredModelClient` 是唯一 retry owner；
+- repair：typed validation 失败最多请求同一模型完整重写一次，累计全部调用的 latency/token，
+  第二次仍无效则 fail closed；
 - timeout：connect/read/write/pool timeout 外，再执行完整 Provider 调用的 wall-clock
   deadline；structured SSE 消费也受该 deadline 约束。
 
-所有生成式 Adapter 从 canonical `STRUCTURED_*` 配置解析，当前模型为 `gpt-5.4-mini`；
-embedding 和 transcription 保持独立契约。Provider transport compatibility 可以改变传输
-格式，但不得修改 Prompt 语义、Proposal payload 或 typed output contract。
+所有生成式 Adapter 从 canonical `STRUCTURED_*` 配置解析；`STRUCTURED_OUTPUT_TRANSPORT`
+声明 deployment 的结构化输出能力，禁止根据一次异常在运行中切换协议。当前配置为
+`deepseek-v4-flash` + `json_object`；embedding 和 transcription 保持独立契约。Provider
+transport compatibility 可以改变传输格式，但不得修改 Prompt 语义、Proposal payload 或
+typed output contract。
 
 `StructuredModelRequest.context_projection_ref` 必填。边界明确、完整输入即 messages 的调用
 使用 content-addressed `sealed-context`；上下文内容变化会改变 digest。模型调用仍经过
@@ -295,7 +396,7 @@ Procedure 或迁移代码使用，但它们不是正式 Conversation 入口，�
 
 E2E 分类的唯一 owner 是 `evals/e2e_quality/evidence_catalog.py`：
 
-- E01–E13：原生产品能力；
+- E01–E14：原生产品能力；
 - C01–C04：组合产品能力；
 - L01–L06：自然复杂主循环、恢复、fail-closed 和 receipt-bound semantic revision；
 - E16–E19：真实外部 Provider profile，只作为相应产品旅程的组成证据。
@@ -350,6 +451,19 @@ Product API / CLI
 固定 Capture、Ask、Knowledge Lifecycle、Review、Research 和 Scheduled Intelligence 不为
 “更 Agentic”而强制进入 Planner。只有语义下一步无法预定义时才回到模型 Interaction loop。
 
+### 10.3 Conversation 内确认后保存
+
+```text
+POST /api/conversation/turn
+  -> ToolCallProposal(prepare_conversation_knowledge_save)
+  -> immutable Command + awaiting_confirmation
+  -> Interaction journal
+POST /api/conversation/runs/{run}/knowledge-save-decision
+  -> principal/workspace/digest validation
+  -> WorkspaceService.solidify_conversation
+  -> Receipt / replay same Receipt
+```
+
 ## 11. 当前架构不变量
 
 - 普通请求不强制创建 Task、GoalGraph、Command、Receipt 或 CompletionReport；
@@ -361,6 +475,7 @@ Product API / CLI
 - Tool 和 Agent 必须经过对应 Gateway，Adapter 不决定授权；
 - Agent Artifact、Tool Receipt、Semantic Verification 和 Domain Completion 互不冒充；
 - Ask 不隐式保存模型回答，长期知识只有明确 ingestion/write path；
+- Conversation 保存只冻结已选 user message；确认前、reject 和 scope denied 均不写知识；
 - 远程能力没有实际 discovery/availability 时 fail closed；
 - replay 不重新生成或覆盖冻结 Command，不重复副作用；
 - retrieval index 和 graph projection 不是知识事实 owner；
@@ -407,9 +522,14 @@ Product API / CLI
 
 1. 旧 23/23 archive 不匹配新版自然 E2E；提交后必须在 clean revision 重跑当前完整矩阵，才能
    建立发布资格；
-2. `conversation_id`、`interaction_run_ref` 等部分 Interface/Application identity 仍以受格式
+2. 当前 package DAG gate 因 `context`、`skills`、`verification` 残留目录返回失败；修复和重跑前
+   不得声称当前架构门禁通过；
+3. README、topics、workflow 和生成的 `egg-info/PKG-INFO` 仍残留已删除
+   TaskAnalyzer/GoalGraph/LangGraph 总主链表述；本轮已收敛权威入口并标记历史文档，完整清理仍需
+   通过链接与术语门禁；
+4. `conversation_id`、`interaction_run_ref` 等部分 Interface/Application identity 仍以受格式
    约束的字符串传递，尚未全部收敛为 Value Object；
-3. 全仓 Ruff 仍有范围外历史问题，变更范围 Ruff 通过不能写成全仓 lint 通过；
-4. GPT Researcher PDF 中文字体视觉质量尚未形成自动化 E2E；
-5. 仓库中仍有部分旧 Task/Control contract 和过期注释，需要按实际调用方继续删除或重新
+5. 全仓 Ruff 仍有范围外历史问题，变更范围 Ruff 通过不能写成全仓 lint 通过；
+6. GPT Researcher PDF 中文字体视觉质量尚未形成自动化 E2E；
+7. 仓库中仍有部分旧 Task/Control contract 和过期注释，需要按实际调用方继续删除或重新
    标明受限用途，避免再次被误认为生产主链。

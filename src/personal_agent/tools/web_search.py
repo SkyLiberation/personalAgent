@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 class WebSearchArgs(BaseModel):
-    query: str = Field(..., min_length=1, description="要搜索的公网信息问题或关键词。")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=400,
+        description="要搜索的公网信息问题或关键词，最多 400 个字符。",
+    )
     limit: int = Field(default=5, ge=1, le=10, description="返回搜索结果数量，范围 1-10。")
     scrape: bool = Field(
         default=False,
@@ -38,7 +43,7 @@ def build_web_search_tool(
         description=(
             "在公网搜索最新或个人知识库无法覆盖的信息，返回标题、URL、摘要和 evidence。"
             "会访问外部网络；优先使用 graph_search 查询个人知识，只有本地证据不足或问题需要最新公开信息时调用。"
-            "limit 必须在 1-10；scrape=true 会额外抓取正文摘要，成本更高，仅在搜索摘要不足时使用。"
+            "query 最多 400 个字符；limit 必须在 1-10；scrape=true 会额外抓取正文摘要，成本更高，仅在搜索摘要不足时使用。"
         ),
         args_schema=WebSearchArgs,
         response_format="content_and_artifact",
@@ -47,7 +52,7 @@ def build_web_search_tool(
             risk_level="low",
             side_effects=("external_network",),
             permission_scope="network:read",
-            timeout_seconds=20.0,
+            timeout_seconds=60.0,
             max_retries=1,
             retry_backoff_seconds=0.5,
             rate_limit_per_minute=30,

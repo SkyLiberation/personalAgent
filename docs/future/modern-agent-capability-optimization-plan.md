@@ -1,11 +1,23 @@
 # 现代 Agent 能力优化路线图
 
-> 状态：目标路线图，尚未实施。本文定义当前系统相对现代优秀 Agent 的产品能力缺口、交付顺序
-> 和目标证据，不拥有当前实现事实。当前事实以
+> 状态：历史混合路线图。Stage 1 exact-span 保存与 Stage 2 IP01 已落地，当前事实已迁入
+> summary/ADR；Stage 3–5 尚未取得各自正式入口 baseline，不能据此实施。剩余收敛与候选准入的
+> 唯一 active owner 是
+> [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md)。
+>
+> 原状态记录：Stage 1 的最小“从同一 user message 选择精确知识 span、确认后保存”纵切已由
+> B02 -> E14 定向通过；冲突核对、assistant candidate 保存及其他 governed action 尚未准入。本文只拥有
+> 未完成目标和交付顺序，当前实现事实以
 > [当前核心架构](../summary/core-architecture-current-state.md)、
 > [能力与发布基线](../summary/phase0-capability-release-baseline.md) 和对应 workflow 文档为准。
 > Durable Investigation Project 的模型、状态和发布门禁仍由
 > [专项目标设计](durable-investigation-project-design.md) 拥有，本文只引用其交付结果。
+> Stage 1 仍仅由 ADR 0006 的临时实验例外保留至 2026-08-28，尚不满足合并门禁；到期前未
+> 收敛净复杂度并取得 clean release evidence 时必须删除。
+> Stage 2 的 B03 failing baseline 与 IP01 target 已闭环；IP01 archive
+> `20260729T101501.732689Z-53628-6c5f02f2` 已从正式 HTTP/worker 交付 verified report。
+> 完整 live capability matrix、paired baseline 和重复运行方差仍是发布门禁；不得把单一
+> IP01 通过外推为整个 Investigation 产品可发布。
 
 ## 1. Goal / Current Incorrect Behavior / Expected User-visible Result
 
@@ -25,7 +37,7 @@ E2E 能力收敛成用户可感知的 Agent 闭环：
   -> 返回结果、证据、限制和执行 Receipt
 ```
 
-第一条必须闭合的用户旅程是：
+下一条候选用户旅程是：
 
 > 核对当前结论与我的已有知识；发现冲突时先向我说明，得到确认后再保存。处理中断后继续，
 > 不能重复写入，也不能把未确认草稿或其他 workspace 内容写入长期知识。
@@ -35,21 +47,24 @@ E2E 能力收敛成用户可感知的 Agent 闭环：
 
 ### 1.2 Current Incorrect Behavior
 
-当前不是某个单点算法错误，而是产品闭环不完整：
+当前不是某个单点算法错误，而是更丰富的产品闭环仍不完整：
 
-1. Conversation 可以直接回答、读取 Tool/MCP 和委托 Agent，但只加载 `public_agent` 能力；
+1. Conversation 可以直接回答、读取 Tool/MCP、委托 Agent，并准备确认后保存 user message
+   中由模型逐字选择且经 Admission 校验的知识 span；
 2. `POST /api/workspace/solidify-conversation` 已能显式保存，Delete/Restore、Subscription 等
    领域 Workflow 也有专用入口；
-3. 用户无法从同一个自然语言 Conversation 进入 scoped Application Capability、Pending
-   Confirmation、Resume 和 Receipt Observation；
-4. Investigation Project 的 durable runtime 已装配，但真实模型、真实 Provider、正式
-   HTTP/worker 的 live release E2E 尚未闭环；
+3. B02 -> E14 已证明显式 exact-span save 可进入 Pending Confirmation、恢复、精确 Claim、
+   Receipt 和 replay，且保存/确认控制语义不进入 Claim；
+   保存 assistant candidate、先核对冲突再保存、删除和订阅变更仍未贯通；
+4. Investigation Project 的 durable runtime、正式 HTTP/worker 和 live B03/IP01 harness 已
+   装配；B03 已证明 verification repair 会死锁，修复后 IP01 又证明同反馈重规划曾无限循环，
+   两者已由 conformance 回归闭合，IP01 最终 live report 已交付；完整 capability matrix 未闭合；
 5. 每轮向模型注入全部 public Tool schema，能力规模扩大后会增加上下文成本和误选风险；
 6. 当前定向 E2E 能证明若干路径在对应现场工作，但缺少同输入 baseline、重复运行方差和当前
    clean matching revision 的完整发布证据。
 
-因此，当前系统可以分别展示“会理解”“会读取”“会治理写入”“会恢复长任务”，还不能证明
-用户只表达一次目标后，Agent 能把这些能力组合成一件完整、可确认、可恢复和可验收的工作。
+因此当前已经有一个自然语言 governed write 的完整样本，但不能从一个样本外推到所有写操作，
+也不能声称路线图开头的“核对冲突后保存”复合目标已经完成。
 
 ### 1.3 Expected User-visible Result
 
@@ -119,7 +134,7 @@ use、Agent team、自动反思、通用 Planner 或 memory mechanism，仍必�
 | Real environment | Workspace Knowledge、Artifact、GitHub/Notion MCP、Web、A2A | 领域读取有基础 | 缺少可组合的 Knowledge Workspace 操作面和统一写入口 |
 | Context engineering | scope 过滤、ArtifactRef、sealed context、知识检索 | 事实边界清晰 | 全量 public schema 注入；缺 capability discovery、预算化 materialization 和质量对照 |
 | Human-in-the-loop | 领域确认、Project approval/steering/cancel | 后端语义较强 | Conversation 未统一暴露 Pending Confirmation 和 Resume |
-| Durable execution | Command/Receipt、worker queue、Project journal | 设计和 runtime 较强 | 普通 Interaction 是文件 journal；Project 缺 live release E2E |
+| Durable execution | Command/Receipt、worker queue、Project journal | verification repair 保留冻结执行、按 lineage 隔离证据且局部反馈有界；IP01 已通过 | 普通 Interaction 仍是文件 journal；完整 live matrix 未闭环 |
 | Specialist collaboration | AgentGateway、DelegationGrant、poll/cancel/stream、AgentArtifact | owner 边界清晰 | 当前 specialist 和组合场景少，尚无隔离工作区需求证据 |
 | Verification | grounded Ask、interaction verifier、Project Completion Gate | Execution/Verification/Completion 分离是优势 | 普通目标的 verifier requirement 仍窄，缺任务级自动检查和 paired eval |
 | Long-term knowledge | Artifact/Evidence/Claim/Relation lifecycle、可重建 retrieval projection | 当前最强的领域差异化 | 还没有通过统一 Agent 入口转化为用户闭环 |
@@ -155,11 +170,11 @@ Application Use Case 和 canonical ingestion path 完成写入。
 | 能力 | 当前状态 | 本路线图动作 | 生产消费者 | 失败语义 |
 | --- | --- | --- | --- | --- |
 | Conversation typed loop | 已有 | 保持，不新增通用 Plan | Conversation | budget/capability limitation |
-| identity/policy-aware capabilities | 需扩展 | Stage 1 先投影一个 scoped Application Capability | semantic model + Admission | authorization denied / capability missing |
-| Prepare/Confirm/Resume/Receipt Observation | 对话链缺失 | Stage 1 闭合 | 用户、Conversation、Workspace Use Case | confirmation required/rejected/expired |
+| identity/policy-aware capabilities | 部分已有 | 已投影一个 save Application Capability；其他能力必须重新走 baseline | semantic model + Admission | authorization denied / capability missing |
+| Prepare/Confirm/Resume/Receipt Observation | save 已闭合 | 只在新失败证据下扩展其他 action | 用户、Conversation、Workspace Use Case | confirmation required/rejected |
 | Workspace solidify canonical write | 已有专用 API | 复用，不创建第二写入口 | Workspace knowledge | validation/execution failure |
-| distributed Interaction confirmation state | 缺失 | Stage 1 只保存恢复确认所必需事实 | Conversation resume | recovery/invariant failure |
-| live Investigation delivery | runtime 已装配 | Stage 2 完成专项目标设计中的 live 门禁 | Project 用户和 worker | typed Project terminal failure |
+| Interaction confirmation state | save 已由 FileInteractionJournal 持有 | 先测跨实例/提交窗口，再决定是否下沉 | Conversation resume | recovery/invariant failure |
+| live Investigation delivery | B03 baseline 与 IP01 target 已闭环 | 执行完整 live matrix 和方差；新扩展重新走 baseline | Project 用户和 worker | typed Project terminal failure |
 | capability discovery/materialization | 缺失 | Stage 3 在规模证据后实现两阶段加载 | Conversation model context | no eligible capability |
 | context compaction | 未证明需要扩展 | Stage 3 先测再决定 | 长 Interaction / Project | context budget limitation |
 | task-specific executable verification | 部分已有 | Stage 4 从一个 Artifact/result contract 扩展 | Verifier / Completion Gate | verification/completion failure |
@@ -171,14 +186,15 @@ Application Use Case 和 canonical ingestion path 完成写入。
 
 ## 6. Simplest Baseline and Evidence of Insufficiency
 
-### 6.1 Baseline A: 当前 Conversation
+### 6.1 Baseline A: pre-change Conversation
 
 使用同一自然语言目标：
 
 > 把刚才关于 SLO 的结论核对后保存下来；如果与我已有知识冲突，先告诉我，不要直接覆盖。
 
-最简单 baseline 是当前 `POST /api/conversation/respond`。预期当前只能回答、读取或说明能力
-限制，不能完成对话内确认和 canonical solidify。必须保存：
+最简单 baseline 使用正式 `POST /api/conversation/turn`。B01 已实际执行并保存 archive
+`20260728T083321.588087Z-48120-2ce6f484`：模型要求确认，但没有 pending state、Tool call 或
+Claim 写入；同输入经 Workspace solidify 可写入，根因是 Conversation 协议缺口。
 
 - 最终用户可见结果；
 - Tool/Agent/Model 次数、token、延迟；
@@ -219,48 +235,54 @@ Project aggregate，除非 live baseline 暴露明确不变量错误。
 
 ## 7. Delivery Roadmap
 
-### Stage 0: 冻结 baseline 与 Golden Set
+### Stage 0: 每项扩展先冻结 baseline 与 Golden Set
 
-目标：在任何生产扩展前证明当前错误，并建立同输入对照。
+目标：在任何生产扩展前证明当前错误，并建立同输入对照。明确 user-message 保存的 B01 已执行，
+archive 为 `20260728T083321.588087Z-48120-2ce6f484`；“冲突核对后保存”等更丰富目标尚未执行
+baseline，因此尚未准入。
 
 交付：
 
-1. 为“核对后保存”建立自然表达 Golden Set，覆盖明确保存、禁止保存、代词指代、冲突、
-   scope denied、能力缺失、确认拒绝和 replay；
-2. 实际执行 Baseline A/B，保存 trace、用户结果和反事实；
-3. 明确 Stage 1 的复杂度预算和删除项；
-4. 在 E2E catalog 登记目标 product evidence，测试可以先失败但不得 skip。
+1. 选择一个尚未满足的具体用户目标并建立自然表达 Golden Set；
+2. 从最简单生产入口实际执行同输入 baseline，保存 trace、用户结果和反事实；
+3. baseline 未失败或失败来自环境/测试时立即停止；
+4. 只有产品失败成立后，才定义目标 E2E、复杂度预算、删除项和 catalog evidence。
 
 禁止只用内部 capability 名称或预期步骤提示模型。
 
-### Stage 1: Conversation Governed Knowledge Action
+### Stage 1: Conversation Governed Knowledge Action（定向 E2E 已通过，合并门禁未闭合）
 
-目标：从 Conversation 打通一个且仅一个 scoped Application Capability：
-“准备保存当前会话中用户明确要求保存的结论”。
+已完成范围：从 Conversation 打通一个且仅一个 Application Capability：模型从用户明确要求
+保存的既有 user message 逐字选择知识 span，Admission 校验来源后冻结，确认后复用 Workspace
+canonical write。B02 baseline archive 为 `20260729T031804.415533Z-15972-214cb81c`；E14
+target archive 为 `20260729T033339.065714Z-22692-16415241`。
 
 目标链：
 
 ```text
 Conversation message
-  -> identity/policy-aware capability projection
-  -> model proposes coarse Application Capability + explicit target intent
-  -> deterministic admission
-  -> Workspace Use Case prepares canonical candidate/Command
+  -> EffectiveCapabilities exposes coarse save capability
+  -> model proposes ToolCallProposal + exact user-authored spans/source indexes
+  -> deterministic admission proves exact source membership
+  -> Conversation freezes spans in immutable Command
   -> Pending Confirmation returned to user
   -> user confirms same run/task and digest
   -> resume frozen Command
-  -> existing solidify/ingestion write path
-  -> Receipt Observation
-  -> parent FinalMessage
+  -> Workspace solidify/ingestion canonical write path
+  -> Receipt returned by typed decision endpoint
 ```
 
-最小新增：
+已落地：
 
-- 一个粗粒度 scoped capability contract；
-- Pending Confirmation/Resume 所需的最小 durable state；
-- 对话响应中可恢复的 confirmation reference；
-- 将现有 Workspace solidify result/receipt 转成 typed Observation 的 Adapter；
-- 对应 Policy、contract test、E2E 和 trace 字段。
+- 一个粗粒度 capability 与 typed exact-span/source-index arguments，禁止保存/确认控制语义
+  进入冻结 payload；
+- immutable Command、单 digest、三态 operation、Receipt 和 journal revision；
+- typed decision endpoint 与 Workspace writer Port；
+- E14 及 confirm/reject/replay Runtime conformance test。
+
+未完成且不能由 E14 外推：冲突检索/核对、保存 assistant candidate、跨实例共享 journal、
+Workspace commit 与 journal Receipt 之间的 crash injection，以及把 Receipt 再交给父模型生成
+FinalMessage。它们必须分别由新的 baseline 失败证据准入。
 
 必须删除或关闭：
 
@@ -275,19 +297,103 @@ Conversation message
 目标：把现有 Investigation runtime 从 diagnostic evidence 升级为用户可验收的 live product
 capability。
 
-只执行
-[Durable Investigation Project 长任务能力交付设计](durable-investigation-project-design.md)
-尚未满足的门禁：
+当前已执行 B03 baseline
+`data/e2e_traces/20260728T123013.176272Z-42316-76b47a9c`。正式 HTTP、独立 Web/worker、
+PostgreSQL、真实 structured model 与真实 Web Search 均进入生产链；Project 在 Verifier 发现
+证据缺口后没有交付报告。该证据证明“执行后可能仍有语义缺口”，但不能证明当前
+`verification_repair` 实现合理。以下是随后由 IP01 target 验收的最小实现边界：
 
-- 正式 HTTP 创建、查询、steer、approve/cancel 入口；
-- 独立 Web/worker 进程和真实 PostgreSQL；
-- 真实 structured model；
-- 场景需要的真实 GitHub、Notion、Web 和 A2A profile；
-- 最终 generated Artifact、evidence coverage、limitation 和 Completion Gate；
+- deterministic Tool dispatch 使用绑定 Proposal、Tool definition 和 ExecutionScope 的 leaf grant；
+- Verifier 临时读取 Artifact owner 的完整正文并校验 digest，不持久化正文副本；
+- PlanAdmission 拒绝 required mapping 指向冻结且未验证的 execution，并要求独立可运行 repair；
+- accepted repair plan remap requirement 后才清除旧 verification waiting；
+- typed `DecisionFeedback` 随 `ReplanRequest` 持久化并交给下一次 Planner；
+- 等价 admission feedback 不含 event sequence，并受已有 `same_feedback_revision_limit` 约束。
+
+生命周期 Harness 会直接注入 Plan、revision 和 Tool result，只属于 Runtime Conformance：它能
+证明冻结边界、单次 dispatch 和有界暂停，不是用户 E2E，也不能作为 repair 的产品收益证据。
+
+IP01 的早期运行未通过。`20260728T125249.466459Z-45552-410f6188` 证明旧 feedback digest 会造成 600 秒
+内持续重规划；修复后的 `20260728T130808.632067Z-17988-0d9bfe10` 在 206 秒内有界暂停，根因是
+单个宽 Web Search 返回无关来源，Verifier 正确拒绝。随后仅收紧现有 Planner/Execution
+Proposer 的一般搜索语义，要求多对象独立取证、聚焦查询并在需要日期/出处时使用已有
+`scrape`。之后 strict `json_schema` 在 DeepSeek deployment 上可被 HTTP 接受但不被执行，
+archive `20260728T135746.012529Z-20360-ce914ffb` 在 226.9 秒、约 33.4k token 后因
+`_PlanDraft.requirement_mappings` 缺失而 `provider_unavailable`。这证明 Provider transport
+capability 不能由 OpenAI-compatible 协议外观推断，并准入显式 Adapter 隔离。
+
+目标对照依次验证了 JSON mode、Tool Strategy 和 thinking profile。Tool Strategy 在复杂
+`_PlanDraft` 上产生多 Tool 或不同的连续 JSON，archive
+`20260728T142614.040177Z-10488-908e3539`、
+`20260728T143017.195570Z-6428-d4a8976d` 均失败，相关 Adapter 已删除。最终
+`JsonObjectStructuredAdapter` 配合 deployment 关闭 thinking 的 archive
+`20260728T143217.175037Z-28784-bb0ed0e8` 用时 59.7 秒、可计 28,828 token，所有
+Plan/Replan/Verification typed parse 通过且 `environment_failed=false`。Project 仍因两项
+evidence verification repair 和“plan revision cannot overwrite frozen work”暂停，没有交付报告。
+
+由这些 baseline 定义的 IP01 target 门禁是：
+
+- IP01 从正式 HTTP/worker 以真实 model/Web Search 完成，而非当前非环境的
+  `verification_repair` 暂停；
+- accepted Plan version 至少为 2，并存在来自 revision 的新 execution proposal；
+- 不得再次提案同一 `(logical_subgoal_id, subgoal_version)`，从而避免重放冻结执行；
+- 用户可读取最终 generated Artifact，coverage、source、date、limitation 和 Completion Gate 通过；
+- 只有 Project completed 后同一 E2E 实际得到 report 404，才准入缺失 report endpoint；
 - crash、late result、approval、replay 和 tenant isolation 反事实；
 - 相对 Conversation 和固定 Workflow 的同输入 baseline。
 
 Stage 2 不创建第二个 Project 模型、Plan、journal、Artifact owner 或通用 DurableTask。
+
+对应可执行契约是同一 `_run_live_investigation_report_journey`：B03 自动断言当前确有
+`verification_repair` wait、没有报告且没有重复 execution proposal；IP01 在同一自然用户目标上
+断言 wait 被消除、repair revision 产生新工作、冻结 execution 不重放并交付 verified report。
+这些条件已由 `20260729T101501.732689Z-53628-6c5f02f2` 满足；Stage 2 的 IP01 repair
+验收完成，但“发布可用”仍取决于本节列出的完整 live matrix、paired baseline 和方差。
+
+2026-07-28 重新执行 B03 的 archive
+`20260728T150928.484946Z-48884-5c941a61` 因 Tavily HTTP 432 配额限制终止，未进入 Verifier，
+不能作为产品 baseline；E2E 已将该错误补入 environment failure 分类，禁止把 Provider 限额误报为
+repair 缺口。
+
+运行配置随后显式切换到 Firecrawl `/v2/search`，复用既有 `FIRECRAWL_*` credential owner，
+没有 runtime fallback 或第二份 key。清理旧 Tavily credential 后重新执行的 IP01 archive
+`20260728T154127.518791Z-8584-3899be03` 中三次生产 `web_search` 均成功，provider metadata 为
+`firecrawl`，无 Tavily 调用且 `environment_failed=false`。Project 接受 Plan v2、执行一个新 repair
+SubGoal 且未重复原 execution；随后因 repair evidence 仍不足，以及下一 revision 没有按规则创建
+next SubGoal version 并 supersede 旧版本而暂停。Provider 阻塞已解除，repair 已有局部 E2E 收益，
+但该次最终报告仍未交付；这是后续 lineage 修复前的历史失败证据。
+
+2026-07-29 的后续同输入 trace 又依次证明并移除了四个更窄缺口：Web Search 的治理超时没有覆盖
+search 加两次 capture；能力不匹配拒绝分支没有按关键字构造 typed `DecisionFeedback`；Execution
+Proposal schema 未把 capability identity 收窄到当前 SubGoal 的 deterministic match；Replanner
+预算投影只识别旧 `web_search_results`，没有识别 canonical Tool artifact `data.results`。
+`20260729T075635.355657Z-17460-0a4c21f8` 已运行四版有界 Plan、8 次真实搜索且没有 exact replay，
+并找到 A2A GitHub Releases 页面，但后段出现 Firecrawl 429/402 且没有交付报告，不能作为 target
+acceptance。URL reader 现由 `Settings.url_capture_provider` 显式单值绑定，E2E 可令 Search 使用
+Firecrawl、正文读取使用 builtin，不存在失败后的 runtime fallback。再次执行的
+`20260729T080725.690825Z-11020-b4ee8959` 仍在 Firecrawl `/v2/search` 处收到账户级 HTTP 402，
+被正确标为环境失败。因此当时继续保留 B03，且禁止用低层通过替代同输入正式 E2E。
+
+2026-07-29 随后删除 Firecrawl Web Search Adapter，生产搜索唯一绑定迁移为 SerpAPI
+`/search.json?engine=google`；`PERSONAL_AGENT_WEB_SEARCH_*` 成为搜索 credential owner，
+URL 正文读取继续显式绑定 builtin，二者均无运行时 fallback。真实 Provider 冒烟成功返回
+GitHub A2A Releases，SerpAPI contract test 覆盖 organic results、合法空结果、认证/Provider
+错误和调用方 limit。迁移后的同输入 IP01 已不再出现搜索 Provider 环境失败，并依次证明：
+臆造 capture URL 必须被 observed-locator schema/Admission 拒绝；空搜索结果不能误分类为
+Provider unavailable；10 条候选可以取得 MCP GitHub Releases，并由 Verifier 确认
+`2025-03-26` 与 `2025-06-18` 两项正式版本。最新 archive
+`20260729T085601.806550Z-18988-2e0c1eba` 仍因 repair SubGoal 消费了跨主题候选、把 A2A
+修复绑定到 MCP URL 后耗尽 plan revision 而暂停。该失败不是 SerpAPI 环境问题，也不是
+target acceptance；下一最小缺口是持久化 repair-to-frozen-gap evidence lineage，并由
+Semantic Admission 在执行前拒绝违反来源排除项的 locator。
+
+最终最小改动由 ADR 0008 固化：accepted SubGoal 持久化 frozen-gap lineage，Execution 仅物化
+依赖/递归 repair lineage 的 admitted evidence；普通 Execution Admission 拒绝在同一 Plan 上
+局部重提；evidence repair 与 semantic Replan 分别计预算；模型选择 observed URL candidate id，
+确定性代码绑定 canonical locator。正式 target archive
+`20260729T101501.732689Z-53628-6c5f02f2` 在 86.42 秒内完成 Plan v3、3/3 verified outcomes、
+5 条 admitted evidence、可读报告与 Completion Gate，且 `environment_failed=false`。Stage 2
+的 IP01 repair 门禁据此闭合，剩余项是更广的 live capability matrix 和 paired/variance 证据。
 
 ### Stage 3: Capability and Context Engine
 
@@ -343,87 +449,62 @@ report/receipt。
 必须先证明为什么现有 Tool、A2A AgentArtifact 或固定 Workflow 不够。第一项 E2E 通过前不创建
 通用 sandbox abstraction、Agent team protocol、角色市场或自治协商。
 
-## 8. Target E2E and Counterfactuals
+## 8. 已准入 E2E 与候选 Baseline Gate
 
-### E2E MA-01: 核对后确认保存
+### 已准入：B01 -> B02 -> E14 明确 exact-span 保存
 
-```text
-Persona: 已登录且拥有 workspace 写权限的知识工作者，只知道自己的目标和已有知识
-Given: workspace 内已有一个与候选结论部分冲突且带 Evidence 的 Claim
-When: 从正式 Conversation 入口说“核对刚才的结论，和已有知识冲突就先告诉我，确认后再保存”
-Then: Agent 返回冲突、Evidence 和待确认候选；确认后用户可以检索到新 canonical Claim
-And not: 确认前零写入；不覆盖旧 Claim；不保存 assistant 未被选中的内容；不跨 workspace
-Path evidence: capability projection、Proposal、Admission、Command/digest、Confirmation、
-               Workspace ingestion、Receipt Observation、FinalMessage
-Allowed fakes: 不可控外部 Evidence Provider；Policy、模型语义选择、Workspace owner 和
-               Completion 不得 Fake
-Baseline: 当前 Conversation 与当前 solidify API 的同输入结果
-Command: uv run pytest -q evals/e2e_quality/test_conversation_governed_knowledge_action.py
-```
+- B01 用同一自然输入证明 Conversation 只能文本确认，缺少 pending operation、恢复、执行和
+  Receipt；Workspace 写能力本身存在；
+- B02 从正式 Conversation HTTP 入口穿过 prepare/confirm/canonical write，证明整条消息固化会
+  缺失精确结论并写入保存/确认控制语义；
+- E14 从同一正式入口证明确认前零写入、exact-span Command 重启恢复、跨 scope 拒绝、精确
+  结论 Claim、控制语义零写入、Receipt 和成功后 replay；
+- Runtime conformance test 补充 reject 终态；
+- E14 不证明 assistant candidate、冲突核对、commit/Receipt crash window 或其他写操作。
 
-### E2E MA-02: 禁止保存与拒绝确认
+### 已闭合 Baseline A：结论与控制语句分离
 
-```text
-Persona: 同一用户
-Given: workspace Claim 数量和 candidate conversation 已冻结
-When: 分别表达“只分析，不要保存”和在 Pending Confirmation 后拒绝
-Then: 返回分析或明确 rejected 终态
-And not: 不创建 Artifact/Claim/Command execution Receipt，不通过相似 Tool 写入
-```
+B02 已用同一自然输入检查最终 canonical Claim，archive
+`20260729T031804.415533Z-15972-214cb81c` 自动证明精确结论缺失且“请求保存/先确认”成为长期
+事实。修复只增加模型 exact-span selection 与机械来源校验，没有 candidate model、关键词解析
+或第二写入口；目标 E14 已通过。
 
-### E2E MA-03: 恢复与 replay
+### 候选 Baseline B：冲突核对后保存
 
-```text
-Persona: 已确认保存的用户
-Given: Command 已冻结；在提交写入或 Receipt 返回边界注入进程终止
-When: 通过正式 Conversation resume 入口恢复，并重复同一确认请求
-Then: 返回同一执行结果和 Receipt
-And not: 不重新调用模型生成 payload，不新增第二个 Claim，不执行第二次副作用
-```
+从正式 Conversation 入口自然表达“核对刚才的结论，和已有知识冲突就先告诉我，确认后再
+保存”，断言用户是否获得冲突 Evidence 和待确认候选，并断言确认前零写入、不覆盖旧 Claim、
+不跨 workspace。只有当前路径在同输入下失败且根因属于产品行为，才创建对应目标 E2E，定义
+assistant candidate owner、版本与验证语义。
 
-### E2E MA-04: Scope denied / capability unavailable
+### 候选 Baseline C：其他 governed action
 
-```text
-Persona: 无目标 workspace 写权限的用户
-Given: 目标知识只存在于其他 workspace，或 scoped capability 当前不可用
-When: 从 Conversation 请求核对并保存
-Then: 返回 typed authorization denied 或 capability missing
-And not: 不泄漏其他 workspace Evidence，不回退到 capture_text、近似 Tool 或本地文件
-```
+删除或订阅等每个动作分别从正式 Conversation 入口执行自然表达，断言含糊目标、确认前副作用、
+scope denied 和 capability unavailable。不能把 E14 当作共享失败证据，也不能先注册
+`prepare_knowledge_delete` 等未来 capability 再证明其必要性。
 
-### E2E MA-05: Live Investigation delivery
+### 候选 Baseline D：crash window 与多实例协调
 
-目标用例、反事实和命令由
-[Durable Investigation Project 设计](durable-investigation-project-design.md#6-e2e-first)
-拥有。本文只增加验收要求：同一用户目标必须与 Conversation 和固定 Workflow baseline 对照，
-并报告完成率、错误副作用、模型轮次、token、延迟和恢复结果。
+在 Workspace commit 与 journal Receipt 写入之间注入真实进程终止，或由两个生产实例并发处理
+同一 digest，断言是否产生重复 Claim/Receipt。只有失败被复现后，才准入 Workspace 幂等键、
+共享事务存储或 outbox；当前 E14 不能支持 exactly-once 的跨边界声明。
 
-### E2E MA-06: Capability scale
+### 独立目标：Live Investigation 与 Capability Scale
 
-```text
-Persona: 只能看到部分 workspace/tenant capabilities 的用户
-Given: registry 中存在大量不可见、语义相近和当前 unavailable 的能力
-When: 运行保存、读取、研究、禁止写入等自然语言 Golden Set
-Then: 只 materialize 当前可见且相关的少量完整 schema，并选择正确能力或直接回答
-And not: 不在 visibility 前检索全部能力，不泄漏隐藏 capability，不以近似能力 fallback
-Baseline: 全量 public schema 注入
-```
+Investigation 的 baseline、目标 E2E 和命令只由
+[Durable Investigation Project 设计](durable-investigation-project-design.md#6-e2e-first) 拥有。
+Capability retrieval 只有在全量 public schema 注入的实际 trace 证明完成率、误选、token 或延迟
+约束后才定义目标 E2E；大量不可见或相近能力的合成数据不能单独成为产品优化证据。
 
 ## 9. Affected Modules and Dependency Direction
 
-预期影响边界：
+Stage 1 已落地的影响边界：
 
 ```text
 Web Conversation DTO
   -> Conversation Application
-     -> Capability Projection Port
-     -> Governance/Confirmation Port
+     -> existing ToolCallProposal + exact-span save arguments
+     -> immutable Command / Interaction Journal
      -> existing Workspace Solidify Use Case
-     -> Interaction Journal Port
-
-Infrastructure Adapters
-  -> implement Ports
-  -> PostgreSQL / Gateway / Provider
 ```
 
 依赖必须保持：
@@ -440,30 +521,24 @@ Stage 2、Stage 3 和 Stage 4 分别在需要时扩展已有 Project、Context �
 
 ## 10. Complexity Added, Removed and Rejected Alternatives
 
-### 10.1 Complexity Budget
+### 10.1 Stage 1 实际复杂度
 
-Stage 1 最多新增：
+Stage 1 新增：
 
 - 一个粗粒度 scoped Application Capability；
-- 一套 Pending Confirmation/Resume contract；
-- 一个必要的 durable confirmation owner/store；
-- 一个复用现有 solidify Use Case 的 Adapter；
-- 对应 Policy、E2E 和 trace 支持。
+- 一套 Pending Confirmation/decision contract；
+- 一个复用现有 FileInteractionJournal 的 confirmation owner；
+- 一个 Workspace writer Port 及现有 solidify Use Case 装配；
+- 对应 E14、Runtime conformance test 和 trace 支持。
 
 每新增一个 Model、状态、digest、表或 Port，实施文档必须说明独立 owner、生命周期、事务边界和
 生产消费者。授权内容和最终执行内容相同时只使用一个 canonical command digest。
 
-### 10.2 Removed Complexity
+### 10.2 Removed and Avoided Complexity
 
-实施时同步删除：
-
-- Conversation 与专用 API 之间重复的 payload 组装；
-- 关键词保存/删除 Router；
-- Prompt 中为了弥补 capability exposure 缺失而存在的业务硬编码；
-- 无消费者的 capability projection、旧 Task/Control contract 和临时 fallback；
-- 只为测试存在的兼容字段或双轨状态。
-
-删除项必须以实际调用方搜索为准；当前不存在的旧路径不得为满足清单而先创建再删除。
+实际删除未接入生产执行的 `conversation_solidify` Procedure definition、输入 contract 和冲突的
+workflow 文档。没有发现关键词保存 Router，因此不伪造删除项；同时没有新增专用 Proposal
+union、第二知识写入口、双 digest、Event/Projection、通用 Workflow 或兼容双轨。
 
 ### 10.3 Rejected Alternatives
 
@@ -482,9 +557,9 @@ Stage 1 最多新增：
 
 严格顺序：
 
-1. 执行并归档 Stage 0 baseline；
-2. 仅实现 Stage 1 最小纵切，使 MA-01 至 MA-04 通过；
-3. 对比结果无收益时停止，不进入 Stage 2/3/4；
+1. B01 baseline 与 E14 最小纵切已归档；
+2. 下一项扩展先从第 8 节选择一个最简单 baseline，未失败就停止；
+3. 产品失败成立后才定义同目标 target E2E、最小改动和同步删除项；
 4. 按专项目标设计闭合 Stage 2 live evidence；
 5. 只有 trace 证明能力规模问题后实施 Stage 3；
 6. 只有结果质量错误成为主要瓶颈后实施 Stage 4；

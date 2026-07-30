@@ -27,6 +27,7 @@ class FaultMechanism(str, Enum):
 
 class EvidenceClaimKind(str, Enum):
     ARCHITECTURE = "architecture"
+    BASELINE_DIAGNOSTIC = "baseline_diagnostic"
     PRODUCT_CAPABILITY = "product_capability"
     CAPABILITY_PROFILE = "capability_profile"
     COMPOSITE_CAPABILITY = "composite_capability"
@@ -167,7 +168,7 @@ def _profile(
         entry_boundary=EntryBoundary.HTTP_PROCESS,
         claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
         capability_profile=capability_profile,
-        limitation="Connector profile evidence; product release claims are owned by E01-E13.",
+        limitation="Connector profile evidence; product release claims are owned by E01-E14.",
     )
 
 
@@ -204,6 +205,24 @@ def _investigation(
 
 
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
+    EvidenceCase(
+        evidence_id="B03.live_investigation_report_baseline",
+        case_id="B03",
+        module="test_product_capability_outcomes.py",
+        test_name="test_baseline_b03_live_investigation_has_no_user_readable_report",
+        layers=frozenset({
+            EvidenceLayer.PLANNING_CONTROL,
+            EvidenceLayer.JOURNAL_RECOVERY,
+            EvidenceLayer.VERIFICATION_COMPLETION,
+        }),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        capability_profile=CapabilityProfile.WEB_SEARCH,
+        claim_kind=EvidenceClaimKind.BASELINE_DIAGNOSTIC,
+        limitation=(
+            "Live Web/worker/model/provider baseline for a user-readable Project report; "
+            "it is not product release evidence."
+        ),
+    ),
     _product("E01", "test_product_e01_conversation_journey", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
     _product("E02", "test_product_e02_grounded_workspace_ask", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
     _product("E03", "test_product_e03_selected_upload_artifact_ask", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
@@ -217,6 +236,16 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     _product("E11", "test_product_e11_review_feedback_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, real_provider_required=False),
     _product("E12", "test_product_e12_knowledge_maintenance_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
     _product("E13", "test_product_e13_scheduled_intelligence_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
+    _product("E14", "test_product_e14_conversation_governed_save", EvidenceLayer.UNDERSTANDING, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION, real_provider_required=False),
+    _product(
+        "IP01",
+        "test_product_ip01_live_investigation_report",
+        EvidenceLayer.PLANNING_CONTROL,
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.JOURNAL_RECOVERY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        capability_profile=CapabilityProfile.WEB_SEARCH,
+    ),
     _composite("C01", "test_composite_c01_personal_research_analyst", capability_profile=CapabilityProfile.WEB_SEARCH),
     _composite("C02", "test_composite_c02_continuous_knowledge_steward", capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY),
     _composite("C03", "test_composite_c03_personalized_learning_agent", capability_profile=CapabilityProfile.WEB_SEARCH),
@@ -323,7 +352,11 @@ def validate_catalog() -> None:
     if len(node_keys) != len(set(node_keys)):
         raise ValueError("one E2E test node cannot own multiple evidence classifications")
     expected = {
-        EvidenceClaimKind.PRODUCT_CAPABILITY: {f"E{index:02d}" for index in range(1, 14)},
+        EvidenceClaimKind.BASELINE_DIAGNOSTIC: {"B03"},
+        EvidenceClaimKind.PRODUCT_CAPABILITY: {
+            *(f"E{index:02d}" for index in range(1, 15)),
+            "IP01",
+        },
         EvidenceClaimKind.COMPOSITE_CAPABILITY: {f"C{index:02d}" for index in range(1, 5)},
         EvidenceClaimKind.COMPLEX_LOOP: {f"L{index:02d}" for index in range(1, 7)},
         EvidenceClaimKind.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19"},

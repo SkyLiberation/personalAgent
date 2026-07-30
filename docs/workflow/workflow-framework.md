@@ -1,4 +1,9 @@
-# Governed Procedure 与 Step Projection
+# 历史设计：Governed Procedure 与 Step Projection
+
+> 状态：本文混合了已删除的 Task/GoalGraph 总主链与仍存在的领域 Procedure 概念，不再是当前
+> 权威文档。固定事务当前由明确 Application Use Case/领域状态机拥有，普通 Conversation 由
+> `ConversationService` 拥有；当前事实见
+> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md)。
 
 ## 定位
 
@@ -36,7 +41,6 @@ Ask、direct response 和普通分析由开放循环逐轮决定。MCP、本地�
 | Procedure | 保护的不变量 |
 | --- | --- |
 | `knowledge_ingest` | 来源规范化、确认、durable admission、receipt |
-| `conversation_solidify` | selected conversation scope、确认、durable admission |
 | `knowledge_consolidate` | provenance、supersession、receipt |
 | `research_run` | budget、evidence loop、checkpoint、verification |
 | `research_subscription_create` | schedule、idempotency、audit |

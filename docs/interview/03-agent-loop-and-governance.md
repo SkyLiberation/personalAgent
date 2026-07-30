@@ -18,9 +18,21 @@ Web / CLI / Feishu
 
 `AgentRuntime` 是 Composition Root，负责集中装配模型、Store、Tool、Agent、Policy 和 Application Service。它不是第二事实源，不持久化 Workspace、Research 或 Interaction 的镜像字段。
 
-## 2. `AgentTurnDecision` 为什么这样设计
+## 2. 顶层逻辑：模型是决策提议者，Runtime 是协议解释器
 
-模型每轮只能返回一个 object-root envelope：
+这一设计首先解决的不是 JSON 格式，而是“概率模型怎样安全地驱动确定性程序”：
+
+```text
+用户自然语言 + committed Observation
+  -> 模型完成开放语义判断
+  -> 产生 typed Proposal
+  -> Runtime 做 Admission
+  -> 执行系统产生事实
+  -> 事实返回下一轮
+```
+
+`AgentTurnDecision` 可以类比编译器 IR：它把“模型认为下一步应该做什么”表达成机器可检查的
+中间表示，但它还不是权限、Command 或执行事实。当前 IR 的封闭决策集合是：
 
 ```text
 AgentTurnDecision
@@ -32,6 +44,13 @@ AgentTurnDecision
          └─ AgentDelegationProposal
 ```
 
+Runtime 不需要从 `Action:`、`Final Answer:` 等文本控制词猜分支。它只接受两种明确状态：
+
+```text
+FinalMessage        -> 结束本次 Interaction
+ContinueTurnProposal -> Admission 后执行 Action，再把 Observation 返回模型
+```
+
 `FinalMessage` 的 disposition 包括：
 
 - `answer`：已形成用户答案；
@@ -39,12 +58,36 @@ AgentTurnDecision
 - `limitation`：能力、预算或环境不足；
 - `failed`：执行失败，不能伪装成成功。
 
-统一 envelope 的价值：
+### 为什么当前 wire format 使用 object-root
 
-1. Provider 始终生成一个明确 object root，避免 root union 在兼容 endpoint 上失效；
-2. 不存在 `action/actions`、singular/plural 双轨；
-3. Pydantic 可以在模型边界直接校验；
-4. Runtime 不需要从自然语言中解析控制信号。
+如果直接把根 Schema 定义成 `FinalMessage | ContinueTurnProposal`，Pydantic 会生成顶层
+`anyOf`。terra deployment 在该形态上出现过 schema retry 超时。本项目保留语义 union，但把它
+下沉到固定对象的 `decision` 字段：
+
+```json
+{
+  "type": "object",
+  "required": ["decision"],
+  "properties": {
+    "decision": {
+      "anyOf": [
+        {"$ref": "#/$defs/FinalMessage"},
+        {"$ref": "#/$defs/ContinueTurnProposal"}
+      ]
+    }
+  }
+}
+```
+
+因此必须分清两个层次：
+
+| 层次 | 当前结论 |
+| --- | --- |
+| 稳定框架原则 | 模型输出 typed Proposal；Runtime 不解析自然语言控制流；Admission 后才执行 |
+| 当前实现选择 | 使用 object-root envelope 兼容已观察 Provider schema 能力 |
+
+将来即使改用 Provider 原生 Tool Calling，第一行仍必须成立；没有同输入 E2E 证明当前 envelope
+造成用户失败时，也不会仅为追逐框架潮流替换它。
 
 对应模型：[conversation/models.py](../../src/personal_agent/application/conversation/models.py)。
 

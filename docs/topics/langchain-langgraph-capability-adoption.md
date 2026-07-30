@@ -1,4 +1,7 @@
-# LangChain / LangGraph 能力接入评估
+# 历史盘点：LangChain / LangGraph 能力接入评估
+
+> 状态：本文基于已经删除的 LangGraph 总图和 orchestration nodes，不能代表当前代码。当前架构
+> 不以 LangGraph 作为三条生产主链的共同父框架；保留本文仅用于解释迁移前取舍。
 
 这份文档基于对当前代码的逐一核查（带 `file:line` 证据），盘点项目实际用了哪些 LangChain / LangGraph 能力、哪些没用，并评估"还有哪些能力值得接入"。
 

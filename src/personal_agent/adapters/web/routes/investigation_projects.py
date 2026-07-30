@@ -9,6 +9,7 @@ from personal_agent.application.investigation_project import (
     ApproveInvestigationCommand,
     CancelInvestigationProject,
     CreateInvestigationProject,
+    GetInvestigationReport,
     PauseInvestigationProject,
     QueryInvestigationProject,
     ResumeInvestigationProject,
@@ -111,6 +112,33 @@ def register_investigation_project_routes(
             ))
         except (KeyError, PermissionError):
             raise HTTPException(status_code=404, detail="Resource not found.") from None
+
+    @app.get("/api/investigation-projects/{project_id}/report")
+    def get_project_report(
+        project_id: str,
+        request: Request,
+        tenant_id: str = Query(min_length=1),
+        workspace_id: str = Query(min_length=1),
+        user_id: str = Query(min_length=1),
+    ):
+        principal, security_scope = _resolve_scope_values(
+            request,
+            settings,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
+        try:
+            report = service.get_investigation_report(GetInvestigationReport(
+                principal=principal,
+                security_scope=security_scope,
+                project_id=project_id,
+            ))
+        except (KeyError, PermissionError):
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return report.model_dump(mode="json")
 
     @app.post("/api/investigation-projects/{project_id}/steering")
     def steer_project(

@@ -14,8 +14,9 @@ from personal_agent.capabilities.inventory import (
 )
 from personal_agent.kernel.config_models import MCPConfig
 from personal_agent.kernel.contracts.agent import SubagentProfile
-from personal_agent.tools.base import tool_governance
+from personal_agent.tools.base import tool_governance, tool_schema
 from personal_agent.tools.mcp_capability import mcp_capability_from_tool
+from personal_agent.tools.mcp_capability import capability_from_tool
 
 
 def build_runtime_capability_inventory(
@@ -35,6 +36,7 @@ def build_runtime_capability_inventory(
             registered_mcp[(mcp.server_id, mcp.remote_tool_name)] = tool
             continue
         governance = tool_governance(tool)
+        capability = capability_from_tool(tool)
         provider_availability: ProviderAvailability = (
             "not_observed"
             if "external_network" in governance.side_effects
@@ -42,8 +44,14 @@ def build_runtime_capability_inventory(
         )
         local_tools.append(LocalToolInventoryItem(
             tool_name=tool.name,
+            description=capability.description,
+            semantic_domains=capability.semantic_domains,
+            resource_types=capability.resource_types,
+            operations=capability.operations,
+            authorization_scope=capability.auth_scope,
             exposure=governance.exposure,
             risk_level=governance.risk_level,
+            input_schema=tool_schema(tool),
             provider_availability=provider_availability,
         ))
 
@@ -57,26 +65,42 @@ def build_runtime_capability_inventory(
                 server_id=server.server_id,
                 remote_tool_name=mapping.remote_name,
                 local_tool_name=registered.name if registered is not None else local_name,
+                description=(
+                    registered.description or registered.name
+                    if registered is not None
+                    else mapping.remote_name
+                ),
+                semantic_domains=tuple(mapping.semantic_domains),
+                resource_types=tuple(mapping.resource_types),
+                operations=tuple(mapping.operations),
+                input_schema=tool_schema(registered) if registered is not None else {},
                 configuration_state="enabled" if enabled else "disabled",
                 discovery_state="discovered" if registered is not None else "not_observed",
             ))
 
     profiles = {profile.agent_id: profile for profile in agent_profiles}
-    a2a_agents = [
-        A2AAgentInventoryItem(
+    a2a_agents: list[A2AAgentInventoryItem] = []
+    for definition in a2a_assembly:
+        profile = profiles.get(definition.agent_id)
+        a2a_agents.append(A2AAgentInventoryItem(
             agent_id=definition.agent_id,
+            description=profile.description if profile is not None else "",
+            semantic_domains=(
+                tuple(profile.semantic_domains) if profile is not None else ()
+            ),
+            resource_types=(
+                tuple(profile.task_types) if profile is not None else ()
+            ),
             implementation_present=definition.implementation_present,
             configuration_state=definition.configuration_state,
             discovery_state=(
                 "registered_profile"
-                if (profile := profiles.get(definition.agent_id)) is not None
+                if profile is not None
                 else "not_observed"
             ),
             protocol=profile.protocol if profile is not None else None,
             capability_ids=profile.capability_ids if profile is not None else (),
-        )
-        for definition in a2a_assembly
-    ]
+        ))
     return RuntimeCapabilityInventory(
         local_tools=tuple(sorted(local_tools, key=lambda item: item.tool_name)),
         mcp_connectors=tuple(sorted(
