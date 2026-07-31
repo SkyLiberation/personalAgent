@@ -77,7 +77,7 @@ rankings: list[tuple[str, list[str]]] = []
 relevance: dict[str, set[str]] = {}
 for query in queries:
     print(f"Asking: {query.query_text[:60]}...", file=sys.stderr)
-    result = store.ask(query.query_text, USER_ID)
+    result = store.retrieve(query.query_text, USER_ID)
     if result.enabled:
         ranked = []
         seen = set()

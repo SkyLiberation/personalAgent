@@ -104,21 +104,30 @@ AnswerCitation
 EvidenceGroundedAnswer
   answer
   citations
-  grounding_status
-  evidence_coverage: complete | partial | sparse | none
-  missing_sections
+  verification
+    verdict: passed | needs_revision | insufficient_evidence
+    conclusion_status: supported | conflicted | insufficient_evidence
+    evidence_coverage: complete | partial | sparse | none
+    conflicts -> evidence_span_ids
+    unsupported_claims
+    missing_sections
   answer_claim_count
-  answer_claim_grounded_count
 ```
 
-`evidence_coverage` 不是装饰字段，而是 e2e 质量边界：
+`verification` 由独立 `WorkspaceAnswerVerifier` 写入；回答组装器不能按 selected 数量推导
+supported。完整所有权与失败语义见
+[Verification 与 Completion](../topics/verification-and-completion.md)。
+
+其中 `evidence_coverage` 不是装饰字段，而是 verifier assessment 的组成部分：
 
 - `complete`：入选证据覆盖当前 Workspace 可用证据。
 - `partial`：有证据，但还有未覆盖 block/span。
 - `sparse`：只有极少证据支撑，不能当作完整回答。
 - `none`：没有匹配证据，必须保守回答。
 
-`missing_sections` 可以指向缺失的 EvidenceBlock，也可以在同一 block 内指向未覆盖 EvidenceSpan，避免“只引用了一个句子却把整段都当覆盖”的问题。
+`missing_sections` 可以指向缺失的 EvidenceBlock，也可以在同一 block 内指向未覆盖
+EvidenceSpan，避免“只引用了一个句子却把整段都当覆盖”的问题。冲突 ref 必须属于本次
+citations；assessment 不写回长期 Claim/Relation。
 
 ## ProjectionJob
 

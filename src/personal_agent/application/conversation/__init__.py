@@ -14,7 +14,12 @@ from personal_agent.application.conversation.models import (
     InteractionTrace,
     KnowledgeSaveArguments,
     LoopBudgetPolicy,
+    ReviewCriteria,
     ToolCallProposal,
+)
+from personal_agent.application.conversation.review_admission import (
+    ReviewIntent,
+    ReviewRequirement,
 )
 from personal_agent.application.conversation.service import (
     ConversationOperationConflict,
@@ -47,5 +52,8 @@ __all__ = [
     "InteractionTrace",
     "KnowledgeSaveArguments",
     "LoopBudgetPolicy",
+    "ReviewCriteria",
+    "ReviewIntent",
+    "ReviewRequirement",
     "ToolCallProposal",
 ]

@@ -22,7 +22,6 @@ from personal_agent.kernel.config_models import (
     MCPConfig,
     MCPServerConfig,
     MCPToolConfig,
-    MicrosoftGraphRagConfig,
     OpenAIConfig,
     PolicyConfig,
     ReflectionReplaySettings,
@@ -138,33 +137,6 @@ def settings_from_env(settings_cls: type):
             ),
             content_filter_fallback=_as_bool(
                 os.getenv("PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK", "true")
-            ),
-        ),
-        ms_graphrag=MicrosoftGraphRagConfig(
-            enabled=_as_bool(os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_ENABLED", "false")),
-            root=Path(os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_ROOT", "./data/ms_graphrag")),
-            executable=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EXECUTABLE", "graphrag"),
-            completion_model_provider=os.getenv(
-                "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL_PROVIDER", "openai"
-            ),
-            completion_model=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL")
-            or structured_model,
-            completion_api_key=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY")
-            or structured_api_key,
-            completion_api_base=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE")
-            or structured_base_url,
-            embedding_model_provider=os.getenv(
-                "PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_MODEL_PROVIDER", "openai"
-            ),
-            embedding_model=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_MODEL"),
-            embedding_api_key=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_API_KEY"),
-            embedding_api_base=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_EMBEDDING_API_BASE"),
-            query_method=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_QUERY_METHOD", "local"),
-            index_method=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_INDEX_METHOD", "standard"),
-            response_type=os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_RESPONSE_TYPE", "Multiple Paragraphs"),
-            auto_index=_as_bool(os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_AUTO_INDEX", "false")),
-            command_timeout_seconds=float(
-                os.getenv("PERSONAL_AGENT_MS_GRAPHRAG_COMMAND_TIMEOUT_SECONDS", "600")
             ),
         ),
         openai=OpenAIConfig(

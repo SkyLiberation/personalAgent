@@ -81,6 +81,8 @@ uv run python scripts/check_layers.py
 
 结果：
 
+曾得到：
+
 ```text
 packages=17 edges=53
 unknown_packages=['context', 'skills', 'verification']
@@ -91,8 +93,12 @@ FAIL: 3 architecture violation(s)
 ```
 
 生产 Python 文件已在当前改动中删除，但目录仍被 `discover_packages()` 当成 package。根因是 gate
-以“目录存在”定义 package，而当前迁移状态包含只剩缓存/残留内容的目录。无论最终选择清理目录
-还是收窄 discovery，门禁和文档都必须以同一 package 定义为准。
+以“目录存在”定义 package，而当前迁移状态包含只剩缓存/残留内容的目录。
+
+**已于 2026-07-30 关闭**：同时采用两种修法——删除三个只剩 `__pycache__` 的残骸目录，并让
+`discover_packages()` 要求目录内至少有一个 `.py`，使未来的 stale pycache 不再制造幻影 FAIL。
+当前结果 `packages=14 edges=53`、`unknown_packages=none`、`OK`。没有把未知目录加入
+allow-list。
 
 ### 3.3 当前模型事实冲突
 
@@ -175,14 +181,18 @@ revision。`release_gate.py` 按设计 fail closed。
 - 已删除源路径对应的“当前”流程；
 - 同一配置和发布状态的重复手写 owner。
 
-### Stage G0：恢复架构门禁
+### Stage G0：恢复架构门禁（已完成，2026-07-30）
 
-已执行 baseline：当前 gate 因三个 unknown package 失败。
+已执行 baseline：gate 曾因三个 unknown package 失败。
 
 最小实现候选只能二选一：
 
 1. 若目录没有生产 Python/资源消费者，删除残留目录；
 2. 若目录是合法 package，补回明确 owner、依赖边和生产消费者，再更新 DAG。
+
+三个目录都属于第 1 类（只剩 `__pycache__/*.pyc`，`git ls-files` 为空）。除删除外还收窄了
+discovery：`discover_packages()` 现在要求目录内至少有一个 `.py`，否则同类残骸会再次制造
+幻影 FAIL。没有把未知目录加入 allow-list。当前结果 `unknown_packages=none`、`OK`。
 
 不得简单把未知目录加入 allow-list 来让测试变绿。完成命令：
 
@@ -208,13 +218,14 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 失败时按 semantic decision、Admission、Execution、Verification、Completion、Evidence Gate
 分层定位；禁止先改 Prompt 或降低断言。
 
-### Stage M0：清理生成 metadata 与旧文档（完成 D0 后）
+### Stage M0：清理生成 metadata 与旧文档（部分完成）
 
-- 重新生成或移除源码树中的陈旧 `personal_agent.egg-info`，避免 package metadata 宣称旧架构；
-- 对 `topics/memory.md`、`topics/tools.md`、`topics/context-engineering.md` 做消费者级重写；
-- 按当前代码与 eval 重建或删除旧 retrieval/Graphiti/GraphRAG 文档及其失效源链接；
-- 重新生成或移除引用旧 EntryGraph 的 Mermaid；
-- 对 API/env/deploy 中仍可到达的旧 endpoint 逐一核对，不以全局替换猜测现状；
+- 已重新生成源码树中的 `personal_agent.egg-info`，不再宣称旧总主链；
+- 已按当前消费者重写 `topics/memory.md`、`topics/context-engineering.md` 和
+  `topics/retrieval-reasoning.md`；
+- 已删除无 source binding 的 Microsoft GraphRAG 生产 Adapter/配置及失效 Provider 文档；
+- 已重写 Memory 与 Ask Mermaid，只保留当前 owner 和生产数据流；
+- 已核对 API/env/deploy 的 Conversation、Provider 和历史 checkpoint 表述；
 - 添加只检查 current 文档的旧术语和本地链接 CI 门禁。
 
 该 Stage 只收敛文档与生成物，不改变产品语义，不需要创建新的架构层。
@@ -253,7 +264,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 本文可以删除或缩减为 ADR 索引，当且仅当：
 
 1. current 文档中旧主链只出现在历史/禁止恢复语境；
-2. package DAG gate 在目标 revision 通过；
+2. ~~package DAG gate 在目标 revision 通过~~ 已满足（2026-07-30，Stage G0）；
 3. current catalog 的 complete matrix 与 release gate 在 clean matching revision 上执行；
 4. landed future stages 已迁出，future 只保留真正未落地候选；
 5. 文档链接和术语门禁进入 CI，后续重构不能再次产生同类漂移。

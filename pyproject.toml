@@ -1,7 +1,7 @@
 [project]
 name = "personal-agent"
 version = "0.1.0"
-description = "A personal knowledge management agent powered by LangGraph."
+description = "A governed personal knowledge agent runtime."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -105,7 +105,7 @@ NATIVE_CAPABILITIES: tuple[NativeCapabilityDefinition, ...] = (
     ),
     NativeCapabilityDefinition(
         capability_id="grounded_ask",
-        required_evidence_ids=("E02", "E03", "E08"),
+        required_evidence_ids=("E02", "E03", "E08", "E20"),
     ),
     NativeCapabilityDefinition(
         capability_id="knowledge_lifecycle",
@@ -184,6 +184,7 @@ LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
 
 REQUIRED_NATIVE_EVIDENCE_IDS = (
     *(f"E{index:02d}" for index in range(1, 15)),
+    "E20",
     "IP01",
 )
 REQUIRED_COMPOSITE_EVIDENCE_IDS = tuple(f"C{index:02d}" for index in range(1, 5))

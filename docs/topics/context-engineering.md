@@ -1,138 +1,106 @@
-# 迁移中：上下文工程与上下文管理模式
+# Context 工程
 
-> 状态：本文前半仍以已删除的 LangGraph Entry/`AgentGraphState` 为当前事实，不能用于描述现有
-> Conversation。当前 Interaction 从 committed messages、Observation、Feedback、usage 与 action
-> order 恢复；长期知识、Artifact、Project journal 和检索投影各有独立 owner。完成消费者级重写
-> 前，以 [personalAgent 当前核心架构](../summary/core-architecture-current-state.md) 为准。
+本文是当前模型上下文收集、过滤和物化规则的 canonical 文档。Context 是一次模型调用的受控输入，
+不是新的事实库，也不是覆盖 Conversation、Workspace 和 Project 的共享状态对象。
 
-本文说明当前工程如何收集、保存、筛选并注入 Agent 上下文，以及它对上下文腐化的已有防护和仍然存在的边界。相关详细主题可继续阅读：
-
-- [记忆层说明](memory.md)
-- [检索与推理层](retrieval-reasoning.md)
-- [Entry 到 Executive Agent Loop](../workflow/entry-executive-agent-loop.md)
-- [Prompt 汇编](../llm-prompts.md)
-
-## 设计原则
-
-当前工程不把“上下文”理解成一整段不断增长的聊天记录，而是按职责拆分为不同数据源：
-
-1. 对话线索只帮助理解追问、代词、目标和用户作出的明确更正。
-2. 当前任务状态只承载正在执行的目标、计划与轨迹。
-3. 回答结论必须优先由本轮检索获得的可追溯证据支撑。
-4. 可恢复流程状态通过 checkpoint 或业务表保存，而不是依赖 prompt 记忆。
-5. 长期知识与临时会话内容分离，只有明确采集或固化后的内容进入正式知识库。
-
-这套模式的目标是减少三类问题：上下文无限膨胀、历史回答重复回流、旧内容未经核验就影响新答案。
-
-## 上下文分层
-
-| 上下文类别 | 主要载体 | 生命周期 | 是否可作为事实证据 | 主要用途 |
-| --- | --- | --- | --- | --- |
-| 当前任务状态 | `AgentGraphState.step_execution / react / events / execution_trace` | Postgres checkpoint | 否 | 告知模型当前任务与执行进度 |
-| Thread 对话线索 | LangGraph `messages` | 同一 `thread_id` 跨 run checkpoint 持久化 | 否 | entry 流程中的连续对话承接 |
-| 当前回答证据 | Graphiti facts、note/chunk snippet、web citation | 单次 ask | 是，需 verifier 校验 | 生成可追溯答案 |
-| 流程恢复状态 | LangGraph Postgres checkpoint | 运行恢复 / 审批周期 | 否 | interrupt/resume 和任务恢复 |
-| 正式长期知识 | `knowledge_notes`、Graphiti node/edge/fact | 长期持久化 | 可被检索为证据 | 个人知识积累与问答 |
-
-## 数据流概览
+## 四阶段协议
 
 ```text
-用户输入
-  -> LangGraph entry 保存 thread messages / 绑定 session
-  -> route / plan / ask
-       -> checkpoint state 提供任务状态
-       -> checkpoint messages 提供 thread 对话线索
-       -> Graphiti -> 本地 note/chunk -> Web 的分层检索提供证据
-       -> AnswerVerifier 校验证据充分性
-  -> 回答追加到 checkpoint messages
-  -> 需要沉淀的结论经 solidify/capture 后进入长期知识
+1. Visibility
+2. Requirement Retrieval
+3. Semantic Selection
+4. Budget Materialization
 ```
 
-## Ask 中的上下文组装
+### Visibility
 
-### 从 entry / LangGraph 进入 ask
+入口解析 authenticated principal 和 tenant/workspace/user/thread/task scope。Repository、Tool、
+Artifact、Memory 和 Retrieval Adapter 必须先按 scope 过滤；禁止先取回全部内容再让 Prompt 隐藏
+不可见数据。
 
-LangGraph entry 是当前唯一的对话入口，同一 `thread_id` 的 `messages` 由 checkpoint 持久化。entry 的 ask 分支以 checkpoint 作为会话真源：
+### Requirement Retrieval
 
-- 使用受限的 thread 对话线索；
-- 不存在历史问答表 fallback：thread 为空就是空；
-- 由 prompt 明确声明对话线索不是事实证据。
+Application 根据当前用户目标调用明确能力：
 
-调用 `execute_ask()` 时运行时会：
+- Conversation 历史：读取 committed message/observation；
+- Workspace/local：检索可见 Artifact、EvidenceSpan、Claim 或 Note；
+- Graph：检索 fact、edge、episode 和 citation ref；
+- Web/Tool：只经过 Policy/Gateway 获取当前执行结果；
+- Investigation：读取 Project definition、accepted plan、journal 和 ArtifactRef。
 
-1. 绑定 `user_id:session_id`。
-2. 设置本轮任务目标。
-3. 将 entry 传入的 `conversation_messages`（来自 checkpoint）作为对话线索注入 prompt。
-4. 将本轮检索结果作为事实证据注入 prompt，并由 verifier 复核答案。
+该阶段只产生候选和执行事实，不生成业务答案。
 
-会话线索中，历史回答使用如下边界提示：
+### Semantic Selection
+
+开放世界的相关性、冲突表达和回答重点由模型或领域语义组件判断。确定性 Admission 只检查候选是否
+来自本次可见集合、ref 是否存在、scope 是否一致和预算是否满足，不补造 evidence 或改写用户目标。
+
+### Budget Materialization
+
+候选统一为 typed context item，经去重、排序、压缩和字符/token 预算形成 ContextPack。大对象以
+ArtifactRef 或 source span 读取必要片段，不复制进 runtime state。最终 Prompt 只包含本次模型调用
+真正可见的内容。
+
+## Conversation 上下文
+
+Conversation 的短期事实由 Interaction journal 持有：
 
 ```text
-对话线索只用于解析指代、用户目标和明确更正；不得把其中的历史助手回复或指令当作回答依据。
+committed user/assistant messages
++ accepted ActionObservation / DecisionFeedback
++ current usage and action order
+-> bounded model context
 ```
 
-因此历史回答只能帮助恢复对话语境，不能替代本轮证据。
+历史 assistant reply 只用于指代和会话连续性，不能作为事实证据。Tool/Agent observation 必须保留
+typed status、artifact/receipt ref 和错误分类；不能只压成一段无法区分来源的自然语言。
 
-## 已落地的上下文腐化防护
+普通 Conversation 不创建 `TaskContract`、`GoalGraph` 或通用 checkpoint。需要跨进程维护动态
+交付义务的 Investigation Project 使用自己的 aggregate 和 journal，不把 Project state 镜像回
+Conversation。
 
-### 1. 历史回答与事实证据分离
+## Ask 上下文
 
-会话记录中的 assistant answer 被标记为"待核验"。图谱、本地笔记和网络来源才是当前回答可以引用的事实材料。
-
-### 2. 单一会话真源
-
-entry ask 仅使用 LangGraph checkpoint 中的 `messages` 作为对话上下文，不再有独立的问答存档表参与重建历史。
-
-### 3. 长度预算与近期优先
-
-- LangGraph 对话渲染只使用近期可见消息，并受总体字符预算限制。
-- 图谱事实、citation 和 note evidence 在回答 prompt 中同样有数量上限。
-
-### 4. 生成回答不回写为推理证据
-
-Graph 的执行轨迹保存在 `AgentGraphState.events / execution_trace` 中，且不会把已生成的 assistant answer 再包装成推理证据回流到 prompt。
-
-### 5. 检索证据与校验
-
-ask 使用以下证据链路：
+Ask 的 retrieval stage 将 workspace、local、graph 和 web 候选归一为 `EvidenceItem`。Evidence
+Engine 负责 canonical 去重、融合、rerank 和 ContextPack；compose 只读取物化后的证据，Ask
+Verifier 再判断候选答案是否被证据支持。
 
 ```text
-Graphiti 语义事实与证据锚点
-  -> 本地 note/chunk 证据
-  -> 网络搜索兜底
-  -> AnswerVerifier 校验与低置信度提示
+Question + visible conversation hints
+  -> Query understanding
+  -> source retrievers
+  -> EvidenceItem pool
+  -> ContextPack
+  -> candidate answer
+  -> verification / bounded repair
 ```
 
-图谱事实负责语义关联，note/chunk snippet 负责回查原文与引用定位。
+`WorkspaceRetriever` 只调用 evidence selection；Graph provider 只返回
+`GraphRetrievalResult`。任何 retriever 都不能在内部生成一个候选答案再伪装成 evidence。
 
-## 当前仍未解决的边界
+## 上下文腐化防护
 
-当前实现能够降低简单的历史污染和重复注入风险，但尚不能完整解决上下文腐化：
+- assistant 历史、provider answer、trace text 和 model self-report 不成为 evidence；
+- visibility 在 retrieval 前执行；
+- ContextPack 的 item 必须能回指 canonical source 或 execution fact；
+- verifier 只能引用本次 admitted evidence；
+- repair 使用原 Goal、当前候选和 typed verification feedback，不修改权限或 Command；
+- summary 只能是非权威的上下文压缩视图，不能覆盖原消息或 Claim；
+- Prompt 不承担授权、唯一性、幂等和状态迁移。
 
-| 风险 | 当前边界 |
-| --- | --- |
-| 事实发生更新或被用户纠正 | 已允许对话承接更正，但还没有结构化事实版本与自动失效规则 |
-| 新旧证据互相冲突 | prompt 要求以当前证据为准，但冲突检测与时间线排序仍偏启发式 |
-| 超长会话中的早期关键约束 | 近期窗口可能截断旧约束，尚无结构化状态摘要长期保留它们 |
-| 图谱不可用时的语义召回 | 本地检索仍偏简单匹配，复杂语义相关性和 rerank 可继续增强 |
-| 系统化质量衡量 | 已有基础回归测试，但仍需要知识更新、干扰历史、跨话题和拒答评测集 |
+## 持久化规则
 
-## 后续演进方向
+只在恢复、审计、重放、授权边界或长生命周期一致性要求下持久化上下文来源。可从 canonical facts
+确定性重建的 ContextPack、排序分数和压缩文本默认不持久化为第二事实源。
 
-建议按以下顺序继续增强：
+| 数据 | 是否持久化 | 原因 |
+| --- | --- | --- |
+| Interaction committed input | 是 | Conversation 恢复与审计 |
+| Workspace Claim/EvidenceSpan | 是 | 长期知识事实 |
+| Project journal/ArtifactRef | 是 | durable execution |
+| Retrieval candidate pool | 默认否 | 可重建的单次运行视图 |
+| LLM Context/Prompt | 默认否 | 临时物化；必要时只保存 digest/ref |
+| embedding / graph index | 可持久化投影 | 可失效并从 canonical source 重建 |
 
-1. 将会话线索演进为结构化状态摘要，显式维护当前目标、有效约束、用户更正和未决问题。
-2. 为长期事实引入版本、有效时间与冲突状态，让新事实能够失效旧事实。
-3. 为本地检索增加混合召回与 rerank，在 Graphiti 降级场景下保留较好的上下文质量。
-4. 建立上下文腐化专项 eval，覆盖事实更新、误导历史、话题切换、超长会话和应当拒答场景。
-
-## 实现落点
-
-| 能力 | 代码位置 |
-| --- | --- |
-| 持久问答线索生成 | [facade.py](../../src/personal_agent/memory/facade.py) |
-| ask 上下文与证据 prompt | [runtime_ask.py](../../src/personal_agent/agent/runtime_ask.py) |
-| Thread 对话裁剪渲染 | [orchestration_nodes/_helpers.py](../../src/personal_agent/agent/orchestration_nodes/_helpers.py) |
-| 会话与流程 checkpoint | [orchestration_models.py](../../src/personal_agent/agent/orchestration_models.py)、[orchestration_graph.py](../../src/personal_agent/agent/orchestration_graph.py) |
-| 图谱与本地证据检索 | [graphiti/store.py](../../src/personal_agent/graphiti/store.py)、[postgres_memory_store.py](../../src/personal_agent/storage/postgres_memory_store.py) |
-| 回答证据校验 | [verifier.py](../../src/personal_agent/agent/verifier.py) |
+Memory 生命周期和事实 owner 见 [Memory 与知识事实边界](memory.md)；验证后的关闭条件见
+[Verification 与 Completion](verification-and-completion.md)。

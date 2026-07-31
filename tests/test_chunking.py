@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 
 from personal_agent.application.chunking import (
     chunk_content,
@@ -9,7 +8,6 @@ from personal_agent.application.chunking import (
     _derive_title,
     _finalize_chunks,
     MIN_CHUNK_CHARS,
-    MAX_CHUNK_CHARS,
 )
 
 

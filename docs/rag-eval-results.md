@@ -17,7 +17,8 @@
 
 - Open RAGBench 上，最优生产链路是 `optimized hybrid`：MRR=0.721，R@10=0.700。
 - MultiHopRAG 上，`optimized hybrid wide` 相比 graphiti-only / hybrid narrow 有小幅提升：MRR=0.434，R@10=0.733，但仍显著低于 retrieval-only Graphiti（MRR=0.589，R@10=0.919）。
-- Microsoft GraphRAG CLI 已接入并完成两个 30q 评估集测试，但作为生产 Ask provider 的效果低于 Structural + Graphiti hybrid；主要问题不是“能不能构图”，而是 CLI answer 需要再投影回本地 note id，且 community-level answer 不天然返回可直接评价的证据集合。
+- 历史 Microsoft GraphRAG CLI 曾完成两个 30q 对照，但使用已删除的 answer-to-local-note
+  projection，不能作为当前生产 Provider 或 grounded retrieval 证据。
 
 ## Graphiti Ingest 数据量统计
 
@@ -570,6 +571,9 @@ ingest 规模见上方 [Graphiti Ingest 数据量统计](#multihoprag-30qgrouppe
 
 #### Microsoft GraphRAG CLI provider
 
+> 历史结果：本节使用的 `answer_to_local_notes` projection 已由 ADR 0012 删除，不能代表当前生产
+> capability。当前生产 Adapter、配置和 eval CLI 选项均已删除。
+
 接入 [microsoft/graphrag](https://github.com/microsoft/graphrag) CLI（本地版本 `graphrag v3.1.0`），新增 `graph_provider=ms_graphrag`。与 Graphiti 不同，Microsoft GraphRAG 是 project-directory 模式：先把 corpus 导出到 `ROOT/input/*.txt`，再运行 `graphrag index` 生成 parquet / LanceDB / community report，最后用 `graphrag query` 生成自然语言 answer。
 
 评估配置：
@@ -625,4 +629,5 @@ embedding_api_base=https://dashscope.aliyuncs.com/compatible-mode/v1
 - **project-level indexing 成本高**：Open RAGBench 750 notes 下，即使 `fast` index 也依赖 community report 阶段；模型 schema 兼容性不好时会被严格 JSON 校验拖垮。
 - **adapter 仍是最小可用集成**：它还没有直接读取 GraphRAG 的 parquet/LanceDB 中间产物来生成 note candidates，而是通过 CLI answer 做反向映射。要公平比较，需要进一步实现“GraphRAG artifacts -> local note evidence”的原生检索层。
 
-结论：Microsoft GraphRAG CLI 可以作为离线图分析和社区摘要 provider 保留，但不建议替换 Graphiti。生产 Ask 的主线仍应是 `Structural + Graphiti hybrid`：Structural 保证宽召回，Graphiti 保证实体/关系事实，LLM rerank/MMR 负责最终 evidence set 排序。GraphRAG 后续优化应集中在 artifact-level retrieval 和 citation 映射，而不是直接用 CLI answer 当检索结果。
+历史结果只说明当时 CLI answer projection 的实验表现，不能支持当前产品能力声明。当前 Ask
+主线是 `Structural + Graphiti hybrid`；Microsoft GraphRAG 不属于当前生产或 eval 选择面。

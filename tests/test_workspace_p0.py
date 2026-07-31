@@ -10,6 +10,7 @@ from personal_agent.application.workspace import (
     ClaimRelationCandidate,
     ConversationMessage,
     ClaimAdmissionPolicy,
+    FixtureWorkspaceAnswerVerifier,
     InMemoryWorkspaceStore,
     KnowledgeStateMachine,
     WorkspaceService,
@@ -85,7 +86,10 @@ def test_assistant_inference_never_becomes_active_even_when_grounded():
 
 def test_answer_with_evidence_returns_resolvable_citations_without_saving_answer_claims():
     store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    service = WorkspaceService(
+        store,
+        answer_verifier=FixtureWorkspaceAnswerVerifier(),
+    )
     service.ingest_text(
         "蓝绿发布会同时保留两套环境。发布时可以将一半流量切到绿色环境。",
         workspace_id="w1",
@@ -94,7 +98,8 @@ def test_answer_with_evidence_returns_resolvable_citations_without_saving_answer
 
     answer = service.answer_with_evidence("蓝绿发布如何切流量？", workspace_id="w1")
 
-    assert answer.grounding_status in {"supported", "weak_evidence"}
+    assert answer.verification.verdict == "passed"
+    assert answer.verification.conclusion_status == "supported"
     assert answer.citations
     assert answer.answer_claim_saved_count == 0
     assert answer.active_claim_count_delta == 0
@@ -111,7 +116,8 @@ def test_no_evidence_question_returns_conservative_answer():
 
     answer = service.answer_with_evidence("完全不存在的主题是什么？", workspace_id="w1")
 
-    assert answer.grounding_status == "unsupported"
+    assert answer.verification.verdict == "insufficient_evidence"
+    assert answer.verification.conclusion_status == "insufficient_evidence"
     assert answer.citations == []
     assert "证据不足" in answer.answer
 
@@ -211,7 +217,10 @@ def test_correct_claim_supersedes_old_claim_and_creates_relation():
 
 def test_potential_conflict_creates_relation_decision_and_gap_without_state_change():
     store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    service = WorkspaceService(
+        store,
+        answer_verifier=FixtureWorkspaceAnswerVerifier(),
+    )
     first = service.ingest_text(
         "Orion 功能默认开启。",
         workspace_id="w1",
@@ -240,7 +249,11 @@ def test_potential_conflict_creates_relation_decision_and_gap_without_state_chan
 
 def test_semantic_conflict_judge_marks_both_claims_conflicted():
     store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store, relation_judge=_AlwaysConflictJudge())
+    service = WorkspaceService(
+        store,
+        relation_judge=_AlwaysConflictJudge(),
+        answer_verifier=FixtureWorkspaceAnswerVerifier(),
+    )
     first = service.ingest_text(
         "Orion 功能默认开启。",
         workspace_id="w1",

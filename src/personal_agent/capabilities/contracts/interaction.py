@@ -15,6 +15,7 @@ class InteractionToolDefinition(BaseModel):
     input_schema: dict[str, object]
     read_only: bool
     safely_retryable: bool
+    emits_verified_artifact: bool = False
 
 
 class InteractionToolCallValidation(BaseModel):

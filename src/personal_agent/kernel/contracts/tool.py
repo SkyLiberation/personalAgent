@@ -71,6 +71,9 @@ class ToolGovernance:
     rate_limit_per_minute: int | None = None
     # 外部网络工具的来源白名单（域名后缀匹配）。空元组表示该工具不做域名限制。
     allowed_domains: tuple[str, ...] = ()
+    # 该工具是否产出可被后续终止提议引用的受管产物（Verification Receipt）。
+    # Admission 据此按能力属性筛选，而不是硬编码具体工具名。
+    emits_verified_artifact: bool = False
 
 
 class ToolArtifact(BaseModel):

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import Citation, KnowledgeNote, MemoryEpisode, MemoryItem
 from personal_agent.kernel.projections import EvidenceSource, evidence_source_from_note
-from personal_agent.kernel.graph_results import GraphAskResult, GraphCitationHit
+from personal_agent.kernel.graph_results import GraphCitationHit, GraphRetrievalResult
 
 
 class SourceDocument(BaseModel):
@@ -650,7 +650,7 @@ def _candidate_source_family(source: str, item: EvidenceItem) -> str:
         return "dense"
     if normalized in {"local", "sparse", "lexical", "keyword", "bm25", "support", "shared"}:
         return "sparse"
-    if normalized in {"graph", "graphiti", "structural", "graph_provider_relation_fact", "graph_provider_answer"}:
+    if normalized in {"graph", "graphiti", "structural", "graph_provider_relation_fact"}:
         return "graph"
     if normalized == "workspace":
         return "workspace"
@@ -872,11 +872,11 @@ def _terms(text: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 def graph_result_to_evidence(
-    graph_result: GraphAskResult,
+    graph_result: GraphRetrievalResult,
     notes_by_episode: dict[str, KnowledgeNote],
     question: str,
 ) -> list[EvidenceItem]:
-    """Convert a ``GraphAskResult`` into a list of ``EvidenceItem``.
+    """Convert a ``GraphRetrievalResult`` into a list of ``EvidenceItem``.
 
     Mapping rules:
     - ``fact_refs / edge_refs`` -> ``source_type="graph_fact"``
@@ -965,9 +965,8 @@ def graph_result_to_evidence(
                 },
             ))
 
-    # 4. provider-level relation facts/answers. Some graph providers (for
-    # example Microsoft GraphRAG CLI queries) return a synthesized answer
-    # rather than episode-level citation hits.
+    # 4. Provider-level relation facts are accepted only when the provider
+    # exposes them as graph retrieval facts, not by splitting a synthesized answer.
     for index, fact in enumerate(graph_result.relation_facts):
         normalized = fact.strip()
         if not normalized or normalized in seen_facts:
@@ -980,18 +979,6 @@ def graph_result_to_evidence(
             score=0.55,
             metadata={"retrieved_by": "graph_provider_relation_fact"},
         ))
-
-    if graph_result.answer:
-        answer = graph_result.answer.strip()
-        if answer and answer not in seen_facts:
-            items.append(EvidenceItem(
-                source_type="graph_fact",
-                source_id="graph_answer",
-                fact=answer,
-                score=0.5,
-                metadata={"retrieved_by": "graph_provider_answer"},
-            ))
-
     return items
 
 

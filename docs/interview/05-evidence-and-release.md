@@ -1,4 +1,20 @@
-# E2E 与工程可信度
+# 证据、E2E 与发布资格
+
+本文是证据口径的权威参考：用例编号、archive、分级和 release gate 状态。任何其他文档引用证据时
+必须与本文一致。写法遵守 [面试文档规范](00-writing-spec.md)，方法论层面见
+[能力轴 11](03-capability-axes.md#11-评估与发布证据)。
+
+证据分级（规范第 5 条）在本文的具体落位：
+
+```text
+A 正式入口 E2E + clean matching revision   -> 当前无（完整矩阵未在 clean revision 重跑）
+  B 正式入口 E2E，dirty revision 或覆盖窄     -> E01-E14、E20、C01-C04、L01-L06、E16-E19、IP01
+C 诊断运行、单测、对象存在、DB 有记录        -> LT01-LT13、各类 probe
+D 仅设计或推理                             -> 第 11 节的候选 baseline
+```
+
+因此本文中所有「passed」都最多是 B 级。**当前没有任何 A 级证据**——package DAG gate 已转
+PASS（第 9 节），但 archive 与工作树 dirty，clean matching revision 仍未闭合。
 
 ## 1. 为什么 Agent 项目必须从 E2E 讲可信度
 
@@ -57,7 +73,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 ## 4. Conversation 与产品 Release E2E
 
-### E01-E14：原生产品能力
+### E01-E14、E20：原生产品能力
 
 | ID | 用户旅程 | 关键正向结果 | 关键反事实 |
 | --- | --- | --- | --- |
@@ -74,6 +90,8 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 | E11 | Review | feedback 后 schedule 更新 | 重启后 answered card 不再 due |
 | E12 | Knowledge Maintenance | 冲突/孤立分析和 backlink | projection 必须绑定 source Claim |
 | E13 | Scheduled Intelligence | Run、Digest、Delivery、Feedback 闭环 | Delivery 恰好一次 |
+| E14 | Conversation Governed Save | exact user-authored span 确认后保存 | 控制语义、assistant candidate 不写入 |
+| E20 | Workspace Answer Verification | 冲突 assessment 绑定本次 EvidenceSpan | 回答组装器不把互斥结论标成 supported |
 
 ### C01-C04：组合用户旅程
 
@@ -126,12 +144,20 @@ limitation 和“未生成替代答案”；最终消息不得泄漏或猜出随
 
 证明：Runtime 不生成确定性业务 fallback。
 
-#### L06 Receipt-bound semantic revision
+#### L06 Runtime-owned semantic revision
 
 用户要求审查并修订一段缺少执行证据却声称“已完成所有写入”的答复。最终文本不能保留该
-无证据声明，必须经过至少一次语义验证，并逐字等于最新 passed receipt 的 `verified_draft`。
+无证据声明，必须经过至少一次语义验证，并等于 passed receipt 的 `verified_draft`。判据、触发与
+产物三者都由 Runtime 拥有：判据从用户表述派生并逐字校验，verifier 不在模型能力清单里，
+发出的字节直接取自 Runtime 已持有的凭据（[ADR 0010](../adr/0010-runtime-owned-interaction-verification.md)）。
 
-证明：用户收到的是经过验证且与 receipt 绑定的安全文本，Runtime 不改写模型答案。真实用户
+**当前真实状态：9 次真实模型运行 9 次通过**（所有权收归 Runtime 前为 5/9），因此升为 **B 级**。
+改动过程中一条值得记录的实测：仅收回控制权与判据权时是 0/3，确定性地以
+`clarification_required` 终止——模型向用户索取判据提到的那份证据，而非删掉无证据的断言。
+只有 `answer` 会被验证，非 answer 的 disposition 因此是一条绕过验证的出口；Runtime 拒绝该
+disposition 后 9/9。
+
+设计意图：用户收到的是经过验证的安全文本，Runtime 不改写模型答案。真实用户
 不关心模型在验证前还是验证后先自行修订，因此 release E2E 不规定 verifier 调用次数；两轮
 `needs_revision -> passed` 的反馈状态机由 scripted Runtime Conformance 测试验证。
 
@@ -243,15 +269,27 @@ IP01 live target:
   data/e2e_traces/20260729T101501.732689Z-53628-6c5f02f2
 ```
 
-架构依赖检查：
+架构依赖检查（`uv run python scripts/check_layers.py`，2026-07-30）：
 
 ```text
-unknown_packages = context, skills, verification
-missing_packages = none
-cycles = none
-forbidden_edges = 0
-result = FAIL (3 architecture violations)
+packages=14 edges=53
+unknown_packages=none
+missing_packages=none
+cycles=none
+forbidden_edges=0
+OK: explicit package DAG satisfied
 ```
+
+这条的**历史**要主动说，因为它本身是一个诊断教训：此前门禁长期 FAIL，
+`unknown_packages = context, skills, verification`。追下去发现三个目录只剩
+`__pycache__/*.pyc`、`git ls-files` 为空——是已删除包的编译残骸，而
+`discover_packages()` 只判断 `isdir` 就把它们数成了包。**门禁报的是真实失败，但根因不是
+架构违规，而是门禁自己的探测规则。** 修法两步：删残骸目录，并要求目录内至少有一个 `.py`，
+使未来的 stale pycache 不再制造幻影 FAIL。教训是 fail-closed 门禁也需要区分「被守护的
+不变量破了」与「探测器坏了」，否则会长期误报并稀释门禁可信度。
+
+门禁转 PASS 移除了 clean release 资格的一个障碍，但 A 级证据仍不成立——原因是 archive 与
+工作树 dirty，见下一节。
 
 ## 10. 为什么还不能说“可发布”
 

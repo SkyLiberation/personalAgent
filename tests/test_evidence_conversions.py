@@ -12,10 +12,10 @@ from personal_agent.kernel.evidence import (
     web_results_to_evidence,
 )
 from personal_agent.kernel.contracts.research import ResearchSource
+from personal_agent.kernel.graph_results import GraphRetrievalResult
 from personal_agent.kernel.models import KnowledgeNote, MemoryEpisode, MemoryItem
 from personal_agent.memory.graphiti.reranker import GraphCitationHit
 from personal_agent.memory.graphiti.store import (
-    GraphAskResult,
     GraphEdgeRef,
     GraphFactRef,
 )
@@ -35,7 +35,7 @@ def _note(note_id: str, title: str = "测试笔记", episode_uuid: str | None = 
 
 class TestGraphResultToEvidence:
     def test_fact_refs_to_graph_fact(self):
-        result = GraphAskResult(
+        result = GraphRetrievalResult(
             enabled=True, fact_refs=[
                 GraphFactRef(fact="Redis supports caching", edge_uuid="e1",
                              source_node_name="Redis", target_node_name="Caching",
@@ -50,7 +50,7 @@ class TestGraphResultToEvidence:
         assert items[0].metadata["source_node_name"] == "Redis"
 
     def test_edge_refs_dedup_against_fact_refs(self):
-        result = GraphAskResult(
+        result = GraphRetrievalResult(
             enabled=True,
             fact_refs=[GraphFactRef(fact="same fact", edge_uuid="e1")],
             edge_refs=[GraphEdgeRef(uuid="e2", fact="same fact")],
@@ -61,7 +61,7 @@ class TestGraphResultToEvidence:
 
     def test_citation_hit_with_episode_mapping(self):
         note = _note("n1", "Redis笔记", episode_uuid="ep-1")
-        result = GraphAskResult(
+        result = GraphRetrievalResult(
             enabled=True,
             citation_hits=[GraphCitationHit(
                 episode_uuid="ep-1", relation_fact="Redis supports caching",
@@ -77,7 +77,7 @@ class TestGraphResultToEvidence:
 
     def test_citation_hit_chunk_type(self):
         chunk = _note("c1", "Redis chunk", episode_uuid="ep-1", parent_note_id="p1")
-        result = GraphAskResult(
+        result = GraphRetrievalResult(
             enabled=True,
             citation_hits=[GraphCitationHit(
                 episode_uuid="ep-1", relation_fact="Redis fact",
@@ -88,7 +88,7 @@ class TestGraphResultToEvidence:
         assert items[0].source_type == "chunk"
 
     def test_orphan_citation_hit(self):
-        result = GraphAskResult(
+        result = GraphRetrievalResult(
             enabled=True,
             citation_hits=[GraphCitationHit(
                 episode_uuid="ep-missing", relation_fact="orphan fact",
@@ -101,7 +101,7 @@ class TestGraphResultToEvidence:
         assert items[0].metadata["orphan"] is True
 
     def test_empty_result(self):
-        result = GraphAskResult(enabled=True)
+        result = GraphRetrievalResult(enabled=True)
         items = graph_result_to_evidence(result, {}, "test")
         assert items == []
 

@@ -59,6 +59,7 @@ def governance_extras(
     retry_backoff_seconds: float = 0.2,
     rate_limit_per_minute: int | None = None,
     allowed_domains: tuple[str, ...] = (),
+    emits_verified_artifact: bool = False,
 ) -> dict[str, Any]:
     governance = ToolGovernance(
         exposure=exposure,
@@ -74,6 +75,7 @@ def governance_extras(
         retry_backoff_seconds=max(0.0, retry_backoff_seconds),
         rate_limit_per_minute=rate_limit_per_minute,
         allowed_domains=allowed_domains,
+        emits_verified_artifact=emits_verified_artifact,
     )
     payload = asdict(governance)
     payload["side_effects"] = list(governance.side_effects)
@@ -137,6 +139,7 @@ def tool_governance(tool: BaseTool) -> ToolGovernance:
         retry_backoff_seconds=max(0.0, float(payload.get("retry_backoff_seconds", 0.2))),
         rate_limit_per_minute=payload.get("rate_limit_per_minute"),
         allowed_domains=allowed_domains,
+        emits_verified_artifact=bool(payload.get("emits_verified_artifact", False)),
     )
 
 

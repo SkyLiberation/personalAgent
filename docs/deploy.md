@@ -88,7 +88,7 @@ worker 启动时会扫描非终态且非 paused 的 Project，并以稳定 idemp
 
 - 修改 `.env` 配置
 - 安装或更新 Python 依赖
-- 修改 LangGraph 编排、checkpoint backend 或其他会在进程内缓存的运行时对象
+- 修改 Conversation/Application 编排、Provider、Tool registry 或其他进程内装配对象
 - 页面行为与当前源码不一致，怀疑仍有旧 worker 占用 `8000` 端口
 
 推荐步骤：
@@ -131,7 +131,8 @@ if ($reloader) {
 uv run uvicorn personal_agent.adapters.web.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-不要在旧实例仍占用端口时重复启动后端。对于 LangGraph 这类会缓存已编译 graph 的代码，完整重启后，新请求才会确定使用最新编排定义。
+不要在旧实例仍占用端口时重复启动后端。Composition Root、Provider client 和 Tool registry
+都在进程内装配；完整重启后，新请求才会确定使用最新定义。
 
 ### 6.2 飞书接入注意事项
 
@@ -226,7 +227,8 @@ npm run test:research-e2e
 
 它会清理：
 
-- 配置的 Postgres 当前 schema 中全部普通表数据，包括业务表和 LangGraph checkpoint/迁移元数据；清理后会重建 LangGraph 迁移版本记录
+- 配置的 Postgres 当前 schema 中全部普通表数据，包括业务表和可能残留的历史 LangGraph
+  checkpoint/迁移元数据；历史表不是当前 Conversation 真源
 - `data/uploads/` 下全部上传源文件
 - 配置的 Neo4j 数据库中全部图谱节点和关系
 
@@ -282,4 +284,6 @@ PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false
 
 即使 cron 被重复触发，ResearchRun、worker task 和 delivery ledger 的数据库唯一键仍会阻止同一时间窗口重复执行或投递。
 
-`Ask History` 不再单独存档 — 同一会话的问答以 LangGraph checkpoint 中的 `state.messages` 为唯一真源，前端历史列表通过 `/api/entry/runs` 渲染最近 run snapshot。
+Conversation 历史由 `FileInteractionJournal` 的 committed messages 和 observations 持有，通过
+公开 `interaction_run_ref` 查询。已删除的 `/api/entry/runs` 与 LangGraph run snapshot 不再是
+前端或恢复入口。

@@ -16,11 +16,23 @@ from personal_agent.application.conversation import (
     FileInteractionJournal,
     FinalMessage,
     LoopBudgetPolicy,
+    ReviewIntent,
+    ReviewRequirement,
     ToolCallProposal,
 )
 from personal_agent.application.conversation.models import (
+    ActionObservation,
     CommittedUsage,
+    DecisionFeedback,
     EffectiveCapabilities,
+    ReviewCriteria,
+)
+from personal_agent.application.conversation.review_admission import (
+    admit_review_intent,
+    ungrounded_criteria_feedback,
+)
+from personal_agent.application.conversation.verification_admission import (
+    observed_receipts,
 )
 from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from personal_agent.governance import ToolExecutor
@@ -42,6 +54,9 @@ from personal_agent.kernel.contracts.agent import (
     new_agent_run_id,
 )
 from personal_agent.kernel.llm_schemas import strictify_schema
+from personal_agent.tools.interaction_verifier import (
+    build_verify_interaction_draft_tool,
+)
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
     SecurityScope,
@@ -51,17 +66,33 @@ from personal_agent.tools.base import governance_extras, tool_response, tool_suc
 
 
 class _Decisions:
-    def __init__(self, *items) -> None:
+    """Scripted decision turns, plus the runtime's own review-criteria derivation.
+
+    ``review_intent`` answers the runtime-owned derivation call. Its default says
+    "not a review request", which is what keeps every ordinary-path test free of
+    verification setup it does not exercise.
+    """
+
+    def __init__(self, *items, review_intent: ReviewIntent | None = None) -> None:
         self.items = list(items)
         self.requests = []
+        self.review_intent = review_intent or ReviewIntent(requires_review=False)
+        self.decision_requests = []
 
     def generate(self, request):
         self.requests.append(request)
+        if request.operation == "interaction_review_criteria":
+            return self._response(self.review_intent)
+        self.decision_requests.append(request)
         item = self.items.pop(0)
         if isinstance(item, BaseException):
             raise item
+        return self._response(AgentTurnDecision(decision=item))
+
+    @staticmethod
+    def _response(value):
         return StructuredModelResponse(
-            value=AgentTurnDecision(decision=item),
+            value=value,
             model="contract-model",
             latency_ms=1,
             input_tokens=10,
@@ -99,7 +130,26 @@ def test_interaction_prompt_matches_the_object_root_wire_contract():
     assert '"kind": "continue_turn"' in prompt
 
 
-def _tool(name, function, *, side_effects=("none",)):
+def test_prompt_never_asks_the_model_to_run_or_reference_verification():
+    """The invariant is the runtime's, so the prompt must not delegate it.
+
+    Wording that tells the model to call a verifier is what the previous design
+    relied on, and is exactly the probabilistic enforcement this change removes.
+    Its absence is asserted so it cannot drift back in as a "helpful" hint.
+    """
+    prompt = ConversationService(None)._system_prompt(
+        EffectiveCapabilities(revision="test"),
+        CommittedUsage(),
+        ReviewCriteria(criteria=("no unverifiable occurrence claims",)),
+    )
+
+    assert "no unverifiable occurrence claims" in prompt
+    assert "verify_interaction_draft" not in prompt
+    assert "verified_final_message" not in prompt
+    assert "receipt" not in prompt.lower()
+
+
+def _tool(name, function, *, side_effects=("none",), emits_verified_artifact=False):
     return StructuredTool.from_function(
         func=function,
         name=name,
@@ -109,6 +159,7 @@ def _tool(name, function, *, side_effects=("none",)):
             side_effects=side_effects,
             permission_scope=f"test:{name}",
             timeout_seconds=5,
+            emits_verified_artifact=emits_verified_artifact,
         ),
     )
 
@@ -159,7 +210,9 @@ def test_l01_observation_drives_next_react_decision_and_user_result():
     assert trace is not None
     assert trace.inputs[0].kind == "tool_result"
     assert trace.inputs[0].payload["data"]["fact"] == "observed:Orion"
-    next_turn_context = "\n".join(message["content"] for message in model.requests[1].messages)
+    next_turn_context = "\n".join(
+        message["content"] for message in model.decision_requests[1].messages
+    )
     assert "Typed execution inputs" in next_turn_context
     assert "working plan" not in next_turn_context.lower()
     assert trace.final_message is not None
@@ -276,7 +329,7 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
     assert result.disposition == "answer"
     assert calls == 1
     resumed_context = "\n".join(
-        message["content"] for message in resumed_model.requests[0].messages
+        message["content"] for message in resumed_model.decision_requests[0].messages
     )
     assert "Typed execution inputs" in resumed_context
     trace = resumed.trace("irun_l03")
@@ -296,11 +349,11 @@ def test_independent_user_results_instruction_does_not_require_named_capabilitie
         )],
     )
 
-    system_prompt = model.requests[0].messages[0]["content"]
+    system_prompt = model.decision_requests[0].messages[0]["content"]
     assert "goal requires multiple independent read-only results" in system_prompt
     assert "user does not need to know or name internal capabilities" in system_prompt
-    assert model.requests[0].temperature == 0
-    assert model.requests[0].max_tokens == 1_600
+    assert model.decision_requests[0].temperature == 0
+    assert model.decision_requests[0].max_tokens == 1_600
 
 
 def test_interaction_delegation_budget_cannot_exceed_synchronous_policy_limit():
@@ -395,7 +448,10 @@ def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
         and item.reason_code == "agent_artifact_already_returned"
         for item in trace.inputs
     )
-    assert "produce the parent synthesis" in model.requests[1].messages[0]["content"]
+    assert (
+        "produce the parent synthesis"
+        in model.decision_requests[1].messages[0]["content"]
+    )
 
 
 def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegation():
@@ -483,7 +539,7 @@ def test_l05_budget_exhaustion_fails_closed_after_committed_result():
     assert service.trace("irun_l05").inputs[0].status == "succeeded"
 
 
-def test_l06_verifier_feedback_revises_answer_without_rewriting_execution_fact():
+def test_l06_observation_drives_revision_without_rewriting_execution_fact():
     calls = 0
 
     def verify(draft: str):
@@ -505,7 +561,7 @@ def test_l06_verifier_feedback_revises_answer_without_rewriting_execution_fact()
         **_conversation_scope(),
         conversation_id="conversation-l06",
         interaction_run_ref="irun_l06",
-        messages=[ConversationMessage(role="user", content="Verify and revise the draft.")],
+        messages=[ConversationMessage(role="user", content="Check the draft, then answer.")],
     )
     trace = service.trace("irun_l06")
 
@@ -513,79 +569,379 @@ def test_l06_verifier_feedback_revises_answer_without_rewriting_execution_fact()
     assert result.message.content.startswith("Revised answer")
     assert trace.inputs[0].payload["data"]["status"] == "failed"
     assert trace.execution_order == ("verify",)
-    assert "do not repeat a rejected claim verbatim" in model.requests[1].messages[0]["content"]
 
 
-def test_answer_is_bound_to_latest_passed_verification_receipt():
-    calls: list[str] = []
-    revised = "Only observed facts are reported."
+def _receipt_payload(draft, *, verdict, criterion="grounded", criteria_digest="0" * 64):
+    normalized = draft.strip()
+    digest = sha256(normalized.encode("utf-8")).hexdigest()
+    return {
+        "verdict": verdict,
+        "criterion_results": [{
+            "criterion": criterion,
+            "status": "satisfied" if verdict == "passed" else "not_satisfied",
+            "feedback": "" if verdict == "passed" else "revise",
+        }],
+        "revision_feedback": "" if verdict == "passed" else "revise",
+        "receipt_id": f"svr_{digest[:20]}",
+        "verified_draft": normalized,
+        "draft_digest": digest,
+        "success_criteria": [criterion],
+        "criteria_digest": criteria_digest,
+    }
+
+
+def _receipt_id(draft):
+    return f"svr_{sha256(draft.strip().encode('utf-8')).hexdigest()[:20]}"
+
+
+def _receipt_observation(draft, *, verdict, action_id="verify", **kwargs):
+    return ActionObservation(
+        kind="tool_result",
+        action_id=action_id,
+        capability_id="verify_interaction_draft",
+        status="succeeded",
+        payload={"ok": True, "data": _receipt_payload(draft, verdict=verdict, **kwargs)},
+    )
+
+
+_RECEIPT_CAPABILITIES = frozenset({"verify_interaction_draft"})
+
+
+_REVIEW_REQUEST = (
+    "请审查这段要发给用户的答复：“系统已经完成所有写入。”"
+    "要求是：没有可核验的执行证据时，不能声称写入已经发生。"
+)
+
+
+def _review_intent(*criteria_and_spans):
+    return ReviewIntent(
+        requires_review=True,
+        requirements=tuple(
+            ReviewRequirement(criterion=criterion, source_span=span)
+            for criterion, span in criteria_and_spans
+        ),
+    )
+
+
+def _verifier_tool(recorder, *, verdicts):
+    """A verifier whose verdicts are scripted, recording every call it receives."""
 
     def verify_interaction_draft(
         draft: str,
         success_criteria: tuple[str, ...],
         evidence_refs: tuple[str, ...] = (),
     ):
-        calls.append(draft)
-        verdict = "needs_revision" if len(calls) == 1 else "passed"
-        return tool_response(tool_success({
-            "verdict": verdict,
-            "criterion_results": [{
-                "criterion": success_criteria[0],
-                "status": "not_satisfied" if verdict == "needs_revision" else "satisfied",
-                "feedback": "revise" if verdict == "needs_revision" else "",
-            }],
-            "revision_feedback": "revise" if verdict == "needs_revision" else "",
-            "verified_draft": draft.strip(),
-            "draft_digest": sha256(draft.strip().encode("utf-8")).hexdigest(),
-            "criteria_digest": "0" * 64,
-        }))
+        recorder.append((draft, tuple(success_criteria)))
+        return tool_response(tool_success(_receipt_payload(
+            draft,
+            verdict=verdicts[min(len(recorder) - 1, len(verdicts) - 1)],
+            criterion=success_criteria[0],
+        )))
 
-    first = ToolCallProposal(
-        action_id="verify-bad",
-        tool_name="verify_interaction_draft",
-        arguments={"draft": "unsupported", "success_criteria": ["grounded"]},
+    return _tool(
+        "verify_interaction_draft",
+        verify_interaction_draft,
+        emits_verified_artifact=True,
     )
-    second = ToolCallProposal(
-        action_id="verify-revised",
-        tool_name="verify_interaction_draft",
-        arguments={"draft": revised, "success_criteria": ["grounded"]},
+
+
+def test_review_criteria_must_be_traceable_to_the_user_verbatim():
+    """A criterion the user did not write is dropped, not repaired.
+
+    This is the mechanical replacement for asking the model, in a prompt, to copy
+    the user's requirement faithfully: an invented standard cannot enter the turn,
+    so the verifier's verdict always means something the user actually asked for.
+    """
+    messages = [ConversationMessage(role="user", content=_REVIEW_REQUEST)]
+
+    admitted = admit_review_intent(
+        _review_intent(
+            ("must not claim writes occurred", "不能声称写入已经发生"),
+            ("text should be enthusiastic", "make it sound great"),
+        ),
+        messages=messages,
     )
-    redundant = ToolCallProposal(
-        action_id="verify-redundant",
-        tool_name="verify_interaction_draft",
-        arguments={"draft": "unsupported", "success_criteria": ["grounded"]},
+
+    assert admitted.criteria == ("must not claim writes occurred",)
+    assert admitted.ungrounded_spans == ("make it sound great",)
+    assert admitted.requires_review is True
+
+
+def test_a_review_request_with_no_grounded_criterion_is_not_silently_downgraded():
+    messages = [ConversationMessage(role="user", content=_REVIEW_REQUEST)]
+
+    admitted = admit_review_intent(
+        _review_intent(("text should be enthusiastic", "make it sound great")),
+        messages=messages,
     )
-    model = _Decisions(
-        _continue(first),
-        FinalMessage(disposition="answer", message="premature"),
-        ContinueTurnProposal(actions=(second,)),
-        ContinueTurnProposal(actions=(redundant,)),
-        FinalMessage(disposition="answer", message="different text"),
-        FinalMessage(disposition="answer", message=revised),
+
+    assert admitted.criteria == ()
+    assert admitted.requires_review is False
+    assert admitted.ungrounded_spans == ("make it sound great",)
+    assert (
+        ungrounded_criteria_feedback(admitted).reason_code
+        == "review_criteria_not_grounded"
     )
+
+
+def test_criteria_are_never_taken_from_an_assistant_message():
+    """Only user text can set the standard.
+
+    Otherwise a turn could state a lenient criterion in its own prose and have it
+    admitted on the next turn -- self-authored criteria via the conversation.
+    """
+    admitted = admit_review_intent(
+        _review_intent(("any claim is fine", "any claim is fine")),
+        messages=[
+            ConversationMessage(role="user", content="审查这段话。"),
+            ConversationMessage(role="assistant", content="any claim is fine"),
+        ],
+    )
+
+    assert admitted.criteria == ()
+    assert admitted.requires_review is False
+
+
+def test_an_ordinary_request_is_answered_without_any_verification():
+    """Non-review requests must not pay for verification, or trigger it at all."""
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    model = _Decisions(FinalMessage(disposition="answer", message="Orion is a constellation."))
     service = ConversationService(
         model,
-        tool_port=_executor(_tool("verify_interaction_draft", verify_interaction_draft)),
+        tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
     )
 
     result = service.respond(
         **_conversation_scope(),
-        conversation_id="conversation-verification-binding",
-        interaction_run_ref="irun-verification-binding",
-        messages=[ConversationMessage(role="user", content="Verify the exact final draft.")],
+        conversation_id="conversation-no-review",
+        interaction_run_ref="irun-no-review",
+        messages=[ConversationMessage(role="user", content="What is Orion?")],
     )
-    trace = service.trace("irun-verification-binding")
+    trace = service.trace("irun-no-review")
 
-    assert calls == ["unsupported", revised]
-    assert result.message.content == revised
-    assert trace is not None
+    assert result.message.content == "Orion is a constellation."
+    assert recorder == []
+    assert trace.execution_order == ()
+    assert trace.review_criteria == ReviewCriteria()
+
+
+def test_the_real_verifier_is_not_a_capability_the_model_can_see():
+    """The model cannot skip a step it does not know exists.
+
+    Exposure is what makes "verification will happen" structural: the capability
+    list is the model's only route to a tool, and the production verifier is
+    absent from it while remaining callable by the runtime.
+    """
+    verifier = build_verify_interaction_draft_tool(_Decisions())
+    executor = _executor(verifier)
+    service = ConversationService(None, tool_port=executor)
+
+    visible = [tool.name for tool in service._effective_capabilities().tools]
+
+    assert "verify_interaction_draft" not in visible
+    assert executor.get("verify_interaction_draft") is verifier
+    assert (
+        executor.validate_interaction_call(
+            "verify_interaction_draft",
+            {"draft": "d", "success_criteria": ["c"]},
+        ).status == "accepted"
+    )
+
+
+def test_a_review_answer_is_verified_before_it_can_be_sent():
+    """The runtime verifies the answer itself, against the frozen criteria.
+
+    The model proposes ordinary prose and never references a receipt: the sent
+    bytes come from the receipt the runtime already holds, so "verified" and
+    "sent" cannot diverge.
+    """
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    safe = "无法确认写入是否发生。"
+    model = _Decisions(
+        FinalMessage(disposition="answer", message="系统已经完成所有写入。"),
+        FinalMessage(disposition="answer", message=safe),
+        review_intent=_review_intent(
+            ("must not claim writes occurred", "不能声称写入已经发生"),
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(
+            _verifier_tool(recorder, verdicts=("needs_revision", "passed")),
+        ),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-runtime-verified",
+        interaction_run_ref="irun-runtime-verified",
+        messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
+    )
+    trace = service.trace("irun-runtime-verified")
+
+    assert [draft for draft, _ in recorder] == ["系统已经完成所有写入。", safe]
+    assert result.disposition == "answer"
+    assert result.message.content == safe
+    assert trace.final_message.message == safe
+    assert trace.execution_order == ("runtime-verify-0", "runtime-verify-1")
+    assert [item.capability_id for item in trace.inputs] == [
+        "verify_interaction_draft", "verify_interaction_draft",
+    ]
+
+
+def test_a_review_request_cannot_be_ended_without_a_verified_answer():
+    """A non-answer disposition is not a way past verification.
+
+    Only ``answer`` is verified, so ending a review request as a clarification
+    would deliver unverified text. Observed against the live model: asked to
+    remove an unevidenced claim, it asked the user for the evidence instead. The
+    runtime rejects the disposition and the retried answer is verified normally.
+    """
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    safe = "无法确认写入是否发生。"
+    model = _Decisions(
+        FinalMessage(
+            disposition="clarification_required",
+            message="请提供可核验的执行证据。",
+        ),
+        FinalMessage(disposition="answer", message=safe),
+        review_intent=_review_intent(
+            ("must not claim writes occurred", "不能声称写入已经发生"),
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-review-disposition",
+        interaction_run_ref="irun-review-disposition",
+        messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
+    )
+    trace = service.trace("irun-review-disposition")
+
+    assert [draft for draft, _ in recorder] == [safe]
+    assert result.disposition == "answer"
+    assert result.message.content == safe
+    assert [
+        item.reason_code for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+    ] == ["review_requires_sendable_answer"]
+
+
+def test_the_frozen_criteria_are_reused_for_every_verification_in_the_turn():
+    """One derivation, one standard.
+
+    Re-deriving per attempt would restore the drift this change removes: a later
+    turn could be judged against a weaker criterion than the first.
+    """
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    model = _Decisions(
+        FinalMessage(disposition="answer", message="系统已经完成所有写入。"),
+        FinalMessage(disposition="answer", message="无法确认写入是否发生。"),
+        review_intent=_review_intent(
+            ("must not claim writes occurred", "不能声称写入已经发生"),
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(
+            _verifier_tool(recorder, verdicts=("needs_revision", "passed")),
+        ),
+    )
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-frozen-criteria",
+        interaction_run_ref="irun-frozen-criteria",
+        messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
+    )
+    trace = service.trace("irun-frozen-criteria")
+
+    criteria_per_call = {criteria for _, criteria in recorder}
+    assert criteria_per_call == {("must not claim writes occurred",)}
+    assert trace.review_criteria.criteria == ("must not claim writes occurred",)
+    assert (
+        sum(request.operation == "interaction_review_criteria" for request in model.requests)
+        == 1
+    )
+
+
+def test_a_review_request_fails_closed_when_verification_is_unavailable():
+    """No verifier means no claim of review, rather than an unverified answer."""
+    model = _Decisions(
+        FinalMessage(disposition="answer", message="无法确认写入是否发生。"),
+        review_intent=_review_intent(
+            ("must not claim writes occurred", "不能声称写入已经发生"),
+        ),
+    )
+    service = ConversationService(model, tool_port=_executor())
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-verifier-missing",
+        interaction_run_ref="irun-verifier-missing",
+        messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
+    )
+    trace = service.trace("irun-verifier-missing")
+
+    assert result.disposition == "answer"
+    assert trace.review_criteria == ReviewCriteria()
     assert [
         item.reason_code for item in trace.inputs if item.kind == "decision_feedback"
-    ] == [
-        "verification_required",
-        "verified_draft_ready",
-        "verified_draft_mismatch",
+    ] == ["verification_capability_unavailable"]
+
+
+def test_a_failed_criteria_derivation_answers_without_claiming_review():
+    """A broken derivation must not become a runtime-invented standard."""
+    class _FailingDerivation(_Decisions):
+        def generate(self, request):
+            if request.operation == "interaction_review_criteria":
+                raise RuntimeError("derivation provider unavailable")
+            return super().generate(request)
+
+    model = _FailingDerivation(
+        FinalMessage(disposition="answer", message="无法确认写入是否发生。"),
+    )
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    service = ConversationService(
+        model,
+        tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-derivation-failed",
+        interaction_run_ref="irun-derivation-failed",
+        messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
+    )
+
+    assert result.disposition == "answer"
+    assert recorder == []
+    assert service.trace("irun-derivation-failed").review_criteria == ReviewCriteria()
+
+
+def test_receipts_are_read_from_observations_by_contract_not_by_position():
+    inputs = [
+        _receipt_observation("first draft", verdict="needs_revision", action_id="v1"),
+        ActionObservation(
+            kind="tool_result",
+            action_id="v2",
+            capability_id="verify_interaction_draft",
+            status="succeeded",
+            payload={"ok": True, "data": {"not": "a receipt"}},
+        ),
+        _receipt_observation("final draft", verdict="passed", action_id="v3"),
     ]
+
+    receipts = observed_receipts(
+        inputs, capability_names=frozenset({"verify_interaction_draft"}),
+    )
+
+    assert [receipt.verdict for receipt in receipts] == ["needs_revision", "passed"]
+    assert receipts[-1].verified_draft == "final draft"
 
 
 def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate(

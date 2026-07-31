@@ -12,7 +12,6 @@ from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.application.knowledge import KnowledgeConsolidationUseCase
 from personal_agent.application.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
-from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.governance.guardrails import configure_guardrails
 from personal_agent.governance.policy import PolicyEngine, PolicyRules
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
@@ -141,7 +140,7 @@ from personal_agent.application.research import (
 )
 from personal_agent.application.workspace import (
     IngestKnowledgeResult,
-    LLMAnswerCoverageJudge,
+    LLMWorkspaceAnswerVerifier,
     LLMClaimGroundingJudge,
     LLMClaimRelationJudge,
     LLMSemanticClaimExtractor,
@@ -251,7 +250,6 @@ class AgentRuntime:
         settings: Settings,
         store: PostgresMemoryStore,
         graph_store: GraphitiStore,
-        ms_graphrag_store: MicrosoftGraphRagStore | None = None,
         capture_service: "CaptureService | None" = None,
     ) -> None:
         if not settings.postgres_url:
@@ -260,7 +258,6 @@ class AgentRuntime:
         configure_langsmith_environment(settings.langsmith)
         self.store = store
         self.graph_store = graph_store
-        self.ms_graphrag_store = ms_graphrag_store or MicrosoftGraphRagStore(settings)
         self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
         # Install the process-wide content guard so the entry/finalize/web seams
         # (nodes without a context param) share one configured instance.
@@ -307,7 +304,9 @@ class AgentRuntime:
             self.workspace_service.semantic_evidence_extractor = LLMSemanticEvidenceExtractor(self._structured_client)
             self.workspace_service.semantic_claim_extractor = LLMSemanticClaimExtractor(self._structured_client)
             self.workspace_service.claim_grounding_judge = LLMClaimGroundingJudge(self._structured_client)
-            self.workspace_service.answer_coverage_judge = LLMAnswerCoverageJudge(self._structured_client)
+            self.workspace_service.answer_verifier = LLMWorkspaceAnswerVerifier(
+                self._structured_client
+            )
         self._streaming_client = build_streaming_model_client(
             settings.openai, settings.langsmith,
         )
@@ -633,7 +632,6 @@ class AgentRuntime:
         return AskService(
             settings=self.settings,
             graph_store=self.graph_store,
-            ms_graphrag_store=self.ms_graphrag_store,
             structural_retriever=self.structural_retriever,
             memory=self.memory,
             tool_executor=self._tool_executor,
@@ -675,9 +673,6 @@ class AgentRuntime:
         )
 
     def _active_graph_store(self):
-        provider = self.settings.ask.graph_provider.strip().lower()
-        if provider in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
-            return self.ms_graphrag_store
         return self.graph_store
 
     def _bind_active_graph_store_to_memory(self) -> None:
@@ -960,7 +955,7 @@ class AgentRuntime:
             session_id=session_id or "default",
             repair_telemetry={
                 "workspace": True,
-                "grounding_status": answer.grounding_status,
+                "verification": answer.verification.model_dump(mode="json"),
                 "selected_claim_ids": list(answer.selected_claim_ids),
                 "conflicted_claim_ids": list(answer.conflicted_claim_ids),
                 "diagnostic_fields": answer.diagnostic_fields,

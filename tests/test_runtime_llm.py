@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from personal_agent.infra.runtime_llm import LlmClient
 from personal_agent.infra.structured_model import OpenAIModelClient
 from personal_agent.kernel.config import OpenAIConfig, Settings
-from personal_agent.kernel.config_models import LangSmithConfig
 
 
 def _make_client(settings: Settings) -> LlmClient:

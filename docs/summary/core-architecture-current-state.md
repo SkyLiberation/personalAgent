@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-本文记录截至 2026-07-30 已落地的生产架构事实。尚未落地的设计只进入
+本文记录截至 2026-07-31 已落地的生产架构事实。尚未落地的设计只进入
 [future 索引](../future/README.md)，不能反向定义当前架构；产品能力、E2E 和发布可信度的当前事实由
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md) 拥有。
 [`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 只保存已删除旧架构的历史诊断
@@ -75,6 +75,7 @@ God Task、God State 或统一 Planner。框架统一的是不变量，不是把
 | terra 在顶层 union structured schema 上 retry 超时 | Phase 0 Provider probe/E17 记录 | Provider transport 是可替换能力边界，不能污染业务 contract |
 | 子 Agent 返回 Artifact 后仍被重复委托，或 child terminal 被误当父完成 | E17/C04/L04 定向 archive | child execution fact 与父级综合、完成分离 |
 | live Investigation 有搜索结果却因 repair lineage 不闭合而无法交付报告 | B03 到 IP01 的同输入 archive 链 | Evidence Admission、Plan revision 和 Completion obligation 必须由 durable owner 维护 |
+| Workspace 回答并列互斥事实却宣称 supported | B04 `20260731T063040.820774Z-16696-c3646c8a` 到 E20 `20260731T064446.108938Z-8804-52b29d3c` | 回答组装与 answer-level Semantic Verification 必须由不同 owner 负责 |
 
 这些 archive 证明的是对应工作树和输入上的工程事实，不自动建立 clean-revision 发布资格。
 框架的可信度来自“问题—owner—最小改动—目标 E2E”链路，而不是来自“对齐优秀 Agent”的类图。
@@ -121,20 +122,18 @@ View / DTO  读取时组合，不成为新事实 owner
 同一事实只能有一个 canonical owner 和一个合法写入口。可确定性重建的值默认不持久化，
 禁止用 alias、双写、converter 或 fallback 维护新旧事实副本。
 
-包依赖由 `scripts/check_layers.py` 的显式 DAG 检查。2026-07-30 在当前工作树实际执行结果为：
+包依赖由 `scripts/check_layers.py` 的显式 DAG 检查。2026-07-31 在当前工作树实际执行结果为：
 
 ```text
-unknown_packages=['context', 'skills', 'verification']
+packages=14 edges=53
+unknown_packages=none
 missing_packages=none
 cycles=none
 forbidden_edges=0
-FAIL: 3 architecture violation(s)
+OK: explicit package DAG satisfied
 ```
 
-三个目录的生产 Python 文件正在删除，但残留目录仍被 gate 发现；因此此前“当前 DAG gate
-passed”的文档声明已失效。修复必须让 package discovery 与真实 Python package 定义一致，并
-重新执行 gate；不能只在文档中忽略失败。对应退出方案见
-[可信 Agent Runtime 演进与收敛计划](../future/trusted-agent-runtime-evolution.md)。
+package discovery 只识别真实 Python package；空迁移目录不再制造未知 package。
 
 ## 2. 正式入口与 Composition Root
 
@@ -312,9 +311,11 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 | Research | `ResearchService` | ResearchRun、Event、Digest、Delivery/limitation |
 | Scheduled Intelligence | Research/Review scheduler | Subscription definition、Run、Delivery、feedback 分离 |
 
-Workspace 的 PostgreSQL Store 是结构化知识事实 owner。Graphiti、embedding index 和
-MS GraphRAG 是检索/图投影，不是事实权威源；投影失败不能覆盖或删除 Workspace canonical
-facts。大型正文和上传文件由 Artifact Store 持有，运行状态优先保存 ref 而不是复制内容。
+Workspace 的 PostgreSQL Store 是结构化知识事实 owner。Graphiti 和 embedding index 是检索/图
+投影，不是事实权威源；投影失败不能覆盖或删除 Workspace canonical facts。生产 Graph Provider
+只接受 `graphiti`、`structural` 和 `hybrid`；旧 Microsoft GraphRAG Adapter 因缺少
+source/citation binding 已删除，历史 CLI synthesized answer 不能作为检索事实。
+大型正文和上传文件由 Artifact Store 持有，运行状态优先保存 ref 而不是复制内容。
 
 Knowledge delete/restore 不使用通用 Planner 猜测目标。Application 根据明确的
 user/scope/note identity 创建 immutable Command；一个 `command_digest` 绑定
@@ -363,10 +364,16 @@ Domain Completion
   = 对应领域 Aggregate 是否满足其 definition 并进入合法终态
 ```
 
-普通 Interaction 可以使用 `verify_interaction_draft` Tool 形成模型 Verifier receipt。receipt
-通过后，`ConversationService` 只允许返回与 `verified_draft` 完全相同的 FinalMessage；它不
-允许 Runtime 改写草稿。没有 verifier requirement 的普通回答不为形式统一伪造
-VerificationReport 或 CompletionReport。
+审查类 Interaction 的语义验证由 `ConversationService` 拥有，模型只保留「这是不是一次审查请求」
+的路由判断。判据由 Runtime 经一次独立结构化调用派生，每条 `criterion` 必须携带逐字出现在用户
+消息里的 `source_span`（否则丢弃，并留下 `review_criteria_not_grounded`），派生结果冻结进
+`InteractionTrace.review_criteria`。`verify_interaction_draft` 的 `exposure` 是
+`workflow_activity`，不出现在模型能力清单里；`ToolExecutor.list_interaction_tools()` 按 exposure
+过滤而 `invoke_interaction()` 不过滤，所以 Runtime 仍经同一 ToolGateway 调用，`permission_scope`、
+超时、限流、审计与预算记账全部保留。Runtime 在终止前无条件验证，并拒绝审查请求上任何非
+`answer` 的 disposition；通过后发出的文本直接取自凭据的 `verified_draft`，模型不参与产物传输
+（[ADR 0010](../adr/0010-runtime-owned-interaction-verification.md)）。非审查请求完全跳过验证，
+普通问答路径不变，也不为形式统一伪造 VerificationReport 或 CompletionReport。
 
 Research、Knowledge Lifecycle、Review 和 Delivery 使用各自的 typed result/receipt/terminal
 state。Tool success、Agent completed、数据库新增记录或模型自述均不能单独证明用户目标完成。
@@ -396,9 +403,9 @@ Procedure 或迁移代码使用，但它们不是正式 Conversation 入口，�
 
 E2E 分类的唯一 owner 是 `evals/e2e_quality/evidence_catalog.py`：
 
-- E01–E14：原生产品能力；
+- E01–E14、E20：原生产品能力；
 - C01–C04：组合产品能力；
-- L01–L06：自然复杂主循环、恢复、fail-closed 和 receipt-bound semantic revision；
+- L01–L06：自然复杂主循环、恢复、fail-closed 和 receipt-reference semantic revision；
 - E16–E19：真实外部 Provider profile，只作为相应产品旅程的组成证据。
 
 完整矩阵必须从真实 HTTP 入口进入独立 Web 进程，使用真实模型、PostgreSQL 和场景需要的
@@ -522,14 +529,11 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 
 1. 旧 23/23 archive 不匹配新版自然 E2E；提交后必须在 clean revision 重跑当前完整矩阵，才能
    建立发布资格；
-2. 当前 package DAG gate 因 `context`、`skills`、`verification` 残留目录返回失败；修复和重跑前
-   不得声称当前架构门禁通过；
-3. README、topics、workflow 和生成的 `egg-info/PKG-INFO` 仍残留已删除
-   TaskAnalyzer/GoalGraph/LangGraph 总主链表述；本轮已收敛权威入口并标记历史文档，完整清理仍需
-   通过链接与术语门禁；
-4. `conversation_id`、`interaction_run_ref` 等部分 Interface/Application identity 仍以受格式
+2. 历史 workflow/topic 与评测归档仍会提及已删除 Task/GoalGraph/LangGraph 或 MS GraphRAG；
+   它们必须保持历史状态标记，不能作为当前架构或发布依据；
+3. `conversation_id`、`interaction_run_ref` 等部分 Interface/Application identity 仍以受格式
    约束的字符串传递，尚未全部收敛为 Value Object；
-5. 全仓 Ruff 仍有范围外历史问题，变更范围 Ruff 通过不能写成全仓 lint 通过；
-6. GPT Researcher PDF 中文字体视觉质量尚未形成自动化 E2E；
-7. 仓库中仍有部分旧 Task/Control contract 和过期注释，需要按实际调用方继续删除或重新
+4. GPT Researcher PDF 中文字体视觉质量尚未形成自动化 E2E；
+5. 仓库中仍有部分旧 Task/Control contract 供 Procedure 等受限消费者使用，需要按实际调用方
+   继续删除或重新
    标明受限用途，避免再次被误认为生产主链。

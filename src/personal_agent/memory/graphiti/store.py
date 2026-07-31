@@ -12,7 +12,7 @@ from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RR
 from neo4j import AsyncGraphDatabase
 
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.graph_results import GraphAskResult, GraphCaptureResult
+from personal_agent.kernel.graph_results import GraphCaptureResult, GraphRetrievalResult
 from personal_agent.kernel.logging_utils import log_event, trace_span
 from personal_agent.kernel.models import (
     KnowledgeNote,
@@ -144,18 +144,18 @@ class GraphitiStore:
                 for note in notes
             }
 
-    def ask(
+    def retrieve(
         self, question: str, user_id: str, trace_id: str | None = None
-    ) -> GraphAskResult:
+    ) -> GraphRetrievalResult:
         if not self.configured():
-            return GraphAskResult(enabled=False, error="Graphiti is not configured.")
+            return GraphRetrievalResult(enabled=False, error="Graphiti is not configured.")
         if not self._neo4j_reachable():
-            return GraphAskResult(enabled=False, error="Neo4j is not reachable.")
+            return GraphRetrievalResult(enabled=False, error="Neo4j is not reachable.")
         try:
-            return asyncio.run(self._ask(question, user_id, trace_id=trace_id))
+            return asyncio.run(self._retrieve(question, user_id, trace_id=trace_id))
         except Exception as exc:
-            logger.exception("Graphiti ask failed for user %s", user_id)
-            return GraphAskResult(
+            logger.exception("Graphiti retrieval failed for user %s", user_id)
+            return GraphRetrievalResult(
                 enabled=False, error=str(exc)[:500] or exc.__class__.__name__
             )
 
@@ -427,12 +427,12 @@ class GraphitiStore:
         pairs = await asyncio.gather(*tasks)
         return dict(pairs)
 
-    async def _ask(
+    async def _retrieve(
         self, question: str, user_id: str, trace_id: str | None = None
-    ) -> GraphAskResult:
+    ) -> GraphRetrievalResult:
         with trace_span(
             logger,
-            "graphiti.ask",
+            "graphiti.retrieve",
             trace_id=trace_id,
             user_id=user_id,
             model=self.settings.graphiti.llm_model or self.settings.openai.model,
@@ -443,7 +443,7 @@ class GraphitiStore:
             try:
                 with trace_span(
                     logger,
-                    "graphiti.search_for_ask",
+                    "graphiti.search_for_retrieval",
                     trace_id=trace_id,
                     user_id=user_id,
                 ):
@@ -509,20 +509,10 @@ class GraphitiStore:
                     for edge in search_result.edges
                 ]
 
-                answer = None
-                if relation_facts:
-                    top_entities = (
-                        "、".join(entity_names[:5]) if entity_names else "暂无实体摘要"
-                    )
-                    fact_lines = "\n".join(f"- {fact}" for fact in relation_facts[:5])
-                    answer = (
-                        f"图谱里最相关的实体：{top_entities}\n关联事实：\n{fact_lines}"
-                    )
-
                 log_event(
                     logger,
                     logging.INFO,
-                    "graphiti.ask.completed",
+                    "graphiti.retrieve.completed",
                     trace_id=trace_id,
                     user_id=user_id,
                     entity_count=len(entity_names),
@@ -530,9 +520,8 @@ class GraphitiStore:
                     related_episode_count=len(related_episode_uuids),
                     search_strategy=self.search_strategy.name,
                 )
-                return GraphAskResult(
+                return GraphRetrievalResult(
                     enabled=True,
-                    answer=answer,
                     entity_names=entity_names,
                     relation_facts=relation_facts,
                     related_episode_uuids=related_episode_uuids,

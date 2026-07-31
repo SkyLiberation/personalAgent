@@ -106,9 +106,6 @@ def test_structured_provider_is_default_for_every_generative_adapter(monkeypatch
         "PERSONAL_AGENT_EXTRACT_API_KEY",
         "PERSONAL_AGENT_EXTRACT_BASE_URL",
         "PERSONAL_AGENT_EXTRACT_MODEL",
-        "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY",
-        "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE",
-        "PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -135,11 +132,6 @@ def test_structured_provider_is_default_for_every_generative_adapter(monkeypatch
         settings.langextract.api_key,
         settings.langextract.base_url,
         settings.langextract.model_id,
-    ) == expected_provider
-    assert (
-        settings.ms_graphrag.completion_api_key,
-        settings.ms_graphrag.completion_api_base,
-        settings.ms_graphrag.completion_model,
     ) == expected_provider
     assert settings.openai.embedding_api_key == "embedding-key"
     assert settings.openai.embedding_base_url == "https://embedding.example/v1"

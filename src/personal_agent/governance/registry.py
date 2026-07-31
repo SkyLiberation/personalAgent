@@ -72,6 +72,7 @@ class ToolExecutor:
                 input_schema=tool_schema(tool),
                 read_only=not side_effects,
                 safely_retryable=not side_effects,
+                emits_verified_artifact=governance.emits_verified_artifact,
             ))
         return tuple(definitions)
 

@@ -16,7 +16,7 @@ Durable Investigation Project 是这套框架针对不同生命周期的三种�
 | `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
 | `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
-| `interview/` | 面试问答稿（同内容的 Q&A 形态，面向讲解场景） |
+| `interview/` | 面试材料：能力轴主文档、讲稿、请求走查、证据口径与速答（写法见 `interview/00-writing-spec.md`） |
 | `mermaid/` | Model / Layer 依赖类图 |
 | `future/` | 未来能力与优化设想 |
 | `adr/` | 已接受的跨模块架构决策、baseline、迁移和退出条件 |
@@ -51,15 +51,19 @@ Durable Investigation Project 是这套框架针对不同生命周期的三种�
 | Phase 0 能力目录、运行时清单与发布基线 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
+| Memory 与知识事实边界 | [topics/memory.md](topics/memory.md) |
+| Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md) |
+| Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
+| Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md) |
 
 以下文档仍包含已删除 `TaskAnalyzer/GoalGraph/Executive/LangGraph` 总主链的历史设计，当前不再是
-权威事实源：`topics/task-analysis.md`、`topics/runtime.md`、`topics/context-engineering.md`、
-`topics/langchain-langgraph-capability-adoption.md`、`topics/memory.md`、`topics/tools.md`、
+权威事实源：`topics/task-analysis.md`、`topics/runtime.md`、
+`topics/langchain-langgraph-capability-adoption.md`、`topics/tools.md`、
 `topics/observability-governance.md`、`topics/execution-feedback.md`、
-`topics/retrieval-reasoning.md`、`workflow/entry-executive-agent-loop.md`、
+`workflow/entry-executive-agent-loop.md`、
 `workflow/workflow-framework.md`、`workflow/capture-ask-model-flow.md` 和
 `mermaid/memory-model-layer-dependencies.md`，以及顶层
-`retrieval-strategies.md`、`rag-eval-results.md`、`ms-graphrag-provider.md`。它们只用于迁移
+`retrieval-strategies.md`、`rag-eval-results.md`。它们只用于迁移
 审计，当前主链以 core current-state 和生产代码为准。
 
 ## 关键业务 Procedure

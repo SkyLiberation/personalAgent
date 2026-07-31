@@ -133,14 +133,11 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=${STRUCTURED_MODEL}
 PERSONAL_AGENT_EXTRACT_BASE_URL=${STRUCTURED_BASE_URL}
 PERSONAL_AGENT_EXTRACT_API_KEY=${STRUCTURED_API_KEY}
 PERSONAL_AGENT_EXTRACT_MODEL=${STRUCTURED_MODEL}
-PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_BASE=${STRUCTURED_BASE_URL}
-PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_API_KEY=${STRUCTURED_API_KEY}
-PERSONAL_AGENT_MS_GRAPHRAG_COMPLETION_MODEL=${STRUCTURED_MODEL}
 ```
 
 `STRUCTURED_*` 是生成式模型的 canonical 配置。直接回答、结构化决策、Graphiti 生成、
-LangExtract 和 MS GraphRAG completion 在没有显式 Adapter override 时均从这里解析；当前
-部署统一使用 `gpt-5.4-mini`。embedding 和 transcription 不属于生成式模型切换，继续使用
+LangExtract 在没有显式 Adapter override 时均从这里解析；当前部署统一使用
+`gpt-5.4-mini`。embedding 和 transcription 不属于生成式模型切换，继续使用
 `EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
 
 `STRUCTURED_*` 也是相邻 GPT Researcher `docker-compose.tokeness.yml` 的唯一配置源；通过
@@ -181,33 +178,13 @@ PERSONAL_AGENT_ASK_LLM_RERANK_MODEL=
 ```
 
 - `PERSONAL_AGENT_ASK_RERANKER` 当前可选 `heuristic` / `llm`。默认 `heuristic` 保持原有稳定路径；`llm` 会先用启发式召回 top N，再用 strict `json_schema` listwise rerank 重排证据。
-- `PERSONAL_AGENT_ASK_GRAPH_PROVIDER` 当前可选 `graphiti` / `structural` / `hybrid` / `ms_graphrag`。`graphiti` 使用在线实体关系图谱；`structural` 使用本地 parent-section 结构召回；`hybrid` 组合 structural + Graphiti；`ms_graphrag` 调用 Microsoft GraphRAG CLI 的离线索引与 query 项目。
+- `PERSONAL_AGENT_ASK_GRAPH_PROVIDER` 当前只接受 `graphiti` / `structural` / `hybrid`。
+  `graphiti` 使用在线实体关系图谱；`structural` 使用本地 parent-section 结构召回；
+  `hybrid` 组合 structural + Graphiti。未知值在配置加载阶段 fail closed，不会静默改绑 Provider。
 - `PERSONAL_AGENT_ASK_CANDIDATE_ENRICHER` 当前可选 `parent_child` / `none`。默认 `parent_child` 会在 rerank 前补齐 parent 命中的高相关 child sections，以及 child 命中的 parent。邻近 chunk 默认不补，避免给 LLM rerank 注入过多相邻但不直接回答的候选。
 - `PERSONAL_AGENT_ASK_GRAPH_NOTE_EVIDENCE_MODE` 当前可选 `all` / `cited_overlap` / `none`。`all` 会把 Graphiti 映射回来的 notes 作为 evidence 交给 ContextPack；`cited_overlap` 只放入 citation 命中或 query overlap 足够的 notes；`none` 关闭该桥接。
 - LLM rerank 优先复用 `PERSONAL_AGENT_EXTRACT_*` 的 DashScope/qwen 配置；未配置 extract key 时回退到 `OPENAI_*`。
 - `PERSONAL_AGENT_ASK_CONTEXT_MAX_ITEMS` 和 `PERSONAL_AGENT_ASK_CONTEXT_CHAR_BUDGET` 控制进入 prompt 的 evidence 数量和字符预算。
-
-## Microsoft GraphRAG 配置
-
-Microsoft GraphRAG 通过外部 `graphrag` CLI 接入。需要先安装 CLI，并准备其项目目录；官方流程是 `graphrag init --root <root>` 创建 `.env/settings.yaml/input`，`graphrag index --root <root>` 构建索引，`graphrag query --root <root> --method local|global|drift|basic --query "..."` 查询。
-
-```env
-PERSONAL_AGENT_ASK_GRAPH_PROVIDER=ms_graphrag
-PERSONAL_AGENT_MS_GRAPHRAG_ENABLED=true
-PERSONAL_AGENT_MS_GRAPHRAG_ROOT=./data/ms_graphrag
-PERSONAL_AGENT_MS_GRAPHRAG_EXECUTABLE=graphrag
-PERSONAL_AGENT_MS_GRAPHRAG_QUERY_METHOD=local
-PERSONAL_AGENT_MS_GRAPHRAG_INDEX_METHOD=standard
-PERSONAL_AGENT_MS_GRAPHRAG_RESPONSE_TYPE=Multiple Paragraphs
-PERSONAL_AGENT_MS_GRAPHRAG_AUTO_INDEX=false
-PERSONAL_AGENT_MS_GRAPHRAG_COMMAND_TIMEOUT_SECONDS=600
-```
-
-说明：
-
-- `ms_graphrag` 与 Graphiti 的主要差别是离线批处理：capture/sync 会把 note 导出到 `ROOT/input/*.txt`；只有 `AUTO_INDEX=true` 或手动执行 `graphrag index` 后，query 才会看到新内容。
-- 当前 adapter 把 GraphRAG query 的生成结果包装成 `graph_fact` evidence；Microsoft GraphRAG CLI 不返回本项目可直接使用的 episode UUID，因此评估 runner 会把答案文本再投影回本地 note ids 计算 IR 指标。
-- GraphRAG 的模型/embedding 具体配置由其项目目录下的 `settings.yaml` / `.env` 管理，不复用 `PERSONAL_AGENT_GRAPHITI_LLM_*`。
 
 ## Embedding 配置
 

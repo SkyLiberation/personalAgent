@@ -114,7 +114,11 @@ Workspace Artifact / EvidenceBlock / EvidenceSpan / Claim / KnowledgeRelation
   -> KnowledgeNote(source.type="workspace_evidence")
 ```
 
-因此 Workspace 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 verifier，不会绕过 EvidenceEngine 直接生成最终回答。Workspace 自身的 `answer_with_evidence()` 也会返回 `EvidenceRef / evidence_coverage / missing_sections`，用于直接回答和 e2e 诊断；进入通用 Ask 时，Claim 只作为 metadata / element_ids 参与，最终证据 id 对齐 `EvidenceSpan`，避免把 Claim statement 当作原文证据注入。
+因此 Workspace 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 Ask verifier，不会绕过 EvidenceEngine 直接生成最终回答。`WorkspaceRetriever` 调用 `WorkspaceService.select_evidence()`，该边界不生成或验证 Workspace Answer；只有正式 direct Workspace Ask 才调用 `answer_with_evidence()` 并返回独立 `verification`。进入通用 Ask 时，Claim 只作为 metadata / element_ids 参与，最终证据 id 对齐 `EvidenceSpan`，避免把 Claim statement 当作原文证据注入。
+
+Graph provider 同样只允许返回 `GraphRetrievalResult` 中的 fact、edge、episode、note 和 citation
+引用。Provider synthesized answer 不属于 Evidence，禁止转换为 `graph_fact`；当前 Microsoft
+GraphRAG Adapter 因缺少 source binding 而 fail closed。
 
 ### 2. Context Assembly
 

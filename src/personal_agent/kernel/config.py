@@ -19,7 +19,6 @@ from personal_agent.kernel.config_models import (
     KnowledgeGapConfig,
     InteractionLoopConfig,
     MCPConfig,
-    MicrosoftGraphRagConfig,
     OpenAIConfig,
     PolicyConfig,
     ReflectionReplaySettings,
@@ -43,7 +42,6 @@ class Settings(_StrictBase):
     url_capture_provider: Literal["firecrawl", "builtin"] = "builtin"
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
-    ms_graphrag: MicrosoftGraphRagConfig = Field(default_factory=MicrosoftGraphRagConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     structured: StructuredConfig = Field(default_factory=StructuredConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)

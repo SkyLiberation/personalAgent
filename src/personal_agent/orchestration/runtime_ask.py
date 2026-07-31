@@ -14,7 +14,7 @@ from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.kernel.prompts import get_prompt, render_prompt
 from personal_agent.kernel.projections import MatchRef
 from personal_agent.kernel.query_understanding import RetrievalFilters
-from personal_agent.memory.graphiti.store import GraphAskResult
+from personal_agent.kernel.graph_results import GraphRetrievalResult
 from personal_agent.orchestration.ask import AskRunContext
 from personal_agent.orchestration.ask.evidence_ops import (
     graph_matches_to_evidence as _graph_matches_to_evidence,
@@ -66,7 +66,6 @@ class AskService(AskPromptMixin):
         *,
         settings,
         graph_store,
-        ms_graphrag_store,
         structural_retriever,
         memory,
         tool_executor,
@@ -78,7 +77,6 @@ class AskService(AskPromptMixin):
     ) -> None:
         self.settings = settings
         self.graph_store = graph_store
-        self.ms_graphrag_store = ms_graphrag_store
         self.structural_retriever = structural_retriever
         self.memory = memory
         self._tool_executor = tool_executor
@@ -205,13 +203,12 @@ class AskService(AskPromptMixin):
 
     @staticmethod
     def _graph_has_evidence(
-        graph_result: GraphAskResult,
+        graph_result: GraphRetrievalResult,
         matches: list[KnowledgeNote],
         citations: list[Citation],
     ) -> bool:
         return bool(
-            graph_result.answer
-            or graph_result.relation_facts
+            graph_result.relation_facts
             or graph_result.node_refs
             or graph_result.edge_refs
             or graph_result.fact_refs
@@ -226,18 +223,14 @@ class AskService(AskPromptMixin):
         user_id: str,
         trace_id: str,
         filters: RetrievalFilters | None = None,
-    ) -> GraphAskResult | AgentState | None:
+    ) -> GraphRetrievalResult | AgentState | None:
         if provider == "structural":
             return self._run_structural_retrieval(question, user_id, filters)
-        if provider in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
-            if not self.ms_graphrag_store.configured():
-                return None
-            return self.ms_graphrag_store.ask(question, user_id, trace_id=trace_id)
         if provider == "hybrid":
             structural_state = self._run_structural_retrieval(question, user_id, filters)
             if not self.graph_store.configured():
                 return structural_state
-            graph_result = self.graph_store.ask(question, user_id, trace_id=trace_id)
+            graph_result = self.graph_store.retrieve(question, user_id, trace_id=trace_id)
             if not graph_result.enabled:
                 return structural_state
             graph_matches, graph_citations = self._graph_matches_and_citations(
@@ -270,13 +263,12 @@ class AskService(AskPromptMixin):
                 matches=_merge_notes(structural_state.matches, graph_matches),
                 citations=_merge_citations(structural_state.citations, graph_citations),
                 evidence=[*structural_state.evidence, *graph_evidence],
-                answer=structural_state.answer or graph_result.answer,
             )
         if provider != "graphiti":
-            logger.warning("Unknown graph provider=%s; falling back to graphiti", provider)
+            raise ValueError(f"Unsupported graph provider: {provider}")
         if not self.graph_store.configured():
             return None
-        return self.graph_store.ask(question, user_id, trace_id=trace_id)
+        return self.graph_store.retrieve(question, user_id, trace_id=trace_id)
 
     def _run_structural_retrieval(
         self,
@@ -284,7 +276,7 @@ class AskService(AskPromptMixin):
         user_id: str,
         filters: RetrievalFilters | None = None,
     ) -> AgentState:
-        matches, citations = self.structural_retriever.ask(
+        matches, citations = self.structural_retriever.retrieve(
             question,
             user_id,
             limit=self.settings.graphiti.search_limit,
@@ -309,7 +301,6 @@ class AskService(AskPromptMixin):
             matches=matches,
             citations=citations,
             evidence=evidence,
-            answer=matches[0].body.summary if matches else None,
         )
 
     def _run_local_retrieval(
@@ -329,16 +320,12 @@ class AskService(AskPromptMixin):
             Citation(note_id=note.id, title=note.body.title, snippet=note.body.summary[:80])
             for note in matches
         ]
-        answer = None
-        if matches:
-            answer = f"根据你已有的笔记，最相关的结论是：{matches[0].body.summary}"
         return AgentState(
             mode="ask",
             question=question,
             user_id=user_id,
             matches=matches,
             citations=citations,
-            answer=answer,
         )
 
     def _execute_web_search(self, question: str) -> tuple[list[dict], list[Citation]]:
@@ -385,7 +372,11 @@ class AskService(AskPromptMixin):
             logger.exception("Web search failed for question=%s", question[:80])
             return [], []
 
-    def _graph_citations(self, matches: list[KnowledgeNote], graph_result: GraphAskResult) -> list[Citation]:
+    def _graph_citations(
+        self,
+        matches: list[KnowledgeNote],
+        graph_result: GraphRetrievalResult,
+    ) -> list[Citation]:
         citations: list[Citation] = []
         facts_by_episode = _graph_facts_by_episode(graph_result)
         fallback_facts = _graph_fact_lines(graph_result, limit=8)
@@ -408,7 +399,7 @@ class AskService(AskPromptMixin):
         self,
         user_id: str,
         question: str,
-        graph_result: GraphAskResult,
+        graph_result: GraphRetrievalResult,
         filters: RetrievalFilters | None = None,
     ) -> tuple[list[KnowledgeNote], list[Citation]]:
         episode_uuids = _graph_episode_uuids(graph_result)

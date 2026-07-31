@@ -27,7 +27,8 @@
 
 1. **统一多端入口**：Web、CLI、飞书文本/文件和 SSE 请求进入同一 Conversation Use Case；模型输出 typed answer/tool/agent proposal，Application 负责预算、执行与验证。
 2. **多来源知识采集**：接收文本、网页链接、PDF/上传文件和对话结论，完成正文提取、结构化分块、来源指纹、重复检测、摘要、标签和引用定位。
-3. **长期记忆与知识连接**：以 Postgres 保存笔记、chunk、复习卡、版本关系、运行历史和 checkpoint，以 Graphiti/Neo4j 保存实体、关系、事实和 episode 映射。
+3. **长期记忆与知识连接**：以 Postgres 分别保存知识事实、Interaction journal、领域运行状态和
+   Artifact ref，以 Graphiti/Neo4j 保存可重建的实体、关系、事实和 episode 检索投影。
 4. **多源检索与证据问答**：组合图谱、本地语义/关键词、结构化文档、情景记忆、反思记忆和公网搜索，经过融合、去冗余、上下文压缩、生成与事实校验后输出可追溯回答。
 5. **知识生命周期管理**：支持会话固化、同主题知识整理、supersede、冲突标记、软删除、删除快照、人工确认、幂等执行和恢复。
 6. **复习与知识巩固**：采集时生成复习卡，按用户时区生成和投递知识简报，通过 Web/飞书接收“记得、忘了、稍后”反馈并调整复习计划。
@@ -224,7 +225,7 @@ README 只保留最短路径：
 - API Key 与管理员 Key 提供用户身份和跨用户管理边界
 - 工具调用和策略决策写入独立 Postgres 审计表
 - LangSmith trace 默认脱敏，不上传用户正文和工具参数
-- run snapshot、execution event、checkpoint export 和 replay 支持问题定位
+- Interaction/Project journal、execution event、trace archive 和 receipt replay 支持问题定位
 - `tests/` 覆盖单元、集成、Postgres、API 和完整 Agent flow
 - `evals/` 覆盖 Conversation、Gateway、Workspace/RAG、Research、Investigation 和组合用户旅程
 - Research 评测包含事件召回/精度、去重质量、一手来源率和不确定性校准
@@ -280,7 +281,7 @@ personalAgent/                  # 项目根目录
 
 - 业务持久化：`knowledge_notes`、`review_cards`、`digest_*`、`research_*`、
   `intelligence_digests`、`worker_queue_tasks`、`knowledge_gap_deliveries`、
-  workflow/checkpoint/artifact/audit 相关 Postgres 表
+  workflow/journal/artifact/audit 相关 Postgres 表
 - 上传源文件：`data/uploads/`
 - 运行日志：`log/run.log`
 

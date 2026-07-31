@@ -40,10 +40,7 @@ Executive 和 verifier 的任务态 prompt 在各自模块中动态组装，因�
 
 - `answer_generation.system`
 - `answer.dialogue_context_policy`
-- `ask.web_answer.user`
 - `ask.unified_answer.user`
-- `ask.graph_answer.user`
-- `ask.local_answer.user`
 - `ask.correction.user`
 - `query_planner.system/user`
 - `evidence_rerank.system/user`

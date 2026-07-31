@@ -29,7 +29,6 @@ from .models import (
     AgentDelegationProposal,
     AgentTurnDecision,
     CommittedUsage,
-    ContinueTurnProposal,
     ConversationKnowledgeSaveCommand,
     ConversationKnowledgeSaveOperation,
     ConversationKnowledgeSaveReceipt,
@@ -51,6 +50,12 @@ from .ports import (
     InteractionArtifactPort,
     InteractionToolPort,
 )
+from .review_admission import (
+    ReviewCriteria,
+    derive_review_criteria,
+    ungrounded_criteria_feedback,
+)
+from .verification_admission import observed_receipts
 
 
 class ConversationUnavailable(RuntimeError):
@@ -66,6 +71,7 @@ class ConversationOperationConflict(RuntimeError):
 
 
 _KNOWLEDGE_SAVE_CAPABILITY = "prepare_conversation_knowledge_save"
+_VERIFICATION_CAPABILITY = "verify_interaction_draft"
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,30 +194,72 @@ class ConversationService:
         execution_order = list(prior.execution_order if prior else ())
         concurrent_batches = list(prior.concurrent_batches if prior else ())
         usage = prior.usage if prior else CommittedUsage()
+        review_criteria = prior.review_criteria if prior else None
+        if review_criteria is None:
+            review_criteria, derivation_tokens = self._derive_review_criteria(messages)
+            usage = usage.model_copy(update={
+                "total_tokens": usage.total_tokens + derivation_tokens,
+            })
+            if review_criteria.requires_review and not self._verification_available():
+                inputs.append(self._verification_unavailable_feedback())
+                review_criteria = ReviewCriteria()
+            elif review_criteria.ungrounded_spans and not review_criteria.requires_review:
+                inputs.append(ungrounded_criteria_feedback(review_criteria))
+            self._commit(
+                run_ref, messages, capabilities, inputs, usage,
+                execution_order, concurrent_batches,
+                review_criteria=review_criteria,
+            )
 
         while usage.model_turns < self._budget_policy.max_model_turns:
             if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches)
+                return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria)
             decision, token_count = self._decide(
                 messages=messages,
                 capabilities=capabilities,
                 inputs=inputs,
                 usage=usage,
+                review_criteria=review_criteria,
             )
             usage = usage.model_copy(update={
                 "model_turns": usage.model_turns + 1,
                 "total_tokens": usage.total_tokens + token_count,
             })
-            verification_feedback = self._admit_final_verification(decision, inputs=inputs)
-            if verification_feedback is not None:
-                inputs.append(verification_feedback)
-                self._commit(
-                    run_ref, messages, capabilities, inputs, usage,
-                    execution_order, concurrent_batches,
-                )
-                continue
             if isinstance(decision, FinalMessage):
-                self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, final_message=decision)
+                if (
+                    review_criteria.requires_review
+                    and decision.disposition != "answer"
+                ):
+                    inputs.append(self._review_answer_required_feedback(decision))
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches,
+                        review_criteria=review_criteria,
+                    )
+                    continue
+                if review_criteria.requires_review:
+                    verified, result, usage = self._verify_before_send(
+                        decision,
+                        review_criteria=review_criteria,
+                        conversation_id=conversation_id,
+                        run_ref=run_ref,
+                        principal=principal,
+                        security_scope=security_scope,
+                        source_platform=source_platform,
+                        usage=usage,
+                        attempt=len(execution_order),
+                    )
+                    inputs.append(result.interaction_input)
+                    execution_order.append(result.action_id)
+                    if verified is None:
+                        self._commit(
+                            run_ref, messages, capabilities, inputs, usage,
+                            execution_order, concurrent_batches,
+                            review_criteria=review_criteria,
+                        )
+                        continue
+                    decision = verified
+                self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=review_criteria, final_message=decision)
                 return ConversationTurnView(
                     interaction_run_ref=run_ref,
                     conversation_id=conversation_id,
@@ -238,6 +286,7 @@ class ConversationService:
                     self._commit(
                         run_ref, messages, capabilities, inputs, usage,
                         execution_order, concurrent_batches,
+                        review_criteria=review_criteria,
                     )
                     continue
                 operation = self._prepare_knowledge_save(
@@ -251,6 +300,7 @@ class ConversationService:
                 self._commit(
                     run_ref, messages, capabilities, inputs, usage,
                     execution_order, concurrent_batches,
+                    review_criteria=review_criteria,
                     knowledge_save_operation=operation,
                 )
                 return self._knowledge_save_turn_view(
@@ -274,9 +324,9 @@ class ConversationService:
             execution_order.extend(item.action_id for item in results)
             if concurrent:
                 concurrent_batches.append(tuple(item.action_id for item in results))
-            self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches)
+            self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=review_criteria)
 
-        return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches)
+        return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria)
 
     def trace(self, interaction_run_ref: str) -> InteractionTrace | None:
         return self._journal.get(interaction_run_ref)
@@ -488,9 +538,137 @@ class ConversationService:
             ),
         )
 
-    def _decide(self, *, messages, capabilities, inputs, usage):
+    def _derive_review_criteria(self, messages):
+        """Derive this interaction's frozen verification standard.
+
+        Runs once per interaction, before the first decision turn, so the
+        standard exists before there is any answer to measure against it. A
+        derivation failure degrades to "not a review request" rather than to a
+        runtime-invented criterion.
+        """
+        try:
+            return derive_review_criteria(self._model_client, messages=messages)
+        except Exception:
+            return ReviewCriteria(), 0
+
+    def _verification_available(self) -> bool:
+        """Whether this deployment can actually verify a review answer.
+
+        Checked before the criteria are frozen, so a deployment without the
+        verifier registered answers as an ordinary request instead of deriving a
+        standard it has no way to enforce.
+        """
+        if self._tool_port is None:
+            return False
+        validation = self._tool_port.validate_interaction_call(
+            _VERIFICATION_CAPABILITY, {},
+        )
+        return validation.status != "capability_missing"
+
+    @staticmethod
+    def _verification_unavailable_feedback():
+        return DecisionFeedback(
+            action_id="interaction_turn",
+            reason_code="verification_capability_unavailable",
+            message=(
+                "This request states review requirements, but the semantic "
+                "verification capability is not available in this deployment."
+            ),
+            immutable_fields=("messages",),
+            required_repair=(
+                "Answer the request directly and state that the answer was not "
+                "verified against the stated requirements. Never claim that a "
+                "review or verification was performed."
+            ),
+            disposition="fail_closed",
+        )
+
+    @staticmethod
+    def _review_answer_required_feedback(decision):
+        """Close the non-answer route around verification.
+
+        A review request supplies both the text and the standard, so nothing is
+        missing from the user. Ending the turn as a clarification, limitation, or
+        failure would deliver unverified text under a disposition the verify step
+        never sees, so the runtime rejects the disposition itself and asks for the
+        revision that was requested.
+        """
+        return DecisionFeedback(
+            action_id="interaction_turn",
+            reason_code="review_requires_sendable_answer",
+            message=(
+                f"A review request cannot end as {decision.disposition!r}. The user "
+                "supplied both the text to review and the requirements it must meet."
+            ),
+            repairable_fields=("disposition", "message"),
+            immutable_fields=("messages",),
+            required_repair=(
+                "Return disposition 'answer' whose message is the revised sendable "
+                "text. Satisfy a requirement that forbids an unevidenced claim by "
+                "removing that claim, not by asking the user for the evidence."
+            ),
+        )
+
+    def _verify_before_send(
+        self,
+        decision,
+        *,
+        review_criteria,
+        conversation_id,
+        run_ref,
+        principal,
+        security_scope,
+        source_platform,
+        usage,
+        attempt,
+    ):
+        """Verify a review answer before it can be sent, and carry back the receipt.
+
+        The runtime invokes the verifier itself, so "verification happened" is a
+        property of this code path rather than of the model's cooperation. On a
+        passed verdict the sent text is taken from the receipt, which keeps the
+        emitted bytes identical to the judged bytes without asking a model to
+        copy them.
+
+        Returns ``(final_message | None, action_result, usage)``: ``None`` means
+        the verdict was not ``passed``, and the observation goes back into the
+        loop as revision material.
+        """
+        action_id = f"runtime-verify-{attempt}"
+        result = self._execute_one(
+            ToolCallProposal(
+                action_id=action_id,
+                tool_name=_VERIFICATION_CAPABILITY,
+                arguments={
+                    "draft": decision.message,
+                    "success_criteria": list(review_criteria.criteria),
+                },
+            ),
+            (conversation_id, run_ref, principal, security_scope, source_platform),
+        )
+        usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
+        receipts = observed_receipts(
+            (result.interaction_input,),
+            capability_names=frozenset({_VERIFICATION_CAPABILITY}),
+        )
+        passed = next(
+            (receipt for receipt in receipts if receipt.verdict == "passed"),
+            None,
+        )
+        if passed is None:
+            return None, result, usage
+        return (
+            FinalMessage(disposition="answer", message=passed.verified_draft),
+            result,
+            usage,
+        )
+
+    def _decide(self, *, messages, capabilities, inputs, usage, review_criteria):
         visible_messages = [
-            {"role": "system", "content": self._system_prompt(capabilities, usage)},
+            {
+                "role": "system",
+                "content": self._system_prompt(capabilities, usage, review_criteria),
+            },
             *(item.model_dump(mode="json") for item in messages),
         ]
         if inputs:
@@ -518,66 +696,6 @@ class ConversationService:
         )
         return decision, token_count
 
-    @staticmethod
-    def _admit_final_verification(decision, *, inputs) -> DecisionFeedback | None:
-        receipt = None
-        for item in reversed(inputs):
-            if (
-                isinstance(item, ActionObservation)
-                and item.capability_id == "verify_interaction_draft"
-                and item.status == "succeeded"
-            ):
-                candidate = item.payload.get("data")
-                if isinstance(candidate, dict):
-                    receipt = candidate
-                    break
-        if receipt is None:
-            return None
-        verdict = receipt.get("verdict")
-        if isinstance(decision, ContinueTurnProposal):
-            repeats_verification = any(
-                isinstance(action, ToolCallProposal)
-                and action.tool_name == "verify_interaction_draft"
-                for action in decision.actions
-            )
-            if verdict == "passed" and repeats_verification:
-                return ConversationService._verification_completion_feedback(
-                    receipt,
-                    reason_code="verified_draft_ready",
-                )
-            return None
-        if not isinstance(decision, FinalMessage) or decision.disposition != "answer":
-            return None
-        expected_digest = sha256(decision.message.strip().encode("utf-8")).hexdigest()
-        if verdict == "passed" and receipt.get("draft_digest") == expected_digest:
-            return None
-        reason_code = (
-            "verified_draft_mismatch" if verdict == "passed"
-            else "verification_required"
-        )
-        return ConversationService._verification_completion_feedback(
-            receipt,
-            reason_code=reason_code,
-        )
-
-    @staticmethod
-    def _verification_completion_feedback(receipt, *, reason_code) -> DecisionFeedback:
-        return DecisionFeedback(
-            action_id="interaction_turn",
-            reason_code=reason_code,
-            message=(
-                "An answer must reuse the exact draft bound to the latest passed "
-                "verify_interaction_draft receipt."
-            ),
-            repairable_fields=("actions",),
-            immutable_fields=("messages", "inputs", "execution_order"),
-            required_repair=(
-                "Submit the exact revised final text to verify_interaction_draft using the original "
-                "success criteria, wait for a passed receipt, then return verified_draft unchanged. "
-                f"Latest verified_draft: {receipt.get('verified_draft', '')}"
-            ),
-        )
-
     def _effective_capabilities(self) -> EffectiveCapabilities:
         tools: list[EffectiveToolCapability] = []
         if self._knowledge_writer is not None:
@@ -599,6 +717,7 @@ class ConversationService:
                     input_schema=candidate.input_schema,
                     read_only=candidate.read_only,
                     safely_retryable=candidate.safely_retryable,
+                    emits_verified_artifact=candidate.emits_verified_artifact,
                 ))
         agents = tuple(
             EffectiveAgentCapability(
@@ -903,7 +1022,7 @@ class ConversationService:
             completion_contract="return typed status and artifact refs to parent",
         )
 
-    def _system_prompt(self, capabilities, usage):
+    def _system_prompt(self, capabilities, usage, review_criteria=None):
         remaining = {
             "model_turns": self._budget_policy.max_model_turns - usage.model_turns,
             "tool_calls": self._budget_policy.max_tool_calls - usage.tool_calls,
@@ -948,17 +1067,39 @@ class ConversationService:
             "When the user's goal requires multiple independent read-only results, propose the necessary "
             "independent calls together in one actions list and wait for every observation before answering; "
             "the user does not need to know or name internal capabilities. Lack of prior observations is not a "
-            "capability limitation. When the user explicitly asks to review or revise a draft against stated "
-            "success criteria, use an available semantic verifier before returning the reviewed text. After "
-            "verifier feedback, "
-            "revise unsupported or prohibited claims, and do not repeat a rejected claim verbatim in the final "
-            "answer, including as a quotation or explanation. If a criterion prohibits asserting that an event "
-            "occurred, remove every positive or presupposed occurrence claim; a minimal draft that makes no claim "
-            "about that event is valid repair material. Submit the exact revised final text to the verifier "
-            "again and, after a passed receipt, return verified_draft unchanged without another verifier call. "
+            "capability limitation. "
             "Ask for clarification whenever required user input is missing. "
+            + self._review_instruction(review_criteria)
             + "Effective capabilities: " + capabilities.model_dump_json()
             + " Remaining budget: " + json.dumps(remaining)
+        )
+
+    @staticmethod
+    def _review_instruction(review_criteria):
+        """State the runtime-derived criteria, without promising who enforces them.
+
+        The criteria are shown so the answer can be written to meet them on the
+        first attempt. Enforcement is not described, because it is not the model's
+        to perform: the runtime verifies every answer to this request before it
+        can be sent, whatever this prompt says.
+        """
+        if review_criteria is None or not review_criteria.requires_review:
+            return ""
+        return (
+            "This request is a review request. Your answer is the text the user will "
+            "send, and it must satisfy every one of these requirements: "
+            + json.dumps(list(review_criteria.criteria), ensure_ascii=False)
+            + ". Return only that sendable text as the message: no preamble, review "
+            "commentary, or explanation of your changes. When a requirement forbids "
+            "claiming that an event occurred, remove every positive or presupposed "
+            "claim that it occurred rather than restating it with a caveat. When "
+            "revision feedback on a prior attempt is present in the typed execution "
+            "inputs, apply it and do not repeat a rejected claim verbatim, including "
+            "as a quotation. The request already carries the text and the "
+            "requirements, so nothing is missing from the user: your disposition "
+            "MUST be answer. Never ask the user to supply the evidence a "
+            "requirement refers to, and never withhold the revision for lack of it "
+            "-- the revision is exactly the text that no longer needs it. "
         )
 
     @staticmethod
@@ -970,12 +1111,12 @@ class ConversationService:
             disposition="fail_closed",
         )
 
-    def _budget_exhausted(self, conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches):
+    def _budget_exhausted(self, conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=None):
         final = FinalMessage(
             disposition="limitation",
             message="本次交互已达到执行预算上限，未生成替代答案。可增加预算后基于已提交结果继续。",
         )
-        self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, final_message=final)
+        self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=review_criteria, final_message=final)
         return ConversationTurnView(
             interaction_run_ref=run_ref,
             conversation_id=conversation_id,
@@ -995,6 +1136,7 @@ class ConversationService:
         usage,
         execution_order,
         concurrent_batches,
+        review_criteria=None,
         final_message=None,
         knowledge_save_operation=None,
     ):
@@ -1005,6 +1147,7 @@ class ConversationService:
             messages=tuple(messages),
             inputs=tuple(inputs), usage=usage,
             execution_order=tuple(execution_order), concurrent_batches=tuple(concurrent_batches),
+            review_criteria=review_criteria,
             final_message=final_message,
             knowledge_save_operation=knowledge_save_operation,
         ))

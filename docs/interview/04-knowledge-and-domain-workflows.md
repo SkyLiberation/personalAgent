@@ -1,6 +1,12 @@
 # 知识、领域 Workflow 与 Durable Project
 
+本文是知识域与领域 Workflow 的细节参考，供面试官深挖时使用；理念与举证在
+[能力轴 5/8/9/10](03-capability-axes.md)。写法遵守 [面试文档规范](00-writing-spec.md)。
+
 ## 1. 知识模型为什么不只是 Document + Embedding
+
+Document + Embedding 两层模型失效在一个具体地方：**它无法表达 supersede 与 conflict**。用户纠正
+一条旧事实时，只能覆盖或删除，于是「旧事实曾经存在」和「谁在何时修正」都查不到。
 
 系统需要回答三个问题：
 
@@ -37,7 +43,11 @@ Source
 
 ### Retrieval/Graph Projection
 
-embedding index、Graphiti、MS GraphRAG 是检索投影，不是事实权威源。它们可以从 PostgreSQL canonical facts 重建，投影失败不能覆盖 Claim。
+embedding index 和 Graphiti 是检索投影，不是事实权威源。它们可以从 PostgreSQL canonical
+facts 重建，投影失败不能覆盖 Claim。
+
+反过来说，把向量库或图库当事实源的具体后果是：**一次索引更新失败就可能覆盖或删除业务事实，
+而没有任何地方可以查证原本是什么。**
 
 ## 2. Fact Owner
 

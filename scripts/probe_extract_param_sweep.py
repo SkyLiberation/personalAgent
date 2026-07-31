@@ -63,7 +63,6 @@ def main() -> int:
     print(header)
     print("-" * len(header))
 
-    best: tuple[int, int, int, dict] | None = None
     rows: list[dict] = []
     for buffer_size, passes in COMBOS:
         cfg = LangExtractConfig(

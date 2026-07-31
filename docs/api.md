@@ -232,7 +232,8 @@ Item/Claim states 恢复，并返回唯一 restore Receipt。
 
 会清理：
 
-- `PERSONAL_AGENT_POSTGRES_URL` 指向的当前 schema 中全部普通表数据，包括业务表与 LangGraph checkpoint 表
+- `PERSONAL_AGENT_POSTGRES_URL` 指向的当前 schema 中全部普通表数据，包括业务表与可能残留的
+  历史 LangGraph checkpoint 表；后者不是当前 Conversation 真源
 - `data/uploads/` 中全部上传源文件
 - 配置的 Graphiti / Neo4j 数据库中除 eval manifest 缓存分组外的节点和关系
 
@@ -240,7 +241,8 @@ Neo4j 清理会读取 `evals/**/*manifest*.json` 中的 Graphiti eval manifest�
 `graphiti_group_prefix` 与当前配置匹配且存在 `episode_to_note_id` 时，该 `user_id`
 对应的 Graphiti `group_id` 会被保留，以便 `--reuse-graphiti` 渐进式评估缓存继续复用。
 
-`checkpoint_migrations` 同样会被清空；操作完成后服务会立即重新写入 LangGraph 所需的迁移版本记录。
+如果 schema 仍含历史 `checkpoint_migrations`，它也会被清空；该运维行为不表示当前主链使用
+LangGraph checkpoint。
 
 示例响应：
 

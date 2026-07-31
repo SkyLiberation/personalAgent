@@ -5,10 +5,7 @@ def test_core_prompts_are_registered_with_versions() -> None:
     prompt_names = [
         "answer_generation.system",
         "answer.dialogue_context_policy",
-        "ask.web_answer.user",
         "ask.unified_answer.user",
-        "ask.graph_answer.user",
-        "ask.local_answer.user",
         "ask.correction.user",
         "query_planner.system",
         "query_planner.user",
@@ -34,13 +31,6 @@ def test_core_prompts_are_registered_with_versions() -> None:
 def test_expanded_registry_prompts_render_with_sample_variables() -> None:
     dialogue_policy = render_prompt("answer.dialogue_context_policy")
 
-    assert "网络搜索结果" in render_prompt(
-        "ask.web_answer.user",
-        dialogue_context_policy=dialogue_policy,
-        question="Q",
-        context_block="ctx",
-        web_block="web",
-    )
     assert "ContextPack：selected=1" in render_prompt(
         "ask.unified_answer.user",
         dialogue_context_policy=dialogue_policy,
@@ -53,23 +43,6 @@ def test_expanded_registry_prompts_render_with_sample_variables() -> None:
         evidence_block="evidence",
         citation_hint="citation",
         match_hint="match",
-    )
-    assert "图谱事实网络" in render_prompt(
-        "ask.graph_answer.user",
-        dialogue_context_policy=dialogue_policy,
-        question="Q",
-        context_block="ctx",
-        focus_entities="Redis",
-        graph_fact_block="facts",
-        anchored_block="anchors",
-        notes_block="notes",
-    )
-    assert "相关内容证据" in render_prompt(
-        "ask.local_answer.user",
-        dialogue_context_policy=dialogue_policy,
-        question="Q",
-        context_block="ctx",
-        notes_block="notes",
     )
     assert "校验发现的问题" in render_prompt(
         "ask.correction.user",

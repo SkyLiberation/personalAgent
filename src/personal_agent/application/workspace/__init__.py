@@ -1,4 +1,6 @@
 from personal_agent.application.workspace.models import (
+    AnswerVerificationAssessment,
+    AnswerVerificationConflict,
     Artifact,
     ArtifactDeleteImpactResult,
     Claim,
@@ -32,6 +34,12 @@ from personal_agent.application.workspace.models import (
     ReviewItem,
     ReviewPlanResult,
     SemanticReplayDiffResult,
+    WorkspaceEvidenceSelection,
+)
+from personal_agent.application.workspace.answer_verifier import (
+    FixtureWorkspaceAnswerVerifier,
+    LLMWorkspaceAnswerVerifier,
+    WorkspaceAnswerVerifier,
 )
 from personal_agent.application.workspace.policy import (
     ClaimAdmissionPolicy,
@@ -45,18 +53,14 @@ from personal_agent.application.workspace.relation_judge import (
     LLMClaimRelationJudge,
 )
 from personal_agent.application.workspace.semantic import (
-    AnswerCoverageJudge,
-    AnswerCoverageJudgment,
     CandidateClaimDraft,
     CandidateClaimExtraction,
     ClaimGroundingJudge,
     ClaimGroundingJudgment,
-    LLMAnswerCoverageJudge,
     LLMClaimGroundingJudge,
     LLMSemanticClaimExtractor,
     LLMSemanticEvidenceExtractor,
     LocalSemanticFixtureClaimExtractor,
-    LocalSemanticFixtureCoverageJudge,
     LocalSemanticFixtureExtractor,
     LocalSemanticFixtureGroundingJudge,
     SemanticClaimExtractor,
@@ -67,6 +71,8 @@ from personal_agent.application.workspace.service import WorkspaceService
 from personal_agent.application.workspace.store import InMemoryWorkspaceStore
 
 __all__ = [
+    "AnswerVerificationAssessment",
+    "AnswerVerificationConflict",
     "Artifact",
     "ArtifactDeleteImpactResult",
     "Claim",
@@ -101,6 +107,7 @@ __all__ = [
     "ReviewItem",
     "ReviewPlanResult",
     "SemanticReplayDiffResult",
+    "WorkspaceEvidenceSelection",
     "ClaimAdmissionPolicy",
     "ClaimRelationAdjudication",
     "ClaimRelationCandidate",
@@ -108,22 +115,21 @@ __all__ = [
     "DecisionPolicy",
     "KnowledgeStateMachine",
     "LLMClaimRelationJudge",
-    "AnswerCoverageJudge",
-    "AnswerCoverageJudgment",
     "CandidateClaimDraft",
     "CandidateClaimExtraction",
     "ClaimGroundingJudge",
     "ClaimGroundingJudgment",
-    "LLMAnswerCoverageJudge",
+    "FixtureWorkspaceAnswerVerifier",
+    "LLMWorkspaceAnswerVerifier",
     "LLMClaimGroundingJudge",
     "LLMSemanticClaimExtractor",
     "LLMSemanticEvidenceExtractor",
     "LocalSemanticFixtureClaimExtractor",
-    "LocalSemanticFixtureCoverageJudge",
     "LocalSemanticFixtureExtractor",
     "LocalSemanticFixtureGroundingJudge",
     "SemanticClaimExtractor",
     "SemanticEvidenceExtraction",
     "SemanticEvidenceExtractor",
+    "WorkspaceAnswerVerifier",
     "WorkspaceService",
 ]

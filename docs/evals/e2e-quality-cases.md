@@ -49,9 +49,9 @@ PostgreSQL 测试库、临时 Artifact 目录和 Graphiti group prefix 只做数
 
 | 分类 | 当前编号 | 能证明什么 | 不能证明什么 |
 | --- | --- | --- | --- |
-| 原生产品能力 | E01–E14、IP01 | 一个明确产品目标从正式入口获得结果 | 未覆盖的其他能力和组合 |
+| 原生产品能力 | E01–E14、E20、IP01 | 一个明确产品目标从正式入口获得结果 | 未覆盖的其他能力和组合 |
 | 组合用户旅程 | C01–C04 | 多个已存在能力完成同一用户目标 | 单个组件普遍可靠 |
-| 复杂 Interaction | L01–L06 | 自然能力选择、并发、恢复、预算和 receipt-bound revision | durable Project 全生命周期 |
+| 复杂 Interaction | L01–L06 | 自然能力选择、并发、恢复、预算和 receipt-reference revision（L06 当前 9 次运行 5 次通过，见 [ADR 0009](../adr/0009-verified-final-message-receipt-reference.md)） | durable Project 全生命周期 |
 | Capability Profile | E16–E19 | 真实 MCP/A2A connector 可执行或 fail closed | 独立产品发布声明 |
 | Durable diagnostic | LT01–LT13 | 生产 Domain/Application/PostgreSQL/worker 协议 | live model/provider 产品结果 |
 | Baseline diagnostic | B03 等历史 archive | 当前产品行为的已执行不足 | 修复已经正确 |

@@ -71,7 +71,7 @@ class StructuralRetrieverStore:
         ranked_ids = self.rank_note_ids(question, index, limit=limit)
         return [index.notes_by_id[note_id] for note_id in ranked_ids if note_id in index.notes_by_id]
 
-    def ask(
+    def retrieve(
         self,
         question: str,
         user_id: str,

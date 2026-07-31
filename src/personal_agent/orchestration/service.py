@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
 from personal_agent.memory.graphiti.store import GraphitiStore
-from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.orchestration.runtime import AgentRuntime
 
@@ -41,7 +40,6 @@ class AgentService:
             settings=resolved_settings,
             store=store,
             graph_store=GraphitiStore(resolved_settings),
-            ms_graphrag_store=MicrosoftGraphRagStore(resolved_settings),
             capture_service=capture_service,
         )
 
@@ -76,10 +74,6 @@ class AgentService:
     @graph_store.setter
     def graph_store(self, value):
         self.runtime.graph_store = value
-
-    @property
-    def ms_graphrag_store(self):
-        return self.runtime.ms_graphrag_store
 
     @property
     def tool_governance_store(self):

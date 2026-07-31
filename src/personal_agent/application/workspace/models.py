@@ -386,15 +386,42 @@ class AnswerCitation(BaseModel):
     claim_ids: list[str] = Field(default_factory=list)
 
 
+class WorkspaceEvidenceSelection(BaseModel):
+    """Read-only evidence and knowledge-state facts selected for one question."""
+
+    question: str
+    selected_spans: list[EvidenceSpan] = Field(default_factory=list)
+    citations: list[AnswerCitation] = Field(default_factory=list)
+    selected_claims: list[Claim] = Field(default_factory=list)
+    conflicted_claim_ids: list[str] = Field(default_factory=list)
+    potential_conflicted_claim_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class AnswerVerificationConflict(BaseModel):
+    evidence_span_ids: list[str] = Field(min_length=2)
+    description: str = Field(min_length=1)
+
+
+class AnswerVerificationAssessment(BaseModel):
+    verdict: Literal["passed", "needs_revision", "insufficient_evidence"]
+    conclusion_status: Literal["supported", "conflicted", "insufficient_evidence"]
+    evidence_coverage: EvidenceCoverage = "none"
+    conflicts: list[AnswerVerificationConflict] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+    missing_sections: list[dict[str, str]] = Field(default_factory=list)
+    feedback: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    verifier_name: str
+    verifier_version: str
+
+
 class EvidenceGroundedAnswer(BaseModel):
     question: str
     answer: str
     citations: list[AnswerCitation] = Field(default_factory=list)
-    grounding_status: Literal["supported", "weak_evidence", "unsupported"] = "unsupported"
-    evidence_coverage: EvidenceCoverage = "none"
-    missing_sections: list[dict[str, str]] = Field(default_factory=list)
+    verification: AnswerVerificationAssessment
     answer_claim_count: int = 0
-    answer_claim_grounded_count: int = 0
     answer_claim_saved_count: int = 0
     active_claim_count_delta: int = 0
     selected_claim_ids: list[str] = Field(default_factory=list)

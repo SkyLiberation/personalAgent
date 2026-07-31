@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from personal_agent.kernel.models import Citation, KnowledgeNote
-from personal_agent.memory.graphiti.store import GraphAskResult
+from personal_agent.kernel.graph_results import GraphRetrievalResult
 from personal_agent.application.verifier import VerificationResult
 
 def _annotate_answer(answer: str, verification: VerificationResult) -> str:
@@ -40,7 +40,7 @@ def _merge_citations(primary: list[Citation], secondary: list[Citation]) -> list
     return merged
 
 
-def _graph_episode_uuids(graph_result: GraphAskResult) -> list[str]:
+def _graph_episode_uuids(graph_result: GraphRetrievalResult) -> list[str]:
     ordered: list[str] = []
 
     def add(value: str | None) -> None:
@@ -60,7 +60,7 @@ def _graph_episode_uuids(graph_result: GraphAskResult) -> list[str]:
     return ordered
 
 
-def _graph_facts_by_episode(graph_result: GraphAskResult) -> dict[str, list[str]]:
+def _graph_facts_by_episode(graph_result: GraphRetrievalResult) -> dict[str, list[str]]:
     facts_by_episode: dict[str, list[str]] = {}
 
     def add(episode_uuid: str, fact: str) -> None:
@@ -82,7 +82,7 @@ def _graph_facts_by_episode(graph_result: GraphAskResult) -> dict[str, list[str]
     return facts_by_episode
 
 
-def _graph_fact_lines(graph_result: GraphAskResult, limit: int = 8) -> list[str]:
+def _graph_fact_lines(graph_result: GraphRetrievalResult, limit: int = 8) -> list[str]:
     facts: list[str] = []
 
     def add(value: str | None) -> None:

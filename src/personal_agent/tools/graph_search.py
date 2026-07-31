@@ -5,7 +5,7 @@ import logging
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from personal_agent.kernel.evidence import EvidenceItem
+from personal_agent.kernel.evidence import graph_result_to_evidence
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.tools.base import ToolError, governance_extras, tool_response, tool_success
 
@@ -32,7 +32,7 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
             "在个人长期知识图谱中搜索实体关系、关联路径和已同步图事实。"
             "只读本地图谱，不访问外网、不写入数据；适合关系问答和图候选定位。"
             "图谱无用户数据或无结果不代表长期知识笔记不存在；按主题回忆笔记应使用笔记语义搜索。"
-            "返回 artifact.data.answer/entity_names/relation_facts/node_refs/edge_refs/fact_refs，并附带 evidence。"
+            "返回 artifact.data.entity_names/relation_facts/node_refs/edge_refs/fact_refs，并附带 evidence。"
         ),
         args_schema=GraphSearchArgs,
         response_format="content_and_artifact",
@@ -59,7 +59,6 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
             user_has_data = True
         if not user_has_data:
             return tool_response(tool_success({
-                "answer": None,
                 "entity_names": [],
                 "relation_facts": [],
                 "related_episode_uuids": [],
@@ -68,34 +67,14 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
                 "fact_refs": [],
                 "skipped_reason": "no_user_graph_data",
             }, []))
-        result = graph_store.ask(_graph_search_text(question, structured_context or {}), user_id)
+        result = graph_store.retrieve(
+            _graph_search_text(question, structured_context or {}),
+            user_id,
+        )
         if not result.enabled:
             raise ToolError(result.error or "图谱检索不可用。", kind="permission")
-        evidence: list[EvidenceItem] = []
-        seen_facts: set[str] = set()
-        for fact_ref in result.fact_refs:
-            fact = fact_ref.fact.strip()
-            if fact and fact not in seen_facts:
-                seen_facts.add(fact)
-                evidence.append(EvidenceItem(
-                    source_type="graph_fact", source_id=fact_ref.edge_uuid, fact=fact,
-                    metadata={"source_node_name": fact_ref.source_node_name, "target_node_name": fact_ref.target_node_name, "episode_uuids": fact_ref.episode_uuids},
-                ))
-        for edge_ref in result.edge_refs:
-            fact = edge_ref.fact.strip()
-            if fact and fact not in seen_facts:
-                seen_facts.add(fact)
-                evidence.append(EvidenceItem(
-                    source_type="graph_fact", source_id=edge_ref.uuid, fact=fact,
-                    metadata={"source_node_name": edge_ref.source_node_name, "target_node_name": edge_ref.target_node_name, "episodes": edge_ref.episodes},
-                ))
-        for hit in result.citation_hits:
-            evidence.append(EvidenceItem(
-                source_type="graph_fact", source_id=hit.episode_uuid, fact=hit.relation_fact, score=float(hit.score),
-                metadata={"episode_uuid": hit.episode_uuid, "endpoint_names": hit.endpoint_names, "matched_terms": hit.matched_terms, "entity_overlap_count": hit.entity_overlap_count},
-            ))
+        evidence = graph_result_to_evidence(result, {}, question)
         return tool_response(tool_success({
-            "answer": result.answer,
             "entity_names": result.entity_names,
             "relation_facts": result.relation_facts,
             "related_episode_uuids": result.related_episode_uuids,

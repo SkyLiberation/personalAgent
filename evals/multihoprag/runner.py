@@ -23,7 +23,6 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import KnowledgeNote
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory.graphiti.search_strategies import STRATEGIES
-from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 # Reuse dataset-agnostic Graphiti ingest + manifest plumbing from open_ragbench.
 from evals.open_ragbench.runner import (
@@ -460,7 +459,7 @@ class GraphitiRetrievalStrategy:
 
         rankings: list[tuple[str, list[str]]] = []
         for query in queries:
-            result = graph_store.ask(query.query_text, context.graphiti_user_id)
+            result = graph_store.retrieve(query.query_text, context.graphiti_user_id)
             if not result.enabled:
                 raise RuntimeError(f"Graphiti ask failed for {query.query_id}: {result.error}")
             ranked = _ranked_note_ids_from_graph_result(result, episode_to_note_id, limit * 3)
@@ -507,12 +506,7 @@ class RuntimeAskStrategy:
                 graph_store=graph_store, notes=all_notes, context=context
             )
             _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
-        ms_store = MicrosoftGraphRagStore(settings)
-        if settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
-            ms_store.clear_all_data()
-            ms_store.ingest_notes(all_notes, trace_id="multihoprag-msgraphrag-ingest")
-            ms_store.build_index()
-        runtime = AgentRuntime(settings, store, graph_store, ms_graphrag_store=ms_store)
+        runtime = AgentRuntime(settings, store, graph_store)
 
         rankings: list[tuple[str, list[str]]] = []
         for query in queries:
@@ -526,19 +520,6 @@ class RuntimeAskStrategy:
                 pid = match.id.split("_sec_")[0]
                 if pid not in collapsed:
                     collapsed.append(pid)
-            if (
-                settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"}
-                and not collapsed
-            ):
-                projection_text = " ".join(
-                    part for part in [result.answer, *[item.fact or item.snippet for item in result.evidence]]
-                    if part
-                )
-                projected = store.find_similar_notes(eval_user_id, projection_text, limit=limit)
-                for note in projected:
-                    pid = note.id.split("_sec_")[0]
-                    if pid not in collapsed:
-                        collapsed.append(pid)
             rankings.append((query.query_id, collapsed[:limit]))
             _record_eval_snapshot(
                 context,
@@ -551,7 +532,6 @@ class RuntimeAskStrategy:
                     "ranked_ids": collapsed[:limit],
                     "citation_note_ids": [c.note_id for c in result.citations[:limit]],
                     "graph_provider": settings.ask.graph_provider,
-                    "projection": "answer_to_local_notes" if settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"} else "",
                 },
             )
         return rankings
@@ -667,7 +647,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--graphiti-continue-on-ingest-error", action="store_true")
     parser.add_argument("--graph-search-limit", type=int, default=None)
     parser.add_argument("--graph-search-citation-limit", type=int, default=None)
-    parser.add_argument("--ask-graph-provider", choices=("graphiti", "structural", "hybrid", "ms_graphrag"), default=None)
+    parser.add_argument("--ask-graph-provider", choices=("graphiti", "structural", "hybrid"), default=None)
     parser.add_argument("--ask-reranker", choices=("heuristic", "llm"), default=None)
     parser.add_argument("--ask-candidate-enricher", choices=("parent_child", "none"), default=None)
     parser.add_argument(

@@ -168,7 +168,10 @@ def _profile(
         entry_boundary=EntryBoundary.HTTP_PROCESS,
         claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
         capability_profile=capability_profile,
-        limitation="Connector profile evidence; product release claims are owned by E01-E14.",
+        limitation=(
+            "Connector profile evidence; product release claims are owned by "
+            "E01-E14, E20 and IP01."
+        ),
     )
 
 
@@ -237,6 +240,13 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     _product("E12", "test_product_e12_knowledge_maintenance_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
     _product("E13", "test_product_e13_scheduled_intelligence_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
     _product("E14", "test_product_e14_conversation_governed_save", EvidenceLayer.UNDERSTANDING, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION, real_provider_required=False),
+    _product(
+        "E20",
+        "test_product_e20_workspace_answer_has_independent_verification",
+        EvidenceLayer.UNDERSTANDING,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        real_provider_required=False,
+    ),
     _product(
         "IP01",
         "test_product_ip01_live_investigation_report",
@@ -355,6 +365,7 @@ def validate_catalog() -> None:
         EvidenceClaimKind.BASELINE_DIAGNOSTIC: {"B03"},
         EvidenceClaimKind.PRODUCT_CAPABILITY: {
             *(f"E{index:02d}" for index in range(1, 15)),
+            "E20",
             "IP01",
         },
         EvidenceClaimKind.COMPOSITE_CAPABILITY: {f"C{index:02d}" for index in range(1, 5)},

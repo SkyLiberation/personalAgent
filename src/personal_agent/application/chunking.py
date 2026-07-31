@@ -129,7 +129,7 @@ def _para_chunk(paragraphs: list[str], start_idx: int, end_idx: int) -> dict[str
 
 def _split_long_section(body: str, heading: str) -> list[dict[str, str]]:
     """Sub-split a very long section by single newlines."""
-    lines = [l.strip() for l in _SINGLE_NL_RE.split(body) if l.strip()]
+    lines = [line.strip() for line in _SINGLE_NL_RE.split(body) if line.strip()]
     if len(lines) <= 1:
         return [{"title": heading, "content": body, "source_span": f"## {heading}"}]
 

@@ -23,22 +23,6 @@ PROMPTS: dict[str, PromptSpec] = {
             "如对话线索与当前可追溯证据冲突，以当前证据为准并说明不确定或变更。"
         ),
     ),
-    "ask.web_answer.user": PromptSpec(
-        name="ask.web_answer.user",
-        version="v1",
-        output_contract="free_text",
-        template=(
-            "你是个人知识库助手。你的个人知识库中未能找到足够依据来回答这个问题，"
-            "因此进行了一次网络搜索。请基于以下网络搜索结果，用自然中文回答问题。\n"
-            "{dialogue_context_policy}\n"
-            "重要：你必须明确指出信息来源于网络搜索，并标注每个要点的来源编号（如 [来源1]）。"
-            "如果搜索结果之间存在矛盾，请如实指出。"
-            "如果搜索结果仍不足以完整回答问题，请说明现有信息的局限。\n\n"
-            "当前问题：{question}\n\n"
-            "最近对话与任务上下文：\n{context_block}\n\n"
-            "网络搜索结果：\n{web_block}"
-        ),
-    ),
     "ask.unified_answer.user": PromptSpec(
         name="ask.unified_answer.user",
         version="v1",
@@ -56,43 +40,6 @@ PROMPTS: dict[str, PromptSpec] = {
             "统一证据池：\n{evidence_block}\n\n"
             "引用锚点摘要：\n{citation_hint}\n\n"
             "匹配笔记摘要：\n{match_hint}"
-        ),
-    ),
-    "ask.graph_answer.user": PromptSpec(
-        name="ask.graph_answer.user",
-        version="v1",
-        output_contract="free_text",
-        template=(
-            "你是个人知识库助手。请基于给定的对话上下文、图谱事实网络和原文证据，"
-            "先总结结论，再解释原因，生成一段自然、直接、连续的中文回答。"
-            "如果上下文里存在代词或省略，请结合最近几轮对话补全指代。"
-            "{dialogue_context_policy}"
-            "不要先输出「最相关实体」「关联事实」「根据检索结果」之类栏目标题，不要机械列点，不要把原始片段逐条照搬。"
-            "你的主要推理材料是图谱事实网络中的实体、关系边和事实；"
-            "笔记片段只用于核对出处、补充限定条件和引用定位。"
-            "如果证据不足，要明确指出不确定点。"
-            "回答尽量先给出一句直接结论，再补充展开说明。\n\n"
-            "当前问题：{question}\n\n"
-            "最近对话与任务上下文：\n{context_block}\n\n"
-            "图谱实体：{focus_entities}\n\n"
-            "图谱事实网络（优先基于这些实体关系和事实推理）：\n{graph_fact_block}\n\n"
-            "原文证据锚点（用于校验和引用定位）：\n{anchored_block}\n\n"
-            "原文证据片段：\n{notes_block}"
-        ),
-    ),
-    "ask.local_answer.user": PromptSpec(
-        name="ask.local_answer.user",
-        version="v1",
-        output_contract="free_text",
-        template=(
-            "你是个人知识库助手。请基于最近几轮对话和当前匹配到的笔记内容证据，"
-            "用自然中文总结并回答用户问题。优先回答用户真正想问的内容，必要时承认信息不足。"
-            "{dialogue_context_policy}"
-            "不要把答案写成检索结果罗列，也不要简单重复原始片段。"
-            "回答尽量先给出一句直接结论，再补充必要解释。\n\n"
-            "当前问题：{question}\n\n"
-            "最近对话与任务上下文：\n{context_block}\n\n"
-            "相关内容证据：\n{notes_block}"
         ),
     ),
     "ask.correction.user": PromptSpec(

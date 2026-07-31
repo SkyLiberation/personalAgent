@@ -11,13 +11,12 @@ from personal_agent.orchestration.runtime_helpers import (
 )
 from personal_agent.kernel.evidence import _best_snippet
 from personal_agent.kernel.models import (
-    Citation,
     GraphNodeRef,
     GraphEdgeRef,
     GraphFactRef,
 )
 from personal_agent.memory.graphiti.store import GraphCaptureResult
-from personal_agent.memory.graphiti.store import GraphAskResult
+from personal_agent.kernel.graph_results import GraphRetrievalResult
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from tests.conftest import POSTGRES_URL
 from tests.note_factory import make_note
@@ -137,9 +136,9 @@ class TestMergeGraphCaptureRefs:
         assert note.graph_sync.status == "synced"
 
 
-class TestGraphAskSemanticEvidence:
+class TestGraphRetrievalSemanticEvidence:
     def test_episode_uuids_include_fact_and_edge_refs(self):
-        graph_result = GraphAskResult(
+        graph_result = GraphRetrievalResult(
             enabled=True,
             related_episode_uuids=["ep-related"],
             fact_refs=[
@@ -159,64 +158,6 @@ class TestGraphAskSemanticEvidence:
         )
 
         assert _graph_episode_uuids(graph_result) == ["ep-fact", "ep-edge", "ep-related"]
-
-    def test_graph_prompt_prioritizes_fact_network(self):
-        from personal_agent.orchestration.runtime_ask import AskService
-
-        graph_result = GraphAskResult(
-            enabled=True,
-            entity_names=["Redis", "订单服务"],
-            node_refs=[
-                GraphNodeRef(uuid="n1", name="Redis", summary="内存数据存储"),
-                GraphNodeRef(uuid="n2", name="订单服务"),
-            ],
-            fact_refs=[
-                GraphFactRef(
-                    fact="订单服务依赖 Redis 缓存热点数据",
-                    edge_uuid="e1",
-                    source_node_name="订单服务",
-                    target_node_name="Redis",
-                    episode_uuids=["ep1"],
-                )
-            ],
-            edge_refs=[
-                GraphEdgeRef(
-                    uuid="e2",
-                    fact="Redis 用于降低数据库压力",
-                    source_node_name="Redis",
-                    target_node_name="数据库压力",
-                    episodes=["ep1"],
-                )
-            ],
-        )
-        note = make_note(
-            id="note1",
-            title="缓存方案",
-            content="订单服务依赖 Redis 缓存热点数据，从而降低数据库压力。",
-            summary="订单服务使用 Redis 缓存",
-            graph_episode_uuid="ep1",
-        )
-        citation = Citation(
-            note_id="note1",
-            title="缓存方案",
-            snippet="订单服务依赖 Redis 缓存热点数据",
-            relation_fact="订单服务依赖 Redis 缓存热点数据",
-        )
-
-        rt = object.__new__(AskService)
-        prompt = rt._build_graph_answer_prompt(
-            "订单服务为什么用 Redis？",
-            graph_result,
-            [note],
-            [citation],
-            "无",
-        )
-
-        assert "图谱事实网络" in prompt
-        assert "订单服务 -> Redis: 订单服务依赖 Redis 缓存热点数据" in prompt
-        assert "原文证据锚点" in prompt
-        assert "笔记片段只用于核对出处" in prompt
-
 
 class TestGraphRefsSerialization:
     def test_note_with_graph_refs_roundtrips(self, temp_dir: Path):

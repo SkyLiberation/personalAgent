@@ -414,6 +414,80 @@ def test_product_e02_grounded_workspace_ask(
     )
 
 
+def test_product_e20_workspace_answer_has_independent_verification(
+    live_web_process: LiveWebProcess,
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    workspace_id = f"product-e20-{uuid4().hex}"
+    subject = f"Northstar-{uuid4().hex[:8]}"
+    _workspace_ingest(
+        live_web_process,
+        workspace_id,
+        f"{subject} 的生产迁移日期是 2026-09-10。",
+        source_type="document",
+    )
+    _workspace_ingest(
+        live_web_process,
+        workspace_id,
+        f"{subject} 的生产迁移日期不是 2026-09-10，而是 2026-10-15。",
+        source_type="document",
+    )
+    before = _get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )
+    answer = _workspace_ask(
+        live_web_process,
+        workspace_id,
+        (
+            f"核对工作区中关于 {subject} 生产迁移日期的材料。逐项列出候选结论和"
+            "对应原文证据，明确冲突；冲突没有解决时，不要把核对结果标成已得到支持。"
+        ),
+    )
+    after = _get_json(
+        f"{live_web_process.base_url}/api/workspace/claims?"
+        + urlencode({"workspace_id": workspace_id})
+    )
+    verification = answer["verification"]
+    cited_span_ids = {
+        item["evidence_span_id"] for item in answer["citations"]
+    }
+    conflict_span_ids = {
+        span_id
+        for conflict in verification["conflicts"]
+        for span_id in conflict["evidence_span_ids"]
+    }
+    _record(
+        trace_archive,
+        request,
+        "E20.product_http",
+        {
+            "answer": answer,
+            "claim_count_before": len(before),
+            "claim_count_after": len(after),
+        },
+        profile="baseline",
+    )
+
+    assert verification["verdict"] == "needs_revision"
+    assert verification["conclusion_status"] == "conflicted"
+    assert verification["conflicts"]
+    assert conflict_span_ids
+    assert conflict_span_ids <= cited_span_ids
+    assert len(before) == len(after)
+    assert answer["answer_claim_saved_count"] == 0
+    assert not any(
+        key in answer
+        for key in (
+            "grounding_status",
+            "evidence_coverage",
+            "missing_sections",
+            "answer_claim_grounded_count",
+        )
+    )
+
+
 def test_product_e03_selected_upload_artifact_ask(
     live_web_process: LiveWebProcess,
     trace_archive: TraceArchive,

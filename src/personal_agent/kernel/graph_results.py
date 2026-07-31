@@ -9,7 +9,7 @@ Concrete graph providers import these canonical boundary contracts directly.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.models import Citation, GraphEdgeRef, GraphFactRef, GraphNodeRef
 
@@ -35,10 +35,11 @@ class GraphCaptureResult(BaseModel):
     fact_refs: list[GraphFactRef] = Field(default_factory=list)
 
 
-class GraphAskResult(BaseModel):
+class GraphRetrievalResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = False
     error: str | None = None
-    answer: str | None = None
     entity_names: list[str] = Field(default_factory=list)
     relation_facts: list[str] = Field(default_factory=list)
     related_episode_uuids: list[str] = Field(default_factory=list)

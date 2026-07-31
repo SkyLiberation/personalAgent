@@ -11,9 +11,7 @@ from personal_agent.application.workspace.models import (
     Artifact,
     Claim,
     ClaimType,
-    CoverageManifest,
     EvidenceBlock,
-    EvidenceCoverage,
     EvidenceRef,
     EvidenceSpan,
     EvidenceSpanType,
@@ -90,21 +88,6 @@ class ClaimGroundingJudgment(BaseModel):
     threshold_profile: str = "active-admission"
 
 
-class MissingCoverageSection(BaseModel):
-    locator: str = ""
-    reason: str = ""
-
-
-class AnswerCoverageJudgment(BaseModel):
-    evidence_coverage: EvidenceCoverage = "none"
-    covered_questions: list[str] = Field(default_factory=list)
-    missing_questions: list[str] = Field(default_factory=list)
-    missing_sections: list[MissingCoverageSection] = Field(default_factory=list)
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    rationale: str = ""
-    judge_version: str = "semantic-coverage-v1"
-
-
 class SemanticEvidenceExtractor(Protocol):
     name: str
     version: str
@@ -147,21 +130,6 @@ class ClaimGroundingJudge(Protocol):
         source_type: str,
         created_by: str,
     ) -> ClaimGroundingJudgment:
-        ...
-
-
-class AnswerCoverageJudge(Protocol):
-    name: str
-    version: str
-
-    def judge(
-        self,
-        *,
-        question: str,
-        selected: list[EvidenceSpan],
-        available: list[EvidenceSpan],
-        manifests: list[CoverageManifest],
-    ) -> AnswerCoverageJudgment:
         ...
 
 
@@ -296,51 +264,6 @@ class LLMClaimGroundingJudge:
                 purpose="workspace_claim_grounding_judge", messages=messages,
             ),
             metadata={"claim_id": claim.claim_id, "workspace_id": claim.workspace_id},
-        ))
-        return response.value
-
-
-class LLMAnswerCoverageJudge:
-    name = "llm-answer-coverage"
-    version = "v1"
-
-    def __init__(self, model_client: StructuredModelClient) -> None:
-        self._model_client = model_client
-
-    def judge(
-        self,
-        *,
-        question: str,
-        selected: list[EvidenceSpan],
-        available: list[EvidenceSpan],
-        manifests: list[CoverageManifest],
-    ) -> AnswerCoverageJudgment:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Judge whether selected evidence covers the user's question. "
-                    "Do not hide omitted, partial, or failed manifest regions. "
-                    "Return partial/sparse with missing_sections when relevant scope or source regions are absent."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _coverage_prompt(question, selected, available, manifests),
-            },
-        ]
-        response = self._model_client.generate(StructuredModelRequest(
-            operation="workspace_answer_coverage_judge",
-            version=self.version,
-            kind="structured",
-            output_type=AnswerCoverageJudgment,
-            temperature=0,
-            max_tokens=1200,
-            messages=messages,
-            context_projection_ref=sealed_context_projection_ref(
-                purpose="workspace_answer_coverage_judge", messages=messages,
-            ),
-            metadata={"selected_span_count": len(selected), "available_span_count": len(available)},
         ))
         return response.value
 
@@ -492,67 +415,6 @@ class LocalSemanticFixtureGroundingJudge:
         )
 
 
-@dataclass(slots=True)
-class LocalSemanticFixtureCoverageJudge:
-    name: str = "fixture-semantic-coverage-judge"
-    version: str = "v1"
-
-    def judge(
-        self,
-        *,
-        question: str,
-        selected: list[EvidenceSpan],
-        available: list[EvidenceSpan],
-        manifests: list[CoverageManifest],
-    ) -> AnswerCoverageJudgment:
-        if not selected:
-            return AnswerCoverageJudgment(
-                evidence_coverage="none",
-                missing_sections=[{"reason": "no_selected_evidence"}],
-                confidence=1.0,
-                rationale="no selected evidence",
-                judge_version=self.name,
-            )
-        missing_sections: list[dict[str, str]] = []
-        for manifest in manifests:
-            for region in manifest.expected_regions:
-                if region.parse_status in {"omitted", "partial", "failed"} or region.semantic_status in {"omitted", "partial", "failed"}:
-                    missing_sections.append({
-                        "locator": region.locator,
-                        "reason": region.reason or "coverage manifest reports unavailable region",
-                    })
-        selected_ids = {span.evidence_span_id for span in selected}
-        if not missing_sections:
-            for span in available:
-                if span.evidence_span_id not in selected_ids:
-                    missing_sections.append({
-                        "evidence_span_id": span.evidence_span_id,
-                        "evidence_block_id": span.evidence_block_id,
-                        "locator": span.locator,
-                        "quote_preview": span.text_span[:120],
-                    })
-                    if len(missing_sections) >= 5:
-                        break
-        if any(manifest.omitted_region_count for manifest in manifests):
-            coverage = "partial"
-        elif len(selected) >= len(available):
-            coverage = "complete"
-            missing_sections = []
-        elif len(selected) == 1 and len(available) > 3:
-            coverage = "sparse"
-        else:
-            coverage = "partial"
-        return AnswerCoverageJudgment(
-            evidence_coverage=coverage,  # type: ignore[arg-type]
-            covered_questions=[question] if coverage == "complete" else [],
-            missing_questions=[] if coverage == "complete" else ["需要更多 scope/time/source 覆盖"],
-            missing_sections=missing_sections,
-            confidence=0.8,
-            rationale="coverage derived from selected evidence and CoverageManifest",
-            judge_version=self.name,
-        )
-
-
 def calibration_from_grounding(judgment: ClaimGroundingJudgment) -> JudgeCalibration:
     return JudgeCalibration(
         confidence=judgment.confidence,
@@ -635,28 +497,6 @@ def _grounding_prompt(
         f"- source_type: {source_type}\n"
         f"- created_by: {created_by}\n\n"
         "Evidence refs:\n" + refs
-    )
-
-
-def _coverage_prompt(
-    question: str,
-    selected: list[EvidenceSpan],
-    available: list[EvidenceSpan],
-    manifests: list[CoverageManifest],
-) -> str:
-    selected_text = "\n".join(f"- {span.evidence_span_id}: {span.text_span}" for span in selected)
-    available_text = "\n".join(f"- {span.evidence_span_id}: {span.text_span}" for span in available[:20])
-    manifest_text = "\n".join(
-        f"- artifact={manifest.artifact_id} coverage={manifest.coverage_status} "
-        f"omitted={manifest.omitted_region_count} regions="
-        f"{[region.model_dump(mode='json') for region in manifest.expected_regions]}"
-        for manifest in manifests
-    )
-    return (
-        f"Question: {question}\n\n"
-        f"Selected evidence:\n{selected_text}\n\n"
-        f"Available evidence:\n{available_text}\n\n"
-        f"Coverage manifests:\n{manifest_text}"
     )
 
 

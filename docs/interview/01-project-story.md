@@ -1,30 +1,27 @@
 # 项目介绍与面试讲稿
 
+本文提供开场讲稿与白板顺序。写法遵守 [面试文档规范](00-writing-spec.md)；深度理解与逐轴举证在
+[能力轴](03-capability-axes.md)。与生产代码或 summary 冲突时以后者为准。
+
 ## 1. 项目是做什么的
 
-personalAgent 不是一个只负责聊天的 Bot，而是一个围绕“个人知识如何进入、被引用、被修正、被复习、被持续研究”的 Agent 系统。
+personalAgent 不是一个只负责聊天的 Bot，而是一个围绕「个人知识如何进入、被引用、被修正、
+被复习、被持续研究」的 Agent 系统。
 
 它解决四类用户问题：
 
-1. 用户的资料来自文本、网页、上传文件和历史会话，系统需要形成可追溯的知识，而不是只把原文塞进向量库；
-2. 用户提问时，回答需要受 workspace、用户权限和可见证据约束，并给出引用；
+1. 资料来自文本、网页、上传文件和历史会话，需要形成可追溯的知识，而不是只把原文塞进向量库；
+2. 提问时回答需要受 workspace、用户权限和可见证据约束，并给出引用；
 3. 保存、删除、恢复、订阅和投递有真实副作用，需要确认、幂等、恢复和审计；
 4. 开放式研究无法预先写死全部步骤，需要模型根据搜索结果、Tool Observation 和子 Agent 产物继续决策。
 
-产品能力包括：
+产品能力：连续对话、Workspace 资料采集与有证据问答、对话结论显式固化、知识纠错/删除/恢复、
+Review Card 与知识缺口分析、一次性研究与周期性情报订阅、GitHub/Notion MCP 读取、
+GPT Researcher A2A 委托。
 
-- 普通连续对话；
-- Workspace 资料采集和有证据问答；
-- 对话结论显式固化；
-- 知识纠错、删除和恢复；
-- Review Card 和知识缺口分析；
-- 一次性研究和周期性情报订阅；
-- GitHub、Notion MCP 读取；
-- GPT Researcher A2A 委托。
+## 2. 最先说清楚的一件事：权力边界
 
-## 2. 面试时最先说清楚的框架理念
-
-项目不是围绕某个模型、JSON 格式或 Agent 框架搭建，而是围绕一个长期稳定的权力边界：
+项目不是围绕某个模型、JSON 格式或 Agent 框架搭建，而是围绕一条长期稳定的所有权链：
 
 ```text
 用户目标与上下文
@@ -35,27 +32,30 @@ personalAgent 不是一个只负责聊天的 Bot，而是一个围绕“个人�
   -> Completion Gate 判断用户结果契约是否齐全
 ```
 
-可以替换的是 object-root JSON、Pydantic、Provider、Tool Calling 协议和编排技术；不能替换的是：
+可以替换的是 object-root JSON、Pydantic、Provider、Tool Calling 协议和编排技术。不能替换的是
+下面六条——**每条后面都跟着它阻止的具体故障，这是判断「不是为了设计而设计」的唯一方式**：
 
-- 模型输出不是授权；
-- 模型自述不是执行事实；
-- Admission 不补业务语义；
-- Tool success 不自动代表用户目标完成；
-- canonical fact 只有一个 owner 和一个写入口；
-- 没有生产 baseline 失败证据的新机制不进入强制主链。
+| 不变量 | 它阻止的具体故障 |
+| --- | --- |
+| 模型输出不是授权 | 模型幻觉一个 Tool 名或越权 scope，就直接产生了真实副作用 |
+| 模型自述不是执行事实 | 模型说「已保存」但写入从未发生，用户以为存了 |
+| Admission 不补业务语义 | 语义 owner 悄悄变成不在 Prompt 里的 if/else，Golden Set 覆盖不到，线上无法归因 |
+| Tool success 不代表用户目标完成 | Web Search 返回了结果就宣布问题已回答 |
+| canonical fact 只有一个 owner 和一个写入口 | 索引重建失败覆盖业务事实，且无处查证原本是什么 |
+| 无 baseline 失败证据的新机制不进强制主链 | 为想象中的问题增加复杂度，撤除成本远高于加入成本 |
 
-这套框架解决的是一个现实矛盾：知识与研究任务需要模型处理开放语义，但权限、真实副作用、
-恢复和审计不能交给概率模型。项目的设计目标不是消除模型的不确定性，而是让不确定性只存在于
-它应该负责的语义层，并在执行前后都形成可检查边界。
+这套边界解决的现实矛盾是：知识与研究任务需要模型处理开放语义，但权限、真实副作用、恢复和审计
+不能交给概率模型。设计目标**不是消除模型的不确定性**，而是让不确定性只存在于它应该负责的语义层。
 
-## 3. 面试时最先说清楚的架构结论
+## 3. 三条生产主链，不是一个 God Task
 
-系统没有把所有请求都包装成一个通用 Task，也没有让一个 Planner 控制全部业务。当前按“路径是否动态”和“是否跨越 durable 边界”分成三条生产主链：
+系统没有把所有请求包装成通用 Task，也没有让一个 Planner 控制全部业务。按「路径是否动态」和
+「是否跨越 durable 边界」分成三条：
 
 ```text
 短动态请求
   -> ConversationService Interaction loop
-  -> 模型决定直接回答、调用 Tool 或委托 Agent
+  -> 模型决定直接回答 / 调用 Tool / 委托 Agent
   -> Observation 返回模型
   -> FinalMessage
 
@@ -72,177 +72,139 @@ personalAgent 不是一个只负责聊天的 Bot，而是一个围绕“个人�
   -> Verification + Completion Gate
 ```
 
-“固定事务”指执行拓扑和不变量固定，不是输入必须来自按钮。例如删除知识一旦被接受，就必须依次经过 prepare、confirmation、execute、receipt，不能让模型自由重排。Investigation Project 也不是 Conversation 的隐藏模式；只有 accepted Plan 真正驱动 ready set、coverage、恢复和完成义务时，才承担 durable 调度复杂度。
+不合并的理由是具体故障，不是「更清晰」：合并后**直接回答会被迫伪造 Task/Command/
+CompletionReport**，而 ResearchRun、DeleteCommand、Delivery、Project 的状态机与恢复语义完全不同，
+一个 God Aggregate 装下它们只会让每种恢复都走最保守路径。
+
+两个易被误解的点：
+
+- 「固定事务」指执行拓扑与不变量固定，**不是输入必须来自按钮**。删除一旦被接受就必须依次经过
+  prepare、confirmation、execute、receipt，模型不能自由重排；
+- Investigation Project **不是 Conversation 的隐藏模式**。只有 accepted Plan 真正驱动 ready set、
+  coverage、恢复和完成义务时，才承担 durable 调度成本。
 
 ## 4. 30 秒介绍稿
 
 > 我做的是一个个人知识与持续研究 Agent，核心是一套可信 Agent Runtime：模型负责提出开放语义
 > Proposal，确定性系统负责 Admission、权限和执行，执行事实再经过 Verification 与 Completion。
 > 短动态请求、固定事务和 durable 动态长任务分别进入 Conversation、Application Workflow 和
-> Investigation Project。这个边界由错误 digest、知识污染、重复副作用、Provider 协议失败和
-> live Investigation repair 等 E2E 反事实支撑；当前完整 clean-revision 发布矩阵仍未重跑。
+> Investigation Project。这个边界不是画出来的，是由错误 digest、知识污染、重复副作用、
+> Provider 协议失败和 live Investigation repair 等 E2E 反事实撑出来的；当前完整 clean-revision
+> 发布矩阵仍未重跑。
 
 ## 5. 2 分钟介绍稿
 
-> 这个项目解决的是个人知识从采集到使用再到维护的完整闭环。用户可以导入文本、网页、文件和会话，系统会保存 application-owned Artifact，再形成 EvidenceBlock、Claim 和 KnowledgeItem。问答只读取当前 workspace 可见证据，并给出 citation；Ask 本身不会把模型回答写回长期知识，只有用户显式保存才进入唯一写入口。
+> 项目解决个人知识从采集到使用再到维护的闭环。用户导入文本、网页、文件和会话，系统保存
+> application-owned Artifact，再形成 EvidenceBlock、Claim 和 KnowledgeItem。问答只读取当前
+> workspace 可见证据并给出 citation；Ask 本身不会把模型回答写回长期知识，只有用户显式保存才进入
+> 唯一写入口——这条是为了阻断「模型输出在下一轮变成系统已知事实」的污染循环。
 >
-> Agent 主链不是“自然语言转 JSON”这么简单。模型每轮产生一个 typed Proposal：
-> `FinalMessage` 或带 ToolCall/AgentDelegation 的 `ContinueTurnProposal`。Runtime 只做 schema、
-> 能力存在性、scope、预算、重复 action 和并发安全等确定性 Admission，不能替模型补参数或
-> 修改目标。Tool 或子 Agent 执行后产生 `ActionObservation`，模型再根据真实结果继续。JSON 是
-> 当前 wire format，Proposal 与执行事实分离才是稳定框架。
+> Agent 主链不是「自然语言转 JSON」。模型每轮产生一个 typed Proposal：`FinalMessage`，或带
+> ToolCall/AgentDelegation 的 `ContinueTurnProposal`。Runtime 只做 schema、能力存在性、scope、
+> 预算、重复 action 和并发安全等确定性 Admission，不替模型补参数或改目标。Tool 或子 Agent 执行后
+> 产生 `ActionObservation`，模型再根据真实结果继续。JSON 是当前 wire format，Proposal 与执行事实
+> 分离才是稳定框架。
 >
-> 对有外部副作用或需要恢复的操作，我没有机械地把它们当普通 ToolCall。以知识删除为例，系统创建 immutable Command，用一个 command digest 同时绑定确认和 Receipt。错误 digest 被拒绝，重启后可以恢复，replay 返回同一 Receipt，不重复删除；无消费者的 lifecycle Event 和第二个 digest 已被移除。
+> 有外部副作用或需要恢复的操作没有当成普通 ToolCall。以知识删除为例，系统创建 immutable
+> Command，用一个 command digest 同时绑定确认和 Receipt。错误 digest 被拒绝，重启后可恢复，
+> replay 返回同一 Receipt 不重复删除。这里也做过删减：无消费者的 lifecycle Event 和第二个 digest
+> 已被移除。
 >
-> 当任务既需要根据新 Observation 动态调整，又必须跨进程、用户轮次或审批边界保持完成义务时，用户显式创建 Investigation Project。Project 持久化 immutable definition 和 append-only journal，accepted Plan 驱动 ready set、dispatch、join、coverage 和 Completion Gate；普通 Conversation 不会隐式升级成 Project。
+> 任务既需要根据新 Observation 调整、又必须跨进程或审批边界保持完成义务时，用户显式创建
+> Investigation Project。它持久化 immutable definition 和 append-only journal，accepted Plan 驱动
+> ready set、dispatch、join、coverage 和 Completion Gate；普通 Conversation 不会隐式升级。
 >
-> 外部能力通过 MCP 和 A2A Adapter 接入，但 Adapter 只做协议转换。MCP 是否可用由 discovery、Host mapping 和 policy 共同决定；子 Agent completed 也不会自动完成父请求，父 Agent 必须读取 Artifact 后综合答案。
+> 外部能力通过 MCP 和 A2A Adapter 接入，Adapter 只做协议转换。MCP 是否可用由 discovery、Host
+> mapping 和 policy 共同决定；子 Agent completed 也不会自动完成父请求。
 >
-> 测试上不是只看对象存在或数据库新增，而是从独立 Web 进程的真实 HTTP 入口，使用真实模型、
-> PostgreSQL 和场景要求的真实 Provider，断言用户结果和反事实。历史 23/23 archive 和当前定向
-> archive 只能证明对应工程现场可执行；当前完整矩阵尚未重跑。LT01-LT13 属于 scripted/frozen
-> Port 诊断证据，IP01 已有 live target 报告交付，但更广的组合矩阵和重复方差尚未闭合。
-> Conversation 的首条受治理保存纵切已经 E14 定向通过；其他写操作和“冲突核对后保存”仍需
-> 各自 baseline 与整链证明。
+> 测试上不看对象存在或数据库新增，而是从独立 Web 进程的真实 HTTP 入口，用真实模型、PostgreSQL
+> 和场景要求的真实 Provider，断言用户结果和反事实。历史 23/23 与当前定向 archive 只证明对应工程
+> 现场可执行；完整矩阵尚未在 clean revision 重跑，release gate 按设计 fail closed。
 
-## 6. 5 分钟白板介绍顺序
+## 6. 5 分钟白板顺序
 
-### 第一步：画三条生产主链
+### 第一步：三条主链
 
 ```text
 正式入口
-├─ Conversation ReAct
-│  └─ 短动态请求
-├─ Application Workflow
-│  └─ 固定事务与领域状态机
-└─ Investigation Project
-   └─ 动态且必须 durable 的长任务
+├─ Conversation Interaction loop   短动态请求
+├─ Application Workflow            固定事务与领域状态机
+└─ Investigation Project           动态且必须 durable 的长任务
 ```
 
-先解释路由标准：开放问题无法预定义步骤，领域事务不能由模型随意编排；动态任务只有跨越进程、用户轮次或审批边界时，才值得创建 durable Project。
+先讲路由标准：开放问题无法预定义步骤；领域事务不能由模型随意编排；动态任务只有跨越进程、
+用户轮次或审批边界时才值得创建 durable Project。
 
-### 第二步：画 Interaction loop
+### 第二步：Interaction loop
 
 ```text
-Message
-  -> EffectiveCapabilities
-  -> AgentTurnDecision
-  -> Admission
-  -> ToolGateway / AgentGateway
-  -> Observation / Feedback
-  -> next model turn
-  -> FinalMessage
+Message -> EffectiveCapabilities -> AgentTurnDecision -> Admission
+  -> ToolGateway / AgentGateway -> Observation / Feedback -> next model turn -> FinalMessage
 ```
 
-强调 Proposal 不是权限，也不是执行事实。
+强调 Proposal 既不是权限也不是执行事实。
 
-### 第三步：画固定副作用链
+### 第三步：固定副作用链
 
 ```text
-Application Capability
-  -> immutable Command
-  -> Confirmation + Digest
-  -> execute once
-  -> Receipt
-  -> Domain Completion
+Application Capability -> immutable Command -> Confirmation + Digest
+  -> execute once -> Receipt -> Domain Completion
 ```
 
-用 delete/replay 举例说明模型可以选择用户级能力，但不能重排事务不变量。
+用 delete/replay 说明模型可以选择用户级能力，但不能重排事务不变量。
 
-### 第四步：画 Durable Project
+### 第四步：Durable Project
 
 ```text
-immutable Project definition
-  -> accepted Plan
-  -> deterministic ready set
-  -> dispatch / join
-  -> Evidence Admission / Verification
-  -> Completion Gate
+immutable definition -> accepted Plan -> deterministic ready set
+  -> dispatch / join -> Evidence Admission / Verification -> Completion Gate
 ```
 
-强调 GET 只读 projection，恢复不重新生成冻结 Command，Tool/Agent success 也不能单独完成 Project。
+强调 GET 只读 projection（否则用户刷新页面就推进了任务）、恢复不重新生成冻结 Command、
+Tool/Agent success 不能单独完成 Project。
 
-### 第五步：画知识事实链
+### 第五步：知识事实链
 
 ```text
-Source
-  -> Artifact
-  -> EvidenceBlock / EvidenceSpan
-  -> Claim
-  -> Relation / KnowledgeItem
+Source -> Artifact -> EvidenceBlock/EvidenceSpan -> Claim -> Relation/KnowledgeItem
   -> Retrieval / Graph Projection
 ```
 
-强调 PostgreSQL Workspace Store 是 canonical fact owner，向量索引和 Graph projection 只是可重建投影。
+强调 PostgreSQL Workspace Store 是 canonical fact owner；向量索引与 Graph projection 是可重建投影。
 
-### 第六步：用 E2E 收尾
+### 第六步：用证据收尾
 
 ```text
-E01-E14: 原生产品能力
-C01-C04: 组合用户旅程
-L01-L06: 复杂 Interaction loop
-E16-E19: 真实 Provider profile
-LT01-LT13: durable runtime diagnostic
+E01-E14/E20 原生产品能力    release evidence
+C01-C04   组合用户旅程      release evidence
+L01-L06   复杂 Interaction  release evidence
+E16-E19   真实 Provider     profile，不单独产生发布声明
+LT01-LT13 durable runtime   diagnostic，scripted/frozen Port
 ```
 
-说明前四组的 release 分类与 LT 诊断证据不能混用：外部 profile 不能单独冒充产品完成，scripted/frozen LT 也不能冒充 live model/provider 发布证据。
+说明外部 profile 不能冒充产品完成，scripted LT 也不能冒充 live release 证据。
 
 ## 7. 为什么不是普通 RAG Bot
 
-普通 RAG Bot 常见路径是：
+普通 RAG Bot 的路径是 `问题 -> 向量检索 -> 拼 Prompt -> 回答`。本项目还必须处理：哪个
+workspace/用户/Artifact 可见；回答依据的 Claim 与 Evidence 是否可追溯；Ask 为什么不能隐式写知识；
+新 Claim 如何 supersede 旧 Claim；删除/恢复/replay 如何避免重复副作用；外部 Research 是否进入真实
+终态；Delivery 是否 exactly-once；MCP unavailable 时为什么必须 fail closed；子 Agent Artifact 为什么
+不能冒充父级最终答案。
 
-```text
-问题 -> 向量检索 -> 拼 Prompt -> 模型回答
-```
+所以 RAG 只是其中一个读取能力，不是总架构。
 
-本项目还要处理：
+## 8. 最能体现工程判断力的四个点
 
-- 哪个 workspace、用户和 Artifact 可见；
-- 回答依据的 Claim 和 Evidence 是否可追溯；
-- Ask 为什么不能隐式写知识；
-- 新 Claim 如何 supersede 旧 Claim；
-- 删除、恢复和 replay 如何避免重复副作用；
-- 外部 Research 是否进入真实终态；
-- Delivery 是否 exactly-once；
-- MCP unavailable 时为什么必须 fail closed；
-- 子 Agent Artifact 为什么不能直接冒充父级最终答案。
+选这四个而不是罗列亮点，因为它们各自对应一个**做过的取舍**，面试官追问时有下文。
 
-因此 RAG 只是其中一个读取能力，不是系统的总架构。
+1. **决策所有权清晰**：模型负责开放语义，确定性代码负责权限、状态机和不变量，执行系统产生事实，
+   Verifier 判断语义满足，领域状态机判断完成。既保留灵活性，也避免把治理逻辑写进 Prompt。
+2. **执行拓扑按业务约束选择**：短请求不承担 durable 成本；固定事务不调用通用 Planner；三条主链是
+   三种生命周期和事实 owner，不是三个同义框架。
+3. **做过删除而不只是添加**：旧 `WorkingPlanSnapshot` 只进 Prompt/Trace，没有任何生产调度消费者，
+   却增加首次 action 和恢复的模型轮次——所以删掉了。能讲清删掉了什么，比列了多少机制更有说服力。
+4. **E2E 断言反事实**：错误 digest 不执行、Ask 不写 Claim、跨 workspace 不泄漏、预算耗尽不拼替代
+   答案、能力缺失不换 Tool、replay 不重复副作用。正向结果容易蒙对，反事实很难。
 
-## 8. 项目中最能体现 Agent 工程能力的四个点
-
-### 8.1 决策所有权清晰
-
-模型负责开放语义，确定性代码负责权限、状态机和不变量，执行系统产生事实，Verifier 判断语义满足，领域状态机判断完成。这样既保留 Agent 灵活性，也避免把治理逻辑写进 Prompt。
-
-### 8.2 执行拓扑按业务约束选择
-
-短动态请求不承担 durable Project 成本；固定事务不调用通用 Planner；只有动态路径同时跨越 durable 边界时才创建 Investigation Project。三条主链不是三个同义框架，而是三个不同生命周期和事实 owner。
-
-### 8.3 Observation 驱动而不是一次性脚本
-
-普通 Conversation 不在一开始生成强制计划。Tool 和 Agent 返回 Observation 后，模型直接提出下一步；进程重启时基于已提交事实继续。只有显式 Investigation Project 才拥有驱动 durable 调度的 accepted Plan。
-
-### 8.4 E2E 验证用户结果和反事实
-
-测试不仅断言“成功”，还断言：错误 digest 不执行、Ask 不写 Claim、跨 workspace 不泄漏、预算耗尽不拼替代答案、能力缺失不换 Tool、replay 不重复副作用。
-
-## 9. 介绍时不能说错的边界
-
-不要说：
-
-- 所有用户请求都会创建 Task/GoalGraph；
-- LangGraph checkpoint 是当前普通 Conversation 主链；
-- Agent 已经可以从自然语言执行全部保存、删除和订阅操作；
-- Tool success 就代表用户目标完成；
-- Graphiti 或 embedding index 是知识事实源；
-- 23/23 通过就代表 clean revision 可发布。
-
-应当说：
-
-- 普通 Conversation 由 `ConversationService` 的 typed Interaction loop 拥有；
-- 固定领域流程由各 Application Use Case 拥有；
-- Investigation Project 是显式 durable 产品入口，不是 Conversation 的隐藏模式；
-- 当前普通 Conversation 只加载 `public_agent` Tool；
-- LT01-LT13 是 scripted/frozen Port 的诊断证据，不是 live release evidence；
-- 23/23 是 dirty worktree 的工程执行证据，release gate 仍然 fail closed。
+详细举证见 [能力轴](03-capability-axes.md)，证据口径见 [证据与发布](05-evidence-and-release.md)。

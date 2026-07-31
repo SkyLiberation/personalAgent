@@ -2,12 +2,12 @@
 
 本文记录 capability-first 重构后的当前实现和验证事实，当前架构边界由
 [`core-architecture-current-state.md`](core-architecture-current-state.md) 记录；尚未落地的设计只进入
-[future 索引](../future/README.md)。E01–E14、C01–C04、L01–L06 与发布声明的唯一机器映射由
+[future 索引](../future/README.md)。E01–E14、E20、C01–C04、L01–L06 与发布声明的唯一机器映射由
 [`release_gate.py`](../../evals/e2e_quality/release_gate.py) 拥有。
 
 ## 当前结论
 
-截至 2026-07-30，Phase 1–5 的生产主路径代码和当前定向工程 E2E 已落地；发布资格仍未
+截至 2026-07-31，Phase 1–5 的生产主路径代码和当前定向工程 E2E 已落地；发布资格仍未
 建立。必须区分当前完整工程证据和 clean-revision release gate：
 
 | 结论 | 状态 | 依据 |
@@ -18,12 +18,13 @@
 | 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
 | `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
 | 当前 `deepseek-v4-flash` 配置 | `target_completed_release_not_established` | 显式 `json_object` Adapter + 关闭 thinking 后，IP01 最终 archive 已交付报告；完整 clean-revision 矩阵仍未建立 |
-| 低层与 catalog 门禁 | `historical_passed_current_dag_failed` | 659 passed、Ruff/compileall/DAG 是历史工程证据；2026-07-30 当前 DAG gate 因三个残留 package 目录失败 |
+| 低层与 catalog 门禁 | `passed_current_engineering_evidence` | 2026-07-31 当前工作树：`tests/` 720 passed、catalog contract 8 passed、release catalog 26 cases 完整收集、全仓 Ruff PASS、DAG gate PASS（`packages=14`、`unknown_packages=none`） |
 | 上一完整 release E2E | `historical_passed_engineering_evidence` | 旧版 E01–E13/C01–C04/L01–L06 共 23/23 passed，archive `20260726T011631.187395Z-20684-4a62da6a`；L01–L06 语义均已改变，不能证明当前 catalog |
-| 当前自然复杂场景 | `passed_targeted_engineering_evidence` | L01–L05 在同一批次通过；L06 的用户结果和 receipt 绑定已发生，但旧“两次 verifier”白盒断言失败，archive `20260727T163802.147366Z-12512-71873e6b`；移除该错误 release claim 后 L06 定向通过，archive `20260727T164815.081968Z-14456-e1196ad4` |
+| 当前自然复杂场景 | `passed_targeted_engineering_evidence`；L06 为 `unstable_diagnostic_evidence` | L01–L05 在同一批次通过。L06 历史：曾因旧“两次 verifier”白盒断言失败（archive `20260727T163802.147366Z-12512-71873e6b`），移除该错误 claim 后定向通过（archive `20260727T164815.081968Z-14456-e1196ad4`）。2026-07-30 改为凭据引用终止（[ADR 0009](../adr/0009-verified-final-message-receipt-reference.md)）后重测 9 次真实模型运行，**5 次通过**，4 次因 verifier 持续 `needs_revision` 而到不了 passed 凭据；因此 L06 当前不作为通过声明 |
 | 当前外部自然场景 | `passed_targeted_engineering_evidence` | E17/E19/L04 在 archive `20260727T162913.553817Z-9428-c723ad92` 中通过；进一步移除 Prompt 内预期答案后，E16/E18 2/2 passed，archive `20260727T165211.554901Z-17344-3e4bc060`。用户只表达数据源或深度研究结果，不指定 MCP Tool、Agent ID、Artifact、答案或执行顺序 |
 | Conversation clarification | `passed_targeted_engineering_evidence` | E01 baseline `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求被旧答案冒充完成；同输入修复后通过，archive `20260729T033304.468248Z-28272-e91b6630` |
 | Conversation governed save | `passed_targeted_engineering_evidence` | B01 证明旧 Conversation 无可恢复操作；B02 archive `20260729T031804.415533Z-15972-214cb81c` 证明控制语义污染；E14 exact-span 修复后 22.00 秒通过，archive `20260729T033339.065714Z-22692-16415241` |
+| Workspace answer verification | `passed_targeted_engineering_evidence` | B04 证明互斥结论被回答组装器误标 supported；E20 独立 Verifier 返回 `needs_revision/conflicted`，archive `20260731T064446.108938Z-8804-52b29d3c` |
 | Durable Investigation live closure | `target_passed_release_not_established` | B03 证明 verification repair 死锁；IP01 archive `20260729T101501.732689Z-53628-6c5f02f2` 完成 Plan v3、3/3 outcomes、5 条 admitted evidence、可读报告与 Completion Gate |
 | Clean revision 发布资格 | `not_established` | 完整 archive 与目标 worktree 均为 dirty；gate 必须 fail closed |
 
@@ -35,7 +36,7 @@ tokeness 容量故障会使主 Agent 与 GPT Researcher 同时 fail closed。当
 
 当前生成式模型 canonical fact 为 `STRUCTURED_MODEL=deepseek-v4-flash`，结构化输出 profile 为
 `json_object`；该 deployment 还需关闭 thinking 才在 IP01 复杂 typed contract 上稳定通过。
-Conversation、Structured decision、Graphiti、LangExtract、MS GraphRAG completion 以及
+Conversation、Structured decision、Graphiti、LangExtract 以及
 GPT Researcher FAST/SMART/STRATEGIC 均从 canonical `STRUCTURED_*` 解析。embedding 仍是
 独立的本地/多语种 384 维契约，transcription 也未改变。此前
 tokeness 对先前 luna 请求返回 HTTP 404；terra 暴露复杂 RootModel union 与延迟问题。
@@ -97,9 +98,9 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 
 | 分组 | 当前声明 | 当前证据 |
 | --- | --- | --- |
-| 原生产品能力 E01–E14 | 当前完整状态未建立 | 旧 archive E01–E13 为 13/13；新增 E14 已定向通过 |
+| 原生产品能力 E01–E14、E20 | 当前完整状态未建立 | 旧 archive E01–E13 为 13/13；E14、E20 已定向通过 |
 | 组合强能力 C01–C04 | 当前完整状态未建立 | 旧 archive 4/4；C04 依赖的自然 A2A 场景已定向通过 |
-| 复杂主循环 L01–L06 | 各场景定向通过，非单一完整 archive | L01–L05 同批通过；L06 修正错误白盒 claim 后单跑通过 |
+| 复杂主循环 L01–L06 | 各场景定向通过，非单一完整 archive；L06 不稳定 | L01–L05 同批通过；L06 在 2026-07-30 的 9 次真实模型运行中 5 次通过，不作为通过声明 |
 | 外部 Profile | 当前 E16–E19 定向通过 | E17/E19/L04 与最终 E16/E18 分属两个定向 archive，不是完整矩阵 |
 
 其中：
@@ -114,7 +115,7 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 - E07/E17/C04/L04 使用真实深度研究请求和 GPT Researcher adapter/profile，并在执行后断言
   child Artifact 与父级用户结果分离；
 - L01–L06 分别覆盖自然个人知识回忆、最近记录与知识缺口综合、崩溃后从 canonical facts
-  恢复、深度安全研究、budget fail-closed，以及用户要求的语义审查与 receipt-bound 修订。
+  恢复、深度安全研究、budget fail-closed，以及用户要求的语义审查与 receipt-reference 修订。
 - 两轮 `needs_revision -> passed` evaluator-optimizer 状态机属于 Runtime Conformance，
   由 scripted 低层测试验证；release E2E 不要求真实用户控制 verifier 调用次数。
 
@@ -162,16 +163,35 @@ Full-repository Ruff: 13 pre-existing findings outside this change scope
 重新执行 `uv run python scripts/check_layers.py` 得到：
 
 ```text
-unknown_packages=['context', 'skills', 'verification']
+packages=14 edges=53
+unknown_packages=none
 missing_packages=none
 cycles=none
 forbidden_edges=0
-FAIL: 3 architecture violation(s)
+OK: explicit package DAG satisfied
 ```
 
-因此当前不能声明 package DAG gate passed。修复和退出条件见
-[可信 Agent Runtime 演进与收敛](../future/trusted-agent-runtime-evolution.md)。即使架构检查通过，
+此前的 `unknown_packages=['context', 'skills', 'verification']` FAIL 是假阳性：三个目录只剩
+`__pycache__/*.pyc`，是已删除包的编译残骸，而 `discover_packages()` 以“目录存在”定义 package。
+已删残骸并要求目录内至少有一个 `.py`。因此现在可以声明 package DAG gate passed。即使架构检查通过，
 也只说明依赖图没有循环或 forbidden edge，不能替代上面的用户结果 E2E。
+
+2026-07-31 当前工作树实际门禁：
+
+```text
+tests/: 720 passed, 4 warnings
+E2E catalog contract: 8 passed
+Release catalog collect-only: 26 collected, 18 deselected, complete matrix accepted
+Full-repository Ruff: passed
+compileall src/evals/tests: passed
+canonical document local links: 16 documents, no broken links
+release gate: fail closed
+release gate reasons: target_revision_dirty, missing_same_revision_passing_trace
+```
+
+Graph evidence 边界的 baseline、Provider 删除和净复杂度见
+[ADR 0012](../adr/0012-graph-retrieval-evidence-only-boundary.md)。这些结果是当前 dirty
+worktree 的工程证据，不能升级成 release eligibility。
 本次 GPT Researcher 修复只改变 compose Provider 配置，通过 `--no-build --force-recreate`
 重建容器，没有产生冗余镜像。当前 8001 容器的 non-streaming tokeness 路径已由 E17、
 E07 和 C04 验证。此前 clean build 在 Docker Hub base-image metadata 阶段超时，因此
@@ -213,10 +233,9 @@ release gate 缺少 same-revision complete matrix 并 fail closed 是预期结�
    自然场景定向通过都只构成各自 dirty worktree 的工程执行证据；
 2. Docker Hub metadata 网络恢复后应按当前 Dockerfile clean build GPT Researcher，
    重建正式 8001 容器并至少重跑 E17；
-3. 全仓 Ruff 仍有 13 个范围外历史问题；变更范围 Ruff 通过不能写成全仓 lint 通过；
-4. GPT Researcher PDF 生成日志有中文字体 `.notdef` 警告；文本 Artifact 与 E2E 断言通过，
+3. GPT Researcher PDF 生成日志有中文字体 `.notdef` 警告；文本 Artifact 与 E2E 断言通过，
    但 PDF 中文视觉可读性尚未验证；
-5. `conversation_id`、`interaction_run_ref` 等仍在部分 Interface/Application 边界以受格式
+4. `conversation_id`、`interaction_run_ref` 等仍在部分 Interface/Application 边界以受格式
    约束的字符串传递，尚未全部收敛为独立 Value Object；不得把当前实现描述成 typed
    identity 目标已经完全闭合。
 

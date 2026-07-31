@@ -65,27 +65,27 @@ def main() -> int:
         all_fact_lengths.extend(len(f) for f in n.relation_facts if f.strip())
     avg_fact_length = sum(all_fact_lengths) / len(all_fact_lengths) if all_fact_lengths else 0.0
 
-    print(f"\n--- Extraction Metrics ---")
+    print("\n--- Extraction Metrics ---")
     print(f"Total entities:  {total_entities}")
     print(f"Total relations: {total_relations}")
     print(f"Avg entities/note:  {avg_entities:.1f}")
     print(f"Avg relations/note: {avg_relations:.1f}")
     print(f"Avg fact length:    {avg_fact_length:.1f} chars")
 
-    print(f"\n--- Quality Anomalies ---")
+    print("\n--- Quality Anomalies ---")
     zero_rate = len(zero_entity_notes) / len(synced) * 100
     weak_rate = len(weak_relation_notes) / len(synced) * 100
     print(f"Zero-entity anomalies: {len(zero_entity_notes)}/{len(synced)} ({zero_rate:.1f}%)")
     print(f"Weak-relations-only:   {len(weak_relation_notes)}/{len(synced)} ({weak_rate:.1f}%)")
 
     if zero_entity_notes:
-        print(f"\n  Zero-entity notes:")
+        print("\n  Zero-entity notes:")
         for n in zero_entity_notes[:10]:
             topic = (n.preextract_topic or n.title or "")[:40]
             print(f"    {n.id[:8]}... topic={topic!r}")
 
     if weak_relation_notes:
-        print(f"\n  Weak-relation notes:")
+        print("\n  Weak-relation notes:")
         for n in weak_relation_notes[:10]:
             topic = (n.preextract_topic or n.title or "")[:40]
             facts = n.relation_facts[:3]
@@ -94,7 +94,7 @@ def main() -> int:
     if args.neo4j:
         _print_neo4j_health(settings)
 
-    print(f"\n=== Done ===")
+    print("\n=== Done ===")
     return 0
 
 

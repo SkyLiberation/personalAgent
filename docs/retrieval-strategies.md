@@ -65,8 +65,8 @@ query.split()
 
 实现入口：
 
-- [GraphitiStore.ask()](../src/personal_agent/graphiti/store.py)
-- [GraphitiStore._ask()](../src/personal_agent/graphiti/store.py)
+- [GraphitiStore.retrieve()](../src/personal_agent/memory/graphiti/store.py)
+- [GraphitiStore._retrieve()](../src/personal_agent/memory/graphiti/store.py)
 
 使用位置：
 
@@ -76,7 +76,7 @@ query.split()
 核心过程：
 
 ```text
-GraphitiStore.ask(question, user_id)
+GraphitiStore.retrieve(question, user_id)
   -> graphiti.search_(
        query=question,
        config=self.search_strategy.search_config,
@@ -84,12 +84,12 @@ GraphitiStore.ask(question, user_id)
      )
   -> search_result.nodes / search_result.edges
   -> strategy.citation_hits(question, edges, node_names_by_uuid)
-  -> GraphAskResult
+  -> GraphRetrievalResult
 ```
 
 Graphiti 负责根据 `search_config` 在图谱中取回候选节点、边、episode、community 等搜索结果。项目侧随后把 Graphiti 返回的边进一步加工成 `citation_hits`，用于把关系事实映射回本地 note 和回答证据。
 
-`GraphAskResult` 主要成员：
+`GraphRetrievalResult` 主要成员：
 
 - `entity_names`：命中的实体名
 - `relation_facts`：项目侧排序后选出的关系事实
@@ -187,9 +187,8 @@ edges
 
 - [`build_graph_search_tool`](../src/personal_agent/tools/graph_search.py)
 
-该工具封装 `GraphitiStore.ask(question, user_id)`，面向工具调用场景返回结构化数据：
+该工具封装 `GraphitiStore.retrieve(question, user_id)`，面向工具调用场景返回结构化数据：
 
-- `answer`
 - `entity_names`
 - `relation_facts`
 - `related_episode_uuids`
@@ -290,7 +289,7 @@ uv run python -m evals.open_ragbench.runner `
 2. 清理 `--graphiti-user-id` 对应的 Graphiti group
 3. 调用 `GraphitiStore.ingest_note()` 把 note 写入 Graphiti
 4. 记录 `episode_uuid -> note_id` manifest
-5. 对每个 query 调用 `GraphitiStore.ask()`
+5. 对每个 query 调用 `GraphitiStore.retrieve()`
 6. 将返回的 `citation_hits / related_episode_uuids` 映射成本地 note id
 7. 用 Open RAGBench 的 qrel 计算 `MRR / Recall@K / NDCG@K`
 

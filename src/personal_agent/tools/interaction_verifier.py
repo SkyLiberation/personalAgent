@@ -2,39 +2,20 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
-from typing import Literal
-from uuid import uuid4
 
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from personal_agent.capabilities.contracts.model import (
     StructuredModelClient,
     StructuredModelRequest,
     sealed_context_projection_ref,
 )
+from personal_agent.capabilities.contracts.verification import (
+    SemanticVerificationReceipt,
+    SemanticVerificationReport,
+)
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
-
-
-class VerificationCriterionResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    criterion: str
-    status: Literal["satisfied", "not_satisfied", "insufficient_evidence"]
-    feedback: str = ""
-
-
-class SemanticVerificationReport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    report_id: str = Field(default_factory=lambda: f"svr_{uuid4().hex[:16]}")
-    verdict: Literal["passed", "needs_revision", "insufficient_evidence"]
-    criterion_results: tuple[VerificationCriterionResult, ...] = Field(min_length=1)
-    revision_feedback: str = ""
-
-
-class SemanticVerificationReceipt(SemanticVerificationReport):
-    verified_draft: str = Field(min_length=1, max_length=20_000)
-    draft_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class VerifyInteractionDraftArgs(BaseModel):
@@ -47,20 +28,23 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
     @tool(
         "verify_interaction_draft",
         description=(
-            "Use when the user asks to review, validate, or revise a draft against explicit success criteria. "
-            "Evaluate only against caller-supplied criteria and visible evidence refs. Returns a typed "
-            "SemanticVerificationReceipt; it cannot execute effects or mark completion."
+            "Runtime-invoked semantic verification of an interaction draft against runtime-derived "
+            "success criteria. Evaluate only against caller-supplied criteria and visible evidence refs. "
+            "Returns a typed SemanticVerificationReceipt; it cannot execute effects or mark completion. "
+            "Not exposed to the semantic decision maker: the interaction runtime decides when a draft is "
+            "verified, so the model can neither skip verification nor author the criteria it is judged by."
         ),
         args_schema=VerifyInteractionDraftArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
-            exposure="public_agent",
+            exposure="workflow_activity",
             risk_level="low",
             side_effects=("none",),
             permission_scope="interaction:verify",
             timeout_seconds=60,
             max_retries=0,
             rate_limit_per_minute=20,
+            emits_verified_artifact=True,
         ),
     )
     def verify_interaction_draft(
@@ -107,10 +91,14 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        normalized_draft = draft.strip()
+        draft_digest = sha256(normalized_draft.encode("utf-8")).hexdigest()
         receipt = SemanticVerificationReceipt(
             **report.model_dump(mode="python"),
-            verified_draft=draft.strip(),
-            draft_digest=sha256(draft.strip().encode("utf-8")).hexdigest(),
+            receipt_id=f"svr_{draft_digest[:20]}",
+            verified_draft=normalized_draft,
+            draft_digest=draft_digest,
+            success_criteria=tuple(success_criteria),
             criteria_digest=sha256(criteria_payload.encode("utf-8")).hexdigest(),
         )
         return tool_response(tool_success(receipt.model_dump(mode="json")))
@@ -120,6 +108,5 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
 
 __all__ = [
     "SemanticVerificationReceipt", "SemanticVerificationReport",
-    "VerificationCriterionResult",
     "VerifyInteractionDraftArgs", "build_verify_interaction_draft_tool",
 ]

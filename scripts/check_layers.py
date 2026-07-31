@@ -39,10 +39,26 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
 }
 
 
+def contains_module(directory: str) -> bool:
+    """Return whether a directory tree holds at least one importable module.
+
+    A directory that only holds ``__pycache__`` artifacts is a removed package's
+    build residue, not a package. Counting it produced a phantom
+    ``unknown_packages`` violation that no source change could clear.
+    """
+    for dirpath, dirs, files in os.walk(directory):
+        dirs[:] = [name for name in dirs if name != "__pycache__"]
+        if any(name.endswith(".py") for name in files):
+            return True
+    return False
+
+
 def discover_packages() -> set[str]:
     return {
         name for name in os.listdir(PKG_ROOT)
-        if os.path.isdir(os.path.join(PKG_ROOT, name)) and not name.startswith("__")
+        if os.path.isdir(os.path.join(PKG_ROOT, name))
+        and not name.startswith("__")
+        and contains_module(os.path.join(PKG_ROOT, name))
     }
 
 

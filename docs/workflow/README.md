@@ -36,7 +36,7 @@ worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph �
 6. [GPT Researcher A2A](gpt-researcher-a2a-workflow.md)：child lifecycle、Artifact 与父级综合边界。
 
 Conversation Interaction loop 不在本目录复制，统一见
-[Agent 主循环、Tool 与治理](../interview/03-agent-loop-and-governance.md)。Durable Investigation
+[Agent 能力轴](../interview/03-capability-axes.md)（轴 1 决策所有权、轴 4 Tool 治理）。Durable Investigation
 当前事实见
 [Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)。
 

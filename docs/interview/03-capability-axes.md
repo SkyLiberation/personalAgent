@@ -1,17 +1,18 @@
 # Agent 能力轴：理解深度与本项目落地
 
-本文用于面试中展示对现代 Agent 各能力维度的理解，以及这些理解如何落到本项目的具体实现、
-证据和边界上。它不新增架构事实：与
+本文是本目录的主文档，用于面试中展示对现代 Agent 各能力维度的理解，以及这些理解如何落到
+具体实现、证据和边界上。写法遵守 [面试文档规范](00-writing-spec.md)：每轴必须答满 D1-D5，
+证据按 A-D 分级。它不新增架构事实：与
 [当前核心架构](../summary/core-architecture-current-state.md)、
 [能力与发布基线](../summary/phase0-capability-release-baseline.md) 或生产代码冲突时，以后者为准。
 
-每一轴固定四段：
+每一轴固定四段，对应规范的五问：
 
 ```text
-问题本质        这个轴在解决什么第一性问题
-常见做法与失效   行业主流方案以及它们在什么地方失效
-本项目选择      具体实现、代码位置和判据
-证据与边界      哪条 E2E 断言了它；还没做到什么
+问题本质        D1 这个轴在解决什么第一性问题
+常见做法与失效   D2 + D4 主流方案在什么地方失效，本项目与它们的异同
+本项目选择      D3 具体实现、代码位置和判据
+证据与边界      D5 哪条 E2E 断言了它（含级别）；还没做到什么
 ```
 
 最后一段是刻意保留的。只能讲优点、说不出边界的轴，说明理解仍停在术语层。
@@ -43,7 +44,7 @@
 Agent loop 的难点不是「让模型能循环调用工具」，也不是「把自然语言变成 JSON」，而是如何让
 概率模型拥有开放语义决策能力，同时不获得权限、执行事实和完成事实。
 
-顶层协议是：
+顶层协议不是 wire format，而是一条**所有权链**：
 
 ```text
 User Goal + Context + Observation
@@ -55,8 +56,23 @@ User Goal + Context + Observation
   -> Completion
 ```
 
-权属模糊会产生两类故障：确定性代码偷偷改写了语义（模型不知道自己被改了），或模型自述被当
-成执行事实。typed JSON 是 Proposal 的当前传输形式，不是本轴的第一性原理。
+它规定每一段事实由谁产生、谁无权产生：
+
+| 阶段 | owner | 关键否定 |
+| --- | --- | --- |
+| Goal + Context + Observation | Runtime 组装 | 模型不能自行扩写或改写 Goal |
+| Model Proposal | 模型 | 只提议，不获得执行权 |
+| Admission / Policy | 确定性代码 | 只能接受或返回 typed 反馈，不替模型补语义 |
+| Governed Execution | Gateway / Executor | 模型自述不是执行 |
+| Execution Fact | 执行结果本身 | 不能由文本推断 |
+| Verification | Verifier | 执行成功 ≠ 结果正确 |
+| Completion | Domain / Completion Gate | 生成了文本 ≠ 任务完成 |
+
+模型独占的只有一格——开放语义决策。**权限、执行事实、完成事实三样它一样都不拿。**
+typed JSON 是 Proposal 的当前传输形式，不是本轴的第一性原理。
+
+权属模糊会产生两类具体故障（D2）：确定性代码偷偷改写了语义，而模型不知道自己被改了；或者
+模型自述被当成执行事实。
 
 ### 常见做法与失效
 
@@ -91,24 +107,60 @@ AgentTurnDecision
    （[models.py:101](../../src/personal_agent/application/conversation/models.py#L101)），
    携带 `reason_code`、`repairable_fields`、`immutable_fields`、`required_repair`、`disposition`。
 
-`FinalMessage` 还把 `answer / clarification_required / limitation / failed` 设为显式 disposition，
-避免“生成了文本”被 Runtime 一律当作成功。
+`FinalMessage` 还把 `answer / clarification_required / limitation / failed` 设为显式 disposition
+（[models.py:52](../../src/personal_agent/application/conversation/models.py#L52)），
+模型必须自报这是答案、澄清、能力受限还是失败，避免「生成了文本」被 Runtime 一律当作成功。
 
 Admission 明确**不允许**：补 `note_id`、把错误 Tool 换成相似 Tool、拼接缺失 payload、改写 Goal、
-预算耗尽后生成替代答案。
+预算耗尽后生成替代答案。实现上 `_admit`
+（[service.py:678](../../src/personal_agent/application/conversation/service.py#L678)）
+的每一条分支只返回 `DecisionFeedback`，从不修改 action 本身。
+
+**必须分清的两个层次**（规范第 4 条）：
+
+| 层次 | 当前结论 | 可替换性 |
+| --- | --- | --- |
+| 顶层协议 | 模型输出 typed Proposal；Runtime 不解析自然语言控制流；Admission 后才执行 | 不可替换 |
+| wire format | object-root envelope，兼容已观察的 Provider schema 能力 | 可替换 |
+
+将来即使改用 Provider 原生 Tool Calling，第一行仍必须成立；反过来，没有同输入 E2E 证明当前
+envelope 造成用户失败之前，也不会仅为追逐框架潮流替换它。
+
+### 决策所有权速查（可直接当白板表）
+
+| 问题 | Owner |
+| --- | --- |
+| 用户想完成什么 | 模型或用户显式产品操作 |
+| 是否直接回答、选哪个 Tool/Agent | 模型 |
+| Tool 是否存在 | Registry |
+| Proposal schema 是否合法 | Admission |
+| 是否允许执行 | Policy / Governance |
+| Tool 实际返回什么 | Tool / Provider |
+| Command 是否已执行 | Journal / Event / Receipt |
+| durable Plan 是否 accepted、哪些 SubGoal ready | InvestigationProject aggregate |
+| Answer 是否满足证据 | Verifier |
+| Aggregate 是否完成 | Domain state machine |
+| Project required result contract 是否齐全 | Investigation Completion Gate |
+| 是否具备发布证据 | E2E catalog + release gate |
 
 ### 证据与边界
 
-- E01 覆盖直接回答、澄清、多轮继续，并反证不伪造 Task/Command/CompletionReport；baseline
-  `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求曾被旧答案冒充完成；
-- L01 证明自然用户目标（用户不知道 Tool 名）能驱动真实能力选择；
-- 同输入澄清修复后通过 `20260729T033304.468248Z-28272-e91b6630`；
-- terra 的顶层 union retry 超时是 object-root 的直接 Provider 证据，但它不证明自定义 envelope
-  普遍优于所有原生 Tool Calling 协议。
+- **B 级**：E01 覆盖直接回答、澄清、多轮继续，并反证不伪造 Task/Command/CompletionReport；
+  baseline `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求曾被旧答案冒充完成，同输入
+  澄清修复后通过 `20260729T033304.468248Z-28272-e91b6630`；
+- **B 级**：L01 证明自然用户目标（用户不知道 Tool 名）能驱动真实能力选择；
+- **C 级**：terra 的顶层 union retry 超时是 object-root 的直接 Provider 证据，但它不证明自定义
+  envelope 普遍优于所有原生 Tool Calling 协议。
 
-边界：自然语言控制词解析是被拒绝的行业实现路径，本项目没有一条“旧正则 parser 线上事故”
-baseline，面试中不能把它说成本项目历史故障。当前主要证据仍是「一跳 Action -> Observation ->
-Final」，长链多跳的收敛性未被 E2E 压满。
+边界（两条都要主动说）：
+
+1. 自然语言控制词解析是**被拒绝的行业实现路径**，本项目没有「旧正则 parser 线上事故」baseline，
+   面试中不能说成本项目历史故障；
+2. 当前主要证据仍是「一跳 Action -> Observation -> Final」，**长链多跳的收敛性未被 E2E 压满**。
+
+还有一条本轴换不来的东西：所有权链约束的是「谁有权产生哪种事实」，**不保证决策质量**。模型可以
+合规地提出一个愚蠢的 Proposal，Admission 一样放行。它换来的是可归因——出错时能定位到是 Proposal
+层还是 Admission 层，而不是笼统归因 Prompt。
 
 ### 预期追问
 
@@ -122,6 +174,13 @@ Provider 兼容性。terra 部署上顶层 union schema 直接导致 retry 超�
 
 那一刻语义 owner 从模型转移到了 if/else。这个 if/else 不在 Prompt 里，Golden Set 覆盖不到它，
 线上出错时无法归因。宁可返回 `invalid_arguments` 并标明 repairable field，让模型自己修。
+
+> 出错为什么不直接抛异常或返回一句错误字符串？
+
+因为模型不知道哪个字段可改，只能重试同样的错。`DecisionFeedback` 用 `repairable_fields` 与
+`immutable_fields` 明确告诉模型「这个方向不是你修的」，让重试携带信息量。这是与「structured
+error for the model」这一现代 harness 共识相同的地方；不同点是本项目把 feedback 也写进 journal
+成为 committed input，所以进程重启后模型仍看得到上一轮为什么被拒。
 
 ## 2. 结构化输出与 Provider 能力边界
 
@@ -262,7 +321,20 @@ ToolGateway     policy、permission scope、risk/confirmation metadata、idempot
 
 代码：[registry.py](../../src/personal_agent/governance/registry.py)、
 [gateway.py](../../src/personal_agent/governance/gateway.py)。Application 只依赖
-`InteractionToolPort`。
+`InteractionToolPort`，不直接依赖 LangChain `BaseTool`、MCP SDK 或具体 Provider——换 Provider
+不需要改业务层。完整执行链：
+
+```text
+ToolCallProposal
+  -> ToolExecutor.validate_interaction_call   （schema / registry，属于 Admission）
+  -> ToolExecutor.invoke_interaction
+  -> ToolGateway.invoke                       （policy / scope / idempotency / audit）
+  -> typed ToolArtifact
+  -> ActionObservation
+```
+
+注意 validate 与 invoke 是**两次**进入 ToolExecutor：先证明可以调，再调。合成一步就无法在不
+产生副作用的前提下返回 `invalid_arguments`。
 
 **MCP 准入是三方交集**：Host 接受配置 + 实际 discovery 返回远端 name/schema + 本地 mapping 声明
 exposure/scope/risk/data egress/timeout。`RuntimeCapabilityInventory` 明确区分 configuration、
@@ -578,7 +650,7 @@ Source -> Artifact -> EvidenceBlock/EvidenceSpan -> Claim -> Relation/KnowledgeI
                                                         -> Retrieval Index / Graph Projection
 ```
 
-PostgreSQL Workspace Store 是 canonical fact owner；embedding index、Graphiti、MS GraphRAG
+PostgreSQL Workspace Store 是 canonical fact owner；embedding index 和 Graphiti
 **都只是可重建投影**，投影失败不能覆盖或删除 canonical facts。
 
 四条硬规则：
@@ -641,26 +713,62 @@ Domain Completion     领域 Aggregate 是否满足 definition 并进入合法�
 
 ### 本项目选择
 
-三分之外加**两个机械约束**：
+先把**架构不变量**和**具体产品能力**分开。Agent 内部 Verification 元能力是：
 
-1. **receipt-bound revision**：verifier 通过后，`FinalMessage` 必须与 `verified_draft`
-   **逐字相等**，Runtime 只校验 sha256 digest 匹配，且**不改写模型草稿**
-   （[interaction_verifier.py:35](../../src/personal_agent/tools/interaction_verifier.py#L35)、
-   [service.py:552](../../src/personal_agent/application/conversation/service.py#L552)）；
-2. **单向性**：verifier 只判断语义，不能把失败 Tool 说成成功，也不能改变 Command Receipt；
-   反过来 Tool `ok=true` 也不能替代 verifier 判断回答是否有证据支持。
+```text
+Goal / Required Result
+  -> Candidate Result + Execution Facts + Evidence
+  -> Domain Verifier
+  -> typed assessment
+  -> repair 或 Completion Gate
+```
 
-Project 侧的 Completion Gate 更严：要求全部 active requirement 已 verified 或由用户显式 waived，
-且 final Artifact 与 assessment evidence 齐全。verifier 判定不满足时，**原 Proposal、ExecutionRef
-和 Evidence 保持冻结**，Plan revision 必须新增独立可运行的 repair work 并把 required mapping
-转向其可验证 outcome；PlanAdmission 接受 remap 后才清除旧 verification wait。
+Runtime 拥有必需验证的触发、预算和修复边界；领域 Verifier 拥有开放语义判断；确定性 Admission
+校验 Evidence ref、scope 和 digest；Completion Gate 单独判断 required result contract 是否齐全。
+Verifier 只能单向判断语义，不能把失败 Tool 说成成功、改变 Receipt 或直接宣告领域完成。
 
-没有 verifier requirement 的普通回答**不为形式统一伪造** VerificationReport 或 CompletionReport。
+当前实例不能混成一个万能 Verifier：
+
+| 实例 | 触发 | 判断内容 |
+| --- | --- | --- |
+| Workspace Answer | 候选回答组装后自动触发 | 整体支持、冲突、coverage、unsupported claim |
+| Ask/RAG | compose 后固定 stage，repair 后重验 | citation、claim grounding、证据充分性 |
+| Project | SubGoal execution/Evidence Admission 后及 final Artifact 后 | requirement 与报告语义满足 |
+| Conversation Review | 用户显式要求审查文本时 | 最终文本是否满足冻结的用户明示条件 |
+
+这里的“领域实例”不等于子能力每次都运行完整实例。Ask 调用 Workspace 时只走
+`select_evidence()` 取得 EvidenceSpan、Claim 状态和冲突事实；它不会调用
+`answer_with_evidence()`，也不会验证一个随后被丢弃的 Workspace 候选回答。只有独立 Workspace
+Answer 产品入口才触发 Workspace Answer Verifier，Ask 最终答案只由 Ask Verifier 判断。
+
+Graph 子能力也遵守同一边界：`GraphRetrievalResult` 禁止 `answer` 字段，只输出可追溯
+fact/edge/episode/note refs。旧 Microsoft GraphRAG Adapter 只能拿到 CLI synthesized answer，
+没有 source/citation binding，已连同生产配置和 answer projection 删除；不能为了“接入了
+Provider”就把 answer 拆成 graph fact。
+
+最后一项是文本审查产品用例，不是通用 Verify 的触发前提。它只展示 Runtime-owned trigger、
+判据冻结和 verified bytes 的结构性做法
+（[ADR 0010](../adr/0010-runtime-owned-interaction-verification.md)）。完整 canonical 架构见
+[Verification 与 Completion](../topics/verification-and-completion.md)。
+
+Project Completion Gate 要求全部 active requirement 已 verified 或由用户显式 waived，且 final
+Artifact 与 assessment evidence 齐全。普通直接回答不为形式统一伪造 CompletionReport。
 
 ### 证据与边界
 
+- **B04 -> E20**：同一 Workspace 核对目标的 baseline 同时展示互斥日期，却未标冲突，并由回答
+  组装器写成 `supported`、全部 Claim grounded。E20 将 answer-level verification 独立为唯一写入口，
+  返回 `needs_revision/conflicted`，conflict refs 全部绑定本次 citations，Ask 前后 Claim 数不变
+  （baseline `20260731T063040.820774Z-16696-c3646c8a`，target
+  `20260731T064446.108938Z-8804-52b29d3c`，[ADR 0011](../adr/0011-independent-workspace-answer-verification.md)）；
 - **L06**：用户要求审查一段「声称已完成所有写入却缺执行证据」的答复。最终文本不得保留该无证据
-  声明，必须经过至少一次语义验证，并逐字等于最新 passed receipt 的 `verified_draft`；
+  声明，必须经过至少一次语义验证，并等于 passed receipt 的 `verified_draft`。**当前状态：
+  9 次真实模型运行 9 次通过**（收回所有权前为 5/9，判据由模型自拟）。收回判据权后判据形状稳定
+  为「不能声称写入已经发生，除非有可核验的执行证据」，`ungrounded_spans` 9 次均空。
+  值得记录的是收回控制权与判据权**并不足够**：第一次探针 0/3，确定性地以
+  `clarification_required` 终止——模型转而向用户索取那份证据。只有 `answer` 会被验证，非 answer
+  的 disposition 因此是第三条降级路径，补上拒绝后 9/9
+  （[ADR 0010](../adr/0010-runtime-owned-interaction-verification.md)）；
 - L06 还展示了一个**测试设计**上的判断：release E2E **不规定 verifier 调用次数**，因为真实用户
   不关心模型在验证前还是验证后先自行修订；两轮 `needs_revision -> passed` 的状态机由 scripted
   Runtime Conformance 测试覆盖。这是「用户可观察结果」与「内部白盒断言」的正确分工——旧版
@@ -668,9 +776,9 @@ Project 侧的 Completion Gate 更严：要求全部 active requirement 已 veri
 - IP01 target archive `20260729T101501.732689Z-53628-6c5f02f2`：Plan v3、3/3 outcome satisfied、
   5 条 admitted evidence、可读报告、Completion Gate 通过、`environment_failed=false`、86.42 秒。
 
-边界：普通目标的 verifier requirement 仍窄，**缺任务级自动可执行检查和 paired eval**。Stage 4
-的目标是从一个具体 required result contract（带 Claim/Evidence diff 的知识核对报告）扩展，
-而**不是做通用反思 Agent**——没有可执行 verifier 的反思轮次只增加 token，不能证明结果正确。
+边界：E20 只准入 Workspace answer-level semantic assessment，尚未准入自动 repair loop、任务级
+可执行检查或跨领域统一 contract。下一项必须继续从具体 required result contract 和同输入 paired
+baseline 扩展，而**不是做通用反思 Agent**——没有生产消费者和可执行判据的反思轮次只增加 token。
 
 ### 预期追问
 
@@ -714,7 +822,7 @@ Provider、不注入中间 Goal/Proposal/Observation。
 **证据分级**：
 
 ```text
-E01-E14  原生产品能力      release evidence
+E01-E14/E20 原生产品能力    release evidence
 C01-C04  组合用户旅程      release evidence
 L01-L06  复杂 Interaction  release evidence
 E16-E19  外部 Provider     profile，只作为对应旅程的组成证据，不单独产生发布声明
@@ -840,3 +948,14 @@ trace 记录 usage、latency、provider、action order、receipt、verification 
 - 23/23 是 dirty worktree 的工程执行证据，release gate 仍 fail closed。
 
 能清楚说出自己证据的边界，比多报一个通过用例有用得多。
+
+### 说错就掉分的四句话
+
+| 不要说 | 应当说 |
+| --- | --- |
+| 所有用户请求都会创建 Task/GoalGraph | 直接回答不伪造 Task/Command/CompletionReport |
+| LangGraph checkpoint 是当前 Conversation 主链 | 主链是 `ConversationService` 的显式 Interaction loop |
+| Agent 已能从自然语言执行全部保存/删除/订阅 | 目前只有 E14 一条 exact-span save |
+| 23/23 通过就代表 clean revision 可发布 | 那是 dirty worktree 的定向执行证据 |
+
+同样不能说 Graphiti 或 embedding index 是知识事实源，也不能说 Tool success 代表用户目标完成。

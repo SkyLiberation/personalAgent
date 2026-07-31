@@ -81,6 +81,7 @@ class EffectiveToolCapability(_StrictModel):
     input_schema: dict[str, Any]
     read_only: bool
     safely_retryable: bool
+    emits_verified_artifact: bool = False
 
 
 class EffectiveAgentCapability(_StrictModel):
@@ -96,6 +97,26 @@ class EffectiveCapabilities(_StrictModel):
     revision: str
     tools: tuple[EffectiveToolCapability, ...] = ()
     agents: tuple[EffectiveAgentCapability, ...] = ()
+
+
+class ReviewCriteria(_StrictModel):
+    """The frozen standard one interaction's answer is verified against.
+
+    Derived by the runtime once per interaction and committed, so neither a later
+    model turn nor a restart can move the standard the answer is measured by.
+    ``ungrounded_spans`` keeps the dropped derivations visible: a turn that could
+    not trace any criterion to the user is distinguishable from one that was
+    never a review request.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criteria: tuple[str, ...] = ()
+    ungrounded_spans: tuple[str, ...] = ()
+
+    @property
+    def requires_review(self) -> bool:
+        return bool(self.criteria)
 
 
 class DecisionFeedback(_StrictModel):
@@ -198,6 +219,7 @@ class InteractionTrace(_StrictModel):
     usage: CommittedUsage = Field(default_factory=CommittedUsage)
     execution_order: tuple[str, ...] = ()
     concurrent_batches: tuple[tuple[str, ...], ...] = ()
+    review_criteria: ReviewCriteria | None = None
     final_message: FinalMessage | None = None
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
 
@@ -219,5 +241,6 @@ __all__ = [
     "ConversationKnowledgeSaveReceipt",
     "DecisionFeedback", "EffectiveAgentCapability", "EffectiveCapabilities",
     "EffectiveToolCapability", "FinalMessage", "InteractionTrace", "LoopBudgetPolicy",
-    "KnowledgeSaveArguments", "KnowledgeSaveSelection", "ToolCallProposal",
+    "KnowledgeSaveArguments", "KnowledgeSaveSelection", "ReviewCriteria",
+    "ToolCallProposal",
 ]

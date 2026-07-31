@@ -423,7 +423,12 @@ principal + scope
 
 ### Stage 4: Executable Verification and Knowledge Workbench
 
-进入条件：Stage 1/2 的错误分布证明“Action 已执行但结果质量不足”是主要失败来源。
+第一条 Workspace answer-level verification 已由 B04 准入并通过 E20：回答组装与语义验证已
+分离，冲突 assessment 绑定本次 EvidenceSpan，旧镜像 verification 字段已删除。当前事实统一见
+[Verification 与 Completion](../topics/verification-and-completion.md)；本节以下内容仍是尚未准入的
+Knowledge Workbench 候选。
+
+剩余进入条件：Stage 1/2 的错误分布证明“Action 已执行但结果质量不足”是主要失败来源。
 
 先选择一个具体 required result contract，例如“带 Claim/Evidence diff 的知识核对报告”，交付：
 

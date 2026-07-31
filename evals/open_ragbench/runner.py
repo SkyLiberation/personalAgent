@@ -16,9 +16,9 @@ from pydantic import BaseModel, Field, model_validator
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.models import KnowledgeNote
-from personal_agent.memory.graphiti.store import GraphAskResult, GraphitiStore
+from personal_agent.kernel.graph_results import GraphRetrievalResult
+from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory.graphiti.search_strategies import STRATEGIES
-from personal_agent.memory.ms_graphrag import MicrosoftGraphRagStore
 
 from evals.shared_evidence_selector import (
     EvidenceUnit,
@@ -1294,7 +1294,7 @@ class GraphitiRetrievalStrategy:
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}
         for query in queries:
-            result = graph_store.ask(query.query_text, context.graphiti_user_id)
+            result = graph_store.retrieve(query.query_text, context.graphiti_user_id)
             if not result.enabled:
                 raise RuntimeError(f"Graphiti ask failed for {query.query_id}: {result.error}")
             rankings.append((
@@ -1425,7 +1425,7 @@ def _ensure_graphiti_corpus(
 
 
 def _ranked_note_ids_from_graph_result(
-    result: GraphAskResult,
+    result: GraphRetrievalResult,
     episode_to_note_id: dict[str, str],
     limit: int,
 ) -> list[str]:
@@ -4233,7 +4233,10 @@ class AskPipelineStrategy:
                         result_ids.append(match.id)
 
             if "graph" in sources and graph_store.configured() and episode_to_note_id:
-                graph_result = graph_store.ask(effective_query, context.graphiti_user_id)
+                graph_result = graph_store.retrieve(
+                    effective_query,
+                    context.graphiti_user_id,
+                )
                 if graph_result.enabled:
                     for hit in graph_result.citation_hits:
                         note_id = episode_to_note_id.get(hit.episode_uuid)
@@ -4326,12 +4329,7 @@ class RuntimeAskStrategy:
                 context=context,
             )
             _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
-        ms_store = MicrosoftGraphRagStore(settings)
-        if settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"}:
-            ms_store.clear_all_data()
-            ms_store.ingest_notes(all_notes, trace_id="ragbench-msgraphrag-ingest")
-            ms_store.build_index()
-        runtime = AgentRuntime(settings, store, graph_store, ms_graphrag_store=ms_store)
+        runtime = AgentRuntime(settings, store, graph_store)
 
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}
@@ -4345,16 +4343,6 @@ class RuntimeAskStrategy:
             for match in result.matches:
                 if match.id not in ranked_ids:
                     ranked_ids.append(match.id)
-            if (
-                settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"}
-                and not ranked_ids
-            ):
-                projection_text = " ".join(
-                    part for part in [result.answer, *[item.fact or item.snippet for item in result.evidence]]
-                    if part
-                )
-                projected = store.find_similar_notes(eval_user_id, projection_text, limit=limit)
-                ranked_ids = [note.id for note in projected]
             rankings.append((query.query_id, ranked_ids[:limit]))
             section_id, parent_id = expected_note_ids(query)
             relevance[query.query_id] = {section_id, parent_id}
@@ -4369,7 +4357,6 @@ class RuntimeAskStrategy:
                     "citation_note_ids": [citation.note_id for citation in result.citations[:limit]],
                     "evidence_ids": [item.source_id for item in result.evidence[:limit]],
                     "graph_provider": settings.ask.graph_provider,
-                    "projection": "answer_to_local_notes" if settings.ask.graph_provider.strip().lower() in {"ms_graphrag", "microsoft_graphrag", "graphrag"} else "",
                 },
             )
         return rankings, relevance
@@ -4418,8 +4405,7 @@ class RuntimeAskWorkspaceAblationStrategy:
         settings = _workspace_ablation_settings(context.settings)
         store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
         graph_store = GraphitiStore(settings)
-        ms_store = MicrosoftGraphRagStore(settings)
-        runtime = AgentRuntime(settings, store, graph_store, ms_graphrag_store=ms_store)
+        runtime = AgentRuntime(settings, store, graph_store)
         runtime.workspace_service = _fixture_workspace_service(settings)
 
         source_ref_to_note_id: dict[str, str] = {}
@@ -4558,8 +4544,7 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
             settings = _external_embedding_settings(settings)
         store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
         graph_store = GraphitiStore(settings)
-        ms_store = MicrosoftGraphRagStore(settings)
-        runtime = AgentRuntime(settings, store, graph_store, ms_graphrag_store=ms_store)
+        runtime = AgentRuntime(settings, store, graph_store)
         runtime.workspace_service = _fixture_workspace_service(settings)
 
         source_ref_to_note_id: dict[str, str] = {}
@@ -4716,16 +4701,14 @@ def _workspace_ablation_settings(
         update={
             "ask": settings.ask.model_copy(
                 update={
-                    # ``ms_graphrag`` with disabled MS config makes graph retrieval
-                    # return no candidates without falling back to Graphiti.
-                    "graph_provider": "ms_graphrag",
+                    "graph_provider": "graphiti",
                     "reranker": "heuristic",
                 }
             ),
+            "graphiti": settings.graphiti.model_copy(update={"enabled": False}),
             "web_search": settings.web_search.model_copy(update={"api_key": None}),
             "structured": structured,
             "langextract": settings.langextract.model_copy(update={"api_key": None}),
-            "ms_graphrag": settings.ms_graphrag.model_copy(update={"enabled": False}),
         }
     )
 
@@ -5542,7 +5525,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ask-graph-provider",
-        choices=("graphiti", "structural", "hybrid", "ms_graphrag"),
+        choices=("graphiti", "structural", "hybrid"),
         default=None,
         help="Override the production ask graph provider for current_runtime_ask.",
     )

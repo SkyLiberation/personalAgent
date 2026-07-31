@@ -1,5 +1,8 @@
 # Workspace Claim / WorkspaceRetriever 机制与 Open RAGBench 验证总结
 
+> 状态：历史实验记录。下文使用的 disabled `ms_graphrag` 仅用于当时关闭 graph；当前 runner
+> 已改为显式关闭 Graphiti，Microsoft GraphRAG 生产 Adapter 和配置已删除。
+
 ## 结论
 
 当前 Claim / Workspace 机制不是纯解释性增强。它会把 Workspace 中的 `EvidenceSpan` / `Claim` / conflict diagnostics 转成 Ask 统一证据池里的 `EvidenceItem`、`Citation` 和 `KnowledgeNote`，因此会实际影响 Ask 的候选证据、引用和最终回答上下文。
@@ -28,7 +31,8 @@ raw input
 - `EvidenceBlock` / `EvidenceSpan` 必须生成，保证回答引用能回溯到原始证据。
 - `Claim` 进入 active 之前必须经过 grounding / admission，不是抽出来就直接变长期记忆。
 - 高风险、助手推断、冲突 claim 会被降级为 candidate、pending decision 或 conflict，而不是静默保存。
-- `answer_with_evidence()` 返回 `grounding_status`、`evidence_coverage`、`missing_sections`，让 e2e 能检查证据是否足够、覆盖是否完整。
+- `answer_with_evidence()` 返回独立 `verification` assessment，由 Workspace Answer Verifier
+  判断整体支持、冲突、coverage 和 unsupported claim；回答组装器不再写验证结论。
 - 回答阶段不会把答案里的新 claim 自动写回 active claim，避免 Ask 越答越污染长期记忆。
 
 所以 Claim 的价值不只是“解释为什么这么答”，它承担了长期知识准入、证据绑定、冲突诊断和状态审计。
@@ -37,8 +41,12 @@ raw input
 
 Ask 接入 Workspace 有两层：
 
-1. `WorkspaceService.answer_with_evidence()`：直接基于 Workspace 证据选择 citation，输出 grounded answer。
-2. `WorkspaceRetriever`：把 Workspace 结果投影到 Ask 的统一 evidence pool，和 local / graph / web / episodic 等来源一起进入 `EvidenceEngine` 去重、融合、压缩和 rerank。
+1. `WorkspaceService.select_evidence()`：只读选择 EvidenceSpan、citation、Claim 支持状态和冲突事实，不生成或验证答案。
+2. `WorkspaceRetriever`：把 selection 投影到 Ask 的统一 evidence pool，和 local / graph / web / episodic 等来源一起进入 `EvidenceEngine` 去重、融合、压缩和 rerank。
+
+独立产品入口 `WorkspaceService.answer_with_evidence()` 复用同一 selection，随后组装并验证正式
+Workspace Answer。Ask 不调用该回答入口，避免在最终 Ask compose/verify 之前嵌套一套被丢弃的
+answer/verify。
 
 因此它对 Ask 的帮助不是只增强可解释性。只要 Workspace 证据进入 pool，它就会改变：
 
@@ -103,7 +111,7 @@ Claim 不应默认和 local chunk、EvidenceSpan、artifact section 竞争 top-k
 - structured / langextract：`structured.api_key = None`、`langextract.api_key = None`
 - reranker：使用 `heuristic`
 
-为了避免 full `WorkspaceService.ingest_text()` 的 Claim 生命周期成本淹没检索实验，workspace 变体使用 fixture seeding：把每个 Open RAGBench note 写成 `Artifact + EvidenceBlock + EvidenceSpan`，`artifact_id/source_ref = open_ragbench://{note.id}`，再由真实 `WorkspaceRetriever -> answer_with_evidence()` 路径召回并映射回 note id。
+为了避免 full `WorkspaceService.ingest_text()` 的 Claim 生命周期成本淹没检索实验，workspace 变体使用 fixture seeding：把每个 Open RAGBench note 写成 `Artifact + EvidenceBlock + EvidenceSpan`，`artifact_id/source_ref = open_ragbench://{note.id}`，再由真实 `WorkspaceRetriever -> select_evidence()` 路径召回并映射回 note id。
 
 ## 实验结果
 

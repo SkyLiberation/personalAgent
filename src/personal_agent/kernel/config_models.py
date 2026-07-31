@@ -59,25 +59,6 @@ class GraphitiConfig(_StrictBase):
     parent_note_sync_foreground: bool = False
 
 
-class MicrosoftGraphRagConfig(_StrictBase):
-    enabled: bool = False
-    root: Path = Path("./data/ms_graphrag")
-    executable: str = "graphrag"
-    completion_model_provider: str = "openai"
-    completion_model: str | None = None
-    completion_api_key: str | None = None
-    completion_api_base: str | None = None
-    embedding_model_provider: str = "openai"
-    embedding_model: str | None = None
-    embedding_api_key: str | None = None
-    embedding_api_base: str | None = None
-    query_method: str = "local"
-    index_method: str = "standard"
-    response_type: str = "Multiple Paragraphs"
-    auto_index: bool = False
-    command_timeout_seconds: float = 600.0
-
-
 class OpenAIConfig(_StrictBase):
     api_key: str | None = None
     base_url: str | None = None
@@ -299,7 +280,7 @@ class LangExtractConfig(_StrictBase):
     fallback_on_error: bool = True
 
 class AskConfig(_StrictBase):
-    graph_provider: str = "graphiti"
+    graph_provider: Literal["graphiti", "structural", "hybrid"] = "graphiti"
     reranker: str = "support"
     # Answer grounding verifier. "heuristic" = lexical overlap + negation flip
     # (default, unchanged behavior); "entailment" = three-way per-claim

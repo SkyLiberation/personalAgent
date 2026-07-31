@@ -79,7 +79,7 @@ class HybridRetriever(Protocol):
 
 class GraphRetriever:
     """Graph recall (Graphiti / structural / hybrid), incl. AgentState vs
-    GraphAskResult dual-shape handling that used to be inline in execute_ask."""
+    GraphRetrievalResult dual-shape handling that used to be inline in execute_ask."""
 
     name = "graph"
 
@@ -317,7 +317,7 @@ class WorkspaceRetriever:
         if workspace_service is None:
             return out
         try:
-            answer = workspace_service.answer_with_evidence(
+            selection = workspace_service.select_evidence(
                 query,
                 workspace_id=ctx.user_id or "default",
                 limit=quota,
@@ -326,18 +326,25 @@ class WorkspaceRetriever:
             logger.exception("Workspace retrieval failed user=%s", ctx.user_id)
             out.trace.append("Workspace 检索失败，已继续使用其他 Ask 证据源")
             return out
-        if not answer.citations:
+        if not selection.citations:
             out.trace.append("Workspace 未返回可回答证据，继续使用其他 Ask 证据源")
             return out
 
         potential_conflicts = set(
             str(item)
-            for item in answer.diagnostic_fields.get("potential_conflicted_claim_ids", [])
+            for item in selection.potential_conflicted_claim_ids
             if item
         )
-        conflicted = set(str(item) for item in answer.conflicted_claim_ids if item)
+        conflicted = set(str(item) for item in selection.conflicted_claim_ids if item)
+        supported_claim_ids = {
+            claim.claim_id
+            for claim in selection.selected_claims
+            if claim.state == "active"
+            and claim.support_status in {"supported", "user_asserted"}
+            and claim.quality_gate.passed
+        }
         seen_notes: set[str] = set()
-        for index, citation in enumerate(answer.citations[:quota], 1):
+        for index, citation in enumerate(selection.citations[:quota], 1):
             if not citation.evidence_span_id or not citation.artifact_id:
                 continue
             match_id = citation.evidence_span_id
@@ -357,7 +364,6 @@ class WorkspaceRetriever:
                 "claim_ids": list(citation.claim_ids),
                 "conflicted_claim_ids": sorted(conflicted),
                 "potential_conflicted_claim_ids": sorted(potential_conflicts),
-                "grounding_status": answer.grounding_status,
                 "retrieval_mode": getattr(ctx.retrieval_plan, "retrieval_mode", ""),
             }
             out.evidence.append(EvidenceItem(
@@ -369,7 +375,11 @@ class WorkspaceRetriever:
                 source_ref=citation.artifact_id,
                 source_span=citation.locator,
                 element_ids=list(citation.claim_ids),
-                score=self._workspace_score(ctx, answer.grounding_status, bool(citation.claim_ids)),
+                score=self._workspace_score(
+                    ctx,
+                    bool(supported_claim_ids.intersection(citation.claim_ids)),
+                    bool(citation.claim_ids),
+                ),
                 metadata=metadata,
             ))
             out.citations.append(Citation(
@@ -429,17 +439,19 @@ class WorkspaceRetriever:
         return max(0, int(getattr(ask_settings, "workspace_claim_sensitive_quota", 3)))
 
     @staticmethod
-    def _workspace_score(ctx: "AskRunContext", grounding_status: str, has_claim: bool) -> float:
+    def _workspace_score(
+        ctx: "AskRunContext",
+        has_supported_claim: bool,
+        has_claim: bool,
+    ) -> float:
         mode = str(getattr(ctx.retrieval_plan, "retrieval_mode", "evidence_dominant"))
         score = 0.58
         if mode == "claim_expand_to_evidence":
             score += 0.08
         elif mode == "claim_state_diagnostic":
             score += 0.04
-        if grounding_status == "supported":
+        if has_supported_claim:
             score += 0.08
-        elif grounding_status == "weak_evidence":
-            score += 0.03
         if has_claim:
             score += 0.03
         return min(score, 0.78)

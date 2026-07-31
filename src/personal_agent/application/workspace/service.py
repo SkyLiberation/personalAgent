@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from personal_agent.application.evidence_engine import evidence_terms, extract_claims
+from personal_agent.application.workspace.answer_verifier import (
+    WorkspaceAnswerVerifier,
+    unavailable_answer_verification,
+)
 from personal_agent.application.workspace.models import (
     AnswerCitation,
     ArtifactDeleteImpactResult,
@@ -38,6 +42,7 @@ from personal_agent.application.workspace.models import (
     ReviewItem,
     ReviewPlanResult,
     SemanticReplayDiffResult,
+    WorkspaceEvidenceSelection,
     stable_hash,
 )
 from personal_agent.application.workspace.policy import ClaimAdmissionPolicy, KnowledgeStateMachine
@@ -47,10 +52,8 @@ from personal_agent.application.workspace.relation_judge import (
     ClaimRelationJudge,
 )
 from personal_agent.application.workspace.semantic import (
-    AnswerCoverageJudge,
     ClaimGroundingJudge,
     LocalSemanticFixtureClaimExtractor,
-    LocalSemanticFixtureCoverageJudge,
     LocalSemanticFixtureExtractor,
     LocalSemanticFixtureGroundingJudge,
     SemanticClaimExtractor,
@@ -70,7 +73,7 @@ class WorkspaceService:
     semantic_evidence_extractor: SemanticEvidenceExtractor | None = None
     semantic_claim_extractor: SemanticClaimExtractor | None = None
     claim_grounding_judge: ClaimGroundingJudge | None = None
-    answer_coverage_judge: AnswerCoverageJudge | None = None
+    answer_verifier: WorkspaceAnswerVerifier | None = None
 
     def __post_init__(self) -> None:
         self.admission_policy = self.admission_policy or ClaimAdmissionPolicy()
@@ -78,7 +81,6 @@ class WorkspaceService:
         self.semantic_evidence_extractor = self.semantic_evidence_extractor or LocalSemanticFixtureExtractor()
         self.semantic_claim_extractor = self.semantic_claim_extractor or LocalSemanticFixtureClaimExtractor()
         self.claim_grounding_judge = self.claim_grounding_judge or LocalSemanticFixtureGroundingJudge()
-        self.answer_coverage_judge = self.answer_coverage_judge or LocalSemanticFixtureCoverageJudge()
 
     def ingest_text(
         self,
@@ -412,39 +414,28 @@ class WorkspaceService:
             "partial_failure_count": 0,
         })
 
-    def answer_with_evidence(
+    def select_evidence(
         self,
         question: str,
         *,
         workspace_id: str = "default",
         limit: int = 5,
-    ) -> EvidenceGroundedAnswer:
+    ) -> WorkspaceEvidenceSelection:
         normalized = _normalize_text(question)
         if not normalized:
             raise ValueError("question is required")
         selected = self._select_evidence_spans(normalized, workspace_id=workspace_id, limit=limit)
         selected = self._add_claim_evidence_to_selection(normalized, selected, workspace_id=workspace_id, limit=limit)
         if not selected:
-            return EvidenceGroundedAnswer(
+            return WorkspaceEvidenceSelection(
                 question=question,
-                answer="证据不足：当前个人知识库没有足够依据，无法基于当前知识库回答。",
-                citations=[],
-                grounding_status="unsupported",
-                evidence_coverage="none",
-                missing_sections=[{"reason": "no_matching_evidence_span"}],
-                diagnostic_fields={
-                    "selected_evidence_span_ids": [],
-                    "reason": "no_matching_evidence_span",
-                    "evidence_coverage": "none",
-                    "missing_sections": [{"reason": "no_matching_evidence_span"}],
-                },
+                reason="no_matching_evidence_span",
             )
         citations: list[AnswerCitation] = []
-        answer_parts: list[str] = []
         selected_claims = self._claims_for_spans(selected)
         conflicting_ids = self._conflicting_claim_ids(workspace_id, selected_claims)
         potential_conflicting_ids = self._potential_conflicting_claim_ids(workspace_id, selected_claims)
-        for index, span in enumerate(selected, 1):
+        for span in selected:
             block = self.store.get_evidence_block(span.evidence_block_id)
             artifact_id = block.artifact_id if block is not None else ""
             evidence_ref = EvidenceRef(
@@ -466,7 +457,47 @@ class WorkspaceService:
                 evidence_ref=evidence_ref,
                 claim_ids=list(span.claim_ids),
             ))
-            answer_parts.append(f"[{index}] {span.text_span}")
+        return WorkspaceEvidenceSelection(
+            question=question,
+            selected_spans=selected,
+            citations=citations,
+            selected_claims=selected_claims,
+            conflicted_claim_ids=conflicting_ids,
+            potential_conflicted_claim_ids=potential_conflicting_ids,
+        )
+
+    def answer_with_evidence(
+        self,
+        question: str,
+        *,
+        workspace_id: str = "default",
+        limit: int = 5,
+    ) -> EvidenceGroundedAnswer:
+        selection = self.select_evidence(
+            question,
+            workspace_id=workspace_id,
+            limit=limit,
+        )
+        if not selection.selected_spans:
+            return EvidenceGroundedAnswer(
+                question=question,
+                answer="证据不足：当前个人知识库没有足够依据，无法基于当前知识库回答。",
+                citations=[],
+                verification=unavailable_answer_verification(selection.reason),
+                diagnostic_fields={
+                    "selected_evidence_span_ids": [],
+                    "reason": selection.reason,
+                },
+            )
+        selected = selection.selected_spans
+        citations = selection.citations
+        selected_claims = selection.selected_claims
+        conflicting_ids = selection.conflicted_claim_ids
+        potential_conflicting_ids = selection.potential_conflicted_claim_ids
+        answer_parts = [
+            f"[{index}] {citation.quote}"
+            for index, citation in enumerate(citations, 1)
+        ]
         preferred_claims = [
             claim for claim in selected_claims
             if claim.state == "active"
@@ -480,24 +511,20 @@ class WorkspaceService:
             answer_parts.append("注意：相关知识存在冲突，不能静默合并为单一结论。")
         elif potential_conflicting_ids:
             answer_parts.append("注意：相关知识存在待确认的潜在冲突，需要语义裁决或用户确认。")
-        coverage_judgment = self._answer_coverage(normalized, selected, workspace_id=workspace_id)
-        coverage = coverage_judgment.evidence_coverage
-        missing_sections = [
-            section.model_dump() if hasattr(section, "model_dump") else dict(section)
-            for section in coverage_judgment.missing_sections
-        ]
         answer_text = "基于当前证据：\n" + "\n".join(answer_parts)
         answer_claims = extract_claims(answer_text, limit=10)
-        grounded_answer_claim_count = len(answer_claims) if selected else 0
+        verification = self._verify_answer(
+            _normalize_text(question),
+            answer_text,
+            selected,
+            workspace_id=workspace_id,
+        )
         return EvidenceGroundedAnswer(
             question=question,
             answer=answer_text,
             citations=citations,
-            grounding_status="supported" if len(selected) >= 2 else "weak_evidence",
-            evidence_coverage=coverage,
-            missing_sections=missing_sections,
+            verification=verification,
             answer_claim_count=len(answer_claims),
-            answer_claim_grounded_count=grounded_answer_claim_count,
             answer_claim_saved_count=0,
             active_claim_count_delta=0,
             selected_claim_ids=[claim.claim_id for claim in selected_claims],
@@ -509,9 +536,6 @@ class WorkspaceService:
                 "selected_claim_ids": [claim.claim_id for claim in selected_claims],
                 "conflicted_claim_ids": conflicting_ids,
                 "potential_conflicted_claim_ids": potential_conflicting_ids,
-                "evidence_coverage": coverage,
-                "missing_sections": missing_sections,
-                "coverage_judge": self.answer_coverage_judge.name if self.answer_coverage_judge else "",
             },
         )
 
@@ -1186,28 +1210,31 @@ class WorkspaceService:
         self.store.save_projection_jobs(jobs)
         return jobs
 
-    def _answer_coverage(
+    def _verify_answer(
         self,
         question: str,
+        candidate_answer: str,
         selected: list[EvidenceSpan],
         *,
         workspace_id: str,
     ):
+        if self.answer_verifier is None:
+            return unavailable_answer_verification(
+                "workspace_answer_verifier_unavailable"
+            )
         all_spans = self.store.list_evidence_spans(workspace_id, limit=500)
         manifests = self._coverage_manifests_for_spans([*selected, *all_spans])
         try:
-            return self.answer_coverage_judge.judge(  # type: ignore[union-attr]
+            return self.answer_verifier.verify(
                 question=question,
+                candidate_answer=candidate_answer,
                 selected=selected,
                 available=all_spans,
                 manifests=manifests,
             )
-        except Exception:
-            return LocalSemanticFixtureCoverageJudge().judge(
-                question=question,
-                selected=selected,
-                available=all_spans,
-                manifests=manifests,
+        except Exception as exc:
+            return unavailable_answer_verification(
+                f"workspace_answer_verification_failed:{type(exc).__name__}"
             )
 
     def _coverage_manifests_for_spans(self, spans: list[EvidenceSpan]) -> list[CoverageManifest]:
@@ -1223,48 +1250,6 @@ class WorkspaceService:
                 continue
             manifests.append(CoverageManifest.model_validate(extraction_run.coverage_manifest))
         return manifests
-
-    def _evidence_coverage(
-        self,
-        selected: list[EvidenceSpan],
-        *,
-        workspace_id: str,
-    ) -> tuple[str, list[dict[str, str]]]:
-        all_spans = self.store.list_evidence_spans(workspace_id, limit=500)
-        if not selected:
-            return "none", [{"reason": "no_selected_evidence"}]
-        if len(selected) >= len(all_spans):
-            return "complete", []
-        selected_blocks = {span.evidence_block_id for span in selected}
-        all_blocks = {
-            span.evidence_block_id
-            for span in all_spans
-        }
-        missing_blocks = sorted(all_blocks - selected_blocks)
-        missing_sections: list[dict[str, str]] = []
-        for block_id in missing_blocks[:5]:
-            block = self.store.get_evidence_block(block_id)
-            missing_sections.append({
-                "evidence_block_id": block_id,
-                "locator": block.locator if block is not None else "",
-            })
-        if not missing_sections:
-            selected_span_ids = {span.evidence_span_id for span in selected}
-            missing_spans = [
-                span for span in all_spans
-                if span.evidence_span_id not in selected_span_ids
-            ]
-            for span in missing_spans[:5]:
-                block = self.store.get_evidence_block(span.evidence_block_id)
-                missing_sections.append({
-                    "evidence_span_id": span.evidence_span_id,
-                    "evidence_block_id": span.evidence_block_id,
-                    "locator": block.locator if block is not None else "",
-                    "quote_preview": span.text_span[:120],
-                })
-        if len(selected) == 1 and len(all_spans) > 3:
-            return "sparse", missing_sections
-        return "partial", missing_sections
 
     def _build_knowledge_items(self, claims: list[Claim]) -> list[KnowledgeItem]:
         items: list[KnowledgeItem] = []

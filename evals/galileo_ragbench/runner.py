@@ -39,7 +39,7 @@ from evals.open_ragbench.runner import (
 )
 
 from .adapter import corpus_to_notes, relevance_by_query, sentence_note_id
-from .loader import GalileoExample, RelevanceMode, Split, load_examples
+from .loader import GalileoExample, Split, load_examples
 
 
 class GalileoStrategy(Protocol):
