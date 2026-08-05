@@ -65,7 +65,7 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 
 ### 1.5 禁止无证据优化、过度设计与能力空转
 
-**禁止为了对齐“优秀 Agent”、论文、框架范式、形式完整或未来可能性，提前增加抽象、Model、状态、digest、表、层、Planner、Workflow、Agent、缓存、持久化或治理机制。**
+**禁止为了对齐“优秀 Agent”、论文、框架范式、形式完整或未来可能性，提前增加抽象、Model、状态、digest、表、层、Planner、Workflow、Agent、缓存、持久化或治理机制。**外部参考的正确用法见 1.6。
 
 出现以下任一情况即视为过度设计，禁止合并：
 
@@ -91,51 +91,84 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 - 一个事实、状态、digest、表或流程能满足当前已证明需求时，禁止拆分；
 - 只有一个实现且没有外部边界、测试替换需求或近期第二变化来源时，禁止创建 Interface/Factory/Registry；
 - Command、Event、Receipt、Projection、View 按各自真实职责选择，禁止为“配套完整”成套创建；
-- 外部优秀 Agent 的内部结构只能作为候选方案，不能作为需求来源；
 - 已存在但无法补齐上述证据的机制，必须删除、合并，或降为非权威可选投影。
 
 设计新能力或 E2E 前，必须盘点其依赖的模型、Tool、Service、Agent、Provider、Gateway、权限、持久化、恢复和验证能力。依赖能力不存在时，必须在同一设计中定义其业务 owner、canonical contract、唯一入口、生产消费者、实现阶段、失败语义和 E2E/contract test；否则禁止进入实现。接口、DTO、配置、Fake、单项能力存在或未来阶段名称都不能证明能力已落地，多个独立用例也不能拼成组合能力证据。
 
+### 1.6 外部参考的证据分级
+
+**机制选型必须优先参考已落地的业界实现；参考解决“机制怎么做”，不解决“要不要做”。**
+
+来源分级。引用时必须标注等级和可复核坐标——仓库路径、规范版本或日期、常量值与契约原文：
+
+- **A 级，可直接采信**：可读源码或规范正文的已发布实现，包括主干仓库代码、协议规范、官方产品文档；能定位到文件、常量和接口契约。
+- **B 级，需交叉验证**：官方博客、release note、官方演讲；表明了意图但看不到实现，必须与 A 级或第二个独立来源交叉核对后使用。
+- **C 级，仅辅助分析**：论文、教程、示例代码、厂商宣传、个人博客、未合并的 PR 或 issue 描述；只能用于提出候选方案和解释原理。
+
+禁止：
+
+- 用 C 级来源冒充业界实践，或以“最新优秀 Agent 都这么做”替代具体来源；
+- 引用转述而未在目标分支源码或规范正文中核对，尤其是 PR 描述与文章摘要；
+- 给出结论但不给可复核坐标，使他人无法独立复核；
+- 复制外部实现的对象数量、层次或拓扑，或移植与已证明缺口无关的机制。
+
+正确用法：
+
+1. 参考提供机制候选，以及已在生产中付过代价的参数、边界、降级和失败处理；
+2. 需求来源仍是 1.1 的 baseline——先在本工程用同一用户目标执行最简单生产路径，证明当前不足；参考本身不构成需求；
+3. baseline 证明不足后，等级更高的现成机制优先于自创设计；
+4. 采用后必须由目标 E2E 证明本工程的用户结果改善；外部已验证不等于在本工程有效。
+
 ---
 
-## 2. 架构边界与事实模型
+## 2. 架构边界、能力分层与事实模型
 
-系统目标是高内聚、低耦合、可替换、可验证、可恢复、可审计和可演进；这些目标不构成创建空壳层或提前抽象的理由。
+系统目标是高内聚、低耦合、可替换、可验证、可恢复、可审计和可演进；这些目标不构成创建空壳层或提前抽象的理由。禁止把框架协议、运行机制、业务能力和产品生命周期并列称为“能力”或“运行形态”。
 
-### 2.1 分层与依赖方向
+### 2.1 强制术语与能力分层
 
-分层用于约束职责和依赖，不要求每项功能机械创建全部层：
+| 层次 | 定义与 owner | 典型内容 |
+| --- | --- | --- |
+| **Framework Protocol** | 跨业务成立的交互与权力不变量；不拥有业务事实 | Proposal/DecisionFeedback/Observation 契约，Execution/Verification/Completion 分离 |
+| **Runtime Mechanism** | 实现 Port 并拥有必要技术执行事实；不决定业务目标或生命周期 | Model/Tool/Agent Adapter、Gateway、Queue/Lease、checkpoint/journal substrate、ArtifactRef、Trace |
+| **Application Capability** | 用户可理解、可验收的业务动作；由唯一 Application Use Case 拥有语义、入口和结果契约 | grounded answer、删除知识、创建订阅、启动调查 |
+| **Product Aggregate** | 拥有需要独立一致性和持久生命周期的 canonical business facts | Knowledge Item、ResearchSubscription、InvestigationProject |
+| **Interface / Projection** | 转换协议或展示 canonical facts；禁止成为第二写入口 | API/CLI/消息 DTO、进度 View、Capability projection |
 
-1. **Domain**：实体、值对象、领域服务、不变量和状态机；
-2. **Application / Orchestration**：Use Case、Workflow 和事务边界；
-3. **Semantic Decision**：Router、Planner、Replanner、模型 Verifier；
-4. **Governance / Control Plane**：Policy、Admission、Gateway、Approval；
-5. **Capability / Execution**：Tool、Service、MCP/A2A Adapter、Executor；
-6. **Runtime / Persistence**：Checkpoint、Repository、Event/Receipt、Artifact Store；
-7. **Interface**：API、CLI、消息入口和 DTO；
-8. **Observability / Evaluation**：Trace、Metric、Golden Set、E2E 和 Eval。
+架构文档中未加限定的 `Capability` 一律指 **Application Capability**。Tool、MCP endpoint、Agent profile、Provider、Workflow 和 Project 都不得与其并列为同类能力：前四者是执行资源或机制，Workflow 是能力内部的固定编排，Project 是业务 Aggregate。`EffectiveCapabilities`、inventory 或模型可见 schema 只是按 identity/scope/policy 生成的只读投影，不拥有 capability definition、可用性或业务事实。
 
-依赖方向必须指向更稳定的内层：`Interface / Infrastructure -> Application -> Domain`。
+用户或顶层语义路由选择“完成什么”而不是选择 Tool、Workflow 或 Project。Application Capability owner 根据已证明的契约调用 Service/Tool/Agent、执行具体 Workflow，或通过另一明确 Use Case 创建 durable Aggregate；直接 API 与 Agent 入口必须复用同一 Application 写入口。进入已准入 capability 后，模型可以按其公开 contract 提出 ToolCall/AgentDelegation 作为执行步骤，但不能借此改变 Goal、事实 owner 或用户产品路径。
 
-- Domain 禁止依赖 LangGraph、ORM、模型/MCP SDK 或 Web 框架；
-- Application 依赖 Port，不直接依赖具体 Adapter；
-- Interface 只做协议转换、身份解析和输入校验；
-- Adapter 不得补全业务语义或决定业务流程；
-- 框架对象不得跨模块成为业务契约；
-- 依赖装配集中在 Composition Root；
-- 禁止循环依赖和跨层反向调用。
+### 2.2 Framework Capability 准入与边界
 
-### 2.2 模块职责
+框架能力是 Framework Protocol 与 Runtime Mechanism 的组合。新增或抽取框架能力除满足 1.1/1.5 外，还必须同时证明：
 
-- **Domain**：拥有 canonical facts、核心不变量、Command 适用性和确定性迁移；禁止调用模型、网络、数据库、UI 或 Prompt。
-- **Application / Orchestration**：接收 Use Case、协调 Domain/Port/Policy、管理事务和阶段；不得猜测 payload、修复 Proposal、复制领域规则或把工具失败伪装成成功。
-- **Semantic Decision**：Router 识别 Goal/Intent；Planner 仅处理无法预定义的动态依赖；Replanner 只基于新 Observation 修订未冻结计划；输出必须 typed。
-- **Governance**：负责身份、scope、授权、风险、审批、Admission、幂等和预算；不得创造 intent、target、payload、计划或业务回答。
-- **Capability / Execution**：Service 用于固定低风险调用，Tool 用于模型动态选择或统一治理，Adapter 转换协议，Executor 返回 typed result/receipt；Tool 不决定授权或 Goal 完成。
-- **Runtime / Persistence**：负责 checkpoint、恢复、幂等、重放和生命周期；Repository 只保存 Domain/Application 认可的事实，不隐式创建业务对象。
+1. 机制语义与具体业务无关，且被至少两个独立生产消费者需要；仅有一个消费者时，除非外部协议或安全边界强制标准化，否则保留在该 Application 内；
+2. 有稳定 typed contract、owner、失败语义、版本/兼容边界及 Contract/Runtime Conformance Test；
+3. 不拥有 intent、业务 payload、业务 pending 状态、领域合法迁移、语义完成标准或 canonical business facts；
+4. 抽取后由 Application 通过 Port 使用，且删除的重复复杂度大于新增抽象、Registry 和适配成本；
+5. 产品 E2E 仍从用户目标验证结果，不能以框架对象存在或 conformance test 代替。
+
+框架可以统一 identity/scope 传播、Proposal/Feedback/Observation envelope、Policy/Admission/Gateway 协议、digest/幂等/审计原语、Queue/Lease、资源引用、Trace 以及 Verification/Completion 的阶段协议。具体 Application/Aggregate 必须继续拥有 Command payload、等待原因、审批后的合法迁移、补偿、Receipt 业务含义和 required result contract。
+
+审批是边界范例：框架可规定认证、授权决策、确认绑定、digest 校验、审计和 typed outcome；Delete Workflow 或 InvestigationProject 分别拥有待确认 Command、confirm/reject 后迁移和恢复行为。禁止创建通用 Approval/Task/Workflow 表成为第二事实 owner，也禁止要求所有业务机械实现 pause/resume/cancel 全套控制。
+
+同一名称或结构若同时出现在 framework 与 domain，必须证明语义完全相同并由 framework contract 单一拥有；否则使用领域限定名称并保持独立。禁止用 converter 同步两个 `Decision`、`State`、`Receipt` 或 `Evidence` 模型。
+
+### 2.3 依赖方向与模块职责
+
+稳定依赖方向为：`Interface -> Application Capability -> Domain/Product Aggregate`；Application 只依赖 Port，Runtime/Governance/Provider Adapter 从外层实现 Port，统一在 Composition Root 装配。
+
+- **Domain / Product Aggregate**：拥有 canonical facts、核心不变量、Command 适用性和确定性迁移；禁止依赖 LangGraph、ORM、模型/MCP SDK、网络、UI 或 Prompt。
+- **Application Capability**：接收 Use Case，协调 Domain、语义决策 Port、Governance Port 和 Runtime Port，管理事务和阶段；不得猜测 payload、复制领域规则或把执行失败伪装成成功。
+- **Semantic Decision implementation**：模型可提出 Goal/Intent、动态 Plan、下一步和语义验证；必须返回 typed Proposal，不能产生权限、执行事实或业务写入。
+- **Governance / Runtime**：执行通用机械协议并返回 decision/result；不得创造 intent、target、payload、业务计划、业务 pending state 或完成结论。
+- **Interface / Adapter**：只做协议转换、身份解析、输入校验和 Port 适配；不得补全业务语义、选择业务流程或隐式创建 Aggregate。
 - **Observability / Evaluation**：记录和评估事实，不改变生产业务行为。
 
-### 2.3 Canonical Model 与状态
+框架对象不得跨模块成为业务契约；Repository 只保存 Domain/Application 认可的事实；依赖装配集中在 Composition Root；禁止循环依赖和跨层反向调用。分层用于约束职责，不要求每项功能机械创建全部目录、Interface 或 Adapter。
+
+### 2.4 Canonical Model 与状态
 
 禁止在同一 Model 混装：
 
@@ -185,6 +218,8 @@ Receipt 不能直接代表 Goal 完成；模型 Verifier 也不能推翻确定�
 
 digest 是冻结 canonical payload 的一致性指纹，不是身份、授权或执行证明。默认使用一个 canonical `CommandDigest` 绑定 Confirmation、Journal 和 Receipt。
 
+框架只允许统一 Confirmation 的认证、授权、digest 绑定、审计和 outcome contract；具体 Application/Aggregate 拥有待确认 Command、pending/rejected/executed 状态、合法 decision、确认后的事务/恢复和 Receipt 业务含义。通用确认入口只能分发到 canonical Application 写入口，禁止直接改写业务状态。
+
 只有同时满足以下条件时，才允许拆分 `AuthorizationDigest` 与 `ExecutionCommandDigest`：
 
 - 用户授权后仍存在独立的 Command 编译、Provider binding 或 Grant 阶段；
@@ -201,9 +236,9 @@ Command、Event、Receipt 不得机械成套创建：
 - 仅当需要 exactly-once 证明、外部结果关联或恢复依据时创建 Receipt；
 - Projection/View 必须可从 canonical facts 重建且禁止成为第二写入口。
 
-### 3.4 Durable Task
+### 3.4 Durable execution contract
 
-Durable Task 至少支持：
+具体 Application Capability 或 Product Aggregate 只有确需跨请求、进程、审批或恢复边界时才使用 durable execution，并至少支持：
 
 - 明确生命周期和合法状态迁移；
 - checkpoint 与恢复；
@@ -214,7 +249,7 @@ Durable Task 至少支持：
 
 ---
 
-## 4. Context、Memory、RAG 与 Capability
+## 4. Context、Memory、RAG 与 Capability Projection
 
 Context 必须依次经过：
 
@@ -236,21 +271,22 @@ Context 必须依次经过：
 
 State 优先保存 ArtifactRef，不复制大型 Artifact。RAG 只负责检索和证据组织，不得成为隐藏 Router/Planner；检索策略由数据与评测驱动，禁止为单一 benchmark 硬编码，中间检索指标不能替代最终答案与证据正确性。
 
+Capability definition 由对应 Application owner 管理；模型可见 capability、Tool schema、Provider availability 和检索结果都是临时只读投影，必须先 visibility/policy 再 materialize。投影可帮助模型选择 Application Capability，不能替 Agent 完成开放语义选择，也不能反向成为定义或可用性事实源。
+
 只有完整满足同一 `CapabilityEquivalenceClass` 的 Provider 才能确定性绑定；存在语义差异时必须由模型或外部权威选择。
 
 ---
 
 ## 5. 代码组织与模式使用
 
-设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，并受 1.5 的复杂度准入约束。Ports and Adapters、State Machine、Command、Repository、Saga、Decorator、ACL、Registry 均按需使用，不是默认目录模板。
+设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，并受 1.5 的复杂度准入和 1.6 的参考分级约束。Ports and Adapters、State Machine、Command、Repository、Saga、Decorator、ACL、Registry 均按需使用，不是默认目录模板。
 
 禁止：
 
 - 为每个类创建 Interface、Factory、Manager，或用模式掩盖职责不清；
 - 创建 God Service、God State、God Workflow；
 - 让 Strategy/Router 承担开放语义，或让 Adapter/Converter 维护镜像事实；
-- 为未来可能性创建通用 Task、Event、Workflow、Planner、Projection 或兼容层；
-- 复制外部 Agent 的对象数量、层次或拓扑来证明“先进”。
+- 为未来可能性创建通用 Task、Event、Workflow、Planner、Projection 或兼容层。
 
 ### 5.1 LangGraph、Router、Planner 与 Workflow
 
@@ -258,11 +294,14 @@ State 优先保存 ArtifactRef，不复制大型 Artifact。RAG 只负责检索�
 - Node 只提取输入、调用 Use Case、写回结果，不复制业务规则；
 - GraphState 仅存 typed 运行必需状态，大对象使用 ArtifactRef；
 - checkpoint 恢复不得重复模型调用或副作用；
-- Router 输出 Goal/Intent，不输出执行完成事实；
-- 固定依赖由契约或 Workflow 定义，只有动态依赖才使用 Planner；
+- Router/Agent 输出 Goal、Intent 或 Application Capability Proposal，不选择 Repository、Provider、内部 Workflow/Project 模式，也不输出执行完成事实；
+- Workflow 不是框架层、用户入口或 capability 类型，只是具体 Application Capability 内对固定业务不变量的编排；
+- 新增 Workflow 必须同时具有固定业务不变量、多阶段执行事实、真实审批/恢复/审计/重试/补偿消费者和已失败 baseline；否则使用 Service 或 Application Pipeline；
+- 固定依赖由契约或具体 Workflow 定义，只有 Observation 会改变未知依赖时才使用 Planner；
 - Planner 不负责授权、执行或完成判定；
 - Plan 只有被生产代码消费依赖、进度、预算或完成义务时才能成为强制契约；
-- Workflow 内固定低风险步骤优先 Service 化，动态或受控能力 Tool 化。
+- Project 是拥有动态 durable business facts 的 Product Aggregate，不得作为通用 Workflow、路由分支标签或所有长任务的容器；
+- Workflow 内固定低风险步骤优先 Service 化；模型动态选择或需要统一 Gateway 治理的执行资源才 Tool 化。
 
 ### 5.2 错误、注入与命名
 
@@ -280,13 +319,14 @@ State 优先保存 ArtifactRef，不复制大型 Artifact。RAG 只负责检索�
 
 1. 定义待验证的业务扩展/当前错误假设、用户结果、反事实和 Out of Scope；
 2. 编写并实际执行当前最简单生产 baseline E2E，保存不足和失败根因证据；baseline 不失败则停止优化；
-3. 基于已证明缺口完成 Decision/Fact Ownership Analysis 和所需能力盘点；
-4. 定义目标 E2E、影响边界、复杂度预算和删除路径；
-5. 实现使目标 E2E 通过的最小整体改动；
-6. 补充必要的 Unit、Contract、Integration Test 和语义 Eval；
-7. 删除旧字段、旧入口、旧 converter、无消费者投影和临时 fallback；
-8. 执行 E2E、对照 Eval、相关低层测试及 lint/type check；
-9. 记录命令、结果、净复杂度变化和剩余风险。
+3. 基于已证明缺口完成 Decision/Fact Ownership Analysis、Framework/Runtime/Application/Aggregate 分类和所需能力盘点；
+4. 按 1.6 检索已落地的业界机制，标注等级和可复核坐标，说明采纳与不采纳的部分；
+5. 定义目标 E2E、影响边界、复杂度预算和删除路径；
+6. 实现使目标 E2E 通过的最小整体改动；
+7. 补充必要的 Unit、Contract、Integration Test 和语义 Eval；
+8. 删除旧字段、旧入口、旧 converter、无消费者投影和临时 fallback；
+9. 执行 E2E、对照 Eval、相关低层测试及 lint/type check；
+10. 记录命令、结果、净复杂度变化和剩余风险。
 
 ### 6.1 变更分析最小模板
 
@@ -296,7 +336,9 @@ State 优先保存 ArtifactRef，不复制大型 Artifact。RAG 只负责检索�
 ## Simplest Baseline E2E / Executed Result / Root Cause
 ## Target E2E and Counterfactuals
 ## Decision Ownership / Fact Owner and Write Path
-## Required Production Capabilities and Missing-capability Delivery
+## Framework Protocol / Runtime Mechanism / Application Capability / Product Aggregate Classification
+## Referenced Industry Mechanism (grade + verifiable coordinate) / Adopted vs Rejected Parts
+## Required Application Capabilities and Runtime Mechanisms / Missing Delivery
 ## Affected Modules and Dependency Direction
 ## Complexity Added, Removed and Rejected Alternatives
 ## Removed Legacy Path / Risks
@@ -313,7 +355,7 @@ Baseline: <相同正式入口和输入下已执行的命令、结果、失败根
 Then: <用户可观察结果>
 And not: <禁止发生的副作用或错误结果>
 Path evidence: <执行后由 trace/event/receipt/report 证明的生产组件，不注入用户输入>
-Required capabilities: <已有证据、需扩展项、缺失能力落地章节>
+Required application capabilities/runtime mechanisms: <已有证据、需扩展项、缺失能力落地章节>
 Allowed fakes: <仅外部边界>
 Command: <本地或 CI 命令>
 ```
@@ -326,7 +368,7 @@ Command: <本地或 CI 命令>
 - 当前实现、目标设计、历史诊断和执行证据必须分开；
 - 修改公共术语、路径或架构后，搜索并删除旧表述、断链、失效引用和重复章节；
 - 文档按读者任务组织，不按代码包机械分章；
-- 根 `AGENTS.md` 必须保持 500 行以内；新增规则必须合并重复内容。
+- 根 `AGENTS.md` 与 `CLAUDE.md` 必须逐字一致且各自保持 500 行以内；新增规则必须重组并合并重复内容，禁止仅在末尾累加。
 
 ### 6.4 AI Coding Agent 行为
 
@@ -339,6 +381,7 @@ Command: <本地或 CI 命令>
 - 用 raw dict 绕过类型边界；
 - 新增抽象却不说明变化来源和生产消费者；
 - 缺少能力时只写 E2E、Fake、接口或未来阶段，不设计生产落地；
+- 引用外部实践却不给等级和可复核坐标，或未核对源码/规范正文就断言业界做法；
 - 未运行测试就声称完成。
 
 无法确认事实 owner、授权边界或外部契约时，应停止相关实现并明确阻塞原因，不得猜测。
@@ -356,9 +399,11 @@ Command: <本地或 CI 命令>
 - Offline Eval：模型、检索和语义质量；
 - Online Evaluation：线上质量、成本、延迟和失败分布。
 
-核心变更按适用性覆盖 Direct Message、只读 ToolCall、Governed Action、Durable Task、Admission/Authorization Denied、Capability Missing、Execution/Verification Failure、replay 不重算且不重复副作用、tenant/context 隔离，以及新路径生效且旧路径不可达。每项变更至少包含一个成功场景和一个失败、拒绝、恢复或重放场景。
+核心变更按适用性覆盖 Direct Message、只读 ToolCall、Governed Action、Durable Execution、Admission/Authorization Denied、Capability Missing、Execution/Verification Failure、replay 不重算且不重复副作用、tenant/context 隔离，以及新路径生效且旧路径不可达。每项变更至少包含一个成功场景和一个失败、拒绝、恢复或重放场景。
 
 新增或改变语义决策、检索、回答、规划和验证时必须先补 Golden Set，覆盖目标用户的多种自然表达、真实目标、边界、失败、反事实和历史回归；禁止用内部 Tool/Agent 名称或预期步骤提示模型来替代能力选择评测。新增 Planner、反思、记忆、路由、缓存、多 Agent 或恢复机制时，必须与最简单 baseline 做同输入对照，比较完成率、错误副作用、模型轮次、token、延迟和恢复结果；无可观察收益时不得进入强制主链。
+
+Framework Protocol 使用 Contract Test，Runtime Mechanism 使用 Runtime Conformance/Integration Test；二者都不能替代 Application Capability 的正式入口 E2E。抽取框架能力必须为每个独立生产消费者保留至少一个契约用例，并由原用户目标 E2E 证明抽取后行为未退化。
 
 ### 7.2 Observability、安全与审计
 
@@ -387,18 +432,21 @@ Schema 或 Model 迁移必须说明 canonical 新模型、数据迁移、调用�
 - 改变 Command、digest、Replay、Approval、Verification 或 Completion 语义；
 - 偏离本文档中的“必须/禁止”。
 
-ADR 必须包含 1.5 的 `Complexity Justification`、事实/决策 owner、迁移/退出条件、未采用方案和已执行 E2E 证据；ADR 不能代替 E2E。
+ADR 必须包含 1.5 的 `Complexity Justification`、1.6 的参考来源与分级、事实/决策 owner、迁移/退出条件、未采用方案和已执行 E2E 证据；ADR 不能代替 E2E。
 
 一项变更只有全部满足下列条件才可合并并视为完成：
 
 - [ ] 用户目标、错误行为、验收结果和 Out of Scope 明确；
 - [ ] 同一用户目标的最简单 baseline E2E 已实际执行，失败来自当前 Agent 产品行为且不足得到证明；
 - [ ] 所需生产能力已盘点，缺失能力有完整落地设计；
+- [ ] Framework Protocol、Runtime Mechanism、Application Capability、Product Aggregate 和 Projection 已分类，未把 Tool/Workflow/Project 并列为用户能力；
+- [ ] 机制选型已检索业界实现，来源分级和可复核坐标已记录，未采纳部分有理由；
 - [ ] Decision/Fact owner、canonical model 和唯一写入口明确；
 - [ ] 新增 Model、状态、digest、表、层和模式分别具有不可合并职责及生产消费者；
 - [ ] 新增复杂度小于删除复杂度，不存在镜像事实、双写、隐藏 fallback 或无期限兼容；
 - [ ] Proposal、Command、Execution Fact、Verification 和 Completion 边界正确；
 - [ ] 依赖方向正确，Orchestrator、Validator、Adapter 未创造业务语义；
+- [ ] 框架抽取具有两个独立生产消费者或强制外部/安全边界，且不拥有业务 pending 状态、迁移或完成标准；
 - [ ] 旧字段、旧路径、临时状态和无消费者投影已删除或具有期限 ADR；
 - [ ] 正式入口 E2E 已由目标用户自然表达驱动，未以内部名称或步骤替用户决策，并通过用户结果、关键反事实及至少一个失败/拒绝/恢复/replay 场景；
 - [ ] Unit/Contract/Integration/Golden Set 按风险补齐，Trace 和错误分类足以定位问题；

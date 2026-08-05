@@ -13,11 +13,11 @@
 > MCP 或子 Agent，并处理知识生命周期、受控副作用、恢复和投递。真正体现 Agent 的是模型驱动的多轮
 > Interaction loop；真正体现生产工程的是权限、Command、Receipt、Verifier 和 E2E 都不交给模型自述。
 
-### A2 什么任务用 Conversation、Workflow 和 Investigation Project
+### A2 用户需要在 Conversation、Workflow 和 Project 之间做选择吗
 
-> 短动态请求进 Conversation；流程和状态迁移可提前枚举时进领域 Workflow；只有路径动态、同时跨进程
-> 或审批边界维持 required result contract 时，才显式创建 Investigation Project。模型可以选择用户级
-> Workflow，但不能重排内部事务步骤；Conversation 不会隐式升级成 Project。
+> 不需要。普通用户只描述目标和业务约束。Conversation 的模型决定使用 request-local capability、
+> 粗粒度领域 Use Case，还是在用户明确要求跨交互持续、进度查询、暂停/steering 时创建 Project。
+> Workflow 只是具体领域 owner 的固定事务不变量，不是用户模式；Project 仍独立拥有 Plan 和状态。
 
 深挖去哪：[01 第 3 节](01-project-story.md)。
 
@@ -25,7 +25,7 @@
 
 > 不是。仓库仍有 LangGraph 和部分迁移代码，但普通 Conversation 主链由 `ConversationService` 的显式
 > Interaction loop 拥有，固定流程进 Application Use Case，动态 durable 长任务进 Investigation
-> Project。Project 的 accepted Plan 属于自身 aggregate，不代表 LangGraph 是三条主链的共同父框架。
+> Project。Project 的 accepted Plan 属于自身 aggregate，不代表 LangGraph 是目标责任链的共同父框架。
 > 旧 EntryGraph/GoalGraph 不是当前生产入口。
 
 ### A4 为什么不用一个通用 DurableTask 覆盖所有请求
@@ -37,11 +37,12 @@
 
 深挖去哪：[能力轴 8](03-capability-axes.md)。
 
-### A5 Investigation Project 为什么不做成 Conversation 的隐藏模式
+### A5 Conversation 能创建 Project，为什么不把 Project 状态也藏进去
 
-> 它有独立 definition、accepted Plan、SubGoal、approval、budget、steering、cancel、verification 和
-> Completion Gate，还有异步 `202`、只读 GET 和 worker 恢复契约。藏进 Conversation 会有三个具体后果：
-> 查询可能意外推进模型、短请求被迫承担 durable 状态、Conversation journal 变成第二个 Project owner。
+> Conversation 只做一次受治理 handoff 并保存 ProjectReference。Project 的 definition、accepted Plan、
+> SubGoal、approval、budget、steering、cancel、verification 和 Completion Gate 仍由 Project aggregate
+> 独立拥有；查询继续走只读 Project API。这样既不要求用户先选模式，也避免 Conversation journal
+> 成为第二个 Project owner。
 
 ## B. 决策与治理类
 

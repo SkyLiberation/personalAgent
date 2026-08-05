@@ -2,7 +2,7 @@
 
 本文记录 capability-first 重构后的当前实现和验证事实，当前架构边界由
 [`core-architecture-current-state.md`](core-architecture-current-state.md) 记录；尚未落地的设计只进入
-[future 索引](../future/README.md)。E01–E14、E20、C01–C04、L01–L06 与发布声明的唯一机器映射由
+[future 索引](../future/README.md)。E01–E05、E08–E14、E20、E22–E23、IP01、L01–L06 与发布声明的唯一机器映射由
 [`release_gate.py`](../../evals/e2e_quality/release_gate.py) 拥有。
 
 ## 当前结论
@@ -13,19 +13,23 @@
 | 结论 | 状态 | 依据 |
 | --- | --- | --- |
 | 2026-07-24 历史工程 E2E | `passed` | 23/23 selected passed，1506.36 秒，archive `20260724T144409.800183Z-53716-a052c7cd` |
-| 当前 GitHub/Notion MCP | `passed` | E06 内真实 E16/E18/E19 通过，67.77 秒，archive `20260725T064548.518818Z-19688-d08d031f` |
+| 历史 GitHub/Notion MCP wrapper | `passed_historical_only` | 旧 E06 曾复跑 E16/E18/E19；因重复记功已退出当前 catalog，archive `20260725T064548.518818Z-19688-d08d031f` |
 | 历史 tokeness GPT Researcher A2A | `passed`（旧模型定向） | E17 223.32 秒、L04 228.40 秒，分别为 archive `20260725T084944.789762Z-42408-b3b97220`、`20260725T085407.393906Z-28364-8e0c1122` |
 | 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
 | `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
 | 当前 `deepseek-v4-flash` 配置 | `target_completed_release_not_established` | 显式 `json_object` Adapter + 关闭 thinking 后，IP01 最终 archive 已交付报告；完整 clean-revision 矩阵仍未建立 |
-| 低层与 catalog 门禁 | `passed_current_engineering_evidence` | 2026-07-31 当前工作树：`tests/` 720 passed、catalog contract 8 passed、release catalog 26 cases 完整收集、全仓 Ruff PASS、DAG gate PASS（`packages=14`、`unknown_packages=none`） |
+| 当前 catalog/gate 门禁 | `passed_current_engineering_evidence` | 2026-08-03：相关 contract 28 passed；40 个 E2E 可收集，其中 release 22、diagnostic 18 |
 | 上一完整 release E2E | `historical_passed_engineering_evidence` | 旧版 E01–E13/C01–C04/L01–L06 共 23/23 passed，archive `20260726T011631.187395Z-20684-4a62da6a`；L01–L06 语义均已改变，不能证明当前 catalog |
 | 当前自然复杂场景 | `passed_targeted_engineering_evidence`；L06 为 `unstable_diagnostic_evidence` | L01–L05 在同一批次通过。L06 历史：曾因旧“两次 verifier”白盒断言失败（archive `20260727T163802.147366Z-12512-71873e6b`），移除该错误 claim 后定向通过（archive `20260727T164815.081968Z-14456-e1196ad4`）。2026-07-30 改为凭据引用终止（[ADR 0009](../adr/0009-verified-final-message-receipt-reference.md)）后重测 9 次真实模型运行，**5 次通过**，4 次因 verifier 持续 `needs_revision` 而到不了 passed 凭据；因此 L06 当前不作为通过声明 |
 | 当前外部自然场景 | `passed_targeted_engineering_evidence` | E17/E19/L04 在 archive `20260727T162913.553817Z-9428-c723ad92` 中通过；进一步移除 Prompt 内预期答案后，E16/E18 2/2 passed，archive `20260727T165211.554901Z-17344-3e4bc060`。用户只表达数据源或深度研究结果，不指定 MCP Tool、Agent ID、Artifact、答案或执行顺序 |
 | Conversation clarification | `passed_targeted_engineering_evidence` | E01 baseline `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求被旧答案冒充完成；同输入修复后通过，archive `20260729T033304.468248Z-28272-e91b6630` |
 | Conversation governed save | `passed_targeted_engineering_evidence` | B01 证明旧 Conversation 无可恢复操作；B02 archive `20260729T031804.415533Z-15972-214cb81c` 证明控制语义污染；E14 exact-span 修复后 22.00 秒通过，archive `20260729T033339.065714Z-22692-16415241` |
+| Goal-entry workspace recall | `passed_targeted_engineering_evidence` | baseline `20260803T142413.474927Z-4864-39fedcf5` 无 Observation 即误报未找到；补 canonical list capability 后 L01 `20260803T152242.957743Z-388-d0850c85` 通过 |
+| Goal-entry governed delete | `passed_targeted_engineering_evidence` | baseline `20260803T142932.564456Z-23720-19ba8517` 只能文字确认；E22 `20260803T152242.957743Z-388-d0850c85` 覆盖当前条目选择、确认、scope 与 replay |
+| Goal-entry durable handoff | `passed_targeted_engineering_evidence` | baseline `20260803T143007.354551Z-26256-84d0bf1d` 幻觉不存在的 specialist；E23 `20260803T151935.921382Z-27308-be5eadbf` 创建一个 canonical Project 并返回引用 |
+| Research boundary paired eval | `diagnostic_boundary_evidence` | E24 `20260803T143230.864789Z-6460-dbd005fd` 未证明 ResearchRun 对开放调查优于 Conversation/Project；保持 Scheduled Intelligence 边界 |
 | Workspace answer verification | `passed_targeted_engineering_evidence` | B04 证明互斥结论被回答组装器误标 supported；E20 独立 Verifier 返回 `needs_revision/conflicted`，archive `20260731T064446.108938Z-8804-52b29d3c` |
-| Durable Investigation live closure | `target_passed_release_not_established` | B03 证明 verification repair 死锁；IP01 archive `20260729T101501.732689Z-53628-6c5f02f2` 完成 Plan v3、3/3 outcomes、5 条 admitted evidence、可读报告与 Completion Gate |
+| Durable Investigation live closure | `target_passed_release_not_established` | 历史 B03 archive 证明当时 revision 的 verification repair 死锁；IP01 archive `20260729T101501.732689Z-53628-6c5f02f2` 完成 Plan v3、3/3 outcomes、5 条 admitted evidence、可读报告与 Completion Gate。B03 不再对当前实现执行相反断言 |
 | Clean revision 发布资格 | `not_established` | 完整 archive 与目标 worktree 均为 dirty；gate 必须 fail closed |
 
 GPT Researcher 已不再依赖原异常 endpoint。正式 `8001` 服务从相邻 `personalAgent/.env`
@@ -98,10 +102,9 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 
 | 分组 | 当前声明 | 当前证据 |
 | --- | --- | --- |
-| 原生产品能力 E01–E14、E20 | 当前完整状态未建立 | 旧 archive E01–E13 为 13/13；E14、E20 已定向通过 |
-| 组合强能力 C01–C04 | 当前完整状态未建立 | 旧 archive 4/4；C04 依赖的自然 A2A 场景已定向通过 |
+| 应用能力 E01–E05、E08–E14、E20、IP01 | 当前完整状态未建立 | 旧 archive 只能作为历史工程证据；当前 14 个产品旅程尚未形成 clean 同 revision archive |
 | 复杂主循环 L01–L06 | 各场景定向通过，非单一完整 archive；L06 不稳定 | L01–L05 同批通过；L06 在 2026-07-30 的 9 次真实模型运行中 5 次通过，不作为通过声明 |
-| 外部 Profile | 当前 E16–E19 定向通过 | E17/E19/L04 与最终 E16/E18 分属两个定向 archive，不是完整矩阵 |
+| 外部 Profile | E16–E19 定向通过，E21 已入 catalog 未执行 | Profile 是 diagnostic，不单独产生产品发布声明 |
 
 其中：
 
@@ -109,18 +112,18 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 - E04/E10 覆盖 governed delete/restore、错误 digest 拒绝、重启恢复和不重复副作用；
 - E14 覆盖自然语言选择 user message 中的 exact knowledge span、Admission 逐字来源校验、确认前
   零写入、Command 重启恢复、scope denied、精确结论 Claim、控制语义零写入、Receipt 和 replay；
-- E05/C01/E13 覆盖 Research 终态、digest/source 和 limitation，不把 `running` 当成功；
-- E06/E16/E18 使用真实 GitHub/Notion 数据源请求和 MCP gateway，E19 以自然请求覆盖资料源
+- E05/E13 覆盖 Research 终态、digest/source 和 limitation；E05 现在拒绝 partial/空 digest；
+- E16/E18 使用真实 GitHub/Notion 数据源请求和 MCP gateway，E19 以自然请求覆盖资料源
   未连接时的 limitation；
-- E07/E17/C04/L04 使用真实深度研究请求和 GPT Researcher adapter/profile，并在执行后断言
+- E17/L04 使用真实深度研究请求和 GPT Researcher adapter/profile，并在执行后断言
   child Artifact 与父级用户结果分离；
 - L01–L06 分别覆盖自然个人知识回忆、最近记录与知识缺口综合、崩溃后从 canonical facts
   恢复、深度安全研究、budget fail-closed，以及用户要求的语义审查与 receipt-reference 修订。
 - 两轮 `needs_revision -> passed` evaluator-optimizer 状态机属于 Runtime Conformance，
   由 scripted 低层测试验证；release E2E 不要求真实用户控制 verifier 调用次数。
 
-Phase 3 的通用 MCP Host 边界以及 GitHub/Notion 真实 Profile 已在完整矩阵的 E06 中
-执行，Connector 主路径与 unavailable 反事实均有同一 archive 证据。
+Phase 3 的通用 MCP Host 边界由 E16/E18/E19 分别取证；不再通过 E06 wrapper 重复执行后冒充
+一个额外产品目标。
 
 ## 架构与专项门禁
 
@@ -223,7 +226,8 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 5. 对应用例至少有一个 passed trace envelope；
 6. archive run identity 一致且全部 JSON checksum 有效。
 
-上一完整矩阵曾满足第 2、4 条，但 L01–L06 和 E16–E19 语义改变后不再匹配当前 catalog；
+上一完整矩阵曾满足第 2、4 条，但当前已删除 E06/E07/C01–C04，并新增 E14/E20/IP01/E21，
+因此不再匹配当前 catalog；
 当前定向场景也不是完整矩阵。第 3 条仍不满足，因为 archive manifest 与目标工作树均为 dirty。因此
 release gate 缺少 same-revision complete matrix 并 fail closed 是预期结果。
 

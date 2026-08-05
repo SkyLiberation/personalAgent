@@ -1,4 +1,4 @@
-"""Revision-scoped release projection for native and composed capabilities.
+"""Revision-scoped release projection for application capabilities.
 
 The gate consumes the canonical evidence catalog and immutable-shaped trace
 archives. It does not mutate runtime capability state or persist its result.
@@ -31,12 +31,6 @@ class NativeCapabilityDefinition(_GateModel):
     required_evidence_ids: tuple[str, ...]
 
 
-class CompositeCapabilityDefinition(_GateModel):
-    capability_id: str
-    required_evidence_id: str
-    required_native_capability_ids: tuple[str, ...]
-
-
 class LoopCapabilityDefinition(_GateModel):
     capability_id: str
     required_evidence_id: str
@@ -61,10 +55,8 @@ class ReleaseCapabilityReport(_GateModel):
     revision: str
     target_dirty: bool
     native_evidence: tuple[EvidenceGateResult, ...]
-    composite_evidence: tuple[EvidenceGateResult, ...]
     loop_evidence: tuple[EvidenceGateResult, ...]
     native_capabilities: tuple[CapabilityGateResult, ...]
-    composite_capabilities: tuple[CapabilityGateResult, ...]
     loop_capabilities: tuple[CapabilityGateResult, ...]
 
     @property
@@ -72,14 +64,6 @@ class ReleaseCapabilityReport(_GateModel):
         return tuple(
             result.capability_id
             for result in self.native_capabilities
-            if result.status == "trusted"
-        )
-
-    @property
-    def trusted_composite_capability_ids(self) -> tuple[str, ...]:
-        return tuple(
-            result.capability_id
-            for result in self.composite_capabilities
             if result.status == "trusted"
         )
 
@@ -127,54 +111,29 @@ NATIVE_CAPABILITIES: tuple[NativeCapabilityDefinition, ...] = (
         capability_id="scheduled_intelligence",
         required_evidence_ids=("E13",),
     ),
-)
-
-COMPOSITE_CAPABILITIES: tuple[CompositeCapabilityDefinition, ...] = (
-    CompositeCapabilityDefinition(
-        capability_id="personal_research_analyst",
-        required_evidence_id="C01",
-        required_native_capability_ids=(
-            "conversation",
-            "grounded_ask",
-            "research",
-            "capture",
-            "knowledge_lifecycle",
-        ),
+    NativeCapabilityDefinition(
+        capability_id="governed_conversation_save",
+        required_evidence_ids=("E14",),
     ),
-    CompositeCapabilityDefinition(
-        capability_id="continuous_knowledge_steward",
-        required_evidence_id="C02",
-        required_native_capability_ids=(
-            "scheduled_intelligence",
-            "research",
-            "grounded_ask",
-            "knowledge_maintenance",
-            "knowledge_lifecycle",
-        ),
+    NativeCapabilityDefinition(
+        capability_id="durable_investigation_report",
+        required_evidence_ids=("IP01",),
     ),
-    CompositeCapabilityDefinition(
-        capability_id="personalized_learning_agent",
-        required_evidence_id="C03",
-        required_native_capability_ids=(
-            "grounded_ask",
-            "review",
-            "research",
-            "capture",
-        ),
+    NativeCapabilityDefinition(
+        capability_id="governed_knowledge_delete_from_goal",
+        required_evidence_ids=("E22",),
     ),
-    CompositeCapabilityDefinition(
-        capability_id="expert_collaboration_agent",
-        required_evidence_id="C04",
-        required_native_capability_ids=(
-            "conversation",
-            "grounded_ask",
-            "research",
-        ),
+    NativeCapabilityDefinition(
+        capability_id="durable_investigation_handoff",
+        required_evidence_ids=("E23",),
     ),
 )
 
 LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
-    LoopCapabilityDefinition(capability_id="observation_replanning", required_evidence_id="L01"),
+    LoopCapabilityDefinition(
+        capability_id="observed_personal_knowledge_recall",
+        required_evidence_id="L01",
+    ),
     LoopCapabilityDefinition(capability_id="safe_action_concurrency", required_evidence_id="L02"),
     LoopCapabilityDefinition(capability_id="canonical_fact_recovery", required_evidence_id="L03"),
     LoopCapabilityDefinition(capability_id="manager_specialists", required_evidence_id="L04"),
@@ -183,11 +142,12 @@ LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
 )
 
 REQUIRED_NATIVE_EVIDENCE_IDS = (
-    *(f"E{index:02d}" for index in range(1, 15)),
+    "E01", "E02", "E03", "E04", "E05",
+    "E08", "E09", "E10", "E11", "E12", "E13", "E14",
     "E20",
+    "E22", "E23",
     "IP01",
 )
-REQUIRED_COMPOSITE_EVIDENCE_IDS = tuple(f"C{index:02d}" for index in range(1, 5))
 REQUIRED_LOOP_EVIDENCE_IDS = tuple(f"L{index:02d}" for index in range(1, 7))
 
 
@@ -223,16 +183,6 @@ def evaluate_release_capabilities(
         )
         for evidence_id in REQUIRED_NATIVE_EVIDENCE_IDS
     )
-    composite_evidence = tuple(
-        _evaluate_evidence(
-            evidence_id=evidence_id,
-            claim_kind=EvidenceClaimKind.COMPOSITE_CAPABILITY,
-            catalog=catalog,
-            passing=passing,
-            target_dirty=target_dirty,
-        )
-        for evidence_id in REQUIRED_COMPOSITE_EVIDENCE_IDS
-    )
     loop_evidence = tuple(
         _evaluate_evidence(
             evidence_id=evidence_id,
@@ -245,19 +195,12 @@ def evaluate_release_capabilities(
     )
     evidence_by_id = {
         result.evidence_id: result
-        for result in (*native_evidence, *composite_evidence, *loop_evidence)
+        for result in (*native_evidence, *loop_evidence)
     }
 
     native_capabilities = tuple(
         _native_result(definition, evidence_by_id)
         for definition in NATIVE_CAPABILITIES
-    )
-    native_by_id = {
-        result.capability_id: result for result in native_capabilities
-    }
-    composite_capabilities = tuple(
-        _composite_result(definition, evidence_by_id, native_by_id)
-        for definition in COMPOSITE_CAPABILITIES
     )
     loop_capabilities = tuple(
         _loop_result(definition, evidence_by_id)
@@ -267,10 +210,8 @@ def evaluate_release_capabilities(
         revision=revision,
         target_dirty=target_dirty,
         native_evidence=native_evidence,
-        composite_evidence=composite_evidence,
         loop_evidence=loop_evidence,
         native_capabilities=native_capabilities,
-        composite_capabilities=composite_capabilities,
         loop_capabilities=loop_capabilities,
     )
 
@@ -320,27 +261,6 @@ def _native_result(
         status="trusted" if not missing else "unverified",
         required_evidence_ids=definition.required_evidence_ids,
         reasons=tuple(f"untrusted_evidence:{item}" for item in missing),
-    )
-
-
-def _composite_result(
-    definition: CompositeCapabilityDefinition,
-    evidence_by_id: dict[str, EvidenceGateResult],
-    native_by_id: dict[str, CapabilityGateResult],
-) -> CapabilityGateResult:
-    reasons: list[str] = []
-    if evidence_by_id[definition.required_evidence_id].status != "trusted":
-        reasons.append(f"untrusted_evidence:{definition.required_evidence_id}")
-    reasons.extend(
-        f"untrusted_native_capability:{capability_id}"
-        for capability_id in definition.required_native_capability_ids
-        if native_by_id[capability_id].status != "trusted"
-    )
-    return CapabilityGateResult(
-        capability_id=definition.capability_id,
-        status="trusted" if not reasons else "unverified",
-        required_evidence_ids=(definition.required_evidence_id,),
-        reasons=tuple(reasons),
     )
 
 
@@ -492,7 +412,6 @@ def main() -> int:
     print(report.model_dump_json(indent=2))
     return 0 if (
         len(report.trusted_native_capability_ids) == len(NATIVE_CAPABILITIES)
-        and len(report.trusted_composite_capability_ids) == len(COMPOSITE_CAPABILITIES)
         and len(report.trusted_loop_capability_ids) == len(LOOP_CAPABILITIES)
     ) else 1
 
@@ -502,14 +421,11 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "COMPOSITE_CAPABILITIES",
     "NATIVE_CAPABILITIES",
     "LOOP_CAPABILITIES",
-    "REQUIRED_COMPOSITE_EVIDENCE_IDS",
     "REQUIRED_NATIVE_EVIDENCE_IDS",
     "REQUIRED_LOOP_EVIDENCE_IDS",
     "CapabilityGateResult",
-    "CompositeCapabilityDefinition",
     "EvidenceGateResult",
     "NativeCapabilityDefinition",
     "LoopCapabilityDefinition",

@@ -71,7 +71,7 @@ Provider 兼容性取舍（如放弃 root union）只能写在传输层，**不�
 
 规则：
 
-- 引用 E2E 用固定编号（E01、E14、L01、LT01-LT13、IP01）与 baseline id，不写「测试都过了」；
+- 引用 E2E 用当前 catalog 编号（如 E01、E14、L01、LT01、IP01）与历史 baseline archive，不写「测试都过了」；
 - C 级不得升格为「已验证」；测试通过 ≠ 发布资格，发布资格只能由 clean matching revision 的
   release archive 派生；
 - 反证与正证同等重要：写清哪条断言证明了「不该发生的事没发生」（确认前零写入、不伪造

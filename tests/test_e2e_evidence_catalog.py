@@ -6,7 +6,7 @@ from evals.e2e_quality.evidence_catalog import (
     FaultMechanism,
 )
 from evals.e2e_quality.release_gate import (
-    REQUIRED_COMPOSITE_EVIDENCE_IDS,
+    NATIVE_CAPABILITIES,
     REQUIRED_NATIVE_EVIDENCE_IDS,
 )
 from evals.e2e_quality.test_release_user_outcomes import (
@@ -28,24 +28,38 @@ def test_catalog_contains_only_product_loop_and_external_profile_evidence() -> N
         if case.claim_kind is EvidenceClaimKind.CAPABILITY_PROFILE
     }
     assert legacy_architecture_ids == set()
-    assert profile_ids == {"E16", "E17", "E18", "E19"}
+    assert profile_ids == {"E16", "E17", "E18", "E19", "E21"}
 
 
-def test_product_and_composite_release_matrices_are_complete() -> None:
+def test_product_release_matrix_is_complete() -> None:
     product_ids = {
         case.case_id
         for case in EVIDENCE_CASES
         if case.claim_kind is EvidenceClaimKind.PRODUCT_CAPABILITY
     }
 
-    composite_ids = {
-        case.case_id
-        for case in EVIDENCE_CASES
-        if case.claim_kind is EvidenceClaimKind.COMPOSITE_CAPABILITY
-    }
-
     assert product_ids == set(REQUIRED_NATIVE_EVIDENCE_IDS)
-    assert composite_ids == set(REQUIRED_COMPOSITE_EVIDENCE_IDS)
+
+
+def test_current_catalog_has_no_historical_failure_or_synthetic_comparison() -> None:
+    current_ids = {case.case_id for case in EVIDENCE_CASES}
+
+    assert "B03" not in current_ids
+    assert "LT09" not in current_ids
+
+
+def test_every_required_product_evidence_is_consumed_by_an_application_capability() -> None:
+    owners = {evidence_id: [] for evidence_id in REQUIRED_NATIVE_EVIDENCE_IDS}
+    for capability in NATIVE_CAPABILITIES:
+        for evidence_id in capability.required_evidence_ids:
+            owners[evidence_id].append(capability.capability_id)
+
+    assert all(capability_ids for capability_ids in owners.values()), owners
+
+
+def test_executable_assertions_and_profiles_own_outcomes_without_dead_metadata() -> None:
+    assert all(not hasattr(case, "expected_terminal") for case in EVIDENCE_CASES)
+    assert all(not hasattr(case, "real_provider_required") for case in EVIDENCE_CASES)
 
 
 def test_release_evidence_cannot_use_internal_boundaries_or_test_mechanisms() -> None:
@@ -65,11 +79,10 @@ def test_real_mcp_evidence_uses_the_provider_profiles_it_executes() -> None:
     profiles = {
         case.case_id: case.capability_profile
         for case in EVIDENCE_CASES
-        if case.case_id in {"E06", "E16", "E18"}
+        if case.case_id in {"E16", "E18"}
     }
 
     assert profiles == {
-        "E06": CapabilityProfile.GITHUB_NOTION_MCP,
         "E16": CapabilityProfile.GITHUB_MCP,
         "E18": CapabilityProfile.NOTION_MCP,
     }

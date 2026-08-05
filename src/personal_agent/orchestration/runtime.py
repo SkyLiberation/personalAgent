@@ -83,6 +83,7 @@ from personal_agent.capabilities.inventory import (
 )
 from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.investigation_project import (
+    CreateInvestigationProject,
     InvestigationProjectService,
     StructuredExecutionProposer,
     StructuredInvestigationPlanner,
@@ -103,6 +104,12 @@ from personal_agent.application.conversation import (
     FileInteractionJournal,
     LoopBudgetPolicy,
 )
+from personal_agent.application.conversation.models import (
+    ProjectReference,
+    StartDurableInvestigationArguments,
+    WorkspaceKnowledgeCandidate,
+)
+from personal_agent.domain.investigation_project import UserRequirement
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.capability_inventory import build_runtime_capability_inventory
 from personal_agent.orchestration.runtime_ask import AskService
@@ -228,6 +235,72 @@ class _WorkspaceReviewDigestAdapter:
         return digest.text
 
 
+class _ConversationWorkspaceReadAdapter:
+    def __init__(self, workspace_service: WorkspaceService) -> None:
+        self._workspace_service = workspace_service
+
+    def list_workspace_knowledge(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        limit: int,
+    ) -> tuple[WorkspaceKnowledgeCandidate, ...]:
+        items = self._workspace_service.store.list_knowledge_items(
+            workspace_id,
+            limit=500,
+        )
+        visible = tuple(
+            WorkspaceKnowledgeCandidate(
+                knowledge_item_id=item.knowledge_item_id,
+                title=item.title,
+                summary=item.summary,
+                state=item.state,
+            )
+            for item in items
+            if item.user_id == user_id and item.state not in {"deleted", "deprecated"}
+        )
+        return visible[:limit]
+
+
+class _ConversationProjectAdapter:
+    def __init__(self, project_service: InvestigationProjectService) -> None:
+        self._project_service = project_service
+
+    def start(
+        self,
+        *,
+        principal,
+        security_scope,
+        request: StartDurableInvestigationArguments,
+        idempotency_key: str,
+    ) -> ProjectReference:
+        view = self._project_service.create(CreateInvestigationProject(
+            principal=principal,
+            security_scope=security_scope,
+            title=request.title,
+            goal=request.goal,
+            requirements=tuple(
+                UserRequirement(
+                    requirement_id=f"req-{index}",
+                    statement=requirement.statement,
+                    acceptance_contract=requirement.acceptance_contract,
+                )
+                for index, requirement in enumerate(request.requirements, start=1)
+            ),
+            idempotency_key=idempotency_key,
+        ))
+        return ProjectReference(
+            project_id=view.definition.project_id,
+            tenant_id=view.definition.security_scope.tenant_id,
+            workspace_id=view.definition.security_scope.workspace_id,
+            user_id=view.definition.principal.user_id,
+            state=view.state,
+            title=view.definition.title,
+            goal=view.definition.goal,
+        )
+
+
 def _policy_rules_from_settings(settings: Settings) -> PolicyRules:
     """Build the policy override rule set from configured allow/deny lists."""
     cfg = settings.policy
@@ -327,15 +400,6 @@ class AgentRuntime:
                 self.settings.gpt_researcher_a2a,
                 self.artifact_service,
             ))
-        self._conversation_service = ConversationService(
-            self._structured_client,
-            tool_port=self._tool_executor,
-            agent_port=self._agent_gateway,
-            artifact_port=self.artifact_service,
-            knowledge_writer=self.workspace_service,
-            budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
-            journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
-        )
         self._llm = LlmClient(
             settings,
             model_client=self._model_client,
@@ -431,6 +495,18 @@ class AgentRuntime:
                 self._agent_gateway.profile,
             ),
             disclosure_manifest=ScopeBoundDisclosureManifest(),
+        )
+        self._conversation_service = ConversationService(
+            self._structured_client,
+            tool_port=self._tool_executor,
+            agent_port=self._agent_gateway,
+            artifact_port=self.artifact_service,
+            knowledge_writer=self.workspace_service,
+            workspace_reader=_ConversationWorkspaceReadAdapter(self.workspace_service),
+            knowledge_lifecycle=self.knowledge_lifecycle_service,
+            project_port=_ConversationProjectAdapter(self.investigation_project_service),
+            budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
+            journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
         )
         self._sync_procedure_definitions()
         self._procedure_runtime = ProcedureRuntime(

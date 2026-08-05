@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 from threading import Barrier
 
 import pytest
@@ -25,7 +26,13 @@ from personal_agent.application.conversation.models import (
     CommittedUsage,
     DecisionFeedback,
     EffectiveCapabilities,
+    ProjectReference,
     ReviewCriteria,
+    WorkspaceKnowledgeCandidate,
+)
+from personal_agent.application.knowledge_lifecycle.models import (
+    KnowledgeDeleteCommand,
+    KnowledgeDeleteOperationView,
 )
 from personal_agent.application.conversation.review_admission import (
     admit_review_intent,
@@ -34,7 +41,10 @@ from personal_agent.application.conversation.review_admission import (
 from personal_agent.application.conversation.verification_admission import (
     observed_receipts,
 )
-from personal_agent.capabilities.contracts.model import StructuredModelResponse
+from personal_agent.capabilities.contracts.model import (
+    StructuredModelResponse,
+    sealed_context_projection_ref,
+)
 from personal_agent.governance import ToolExecutor
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.application.workspace import InMemoryWorkspaceStore, WorkspaceService
@@ -59,7 +69,12 @@ from personal_agent.tools.interaction_verifier import (
 )
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
+    ExecutionScope,
     SecurityScope,
+)
+from personal_agent.application.conversation.observation_bounds import (
+    MAX_OBSERVATION_PAYLOAD_CHARS,
+    serialized_length,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
@@ -216,6 +231,312 @@ def test_l01_observation_drives_next_react_decision_and_user_result():
     assert "Typed execution inputs" in next_turn_context
     assert "working plan" not in next_turn_context.lower()
     assert trace.final_message is not None
+
+
+def test_recorded_context_segments_account_for_the_input_that_was_sent():
+    """The four segments must add up to the request, not to a re-derivation.
+
+    A composition measured by recomputing its own sources would be a second
+    algorithm for the same input, free to drift from what the model actually saw.
+    Summing per turn against the recorded request is what keeps it a measurement.
+    """
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    model = _Decisions(
+        _continue(ToolCallProposal(action_id="read-1", tool_name="read_fact", arguments={"query": "Orion"})),
+        FinalMessage(disposition="answer", message="Orion fact is grounded in the observation."),
+    )
+    service = ConversationService(model, tool_port=_executor(_tool("read_fact", read_fact)))
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-composition",
+        interaction_run_ref="irun_composition",
+        messages=[ConversationMessage(role="user", content="Read the Orion fact, then answer.")],
+    )
+    trace = service.trace("irun_composition")
+
+    assert trace is not None
+    assert len(trace.context_composition) == len(model.decision_requests) == 2
+    for turn_index, (composition, request) in enumerate(
+        zip(trace.context_composition, model.decision_requests, strict=True)
+    ):
+        sent_chars = sum(len(message["content"]) for message in request.messages)
+        assert composition.turn_index == turn_index
+        assert composition.total_chars == sent_chars
+        assert composition.capability_projection_chars > 0
+        assert composition.input_tokens == 10
+    # The observation only exists after the first turn, so the typed-input
+    # segment separates the two turns instead of being a constant offset.
+    assert trace.context_composition[0].typed_inputs_chars == 0
+    assert trace.context_composition[1].typed_inputs_chars > 0
+
+
+def test_measuring_the_context_does_not_change_the_sealed_input():
+    """Observation must stay outside assembly, or it becomes part of the input.
+
+    The seal covers every visible message, so recomputing it from the recorded
+    request proves the measured turn sent exactly the messages it sealed, and
+    that no measurement field was smuggled in as a visible message.
+    """
+    model = _Decisions(FinalMessage(disposition="answer", message="Answered directly."))
+    service = ConversationService(model)
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-seal",
+        interaction_run_ref="irun_seal",
+        messages=[ConversationMessage(role="user", content="Say hello.")],
+    )
+
+    request = model.decision_requests[0]
+    assert request.context_projection_ref == sealed_context_projection_ref(
+        purpose="agent_interaction_turn", messages=request.messages,
+    )
+    # Measuring yielded a record without yielding a message: the turn sent the
+    # minimum visible set, so nothing was appended for the benefit of the trace.
+    assert [message["role"] for message in request.messages] == ["system", "user"]
+    trace = service.trace("irun_seal")
+    assert trace is not None
+    assert len(trace.context_composition) == 1
+
+
+def test_oversized_tool_observation_is_bounded_and_offloaded_for_re_read():
+    late_fact = "linux-xfs@vger.kernel.org"
+
+    def read_big(path: str):
+        filler = "\n".join(f"line {index}" for index in range(200_000))
+        return tool_response(tool_success({"content": f"{filler}\n{late_fact}\n"}))
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner_scope=SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "MAINTAINERS"})),
+        # The model supplies only the ref and the keyword; no identity argument
+        # exists for it to assert.
+        _continue(ToolCallProposal(
+            action_id="reread",
+            tool_name="read_action_output",
+            arguments={
+                "resource_ref": offloaded_ref.model_dump(mode="json"),
+                "keyword": "xfs",
+            },
+        )),
+        FinalMessage(disposition="answer", message=f"The address is {late_fact}."),
+    )
+    artifacts = _ArtifactTexts()
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=artifacts,
+    )
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-oversized",
+        interaction_run_ref="irun-oversized",
+        messages=[ConversationMessage(role="user", content="Tell me the XFS list address in that file.")],
+    )
+    trace = service.trace("irun-oversized")
+
+    observation = trace.inputs[0]
+    assert observation.kind == "tool_result"
+    assert serialized_length(observation.payload) <= MAX_OBSERVATION_PAYLOAD_CHARS
+    retrieval = observation.payload["retrieval"]
+    assert retrieval["omitted_chars"] > 0
+    assert retrieval["original_chars"] > MAX_OBSERVATION_PAYLOAD_CHARS
+    assert "unavailable_reason" not in retrieval
+    assert len(artifacts.written) == 1
+    assert artifacts.written[0]["producer_key"] == "irun-oversized:read-big:observation"
+    # The omitted fact is recovered through the loop, with the identity the loop
+    # resolved: the model supplies only the ref and the keyword.
+    reread = trace.inputs[1]
+    assert reread.capability_id == "read_action_output"
+    assert reread.status == "succeeded"
+    assert any(late_fact in line["text"] for line in reread.payload["lines"])
+    assert reread.payload["keyword_match_count"] >= 1
+
+
+def test_offload_failure_is_reported_in_the_observation_not_swallowed():
+    def read_big(path: str):
+        return tool_response(tool_success({"content": "q" * 500_000}))
+
+    model = _Decisions(
+        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "f"})),
+        FinalMessage(disposition="answer", message="Bounded without the remainder."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=_ArtifactTexts(write_error=RuntimeError("store offline")),
+    )
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-offload-fail",
+        interaction_run_ref="irun-offload-fail",
+        messages=[ConversationMessage(role="user", content="Read that file and answer.")],
+    )
+    trace = service.trace("irun-offload-fail")
+
+    retrieval = trace.inputs[0].payload["retrieval"]
+    assert "resource_ref" not in retrieval
+    assert "RuntimeError" in retrieval["unavailable_reason"]
+    assert serialized_length(trace.inputs[0].payload) <= MAX_OBSERVATION_PAYLOAD_CHARS
+
+
+def test_re_reading_another_principals_offloaded_output_is_denied():
+    """A ref from another principal's run must not become a read of their output.
+
+    The re-read is served with the identity the loop resolved, so a stolen or
+    guessed ref fails the artifact's own principal check instead of leaking.
+    """
+
+    artifacts = _ArtifactTexts()
+    scope = SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1")
+    foreign_ref = artifacts.write_generated(
+        security_scope=scope,
+        execution_scope=ExecutionScope(
+            security_scope=scope,
+            principal_id="tenant-1:someone-else",
+            execution_id="irun-foreign",
+        ),
+        producer_key="irun-foreign:act:observation",
+        producer_ref="read_big",
+        kind="action_output",
+        content="another principal's private output",
+        content_digest="d",
+        source_artifact_refs=(),
+        evidence_refs=(),
+    )
+    model = _Decisions(
+        _continue(ToolCallProposal(
+            action_id="steal",
+            tool_name="read_action_output",
+            arguments={"resource_ref": foreign_ref.model_dump(mode="json"), "keyword": "private"},
+        )),
+        FinalMessage(disposition="limitation", message="That output is not available to me."),
+    )
+    service = ConversationService(model, tool_port=_executor(), artifact_port=artifacts)
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-foreign",
+        interaction_run_ref="irun-foreign-read",
+        messages=[ConversationMessage(role="user", content="Show me that earlier output.")],
+    )
+    trace = service.trace("irun-foreign-read")
+
+    observation = trace.inputs[0]
+    assert observation.status == "failed"
+    assert observation.payload["ok"] is False
+    assert "PermissionError" in observation.payload["error"]
+    assert "private" not in json.dumps(observation.payload, ensure_ascii=False)
+
+
+def test_asking_the_user_about_an_output_this_run_offloaded_is_rejected():
+    """The user cannot answer a question about a file only this run has read.
+
+    Observed live: a turn read an oversized file, then asked the user which branch
+    of it to look at, while holding the read remainder. The exit is rejected; what
+    the remainder says stays the model's call.
+    """
+
+    late_fact = "linux-xfs@vger.kernel.org"
+
+    def read_big(path: str):
+        filler = "\n".join(f"line {index}" for index in range(200_000))
+        return tool_response(tool_success({"content": f"{filler}\n{late_fact}\n"}))
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner_scope=SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "MAINTAINERS"})),
+        FinalMessage(
+            disposition="clarification_required",
+            message="Which branch of MAINTAINERS did you mean?",
+        ),
+        _continue(ToolCallProposal(
+            action_id="reread",
+            tool_name="read_action_output",
+            arguments={"resource_ref": offloaded_ref.model_dump(mode="json"), "keyword": "xfs"},
+        )),
+        FinalMessage(disposition="answer", message=f"The address is {late_fact}."),
+    )
+    artifacts = _ArtifactTexts()
+    service = ConversationService(
+        model, tool_port=_executor(_tool("read_big", read_big)), artifact_port=artifacts
+    )
+
+    view = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-unread",
+        interaction_run_ref="irun-unread",
+        messages=[ConversationMessage(role="user", content="Tell me the XFS list address in that file.")],
+    )
+    trace = service.trace("irun-unread")
+
+    assert view.disposition == "answer"
+    assert late_fact in view.message.content
+    feedback = [item for item in trace.inputs if isinstance(item, DecisionFeedback)]
+    assert [item.reason_code for item in feedback] == ["offloaded_output_unread"]
+    assert feedback[0].repairable_fields == ("disposition", "message")
+    assert "gen_0" in feedback[0].required_repair
+    reread = trace.inputs[-1]
+    assert reread.payload["resource_id"] == "gen_0"
+
+
+def test_a_limitation_stands_once_the_offloaded_remainder_has_been_read():
+    """Reading it is the requirement, not concluding anything about it.
+
+    The remainder here genuinely lacks what was asked for, so the same rule that
+    rejected the unread exit must let this one through.
+    """
+
+    def read_big(path: str):
+        return tool_response(tool_success({"content": "\n".join(f"line {i}" for i in range(200_000))}))
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner_scope=SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "f"})),
+        _continue(ToolCallProposal(
+            action_id="reread",
+            tool_name="read_action_output",
+            arguments={"resource_ref": offloaded_ref.model_dump(mode="json"), "keyword": "xfs"},
+        )),
+        FinalMessage(disposition="limitation", message="That file has no XFS entry."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=_ArtifactTexts(),
+    )
+
+    view = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-read-limit",
+        interaction_run_ref="irun-read-limit",
+        messages=[ConversationMessage(role="user", content="Is there an XFS entry in that file?")],
+    )
+    trace = service.trace("irun-read-limit")
+
+    assert view.disposition == "limitation"
+    assert not [item for item in trace.inputs if isinstance(item, DecisionFeedback)]
+    assert trace.inputs[1].payload["keyword_match_count"] == 0
 
 
 def test_initial_action_executes_without_a_synthetic_working_plan_contract():
@@ -1109,6 +1430,178 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
     assert store.list_claims("workspace-1") == []
 
 
+class _WorkspaceKnowledgeReader:
+    def list_workspace_knowledge(self, *, workspace_id, user_id, limit):
+        assert workspace_id == "workspace-1"
+        assert user_id == "default"
+        assert limit <= 50
+        return (
+            WorkspaceKnowledgeCandidate(
+                knowledge_item_id="kitm_target",
+                title="Incorrect launch window",
+                summary="The launch window is Monday at 09:00.",
+                state="active",
+            ),
+        )
+
+
+class _KnowledgeDeleteLifecycle:
+    def __init__(self):
+        self.operations = {}
+
+    def prepare_delete(
+        self, *, workspace_id, user_id, target_note_id, reason, idempotency_key,
+    ):
+        operation = KnowledgeDeleteOperationView(
+            command=KnowledgeDeleteCommand(
+                command_id="kdel_target",
+                idempotency_key=idempotency_key,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                target_note_id=target_note_id,
+                reason=reason,
+                command_digest="a" * 64,
+            ),
+            status="awaiting_confirmation",
+        )
+        self.operations[operation.command.command_id] = operation
+        return operation
+
+    def get_delete(self, command_id, *, user_id):
+        operation = self.operations.get(command_id)
+        return operation if operation and operation.command.user_id == user_id else None
+
+
+class _ProjectStarter:
+    def __init__(self):
+        self.calls = 0
+
+    def start(self, *, principal, security_scope, request, idempotency_key):
+        self.calls += 1
+        assert principal.user_id == "default"
+        assert security_scope.workspace_id == "workspace-1"
+        assert idempotency_key
+        return ProjectReference(
+            project_id="iprj_target",
+            tenant_id=principal.tenant_id,
+            workspace_id=security_scope.workspace_id,
+            user_id=principal.user_id,
+            state="planning",
+            title=request.title,
+            goal=request.goal,
+        )
+
+
+def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_command():
+    lifecycle = _KnowledgeDeleteLifecycle()
+    service = ConversationService(
+        _Decisions(
+            _continue(ToolCallProposal(
+                action_id="list-knowledge",
+                tool_name="list_workspace_knowledge",
+                arguments={"limit": 20},
+            )),
+            _continue(ToolCallProposal(
+                action_id="prepare-delete",
+                tool_name="prepare_knowledge_delete",
+                arguments={
+                    "target_knowledge_item_id": "kitm_target",
+                    "reason": "The user identified this entry as incorrect.",
+                },
+            )),
+        ),
+        workspace_reader=_WorkspaceKnowledgeReader(),
+        knowledge_lifecycle=lifecycle,
+    )
+
+    prepared = service.respond(
+        **_conversation_scope(),
+        conversation_id="workspace-1",
+        interaction_run_ref="irun_delete_from_goal",
+        messages=[ConversationMessage(
+            role="user",
+            content="Delete the incorrect launch-window knowledge, but confirm first.",
+        )],
+    )
+    trace = service.trace("irun_delete_from_goal")
+
+    assert prepared.disposition == "confirmation_required"
+    assert prepared.pending_confirmation.kind == "knowledge_delete"
+    assert prepared.pending_confirmation.operation.command.target_note_id == "kitm_target"
+    assert trace.knowledge_delete_command_ref == "kdel_target"
+    assert trace.project_reference is None
+    assert [item.capability_id for item in trace.inputs] == ["list_workspace_knowledge"]
+
+
+def test_goal_entry_starts_one_existing_project_and_replay_returns_same_reference():
+    project_port = _ProjectStarter()
+    service = ConversationService(
+        _Decisions(_continue(ToolCallProposal(
+            action_id="start-project",
+            tool_name="start_durable_investigation",
+            arguments={
+                "title": "Protocol changes",
+                "goal": "Investigate protocol changes and deliver a sourced report.",
+                "requirements": [{
+                    "statement": "Use official sources.",
+                    "acceptance_contract": "Every material claim has an official source.",
+                }],
+            },
+        ))),
+        project_port=project_port,
+    )
+    kwargs = {
+        **_conversation_scope(),
+        "conversation_id": "workspace-1",
+        "interaction_run_ref": "irun_project_from_goal",
+        "messages": [ConversationMessage(
+            role="user",
+            content="Investigate this in the background so I can pause or steer it later.",
+        )],
+    }
+
+    started = service.respond(**kwargs)
+    replayed = service.respond(**kwargs)
+    trace = service.trace("irun_project_from_goal")
+
+    assert started.disposition == "background_started"
+    assert replayed.project_reference == started.project_reference
+    assert project_port.calls == 1
+    assert trace.project_reference == started.project_reference
+    assert trace.knowledge_delete_command_ref is None
+
+
+def test_explanation_only_request_does_not_create_a_project_or_delete_command():
+    project_port = _ProjectStarter()
+    lifecycle = _KnowledgeDeleteLifecycle()
+    service = ConversationService(
+        _Decisions(FinalMessage(
+            disposition="answer",
+            message="Here is how the deletion policy works; no operation was prepared.",
+        )),
+        workspace_reader=_WorkspaceKnowledgeReader(),
+        knowledge_lifecycle=lifecycle,
+        project_port=project_port,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="workspace-1",
+        interaction_run_ref="irun_explain_only",
+        messages=[ConversationMessage(
+            role="user",
+            content="Only explain how deletion works. Do not execute or start anything.",
+        )],
+    )
+    trace = service.trace("irun_explain_only")
+
+    assert result.disposition == "answer"
+    assert project_port.calls == 0
+    assert lifecycle.operations == {}
+    assert trace.knowledge_delete_command_ref is None
+    assert trace.project_reference is None
+
+
 class _AsyncSpecialist:
     profile = SubagentProfile(
         agent_id="specialist",
@@ -1193,7 +1686,55 @@ class _AsyncSpecialist:
 
 
 class _ArtifactTexts:
+    def __init__(self, *, write_error: Exception | None = None) -> None:
+        self.written: list[dict[str, object]] = []
+        self._write_error = write_error
+
     def read_text(self, resource_ref, *, principal, security_scope):
         if resource_ref.owner_scope != security_scope:
             raise PermissionError("cross-scope test artifact")
+        for record in self.written:
+            if record["resource_ref"].resource_id != resource_ref.resource_id:
+                continue
+            # ArtifactService.resolve rejects a principal that did not create the
+            # artifact. The fake must reject it too, or it grants a read that
+            # production denies.
+            if record["created_by_principal_id"] != principal.principal_id:
+                raise PermissionError("artifact principal is not authorized")
+            return record["content"]
         return "bounded specialist evidence"
+
+    def write_generated(
+        self,
+        *,
+        security_scope,
+        execution_scope,
+        producer_key,
+        producer_ref,
+        kind,
+        content,
+        content_digest,
+        source_artifact_refs,
+        evidence_refs,
+        limitations=(),
+    ):
+        if self._write_error is not None:
+            raise self._write_error
+        for record in self.written:
+            if record["producer_key"] == producer_key:
+                return record["resource_ref"]
+        resource_ref = ResourceRef(
+            resource_id=f"gen_{len(self.written)}",
+            resource_type="artifact",
+            owner_scope=security_scope,
+            revision=1,
+        )
+        self.written.append({
+            "producer_key": producer_key,
+            "producer_ref": producer_ref,
+            "kind": kind,
+            "content": content,
+            "resource_ref": resource_ref,
+            "created_by_principal_id": execution_scope.principal_id,
+        })
+        return resource_ref

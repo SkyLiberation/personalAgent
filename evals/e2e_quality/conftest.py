@@ -13,7 +13,6 @@ from evals.e2e_quality.evidence_catalog import (
     EvidenceClaimKind,
 )
 from evals.e2e_quality.release_gate import (
-    REQUIRED_COMPOSITE_EVIDENCE_IDS,
     REQUIRED_NATIVE_EVIDENCE_IDS,
     REQUIRED_LOOP_EVIDENCE_IDS,
 )
@@ -105,19 +104,6 @@ def pytest_collection_modifyitems(config, items) -> None:
                 "release E2E matrix is incomplete; missing: "
                 + ", ".join(sorted(missing_release))
             )
-        composite_case_ids = {
-            case.case_id for case in EVIDENCE_BY_NODE.values()
-            if (
-                case.release_eligible
-                and case.claim_kind is EvidenceClaimKind.COMPOSITE_CAPABILITY
-            )
-        }
-        missing_composite = set(REQUIRED_COMPOSITE_EVIDENCE_IDS) - composite_case_ids
-        if missing_composite:
-            raise pytest.UsageError(
-                "composite release E2E matrix is incomplete; missing: "
-                + ", ".join(sorted(missing_composite))
-            )
         loop_case_ids = {
             case.case_id for case in EVIDENCE_BY_NODE.values()
             if case.release_eligible and case.claim_kind is EvidenceClaimKind.COMPLEX_LOOP
@@ -133,7 +119,6 @@ def pytest_collection_modifyitems(config, items) -> None:
             for case in EVIDENCE_BY_NODE.values()
             if case.claim_kind in {
                 EvidenceClaimKind.PRODUCT_CAPABILITY,
-                EvidenceClaimKind.COMPOSITE_CAPABILITY,
                 EvidenceClaimKind.COMPLEX_LOOP,
             }
         }

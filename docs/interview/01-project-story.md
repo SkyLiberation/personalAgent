@@ -110,9 +110,10 @@ CompletionReport**，而 ResearchRun、DeleteCommand、Delivery、Project 的状
 > replay 返回同一 Receipt 不重复删除。这里也做过删减：无消费者的 lifecycle Event 和第二个 digest
 > 已被移除。
 >
-> 任务既需要根据新 Observation 调整、又必须跨进程或审批边界保持完成义务时，用户显式创建
-> Investigation Project。它持久化 immutable definition 和 append-only journal，accepted Plan 驱动
-> ready set、dispatch、join、coverage 和 Completion Gate；普通 Conversation 不会隐式升级。
+> 任务既需要根据新 Observation 调整、又必须跨交互或审批边界保持完成义务时，模型可以从普通
+> Conversation 提出 durable investigation。它调用同一 Project Application Service，只把
+> ProjectReference 留在 Interaction；Project 自己持久化 definition、journal 和 accepted Plan，驱动
+> ready set、dispatch、join、coverage 和 Completion Gate。短任务不会因此承担 Project 成本。
 >
 > 外部能力通过 MCP 和 A2A Adapter 接入，Adapter 只做协议转换。MCP 是否可用由 discovery、Host
 > mapping 和 policy 共同决定；子 Agent completed 也不会自动完成父请求。
@@ -123,13 +124,13 @@ CompletionReport**，而 ResearchRun、DeleteCommand、Delivery、Project 的状
 
 ## 6. 5 分钟白板顺序
 
-### 第一步：三条主链
+### 第一步：一套目标入口与内部责任链
 
 ```text
-正式入口
-├─ Conversation Interaction loop   短动态请求
-├─ Application Workflow            固定事务与领域状态机
-└─ Investigation Project           动态且必须 durable 的长任务
+普通用户目标 -> Conversation semantic decision
+├─ request-local capability        短动态请求
+├─ concrete Application Use Case   固定事务与领域状态机
+└─ Project handoff                  动态且必须 durable 的长任务
 ```
 
 先讲路由标准：开放问题无法预定义步骤；领域事务不能由模型随意编排；动态任务只有跨越进程、
@@ -175,11 +176,10 @@ Source -> Artifact -> EvidenceBlock/EvidenceSpan -> Claim -> Relation/KnowledgeI
 ### 第六步：用证据收尾
 
 ```text
-E01-E14/E20 原生产品能力    release evidence
-C01-C04   组合用户旅程      release evidence
-L01-L06   复杂 Interaction  release evidence
-E16-E19   真实 Provider     profile，不单独产生发布声明
-LT01-LT13 durable runtime   diagnostic，scripted/frozen Port
+E01-E05/E08-E14/E20/IP01   应用能力          release evidence
+L01-L06                    复杂 Interaction  release evidence
+E16-E19/E21                真实 Profile      diagnostic，不单独产生发布声明
+LT01-LT08/LT10-LT13        durable runtime   diagnostic，scripted/frozen Port
 ```
 
 说明外部 profile 不能冒充产品完成，scripted LT 也不能冒充 live release 证据。
@@ -200,8 +200,8 @@ workspace/用户/Artifact 可见；回答依据的 Claim 与 Evidence 是否可�
 
 1. **决策所有权清晰**：模型负责开放语义，确定性代码负责权限、状态机和不变量，执行系统产生事实，
    Verifier 判断语义满足，领域状态机判断完成。既保留灵活性，也避免把治理逻辑写进 Prompt。
-2. **执行拓扑按业务约束选择**：短请求不承担 durable 成本；固定事务不调用通用 Planner；三条主链是
-   三种生命周期和事实 owner，不是三个同义框架。
+2. **入口统一、事实 owner 不合并**：用户只描述目标；短请求不承担 durable 成本，固定事务不调用
+   通用 Planner，Project 状态不复制进 Conversation。
 3. **做过删除而不只是添加**：旧 `WorkingPlanSnapshot` 只进 Prompt/Trace，没有任何生产调度消费者，
    却增加首次 action 和恢复的模型轮次——所以删掉了。能讲清删掉了什么，比列了多少机制更有说服力。
 4. **E2E 断言反事实**：错误 digest 不执行、Ask 不写 Claim、跨 workspace 不泄漏、预算耗尽不拼替代

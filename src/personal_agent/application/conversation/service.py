@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
 from threading import RLock
 from time import monotonic, sleep
+from typing import Any
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from personal_agent.capabilities.contracts.grants import DelegationGrant, GrantDependencySet
 from personal_agent.capabilities.contracts.model import (
@@ -24,6 +28,11 @@ from personal_agent.kernel.contracts.scope import (
     SecurityScope,
 )
 
+from .observation_bounds import (
+    bound_observation_payload,
+    excerpt_payload_text,
+    select_offload_text,
+)
 from .models import (
     ActionObservation,
     AgentDelegationProposal,
@@ -40,12 +49,21 @@ from .models import (
     EffectiveToolCapability,
     FinalMessage,
     InteractionTrace,
+    KnowledgeDeleteConfirmation,
     KnowledgeSaveArguments,
+    ListWorkspaceKnowledgeArguments,
     LoopBudgetPolicy,
+    PrepareKnowledgeDeleteArguments,
+    ReadActionOutputArguments,
+    StartDurableInvestigationArguments,
     ToolCallProposal,
+    TurnContextComposition,
 )
 from .ports import (
+    ConversationKnowledgeLifecyclePort,
     ConversationKnowledgeWriter,
+    ConversationProjectPort,
+    ConversationWorkspaceReadPort,
     InteractionAgentPort,
     InteractionArtifactPort,
     InteractionToolPort,
@@ -72,6 +90,10 @@ class ConversationOperationConflict(RuntimeError):
 
 _KNOWLEDGE_SAVE_CAPABILITY = "prepare_conversation_knowledge_save"
 _VERIFICATION_CAPABILITY = "verify_interaction_draft"
+_READ_ACTION_OUTPUT_CAPABILITY = "read_action_output"
+_LIST_WORKSPACE_KNOWLEDGE_CAPABILITY = "list_workspace_knowledge"
+_PREPARE_KNOWLEDGE_DELETE_CAPABILITY = "prepare_knowledge_delete"
+_START_DURABLE_INVESTIGATION_CAPABILITY = "start_durable_investigation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +161,9 @@ class ConversationService:
         agent_port: InteractionAgentPort | None = None,
         artifact_port: InteractionArtifactPort | None = None,
         knowledge_writer: ConversationKnowledgeWriter | None = None,
+        workspace_reader: ConversationWorkspaceReadPort | None = None,
+        knowledge_lifecycle: ConversationKnowledgeLifecyclePort | None = None,
+        project_port: ConversationProjectPort | None = None,
         budget_policy: LoopBudgetPolicy | None = None,
         journal: InMemoryInteractionJournal | None = None,
     ) -> None:
@@ -147,6 +172,9 @@ class ConversationService:
         self._agent_port = agent_port
         self._artifact_port = artifact_port
         self._knowledge_writer = knowledge_writer
+        self._workspace_reader = workspace_reader
+        self._knowledge_lifecycle = knowledge_lifecycle
+        self._project_port = project_port
         self._confirmation_lock = RLock()
         if agent_port is not None and artifact_port is None:
             raise ValueError("agent delegation requires the canonical Artifact read port")
@@ -183,6 +211,20 @@ class ConversationService:
                 run_ref,
                 prior.knowledge_save_operation,
             )
+        if prior is not None and prior.knowledge_delete_command_ref is not None:
+            operation = (
+                self._knowledge_lifecycle.get_delete(
+                    prior.knowledge_delete_command_ref,
+                    user_id=principal.user_id,
+                )
+                if self._knowledge_lifecycle is not None
+                else None
+            )
+            if operation is None:
+                raise ConversationOperationNotFound("knowledge delete operation not found")
+            return self._knowledge_delete_turn_view(conversation_id, run_ref, operation)
+        if prior is not None and prior.project_reference is not None:
+            return self._project_turn_view(conversation_id, run_ref, prior.project_reference)
         if prior is not None and prior.final_message is not None:
             return ConversationTurnView(
                 interaction_run_ref=run_ref,
@@ -193,6 +235,7 @@ class ConversationService:
         inputs = list(prior.inputs if prior else ())
         execution_order = list(prior.execution_order if prior else ())
         concurrent_batches = list(prior.concurrent_batches if prior else ())
+        context_composition = list(prior.context_composition if prior else ())
         usage = prior.usage if prior else CommittedUsage()
         review_criteria = prior.review_criteria if prior else None
         if review_criteria is None:
@@ -207,25 +250,40 @@ class ConversationService:
                 inputs.append(ungrounded_criteria_feedback(review_criteria))
             self._commit(
                 run_ref, messages, capabilities, inputs, usage,
-                execution_order, concurrent_batches,
+                execution_order, concurrent_batches, context_composition,
                 review_criteria=review_criteria,
             )
 
         while usage.model_turns < self._budget_policy.max_model_turns:
             if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria)
-            decision, token_count = self._decide(
+                return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, context_composition, review_criteria)
+            decision, token_count, composition = self._decide(
                 messages=messages,
                 capabilities=capabilities,
                 inputs=inputs,
                 usage=usage,
                 review_criteria=review_criteria,
+                turn_index=usage.model_turns,
             )
+            context_composition.append(composition)
             usage = usage.model_copy(update={
                 "model_turns": usage.model_turns + 1,
                 "total_tokens": usage.total_tokens + token_count,
             })
             if isinstance(decision, FinalMessage):
+                unread = (
+                    self._unread_offloaded_resource(inputs)
+                    if decision.disposition != "answer"
+                    else None
+                )
+                if unread is not None:
+                    inputs.append(self._unread_output_feedback(decision, unread))
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches, context_composition,
+                        review_criteria=review_criteria,
+                    )
+                    continue
                 if (
                     review_criteria.requires_review
                     and decision.disposition != "answer"
@@ -233,7 +291,7 @@ class ConversationService:
                     inputs.append(self._review_answer_required_feedback(decision))
                     self._commit(
                         run_ref, messages, capabilities, inputs, usage,
-                        execution_order, concurrent_batches,
+                        execution_order, concurrent_batches, context_composition,
                         review_criteria=review_criteria,
                     )
                     continue
@@ -254,12 +312,12 @@ class ConversationService:
                     if verified is None:
                         self._commit(
                             run_ref, messages, capabilities, inputs, usage,
-                            execution_order, concurrent_batches,
+                            execution_order, concurrent_batches, context_composition,
                             review_criteria=review_criteria,
                         )
                         continue
                     decision = verified
-                self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=review_criteria, final_message=decision)
+                self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, context_composition, review_criteria=review_criteria, final_message=decision)
                 return ConversationTurnView(
                     interaction_run_ref=run_ref,
                     conversation_id=conversation_id,
@@ -285,7 +343,7 @@ class ConversationService:
                     inputs.append(feedback)
                     self._commit(
                         run_ref, messages, capabilities, inputs, usage,
-                        execution_order, concurrent_batches,
+                        execution_order, concurrent_batches, context_composition,
                         review_criteria=review_criteria,
                     )
                     continue
@@ -299,7 +357,7 @@ class ConversationService:
                 )
                 self._commit(
                     run_ref, messages, capabilities, inputs, usage,
-                    execution_order, concurrent_batches,
+                    execution_order, concurrent_batches, context_composition,
                     review_criteria=review_criteria,
                     knowledge_save_operation=operation,
                 )
@@ -307,6 +365,103 @@ class ConversationService:
                     conversation_id,
                     run_ref,
                     operation,
+                )
+
+            delete_actions = [
+                action for action in decision.actions
+                if isinstance(action, ToolCallProposal)
+                and action.tool_name == _PREPARE_KNOWLEDGE_DELETE_CAPABILITY
+            ]
+            if delete_actions:
+                action = delete_actions[0]
+                feedback, arguments = self._admit_knowledge_delete(
+                    action,
+                    all_actions=decision.actions,
+                    principal=principal,
+                    security_scope=security_scope,
+                )
+                if feedback is not None:
+                    inputs.append(feedback)
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches, context_composition,
+                        review_criteria=review_criteria,
+                    )
+                    continue
+                try:
+                    operation = self._knowledge_lifecycle.prepare_delete(
+                        workspace_id=security_scope.workspace_id,
+                        user_id=principal.user_id,
+                        target_note_id=arguments.target_knowledge_item_id,
+                        reason=arguments.reason,
+                        idempotency_key=sha256(
+                            f"{run_ref}:{action.action_id}".encode("utf-8")
+                        ).hexdigest(),
+                    )
+                except (KeyError, PermissionError, ValueError) as error:
+                    inputs.append(self._application_operation_feedback(action, error))
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches, context_composition,
+                        review_criteria=review_criteria,
+                    )
+                    continue
+                execution_order.append(action.action_id)
+                self._commit(
+                    run_ref, messages, capabilities, inputs, usage,
+                    execution_order, concurrent_batches, context_composition,
+                    review_criteria=review_criteria,
+                    knowledge_delete_command_ref=operation.command.command_id,
+                )
+                return self._knowledge_delete_turn_view(
+                    conversation_id, run_ref, operation,
+                )
+
+            project_actions = [
+                action for action in decision.actions
+                if isinstance(action, ToolCallProposal)
+                and action.tool_name == _START_DURABLE_INVESTIGATION_CAPABILITY
+            ]
+            if project_actions:
+                action = project_actions[0]
+                feedback, arguments = self._admit_project_start(
+                    action,
+                    all_actions=decision.actions,
+                )
+                if feedback is not None:
+                    inputs.append(feedback)
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches, context_composition,
+                        review_criteria=review_criteria,
+                    )
+                    continue
+                try:
+                    project_reference = self._project_port.start(
+                        principal=principal,
+                        security_scope=security_scope,
+                        request=arguments,
+                        idempotency_key=sha256(
+                            f"{run_ref}:{action.action_id}".encode("utf-8")
+                        ).hexdigest(),
+                    )
+                except (KeyError, PermissionError, ValueError) as error:
+                    inputs.append(self._application_operation_feedback(action, error))
+                    self._commit(
+                        run_ref, messages, capabilities, inputs, usage,
+                        execution_order, concurrent_batches, context_composition,
+                        review_criteria=review_criteria,
+                    )
+                    continue
+                execution_order.append(action.action_id)
+                self._commit(
+                    run_ref, messages, capabilities, inputs, usage,
+                    execution_order, concurrent_batches, context_composition,
+                    review_criteria=review_criteria,
+                    project_reference=project_reference,
+                )
+                return self._project_turn_view(
+                    conversation_id, run_ref, project_reference,
                 )
 
             results, usage, concurrent = self._execute_actions(
@@ -324,9 +479,9 @@ class ConversationService:
             execution_order.extend(item.action_id for item in results)
             if concurrent:
                 concurrent_batches.append(tuple(item.action_id for item in results))
-            self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=review_criteria)
+            self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, context_composition, review_criteria=review_criteria)
 
-        return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria)
+        return self._budget_exhausted(conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, context_composition, review_criteria)
 
     def trace(self, interaction_run_ref: str) -> InteractionTrace | None:
         return self._journal.get(interaction_run_ref)
@@ -538,6 +693,146 @@ class ConversationService:
             ),
         )
 
+    def _admit_knowledge_delete(
+        self,
+        action,
+        *,
+        all_actions,
+        principal,
+        security_scope,
+    ):
+        if len(all_actions) != 1:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="knowledge_delete_requires_independent_confirmation",
+                message="A knowledge delete proposal must be the only action in its turn.",
+                repairable_fields=("actions",),
+                immutable_fields=("action_id",),
+                required_repair=(
+                    "Propose only prepare_knowledge_delete so its canonical command can be confirmed."
+                ),
+            ), None
+        if self._workspace_reader is None or self._knowledge_lifecycle is None:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="capability_missing",
+                message="The governed knowledge delete capability is unavailable.",
+                immutable_fields=("action_id",),
+                required_repair="Explain the limitation and do not claim deletion was prepared.",
+                disposition="fail_closed",
+            ), None
+        try:
+            arguments = PrepareKnowledgeDeleteArguments.model_validate(action.arguments)
+        except ValidationError as error:
+            return self._invalid_special_arguments(action, error), None
+        candidates = self._workspace_reader.list_workspace_knowledge(
+            workspace_id=security_scope.workspace_id,
+            user_id=principal.user_id,
+            limit=50,
+        )
+        if arguments.target_knowledge_item_id not in {
+            item.knowledge_item_id for item in candidates
+        }:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="target_not_observed_in_scope",
+                message="The target knowledge item was not observed in the caller's workspace.",
+                repairable_fields=("target_knowledge_item_id",),
+                immutable_fields=("action_id", "reason"),
+                required_repair=(
+                    "Call list_workspace_knowledge, select one returned knowledge_item_id, "
+                    "then prepare the delete as a separate action."
+                ),
+            ), None
+        return None, arguments
+
+    def _admit_project_start(self, action, *, all_actions):
+        if len(all_actions) != 1:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="project_start_requires_independent_commit",
+                message="A durable investigation start must be the only action in its turn.",
+                repairable_fields=("actions",),
+                immutable_fields=("action_id",),
+                required_repair="Propose only start_durable_investigation with the complete goal contract.",
+            ), None
+        if self._project_port is None:
+            return DecisionFeedback(
+                action_id=action.action_id,
+                reason_code="capability_missing",
+                message="Durable investigation is unavailable.",
+                immutable_fields=("action_id",),
+                required_repair="Explain the limitation; do not claim background work started.",
+                disposition="fail_closed",
+            ), None
+        try:
+            return None, StartDurableInvestigationArguments.model_validate(action.arguments)
+        except ValidationError as error:
+            return self._invalid_special_arguments(action, error), None
+
+    @staticmethod
+    def _invalid_special_arguments(action, error):
+        return DecisionFeedback(
+            action_id=action.action_id,
+            reason_code="invalid_arguments",
+            message=str(error),
+            repairable_fields=("arguments",),
+            immutable_fields=("action_id", "tool_name"),
+            required_repair="Revise only the arguments to satisfy the declared capability schema.",
+        )
+
+    @staticmethod
+    def _application_operation_feedback(action, error):
+        return DecisionFeedback(
+            action_id=action.action_id,
+            reason_code="application_operation_rejected",
+            message=str(error),
+            immutable_fields=("action_id", "tool_name"),
+            required_repair=(
+                "Do not claim the operation started. Explain the rejection or ask for "
+                "the missing business input without changing the user's goal."
+            ),
+            disposition="fail_closed",
+        )
+
+    @staticmethod
+    def _knowledge_delete_turn_view(conversation_id, run_ref, operation):
+        messages = {
+            "awaiting_confirmation": "请确认是否删除该知识条目。确认前不会发生删除。",
+            "rejected": "已取消删除，知识条目保持不变。",
+            "executed": "该知识条目已删除。",
+        }
+        return ConversationTurnView(
+            interaction_run_ref=run_ref,
+            conversation_id=conversation_id,
+            disposition=(
+                "confirmation_required"
+                if operation.status == "awaiting_confirmation"
+                else "answer"
+            ),
+            message=ConversationMessage(role="assistant", content=messages[operation.status]),
+            pending_confirmation=(
+                KnowledgeDeleteConfirmation(operation=operation)
+                if operation.status == "awaiting_confirmation"
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _project_turn_view(conversation_id, run_ref, project_reference):
+        return ConversationTurnView(
+            interaction_run_ref=run_ref,
+            conversation_id=conversation_id,
+            disposition="background_started",
+            message=ConversationMessage(
+                role="assistant",
+                content=(
+                    "已创建可持续、可恢复的后台调查。你可以随后查看进度、暂停或调整要求。"
+                ),
+            ),
+            project_reference=project_reference,
+        )
+
     def _derive_review_criteria(self, messages):
         """Derive this interaction's frozen verification standard.
 
@@ -609,6 +904,58 @@ class ConversationService:
             ),
         )
 
+    @staticmethod
+    def _unread_output_feedback(decision, resource_id: str) -> DecisionFeedback:
+        """Reject the exit, not the conclusion.
+
+        What the omitted part says is the model's call, including that it does not
+        contain what was asked for. What is not the model's call is ending the turn
+        without looking.
+        """
+
+        return DecisionFeedback(
+            action_id="interaction_turn",
+            reason_code="offloaded_output_unread",
+            message=(
+                f"This turn cannot end as {decision.disposition!r} while the output of "
+                "an earlier call is still unread. Its excerpt omitted part of the "
+                "output, and the omitted part is held by this run, not by the user."
+            ),
+            repairable_fields=("disposition", "message"),
+            required_repair=(
+                "Call read_action_output for resource_id "
+                f"{resource_id!r} with a keyword or start_line that would locate what "
+                "is missing. If the omitted part turns out not to contain it, say so "
+                "from what the windows showed."
+            ),
+        )
+
+    @staticmethod
+    def _unread_offloaded_resource(inputs) -> str | None:
+        """The output this turn fetched, offloaded, and never came back for.
+
+        A turn that fetched an oversized output holds evidence the user does not
+        have. Ending it as a clarification, limitation, or failure asks the user
+        for something already sitting in this run's own artifact, so the omitted
+        part has to be read, or found absent, before that exit is honest. Only a
+        succeeded observation counts: a failed call's offloaded error text is not
+        evidence anyone was reaching for.
+        """
+
+        offloaded: dict[str, None] = {}
+        for item in inputs:
+            if not isinstance(item, ActionObservation):
+                continue
+            if item.capability_id == _READ_ACTION_OUTPUT_CAPABILITY:
+                offloaded.pop(str(item.payload.get("resource_id", "")), None)
+                continue
+            if item.status != "succeeded":
+                continue
+            reference = item.payload.get("retrieval", {})
+            if isinstance(reference, dict) and "resource_ref" in reference:
+                offloaded[str(reference["resource_ref"].get("resource_id", ""))] = None
+        return next(iter(offloaded), None)
+
     def _verify_before_send(
         self,
         decision,
@@ -663,21 +1010,33 @@ class ConversationService:
             usage,
         )
 
-    def _decide(self, *, messages, capabilities, inputs, usage, review_criteria):
-        visible_messages = [
-            {
-                "role": "system",
-                "content": self._system_prompt(capabilities, usage, review_criteria),
-            },
-            *(item.model_dump(mode="json") for item in messages),
-        ]
+    def _decide(self, *, messages, capabilities, inputs, usage, review_criteria, turn_index):
+        """Run one decision turn, and record what its input was made of.
+
+        The composition is measured from the strings this method assembled rather
+        than recomputed from the same sources, so the record cannot drift into
+        describing an input that was never sent. It is read after ``generate``
+        returns and takes no part in assembly, so the sealed context digest is
+        unchanged by measuring.
+
+        Scope is this loop's decision turns. The review-criteria derivation is a
+        separate call with no capability projection, so folding it in here would
+        put a turn with a structurally different input shape into the same series.
+        """
+        capability_projection = capabilities.model_dump_json()
+        system_content = self._system_prompt(
+            capabilities, usage, review_criteria,
+            capability_projection=capability_projection,
+        )
+        visible_messages = [{"role": "system", "content": system_content}]
+        conversation_content = [item.model_dump(mode="json") for item in messages]
+        visible_messages.extend(conversation_content)
+        typed_inputs_content = ""
         if inputs:
-            visible_messages.append({
-                "role": "system",
-                "content": "Typed execution inputs:\n" + json.dumps(
-                    [item.model_dump(mode="json") for item in inputs], ensure_ascii=False, default=str
-                ),
-            })
+            typed_inputs_content = "Typed execution inputs:\n" + json.dumps(
+                [item.model_dump(mode="json") for item in inputs], ensure_ascii=False, default=str
+            )
+            visible_messages.append({"role": "system", "content": typed_inputs_content})
         response = self._model_client.generate(StructuredModelRequest(
             operation="agent_interaction_turn",
             version="v1",
@@ -694,7 +1053,19 @@ class ConversationService:
         token_count = response.total_tokens or (
             (response.input_tokens or 0) + (response.output_tokens or 0)
         )
-        return decision, token_count
+        composition = TurnContextComposition(
+            turn_index=turn_index,
+            capability_projection_chars=len(capability_projection),
+            # By subtraction, so the two segments are disjoint by construction and
+            # always sum to the prompt that was sent.
+            system_prompt_other_chars=len(system_content) - len(capability_projection),
+            conversation_messages_chars=sum(
+                len(item["content"]) for item in conversation_content
+            ),
+            typed_inputs_chars=len(typed_inputs_content),
+            input_tokens=response.input_tokens,
+        )
+        return decision, token_count, composition
 
     def _effective_capabilities(self) -> EffectiveCapabilities:
         tools: list[EffectiveToolCapability] = []
@@ -706,6 +1077,57 @@ class ConversationService:
                     "in selected user messages. This action does not write knowledge."
                 ),
                 input_schema=KnowledgeSaveArguments.model_json_schema(),
+                read_only=False,
+                safely_retryable=False,
+            ))
+        if self._artifact_port is not None:
+            tools.append(EffectiveToolCapability(
+                name=_READ_ACTION_OUTPUT_CAPABILITY,
+                description=(
+                    "Re-read the part of an earlier action output that was omitted from its "
+                    "observation excerpt. Pass the retrieval.resource_ref from that observation, "
+                    "plus a keyword to locate lines anywhere in the full output, or start_line to "
+                    "read sequentially. Each keyword hit is returned with the few lines before "
+                    "and after it, so a heading also shows what is written under it. Line numbers "
+                    "are the source's own, counted from 1. Returns numbered lines, total_lines "
+                    "and next_start_line. Read-only."
+                ),
+                input_schema=ReadActionOutputArguments.model_json_schema(),
+                read_only=True,
+                safely_retryable=True,
+            ))
+        if self._workspace_reader is not None:
+            tools.append(EffectiveToolCapability(
+                name=_LIST_WORKSPACE_KNOWLEDGE_CAPABILITY,
+                description=(
+                    "List the caller's current workspace knowledge items with canonical "
+                    "knowledge_item_id, title, summary, and state. Use this before answering "
+                    "questions about stored personal/workspace facts or selecting a delete target."
+                ),
+                input_schema=ListWorkspaceKnowledgeArguments.model_json_schema(),
+                read_only=True,
+                safely_retryable=True,
+            ))
+        if self._workspace_reader is not None and self._knowledge_lifecycle is not None:
+            tools.append(EffectiveToolCapability(
+                name=_PREPARE_KNOWLEDGE_DELETE_CAPABILITY,
+                description=(
+                    "Prepare the canonical governed deletion command for one observed workspace "
+                    "knowledge item. This does not delete anything; user confirmation is required."
+                ),
+                input_schema=PrepareKnowledgeDeleteArguments.model_json_schema(),
+                read_only=False,
+                safely_retryable=False,
+            ))
+        if self._project_port is not None:
+            tools.append(EffectiveToolCapability(
+                name=_START_DURABLE_INVESTIGATION_CAPABILITY,
+                description=(
+                    "Start a durable background investigation only when the user's goal requires "
+                    "continuity across turns plus later progress inspection, pause, or steering. "
+                    "Return a project reference; do not wait for the report in this interaction."
+                ),
+                input_schema=StartDurableInvestigationArguments.model_json_schema(),
                 read_only=False,
                 safely_retryable=False,
             ))
@@ -804,6 +1226,48 @@ class ConversationService:
                 immutable_fields=("kind",),
                 required_repair="Create a new proposal with a fresh action_id; do not replay the prior action.",
             )
+        if (
+            isinstance(action, ToolCallProposal)
+            and action.tool_name == _READ_ACTION_OUTPUT_CAPABILITY
+        ):
+            # Service-owned: the artifact port serves it, so the tool registry has no
+            # entry to validate against and its schema is the contract.
+            if self._artifact_port is None:
+                return DecisionFeedback(
+                    action_id=action.action_id, reason_code="capability_missing",
+                    message=f"Tool {action.tool_name!r} is not currently available.",
+                    repairable_fields=("tool_name", "arguments"), immutable_fields=("action_id",),
+                    required_repair="Choose an available tool or explain the capability limitation.",
+                )
+            try:
+                ReadActionOutputArguments.model_validate(action.arguments)
+            except ValidationError as error:
+                return DecisionFeedback(
+                    action_id=action.action_id, reason_code="invalid_arguments",
+                    message=str(error),
+                    repairable_fields=("arguments",),
+                    immutable_fields=("action_id", "tool_name"),
+                    required_repair="Revise only the arguments to satisfy the declared tool schema.",
+                )
+            return None
+        if (
+            isinstance(action, ToolCallProposal)
+            and action.tool_name == _LIST_WORKSPACE_KNOWLEDGE_CAPABILITY
+        ):
+            if self._workspace_reader is None:
+                return DecisionFeedback(
+                    action_id=action.action_id,
+                    reason_code="capability_missing",
+                    message=f"Tool {action.tool_name!r} is not currently available.",
+                    immutable_fields=("action_id",),
+                    required_repair="Explain the capability limitation.",
+                    disposition="fail_closed",
+                )
+            try:
+                ListWorkspaceKnowledgeArguments.model_validate(action.arguments)
+            except ValidationError as error:
+                return self._invalid_special_arguments(action, error)
+            return None
         if isinstance(action, ToolCallProposal):
             if self._tool_port is None:
                 return DecisionFeedback(
@@ -900,6 +1364,8 @@ class ConversationService:
 
     def _safe_for_concurrency(self, action):
         if isinstance(action, ToolCallProposal):
+            if action.tool_name == _LIST_WORKSPACE_KNOWLEDGE_CAPABILITY:
+                return True
             return bool(
                 self._tool_port
                 and self._tool_port.interaction_call_is_safe_for_concurrency(
@@ -908,6 +1374,132 @@ class ConversationService:
             )
         profile = self._agent_port.profile(action.agent_id) if self._agent_port else None
         return bool(profile and set(profile.allowed_operations) <= {"delegate", "read"})
+
+    def _fit_observation_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        action_id: str,
+        capability_id: str,
+        run_ref: str,
+        security_scope,
+        execution_scope,
+    ) -> dict[str, Any]:
+        """Fit one observation into the context, offloading whatever did not fit.
+
+        The bound is what keeps ``max_total_tokens`` meaningful for a single
+        oversized return. Offloading is what keeps the bound from destroying
+        evidence: the omitted text stays readable through ``read_action_output``,
+        so choosing which part matters remains the model's decision.
+        """
+
+        bounded = bound_observation_payload(payload)
+        if not bounded.is_bounded:
+            return bounded.payload
+        fitted = dict(bounded.payload)
+        retrieval: dict[str, Any] = {
+            "omitted_chars": bounded.omitted_chars,
+            "original_chars": bounded.original_chars,
+        }
+        full_text = select_offload_text(payload)
+        try:
+            resource_ref = self._artifact_port.write_generated(
+                security_scope=security_scope,
+                execution_scope=execution_scope,
+                producer_key=f"{run_ref}:{action_id}:observation",
+                producer_ref=capability_id,
+                kind="action_output",
+                content=full_text,
+                content_digest=sha256(full_text.encode("utf-8")).hexdigest(),
+                source_artifact_refs=(),
+                evidence_refs=(),
+                limitations=(
+                    f"Offloaded for re-read: the observation was {bounded.original_chars} "
+                    "characters, beyond one observation's context budget.",
+                ),
+            )
+        except Exception as error:  # offload failure must be visible, not silent
+            retrieval["unavailable_reason"] = (
+                f"Offload failed ({type(error).__name__}); the omitted part cannot be "
+                "re-read in this turn."
+            )
+        else:
+            retrieval["resource_ref"] = resource_ref.model_dump(mode="json")
+            retrieval["read_more"] = (
+                "This excerpt omits the middle of the output. To read the omitted part, "
+                "call read_action_output with this resource_ref plus either a keyword to "
+                "locate it or a start_line to read sequentially."
+            )
+        fitted["retrieval"] = retrieval
+        return fitted
+
+    def _read_action_output(self, action, *, principal, security_scope):
+        """Serve a window of an offloaded action output back to the model.
+
+        This is executed here rather than as a registered tool because the artifact
+        belongs to this interaction: the principal and scope that wrote it are the
+        resolved request identity, which the model neither knows nor may assert.
+        Which window matters stays the model's choice.
+        """
+
+        observation = partial(
+            ActionObservation,
+            kind="tool_result",
+            action_id=action.action_id,
+            capability_id=_READ_ACTION_OUTPUT_CAPABILITY,
+        )
+        try:
+            arguments = ReadActionOutputArguments.model_validate(action.arguments)
+        except ValidationError as error:
+            return _ActionResult(action.action_id, observation(
+                status="failed",
+                payload={"ok": False, "error_kind": "invalid_param", "error": str(error)},
+            ))
+        try:
+            text = self._artifact_port.read_text(
+                arguments.resource_ref,
+                principal=principal,
+                security_scope=security_scope,
+            )
+        except Exception as error:
+            return _ActionResult(action.action_id, observation(
+                status="failed",
+                payload={
+                    "ok": False,
+                    "error_kind": "execution_failure",
+                    "error": f"{type(error).__name__}: {error}",
+                },
+            ))
+        excerpt = excerpt_payload_text(
+            text, keyword=arguments.keyword, start_line=arguments.start_line
+        )
+        payload = {
+            "ok": True,
+            # Naming the source makes each window attributable when several outputs were
+            # offloaded, and lets the loop tell a read remainder from an unread one.
+            "resource_id": arguments.resource_ref.resource_id,
+            "lines": [{"line": number, "text": line} for number, line in excerpt.lines],
+            "total_lines": excerpt.total_lines,
+            "keyword_match_count": len(excerpt.matched_lines),
+            "next_start_line": excerpt.next_start_line,
+        }
+        # A window is already line-bounded, but one line can still be huge. Bound it
+        # without offloading again: the remainder is still in the same artifact, so a
+        # narrower range is the model's remedy, not a second copy.
+        bounded = bound_observation_payload(payload)
+        window = dict(bounded.payload)
+        if bounded.is_bounded:
+            window["retrieval"] = {
+                "omitted_chars": bounded.omitted_chars,
+                "original_chars": bounded.original_chars,
+                "read_more": (
+                    "This window was too large to show in full. Request a narrower "
+                    "start_line range, or a more specific keyword."
+                ),
+            }
+        return _ActionResult(action.action_id, observation(
+            status="succeeded", payload=window,
+        ))
 
     def _execute_one(self, action, context):
         conversation_id, run_ref, principal, security_scope, source_platform = context
@@ -918,6 +1510,33 @@ class ConversationService:
             thread_id=conversation_id,
             task_id=action.action_id,
         )
+        if (
+            isinstance(action, ToolCallProposal)
+            and action.tool_name == _READ_ACTION_OUTPUT_CAPABILITY
+        ):
+            return self._read_action_output(
+                action, principal=principal, security_scope=security_scope
+            )
+        if (
+            isinstance(action, ToolCallProposal)
+            and action.tool_name == _LIST_WORKSPACE_KNOWLEDGE_CAPABILITY
+        ):
+            arguments = ListWorkspaceKnowledgeArguments.model_validate(action.arguments)
+            items = self._workspace_reader.list_workspace_knowledge(
+                workspace_id=security_scope.workspace_id,
+                user_id=principal.user_id,
+                limit=arguments.limit,
+            )
+            return _ActionResult(action.action_id, ActionObservation(
+                kind="tool_result",
+                action_id=action.action_id,
+                capability_id=action.tool_name,
+                status="succeeded",
+                payload={
+                    "items": [item.model_dump(mode="json") for item in items],
+                    "count": len(items),
+                },
+            ))
         if isinstance(action, ToolCallProposal):
             result = self._tool_port.invoke_interaction(
                 action.tool_name,
@@ -928,7 +1547,15 @@ class ConversationService:
             )
             return _ActionResult(action.action_id, ActionObservation(
                 kind="tool_result", action_id=action.action_id, capability_id=action.tool_name,
-                status="succeeded" if result.get("ok") else "failed", payload=result,
+                status="succeeded" if result.get("ok") else "failed",
+                payload=self._fit_observation_payload(
+                    result,
+                    action_id=action.action_id,
+                    capability_id=action.tool_name,
+                    run_ref=run_ref,
+                    security_scope=security_scope,
+                    execution_scope=execution_scope,
+                ),
             ))
         gateway_context = AgentGatewayContext(
             execution_scope=execution_scope,
@@ -1022,12 +1649,21 @@ class ConversationService:
             completion_contract="return typed status and artifact refs to parent",
         )
 
-    def _system_prompt(self, capabilities, usage, review_criteria=None):
+    def _system_prompt(
+        self, capabilities, usage, review_criteria=None, *, capability_projection=None
+    ):
+        """Assemble the turn's system prompt.
+
+        ``capability_projection`` lets the caller pass the serialization it will
+        also measure, so the embedded and measured strings are the same string.
+        """
+        if capability_projection is None:
+            capability_projection = capabilities.model_dump_json()
         remaining = {
-            "model_turns": self._budget_policy.max_model_turns - usage.model_turns,
-            "tool_calls": self._budget_policy.max_tool_calls - usage.tool_calls,
-            "agent_calls": self._budget_policy.max_agent_calls - usage.agent_calls,
-            "tokens": self._budget_policy.max_total_tokens - usage.total_tokens,
+            "model_turns": max(0, self._budget_policy.max_model_turns - usage.model_turns),
+            "tool_calls": max(0, self._budget_policy.max_tool_calls - usage.tool_calls),
+            "agent_calls": max(0, self._budget_policy.max_agent_calls - usage.agent_calls),
+            "tokens": max(0, self._budget_policy.max_total_tokens - usage.total_tokens),
         }
         return (
             "You are the interaction runtime's semantic decision maker. Return one root JSON object with "
@@ -1049,6 +1685,17 @@ class ConversationService:
             "Copy each text_span exactly from its user message and exclude the request to save, confirmation "
             "instructions, and other control text. Never select assistant text or paraphrase the saved payload. "
             "This proposal only prepares immutable confirmation; it does not claim the save happened. "
+            "For a question about facts stored in the user's personal or workspace knowledge, call "
+            "list_workspace_knowledge before saying the fact is absent, unavailable, or needs to be "
+            "re-supplied. No observation is not evidence of absence. "
+            "For a requested deletion, first observe the target with list_workspace_knowledge, then in "
+            "a separate turn call prepare_knowledge_delete as the only action using exactly one returned "
+            "knowledge_item_id. Preparing is not deleting; return the runtime confirmation unchanged. "
+            "Use start_durable_investigation only when the user explicitly needs work to continue beyond "
+            "this interaction and later be inspected, paused, resumed, or steered. Encode the user's goal "
+            "and acceptance conditions as requirements, call it as the only action, and do not invent a "
+            "specialist agent name or wait synchronously for its report. Ordinary multi-step work remains "
+            "in this interaction loop. "
             "Use only listed effective capabilities. Never claim a tool result "
             "before receiving its typed observation. Admission feedback must be repaired by a new proposal; "
             "do not assume rejected actions ran. A remote agent completion is evidence for you to assess, "
@@ -1061,6 +1708,15 @@ class ConversationService:
             "context_projection_refs. AgentArtifact payloads already contain the parent-visible evidence "
             "excerpt. The inspect_artifact tool is only for application-owned uploaded ResourceRef values; "
             "never pass an AgentArtifact aart_* reference to it. "
+            "An Observation carrying retrieval.omitted_chars was too large for the context and was "
+            "excerpted, so you have NOT seen the omitted part. If the user asked for a specific fact "
+            "from that payload and it is absent from the excerpt you received, you MUST call "
+            "read_action_output with {\"resource_ref\": <that retrieval.resource_ref verbatim>, "
+            "\"keyword\": \"<text that would appear on the line you need>\"} to locate it, even when "
+            "you believe you already know the answer; your own recollection is not evidence about "
+            "what this payload contains, and a fact you did not read is not a fact you observed. "
+            "Continue with start_line=<next_start_line> while more lines remain. "
+            "Report a limitation only when retrieval.unavailable_reason is present. "
             "Use an available deep-research agent for a user-requested comprehensive external research report "
             "that requires multi-source synthesis, comparison, or analysis. Use a read-only search tool for "
             "narrow lookups; do not replace a requested deep-research deliverable with a superficial lookup. "
@@ -1070,7 +1726,7 @@ class ConversationService:
             "capability limitation. "
             "Ask for clarification whenever required user input is missing. "
             + self._review_instruction(review_criteria)
-            + "Effective capabilities: " + capabilities.model_dump_json()
+            + "Effective capabilities: " + capability_projection
             + " Remaining budget: " + json.dumps(remaining)
         )
 
@@ -1111,12 +1767,12 @@ class ConversationService:
             disposition="fail_closed",
         )
 
-    def _budget_exhausted(self, conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=None):
+    def _budget_exhausted(self, conversation_id, run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, context_composition, review_criteria=None):
         final = FinalMessage(
             disposition="limitation",
             message="本次交互已达到执行预算上限，未生成替代答案。可增加预算后基于已提交结果继续。",
         )
-        self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, review_criteria=review_criteria, final_message=final)
+        self._commit(run_ref, messages, capabilities, inputs, usage, execution_order, concurrent_batches, context_composition, review_criteria=review_criteria, final_message=final)
         return ConversationTurnView(
             interaction_run_ref=run_ref,
             conversation_id=conversation_id,
@@ -1136,9 +1792,12 @@ class ConversationService:
         usage,
         execution_order,
         concurrent_batches,
+        context_composition,
         review_criteria=None,
         final_message=None,
         knowledge_save_operation=None,
+        knowledge_delete_command_ref=None,
+        project_reference=None,
     ):
         prior = self._journal.get(run_ref)
         self._journal.put(InteractionTrace(
@@ -1147,9 +1806,20 @@ class ConversationService:
             messages=tuple(messages),
             inputs=tuple(inputs), usage=usage,
             execution_order=tuple(execution_order), concurrent_batches=tuple(concurrent_batches),
+            context_composition=tuple(context_composition),
             review_criteria=review_criteria,
             final_message=final_message,
             knowledge_save_operation=knowledge_save_operation,
+            knowledge_delete_command_ref=(
+                knowledge_delete_command_ref
+                if knowledge_delete_command_ref is not None
+                else (prior.knowledge_delete_command_ref if prior is not None else None)
+            ),
+            project_reference=(
+                project_reference
+                if project_reference is not None
+                else (prior.project_reference if prior is not None else None)
+            ),
         ))
 
 

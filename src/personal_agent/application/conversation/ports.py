@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from personal_agent.application.workspace.models import ConversationSolidifyResult
+from personal_agent.application.knowledge_lifecycle.models import KnowledgeDeleteOperationView
 from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.capabilities.contracts.interaction import (
     InteractionToolCallValidation,
@@ -14,12 +15,14 @@ from personal_agent.kernel.contracts.agent import (
     ChildAgentRunRecord,
     SubagentProfile,
 )
-from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
+    ExecutionScope,
     SecurityScope,
 )
+
+from .models import ProjectReference, StartDurableInvestigationArguments, WorkspaceKnowledgeCandidate
 
 
 class InteractionToolPort(Protocol):
@@ -69,6 +72,21 @@ class InteractionArtifactPort(Protocol):
         security_scope: SecurityScope,
     ) -> str: ...
 
+    def write_generated(
+        self,
+        *,
+        security_scope: SecurityScope,
+        execution_scope: ExecutionScope,
+        producer_key: str,
+        producer_ref: str,
+        kind: str,
+        content: str,
+        content_digest: str,
+        source_artifact_refs: tuple[ResourceRef, ...],
+        evidence_refs: tuple[str, ...],
+        limitations: tuple[str, ...] = (),
+    ) -> ResourceRef: ...
+
     def poll(
         self,
         agent_run_id: str,
@@ -92,8 +110,51 @@ class ConversationKnowledgeWriter(Protocol):
     ) -> ConversationSolidifyResult: ...
 
 
+class ConversationWorkspaceReadPort(Protocol):
+    def list_workspace_knowledge(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        limit: int,
+    ) -> tuple[WorkspaceKnowledgeCandidate, ...]: ...
+
+
+class ConversationKnowledgeLifecyclePort(Protocol):
+    def prepare_delete(
+        self,
+        *,
+        workspace_id: str,
+        user_id: str,
+        target_note_id: str,
+        reason: str,
+        idempotency_key: str,
+    ) -> KnowledgeDeleteOperationView: ...
+
+    def get_delete(
+        self,
+        command_id: str,
+        *,
+        user_id: str,
+    ) -> KnowledgeDeleteOperationView | None: ...
+
+
+class ConversationProjectPort(Protocol):
+    def start(
+        self,
+        *,
+        principal: AuthenticatedPrincipal,
+        security_scope: SecurityScope,
+        request: StartDurableInvestigationArguments,
+        idempotency_key: str,
+    ) -> ProjectReference: ...
+
+
 __all__ = [
+    "ConversationKnowledgeLifecyclePort",
     "ConversationKnowledgeWriter",
+    "ConversationProjectPort",
+    "ConversationWorkspaceReadPort",
     "InteractionAgentPort",
     "InteractionArtifactPort",
     "InteractionToolPort",

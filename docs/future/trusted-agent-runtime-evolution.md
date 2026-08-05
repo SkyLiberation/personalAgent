@@ -33,7 +33,7 @@ Semantic Proposal
 
 期望结果是：
 
-1. 任何入口先看到同一框架命题、三条主链和 owner；
+1. 任何入口先看到同一框架命题、目标责任链和 owner；
 2. current、historical、future、diagnostic、release evidence 明确分开；
 3. 文档不能声称当前 gate 通过，除非相同工作树实际命令为零退出；
 4. 技术实现可以替换，但 Proposal、Authority、Execution Fact、Verification、Completion 的边界
@@ -245,6 +245,10 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 这些候选共享同一退出规则：baseline 未失败、失败来自环境/测试、或当前路径已满足用户目标时，
 停止优化。不得先创建 Interface、Registry、Projection、Fake 或第二状态模型。
+
+「两阶段 capability discovery」与「Context compaction」两行的机制细节、业界坐标和缺失的
+baseline 测量能力见 [Context 物化度量与逐出](context-materialization-measurement-and-eviction.md)；
+准入判定仍由本节所有，那份文档不构成第二个 owner。
 
 ## 8. Complexity Budget and Rejected Alternatives
 

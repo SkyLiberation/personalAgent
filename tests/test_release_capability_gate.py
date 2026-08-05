@@ -8,7 +8,7 @@ from evals.e2e_quality.evidence_catalog import (
     EvidenceClaimKind,
 )
 from evals.e2e_quality.release_gate import (
-    REQUIRED_COMPOSITE_EVIDENCE_IDS,
+    NATIVE_CAPABILITIES,
     REQUIRED_NATIVE_EVIDENCE_IDS,
     REQUIRED_LOOP_EVIDENCE_IDS,
     evaluate_release_capabilities,
@@ -37,20 +37,16 @@ def _case(
     )
 
 
-def _catalog(*, include_composites: bool = True) -> tuple[EvidenceCase, ...]:
+def _catalog() -> tuple[EvidenceCase, ...]:
     native = tuple(
         _case(evidence_id, EvidenceClaimKind.PRODUCT_CAPABILITY)
         for evidence_id in REQUIRED_NATIVE_EVIDENCE_IDS
-    )
-    composite = tuple(
-        _case(evidence_id, EvidenceClaimKind.COMPOSITE_CAPABILITY)
-        for evidence_id in REQUIRED_COMPOSITE_EVIDENCE_IDS
     )
     loops = tuple(
         _case(evidence_id, EvidenceClaimKind.COMPLEX_LOOP)
         for evidence_id in REQUIRED_LOOP_EVIDENCE_IDS
     )
-    return native + (composite if include_composites else ()) + loops
+    return native + loops
 
 
 def _write_passing_archive(temp_dir, cases: tuple[EvidenceCase, ...]) -> None:
@@ -93,8 +89,7 @@ def test_gate_trusts_only_same_revision_catalog_and_trace_intersection(temp_dir)
         evidence_cases=cases,
     )
 
-    assert len(report.trusted_native_capability_ids) == 8
-    assert len(report.trusted_composite_capability_ids) == 4
+    assert len(report.trusted_native_capability_ids) == len(NATIVE_CAPABILITIES)
     assert len(report.trusted_loop_capability_ids) == 6
 
 
@@ -111,21 +106,6 @@ def test_catalog_or_implementation_presence_without_trace_is_unverified(temp_dir
         result.status == "unverified"
         for result in report.native_capabilities
     )
-
-
-def test_base_evidence_does_not_prove_composite_capabilities(temp_dir) -> None:
-    cases = _catalog(include_composites=False)
-    _write_passing_archive(temp_dir, cases)
-
-    report = evaluate_release_capabilities(
-        revision=REVISION,
-        target_dirty=False,
-        trace_root=temp_dir,
-        evidence_cases=cases,
-    )
-
-    assert len(report.trusted_native_capability_ids) == 8
-    assert report.trusted_composite_capability_ids == ()
 
 
 def test_dirty_target_revision_fails_closed_even_with_passing_archive(temp_dir) -> None:

@@ -230,13 +230,19 @@ ResearchRun 可以在内部调用模型和 Web Search，但状态机是确定性
 
 ## 8. 请求八：创建动态长调查
 
-用户通过 Investigation Project 产品入口提交目标、required result contract、scope 和预算。它不是普通 Conversation 自动升级出来的隐藏 Task。
+普通用户只需在 Conversation 中描述目标、required result、来源约束，以及“需要后台持续并可查看、
+暂停或调整”的业务要求。模型可以提出 `start_durable_investigation`；Admission 接受后调用现有
+`InvestigationProjectService.create`。已明确知道业务动作的 UI/自动化仍可直接调用 Project API，
+两者不是两套 Project 写路径。
 
 ```text
-POST /api/investigation-projects
+POST /api/conversation/turn
+  -> typed start_durable_investigation proposal
+  -> capability-specific Admission
+  -> InvestigationProjectService.create
   -> persist immutable Project definition
   -> enqueue investigation worker task
-  -> 202 + project_id
+  -> background_started + ProjectReference
 
 investigation worker
   -> rehydrate append-only journal
@@ -258,7 +264,7 @@ investigation worker
 
 `GET /api/investigation-projects/{id}` 只读取 projection，不调用模型或推进状态。steering 只修订未冻结 SubGoal；恢复复用 accepted Plan、稳定 submission key 和已提交执行事实，不重新生成冻结 Command。
 
-当前 LT01-LT13 已覆盖生产 Domain/Application/PostgreSQL/Worker 路径，但 semantic model 和外部 Provider 使用 scripted/frozen Port，因此属于诊断证据，不是 live model/provider release evidence。
+当前 LT01-LT08、LT10-LT13 覆盖生产 Domain/Application/PostgreSQL/Worker 路径，但 semantic model 和外部 Provider 使用 scripted/frozen Port，因此属于诊断证据，不是 live model/provider release evidence。LT09 因没有实际 paired baseline 已删除。
 
 对应入口：[Investigation project routes](../../src/personal_agent/adapters/web/routes/investigation_projects.py)。
 
@@ -282,6 +288,9 @@ investigation worker
 
 ```text
 prepare_conversation_knowledge_save
+list_workspace_knowledge
+prepare_knowledge_delete
+start_durable_investigation
 ```
 
 不应该暴露：
@@ -307,10 +316,11 @@ research_verify_digest
 | Workspace Ask | 产品 UI/API | Workspace API | 不是统一 Conversation 路径 |
 | 明确 user message 的确认后保存 | 模型选择 Application Capability + 用户确认 | Conversation + Workspace solidify | 是（E14 定向通过） |
 | 保存 assistant candidate / 冲突核对后保存 | 未准入 | 无 | 否 |
-| 删除/恢复 | 产品 UI/API + 用户确认 | lifecycle API | 否 |
+| 删除 | 模型选择粗粒度 capability + 用户确认 | Conversation + lifecycle API | 是（E22 定向通过） |
+| 恢复 | 产品 UI/API + 用户确认 | lifecycle API | 否 |
 | 创建/修改订阅 | 产品 UI/API | Research API | 否 |
 | 定时运行 | Scheduler/Worker | Queue | 不应由每轮对话决定 |
-| 动态 durable 调查 | 用户显式创建 Project；模型在 Project 内规划 | Investigation API + Worker | 不会从 Conversation 隐式创建 |
+| 动态 durable 调查 | 模型选择粗粒度 capability；Project 内模型规划 | Conversation 或直接 Project API + Worker | 是（E23 定向通过） |
 
 ## 11. 为什么不加关键词 Router
 

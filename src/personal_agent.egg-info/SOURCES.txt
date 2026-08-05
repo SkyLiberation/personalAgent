@@ -73,6 +73,7 @@ src/personal_agent/application/capture/providers/url.py
 src/personal_agent/application/capture/providers/web_search.py
 src/personal_agent/application/conversation/__init__.py
 src/personal_agent/application/conversation/models.py
+src/personal_agent/application/conversation/observation_bounds.py
 src/personal_agent/application/conversation/ports.py
 src/personal_agent/application/conversation/review_admission.py
 src/personal_agent/application/conversation/service.py
@@ -314,6 +315,7 @@ tests/test_conversation_interaction.py
 tests/test_core_projections.py
 tests/test_document_partition_coordinates.py
 tests/test_e2e_evidence_catalog.py
+tests/test_e2e_impact_map.py
 tests/test_e2e_trace_archive.py
 tests/test_embedding_trace.py
 tests/test_entailment_judge.py
@@ -348,6 +350,7 @@ tests/test_memory.py
 tests/test_mmr_selection.py
 tests/test_multihoprag_adapter.py
 tests/test_observability.py
+tests/test_observation_bounds.py
 tests/test_open_ragbench_adapter.py
 tests/test_open_ragbench_structural.py
 tests/test_policy.py

@@ -280,6 +280,54 @@ export type WorkspaceCapturedResource = {
   };
 };
 
+export type ProjectReference = {
+  project_id: string;
+  tenant_id: string;
+  workspace_id: string;
+  user_id: string;
+  state: string;
+  title: string;
+  goal: string;
+};
+
+export type InvestigationProjectView = {
+  project_id: string;
+  state: string;
+  last_state_reason: string;
+  waiting_reasons: Array<{ code?: string; message?: string }>;
+  completion_report?: unknown;
+};
+
+export function fetchInvestigationProject(
+  reference: ProjectReference,
+): Promise<InvestigationProjectView> {
+  const params = new URLSearchParams({
+    tenant_id: reference.tenant_id,
+    workspace_id: reference.workspace_id,
+    user_id: reference.user_id,
+  });
+  return requestJson<InvestigationProjectView>(
+    `/api/investigation-projects/${encodeURIComponent(reference.project_id)}?${params.toString()}`,
+  );
+}
+
+export function setInvestigationProjectPaused(
+  reference: ProjectReference,
+  paused: boolean,
+): Promise<InvestigationProjectView> {
+  return requestJson<InvestigationProjectView>(
+    `/api/investigation-projects/${encodeURIComponent(reference.project_id)}/${paused ? "pause" : "resume"}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        tenant_id: reference.tenant_id,
+        workspace_id: reference.workspace_id,
+        user_id: reference.user_id,
+      }),
+    },
+  );
+}
+
 export type WorkspaceGroundedAnswer = {
   answer: string;
   grounding_status: "supported" | "weak_evidence" | "unsupported";

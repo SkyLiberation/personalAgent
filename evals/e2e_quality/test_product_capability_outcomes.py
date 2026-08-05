@@ -1,4 +1,4 @@
-"""Release E2E journeys for product and composite capability claims.
+"""Release E2E journeys for application capability claims.
 
 Every case enters through the separately running HTTP process.  Setup is also
 performed through HTTP; PostgreSQL reads are used only for evidence capture in
@@ -25,17 +25,11 @@ from evals.e2e_quality.trace_archive import TraceArchive
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
     _get_json,
-    _new_github_mcp_web_process,
     _new_live_web_process,
-    _new_notion_mcp_web_process,
     _post_json,
     _post_text_attachment,
     _require_live_dependencies,
     _yield_started_server,
-    test_e16_http_process_reads_github_through_real_mcp_gateway as _profile_e16,
-    test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result as _profile_e17,
-    test_e18_http_process_reads_notion_through_real_mcp_gateway as _profile_e18,
-    test_e19_http_process_mcp_capability_unavailable_fails_closed as _profile_e19,
 )
 
 
@@ -669,78 +663,16 @@ def test_product_e05_research_run_journey(
         "Agent 工具协议最近的发展",
     )
     run = detail["run"]
-    assert run["status"] in {
-        "completed_verified",
-        "completed_with_limitations",
-        "partial_no_supported_claims",
-        "partial_budget_exhausted",
-        "partial_low_yield",
-    }
-    if detail["digest"] is not None:
-        assert all(item["source_urls"] for item in detail["digest"]["items"])
+    assert run["status"] in {"completed_verified", "completed_with_limitations"}
+    assert detail["digest"] is not None
+    assert detail["digest"]["items"]
+    assert all(item["source_urls"] for item in detail["digest"]["items"])
     _record(
         trace_archive,
         request,
         "E05.product_http",
         {"research": detail},
         profile="baseline+web_search",
-    )
-
-
-def test_product_e06_mcp_read_extension(
-    live_web_process: LiveWebProcess,
-    server_temp_dir: Path,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    # Each profile is a real production assembly, but they run sequentially so
-    # one E2E journey cannot overload the shared model provider with idle peers.
-    live_web_process.stop()
-    try:
-        github_server = _new_github_mcp_web_process(
-            server_temp_dir / "e06-github-mcp",
-            live_web_process.settings,
-        )
-        for running_server in _yield_started_server(github_server):
-            _profile_e16(running_server, trace_archive, request)
-
-        notion_server = _new_notion_mcp_web_process(
-            server_temp_dir / "e06-notion-mcp",
-            live_web_process.settings,
-        )
-        for running_server in _yield_started_server(notion_server):
-            _profile_e18(running_server, trace_archive, request)
-
-        live_web_process.start()
-        _profile_e19(live_web_process, trace_archive, request)
-    finally:
-        if live_web_process.process is None:
-            live_web_process.start()
-    _record(
-        trace_archive,
-        request,
-        "E06.product_http",
-        {
-            "github_read_completed": True,
-            "notion_read_completed": True,
-            "capability_unavailable_confirmed": True,
-        },
-        profile="baseline+github_mcp+notion_mcp",
-    )
-
-
-def test_product_e07_a2a_research_delegation(
-    live_a2a_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    _profile_e17(live_a2a_web_process, trace_archive, request)
-    _record(
-        trace_archive,
-        request,
-        "E07.product_http",
-        {"real_a2a_artifact_completed": True},
-        profile="baseline+gpt_researcher_a2a",
     )
 
 
@@ -795,13 +727,16 @@ def _run_live_investigation_report_journey(
     request: pytest.FixtureRequest,
     *,
     evidence_id: str,
+    goal_override: str | None = None,
+    title: str = "Agent 协议变化调研",
+    requirements_override: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     worker, worker_log_path = live_investigation_worker
     marker = uuid4().hex
     tenant_id = f"tenant-b03-{marker}"
     workspace_id = f"workspace-b03-{marker}"
     user_id = f"user-b03-{marker}"
-    goal = (
+    goal = goal_override or (
         "调研 2025-03-01 至 2025-06-30 公开发布的 MCP 与 A2A "
         "互操作规范版本或发布变化，至少比较两项；排除产品博客、非公开草案和没有正式发布说明的"
         f"实现代码；给出来源和局限。验收标记：{marker}。"
@@ -814,9 +749,9 @@ def _run_live_investigation_report_journey(
             "tenant_id": tenant_id,
             "workspace_id": workspace_id,
             "user_id": user_id,
-            "title": "Agent 协议变化调研",
+            "title": title,
             "goal": goal,
-            "requirements": [{
+            "requirements": requirements_override or [{
                 "requirement_id": "recent-protocol-changes",
                 "statement": (
                     "比较至少两项指定时间窗口内公开发布的 MCP、A2A 或 "
@@ -949,6 +884,7 @@ def _run_live_investigation_report_journey(
         profile="baseline+web_search",
     )
     return {
+        "goal": goal,
         "final_view": final_view,
         "environment_failed": environment_failed,
         "report_response": report_response,
@@ -957,25 +893,69 @@ def _run_live_investigation_report_journey(
     }
 
 
-def test_baseline_b03_live_investigation_has_no_user_readable_report(
+def test_e24_research_boundary_paired_baseline(
     live_web_search_process: LiveWebProcess,
     live_investigation_worker: tuple[subprocess.Popen[bytes], Path],
     trace_archive: TraceArchive,
     request: pytest.FixtureRequest,
 ) -> None:
-    journey = _run_live_investigation_report_journey(
+    marker = uuid4().hex[:10]
+    goal = (
+        "调查 2025 年以来 MCP 与 A2A 互操作规范的公开变化，比较至少两项正式变化，"
+        "说明机制、信任边界、生产采用风险、来源日期和局限，只使用可核验的官方来源。"
+        f"验收标记：{marker}。"
+    )
+    research = _run_research(
+        live_web_search_process,
+        f"research-boundary-{marker}",
+        goal,
+    )
+    conversation = _post_json(
+        f"{live_web_search_process.base_url}/api/conversation/turn",
+        {
+            "conversation_id": f"conversation-boundary-{marker}",
+            "user_id": f"conversation-boundary-{marker}",
+            "messages": [{"role": "user", "content": goal}],
+        },
+    )
+    conversation_trace = _get_json(
+        f"{live_web_search_process.base_url}/api/conversation/runs/"
+        f"{conversation['interaction_run_ref']}"
+    )
+    project = _run_live_investigation_report_journey(
         live_web_search_process,
         live_investigation_worker,
         trace_archive,
         request,
-        evidence_id="B03.live_investigation_report_baseline",
+        evidence_id="E24.research_boundary_project",
+        goal_override=goal,
+        title="MCP 与 A2A 互操作规范对照",
+        requirements_override=[{
+            "requirement_id": "protocol-comparison",
+            "statement": "比较至少两项 2025 年以来公开发布的 MCP 或 A2A 正式规范变化。",
+            "acceptance_contract": (
+                "报告覆盖机制、信任边界、生产采用风险、官方来源日期和明确局限。"
+            ),
+        }],
     )
-    if journey["environment_failed"]:
-        pytest.fail("live Investigation baseline failed at model/provider boundary")
-    assert not journey["delivered"]
-    observation = journey["repair_observation"]
-    assert observation["verification_wait_count"] > 0
-    assert observation["repeated_execution_proposal_keys"] == []
+    _record(
+        trace_archive,
+        request,
+        "E24.research_boundary_comparison",
+        {
+            "natural_user_goal": goal,
+            "research": research,
+            "conversation": conversation,
+            "conversation_trace": conversation_trace,
+            "project": project,
+        },
+        profile="baseline+web_search",
+    )
+    assert research["run"]["status"] != "queued"
+    assert conversation["disposition"] in {
+        "answer", "clarification_required", "limitation", "failed"
+    }
+    assert project["environment_failed"] is False
 
 
 def test_product_ip01_live_investigation_report(
@@ -1012,6 +992,65 @@ def test_product_ip01_live_investigation_report(
     assert "局限" in content or "limitation" in content.lower()
     assert "blog.modelcontextprotocol.io" not in content.lower()
     assert "developers.googleblog.com" not in content.lower()
+
+
+def test_product_e23_durable_investigation_from_goal_entry(
+    live_web_search_process: LiveWebProcess,
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    workspace_id = f"product-e23-{uuid4().hex}"
+    goal = (
+        "请在后台持续调查主流 Agent 协议最近一年的关键变化，覆盖协议机制、信任边界、"
+        "生产采用风险和迁移建议，优先使用官方来源。完成后交付一份带逐项来源的中文报告。"
+        "这项调查可以持续一段时间，我需要之后能查看进度、暂停或调整来源范围。"
+    )
+    assert all(
+        term not in goal
+        for term in ("InvestigationProject", "Workflow", "Tool", "Agent ID", "执行顺序")
+    )
+    started = _post_json(
+        f"{live_web_search_process.base_url}/api/conversation/turn",
+        {
+            "conversation_id": workspace_id,
+            "user_id": workspace_id,
+            "messages": [{"role": "user", "content": goal}],
+        },
+    )
+    initial_trace = _get_json(
+        f"{live_web_search_process.base_url}/api/conversation/runs/"
+        f"{started['interaction_run_ref']}"
+    )
+    _record(
+        trace_archive,
+        request,
+        "E23.product_http",
+        {"natural_user_goal": goal, "result": started, "trace": initial_trace},
+        profile="baseline+web_search",
+    )
+    project_ref = started.get("project_reference")
+    assert started["disposition"] == "background_started"
+    assert isinstance(project_ref, dict)
+    assert str(project_ref.get("project_id", "")).startswith("iprj_")
+    query = urlencode({
+        "tenant_id": project_ref["tenant_id"],
+        "workspace_id": project_ref["workspace_id"],
+        "user_id": project_ref["user_id"],
+    })
+    assert project_ref["workspace_id"] == workspace_id
+    assert project_ref["user_id"] == workspace_id
+    project = _get_json(
+        f"{live_web_search_process.base_url}/api/investigation-projects/"
+        f"{project_ref['project_id']}?{query}"
+    )
+    trace = _get_json(
+        f"{live_web_search_process.base_url}/api/conversation/runs/"
+        f"{started['interaction_run_ref']}"
+    )
+    assert project["project_id"] == project_ref["project_id"]
+    assert project["state"] in {"planning", "active", "paused"}
+    assert trace["project_reference"]["project_id"] == project_ref["project_id"]
+    assert "completion_report" not in started
 
 
 def test_product_e14_conversation_governed_save(
@@ -1148,6 +1187,93 @@ def test_product_e14_conversation_governed_save(
         },
         profile="baseline",
     )
+
+
+def test_product_e22_governed_delete_from_goal_entry(
+    live_web_process: LiveWebProcess,
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    workspace_id = f"product-e22-{uuid4().hex}"
+    marker = uuid4().hex[:10]
+    target_text = f"错误知识条目 {marker}：生产切换窗口是周一 09:00。"
+    target = _workspace_ingest(
+        live_web_process,
+        workspace_id,
+        target_text,
+        source_type="document",
+    )
+    target_id = str(target["knowledge_items"][0]["knowledge_item_id"])
+    other_workspace = f"other-{workspace_id}"
+    other_secret = f"other-secret-{uuid4().hex}"
+    _workspace_ingest(
+        live_web_process,
+        other_workspace,
+        f"{other_secret} 必须保留。",
+        source_type="document",
+    )
+    user_text = f"删除我刚才标记错误的那条知识：错误知识条目 {marker}。删除前让我确认。"
+    assert all(term not in user_text for term in ("delete command", "Workflow", "Tool"))
+    prepared = _post_json(
+        f"{live_web_process.base_url}/api/conversation/turn",
+        {
+            "conversation_id": workspace_id,
+            "user_id": workspace_id,
+            "messages": [{"role": "user", "content": user_text}],
+        },
+    )
+    initial_trace = _get_json(
+        f"{live_web_process.base_url}/api/conversation/runs/"
+        f"{prepared['interaction_run_ref']}"
+    )
+    _record(
+        trace_archive,
+        request,
+        "E22.product_http",
+        {
+            "natural_user_goal": user_text,
+            "target_id": target_id,
+            "prepared": prepared,
+            "trace": initial_trace,
+        },
+        profile="baseline",
+    )
+    pending = prepared.get("pending_confirmation")
+    assert prepared["disposition"] == "confirmation_required"
+    assert isinstance(pending, dict)
+    assert pending["kind"] == "knowledge_delete"
+    assert pending["operation"]["status"] == "awaiting_confirmation"
+    command = pending["operation"]["command"]
+    assert command["target_note_id"] == target_id
+    assert other_secret not in json.dumps(prepared, ensure_ascii=False)
+    assert target_id in {
+        item["id"]
+        for item in _get_json(
+            f"{live_web_process.base_url}/api/notes?" + urlencode({"user_id": workspace_id})
+        )
+    }
+    confirmed = _decide_delete(
+        live_web_process,
+        pending["operation"],
+        user_id=workspace_id,
+        decision="confirm",
+        confirmation_ref="goal-entry-confirmation",
+    )
+    replayed = _decide_delete(
+        live_web_process,
+        pending["operation"],
+        user_id=workspace_id,
+        decision="confirm",
+        confirmation_ref="goal-entry-confirmation",
+    )
+    assert confirmed["status"] == "executed"
+    assert confirmed["receipt"] == replayed["receipt"]
+    assert target_id not in {
+        item["id"]
+        for item in _get_json(
+            f"{live_web_process.base_url}/api/notes?" + urlencode({"user_id": workspace_id})
+        )
+    }
 
 
 def test_product_e09_multi_source_capture(
@@ -1524,103 +1650,4 @@ def test_product_e13_scheduled_intelligence_journey(
         "E13.product_http",
         result,
         profile="baseline+web_search+delivery",
-    )
-
-
-def test_composite_c01_personal_research_analyst(
-    live_web_search_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    workspace_id = f"composite-c01-{uuid4().hex}"
-    _workspace_ingest(
-        live_web_search_process,
-        workspace_id,
-        "本地资料只记录 MCP 负责工具连接。",
-        source_type="document",
-    )
-    local_answer = _workspace_ask(live_web_search_process, workspace_id, "Agent 协议有哪些最新变化？")
-    research = _run_research(live_web_search_process, workspace_id, "Agent 协议最新变化")
-    before_save = _get_json(
-        f"{live_web_search_process.base_url}/api/workspace/claims?"
-        + urlencode({"workspace_id": workspace_id})
-    )
-    saved = _post_json(
-        f"{live_web_search_process.base_url}/api/workspace/solidify-conversation",
-        {
-            "user_id": workspace_id,
-            "workspace_id": workspace_id,
-            "messages": [{"role": "user", "content": "确认保存结论：外部研究需要与个人资料分开标注。"}],
-        },
-    )
-    assert local_answer["answer_claim_saved_count"] == 0
-    assert research["run"]["status"] != "queued"
-    assert saved["user_claim_count"] >= 1
-    _record(
-        trace_archive,
-        request,
-        "C01.composite_http",
-        {"grounded_ask": local_answer, "research": research, "claims_before_save": before_save, "save": saved},
-        profile="baseline+web_search",
-    )
-
-
-def test_composite_c02_continuous_knowledge_steward(
-    live_delivery_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    result = _scheduled_delivery_journey(live_delivery_process)
-    assert result["run"]["digest"] is not None
-    _record(
-        trace_archive,
-        request,
-        "C02.composite_http",
-        result,
-        profile="baseline+web_search+delivery",
-    )
-
-
-def test_composite_c03_personalized_learning_agent(
-    live_web_search_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    workspace_id = "default"
-    _workspace_ingest(
-        live_web_search_process,
-        workspace_id,
-        f"学习事实 {uuid4().hex}：向量检索使用嵌入相似度。",
-        source_type="document",
-    )
-    cards = _get_json(f"{live_web_search_process.base_url}/api/review/cards?due_only=true")
-    card = cards["items"][0]
-    feedback = _post_json(
-        f"{live_web_search_process.base_url}/api/review/cards/{card['id']}/feedback",
-        {"outcome": "forgotten"},
-    )
-    research = _run_research(live_web_search_process, workspace_id, "向量检索的最新最佳实践")
-    assert feedback["state"] == "due"
-    assert research["run"]["status"] != "queued"
-    _record(
-        trace_archive,
-        request,
-        "C03.composite_http",
-        {"review_card": card, "feedback": feedback, "research": research},
-        profile="baseline+web_search",
-    )
-
-
-def test_composite_c04_expert_collaboration_agent(
-    live_a2a_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    _profile_e17(live_a2a_web_process, trace_archive, request)
-    _record(
-        trace_archive,
-        request,
-        "C04.composite_http",
-        {"delegation_and_parent_synthesis_completed": True},
-        profile="baseline+gpt_researcher_a2a",
     )

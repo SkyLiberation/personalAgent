@@ -2,11 +2,11 @@
 
 本项目构建的是一套可信 Agent Runtime：模型负责开放语义 Proposal，Admission/Policy 负责
 确定性准入，Gateway/Executor 产生执行事实，Verifier 判断语义满足，Completion Gate 依据
-required result contract 关闭用户目标。短生命周期 Conversation、确定性领域 Workflow 和显式
-Durable Investigation Project 是这套框架针对不同生命周期的三种运行形态，不是三套互相竞争的
-架构。
+required result contract 关闭用户目标。普通用户只面对一套目标入口；request-local Interaction、
+确定性领域 Use Case 和 Durable Investigation Project 是内部按约束选择的执行语义，不是要求用户
+理解的三种运行模式。
 
-当前系统分层、框架不变量、三条主链、LLM/确定性边界、Capability/MCP/A2A、知识与运行时事实
+当前系统分层、框架不变量、目标责任链、LLM/确定性边界、Capability/MCP/A2A、知识与运行时事实
 统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
 
 ## 目录分工
@@ -55,6 +55,7 @@ Durable Investigation Project 是这套框架针对不同生命周期的三种�
 | Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md) |
 | Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
 | Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md) |
+| 单次 Observation 的上下文边界与卸载重读 | [adr/0013-bounded-observation-and-offloaded-read.md](adr/0013-bounded-observation-and-offloaded-read.md) |
 
 以下文档仍包含已删除 `TaskAnalyzer/GoalGraph/Executive/LangGraph` 总主链的历史设计，当前不再是
 权威事实源：`topics/task-analysis.md`、`topics/runtime.md`、
@@ -83,6 +84,7 @@ Durable Investigation Project 是这套框架针对不同生命周期的三种�
 | Future 范围与退出规则 | [future/README.md](future/README.md) |
 | 当前框架、文档、架构门禁与 clean release 收敛 | [future/trusted-agent-runtime-evolution.md](future/trusted-agent-runtime-evolution.md) |
 | 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
+| Context 物化度量、Observation 逐出与两阶段能力加载 | [future/context-materialization-measurement-and-eviction.md](future/context-materialization-measurement-and-eviction.md) |
 
 ## 运维与参考
 

@@ -346,7 +346,7 @@ Application Capability，但看不到 `research_initialize_state` 这类内部�
 
 ### 证据与边界
 
-- E06/E16/E18 使用真实 GitHub/Notion 数据源与 MCP gateway；
+- E16/E18 使用真实 GitHub/Notion 数据源与 MCP gateway，E21 进一步覆盖超大返回分页取证；
 - **E19 是这一轴最有价值的反证**：能力不可用时断言 `tool_calls=0`，系统返回 limitation，
   不换相似 Tool，也不用常识编造远端内容。
 
@@ -482,7 +482,7 @@ AgentDelegationProposal（bounded_sub_goal + context_projection_refs
 
 ### 证据与边界
 
-- E07/E17/C04/L04 使用真实 GPT Researcher，执行后断言 child Artifact 与父级用户结果分离；
+- E17/L04 使用真实 GPT Researcher，执行后断言 child Artifact 与父级用户结果分离；
 - E17 trace 自动断言 `agent_calls == 1`；
 - durable Agent uncertain-submit / restart reconcile 自动断言 Provider submit count=1；
 - cancel 会 quarantine 终态后返回的 Artifact，不重新打开 Project。
@@ -590,8 +590,9 @@ synthesis 分类，**先 reserve 再调外部能力，最后 charge/release**；
 | Child Agent | `AgentGateway` run store | child status 与父结果分离 |
 
 **普通 Conversation**：只保存 committed facts（messages、capability revision、Observation/
-Feedback、usage、execution order、concurrent batches、final message）。恢复后模型直接读 typed
-inputs 继续，Admission 拒绝重复 `action_id`。
+Feedback、usage、execution order、concurrent batches、final message）以及跨领域资源引用。删除只存
+command ref，durable 调查只存 ProjectReference；Operation、Project definition/Plan/state 仍由原
+Application owner 持有。恢复后模型直接读 typed inputs，或按 ref 回查 canonical projection。
 
 **这一轴最能体现判断力的是一次删除**：旧 `WorkingPlanSnapshot` 只进入 Prompt/Trace，没有任何
 生产调度消费者，却增加首次 action 和恢复的模型轮次——所以把它删了。真正驱动 ready set、
@@ -605,12 +606,12 @@ Project 并用稳定 idempotency key 重新入队，覆盖「create 已提交但
 
 - **L03**：在观察到第一个 committed input、最终回答尚未产生时**真实终止进程**；恢复后必须回答
   本用户随机事实、排除另一用户冲突事实，且执行顺序前缀不变、旧 action 不重复；
-- LT01-LT13：worker 重启从 PostgreSQL journal 恢复、stable submission key 避免重复 child submit、
+- LT01-LT08、LT10-LT13：worker 重启从 PostgreSQL journal 恢复、stable submission key 避免重复 child submit、
   cancel quarantine late Artifact；
 - `completing` / `cancelling` 进程崩溃恢复已通过故障注入，恢复不重复 final synthesis。
 
 边界要说清两层：普通 Interaction 用**文件 journal，已证单进程重启恢复，不是多实例分布式
-session store**；LT01-LT13 使用生产 Domain/Store/Worker 但 model 与 Provider 是 scripted/frozen
+session store**；当前 LT diagnostics 使用生产 Domain/Store/Worker 但 model 与 Provider 是 scripted/frozen
 Port，属于 **diagnostic evidence，不是 live release evidence**。
 
 ### 预期追问
@@ -675,8 +676,8 @@ Retrieval Index（找候选，非真源）。
 - E12：冲突/孤立分析与 backlink **必须绑定 source Claim**，projection 不是新写入口；
 - L01：最终回答包含本用户事实并**排除另一用户的冲突事实**。
 
-边界：这套能力**还没有通过统一 Agent 入口转化为完整用户闭环**。E14 只贯通了一条 exact-span
-保存；「冲突核对后保存」仍是候选 Baseline B，未准入。
+边界：统一目标入口已经覆盖 canonical knowledge list、E14 exact-span 保存、E22 确认式删除；
+restore、订阅变更和「冲突核对后保存」仍未从 Conversation 贯通，不能从已通过场景外推。
 
 ### 预期追问
 
@@ -816,18 +817,20 @@ Provider、不注入中间 Goal/Proposal/Observation。
 **同时断言反事实**（这是最值得讲的部分）：错误 digest 不执行、Ask 不写 Claim、跨 workspace
 不泄漏、预算耗尽不拼替代答案、能力缺失不换 Tool、replay 不重复副作用。
 
-**自然用户输入**：L01-L06 与 E16-E19 已改为不泄漏内部 Tool、Agent、Artifact、verdict 或执行顺序；
+**自然用户输入**：L01-L06 与 E16-E19、E21 不泄漏内部 Tool、Agent、Artifact、verdict 或执行顺序；
 这些只允许出现在**执行后**的 trace 断言里。E16/E18 还专门移除了 Prompt 内的预期答案。
 
 **证据分级**：
 
 ```text
-E01-E14/E20 原生产品能力    release evidence
-C01-C04  组合用户旅程      release evidence
-L01-L06  复杂 Interaction  release evidence
-E16-E19  外部 Provider     profile，只作为对应旅程的组成证据，不单独产生发布声明
-LT01-LT13 durable runtime  diagnostic，scripted/frozen Port，不是 live release evidence
+E01-E05/E08-E14/E20/IP01  应用能力          release evidence
+L01-L06                    复杂 Interaction  release evidence
+E16-E19/E21                外部 Profile      diagnostic，不单独产生发布声明
+LT01-LT08/LT10-LT13        durable runtime   diagnostic，scripted/frozen Port
 ```
+
+原 E06/E07 是 profile wrapper，C01-C04 是独立 Use Case 拼接，LT09 没有真实 paired baseline；
+三类均已退出当前 catalog，避免同一路径重复记功或用常量冒充执行证据。
 
 **release gate fail closed**：只接受 catalog 分类正确、clean matching revision、passed summary、
 trace envelope、checksum 的交集。
@@ -943,8 +946,8 @@ trace 记录 usage、latency、provider、action order、receipt、verification 
 不要把任何单一 archive 说成「已可发布」或「所有写操作已闭环」。当前口径是：
 
 - 普通 Conversation 由 `ConversationService` 的 typed Interaction loop 拥有；
-- Conversation 目前只贯通一条 governed write（E14 exact-span save），不能外推；
-- LT01-LT13 是 scripted/frozen Port 的诊断证据；
+- Conversation 当前贯通 E14 exact-span save、E22 governed delete 和 E23 durable handoff，不能外推到 restore、订阅或任意写操作；
+- LT01-LT08、LT10-LT13 是 scripted/frozen Port 的诊断证据；
 - 23/23 是 dirty worktree 的工程执行证据，release gate 仍 fail closed。
 
 能清楚说出自己证据的边界，比多报一个通过用例有用得多。
@@ -955,7 +958,7 @@ trace 记录 usage、latency、provider、action order、receipt、verification 
 | --- | --- |
 | 所有用户请求都会创建 Task/GoalGraph | 直接回答不伪造 Task/Command/CompletionReport |
 | LangGraph checkpoint 是当前 Conversation 主链 | 主链是 `ConversationService` 的显式 Interaction loop |
-| Agent 已能从自然语言执行全部保存/删除/订阅 | 目前只有 E14 一条 exact-span save |
+| Agent 已能从自然语言执行全部保存/删除/订阅 | 当前证据只覆盖 E14 save、E22 delete 与 E23 Project handoff |
 | 23/23 通过就代表 clean revision 可发布 | 那是 dirty worktree 的定向执行证据 |
 
 同样不能说 Graphiti 或 embedding index 是知识事实源，也不能说 Tool success 代表用户目标完成。

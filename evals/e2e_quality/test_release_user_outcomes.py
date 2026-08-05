@@ -19,6 +19,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from evals.e2e_quality.trace_archive import TraceArchive
+from personal_agent.application.conversation.models import LoopBudgetPolicy
+from personal_agent.application.conversation.observation_bounds import (
+    MAX_OBSERVATION_PAYLOAD_CHARS,
+)
 from personal_agent.kernel.config import Settings, StructuredConfig
 from tests.conftest import POSTGRES_URL
 
@@ -555,6 +559,116 @@ def test_e16_http_process_reads_github_through_real_mcp_gateway(
     assert expected in serialized_results
     assert expected in str(result["message"]["content"])
     assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
+
+
+def test_e21_http_process_answers_from_oversized_read_within_budget(
+    live_github_mcp_web_process: LiveWebProcess,
+    trace_archive: TraceArchive,
+    request: pytest.FixtureRequest,
+) -> None:
+    """A fact late inside a file far larger than the loop's token budget.
+
+    ``torvalds/linux`` ``MAINTAINERS`` is ~916 KB and the XFS block sits at
+    roughly 96% of the file, so neither the head of the payload nor a single
+    unbounded read can serve this goal inside ``max_total_tokens``.
+
+    The address alone is in model training data, so asking only for it cannot
+    distinguish recovering the fact from recalling it. The line number cannot be
+    recalled: ``MAINTAINERS`` churns every release, so the number is a property
+    of the commit this read returned and nothing else. Ground truth is taken
+    from the numbered window the run itself produced, so the assertion needs no
+    pinned revision and cannot drift.
+    """
+
+    owner = os.getenv("PERSONAL_AGENT_E2E_LARGE_OWNER", "torvalds")
+    repository = os.getenv("PERSONAL_AGENT_E2E_LARGE_REPO", "linux")
+    path = os.getenv("PERSONAL_AGENT_E2E_LARGE_PATH", "MAINTAINERS")
+    expected = os.getenv(
+        "PERSONAL_AGENT_E2E_LARGE_EXPECTED_TEXT", "linux-xfs@vger.kernel.org"
+    )
+    user_text = (
+        f"我在给 XFS 文件系统提交补丁，需要改 GitHub 仓库 {owner}/{repository} 的 {path}。"
+        "请告诉我 XFS 文件系统条目登记的邮件列表地址，以及这个地址在该文件中的行号，"
+        "两者都要在最终回答里逐字写出。行号必须是这个文件当前内容里的真实行号，"
+        "我要照着它去定位，不接受估算。这是只读检查，不要修改仓库内容。"
+    )
+    _assert_natural_user_text(
+        user_text,
+        "github.get_file_contents",
+        "read_action_output",
+        "ToolResult",
+        "capability_id",
+        "truncat",
+    )
+    result = _post_json(
+        f"{live_github_mcp_web_process.base_url}/api/conversation/turn",
+        {
+            "conversation_id": f"release-e21-large-{uuid4().hex}",
+            "messages": [{"role": "user", "content": user_text}],
+        },
+    )
+    trace = _get_json(
+        f"{live_github_mcp_web_process.base_url}/api/conversation/runs/{result['interaction_run_ref']}"
+    )
+    tool_results = [item for item in trace["inputs"] if item["kind"] == "tool_result"]
+    largest_payload = max(
+        (len(json.dumps(item["payload"], ensure_ascii=False, default=str))
+         for item in tool_results),
+        default=0,
+    )
+    trace_archive.write_trace(
+        nodeid=request.node.nodeid,
+        case_id="E21.release_http_oversized_read_within_budget",
+        trace={
+            "natural_user_text": user_text,
+            "result": result,
+            "interaction_trace": trace,
+            "resource": {"owner": owner, "repository": repository, "path": path},
+            "measured": {
+                "largest_observation_payload_chars": largest_payload,
+                "committed_total_tokens": trace["usage"]["total_tokens"],
+            },
+        },
+    )
+    answer = str(result["message"]["content"])
+    usage = trace["usage"]
+    assert result["disposition"] == "answer"
+    assert expected in answer
+    assert largest_payload <= MAX_OBSERVATION_PAYLOAD_CHARS * 1.2
+    # The ceiling is read against committed usage at the top of a turn, so answering
+    # instead of failing closed is what proves committed usage never reached 32,000.
+    # What the per-observation bound then buys is that the turn which crossed it added
+    # one ordinary turn, not an unbounded payload: the baseline for this same read
+    # committed 776,720 tokens, 24x the ceiling, from a single 1,940,197-char return.
+    token_ceiling = LoopBudgetPolicy().max_total_tokens
+    overshoot = max(0, usage["total_tokens"] - token_ceiling)
+    assert overshoot <= usage["total_tokens"] / usage["model_turns"], (
+        f"crossed the {token_ceiling} ceiling by {overshoot} tokens, more than one of this "
+        f"run's {usage['model_turns']} turns: {usage}"
+    )
+    assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
+    # Ground truth: the line numbers this run's own re-read windows reported for the
+    # expected address. A number the model recalled rather than read cannot match one
+    # of these, so the answer proves the paging recovery path end to end.
+    observed_lines = [
+        entry["line"]
+        for item in tool_results
+        if item.get("capability_id") == "read_action_output"
+        for entry in item["payload"].get("lines", ())
+        if expected in entry["text"]
+    ]
+    assert observed_lines, (
+        f"No re-read window returned a line containing '{expected}': the offloaded "
+        "output was never paged, so the reported line number has no evidence behind it."
+    )
+    assert any(
+        rendered in answer
+        for line in observed_lines
+        for rendered in (str(line), f"{line:,}")
+    ), (
+        f"answer reports no line number matching the read output {observed_lines}: "
+        f"{answer!r}"
+    )
 
 
 def test_e18_http_process_reads_notion_through_real_mcp_gateway(

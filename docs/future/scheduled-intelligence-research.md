@@ -162,7 +162,7 @@ Connector Adapter -> Research Application -> Research/Event domain
 ```
 
 不把固定持续研究迁入
-[动态长任务](durable-investigation-project-design.md)，不复制 Artifact、Evidence、Claim、Gateway、
+[Durable Investigation Project](../summary/durable-investigation-project-current-state.md)，不复制 Artifact、Evidence、Claim、Gateway、
 Journal 或 Delivery 状态。Connector Adapter 只转换协议和产生 typed observation，不补研究语义。
 
 ## 7. Removed Legacy Path

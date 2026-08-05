@@ -7,7 +7,7 @@ Investigation Project 已成为独立的 durable 产品入口，而不是 Conver
 journal 重建 Project，并按 accepted Plan 计算 ready set、dispatch、join、coverage 与
 Completion。
 
-LT01–LT13 使用生产 Domain、Application、PostgreSQL store、worker queue 和 Artifact owner，
+当前 LT01–LT08、LT10–LT13 使用生产 Domain、Application、PostgreSQL store、worker queue 和 Artifact owner，
 但 semantic model 与外部 Provider 是 scripted/frozen Port。B03 已补正式 HTTP/worker、真实模型
 和 Web Search baseline，并证明 verification repair 的生产死锁；相关 runtime 缺口已修复。
 Firecrawl Web Search Adapter 已删除，生产搜索迁移为 SerpAPI；URL 正文读取仍显式绑定
@@ -108,15 +108,17 @@ capability 变化继续使用 `max_plan_revisions`，两类预算不相互吞噬
 
 ## 6. Conversation boundary
 
-普通 Conversation 保持短生命周期 ReAct，只持久化 messages、Observation/Feedback、usage、
-execution order、并发批次和 final message。旧 `WorkingPlanSnapshot` 输出、恢复 admission 和
-trace 字段已删除。恢复后模型直接消费 committed typed inputs；它不会隐式创建 Project。
+普通 Conversation 保持 request-local ReAct，只持久化 messages、Observation/Feedback、usage、
+execution order、并发批次、final message 和跨领域资源引用。旧 `WorkingPlanSnapshot` 输出、恢复
+admission 和 trace 字段已删除。用户明确要求跨交互持续和后续控制时，Conversation 可以调用
+`InvestigationProjectService.create`，但只保存 `ProjectReference`；Project definition、Plan、状态和
+Completion 仍由 Project aggregate 唯一拥有。
 
 ## 7. 已执行验证
 
 本轮当前工作树定向验证：
 
-- B03 live baseline：passed（即自动证明 `delivered=false` 且非环境失败），archive
+- 历史 B03 live baseline：passed（仅证明当时 revision 的 `delivered=false`），archive
   `20260728T123013.176272Z-42316-76b47a9c`；
 - IP01 在无限同反馈问题修复前 600 秒仍 active，archive
   `20260728T125249.466459Z-45552-410f6188`；修复后同反馈有界暂停，未重复原 Tool；
@@ -163,7 +165,8 @@ trace 字段已删除。恢复后模型直接消费 committed typed inputs；它
   213.42 秒；本轮第一次未隔离开发机 MCP 的全仓运行为 704 passed、1 个 Notion MCP
   initialize setup timeout。显式关闭外部 MCP 后该节点 1 passed，最终同配置全仓 705 passed；
   MCP contract tests 仍由用例自行启用 fixture。前一次错误保留为测试环境隔离风险；
-- LT01–LT13 diagnostic matrix：13 passed；
+- 历史 LT01–LT13 diagnostic matrix：13 passed；其中 LT09 后续审计发现没有实际运行 Conversation
+  baseline，其对比结论已撤销，当前 catalog 为 LT01–LT08、LT10–LT13；
 - AgentGateway quality gate：1 passed；
 - durable Agent uncertain-submit/restart reconcile 自动断言 Provider submit count=1；
 - user pause/resume、system pause non-bypass、OutcomeUnknown fail-closed 已通过应用路径测试；
@@ -176,7 +179,8 @@ trace 字段已删除。恢复后模型直接消费 committed typed inputs；它
 IP01 不再是开放发布阻塞。完整发布前仍必须执行并归档：
 
 - live GitHub/Notion/Web/A2A 正式入口矩阵和重复运行方差；
-- LT09 同输入 paired baseline 的完成率、错误副作用、模型轮次、token、延迟和恢复结果；
+- 若要提出 Project 优于 Conversation 的恢复声明，需新增真实同输入 paired baseline，比较完成率、
+  错误副作用、模型轮次、token、延迟和恢复结果；
 - clean matching revision 的 release E2E、layer gate 和 revision-bound trace archive。
 
 ## 8. 运维入口

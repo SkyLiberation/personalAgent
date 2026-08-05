@@ -23,16 +23,6 @@ def test_lt02_command_dispatch_recovers_without_duplicate(postgres_url, temp_dir
     assert result.replanned_after_crash is False
 
 
-def test_lt09_durable_project_beats_conversation_recovery_baseline(postgres_url, temp_dir):
-    result = InvestigationScenarioHarness(postgres_url, temp_dir).paired_recovery_baseline()
-
-    assert result.input_digest_equal
-    assert result.capability_digest_equal
-    assert result.project_coverage == 4
-    assert result.project_duplicate_side_effects == 0
-    assert result.conversation_coverage < result.project_coverage
-
-
 def test_lt10_child_submit_reconciles_stable_submission_key(postgres_url, temp_dir):
     result = InvestigationScenarioHarness(postgres_url, temp_dir).child_submit_recovery()
 

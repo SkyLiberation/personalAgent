@@ -11,6 +11,7 @@ from personal_agent.application.review.delivery import DeliveryRouter
 from personal_agent.kernel.contracts.research import ResearchRunDefinition, ResearchRunRecord
 from personal_agent.kernel.contracts.review import DeliveryResult
 from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
+from personal_agent.application.conversation.models import ProjectReference
 from personal_agent.application.workspace import Artifact
 from tests.conftest import POSTGRES_URL
 
@@ -216,6 +217,43 @@ class TestEntryStreamEndpoint:
         assert "irun-stream" in response.text
         assert legacy_runs.status_code == 404
         assert api_client.get("/api/entry/runs", params={"user_id": "test-user"}).status_code == 404
+
+    def test_stream_exposes_project_reference_for_progress_ui(
+        self,
+        api_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        def converse(**kwargs):
+            return ConversationTurnView(
+                interaction_run_ref="irun-project-stream",
+                conversation_id=kwargs["conversation_id"],
+                disposition="background_started",
+                message=ConversationMessage(role="assistant", content="后台调查已创建。"),
+                project_reference=ProjectReference(
+                    project_id="iprj_stream",
+                    tenant_id="personal-agent",
+                    workspace_id=kwargs["conversation_id"],
+                    user_id="test-user",
+                    state="planning",
+                    title="协议调查",
+                    goal="生成带来源的报告",
+                ),
+            )
+
+        monkeypatch.setattr(api_client.app.state.service, "converse", converse)
+        response = api_client.get(
+            "/api/entry/stream",
+            params={
+                "text": "在后台调查协议变化",
+                "user_id": "test-user",
+                "session_id": "entry-stream-project",
+            },
+        )
+
+        assert response.status_code == 200
+        assert '"disposition": "background_started"' in response.text
+        assert '"project_id": "iprj_stream"' in response.text
+        assert '"workspace_id": "entry-stream-project"' in response.text
 
 
 class TestConversationEndpoint:

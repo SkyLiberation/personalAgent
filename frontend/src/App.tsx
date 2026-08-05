@@ -4,6 +4,7 @@ import {
   buildEntryStreamUrl,
   confirmPendingAction,
   fetchDigest,
+  fetchInvestigationProject,
   fetchGraphTopology,
   fetchNotes,
   fetchPendingActions,
@@ -12,6 +13,7 @@ import {
   resetDebugData,
   retryGraphSync,
   setApiKey,
+  setInvestigationProjectPaused,
   submitReviewFeedback,
   uploadEntryFile,
   type AskHistoryItem,
@@ -20,6 +22,7 @@ import {
   type GraphTopology,
   type Note,
   type PendingActionItem,
+  type ProjectReference,
   type ExecutionStep,
 } from "./api";
 import ForceGraph2D from "react-force-graph-2d";
@@ -82,6 +85,9 @@ type AskHistoryView = AskHistoryItem & {
   intent_reason?: string;
   captured_title?: string;
   captured_preview?: string;
+  project_reference?: ProjectReference;
+  project_state?: string;
+  project_status_reason?: string;
 };
 
 type SessionSummary = {
@@ -252,6 +258,48 @@ export default function App() {
       void refreshAll();
     } catch (error) {
       console.error("Failed to confirm pending action:", error);
+    }
+  }
+
+  async function refreshProject(historyItemId: string, reference: ProjectReference) {
+    try {
+      const project = await fetchInvestigationProject(reference);
+      setAskHistory((current) => current.map((item) =>
+        item.id === historyItemId
+          ? {
+              ...item,
+              project_state: project.state,
+              project_status_reason: project.last_state_reason,
+            }
+          : item
+      ));
+      setStatus(`后台调查状态：${project.state}`);
+    } catch (error) {
+      console.error(error);
+      setStatus("暂时无法读取后台调查进度。");
+    }
+  }
+
+  async function setProjectPaused(
+    historyItemId: string,
+    reference: ProjectReference,
+    paused: boolean,
+  ) {
+    try {
+      const project = await setInvestigationProjectPaused(reference, paused);
+      setAskHistory((current) => current.map((item) =>
+        item.id === historyItemId
+          ? {
+              ...item,
+              project_state: project.state,
+              project_status_reason: project.last_state_reason,
+            }
+          : item
+      ));
+      setStatus(paused ? "后台调查已暂停。" : "后台调查已恢复。 ");
+    } catch (error) {
+      console.error(error);
+      setStatus(paused ? "暂停后台调查失败。" : "恢复后台调查失败。 ");
     }
   }
 
@@ -563,6 +611,7 @@ export default function App() {
         reply?: string;
         citations?: Citation[];
         graph_enabled?: boolean;
+        project_reference?: ProjectReference;
       }>(streamEvent);
       const finalAnswer = payload.answer ?? payload.reply ?? historyItem.answer;
       setAskHistory((current) =>
@@ -573,6 +622,8 @@ export default function App() {
                 answer: finalAnswer,
                 citations: payload.citations ?? item.citations,
                 graph_enabled: payload.graph_enabled ?? item.graph_enabled,
+                project_reference: payload.project_reference ?? item.project_reference,
+                project_state: payload.project_reference?.state ?? item.project_state,
                 status: "done",
               }
             : item
@@ -954,6 +1005,41 @@ export default function App() {
                               <span>已采集内容</span>
                               {item.captured_title ? <strong>{item.captured_title}</strong> : null}
                               <p>{item.captured_preview}</p>
+                            </div>
+                          ) : null}
+                          {item.project_reference ? (
+                            <div className="step-output-card project-progress-card">
+                              <span>后台调查</span>
+                              <strong>{item.project_reference.title}</strong>
+                              <p>{item.project_reference.goal}</p>
+                              <p>
+                                状态：{item.project_state ?? item.project_reference.state}
+                                {item.project_status_reason ? ` · ${item.project_status_reason}` : ""}
+                              </p>
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => void refreshProject(item.id, item.project_reference!)}
+                              >
+                                刷新进度
+                              </button>
+                              {(item.project_state ?? item.project_reference.state) === "paused" ? (
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void setProjectPaused(item.id, item.project_reference!, false)}
+                                >
+                                  恢复调查
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void setProjectPaused(item.id, item.project_reference!, true)}
+                                >
+                                  暂停调查
+                                </button>
+                              )}
                             </div>
                           ) : null}
                           {item.error ? <p className="sync-error">{item.error}</p> : null}

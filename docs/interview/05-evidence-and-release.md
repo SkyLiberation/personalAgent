@@ -8,8 +8,8 @@
 
 ```text
 A 正式入口 E2E + clean matching revision   -> 当前无（完整矩阵未在 clean revision 重跑）
-  B 正式入口 E2E，dirty revision 或覆盖窄     -> E01-E14、E20、C01-C04、L01-L06、E16-E19、IP01
-C 诊断运行、单测、对象存在、DB 有记录        -> LT01-LT13、各类 probe
+B 正式入口 E2E，dirty revision 或覆盖窄     -> E01-E05、E08-E14、E20、E22-E23、L01-L06、IP01
+C Profile、诊断运行、单测、对象存在         -> E16-E19、E21、E24、LT01-LT08、LT10-LT13
 D 仅设计或推理                             -> 第 11 节的候选 baseline
 ```
 
@@ -65,7 +65,6 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 - evidence kind；
 - evidence layers；
 - capability profile；
-- 是否需要真实 Provider；
 - fault mechanism；
 - 是否能支持产品发布声明。
 
@@ -73,7 +72,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 ## 4. Conversation 与产品 Release E2E
 
-### E01-E14、E20：原生产品能力
+### E01-E05、E08-E14、E20、E22-E23、IP01：应用能力
 
 | ID | 用户旅程 | 关键正向结果 | 关键反事实 |
 | --- | --- | --- | --- |
@@ -82,8 +81,6 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 | E03 | Upload Ask | 上传形成 application Artifact 并被引用 | 不绕过 Artifact ownership |
 | E04 | Governed Delete | confirm 后执行一次，可 replay | prepare/reject 零副作用，错误 digest 拒绝 |
 | E05 | ResearchRun | 明确终态和带 source 的 Digest | 不把 running 当成功 |
-| E06 | MCP Read Extension | GitHub/Notion 真实读取 | unavailable 时不替换能力 |
-| E07 | A2A Delegation | 返回 AgentArtifact，父级综合 | child completed 不自动完成父结果 |
 | E08 | Ask then Save | 显式 solidify 后保存用户 Claim | Ask 不写，assistant candidate 不写 |
 | E09 | Multi-source Capture | text/conversation/upload/URL 均形成 Artifact | URL 不只保存链接或指令 |
 | E10 | Knowledge Lifecycle | correction、delete、restart、restore | replay 不重复副作用，deleted Claim 不残留 |
@@ -92,15 +89,20 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 | E13 | Scheduled Intelligence | Run、Digest、Delivery、Feedback 闭环 | Delivery 恰好一次 |
 | E14 | Conversation Governed Save | exact user-authored span 确认后保存 | 控制语义、assistant candidate 不写入 |
 | E20 | Workspace Answer Verification | 冲突 assessment 绑定本次 EvidenceSpan | 回答组装器不把互斥结论标成 supported |
+| E22 | Goal-entry Governed Delete | 自然语言定位 canonical item，确认后删除一次 | 确认前零副作用、跨 scope 不泄漏、replay 不重复 |
+| E23 | Goal-entry Durable Investigation | 自然目标创建可查询 ProjectReference | 不要求内部名称、不复制 Project 状态、不把创建算完成 |
+| IP01 | Durable Investigation Report | live worker 交付可读、可追溯报告 | 缺 coverage/evidence 时不完成 |
 
-### C01-C04：组合用户旅程
+E24 用同一个开放架构调查自然目标对照 ResearchRun、Conversation 和 Project，属于 diagnostic
+boundary evaluation，不参与 release 记功。`20260803T143230.864789Z-6460-dbd005fd` 中
+ResearchRun 只抓到二手来源，Project 因无法满足官方规范来源要求而诚实暂停；该对照没有证明
+ResearchRun 适合作为通用研究入口，因此它继续只服务 Scheduled Intelligence。
 
-- C01：Workspace ingest + grounded ask + external research + explicit save；
-- C02：Subscription + Research + Digest + Delivery + Feedback；
-- C03：ingest + Review Card + forgotten + due + external research；
-- C04：GPT Researcher delegation + Artifact + parent synthesis。
+### 为什么当前没有组合能力 E2E
 
-组合用例证明多个原生能力可以通过稳定契约形成用户价值，而不是只证明孤立接口。
+原 C01–C04 把 ingest、ask、research、save 等独立 Use Case 串起来，却没有断言一个不可拆分的
+用户结果；C02 直接复跑 E13，C04 直接复跑 E17。因此它们已退出 catalog。组合能力不是把多个
+接口各调用一次，而是先有单一用户目标、同输入 baseline 失败，再由一条正式入口 E2E 证明结果。
 
 ### L01-L06：复杂 Interaction loop
 
@@ -161,9 +163,9 @@ disposition 后 9/9。
 不关心模型在验证前还是验证后先自行修订，因此 release E2E 不规定 verifier 调用次数；两轮
 `needs_revision -> passed` 的反馈状态机由 scripted Runtime Conformance 测试验证。
 
-## 5. E16-E19 外部 Profile 证据
+## 5. E16-E19、E21 外部 Profile 证据
 
-E16-E19 是 connector/provider profile，不单独产生产品发布声明。用户输入仍必须是自然场景：
+E16-E19、E21 是 connector/provider/runtime profile，不单独产生产品发布声明。用户输入仍必须是自然场景：
 GitHub/Notion 是用户选择的数据源，深度研究是用户目标；MCP Tool 名、Agent ID、Artifact
 类型和内部终态只允许在执行后的 trace 断言中出现。
 
@@ -171,14 +173,16 @@ GitHub/Notion 是用户选择的数据源，深度研究是用户目标；MCP To
 - E17：真实 GPT Researcher A2A；
 - E18：真实 Notion MCP；
 - E19：MCP capability unavailable。
+- E21：超大 GitHub 文件返回在 observation/token budget 内分页取证。
 
-产品发布声明由消费这些 profile 的 E06、E07、C04、L04 等旅程拥有。
+E17 的产品级父子协作结果由 L04 证明；E16/E18/E19/E21 当前只提供专项诊断证据。删除 E06/E07
+wrapper 避免同一条实际旅程被多个编号重复记功。
 
 这样避免“GitHub Tool 能调用”被错误解释为“完整用户产品旅程已经完成”。
 
-## 6. LT01-LT13 为什么不是 Release E2E
+## 6. LT01-LT08、LT10-LT13 为什么不是 Release E2E
 
-LT01-LT13 验证 Investigation Project 的 durable runtime：
+这 12 个用例验证 Investigation Project 的 durable runtime：
 
 - accepted Plan 驱动 ready set、parallel join 和 coverage；
 - approval 绑定 digest；
@@ -192,6 +196,9 @@ LT01-LT13 验证 Investigation Project 的 durable runtime：
 这些用例使用生产 Domain、Application、PostgreSQL Store、Worker Queue、ToolGateway、AgentGateway 和 Artifact owner，但 semantic model 与外部 Provider 是 scripted/frozen Port，而且从 in-process service 进入。因此它们属于 diagnostic/runtime conformance evidence，只能证明状态机和恢复协议，不能证明 live model/provider 的正式用户结果。
 
 要升级为 release evidence，仍需从正式 HTTP 入口进入独立 Web/worker 进程，使用真实模型、真实 PostgreSQL 和场景需要的真实 Provider，以自然用户输入断言最终 Artifact、关键反事实、成本、延迟和恢复结果。
+
+旧 LT09 没有执行 Conversation baseline；`input_digest_equal`、`capability_digest_equal` 和
+`conversation_coverage=2` 是 harness 常量，不是 paired execution 结果，因此已删除。
 
 ## 7. E04 如何定位删除链路问题
 
@@ -244,9 +251,9 @@ corrected natural L06 = passed
 natural E17/E19 plus L04 = passed
 answer-free-prompt E16/E18 = 2/2 passed
 current complete matrix = not rerun
-LT01-LT13 historical diagnostic matrix = 13/13 passed
+LT01-LT13 historical diagnostic matrix = 13/13 passed（历史 catalog，LT09 结论已撤销）
 current Investigation lifecycle + diagnostic regression = 15 passed
-Investigation B03 live baseline = passed, product insufficiency proven
+Investigation B03 live baseline = passed（仅证明当时 revision 的历史不足）
 Investigation IP01 live target = passed (3/3 outcome, 5 admitted evidence)
 current package dependency gate = failed (3 unknown packages)
 ```
@@ -344,5 +351,5 @@ Workspace commit 与 journal Receipt 之间的 crash window。B02 已在 archive
 Investigation Project 已证明 IP01 的单次 live 目标闭环；仍缺少：
 
 - live structured model + live GitHub/Notion/Web/A2A 的正式 HTTP/worker E2E；
-- LT09 同输入 paired baseline，对比 Conversation 的完成率、错误副作用、模型轮次、token、延迟和恢复结果；
+- 如要重新提出 Project 优于 Conversation 的恢复声明，先实现真实同输入 paired baseline，并比较完成率、错误副作用、模型轮次、token、延迟和恢复结果；
 - clean matching revision 的 release archive。

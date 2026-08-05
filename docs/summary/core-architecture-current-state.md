@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-本文记录截至 2026-07-31 已落地的生产架构事实。尚未落地的设计只进入
+本文记录截至 2026-08-03 已落地的生产架构事实。尚未落地的设计只进入
 [future 索引](../future/README.md)，不能反向定义当前架构；产品能力、E2E 和发布可信度的当前事实由
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md) 拥有。
 [`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 只保存已删除旧架构的历史诊断
@@ -19,6 +19,16 @@ Conversation governed save 的 pre-change B01 archive 为
 `data/e2e_traces/20260729T033339.065714Z-22692-16415241` 证明 exact-span Command、精确结论
 Claim、控制语义反事实、恢复和 replay。它们均来自 dirty worktree，只是定向工程证据，不建立
 发布资格。
+
+目标入口改造使用相同自然输入先后执行 baseline 与 target：读取 baseline
+`20260803T142413.474927Z-4864-39fedcf5`、删除 baseline
+`20260803T142932.564456Z-23720-19ba8517`、Project baseline
+`20260803T143007.354551Z-26256-84d0bf1d` 均证明旧 Conversation 缺少相应能力；改造后 L01
+`20260803T152242.957743Z-388-d0850c85`、E22
+`20260803T152242.957743Z-388-d0850c85`、E23
+`20260803T151935.921382Z-27308-be5eadbf` 通过。Research paired baseline
+`20260803T143230.864789Z-6460-dbd005fd` 未证明 ResearchRun 对开放调查优于 Conversation 或
+Project，因此 ResearchRun 保持 Scheduled Intelligence 边界。以上仍是 dirty revision 的定向证据。
 
 ## 0. 框架命题：可信 Agent Runtime
 
@@ -54,16 +64,22 @@ Pydantic、OpenAI-compatible transport、手写 loop 或 LangGraph 都可以替�
 6. **复杂度由生命周期而不是 Agent 术语准入**：固定事务不交给 Planner，短请求不承担 durable
    Project 成本，没有失败 E2E 的新机制不进入主链。
 
-### 0.1 三种运行形态
+### 0.1 一套目标责任链，按需选择执行语义
 
-| 用户目标形态 | 下一步 owner | 当前运行形态 | 为什么 |
+普通用户只面对 Conversation 这一目标入口，不需要先判断 Tool、Workflow 或 Project。模型基于
+目标、约束和已提交 Observation 提出粗粒度能力；确定性系统再把已准入的能力交给唯一业务 owner。
+下面是框架内部的执行语义，不是三种产品模式或三个并列入口：
+
+| 目标约束 | 下一步 owner | 内部执行语义 | 为什么 |
 | --- | --- | --- | --- |
 | 短、动态、无需跨请求维持交付义务 | 模型逐轮提出下一步 | Conversation Interaction loop | Observation 会改变下一步，但不需要持久化 Plan |
-| 拓扑和事务不变量固定 | Application / Domain | 明确的 Use Case / Workflow | 模型不能重排确认、写入、Receipt 或补偿顺序 |
-| 路径动态且跨进程、用户轮次或审批边界 | 模型提出 Plan，Aggregate 决定合法迁移 | Investigation Project | accepted Plan、ready set、journal 和 Completion obligation 都有生产消费者 |
+| 拓扑和事务不变量固定 | Application / Domain | 具体 Use Case / 领域 Workflow | 模型不能重排确认、写入、Receipt 或补偿顺序 |
+| 路径动态且跨进程、用户轮次或审批边界 | 模型提出 Project 创建参数；Project 内 Planner 提出 Plan | Investigation Project | accepted Plan、ready set、journal 和 Completion obligation 都有生产消费者 |
 
-这三条主链共享 Proposal、Admission、Execution Fact 和 Completion 的权力观，但不共享一个
-God Task、God State 或统一 Planner。框架统一的是不变量，不是把所有生命周期塞进同一个对象。
+这些语义共享 Proposal、Admission、Execution Fact 和 Completion 的权力观，但不共享一个 God
+Task、God State 或统一 Planner。`Workflow` 只表示具体业务 owner 的稳定事务不变量；它不是
+用户可选择的运行模式，也没有全局 Workflow Registry。专用 UI、自动化和管理 API 可以直达同一
+Application Use Case，但多个协议入口不能制造第二事实 owner。
 
 ### 0.2 现实故障如何支撑框架
 
@@ -85,7 +101,7 @@ God Task、God State 或统一 Planner。框架统一的是不变量，不是把
 | 层次 | 当前选择 | 稳定性 |
 | --- | --- | --- |
 | 框架不变量 | Proposal → Admission → Execution Fact → Verification → Completion | 稳定，改变需 ADR 与产品 E2E |
-| 产品运行形态 | Conversation / Application Workflow / Investigation Project | 稳定，按生命周期选择 |
+| 普通用户入口 | Conversation goal entry | 稳定；内部执行语义不暴露为模式选择 |
 | 模型协议 | `AgentTurnDecision` object-root envelope | 当前 Provider 约束下的实现，可由同等 contract 替换 |
 | Schema/transport | Pydantic + strict JSON Schema 或 JSON Object Adapter | deployment capability，集中在 Model Adapter |
 | 编排技术 | 显式 Python loop、领域状态机、worker queue | 可替换，但不能改变 canonical owner |
@@ -148,9 +164,10 @@ package discovery 只识别真实 Python package；空迁移目录不再制造�
 Lifecycle、Research subscription/run、Review feedback 和 Artifact 操作不必伪装成一次通用
 Conversation Task。固定、稳定的产品流程优先直接调用相应 Use Case。
 
-路径动态且需要跨进程、用户轮次或审批边界维持交付契约的任务，使用显式
-`POST /api/investigation-projects` 创建 Investigation Project。创建先持久化 immutable
-definition，再异步入队并返回 `202`；查询只读取 projection，不调用模型或推进状态。该能力的
+路径动态且需要跨进程、用户轮次或审批边界维持交付契约的任务，可以由普通 Conversation 的
+`start_durable_investigation` 粗粒度能力创建，也可以由已明确知道业务动作的 UI/自动化通过
+`POST /api/investigation-projects` 直接创建。两者复用 `InvestigationProjectService.create`；创建
+先持久化 immutable definition，再异步入队。查询只读取 projection，不调用模型或推进状态。该能力的
 当前事实与发布证据边界由
 [`durable-investigation-project-current-state.md`](durable-investigation-project-current-state.md)
 记录。
@@ -173,8 +190,9 @@ WebAppContext / CLI / Feishu
 ```
 
 Investigation Project 使用 PostgreSQL append-only journal 和现有 worker queue；AgentGateway
-的生产 run store 为 PostgreSQL。普通 Conversation 不生成 Project，也不再拥有
-`WorkingPlanSnapshot`。
+的生产 run store 为 PostgreSQL。Conversation 只在用户明确需要跨交互持续、进度查询、暂停或
+steering 时创建 Project，并且只持久化 `ProjectReference`，不拥有 Project definition、Plan、
+状态或 `WorkingPlanSnapshot`。
 
 `AgentRuntime` 是唯一集中装配点，但 Workspace、Research、Interaction、Tool audit 等事实仍由
 各自 Store/Service 拥有；Composition Root 不通过字段镜像成为第二事实源。
@@ -230,15 +248,26 @@ AgentTurnDecision
 顺序、并发批次和最终消息。恢复后模型直接读取 committed typed inputs；恢复不会重复已提交
 action，也不要求生成一个没有生产调度消费者的中间 Plan。
 
-显式保存用户消息是当前唯一接入 Conversation 的 governed write。模型从
-`EffectiveCapabilities` 选择 `prepare_conversation_knowledge_save`，参数只能引用现有 user
+Conversation 当前额外暴露四个粗粒度 Application capability，而不是领域内部步骤：
+
+- `list_workspace_knowledge`：只读当前 principal/workspace 的 active/conflicted canonical KnowledgeItem 引用；
+- `prepare_conversation_knowledge_save`：冻结 user-authored exact span，等待确认；
+- `prepare_knowledge_delete`：只能引用上一 Observation 中同 scope 的 KnowledgeItem，调用
+  `KnowledgeLifecycleService.prepare_delete`，确认前不删除；
+- `start_durable_investigation`：仅用于用户明确要求跨交互持续、查询进度、暂停或 steering 的目标，
+  调用 `InvestigationProjectService.create` 并返回 `ProjectReference`。
+
+显式保存时，参数只能引用现有 user
 message 索引并逐字复制其中的知识 `text_span`；Admission 机械证明 span 确实存在且来源角色为
 user。Runtime 只冻结 exact span 与 source index 并产生一个 `command_digest`，Interaction journal 保存
 `awaiting_confirmation/rejected/executed` 和 Receipt。确认入口重新校验 principal、workspace、
 digest，执行时仍复用 `WorkspaceService.solidify_conversation`，不开放 `capture_text`，确认后
 也不让模型改写 payload。E14 已覆盖 exact span、确认前零写入、prepare 后重启、跨 scope
 拒绝、精确结论 Claim、控制语义零写入、Receipt 和成功 replay。提交知识与 journal Receipt
-之间的进程终止故障注入仍未覆盖。
+之间的进程终止故障注入仍未覆盖。删除 operation 和 Project 的 canonical 状态不复制到
+Interaction journal；journal 分别只保存 delete command ref 和 `ProjectReference`，恢复时回查
+原 Application owner。E22 覆盖确认前零删除、scope 隔离、确认与 replay；E23 覆盖从自然目标
+创建一个可查询 Project、trace 引用一致且不把创建冒充 Completion。
 
 ## 4. Capability、Tool、MCP 与 A2A
 
@@ -300,7 +329,9 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 | 产品能力 | Application owner | Canonical fact / 唯一写入口 |
 | --- | --- | --- |
 | Conversation | `ConversationService` | `InteractionTrace` / Interaction journal |
-| Conversation governed save | `ConversationService` + `WorkspaceService` | journal 拥有 Command/operation/Receipt；Workspace 固化方法仍是唯一知识写入口 |
+| Conversation governed save | `ConversationService` + `WorkspaceService` | journal 拥有 save Command/operation/Receipt；Workspace 固化方法仍是唯一知识写入口 |
+| Goal-entry knowledge delete | `ConversationService` 调用 `KnowledgeLifecycleService` | lifecycle service/store 拥有 delete Command/status/Receipt；Interaction 只存 command ref |
+| Goal-entry durable investigation | `ConversationService` 调用 `InvestigationProjectService` | Project aggregate/store 拥有 definition/Plan/state/Completion；Interaction 只存 ProjectReference |
 | Artifact | `ArtifactService` | application-owned ArtifactRef 和 Artifact Store |
 | Capture | `CaptureService` + Workspace ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
 | Grounded Ask | `WorkspaceService` | Workspace/Evidence 只读；Answer 不隐式写 Claim |
@@ -403,10 +434,12 @@ Procedure 或迁移代码使用，但它们不是正式 Conversation 入口，�
 
 E2E 分类的唯一 owner 是 `evals/e2e_quality/evidence_catalog.py`：
 
-- E01–E14、E20：原生产品能力；
-- C01–C04：组合产品能力；
+- E01–E05、E08–E14、E20、IP01：应用能力；
 - L01–L06：自然复杂主循环、恢复、fail-closed 和 receipt-reference semantic revision；
-- E16–E19：真实外部 Provider profile，只作为相应产品旅程的组成证据。
+- E16–E19、E21：真实外部 Provider/runtime profile，属于 diagnostic。
+
+E06/E07 重复 profile、C01–C04 拼接独立 Use Case、LT09 使用常量代替 paired baseline，均已退出
+当前 catalog；B03 保留为历史 archive，不再与 IP01 一起对当前实现断言相反结果。
 
 完整矩阵必须从真实 HTTP 入口进入独立 Web 进程，使用真实模型、PostgreSQL 和场景需要的
 真实 Provider，并同时断言用户结果和关键反事实。`release_gate.py` 只接受 catalog、clean

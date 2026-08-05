@@ -77,18 +77,18 @@ External Cron / Manual Research
 | `执行与反馈层` | [adapters/web/routes/](src/personal_agent/adapters/web/routes), [application/conversation/](src/personal_agent/application/conversation), [orchestration/worker.py](src/personal_agent/orchestration/worker.py) | 支持同步 API、SSE、typed Observation/Feedback、受治理确认、异步 worker 与 Project projection | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测、治理与评测层` | [kernel/observability.py](src/personal_agent/kernel/observability.py), [adapters/web/auth.py](src/personal_agent/adapters/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、执行回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
-## 执行主链
+## 目标入口与执行责任
 
-普通输入进入 Conversation ReAct；固定事务直接进入领域 Use Case；显式 Investigation Project
-通过 HTTP 创建后由 `investigation` worker 驱动。历史 LangGraph 图不再定义这些 canonical
-主链，当前事实统一见
+普通用户只向 Conversation 描述目标；模型按需选择 request-local capability、具体领域 Use Case，
+或在目标明确要求跨交互持续和后续控制时创建 Investigation Project。专用 UI/自动化仍可直接调用
+同一 Application Use Case。历史 LangGraph 图不再定义这些 canonical owner，当前事实统一见
 [核心架构](docs/summary/core-architecture-current-state.md)。
 
 ## 当前技术栈
 
 - `Python 3.11+`
 - `FastAPI`
-- `LangGraph checkpoint packages`（遗留数据/迁移依赖，不是当前三条主链的共同编排器）
+- `LangGraph checkpoint packages`（遗留数据/迁移依赖，不是当前目标责任链的共同编排器）
 - `Graphiti`
 - `Neo4j`
 - `Postgres`
@@ -149,10 +149,13 @@ README 只保留最短路径：
 - Tool/Agent 结果形成 `ActionObservation`，拒绝形成 `DecisionFeedback`，共同驱动下一模型轮
 - 模型不可用、能力不足或信息不足时进入 typed failure/limitation/clarification，不使用关键词
   fallback 生成业务答案
+- 当前粗粒度 Application capability 包括 canonical workspace knowledge list、确认式保存、确认式
+  删除和 durable investigation handoff；Conversation 只保存跨领域 ref，不复制 delete/Project 状态
 
 ### 5. Knowledge Lifecycle
 
-- `KnowledgeLifecycleService` 是删除与恢复的唯一写入口，普通 Conversation Tool 和直接 DELETE API 不可执行删除
+- `KnowledgeLifecycleService` 是删除与恢复的唯一写入口；Conversation 和直接 API 都只能调用该
+  owner，prepare 不执行删除
 - prepare 只创建 durable operation；确认时用一个 `command_digest` 绑定 canonical payload，重启后仍可继续
 - confirm 在单事务中更新 Knowledge Item/Claim、记录 Workspace 状态事件并写 Receipt；replay 返回同一 Receipt
 - restore 引用已执行的 delete command，并按 delete receipt 中的 previous states 精确恢复
@@ -296,7 +299,7 @@ Project journal：历史对话只辅助理解追问与更正，事实结论必�
 - [docs/future/README.md](docs/future/README.md) - 仅包含尚未落地且由目标 E2E 驱动的未来设计
 - [docs/future/trusted-agent-runtime-evolution.md](docs/future/trusted-agent-runtime-evolution.md) - 当前文档、架构门禁和 clean release 收敛
 - [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 持续研究尚未落地的来源验证、connector 和事件触发 P1/P2
-- [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 框架理念、系统分层、三条主链、知识与运行时当前事实
+- [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 框架理念、系统分层、目标责任链、知识与运行时当前事实
 
 ## 文档导航
 

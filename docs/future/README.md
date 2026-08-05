@@ -8,18 +8,9 @@
 
 | 业务扩展 | 状态 | 文档 |
 | --- | --- | --- |
-| 当前框架、文档事实源、架构门禁与 clean release 证据收敛 | D0 文档重置进行中；G0/R0/M0 待完成 | [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md) |
+| 当前框架、文档事实源、架构门禁与 clean release 证据收敛 | G0 已完成；R0 待完成；M0 部分完成 | [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md) |
 | 持续研究的来源验证与事件触发 | P1/P2，未实现 | [持续研究 P1/P2](scheduled-intelligence-research.md) |
-
-以下两份文档保留历史 baseline、已接受设计和迁移诊断，不再是 active future owner：
-
-- [现代 Agent 能力优化路线图](modern-agent-capability-optimization-plan.md)：Stage 1 保存纵切与
-  Stage 2 IP01 已落地；未执行 baseline 的 Stage 3–5 候选统一受
-  [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md) 第 7 节约束；
-- [Durable Investigation Project 目标设计](durable-investigation-project-design.md)：当前实现和
-  live IP01 证据已迁入
-  [Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)；
-  本文件仅保留历史设计推导，不能反向定义生产状态。
+| Context 物化的度量、逐出与两阶段能力加载 | P0 可实施（纯观测）；P1/P2 未准入，缺 baseline 测量能力 | [Context 物化度量与逐出](context-materialization-measurement-and-eviction.md) |
 
 ## 进入与退出规则
 

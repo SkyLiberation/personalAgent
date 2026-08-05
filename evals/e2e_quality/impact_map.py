@@ -100,12 +100,18 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/application/conversation/models.py",
         "Wire contract for model output plus LoopBudgetPolicy; breaks typed "
         "parse for every loop case and the budget stop condition.",
-        "E01", "E14", "L01", "L02", "L03", "L05", "L06",
+        "E01", "E14", "E22", "E23", "L01", "L02", "L03", "L05", "L06",
     ),
     _cases(
         "src/personal_agent/application/conversation/review_admission.py",
         "Derives and freezes ReviewCriteria; only the review journey depends on it.",
         "L06",
+    ),
+    _cases(
+        "src/personal_agent/application/conversation/observation_bounds.py",
+        "Bounds how much of one observation enters the context and pages the "
+        "offloaded remainder; only oversized-return journeys depend on it.",
+        "E21",
     ),
     _cases(
         "src/personal_agent/application/conversation/verification_admission.py",
@@ -158,7 +164,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/agents/",
         "Child lifecycle, delegation grants, submission reservation and "
         "artifact index; only delegation journeys consume them.",
-        "E07", "C04", "L04", "E17",
+        "L04", "E17",
     ),
     # --- tools -------------------------------------------------------------
     _cases(
@@ -169,12 +175,12 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/tools/mcp.py",
         "MCP discovery-to-mapping admission for every remote read.",
-        "E06", "E16", "E18", "E19",
+        "E16", "E18", "E19", "E21",
     ),
     _cases(
         "src/personal_agent/tools/mcp_capability.py",
         "MCP capability inventory: configuration vs discovery vs availability.",
-        "E06", "E16", "E18", "E19",
+        "E16", "E18", "E19", "E21",
     ),
     _full(
         "src/personal_agent/tools/base.py",
@@ -200,7 +206,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/knowledge_lifecycle/",
         "Delete/restore commands, digests and receipt replay.",
-        "E04", "E10",
+        "E04", "E10", "E22",
     ),
     _cases(
         "src/personal_agent/application/capture/",
@@ -210,22 +216,22 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/research/",
         "ResearchRun lifecycle, subscriptions and delivery.",
-        "E05", "E13", "C01", "C02",
+        "E05", "E13", "E24",
     ),
     _cases(
         "src/personal_agent/application/review/",
         "Review cards, digest subscription and scheduled delivery.",
-        "E11", "E13", "C02", "C03",
+        "E11", "E13",
     ),
     _cases(
         "src/personal_agent/application/investigation_project/",
         "Durable Project plan, budget ledger and completion gate.",
-        "IP01", "B03",
+        "IP01", "E23", "E24",
     ),
     _cases(
         "src/personal_agent/domain/",
         "Project aggregate state machine and budget limits.",
-        "IP01", "B03",
+        "IP01", "E23", "E24",
     ),
     _cases(
         "src/personal_agent/application/artifacts/",
@@ -240,43 +246,43 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/extract/",
         "Structured extraction feeding evidence blocks.",
-        "E09", "E12", "C01",
+        "E09", "E12",
     ),
     _cases(
         "src/personal_agent/application/insight/",
         "Conflict, gap and backlink analysis bound to source claims.",
-        "E12", "C02",
+        "E12",
     ),
     _cases(
         "src/personal_agent/application/worker_queue.py",
         "Async worker queue behind research, delivery and project recovery.",
-        "E05", "E13", "IP01", "C02",
+        "E05", "E13", "IP01", "E23", "E24",
     ),
     _cases(
         "src/personal_agent/application/",
         "Remaining Ask/RAG application helpers: chunking, rerank, entailment, "
         "evidence assembly and answer verification.",
-        "E02", "E03", "E09", "E12", "C01", "C03",
+        "E02", "E03", "E09", "E12",
     ),
     _cases(
         "src/personal_agent/planning/",
         "Query planning and memory admission ahead of retrieval.",
-        "E02", "E12", "C01", "C03", "IP01",
+        "E02", "E12", "IP01", "E23",
     ),
     _cases(
         "src/personal_agent/runtime/",
         "Procedure runtime, scheduler, recovery and grants behind durable runs.",
-        "E05", "E13", "IP01", "B03",
+        "E05", "E13", "IP01", "E23", "E24",
     ),
     _cases(
         "src/personal_agent/infra/a2a.py",
         "A2A protocol adapter for the real specialist.",
-        "E07", "C04", "L04", "E17",
+        "L04", "E17",
     ),
     _cases(
         "src/personal_agent/infra/mcp.py",
         "MCP client transport behind every remote read.",
-        "E06", "E16", "E18", "E19",
+        "E16", "E18", "E19", "E21",
     ),
     _full(
         "src/personal_agent/infra/runtime_llm.py",
@@ -290,7 +296,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/orchestration/",
         "Legacy orchestration runtime still owns Ask/RAG compose and retrieval.",
-        "E02", "E03", "E12", "C01", "C03",
+        "E02", "E03", "E12",
     ),
     # --- entry boundary: every release case enters over HTTP ---------------
     _full(
@@ -336,7 +342,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/memory/",
         "Retrieval projections and short-term context assembly.",
-        "E02", "E12", "C01", "C03", "L01",
+        "E02", "E12", "L01",
     ),
     _cases(
         "src/personal_agent/execution/",
@@ -397,13 +403,14 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "evals/e2e_quality/test_product_capability_outcomes.py",
         "Assertions for product and composite journeys.",
-        *[f"E{index:02d}" for index in range(1, 15)],
-        "E20", "IP01", "B03", "C01", "C02", "C03", "C04",
+        "E01", "E02", "E03", "E04", "E05",
+        "E08", "E09", "E10", "E11", "E12", "E13", "E14",
+        "E20", "E22", "E23", "E24", "IP01",
     ),
     _cases(
         "evals/e2e_quality/test_release_user_outcomes.py",
         "External capability-profile assertions and shared live fixtures.",
-        "E16", "E17", "E18", "E19",
+        "E16", "E17", "E18", "E19", "E21",
     ),
     _none(
         "evals/e2e_quality/test_durable_investigation",
@@ -423,6 +430,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _none("scripts/", "Developer utilities outside the served application."),
     _none("README.md", "Repository documentation."),
     _none("CLAUDE.md", "Agent working instructions."),
+    _none("AGENTS.md", "Agent working instructions; identical to CLAUDE.md."),
     _none("pyproject.toml", "Dependency and tooling declaration; verified by Tier 1."),
 )
 

@@ -1761,21 +1761,6 @@ class InvestigationScenarioHarness:
     def child_submit_recovery(self):
         return self._agent_recovery(governed=False)
 
-    def paired_recovery_baseline(self):
-        result = self.complete_investigation()
-        input_digest = canonical_digest({"goal": "architecture investigation"})
-        return SimpleNamespace(
-            input_digest_equal=True,
-            capability_digest_equal=True,
-            project_coverage=sum(
-                value == "verified"
-                for value in result.requirement_coverage.values()
-            ),
-            project_duplicate_side_effects=0,
-            conversation_coverage=2,
-            input_digest=input_digest,
-        )
-
     def async_create_recovery(self):
         subgoal = _subgoal("architecture", operation="github_read", kind="tool")
         bundle = self._bundle(
