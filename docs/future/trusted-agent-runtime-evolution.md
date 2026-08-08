@@ -47,7 +47,7 @@ Semantic Proposal
 
 Out of Scope：
 
-- 不重写 Conversation、Investigation、Workspace 或 Research 生产代码；
+- 不重写 Conversation、Investigation、Personal Knowledge 或 Research 生产代码；
 - 不创建新的通用 Agent、Planner、Task、Context Engine、Memory 层或 Registry；
 - 不因为原生 Tool Calling 更流行就替换当前 `AgentTurnDecision`；
 - 不因为 `FileInteractionJournal` 不是分布式存储就提前增加数据库 session 模型；
@@ -232,23 +232,35 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 
 ## 7. Conditional Candidates Not Yet Admitted
 
-以下都是合理研究方向，但当前没有同一用户目标的 baseline 失败证据，因此不是实施计划：
+以下都是合理研究方向，但当前没有同一用户目标的 baseline 失败证据，因此不是实施计划。
+**本节是这些候选准入与否的单一 owner。**
 
-| 候选 | 必须先执行的 baseline | 准入条件 |
-| --- | --- | --- |
-| Provider 原生 Tool Calling 替换 Interaction envelope | 相同自然 Conversation 场景记录完成率、错误副作用、parse failure、token、延迟 | 当前 envelope 导致可重复用户失败，且替换不破坏 Admission/Observation contract |
-| Conversation distributed journal | 多实例切换或 commit/Receipt crash injection | File journal 导致丢失恢复事实或重复副作用 |
-| 两阶段 capability discovery | Tool 数量扩大的自然选择场景 | 全量 schema 注入造成可量化误选、延迟或 context budget failure |
-| Context compaction | 长对话/长 Project 同输入对照 | 当前 materialization 因 context overflow 丢失 required result |
-| Identity Value Object 全面迁移 | scope/identity 混淆的正式入口失败 | 字符串 identity 导致越权、错误恢复或不可定位错误 |
-| Online Eval 控制面 | 真实线上质量运营目标 | 离线 E2E 无法回答已定义的线上成功率、成本或失败分布问题 |
+| 候选 | 必须先执行的 baseline | 准入条件 | 当前判定 |
+| --- | --- | --- | --- |
+| Provider 原生 Tool Calling 替换 Interaction envelope | 相同自然 Conversation 场景记录完成率、错误副作用、parse failure、token、延迟 | 当前 envelope 导致可重复用户失败，且替换不破坏 Admission/Observation contract | 未测量 |
+| Conversation distributed journal | 多实例切换或 commit/Receipt crash injection | File journal 导致丢失恢复事实或重复副作用 | 未测量 |
+| 两阶段 capability discovery | Tool 数量扩大的自然选择场景 | 全量 schema 注入造成可量化误选、延迟或 context budget failure | **已测量 → 不准入**：命中官方反向判据，且无 baseline 失败 |
+| Context compaction（逐出与重读） | 长对话/长 Project 同输入对照 | 当前 materialization 因 context overflow 丢失 required result | **未准入：决定性测量未执行**。现有 22 条全是 2 轮收敛，没有一条在测跨轮累积；本行由本节门禁挡住，不由数据关闭 |
+| Identity Value Object 全面迁移 | scope/identity 混淆的正式入口失败 | 字符串 identity 导致越权、错误恢复或不可定位错误 | 未测量 |
+| Online Eval 控制面 | 真实线上质量运营目标 | 离线 E2E 无法回答已定义的线上成功率、成本或失败分布问题 | 未测量 |
 
 这些候选共享同一退出规则：baseline 未失败、失败来自环境/测试、或当前路径已满足用户目标时，
 停止优化。不得先创建 Interface、Registry、Projection、Fake 或第二状态模型。
 
-「两阶段 capability discovery」与「Context compaction」两行的机制细节、业界坐标和缺失的
-baseline 测量能力见 [Context 物化度量与逐出](context-materialization-measurement-and-eviction.md)；
-准入判定仍由本节所有，那份文档不构成第二个 owner。
+**上表两个 capability/context 行的判定依据不同强度，不得合并陈述。**缺失的测量能力已落地
+（`TurnContextComposition`），共 22 条真实 turn 记录：
+
+- **两阶段 capability discovery — 数据有代表性。**全量 schema 每轮无条件注入，任何一次运行都在
+  测它；测得 2,917–4,970 tokens，命中官方反向判据，且无 baseline 失败。判定成立。
+- **Context compaction — 数据无代表性。**只有多轮且每轮带较大 observation 的运行才在测它，而 22 条
+  全是 2 轮收敛，且来自与跨轮累积无关的用例（E22/E23/E24/L01）。**「没有一条失败」不等于「有一条
+  在测它」**，所以本行靠的是本节门禁（无已执行 baseline 失败即不准入），不是一组显示它不必要的数据。
+  复核的最便宜动作是重跑现有 E21（多次重读形态，archive 早于该字段落地），不是设计新用例。
+
+数据、官方可复核坐标、逐条准入条件和重跑三种结果的处置见
+[Context 物化度量与逐出](context-materialization-measurement-and-eviction.md)；那份文档持有机制与
+数据，不持有裁决。重开信号也记在那里：多次重读形态的分段记录，或 MCP 全开 profile 下可重复的
+误选/延迟越界。
 
 ## 8. Complexity Budget and Rejected Alternatives
 

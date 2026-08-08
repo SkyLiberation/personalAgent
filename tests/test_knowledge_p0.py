@@ -4,18 +4,18 @@ from uuid import uuid4
 
 import pytest
 
-from personal_agent.application.workspace import (
+from personal_agent.application.knowledge import (
     Claim,
     ClaimRelationAdjudication,
     ClaimRelationCandidate,
     ConversationMessage,
     ClaimAdmissionPolicy,
-    FixtureWorkspaceAnswerVerifier,
-    InMemoryWorkspaceStore,
+    FixtureKnowledgeAnswerVerifier,
+    InMemoryKnowledgeStore,
     KnowledgeStateMachine,
-    WorkspaceService,
+    KnowledgeService,
 )
-from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
+from personal_agent.infra.storage.postgres_knowledge_store import PostgresKnowledgeStore
 
 
 class _AlwaysConflictJudge:
@@ -36,13 +36,13 @@ class _AlwaysConflictJudge:
 
 
 def test_ingest_text_creates_p0_chain_and_admits_supported_claims():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
 
     result = service.ingest_text(
         "Redis 支持缓存。Redis 使用内存存储数据。",
         user_id="u1",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
         source_ref="doc://redis",
     )
@@ -61,19 +61,19 @@ def test_ingest_text_creates_p0_chain_and_admits_supported_claims():
     assert result.knowledge_items[0].claim_ids
     active_items = store.list_knowledge_items("w1", state="active")
     deprecated_items = store.list_knowledge_items("w1", state="deprecated")
-    assert [item.knowledge_item_id for item in active_items] == [
+    assert {item.knowledge_item_id for item in active_items} == {
         item.knowledge_item_id for item in result.knowledge_items
-    ]
+    }
     assert len(deprecated_items) == 1
     assert deprecated_items[0].claim_ids == []
 
 
 def test_assistant_inference_never_becomes_active_even_when_grounded():
-    service = WorkspaceService(InMemoryWorkspaceStore())
+    service = KnowledgeService(InMemoryKnowledgeStore())
 
     result = service.ingest_text(
         "用户可能喜欢低延迟缓存方案。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="conversation",
         created_by="assistant",
     )
@@ -85,18 +85,18 @@ def test_assistant_inference_never_becomes_active_even_when_grounded():
 
 
 def test_answer_with_evidence_returns_resolvable_citations_without_saving_answer_claims():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(
         store,
-        answer_verifier=FixtureWorkspaceAnswerVerifier(),
+        answer_verifier=FixtureKnowledgeAnswerVerifier(),
     )
     service.ingest_text(
         "蓝绿发布会同时保留两套环境。发布时可以将一半流量切到绿色环境。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
 
-    answer = service.answer_with_evidence("蓝绿发布如何切流量？", workspace_id="w1")
+    answer = service.answer_with_evidence("蓝绿发布如何切流量？", owner_id="w1")
 
     assert answer.verification.verdict == "passed"
     assert answer.verification.conclusion_status == "supported"
@@ -112,9 +112,9 @@ def test_answer_with_evidence_returns_resolvable_citations_without_saving_answer
 
 
 def test_no_evidence_question_returns_conservative_answer():
-    service = WorkspaceService(InMemoryWorkspaceStore())
+    service = KnowledgeService(InMemoryKnowledgeStore())
 
-    answer = service.answer_with_evidence("完全不存在的主题是什么？", workspace_id="w1")
+    answer = service.answer_with_evidence("完全不存在的主题是什么？", owner_id="w1")
 
     assert answer.verification.verdict == "insufficient_evidence"
     assert answer.verification.conclusion_status == "insufficient_evidence"
@@ -123,12 +123,12 @@ def test_no_evidence_question_returns_conservative_answer():
 
 
 def test_sensitive_claim_creates_decision_card_and_does_not_active_directly():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
 
     result = service.ingest_text(
         "我的 api key 是 sk-secret-123。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="conversation",
         created_by="user",
     )
@@ -165,7 +165,7 @@ def test_state_machine_blocks_illegal_active_transition():
 
 
 def test_solidify_conversation_only_persists_user_claims():
-    service = WorkspaceService(InMemoryWorkspaceStore())
+    service = KnowledgeService(InMemoryKnowledgeStore())
 
     result = service.solidify_conversation(
         [
@@ -173,7 +173,7 @@ def test_solidify_conversation_only_persists_user_claims():
             ConversationMessage(role="assistant", content="我推断你可能喜欢夜间发布。"),
         ],
         user_id="u1",
-        workspace_id="w1",
+        owner_id="w1",
     )
 
     assert result.user_claim_count >= 1
@@ -192,11 +192,11 @@ def test_solidify_conversation_only_persists_user_claims():
 
 
 def test_correct_claim_supersedes_old_claim_and_creates_relation():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
     ingest = service.ingest_text(
         "Atlas 的部署窗口是周三上午十点。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
     old_claim = ingest.claims[0]
@@ -215,20 +215,52 @@ def test_correct_claim_supersedes_old_claim_and_creates_relation():
     assert store.get_claim(old_claim.claim_id).state == "superseded"
 
 
+def test_correction_state_transition_is_readable_with_actor_and_from_state():
+    """A superseded claim must be able to answer who changed it, when, and from what.
+
+    Without a read path the written KnowledgeStateEvent is unobservable, so
+    "history is auditable" would be a claim with no production consumer.
+    """
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
+    ingest = service.ingest_text(
+        "Atlas 的部署窗口是周三上午十点。",
+        owner_id="w1",
+        source_type="document",
+    )
+    old_claim = ingest.claims[0]
+    previous_state = old_claim.state
+
+    service.correct_claim(
+        old_claim.claim_id,
+        "Atlas 的部署窗口是周四上午十点。",
+        user_id="u1",
+        actor="user",
+    )
+
+    history = store.list_knowledge_state_events("w1", target_id=old_claim.claim_id)
+    supersede = [event for event in history if event.to_state == "superseded"]
+    assert len(supersede) == 1
+    assert supersede[0].from_state == previous_state
+    assert supersede[0].actor == "user"
+    assert supersede[0].reason == "user correction"
+    assert supersede[0].target_id == old_claim.claim_id
+
+
 def test_potential_conflict_creates_relation_decision_and_gap_without_state_change():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(
         store,
-        answer_verifier=FixtureWorkspaceAnswerVerifier(),
+        answer_verifier=FixtureKnowledgeAnswerVerifier(),
     )
     first = service.ingest_text(
         "Orion 功能默认开启。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
     second = service.ingest_text(
         "Orion 功能默认关闭。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
 
@@ -241,27 +273,27 @@ def test_potential_conflict_creates_relation_decision_and_gap_without_state_chan
     assert store.get_claim(second.claims[0].claim_id).state == "active"
     assert store.list_decisions("w1", status="pending")
     assert store.list_knowledge_gaps("w1", state="open")
-    answer = service.answer_with_evidence("Orion 功能默认是否开启？", workspace_id="w1")
+    answer = service.answer_with_evidence("Orion 功能默认是否开启？", owner_id="w1")
     assert not answer.conflicted_claim_ids
     assert answer.diagnostic_fields["potential_conflicted_claim_ids"]
     assert "潜在冲突" in answer.answer
 
 
 def test_semantic_conflict_judge_marks_both_claims_conflicted():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(
         store,
         relation_judge=_AlwaysConflictJudge(),
-        answer_verifier=FixtureWorkspaceAnswerVerifier(),
+        answer_verifier=FixtureKnowledgeAnswerVerifier(),
     )
     first = service.ingest_text(
         "Orion 功能默认开启。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
     second = service.ingest_text(
         "Orion 功能默认关闭。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
 
@@ -272,16 +304,16 @@ def test_semantic_conflict_judge_marks_both_claims_conflicted():
     assert second.claims[0].claim_id in {relations[0].source_id, relations[0].target_id}
     assert store.get_claim(first.claims[0].claim_id).state == "conflicted"
     assert store.get_claim(second.claims[0].claim_id).state == "conflicted"
-    answer = service.answer_with_evidence("Orion 功能默认是否开启？", workspace_id="w1")
+    answer = service.answer_with_evidence("Orion 功能默认是否开启？", owner_id="w1")
     assert answer.conflicted_claim_ids
 
 
 def test_research_event_enters_lifecycle_and_records_feedback():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
     service.ingest_text(
         "Kappa API rate limit 是每分钟 60 次。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
 
@@ -289,7 +321,7 @@ def test_research_event_enters_lifecycle_and_records_feedback():
         topic="Kappa API",
         title="Kappa API rate limit update",
         summary="Kappa API rate limit 是每分钟 120 次。",
-        workspace_id="w1",
+        owner_id="w1",
         source_ref="https://example.com/kappa",
     )
     feedback = service.submit_research_feedback(
@@ -306,12 +338,12 @@ def test_research_event_enters_lifecycle_and_records_feedback():
 
 
 def test_review_plan_uses_claim_state_and_creates_conflict_gap():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
-    service.ingest_text("Orion 功能默认开启。", workspace_id="w1", source_type="document")
-    service.ingest_text("Orion 功能默认关闭。", workspace_id="w1", source_type="document")
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
+    service.ingest_text("Orion 功能默认开启。", owner_id="w1", source_type="document")
+    service.ingest_text("Orion 功能默认关闭。", owner_id="w1", source_type="document")
 
-    result = service.plan_review_and_gaps(workspace_id="w1")
+    result = service.plan_review_and_gaps(owner_id="w1")
 
     assert result.knowledge_gaps
     assert any(gap.gap_type == "conflict" for gap in result.knowledge_gaps)
@@ -319,11 +351,11 @@ def test_review_plan_uses_claim_state_and_creates_conflict_gap():
 
 
 def test_review_plan_creates_due_items_for_active_claims():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
-    service.ingest_text("Redis 支持缓存。", workspace_id="w1", source_type="document")
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
+    service.ingest_text("Redis 支持缓存。", owner_id="w1", source_type="document")
 
-    result = service.plan_review_and_gaps(workspace_id="w1")
+    result = service.plan_review_and_gaps(owner_id="w1")
 
     assert result.review_items
     assert result.review_items[0].state == "due"
@@ -332,15 +364,15 @@ def test_review_plan_creates_due_items_for_active_claims():
 
 
 def test_graph_projection_backlinks_to_claim_and_evidence():
-    store = InMemoryWorkspaceStore()
-    service = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
     ingest = service.ingest_text(
         "Redis 支持缓存。",
-        workspace_id="w1",
+        owner_id="w1",
         source_type="document",
     )
 
-    result = service.project_knowledge_graph(workspace_id="w1")
+    result = service.project_knowledge_graph(owner_id="w1")
 
     assert result.projections
     assert result.backlink_ok is True
@@ -352,19 +384,46 @@ def test_graph_projection_backlinks_to_claim_and_evidence():
 
 
 @pytest.mark.usefixtures("clean_postgres_business_tables")
-def test_postgres_workspace_store_roundtrips_p0_chain(postgres_url: str):
-    workspace_id = f"w-{uuid4().hex}"
-    store = PostgresWorkspaceStore(postgres_url)
-    service = WorkspaceService(store)
+def test_postgres_knowledge_store_roundtrips_p0_chain(postgres_url: str):
+    owner_id = f"w-{uuid4().hex}"
+    store = PostgresKnowledgeStore(postgres_url)
+    service = KnowledgeService(store)
 
     result = service.ingest_text(
         "Postgres 支持 JSONB。JSONB 可以存储结构化 payload。",
-        workspace_id=workspace_id,
+        owner_id=owner_id,
         source_type="document",
     )
-    answer = service.answer_with_evidence("Postgres 支持什么结构化字段？", workspace_id=workspace_id)
+    answer = service.answer_with_evidence("Postgres 支持什么结构化字段？", owner_id=owner_id)
 
     assert store.get_artifact(result.artifact.artifact_id) is not None
-    assert store.list_claims(workspace_id, state="active")
+    assert store.list_claims(owner_id, state="active")
     assert answer.citations
     assert store.get_evidence_block(answer.citations[0].evidence_block_id) is not None
+
+
+@pytest.mark.usefixtures("clean_postgres_business_tables")
+def test_postgres_knowledge_store_reads_back_correction_state_events(postgres_url: str):
+    owner_id = f"w-{uuid4().hex}"
+    store = PostgresKnowledgeStore(postgres_url)
+    service = KnowledgeService(store)
+
+    ingest = service.ingest_text(
+        "Orion 的维护窗口是周三。",
+        owner_id=owner_id,
+        source_type="document",
+    )
+    old_claim = ingest.claims[0]
+
+    service.correct_claim(
+        old_claim.claim_id,
+        "Orion 的维护窗口是周四。",
+        user_id="u1",
+        actor="user",
+    )
+
+    history = store.list_knowledge_state_events(owner_id, target_id=old_claim.claim_id)
+    assert [event.to_state for event in history if event.to_state == "superseded"] == ["superseded"]
+    assert all(event.target_id == old_claim.claim_id for event in history)
+    other = store.list_knowledge_state_events(f"w-{uuid4().hex}")
+    assert other == []

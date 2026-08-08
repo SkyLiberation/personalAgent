@@ -78,7 +78,7 @@ def _request(equivalence: CapabilityEquivalenceClass | None = None) -> Execution
     [
         ({"output_contract": "ToolResult"}, "required_output_contract"),
         ({"side_effects": ("external_network",)}, "side_effect_class"),
-        ({"auth_scope": "workspace:read"}, "authority_scope"),
+        ({"auth_scope": "knowledge:read"}, "authority_scope"),
         ({"data_egress_class": "content"}, "data_egress_class"),
         ({"evidence_contract": "unverified_text"}, "evidence_contract"),
         ({"failure_semantics": "raise_untyped_error"}, "failure_semantics"),

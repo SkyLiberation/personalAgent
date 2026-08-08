@@ -178,7 +178,7 @@ def _investigation(
 
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     _product("E01", "test_product_e01_conversation_journey", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E02", "test_product_e02_grounded_workspace_ask", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION),
+    _product("E02", "test_product_e02_grounded_knowledge_ask", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION),
     _product("E03", "test_product_e03_selected_upload_artifact_ask", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
     _product("E04", "test_product_e04_governed_delete_recovery", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
     _product("E05", "test_product_e05_research_run_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH),
@@ -191,7 +191,7 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     _product("E14", "test_product_e14_conversation_governed_save", EvidenceLayer.UNDERSTANDING, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
     _product(
         "E20",
-        "test_product_e20_workspace_answer_has_independent_verification",
+        "test_product_e20_knowledge_answer_has_independent_verification",
         EvidenceLayer.UNDERSTANDING,
         EvidenceLayer.VERIFICATION_COMPLETION,
     ),
@@ -222,6 +222,10 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     _loop("L01", "test_l01_http_natural_recall_uses_observed_personal_knowledge"),
+    _loop(
+        "L07",
+        "test_l07_http_conversation_save_is_recalled_in_a_new_conversation",
+    ),
     _loop("L02", "test_l02_http_independent_reads_use_safe_concurrency"),
     _loop("L03", "test_l03_http_process_restart_rebuilds_from_committed_facts", fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
     _loop("L04", "test_l04_http_manager_synthesizes_bounded_specialist_artifact", capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
@@ -343,7 +347,7 @@ def validate_catalog() -> None:
             "E22", "E23",
             "IP01",
         },
-        EvidenceClaimKind.COMPLEX_LOOP: {f"L{index:02d}" for index in range(1, 7)},
+        EvidenceClaimKind.COMPLEX_LOOP: {f"L{index:02d}" for index in range(1, 8)},
         EvidenceClaimKind.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19", "E21"},
         EvidenceClaimKind.DURABLE_INVESTIGATION: {
             *(f"LT{index:02d}" for index in range(1, 9)),

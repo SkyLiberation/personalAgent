@@ -652,8 +652,8 @@ def _candidate_source_family(source: str, item: EvidenceItem) -> str:
         return "sparse"
     if normalized in {"graph", "graphiti", "structural", "graph_provider_relation_fact"}:
         return "graph"
-    if normalized == "workspace":
-        return "workspace"
+    if normalized == "personal_knowledge":
+        return "personal_knowledge"
     if normalized == "web" or item.source_type == "web":
         return "web"
     if normalized in {"episodic", "reflection", "contrastive"}:

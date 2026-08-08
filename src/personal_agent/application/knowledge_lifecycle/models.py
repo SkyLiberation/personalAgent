@@ -13,7 +13,7 @@ class KnowledgeDeleteCommand(BaseModel):
 
     command_id: str
     idempotency_key: str
-    workspace_id: str
+    owner_id: str
     user_id: str
     target_note_id: str
     reason: str
@@ -48,7 +48,7 @@ class KnowledgeRestoreCommand(BaseModel):
 
     command_id: str
     idempotency_key: str
-    workspace_id: str
+    owner_id: str
     user_id: str
     delete_command_id: str
     reason: str

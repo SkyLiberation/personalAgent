@@ -31,7 +31,7 @@ class CandidateFusion:
     """Fuse retriever-neutral candidates before evidence reranking.
 
     RRF is intentionally rank-based: dense cosine, BM25, graph scores and
-    workspace confidence have different scales, while ranks are comparable
+    knowledge confidence have different scales, while ranks are comparable
     enough to reward candidates reached by multiple independent paths.
     """
 

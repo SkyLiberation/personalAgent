@@ -405,8 +405,8 @@ class AgentGateway:
         governance = definition.governance
         decision = self._policy_engine.evaluate(PolicyInput(
             action="agent_call",
-            user_id=context.execution_scope.principal_id,
-            session_id=context.execution_scope.security_scope.workspace_id,
+            user_id=context.execution_scope.principal.principal_id,
+            session_id=context.execution_scope.principal.user_id,
             source_platform=context.source_platform,
             execution_mode=execution_mode,
             tool_name=definition.agent_id,

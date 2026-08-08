@@ -24,9 +24,9 @@ worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph �
 
 ## 当前链路文档
 
-1. [Capture / Ask 当前流程](capture-ask-model-flow.md)：Capture ingestion、Workspace
+1. [Capture / Ask 当前流程](capture-ask-model-flow.md)：Capture ingestion、Personal Knowledge
    Artifact/Evidence/Claim 与 Ask 多源证据、ContextPack、verify/repair；
-2. [Workspace 生命周期](workspace-lifecycle-workflow.md)：Artifact/Evidence 优先入库、
+2. [Personal Knowledge 生命周期](personal-knowledge-lifecycle-workflow.md)：Artifact/Evidence 优先入库、
    Claim/Grounding/Admission/Conflict 与 ProjectionJob；
 3. [Evidence Engine](evidence-engine.md)：Ask 与 Research 共享的证据归一、装配、引用选择和
    claim grounding；
@@ -55,7 +55,7 @@ Conversation Interaction loop 不在本目录复制，统一见
 ## 当前事实所有权
 
 - Conversation：`ConversationService` / Interaction journal；
-- Capture/Ask/Knowledge：对应 Application Service 与 Workspace canonical store；
+- Capture/Ask/Knowledge：对应 Application Service 与 Personal Knowledge canonical store；
 - Delete/Restore：`KnowledgeLifecycleService` 与 immutable Command/Receipt；
 - Research/Subscription/Delivery：`ResearchService`、worker queue 与各自 Store；
 - Investigation：`InvestigationProject` aggregate、append-only journal 与 Completion Gate；

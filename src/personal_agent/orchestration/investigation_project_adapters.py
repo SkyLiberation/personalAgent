@@ -34,14 +34,14 @@ from personal_agent.kernel.contracts.resource import (
     ResourceRef,
     ResourceSelector,
 )
-from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
 
 
 class RuntimeCapabilitySnapshot(CapabilitySnapshotPort):
     def __init__(self, inventory_factory) -> None:
         self._inventory_factory = inventory_factory
 
-    def snapshot(self, security_scope: SecurityScope) -> RuntimeCapabilityInventory:
+    def snapshot(self, owner: AuthenticatedPrincipal) -> RuntimeCapabilityInventory:
         inventory = self._inventory_factory()
         if not isinstance(inventory, RuntimeCapabilityInventory):
             raise TypeError("capability factory returned an invalid inventory")
@@ -91,7 +91,7 @@ class ToolExecutorProjectAdapter:
             owner_ref=proposal.proposal_id,
             execution_digest=execution_digest,
         )
-        artifact_refs = _artifact_refs(output, execution_scope.security_scope)
+        artifact_refs = _artifact_refs(output, execution_scope.principal)
         evidence_payload = {
             "tool": operation.tool_name,
             "data": output.get("data"),
@@ -105,7 +105,7 @@ class ToolExecutorProjectAdapter:
         )
         content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         evidence_artifact_ref = self._artifact_writer.write_generated(
-            security_scope=execution_scope.security_scope,
+            owner=execution_scope.principal,
             execution_scope=execution_scope,
             producer_key=(
                 f"tool-evidence:{proposal.proposal_digest}:{content_digest}"
@@ -165,8 +165,7 @@ class PolicyEngineDelegationAdapter:
             )
         decision = self._policy.evaluate(PolicyInput(
             action="agent_call",
-            user_id=execution_scope.principal_id,
-            workspace=execution_scope.security_scope.workspace_id,
+            user_id=execution_scope.principal.principal_id,
             execution_mode="deterministic",
             tool_name=operation.agent_id,
             risk_level=profile.governance.risk_level,
@@ -193,15 +192,15 @@ class ScopeBoundDisclosureManifest:
         self,
         artifact_refs: tuple[ResourceRef, ...],
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         execution_scope: ExecutionScope,
     ) -> DisclosureManifest:
-        if execution_scope.security_scope != security_scope:
+        if execution_scope.principal != owner:
             raise PermissionError("disclosure execution scope mismatch")
-        if any(item.owner_scope != security_scope for item in artifact_refs):
+        if any(item.owner != owner for item in artifact_refs):
             raise PermissionError("disclosure contains cross-scope artifacts")
         content_digest = canonical_digest({
-            "security_scope": security_scope.model_dump(mode="json"),
+            "owner": owner.model_dump(mode="json"),
             "artifact_refs": [item.model_dump(mode="json") for item in artifact_refs],
             "redaction_policy": "private_excerpt",
         })
@@ -376,7 +375,7 @@ def _agent_execution_ref(
 
 def _artifact_refs(
     output: dict,
-    expected_scope: SecurityScope,
+    expected_scope: AuthenticatedPrincipal,
 ) -> tuple[ResourceRef, ...]:
     candidates: list[object] = []
     data = output.get("data")
@@ -387,7 +386,7 @@ def _artifact_refs(
     parsed: list[ResourceRef] = []
     for item in candidates:
         ref = ResourceRef.model_validate(item)
-        if ref.owner_scope != expected_scope:
+        if ref.owner != expected_scope:
             raise PermissionError("tool returned cross-scope artifact")
         parsed.append(ref)
     return tuple(parsed)

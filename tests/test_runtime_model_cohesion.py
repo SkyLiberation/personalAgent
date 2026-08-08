@@ -24,12 +24,6 @@ from personal_agent.execution.contracts.invocation import (
     ExecutableInvocation,
     InvocationAttemptState,
 )
-from personal_agent.runtime.contracts.planning import (
-    PlanRuntimeProjection,
-    PlannerExecutionProfile,
-    PlanningLimits,
-    PlanningUsage,
-)
 from personal_agent.capabilities.contracts.procedure import (
     ProcedureInvocation,
     ProcedureRunProjection,
@@ -61,15 +55,12 @@ def test_goal_definition_and_runtime_have_one_owner_each() -> None:
 
 
 def test_projection_models_do_not_embed_event_logs_or_requests() -> None:
-    assert "events" not in PlanRuntimeProjection.model_fields
     assert "request" not in CapabilityResolutionDecision.model_fields
     assert "lifecycle_events" not in CapabilityResolutionDecision.model_fields
     assert "artifacts" not in ChildAgentRunOutcome.__dataclass_fields__
 
 
 def test_limits_usage_and_invocation_attempts_are_separate() -> None:
-    assert not set(PlanningLimits.model_fields).intersection(PlanningUsage.model_fields)
-    assert PlannerExecutionProfile.model_fields["limits"].annotation is PlanningLimits
     invocation = ExecutableInvocation(
         step_id="invoke-1",
         action_type="compose",

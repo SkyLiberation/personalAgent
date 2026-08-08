@@ -206,12 +206,12 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                             or context.execution_scope.task_id
                         ),
                         context.tool_call_id,
-                        context.execution_scope.principal_id,
+                        context.execution_scope.principal.principal_id,
                         now,
                         now,
                         Jsonb({
-                            "security_scope": (
-                                context.execution_scope.security_scope.model_dump(
+                            "principal": (
+                                context.execution_scope.principal.model_dump(
                                     mode="json"
                                 )
                             ),

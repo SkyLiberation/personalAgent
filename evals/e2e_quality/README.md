@@ -26,7 +26,7 @@ layer 是断言焦点，不是独立产品链路，也不能替代完整用户�
 ## 当前矩阵
 
 - `product_capability`：E01–E05、E08–E14、E20、E22–E23、IP01，共 16 个应用能力旅程；
-- `complex_loop`：L01–L06，共 6 个用户旅程及其 runtime 反事实；
+- `complex_loop`：L01–L07，共 7 个用户旅程及其 runtime 反事实；
 - `capability_profile/boundary_evaluation`：E16–E19、E21、E24，共 6 个外部能力或边界专项证据；
 - `durable_investigation`：LT01–LT08、LT10–LT13，共 12 个 in-process runtime diagnostic；
 - release 共 22 个，diagnostic 共 18 个。

@@ -95,7 +95,9 @@ MCP Tool 只有同时满足以下条件才进入可见 registry：
 1. Host 接受了 Server 配置；
 2. 实际 discovery 得到远端 Tool name/schema；
 3. 本地 mapping 声明了 exposure、scope、risk、data egress 和 timeout；
-4. 当前 Interaction 的 capability visibility 允许模型看到。
+4. 当前 Interaction 的 exposure projection 允许模型看到 schema，且 Admission/Policy 仍会单独判断
+   当前 principal/scope 是否可调用；exposure 不是授权，完整分层见
+   [Visibility](03-capability-axes.md#先定义-visibility再谈-retrieval)。
 
 “配置存在”不等于“Provider 健康”，“discovery 成功”也不等于“调用成功”。E19 专门验证能力不可用时 `tool_calls=0`，系统返回 limitation，而不是换一个相似 Tool 或用常识编造远端内容。
 
@@ -151,8 +153,8 @@ POST /api/conversation/turn
   -> Interaction journal
 
 POST /api/conversation/runs/{run}/knowledge-save-decision
-  -> principal/workspace/digest 校验
-  -> WorkspaceService.solidify_conversation
+  -> principal/personal knowledge/digest 校验
+  -> KnowledgeService.solidify_conversation
   -> Artifact/Evidence/Claim/KnowledgeItem
   -> Receipt
 ```
@@ -186,7 +188,7 @@ POST /api/notes/{note_id}/delete-commands
 POST /api/knowledge-delete-commands/{id}/decision
   -> 校验用户/scope/digest/decision
   -> execute once
-  -> Workspace state event + DeleteReceipt
+  -> Personal Knowledge state event + DeleteReceipt
 ```
 
 关键反事实：
@@ -288,7 +290,7 @@ investigation worker
 
 ```text
 prepare_conversation_knowledge_save
-list_workspace_knowledge
+list_personal_knowledge
 prepare_knowledge_delete
 start_durable_investigation
 ```
@@ -313,8 +315,8 @@ research_verify_digest
 | Web Search | 模型选择 public Tool | Conversation | 是 |
 | GitHub/Notion MCP | 模型选择 discovered Tool | Conversation | 是 |
 | GPT Researcher | 模型选择 Agent profile | Conversation | 是 |
-| Workspace Ask | 产品 UI/API | Workspace API | 不是统一 Conversation 路径 |
-| 明确 user message 的确认后保存 | 模型选择 Application Capability + 用户确认 | Conversation + Workspace solidify | 是（E14 定向通过） |
+| Personal Knowledge Ask | 产品 UI/API | Personal Knowledge API | 不是统一 Conversation 路径 |
+| 明确 user message 的确认后保存 | 模型选择 Application Capability + 用户确认 | Conversation + Personal Knowledge solidify | 是（E14 定向通过） |
 | 保存 assistant candidate / 冲突核对后保存 | 未准入 | 无 | 否 |
 | 删除 | 模型选择粗粒度 capability + 用户确认 | Conversation + lifecycle API | 是（E22 定向通过） |
 | 恢复 | 产品 UI/API + 用户确认 | lifecycle API | 否 |

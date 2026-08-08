@@ -9,7 +9,6 @@ from personal_agent.application.capture import CaptureService
 from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
-    SecurityScope,
 )
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
@@ -70,10 +69,6 @@ def entry(
         principal=AuthenticatedPrincipal(
             tenant_id="personal-agent",
             user_id=user_id,
-        ),
-        security_scope=SecurityScope(
-            tenant_id="personal-agent",
-            workspace_id=session_id,
         ),
         source_platform="cli",
     )

@@ -9,9 +9,8 @@ from personal_agent.domain.investigation_project import (
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 from personal_agent.orchestration.investigation_project_adapters import (
     ToolExecutorProjectAdapter,
@@ -55,13 +54,8 @@ class _ChangingExecutor:
 
 def test_generated_artifact_preserves_limitations_across_read(temp_dir) -> None:
     principal = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="user-1")
-    security_scope = SecurityScope(
-        tenant_id=principal.tenant_id,
-        workspace_id="workspace-1",
-    )
     execution_scope = ExecutionScope(
-        security_scope=security_scope,
-        principal_id=principal.principal_id,
+        principal=principal,
         execution_id="execution-limitations",
         project_id="project-1",
         plan_version=1,
@@ -71,7 +65,7 @@ def test_generated_artifact_preserves_limitations_across_read(temp_dir) -> None:
     artifacts = ArtifactService(Settings(data_dir=temp_dir))
 
     resource_ref = artifacts.write_generated(
-        security_scope=security_scope,
+        owner=principal,
         execution_scope=execution_scope,
         producer_key="report:limitations",
         producer_ref="report-1",
@@ -86,7 +80,7 @@ def test_generated_artifact_preserves_limitations_across_read(temp_dir) -> None:
     restored = artifacts.read_generated(
         resource_ref,
         principal=principal,
-        security_scope=security_scope,
+        owner=principal,
     )
     assert restored.limitations == (
         "No migration benchmark was published.",
@@ -95,13 +89,8 @@ def test_generated_artifact_preserves_limitations_across_read(temp_dir) -> None:
 
 def test_tool_evidence_materializes_full_output_via_artifact_owner(temp_dir) -> None:
     principal = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="user-1")
-    security_scope = SecurityScope(
-        tenant_id=principal.tenant_id,
-        workspace_id="workspace-1",
-    )
     execution_scope = ExecutionScope(
-        security_scope=security_scope,
-        principal_id=principal.principal_id,
+        principal=principal,
         execution_id="execution-1",
         project_id="project-1",
         plan_version=1,
@@ -134,7 +123,7 @@ def test_tool_evidence_materializes_full_output_via_artifact_owner(temp_dir) -> 
     materialized = artifacts.read_generated(
         evidence.artifact_ref,
         principal=principal,
-        security_scope=security_scope,
+        owner=principal,
     )
     assert "https://example.test/formal-2025-release" in materialized.content
     assert "2025-06-18" in materialized.content
@@ -143,13 +132,8 @@ def test_tool_evidence_materializes_full_output_via_artifact_owner(temp_dir) -> 
 
 def test_safe_tool_retry_binds_artifact_to_observed_content(temp_dir) -> None:
     principal = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="user-1")
-    security_scope = SecurityScope(
-        tenant_id=principal.tenant_id,
-        workspace_id="workspace-1",
-    )
     execution_scope = ExecutionScope(
-        security_scope=security_scope,
-        principal_id=principal.principal_id,
+        principal=principal,
         execution_id="execution-1",
         project_id="project-1",
         plan_version=1,

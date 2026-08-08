@@ -108,8 +108,7 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 禁止：
 
 - 用 C 级来源冒充业界实践，或以“最新优秀 Agent 都这么做”替代具体来源；
-- 引用转述而未在目标分支源码或规范正文中核对，尤其是 PR 描述与文章摘要；
-- 给出结论但不给可复核坐标，使他人无法独立复核；
+- 引用转述而未在目标分支源码或规范正文核对（尤其 PR 描述与文章摘要），或给出结论却不给可复核坐标使他人无法独立复核；
 - 复制外部实现的对象数量、层次或拓扑，或移植与已证明缺口无关的机制。
 
 正确用法：
@@ -118,6 +117,17 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 2. 需求来源仍是 1.1 的 baseline——先在本工程用同一用户目标执行最简单生产路径，证明当前不足；参考本身不构成需求；
 3. baseline 证明不足后，等级更高的现成机制优先于自创设计；
 4. 采用后必须由目标 E2E 证明本工程的用户结果改善；外部已验证不等于在本工程有效。
+
+**按机制域检索，不按框架名检索。**下表给出本工程相关机制域的起点，不是推荐技术栈、需求来源或采用理由；清单不完备也不排他，出现等级更高的实现时优先采用并在本表补充坐标。坐标随版本漂移，引用时必须在目标分支源码或规范正文重新核对并按上述分级标注：
+
+| 机制域 | 优先检索对象（起点坐标） |
+| --- | --- |
+| Tool/资源协议与权限边界 | Model Context Protocol 规范正文（标注 spec 日期版本）；本工程 `capabilities/contracts/execution.py` 已按其建模 |
+| 编排、checkpoint、HITL 中断与 durable execution | LangGraph 源码与 checkpointer 契约（`pyproject.toml:11`、`langgraph-checkpoint-postgres`）；Temporal / Restate 的 determinism、replay、重试与补偿规则（须定位到 SDK 源码或规范章节） |
+| 知识生命周期与时间性失效 | graphiti-core 边级双时态 `valid_at` / `invalid_at`（`pyproject.toml:9`、`memory/graphiti/llm_strategies.py:167`） |
+| Memory 纠错、supersede 与污染控制 | OpenClaw 的条目级 `status: active／superseded`；Hermes 的破坏性 `replace`（均为 B 级，须在 upstream 仓库正文核对，第三方文档镜像不可用于复核） |
+| Agent 循环、工具调用与安全策略 | OpenAI / Anthropic 官方产品与 API 文档（A 级，标注日期与契约原文） |
+| 检索与证据组织 | 官方检索/rerank 实现与评测协议正文；论文仅按 C 级用于提出候选 |
 
 ---
 
@@ -182,7 +192,7 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 
 Event 只记录已发生事实。只有具有恢复、审计、重放或长生命周期消费者的核心 Aggregate 才使用完整 Event + Projection；固定小状态机不得默认事件化。
 
-Identity 和 scope 禁止使用空字符串、裸字符串或 raw dict。读取、检索、Tool、Artifact 和 Memory 必须携带并校验适用的 tenant/workspace/user/thread/task scope。
+Identity 和 scope 禁止使用空字符串、裸字符串或 raw dict。读取、检索、Tool、Artifact 和 Memory 必须携带并校验适用的 tenant/user/thread/task scope。
 
 ---
 
@@ -277,18 +287,39 @@ Capability definition 由对应 Application owner 管理；模型可见 capabili
 
 ---
 
-## 5. 代码组织与模式使用
+## 5. 代码组织与不变量归属
+
+结构存在的意义是让不变量可定位：**每条结构性不变量只能有一个命名 owner，破坏它必须由类型检查或某条确定性断言机械失败。**靠字符串键、散落条件分支或注释维持的不变量视为未实现——重命名字段或更换 provider 后它会静默消失而不亮红灯。提交前必须能说出三件事：承载它的类型或模块名、破坏它的最小改动、因此变红的类型错误或断言。只有依赖模型运行方差才偶发触发的门禁不算被覆盖。
+
+反面同样禁止：概念不得只以类型存在。理念映射到代码指的是不变量有归属，不是每个名词各得一个对象。
 
 设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，并受 1.5 的复杂度准入和 1.6 的参考分级约束。Ports and Adapters、State Machine、Command、Repository、Saga、Decorator、ACL、Registry 均按需使用，不是默认目录模板。
 
 禁止：
 
 - 为每个类创建 Interface、Factory、Manager，或用模式掩盖职责不清；
-- 创建 God Service、God State、God Workflow；
 - 让 Strategy/Router 承担开放语义，或让 Adapter/Converter 维护镜像事实；
-- 为未来可能性创建通用 Task、Event、Workflow、Planner、Projection 或兼容层。
+- 为未来可能性创建通用 Task、Event、Workflow、Planner、Projection 或兼容层；
+- 新增 Model、契约或分层在生产路径零构造点或零读取点：该结构是空转，必须删除或降为可选投影（见 1.5）。
 
-### 5.1 LangGraph、Router、Planner 与 Workflow
+### 5.1 类型边界与 payload 所有权
+
+无 schema 的 `dict[str, Any]`、raw JSON 和裸字符串只允许承载**边界另一侧拥有的内容**：外部 Tool、Provider、MCP endpoint 或用户输入。判据是写入者与读取者，不是字段看起来是否规整：
+
+- 由本层写入又由本层读取的字段必须是 typed 字段。它承载内部不变量而非外部契约，禁止穿 dict 传递；
+- 外部拥有的 payload 在读取处必须经 typed 校验，校验失败按「该事实不存在」处理；禁止兜底填充、默认成功、字符串包含或相似度判断；
+- identity、scope、digest 和资源引用跨层一律 typed（另见 2.4）。
+
+自写自读却经由 dict 的字段是典型缺陷：键名漂移不产生类型错误，被它守护的门禁静默失效，类型检查与测试都不会亮红。
+
+### 5.2 模块职责与 Application Capability 边界
+
+一个模块的职责必须能用一句不含「以及」的话说清。说不清时先检查它是否同时拥有多个 Application Capability 的准入、结果契约或展示投影——这是 God Service 的判据，不是文件行数。
+
+- 一个 Service 只拥有一个 Application Capability 的 admission、结果契约与展示投影；多 capability 共用入口时，入口只做语义路由、Context 组装、预算与终止判据，各 capability 的准入与投影归各自 owner；
+- 抽出的准入模块必须可被独立 contract test 覆盖，且不反向依赖编排。
+
+### 5.3 LangGraph、Router、Planner 与 Workflow
 
 - Graph 表达编排和迁移，不拥有领域事实；
 - Node 只提取输入、调用 Use Case、写回结果，不复制业务规则；
@@ -303,7 +334,7 @@ Capability definition 由对应 Application owner 管理；模型可见 capabili
 - Project 是拥有动态 durable business facts 的 Product Aggregate，不得作为通用 Workflow、路由分支标签或所有长任务的容器；
 - Workflow 内固定低风险步骤优先 Service 化；模型动态选择或需要统一 Gateway 治理的执行资源才 Tool 化。
 
-### 5.2 错误、注入与命名
+### 5.4 错误、注入与命名
 
 错误至少区分 Validation、Semantic Rejection、Authorization Denied、Capability Missing、Execution Failure、Transient Failure、Verification Failure、Completion Failure 和 Invariant Violation。禁止捕获异常后返回空结果、默认成功或模糊 fallback。
 
@@ -362,6 +393,16 @@ Command: <本地或 CI 命令>
 
 ### 6.3 文档规范
 
+**文档要让读者一眼看出这一段在讲什么、结论是什么，而不是完整记录发生过什么。**
+
+可扫读要求：
+
+- 每个章节和小节开头必须先给结论、判断或待解决问题，再展开推理与细节；禁止按时间顺序或探索过程铺陈的流水帐；
+- 关键观点、结论、约束、owner、取舍和风险必须用加粗、表格或列表突出，使跳读即可定位；禁止把判断埋在长段落中部；
+- 禁止无信息量的过渡句、重复上文的收尾段和为凑结构而写的空章节；一句话不增加新信息就删除。
+
+结构与所有权要求：
+
 - 变更前通读目标文档结构，确认 canonical owner、相关事实源和受影响章节；
 - 语义或架构变化必须整体重组定位、主链、所有权、E2E、状态和风险，禁止末尾叠加“补充/最新更新”并保留冲突正文；
 - 一个事实只允许一个 canonical 文档 owner；其他文档链接引用，不复制可漂移状态表；
@@ -378,8 +419,9 @@ Command: <本地或 CI 命令>
 
 - 因不确定新增 fallback，或为兼容保留新旧双轨；
 - 未搜索调用方就修改公共模型；
-- 用 raw dict 绕过类型边界；
-- 新增抽象却不说明变化来源和生产消费者；
+- 用 raw dict 绕过类型边界（判据见 5.1）；
+- 新增抽象却不说明变化来源和生产消费者，或新增结构在生产路径没有构造点与读取点；
+- 让自写自读的内部字段穿 dict 传递，使结构性不变量失去机械判据；
 - 缺少能力时只写 E2E、Fake、接口或未来阶段，不设计生产落地；
 - 引用外部实践却不给等级和可复核坐标，或未核对源码/规范正文就断言业界做法；
 - 未运行测试就声称完成。
@@ -407,7 +449,7 @@ Framework Protocol 使用 Contract Test，Runtime Mechanism 使用 Runtime Confo
 
 ### 7.2 Observability、安全与审计
 
-Trace 按适用性记录 trace_id、tenant/workspace/user、thread/task、goal、proposal/version、policy/version、command/authorization digest、tool/provider、attempt、latency、token/cost、receipt、verification、completion 和 error taxonomy；不得记录不必要的密钥、完整敏感内容或跨 scope 数据。
+Trace 按适用性记录 trace_id、tenant/user、thread/task、goal、proposal/version、policy/version、command/authorization digest、tool/provider、attempt、latency、token/cost、receipt、verification、completion 和 error taxonomy；不得记录不必要的密钥、完整敏感内容或跨 scope 数据。
 
 - Identity 和 scope 在入口解析并贯穿调用链；
 - Policy 决定是否允许及是否需要审批；
@@ -442,7 +484,8 @@ ADR 必须包含 1.5 的 `Complexity Justification`、1.6 的参考来源与分�
 - [ ] Framework Protocol、Runtime Mechanism、Application Capability、Product Aggregate 和 Projection 已分类，未把 Tool/Workflow/Project 并列为用户能力；
 - [ ] 机制选型已检索业界实现，来源分级和可复核坐标已记录，未采纳部分有理由；
 - [ ] Decision/Fact owner、canonical model 和唯一写入口明确；
-- [ ] 新增 Model、状态、digest、表、层和模式分别具有不可合并职责及生产消费者；
+- [ ] 新增 Model、状态、digest、表、层和模式分别具有不可合并职责、生产构造点与读取点；
+- [ ] 每条新增结构性不变量有命名 owner，且能指出破坏它的最小改动会使哪个类型错误或断言失败；
 - [ ] 新增复杂度小于删除复杂度，不存在镜像事实、双写、隐藏 fallback 或无期限兼容；
 - [ ] Proposal、Command、Execution Fact、Verification 和 Completion 边界正确；
 - [ ] 依赖方向正确，Orchestrator、Validator、Adapter 未创造业务语义；
@@ -450,7 +493,7 @@ ADR 必须包含 1.5 的 `Complexity Justification`、1.6 的参考来源与分�
 - [ ] 旧字段、旧路径、临时状态和无消费者投影已删除或具有期限 ADR；
 - [ ] 正式入口 E2E 已由目标用户自然表达驱动，未以内部名称或步骤替用户决策，并通过用户结果、关键反事实及至少一个失败/拒绝/恢复/replay 场景；
 - [ ] Unit/Contract/Integration/Golden Set 按风险补齐，Trace 和错误分类足以定位问题；
-- [ ] 文档整体更新，无冲突正文、重复 owner、失效链接或未来设计冒充当前事实；
+- [ ] 文档整体更新，无冲突正文、重复 owner、失效链接或未来设计冒充当前事实；章节开头给出结论、关键观点加粗或列表突出、可扫读而非流水帐；
 - [ ] 验证命令、结果、净复杂度变化和未验证风险已如实记录。
 
 **没有 baseline E2E 证明当前 Agent 的不足，就不得优化；没有目标 E2E 证明用户结果改善，就没有可信落地。**

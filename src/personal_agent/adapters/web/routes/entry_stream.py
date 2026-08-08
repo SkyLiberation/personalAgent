@@ -12,9 +12,6 @@ from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, s
 from personal_agent.application.conversation import ConversationMessage, ConversationUnavailable
 from personal_agent.kernel.config import Settings
 from personal_agent.orchestration.service import AgentService
-from personal_agent.kernel.contracts.scope import (
-    SecurityScope,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +47,6 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                     conversation_id=session_id,
                     messages=[ConversationMessage(role="user", content=normalized_text)],
                     principal=principal,
-                    security_scope=SecurityScope(
-                        tenant_id=principal.tenant_id,
-                        workspace_id=session_id,
-                    ),
                     source_platform="web",
                 )
             except ConversationUnavailable:

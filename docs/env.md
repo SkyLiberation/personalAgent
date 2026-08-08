@@ -24,7 +24,7 @@ FEISHU_BASE_URL=https://open.feishu.cn
 
 说明：
 
-- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。Workspace/知识、Review、受治理执行、
+- `PERSONAL_AGENT_POSTGRES_URL` 为必填项。Personal Knowledge/知识、Review、受治理执行、
   Investigation journal、worker queue 等各自通过生产 Store 使用 Postgres。普通 Conversation
   的 Interaction trace 当前由 `PERSONAL_AGENT_DATA_DIR/interaction_runs` 下的
   `FileInteractionJournal` 保存；历史 LangGraph checkpoint 表不是当前普通对话真源。
@@ -279,7 +279,7 @@ PERSONAL_AGENT_GITHUB_MCP_TOOLS=search_code,get_file_contents,search_repositorie
 | `github.get_file_contents` | `codebase`, `docs` | `repository`, `file` | `read` | `scoped` / `delegated_token` / `content` / `pinned` |
 | `github.search_repositories` | `codebase`, `repository_discovery` | `repository` | `search` | `scoped` / `delegated_token` / `content` / `pinned` |
 
-Notion MCP 也有一组一等配置，默认只映射 workspace 只读能力：
+Notion MCP 也有一组一等配置，默认只映射 personal knowledge 只读能力：
 
 ```env
 PERSONAL_AGENT_NOTION_MCP_ENABLED=true
@@ -295,18 +295,18 @@ PERSONAL_AGENT_E2E_NOTION_EXPECTED_TEXT=PERSONAL_AGENT_NOTION_E18_MARKER
 - `notion.search`：搜索当前 Notion integration 授权可见的页面和 data source。
 - `notion.retrieve_page_markdown`：读取指定 Notion 页面 Markdown 正文。
 
-默认 stdio 命令是 `npx -y @notionhq/notion-mcp-server`。这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`notion:workspace:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。当前 preset 不映射 `update-page-markdown`、`move-page`、评论、data source 更新等写操作；这些能力应作为单独 workflow 接入，并声明中高风险、确认和幂等策略。
+默认 stdio 命令是 `npx -y @notionhq/notion-mcp-server`。这些工具都声明为 `public_agent`、`low` 风险、`external_network`、`notion:personal knowledge:read`，并通过 ToolGateway 统一执行审计、超时、重试和限流。当前 preset 不映射 `update-page-markdown`、`move-page`、评论、data source 更新等写操作；这些能力应作为单独 workflow 接入，并声明中高风险、确认和幂等策略。
 
 每个 Notion MCP mapping 也会注册一份 `MCPCapability`：
 
 | Tool | semantic_domains | resource_types | operations | trust / credential / egress / attestation |
 | --- | --- | --- | --- | --- |
-| `notion.search` | `workspace_knowledge`, `docs` | `page`, `data_source` | `search` | `scoped` / `delegated_token` / `content` / `pinned` |
-| `notion.retrieve_page_markdown` | `workspace_knowledge`, `docs` | `page` | `read` | `scoped` / `delegated_token` / `content` / `pinned` |
+| `notion.search` | `knowledge_knowledge`, `docs` | `page`, `data_source` | `search` | `scoped` / `delegated_token` / `content` / `pinned` |
+| `notion.retrieve_page_markdown` | `knowledge_knowledge`, `docs` | `page` | `read` | `scoped` / `delegated_token` / `content` / `pinned` |
 
 `PERSONAL_AGENT_MCP_SERVERS` 仍可用一个 JSON 对象注册其他经过业务批准的 MCP 工具。项目启动时会先发现远端 MCP server 的工具，再只把 `tools` 中显式映射的能力注册进 `ToolGateway`；每个映射必须同时声明 `risk_level`、`side_effects`、`permission_scope`、限流、超时、审计配置和 capability metadata。缺少 capability metadata 的旧格式 mapping 会被配置解析拒绝：
 
-- `semantic_domains`：能力所属语义领域，例如 `codebase`、`workspace_knowledge`、`docs`。
+- `semantic_domains`：能力所属语义领域，例如 `codebase`、`knowledge_knowledge`、`docs`。
 - `resource_types`：可操作资源，例如 `repository`、`file`、`page`、`data_source`。
 - `operations`：允许的操作类型，例如 `search`、`read`、`list`、`create`、`update`、`delete`。
 - `trust_level`：`trusted`、`scoped`、`external`、`untrusted`。
@@ -493,7 +493,8 @@ LANGSMITH_WORKSPACE_ID=
 - `LANGSMITH_API_KEY` 为 LangSmith API key。
 - `PERSONAL_AGENT_LANGSMITH_PROJECT` 会写入 `LANGSMITH_PROJECT`。
 - `LANGSMITH_ENDPOINT` 默认使用 LangSmith SaaS endpoint。
-- `LANGSMITH_WORKSPACE_ID` 仅在 API key 关联多个 workspace 时需要。
+- `LANGSMITH_WORKSPACE_ID` 仅在 LangSmith API key 关联多个 LangSmith workspace 时需要；这是外部产品契约，
+  不是本系统的资源可见性层。
 - `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 控制 entry trace 采样率，`1.0` 表示全量，`0` 表示不上传。
 - `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，LLM wrapper 只向 LangSmith 上传脱敏摘要：
   prompt 名称和版本、模型参数、消息数量/角色/字符数、工具名称、延迟、输出长度和 token usage；
@@ -505,7 +506,7 @@ LANGSMITH_WORKSPACE_ID=
 `PERSONAL_AGENT_LANGSMITH_ENABLED` 决定，采样比例由 `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 决定。
 生产环境建议保持 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false`。
 
-结构化模型调用通过 composition root 注入观测装饰器，Conversation、Workspace、Research 和
+结构化模型调用通过 composition root 注入观测装饰器，Conversation、Personal Knowledge、Research 和
 Investigation Application 组件不读取该开关。该策略不能保证覆盖第三方库自动产生的全部 trace，
 也不能覆盖尚未迁移到统一 Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
 文件内容或密钥。
@@ -519,7 +520,7 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/person
 
 说明：
 
-- Workspace、Research、Knowledge Lifecycle、Tool governance、Agent run、worker queue 和
+- Personal Knowledge、Research、Knowledge Lifecycle、Tool governance、Agent run、worker queue 和
   Investigation journal 共享该 PostgreSQL 连接，但各自拥有事实表和恢复语义；
 - 普通 Conversation 使用 `data/interaction_runs` 下的 `FileInteractionJournal`，不是 LangGraph
   checkpoint；

@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | 1 | Agent loop 与决策所有权 | 模型提 Proposal，Runtime 准入并执行；object-root 只是当前 wire format | 强 |
 | 2 | 结构化输出与 Provider 边界 | 传输能力不能由协议外观推断，禁止运行中切协议 | 强 |
-| 3 | Context engineering | 可见性先于检索、ArtifactRef、sealed context | 部分（无两阶段发现与 compaction） |
+| 3 | Context engineering | 四阶段协议 + 单次 Observation 有界可重读；Personal Knowledge visibility 仍缺 membership owner 与独立 E2E | 部分（体积有机制/度量，资源授权边界未闭合） |
 | 4 | Tool 与 capability 治理 | Tool 不决定自己是否被授权；配置存在 ≠ 可用 | 强（无 sandbox，有意取舍） |
 | 5 | HITL 与受治理副作用 | 一个 digest 绑定确认、执行与 Receipt | 强 |
 | 6 | Specialist 协作 | child completed ≠ 父任务完成；不盲目重提 | 相当（单 specialist） |
@@ -86,7 +86,7 @@ typed JSON 是 Proposal 的当前传输形式，不是本轴的第一性原理�
 ### 本项目选择
 
 模型每轮先产生一个 typed Proposal。当前 wire contract 使用 object-root envelope
-（[models.py:72](../../src/personal_agent/application/conversation/models.py#L72)）：
+（[models.py:123](../../src/personal_agent/application/conversation/models.py#L123)）：
 
 ```text
 AgentTurnDecision
@@ -104,16 +104,16 @@ AgentTurnDecision
 3. **object root 而非 union root**：这是 terra 顶层 union 失败后的 Provider 适配，不能冒充
    顶层框架理念；
 4. **Admission 只能接受或返回 typed `DecisionFeedback`**
-   （[models.py:101](../../src/personal_agent/application/conversation/models.py#L101)），
+   （[models.py:173](../../src/personal_agent/application/conversation/models.py#L173)），
    携带 `reason_code`、`repairable_fields`、`immutable_fields`、`required_repair`、`disposition`。
 
 `FinalMessage` 还把 `answer / clarification_required / limitation / failed` 设为显式 disposition
-（[models.py:52](../../src/personal_agent/application/conversation/models.py#L52)），
+（[models.py:103](../../src/personal_agent/application/conversation/models.py#L103)），
 模型必须自报这是答案、澄清、能力受限还是失败，避免「生成了文本」被 Runtime 一律当作成功。
 
 Admission 明确**不允许**：补 `note_id`、把错误 Tool 换成相似 Tool、拼接缺失 payload、改写 Goal、
 预算耗尽后生成替代答案。实现上 `_admit`
-（[service.py:678](../../src/personal_agent/application/conversation/service.py#L678)）
+（[service.py:1223](../../src/personal_agent/application/conversation/service.py#L1223)）
 的每一条分支只返回 `DecisionFeedback`，从不修改 action 本身。
 
 **必须分清的两个层次**（规范第 4 条）：
@@ -238,60 +238,206 @@ E2E 也无法断言「这次到底走了哪条路」。宁可 fail closed 并把
 
 ## 3. Context engineering
 
+**一句话结论**：Context 体积与资源可见性必须分开评价，且四档的证据强度各不相同：
+
+- **单次工具返回体积**：有生产机制，有执行证据（E21）。
+- **跨轮 Observation 累积**：**未被证明需要**——挡住它的是「无 baseline 失败即不准入」这条门禁，
+  不是一组显示它不必要的数据。现有 22 条记录没有一条在测它。
+- **能力定义注入量**：量过，占比高但绝对值小，两阶段发现不准入。这一档的数据有代表性。
+- **资源可见性**：由 tenant/principal ownership 与 execution 缩权建立，不存在 workspace 层。
+
+| 档 | 问题 | 当前状态 | 依据 |
+| --- | --- | --- | --- |
+| 单次 Observation 体积 | 一次工具返回能进 Context 多大 | **已有机制**：20,000 字符上限 + 卸载 + 关键词/行号重读 + 未读完不许收尾 | ADR 0013；E21 |
+| 跨轮 Observation 累积 | 多轮 inputs 单调增长挤占后续轮 | **未被证明需要**：22 条全是 2 轮收敛，决定性测量未执行 | 门禁生效；数据无代表性 |
+| 能力定义注入量 | 全量 schema 每轮进 system prompt | **占比高但绝对值小**，两阶段发现不准入 | P0 度量 + 官方反向判据 |
+| 资源可见集合 | retrieval 前是否已经完成身份、ownership 与 policy 过滤 | **已收敛到 principal ownership**：个人长期知识不再接受调用方分区 ID；Conversation/Execution 不扩权 | L07 + principal 隔离测试 |
+
 ### 问题本质
 
-不是「塞得越多越好」，而是三件事同时成立：在 token 预算内让模型看到**恰好足够**做对决策的内容；
-能**证明**它这一轮看到了什么；上下文里的东西**不会变成事实**。
+不是「塞得越多越好」，而是四件事同时成立：在 token 预算内让模型看到**恰好足够**做对决策的内容；
+能**证明**它这一轮看到了什么；上下文里的东西**不会变成事实**；以及——这一条最容易被忽略——
+**上限必须由生产机制执行，而不只是被声明**。
+
+### 先定义 Visibility，再谈 Retrieval
+
+**Visibility 有两条正交轴：资源可见性决定“有权看什么”，能力可见性决定“模型可以选择什么动作”。**
+完整定义与 owner 见 canonical [Context 工程](../topics/context-engineering.md#visibility-的定义与分层)；面试时先画
+下面这张最小关系图，而不要把几个 ID 画成一条嵌套链：
+
+```text
+Tenant
+└─ Principal/User ── owns ──> 个人长期知识与 Artifact
+   ├─ Thread/Conversation：短期上下文关联，不授予长期资源
+   └─ Execution/Project/Task：执行关联与缩权，不成为第二 owner
+```
+
+| Scope | 控制对象 | 当前边界 |
+| --- | --- | --- |
+| Tenant | 顶层组织、身份和策略隔离 | typed tenant 已存在 |
+| Principal/User | 操作者身份、个人长期知识与偏好的 canonical owner | API key principal 与资源 owner 均 typed；存储 key 从 principal 派生 |
+| Thread/Conversation | committed message、Observation 与会话内引用 | 是短期上下文边界，不是长期知识授权来源 |
+| Execution/Project/Task | 当前运行的资源/Tool/预算缩权和父级关联 | 是执行关联，不是第二资源 owner |
+
+能力进入模型还要依次经过 `definition/availability -> exposure -> authorization -> requirement
+retrieval -> budget materialization`。`public_agent` 只表示普通 Conversation 可看到定义，不表示所有用户
+获权；Provider 健康不表示获权；相似度也不表示获权。
+
+### Workspace 已删除：没有独立用户目标就不保留产品边界
+
+**当前没有真实用户场景证明需要 workspace。**产品定位是“个人知识生命周期管理”：同一用户跨
+Conversation 采集、检索、修正、复习和研究自己的长期知识。现有“多用户安全”只要求不同用户之间
+不串读；这两类目标可由 tenant/principal/user 与 thread 表达，不自然产生一个位于 user 和 thread
+之间的 workspace 产品边界。
+
+“顾问 Alice 隔离客户 A/B、与 Bob 共享 A”只能说明**什么约束会在逻辑上需要共享知识集合**，但仓库中
+没有用户访谈、真实请求、产品决策或使用数据证明目标用户会遇到它。用这个例子反向设计 baseline，等于
+先选机制再发明需求，不能准入。
+
+删除前执行了当前最简单的真实目标：用户在一次 Conversation 中要求保存自己的事实，确认后在新 Conversation
+自然询问同一事实。baseline 保存成功但新会话回答没有记录，trace 为
+`data/e2e_traces/20260808T075713.239052Z-30360-52c7f40a`。根因不是缺少共享空间，而是 Conversation ID 被误作
+workspace owner，且模型还能选择读取另一套 raw-note store。
+
+最小改动因此是删除 workspace：个人知识直接归 `AuthenticatedPrincipal` 所有，Conversation 只保留短期交互，
+并从 Conversation 的能力投影移除重复 raw-note 读取路径。相同自然输入的目标 L07 已通过，trace 为
+`data/e2e_traces/20260808T084332.564715Z-7092-0f815eeb`。这证明 principal ownership 满足当前用户目标；它不证明
+未来永远不需要共享。如果以后出现真实共享或多集合隔离目标，应为该目标重新执行 baseline，并设计明确命名的
+SharedCollection/TeamLibrary Aggregate，而不是恢复通用 workspace。
 
 ### 常见做法与失效
 
 | 做法 | 失效点 |
 | --- | --- |
+| 声明回合 token 上限，但不约束单次工具返回 | 一次返回即击穿上限，上限只是一个数字 |
+| 超限就截断并提示「已截断」 | 不给可寻址重读入口，被截掉的事实在任何 offset 都取不回来 |
 | 全量注入 Tool 定义 | Tool 增多后延迟与误选率同时上升 |
 | 先语义检索再过权限 | 跨租户泄漏；相似度不是授权 |
 | 把大正文复制进 Agent State | State 膨胀，且正文出现第二 owner |
+| 摘要式 compaction | 模型输出回灌成输入，且先丢掉「第 29502 行」这类事实 |
 | compaction 连 Command/Evidence 一起压 | 恢复后重复执行副作用 |
 
 ### 本项目选择
 
-四条已落地：
+**四条协议级约束**（canonical 文档见 [Context 工程](../topics/context-engineering.md)）：
 
-1. **可见性先于检索**：先按 user/workspace scope 过滤，再做语义检索；检索只能缩小候选集合，
-   不能替模型做最终语义选择；
+1. **可见性先于检索**：先由 authenticated principal、canonical resource ownership、policy 和当前
+   execution grant 产生 authorized set，再做语义检索；检索只能缩小集合，不能授予权限或替模型做最终
+   语义选择。个人长期知识的 owner 由 principal 派生，不接受调用方提交的分区 ID；
 2. **ArtifactRef 而非正文**：运行状态保存 ref，正文由 `ArtifactService` 持有；Project 只存
    `ResourceRef`，Verifier 临时读正文并校验 digest，不持久化副本；
-3. **capability revision**：对 `EffectiveCapabilities` 的 canonical JSON 计算 revision，
+3. **capability revision**：对 `EffectiveCapabilities` 的 canonical JSON 计算 revision
+   （[service.py:1162](../../src/personal_agent/application/conversation/service.py#L1162)），
    用于证明「本轮模型看到了哪组定义」——但它**不证明远端 Provider 健康**；
 4. **sealed context**：`StructuredModelRequest.context_projection_ref` 必填
    （[model.py:24](../../src/personal_agent/capabilities/contracts/model.py#L24)），
    边界明确的调用使用 content-addressed `sealed-context`，上下文变化即改变 digest。
 
-### 证据与边界
-
-诚实说，这是当前最弱的一轴之二：
-
-- 每轮仍注入**全部** public Tool schema；
-- **无 context compaction**。
-
-Stage 3 的目标管线已写清，但准入条件是「实际 trace 先证明规模问题」，不是「业界都这么做」：
+**单次 Observation 有界 + 卸载重读**（[ADR 0013](../adr/0013-bounded-observation-and-offloaded-read.md)）：
 
 ```text
-principal + scope -> visibility filtering -> 小的 capability summary
-  -> requirement retrieval -> 加载少量完整 schema -> 模型最终选择 -> budgeted materialization
+Tool 返回 -> bound_observation_payload（20,000 字符上限）
+  -> 超限则 select_offload_text 卸载为 ResourceRef，excerpt 回带 retrieval.omitted_chars
+  -> 模型用 read_action_output 按 keyword / start_line 取窗口（命中行带 before=2 / after=4）
+  -> _unread_offloaded_resource：存在未读卸载物时，clarification_required / limitation / failed 被拒
 ```
+
+这里的 D2 很具体：**没有最后那条终止判据，模型会在自己的 Observation 里已有答案的情况下反问用户**
+——baseline 第四轮实际发生过。判据只否决出口不否决结论：读完之后同样的 `limitation` 直接放行，
+「远端输出里没有」是模型的判断，「没看就收尾」不是。
+
+**度量而非估算**：`TurnContextComposition`
+（[models.py:292](../../src/personal_agent/application/conversation/models.py#L292)）逐轮记录四个互不
+重叠的字符分段，加总等于该轮实际发出的输入，外加 Provider 报告的 `input_tokens`。它在 `generate`
+之后记录，不参与可见输入组装，因此不改变 sealed digest——这一点由
+[test_measuring_the_context_does_not_change_the_sealed_input](../../tests/test_conversation_interaction.py#L276)
+用重算 seal 的方式守住。
+
+### 证据与边界
+
+**第一档，B 级**：E21 从 `/api/conversation/turn` 以自然表达执行，同一 1,940,197 字符输入上单次
+payload 降到 12,138 字符、提交 tokens 从 776,720 降到 26,424，模型答出真实行号 29502。
+覆盖限于单文件多次定位这一形态，且 catalog 把外部 Provider profile 归为 diagnostic，
+E21 不单独产生发布声明；archive 亦为 dirty worktree。
+
+**第二、三档，C 级**：P0 度量数据来自 2026-08-03 的 12 个带 `context_composition` 的 archive
+（commit `0f692ad`，dirty）、E22/E23/E24/L01 共 **22 条 turn 记录**。这是观测数据，不是发布证据：
+
+| 测得事实 | 数值 |
+| --- | --- |
+| capability 投影占该轮可见输入 | **39.5%–78.4%**（turn 0 的 14 条集中在 69.7%–78.4%） |
+| capability 投影绝对体积 | baseline profile 9,442–11,779 字符 ≈ 2,917–3,561 tokens；`+web_search` 15,111–17,448 字符 ≈ 4,444–4,970 tokens |
+| 实测字符/token 比 | 3.23–3.51（均值 3.39），逐条换算而非按均值外推 |
+| 回合峰值 `input_tokens` | 11,339，为 `max_total_tokens=32,000` 的 **35.4%** |
+| 最大 `turn_index` | **1**（即 2 轮收敛），上限是 `max_model_turns=8` |
+| 最大 `typed_inputs_chars` | 18,939 |
+
+由这组数字得出两个否定结论，**但两者的证据强度不同，讲的时候必须分开**：
+
+- **跨轮逐出不做——靠门禁，不靠数据。**
+  [度量与逐出设计](../future/context-materialization-measurement-and-eviction.md) 写的关闭条件是
+  「多数回合在 2–3 轮内结束、`typed_inputs_chars` 从未接近上限则 G2 是想象中的问题」，22 条字面
+  全部命中。但**只有多轮且每轮带较大 observation 的运行才在测跨轮累积**，而这 22 条全是 2 轮收敛，
+  且来自与该问题无关的用例（E22/E23/E24/L01）——它们是顺手攒下的遥测，不是针对它执行的 baseline。
+  **「没有一条失败」不等于「有一条在测它」。**所以诚实的说法是「未被证明需要」：挡住它的是
+  §1.1「无已执行 baseline 失败即不准入」，不是一组显示它不必要的数据。复核动作是重跑现有 E21
+  （多次重读形态，archive 早于 `TurnContextComposition` 落地），不是设计新用例。
+- **两阶段能力发现不做——数据有代表性。**全量 schema 每轮无条件注入，任何一次运行都在测它。
+  占比 70%+ 看着刺眼，但绝对值只有约 2.9k–5.0k tokens。官方判据有两条
+  （A 级，platform.claude.com `/docs/en/agents-and-tools/tool-use/tool-search-tool`）：definition
+  超过 context window 10% 才自动启用；以及反向判据「tool 少于 10 个或 definition 总量很小时不值得
+  做」。**这里必须诚实：前一条本工程当前算不出来**——它的分母是 Provider context window，而 trace
+  里没有这个字段。所以判定落在反向判据加「没有 baseline 失败」这两条上。**占比高的正确读法是
+  「其他段太小」，不是「投影太大」**：唯一降到 39.5% 的那条记录（E24 turn 1）正是唯一 observation
+  体量可观的记录。
+
+必须主动说的四条边界：
+
+1. **P0 数据集不含多次重读形态，而那正是跨轮累积唯一会显形的形态。**E21 的 archive（20260731）
+   早于 `TurnContextComposition` 落地，那几次 3–4 轮、35,947 tokens 的运行**没有分段记录**。
+   **缺失不是随机的**——它与用例年龄相关，用例年龄又与场景形态相关，于是数据集系统性地排除了唯一
+   相关形态，且偏向对结论有利的一侧。这条教训不是「用例设计不足」（覆盖该形态的 E21 一直存在），
+   而是**新增观测字段会产生一条静默分界线**：此后引用观测数据必须同时记录字段落地日期与数据集
+   缺失的形态；
+2. **官方 10% 阈值当前不可权威计算**。若拿手头唯一的硬上限 `max_total_tokens=32,000` 当分母，
+   20/22 条越过 3,200——这个读数对「不做」的结论不利，但它用错了分母：32,000 是本工程的回合预算，
+   不是模型的 context window。如实记录这条比值，并说明为什么不用它，比只报有利数字更站得住；
+3. **prompt cache 命中不可观测**。`StructuredModelResponse` 没有 cache 字段，当前把 capabilities
+   JSON 拼在 system prompt 尾部、其后紧跟每轮变化的 remaining budget
+   （[service.py:1732](../../src/personal_agent/application/conversation/service.py#L1732)）。
+   「调整拼接顺序能省钱」目前是 D 级推断，前置条件是先让 cache 指标进入 trace；
+4. **回合 token 上限按回合起点判定**。ADR 0013 明确不改这个语义，P0 只把回合内峰值记录下来
+   使其可讨论。
 
 ### 预期追问
 
 > Tool 涨到 100 个怎么办？
 
-上面那条两阶段管线。要强调三个约束：visibility 必须先于 retrieval；capability summary、
-full schema、availability observation 不能变成三个可写事实源；compaction 只能压可丢弃的
-LLM Context，绝不触碰 Command、Receipt、Evidence 或 Project journal。
+那时才做两阶段：visibility filtering -> 小的 capability summary -> requirement retrieval ->
+加载少量完整 schema -> 模型最终选择 -> budgeted materialization。三个约束要一起说：visibility
+必须先于 retrieval；`capability_revision` 必须继续覆盖全集而不是本轮子集，否则同一 Interaction
+两轮 revision 不同、故障归因立刻失效；Tier 2 注入是 Admission 前的上下文装配，不是一次 ToolCall，
+否则「模型看到定义」会被记成一次执行事实。
 
 > 为什么现在不做？
 
-没有 trace 证明当前 Tool 规模已造成完成率下降、误选或延迟约束。先做等于为想象中的问题增加
-复杂度，而这套 capability 层一旦加上，撤除成本很高。
+因为现在有数字：投影约 2.9k–5.0k tokens，回合峰值只用掉回合上限的 35%，2 轮就收敛。没有一条
+trace 显示当前规模造成误选、延迟或 context budget failure。这套 capability 层加上之后撤除成本很高。
+
+> 那跨轮逐出呢，也是「有数字所以不做」吗？
+
+不是，这两条不能一起说。全量 schema 每轮无条件注入，所以任何一次运行都在测它；跨轮累积只有多轮
+且每轮带大 observation 的运行才在测，而现有 22 条全是 2 轮收敛。**那把尺子从没量到它要量的东西。**
+所以逐出当前是「未被证明需要」，靠的是「无已执行 baseline 失败即不准入」这条门禁。复核动作是重跑
+现有 E21，三种结果里两种反而会加固当前结论（累积可观但成功 → 关闭理由更强；累积其实不大 → 说明
+ADR 0013 的卸载已顺手解决），只有「挤占且失败或降质」才推翻它。
+
+> 那 70% 占比不算问题吗？
+
+占比是比值，分母是这几个场景本来就很小的可见输入。判据应当用绝对量对齐 context window，而不是
+用段间比值——这也是官方阈值用「超过 context window 10%」而不是「超过 prompt 的百分之多少」的原因。
+诚实的补充是：本工程当前算不出那条官方比值，因为 trace 里没有 context window 字段；所以我用的是
+官方另一条反向判据加「没有 baseline 失败」，不是那条算不出来的阈值。
 
 ## 4. Tool 与 capability 治理
 
@@ -401,8 +547,8 @@ E14 是当前最完整的样本链：
   -> Admission 机械证明该 span 确实存在于该 user message 且 role=user
   -> Runtime 只冻结 exact span 为 immutable Command + 单一 digest
   -> awaiting_confirmation 返回用户
-  -> 用户确认（校验 principal/workspace/digest）
-  -> WorkspaceService.solidify_conversation（既有 canonical write path）
+  -> 用户确认（校验 principal/personal knowledge/digest）
+  -> KnowledgeService.solidify_conversation（既有 canonical write path）
   -> typed Receipt
 ```
 
@@ -418,7 +564,7 @@ E14 是当前最完整的样本链：
 很隐蔽——它「保存成功了」，只是保存错了东西。修复方式是加 exact-span 选择 + 机械来源校验，
 而不是加关键词过滤。
 
-边界（不能从 E14 外推）：Workspace commit 与 journal Receipt 之间的 **crash window 未覆盖**；
+边界（不能从 E14 外推）：Personal Knowledge commit 与 journal Receipt 之间的 **crash window 未覆盖**；
 多实例并发同一 digest 未验证，因此不能声称跨边界 exactly-once；删除、订阅、「冲突核对后保存」、
 保存 assistant candidate 仍需各自 baseline。候选 Baseline D 就是为 crash window 准备的。
 
@@ -459,14 +605,14 @@ AgentDelegationProposal（bounded_sub_goal + context_projection_refs
   -> 父模型综合 FinalMessage
 ```
 
-见 [models.py:28](../../src/personal_agent/application/conversation/models.py#L28)、
+见 [models.py:31](../../src/personal_agent/application/conversation/models.py#L31)、
 [gateway.py](../../src/personal_agent/agents/gateway.py)。四条不变量：
 
 - `AgentGateway` 拥有 child lifecycle 与 Artifact index，A2A Adapter 只转协议；
 - 远端 `completed` 是子执行事实，**不能完成父 Interaction**；
 - 同一 Interaction 内该 Agent 已返回 Artifact 后，重复委托被 Admission 拒绝；
 - Provider Artifact 先经 `ArtifactService.write_generated` 落入 owner scope，AgentRun 只存
-  `ResourceRef`；读正文时重新校验 principal 与 SecurityScope。
+  `ResourceRef`；读正文时重新校验 principal 与 resource owner。
 
 **durable 侧的 submit 安全序列**（这条细节含金量高）：
 
@@ -515,7 +661,7 @@ Agent 最贵的失败不是「做错」，而是**不知道什么时候该停**�
 
 ### 本项目选择
 
-`LoopBudgetPolicy`（[models.py:123](../../src/personal_agent/application/conversation/models.py#L123)）
+`LoopBudgetPolicy`（[models.py:195](../../src/personal_agent/application/conversation/models.py#L195)）
 限制 model turns、tool calls、agent calls、total tokens、concurrency 五项。耗尽时：
 
 ```text
@@ -582,7 +728,7 @@ synthesis 分类，**先 reserve 再调外部能力，最后 charge/release**；
 | 边界 | 实现 | 恢复语义 |
 | --- | --- | --- |
 | 普通 Interaction | `FileInteractionJournal` | 从 committed inputs 重建 transient context |
-| Workspace/Knowledge | `PostgresWorkspaceStore` | 从 Artifact/Evidence/Claim/Event 恢复 |
+| Personal Knowledge/Knowledge | `PostgresKnowledgeStore` | 从 Artifact/Evidence/Claim/Event 恢复 |
 | Delete/Restore | `PostgresKnowledgeLifecycleStore` | Command/Event/Receipt digest replay |
 | Research | `PostgresResearchStore` + queue | Run/Subscription/Delivery lifecycle |
 | Investigation Project | `PostgresInvestigationProjectStore` + append-only journal | 重建 Plan、ready set、verification、completion |
@@ -638,7 +784,7 @@ Agent memory 的核心风险不是遗忘，而是**模型输出自动变成下�
 | 做法 | 失效点 |
 | --- | --- |
 | 每轮对话自动写回向量库 | 污染循环；来源不可审计 |
-| Document + Embedding 两层模型 | 无法表达 supersede / conflict 关系 |
+| Document + Embedding 两层模型 | 没有可寻址的陈述单元，state 无处附着；纠错只能覆盖、删除重插或两条并存（矛盾退化为排序意外） |
 | 向量库或图数据库作为事实源 | 索引重建失败会覆盖或删除业务事实 |
 | Ask 顺手把答案写入 memory | 读取行为产生长期副作用 |
 
@@ -651,7 +797,7 @@ Source -> Artifact -> EvidenceBlock/EvidenceSpan -> Claim -> Relation/KnowledgeI
                                                         -> Retrieval Index / Graph Projection
 ```
 
-PostgreSQL Workspace Store 是 canonical fact owner；embedding index 和 Graphiti
+PostgreSQL Personal Knowledge Store 是 canonical fact owner；embedding index 和 Graphiti
 **都只是可重建投影**，投影失败不能覆盖或删除 canonical facts。
 
 四条硬规则：
@@ -659,17 +805,38 @@ PostgreSQL Workspace Store 是 canonical fact owner；embedding index 和 Graphi
 1. **Ask 是 read-only**，E2E 直接比较前后 Claim 数；
 2. **只有显式 solidify 进入唯一写入口**，且只收 user-authored claim，assistant candidate 全部拒绝；
 3. **纠错是 supersede 而非覆盖**：旧 Claim 转 `superseded`、新 Claim `active`、Relation 记录
-   supersedes/conflicts；检索只选 active，但历史可审计；
+   supersedes/conflicts；检索只选 active，历史由 `KnowledgeStateEvent` 保留 `actor` 与
+   `from_state -> to_state`，经 `GET /api/knowledge/state-events?target_id=<claim_id>` 可查；
 4. **外部结果不是 Claim**：MCP、Web Search、A2A 返回的是 Observation 或 Artifact，要保存必须走
-   Workspace ingestion path；Adapter 不能因为「看起来可信」就直接写入。
+   Personal Knowledge ingestion path；Adapter 不能因为「看起来可信」就直接写入。
 
 配套还要把五种「状态」分开，避免 God State：LLM Context（可丢弃）、Interaction Journal
 （恢复用 committed inputs）、Artifact Store（大正文）、Long-term Knowledge（跨会话事实）、
 Retrieval Index（找候选，非真源）。
 
+### 与业界机制对照
+
+| 实现 | 纠错语义 | 历史 | 等级与坐标 |
+| --- | --- | --- | --- |
+| graphiti-core | 边级双时态失效：`valid_at` / `invalid_at`，旧边不删 | 保留 | A：`pyproject.toml:9` 依赖 `graphiti-core>=0.29.0`；本仓 `memory/graphiti/llm_strategies.py:167` 读取该三元组 |
+| OpenClaw | Markdown 条目上 `status: active｜superseded`，原地标注不删除 | 保留（但拥挤时建议清理旧条目） | B：upstream `openclaw/openclaw` 文档，经检索工具转述而非亲自读取；第三方镜像 clawdocs.org 与 upstream 矛盾，不可用于复核 |
+| Hermes | `replace` 破坏性覆盖 | 丢失 | B：同上，未核对源码正文 |
+| 本项目 | Claim 级 supersede + Relation + StateEvent | 保留且带 actor / 授权结果 | 见上文规则 3 |
+
+两点判断，不要在面试里说过头：
+
+- **方向被独立收敛验证**。OpenClaw 在纯文件形态下也走到 supersede 而非覆盖，说明「可寻址条目 +
+  状态标签」是这类需求的最小解，不是本项目的偏好；Hermes 选破坏性覆盖并接受历史丢失，说明这是
+  取舍点而非共识。
+- **机制重量不是最优**。同一语义 OpenClaw 用两个字段完成，本项目用了新 Claim、状态翻转、
+  Relation、两条 StateEvent、一张高风险 DecisionCard。多出来的部分换到的是 `actor` 归属、
+  授权结果和跨 personal knowledge 隔离——面向个人知识治理这笔账划得来，但要能说清代价，
+  并且承认「更轻的形状也能表达 supersede」。
+
 ### 证据与边界
 
-- **E02**：回答有 citations，且 Ask 不新增 Claim、不跨 workspace 泄漏；
+- **E02**：回答有 citations 且 Ask 不新增 Claim；两个不同 `owner_id` 的随机内容没有串读，但
+  helper 同时改变 user/personal knowledge，只证明分区结果，不证明 membership 授权；
 - **E08**：显式 solidify 后保存用户 Claim，Ask 不写、assistant candidate 不写；
 - E09：text/conversation/upload/URL 均形成 Artifact，URL 不只保存链接或指令；
 - E10：correction、delete、restart、restore 全链，replay 不重复副作用、deleted Claim 不残留；
@@ -732,15 +899,15 @@ Verifier 只能单向判断语义，不能把失败 Tool 说成成功、改变 R
 
 | 实例 | 触发 | 判断内容 |
 | --- | --- | --- |
-| Workspace Answer | 候选回答组装后自动触发 | 整体支持、冲突、coverage、unsupported claim |
+| Personal Knowledge Answer | 候选回答组装后自动触发 | 整体支持、冲突、coverage、unsupported claim |
 | Ask/RAG | compose 后固定 stage，repair 后重验 | citation、claim grounding、证据充分性 |
 | Project | SubGoal execution/Evidence Admission 后及 final Artifact 后 | requirement 与报告语义满足 |
 | Conversation Review | 用户显式要求审查文本时 | 最终文本是否满足冻结的用户明示条件 |
 
-这里的“领域实例”不等于子能力每次都运行完整实例。Ask 调用 Workspace 时只走
+这里的“领域实例”不等于子能力每次都运行完整实例。Ask 调用 Personal Knowledge 时只走
 `select_evidence()` 取得 EvidenceSpan、Claim 状态和冲突事实；它不会调用
-`answer_with_evidence()`，也不会验证一个随后被丢弃的 Workspace 候选回答。只有独立 Workspace
-Answer 产品入口才触发 Workspace Answer Verifier，Ask 最终答案只由 Ask Verifier 判断。
+`answer_with_evidence()`，也不会验证一个随后被丢弃的 Personal Knowledge 候选回答。只有独立 Personal Knowledge
+Answer 产品入口才触发 Personal Knowledge Answer Verifier，Ask 最终答案只由 Ask Verifier 判断。
 
 Graph 子能力也遵守同一边界：`GraphRetrievalResult` 禁止 `answer` 字段，只输出可追溯
 fact/edge/episode/note refs。旧 Microsoft GraphRAG Adapter 只能拿到 CLI synthesized answer，
@@ -757,11 +924,11 @@ Artifact 与 assessment evidence 齐全。普通直接回答不为形式统一�
 
 ### 证据与边界
 
-- **B04 -> E20**：同一 Workspace 核对目标的 baseline 同时展示互斥日期，却未标冲突，并由回答
+- **B04 -> E20**：同一 Personal Knowledge 核对目标的 baseline 同时展示互斥日期，却未标冲突，并由回答
   组装器写成 `supported`、全部 Claim grounded。E20 将 answer-level verification 独立为唯一写入口，
   返回 `needs_revision/conflicted`，conflict refs 全部绑定本次 citations，Ask 前后 Claim 数不变
   （baseline `20260731T063040.820774Z-16696-c3646c8a`，target
-  `20260731T064446.108938Z-8804-52b29d3c`，[ADR 0011](../adr/0011-independent-workspace-answer-verification.md)）；
+  `20260731T064446.108938Z-8804-52b29d3c`，[ADR 0011](../adr/0011-independent-personal-knowledge-answer-verification.md)）；
 - **L06**：用户要求审查一段「声称已完成所有写入却缺执行证据」的答复。最终文本不得保留该无证据
   声明，必须经过至少一次语义验证，并等于 passed receipt 的 `verified_draft`。**当前状态：
   9 次真实模型运行 9 次通过**（收回所有权前为 5/9，判据由模型自拟）。收回判据权后判据形状稳定
@@ -777,7 +944,7 @@ Artifact 与 assessment evidence 齐全。普通直接回答不为形式统一�
 - IP01 target archive `20260729T101501.732689Z-53628-6c5f02f2`：Plan v3、3/3 outcome satisfied、
   5 条 admitted evidence、可读报告、Completion Gate 通过、`environment_failed=false`、86.42 秒。
 
-边界：E20 只准入 Workspace answer-level semantic assessment，尚未准入自动 repair loop、任务级
+边界：E20 只准入 Personal Knowledge answer-level semantic assessment，尚未准入自动 repair loop、任务级
 可执行检查或跨领域统一 contract。下一项必须继续从具体 required result contract 和同输入 paired
 baseline 扩展，而**不是做通用反思 Agent**——没有生产消费者和可执行判据的反思轮次只增加 token。
 
@@ -814,7 +981,7 @@ fault mechanism、是否支持发布声明。
 **完整矩阵要求**：真实 HTTP 入口进入独立 Web 进程、真实模型、PostgreSQL、场景需要的真实
 Provider、不注入中间 Goal/Proposal/Observation。
 
-**同时断言反事实**（这是最值得讲的部分）：错误 digest 不执行、Ask 不写 Claim、跨 workspace
+**同时断言反事实**（这是最值得讲的部分）：错误 digest 不执行、Ask 不写 Claim、跨 personal knowledge
 不泄漏、预算耗尽不拼替代答案、能力缺失不换 Tool、replay 不重复副作用。
 
 **自然用户输入**：L01-L06 与 E16-E19、E21 不泄漏内部 Tool、Agent、Artifact、verdict 或执行顺序；
@@ -859,7 +1026,7 @@ B01 证明旧 Conversation 只能文本确认，无 pending state / Tool call / 
 
 > 你怎么知道 Agent 真的做对了？
 
-看反事实。正向结果容易蒙对，反事实很难：错误 digest 拒绝、Ask 后 Claim 数不变、跨 workspace
+看反事实。正向结果容易蒙对，反事实很难：错误 digest 拒绝、Ask 后 Claim 数不变、跨 personal knowledge
 查不到、预算耗尽时最终消息不含那个随机答案、能力不可用时 `tool_calls=0`。这些断言不成立时，
 即使正向用例通过，我也不认为它对。
 

@@ -1,6 +1,6 @@
 import { FormEvent, type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
-  askWorkspace,
+  askKnowledge,
   buildEntryStreamUrl,
   confirmPendingAction,
   fetchDigest,
@@ -735,7 +735,7 @@ export default function App() {
       const captured = await uploadEntryFile(file, userId);
       const artifactId = captured.ingest_result.artifact.artifact_id;
       const questionForArtifact = text?.trim() || `请概述刚上传的文件 ${file.name}`;
-      const grounded = await askWorkspace(questionForArtifact, userId);
+      const grounded = await askKnowledge(questionForArtifact, userId);
       const reply = grounded.answer || `附件已入库（${artifactId}）。`;
       setAskHistory((current) =>
         current.map((item) =>
@@ -839,7 +839,7 @@ export default function App() {
         </p>
       </header>
 
-      <main className="workspace-shell">
+      <main className="app-shell">
         <aside className="sidebar">
           <div className="sidebar-brand">
             <p className="panel-kicker">工作台</p>

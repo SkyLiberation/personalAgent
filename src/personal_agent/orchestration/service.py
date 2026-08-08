@@ -60,8 +60,8 @@ class AgentService:
         return self.runtime.memory
 
     @property
-    def workspace_service(self):
-        return self.runtime.workspace_service
+    def knowledge_service(self):
+        return self.runtime.knowledge_service
 
     @property
     def knowledge_lifecycle_service(self):

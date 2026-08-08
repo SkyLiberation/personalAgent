@@ -11,7 +11,7 @@ from personal_agent.domain.investigation_project import (
     ProjectEvent,
 )
 from personal_agent.infra.storage.postgres_common import PostgresStoreBase
-from personal_agent.kernel.contracts.scope import SecurityScope
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
 class ProjectConcurrencyError(RuntimeError):
@@ -30,24 +30,23 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS investigation_projects (
+                    CREATE TABLE IF NOT EXISTS personal_investigation_projects (
                         project_id TEXT PRIMARY KEY,
                         tenant_id TEXT NOT NULL,
-                        workspace_id TEXT NOT NULL,
-                        principal_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
                         create_idempotency_key TEXT NOT NULL,
                         definition_digest TEXT NOT NULL,
                         definition JSONB NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL,
-                        UNIQUE (tenant_id, workspace_id, principal_id, create_idempotency_key)
+                        UNIQUE (tenant_id, user_id, create_idempotency_key)
                     )
                     """
                 )
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS investigation_project_events (
+                    CREATE TABLE IF NOT EXISTS personal_investigation_project_events (
                         event_id TEXT PRIMARY KEY,
-                        project_id TEXT NOT NULL REFERENCES investigation_projects(project_id),
+                        project_id TEXT NOT NULL REFERENCES personal_investigation_projects(project_id),
                         sequence INTEGER NOT NULL,
                         event_kind TEXT NOT NULL,
                         payload JSONB NOT NULL,
@@ -58,14 +57,14 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                 )
                 cur.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS investigation_project_scope_idx
-                    ON investigation_projects (tenant_id, workspace_id, project_id)
+                    CREATE INDEX IF NOT EXISTS personal_investigation_project_owner_idx
+                    ON personal_investigation_projects (tenant_id, user_id, project_id)
                     """
                 )
                 cur.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS investigation_project_events_project_idx
-                    ON investigation_project_events (project_id, sequence)
+                    CREATE INDEX IF NOT EXISTS personal_investigation_project_events_project_idx
+                    ON personal_investigation_project_events (project_id, sequence)
                     """
                 )
         self._initialized = True
@@ -76,7 +75,6 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
         self.ensure_schema()
         definition_digest = canonical_digest({
             "principal": definition.principal.model_dump(mode="json"),
-            "security_scope": definition.security_scope.model_dump(mode="json"),
             "title": definition.title,
             "goal": definition.goal,
             "user_requirements": definition.user_requirements.model_dump(
@@ -86,26 +84,25 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
             "budget": definition.budget.model_dump(mode="json"),
             "create_idempotency_key": definition.create_idempotency_key,
         })
-        scope = definition.security_scope
+        owner = definition.principal
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO investigation_projects (
-                        project_id, tenant_id, workspace_id, principal_id,
+                    INSERT INTO personal_investigation_projects (
+                        project_id, tenant_id, user_id,
                         create_idempotency_key, definition_digest, definition, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (
-                        tenant_id, workspace_id, principal_id, create_idempotency_key
+                        tenant_id, user_id, create_idempotency_key
                     ) DO NOTHING
                     RETURNING definition, definition_digest
                     """,
                     (
                         definition.project_id,
-                        scope.tenant_id,
-                        scope.workspace_id,
-                        definition.principal.principal_id,
+                        owner.tenant_id,
+                        owner.user_id,
                         definition.create_idempotency_key,
                         definition_digest,
                         Jsonb(definition.model_dump(mode="json")),
@@ -117,16 +114,14 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                     cur.execute(
                         """
                         SELECT definition, definition_digest
-                        FROM investigation_projects
+                        FROM personal_investigation_projects
                         WHERE tenant_id = %s
-                          AND workspace_id = %s
-                          AND principal_id = %s
+                          AND user_id = %s
                           AND create_idempotency_key = %s
                         """,
                         (
-                            scope.tenant_id,
-                            scope.workspace_id,
-                            definition.principal.principal_id,
+                            owner.tenant_id,
+                            owner.user_id,
                             definition.create_idempotency_key,
                         ),
                     )
@@ -136,13 +131,13 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                             "create idempotency key is bound to a different definition"
                         )
         persisted = InvestigationProjectDefinition.model_validate(inserted["definition"])
-        return self.load(persisted.security_scope, persisted.project_id) or InvestigationProject(
+        return self.load(persisted.principal, persisted.project_id) or InvestigationProject(
             definition=persisted
         )
 
     def load(
         self,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         project_id: str,
     ) -> InvestigationProject | None:
         self.ensure_schema()
@@ -151,13 +146,13 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                 cur.execute(
                     """
                     SELECT definition
-                    FROM investigation_projects
-                    WHERE project_id = %s AND tenant_id = %s AND workspace_id = %s
+                    FROM personal_investigation_projects
+                    WHERE project_id = %s AND tenant_id = %s AND user_id = %s
                     """,
                     (
                         project_id,
-                        security_scope.tenant_id,
-                        security_scope.workspace_id,
+                        owner.tenant_id,
+                        owner.user_id,
                     ),
                 )
                 row = cur.fetchone()
@@ -166,7 +161,7 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                 cur.execute(
                     """
                     SELECT payload
-                    FROM investigation_project_events
+                    FROM personal_investigation_project_events
                     WHERE project_id = %s
                     ORDER BY sequence
                     """,
@@ -180,14 +175,14 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
     def append(
         self,
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         project_id: str,
         expected_sequence: int,
         events: tuple[ProjectEvent, ...],
     ) -> InvestigationProject:
         self.ensure_schema()
         if not events:
-            project = self.load(security_scope, project_id)
+            project = self.load(owner, project_id)
             if project is None:
                 raise KeyError(f"unknown project_id={project_id}")
             return project
@@ -202,25 +197,25 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT tenant_id, workspace_id
-                    FROM investigation_projects
+                    SELECT tenant_id, user_id
+                    FROM personal_investigation_projects
                     WHERE project_id = %s
                     FOR UPDATE
                     """,
                     (project_id,),
                 )
-                owner = cur.fetchone()
-                if owner is None:
+                persisted_owner = cur.fetchone()
+                if persisted_owner is None:
                     raise KeyError(f"unknown project_id={project_id}")
                 if (
-                    owner["tenant_id"] != security_scope.tenant_id
-                    or owner["workspace_id"] != security_scope.workspace_id
+                    persisted_owner["tenant_id"] != owner.tenant_id
+                    or persisted_owner["user_id"] != owner.user_id
                 ):
-                    raise PermissionError("project belongs to a different security scope")
+                    raise PermissionError("project belongs to a different principal")
                 cur.execute(
                     """
                     SELECT COALESCE(MAX(sequence), 0) AS sequence
-                    FROM investigation_project_events
+                    FROM personal_investigation_project_events
                     WHERE project_id = %s
                     """,
                     (project_id,),
@@ -233,7 +228,7 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                 for event in events:
                     cur.execute(
                         """
-                        INSERT INTO investigation_project_events (
+                        INSERT INTO personal_investigation_project_events (
                             event_id, project_id, sequence, event_kind, payload, created_at
                         )
                         VALUES (%s, %s, %s, %s, %s, %s)
@@ -247,7 +242,7 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                             event.created_at,
                         ),
                     )
-        project = self.load(security_scope, project_id)
+        project = self.load(owner, project_id)
         if project is None:
             raise RuntimeError("project disappeared after event append")
         return project
@@ -258,8 +253,8 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT project_id, tenant_id, workspace_id
-                    FROM investigation_projects
+                    SELECT project_id, tenant_id, user_id
+                    FROM personal_investigation_projects
                     ORDER BY created_at
                     LIMIT %s
                     """,
@@ -268,11 +263,11 @@ class PostgresInvestigationProjectStore(PostgresStoreBase):
                 rows = cur.fetchall()
         projects: list[InvestigationProject] = []
         for row in rows:
-            scope = SecurityScope(
+            owner = AuthenticatedPrincipal(
                 tenant_id=row["tenant_id"],
-                workspace_id=row["workspace_id"],
+                user_id=row["user_id"],
             )
-            project = self.load(scope, row["project_id"])
+            project = self.load(owner, row["project_id"])
             if project is not None and not project.is_terminal:
                 projects.append(project)
         return tuple(projects)

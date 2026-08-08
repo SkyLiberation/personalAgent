@@ -11,7 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope, SecurityScope
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
 
 
 ProjectState = Literal[
@@ -353,7 +353,7 @@ class DisclosureManifest(DomainModel):
 
 class ExternalDelegationCommand(DomainModel):
     command_id: str = Field(default_factory=lambda: f"ipcmd_{uuid4().hex[:20]}")
-    security_scope: SecurityScope
+    principal: AuthenticatedPrincipal
     execution_scope: ExecutionScope
     plan_version: int
     logical_subgoal_id: str
@@ -385,7 +385,6 @@ class CompletionReport(DomainModel):
 class InvestigationProjectDefinition(DomainModel):
     project_id: str = Field(default_factory=new_project_id)
     principal: AuthenticatedPrincipal
-    security_scope: SecurityScope
     title: str = Field(min_length=1)
     goal: str = Field(min_length=1)
     user_requirements: UserRequirementVersion

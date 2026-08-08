@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.adapters.web.routes._shared import (
     auth_is_disabled,
@@ -39,8 +39,9 @@ class ToolDescriptionResponse(BaseModel):
 
 
 class ToolExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tenant_id: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1)
     user_id: str = Field(min_length=1)
     kwargs: dict[str, object] = Field(default_factory=dict)
 
@@ -101,7 +102,6 @@ def register_system_routes(
             name,
             execution_scope=interaction_execution_scope(
                 tenant_id=principal.tenant_id,
-                workspace_id=body.workspace_id,
                 user_id=principal.user_id,
                 execution_id=f"direct:{name}",
                 task_id=name,

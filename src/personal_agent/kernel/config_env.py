@@ -792,7 +792,7 @@ def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
     }
     capability_by_remote = {
         "API-post-search": {
-            "semantic_domains": ("workspace_knowledge", "docs"),
+            "semantic_domains": ("personal_knowledge", "docs"),
             "resource_types": ("page", "data_source"),
             "operations": ("search",),
             "provider_priority": 20,
@@ -802,7 +802,7 @@ def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
             },),
         },
         "API-retrieve-page-markdown": {
-            "semantic_domains": ("workspace_knowledge", "docs"),
+            "semantic_domains": ("personal_knowledge", "docs"),
             "resource_types": ("page",),
             "operations": ("read",),
             "provider_priority": 20,
@@ -818,7 +818,7 @@ def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
         name=public_name_by_remote.get(remote_name, f"notion.{remote_name.replace('-', '_')}"),
         description=descriptions.get(remote_name),
         business_role="enterprise_knowledge_search",
-        semantic_domains=capability.get("semantic_domains", ("workspace_knowledge",)),
+        semantic_domains=capability.get("semantic_domains", ("personal_knowledge",)),
         resource_types=capability.get("resource_types", ("page",)),
         operations=capability.get("operations", ("search",)),
         trust_level="scoped",

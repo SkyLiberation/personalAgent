@@ -59,7 +59,7 @@ input {
 }
 
 .hero,
-.workspace-shell {
+.app-shell {
   position: relative;
   z-index: 1;
 }
@@ -95,7 +95,7 @@ input {
   font-size: 1.02rem;
 }
 
-.workspace-shell {
+.app-shell {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   gap: 24px;
@@ -1378,7 +1378,7 @@ button:disabled {
 }
 
 @media (max-width: 1080px) {
-  .workspace-shell {
+  .app-shell {
     grid-template-columns: 1fr;
   }
 

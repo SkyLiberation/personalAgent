@@ -28,7 +28,7 @@ from personal_agent.application.conversation.models import (
     EffectiveCapabilities,
     ProjectReference,
     ReviewCriteria,
-    WorkspaceKnowledgeCandidate,
+    PersonalKnowledgeCandidate,
 )
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
@@ -47,7 +47,7 @@ from personal_agent.capabilities.contracts.model import (
 )
 from personal_agent.governance import ToolExecutor
 from personal_agent.governance.policy import PolicyEngine
-from personal_agent.application.workspace import InMemoryWorkspaceStore, WorkspaceService
+from personal_agent.application.knowledge import InMemoryKnowledgeStore, KnowledgeService
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     AgentGatewayContext,
@@ -68,9 +68,8 @@ from personal_agent.tools.interaction_verifier import (
     build_verify_interaction_draft_tool,
 )
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 from personal_agent.application.conversation.observation_bounds import (
     MAX_OBSERVATION_PAYLOAD_CHARS,
@@ -196,10 +195,6 @@ def _conversation_scope():
             tenant_id="tenant-1",
             user_id="default",
         ),
-        "security_scope": SecurityScope(
-            tenant_id="tenant-1",
-            workspace_id="workspace-1",
-        ),
     }
 
 
@@ -312,7 +307,7 @@ def test_oversized_tool_observation_is_bounded_and_offloaded_for_re_read():
     offloaded_ref = ResourceRef(
         resource_id="gen_0",
         resource_type="artifact",
-        owner_scope=SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1"),
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
         revision=1,
     )
     model = _Decisions(
@@ -398,12 +393,11 @@ def test_re_reading_another_principals_offloaded_output_is_denied():
     """
 
     artifacts = _ArtifactTexts()
-    scope = SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1")
+    scope = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="someone-else")
     foreign_ref = artifacts.write_generated(
-        security_scope=scope,
+        owner=scope,
         execution_scope=ExecutionScope(
-            security_scope=scope,
-            principal_id="tenant-1:someone-else",
+            principal=scope,
             execution_id="irun-foreign",
         ),
         producer_key="irun-foreign:act:observation",
@@ -456,7 +450,7 @@ def test_asking_the_user_about_an_output_this_run_offloaded_is_rejected():
     offloaded_ref = ResourceRef(
         resource_id="gen_0",
         resource_type="artifact",
-        owner_scope=SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1"),
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
         revision=1,
     )
     model = _Decisions(
@@ -508,7 +502,7 @@ def test_a_limitation_stands_once_the_offloaded_remainder_has_been_read():
     offloaded_ref = ResourceRef(
         resource_id="gen_0",
         resource_type="artifact",
-        owner_scope=SecurityScope(tenant_id="tenant-1", workspace_id="workspace-1"),
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
         revision=1,
     )
     model = _Decisions(
@@ -1268,8 +1262,8 @@ def test_receipts_are_read_from_observations_by_contract_not_by_position():
 def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate(
     temp_dir,
 ):
-    store = InMemoryWorkspaceStore()
-    writer = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    writer = KnowledgeService(store)
     journal_root = temp_dir / "conversation-knowledge-save"
     messages = [ConversationMessage(
         role="user",
@@ -1290,7 +1284,7 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
 
     prepared = first.respond(
         **_conversation_scope(),
-        conversation_id="workspace-1",
+        conversation_id="conversation-1",
         interaction_run_ref="irun_knowledge_save",
         messages=messages,
     )
@@ -1298,7 +1292,7 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
     assert prepared.disposition == "confirmation_required"
     assert prepared.pending_confirmation is not None
     assert prepared.pending_confirmation.status == "awaiting_confirmation"
-    assert store.list_claims("workspace-1") == []
+    assert store.list_claims("tenant-1:default") == []
     command = prepared.pending_confirmation.command
     assert command.source_message_indexes == (0,)
     assert command.messages == (
@@ -1325,7 +1319,7 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
         command_digest=command.command_digest,
         confirmation_ref="unit-user-confirmation",
     )
-    claim_count = len(store.list_claims("workspace-1"))
+    claim_count = len(store.list_claims("tenant-1:default"))
     replayed = resumed.decide_knowledge_save(
         **_conversation_scope(),
         interaction_run_ref="irun_knowledge_save",
@@ -1337,7 +1331,7 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
     assert executed.status == "executed"
     assert executed.receipt is not None
     assert replayed.receipt == executed.receipt
-    assert len(store.list_claims("workspace-1")) == claim_count
+    assert len(store.list_claims("tenant-1:default")) == claim_count
     after_restart = ConversationService(
         None,
         knowledge_writer=writer,
@@ -1348,8 +1342,8 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
 
 
 def test_governed_knowledge_save_rejects_without_writing(temp_dir):
-    store = InMemoryWorkspaceStore()
-    writer = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    writer = KnowledgeService(store)
     service = ConversationService(
         _Decisions(_continue(ToolCallProposal(
             action_id="save-reject",
@@ -1364,7 +1358,7 @@ def test_governed_knowledge_save_rejects_without_writing(temp_dir):
     )
     prepared = service.respond(
         **_conversation_scope(),
-        conversation_id="workspace-1",
+        conversation_id="conversation-1",
         interaction_run_ref="irun_knowledge_save_reject",
         messages=[ConversationMessage(
             role="user",
@@ -1386,12 +1380,12 @@ def test_governed_knowledge_save_rejects_without_writing(temp_dir):
 
     assert rejected.status == "rejected"
     assert rejected.receipt is None
-    assert store.list_claims("workspace-1") == []
+    assert store.list_claims("tenant-1:default") == []
 
 
 def test_governed_knowledge_save_rejects_fabricated_selection():
-    store = InMemoryWorkspaceStore()
-    writer = WorkspaceService(store)
+    store = InMemoryKnowledgeStore()
+    writer = KnowledgeService(store)
     service = ConversationService(
         _Decisions(
             _continue(ToolCallProposal(
@@ -1412,7 +1406,7 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
 
     result = service.respond(
         **_conversation_scope(),
-        conversation_id="workspace-1",
+        conversation_id="conversation-1",
         interaction_run_ref="irun_knowledge_save_fabricated",
         messages=[ConversationMessage(
             role="user",
@@ -1427,16 +1421,16 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
     assert [
         item.reason_code for item in trace.inputs if item.kind == "decision_feedback"
     ] == ["invalid_knowledge_save_source"]
-    assert store.list_claims("workspace-1") == []
+    assert store.list_claims("tenant-1:default") == []
 
 
-class _WorkspaceKnowledgeReader:
-    def list_workspace_knowledge(self, *, workspace_id, user_id, limit):
-        assert workspace_id == "workspace-1"
+class _KnowledgeKnowledgeReader:
+    def list_personal_knowledge(self, *, owner_id, user_id, limit):
+        assert owner_id == "tenant-1:default"
         assert user_id == "default"
         assert limit <= 50
         return (
-            WorkspaceKnowledgeCandidate(
+            PersonalKnowledgeCandidate(
                 knowledge_item_id="kitm_target",
                 title="Incorrect launch window",
                 summary="The launch window is Monday at 09:00.",
@@ -1450,13 +1444,13 @@ class _KnowledgeDeleteLifecycle:
         self.operations = {}
 
     def prepare_delete(
-        self, *, workspace_id, user_id, target_note_id, reason, idempotency_key,
+        self, *, owner_id, user_id, target_note_id, reason, idempotency_key,
     ):
         operation = KnowledgeDeleteOperationView(
             command=KnowledgeDeleteCommand(
                 command_id="kdel_target",
                 idempotency_key=idempotency_key,
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 user_id=user_id,
                 target_note_id=target_note_id,
                 reason=reason,
@@ -1476,15 +1470,14 @@ class _ProjectStarter:
     def __init__(self):
         self.calls = 0
 
-    def start(self, *, principal, security_scope, request, idempotency_key):
+    def start(self, *, principal, owner, request, idempotency_key):
         self.calls += 1
         assert principal.user_id == "default"
-        assert security_scope.workspace_id == "workspace-1"
+        assert owner == principal
         assert idempotency_key
         return ProjectReference(
             project_id="iprj_target",
             tenant_id=principal.tenant_id,
-            workspace_id=security_scope.workspace_id,
             user_id=principal.user_id,
             state="planning",
             title=request.title,
@@ -1498,7 +1491,7 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
         _Decisions(
             _continue(ToolCallProposal(
                 action_id="list-knowledge",
-                tool_name="list_workspace_knowledge",
+                tool_name="list_personal_knowledge",
                 arguments={"limit": 20},
             )),
             _continue(ToolCallProposal(
@@ -1510,13 +1503,13 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
                 },
             )),
         ),
-        workspace_reader=_WorkspaceKnowledgeReader(),
+        knowledge_reader=_KnowledgeKnowledgeReader(),
         knowledge_lifecycle=lifecycle,
     )
 
     prepared = service.respond(
         **_conversation_scope(),
-        conversation_id="workspace-1",
+        conversation_id="conversation-1",
         interaction_run_ref="irun_delete_from_goal",
         messages=[ConversationMessage(
             role="user",
@@ -1530,7 +1523,7 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
     assert prepared.pending_confirmation.operation.command.target_note_id == "kitm_target"
     assert trace.knowledge_delete_command_ref == "kdel_target"
     assert trace.project_reference is None
-    assert [item.capability_id for item in trace.inputs] == ["list_workspace_knowledge"]
+    assert [item.capability_id for item in trace.inputs] == ["list_personal_knowledge"]
 
 
 def test_goal_entry_starts_one_existing_project_and_replay_returns_same_reference():
@@ -1552,7 +1545,7 @@ def test_goal_entry_starts_one_existing_project_and_replay_returns_same_referenc
     )
     kwargs = {
         **_conversation_scope(),
-        "conversation_id": "workspace-1",
+        "conversation_id": "conversation-1",
         "interaction_run_ref": "irun_project_from_goal",
         "messages": [ConversationMessage(
             role="user",
@@ -1579,14 +1572,14 @@ def test_explanation_only_request_does_not_create_a_project_or_delete_command():
             disposition="answer",
             message="Here is how the deletion policy works; no operation was prepared.",
         )),
-        workspace_reader=_WorkspaceKnowledgeReader(),
+        knowledge_reader=_KnowledgeKnowledgeReader(),
         knowledge_lifecycle=lifecycle,
         project_port=project_port,
     )
 
     result = service.respond(
         **_conversation_scope(),
-        conversation_id="workspace-1",
+        conversation_id="conversation-1",
         interaction_run_ref="irun_explain_only",
         messages=[ConversationMessage(
             role="user",
@@ -1666,7 +1659,7 @@ class _AsyncSpecialist:
             artifact_ref=ResourceRef(
                 resource_id=f"artifact-{run_id}",
                 resource_type="artifact",
-                owner_scope=context.execution_scope.security_scope,
+                owner=context.execution_scope.principal,
             ),
         ),)
         return ChildAgentRunRecord(
@@ -1690,8 +1683,8 @@ class _ArtifactTexts:
         self.written: list[dict[str, object]] = []
         self._write_error = write_error
 
-    def read_text(self, resource_ref, *, principal, security_scope):
-        if resource_ref.owner_scope != security_scope:
+    def read_text(self, resource_ref, *, principal, owner):
+        if resource_ref.owner != owner:
             raise PermissionError("cross-scope test artifact")
         for record in self.written:
             if record["resource_ref"].resource_id != resource_ref.resource_id:
@@ -1707,7 +1700,7 @@ class _ArtifactTexts:
     def write_generated(
         self,
         *,
-        security_scope,
+        owner,
         execution_scope,
         producer_key,
         producer_ref,
@@ -1726,7 +1719,7 @@ class _ArtifactTexts:
         resource_ref = ResourceRef(
             resource_id=f"gen_{len(self.written)}",
             resource_type="artifact",
-            owner_scope=security_scope,
+            owner=owner,
             revision=1,
         )
         self.written.append({
@@ -1735,6 +1728,6 @@ class _ArtifactTexts:
             "kind": kind,
             "content": content,
             "resource_ref": resource_ref,
-            "created_by_principal_id": execution_scope.principal_id,
+            "created_by_principal_id": execution_scope.principal.principal_id,
         })
         return resource_ref

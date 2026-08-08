@@ -27,10 +27,10 @@ def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
         result = artifact_service.inspect_upload(
             resource_ref=resource_ref,
             principal=AuthenticatedPrincipal(
-                tenant_id=resource_ref.owner_scope.tenant_id,
+                tenant_id=resource_ref.owner.tenant_id,
                 user_id=user_id,
             ),
-            security_scope=resource_ref.owner_scope,
+            owner=resource_ref.owner,
             question=question,
         )
         return tool_response(tool_success(result, evidence=result["evidence_refs"]))

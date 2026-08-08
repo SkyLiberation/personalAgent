@@ -128,7 +128,6 @@ def test_tool_execution_contract_meets_quality_baseline():
         executor, calls = _executor_and_calls()
         execution_scope = interaction_execution_scope(
             tenant_id="tool-quality",
-            workspace_id="tool-quality",
             user_id="alice",
             execution_id=case.id,
             thread_id=case.id,

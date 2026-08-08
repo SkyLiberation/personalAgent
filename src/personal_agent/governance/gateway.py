@@ -26,7 +26,7 @@ from personal_agent.capabilities.contracts.grants import (
     AtomicCapabilityGrant,
     ProcedureNodeGrant,
 )
-from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -308,7 +308,7 @@ class ToolGateway:
         limit = governance.rate_limit_per_minute
         if limit is None or limit <= 0:
             return False
-        subject = context.execution_scope.principal_id
+        subject = context.execution_scope.principal.principal_id
         key = f"{tool.name}:{subject}"
         return not self._rate_limiter.allow(key, limit=limit, window_seconds=60.0)
 
@@ -357,8 +357,8 @@ class ToolGateway:
         decision = self._policy.evaluate(
             PolicyInput(
                 action="tool_call",
-                user_id=context.execution_scope.principal_id,
-                session_id=context.execution_scope.security_scope.workspace_id,
+                user_id=context.execution_scope.principal.principal_id,
+                session_id=context.execution_scope.principal.user_id,
                 source_platform=context.source_platform,
                 execution_mode=context.execution_mode,
                 tool_name=tool.name,
@@ -513,8 +513,8 @@ class ToolGateway:
             tool_name=tool.name,
             permission_scope=governance.permission_scope,
             risk_level=governance.risk_level,
-            user_id=context.execution_scope.principal_id,
-            session_id=context.execution_scope.security_scope.workspace_id,
+            user_id=context.execution_scope.principal.principal_id,
+            session_id=context.execution_scope.principal.user_id,
             source_platform=context.source_platform,
             execution_mode=context.execution_mode,
             thread_id=context.execution_scope.thread_id,
@@ -580,7 +580,7 @@ class ToolGateway:
             ),
             thread_id=context.execution_scope.thread_id,
             run_id=context.execution_scope.execution_id,
-            user_id=context.execution_scope.principal_id,
+            user_id=context.execution_scope.principal.principal_id,
             latency_ms=latency_ms,
             langsmith_run_id=_current_langsmith_run_id(),
             attempts=attempts,
@@ -600,20 +600,13 @@ class ToolGateway:
         entry_input = getattr(state, "entry_input", None)
         source_platform = getattr(entry_input, "source_platform", None)
         tenant_id = str(getattr(state, "tenant_id", None) or "personal-agent")
-        workspace_id = str(
-            getattr(state, "workspace_id", None)
-            or getattr(state, "session_id", None)
-            or getattr(state, "thread_id", None)
-            or "default"
-        )
-        principal_id = str(getattr(state, "user_id", None) or "anonymous")
+        user_id = str(getattr(state, "user_id", None) or "anonymous")
         return ToolGatewayContext(
             execution_scope=ExecutionScope(
-                security_scope=SecurityScope(
+                principal=AuthenticatedPrincipal(
                     tenant_id=tenant_id,
-                    workspace_id=workspace_id,
+                    user_id=user_id,
                 ),
-                principal_id=f"{tenant_id}:{principal_id}",
                 execution_id=str(getattr(state, "run_id", None) or call_id),
                 thread_id=getattr(state, "thread_id", None),
                 task_id=getattr(tracking, "pending_step_id", None),

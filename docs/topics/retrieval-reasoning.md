@@ -8,7 +8,7 @@
 ```text
 User question
   -> query understanding
-  -> workspace / local / graph retrieval
+  -> personal knowledge / local / graph retrieval
   -> optional web retrieval under policy
   -> EvidenceItem normalization
   -> Evidence Engine fusion / rerank / budget
@@ -25,7 +25,7 @@ verification；确定性代码负责 visibility、scope、source ref、预算、
 
 | Retriever | 输入 | 输出 | 禁止 |
 | --- | --- | --- | --- |
-| Workspace | question、scope、filters | EvidenceSpan、Citation、Claim support/conflict | 生成/验证 Workspace answer |
+| Personal Knowledge | question、scope、filters | EvidenceSpan、Citation、Claim support/conflict | 生成/验证 Personal Knowledge answer |
 | Local | question、scope、filters | Note/chunk candidates | 把模型回答写回 Note |
 | Graph | question、scope | fact/edge/episode/citation refs | 返回 provider candidate answer |
 | Web | question、Policy/egress scope | SourceDocument / EvidenceItem | 绕过 Gateway 或权限 |
@@ -62,15 +62,15 @@ Evidence Engine 负责候选归一、去重、融合、rerank、压缩和预算�
 完成。Compose 只读取 ContextPack；Ask Verifier 判断 claim grounding、citation 和 evidence
 sufficiency。Tool success、retrieval hit 或非空 ContextPack 都不能直接完成用户目标。
 
-Workspace 有两个不同消费者：
+Personal Knowledge 有两个不同消费者：
 
 ```text
-/api/workspace/ask
+/api/knowledge/ask
   -> select evidence
-  -> compose Workspace answer
-  -> WorkspaceAnswerVerifier
+  -> compose Personal Knowledge answer
+  -> KnowledgeAnswerVerifier
 
-Ask WorkspaceRetriever
+Ask KnowledgeRetriever
   -> select evidence only
   -> shared EvidenceItem pool
   -> Ask compose / Ask verifier
@@ -90,7 +90,7 @@ Ask WorkspaceRetriever
 
 - Graph synthesized answer baseline 与删除路径见
   [ADR 0012](../adr/0012-graph-retrieval-evidence-only-boundary.md)；
-- Workspace 内外层重复验证 baseline 与边界见
-  [ADR 0011](../adr/0011-independent-workspace-answer-verification.md)；
+- Personal Knowledge 内外层重复验证 baseline 与边界见
+  [ADR 0011](../adr/0011-independent-personal-knowledge-answer-verification.md)；
 - Verification 和 Completion owner 见
   [Verification 与 Completion](verification-and-completion.md)。

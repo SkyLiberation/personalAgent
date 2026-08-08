@@ -20,7 +20,7 @@ query
   -> query normalization / optional intent-aware rewrite
   -> dense semantic retrieval
   -> sparse lexical retrieval
-  -> optional workspace / graph / metadata candidates
+  -> optional personal knowledge / graph / metadata candidates
   -> dedupe + chunk/parent grouping
   -> RRF or normalized score fusion
   -> reranker over fused candidates
@@ -44,7 +44,7 @@ query
 
 ```text
 Retrieval:
-  dense / sparse-support / workspace / graph / metadata
+  dense / sparse-support / personal knowledge / graph / metadata
 
 Fusion:
   RRF / normalized score fusion / source quotas / dedupe
@@ -80,7 +80,7 @@ Verification:
 ```text
 query
   -> intent/query normalization
-  -> dense retrieval + sparse retrieval + workspace/metadata candidates
+  -> dense retrieval + sparse retrieval + personal knowledge/metadata candidates
   -> dedupe + parent/section grouping
   -> RRF or normalized fusion
   -> semantic reranker or gated LLM rescue
@@ -168,7 +168,7 @@ shared selector 已在以下设置中相对 keyword 全指标上升：
 ## 已落地
 
 1. 数据与评估：Postgres vector 维度已与 1024 维 embedding 对齐；Open / Galileo runner、metrics、diagnostics、多 seed 和 Galileo validation 验证已跑通。
-2. 通用链路边界：生产 Ask 已落地统一 `Candidate` schema；`RetrievalCoordinator` 作为 `HybridRetriever` 边界统一接入 local/workspace/graph/web 等候选源。
+2. 通用链路边界：生产 Ask 已落地统一 `Candidate` schema；`RetrievalCoordinator` 作为 `HybridRetriever` 边界统一接入 local/personal knowledge/graph/web 等候选源。
 3. Fusion 与归因：local 检索会投影 `sparse_rank` / `dense_rank`；`CandidateFusion(rrf)` 统一执行 dedupe + RRF，并写回 `fusion_rank`、`fusion_score`、`fusion_components`、`consensus_count`。
 4. LLM 与可靠性：结构化模型客户端已有 retry wrapper；shared LLM policy 已接入 uuapi `gpt-5.4-mini`、低思考强度、concurrency=3 和 per-query fallback。
 5. Gate 与默认策略：retrieval default gate 已支持 Open/Galileo profile、baseline alias、latency/cost/grounding/harmed 预算；Open/Galileo 100q full gate 已通过。

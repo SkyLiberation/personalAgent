@@ -19,7 +19,7 @@ def test_legacy_six_tables_migrate_to_two_without_changing_receipt() -> None:
     command_payload = {
         "command_id": "legacy-delete-command",
         "idempotency_key": "legacy-delete-key",
-        "workspace_id": "alice",
+        "owner_id": "alice",
         "user_id": "alice",
         "target_note_id": "legacy-note",
         "reason": "legacy cleanup",
@@ -47,7 +47,7 @@ def test_legacy_six_tables_migrate_to_two_without_changing_receipt() -> None:
                 CREATE TABLE knowledge_delete_commands (
                     command_id TEXT PRIMARY KEY,
                     idempotency_key TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     target_note_id TEXT NOT NULL,
                     authorization_digest TEXT NOT NULL,
@@ -74,7 +74,7 @@ def test_legacy_six_tables_migrate_to_two_without_changing_receipt() -> None:
                 CREATE TABLE knowledge_restore_commands (
                     command_id TEXT PRIMARY KEY,
                     idempotency_key TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     delete_command_id TEXT NOT NULL,
                     authorization_digest TEXT NOT NULL,
@@ -103,7 +103,7 @@ def test_legacy_six_tables_migrate_to_two_without_changing_receipt() -> None:
             cur.execute(
                 """
                 INSERT INTO knowledge_delete_commands (
-                    command_id, idempotency_key, workspace_id, user_id,
+                    command_id, idempotency_key, owner_id, user_id,
                     target_note_id, authorization_digest,
                     execution_command_digest, payload, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)

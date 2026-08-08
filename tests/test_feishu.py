@@ -42,7 +42,7 @@ def test_feishu_text_enters_canonical_conversation_with_visible_thread_context(t
     assert call["conversation_id"] == "chat-1"
     assert call["principal"].user_id == "default"
     assert call["principal"].tenant_id == "feishu"
-    assert call["security_scope"].workspace_id == "chat-1"
+    assert "security_scope" not in call
     assert call["source_platform"] == "feishu"
     assert [item.content for item in call["messages"]] == ["前文", "帮我总结一下群聊"]
 

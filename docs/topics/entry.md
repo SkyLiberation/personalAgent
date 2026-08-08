@@ -110,7 +110,7 @@
 ```text
 HTTP request
   -> web/routes/entry.py
-  -> ConversationMessage + authenticated principal + SecurityScope
+  -> ConversationMessage + authenticated principal
   -> AgentService.converse()
   -> ConversationService.respond()
 ```

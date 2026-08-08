@@ -4,7 +4,7 @@ import logging
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
@@ -28,28 +28,30 @@ class GraphSyncResponse(BaseModel):
     queued: bool = False
 
 
-class PrepareKnowledgeDeleteRequest(BaseModel):
+class _StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PrepareKnowledgeDeleteRequest(_StrictRequest):
     user_id: str | None = None
-    workspace_id: str | None = None
     reason: str = ""
     idempotency_key: str = Field(min_length=1, max_length=200)
 
 
-class DecideKnowledgeDeleteRequest(BaseModel):
+class DecideKnowledgeDeleteRequest(_StrictRequest):
     user_id: str | None = None
     decision: Literal["confirm", "reject"]
     command_digest: str = Field(min_length=64, max_length=64)
     confirmation_ref: str = Field(default="", max_length=200)
 
 
-class PrepareKnowledgeRestoreRequest(BaseModel):
+class PrepareKnowledgeRestoreRequest(_StrictRequest):
     user_id: str | None = None
-    workspace_id: str | None = None
     reason: str = ""
     idempotency_key: str = Field(min_length=1, max_length=200)
 
 
-class DecideKnowledgeRestoreRequest(BaseModel):
+class DecideKnowledgeRestoreRequest(_StrictRequest):
     user_id: str | None = None
     decision: Literal["confirm", "reject"]
     command_digest: str = Field(min_length=64, max_length=64)
@@ -68,14 +70,14 @@ def register_note_routes(
         user_id: str | None = None,
         flat: bool = False,
     ) -> list[dict[str, object]]:
-        resolved_user = user_id or resolve_user_id(request, settings)
-        logger.info("Listing notes for user=%s flat=%s", resolved_user, flat)
-        items = service.workspace_service.store.list_knowledge_items(
-            resolved_user,
+        principal = resolve_requested_principal(request, settings, user_id)
+        logger.info("Listing notes for user=%s flat=%s", principal.user_id, flat)
+        items = service.knowledge_service.store.list_knowledge_items(
+            principal.principal_id,
             state="active",
             limit=200,
         )
-        return [_workspace_note_response(item) for item in items]
+        return [_knowledge_note_response(item) for item in items]
 
     @app.post(
         "/api/notes/{note_id}/delete-commands",
@@ -87,16 +89,15 @@ def register_note_routes(
         request: Request,
     ) -> KnowledgeDeleteOperationView:
         try:
-            resolved_user = resolve_requested_principal(
+            principal = resolve_requested_principal(
                 request, settings, body.user_id
-            ).user_id
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        workspace_id = body.workspace_id or resolved_user
         try:
             return service.knowledge_lifecycle_service.prepare_delete(
-                workspace_id=workspace_id,
-                user_id=resolved_user,
+                owner_id=principal.principal_id,
+                user_id=principal.user_id,
                 target_note_id=note_id,
                 reason=body.reason,
                 idempotency_key=body.idempotency_key,
@@ -116,15 +117,15 @@ def register_note_routes(
         request: Request,
     ) -> KnowledgeDeleteOperationView:
         try:
-            resolved_user = resolve_requested_principal(
+            principal = resolve_requested_principal(
                 request, settings, body.user_id
-            ).user_id
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         try:
             return service.knowledge_lifecycle_service.decide_delete(
                 command_id=command_id,
-                user_id=resolved_user,
+                user_id=principal.user_id,
                 decision=body.decision,
                 command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,
@@ -162,16 +163,15 @@ def register_note_routes(
         request: Request,
     ) -> KnowledgeRestoreOperationView:
         try:
-            resolved_user = resolve_requested_principal(
+            principal = resolve_requested_principal(
                 request, settings, body.user_id
-            ).user_id
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        workspace_id = body.workspace_id or resolved_user
         try:
             return service.knowledge_lifecycle_service.prepare_restore(
-                workspace_id=workspace_id,
-                user_id=resolved_user,
+                owner_id=principal.principal_id,
+                user_id=principal.user_id,
                 delete_command_id=delete_command_id,
                 reason=body.reason,
                 idempotency_key=body.idempotency_key,
@@ -230,13 +230,13 @@ def register_note_routes(
     @app.get("/api/notes/{note_id}/chunks", response_model=list[KnowledgeNote])
     def get_note_chunks(note_id: str, request: Request) -> list[KnowledgeNote]:
         resolved_user = resolve_user_id(request, settings)
-        items = service.workspace_service.store.list_knowledge_items(resolved_user, limit=500)
+        items = service.knowledge_service.store.list_knowledge_items(resolved_user, limit=500)
         item = next((candidate for candidate in items if candidate.knowledge_item_id == note_id), None)
         if item is None:
             raise HTTPException(status_code=404, detail="Note not found.")
         chunks: list[KnowledgeNote] = []
         for span_id in item.evidence_span_ids:
-            span = service.workspace_service.store.get_evidence_span(span_id)
+            span = service.knowledge_service.store.get_evidence_span(span_id)
             if span is None:
                 continue
             chunks.append(KnowledgeNote(
@@ -288,14 +288,14 @@ def _note_response(note: KnowledgeNote) -> dict[str, object]:
     return payload
 
 
-def _workspace_note_response(item) -> dict[str, object]:
+def _knowledge_note_response(item) -> dict[str, object]:
     payload = item.model_dump(mode="json")
     payload.update({
         "id": item.knowledge_item_id,
         "title": item.title,
         "content": item.summary,
         "summary": item.summary,
-        "source_type": "workspace_item",
+        "source_type": "knowledge_item",
         "source_ref": item.knowledge_item_id,
         "source_fingerprint": None,
         "parent_note_id": None,

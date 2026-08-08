@@ -45,8 +45,6 @@ class PolicyInput:
     user_id: str | None = None
     session_id: str | None = None
     source_platform: str | None = None
-    # 预留 workspace 维度（当前不引入业务 workspace 概念，默认 None）。
-    workspace: str | None = None
     # 执行场景：deterministic | react | direct | memory | entry。
     execution_mode: str = "direct"
 

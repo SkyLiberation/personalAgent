@@ -17,7 +17,7 @@ from personal_agent.adapters.web.routes.notes import register_note_routes
 from personal_agent.adapters.web.routes.review import register_review_routes
 from personal_agent.adapters.web.routes.research import register_research_routes
 from personal_agent.adapters.web.routes.system import register_system_routes
-from personal_agent.adapters.web.routes.workspace import register_workspace_routes
+from personal_agent.adapters.web.routes.knowledge import register_knowledge_routes
 
 
 def register_api_routes(app: FastAPI, context: WebAppContext) -> None:
@@ -46,10 +46,10 @@ def register_api_routes(app: FastAPI, context: WebAppContext) -> None:
         settings=settings,
         service=context.service,
     )
-    register_workspace_routes(
+    register_knowledge_routes(
         app,
         settings=settings,
-        workspace_service=context.workspace_service,
+        knowledge_service=context.knowledge_service,
         artifact_service=context.service.artifact_service,
         capture_service=context.capture_service,
     )

@@ -70,7 +70,7 @@ class HybridRetriever(Protocol):
     """Production multi-source retrieval boundary.
 
     Implementations populate a shared candidate/evidence pool from dense,
-    sparse, workspace, graph and metadata branches before fusion/reranking.
+    sparse, personal-knowledge, graph and metadata branches before fusion/reranking.
     """
 
     def run(self, ctx: "AskRunContext") -> None:
@@ -289,45 +289,45 @@ class WebRetriever:
         return out
 
 
-class WorkspaceRetriever:
-    """Workspace Claim/Evidence recall as a first-class ask evidence source.
+class KnowledgeRetriever:
+    """Personal Knowledge Claim/Evidence recall as a first-class ask evidence source.
 
-    Workspace owns knowledge lifecycle and provenance, but ask still owns query
+    Personal Knowledge owns knowledge lifecycle and provenance, but ask still owns query
     planning, multi-source retrieval, generation, verification and repair. This
-    retriever converts Workspace evidence into the same unified evidence shapes
+    retriever converts Knowledge evidence into the same unified evidence shapes
     used by local/graph/web instead of short-circuiting the ask pipeline.
     """
 
-    name = "workspace"
+    name = "personal_knowledge"
 
     def __init__(self, service: "AskService") -> None:
         self._service = service
 
     def retrieve(self, query, filters, ctx) -> RetrievalContribution:
-        workspace_service = getattr(self._service, "workspace_service", None)
+        knowledge_service = getattr(self._service, "knowledge_service", None)
         out = RetrievalContribution(source=self.name)
-        if not getattr(self._service.settings.ask, "workspace_retrieval_enabled", True):
+        if not getattr(self._service.settings.ask, "knowledge_retrieval_enabled", True):
             return out
-        quota = self._workspace_quota(ctx)
+        quota = self._knowledge_quota(ctx)
         if quota <= 0:
             out.trace.append(
-                "Workspace 检索已跳过：当前问题未判定为 claim-sensitive，保持 evidence-first"
+                "个人知识检索已跳过：当前问题未判定为 claim-sensitive，保持 evidence-first"
             )
             return out
-        if workspace_service is None:
+        if knowledge_service is None:
             return out
         try:
-            selection = workspace_service.select_evidence(
+            selection = knowledge_service.select_evidence(
                 query,
-                workspace_id=ctx.user_id or "default",
+                owner_id=ctx.user_id or "default",
                 limit=quota,
             )
         except Exception:
-            logger.exception("Workspace retrieval failed user=%s", ctx.user_id)
-            out.trace.append("Workspace 检索失败，已继续使用其他 Ask 证据源")
+            logger.exception("Personal knowledge retrieval failed user=%s", ctx.user_id)
+            out.trace.append("个人知识检索失败，已继续使用其他 Ask 证据源")
             return out
         if not selection.citations:
-            out.trace.append("Workspace 未返回可回答证据，继续使用其他 Ask 证据源")
+            out.trace.append("个人知识未返回可回答证据，继续使用其他 Ask 证据源")
             return out
 
         potential_conflicts = set(
@@ -348,7 +348,7 @@ class WorkspaceRetriever:
             if not citation.evidence_span_id or not citation.artifact_id:
                 continue
             match_id = citation.evidence_span_id
-            title = f"Workspace evidence {index}"
+            title = f"Knowledge evidence {index}"
             evidence_ref_payload = (
                 citation.evidence_ref.model_dump(mode="json")
                 if citation.evidence_ref is not None
@@ -356,7 +356,7 @@ class WorkspaceRetriever:
             )
             metadata = {
                 "retrieved_by": self.name,
-                "workspace_id": ctx.user_id or "default",
+                "owner_id": ctx.user_id or "default",
                 "artifact_id": citation.artifact_id,
                 "evidence_block_id": citation.evidence_block_id,
                 "evidence_span_id": citation.evidence_span_id,
@@ -375,7 +375,7 @@ class WorkspaceRetriever:
                 source_ref=citation.artifact_id,
                 source_span=citation.locator,
                 element_ids=list(citation.claim_ids),
-                score=self._workspace_score(
+                score=self._knowledge_score(
                     ctx,
                     bool(supported_claim_ids.intersection(citation.claim_ids)),
                     bool(citation.claim_ids),
@@ -386,7 +386,7 @@ class WorkspaceRetriever:
                 note_id=match_id,
                 title=title,
                 snippet=citation.quote,
-                source_type="workspace",
+                source_type="personal_knowledge",
                 evidence_id=citation.evidence_span_id,
                 source_ref=citation.artifact_id,
                 source_span=citation.locator,
@@ -399,7 +399,7 @@ class WorkspaceRetriever:
                 id=match_id,
                 user_id=ctx.user_id,
                 source=NoteSource(
-                    type="workspace_evidence",
+                    type="knowledge_evidence",
                     ref=citation.artifact_id,
                     metadata=metadata,
                 ),
@@ -415,12 +415,12 @@ class WorkspaceRetriever:
         elif potential_conflicts:
             conflict_hint = f" potential_conflict={len(potential_conflicts)}"
         out.trace.append(
-            f"Workspace 候选已进入统一证据池 citations={len(out.citations)} "
+            f"个人知识候选已进入统一证据池 citations={len(out.citations)} "
             f"evidence={len(out.evidence)} quota={quota}{conflict_hint}"
         )
         return out
 
-    def _workspace_quota(self, ctx: "AskRunContext") -> int:
+    def _knowledge_quota(self, ctx: "AskRunContext") -> int:
         plan = getattr(ctx, "retrieval_plan", None)
         understanding = getattr(ctx, "understanding", None)
         mode = str(
@@ -435,11 +435,11 @@ class WorkspaceRetriever:
         )
         ask_settings = self._service.settings.ask
         if not claim_sensitive:
-            return max(0, int(getattr(ask_settings, "workspace_default_quota", 0)))
-        return max(0, int(getattr(ask_settings, "workspace_claim_sensitive_quota", 3)))
+            return max(0, int(getattr(ask_settings, "knowledge_default_quota", 0)))
+        return max(0, int(getattr(ask_settings, "knowledge_claim_sensitive_quota", 3)))
 
     @staticmethod
-    def _workspace_score(
+    def _knowledge_score(
         ctx: "AskRunContext",
         has_supported_claim: bool,
         has_claim: bool,
@@ -548,7 +548,7 @@ class RetrievalCoordinator:
         self.episodic = EpisodicRetriever(service)
         self.reflection = ReflectionRetriever(service)
         self.web = WebRetriever(service)
-        self.workspace = WorkspaceRetriever(service)
+        self.knowledge = KnowledgeRetriever(service)
         self.contrastive = ContrastiveRetriever(service)
 
     def _absorb(self, ctx: "AskRunContext", contrib: RetrievalContribution) -> None:
@@ -613,11 +613,11 @@ class RetrievalCoordinator:
         if local_contrib is not None:
             self._absorb(ctx, local_contrib)
 
-        workspace_contrib = self.workspace.retrieve(query, filters, ctx)
-        if workspace_contrib.evidence or workspace_contrib.citations or workspace_contrib.matches:
-            self._absorb(ctx, workspace_contrib)
+        knowledge_contrib = self.knowledge.retrieve(query, filters, ctx)
+        if knowledge_contrib.evidence or knowledge_contrib.citations or knowledge_contrib.matches:
+            self._absorb(ctx, knowledge_contrib)
         else:
-            for line in workspace_contrib.trace:
+            for line in knowledge_contrib.trace:
                 ctx.add_trace(line)
 
         # --- episodic / reflection / proactive web ---

@@ -24,7 +24,7 @@ Knowledge Item 与 Claim 状态。
 - 确认内容与实际执行内容一致；
 - 相同请求只执行一次并返回同一 Receipt；
 - 恢复 Item 和所有 Claim 的删除前状态；
-- 跨 user/workspace 操作 fail closed。
+- 跨 user/personal knowledge 操作 fail closed。
 
 因此需要 durable operation，但不需要通用 Planner、Procedure、生命周期
 Event 或两套 digest。
@@ -38,7 +38,7 @@ Event 或两套 digest。
 2. 一个 `command_digest` 对 canonical command payload 做 SHA-256，绑定确认、
    Operation 和 Receipt；digest 是一致性指纹，不是身份或授权；
 3. decision 校验入口身份、command owner、digest 和 `confirmation_ref`；
-4. confirm 在一个数据库事务中更新 Workspace canonical facts、写 Workspace
+4. confirm 在一个数据库事务中更新 Personal Knowledge canonical facts、写 Personal Knowledge
    `KnowledgeStateEvent` 并写 Receipt；
 5. replay 已执行 command 时直接返回原 Receipt，不再次产生副作用；
 6. restore 必须引用已执行的 delete command，并以 delete receipt 中记录的
@@ -53,14 +53,14 @@ Delete 与 Restore 保留不同的 typed Command/Receipt，因为它们的 paylo
 前置条件和恢复责任不同；它们共享表结构，不复制生命周期框架。
 
 不创建 `KnowledgeDeleteEvent`/`KnowledgeRestoreEvent`。Operation status 已能表达
-等待、拒绝和执行；真正的 Item/Claim 状态变化由 Workspace
+等待、拒绝和执行；真正的 Item/Claim 状态变化由 Personal Knowledge
 `KnowledgeStateEvent` 记录，它有审计消费者。
 
 ## 所有权
 
 - Command、operation status、Receipt：`KnowledgeLifecycleService` /
   `PostgresKnowledgeLifecycleStore`；
-- Knowledge Item、Claim 和其状态事件：Workspace aggregate；
+- Knowledge Item、Claim 和其状态事件：Personal Knowledge aggregate；
 - 用户身份与 scope：正式 HTTP 入口解析，body 不得扩大 scope；
 - 执行事实：Receipt；完成结果：Operation View 中 `status=executed` 且 Receipt
   存在。
@@ -85,7 +85,7 @@ Legacy 六表迁移代码只服务本次滚动升级。所有部署环境完成�
 ## 目标 E2E 与反事实
 
 - prepare 返回 command 与 `command_digest`，业务事实不变；
-- 错误 user/workspace、错误 digest、缺失确认或 rejected command 均不执行；
+- 错误 user/personal knowledge、错误 digest、缺失确认或 rejected command 均不执行；
 - 进程重启后可以确认同一个 command；
 - 同 command replay 返回同一 Receipt，状态事件不增加；
 - restore 在重启后精确恢复 Item/Claim previous states；

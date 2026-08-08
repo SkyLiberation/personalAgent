@@ -96,14 +96,30 @@
 > Artifact 产出的 bounded sub-goal。A2A 有独立 child lifecycle、poll/cancel/stream 和 Artifact index。
 > 子 Agent 不能宣布父请求完成。
 
-深挖去哪：[能力轴 4 与 6](03-capability-axes.md)。
+### B10 Visibility 分几层
+
+> 资源侧有 tenant、principal/user、personal knowledge、thread/conversation、execution/project/task 五层，但
+> 不是一棵 ID 嵌套树：Principal 和 Personal Knowledge 都属于 tenant，membership 才把两者连接起来；thread
+> 管短期上下文，execution 只缩权。能力侧另有 availability、exposure、authorization、requirement
+> retrieval、materialization，不能和资源 ownership 混成一个字段。完整表见
+> [03 Context engineering](03-capability-axes.md#先定义-visibility再谈-retrieval)。
+
+### B11 为什么需要 Personal Knowledge，当前证明了吗
+
+> 当前没有证据证明需要。产品目标是个人知识闭环，多用户要求也是彼此隔离；这些目标用 user scope
+> 就能表达。只有真实用户明确要求“同一账号隔离多个知识集合”或“多人共享同一集合”时，Personal Knowledge
+> 才可能多出价值。Alice/A/B/Bob 只是机制需要的反例，不是真实 Persona，不能据此写 E2E。证据边界见
+> [05](05-evidence-and-release.md#personal-knowledge-产品需求与-e2e-均未成立)。
+
+深挖去哪：Tool/A2A 见[能力轴 4 与 6](03-capability-axes.md)，Visibility/Personal Knowledge 见
+[Context engineering](03-capability-axes.md#先定义-visibility再谈-retrieval)。
 
 ## C. 知识与验证类
 
 ### C1 为什么 Graph/Vector Index 不是事实源
 
 > 它们为检索优化，会重建、延迟、失败。事实源必须支持明确生命周期、事务和审计，所以 Artifact、
-> Evidence、Claim 在 PostgreSQL Workspace Store 里，Graph 和 embedding 是可重建 projection。否则一次
+> Evidence、Claim 在 PostgreSQL Personal Knowledge Store 里，Graph 和 embedding 是可重建 projection。否则一次
 > 索引更新失败就可能覆盖业务事实，而没有地方可以查证原本是什么。
 
 ### C2 如何防止 Ask 自动污染长期知识
@@ -150,15 +166,31 @@
 的任务；model/tool/agent/token budget；安全只读 action 并发；SDK 隐式 retry 关闭、统一 retry owner；
 Provider wall-clock deadline；budget exhaustion fail closed。
 
-当前不足（要一起说）：没有跨实例一致的 distributed session store；全部 public Tool schema 每轮进
-Context，Tool 增多后影响延迟与选择准确率；完整真实 Provider E2E 约 30 分钟，缺快速门禁分层。
+单次工具返回也已受生产机制约束：20,000 字符上限 + 卸载为 ResourceRef + 按关键词/行号重读，且未读完
+不许以非 answer 收尾（[ADR 0013](../adr/0013-bounded-observation-and-offloaded-read.md)）。
+
+当前不足（要一起说）：没有跨实例一致的 distributed session store；prompt cache 命中不可观测，所以
+「省 token」类优化目前都是推断；完整真实 Provider E2E 约 30 分钟，缺快速门禁分层。
 
 ### D3 Tool 很多时怎么扩展
 
-> 当前把 public Tool definitions 全部注入。只有自然用户场景证明全量 schema 导致可重复误选、延迟或
-> context budget failure 后，才准入两阶段发现：visible capability summary -> requirement retrieval ->
-> 加载少量完整 schema -> 模型最终选择。检索只能缩小当前用户可见的候选集合，不能在可见性过滤前扫描
-> 所有 Tool，也不能替模型做最终语义选择。
+> 当前把 public Tool definitions 全部注入，而且已经量过：投影约 2.9k–5.0k tokens，占该轮可见输入
+> 39%–78%，但回合峰值只用掉回合上限 32,000 的 35%，2 轮收敛，没有一条 trace 显示误选或延迟越界。
+> 官方给的反向判据是「tool 少于 10 个或 definition 总量很小时不值得做」，当前规模正落在这一侧，
+> 所以不做。**这里有一处要主动交代**：官方另一条阈值「definition 超过 context window 10%」本工程
+> 当前算不出来——分母是 Provider context window，trace 里没有这个字段；若拿手头的回合上限 32,000
+> 当分母，20/22 条会越线，但那是错的分母。所以结论建立在反向判据和「没有 baseline 失败」上，不是
+> 建立在那条算不出的比值上。
+>
+> 只有自然用户场景证明全量 schema 导致可重复误选、延迟或 context budget failure 后，才准入两阶段
+> 发现：visible capability summary -> requirement retrieval -> 加载少量完整 schema -> 模型最终选择。
+> 检索只能缩小当前用户可见的候选集合，不能在可见性过滤前扫描所有 Tool，也不能替模型做最终语义
+> 选择；`capability_revision` 必须继续覆盖全集，否则同一 Interaction 两轮 revision 不同、故障归因失效。
+> 数据与四档结论见 [能力轴第 3 轴](03-capability-axes.md#3-context-engineering)。
+>
+> **不要把这条结论顺延到跨轮 Observation 逐出。**全量 schema 每轮无条件注入，所以任何一次运行都在
+> 测本题；跨轮累积只有多轮且每轮带大 observation 的运行才在测，而现有 22 条全是 2 轮收敛。逐出当前
+> 是「未被证明需要」——靠「无已执行 baseline 失败即不准入」这条门禁，不靠数据。
 
 ### D4 这套框架的核心理念是什么，和优秀 Agent 是什么关系
 
@@ -172,7 +204,7 @@ Context，Tool 增多后影响延迟与选择准确率；完整真实 Provider E
 
 > 缺口已不是「自然语言完全不能进入写操作」。B02 先证明整条 user message 固化会污染 Claim；E14 随后
 > 证明模型可逐字选择 user-authored span、Admission 机械校验来源、系统冻结 exact span、经确认后由
-> Workspace 唯一写入口保存，并反证控制语义没进 Claim。但删除、订阅、「先核对冲突再保存」、
+> Personal Knowledge 唯一写入口保存，并反证控制语义没进 Claim。但删除、订阅、「先核对冲突再保存」、
 > assistant candidate、多实例并发和 commit/Receipt crash window 都不能从 E14 外推。
 
 ### D6 如果只能优化一周，优先做什么

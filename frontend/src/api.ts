@@ -262,18 +262,17 @@ export function buildEntryStreamUrl(text: string, userId = "default", sessionId 
 export function uploadEntryFile(
   file: File,
   userId = "default",
-): Promise<WorkspaceCapturedResource> {
+): Promise<KnowledgeCapturedResource> {
   const body = new FormData();
   body.append("file", file);
   body.append("user_id", userId);
-  body.append("workspace_id", userId);
-  return requestFormData<WorkspaceCapturedResource>("/api/workspace/ingest-upload", {
+  return requestFormData<KnowledgeCapturedResource>("/api/knowledge/ingest-upload", {
     method: "POST",
     body,
   });
 }
 
-export type WorkspaceCapturedResource = {
+export type KnowledgeCapturedResource = {
   resource_ref: { resource_id: string } | null;
   ingest_result: {
     artifact: { artifact_id: string; text: string };
@@ -283,7 +282,6 @@ export type WorkspaceCapturedResource = {
 export type ProjectReference = {
   project_id: string;
   tenant_id: string;
-  workspace_id: string;
   user_id: string;
   state: string;
   title: string;
@@ -303,7 +301,6 @@ export function fetchInvestigationProject(
 ): Promise<InvestigationProjectView> {
   const params = new URLSearchParams({
     tenant_id: reference.tenant_id,
-    workspace_id: reference.workspace_id,
     user_id: reference.user_id,
   });
   return requestJson<InvestigationProjectView>(
@@ -321,25 +318,24 @@ export function setInvestigationProjectPaused(
       method: "POST",
       body: JSON.stringify({
         tenant_id: reference.tenant_id,
-        workspace_id: reference.workspace_id,
         user_id: reference.user_id,
       }),
     },
   );
 }
 
-export type WorkspaceGroundedAnswer = {
+export type KnowledgeGroundedAnswer = {
   answer: string;
   grounding_status: "supported" | "weak_evidence" | "unsupported";
 };
 
-export function askWorkspace(
+export function askKnowledge(
   question: string,
-  workspaceId = "default",
-): Promise<WorkspaceGroundedAnswer> {
-  return requestJson<WorkspaceGroundedAnswer>("/api/workspace/ask", {
+  userId = "default",
+): Promise<KnowledgeGroundedAnswer> {
+  return requestJson<KnowledgeGroundedAnswer>("/api/knowledge/ask", {
     method: "POST",
-    body: JSON.stringify({ question, workspace_id: workspaceId }),
+    body: JSON.stringify({ question, user_id: userId }),
   });
 }
 

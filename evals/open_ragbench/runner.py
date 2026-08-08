@@ -1726,7 +1726,7 @@ def _strategy_eval_config(strategy: BenchmarkStrategy, settings: Settings) -> di
             "semantic_policy_confidence_threshold": strategy.confidence_threshold,
             "semantic_policy_preserve_top_k": strategy.preserve_top_k,
         })
-    elif isinstance(strategy, RuntimeAskRetrievalWorkspaceAblationStrategy):
+    elif isinstance(strategy, RuntimeAskRetrievalKnowledgeAblationStrategy):
         config.update({
             "embedding_provider": "openai" if strategy.external_embedding else settings.embedding_provider,
             "embedding_model": "BAAI/bge-m3" if strategy.external_embedding else settings.openai.embedding_model,
@@ -1735,8 +1735,8 @@ def _strategy_eval_config(strategy: BenchmarkStrategy, settings: Settings) -> di
             "ask_reranker": strategy.ask_reranker or (
                 "llm_gated" if strategy.llm_gated else "llm" if strategy.llm_rerank else "heuristic"
             ),
-            "workspace_enabled": strategy.include_workspace,
-            "workspace_only": strategy.workspace_only,
+            "knowledge_enabled": strategy.include_knowledge,
+            "knowledge_only": strategy.knowledge_only,
             "force_claim_sensitive": strategy.force_claim_sensitive,
             "llm_rerank_mode": (
                 "ask_llm_gated"
@@ -4363,29 +4363,29 @@ class RuntimeAskStrategy:
 
 
 @dataclass(frozen=True)
-class RuntimeAskWorkspaceAblationStrategy:
-    """Full Ask path with graph/web disabled, optionally seeding Workspace.
+class RuntimeAskKnowledgeAblationStrategy:
+    """Full Ask path with graph/web disabled, optionally seeding Knowledge.
 
-    The pair ``current_runtime_ask_no_workspace`` / ``current_runtime_ask_workspace``
-    isolates the effect of ``WorkspaceRetriever`` on the final Ask evidence
+    The pair ``current_runtime_ask_no_knowledge`` / ``current_runtime_ask_knowledge``
+    isolates the effect of ``KnowledgeRetriever`` on the final Ask evidence
     ranking. Both variants use the same local note corpus and the same disabled
-    graph/web settings; the workspace variant additionally ingests the corpus
-    into ``WorkspaceService`` and maps workspace citations back to RAGBench note
+    graph/web settings; the knowledge variant additionally ingests the corpus
+    into ``KnowledgeService`` and maps knowledge citations back to RAGBench note
     ids through artifact ``source_ref``.
     """
 
-    include_workspace: bool = False
+    include_knowledge: bool = False
 
     @property
     def name(self) -> str:
         return (
-            "current_runtime_ask_workspace"
-            if self.include_workspace else "current_runtime_ask_no_workspace"
+            "current_runtime_ask_knowledge"
+            if self.include_knowledge else "current_runtime_ask_no_knowledge"
         )
 
     @property
     def description(self) -> str:
-        suffix = "with Workspace corpus seeded" if self.include_workspace else "without Workspace corpus"
+        suffix = "with Knowledge corpus seeded" if self.include_knowledge else "without Knowledge corpus"
         return (
             "Full AgentRuntime.execute_ask path with graph/web/structured semantic "
             f"extraction disabled, {suffix}."
@@ -4402,15 +4402,15 @@ class RuntimeAskWorkspaceAblationStrategy:
         from personal_agent.orchestration.runtime import AgentRuntime
 
         eval_user_id = context.graphiti_user_id
-        settings = _workspace_ablation_settings(context.settings)
+        settings = _knowledge_ablation_settings(context.settings)
         store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
         graph_store = GraphitiStore(settings)
         runtime = AgentRuntime(settings, store, graph_store)
-        runtime.workspace_service = _fixture_workspace_service(settings)
+        runtime.knowledge_service = _fixture_knowledge_service(settings)
 
         source_ref_to_note_id: dict[str, str] = {}
-        if self.include_workspace:
-            source_ref_to_note_id = _seed_workspace_from_notes(
+        if self.include_knowledge:
+            source_ref_to_note_id = _seed_knowledge_from_notes(
                 runtime,
                 all_notes,
                 user_id=eval_user_id,
@@ -4443,7 +4443,7 @@ class RuntimeAskWorkspaceAblationStrategy:
                     "match_ids": [match.id for match in result.matches[:limit]],
                     "citation_note_ids": [citation.note_id for citation in result.citations[:limit]],
                     "evidence_ids": [item.source_id for item in result.evidence[:limit]],
-                    "workspace_enabled": self.include_workspace,
+                    "knowledge_enabled": self.include_knowledge,
                     "graph_provider": settings.ask.graph_provider,
                     "web_enabled": settings.web_search_available,
                     "structured_enabled": bool(settings.structured.api_key),
@@ -4453,18 +4453,18 @@ class RuntimeAskWorkspaceAblationStrategy:
 
 
 @dataclass(frozen=True)
-class RuntimeAskRetrievalWorkspaceAblationStrategy:
+class RuntimeAskRetrievalKnowledgeAblationStrategy:
     """Ask retrieval stage only, with graph/web/langextract disabled.
 
-    This is the fast ablation for ``WorkspaceRetriever``. It executes the real
-    Ask retrieval stage and context assembly, then projects selected workspace
+    This is the fast ablation for ``KnowledgeRetriever``. It executes the real
+    Ask retrieval stage and context assembly, then projects selected knowledge
     citations back to Open RAGBench note ids through their artifact ``source_ref``.
     It intentionally skips answer generation, verifier, and repair.
     """
 
-    include_workspace: bool = False
+    include_knowledge: bool = False
     force_claim_sensitive: bool = False
-    workspace_only: bool = False
+    knowledge_only: bool = False
     high_accuracy: bool = False
     llm_rerank: bool = False
     llm_gated: bool = False
@@ -4486,16 +4486,16 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
             return "ask_retrieve_external_embedding"
         if self.high_accuracy:
             return "ask_retrieve_high_accuracy"
-        if self.workspace_only:
-            return "ask_retrieve_workspace_evidence_only"
+        if self.knowledge_only:
+            return "ask_retrieve_knowledge_evidence_only"
         if self.force_claim_sensitive:
-            return "ask_retrieve_workspace_forced_claim_sensitive"
-        return "ask_retrieve_workspace" if self.include_workspace else "ask_retrieve_no_workspace"
+            return "ask_retrieve_knowledge_forced_claim_sensitive"
+        return "ask_retrieve_knowledge" if self.include_knowledge else "ask_retrieve_no_knowledge"
 
     @property
     def description(self) -> str:
-        if self.workspace_only:
-            suffix = "with only Workspace evidence enabled"
+        if self.knowledge_only:
+            suffix = "with only Knowledge evidence enabled"
         elif self.llm_gated:
             suffix = "with gated LLM rerank enabled and default planner forced"
         elif self.ask_reranker == "support":
@@ -4509,9 +4509,9 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
         elif self.high_accuracy:
             suffix = "with high-accuracy local recall/context profile"
         elif self.force_claim_sensitive:
-            suffix = "with Workspace corpus seeded and claim-sensitive routing forced"
+            suffix = "with Knowledge corpus seeded and claim-sensitive routing forced"
         else:
-            suffix = "with Workspace corpus seeded" if self.include_workspace else "without Workspace corpus"
+            suffix = "with Knowledge corpus seeded" if self.include_knowledge else "without Knowledge corpus"
         return (
             "Real AskService.run_retrieval_stage with graph/web/langextract disabled, "
             f"{suffix}; skips generation/verifier."
@@ -4528,7 +4528,7 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
         from personal_agent.orchestration.runtime import AgentRuntime
 
         eval_user_id = context.graphiti_user_id
-        settings = _workspace_ablation_settings(
+        settings = _knowledge_ablation_settings(
             context.settings,
             preserve_structured=self.llm_rerank or self.llm_gated,
         )
@@ -4545,11 +4545,11 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
         store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
         graph_store = GraphitiStore(settings)
         runtime = AgentRuntime(settings, store, graph_store)
-        runtime.workspace_service = _fixture_workspace_service(settings)
+        runtime.knowledge_service = _fixture_knowledge_service(settings)
 
         source_ref_to_note_id: dict[str, str] = {}
-        if self.include_workspace:
-            source_ref_to_note_id = _seed_workspace_from_notes(
+        if self.include_knowledge:
+            source_ref_to_note_id = _seed_knowledge_from_notes(
                 runtime,
                 all_notes,
                 user_id=eval_user_id,
@@ -4558,9 +4558,9 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
         ask_service = runtime._ask_service()
         if self.force_default_planner or self.llm_rerank or self.llm_gated:
             ask_service._plan_retrieval = _default_eval_planner()  # type: ignore[method-assign]
-        if self.force_claim_sensitive or self.workspace_only:
-            ask_service._plan_retrieval = _forced_workspace_eval_planner(  # type: ignore[method-assign]
-                force_workspace_only=self.workspace_only,
+        if self.force_claim_sensitive or self.knowledge_only:
+            ask_service._plan_retrieval = _forced_knowledge_eval_planner(  # type: ignore[method-assign]
+                force_knowledge_only=self.knowledge_only,
             )
         rankings: list[tuple[str, list[str]]] = []
         relevance: dict[str, set[str]] = {}
@@ -4586,19 +4586,19 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
                 filters=ctx.retrieval_plan.filters if ctx.retrieval_plan is not None else None,
             ))
             evidence = ctx.context_pack.evidence if ctx.context_pack is not None else []
-            workspace_evidence = [
+            knowledge_evidence = [
                 item for item in evidence
-                if item.metadata.get("retrieved_by") == "workspace"
+                if item.metadata.get("retrieved_by") == "knowledge"
                 or item.source_ref in source_ref_to_note_id
             ]
 
             def resolved_match_note_id(match) -> str:
-                if match.source.type in {"workspace_claim", "workspace_evidence"}:
+                if match.source.type in {"knowledge_claim", "knowledge_evidence"}:
                     return source_ref_to_note_id.get(str(match.source.ref or ""), "")
                 return str(match.id or "")
 
             def resolved_citation_note_id(citation) -> str:
-                if citation.source_type == "workspace":
+                if citation.source_type == "knowledge":
                     return source_ref_to_note_id.get(str(citation.source_ref or ""), "")
                 return str(citation.note_id or "")
 
@@ -4649,8 +4649,8 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
                     "ask_reranker": settings.ask.reranker,
                     "llm_rerank_model_configured": bool(settings.structured.api_key and settings.structured.base_url),
                     **_embedding_eval_snapshot(store),
-                    "workspace_enabled": self.include_workspace,
-                    "workspace_evidence_count": len(workspace_evidence),
+                    "knowledge_enabled": self.include_knowledge,
+                    "knowledge_evidence_count": len(knowledge_evidence),
                     "selected_match_ids": [match.id for match in ctx.selected_matches[:limit]],
                     "selected_match_resolved_note_ids": [
                         note_id for note_id in (
@@ -4690,7 +4690,7 @@ class RuntimeAskRetrievalWorkspaceAblationStrategy:
         return rankings, relevance
 
 
-def _workspace_ablation_settings(
+def _knowledge_ablation_settings(
     settings: Settings,
     *,
     preserve_structured: bool = False,
@@ -4807,12 +4807,12 @@ def _retrieval_eval_snapshot(store) -> dict[str, object]:
     }
 
 
-def _fixture_workspace_service(settings: Settings):
-    """Build WorkspaceService with local fixture semantic components only."""
-    from personal_agent.application.workspace import WorkspaceService
-    from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
+def _fixture_knowledge_service(settings: Settings):
+    """Build KnowledgeService with local fixture semantic components only."""
+    from personal_agent.application.knowledge import KnowledgeService
+    from personal_agent.infra.storage.postgres_knowledge_store import PostgresKnowledgeStore
 
-    return WorkspaceService(PostgresWorkspaceStore(settings.postgres_url, settings.data_dir))
+    return KnowledgeService(PostgresKnowledgeStore(settings.postgres_url, settings.data_dir))
 
 
 def _default_eval_planner():
@@ -4840,7 +4840,7 @@ def _default_eval_planner():
     return _planner
 
 
-def _forced_workspace_eval_planner(*, force_workspace_only: bool):
+def _forced_knowledge_eval_planner(*, force_knowledge_only: bool):
     from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
     def _planner(question: str, structured_context: str):
@@ -4853,7 +4853,7 @@ def _forced_workspace_eval_planner(*, force_workspace_only: bool):
             filters=filters,
         )
         plan = RetrievalPlan(
-            sources=[] if force_workspace_only else ["local"],
+            sources=[] if force_knowledge_only else ["local"],
             parallel=False,
             query=question,
             filters=filters,
@@ -4865,8 +4865,8 @@ def _forced_workspace_eval_planner(*, force_workspace_only: bool):
     return _planner
 
 
-def _seed_workspace_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: str) -> dict[str, str]:
-    from personal_agent.application.workspace.models import (
+def _seed_knowledge_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: str) -> dict[str, str]:
+    from personal_agent.application.knowledge.models import (
         Artifact,
         EvidenceBlock,
         EvidenceSpan,
@@ -4875,7 +4875,7 @@ def _seed_workspace_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: 
     )
 
     source_ref_to_note_id: dict[str, str] = {}
-    store = runtime.workspace_service.store
+    store = runtime.knowledge_service.store
     for note in notes:
         source_ref = f"open_ragbench://{note.id}"
         source_ref_to_note_id[source_ref] = note.id
@@ -4884,7 +4884,7 @@ def _seed_workspace_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: 
         stable_suffix = re.sub(r"[^A-Za-z0-9_]+", "_", note.id)[:120]
         artifact = Artifact(
             artifact_id=source_ref,
-            workspace_id=user_id,
+            owner_id=user_id,
             user_id=user_id,
             source_type="open_ragbench",
             source_ref=source_ref,
@@ -4896,7 +4896,7 @@ def _seed_workspace_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: 
         extraction_run = ExtractionRun(
             extraction_run_id=f"xrun_{stable_suffix}",
             artifact_id=artifact.artifact_id,
-            workspace_id=user_id,
+            owner_id=user_id,
             extractor="open-ragbench-fixture",
             parser_version="open-ragbench-fixture-v1",
             input_hash=content_hash,
@@ -4908,7 +4908,7 @@ def _seed_workspace_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: 
         block = EvidenceBlock(
             evidence_block_id=extraction_run.evidence_block_ids[0],
             artifact_id=artifact.artifact_id,
-            workspace_id=user_id,
+            owner_id=user_id,
             locator=note.id,
             title_path=[note.body.title],
             char_range=(0, len(content)),
@@ -4919,7 +4919,7 @@ def _seed_workspace_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: 
         span = EvidenceSpan(
             evidence_span_id=extraction_run.evidence_span_ids[0],
             evidence_block_id=block.evidence_block_id,
-            workspace_id=user_id,
+            owner_id=user_id,
             start_offset=0,
             end_offset=len(content),
             text_span=content,
@@ -4947,7 +4947,7 @@ def _ranked_note_ids_from_ask_result(
             ranked.append(note_id)
 
     for match in result.matches:
-        if match.source.type in {"workspace_claim", "workspace_evidence"}:
+        if match.source.type in {"knowledge_claim", "knowledge_evidence"}:
             add(source_ref_to_note_id.get(str(match.source.ref or "")))
         else:
             add(match.id)
@@ -4955,7 +4955,7 @@ def _ranked_note_ids_from_ask_result(
             return ranked[:limit]
 
     for citation in result.citations:
-        if citation.source_type == "workspace":
+        if citation.source_type == "knowledge":
             add(source_ref_to_note_id.get(str(citation.source_ref or "")))
         else:
             add(citation.note_id)
@@ -4988,7 +4988,7 @@ def _ranked_note_ids_from_ask_context(
             ranked.append(note_id)
 
     for match in ctx.selected_matches:
-        if match.source.type in {"workspace_claim", "workspace_evidence"}:
+        if match.source.type in {"knowledge_claim", "knowledge_evidence"}:
             add(source_ref_to_note_id.get(str(match.source.ref or "")))
         else:
             add(match.id)
@@ -4996,7 +4996,7 @@ def _ranked_note_ids_from_ask_context(
             return ranked[:limit]
 
     for citation in ctx.selected_citations:
-        if citation.source_type == "workspace":
+        if citation.source_type == "knowledge":
             add(source_ref_to_note_id.get(str(citation.source_ref or "")))
         else:
             add(citation.note_id)
@@ -5062,7 +5062,7 @@ def list_strategy_names() -> list[str]:
         "ask_pipeline_no_rewrite",
         "ask_pipeline_local_only",
         "ask_pipeline_no_planner",
-        "ask_retrieve_no_workspace",
+        "ask_retrieve_no_knowledge",
         "ask_retrieve_support",
         "ask_retrieve_high_accuracy",
         "ask_retrieve_shared_evidence_selector_lexical",
@@ -5081,12 +5081,12 @@ def list_strategy_names() -> list[str]:
         "ask_retrieve_llm_rerank",
         "ask_retrieve_external_embedding",
         "ask_retrieve_external_llm_rerank",
-        "ask_retrieve_workspace",
-        "ask_retrieve_workspace_forced_claim_sensitive",
-        "ask_retrieve_workspace_evidence_only",
+        "ask_retrieve_knowledge",
+        "ask_retrieve_knowledge_forced_claim_sensitive",
+        "ask_retrieve_knowledge_evidence_only",
         "current_runtime_ask",
-        "current_runtime_ask_no_workspace",
-        "current_runtime_ask_workspace",
+        "current_runtime_ask_no_knowledge",
+        "current_runtime_ask_knowledge",
         *real_graph_names,
     ]
 
@@ -5234,14 +5234,14 @@ def get_strategy(name: str) -> BenchmarkStrategy:
         )
     if normalized == "current_runtime_ask":
         return RuntimeAskStrategy()
-    if normalized == "ask_retrieve_no_workspace":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(
-            include_workspace=False,
+    if normalized == "ask_retrieve_no_knowledge":
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(
+            include_knowledge=False,
             force_default_planner=True,
         )
     if normalized == "ask_retrieve_support":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(
-            include_workspace=False,
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(
+            include_knowledge=False,
             force_default_planner=True,
             ask_reranker="support",
         )
@@ -5376,33 +5376,33 @@ def get_strategy(name: str) -> BenchmarkStrategy:
     if normalized == "ask_retrieve_high_accuracy_semantic_policy_selector":
         return HighAccuracySemanticPolicySelectorStrategy()
     if normalized == "ask_retrieve_llm_gated":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(llm_gated=True)
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(llm_gated=True)
     if normalized == "ask_retrieve_llm_rerank":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(llm_rerank=True)
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(llm_rerank=True)
     if normalized == "ask_retrieve_external_embedding":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(external_embedding=True)
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(external_embedding=True)
     if normalized == "ask_retrieve_external_llm_rerank":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(
             llm_rerank=True,
             external_embedding=True,
         )
-    if normalized == "ask_retrieve_workspace":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(include_workspace=True)
-    if normalized == "ask_retrieve_workspace_forced_claim_sensitive":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(
-            include_workspace=True,
+    if normalized == "ask_retrieve_knowledge":
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(include_knowledge=True)
+    if normalized == "ask_retrieve_knowledge_forced_claim_sensitive":
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(
+            include_knowledge=True,
             force_claim_sensitive=True,
         )
-    if normalized == "ask_retrieve_workspace_evidence_only":
-        return RuntimeAskRetrievalWorkspaceAblationStrategy(
-            include_workspace=True,
+    if normalized == "ask_retrieve_knowledge_evidence_only":
+        return RuntimeAskRetrievalKnowledgeAblationStrategy(
+            include_knowledge=True,
             force_claim_sensitive=True,
-            workspace_only=True,
+            knowledge_only=True,
         )
-    if normalized == "current_runtime_ask_no_workspace":
-        return RuntimeAskWorkspaceAblationStrategy(include_workspace=False)
-    if normalized == "current_runtime_ask_workspace":
-        return RuntimeAskWorkspaceAblationStrategy(include_workspace=True)
+    if normalized == "current_runtime_ask_no_knowledge":
+        return RuntimeAskKnowledgeAblationStrategy(include_knowledge=False)
+    if normalized == "current_runtime_ask_knowledge":
+        return RuntimeAskKnowledgeAblationStrategy(include_knowledge=True)
     if normalized.startswith("graphiti_"):
         graph_strategy_name = normalized.removeprefix("graphiti_")
         if graph_strategy_name in STRATEGIES:

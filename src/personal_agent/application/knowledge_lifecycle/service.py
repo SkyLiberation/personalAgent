@@ -23,7 +23,7 @@ class KnowledgeLifecycleService:
     def prepare_delete(
         self,
         *,
-        workspace_id: str,
+        owner_id: str,
         user_id: str,
         target_note_id: str,
         reason: str,
@@ -38,7 +38,7 @@ class KnowledgeLifecycleService:
             "idempotency_key": normalized_key,
         })[:20]
         command_digest = _command_digest(command_id, "delete_knowledge_item", {
-            "workspace_id": workspace_id,
+            "owner_id": owner_id,
             "user_id": user_id,
             "target_note_id": target_note_id,
             "reason": normalized_reason,
@@ -47,7 +47,7 @@ class KnowledgeLifecycleService:
         return self._store.prepare_delete(KnowledgeDeleteCommand(
             command_id=command_id,
             idempotency_key=normalized_key,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             user_id=user_id,
             target_note_id=target_note_id,
             reason=normalized_reason,
@@ -85,7 +85,7 @@ class KnowledgeLifecycleService:
     def prepare_restore(
         self,
         *,
-        workspace_id: str,
+        owner_id: str,
         user_id: str,
         delete_command_id: str,
         reason: str,
@@ -100,7 +100,7 @@ class KnowledgeLifecycleService:
             "idempotency_key": normalized_key,
         })[:20]
         command_digest = _command_digest(command_id, "restore_knowledge_item", {
-            "workspace_id": workspace_id,
+            "owner_id": owner_id,
             "user_id": user_id,
             "delete_command_id": delete_command_id,
             "reason": normalized_reason,
@@ -109,7 +109,7 @@ class KnowledgeLifecycleService:
         return self._store.prepare_restore(KnowledgeRestoreCommand(
             command_id=command_id,
             idempotency_key=normalized_key,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             user_id=user_id,
             delete_command_id=delete_command_id,
             reason=normalized_reason,

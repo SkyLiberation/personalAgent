@@ -11,11 +11,11 @@ personalAgent 不是一个只负责聊天的 Bot，而是一个围绕「个人�
 它解决四类用户问题：
 
 1. 资料来自文本、网页、上传文件和历史会话，需要形成可追溯的知识，而不是只把原文塞进向量库；
-2. 提问时回答需要受 workspace、用户权限和可见证据约束，并给出引用；
+2. 提问时回答需要受 authenticated user scope、资源 ownership 和可见证据约束，并给出引用；
 3. 保存、删除、恢复、订阅和投递有真实副作用，需要确认、幂等、恢复和审计；
 4. 开放式研究无法预先写死全部步骤，需要模型根据搜索结果、Tool Observation 和子 Agent 产物继续决策。
 
-产品能力：连续对话、Workspace 资料采集与有证据问答、对话结论显式固化、知识纠错/删除/恢复、
+产品能力：连续对话、个人资料采集与有证据问答、对话结论显式固化、知识纠错/删除/恢复、
 Review Card 与知识缺口分析、一次性研究与周期性情报订阅、GitHub/Notion MCP 读取、
 GPT Researcher A2A 委托。
 
@@ -96,7 +96,7 @@ CompletionReport**，而 ResearchRun、DeleteCommand、Delivery、Project 的状
 
 > 项目解决个人知识从采集到使用再到维护的闭环。用户导入文本、网页、文件和会话，系统保存
 > application-owned Artifact，再形成 EvidenceBlock、Claim 和 KnowledgeItem。问答只读取当前
-> workspace 可见证据并给出 citation；Ask 本身不会把模型回答写回长期知识，只有用户显式保存才进入
+> authenticated user scope 内的可见证据并给出 citation；Ask 本身不会把模型回答写回长期知识，只有用户显式保存才进入
 > 唯一写入口——这条是为了阻断「模型输出在下一轮变成系统已知事实」的污染循环。
 >
 > Agent 主链不是「自然语言转 JSON」。模型每轮产生一个 typed Proposal：`FinalMessage`，或带
@@ -171,7 +171,8 @@ Source -> Artifact -> EvidenceBlock/EvidenceSpan -> Claim -> Relation/KnowledgeI
   -> Retrieval / Graph Projection
 ```
 
-强调 PostgreSQL Workspace Store 是 canonical fact owner；向量索引与 Graph projection 是可重建投影。
+强调代码中名为 `PostgresKnowledgeStore` 的知识 Store 是 canonical fact owner；这个历史模块名不证明
+Personal Knowledge 是用户可见 Product Aggregate。向量索引与 Graph projection 是可重建投影。
 
 ### 第六步：用证据收尾
 
@@ -187,7 +188,7 @@ LT01-LT08/LT10-LT13        durable runtime   diagnostic，scripted/frozen Port
 ## 7. 为什么不是普通 RAG Bot
 
 普通 RAG Bot 的路径是 `问题 -> 向量检索 -> 拼 Prompt -> 回答`。本项目还必须处理：哪个
-workspace/用户/Artifact 可见；回答依据的 Claim 与 Evidence 是否可追溯；Ask 为什么不能隐式写知识；
+tenant/principal/Artifact 可见；回答依据的 Claim 与 Evidence 是否可追溯；Ask 为什么不能隐式写知识；
 新 Claim 如何 supersede 旧 Claim；删除/恢复/replay 如何避免重复副作用；外部 Research 是否进入真实
 终态；Delivery 是否 exactly-once；MCP unavailable 时为什么必须 fail closed；子 Agent Artifact 为什么
 不能冒充父级最终答案。
@@ -204,7 +205,7 @@ workspace/用户/Artifact 可见；回答依据的 Claim 与 Evidence 是否可�
    通用 Planner，Project 状态不复制进 Conversation。
 3. **做过删除而不只是添加**：旧 `WorkingPlanSnapshot` 只进 Prompt/Trace，没有任何生产调度消费者，
    却增加首次 action 和恢复的模型轮次——所以删掉了。能讲清删掉了什么，比列了多少机制更有说服力。
-4. **E2E 断言反事实**：错误 digest 不执行、Ask 不写 Claim、跨 workspace 不泄漏、预算耗尽不拼替代
+4. **E2E 断言反事实**：错误 digest 不执行、Ask 不写 Claim、跨用户随机事实不泄漏、预算耗尽不拼替代
    答案、能力缺失不换 Tool、replay 不重复副作用。正向结果容易蒙对，反事实很难。
 
 详细举证见 [能力轴](03-capability-axes.md)，证据口径见 [证据与发布](05-evidence-and-release.md)。

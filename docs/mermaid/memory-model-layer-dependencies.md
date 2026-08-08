@@ -13,7 +13,7 @@ flowchart LR
 
     subgraph KnowledgeFacts["长期知识 owner"]
         Artifact["Artifact Store<br/>large content"]
-        Workspace["Workspace Store<br/>EvidenceSpan / Claim / Relation"]
+        Personal Knowledge["Personal Knowledge Store<br/>EvidenceSpan / Claim / Relation"]
     end
 
     subgraph Projections["可重建检索投影"]
@@ -31,10 +31,10 @@ flowchart LR
 
     User --> Conversation
     User --> Artifact
-    Artifact --> Workspace
-    Workspace --> Embedding
-    Workspace --> Graph
-    Workspace --> Visibility
+    Artifact --> Personal Knowledge
+    Personal Knowledge --> Embedding
+    Personal Knowledge --> Graph
+    Personal Knowledge --> Visibility
     Conversation --> Visibility
     Project --> Visibility
     Research --> Visibility
@@ -47,5 +47,5 @@ flowchart LR
     Budget --> LlmContext
 ```
 
-检索投影不能反向写入 Workspace facts；LLM Context 也不能自动写回 Conversation 或长期知识。
+检索投影不能反向写入 Personal Knowledge facts；LLM Context 也不能自动写回 Conversation 或长期知识。
 完整规则见 [Memory 与知识事实边界](../topics/memory.md)。

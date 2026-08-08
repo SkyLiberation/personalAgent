@@ -11,7 +11,7 @@
 - 删除属于不可逆副作用，影响用户长期记忆和信任。
 - prepare 与 confirm 分离，prepare 不产生业务副作用并可跨进程恢复。
 - 一个 canonical `command_digest` 把用户确认绑定到实际 Command payload。
-- Operation、Workspace 状态迁移和 Receipt 在事务边界内保持一致。
+- Operation、Personal Knowledge 状态迁移和 Receipt 在事务边界内保持一致。
 - Delete Receipt 保存 Item/Claim previous states，Restore 以它作为唯一恢复依据。
 - 相同 Command replay 返回同一 Receipt，不重复删除或恢复。
 
@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | P0 | 删除安全与恢复 | 删除可撤销、可追踪、可补偿 |
 | P1 | 工具审计产品化 | 高风险操作可查询、可脱敏、可告警 |
-| P2 | 生产权限模型 | workspace/tenant/RBAC/ABAC 可落地 |
+| P2 | 生产权限模型 | personal knowledge/tenant/RBAC/ABAC 可落地 |
 | P3 | 固化质量候选假设 | 先用 baseline 验证长会话噪声是否造成错误知识 |
 | P4 | 知识冲突治理 | 自动发现冲突，降低错误覆盖 |
 | P5 | replay 治理 | 保留现网问题复现价值，同时约束副作用 |
@@ -33,7 +33,7 @@
 ### 当前状态
 
 当前工程已具备 durable prepare/confirm、scope 校验、单 digest、事务 Receipt、
-exactly-once replay 和精确恢复。删除确认后，Workspace Knowledge Item/Claim
+exactly-once replay 和精确恢复。删除确认后，Personal Knowledge Knowledge Item/Claim
 进入 deleted 状态；如果用户后悔，可以基于已执行 delete command 创建独立
 restore command。
 
@@ -94,13 +94,13 @@ restore command。
 
 ### 当前风险
 
-PolicyEngine 已有基础策略拦截，但还缺 workspace、tenant、RBAC、ABAC、API key 生命周期等生产级权限模型。多用户、多空间或管理后台接入后，权限边界容易变成隐性约定。
+PolicyEngine 已有基础策略拦截，但还缺 personal knowledge、tenant、RBAC、ABAC、API key 生命周期等生产级权限模型。多用户、多空间或管理后台接入后，权限边界容易变成隐性约定。
 
 ### 优化方案
 
-1. 引入 workspace/tenant 上下文。
-   - 所有 run、thread、note、tool audit、checkpoint 关联 workspace。
-   - API 层强制传递并校验 workspace scope。
+1. 引入 personal knowledge/tenant 上下文。
+   - 所有 run、thread、note、tool audit、checkpoint 关联 personal knowledge。
+   - API 层强制传递并校验 personal knowledge scope。
 
 2. 增加 RBAC。
    - 普通用户：只能管理自己的记忆。
@@ -111,12 +111,12 @@ PolicyEngine 已有基础策略拦截，但还缺 workspace、tenant、RBAC、AB
    - 根据工具风险等级、数据敏感级别、来源、用户状态、时间窗口做动态策略。
 
 4. 完善 API key 和服务身份。
-   - key 绑定 workspace、角色、过期时间和允许工具集合。
+   - key 绑定 personal knowledge、角色、过期时间和允许工具集合。
    - 所有后台操作写入 actor 类型：user、admin、service、system。
 
 ### 验收标准
 
-- 跨 workspace 访问被拒绝。
+- 跨 personal knowledge 访问被拒绝。
 - replay、restore、delete 等高风险接口需要明确角色授权。
 - 审计记录能区分用户、管理员、服务账号和系统任务。
 
@@ -125,7 +125,7 @@ PolicyEngine 已有基础策略拦截，但还缺 workspace、tenant、RBAC、AB
 ### 当前风险
 
 Conversation governed save 已只冻结模型从 user message 中逐字选择、由 Admission 机械校验
-来源的知识 span，确认后复用 Workspace `solidify_conversation`；assistant message 和保存/确认
+来源的知识 span，确认后复用 Personal Knowledge `solidify_conversation`；assistant message 和保存/确认
 控制语义不会成为写入内容。B02 -> E14 已闭合单个明确结论场景；长 user message 中的临时假设、
 否定或修正仍未由正式入口 baseline 证明，因此以下内容只是待验证假设，不是实现授权。
 

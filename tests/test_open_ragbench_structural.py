@@ -86,7 +86,7 @@ def test_ask_pipeline_eval_variants_are_registered():
     assert "ask_pipeline_no_rewrite" in names
     assert "ask_pipeline_local_only" in names
     assert "ask_pipeline_no_planner" in names
-    assert "ask_retrieve_no_workspace" in names
+    assert "ask_retrieve_no_knowledge" in names
     assert "ask_retrieve_support" in names
     assert "ask_retrieve_high_accuracy" in names
     assert "ask_retrieve_shared_evidence_selector_lexical" in names
@@ -104,9 +104,9 @@ def test_ask_pipeline_eval_variants_are_registered():
     assert "ask_retrieve_llm_rerank" in names
     assert "ask_retrieve_external_embedding" in names
     assert "ask_retrieve_external_llm_rerank" in names
-    assert "ask_retrieve_workspace" in names
-    assert "ask_retrieve_workspace_forced_claim_sensitive" in names
-    assert "ask_retrieve_workspace_evidence_only" in names
+    assert "ask_retrieve_knowledge" in names
+    assert "ask_retrieve_knowledge_forced_claim_sensitive" in names
+    assert "ask_retrieve_knowledge_evidence_only" in names
     assert "current_runtime_ask" in names
     assert isinstance(get_strategy("ask_pipeline"), AskPipelineStrategy)
     assert isinstance(get_strategy("ask_pipeline_no_rewrite"), AskPipelineStrategy)

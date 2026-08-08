@@ -321,9 +321,9 @@ class AskConfig(_StrictBase):
     llm_rerank_gated_dense_sparse_gap: int = 8
     llm_rerank_gated_min_support_coverage: float = 0.35
     llm_rerank_gated_preserve_top_k: int = 0
-    workspace_retrieval_enabled: bool = True
-    workspace_default_quota: int = 0
-    workspace_claim_sensitive_quota: int = 3
+    knowledge_retrieval_enabled: bool = True
+    knowledge_default_quota: int = 0
+    knowledge_claim_sensitive_quota: int = 3
 
 
 class ShortTermMemoryConfig(_StrictBase):

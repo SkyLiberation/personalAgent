@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, Field
 
 from personal_agent.application.evidence_engine import evidence_terms
-from personal_agent.application.workspace.models import (
+from personal_agent.application.knowledge.models import (
     Artifact,
     Claim,
     ClaimType,
@@ -153,7 +153,7 @@ class LLMSemanticEvidenceExtractor:
             {"role": "user", "content": _blocks_prompt(artifact, blocks)},
         ]
         response = self._model_client.generate(StructuredModelRequest(
-            operation="workspace_semantic_evidence_extraction",
+            operation="knowledge_semantic_evidence_extraction",
             version=self.version,
             kind="structured",
             output_type=SemanticEvidenceExtraction,
@@ -161,9 +161,9 @@ class LLMSemanticEvidenceExtractor:
             max_tokens=1800,
             messages=messages,
             context_projection_ref=sealed_context_projection_ref(
-                purpose="workspace_semantic_evidence_extraction", messages=messages,
+                purpose="knowledge_semantic_evidence_extraction", messages=messages,
             ),
-            metadata={"artifact_id": artifact.artifact_id, "workspace_id": artifact.workspace_id},
+            metadata={"artifact_id": artifact.artifact_id, "owner_id": artifact.owner_id},
         ))
         return response.value
 
@@ -204,7 +204,7 @@ class LLMSemanticClaimExtractor:
             },
         ]
         response = self._model_client.generate(StructuredModelRequest(
-            operation="workspace_candidate_claim_extraction",
+            operation="knowledge_candidate_claim_extraction",
             version=self.version,
             kind="structured",
             output_type=CandidateClaimExtraction,
@@ -212,9 +212,9 @@ class LLMSemanticClaimExtractor:
             max_tokens=2200,
             messages=messages,
             context_projection_ref=sealed_context_projection_ref(
-                purpose="workspace_candidate_claim_extraction", messages=messages,
+                purpose="knowledge_candidate_claim_extraction", messages=messages,
             ),
-            metadata={"artifact_id": artifact.artifact_id, "workspace_id": artifact.workspace_id},
+            metadata={"artifact_id": artifact.artifact_id, "owner_id": artifact.owner_id},
         ))
         return response.value
 
@@ -253,7 +253,7 @@ class LLMClaimGroundingJudge:
             },
         ]
         response = self._model_client.generate(StructuredModelRequest(
-            operation="workspace_claim_grounding_judge",
+            operation="knowledge_claim_grounding_judge",
             version=self.version,
             kind="structured",
             output_type=ClaimGroundingJudgment,
@@ -261,9 +261,9 @@ class LLMClaimGroundingJudge:
             max_tokens=1200,
             messages=messages,
             context_projection_ref=sealed_context_projection_ref(
-                purpose="workspace_claim_grounding_judge", messages=messages,
+                purpose="knowledge_claim_grounding_judge", messages=messages,
             ),
-            metadata={"claim_id": claim.claim_id, "workspace_id": claim.workspace_id},
+            metadata={"claim_id": claim.claim_id, "owner_id": claim.owner_id},
         ))
         return response.value
 

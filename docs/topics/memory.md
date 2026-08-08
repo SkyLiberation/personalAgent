@@ -1,6 +1,6 @@
 # Memory 与知识事实边界
 
-本文是当前 Memory 事实、生命周期和读写边界的 canonical 文档。Conversation、Workspace、
+本文是当前 Memory 事实、生命周期和读写边界的 canonical 文档。Conversation、Personal Knowledge、
 Investigation Project、Artifact 和 Retrieval Index 不共享一个 God Memory；它们按事实 owner
 分别持久化，只在 Application Use Case 中通过 typed ref 协作。
 
@@ -9,19 +9,19 @@ Investigation Project、Artifact 和 Retrieval Index 不共享一个 God Memory�
 | 事实 | Canonical owner | 生命周期 | 是否可作为回答证据 |
 | --- | --- | --- | --- |
 | Conversation message / committed observation | Interaction journal | 单次或连续 Conversation | 只能理解指代，不直接证明外部事实 |
-| Workspace Artifact / EvidenceSpan / Claim / Relation | Workspace Store | 长期知识生命周期 | 经过 visibility 和 retrieval 后可以 |
+| Personal Knowledge Artifact / EvidenceSpan / Claim / Relation | Personal Knowledge Store | 长期知识生命周期 | 经过 visibility 和 retrieval 后可以 |
 | 大文本、文件和生成产物 | Artifact Store | 由 ArtifactRef 生命周期管理 | 只有可见且有 source binding 时可以 |
 | Investigation definition / plan / journal / artifact | Investigation Project aggregate | durable project | admitted evidence 或 verified artifact 可以 |
-| Graphiti node / edge / episode | Graph retrieval projection | 可从 Workspace/Note 重建 | 只作为 retrieval fact/ref，不是权威写源 |
+| Graphiti node / edge / episode | Graph retrieval projection | 可从 Personal Knowledge/Note 重建 | 只作为 retrieval fact/ref，不是权威写源 |
 | Embedding / search index | Retrieval projection | 可失效并重建 | 只能定位 canonical source |
 | 当前 LLM Context | Model invocation input | 单次调用 | 不是持久化事实 |
 
 历史 LangGraph checkpoint 表可能仍存在于数据库或运维清理范围，但不再是当前 Conversation、
-Workspace 或 Investigation 的共同事实 owner。
+Personal Knowledge 或 Investigation 的共同事实 owner。
 
 ## 唯一写入口
 
-长期知识只能通过明确的 Capture、Workspace ingest 或 governed Conversation save 进入：
+长期知识只能通过明确的 Capture、Personal Knowledge ingest 或 governed Conversation save 进入：
 
 ```text
 User-authored source
@@ -34,12 +34,12 @@ User-authored source
 ```
 
 Conversation save 只允许模型选择用户消息中的逐字 `text_span`。Application 机械校验来源并冻结
-Command；用户确认后复用 `WorkspaceService.solidify_conversation()`。模型回答、assistant message、
+Command；用户确认后复用 `KnowledgeService.solidify_conversation()`。模型回答、assistant message、
 保存控制语义和检索结果都不能直接写成 Claim。
 
 Knowledge delete/restore 由 `KnowledgeLifecycleService` 的 immutable Command、单一
 `command_digest`、Operation 和 Receipt 管理。Graph/index 的删除只是随 canonical 状态变化更新
-投影，不能反向删除或覆盖 Workspace facts。
+投影，不能反向删除或覆盖 Personal Knowledge facts。
 
 ## 读取与上下文
 
@@ -53,7 +53,7 @@ Visibility
   -> LLM Context
 ```
 
-权限和 tenant/workspace/user scope 必须先过滤。检索只产生候选 source/evidence；模型可以在可见
+权限和 tenant/personal knowledge/user scope 必须先过滤。检索只产生候选 source/evidence；模型可以在可见
 候选中做开放语义选择，但不能扩大 visibility。最终注入 Prompt 的 ContextPack 是临时只读视图，
 不写回 Memory。
 
@@ -62,7 +62,7 @@ Conversation 历史只帮助解析追问、用户选择和当前义务。历史 
 
 ## Graph 与 RAG 的位置
 
-Graphiti 和 embedding search 是 Workspace/Note 的检索投影：
+Graphiti 和 embedding search 是 Personal Knowledge/Note 的检索投影：
 
 - Graph capture 返回 `GraphCaptureResult`，记录 episode、entity、edge 和 fact ref；
 - Graph retrieve 返回严格的 `GraphRetrievalResult`，不包含 provider candidate answer；
@@ -75,7 +75,7 @@ RAG 不拥有隐藏的 Router、Planner 或 Completion：
 ```text
 Ask Application
   -> Retrieval Stage
-       -> workspace / local / graph / web candidates
+       -> personal knowledge / local / graph / web candidates
        -> canonical EvidenceItem pool
   -> Compose Stage
   -> Ask Verifier
@@ -84,17 +84,17 @@ Ask Application
 ```
 
 Retriever 只返回候选、证据和环境错误。它不生成最终回答、不判断 Goal 完成，也不在内部运行一个
-与主 Agent 同构的循环。Workspace 的独立 `/api/workspace/ask` 才拥有自己的回答组装和
-`WorkspaceAnswerVerifier`；当 Workspace 作为 Ask 的子能力时，只调用
-`WorkspaceService.select_evidence()`，不会生成或验证一个随后被丢弃的内部答案。
+与主 Agent 同构的循环。Personal Knowledge 的独立 `/api/knowledge/ask` 才拥有自己的回答组装和
+`KnowledgeAnswerVerifier`；当 Personal Knowledge 作为 Ask 的子能力时，只调用
+`KnowledgeService.select_evidence()`，不会生成或验证一个随后被丢弃的内部答案。
 
 ## 恢复边界
 
 | 运行形态 | 恢复 owner | 恢复依据 |
 | --- | --- | --- |
 | Conversation | Interaction journal | committed messages、Observation、Feedback、usage、action order |
-| Governed save | Interaction journal + Workspace | frozen Command、confirmation、Receipt |
-| Knowledge lifecycle | Knowledge lifecycle store | Command、Operation、Receipt、Workspace state events |
+| Governed save | Interaction journal + Personal Knowledge | frozen Command、confirmation、Receipt |
+| Knowledge lifecycle | Knowledge lifecycle store | Command、Operation、Receipt、Personal Knowledge state events |
 | Investigation Project | Project aggregate/journal | definition、accepted plan、step journal、artifact refs |
 | Research | Research store + worker queue | ResearchRun、event、delivery/limitation |
 

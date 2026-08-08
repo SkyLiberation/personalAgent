@@ -1766,7 +1766,6 @@ class ResearchService:
             name,
             execution_scope=interaction_execution_scope(
                 tenant_id="personal-agent",
-                workspace_id=f"research:{user_id}",
                 user_id=user_id,
                 execution_id=run_id,
                 task_id=trace_decision_id or name,

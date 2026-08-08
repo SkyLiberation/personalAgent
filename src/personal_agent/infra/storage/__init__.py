@@ -9,7 +9,6 @@ from personal_agent.infra.storage.postgres_procedure_definition_store import (
     ProcedureEvalRun,
 )
 from personal_agent.infra.storage.postgres_agent_trace_store import PostgresAgentTraceStore
-from personal_agent.infra.storage.postgres_control_plane_store import PostgresControlPlaneStore
 from personal_agent.infra.storage.postgres_execution_replay_store import (
     PostgresExecutionReplayStore,
     ExecutionArtifactRecord,
@@ -25,7 +24,6 @@ __all__ = [
     "PostgresWorkerQueueStore",
     "PostgresProcedureDefinitionStore",
     "PostgresAgentTraceStore",
-    "PostgresControlPlaneStore",
     "PostgresExecutionReplayStore",
     "PostgresDurableRunRepository",
     "ExecutionArtifactRecord",

@@ -1,10 +1,10 @@
-# Workspace 生命周期 Workflow
+# Personal Knowledge 生命周期 Workflow
 
-本文描述当前已经落地的 Workspace 知识生命周期。它不是一个薄 API 层；它负责把长期知识从原始证据推进到可回答、可复习、可审计、可投影的业务状态。
+本文描述当前已经落地的 Personal Knowledge 知识生命周期。它不是一个薄 API 层；它负责把长期知识从原始证据推进到可回答、可复习、可审计、可投影的业务状态。
 
 ## 一句话结论
 
-Workspace 的成功边界先落在 `Artifact / EvidenceBlock / EvidenceSpan`，然后再进入 `Claim / Grounding / Admission / Conflict` 增强链路。Ask 回答时引用的是可回溯的 `EvidenceRef`，并输出 `evidence_coverage` 与 `missing_sections`，让 e2e 质量能检查“有无证据、证据是否覆盖、缺口在哪里”。
+Personal Knowledge 的成功边界先落在 `Artifact / EvidenceBlock / EvidenceSpan`，然后再进入 `Claim / Grounding / Admission / Conflict` 增强链路。Ask 回答时引用的是可回溯的 `EvidenceRef`，并输出 `evidence_coverage` 与 `missing_sections`，让 e2e 质量能检查“有无证据、证据是否覆盖、缺口在哪里”。
 
 ## 生命周期分层
 
@@ -32,7 +32,7 @@ raw input
 
 ### ingest_knowledge
 
-`WorkspaceService.ingest_knowledge()` 是 evidence-first 摄取入口。
+`KnowledgeService.ingest_knowledge()` 是 evidence-first 摄取入口。
 
 ```text
 text/source
@@ -48,7 +48,7 @@ text/source
 
 ### enhance_claim_lifecycle
 
-`WorkspaceService.enhance_claim_lifecycle()` 在已有 ingest 结果上继续增强 Claim 生命周期。
+`KnowledgeService.enhance_claim_lifecycle()` 在已有 ingest 结果上继续增强 Claim 生命周期。
 
 ```text
 EvidenceSpan
@@ -87,10 +87,10 @@ EvidenceSpan
 
 ## Ask 接入
 
-Workspace 在 Ask 中有两层接入：
+Personal Knowledge 在 Ask 中有两层接入：
 
-1. `WorkspaceService.answer_with_evidence()` 可以直接基于 Workspace 证据回答，返回 `EvidenceGroundedAnswer`。
-2. `WorkspaceRetriever` 把 Workspace EvidenceSpan / Claim / conflict diagnostics 投影为统一 `EvidenceItem / Citation / KnowledgeNote`，进入 AskService 的 retrieve / compose / verify / repair 主链路。
+1. `KnowledgeService.answer_with_evidence()` 可以直接基于 Personal Knowledge 证据回答，返回 `EvidenceGroundedAnswer`。
+2. `KnowledgeRetriever` 把 Personal Knowledge EvidenceSpan / Claim / conflict diagnostics 投影为统一 `EvidenceItem / Citation / KnowledgeNote`，进入 AskService 的 retrieve / compose / verify / repair 主链路。
 
 回答侧关键输出：
 
@@ -114,13 +114,13 @@ EvidenceGroundedAnswer
   answer_claim_count
 ```
 
-`verification` 由独立 `WorkspaceAnswerVerifier` 写入；回答组装器不能按 selected 数量推导
+`verification` 由独立 `KnowledgeAnswerVerifier` 写入；回答组装器不能按 selected 数量推导
 supported。完整所有权与失败语义见
 [Verification 与 Completion](../topics/verification-and-completion.md)。
 
 其中 `evidence_coverage` 不是装饰字段，而是 verifier assessment 的组成部分：
 
-- `complete`：入选证据覆盖当前 Workspace 可用证据。
+- `complete`：入选证据覆盖当前 Personal Knowledge 可用证据。
 - `partial`：有证据，但还有未覆盖 block/span。
 - `sparse`：只有极少证据支撑，不能当作完整回答。
 - `none`：没有匹配证据，必须保守回答。
@@ -153,7 +153,7 @@ Capture 仍负责原有笔记体系：
 - review card
 - graph sync / worker queue
 
-Workspace 负责知识生命周期：
+Personal Knowledge 负责知识生命周期：
 
 - Artifact / Evidence
 - Claim / Grounding / Admission
@@ -161,7 +161,7 @@ Workspace 负责知识生命周期：
 - EvidenceRef / Coverage / MissingSections
 - ProjectionJob
 
-二者不是互斥替代关系。Capture 提供笔记与 chunk 资产，Workspace 提供证据和 Claim 生命周期。Ask 通过 EvidenceEngine 把 Workspace、local note、graph、web、episode 等来源统一到同一个 evidence pool。
+二者不是互斥替代关系。Capture 提供笔记与 chunk 资产，Personal Knowledge 提供证据和 Claim 生命周期。Ask 通过 EvidenceEngine 把 Personal Knowledge、local note、graph、web、episode 等来源统一到同一个 evidence pool。
 
 ## e2e_quality 约束
 
@@ -175,11 +175,11 @@ Workspace 负责知识生命周期：
 - 部分覆盖问题是否返回 `partial/sparse` 且产生 `missing_sections`。
 - 回答生成不能悄悄新增 active claim。
 
-这让 Workspace 设计不脱离现实业务：如果证据缺口无法被用户或评测看到，就不算真正落地。
+这让 Personal Knowledge 设计不脱离现实业务：如果证据缺口无法被用户或评测看到，就不算真正落地。
 
 ## 边界
 
-Workspace 不负责：
+Personal Knowledge 不负责：
 
 - 入口 intent 路由。
 - LangGraph checkpoint 和 step 调度。
@@ -187,4 +187,4 @@ Workspace 不负责：
 - Research loop 的事件发现和停止条件。
 - ToolGateway 的权限、HITL、幂等和审计。
 
-Workspace 负责的是知识对象的生命周期、证据引用、Claim 准入、冲突诊断、状态事件和下游投影任务。
+Personal Knowledge 负责的是知识对象的生命周期、证据引用、Claim 准入、冲突诊断、状态事件和下游投影任务。

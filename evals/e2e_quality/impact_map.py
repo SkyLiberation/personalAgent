@@ -192,14 +192,14 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "Individual tool implementations reachable from the model each turn.",
         "E01", "E02", "E12", "L01", "L02",
     ),
-    # --- workspace / knowledge --------------------------------------------
+    # --- personal knowledge ------------------------------------------------
     _cases(
-        "src/personal_agent/application/workspace/answer_verifier.py",
+        "src/personal_agent/application/knowledge/answer_verifier.py",
         "Independent answer-level semantic assessment write path.",
         "E20",
     ),
     _cases(
-        "src/personal_agent/application/workspace/",
+        "src/personal_agent/application/knowledge/",
         "Canonical knowledge fact owner: claims, evidence, supersede/conflict.",
         "E02", "E08", "E10", "E12", "E20", "L01",
     ),
@@ -237,11 +237,6 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/application/artifacts/",
         "Artifact write/read path behind ArtifactRef and digest checks.",
         "E03", "E09", "E20", "IP01",
-    ),
-    _cases(
-        "src/personal_agent/application/knowledge/",
-        "Knowledge item and relation projections over canonical claims.",
-        "E02", "E08", "E10", "E12",
     ),
     _cases(
         "src/personal_agent/application/extract/",

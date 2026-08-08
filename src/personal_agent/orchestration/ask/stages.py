@@ -156,7 +156,7 @@ class RetrievalStage:
         )
         preferred = list(ctx.retrieval_plan.sources)
         if ctx.retrieval_plan.claim_sensitive:
-            preferred.append("workspace")
+            preferred.append("personal_knowledge")
         if ctx.understanding.needs_episodic_context:
             preferred.append("episodic")
         preferred.extend(["reflection"])
@@ -257,7 +257,7 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
             provider="graph",
             local_name="graph",
             description="Graph-backed evidence retrieval.",
-            semantic_domains=("graph", "local_memory", "workspace_knowledge"),
+            semantic_domains=("graph", "local_memory", "personal_knowledge"),
             resource_types=("note", "claim", "relation"),
             operations=("search", "read"),
             risk_level="low",
@@ -292,20 +292,20 @@ def _ask_retriever_capabilities(ctx: "AskRunContext", svc: "AskService") -> tupl
             provider_priority=1,
         ),
     ]
-    workspace_default_quota = int(getattr(svc.settings.ask, "workspace_default_quota", 0) or 0)
-    if bool(getattr(plan, "claim_sensitive", False)) or workspace_default_quota > 0:
+    knowledge_default_quota = int(getattr(svc.settings.ask, "knowledge_default_quota", 0) or 0)
+    if bool(getattr(plan, "claim_sensitive", False)) or knowledge_default_quota > 0:
         capabilities.append(EvidenceSourceCapability.from_dimensions(
-            capability_id="retriever:workspace",
+            capability_id="retriever:personal_knowledge",
             kind="retriever",
-            provider="workspace",
-            local_name="workspace",
-            description="Workspace evidence and claim retrieval.",
-            semantic_domains=("workspace_knowledge", "local_memory"),
+            provider="personal_knowledge",
+            local_name="personal_knowledge",
+            description="Knowledge evidence and claim retrieval.",
+            semantic_domains=("personal_knowledge", "local_memory"),
             resource_types=("evidence", "claim"),
             operations=("search", "read"),
             risk_level="low",
             side_effects=("none",),
-            auth_scope="workspace:read",
+            auth_scope="personal_knowledge:read",
             trust_level="trusted",
             credential_mode="none",
             data_egress_class="none",

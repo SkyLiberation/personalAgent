@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from personal_agent.capabilities.contracts.grants import GrantDependencySet, ProcedureNodeGrant
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
-from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope, interaction_execution_scope
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal, interaction_execution_scope
 from personal_agent.tools import (
     ToolError,
     build_capture_text_tool,
@@ -32,7 +32,6 @@ from personal_agent.tools import (
 def _scope(user_id: str = "u1", task_id: str = "direct"):
     return interaction_execution_scope(
         tenant_id="tenant-1",
-        workspace_id="workspace-1",
         user_id=user_id,
         execution_id=f"run-{user_id}",
         task_id=task_id,
@@ -244,11 +243,10 @@ class TestToolExecutor:
     def test_project_invocation_derives_leaf_grant_from_frozen_proposal(self, executor):
         executor.register(echo)
         scope = ExecutionScope(
-            security_scope=SecurityScope(
+            principal=AuthenticatedPrincipal(
                 tenant_id="tenant-1",
-                workspace_id="workspace-1",
+                user_id="u1",
             ),
-            principal_id="tenant-1:u1",
             execution_id="proposal-1",
             project_id="project-1",
             plan_version=2,

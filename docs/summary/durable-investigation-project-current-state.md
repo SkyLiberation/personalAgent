@@ -74,7 +74,7 @@ Agent submission 顺序是：
 Grant 的 AuthorizationDigest、ExecutionCommandDigest 和 submission key 写入 canonical child
 definition。Provider Artifact 先通过 `ArtifactService.write_generated` 落入 owner scope，
 AgentRun 只保存 `ResourceRef`。Conversation 或 Project 读取正文时必须再次通过 principal 和
-SecurityScope 校验。
+resource owner 校验。
 
 ## 5. Project state and control
 

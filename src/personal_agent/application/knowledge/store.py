@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
-from personal_agent.application.workspace.models import (
+from personal_agent.application.knowledge.models import (
     Artifact,
     Claim,
     ClaimAdmissionDecision,
@@ -24,7 +24,7 @@ from personal_agent.application.workspace.models import (
 )
 
 
-class WorkspaceStore(Protocol):
+class KnowledgeStore(Protocol):
     def save_artifact(self, artifact: Artifact) -> None: ...
     def save_extraction_run(self, run: ExtractionRun) -> None: ...
     def save_evidence_blocks(self, blocks: Iterable[EvidenceBlock]) -> None: ...
@@ -45,7 +45,7 @@ class WorkspaceStore(Protocol):
     def get_artifact(self, artifact_id: str) -> Artifact | None: ...
     def list_artifacts(
         self,
-        workspace_id: str,
+        owner_id: str,
         *,
         source_type: str | None = None,
         limit: int = 100,
@@ -56,33 +56,40 @@ class WorkspaceStore(Protocol):
     def get_decision(self, decision_id: str) -> DecisionCard | None: ...
     def get_evidence_block(self, evidence_block_id: str) -> EvidenceBlock | None: ...
     def get_evidence_span(self, evidence_span_id: str) -> EvidenceSpan | None: ...
-    def list_evidence_spans(self, workspace_id: str, *, limit: int = 100) -> list[EvidenceSpan]: ...
-    def list_claims(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[Claim]: ...
+    def list_evidence_spans(self, owner_id: str, *, limit: int = 100) -> list[EvidenceSpan]: ...
+    def list_claims(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[Claim]: ...
     def list_knowledge_relations(
         self,
-        workspace_id: str,
+        owner_id: str,
         *,
         source_id: str | None = None,
         target_id: str | None = None,
         relation_type: str | None = None,
         limit: int = 100,
     ) -> list[KnowledgeRelation]: ...
-    def list_research_events(self, workspace_id: str, *, limit: int = 100) -> list[ResearchEvent]: ...
-    def list_knowledge_items(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeItem]: ...
-    def list_decisions(self, workspace_id: str, *, status: str | None = None, limit: int = 100) -> list[DecisionCard]: ...
-    def list_review_items(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[ReviewItem]: ...
-    def list_knowledge_gaps(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeGap]: ...
-    def list_graph_projections(self, workspace_id: str, *, limit: int = 100) -> list[GraphProjection]: ...
+    def list_knowledge_state_events(
+        self,
+        owner_id: str,
+        *,
+        target_id: str | None = None,
+        limit: int = 100,
+    ) -> list[KnowledgeStateEvent]: ...
+    def list_research_events(self, owner_id: str, *, limit: int = 100) -> list[ResearchEvent]: ...
+    def list_knowledge_items(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeItem]: ...
+    def list_decisions(self, owner_id: str, *, status: str | None = None, limit: int = 100) -> list[DecisionCard]: ...
+    def list_review_items(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[ReviewItem]: ...
+    def list_knowledge_gaps(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeGap]: ...
+    def list_graph_projections(self, owner_id: str, *, limit: int = 100) -> list[GraphProjection]: ...
     def list_projection_jobs(
         self,
-        workspace_id: str,
+        owner_id: str,
         *,
         status: str | None = None,
         limit: int = 100,
     ) -> list[ProjectionJob]: ...
 
 
-class InMemoryWorkspaceStore:
+class InMemoryKnowledgeStore:
     def __init__(self) -> None:
         self.artifacts: dict[str, Artifact] = {}
         self.extraction_runs: dict[str, ExtractionRun] = {}
@@ -173,14 +180,14 @@ class InMemoryWorkspaceStore:
 
     def list_artifacts(
         self,
-        workspace_id: str,
+        owner_id: str,
         *,
         source_type: str | None = None,
         limit: int = 100,
     ) -> list[Artifact]:
         artifacts = [
             artifact for artifact in self.artifacts.values()
-            if artifact.workspace_id == workspace_id
+            if artifact.owner_id == owner_id
             and (source_type is None or artifact.source_type == source_type)
         ]
         artifacts.sort(key=lambda item: item.created_at, reverse=True)
@@ -204,25 +211,25 @@ class InMemoryWorkspaceStore:
     def get_evidence_span(self, evidence_span_id: str) -> EvidenceSpan | None:
         return self.evidence_spans.get(evidence_span_id)
 
-    def list_evidence_spans(self, workspace_id: str, *, limit: int = 100) -> list[EvidenceSpan]:
+    def list_evidence_spans(self, owner_id: str, *, limit: int = 100) -> list[EvidenceSpan]:
         spans = [
             span for span in self.evidence_spans.values()
-            if span.workspace_id == workspace_id
+            if span.owner_id == owner_id
         ]
         spans.sort(key=lambda item: item.created_at, reverse=True)
         return spans[:max(1, limit)]
 
-    def list_claims(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[Claim]:
+    def list_claims(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[Claim]:
         claims = [
             claim for claim in self.claims.values()
-            if claim.workspace_id == workspace_id and (state is None or claim.state == state)
+            if claim.owner_id == owner_id and (state is None or claim.state == state)
         ]
         claims.sort(key=lambda item: item.created_at, reverse=True)
         return claims[:max(1, limit)]
 
     def list_knowledge_relations(
         self,
-        workspace_id: str,
+        owner_id: str,
         *,
         source_id: str | None = None,
         target_id: str | None = None,
@@ -231,7 +238,7 @@ class InMemoryWorkspaceStore:
     ) -> list[KnowledgeRelation]:
         relations = [
             relation for relation in self.knowledge_relations.values()
-            if relation.workspace_id == workspace_id
+            if relation.owner_id == owner_id
             and (source_id is None or relation.source_id == source_id)
             and (target_id is None or relation.target_id == target_id)
             and (relation_type is None or relation.relation_type == relation_type)
@@ -239,61 +246,76 @@ class InMemoryWorkspaceStore:
         relations.sort(key=lambda item: item.created_at, reverse=True)
         return relations[:max(1, limit)]
 
-    def list_research_events(self, workspace_id: str, *, limit: int = 100) -> list[ResearchEvent]:
-        events = [event for event in self.research_events.values() if event.workspace_id == workspace_id]
+    def list_knowledge_state_events(
+        self,
+        owner_id: str,
+        *,
+        target_id: str | None = None,
+        limit: int = 100,
+    ) -> list[KnowledgeStateEvent]:
+        events = [
+            event for event in self.knowledge_state_events.values()
+            if event.owner_id == owner_id
+            and (target_id is None or event.target_id == target_id)
+        ]
         events.sort(key=lambda item: item.created_at, reverse=True)
         return events[:max(1, limit)]
 
-    def list_knowledge_items(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeItem]:
+    def list_research_events(self, owner_id: str, *, limit: int = 100) -> list[ResearchEvent]:
+        events = [event for event in self.research_events.values() if event.owner_id == owner_id]
+        events.sort(key=lambda item: item.created_at, reverse=True)
+        return events[:max(1, limit)]
+
+    def list_knowledge_items(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeItem]:
         items = [
             item for item in self.knowledge_items.values()
-            if item.workspace_id == workspace_id and (state is None or item.state == state)
+            if item.owner_id == owner_id and (state is None or item.state == state)
         ]
         items.sort(key=lambda item: item.updated_at, reverse=True)
         return items[:max(1, limit)]
 
-    def list_decisions(self, workspace_id: str, *, status: str | None = None, limit: int = 100) -> list[DecisionCard]:
+    def list_decisions(self, owner_id: str, *, status: str | None = None, limit: int = 100) -> list[DecisionCard]:
         decisions = [
             decision for decision in self.decisions.values()
-            if decision.workspace_id == workspace_id and (status is None or decision.status == status)
+            if decision.owner_id == owner_id and (status is None or decision.status == status)
         ]
         decisions.sort(key=lambda item: item.created_at, reverse=True)
         return decisions[:max(1, limit)]
 
-    def list_review_items(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[ReviewItem]:
+    def list_review_items(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[ReviewItem]:
         items = [
             item for item in self.review_items.values()
-            if item.workspace_id == workspace_id and (state is None or item.state == state)
+            if item.owner_id == owner_id and (state is None or item.state == state)
         ]
         items.sort(key=lambda item: (item.priority, item.created_at), reverse=True)
         return items[:max(1, limit)]
 
-    def list_knowledge_gaps(self, workspace_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeGap]:
+    def list_knowledge_gaps(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[KnowledgeGap]:
         gaps = [
             gap for gap in self.knowledge_gaps.values()
-            if gap.workspace_id == workspace_id and (state is None or gap.state == state)
+            if gap.owner_id == owner_id and (state is None or gap.state == state)
         ]
         gaps.sort(key=lambda item: (item.severity, item.created_at), reverse=True)
         return gaps[:max(1, limit)]
 
-    def list_graph_projections(self, workspace_id: str, *, limit: int = 100) -> list[GraphProjection]:
+    def list_graph_projections(self, owner_id: str, *, limit: int = 100) -> list[GraphProjection]:
         projections = [
             projection for projection in self.graph_projections.values()
-            if projection.workspace_id == workspace_id
+            if projection.owner_id == owner_id
         ]
         projections.sort(key=lambda item: item.created_at, reverse=True)
         return projections[:max(1, limit)]
 
     def list_projection_jobs(
         self,
-        workspace_id: str,
+        owner_id: str,
         *,
         status: str | None = None,
         limit: int = 100,
     ) -> list[ProjectionJob]:
         jobs = [
             job for job in self.projection_jobs.values()
-            if job.workspace_id == workspace_id and (status is None or job.status == status)
+            if job.owner_id == owner_id and (status is None or job.status == status)
         ]
         jobs.sort(key=lambda item: item.created_at, reverse=True)
         return jobs[:max(1, limit)]

@@ -24,7 +24,7 @@ from personal_agent.kernel.contracts.agent import (
     new_agent_run_id,
 )
 from personal_agent.kernel.contracts.scope import (
-    SecurityScope,
+    AuthenticatedPrincipal,
     interaction_execution_scope,
 )
 
@@ -136,7 +136,6 @@ def _ctx() -> AgentGatewayContext:
     return AgentGatewayContext(
         execution_scope=interaction_execution_scope(
             tenant_id="tenant-1",
-            workspace_id="workspace-1",
             user_id="u1",
             execution_id="entry-run-1",
             task_id="action",
@@ -236,9 +235,9 @@ class _FakeAgent:
             artifact_ref=ResourceRef(
                 resource_id=f"artifact-{run_id}",
                 resource_type="artifact",
-                owner_scope=SecurityScope(
+                owner=AuthenticatedPrincipal(
                     tenant_id="tenant-1",
-                    workspace_id="workspace-1",
+                    user_id="u1",
                 ),
             ),
         )

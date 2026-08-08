@@ -54,7 +54,7 @@ def test_configure_langsmith_environment_sets_standard_vars(monkeypatch):
             api_key="ls-test",
             project="agent-test",
             endpoint="https://smith.example",
-            workspace_id="workspace-1",
+            workspace_id="langsmith-space-1",
         )
     )
 
@@ -63,7 +63,7 @@ def test_configure_langsmith_environment_sets_standard_vars(monkeypatch):
     assert os.environ["LANGSMITH_API_KEY"] == "ls-test"
     assert os.environ["LANGSMITH_PROJECT"] == "agent-test"
     assert os.environ["LANGSMITH_ENDPOINT"] == "https://smith.example"
-    assert os.environ["LANGSMITH_WORKSPACE_ID"] == "workspace-1"
+    assert os.environ["LANGSMITH_WORKSPACE_ID"] == "langsmith-space-1"
 
     configure_langsmith_environment(LangSmithConfig(enabled=False))
     assert os.environ["LANGSMITH_TRACING_V2"] == "false"

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent.application.workspace.answer_verifier import (
-    LLMWorkspaceAnswerVerifier,
+from personal_agent.application.knowledge.answer_verifier import (
+    LLMKnowledgeAnswerVerifier,
 )
-from personal_agent.application.workspace.models import EvidenceSpan
+from personal_agent.application.knowledge.models import EvidenceSpan
 from personal_agent.capabilities.contracts.model import StructuredModelResponse
 
 
@@ -32,7 +32,7 @@ def _span(span_id: str, text: str) -> EvidenceSpan:
     )
 
 
-def test_workspace_answer_verifier_binds_conflict_to_selected_evidence() -> None:
+def test_knowledge_answer_verifier_binds_conflict_to_selected_evidence() -> None:
     model = _StructuredResponse({
         "verdict": "needs_revision",
         "conclusion_status": "conflicted",
@@ -44,7 +44,7 @@ def test_workspace_answer_verifier_binds_conflict_to_selected_evidence() -> None
         "feedback": "State the unresolved conflict explicitly.",
         "confidence": 0.97,
     })
-    verifier = LLMWorkspaceAnswerVerifier(model)
+    verifier = LLMKnowledgeAnswerVerifier(model)
     selected = [
         _span("span-a", "Northstar 的迁移日期是 2026-09-10。"),
         _span("span-b", "Northstar 的迁移日期是 2026-10-15。"),
@@ -61,11 +61,11 @@ def test_workspace_answer_verifier_binds_conflict_to_selected_evidence() -> None
     assert assessment.verdict == "needs_revision"
     assert assessment.conclusion_status == "conflicted"
     assert assessment.conflicts[0].evidence_span_ids == ["span-a", "span-b"]
-    assert assessment.verifier_name == "llm-workspace-answer-verifier"
-    assert model.requests[0].operation == "workspace_answer_semantic_verification"
+    assert assessment.verifier_name == "llm-knowledge-answer-verifier"
+    assert model.requests[0].operation == "knowledge_answer_semantic_verification"
 
 
-def test_workspace_answer_verifier_rejects_unknown_evidence_reference() -> None:
+def test_knowledge_answer_verifier_rejects_unknown_evidence_reference() -> None:
     model = _StructuredResponse({
         "verdict": "needs_revision",
         "conclusion_status": "conflicted",
@@ -74,7 +74,7 @@ def test_workspace_answer_verifier_rejects_unknown_evidence_reference() -> None:
             "description": "An invented conflict binding.",
         }],
     })
-    verifier = LLMWorkspaceAnswerVerifier(model)
+    verifier = LLMKnowledgeAnswerVerifier(model)
     selected = [_span("span-a", "Northstar 的迁移日期是 2026-09-10。")]
 
     with pytest.raises(

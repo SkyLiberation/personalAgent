@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
@@ -11,10 +11,18 @@ from personal_agent.kernel.models import ReviewCard
 from personal_agent.application.review import DigestSubscription, ReviewDigestJob, ReviewFeedbackUseCase
 from personal_agent.kernel.contracts.review import ReviewFeedbackOutcome
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
-from personal_agent.adapters.web.routes._shared import is_admin, resolve_user_id
+from personal_agent.adapters.web.routes._shared import (
+    is_admin,
+    resolve_requested_principal,
+    resolve_user_id,
+)
 
 
-class DigestSubscriptionRequest(BaseModel):
+class _StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DigestSubscriptionRequest(_StrictRequest):
     id: str | None = None
     user_id: str | None = None
     channel: str = "feishu"
@@ -25,7 +33,7 @@ class DigestSubscriptionRequest(BaseModel):
     enabled: bool = True
 
 
-class DigestSubscriptionPatchRequest(BaseModel):
+class DigestSubscriptionPatchRequest(_StrictRequest):
     user_id: str | None = None
     channel: str | None = None
     target_type: str | None = None
@@ -47,7 +55,7 @@ class ReviewCardListResponse(BaseModel):
     items: list[ReviewCard] = Field(default_factory=list)
 
 
-class ReviewFeedbackRequest(BaseModel):
+class ReviewFeedbackRequest(_StrictRequest):
     user_id: str | None = None
     outcome: ReviewFeedbackOutcome
 
@@ -155,9 +163,10 @@ def register_review_routes(
         user_id: str | None = None,
         due_only: bool = False,
     ) -> ReviewCardListResponse:
-        resolved_user = user_id if is_admin(request) and user_id else resolve_user_id(request, settings)
-        plan = service.workspace_service.plan_review_and_gaps(
-            workspace_id=resolved_user,
+        requested_user = user_id if is_admin(request) else None
+        principal = resolve_requested_principal(request, settings, requested_user)
+        plan = service.knowledge_service.plan_review_and_gaps(
+            owner_id=principal.principal_id,
             limit=100,
         )
         cards = [
@@ -179,9 +188,10 @@ def register_review_routes(
         body: ReviewFeedbackRequest,
         request: Request,
     ) -> dict[str, object]:
-        resolved_user = body.user_id if is_admin(request) and body.user_id else resolve_user_id(request, settings)
-        review_items = service.workspace_service.store.list_review_items(
-            resolved_user,
+        requested_user = body.user_id if is_admin(request) else None
+        principal = resolve_requested_principal(request, settings, requested_user)
+        review_items = service.knowledge_service.store.list_review_items(
+            principal.principal_id,
             limit=200,
         )
         item = next(
@@ -194,7 +204,7 @@ def register_review_routes(
             "skipped" if body.outcome == "later" else "due"
         )
         saved = item.model_copy(update={"state": state})
-        service.workspace_service.store.save_review_items([saved])
+        service.knowledge_service.store.save_review_items([saved])
         return {
             "ok": True,
             "outcome": body.outcome,

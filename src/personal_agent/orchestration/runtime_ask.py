@@ -72,7 +72,7 @@ class AskService(AskPromptMixin):
         verifier,
         llm,
         planner_client=None,
-        workspace_service=None,
+        knowledge_service=None,
         policy_engine=None,
     ) -> None:
         self.settings = settings
@@ -83,7 +83,7 @@ class AskService(AskPromptMixin):
         self._verifier = verifier
         self._llm = llm
         self._planner_client = planner_client
-        self.workspace_service = workspace_service
+        self.knowledge_service = knowledge_service
         self.policy_engine = policy_engine
         self.evidence_engine = EvidenceEngine()
         self.dialogue_context_policy = get_prompt("answer.dialogue_context_policy").template
@@ -343,7 +343,6 @@ class AskService(AskPromptMixin):
                 "web_search",
                 execution_scope=interaction_execution_scope(
                     tenant_id="personal-agent",
-                    workspace_id="ask",
                     user_id="ask",
                     execution_id="ask-web-search",
                     task_id="web_search",

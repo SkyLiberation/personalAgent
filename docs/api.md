@@ -38,13 +38,13 @@ UI、自动化与集成方可使用下列资源 API。两种入口都调用同�
 ### `POST /api/investigation-projects`
 
 持久化 immutable Project definition 和第一版 UserRequirement 后返回 `202`。Planner 和
-Provider 不在请求内执行。请求必须包含 `tenant_id`、`workspace_id`、`user_id`、`title`、
+Provider 不在请求内执行。请求必须包含 `tenant_id`、`owner_id`、`user_id`、`title`、
 `goal`、非空 `requirements`、`budget` 和 `idempotency_key`。鉴权启用时 tenant/user 必须与
 API key 的 typed principal 一致。
 
 ### `GET /api/investigation-projects/{project_id}`
 
-按 tenant/workspace/user scope 返回只读 projection。查询不会调用模型、重新规划或推进 worker。
+按 tenant/personal knowledge/user scope 返回只读 projection。查询不会调用模型、重新规划或推进 worker。
 
 ### Project 控制入口
 
@@ -79,7 +79,7 @@ Item/Claim。
 ```json
 {
   "user_id": "default",
-  "workspace_id": "default",
+  "owner_id": "default",
   "reason": "内容已过期",
   "idempotency_key": "delete:note-123"
 }
@@ -316,7 +316,7 @@ LangGraph checkpoint。
 ## Conversation
 
 普通用户目标使用 canonical Conversation contract。模型从当前 EffectiveCapabilities 选择粗粒度
-业务能力；文件摄取等有独立交互的产品功能仍可进入明确 Workspace API，不由关键词 Router 猜测。
+业务能力；文件摄取等有独立交互的产品功能仍可进入明确 Personal Knowledge API，不由关键词 Router 猜测。
 
 ### `POST /api/conversation/turn`
 
@@ -324,7 +324,7 @@ LangGraph checkpoint。
 
 ```json
 {
-  "conversation_id": "workspace-1",
+  "conversation_id": "personal knowledge-1",
   "messages": [
     {"role": "user", "content": "总结我已经保存的知识"}
   ],
@@ -336,14 +336,14 @@ LangGraph checkpoint。
 响应由 `ConversationTurnView` 定义，包含 `interaction_run_ref`、`conversation_id`、
 `disposition` 和一条 assistant `message`。保存或删除需要确认时返回 `pending_confirmation`；
 durable 调查创建后返回
-`project_reference={project_id,tenant_id,workspace_id,user_id,state,title,goal}`，供客户端只读查询
+`project_reference={project_id,tenant_id,owner_id,user_id,state,title,goal}`，供客户端只读查询
 原 Project projection。`disposition` 可能为
 `answer`、`clarification_required`、`confirmation_required`、`background_started`、`limitation`
 或 `failed`。
 
 当前 goal-entry capability：
 
-- `list_workspace_knowledge`：读取同 scope 的 active/conflicted canonical KnowledgeItem 引用；
+- `list_personal_knowledge`：读取当前 principal 的 active/conflicted canonical KnowledgeItem 引用；
 - `prepare_conversation_knowledge_save`：冻结 exact user span；
 - `prepare_knowledge_delete`：准备 lifecycle delete command，确认前零副作用；
 - `start_durable_investigation`：创建 Project 并返回引用，不把创建视为报告完成。
@@ -378,12 +378,12 @@ Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/
 
 - `GET /api/conversation/runs/{interaction_run_ref}` 读取已提交的 Interaction trace；
 - `POST /api/conversation/runs/{interaction_run_ref}/knowledge-save-decision` 接受或拒绝已冻结的
-  exact-span 保存 Command，确认必须绑定 `workspace_id`、`command_digest` 和
+  exact-span 保存 Command，确认必须绑定 `owner_id`、`command_digest` 和
   `confirmation_ref`。
 
 旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
 `POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用
-`POST /api/workspace/ingest-upload`；Conversation 恢复事实由 Interaction journal 与公开
+`POST /api/knowledge/ingest-upload`；Conversation 恢复事实由 Interaction journal 与公开
 `interaction_run_ref` 合约拥有，不再暴露 LangGraph run snapshot。
 
 ---

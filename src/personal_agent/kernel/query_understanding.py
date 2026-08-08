@@ -113,7 +113,7 @@ class QueryUnderstanding(BaseModel):
     retrieval_mode: RetrievalMode = Field(
         default="evidence_dominant",
         description=(
-            "How Claim/Workspace should participate: evidence-only, "
+            "How Claim/Knowledge should participate: evidence-only, "
             "evidence-dominant, claim expansion to evidence, or claim state diagnostics."
         ),
     )
@@ -159,7 +159,7 @@ class RetrievalPlan(BaseModel):
     )
     claim_sensitive: bool = Field(
         default=False,
-        description="Whether Claim/Workspace may participate in this retrieval run.",
+        description="Whether Claim/Knowledge may participate in this retrieval run.",
     )
     retrieval_mode: RetrievalMode = Field(
         default="evidence_dominant",

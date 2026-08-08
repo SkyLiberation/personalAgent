@@ -29,7 +29,7 @@ step_execution_graph
   -> capture_text tool
   -> AgentRuntime.execute_capture
        IngestionPipeline.ingest(...)
-       Workspace lifecycle ingest/projection
+       Personal Knowledge lifecycle ingest/projection
   -> answer = "已收进知识库：{title}"
   -> finalize_entry_result
 ```
@@ -80,12 +80,12 @@ entry_input.artifacts[0] / metadata.file_path
 ```text
 execute_capture(...)
   -> IngestionPipeline.ingest(...)
-  -> WorkspaceService.ingest_text(...)
+  -> KnowledgeService.ingest_text(...)
        ingest_knowledge(...)
        enhance_claim_lifecycle(...)
 ```
 
-`IngestionPipeline` 仍负责原有 `knowledge_notes / chunks / review / graph sync` 能力。Workspace 是 Claim/Evidence 生命周期的服务边界，负责 Artifact、EvidenceBlock、EvidenceSpan、Claim、Grounding、Admission、Conflict、Decision 和 ProjectionJob。也就是说，Capture 产出笔记与 chunk，Workspace 产出可追溯证据和知识状态，二者共同构成长期知识主链路。
+`IngestionPipeline` 仍负责原有 `knowledge_notes / chunks / review / graph sync` 能力。Personal Knowledge 是 Claim/Evidence 生命周期的服务边界，负责 Artifact、EvidenceBlock、EvidenceSpan、Claim、Grounding、Admission、Conflict、Decision 和 ProjectionJob。也就是说，Capture 产出笔记与 chunk，Personal Knowledge 产出可追溯证据和知识状态，二者共同构成长期知识主链路。
 
 capture pipeline 当前顺序：
 
@@ -317,7 +317,7 @@ question + dialogue context
        QueryUnderstanding
        RetrievalPlan
   -> RetrievalCoordinator.run(ctx)
-       workspace / graph / structural / local / episodic / reflection / web 召回
+       personal knowledge / graph / structural / local / episodic / reflection / web 召回
   -> EvidenceEngine.assemble_context(...)
        dedupe
        RRF fusion
@@ -342,7 +342,7 @@ question + dialogue context
 
 `RetrievalCoordinator` 的召回边界是：
 
-- `workspace`：读取 Workspace EvidenceSpan / Claim，携带 `conflict / potential_conflict` 诊断，转换成统一 `EvidenceItem / Citation / KnowledgeNote`。
+- `personal knowledge`：读取 Personal Knowledge EvidenceSpan / Claim，携带 `conflict / potential_conflict` 诊断，转换成统一 `EvidenceItem / Citation / KnowledgeNote`。
 - `graph`：可走 Graphiti、structural 或 hybrid graph provider。
 - `local`：本地 note/chunk 检索。
 - `web`：按 retrieval plan 主动补充外部证据。
@@ -381,7 +381,7 @@ _compose_unified_answer(
 )
 ```
 
-生成阶段的输入边界是 `ContextPack`，不是原始 Workspace、graph、local 或 web 结果。Workspace、graph、local、structural、episode、reflection、web 的候选在 retrieve 阶段已经被归一成 `EvidenceItem` 并排序。
+生成阶段的输入边界是 `ContextPack`，不是原始 Personal Knowledge、graph、local 或 web 结果。Personal Knowledge、graph、local、structural、episode、reflection、web 的候选在 retrieve 阶段已经被归一成 `EvidenceItem` 并排序。
 
 ## ask-verify
 
@@ -469,12 +469,12 @@ capture
   -> local lexical/vector indexes
   -> optional Graphiti episode / graph facts
   -> review card
-  -> Workspace Artifact / EvidenceBlock / EvidenceSpan
-  -> optional Workspace Claim lifecycle
+  -> Personal Knowledge Artifact / EvidenceBlock / EvidenceSpan
+  -> optional Personal Knowledge Claim lifecycle
   -> ProjectionJob
 
 ask
-  -> workspace / graph / structural / local / episodic / reflection / web retrieval
+  -> personal knowledge / graph / structural / local / episodic / reflection / web retrieval
   -> EvidenceItem
   -> ContextPack
   -> grounded answer
@@ -484,8 +484,8 @@ ask
 两条链路之间的关键共享模型：
 
 - `KnowledgeNote`：长期知识和 chunk 的持久化实体。
-- `Artifact / EvidenceBlock / EvidenceSpan`：Workspace 的证据生命周期和可回溯证据单元。
-- `Claim / GroundingRun / ClaimAdmissionDecision`：Workspace 的 Claim 增强、准入和状态推进。
+- `Artifact / EvidenceBlock / EvidenceSpan`：Personal Knowledge 的证据生命周期和可回溯证据单元。
+- `Claim / GroundingRun / ClaimAdmissionDecision`：Personal Knowledge 的 Claim 增强、准入和状态推进。
 - `EvidenceRef`：回答引用回到 artifact/block/span 的稳定引用。
 - `Citation`：回答引用。
 - `EvidenceItem`：ask 生成前的统一证据候选。
@@ -505,7 +505,7 @@ ask
 - chunk quality score / retrievable 标记。
 - review card。
 - chunk-level graph sync 状态和 durable worker queue 入队。
-- Workspace 生命周期写入，生成 Artifact / EvidenceBlock / EvidenceSpan / Claim / Grounding / Admission / ProjectionJob 等业务状态。
+- Personal Knowledge 生命周期写入，生成 Artifact / EvidenceBlock / EvidenceSpan / Claim / Grounding / Admission / ProjectionJob 等业务状态。
 
 当前仍有限制：
 
@@ -520,7 +520,7 @@ ask
 - workflow-step 化的 `retrieve / compose / verify / repair`。
 - `AskRunContext` 承载 retrieve / compose / verify / repair 四阶段中间状态。
 - query understanding + retrieval plan。
-- workspace / graph / structural / local / episodic / reflection / web 多源召回。
+- personal knowledge / graph / structural / local / episodic / reflection / web 多源召回。
 - EvidenceEngine 统一 source/evidence assembly。
 - EvidenceItem 归一。
 - RRF fusion。
@@ -530,16 +530,16 @@ ask
 - ContextPack 预算控制。
 - verifier + retry。
 - 显式 ask-repair，负责 optional contrastive retrieval、web fallback 和最终证据不足标注。
-- Workspace Claim 冲突诊断会以 evidence metadata 进入 Ask；`potential_conflict` 不会直接替代回答或跳过 verifier。
+- Personal Knowledge Claim 冲突诊断会以 evidence metadata 进入 Ask；`potential_conflict` 不会直接替代回答或跳过 verifier。
 
 当前仍有限制：
 
 - rerank、MMR、多样性和反证检索仍有提升空间。
-- claim grounding 已统一进入 EvidenceEngine / Workspace grounding 边界；复杂蕴含仍依赖 verifier 与 structured judge 的质量。
-- Workspace evidence coverage 已进入回答和 e2e，但 coverage 目前主要依据选中 evidence 与可用 span/block 的覆盖关系，后续还可以进一步结合问题分解后的子问题覆盖率。
+- claim grounding 已统一进入 EvidenceEngine / Personal Knowledge grounding 边界；复杂蕴含仍依赖 verifier 与 structured judge 的质量。
+- Personal Knowledge evidence coverage 已进入回答和 e2e，但 coverage 目前主要依据选中 evidence 与可用 span/block 的覆盖关系，后续还可以进一步结合问题分解后的子问题覆盖率。
 
 ## 面试表述
 
 可以这样说：
 
-> Capture 是 Governed Procedure，Ask 是开放 Agent Loop。`knowledge_ingest` 根据文本、链接或文件资源物化 acquisition/ingest 节点，底层统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync，同时进入 Workspace 的 Artifact/Evidence、Claim/Grounding/Admission/Conflict 生命周期。Ask 由 Executive 逐轮产生 retrieve/compose/verify/repair 动作，复用 LangGraph step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和 workspace/graph/local/web 多源召回，并交给 `EvidenceEngine` 做证据归一、RRF、压缩、rerank、ContextPack 和 citation/match；compose 只基于投影上下文生成，verify/repair 通过 VerificationGap 驱动下一轮策略。
+> Capture 是 Governed Procedure，Ask 是开放 Agent Loop。`knowledge_ingest` 根据文本、链接或文件资源物化 acquisition/ingest 节点，底层统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync，同时进入 Personal Knowledge 的 Artifact/Evidence、Claim/Grounding/Admission/Conflict 生命周期。Ask 由 Executive 逐轮产生 retrieve/compose/verify/repair 动作，复用 LangGraph step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和 personal knowledge/graph/local/web 多源召回，并交给 `EvidenceEngine` 做证据归一、RRF、压缩、rerank、ContextPack 和 citation/match；compose 只基于投影上下文生成，verify/repair 通过 VerificationGap 驱动下一轮策略。

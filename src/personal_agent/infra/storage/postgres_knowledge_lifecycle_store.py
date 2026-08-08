@@ -16,7 +16,7 @@ from personal_agent.application.knowledge_lifecycle import (
     KnowledgeRestoreOperationView,
     KnowledgeRestoreReceipt,
 )
-from personal_agent.application.workspace.models import (
+from personal_agent.application.knowledge.models import (
     Claim,
     KnowledgeItem,
     KnowledgeStateEvent,
@@ -37,11 +37,11 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS knowledge_lifecycle_operations (
+                    CREATE TABLE IF NOT EXISTS personal_knowledge_lifecycle_operations (
                         command_id TEXT PRIMARY KEY,
                         kind TEXT NOT NULL CHECK (kind IN ('delete', 'restore')),
                         idempotency_key TEXT NOT NULL,
-                        workspace_id TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
                         user_id TEXT NOT NULL,
                         target_ref TEXT NOT NULL,
                         command_digest TEXT NOT NULL UNIQUE,
@@ -54,10 +54,10 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                         UNIQUE (user_id, kind, idempotency_key)
                     );
                     CREATE INDEX IF NOT EXISTS knowledge_lifecycle_target_idx
-                    ON knowledge_lifecycle_operations
-                        (workspace_id, user_id, kind, target_ref, created_at DESC);
+                    ON personal_knowledge_lifecycle_operations
+                        (owner_id, user_id, kind, target_ref, created_at DESC);
 
-                    CREATE TABLE IF NOT EXISTS knowledge_lifecycle_receipts (
+                    CREATE TABLE IF NOT EXISTS personal_knowledge_lifecycle_receipts (
                         receipt_id TEXT PRIMARY KEY,
                         command_id TEXT NOT NULL UNIQUE,
                         kind TEXT NOT NULL CHECK (kind IN ('delete', 'restore')),
@@ -91,11 +91,11 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
 
                 cur.execute(
                     """
-                    SELECT state FROM workspace_knowledge_items
-                    WHERE knowledge_item_id = %s AND workspace_id = %s AND user_id = %s
+                    SELECT state FROM knowledge_items
+                    WHERE knowledge_item_id = %s AND owner_id = %s AND user_id = %s
                     FOR SHARE
                     """,
-                    (command.target_note_id, command.workspace_id, command.user_id),
+                    (command.target_note_id, command.owner_id, command.user_id),
                 )
                 target = cur.fetchone()
                 if target is None:
@@ -228,7 +228,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                 )
                 if (
                     delete_row is None
-                    or delete_row["workspace_id"] != command.workspace_id
+                    or delete_row["owner_id"] != command.owner_id
                 ):
                     raise KnowledgeDeleteNotFound(
                         "delete command not found in caller scope"
@@ -243,13 +243,13 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                 )
                 cur.execute(
                     """
-                    SELECT state FROM workspace_knowledge_items
-                    WHERE knowledge_item_id = %s AND workspace_id = %s AND user_id = %s
+                    SELECT state FROM knowledge_items
+                    WHERE knowledge_item_id = %s AND owner_id = %s AND user_id = %s
                     FOR SHARE
                     """,
                     (
                         delete_command.target_note_id,
-                        command.workspace_id,
+                        command.owner_id,
                         command.user_id,
                     ),
                 )
@@ -364,11 +364,11 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     ) -> KnowledgeDeleteReceipt:
         cur.execute(
             """
-            SELECT payload FROM workspace_knowledge_items
-            WHERE knowledge_item_id = %s AND workspace_id = %s AND user_id = %s
+            SELECT payload FROM knowledge_items
+            WHERE knowledge_item_id = %s AND owner_id = %s AND user_id = %s
             FOR UPDATE
             """,
-            (command.target_note_id, command.workspace_id, command.user_id),
+            (command.target_note_id, command.owner_id, command.user_id),
         )
         item_row = cur.fetchone()
         if item_row is None:
@@ -398,11 +398,11 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         for claim_id in item.claim_ids:
             cur.execute(
                 """
-                SELECT payload FROM workspace_claims
-                WHERE claim_id = %s AND workspace_id = %s AND user_id = %s
+                SELECT payload FROM knowledge_claims
+                WHERE claim_id = %s AND owner_id = %s AND user_id = %s
                 FOR UPDATE
                 """,
-                (claim_id, command.workspace_id, command.user_id),
+                (claim_id, command.owner_id, command.user_id),
             )
             claim_row = cur.fetchone()
             if claim_row is None:
@@ -425,7 +425,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
             state_event_ids.append(self._record_state_event(
                 cur,
                 command_id=command.command_id,
-                workspace_id=command.workspace_id,
+                owner_id=command.owner_id,
                 target_type=target_type,
                 target_id=target_id,
                 from_state=previous_state,
@@ -460,7 +460,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
             kind="delete",
             user_id=command.user_id,
         )
-        if delete_row is None or delete_row["workspace_id"] != command.workspace_id:
+        if delete_row is None or delete_row["owner_id"] != command.owner_id:
             raise KnowledgeDeleteNotFound(
                 "delete command not found in restore scope"
             )
@@ -471,13 +471,13 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
 
         cur.execute(
             """
-            SELECT payload FROM workspace_knowledge_items
-            WHERE knowledge_item_id = %s AND workspace_id = %s AND user_id = %s
+            SELECT payload FROM knowledge_items
+            WHERE knowledge_item_id = %s AND owner_id = %s AND user_id = %s
             FOR UPDATE
             """,
             (
                 delete_receipt.deleted_note_id,
-                command.workspace_id,
+                command.owner_id,
                 command.user_id,
             ),
         )
@@ -512,11 +512,11 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         for claim_id in delete_receipt.affected_claim_ids:
             cur.execute(
                 """
-                SELECT payload FROM workspace_claims
-                WHERE claim_id = %s AND workspace_id = %s AND user_id = %s
+                SELECT payload FROM knowledge_claims
+                WHERE claim_id = %s AND owner_id = %s AND user_id = %s
                 FOR UPDATE
                 """,
-                (claim_id, command.workspace_id, command.user_id),
+                (claim_id, command.owner_id, command.user_id),
             )
             claim_row = cur.fetchone()
             if claim_row is None:
@@ -550,7 +550,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
             state_event_ids.append(self._record_state_event(
                 cur,
                 command_id=command.command_id,
-                workspace_id=command.workspace_id,
+                owner_id=command.owner_id,
                 target_type=target_type,
                 target_id=target_id,
                 from_state=from_state,
@@ -575,8 +575,8 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     def _insert_operation(cur, *, kind: str, target_ref: str, command) -> None:
         cur.execute(
             """
-            INSERT INTO knowledge_lifecycle_operations (
-                command_id, kind, idempotency_key, workspace_id, user_id,
+            INSERT INTO personal_knowledge_lifecycle_operations (
+                command_id, kind, idempotency_key, owner_id, user_id,
                 target_ref, command_digest, payload, status, created_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'awaiting_confirmation', %s)
             ON CONFLICT DO NOTHING
@@ -585,7 +585,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                 command.command_id,
                 kind,
                 command.idempotency_key,
-                command.workspace_id,
+                command.owner_id,
                 command.user_id,
                 target_ref,
                 command.command_digest,
@@ -604,7 +604,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     ):
         cur.execute(
             """
-            SELECT * FROM knowledge_lifecycle_operations
+            SELECT * FROM personal_knowledge_lifecycle_operations
             WHERE user_id = %s AND kind = %s AND idempotency_key = %s
             FOR UPDATE
             """,
@@ -623,7 +623,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     ):
         suffix = " FOR UPDATE" if lock else ""
         cur.execute(
-            "SELECT * FROM knowledge_lifecycle_operations "
+            "SELECT * FROM personal_knowledge_lifecycle_operations "
             "WHERE command_id = %s AND kind = %s AND user_id = %s" + suffix,
             (command_id, kind, user_id),
         )
@@ -633,7 +633,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     def _reject_operation(cur, command_id: str) -> None:
         cur.execute(
             """
-            UPDATE knowledge_lifecycle_operations
+            UPDATE personal_knowledge_lifecycle_operations
             SET status = 'rejected', decided_at = %s
             WHERE command_id = %s AND status = 'awaiting_confirmation'
             """,
@@ -649,7 +649,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     ) -> None:
         cur.execute(
             """
-            UPDATE knowledge_lifecycle_operations
+            UPDATE personal_knowledge_lifecycle_operations
             SET status = 'executed', confirmation_ref = %s, decided_at = %s
             WHERE command_id = %s AND status = 'awaiting_confirmation'
             """,
@@ -661,7 +661,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         created_at = getattr(receipt, "executed_at", None) or receipt.restored_at
         cur.execute(
             """
-            INSERT INTO knowledge_lifecycle_receipts (
+            INSERT INTO personal_knowledge_lifecycle_receipts (
                 receipt_id, command_id, kind, command_digest, payload, created_at
             ) VALUES (%s, %s, %s, %s, %s, %s)
             """,
@@ -679,7 +679,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     def _receipt_row(cur, command_id: str, kind: str):
         cur.execute(
             """
-            SELECT payload FROM knowledge_lifecycle_receipts
+            SELECT payload FROM personal_knowledge_lifecycle_receipts
             WHERE command_id = %s AND kind = %s
             """,
             (command_id, kind),
@@ -757,7 +757,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     def _update_item(cur, item: KnowledgeItem) -> None:
         cur.execute(
             """
-            UPDATE workspace_knowledge_items
+            UPDATE knowledge_items
             SET state = %s, payload = %s, updated_at = %s
             WHERE knowledge_item_id = %s
             """,
@@ -773,7 +773,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     def _update_claim(cur, claim: Claim) -> None:
         cur.execute(
             """
-            UPDATE workspace_claims
+            UPDATE knowledge_claims
             SET state = %s, payload = %s, updated_at = %s
             WHERE claim_id = %s
             """,
@@ -790,7 +790,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         cur,
         *,
         command_id: str,
-        workspace_id: str,
+        owner_id: str,
         target_type: str,
         target_id: str,
         from_state: str,
@@ -801,7 +801,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
     ) -> str:
         event = KnowledgeStateEvent(
             event_id=_stable_id("ksev", command_id, target_id),
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             target_type=target_type,
             target_id=target_id,
             from_state=from_state,
@@ -813,15 +813,15 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         )
         cur.execute(
             """
-            INSERT INTO workspace_knowledge_state_events
-                (event_id, target_id, workspace_id, to_state, payload, created_at)
+            INSERT INTO knowledge_state_events
+                (event_id, target_id, owner_id, to_state, payload, created_at)
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (event_id) DO NOTHING
             """,
             (
                 event.event_id,
                 event.target_id,
-                event.workspace_id,
+                event.owner_id,
                 event.to_state,
                 Jsonb(event.model_dump(mode="json")),
                 event.created_at,
@@ -861,12 +861,12 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
             return
         cur.execute(
             f"""
-            INSERT INTO knowledge_lifecycle_operations (
-                command_id, kind, idempotency_key, workspace_id, user_id,
+            INSERT INTO personal_knowledge_lifecycle_operations (
+                command_id, kind, idempotency_key, owner_id, user_id,
                 target_ref, command_digest, payload, status, confirmation_ref,
                 created_at, decided_at
             )
-            SELECT command_id, %s, idempotency_key, workspace_id, user_id,
+            SELECT command_id, %s, idempotency_key, owner_id, user_id,
                    {target_column}, execution_command_digest,
                    (payload - 'authorization_digest' - 'execution_command_digest')
                        || jsonb_build_object(
@@ -881,7 +881,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         if self._table_exists(cur, receipt_table):
             cur.execute(
                 f"""
-                INSERT INTO knowledge_lifecycle_receipts (
+                INSERT INTO personal_knowledge_lifecycle_receipts (
                     receipt_id, command_id, kind, command_digest, payload, created_at
                 )
                 SELECT receipt_id, command_id, %s, execution_command_digest,
@@ -897,13 +897,13 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
             )
             cur.execute(
                 """
-                UPDATE knowledge_lifecycle_operations operation
+                UPDATE personal_knowledge_lifecycle_operations operation
                 SET status = 'executed',
                     confirmation_ref = COALESCE(
                         receipt.payload->>'confirmation_ref', ''
                     ),
                     decided_at = receipt.created_at
-                FROM knowledge_lifecycle_receipts receipt
+                FROM personal_knowledge_lifecycle_receipts receipt
                 WHERE operation.command_id = receipt.command_id
                   AND operation.kind = %s
                   AND receipt.kind = %s
@@ -913,7 +913,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         if self._table_exists(cur, event_table):
             cur.execute(
                 f"""
-                UPDATE knowledge_lifecycle_operations operation
+                UPDATE personal_knowledge_lifecycle_operations operation
                 SET status = 'rejected', decided_at = rejected.created_at
                 FROM (
                     SELECT command_id, MAX(created_at) AS created_at
@@ -932,7 +932,7 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         legacy_count = int(cur.fetchone()["count"])
         cur.execute(
             """
-            SELECT COUNT(*) AS count FROM knowledge_lifecycle_operations
+            SELECT COUNT(*) AS count FROM personal_knowledge_lifecycle_operations
             WHERE kind = %s
             """,
             (kind,),

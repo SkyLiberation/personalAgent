@@ -1,7 +1,41 @@
 # Context 工程
 
 本文是当前模型上下文收集、过滤和物化规则的 canonical 文档。Context 是一次模型调用的受控输入，
-不是新的事实库，也不是覆盖 Conversation、Workspace 和 Project 的共享状态对象。
+不是新的事实库，也不是覆盖 Conversation、个人长期知识和 Project 的共享状态对象。
+
+## Visibility 的定义与分层
+
+**结论：当前不存在 workspace visibility 层。资源 Visibility 是 Application 在 retrieval 前，根据
+`AuthenticatedPrincipal`、canonical resource ownership 和当前执行缩权计算出的可见候选集合。**长期个人知识
+直接归属 tenant 内的 principal；Conversation、Execution、Project 和 Task 只关联上下文或执行，不能授予另一用户的资源。
+
+资源侧只有四类边界；每类只控制自己的事实，不能向下游转让决策权：
+
+| 层 | 控制什么 | 不控制什么 | 当前实现状态 |
+| --- | --- | --- | --- |
+| Tenant | 顶层组织隔离、租户级身份与策略边界 | 不直接拥有某个用户的个人知识 | `AuthenticatedPrincipal.tenant_id` 是 typed 边界；Application 校验 tenant 一致性 |
+| Principal / User | 操作者身份，以及个人长期知识、Artifact 和偏好的 canonical owner | 不拥有另一 principal 的资源，也不等于一次 Conversation | API key 解析为 `AuthenticatedPrincipal(tenant_id,user_id)`；资源 owner 使用同一 typed principal |
+| Thread / Conversation | 本次会话的 committed messages、Observation 和会话内引用 | 不授予长期知识，也不改变资源 owner | Interaction journal 按 conversation/thread 恢复；跨 Conversation 的长期知识仍按 principal 读取 |
+| Execution / Project / Task | 当前运行可使用的资源、Tool、预算和父级关联 | 不成为资源 owner，也不能扩大 principal 原有权限 | `ExecutionScope` 绑定 principal、execution 与可选 project/thread/task；授权只能保持或缩小 |
+
+存储中的内部 owner key 由认证 principal 确定性派生，不是调用方可选择的产品 scope。HTTP 请求不能通过提交
+`owner_id` 或其他分区 ID 改写资源归属。未来若真实用户目标要求多人共享或同一用户隔离多个知识集合，必须先用
+正式入口执行同目标 baseline 并证明当前失败，再引入有明确 owner、membership 和生命周期的业务 Aggregate；不得
+恢复一个无场景的通用 workspace。
+
+能力侧是另一条正交链，禁止和资源归属混为一个 `visibility` 字段：
+
+| 阶段 | 回答的问题 | Owner |
+| --- | --- | --- |
+| Definition / Availability | 能力是否注册、远端是否 discovery、Provider 当前是否可用 | Application capability owner / Runtime observation |
+| Exposure | 这种 Agent 是否应该看到 schema，例如 `public_agent`、`scoped_agent`、`workflow_activity` | Tool/Application definition |
+| Authorization | 当前 Principal 在当前 scope 是否允许调用 | Policy / Admission / Gateway |
+| Requirement Retrieval | 已授权能力中哪些与当前目标相关 | Application retrieval；只能缩小集合 |
+| Budget Materialization | 哪些摘要、schema 和事实真正进入本轮 LLM Context | Context builder |
+
+`exposure=public_agent` 不等于所有用户获权，Provider available 不等于获权，retrieval 排名也不等于
+获权。原文“visibility 必须先于 retrieval”具体指：**先由前三类权威事实产生 authorized set，再在
+集合内按需求检索；不能先全局召回后过滤。**
 
 ## 四阶段协议
 
@@ -14,16 +48,16 @@
 
 ### Visibility
 
-入口解析 authenticated principal 和 tenant/workspace/user/thread/task scope。Repository、Tool、
-Artifact、Memory 和 Retrieval Adapter 必须先按 scope 过滤；禁止先取回全部内容再让 Prompt 隐藏
-不可见数据。
+入口先解析 authenticated principal；Application 再从 canonical ownership 和 policy 得到可见资源集合，并用
+`ExecutionScope` 表达本次运行的关联与缩权。Repository、Tool、Artifact、Memory 和 Retrieval Adapter 必须先在
+这个授权集合内过滤；禁止相信请求体中的裸 owner key，也禁止先取回全部内容再让 Prompt 隐藏不可见数据。
 
 ### Requirement Retrieval
 
 Application 根据当前用户目标调用明确能力：
 
 - Conversation 历史：读取 committed message/observation；
-- Workspace/local：检索可见 Artifact、EvidenceSpan、Claim 或 Note；
+- 个人长期知识/local：检索当前 principal 拥有的 Artifact、EvidenceSpan、Claim 或 Note；
 - Graph：检索 fact、edge、episode 和 citation ref；
 - Web/Tool：只经过 Policy/Gateway 获取当前执行结果；
 - Investigation：读取 Project definition、accepted plan、journal 和 ArtifactRef。
@@ -55,13 +89,48 @@ committed user/assistant messages
 历史 assistant reply 只用于指代和会话连续性，不能作为事实证据。Tool/Agent observation 必须保留
 typed status、artifact/receipt ref 和错误分类；不能只压成一段无法区分来源的自然语言。
 
+### 单次 Observation 的体积边界
+
+**回合 token 上限不约束单次工具返回，因此单次体积必须由独立机制执行。** owner 是
+`application/conversation/observation_bounds.py`，语义与判据见
+[ADR 0013](../adr/0013-bounded-observation-and-offloaded-read.md)：
+
+| 事实 | 写入口 |
+| --- | --- |
+| 一次 Observation 能进入 Context 的体积（`MAX_OBSERVATION_PAYLOAD_CHARS = 20_000`） | `bound_observation_payload` |
+| 被卸载文本的形态（原始串而非序列化结果） | `select_offload_text` |
+| 某个窗口的内容（命中行带 before=2 / after=4，1 起计行号） | `excerpt_payload_text` |
+| 「读哪一段」 | 模型，经 `read_action_output` 的 `keyword` / `start_line` |
+| 「未读完能否以非 answer 收尾」 | `ConversationService._unread_offloaded_resource` |
+
+被界定的 Observation 回带 `retrieval.omitted_chars`、`original_chars` 与 `resource_ref`，
+所以「这个远端输出读过没有」是对 committed inputs 的纯函数判定，不需要另存已读集合。
+卸载失败时 `unavailable_reason` 可见，不静默。
+
+### 上下文构成度量
+
+`TurnContextComposition` 逐轮记录**四个互不重叠且加总等于该轮实际发出输入**的字符分段——
+capability 投影、system prompt 其余部分、committed messages、typed inputs——外加 Provider
+报告的 `input_tokens` 与 `turn_index`，随 `InteractionTrace` 生命周期存在。
+
+三条边界使它属于 Observability 而非产品行为：
+
+- 记录在 `generate` 调用**之后**发生，不参与 `visible_messages` 组装，`context_projection_ref`
+  的 digest 不变；
+- 用字符而非 tokenizer：字符由发出的字符串直接派生，tokenizer 会引入第二套 Provider 相关口径；
+- 不进入任何终止判据、预算判定或 Admission 分支。
+
+它可由 committed inputs 确定性重算，不构成第二写入口。**当前测得数据及由此关闭的候选机制见
+[Context 物化度量与逐出](../future/context-materialization-measurement-and-eviction.md)**；
+本文不复制那份数据。
+
 普通 Conversation 不创建 `TaskContract`、`GoalGraph` 或通用 checkpoint。需要跨进程维护动态
 交付义务的 Investigation Project 使用自己的 aggregate 和 journal，不把 Project state 镜像回
 Conversation。
 
 ## Ask 上下文
 
-Ask 的 retrieval stage 将 workspace、local、graph 和 web 候选归一为 `EvidenceItem`。Evidence
+Ask 的 retrieval stage 将 personal knowledge、local、graph 和 web 候选归一为 `EvidenceItem`。Evidence
 Engine 负责 canonical 去重、融合、rerank 和 ContextPack；compose 只读取物化后的证据，Ask
 Verifier 再判断候选答案是否被证据支持。
 
@@ -75,7 +144,7 @@ Question + visible conversation hints
   -> verification / bounded repair
 ```
 
-`WorkspaceRetriever` 只调用 evidence selection；Graph provider 只返回
+`KnowledgeRetriever` 只调用 evidence selection；Graph provider 只返回
 `GraphRetrievalResult`。任何 retriever 都不能在内部生成一个候选答案再伪装成 evidence。
 
 ## 上下文腐化防护
@@ -96,8 +165,10 @@ Question + visible conversation hints
 | 数据 | 是否持久化 | 原因 |
 | --- | --- | --- |
 | Interaction committed input | 是 | Conversation 恢复与审计 |
-| Workspace Claim/EvidenceSpan | 是 | 长期知识事实 |
+| Personal Knowledge Claim/EvidenceSpan | 是 | 长期知识事实 |
 | Project journal/ArtifactRef | 是 | durable execution |
+| 被卸载的 Observation 正文 | 是，作为 Artifact | 本次交互内需可重读；`producer_key` 幂等，身份是 `ResourceRef` |
+| `TurnContextComposition` | 是，随 `InteractionTrace` | 与 committed inputs 同生命周期，可由其重算 |
 | Retrieval candidate pool | 默认否 | 可重建的单次运行视图 |
 | LLM Context/Prompt | 默认否 | 临时物化；必要时只保存 digest/ref |
 | embedding / graph index | 可持久化投影 | 可失效并从 canonical source 重建 |

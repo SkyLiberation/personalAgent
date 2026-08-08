@@ -85,7 +85,7 @@ def test_declared_no_impact_selects_nothing() -> None:
 
 def test_longest_prefix_wins_over_package_rule() -> None:
     """A specific file rule must override its enclosing package rule."""
-    rule = match_rule("src/personal_agent/application/workspace/answer_verifier.py")
+    rule = match_rule("src/personal_agent/application/knowledge/answer_verifier.py")
     assert rule is not None
     assert rule.case_ids == frozenset({"E20"})
 

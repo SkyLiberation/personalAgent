@@ -815,7 +815,7 @@ class EvidenceAdmission:
         )
         scope_matches = (
             evidence.artifact_ref is None
-            or evidence.artifact_ref.owner_scope == project.definition.security_scope
+            or evidence.artifact_ref.owner == project.definition.owner
         )
         admitted = known_execution and scope_matches and bool(evidence.content_digest)
         reason = ""

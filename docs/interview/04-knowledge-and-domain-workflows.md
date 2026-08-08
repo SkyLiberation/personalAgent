@@ -5,8 +5,11 @@
 
 ## 1. 知识模型为什么不只是 Document + Embedding
 
-Document + Embedding 两层模型失效在一个具体地方：**它无法表达 supersede 与 conflict**。用户纠正
-一条旧事实时，只能覆盖或删除，于是「旧事实曾经存在」和「谁在何时修正」都查不到。
+Document + Embedding 两层模型失效在一个具体地方：**它没有可寻址的陈述单元，state 无处附着**。
+存储单元是 document/chunk，检索单元是相似度排序后的 chunk，于是用户纠正一条旧事实时只有三个
+选项：覆盖（旧事实不再存在）、删除重插（同样丢历史，且没有 actor）、两条并存（矛盾退化为排序
+意外，而被取代的旧措辞在向量空间里往往比纠正后的说法更接近原问题）。真正的前提是「可寻址条目 +
+状态标签」——OpenClaw 在纯 Markdown 形态下也满足了这个前提，所以问题不在于用不用向量库。
 
 系统需要回答三个问题：
 
@@ -54,7 +57,7 @@ facts 重建，投影失败不能覆盖 Claim。
 | 事实 | Owner / 唯一写入口 |
 | --- | --- |
 | 原始 Artifact | ArtifactService + Artifact Store |
-| Workspace Evidence/Claim | WorkspaceService ingestion transaction |
+| Personal Knowledge Evidence/Claim | KnowledgeService ingestion transaction |
 | Conversation Interaction | ConversationService + Interaction journal |
 | Delete/Restore Command/Event/Receipt | KnowledgeLifecycleService + lifecycle store |
 | ResearchRun/Digest/Delivery | ResearchService + research store |
@@ -94,7 +97,7 @@ Repository 只持久化 Application/Domain 认可的事实，不能隐式创建�
 典型路径：
 
 ```text
-workspace_id + question
+authenticated principal + authorized internal knowledge scope + question
   -> Visibility filtering
   -> Requirement retrieval
   -> Evidence selection
@@ -105,10 +108,13 @@ workspace_id + question
 
 关键不变量：
 
-- 先按 user/workspace scope 过滤，再做语义检索；
+- 先从 authenticated principal 与 canonical ownership/policy 得到 authorized set，再做语义检索；
+  当前 `owner_id` 只证明分区，membership/role 边界尚未落地，见
+  [Visibility 分层](03-capability-axes.md#先定义-visibility再谈-retrieval)；
 - Citation 必须回到实际 Evidence；
 - Ask 是读取行为，不增加 Claim；
-- 其他 workspace 的内容不能进入 Context；
+- authorized set 外的用户/资源内容不能进入 Context；当前不同 `owner_id` 的不串读只属于分区证据，
+  不是 Personal Knowledge membership 证据；
 - 检索结果为空时不能使用不可见数据补答案。
 
 ## 5. Ask 与 Save 为什么分离
@@ -167,7 +173,7 @@ Application 根据明确的 user/scope/note identity 创建 immutable Command：
 ```text
 DeleteCommand
   - command_id
-  - user/workspace scope
+  - user/personal knowledge scope
   - target identity
   - reason
   - command digest
@@ -184,14 +190,14 @@ prepare 只产生待确认事实，不删除知识。
 
 执行产生：
 
-- Workspace KnowledgeStateEvent；
+- Personal Knowledge KnowledgeStateEvent；
 - Receipt。
 
 同一 digest 再次执行时返回已有 Receipt。
 
 ### 7.4 Restore
 
-Restore 不是把 DeleteCommand 的 status 改回去，而是创建新的 RestoreCommand，执行后产生 Restore Receipt 与 Workspace 状态事件。原删除 Operation/Receipt 仍保留。
+Restore 不是把 DeleteCommand 的 status 改回去，而是创建新的 RestoreCommand，执行后产生 Restore Receipt 与 Personal Knowledge 状态事件。原删除 Operation/Receipt 仍保留。
 
 ## 8. Review 与 Knowledge Maintenance
 
@@ -276,9 +282,9 @@ Worker queue 负责：
 
 ## 11. MCP 与 A2A 为什么不成为事实 Owner
 
-MCP、Web Search 和 GPT Researcher 返回的是外部 Observation 或 Artifact，不是 Workspace Claim。
+MCP、Web Search 和 GPT Researcher 返回的是外部 Observation 或 Artifact，不是 Personal Knowledge Claim。
 
-如果用户明确保存，仍需经过 Workspace ingestion/write path。Adapter 不能因为远端结果“看起来可信”就直接写入长期知识。
+如果用户明确保存，仍需经过 Personal Knowledge ingestion/write path。Adapter 不能因为远端结果“看起来可信”就直接写入长期知识。
 
 同理，A2A Artifact 只能支撑父 Agent 综合；它不能替代父级 FinalMessage、Verification 或 Domain Completion。
 
@@ -303,7 +309,7 @@ Project 只保存 ArtifactRef；Artifact 正文仍由 ArtifactService 持有。T
 | 边界 | 当前实现 | 恢复语义 |
 | --- | --- | --- |
 | 普通 Interaction | FileInteractionJournal | 从 committed inputs 重建 transient context |
-| Workspace/Knowledge | PostgresWorkspaceStore | 从 Artifact/Evidence/Claim 恢复 |
+| Personal Knowledge/Knowledge | PostgresKnowledgeStore | 从 Artifact/Evidence/Claim 恢复 |
 | Delete/Restore | PostgresKnowledgeLifecycleStore | Command/Event/Receipt digest replay |
 | Research | PostgresResearchStore + worker queue | Run/Subscription/Delivery lifecycle |
 | Investigation Project | PostgresInvestigationProjectStore + investigation queue | 从 definition/append-only journal 重建 Plan、ready set、verification 和 completion |

@@ -16,9 +16,6 @@ from personal_agent.application.conversation import (
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
 from personal_agent.adapters.web.routes._shared import resolve_requested_principal
-from personal_agent.kernel.contracts.scope import (
-    SecurityScope,
-)
 
 
 class ConversationTurnRequest(BaseModel):
@@ -29,7 +26,6 @@ class ConversationTurnRequest(BaseModel):
 
 
 class ConversationKnowledgeSaveDecisionRequest(BaseModel):
-    workspace_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
     decision: Literal["confirm", "reject"]
     command_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -65,10 +61,6 @@ def register_conversation_routes(
                 messages=body.messages,
                 interaction_run_ref=body.interaction_run_ref,
                 principal=principal,
-                security_scope=SecurityScope(
-                    tenant_id=principal.tenant_id,
-                    workspace_id=body.conversation_id,
-                ),
                 source_platform="web",
             )
         except ValueError as exc:
@@ -99,10 +91,6 @@ def register_conversation_routes(
             return service.decide_conversation_knowledge_save(
                 interaction_run_ref=interaction_run_ref,
                 principal=principal,
-                security_scope=SecurityScope(
-                    tenant_id=principal.tenant_id,
-                    workspace_id=body.workspace_id,
-                ),
                 decision=body.decision,
                 command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,

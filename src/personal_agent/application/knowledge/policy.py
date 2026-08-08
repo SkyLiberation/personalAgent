@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from personal_agent.application.workspace.models import (
+from personal_agent.application.knowledge.models import (
     Claim,
     ClaimAdmissionDecision,
     DecisionEffect,
@@ -111,7 +111,7 @@ class ClaimAdmissionPolicy:
         retention_policy: str | None = None,
     ) -> ClaimAdmissionDecision:
         return ClaimAdmissionDecision(
-            workspace_id=claim.workspace_id,
+            owner_id=claim.owner_id,
             claim_id=claim.claim_id,
             admission_result=admission_result,  # type: ignore[arg-type]
             reason=reason,

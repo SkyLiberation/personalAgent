@@ -1,6 +1,7 @@
 # personalAgent 面试材料索引
 
 本目录只描述截至 2026-08-03 已落地并有代码或 E2E 证据的当前架构，不把未来设计写成当前事实。
+尚未证明的用户场景只能放在明确标记的“待验证场景/证据缺口”中，不能进入当前能力矩阵或发布声明。
 所有文档遵守 [面试文档规范](00-writing-spec.md)。
 
 面试时先讲一句话：
@@ -28,9 +29,9 @@ archive 与工作树 dirty，见 [05 证据与发布](05-evidence-and-release.md
 | [00 规范](00-writing-spec.md) | 写作与举证纪律 | 新增或修改本目录任何文档前 |
 | [01 项目介绍](01-project-story.md) | 讲稿与白板顺序 | 准备开场 30 秒 / 2 分钟 / 5 分钟 |
 | [02 请求走查](02-request-walkthroughs.md) | 八条真实请求的生产路径 | 面试官问「一个请求怎么跑」 |
-| [03 能力轴](03-capability-axes.md) | **主文档**：12 轴理念、实现、证据、边界 | 深度技术讨论；按岗位选三轴深讲 |
+| [03 能力轴](03-capability-axes.md) | **主文档**：12 轴理念、Visibility 分层、实现、证据、边界 | 深度技术讨论；按岗位选三轴深讲 |
 | [04 知识与领域 Workflow](04-knowledge-and-domain-workflows.md) | 知识域与固定事务细节 | 面试官深挖知识模型或 Command 链 |
-| [05 证据与发布](05-evidence-and-release.md) | 证据编号、archive、分级、release gate | 任何涉及「测过没有」的问题 |
+| [05 证据与发布](05-evidence-and-release.md) | 证据编号、archive、Personal Knowledge 未证明边界、分级、release gate | 任何涉及「测过没有」的问题 |
 | [06 追问速答](06-qa-and-tradeoffs.md) | 现场答话稿 | 临场速查；不展开实现细节 |
 
 事实上下游关系：03 是理念与举证的主文档，01/02 是它的入口，04 是细节延伸，05 是证据权威源，
@@ -75,7 +76,7 @@ archive 与工作树 dirty，见 [05 证据与发布](05-evidence-and-release.md
    - 当前 dirty revision 与 package DAG gate 状态。
 
 6. [高频追问速答与取舍](06-qa-and-tradeoffs.md)
-   - 定位、治理、知识验证、取舍四组共 28 个速答；
+   - 定位、治理、知识验证、取舍四组共 30 个速答；
    - 与 RAG Bot、Workflow、LangGraph、现代 Agent Harness 的关系；
    - 当前缺口、一周优先级与失败定位清单。
 

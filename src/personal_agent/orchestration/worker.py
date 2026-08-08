@@ -10,7 +10,7 @@ from personal_agent.application.worker_queue import WorkerTask
 from personal_agent.application.investigation_project import (
     ProcessInvestigationProject,
 )
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, SecurityScope
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 logger = logging.getLogger(__name__)
 
@@ -144,19 +144,14 @@ class WorkflowWorker:
     def _handle_investigation_project(self, task: WorkerTask) -> bool:
         project_id = str(task.payload.get("project_id") or "")
         tenant_id = str(task.payload.get("tenant_id") or "")
-        workspace_id = str(task.payload.get("workspace_id") or "")
         user_id = str(task.payload.get("user_id") or "")
-        if not all((project_id, tenant_id, workspace_id, user_id)):
+        if not all((project_id, tenant_id, user_id)):
             return False
         self.runtime.investigation_project_service.process(
             ProcessInvestigationProject(
                 principal=AuthenticatedPrincipal(
                     tenant_id=tenant_id,
                     user_id=user_id,
-                ),
-                security_scope=SecurityScope(
-                    tenant_id=tenant_id,
-                    workspace_id=workspace_id,
                 ),
                 project_id=project_id,
             )

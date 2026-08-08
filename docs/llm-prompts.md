@@ -62,11 +62,11 @@ Executive 和 verifier 的任务态 prompt 在各自模块中动态组装，因�
 - `thread_context_compression.user`
 - `graphiti.custom_extraction`
 
-Thread prompt 只压缩会话上下文；Graphiti prompt 只影响实体关系抽取，不替代 Workspace admission 或 Goal verification。
+Thread prompt 只压缩会话上下文；Graphiti prompt 只影响实体关系抽取，不替代 Personal Knowledge admission 或 Goal verification。
 
 ## 非 Registry 决策
 
-Workspace semantic extraction/relation judge、Research extraction 等领域模块也使用 strict `StructuredModelRequest`。它们的 schema 与 validator 位于对应领域模块，原因是输出契约属于领域模型，而不是通用 Agent 路由。
+Personal Knowledge semantic extraction/relation judge、Research extraction 等领域模块也使用 strict `StructuredModelRequest`。它们的 schema 与 validator 位于对应领域模块，原因是输出契约属于领域模型，而不是通用 Agent 路由。
 
 ## 已删除 Prompt
 

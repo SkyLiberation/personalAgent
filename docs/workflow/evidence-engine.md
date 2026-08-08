@@ -105,16 +105,16 @@ ResearchSource
 
 这样 web result、research source、note/chunk、graph fact、episode memory 最终都能进入同一套 `EvidenceItem` 语言。
 
-Workspace 侧在 Ask 中不是直接调用 `EvidenceEngine.sources_to_evidence()`，而是由 `WorkspaceRetriever` 将 EvidenceSpan / Claim / conflict diagnostics 转成同一组运行时对象：
+Personal Knowledge 侧在 Ask 中不是直接调用 `EvidenceEngine.sources_to_evidence()`，而是由 `KnowledgeRetriever` 将 EvidenceSpan / Claim / conflict diagnostics 转成同一组运行时对象：
 
 ```text
-Workspace Artifact / EvidenceBlock / EvidenceSpan / Claim / KnowledgeRelation
-  -> EvidenceItem(source_type="note", metadata.workspace_id / artifact_id / evidence_span_id / claim_ids / conflict diagnostics)
-  -> Citation(source_type="workspace", metadata.evidence_ref)
-  -> KnowledgeNote(source.type="workspace_evidence")
+Personal Knowledge Artifact / EvidenceBlock / EvidenceSpan / Claim / KnowledgeRelation
+  -> EvidenceItem(source_type="note", metadata.owner_id / artifact_id / evidence_span_id / claim_ids / conflict diagnostics)
+  -> Citation(source_type="personal knowledge", metadata.evidence_ref)
+  -> KnowledgeNote(source.type="knowledge_evidence")
 ```
 
-因此 Workspace 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 Ask verifier，不会绕过 EvidenceEngine 直接生成最终回答。`WorkspaceRetriever` 调用 `WorkspaceService.select_evidence()`，该边界不生成或验证 Workspace Answer；只有正式 direct Workspace Ask 才调用 `answer_with_evidence()` 并返回独立 `verification`。进入通用 Ask 时，Claim 只作为 metadata / element_ids 参与，最终证据 id 对齐 `EvidenceSpan`，避免把 Claim statement 当作原文证据注入。
+因此 Personal Knowledge 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 Ask verifier，不会绕过 EvidenceEngine 直接生成最终回答。`KnowledgeRetriever` 调用 `KnowledgeService.select_evidence()`，该边界不生成或验证 Personal Knowledge Answer；只有正式 direct Personal Knowledge Ask 才调用 `answer_with_evidence()` 并返回独立 `verification`。进入通用 Ask 时，Claim 只作为 metadata / element_ids 参与，最终证据 id 对齐 `EvidenceSpan`，避免把 Claim statement 当作原文证据注入。
 
 Graph provider 同样只允许返回 `GraphRetrievalResult` 中的 fact、edge、episode、note 和 citation
 引用。Provider synthesized answer 不属于 Evidence，禁止转换为 `graph_fact`；当前 Microsoft
@@ -247,8 +247,8 @@ RetrievalStage._assemble_context(...)
   -> EvidenceEngine.assemble_context(...)
 AnswerVerifier._grounding_checks(...)
   -> EvidenceEngine.verify_claims(...)
-WorkspaceRetriever
-  -> Workspace EvidenceSpan / Claim
+KnowledgeRetriever
+  -> Personal Knowledge EvidenceSpan / Claim
   -> EvidenceItem / Citation(EvidenceRef) / KnowledgeNote
 WebRetriever
   -> SourceDocument
@@ -257,12 +257,12 @@ WebRetriever
 
 职责边界：
 
-- `RetrievalCoordinator` 负责问答侧的多源召回控制流，包括 workspace、graph、local、episodic、reflection、web。
+- `RetrievalCoordinator` 负责问答侧的多源召回控制流，包括 personal knowledge、graph、local、episodic、reflection、web。
 - `EvidenceEngine` 负责召回之后的证据装配和选择。
 - `GenerationStage` 只基于 `ContextPack` 生成答案。
 - `VerificationStage` 通过 verifier 间接复用 `EvidenceEngine.verify_claims()`。
 - `RepairStage` 负责反证补充或 web fallback，再复用同一个 evidence assembly。
-- `WorkspaceService` 负责 Artifact/Evidence/Claim 生命周期、准入、冲突和投影任务；EvidenceEngine 只消费它投影出的运行时 evidence。
+- `KnowledgeService` 负责 Artifact/Evidence/Claim 生命周期、准入、冲突和投影任务；EvidenceEngine 只消费它投影出的运行时 evidence。
 
 ## Research 如何接入
 
@@ -361,9 +361,9 @@ false supported rate
 
 同一批 source 同时进入 ask verifier 和 research digest verifier 时，support 判断应该一致。这是抽出 `EvidenceEngine` 的核心收益之一。
 
-### Workspace Coverage Eval
+### Personal Knowledge Coverage Eval
 
-Workspace 相关 e2e 还会检查：
+Personal Knowledge 相关 e2e 还会检查：
 
 - citation 是否能解析到 artifact/block/span。
 - 无证据回答是否输出 `evidence_coverage=none`。

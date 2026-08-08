@@ -55,9 +55,8 @@ from personal_agent.domain.investigation_project import (
     canonical_digest,
 )
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 
 
@@ -95,10 +94,6 @@ def _project_with_frozen_execution() -> tuple[
         principal=AuthenticatedPrincipal(
             tenant_id="tenant-1",
             user_id="user-1",
-        ),
-        security_scope=SecurityScope(
-            tenant_id="tenant-1",
-            workspace_id="workspace-1",
         ),
         title="Release investigation",
         goal="Find a formal release change.",
@@ -265,8 +260,7 @@ def test_execution_proposer_receives_durable_local_admission_feedback() -> None:
         frozen,
         evidence_material=(),
         execution_scope=ExecutionScope(
-            security_scope=project.definition.security_scope,
-            principal_id=project.definition.principal.user_id,
+            principal=project.definition.principal,
             thread_id=project.definition.project_id,
             task_id=frozen.logical_subgoal_id,
             project_id=project.definition.project_id,
@@ -386,8 +380,7 @@ def test_execution_proposer_excludes_previously_failed_capture_url() -> None:
             ),
         ),
         execution_scope=ExecutionScope(
-            security_scope=project.definition.security_scope,
-            principal_id=project.definition.principal.user_id,
+            principal=project.definition.principal,
             thread_id=project.definition.project_id,
             task_id=capture.logical_subgoal_id,
             project_id=project.definition.project_id,
@@ -430,8 +423,7 @@ def test_subgoal_verifier_rejects_all_insufficient_observations_as_success() -> 
         (),
         evidence_material=(),
         execution_scope=ExecutionScope(
-            security_scope=project.definition.security_scope,
-            principal_id=project.definition.principal.user_id,
+            principal=project.definition.principal,
             thread_id=project.definition.project_id,
             task_id=frozen.logical_subgoal_id,
             project_id=project.definition.project_id,
@@ -890,8 +882,7 @@ def test_execution_admission_rejects_exact_replay_of_unverified_tool_work() -> N
             repair,
             repeated,
             execution_scope=ExecutionScope(
-                security_scope=project.definition.security_scope,
-                principal_id=project.definition.principal.user_id,
+                principal=project.definition.principal,
                 project_id=project.definition.project_id,
                 plan_version=2,
                 logical_subgoal_id=repair.logical_subgoal_id,
@@ -947,8 +938,7 @@ def test_execution_admission_returns_typed_capability_missing_feedback() -> None
             subgoal,
             proposal,
             execution_scope=ExecutionScope(
-                security_scope=project.definition.security_scope,
-                principal_id=project.definition.principal.user_id,
+                principal=project.definition.principal,
                 project_id=project.definition.project_id,
                 plan_version=1,
                 logical_subgoal_id=subgoal.logical_subgoal_id,

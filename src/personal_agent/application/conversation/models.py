@@ -74,7 +74,7 @@ class ReadActionOutputArguments(_StrictModel):
     )
 
 
-class ListWorkspaceKnowledgeArguments(_StrictModel):
+class ListPersonalKnowledgeArguments(_StrictModel):
     limit: int = Field(default=20, ge=1, le=50)
 
 
@@ -215,7 +215,7 @@ class ConversationKnowledgeSaveCommand(_StrictModel):
     action_id: str
     interaction_run_ref: str
     tenant_id: str
-    workspace_id: str
+    owner_id: str
     user_id: str
     source_message_indexes: tuple[int, ...] = Field(min_length=1)
     messages: tuple[ConversationMessage, ...] = Field(min_length=1)
@@ -261,7 +261,7 @@ class ConversationKnowledgeSaveOperation(_StrictModel):
         return self
 
 
-class WorkspaceKnowledgeCandidate(_StrictModel):
+class PersonalKnowledgeCandidate(_StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     knowledge_item_id: str = Field(min_length=1)
@@ -282,7 +282,6 @@ class ProjectReference(_StrictModel):
 
     project_id: str = Field(min_length=1)
     tenant_id: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1)
     user_id: str = Field(min_length=1)
     state: str = Field(min_length=1)
     title: str = Field(min_length=1)
@@ -361,7 +360,7 @@ __all__ = [
     "DecisionFeedback", "EffectiveAgentCapability", "EffectiveCapabilities",
     "EffectiveToolCapability", "FinalMessage", "InteractionTrace", "LoopBudgetPolicy",
     "InvestigationRequirementInput", "KnowledgeDeleteConfirmation", "KnowledgeSaveArguments",
-    "KnowledgeSaveSelection", "ListWorkspaceKnowledgeArguments", "PrepareKnowledgeDeleteArguments",
+    "KnowledgeSaveSelection", "ListPersonalKnowledgeArguments", "PrepareKnowledgeDeleteArguments",
     "ProjectReference", "ReviewCriteria", "StartDurableInvestigationArguments",
-    "ToolCallProposal", "TurnContextComposition", "WorkspaceKnowledgeCandidate",
+    "ToolCallProposal", "TurnContextComposition", "PersonalKnowledgeCandidate",
 ]

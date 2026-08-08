@@ -12,7 +12,7 @@ from personal_agent.kernel.contracts.research import ResearchRunDefinition, Rese
 from personal_agent.kernel.contracts.review import DeliveryResult
 from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
 from personal_agent.application.conversation.models import ProjectReference
-from personal_agent.application.workspace import Artifact
+from personal_agent.application.knowledge import Artifact
 from tests.conftest import POSTGRES_URL
 
 pytestmark = pytest.mark.usefixtures("clean_postgres_business_tables")
@@ -183,14 +183,12 @@ class TestEntryStreamEndpoint:
             conversation_id,
             messages,
             principal,
-            security_scope,
             source_platform,
         ):
             assert conversation_id == "entry-stream-ask"
             assert messages[-1].content == "什么是API测试？"
             assert principal.user_id == "test-user"
             assert principal.tenant_id == "personal-agent"
-            assert security_scope.workspace_id == "entry-stream-ask"
             assert source_platform == "web"
             return ConversationTurnView(
                 interaction_run_ref="irun-stream",
@@ -232,7 +230,6 @@ class TestEntryStreamEndpoint:
                 project_reference=ProjectReference(
                     project_id="iprj_stream",
                     tenant_id="personal-agent",
-                    workspace_id=kwargs["conversation_id"],
                     user_id="test-user",
                     state="planning",
                     title="协议调查",
@@ -253,7 +250,6 @@ class TestEntryStreamEndpoint:
         assert response.status_code == 200
         assert '"disposition": "background_started"' in response.text
         assert '"project_id": "iprj_stream"' in response.text
-        assert '"workspace_id": "entry-stream-project"' in response.text
 
 
 class TestConversationEndpoint:
@@ -262,14 +258,13 @@ class TestConversationEndpoint:
     ):
         def converse(
             *, conversation_id, messages, interaction_run_ref=None,
-            principal, security_scope, source_platform,
+            principal, source_platform,
         ):
             assert interaction_run_ref is None
             assert conversation_id == "conversation-1"
             assert messages[-1].content == "解释幂等性"
             assert principal.user_id == "default"
             assert principal.tenant_id == "personal-agent"
-            assert security_scope.workspace_id == "conversation-1"
             assert source_platform == "web"
             return ConversationTurnView(
                 interaction_run_ref="irun-test",
@@ -310,14 +305,14 @@ class TestConversationEndpoint:
         assert response.status_code == 422
 
 
-class TestWorkspaceCaptureEndpoints:
-    def test_upload_uses_one_resource_and_workspace_artifact_identity(
+class TestKnowledgeCaptureEndpoints:
+    def test_upload_uses_one_resource_and_knowledge_artifact_identity(
         self,
         api_client: TestClient,
     ) -> None:
         response = api_client.post(
-            "/api/workspace/ingest-upload",
-            data={"user_id": "alice", "workspace_id": "alice"},
+            "/api/knowledge/ingest-upload",
+            data={"user_id": "alice"},
             files={"file": ("fact.txt", b"Atlas window is Friday 20:00.", "text/plain")},
         )
 
@@ -330,7 +325,7 @@ class TestWorkspaceCaptureEndpoints:
             files={"file": ("legacy.txt", b"legacy", "text/plain")},
         ).status_code in {404, 405}
 
-    def test_url_capture_enters_workspace_without_generic_entry_task(
+    def test_url_capture_enters_knowledge_without_generic_entry_task(
         self,
         api_client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
@@ -341,11 +336,10 @@ class TestWorkspaceCaptureEndpoints:
             lambda url: f"Captured from {url}: canonical body",
         )
         response = api_client.post(
-            "/api/workspace/ingest-url",
+            "/api/knowledge/ingest-url",
             json={
                 "url": "https://example.com/source",
                 "user_id": "alice",
-                "workspace_id": "alice",
             },
         )
 
@@ -363,11 +357,10 @@ class TestGovernedKnowledgeDelete:
     ) -> None:
         user_id = "delete-owner"
         ingested = api_client.post(
-            "/api/workspace/ingest-text",
+            "/api/knowledge/ingest-text",
             json={
                 "text": "Atlas 的维护窗口是周五。",
                 "user_id": user_id,
-                "workspace_id": user_id,
                 "source_type": "document",
             },
         ).json()
@@ -376,7 +369,6 @@ class TestGovernedKnowledgeDelete:
             f"/api/notes/{note_id}/delete-commands",
             json={
                 "user_id": user_id,
-                "workspace_id": user_id,
                 "reason": "obsolete",
                 "idempotency_key": "delete-atlas-once",
             },
@@ -436,11 +428,10 @@ class TestGovernedKnowledgeDelete:
     ) -> None:
         user_id = "delete-reject-owner"
         ingested = api_client.post(
-            "/api/workspace/ingest-text",
+            "/api/knowledge/ingest-text",
             json={
                 "text": "保留这条知识。",
                 "user_id": user_id,
-                "workspace_id": user_id,
             },
         ).json()
         note_id = ingested["knowledge_items"][0]["knowledge_item_id"]
@@ -448,7 +439,6 @@ class TestGovernedKnowledgeDelete:
             f"/api/notes/{note_id}/delete-commands",
             json={
                 "user_id": "other-user",
-                "workspace_id": "other-user",
                 "idempotency_key": "cross-scope-delete",
             },
         )
@@ -458,7 +448,6 @@ class TestGovernedKnowledgeDelete:
             f"/api/notes/{note_id}/delete-commands",
             json={
                 "user_id": user_id,
-                "workspace_id": user_id,
                 "idempotency_key": "reject-delete",
             },
         ).json()
@@ -586,8 +575,8 @@ class TestReviewDigestManagementEndpoints:
 
         assert feedback.status_code == 200
         assert feedback.json()["ok"] is True
-        updated = service.workspace_service.store.list_review_items(
-            "default", state="answered", limit=100,
+        updated = service.knowledge_service.store.list_review_items(
+            "personal-agent:default", state="answered", limit=100,
         )
         assert card_id in {item.review_item_id for item in updated}
 
@@ -619,11 +608,10 @@ class TestNotesEndpoint:
     ) -> None:
         user_id = "restore-user"
         ingested = api_client.post(
-            "/api/workspace/ingest-text",
+            "/api/knowledge/ingest-text",
             json={
                 "text": "DNS 是域名系统。",
                 "user_id": user_id,
-                "workspace_id": user_id,
                 "source_type": "document",
             },
         ).json()
@@ -636,7 +624,6 @@ class TestNotesEndpoint:
             f"/api/notes/{note_id}/delete-commands",
             json={
                 "user_id": user_id,
-                "workspace_id": user_id,
                 "idempotency_key": "delete-before-restore",
             },
         ).json()
@@ -659,7 +646,6 @@ class TestNotesEndpoint:
             f"/api/knowledge-delete-commands/{delete_command['command_id']}/restore-commands",
             json={
                 "user_id": "other-user",
-                "workspace_id": "other-user",
                 "idempotency_key": "cross-scope-restore",
             },
         )
@@ -669,7 +655,6 @@ class TestNotesEndpoint:
             f"/api/knowledge-delete-commands/{delete_command['command_id']}/restore-commands",
             json={
                 "user_id": user_id,
-                "workspace_id": user_id,
                 "idempotency_key": "restore-dns-once",
                 "reason": "user requested restoration",
             },
@@ -703,7 +688,7 @@ class TestNotesEndpoint:
             "/api/notes", params={"user_id": user_id}
         ).json())
         claims = api_client.get(
-            "/api/workspace/claims", params={"workspace_id": user_id}
+            "/api/knowledge/claims", params={"user_id": user_id}
         ).json()
         assert all(
             claim["state"] != "deleted"
@@ -720,11 +705,11 @@ class TestNotesEndpoint:
         ).status_code in {404, 405}
 
 
-class TestWorkspaceArtifactsEndpoint:
-    def test_lists_only_requested_workspace_and_source_type(self, api_client: TestClient):
-        store = api_client.app.state.service.workspace_service.store
+class TestKnowledgeArtifactsEndpoint:
+    def test_lists_only_requested_knowledge_and_source_type(self, api_client: TestClient):
+        store = api_client.app.state.service.knowledge_service.store
         expected = Artifact(
-            workspace_id="artifact-api",
+            owner_id="personal-agent:artifact-api",
             user_id="artifact-api",
             source_type="conversation",
             content_hash="expected-hash",
@@ -732,23 +717,23 @@ class TestWorkspaceArtifactsEndpoint:
         )
         store.save_artifact(expected)
         store.save_artifact(Artifact(
-            workspace_id="artifact-api",
+            owner_id="personal-agent:artifact-api",
             user_id="artifact-api",
             source_type="text",
             content_hash="other-type-hash",
             text="other source type",
         ))
         store.save_artifact(Artifact(
-            workspace_id="other-workspace",
-            user_id="other-workspace",
+            owner_id="personal-agent:other-knowledge",
+            user_id="other-knowledge",
             source_type="conversation",
-            content_hash="other-workspace-hash",
-            text="other workspace",
+            content_hash="other-knowledge-hash",
+            text="other knowledge",
         ))
 
         response = api_client.get(
-            "/api/workspace/artifacts",
-            params={"workspace_id": "artifact-api", "source_type": "conversation"},
+            "/api/knowledge/artifacts",
+            params={"user_id": "artifact-api", "source_type": "conversation"},
         )
 
         assert response.status_code == 200
@@ -849,3 +834,27 @@ class TestToolsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
+
+
+class TestRemovedWorkspaceContract:
+    def test_workspace_route_and_partition_fields_are_rejected(
+        self,
+        api_client: TestClient,
+    ):
+        assert api_client.post(
+            "/api/workspace/ask",
+            json={"question": "legacy", "workspace_id": "legacy"},
+        ).status_code == 405
+        assert api_client.post(
+            "/api/knowledge/ask",
+            json={"question": "legacy", "workspace_id": "legacy"},
+        ).status_code == 422
+        assert api_client.post(
+            "/api/tools/search_knowledge/execute",
+            json={
+                "tenant_id": "personal-agent",
+                "user_id": "default",
+                "owner_id": "legacy",
+                "kwargs": {"query": "legacy"},
+            },
+        ).status_code == 422

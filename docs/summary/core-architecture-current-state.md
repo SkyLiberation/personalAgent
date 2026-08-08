@@ -91,7 +91,7 @@ Application Use Case，但多个协议入口不能制造第二事实 owner。
 | terra 在顶层 union structured schema 上 retry 超时 | Phase 0 Provider probe/E17 记录 | Provider transport 是可替换能力边界，不能污染业务 contract |
 | 子 Agent 返回 Artifact 后仍被重复委托，或 child terminal 被误当父完成 | E17/C04/L04 定向 archive | child execution fact 与父级综合、完成分离 |
 | live Investigation 有搜索结果却因 repair lineage 不闭合而无法交付报告 | B03 到 IP01 的同输入 archive 链 | Evidence Admission、Plan revision 和 Completion obligation 必须由 durable owner 维护 |
-| Workspace 回答并列互斥事实却宣称 supported | B04 `20260731T063040.820774Z-16696-c3646c8a` 到 E20 `20260731T064446.108938Z-8804-52b29d3c` | 回答组装与 answer-level Semantic Verification 必须由不同 owner 负责 |
+| Personal Knowledge 回答并列互斥事实却宣称 supported | B04 `20260731T063040.820774Z-16696-c3646c8a` 到 E20 `20260731T064446.108938Z-8804-52b29d3c` | 回答组装与 answer-level Semantic Verification 必须由不同 owner 负责 |
 
 这些 archive 证明的是对应工作树和输入上的工程事实，不自动建立 clean-revision 发布资格。
 框架的可信度来自“问题—owner—最小改动—目标 E2E”链路，而不是来自“对齐优秀 Agent”的类图。
@@ -160,7 +160,7 @@ package discovery 只识别真实 Python package；空迁移目录不再制造�
 - 飞书：消息事件进入 `FeishuService`；
 - 三者最终都调用 `AgentService.converse()`。
 
-产品能力也保留各自明确的 Application/API 入口。例如 Workspace ingest/ask、Knowledge
+产品能力也保留各自明确的 Application/API 入口。例如 Personal Knowledge ingest/ask、Knowledge
 Lifecycle、Research subscription/run、Review feedback 和 Artifact 操作不必伪装成一次通用
 Conversation Task。固定、稳定的产品流程优先直接调用相应 Use Case。
 
@@ -179,7 +179,7 @@ WebAppContext / CLI / Feishu
   -> AgentService
   -> AgentRuntime
      -> ConversationService
-     -> WorkspaceService
+     -> KnowledgeService
      -> KnowledgeLifecycleService
      -> InvestigationProjectService
      -> ResearchService
@@ -194,7 +194,7 @@ Investigation Project 使用 PostgreSQL append-only journal 和现有 worker que
 steering 时创建 Project，并且只持久化 `ProjectReference`，不拥有 Project definition、Plan、
 状态或 `WorkingPlanSnapshot`。
 
-`AgentRuntime` 是唯一集中装配点，但 Workspace、Research、Interaction、Tool audit 等事实仍由
+`AgentRuntime` 是唯一集中装配点，但 Personal Knowledge、Research、Interaction、Tool audit 等事实仍由
 各自 Store/Service 拥有；Composition Root 不通过字段镜像成为第二事实源。
 
 ## 3. 普通 Interaction 主循环
@@ -245,12 +245,17 @@ AgentTurnDecision
 写状态、审批或结果依赖的动作保持串行，并把 Observation 返回下一模型轮。
 
 `InteractionTrace` 保存输入消息、能力 revision、已提交 Observation/Feedback、usage、执行
-顺序、并发批次和最终消息。恢复后模型直接读取 committed typed inputs；恢复不会重复已提交
-action，也不要求生成一个没有生产调度消费者的中间 Plan。
+顺序、并发批次、逐轮上下文构成（`context_composition`）和最终消息。恢复后模型直接读取
+committed typed inputs；恢复不会重复已提交 action，也不要求生成一个没有生产调度消费者的中间 Plan。
+
+`context_composition` 属于 Observability：记录发生在模型调用之后，不参与可见输入组装，不进入任何
+终止判据或预算判定，可由 committed inputs 确定性重算。语义见
+[Context 工程](../topics/context-engineering.md#上下文构成度量)。
 
 Conversation 当前额外暴露四个粗粒度 Application capability，而不是领域内部步骤：
 
-- `list_workspace_knowledge`：只读当前 principal/workspace 的 active/conflicted canonical KnowledgeItem 引用；
+- `list_personal_knowledge`：只读当前 authenticated principal 拥有的 active/conflicted canonical
+  KnowledgeItem 引用；Conversation 和 execution 只关联本次运行，不改变 owner；
 - `prepare_conversation_knowledge_save`：冻结 user-authored exact span，等待确认；
 - `prepare_knowledge_delete`：只能引用上一 Observation 中同 scope 的 KnowledgeItem，调用
   `KnowledgeLifecycleService.prepare_delete`，确认前不删除；
@@ -260,14 +265,31 @@ Conversation 当前额外暴露四个粗粒度 Application capability，而不�
 显式保存时，参数只能引用现有 user
 message 索引并逐字复制其中的知识 `text_span`；Admission 机械证明 span 确实存在且来源角色为
 user。Runtime 只冻结 exact span 与 source index 并产生一个 `command_digest`，Interaction journal 保存
-`awaiting_confirmation/rejected/executed` 和 Receipt。确认入口重新校验 principal、workspace、
-digest，执行时仍复用 `WorkspaceService.solidify_conversation`，不开放 `capture_text`，确认后
-也不让模型改写 payload。E14 已覆盖 exact span、确认前零写入、prepare 后重启、跨 scope
+`awaiting_confirmation/rejected/executed` 和 Receipt。确认入口重新校验 principal、
+digest，执行时仍复用 `KnowledgeService.solidify_conversation`，不开放 `capture_text`，确认后
+也不让模型改写 payload。E14 已覆盖 exact span、确认前零写入、prepare 后重启、跨 principal
 拒绝、精确结论 Claim、控制语义零写入、Receipt 和成功 replay。提交知识与 journal Receipt
 之间的进程终止故障注入仍未覆盖。删除 operation 和 Project 的 canonical 状态不复制到
 Interaction journal；journal 分别只保存 delete command ref 和 `ProjectReference`，恢复时回查
 原 Application owner。E22 覆盖确认前零删除、scope 隔离、确认与 replay；E23 覆盖从自然目标
 创建一个可查询 Project、trace 引用一致且不把创建冒充 Completion。
+
+### 3.3 单次 Observation 的体积边界
+
+回合 token 上限按回合起点判定，**不约束单次工具返回**，因此单次体积由独立生产机制执行
+（[ADR 0013](../adr/0013-bounded-observation-and-offloaded-read.md)）：一次 Observation 进入
+Context 的上限是 20,000 字符，超限部分卸载为 `ResourceRef` 并回带 `retrieval.omitted_chars`；
+模型用 `read_action_output` 按关键词或行号取窗口；存在未读完的卸载物时，`clarification_required`
+/ `limitation` / `failed` 被拒绝，防止模型在自己的 Observation 里已有答案时反问用户。
+
+被卸载的正文以 Artifact 持久化，身份是 `ResourceRef`，`producer_key` 保证幂等；「这个远端输出读过
+没有」是对 committed inputs 的纯函数判定，不另存已读集合。
+
+跨轮逐出与两阶段 capability 加载**当前都不做，但依据不同**：两阶段加载由已落地的
+`context_composition` 度量数据判定不准入；跨轮逐出的决定性测量尚未执行（现有记录全是 2 轮收敛，
+没有一条在测跨轮累积），当前由「无已执行 baseline 失败即不准入」这条门禁挡住。两者的数据、准入
+条件与复核路径见
+[Context 物化度量与逐出](../future/context-materialization-measurement-and-eviction.md)。
 
 ## 4. Capability、Tool、MCP 与 A2A
 
@@ -329,28 +351,28 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 | 产品能力 | Application owner | Canonical fact / 唯一写入口 |
 | --- | --- | --- |
 | Conversation | `ConversationService` | `InteractionTrace` / Interaction journal |
-| Conversation governed save | `ConversationService` + `WorkspaceService` | journal 拥有 save Command/operation/Receipt；Workspace 固化方法仍是唯一知识写入口 |
+| Conversation governed save | `ConversationService` + `KnowledgeService` | journal 拥有 save Command/operation/Receipt；Personal Knowledge 固化方法仍是唯一知识写入口 |
 | Goal-entry knowledge delete | `ConversationService` 调用 `KnowledgeLifecycleService` | lifecycle service/store 拥有 delete Command/status/Receipt；Interaction 只存 command ref |
 | Goal-entry durable investigation | `ConversationService` 调用 `InvestigationProjectService` | Project aggregate/store 拥有 definition/Plan/state/Completion；Interaction 只存 ProjectReference |
 | Artifact | `ArtifactService` | application-owned ArtifactRef 和 Artifact Store |
-| Capture | `CaptureService` + Workspace ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
-| Grounded Ask | `WorkspaceService` | Workspace/Evidence 只读；Answer 不隐式写 Claim |
+| Capture | `CaptureService` + Personal Knowledge ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
+| Grounded Ask | `KnowledgeService` | Personal Knowledge/Evidence 只读；Answer 不隐式写 Claim |
 | Knowledge Lifecycle | `KnowledgeLifecycleService` | immutable delete/restore Command、operation status、Receipt |
-| Workspace Knowledge | `WorkspaceService` | Artifact、EvidenceBlock/Span、Claim、Relation、KnowledgeItem |
+| Personal Knowledge Knowledge | `KnowledgeService` | Artifact、EvidenceBlock/Span、Claim、Relation、KnowledgeItem |
 | Review | `ReviewDigestUseCase` / feedback use case | review content、feedback fact、schedule projection 分离 |
 | Knowledge Gap | `KnowledgeGapUseCase` | gap analysis result；不成为知识事实写入口 |
 | Research | `ResearchService` | ResearchRun、Event、Digest、Delivery/limitation |
 | Scheduled Intelligence | Research/Review scheduler | Subscription definition、Run、Delivery、feedback 分离 |
 
-Workspace 的 PostgreSQL Store 是结构化知识事实 owner。Graphiti 和 embedding index 是检索/图
-投影，不是事实权威源；投影失败不能覆盖或删除 Workspace canonical facts。生产 Graph Provider
+Personal Knowledge 的 PostgreSQL Store 是结构化知识事实 owner。Graphiti 和 embedding index 是检索/图
+投影，不是事实权威源；投影失败不能覆盖或删除 Personal Knowledge canonical facts。生产 Graph Provider
 只接受 `graphiti`、`structural` 和 `hybrid`；旧 Microsoft GraphRAG Adapter 因缺少
 source/citation binding 已删除，历史 CLI synthesized answer 不能作为检索事实。
 大型正文和上传文件由 Artifact Store 持有，运行状态优先保存 ref 而不是复制内容。
 
 Knowledge delete/restore 不使用通用 Planner 猜测目标。Application 根据明确的
 user/scope/note identity 创建 immutable Command；一个 `command_digest` 绑定
-confirmation、Operation 和 Receipt，错误 digest 或 replay 不重复副作用。只有 Workspace
+confirmation、Operation 和 Receipt，错误 digest 或 replay 不重复副作用。只有 Personal Knowledge
 Item/Claim 的真实迁移产生状态事件，生命周期本身不复制 Event。
 
 ## 6. Model Port 与 Provider 边界
@@ -416,7 +438,7 @@ state。Tool success、Agent completed、数据库新增记录或模型自述均
 | 边界 | 当前实现 | 恢复语义 |
 | --- | --- | --- |
 | 普通 Interaction | `FileInteractionJournal` | 从 committed inputs/usage 重建 transient context |
-| Workspace/Knowledge | `PostgresWorkspaceStore` | 从 canonical Artifact/Evidence/Claim/Event 恢复 |
+| Personal Knowledge/Knowledge | `PostgresKnowledgeStore` | 从 canonical Artifact/Evidence/Claim/Event 恢复 |
 | Delete/Restore | `PostgresKnowledgeLifecycleStore` | immutable Command/Event/Receipt，digest replay |
 | Research | `PostgresResearchStore` + worker queue | ResearchRun/Subscription/Delivery 生命周期 |
 | Tool governance | `PostgresToolGovernanceStore` | policy decision、idempotency 和 audit |
@@ -499,8 +521,8 @@ POST /api/conversation/turn
   -> immutable Command + awaiting_confirmation
   -> Interaction journal
 POST /api/conversation/runs/{run}/knowledge-save-decision
-  -> principal/workspace/digest validation
-  -> WorkspaceService.solidify_conversation
+  -> principal/personal knowledge/digest validation
+  -> KnowledgeService.solidify_conversation
   -> Receipt / replay same Receipt
 ```
 
@@ -530,7 +552,7 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 | Conversation models / loop | `application/conversation/models.py`、`application/conversation/service.py` |
 | Conversation Ports | `application/conversation/ports.py`、`capabilities/contracts/interaction.py` |
 | Web conversation entry | `adapters/web/routes/conversation.py` |
-| Workspace / Grounded Ask | `application/workspace/`、`adapters/web/routes/workspace.py` |
+| Personal Knowledge / Grounded Ask | `application/knowledge/`、`adapters/web/routes/knowledge.py` |
 | Knowledge delete/restore | `application/knowledge_lifecycle/`、`adapters/web/routes/notes.py` |
 | Research / Scheduled Intelligence | `application/research/`、`adapters/web/routes/research.py` |
 | Review / Knowledge Gap | `application/review/`、`application/insight/` |

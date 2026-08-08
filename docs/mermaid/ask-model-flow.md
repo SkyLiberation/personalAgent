@@ -6,7 +6,7 @@ flowchart LR
     Understanding["Query understanding"]
 
     subgraph Retrieval["Retrieval Stage"]
-        Workspace["Workspace evidence selection"]
+        Personal Knowledge["Personal Knowledge evidence selection"]
         Local["Local note/chunk retrieval"]
         Graph["Graphiti / structural retrieval"]
         Web["Policy-governed web retrieval"]
@@ -22,11 +22,11 @@ flowchart LR
     Result["AskResult"]
 
     Question --> Understanding
-    Understanding --> Workspace
+    Understanding --> Personal Knowledge
     Understanding --> Local
     Understanding --> Graph
     Understanding --> Web
-    Workspace --> Normalize
+    Personal Knowledge --> Normalize
     Local --> Normalize
     Graph --> Normalize
     Web --> Normalize
@@ -40,6 +40,6 @@ flowchart LR
     Repair --> Verify
 ```
 
-Workspace 和 Graph 在该路径只返回 evidence。它们不生成内部候选答案，不运行自己的 Completion，
-也不把 Provider answer 投影成 fact。独立 Workspace Answer 产品入口的验证边界见
+Personal Knowledge 和 Graph 在该路径只返回 evidence。它们不生成内部候选答案，不运行自己的 Completion，
+也不把 Provider answer 投影成 fact。独立 Personal Knowledge Answer 产品入口的验证边界见
 [Verification 与 Completion](../topics/verification-and-completion.md)。

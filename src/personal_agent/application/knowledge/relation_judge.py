@@ -5,7 +5,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from personal_agent.application.workspace.models import Claim
+from personal_agent.application.knowledge.models import Claim
 from personal_agent.capabilities.contracts.model import (
     StructuredModelClient,
     StructuredModelRequest,
@@ -99,7 +99,7 @@ class LLMClaimRelationJudge:
             },
         ]
         response = self._model_client.generate(StructuredModelRequest(
-            operation="workspace_claim_relation_judge",
+            operation="knowledge_claim_relation_judge",
             version="v1",
             kind="structured",
             output_type=ClaimRelationAdjudication,
@@ -107,7 +107,7 @@ class LLMClaimRelationJudge:
             max_tokens=500,
             messages=messages,
             context_projection_ref=sealed_context_projection_ref(
-                purpose="workspace_claim_relation_judge", messages=messages,
+                purpose="knowledge_claim_relation_judge", messages=messages,
             ),
             metadata={
                 "candidate_relation_type": candidate.relation_type,

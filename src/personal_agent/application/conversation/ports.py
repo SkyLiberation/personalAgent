@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from personal_agent.application.workspace.models import ConversationSolidifyResult
+from personal_agent.application.knowledge.models import ConversationSolidifyResult
 from personal_agent.application.knowledge_lifecycle.models import KnowledgeDeleteOperationView
 from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.capabilities.contracts.interaction import (
@@ -17,12 +17,11 @@ from personal_agent.kernel.contracts.agent import (
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 
-from .models import ProjectReference, StartDurableInvestigationArguments, WorkspaceKnowledgeCandidate
+from .models import ProjectReference, StartDurableInvestigationArguments, PersonalKnowledgeCandidate
 
 
 class InteractionToolPort(Protocol):
@@ -69,13 +68,13 @@ class InteractionArtifactPort(Protocol):
         resource_ref: ResourceRef,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> str: ...
 
     def write_generated(
         self,
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         execution_scope: ExecutionScope,
         producer_key: str,
         producer_ref: str,
@@ -106,25 +105,25 @@ class ConversationKnowledgeWriter(Protocol):
         messages: list[dict[str, str]],
         *,
         user_id: str,
-        workspace_id: str,
+        owner_id: str,
     ) -> ConversationSolidifyResult: ...
 
 
-class ConversationWorkspaceReadPort(Protocol):
-    def list_workspace_knowledge(
+class ConversationKnowledgeReadPort(Protocol):
+    def list_personal_knowledge(
         self,
         *,
-        workspace_id: str,
+        owner_id: str,
         user_id: str,
         limit: int,
-    ) -> tuple[WorkspaceKnowledgeCandidate, ...]: ...
+    ) -> tuple[PersonalKnowledgeCandidate, ...]: ...
 
 
 class ConversationKnowledgeLifecyclePort(Protocol):
     def prepare_delete(
         self,
         *,
-        workspace_id: str,
+        owner_id: str,
         user_id: str,
         target_note_id: str,
         reason: str,
@@ -144,7 +143,7 @@ class ConversationProjectPort(Protocol):
         self,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         request: StartDurableInvestigationArguments,
         idempotency_key: str,
     ) -> ProjectReference: ...
@@ -154,7 +153,7 @@ __all__ = [
     "ConversationKnowledgeLifecyclePort",
     "ConversationKnowledgeWriter",
     "ConversationProjectPort",
-    "ConversationWorkspaceReadPort",
+    "ConversationKnowledgeReadPort",
     "InteractionAgentPort",
     "InteractionArtifactPort",
     "InteractionToolPort",

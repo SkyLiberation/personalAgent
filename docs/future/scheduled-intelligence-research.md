@@ -43,7 +43,7 @@
 | 来源是否语义独立 | typed model proposal + admission | 代码只验证结构，不按域名数直接判定 |
 | source event identity、revision/supersedes | Research event lifecycle | event admission transaction |
 | Subscription、cursor、ResearchRun、Delivery | 各自领域 owner | 不双写为通用 DurableTask |
-| Claim、EvidenceBlock/Span | Workspace knowledge lifecycle | Research 只引用，不另建 Claim 写入口 |
+| Claim、EvidenceBlock/Span | Personal Knowledge knowledge lifecycle | Research 只引用，不另建 Claim 写入口 |
 | 重要性与个人相关性 | Digest decision/output | 不成为事实真实性判断 |
 | 即时/定时/安静时段投递 | deterministic delivery policy | 不修改事件发生时间或可信度 |
 
@@ -141,7 +141,7 @@ E2E SI-P2-06: connector 缺 credential，进入 typed authorization/capability m
 And not: 不选择相似 Provider、不生成替代结果
 
 E2E SI-P2-07: follow-up 引用原 entity/event ID，旧 run 内容不复制为新事实 owner
-And not: tenant/workspace scope 不得变化
+And not: tenant/personal knowledge scope 不得变化
 ```
 
 目标命令：

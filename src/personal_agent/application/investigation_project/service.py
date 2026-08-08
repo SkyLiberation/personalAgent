@@ -87,7 +87,7 @@ from personal_agent.domain.investigation_project import (
     canonical_digest,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope, SecurityScope
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
 
 
 class ApplicationModel(BaseModel):
@@ -96,7 +96,6 @@ class ApplicationModel(BaseModel):
 
 class CreateInvestigationProject(ApplicationModel):
     principal: AuthenticatedPrincipal
-    security_scope: SecurityScope
     title: str = Field(min_length=1)
     goal: str = Field(min_length=1)
     requirements: tuple[UserRequirement, ...] = Field(min_length=1)
@@ -106,7 +105,6 @@ class CreateInvestigationProject(ApplicationModel):
 
 class QueryInvestigationProject(ApplicationModel):
     principal: AuthenticatedPrincipal
-    security_scope: SecurityScope
     project_id: str = Field(min_length=1)
 
 
@@ -192,14 +190,11 @@ class InvestigationProjectService:
         self.completion_gate = CompletionGate()
 
     def create(self, command: CreateInvestigationProject) -> ProjectView:
-        if command.principal.tenant_id != command.security_scope.tenant_id:
-            raise PermissionError("principal tenant does not match security scope")
         requirement_ids = [item.requirement_id for item in command.requirements]
         if len(requirement_ids) != len(set(requirement_ids)):
             raise ValueError("user requirement ids must be unique")
         definition = InvestigationProjectDefinition(
             principal=command.principal,
-            security_scope=command.security_scope,
             title=command.title,
             goal=command.goal,
             user_requirements=UserRequirementVersion(
@@ -227,7 +222,7 @@ class InvestigationProjectService:
         return self.artifact_writer.read_generated(
             report.final_artifact_ref,
             principal=query.principal,
-            security_scope=query.security_scope,
+            owner=query.principal,
         )
 
     def recover(self, *, limit: int = 100) -> int:
@@ -443,7 +438,7 @@ class InvestigationProjectService:
         if not project.is_terminal:
             raise ValueError("late-result admission is only valid after terminal state")
         for artifact_ref in artifact_refs:
-            if artifact_ref.owner_scope != project.definition.security_scope:
+            if artifact_ref.owner != project.definition.principal:
                 raise PermissionError("late artifact belongs to another scope")
         return self._append(project, LateResultQuarantinedData(
             agent_run_id=agent_run_id,
@@ -668,7 +663,7 @@ class InvestigationProjectService:
                 authority="user",
                 detail=detail,
             )
-        inventory = self.capabilities.snapshot(project.definition.security_scope)
+        inventory = self.capabilities.snapshot(project.definition.principal)
         capability_revision = self.capabilities.revision(inventory)
         try:
             project, reservation = self._reserve_model(
@@ -773,7 +768,7 @@ class InvestigationProjectService:
         project: InvestigationProject,
         subgoal,
     ) -> InvestigationProject:
-        inventory = self.capabilities.snapshot(project.definition.security_scope)
+        inventory = self.capabilities.snapshot(project.definition.principal)
         try:
             project, reservation = self._reserve_model(
                 project,
@@ -979,7 +974,7 @@ class InvestigationProjectService:
         if decision.requires_approval and command is None:
             manifest = self.disclosure_manifest.materialize(
                 operation.context_artifact_refs,
-                security_scope=project.definition.security_scope,
+                owner=project.definition.principal,
                 execution_scope=scope,
             )
             command_payload = {
@@ -996,7 +991,7 @@ class InvestigationProjectService:
             }
             command_digest = canonical_digest(command_payload)
             command = ExternalDelegationCommand(
-                security_scope=project.definition.security_scope,
+                principal=project.definition.principal,
                 execution_scope=scope,
                 plan_version=proposal.plan_version,
                 logical_subgoal_id=proposal.logical_subgoal_id,
@@ -1124,7 +1119,7 @@ class InvestigationProjectService:
             "proposal_digest": proposal.proposal_digest,
         })
         artifact_ref = self.artifact_writer.write_generated(
-            security_scope=project.definition.security_scope,
+            owner=project.definition.principal,
             execution_scope=scope,
             producer_key=producer_key,
             producer_ref=proposal.proposal_id,
@@ -1237,7 +1232,7 @@ class InvestigationProjectService:
             generated = self.artifact_writer.read_generated(
                 generated_artifact,
                 principal=project.definition.principal,
-                security_scope=project.definition.security_scope,
+                owner=project.definition.principal,
             )
             verification_evidence = (
                 *admitted,
@@ -1365,7 +1360,7 @@ class InvestigationProjectService:
                 stored = self.artifact_writer.read_generated(
                     item.artifact_ref,
                     principal=project.definition.principal,
-                    security_scope=project.definition.security_scope,
+                    owner=project.definition.principal,
                 )
                 if stored.content_digest != item.content_digest:
                     raise ValueError("evidence artifact content digest mismatch")
@@ -1484,7 +1479,7 @@ class InvestigationProjectService:
                     decision.value.evidence_refs,
                 )
                 artifact_ref = self.artifact_writer.write_generated(
-                    security_scope=project.definition.security_scope,
+                    owner=project.definition.principal,
                     execution_scope=scope,
                     producer_key=producer_key,
                     producer_ref=project.accepted_plan.plan_digest,
@@ -1513,7 +1508,7 @@ class InvestigationProjectService:
                 stored = self.artifact_writer.read_generated(
                     artifact_ref,
                     principal=project.definition.principal,
-                    security_scope=project.definition.security_scope,
+                    owner=project.definition.principal,
                 )
                 generated = GeneratedContent(
                     content=stored.content,
@@ -1714,7 +1709,7 @@ class InvestigationProjectService:
                 f"partial:{project.event_sequence}",
             )
             artifact_ref = self.artifact_writer.write_generated(
-                security_scope=project.definition.security_scope,
+                owner=project.definition.principal,
                 execution_scope=scope,
                 producer_key=canonical_digest({
                     "project_id": project.definition.project_id,
@@ -1811,8 +1806,7 @@ class InvestigationProjectService:
         execution_id: str,
     ) -> ExecutionScope:
         return ExecutionScope(
-            security_scope=project.definition.security_scope,
-            principal_id=project.definition.principal.principal_id,
+            principal=project.definition.principal,
             execution_id=execution_id,
             project_id=project.definition.project_id,
             plan_version=(
@@ -1834,7 +1828,7 @@ class InvestigationProjectService:
             for index, item in enumerate(data, start=1)
         )
         return self.store.append(
-            security_scope=project.definition.security_scope,
+            owner=project.definition.principal,
             project_id=project.definition.project_id,
             expected_sequence=project.event_sequence,
             events=events,
@@ -1844,7 +1838,7 @@ class InvestigationProjectService:
         self,
         query: QueryInvestigationProject,
     ) -> InvestigationProject:
-        project = self.store.load(query.security_scope, query.project_id)
+        project = self.store.load(query.principal, query.project_id)
         if project is None:
             raise KeyError("investigation project not found")
         self._authorize(project, query.principal)
@@ -1864,8 +1858,7 @@ class InvestigationProjectService:
             task_type="investigation_project",
             payload={
                 "project_id": project.definition.project_id,
-                "tenant_id": project.definition.security_scope.tenant_id,
-                "workspace_id": project.definition.security_scope.workspace_id,
+                "tenant_id": project.definition.principal.tenant_id,
                 "user_id": project.definition.principal.user_id,
                 "reason": reason,
             },

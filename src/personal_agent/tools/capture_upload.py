@@ -27,10 +27,10 @@ def build_capture_upload_tool(capture_service: CaptureService, artifact_service:
         record, file_bytes = artifact_service.read_upload(
             resource_ref,
             principal=AuthenticatedPrincipal(
-                tenant_id=resource_ref.owner_scope.tenant_id,
+                tenant_id=resource_ref.owner.tenant_id,
                 user_id=user_id,
             ),
-            security_scope=resource_ref.owner_scope,
+            owner=resource_ref.owner,
         )
         text = capture_service.capture_text_from_upload(filename=record.filename, content_type=record.content_type, file_bytes=file_bytes, source_type=record.source_type)
         return tool_response(tool_success({"resource_ref": resource_ref.model_dump(mode="json"), "filename": record.filename, "source_type": record.source_type, "text": text}))

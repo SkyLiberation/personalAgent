@@ -120,7 +120,6 @@ class TestGovernanceStoreQueries:
         ctx = ToolGatewayContext(
             execution_scope=interaction_execution_scope(
                 tenant_id="tenant-1",
-                workspace_id="workspace-1",
                 user_id="dave",
                 execution_id="r1",
                 thread_id="t1",
@@ -142,7 +141,6 @@ class TestGovernanceStoreQueries:
         ctx = ToolGatewayContext(
             execution_scope=interaction_execution_scope(
                 tenant_id="tenant-1",
-                workspace_id="workspace-1",
                 user_id="receipt-user",
                 execution_id="run-receipt",
                 thread_id="thread-receipt",
@@ -246,7 +244,6 @@ class TestAuditApiGate:
             headers={"X-API-Key": "user-key"},
             json={
                 "tenant_id": "tenant-1",
-                "workspace_id": "workspace-a",
                 "user_id": "bob",
                 "kwargs": {"query": "secret"},
             },

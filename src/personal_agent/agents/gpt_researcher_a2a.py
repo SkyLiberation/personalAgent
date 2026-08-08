@@ -22,14 +22,14 @@ from personal_agent.kernel.contracts.agent import (
     new_agent_run_id,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.contracts.scope import ExecutionScope, SecurityScope
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
 
 
 class AgentArtifactWriteProtocol(Protocol):
     def write_generated(
         self,
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         execution_scope: ExecutionScope,
         producer_key: str,
         producer_ref: str,
@@ -202,7 +202,7 @@ class GPTResearcherA2AAdapter:
         if not artifacts and response.report:
             content_digest = sha256(response.report.encode("utf-8")).hexdigest()
             artifact_ref = self._artifact_writer.write_generated(
-                security_scope=context.execution_scope.security_scope,
+                owner=context.execution_scope.principal,
                 execution_scope=context.execution_scope,
                 producer_key=(
                     f"agent:{self.profile.agent_id}:{response.task_id}:"
@@ -277,7 +277,7 @@ class GPTResearcherA2AAdapter:
         kind = str(raw.get("name") or raw.get("kind") or "a2a_artifact")
         content_digest = sha256(content.encode("utf-8")).hexdigest()
         artifact_ref = self._artifact_writer.write_generated(
-            security_scope=context.execution_scope.security_scope,
+            owner=context.execution_scope.principal,
             execution_scope=context.execution_scope,
             producer_key=(
                 f"agent:{self.profile.agent_id}:{provider_task_id}:"

@@ -530,7 +530,7 @@ def _capability_local_name(capability: Capability) -> str:
 
 def _is_local_capability(capability: Capability) -> bool:
     if capability.provider in {
-        "internal", "local", "graphiti", "workspace",
+        "internal", "local", "graphiti", "personal_knowledge",
         "structural", "episodic", "reflection",
     }:
         return True

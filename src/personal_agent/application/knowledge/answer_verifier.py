@@ -6,7 +6,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from personal_agent.application.workspace.models import (
+from personal_agent.application.knowledge.models import (
     AnswerVerificationAssessment,
     AnswerVerificationConflict,
     CoverageManifest,
@@ -20,7 +20,7 @@ from personal_agent.capabilities.contracts.model import (
 )
 
 
-class WorkspaceAnswerVerifier(Protocol):
+class KnowledgeAnswerVerifier(Protocol):
     name: str
     version: str
 
@@ -51,8 +51,8 @@ class _AnswerVerificationDraft(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
-class LLMWorkspaceAnswerVerifier:
-    name = "llm-workspace-answer-verifier"
+class LLMKnowledgeAnswerVerifier:
+    name = "llm-knowledge-answer-verifier"
     version = "v1"
 
     def __init__(self, model_client: StructuredModelClient) -> None:
@@ -97,7 +97,7 @@ class LLMWorkspaceAnswerVerifier:
             },
         ]
         response = self._model_client.generate(StructuredModelRequest(
-            operation="workspace_answer_semantic_verification",
+            operation="knowledge_answer_semantic_verification",
             version=self.version,
             kind="structured",
             output_type=_AnswerVerificationDraft,
@@ -105,7 +105,7 @@ class LLMWorkspaceAnswerVerifier:
             max_tokens=1400,
             messages=messages,
             context_projection_ref=sealed_context_projection_ref(
-                purpose="workspace_answer_semantic_verification",
+                purpose="knowledge_answer_semantic_verification",
                 messages=messages,
             ),
             metadata={
@@ -122,10 +122,10 @@ class LLMWorkspaceAnswerVerifier:
 
 
 @dataclass(slots=True)
-class FixtureWorkspaceAnswerVerifier:
+class FixtureKnowledgeAnswerVerifier:
     """Deterministic external-model substitute for unit and contract tests."""
 
-    name: str = "fixture-workspace-answer-verifier"
+    name: str = "fixture-knowledge-answer-verifier"
     version: str = "v1"
 
     def verify(
@@ -175,7 +175,7 @@ def unavailable_answer_verification(reason: str) -> AnswerVerificationAssessment
         evidence_coverage="none",
         missing_sections=[{"reason": reason}],
         feedback="Answer verification could not establish that the candidate is supported.",
-        verifier_name="unavailable-workspace-answer-verifier",
+        verifier_name="unavailable-knowledge-answer-verifier",
         verifier_version="v1",
     )
 
@@ -276,8 +276,8 @@ def _fixture_coverage(
 
 
 __all__ = [
-    "FixtureWorkspaceAnswerVerifier",
-    "LLMWorkspaceAnswerVerifier",
-    "WorkspaceAnswerVerifier",
+    "FixtureKnowledgeAnswerVerifier",
+    "LLMKnowledgeAnswerVerifier",
+    "KnowledgeAnswerVerifier",
     "unavailable_answer_verification",
 ]

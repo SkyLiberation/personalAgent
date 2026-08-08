@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.kernel.contracts.scope import SecurityScope
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
 class ResourceRef(BaseModel):
@@ -17,7 +17,7 @@ class ResourceRef(BaseModel):
 
     resource_id: str = Field(min_length=1)
     resource_type: str = Field(min_length=1)
-    owner_scope: SecurityScope
+    owner: AuthenticatedPrincipal
     revision: int = Field(default=1, ge=1)
 
 

@@ -14,7 +14,7 @@ POST /api/knowledge-delete-commands/{command_id}/decision
   -> identity/scope + command_digest + confirmation_ref 校验
   -> one transaction:
        KnowledgeItem/Claim state transition
-       Workspace KnowledgeStateEvent
+       Personal Knowledge KnowledgeStateEvent
        knowledge_lifecycle_receipts
   -> KnowledgeDeleteOperationView(executed, receipt)
 ```
@@ -40,10 +40,10 @@ Event 体系。
 
 - HTTP 入口解析 authenticated user；body 中的 user 不能扩大 scope；
 - 一个 `command_digest` 绑定 canonical command payload，不能代替身份或 Policy；
-- command owner、workspace、digest 或 confirmation 不匹配时 fail closed；
+- command owner、personal knowledge、digest 或 confirmation 不匹配时 fail closed；
 - reject 后不能 confirm；
 - delete receipt 是恢复 previous states 的唯一依据；
-- Workspace aggregate 拥有 Item/Claim 状态，Lifecycle Service 不能复制事实；
+- Personal Knowledge aggregate 拥有 Item/Claim 状态，Lifecycle Service 不能复制事实；
 - 旧直接 DELETE、snapshot restore、Conversation Tool/Procedure 路径不可达。
 
 ## 为什么不用 Agent Workflow

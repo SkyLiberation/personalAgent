@@ -92,7 +92,7 @@ def stable_hash(text: str) -> str:
 
 class Artifact(BaseModel):
     artifact_id: str = Field(default_factory=lambda: new_id("art"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     user_id: str = "default"
     source_type: str = "text"
     source_ref: str | None = None
@@ -108,7 +108,7 @@ class Artifact(BaseModel):
 class ExtractionRun(BaseModel):
     extraction_run_id: str = Field(default_factory=lambda: new_id("xrun"))
     artifact_id: str
-    workspace_id: str = "default"
+    owner_id: str = "default"
     extractor: str = "semantic-lifecycle"
     extractor_version: str = "p0-v1"
     parser_version: str = "deterministic-block-parser-v1"
@@ -150,7 +150,7 @@ class CoverageManifest(BaseModel):
 class EvidenceBlock(BaseModel):
     evidence_block_id: str = Field(default_factory=lambda: new_id("eblk"))
     artifact_id: str
-    workspace_id: str = "default"
+    owner_id: str = "default"
     locator: str = ""
     block_type: EvidenceBlockType = "paragraph"
     title_path: list[str] = Field(default_factory=list)
@@ -167,7 +167,7 @@ class EvidenceBlock(BaseModel):
 class EvidenceSpan(BaseModel):
     evidence_span_id: str = Field(default_factory=lambda: new_id("espn"))
     evidence_block_id: str
-    workspace_id: str = "default"
+    owner_id: str = "default"
     start_offset: int = 0
     end_offset: int = 0
     span_type: EvidenceSpanType = "factual_statement"
@@ -226,7 +226,7 @@ class ClaimQualityGate(BaseModel):
 
 class Claim(BaseModel):
     claim_id: str = Field(default_factory=lambda: new_id("clm"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     user_id: str = "default"
     claim_type: ClaimType = "external_fact"
     statement: str
@@ -259,7 +259,7 @@ class Claim(BaseModel):
 
 class GroundingRun(BaseModel):
     grounding_run_id: str = Field(default_factory=lambda: new_id("grun"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     claim_id: str
     evidence_span_ids: list[str] = Field(default_factory=list)
     contradicting_evidence_span_ids: list[str] = Field(default_factory=list)
@@ -274,7 +274,7 @@ class GroundingRun(BaseModel):
 
 class ClaimSupportEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: new_id("cse"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     claim_id: str
     from_support_status: SupportStatus | None = None
     to_support_status: SupportStatus
@@ -286,7 +286,7 @@ class ClaimSupportEvent(BaseModel):
 
 class ClaimAdmissionDecision(BaseModel):
     admission_id: str = Field(default_factory=lambda: new_id("adm"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     claim_id: str
     admission_result: AdmissionResult
     reason: str = ""
@@ -299,7 +299,7 @@ class ClaimAdmissionDecision(BaseModel):
 
 class KnowledgeStateEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: new_id("kst"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     target_type: Literal["claim", "knowledge_item"] = "claim"
     target_id: str
     from_state: KnowledgeState | None = None
@@ -315,7 +315,7 @@ class KnowledgeStateEvent(BaseModel):
 
 class KnowledgeRelation(BaseModel):
     relation_id: str = Field(default_factory=lambda: new_id("krel"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     source_type: Literal["claim", "knowledge_item", "artifact", "research_event"] = "claim"
     source_id: str
     target_type: Literal["claim", "knowledge_item", "artifact", "research_event"] = "claim"
@@ -330,7 +330,7 @@ class KnowledgeRelation(BaseModel):
 
 class KnowledgeItem(BaseModel):
     knowledge_item_id: str = Field(default_factory=lambda: new_id("kitm"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     user_id: str = "default"
     title: str
     summary: str = ""
@@ -345,7 +345,7 @@ class KnowledgeItem(BaseModel):
 
 class ProjectionJob(BaseModel):
     projection_job_id: str = Field(default_factory=lambda: new_id("pjob"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     projection_type: ProjectionType
     source_object_type: Literal["artifact", "evidence", "claim", "knowledge_item"] = "artifact"
     source_object_id: str
@@ -358,7 +358,7 @@ class ProjectionJob(BaseModel):
 
 class DecisionCard(BaseModel):
     decision_id: str = Field(default_factory=lambda: new_id("dec"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     decision_type: Literal[
         "claim_admission",
         "claim_correction",
@@ -386,7 +386,7 @@ class AnswerCitation(BaseModel):
     claim_ids: list[str] = Field(default_factory=list)
 
 
-class WorkspaceEvidenceSelection(BaseModel):
+class KnowledgeEvidenceSelection(BaseModel):
     """Read-only evidence and knowledge-state facts selected for one question."""
 
     question: str
@@ -468,7 +468,7 @@ class ClaimCorrectionResult(BaseModel):
 
 class ResearchEvent(BaseModel):
     research_event_id: str = Field(default_factory=lambda: new_id("rev"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     user_id: str = "default"
     topic: str = ""
     title: str = ""
@@ -499,7 +499,7 @@ class ResearchIngestResult(BaseModel):
 
 class ReviewItem(BaseModel):
     review_item_id: str = Field(default_factory=lambda: new_id("rvi"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     claim_id: str
     prompt: str
     priority: float = 0.0
@@ -511,7 +511,7 @@ class ReviewItem(BaseModel):
 
 class KnowledgeGap(BaseModel):
     gap_id: str = Field(default_factory=lambda: new_id("kgap"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     gap_type: Literal["conflict", "uncertain", "missing_evidence", "low_coverage"]
     claim_ids: list[str] = Field(default_factory=list)
     question: str
@@ -528,7 +528,7 @@ class ReviewPlanResult(BaseModel):
 
 class GraphProjection(BaseModel):
     graph_projection_id: str = Field(default_factory=lambda: new_id("gprj"))
-    workspace_id: str = "default"
+    owner_id: str = "default"
     source_claim_id: str
     evidence_span_ids: list[str] = Field(default_factory=list)
     entity_names: list[str] = Field(default_factory=list)

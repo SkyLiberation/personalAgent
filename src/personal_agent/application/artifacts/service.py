@@ -27,9 +27,8 @@ from personal_agent.kernel.contracts.resource import (
     ResourceRef,
 )
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 
 
@@ -58,15 +57,15 @@ class ArtifactService:
         file_bytes: bytes,
         uploads_dir: Path,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> ResourceRef:
-        _authorize_principal(principal, security_scope)
+        _authorize_principal(principal, owner)
         normalized = normalize_upload_filename(filename)
         artifact_id = _artifact_id(normalized, file_bytes)
         resource_ref = ResourceRef(
             resource_id=artifact_id,
             resource_type="artifact",
-            owner_scope=security_scope,
+            owner=owner,
         )
         uploads_dir.mkdir(parents=True, exist_ok=True)
         stored_path = uploads_dir / f"{artifact_id}_{normalized}"
@@ -94,12 +93,12 @@ class ArtifactService:
         resource_ref: ResourceRef,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> StoredArtifact:
         if resource_ref.resource_type != "artifact":
             raise ValueError("resource_ref is not an artifact")
-        _authorize_principal(principal, security_scope)
-        if resource_ref.owner_scope != security_scope:
+        _authorize_principal(principal, owner)
+        if resource_ref.owner != owner:
             raise PermissionError("artifact belongs to a different security scope")
         sidecar = self._sidecar(resource_ref.resource_id)
         if not sidecar.exists():
@@ -127,12 +126,12 @@ class ArtifactService:
         resource_ref: ResourceRef,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> tuple[StoredArtifact, bytes]:
         record = self.resolve(
             resource_ref,
             principal=principal,
-            security_scope=security_scope,
+            owner=owner,
         )
         return record, record.storage_path.read_bytes()
 
@@ -141,14 +140,14 @@ class ArtifactService:
         resource_ref: ResourceRef,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> str:
         """Read a text artifact through the canonical owner and scope checks."""
 
         record = self.resolve(
             resource_ref,
             principal=principal,
-            security_scope=security_scope,
+            owner=owner,
         )
         if record.source_type != "generated" and not (
             record.content_type or ""
@@ -161,13 +160,13 @@ class ArtifactService:
         *,
         resource_ref: ResourceRef,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         question: str = "",
     ) -> dict[str, Any]:
         record, file_bytes = self.read_upload(
             resource_ref,
             principal=principal,
-            security_scope=security_scope,
+            owner=owner,
         )
         text = self._interpret_bytes(
             filename=record.filename,
@@ -196,7 +195,7 @@ class ArtifactService:
     def write_generated(
         self,
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         execution_scope: ExecutionScope,
         producer_key: str,
         producer_ref: str,
@@ -207,7 +206,7 @@ class ArtifactService:
         evidence_refs: tuple[str, ...],
         limitations: tuple[str, ...] = (),
     ) -> ResourceRef:
-        if execution_scope.security_scope != security_scope:
+        if execution_scope.principal != owner:
             raise PermissionError("generated artifact execution scope mismatch")
         actual_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         accepted_digests = {
@@ -224,7 +223,7 @@ class ArtifactService:
         if content_digest not in accepted_digests:
             raise ValueError("generated artifact content digest mismatch")
         for source_ref in source_artifact_refs:
-            if source_ref.owner_scope != security_scope:
+            if source_ref.owner != owner:
                 raise PermissionError("generated artifact source is cross-scope")
         root = self.settings.data_dir / "generated_artifacts"
         root.mkdir(parents=True, exist_ok=True)
@@ -241,8 +240,8 @@ class ArtifactService:
                 )
             return ResourceRef.model_validate(existing["resource_ref"])
         identity_material = "\0".join((
-            security_scope.tenant_id,
-            security_scope.workspace_id,
+            owner.tenant_id,
+            owner.user_id,
             producer_key,
             content_digest,
         ))
@@ -251,7 +250,7 @@ class ArtifactService:
         resource_ref = ResourceRef(
             resource_id=artifact_id,
             resource_type="artifact",
-            owner_scope=security_scope,
+            owner=owner,
         )
         content_path = root / f"{artifact_id}.txt"
         content_tmp = root / f".{artifact_id}.txt.tmp"
@@ -264,7 +263,7 @@ class ArtifactService:
             "source_type": "generated",
             "size_bytes": len(content.encode("utf-8")),
             "storage_name": content_path.name,
-            "created_by_principal_id": execution_scope.principal_id,
+            "created_by_principal_id": execution_scope.principal.principal_id,
             "artifact_kind": kind,
             "producer_key": producer_key,
             "producer_ref": producer_ref,
@@ -299,12 +298,12 @@ class ArtifactService:
         resource_ref: ResourceRef,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> GeneratedArtifactContent:
         record = self.resolve(
             resource_ref,
             principal=principal,
-            security_scope=security_scope,
+            owner=owner,
         )
         if record.source_type != "generated":
             raise ValueError("artifact is not generated content")
@@ -388,9 +387,9 @@ def _metadata_only_context(filename: str, content_type: str | None, source_type:
 
 def _authorize_principal(
     principal: AuthenticatedPrincipal,
-    security_scope: SecurityScope,
+    owner: AuthenticatedPrincipal,
 ) -> None:
-    if principal.tenant_id != security_scope.tenant_id:
+    if principal.tenant_id != owner.tenant_id:
         raise PermissionError("principal tenant does not match security scope")
 
 

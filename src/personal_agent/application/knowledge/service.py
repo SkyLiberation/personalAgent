@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from personal_agent.application.evidence_engine import evidence_terms, extract_claims
-from personal_agent.application.workspace.answer_verifier import (
-    WorkspaceAnswerVerifier,
+from personal_agent.application.knowledge.answer_verifier import (
+    KnowledgeAnswerVerifier,
     unavailable_answer_verification,
 )
-from personal_agent.application.workspace.models import (
+from personal_agent.application.knowledge.models import (
     AnswerCitation,
     ArtifactDeleteImpactResult,
     Artifact,
@@ -42,16 +42,16 @@ from personal_agent.application.workspace.models import (
     ReviewItem,
     ReviewPlanResult,
     SemanticReplayDiffResult,
-    WorkspaceEvidenceSelection,
+    KnowledgeEvidenceSelection,
     stable_hash,
 )
-from personal_agent.application.workspace.policy import ClaimAdmissionPolicy, KnowledgeStateMachine
-from personal_agent.application.workspace.relation_judge import (
+from personal_agent.application.knowledge.policy import ClaimAdmissionPolicy, KnowledgeStateMachine
+from personal_agent.application.knowledge.relation_judge import (
     ClaimRelationAdjudication,
     ClaimRelationCandidate,
     ClaimRelationJudge,
 )
-from personal_agent.application.workspace.semantic import (
+from personal_agent.application.knowledge.semantic import (
     ClaimGroundingJudge,
     LocalSemanticFixtureClaimExtractor,
     LocalSemanticFixtureExtractor,
@@ -61,19 +61,19 @@ from personal_agent.application.workspace.semantic import (
     SemanticEvidenceExtractor,
     calibration_from_grounding,
 )
-from personal_agent.application.workspace.store import WorkspaceStore
+from personal_agent.application.knowledge.store import KnowledgeStore
 
 
 @dataclass(slots=True)
-class WorkspaceService:
-    store: WorkspaceStore
+class KnowledgeService:
+    store: KnowledgeStore
     admission_policy: ClaimAdmissionPolicy | None = None
     state_machine: KnowledgeStateMachine | None = None
     relation_judge: ClaimRelationJudge | None = None
     semantic_evidence_extractor: SemanticEvidenceExtractor | None = None
     semantic_claim_extractor: SemanticClaimExtractor | None = None
     claim_grounding_judge: ClaimGroundingJudge | None = None
-    answer_verifier: WorkspaceAnswerVerifier | None = None
+    answer_verifier: KnowledgeAnswerVerifier | None = None
 
     def __post_init__(self) -> None:
         self.admission_policy = self.admission_policy or ClaimAdmissionPolicy()
@@ -87,7 +87,7 @@ class WorkspaceService:
         text: str,
         *,
         user_id: str = "default",
-        workspace_id: str = "default",
+        owner_id: str = "default",
         source_type: str = "text",
         source_ref: str | None = None,
         raw_location: str = "",
@@ -101,7 +101,7 @@ class WorkspaceService:
         ingest = self.ingest_knowledge(
             text,
             user_id=user_id,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             source_type=source_type,
             source_ref=source_ref,
             raw_location=raw_location,
@@ -119,7 +119,7 @@ class WorkspaceService:
         text: str,
         *,
         user_id: str = "default",
-        workspace_id: str = "default",
+        owner_id: str = "default",
         source_type: str = "text",
         source_ref: str | None = None,
         raw_location: str = "",
@@ -132,7 +132,7 @@ class WorkspaceService:
             raise ValueError("text is required")
         artifact = Artifact(
             **({"artifact_id": artifact_id} if artifact_id else {}),
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             user_id=user_id,
             source_type=source_type,
             source_ref=source_ref,
@@ -143,7 +143,7 @@ class WorkspaceService:
         )
         extraction_run = ExtractionRun(
             artifact_id=artifact.artifact_id,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             input_hash=artifact.content_hash,
             semantic_extractor_version=self.semantic_evidence_extractor.version if self.semantic_evidence_extractor else "",
             prompt_version=self.semantic_evidence_extractor.version if self.semantic_evidence_extractor else "",
@@ -160,7 +160,7 @@ class WorkspaceService:
             spans = self._build_semantic_evidence_spans(
                 semantic_result,
                 blocks,
-                workspace_id=workspace_id,
+                owner_id=owner_id,
             )
         except Exception as exc:  # pragma: no cover - exercised through fallback tests.
             semantic_failed = True
@@ -168,7 +168,7 @@ class WorkspaceService:
             spans = self._build_semantic_evidence_spans(
                 semantic_result,
                 blocks,
-                workspace_id=workspace_id,
+                owner_id=owner_id,
             )
             extraction_run.status = "partial"
             extraction_run.errors.append(f"semantic_evidence_extraction_failed:{type(exc).__name__}:{exc}")
@@ -217,7 +217,7 @@ class WorkspaceService:
         self.store.save_evidence_spans(spans)
         self.store.save_knowledge_items(knowledge_items)
         projection_jobs = self._enqueue_projection_jobs(
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             source_object_type="artifact",
             source_object_id=artifact.artifact_id,
             include_claims=False,
@@ -245,7 +245,7 @@ class WorkspaceService:
     ) -> IngestKnowledgeResult:
         """Run recoverable Claim/Grounding/Admission enhancement for an ingest."""
         artifact = ingest.artifact
-        workspace_id = artifact.workspace_id
+        owner_id = artifact.owner_id
         evidence_refs_by_span = {
             span.evidence_span_id: self._evidence_ref_for_span_id(
                 span.evidence_span_id,
@@ -267,7 +267,7 @@ class WorkspaceService:
                 claim_extraction,
                 artifact=artifact,
                 user_id=artifact.user_id,
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 created_from=artifact.artifact_id,
                 created_by=created_by,
                 source_type=artifact.source_type,
@@ -288,7 +288,7 @@ class WorkspaceService:
                 claim_extraction,
                 artifact=artifact,
                 user_id=artifact.user_id,
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 created_from=artifact.artifact_id,
                 created_by=created_by,
                 source_type=artifact.source_type,
@@ -299,7 +299,7 @@ class WorkspaceService:
         admission_decisions: list[ClaimAdmissionDecision] = []
         state_events: list[KnowledgeStateEvent] = []
         decisions: list[DecisionCard] = []
-        existing_claims = self.store.list_claims(workspace_id, limit=500)
+        existing_claims = self.store.list_claims(owner_id, limit=500)
         for claim in claims:
             grounding = self._ground_claim_with_judge(
                 claim,
@@ -321,7 +321,7 @@ class WorkspaceService:
             claim.confidence = _confidence_for_support(grounding.support_status)
             claim.quality_gate = self._claim_quality_gate(claim, grounding=grounding)
             support_events.append(ClaimSupportEvent(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 claim_id=claim.claim_id,
                 from_support_status=None,
                 to_support_status=grounding.support_status,
@@ -337,7 +337,7 @@ class WorkspaceService:
             claim.state = self.state_machine.next_state(claim, admission)
             claim.quality_gate = self._claim_quality_gate(claim, grounding=grounding)
             state_events.append(KnowledgeStateEvent(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 target_id=claim.claim_id,
                 from_state=from_state,
                 to_state=claim.state,
@@ -348,7 +348,7 @@ class WorkspaceService:
                 policy_result=admission.admission_result,
             ))
         relations, relation_state_events, relation_updated_claims, relation_decisions, relation_gaps = (
-            self._relate_new_claims(claims, existing_claims, workspace_id=workspace_id)
+            self._relate_new_claims(claims, existing_claims, owner_id=owner_id)
         )
         state_events.extend(relation_state_events)
         if relation_updated_claims:
@@ -395,7 +395,7 @@ class WorkspaceService:
         self.store.save_knowledge_gaps(relation_gaps)
         self.store.save_decisions(decisions)
         projection_jobs = self._enqueue_projection_jobs(
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             source_object_type="claim",
             source_object_id=artifact.artifact_id,
             include_claims=bool(claims),
@@ -418,23 +418,23 @@ class WorkspaceService:
         self,
         question: str,
         *,
-        workspace_id: str = "default",
+        owner_id: str = "default",
         limit: int = 5,
-    ) -> WorkspaceEvidenceSelection:
+    ) -> KnowledgeEvidenceSelection:
         normalized = _normalize_text(question)
         if not normalized:
             raise ValueError("question is required")
-        selected = self._select_evidence_spans(normalized, workspace_id=workspace_id, limit=limit)
-        selected = self._add_claim_evidence_to_selection(normalized, selected, workspace_id=workspace_id, limit=limit)
+        selected = self._select_evidence_spans(normalized, owner_id=owner_id, limit=limit)
+        selected = self._add_claim_evidence_to_selection(normalized, selected, owner_id=owner_id, limit=limit)
         if not selected:
-            return WorkspaceEvidenceSelection(
+            return KnowledgeEvidenceSelection(
                 question=question,
                 reason="no_matching_evidence_span",
             )
         citations: list[AnswerCitation] = []
         selected_claims = self._claims_for_spans(selected)
-        conflicting_ids = self._conflicting_claim_ids(workspace_id, selected_claims)
-        potential_conflicting_ids = self._potential_conflicting_claim_ids(workspace_id, selected_claims)
+        conflicting_ids = self._conflicting_claim_ids(owner_id, selected_claims)
+        potential_conflicting_ids = self._potential_conflicting_claim_ids(owner_id, selected_claims)
         for span in selected:
             block = self.store.get_evidence_block(span.evidence_block_id)
             artifact_id = block.artifact_id if block is not None else ""
@@ -457,7 +457,7 @@ class WorkspaceService:
                 evidence_ref=evidence_ref,
                 claim_ids=list(span.claim_ids),
             ))
-        return WorkspaceEvidenceSelection(
+        return KnowledgeEvidenceSelection(
             question=question,
             selected_spans=selected,
             citations=citations,
@@ -470,12 +470,12 @@ class WorkspaceService:
         self,
         question: str,
         *,
-        workspace_id: str = "default",
+        owner_id: str = "default",
         limit: int = 5,
     ) -> EvidenceGroundedAnswer:
         selection = self.select_evidence(
             question,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             limit=limit,
         )
         if not selection.selected_spans:
@@ -517,7 +517,7 @@ class WorkspaceService:
             _normalize_text(question),
             answer_text,
             selected,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
         )
         return EvidenceGroundedAnswer(
             question=question,
@@ -544,7 +544,7 @@ class WorkspaceService:
         messages: list[ConversationMessage | dict[str, str]],
         *,
         user_id: str = "default",
-        workspace_id: str = "default",
+        owner_id: str = "default",
     ) -> ConversationSolidifyResult:
         normalized_messages = [
             item if isinstance(item, ConversationMessage) else ConversationMessage.model_validate(item)
@@ -556,7 +556,7 @@ class WorkspaceService:
         ingest = self.ingest_text(
             user_text,
             user_id=user_id,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             source_type="conversation",
             created_by="user",
         )
@@ -583,7 +583,7 @@ class WorkspaceService:
             raise ValueError("corrected_statement is required")
         subject, predicate, obj, scope, condition, valid_time = _semantic_claim_parts(statement)
         new_claim = Claim(
-            workspace_id=old_claim.workspace_id,
+            owner_id=old_claim.owner_id,
             user_id=user_id,
             claim_type="user_fact",
             statement=statement,
@@ -612,7 +612,7 @@ class WorkspaceService:
         previous_state = old_claim.state
         old_claim.state = "superseded"
         relation = KnowledgeRelation(
-            workspace_id=old_claim.workspace_id,
+            owner_id=old_claim.owner_id,
             source_id=new_claim.claim_id,
             target_id=old_claim.claim_id,
             relation_type="supersede",
@@ -622,7 +622,7 @@ class WorkspaceService:
         )
         events = [
             KnowledgeStateEvent(
-                workspace_id=old_claim.workspace_id,
+                owner_id=old_claim.owner_id,
                 target_id=old_claim.claim_id,
                 from_state=previous_state,
                 to_state="superseded",
@@ -632,7 +632,7 @@ class WorkspaceService:
                 policy_result="user_confirmed_correction",
             ),
             KnowledgeStateEvent(
-                workspace_id=old_claim.workspace_id,
+                owner_id=old_claim.owner_id,
                 target_id=new_claim.claim_id,
                 from_state="candidate",
                 to_state="active",
@@ -643,7 +643,7 @@ class WorkspaceService:
             ),
         ]
         correction_decision = DecisionCard(
-            workspace_id=old_claim.workspace_id,
+            owner_id=old_claim.owner_id,
             decision_type="claim_correction",
             proposed_action="supersede old claim with corrected user assertion",
             impact_claim_ids=[old_claim.claim_id, new_claim.claim_id],
@@ -682,20 +682,20 @@ class WorkspaceService:
         title: str,
         summary: str,
         user_id: str = "default",
-        workspace_id: str = "default",
+        owner_id: str = "default",
         source_ref: str | None = None,
     ) -> ResearchIngestResult:
         text = _normalize_text(f"{title}\n{summary}")
         ingest = self.ingest_text(
             text,
             user_id=user_id,
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             source_type="research_event",
             source_ref=source_ref,
             created_by="system",
         )
         event = ResearchEvent(
-            workspace_id=workspace_id,
+            owner_id=owner_id,
             user_id=user_id,
             topic=topic,
             title=title,
@@ -708,7 +708,7 @@ class WorkspaceService:
         )
         derived_relations = [
             KnowledgeRelation(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 source_type="research_event",
                 source_id=event.research_event_id,
                 target_type="claim",
@@ -752,17 +752,17 @@ class WorkspaceService:
     def plan_review_and_gaps(
         self,
         *,
-        workspace_id: str = "default",
+        owner_id: str = "default",
         limit: int = 10,
     ) -> ReviewPlanResult:
-        claims = self.store.list_claims(workspace_id, limit=500)
+        claims = self.store.list_claims(owner_id, limit=500)
         review_items: list[ReviewItem] = []
         gaps: list[KnowledgeGap] = []
         for claim in claims:
             if claim.state == "active" and self._claim_projection_eligible(claim, "review"):
                 priority = round(claim.confidence + min(len(claim.evidence_span_ids), 3) * 0.05, 4)
                 review_items.append(ReviewItem(
-                    workspace_id=workspace_id,
+                    owner_id=owner_id,
                     claim_id=claim.claim_id,
                     prompt=f"复习：{claim.statement}",
                     priority=priority,
@@ -771,7 +771,7 @@ class WorkspaceService:
                 ))
                 if not claim.evidence_span_ids and claim.support_status != "user_asserted":
                     gaps.append(KnowledgeGap(
-                        workspace_id=workspace_id,
+                        owner_id=owner_id,
                         gap_type="missing_evidence",
                         claim_ids=[claim.claim_id],
                         question=f"这条知识缺少证据：{claim.statement}",
@@ -780,7 +780,7 @@ class WorkspaceService:
                     ))
             elif claim.state == "active" and not self._claim_projection_eligible(claim, "review"):
                 gaps.append(KnowledgeGap(
-                    workspace_id=workspace_id,
+                    owner_id=owner_id,
                     gap_type="missing_evidence",
                     claim_ids=[claim.claim_id],
                     question=f"这条知识未通过复习投影质量门：{claim.statement}",
@@ -789,7 +789,7 @@ class WorkspaceService:
                 ))
             elif claim.state == "conflicted":
                 gaps.append(KnowledgeGap(
-                    workspace_id=workspace_id,
+                    owner_id=owner_id,
                     gap_type="conflict",
                     claim_ids=[claim.claim_id],
                     question=f"需要澄清冲突知识：{claim.statement}",
@@ -798,7 +798,7 @@ class WorkspaceService:
                 ))
             elif claim.state in {"uncertain", "grounded", "verified"} or claim.support_status in {"partially_supported", "not_found"}:
                 gaps.append(KnowledgeGap(
-                    workspace_id=workspace_id,
+                    owner_id=owner_id,
                     gap_type="uncertain",
                     claim_ids=[claim.claim_id],
                     question=f"需要补充证据或确认：{claim.statement}",
@@ -807,7 +807,7 @@ class WorkspaceService:
                 ))
         seen_potential_conflicts: set[tuple[str, str]] = set()
         for relation in self.store.list_knowledge_relations(
-            workspace_id,
+            owner_id,
             relation_type="potential_conflict",
             limit=500,
         ):
@@ -820,7 +820,7 @@ class WorkspaceService:
             if source is None or target is None:
                 continue
             gaps.append(KnowledgeGap(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 gap_type="conflict",
                 claim_ids=[source.claim_id, target.claim_id],
                 question=f"需要语义确认潜在冲突：{source.statement} / {target.statement}",
@@ -836,11 +836,11 @@ class WorkspaceService:
     def project_knowledge_graph(
         self,
         *,
-        workspace_id: str = "default",
+        owner_id: str = "default",
         limit: int = 100,
     ) -> GraphProjectionResult:
         claims = [
-            claim for claim in self.store.list_claims(workspace_id, limit=limit)
+            claim for claim in self.store.list_claims(owner_id, limit=limit)
             if self._claim_projection_eligible(claim, "graph")
         ]
         projections: list[GraphProjection] = []
@@ -848,7 +848,7 @@ class WorkspaceService:
             entities = sorted({claim.subject, claim.object, *_extract_entities(claim.statement)} - {""})
             quality = "ok" if claim.evidence_span_ids else "no_backlink"
             projections.append(GraphProjection(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 source_claim_id=claim.claim_id,
                 evidence_span_ids=list(claim.evidence_span_ids),
                 entity_names=entities,
@@ -876,14 +876,14 @@ class WorkspaceService:
         if artifact is None:
             raise ValueError(f"Artifact not found: {artifact_id}")
         spans = []
-        for span in self.store.list_evidence_spans(artifact.workspace_id, limit=1000):
+        for span in self.store.list_evidence_spans(artifact.owner_id, limit=1000):
             block = self.store.get_evidence_block(span.evidence_block_id)
             if block is not None and block.artifact_id == artifact_id:
                 spans.append(span)
         affected_span_ids = {span.evidence_span_id for span in spans}
         affected_claims: list[Claim] = []
         events: list[KnowledgeStateEvent] = []
-        for claim in self.store.list_claims(artifact.workspace_id, limit=1000):
+        for claim in self.store.list_claims(artifact.owner_id, limit=1000):
             if not (set(claim.evidence_span_ids) & affected_span_ids):
                 continue
             previous = claim.state
@@ -896,7 +896,7 @@ class WorkspaceService:
             claim.quality_gate = self._claim_quality_gate(claim)
             affected_claims.append(claim)
             events.append(KnowledgeStateEvent(
-                workspace_id=artifact.workspace_id,
+                owner_id=artifact.owner_id,
                 target_id=claim.claim_id,
                 from_state=previous,
                 to_state="deleted",
@@ -910,7 +910,7 @@ class WorkspaceService:
         if events:
             self.store.save_knowledge_state_events(events)
         invalidated = sum(
-            1 for projection in self.store.list_graph_projections(artifact.workspace_id, limit=1000)
+            1 for projection in self.store.list_graph_projections(artifact.owner_id, limit=1000)
             if projection.source_claim_id in {claim.claim_id for claim in affected_claims}
         )
         return ArtifactDeleteImpactResult(
@@ -931,12 +931,12 @@ class WorkspaceService:
         if artifact is None:
             raise ValueError(f"Artifact not found: {artifact_id}")
         old_claims = [
-            claim for claim in self.store.list_claims(artifact.workspace_id, limit=1000)
+            claim for claim in self.store.list_claims(artifact.owner_id, limit=1000)
             if claim.created_from == artifact_id
         ]
         replay_run = ExtractionRun(
             artifact_id=artifact.artifact_id,
-            workspace_id=artifact.workspace_id,
+            owner_id=artifact.owner_id,
             input_hash=artifact.content_hash,
             semantic_extractor_version=self.semantic_evidence_extractor.version if self.semantic_evidence_extractor else "",
             prompt_version=prompt_version,
@@ -951,14 +951,14 @@ class WorkspaceService:
             spans = self._build_semantic_evidence_spans(
                 semantic_result,
                 blocks,
-                workspace_id=artifact.workspace_id,
+                owner_id=artifact.owner_id,
             )
         except Exception:
             semantic_result = LocalSemanticFixtureExtractor().extract(artifact=artifact, blocks=blocks)
             spans = self._build_semantic_evidence_spans(
                 semantic_result,
                 blocks,
-                workspace_id=artifact.workspace_id,
+                owner_id=artifact.owner_id,
             )
         refs_by_span = {
             span.evidence_span_id: EvidenceRef(
@@ -994,7 +994,7 @@ class WorkspaceService:
             claim_extraction,
             artifact=artifact,
             user_id=artifact.user_id,
-            workspace_id=artifact.workspace_id,
+            owner_id=artifact.owner_id,
             created_from=artifact.artifact_id,
             created_by="system",
             source_type=artifact.source_type,
@@ -1037,7 +1037,7 @@ class WorkspaceService:
         elif admission.decision_policy == "auto_execute":
             status = "auto_executed"
         return DecisionCard(
-            workspace_id=claim.workspace_id,
+            owner_id=claim.owner_id,
             decision_type="claim_admission",
             proposed_action=f"{admission.admission_result}: {claim.statement}",
             impact_claim_ids=[claim.claim_id],
@@ -1057,7 +1057,7 @@ class WorkspaceService:
         if not title:
             title = artifact.source_ref or artifact.text.splitlines()[0][:48] or "Untitled knowledge item"
         return KnowledgeItem(
-            workspace_id=artifact.workspace_id,
+            owner_id=artifact.owner_id,
             user_id=artifact.user_id,
             title=str(title)[:80],
             summary=artifact.text[:500],
@@ -1189,7 +1189,7 @@ class WorkspaceService:
     def _enqueue_projection_jobs(
         self,
         *,
-        workspace_id: str,
+        owner_id: str,
         source_object_type: str,
         source_object_id: str,
         include_claims: bool,
@@ -1199,7 +1199,7 @@ class WorkspaceService:
             projection_types.extend(["project_claim_indexes", "project_review", "project_graph"])
         jobs = [
             ProjectionJob(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 projection_type=projection_type,  # type: ignore[arg-type]
                 source_object_type=source_object_type,  # type: ignore[arg-type]
                 source_object_id=source_object_id,
@@ -1216,13 +1216,13 @@ class WorkspaceService:
         candidate_answer: str,
         selected: list[EvidenceSpan],
         *,
-        workspace_id: str,
+        owner_id: str,
     ):
         if self.answer_verifier is None:
             return unavailable_answer_verification(
-                "workspace_answer_verifier_unavailable"
+                "knowledge_answer_verifier_unavailable"
             )
-        all_spans = self.store.list_evidence_spans(workspace_id, limit=500)
+        all_spans = self.store.list_evidence_spans(owner_id, limit=500)
         manifests = self._coverage_manifests_for_spans([*selected, *all_spans])
         try:
             return self.answer_verifier.verify(
@@ -1234,7 +1234,7 @@ class WorkspaceService:
             )
         except Exception as exc:
             return unavailable_answer_verification(
-                f"workspace_answer_verification_failed:{type(exc).__name__}"
+                f"knowledge_answer_verification_failed:{type(exc).__name__}"
             )
 
     def _coverage_manifests_for_spans(self, spans: list[EvidenceSpan]) -> list[CoverageManifest]:
@@ -1257,7 +1257,7 @@ class WorkspaceService:
             if claim.state not in {"active", "conflicted", "verified", "grounded"}:
                 continue
             items.append(KnowledgeItem(
-                workspace_id=claim.workspace_id,
+                owner_id=claim.owner_id,
                 user_id=claim.user_id,
                 title=_knowledge_item_title(claim.statement),
                 summary=claim.statement,
@@ -1280,7 +1280,7 @@ class WorkspaceService:
             cursor = end
             blocks.append(EvidenceBlock(
                 artifact_id=artifact.artifact_id,
-                workspace_id=artifact.workspace_id,
+                owner_id=artifact.owner_id,
                 locator=f"paragraph:{index}",
                 block_type=_block_type(paragraph),
                 char_range=(start, end),
@@ -1291,13 +1291,13 @@ class WorkspaceService:
             ))
         return blocks
 
-    def _build_evidence_spans(self, blocks: list[EvidenceBlock], *, workspace_id: str) -> list[EvidenceSpan]:
+    def _build_evidence_spans(self, blocks: list[EvidenceBlock], *, owner_id: str) -> list[EvidenceSpan]:
         spans: list[EvidenceSpan] = []
         for block in blocks:
             for start, end, sentence in _split_spans(block.full_context):
                 spans.append(EvidenceSpan(
                     evidence_block_id=block.evidence_block_id,
-                    workspace_id=workspace_id,
+                    owner_id=owner_id,
                     start_offset=start,
                     end_offset=end,
                     span_type=_span_type(sentence),
@@ -1314,7 +1314,7 @@ class WorkspaceService:
         extraction: SemanticEvidenceExtraction,
         blocks: list[EvidenceBlock],
         *,
-        workspace_id: str,
+        owner_id: str,
     ) -> list[EvidenceSpan]:
         spans: list[EvidenceSpan] = []
         blocks_by_locator = {block.locator: block for block in blocks}
@@ -1333,7 +1333,7 @@ class WorkspaceService:
             end = start + len(text)
             spans.append(EvidenceSpan(
                 evidence_block_id=block.evidence_block_id,
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 start_offset=start,
                 end_offset=end,
                 span_type=draft.span_type,
@@ -1346,7 +1346,7 @@ class WorkspaceService:
             ))
         if spans:
             return spans
-        return self._build_evidence_spans(blocks, workspace_id=workspace_id)
+        return self._build_evidence_spans(blocks, owner_id=owner_id)
 
     def _claims_from_semantic_extraction(
         self,
@@ -1354,7 +1354,7 @@ class WorkspaceService:
         *,
         artifact: Artifact,
         user_id: str,
-        workspace_id: str,
+        owner_id: str,
         created_from: str,
         created_by: str,
         source_type: str,
@@ -1383,7 +1383,7 @@ class WorkspaceService:
                 if ref_id in refs_by_id
             ]
             claim = Claim(
-                workspace_id=workspace_id,
+                owner_id=owner_id,
                 user_id=user_id,
                 claim_type=draft.claim_type,
                 statement=statement,
@@ -1451,7 +1451,7 @@ class WorkspaceService:
             if ref_id in refs_by_id
         ]
         return GroundingRun(
-            workspace_id=claim.workspace_id,
+            owner_id=claim.owner_id,
             claim_id=claim.claim_id,
             evidence_span_ids=[refs_by_id[ref_id].evidence_span_id for ref_id in supporting_ref_ids],
             contradicting_evidence_span_ids=[refs_by_id[ref_id].evidence_span_id for ref_id in contradicting_ref_ids],
@@ -1463,12 +1463,12 @@ class WorkspaceService:
             calibration=calibration_from_grounding(judgment),
         )
 
-    def _select_evidence_spans(self, question: str, *, workspace_id: str, limit: int) -> list[EvidenceSpan]:
+    def _select_evidence_spans(self, question: str, *, owner_id: str, limit: int) -> list[EvidenceSpan]:
         q_terms = evidence_terms(question)
         if not q_terms:
             return []
         scored: list[tuple[int, EvidenceSpan]] = []
-        for span in self.store.list_evidence_spans(workspace_id, limit=500):
+        for span in self.store.list_evidence_spans(owner_id, limit=500):
             overlap = len(q_terms & evidence_terms(span.text_span))
             if overlap:
                 scored.append((overlap, span))
@@ -1480,13 +1480,13 @@ class WorkspaceService:
         question: str,
         selected: list[EvidenceSpan],
         *,
-        workspace_id: str,
+        owner_id: str,
         limit: int,
     ) -> list[EvidenceSpan]:
         selected_by_id = {span.evidence_span_id: span for span in selected}
         q_terms = evidence_terms(question)
         scored_claims: list[tuple[int, Claim]] = []
-        for claim in self.store.list_claims(workspace_id, limit=500):
+        for claim in self.store.list_claims(owner_id, limit=500):
             if not self._claim_projection_eligible(claim, "ask"):
                 continue
             claim_terms = evidence_terms(" ".join([
@@ -1528,15 +1528,15 @@ class WorkspaceService:
                 claims.append(claim)
         return claims
 
-    def _conflicting_claim_ids(self, workspace_id: str, claims: list[Claim]) -> list[str]:
-        return self._related_claim_ids(workspace_id, claims, relation_type="conflict", include_claim_state=True)
+    def _conflicting_claim_ids(self, owner_id: str, claims: list[Claim]) -> list[str]:
+        return self._related_claim_ids(owner_id, claims, relation_type="conflict", include_claim_state=True)
 
-    def _potential_conflicting_claim_ids(self, workspace_id: str, claims: list[Claim]) -> list[str]:
-        return self._related_claim_ids(workspace_id, claims, relation_type="potential_conflict")
+    def _potential_conflicting_claim_ids(self, owner_id: str, claims: list[Claim]) -> list[str]:
+        return self._related_claim_ids(owner_id, claims, relation_type="potential_conflict")
 
     def _related_claim_ids(
         self,
-        workspace_id: str,
+        owner_id: str,
         claims: list[Claim],
         *,
         relation_type: str,
@@ -1547,7 +1547,7 @@ class WorkspaceService:
             if include_claim_state and claim.state == "conflicted":
                 ids.add(claim.claim_id)
             for relation in self.store.list_knowledge_relations(
-                workspace_id,
+                owner_id,
                 source_id=claim.claim_id,
                 relation_type=relation_type,
                 limit=50,
@@ -1555,7 +1555,7 @@ class WorkspaceService:
                 ids.add(relation.source_id)
                 ids.add(relation.target_id)
             for relation in self.store.list_knowledge_relations(
-                workspace_id,
+                owner_id,
                 target_id=claim.claim_id,
                 relation_type=relation_type,
                 limit=50,
@@ -1569,7 +1569,7 @@ class WorkspaceService:
         new_claims: list[Claim],
         existing_claims: list[Claim],
         *,
-        workspace_id: str,
+        owner_id: str,
     ) -> tuple[list[KnowledgeRelation], list[KnowledgeStateEvent], list[Claim], list[DecisionCard], list[KnowledgeGap]]:
         relations: list[KnowledgeRelation] = []
         state_events: list[KnowledgeStateEvent] = []
@@ -1606,7 +1606,7 @@ class WorkspaceService:
                     )
                     decisions.append(decision)
                     gaps.append(KnowledgeGap(
-                        workspace_id=workspace_id,
+                        owner_id=owner_id,
                         gap_type="conflict",
                         claim_ids=[new_claim.claim_id, existing.claim_id],
                         question=f"需要确认这两条知识是否冲突：{new_claim.statement} / {existing.statement}",
@@ -1614,7 +1614,7 @@ class WorkspaceService:
                         severity="high" if relation_type == "conflict" else "medium",
                     ))
                 relation = KnowledgeRelation(
-                    workspace_id=workspace_id,
+                    owner_id=owner_id,
                     source_id=new_claim.claim_id,
                     target_id=existing.claim_id,
                     relation_type=relation_type,
@@ -1629,7 +1629,7 @@ class WorkspaceService:
                         from_state = new_claim.state
                         new_claim.state = "conflicted"
                         state_events.append(KnowledgeStateEvent(
-                            workspace_id=workspace_id,
+                            owner_id=owner_id,
                             target_id=new_claim.claim_id,
                             from_state=from_state,
                             to_state="conflicted",
@@ -1642,7 +1642,7 @@ class WorkspaceService:
                         existing.state = "conflicted"
                         updated_existing[existing.claim_id] = existing
                         state_events.append(KnowledgeStateEvent(
-                            workspace_id=workspace_id,
+                            owner_id=owner_id,
                             target_id=existing.claim_id,
                             from_state=previous,
                             to_state="conflicted",
@@ -1707,7 +1707,7 @@ class WorkspaceService:
     ) -> DecisionCard:
         action = "确认冲突并选择保留哪条知识" if relation_type == "conflict" else "确认两条知识是否真的冲突"
         return DecisionCard(
-            workspace_id=new_claim.workspace_id,
+            owner_id=new_claim.owner_id,
             decision_type="conflict_resolution",
             proposed_action=f"{action}: {new_claim.statement} / {existing.statement}",
             impact_claim_ids=[new_claim.claim_id, existing.claim_id],

@@ -112,7 +112,7 @@ GraphRAG answer 标成低分 evidence：降低分数不能建立来源真实性�
 
 当前生产 Graph Provider 只有 `graphiti`、`structural` 和 `hybrid`。Microsoft GraphRAG 历史结果
 保留为无效 answer projection 的评测记录，不再形成生产选择面。Graphiti、structural、local、
-workspace 和 web 路径不受此删除影响。
+personal knowledge 和 web 路径不受此删除影响。
 
 ## Executed Verification / Net Complexity / Remaining Risk
 

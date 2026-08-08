@@ -34,7 +34,7 @@ uv run pytest -q evals/e2e_quality/test_product_capability_outcomes.py::test_bas
 
 结果：`1 passed in 120.78s`。Conversation 返回 `clarification_required`，模型明确要求确认，
 但 Claim 零增长、`tool_calls=0`，响应和 trace 均没有 pending confirmation；同一输入调用
-`WorkspaceService.solidify_conversation` 后新增 2 个 Claim。根因是 Conversation 缺少确认后
+`KnowledgeService.solidify_conversation` 后新增 2 个 Claim。根因是 Conversation 缺少确认后
 继续执行的确定性产品协议，不是模型理解失败或知识写能力缺失。
 
 ## Target E2E and Counterfactuals
@@ -57,7 +57,7 @@ E14 从 `/api/conversation/turn` 输入用户自然表达，自动断言：
 - Conversation Admission：机械证明 message index 有效且 span 逐字存在于对应 user message；
 - Conversation Service：冻结精确 span 与 source index，创建 Command，执行 scope/digest/状态校验；
 - Interaction Journal：拥有 Command、确认状态和 Receipt；
-- `WorkspaceService.solidify_conversation`：知识事实唯一 canonical 写入口；
+- `KnowledgeService.solidify_conversation`：知识事实唯一 canonical 写入口；
 - Receipt：知识写入的 execution fact；E14 还必须从公开 Claim 读取入口证明精确结论存在且控制
   语义不存在，Receipt 或记录新增不能单独完成本用例。
 
@@ -68,7 +68,7 @@ source index、command、确认、journal 与 Receipt。
 ## Required Production Capabilities and Missing-capability Delivery
 
 已有：Conversation typed model decision、正式 HTTP 入口、FileInteractionJournal、身份/scope、
-Workspace 固化及 Claim 持久化。
+Personal Knowledge 固化及 Claim 持久化。
 
 需扩展：在既有 `ToolCallProposal` 中注册粗粒度 save capability、typed exact-span selection、
 immutable Command/Receipt/operation、公开 decision contract、journal 恢复与 replay。
@@ -78,12 +78,12 @@ immutable Command/Receipt/operation、公开 decision contract、journal 恢复�
 ## Affected Modules and Dependency Direction
 
 - `application/conversation`：proposal、command、receipt、状态迁移和用例；
-- `orchestration/runtime`：注入现有 Workspace canonical writer；
+- `orchestration/runtime`：注入现有 Personal Knowledge canonical writer；
 - `adapters/web/routes/conversation`：协议转换、身份解析和错误映射；
-- `application/workspace`：保持现有 owner，不接收模型生成的替代正文；
+- `application/knowledge`：保持现有 owner，不接收模型生成的替代正文；
 - E14：正式 HTTP 生产路径与 trace/report 证据。
 
-依赖仍为 Web Adapter -> AgentService/Conversation -> Workspace Application；Domain 和 Workspace
+依赖仍为 Web Adapter -> AgentService/Conversation -> Personal Knowledge Application；Domain 和 Personal Knowledge
 事实模型不依赖 Conversation 或 Web。
 
 ## Complexity Added, Removed and Rejected Alternatives
@@ -100,15 +100,15 @@ Planner/Projection/Grant 双 digest 等未被 baseline 要求的机制；也拒�
 ## Removed Legacy Path / Risks
 
 删除空转 Procedure 后，Conversation governed save 是该用户目标的唯一主链；原有显式
-`/api/workspace/solidify-conversation` 仍是已发布的 Workspace API，但与新链路复用同一个
+`/api/knowledge/solidify-conversation` 仍是已发布的 Personal Knowledge API，但与新链路复用同一个
 Application 写方法，不构成第二 canonical owner。
 
-当前 E14 覆盖精确 span、控制语义反事实、确认前重启与成功后 replay。若故障注入证明“Workspace 已提交、Journal Receipt
-尚未提交”的窗口会产生重复用户结果，必须先保存该失败证据，再把幂等键下沉到 Workspace
+当前 E14 覆盖精确 span、控制语义反事实、确认前重启与成功后 replay。若故障注入证明“Personal Knowledge 已提交、Journal Receipt
+尚未提交”的窗口会产生重复用户结果，必须先保存该失败证据，再把幂等键下沉到 Personal Knowledge
 canonical 写入口；在证据出现前不新增事务表或 outbox。
 
 B02 在 archive `20260729T031804.415533Z-15972-214cb81c` 中从正式 HTTP 穿过 prepare、confirm
-和 Workspace canonical write，自动证明精确结论缺失且控制语义 Claim 存在。修复前 E14
+和 Personal Knowledge canonical write，自动证明精确结论缺失且控制语义 Claim 存在。修复前 E14
 archive `20260729T031852.315661Z-14416-2f3c2aac` 因相同语义断言失败；最小 exact-span
 selection 修复后最终 matching archive `20260729T033339.065714Z-22692-16415241` 只新增一个精确结论 Claim，
 控制语义为零，原 Command 可恢复且 replay 不新增 Claim。B02 代码已在目标 E2E 通过后移除，
@@ -126,5 +126,5 @@ selection 修复后最终 matching archive `20260729T033339.065714Z-22692-164152
 
 退出条件：2026-08-28 前必须以已证明的调用方删除或职责收敛使净复杂度满足门禁，并在 clean
 matching revision 上重跑目标 E2E；否则删除本 ADR 对应的 Conversation capability、Command、
-operation、decision endpoint 和 E14 catalog 条目，恢复到 Workspace 专用入口。禁止延期或增加
+operation、decision endpoint 和 E14 catalog 条目，恢复到 Personal Knowledge 专用入口。禁止延期或增加
 通用抽象来“摊薄”复杂度；确需改变门禁必须另建 ADR，而不能修改本例外的口径。

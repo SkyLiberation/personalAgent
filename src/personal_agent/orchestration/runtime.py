@@ -4,6 +4,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
 from personal_agent.kernel.models import Citation, KnowledgeNote, NoteBody, NoteSource, ReviewCard
 from personal_agent.kernel.observability import set_policy_decision_sink
@@ -18,13 +19,12 @@ from personal_agent.infra.storage.postgres_memory_store import PostgresMemorySto
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
 from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
-from personal_agent.infra.storage.postgres_workspace_store import PostgresWorkspaceStore
+from personal_agent.infra.storage.postgres_knowledge_store import PostgresKnowledgeStore
 from personal_agent.infra.storage.postgres_knowledge_lifecycle_store import (
     PostgresKnowledgeLifecycleStore,
 )
 from personal_agent.infra.storage.postgres_procedure_definition_store import PostgresProcedureDefinitionStore
 from personal_agent.infra.storage.postgres_agent_trace_store import PostgresAgentTraceStore
-from personal_agent.infra.storage.postgres_control_plane_store import PostgresControlPlaneStore
 from personal_agent.infra.storage.postgres_execution_replay_store import PostgresExecutionReplayStore
 from personal_agent.infra.storage.postgres_investigation_project import (
     PostgresInvestigationProjectStore,
@@ -107,7 +107,7 @@ from personal_agent.application.conversation import (
 from personal_agent.application.conversation.models import (
     ProjectReference,
     StartDurableInvestigationArguments,
-    WorkspaceKnowledgeCandidate,
+    PersonalKnowledgeCandidate,
 )
 from personal_agent.domain.investigation_project import UserRequirement
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
@@ -145,14 +145,14 @@ from personal_agent.application.research import (
     ResearchService,
     ResearchSubscriptionRecord,
 )
-from personal_agent.application.workspace import (
+from personal_agent.application.knowledge import (
     IngestKnowledgeResult,
-    LLMWorkspaceAnswerVerifier,
+    LLMKnowledgeAnswerVerifier,
     LLMClaimGroundingJudge,
     LLMClaimRelationJudge,
     LLMSemanticClaimExtractor,
     LLMSemanticEvidenceExtractor,
-    WorkspaceService,
+    KnowledgeService,
 )
 from personal_agent.kernel.evidence import EvidenceItem, evidence_reference
 from personal_agent.application.research.extraction import StructuredResearchEventExtractor
@@ -165,7 +165,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _WorkspaceJsonResult:
+class _KnowledgeJsonResult:
     def __init__(self, payload: dict[str, object], *, ok: bool = True, error: str = "") -> None:
         self.ok = ok
         self.error = error
@@ -175,38 +175,38 @@ class _WorkspaceJsonResult:
         return dict(self._payload)
 
 
-class _WorkspaceConsolidationAdapter:
+class _KnowledgeConsolidationAdapter:
     def __init__(self, runtime: "AgentRuntime") -> None:
         self._runtime = runtime
 
-    def execute(self, *, topic: str, user_id: str = "default") -> _WorkspaceJsonResult:
-        return _WorkspaceJsonResult(self._runtime.execute_consolidate(topic=topic, user_id=user_id))
+    def execute(self, *, topic: str, user_id: str = "default") -> _KnowledgeJsonResult:
+        return _KnowledgeJsonResult(self._runtime.execute_consolidate(topic=topic, user_id=user_id))
 
 
-class _WorkspaceGapReport:
+class _KnowledgeGapReport:
     def __init__(self, *, text: str, gaps: list[dict[str, object]]) -> None:
         self.text = text
         self.gaps = gaps
 
 
-class _WorkspaceGapAdapter:
+class _KnowledgeGapAdapter:
     def __init__(self, runtime: "AgentRuntime") -> None:
         self._runtime = runtime
 
-    def inspect(self, user_id: str) -> _WorkspaceGapReport:
-        result = self._runtime.workspace_service.plan_review_and_gaps(
-            workspace_id=self._runtime._workspace_id(user_id),
+    def inspect(self, user_id: str) -> _KnowledgeGapReport:
+        result = self._runtime.knowledge_service.plan_review_and_gaps(
+            owner_id=self._runtime._owner_id(user_id),
             limit=self._runtime.settings.knowledge_gap.max_gaps_per_run,
         )
         gaps = [gap.model_dump(mode="json") for gap in result.knowledge_gaps]
         if gaps:
             text = "\n".join(f"- {gap['question']}" for gap in gaps)
         else:
-            text = "当前 workspace 没有发现需要立即处理的知识缺口。"
-        return _WorkspaceGapReport(text=text, gaps=gaps)
+            text = "当前个人知识库 没有发现需要立即处理的知识缺口。"
+        return _KnowledgeGapReport(text=text, gaps=gaps)
 
 
-class _WorkspaceDigest:
+class _KnowledgeDigest:
     def __init__(
         self,
         *,
@@ -221,37 +221,37 @@ class _WorkspaceDigest:
         self.sections = sections
 
 
-class _WorkspaceReviewDigestAdapter:
-    formatter: "_WorkspaceReviewDigestAdapter"
+class _KnowledgeReviewDigestAdapter:
+    formatter: "_KnowledgeReviewDigestAdapter"
 
     def __init__(self, runtime: "AgentRuntime") -> None:
         self._runtime = runtime
         self.formatter = self
 
-    def generate(self, user_id: str) -> _WorkspaceDigest:
-        return self._runtime._workspace_digest(user_id)
+    def generate(self, user_id: str) -> _KnowledgeDigest:
+        return self._runtime._knowledge_digest(user_id)
 
-    def to_text(self, digest: _WorkspaceDigest) -> str:
+    def to_text(self, digest: _KnowledgeDigest) -> str:
         return digest.text
 
 
-class _ConversationWorkspaceReadAdapter:
-    def __init__(self, workspace_service: WorkspaceService) -> None:
-        self._workspace_service = workspace_service
+class _ConversationKnowledgeReadAdapter:
+    def __init__(self, knowledge_service: KnowledgeService) -> None:
+        self._knowledge_service = knowledge_service
 
-    def list_workspace_knowledge(
+    def list_personal_knowledge(
         self,
         *,
-        workspace_id: str,
+        owner_id: str,
         user_id: str,
         limit: int,
-    ) -> tuple[WorkspaceKnowledgeCandidate, ...]:
-        items = self._workspace_service.store.list_knowledge_items(
-            workspace_id,
+    ) -> tuple[PersonalKnowledgeCandidate, ...]:
+        items = self._knowledge_service.store.list_knowledge_items(
+            owner_id,
             limit=500,
         )
         visible = tuple(
-            WorkspaceKnowledgeCandidate(
+            PersonalKnowledgeCandidate(
                 knowledge_item_id=item.knowledge_item_id,
                 title=item.title,
                 summary=item.summary,
@@ -271,13 +271,12 @@ class _ConversationProjectAdapter:
         self,
         *,
         principal,
-        security_scope,
+        owner,
         request: StartDurableInvestigationArguments,
         idempotency_key: str,
     ) -> ProjectReference:
         view = self._project_service.create(CreateInvestigationProject(
             principal=principal,
-            security_scope=security_scope,
             title=request.title,
             goal=request.goal,
             requirements=tuple(
@@ -292,8 +291,7 @@ class _ConversationProjectAdapter:
         ))
         return ProjectReference(
             project_id=view.definition.project_id,
-            tenant_id=view.definition.security_scope.tenant_id,
-            workspace_id=view.definition.security_scope.workspace_id,
+            tenant_id=view.definition.principal.tenant_id,
             user_id=view.definition.principal.user_id,
             state=view.state,
             title=view.definition.title,
@@ -338,15 +336,14 @@ class AgentRuntime:
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
         self.procedure_definition_store = PostgresProcedureDefinitionStore(settings.postgres_url)
         self.agent_trace_store = PostgresAgentTraceStore(settings.postgres_url)
-        self.control_plane_store = PostgresControlPlaneStore(settings.postgres_url)
         self.execution_replay_store = PostgresExecutionReplayStore(settings.postgres_url)
         self.worker_queue_store = PostgresWorkerQueueStore(settings.postgres_url)
         self.research_store = PostgresResearchStore(
             settings.postgres_url,
             worker_queue=self.worker_queue_store,
         )
-        self.workspace_service = WorkspaceService(
-            PostgresWorkspaceStore(settings.postgres_url, settings.data_dir)
+        self.knowledge_service = KnowledgeService(
+            PostgresKnowledgeStore(settings.postgres_url, settings.data_dir)
         )
         self.knowledge_lifecycle_service = KnowledgeLifecycleService(
             PostgresKnowledgeLifecycleStore(settings.postgres_url)
@@ -373,11 +370,11 @@ class AgentRuntime:
             settings.openai, settings.langsmith,
         )
         if self._structured_client is not None:
-            self.workspace_service.relation_judge = LLMClaimRelationJudge(self._structured_client)
-            self.workspace_service.semantic_evidence_extractor = LLMSemanticEvidenceExtractor(self._structured_client)
-            self.workspace_service.semantic_claim_extractor = LLMSemanticClaimExtractor(self._structured_client)
-            self.workspace_service.claim_grounding_judge = LLMClaimGroundingJudge(self._structured_client)
-            self.workspace_service.answer_verifier = LLMWorkspaceAnswerVerifier(
+            self.knowledge_service.relation_judge = LLMClaimRelationJudge(self._structured_client)
+            self.knowledge_service.semantic_evidence_extractor = LLMSemanticEvidenceExtractor(self._structured_client)
+            self.knowledge_service.semantic_claim_extractor = LLMSemanticClaimExtractor(self._structured_client)
+            self.knowledge_service.claim_grounding_judge = LLMClaimGroundingJudge(self._structured_client)
+            self.knowledge_service.answer_verifier = LLMKnowledgeAnswerVerifier(
                 self._structured_client
             )
         self._streaming_client = build_streaming_model_client(
@@ -501,8 +498,8 @@ class AgentRuntime:
             tool_port=self._tool_executor,
             agent_port=self._agent_gateway,
             artifact_port=self.artifact_service,
-            knowledge_writer=self.workspace_service,
-            workspace_reader=_ConversationWorkspaceReadAdapter(self.workspace_service),
+            knowledge_writer=self.knowledge_service,
+            knowledge_reader=_ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
             project_port=_ConversationProjectAdapter(self.investigation_project_service),
             budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
@@ -714,7 +711,7 @@ class AgentRuntime:
             verifier=self._verifier,
             llm=self._llm,
             planner_client=self._planner_client,
-            workspace_service=self.workspace_service,
+            knowledge_service=self.knowledge_service,
             policy_engine=self._policy_engine,
         )
 
@@ -771,17 +768,17 @@ class AgentRuntime:
         )
         normalized_user = user_id or self.settings.default_user
         try:
-            self.workspace_service.ingest_text(
+            self.knowledge_service.ingest_text(
                 text=text,
                 source_type=source_type,
                 user_id=normalized_user,
-                workspace_id=self._workspace_id(normalized_user),
+                owner_id=self._owner_id(normalized_user),
                 source_ref=source_ref,
                 raw_location=source_ref or "",
                 created_by="user",
             )
         except Exception:
-            logger.exception("Workspace side-write failed during capture user=%s", normalized_user)
+            logger.exception("Knowledge projection write failed during capture user=%s", normalized_user)
         return result
 
     def execute_consolidate(
@@ -796,34 +793,34 @@ class AgentRuntime:
         ).model_dump(mode="json")
 
     def inspect_knowledge_gaps(self, user_id: str):
-        return self.workspace_service.plan_review_and_gaps(
-            workspace_id=self._workspace_id(user_id),
+        return self.knowledge_service.plan_review_and_gaps(
+            owner_id=self._owner_id(user_id),
             limit=self.settings.knowledge_gap.max_gaps_per_run,
         )
 
-    def _workspace_digest(self, user_id: str) -> _WorkspaceDigest:
-        workspace_id = self._workspace_id(user_id)
-        plan = self.workspace_service.plan_review_and_gaps(
-            workspace_id=workspace_id,
+    def _knowledge_digest(self, user_id: str) -> _KnowledgeDigest:
+        owner_id = self._owner_id(user_id)
+        plan = self.knowledge_service.plan_review_and_gaps(
+            owner_id=owner_id,
             limit=self.settings.knowledge_gap.max_gaps_per_run,
         )
-        items = self.workspace_service.store.list_knowledge_items(
-            workspace_id,
+        items = self.knowledge_service.store.list_knowledge_items(
+            owner_id,
             state="active",
             limit=20,
         )
         claims_by_id = {
             claim.claim_id: claim
-            for claim in self.workspace_service.store.list_claims(workspace_id, limit=500)
+            for claim in self.knowledge_service.store.list_claims(owner_id, limit=500)
         }
         recent_notes = [
             KnowledgeNote(
                 id=item.knowledge_item_id,
                 user_id=item.user_id,
                 source=NoteSource(
-                    type="workspace_item",
+                    type="knowledge_item",
                     metadata={
-                        "workspace_id": workspace_id,
+                        "owner_id": owner_id,
                         "claim_ids": list(item.claim_ids),
                         "evidence_span_ids": list(item.evidence_span_ids),
                     },
@@ -849,7 +846,7 @@ class AgentRuntime:
         claim_lines = [f"- {item.summary}" for item in items[:8]]
         gap_lines = [f"- {gap.question}" for gap in plan.knowledge_gaps[:8]]
         text = "\n".join([
-            "Workspace 知识简报",
+            "个人知识简报",
             "",
             "活跃知识：",
             *(claim_lines or ["- 暂无 active claim。"]),
@@ -857,7 +854,7 @@ class AgentRuntime:
             "待处理缺口：",
             *(gap_lines or ["- 暂无高优先级缺口。"]),
         ])
-        return _WorkspaceDigest(
+        return _KnowledgeDigest(
             text=text,
             recent_notes=recent_notes,
             due_cards=due_cards,
@@ -868,10 +865,13 @@ class AgentRuntime:
             ],
         )
 
-    def _workspace_id(self, user_id: str | None) -> str:
-        return user_id or self.settings.default_user or "default"
+    def _owner_id(self, user_id: str | None) -> str:
+        return AuthenticatedPrincipal(
+            tenant_id="personal-agent",
+            user_id=user_id or self.settings.default_user or "default",
+        ).principal_id
 
-    def _workspace_capture_result(
+    def _knowledge_capture_result(
         self,
         ingest: IngestKnowledgeResult,
         *,
@@ -884,7 +884,7 @@ class AgentRuntime:
         ]
         title = (
             ingest.knowledge_items[0].title
-            if ingest.knowledge_items else (active_claims[0].statement[:48] if active_claims else "Workspace artifact")
+            if ingest.knowledge_items else (active_claims[0].statement[:48] if active_claims else "Knowledge artifact")
         )
         summary = (
             ingest.knowledge_items[0].summary
@@ -899,7 +899,7 @@ class AgentRuntime:
                 fingerprint=artifact.content_hash,
                 metadata={
                     **(metadata or {}),
-                    "workspace_id": artifact.workspace_id,
+                    "owner_id": artifact.owner_id,
                     "artifact_id": artifact.artifact_id,
                     "extraction_run_id": ingest.extraction_run.extraction_run_id,
                     "claim_ids": [claim.claim_id for claim in ingest.claims],
@@ -917,8 +917,8 @@ class AgentRuntime:
         )
         note.version.content_hash = artifact.content_hash
         note.version.source_fingerprint = artifact.content_hash
-        note.version.chunking_version = "workspace:evidence-block-v1"
-        note.version.graph_extraction_version = "workspace:claim-v1"
+        note.version.chunking_version = "knowledge:evidence-block-v1"
+        note.version.graph_extraction_version = "knowledge:claim-v1"
         chunk_notes = [
             KnowledgeNote(
                 id=block.evidence_block_id,
@@ -928,7 +928,7 @@ class AgentRuntime:
                     ref=artifact.source_ref,
                     fingerprint=artifact.content_hash,
                     metadata={
-                        "workspace_id": artifact.workspace_id,
+                        "owner_id": artifact.owner_id,
                         "artifact_id": artifact.artifact_id,
                         "evidence_block_id": block.evidence_block_id,
                     },
@@ -945,8 +945,8 @@ class AgentRuntime:
         for chunk in chunk_notes:
             chunk.version.content_hash = artifact.content_hash
             chunk.version.source_fingerprint = artifact.content_hash
-            chunk.version.chunking_version = "workspace:evidence-block-v1"
-            chunk.version.graph_extraction_version = "workspace:claim-v1"
+            chunk.version.chunking_version = "knowledge:evidence-block-v1"
+            chunk.version.graph_extraction_version = "knowledge:claim-v1"
         review_card = None
         if active_claims:
             review_card = ReviewCard(
@@ -961,7 +961,7 @@ class AgentRuntime:
             review_card=review_card,
         )
 
-    def _execute_workspace_ask(
+    def _execute_knowledge_ask(
         self,
         question: str,
         user_id: str | None = None,
@@ -969,16 +969,16 @@ class AgentRuntime:
         conversation_messages: list[dict[str, str]] | None = None,
     ) -> AskResult:
         normalized_user = user_id or self.settings.default_user
-        answer = self.workspace_service.answer_with_evidence(
+        answer = self.knowledge_service.answer_with_evidence(
             question,
-            workspace_id=self._workspace_id(normalized_user),
+            owner_id=self._owner_id(normalized_user),
         )
         citations = [
             Citation(
                 note_id=citation.artifact_id,
-                title=f"Workspace evidence {index}",
+                title=f"Knowledge evidence {index}",
                 snippet=citation.quote,
-                source_type="workspace",
+                source_type="personal_knowledge",
                 evidence_id=citation.evidence_span_id,
                 source_ref=citation.artifact_id,
                 source_span=citation.locator,
@@ -991,12 +991,12 @@ class AgentRuntime:
                 evidence_id=citation.evidence_span_id,
                 source_type="note",
                 source_id=citation.artifact_id,
-                title=f"Workspace evidence {index}",
+                title=f"Knowledge evidence {index}",
                 snippet=citation.quote,
                 source_span=citation.locator,
                 score=1.0,
                 metadata={
-                    "workspace_id": self._workspace_id(normalized_user),
+                    "owner_id": self._owner_id(normalized_user),
                     "evidence_block_id": citation.evidence_block_id,
                     "claim_ids": list(citation.claim_ids),
                 },
@@ -1008,9 +1008,9 @@ class AgentRuntime:
                 id=claim_id,
                 user_id=normalized_user,
                 source=NoteSource(
-                    type="workspace_claim",
+                    type="knowledge_claim",
                     metadata={
-                        "workspace_id": self._workspace_id(normalized_user),
+                        "owner_id": self._owner_id(normalized_user),
                         "claim_id": claim_id,
                     },
                 ),
@@ -1030,7 +1030,7 @@ class AgentRuntime:
             evidence_refs=[evidence_reference(item) for item in evidence],
             session_id=session_id or "default",
             repair_telemetry={
-                "workspace": True,
+                "personal_knowledge": True,
                 "verification": answer.verification.model_dump(mode="json"),
                 "selected_claim_ids": list(answer.selected_claim_ids),
                 "conflicted_claim_ids": list(answer.conflicted_claim_ids),

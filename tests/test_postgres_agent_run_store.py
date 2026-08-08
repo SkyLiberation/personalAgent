@@ -33,7 +33,6 @@ def test_reserved_agent_submission_reconciles_after_gateway_restart(
     context = AgentGatewayContext(
         execution_scope=interaction_execution_scope(
             tenant_id="tenant-1",
-            workspace_id="workspace-1",
             user_id="alice",
             execution_id="project-1",
             task_id="subgoal-1",

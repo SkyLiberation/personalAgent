@@ -69,7 +69,7 @@ profile，也不自动等于产品能力。
 
 - 未确认、错误 digest、scope denied 时零副作用；
 - Ask 不把模型回答隐式写成 Claim；
-- 另一 workspace 的事实不进入回答；
+- 另一 personal knowledge 的事实不进入回答；
 - capability unavailable 不选择语义相近的替代 Tool；
 - budget exhaustion 不生成未经执行的答案；
 - child Artifact 不自动成为父级 FinalMessage；

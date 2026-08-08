@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from personal_agent.application.workspace import (
-    FixtureWorkspaceAnswerVerifier,
-    InMemoryWorkspaceStore,
-    WorkspaceService,
+from personal_agent.application.knowledge import (
+    FixtureKnowledgeAnswerVerifier,
+    InMemoryKnowledgeStore,
+    KnowledgeService,
 )
 from personal_agent.application.verifier import AnswerVerifier
 from personal_agent.governance.policy import PolicyEngine
@@ -33,16 +33,16 @@ class _EmptyMemory:
         return []
 
 
-class _RecordingWorkspaceAnswerVerifier:
-    name = "recording-workspace-answer-verifier"
+class _RecordingKnowledgeAnswerVerifier:
+    name = "recording-knowledge-answer-verifier"
     version = "v1"
 
     def __init__(self) -> None:
         self.calls: list[str] = []
-        self._delegate = FixtureWorkspaceAnswerVerifier()
+        self._delegate = FixtureKnowledgeAnswerVerifier()
 
     def verify(self, **kwargs):
-        self.calls.append("workspace_answer_semantic_verification")
+        self.calls.append("knowledge_answer_semantic_verification")
         return self._delegate.verify(**kwargs)
 
 
@@ -55,17 +55,17 @@ class _AnswerLlm:
         )
 
 
-def _claim_sensitive_ask_service() -> tuple[AskService, _RecordingWorkspaceAnswerVerifier]:
-    workspace_store = InMemoryWorkspaceStore()
-    recorder = _RecordingWorkspaceAnswerVerifier()
-    workspace = WorkspaceService(workspace_store, answer_verifier=recorder)
-    workspace.ingest_text(
+def _claim_sensitive_ask_service() -> tuple[AskService, _RecordingKnowledgeAnswerVerifier]:
+    knowledge_store = InMemoryKnowledgeStore()
+    recorder = _RecordingKnowledgeAnswerVerifier()
+    knowledge = KnowledgeService(knowledge_store, answer_verifier=recorder)
+    knowledge.ingest_text(
         (
             "Northstar 的迁移日期是 2026-09-10。"
             "Northstar 的迁移日期是 2026-10-15。"
         ),
         user_id="u1",
-        workspace_id="u1",
+        owner_id="u1",
         source_type="document",
     )
     policy = PolicyEngine()
@@ -80,29 +80,29 @@ def _claim_sensitive_ask_service() -> tuple[AskService, _RecordingWorkspaceAnswe
         tool_executor=ToolExecutor(policy_engine=policy),
         verifier=AnswerVerifier(),
         llm=_AnswerLlm(),
-        workspace_service=workspace,
+        knowledge_service=knowledge,
         policy_engine=policy,
     )
     return service, recorder
 
 
-def test_claim_sensitive_ask_retrieves_workspace_evidence_without_verifying_discarded_answer():
+def test_claim_sensitive_ask_retrieves_knowledge_evidence_without_verifying_discarded_answer():
     service, recorder = _claim_sensitive_ask_service()
 
     ctx = service.build_run_context(
         "Northstar 的迁移日期是否冲突？",
         user_id="u1",
-        session_id="baseline-workspace-boundary",
+        session_id="baseline-knowledge-boundary",
     )
     service.run_retrieval_stage(ctx)
 
-    workspace_evidence = [
+    knowledge_evidence = [
         item
         for item in ctx.evidence_pool
-        if item.metadata.get("retrieved_by") == "workspace"
+        if item.metadata.get("retrieved_by") == "personal_knowledge"
     ]
-    assert workspace_evidence
-    assert all("answer_verification" not in item.metadata for item in workspace_evidence)
+    assert knowledge_evidence
+    assert all("answer_verification" not in item.metadata for item in knowledge_evidence)
     assert recorder.calls == []
     service.run_generation_stage(ctx)
     service.run_verification_stage(ctx)
@@ -113,13 +113,13 @@ def test_claim_sensitive_ask_retrieves_workspace_evidence_without_verifying_disc
     assert result.citations
 
 
-def test_formal_workspace_answer_still_owns_answer_verification():
+def test_formal_knowledge_answer_still_owns_answer_verification():
     service, recorder = _claim_sensitive_ask_service()
 
-    answer = service.workspace_service.answer_with_evidence(
+    answer = service.knowledge_service.answer_with_evidence(
         "Northstar 的迁移日期是否冲突？",
-        workspace_id="u1",
+        owner_id="u1",
     )
 
     assert answer.citations
-    assert recorder.calls == ["workspace_answer_semantic_verification"]
+    assert recorder.calls == ["knowledge_answer_semantic_verification"]

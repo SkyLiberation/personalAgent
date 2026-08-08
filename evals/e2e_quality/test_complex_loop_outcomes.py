@@ -59,7 +59,7 @@ def _capture_memory_text(
         f"{server.base_url}/api/tools/capture_text/execute",
         {
             "tenant_id": "default",
-            "workspace_id": user_id,
+            "owner_id": user_id,
             "user_id": user_id,
             "kwargs": {
                 "text": text,
@@ -170,6 +170,72 @@ def test_l01_http_natural_recall_uses_observed_personal_knowledge(
     assert supporting_observations
     assert trace["execution_order"]
     assert "working_plans" not in trace
+
+
+def test_l07_http_conversation_save_is_recalled_in_a_new_conversation(
+    live_web_process: LiveWebProcess,
+    trace_archive,
+    request: pytest.FixtureRequest,
+) -> None:
+    marker = f"l01b-{uuid4().hex[:8]}"
+    first_conversation_id = f"conversation-save-{marker}"
+    second_conversation_id = f"conversation-recall-{marker}"
+    project_name = f"Juniper-{marker}"
+    expected_code = f"amber-{uuid4().hex[:10]}"
+    save_text = (
+        f"请记住：{project_name} 项目的验收颜色代号是 {expected_code}。"
+        "保存前先让我确认。"
+    )
+    prepared = _conversation(
+        live_web_process,
+        conversation_id=first_conversation_id,
+        text=save_text,
+    )
+    pending = prepared["pending_confirmation"]
+    command = pending["command"]
+    assert prepared["disposition"] == "confirmation_required"
+    assert pending["status"] == "awaiting_confirmation"
+
+    confirmed = _post_json(
+        f"{live_web_process.base_url}/api/conversation/runs/"
+        f"{prepared['interaction_run_ref']}/knowledge-save-decision",
+        {
+            "decision": "confirm",
+            "command_digest": command["command_digest"],
+            "confirmation_ref": f"{marker}-confirmation",
+        },
+    )
+    assert confirmed["status"] == "executed"
+
+    recall_text = f"我之前记下的 {project_name} 项目验收颜色代号是什么？"
+    recalled = _conversation(
+        live_web_process,
+        conversation_id=second_conversation_id,
+        text=recall_text,
+    )
+    trace = _trace(live_web_process, str(recalled["interaction_run_ref"]))
+    final_message = str(recalled["message"]["content"]).strip()
+    _record(
+        trace_archive,
+        request,
+        "L07.conversation_save_cross_conversation_recall",
+        {
+            "save_text": save_text,
+            "prepared": prepared,
+            "confirmed": confirmed,
+            "recall_text": recall_text,
+            "recalled": recalled,
+            "trace": trace,
+        },
+        profile="baseline",
+    )
+    assert recalled["disposition"] == "answer"
+    assert expected_code in final_message
+    assert any(
+        expected_code in json.dumps(item["payload"], ensure_ascii=False)
+        for item in trace["inputs"]
+        if item["kind"] == "tool_result" and item["status"] == "succeeded"
+    )
 
 
 def test_l02_http_independent_reads_use_safe_concurrency(

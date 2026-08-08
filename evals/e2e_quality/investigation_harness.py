@@ -76,9 +76,8 @@ from personal_agent.infra.storage.postgres_worker_queue_store import (
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 
 
@@ -657,7 +656,6 @@ class _RuntimeBundle:
     tools: _ToolPort
     agents: _AgentPort
     sequence: list[str]
-    scope: SecurityScope
     principal: AuthenticatedPrincipal
 
 
@@ -665,10 +663,6 @@ class InvestigationScenarioHarness:
     def __init__(self, postgres_url: str, temp_dir: Path) -> None:
         self.postgres_url = postgres_url
         self.temp_dir = temp_dir
-        self.scope = SecurityScope(
-            tenant_id="tenant-a",
-            workspace_id="architecture",
-        )
         self.principal = AuthenticatedPrincipal(
             tenant_id="tenant-a",
             user_id="architect",
@@ -713,7 +707,7 @@ class InvestigationScenarioHarness:
             cross_scope_refs=tuple(
                 item.resource_id
                 for item in view.artifact_refs
-                if item.owner_scope != self.scope
+                if item.owner != self.principal
             ),
         )
 
@@ -781,7 +775,6 @@ class InvestigationScenarioHarness:
         before = self._view(bundle, project_id)
         bundle.service.steer(SteerInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
             expected_plan_version=before.accepted_plan.plan_version,
             statement="Stop cost analysis and compare two migration orders.",
@@ -899,7 +892,6 @@ class InvestigationScenarioHarness:
         calls_before = bundle.agents.provider_submission_count
         view = bundle.service.approve(ApproveInvestigationCommand(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
             command_id=command.command_id,
             authorization_digest=command.authorization_digest,
@@ -1033,13 +1025,11 @@ class InvestigationScenarioHarness:
         active = self._run(bundle, project_id, max_cycles=1)
         paused = bundle.service.pause(PauseInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
         ))
         recovery_enqueues = bundle.service.recover()
         resumed = bundle.service.resume(ResumeInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
         ))
         completed = self._run(bundle, project_id)
@@ -1072,7 +1062,6 @@ class InvestigationScenarioHarness:
         try:
             blocked_bundle.service.resume(ResumeInvestigationProject(
                 principal=self.principal,
-                security_scope=self.scope,
                 project_id=blocked_id,
             ))
         except ValueError as exc:
@@ -1157,7 +1146,7 @@ class InvestigationScenarioHarness:
             requirements=("architecture",),
         )
         completed = self._run(restarted, project_id)
-        canonical = restarted.service.store.load(self.scope, project_id)
+        canonical = restarted.service.store.load(self.principal, project_id)
         return SimpleNamespace(
             crashed_state=crashed.state,
             completed_state=completed.state,
@@ -1248,7 +1237,6 @@ class InvestigationScenarioHarness:
         try:
             bundle.service.cancel(CancelInvestigationProject(
                 principal=self.principal,
-                security_scope=self.scope,
                 project_id=project_id,
             ))
         except SystemExit as exc:
@@ -1295,14 +1283,12 @@ class InvestigationScenarioHarness:
 
         view = bundle.service.cancel(CancelInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
         ))
         late = self._seed_artifact("late result", execution_id="late")
         view = bundle.service.admit_late_result(
             QueryInvestigationProject(
                 principal=self.principal,
-                security_scope=self.scope,
                 project_id=project_id,
             ),
             agent_run_id="provider-late",
@@ -1782,8 +1768,7 @@ class InvestigationScenarioHarness:
         )
         client = TestClient(app)
         body = {
-            "tenant_id": self.scope.tenant_id,
-            "workspace_id": self.scope.workspace_id,
+            "tenant_id": self.principal.tenant_id,
             "user_id": self.principal.user_id,
             "title": "Architecture",
             "goal": "Investigate architecture",
@@ -1805,8 +1790,7 @@ class InvestigationScenarioHarness:
         report = client.get(
             f"/api/investigation-projects/{project_id}/report",
             params={
-                "tenant_id": self.scope.tenant_id,
-                "workspace_id": self.scope.workspace_id,
+                "tenant_id": self.principal.tenant_id,
                 "user_id": self.principal.user_id,
             },
         )
@@ -1864,7 +1848,6 @@ class InvestigationScenarioHarness:
             command = view.commands[0]
             bundle.service.approve(ApproveInvestigationCommand(
                 principal=self.principal,
-                security_scope=self.scope,
                 project_id=project_id,
                 command_id=command.command_id,
                 authorization_digest=command.authorization_digest,
@@ -1973,7 +1956,6 @@ class InvestigationScenarioHarness:
             tools=tool_port,
             agents=agent_port,
             sequence=sequence,
-            scope=self.scope,
             principal=self.principal,
         )
 
@@ -1992,7 +1974,6 @@ class InvestigationScenarioHarness:
     ) -> str:
         view = bundle.service.create(CreateInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             title="Architecture investigation",
             goal="Investigate architecture, security, cost, and migration.",
             requirements=tuple(_requirement(item) for item in requirements),
@@ -2013,7 +1994,6 @@ class InvestigationScenarioHarness:
     ):
         return bundle.service.process(ProcessInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
             max_cycles=max_cycles,
         ))
@@ -2021,7 +2001,6 @@ class InvestigationScenarioHarness:
     def _view(self, bundle: _RuntimeBundle, project_id: str):
         return bundle.service.get(QueryInvestigationProject(
             principal=self.principal,
-            security_scope=self.scope,
             project_id=project_id,
         ))
 
@@ -2037,8 +2016,7 @@ class InvestigationScenarioHarness:
         )
         writer = ArtifactService(settings)
         scope = ExecutionScope(
-            security_scope=self.scope,
-            principal_id=self.principal.principal_id,
+            principal=self.principal,
             execution_id=execution_id,
             project_id="seed-project",
             plan_version=1,
@@ -2046,7 +2024,7 @@ class InvestigationScenarioHarness:
             subgoal_version=1,
         )
         return writer.write_generated(
-            security_scope=self.scope,
+            owner=self.principal,
             execution_scope=scope,
             producer_key=f"seed:{execution_id}:{canonical_digest({'content': content})}",
             producer_ref=execution_id,

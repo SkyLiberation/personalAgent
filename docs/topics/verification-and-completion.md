@@ -10,7 +10,7 @@ Verification 是 Agent 内部元能力：
 > 候选结果产生后、宣告完成前，依据用户 Goal、required result contract 和可见 Evidence，
 > 判断候选结果是否语义满足，并产生 typed assessment 与 repair feedback。
 
-“元能力”描述运行时义务，不表示所有领域共享一个万能 `VerifierService`。Workspace Answer、
+“元能力”描述运行时义务，不表示所有领域共享一个万能 `VerifierService`。Personal Knowledge Answer、
 Conversation Review、Ask/RAG 和 Investigation Project 的判据 owner、输入事实、生命周期与
 失败消费者不同，因此保留领域 verifier；它们共同遵守相同架构不变量。
 
@@ -44,7 +44,7 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |
-| Workspace Answer | 候选 `EvidenceGroundedAnswer` 组装后 | 回答整体是否支持、冲突、coverage、unsupported claim | `/api/workspace/ask` 响应 |
+| Personal Knowledge Answer | 候选 `EvidenceGroundedAnswer` 组装后 | 回答整体是否支持、冲突、coverage、unsupported claim | `/api/knowledge/ask` 响应 |
 | Ask/RAG | compose 后固定 stage，repair 后重验 | citation、claim grounding、evidence sufficiency | bounded retry / repair |
 | Investigation SubGoal | execution + Evidence Admission 后 | bounded SubGoal 是否被 admitted evidence 满足 | Outcome 或 verification repair |
 | Investigation Final | final Artifact 生成后 | required coverage、claim/evidence、排除条件 | CompletionReport |
@@ -53,15 +53,15 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构性案例，但不能作为
 普通知识目标具备 Verify 元能力的证据。
 
-## Workspace Answer
+## Personal Knowledge Answer
 
-`WorkspaceService.select_evidence()` 是 read-only 检索边界，只返回 typed EvidenceSpan、Citation、
+`KnowledgeService.select_evidence()` 是 read-only 检索边界，只返回 typed EvidenceSpan、Citation、
 Claim 支持状态和冲突事实，不生成候选回答，也不触发 Answer Verifier。Ask 的
-`WorkspaceRetriever` 只调用该边界。
+`KnowledgeRetriever` 只调用该边界。
 
-`WorkspaceService.answer_with_evidence()` 在 evidence selection 之后组装候选回答、Citation 和展示
+`KnowledgeService.answer_with_evidence()` 在 evidence selection 之后组装候选回答、Citation 和展示
 projection。
-`WorkspaceAnswerVerifier` 是唯一 answer-level semantic verification 写入口，输入为：
+`KnowledgeAnswerVerifier` 是唯一 answer-level semantic verification 写入口，输入为：
 
 - 用户问题；
 - 候选回答；
@@ -86,7 +86,7 @@ verifier identity/version
 `needs_revision`。
 
 Verifier 返回的 conflict ref 必须由确定性 Admission 证明属于本次 selected EvidenceSpan。
-Assessment 是正式 Workspace Answer 的当前响应事实，不写回长期 Claim/Relation，也不投影到 Ask
+Assessment 是正式 Personal Knowledge Answer 的当前响应事实，不写回长期 Claim/Relation，也不投影到 Ask
 evidence。Ask 自己的最终回答由 Ask Verifier 判断，避免对被丢弃的内部答案重复验证。
 
 旧 `grounding_status`、`answer_claim_grounded_count`、顶层 `evidence_coverage` 和
@@ -97,7 +97,7 @@ evidence。Ask 自己的最终回答由 Ask Verifier 判断，避免对被丢弃
 Verification 通过只说明某个候选结果满足相应语义标准。只有 required result contract 的全部
 义务、assessment evidence 和 Artifact 齐全后，Completion Gate 才能进入领域终态。
 
-普通直接回答不为形式统一创建 CompletionReport；Workspace Answer 返回临时 assessment，
+普通直接回答不为形式统一创建 CompletionReport；Personal Knowledge Answer 返回临时 assessment，
 因为该 assessment 被 HTTP 用户实际消费，不持久化无消费者投影。
 
 ## 执行证据
@@ -109,4 +109,4 @@ Verification 通过只说明某个候选结果满足相应语义标准。只有 
 - E20 target：archive `20260731T064446.108938Z-8804-52b29d3c`，独立 Verifier 返回
   `needs_revision/conflicted`，conflict refs 全部绑定本次 citations，Ask 前后 Claim 数不变。
 
-设计、迁移和复杂度证据见 [ADR 0011](../adr/0011-independent-workspace-answer-verification.md)。
+设计、迁移和复杂度证据见 [ADR 0011](../adr/0011-independent-personal-knowledge-answer-verification.md)。

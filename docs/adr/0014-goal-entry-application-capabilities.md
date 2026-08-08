@@ -10,7 +10,7 @@
 调整”等结果，不应理解 Tool、Workflow、Project 或执行顺序。旧 Conversation 分别出现：未读取就
 声称未找到、只能文字确认但无法准备 canonical delete command、幻觉不存在的 research agent。
 
-目标结果是 Conversation 自主选择粗粒度业务能力，同时让 Workspace、Knowledge Lifecycle 和
+目标结果是 Conversation 自主选择粗粒度业务能力，同时让 Personal Knowledge、Knowledge Lifecycle 和
 Investigation Project 继续拥有各自事实、权限、状态与恢复语义。
 
 Out of scope：通用 Router、Workflow Registry、UnifiedTask、第二 Project state、restore/订阅的
@@ -20,7 +20,7 @@ Conversation 入口、把 ResearchRun 扩为通用研究 Agent。
 
 | 用户目标 | baseline archive | 已执行结果与根因 |
 | --- | --- | --- |
-| 读取本用户随机知识并排除另一用户冲突事实 | `20260803T142413.474927Z-4864-39fedcf5` | clarification，无 Tool Observation；Semantic Decision 缺 canonical workspace read capability |
+| 读取本用户随机知识并排除另一用户冲突事实 | `20260803T142413.474927Z-4864-39fedcf5` | clarification，无 Tool Observation；Semantic Decision 缺 canonical personal knowledge read capability |
 | 自然语言定位错误知识并先确认删除 | `20260803T142932.564456Z-23720-19ba8517` | 文字确认、零 action；Capability 缺口，无法取得 canonical KnowledgeItem id 或调用 lifecycle owner |
 | 后台持续调查、可查询/暂停/调整 | `20260803T143007.354551Z-26256-84d0bf1d` | 提议不存在的 `deep_research_agent`，Admission `capability_missing`；缺 Project handoff capability |
 | 同目标研究边界对照 | `20260803T143230.864789Z-6460-dbd005fd` | ResearchRun 只得二手来源，Project 因官方规范证据缺失诚实暂停；未证明 ResearchRun 适合开放调查 |
@@ -33,7 +33,8 @@ Conversation 入口、把 ResearchRun 扩为通用研究 Agent。
   现有 `ToolCallProposal`。
 - Conversation Admission：校验 typed schema、单 action、scope 内已观察 target 和能力存在性；只
   接受或拒绝，不补 target、goal 或 requirement。
-- Workspace：拥有 KnowledgeItem；`list_workspace_knowledge` 只投影当前 principal/workspace 可见项。
+- Personal Knowledge：拥有 KnowledgeItem；`list_personal_knowledge` 只投影当前 principal 拥有的
+  `owner_id` 分区的项。它不证明 Personal Knowledge membership；该产品边界仍需独立 baseline/E2E。
 - Knowledge Lifecycle：`prepare_delete/decide_delete` 是 delete Command/status/Receipt 唯一写入口。
 - Investigation Project：`InvestigationProjectService.create` 与 Project store 是 definition、Plan、
   state、journal 和 Completion 唯一写入口。
@@ -59,11 +60,11 @@ Conversation 入口、把 ResearchRun 扩为通用研究 Agent。
 
 在现有 `ConversationService` 和 Proposal union 中增加三个最小能力切片：
 
-1. `list_workspace_knowledge`：安全只读 Observation；
+1. `list_personal_knowledge`：安全只读 Observation；
 2. `prepare_knowledge_delete`：独立 turn，引用已观察 canonical id，调用现有 lifecycle service；
 3. `start_durable_investigation`：独立 turn，调用现有 Project service，返回 ProjectReference。
 
-同时强化模型契约：没有 workspace read Observation 时不得声称个人知识不存在。专用 API 保留给
+同时强化模型契约：没有 personal knowledge read Observation 时不得声称个人知识不存在。专用 API 保留给
 UI/自动化，但与 Agent 入口复用同一 Application owner。ResearchRun 固定为 Scheduled Intelligence。
 
 ## Target E2E and Counterfactuals

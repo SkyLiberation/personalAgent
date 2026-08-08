@@ -64,7 +64,6 @@ def _run_case(case) -> AgentGatewayQualityRun:
     context = AgentGatewayContext(
         execution_scope=interaction_execution_scope(
             tenant_id="quality",
-            workspace_id=case.id,
             user_id="quality",
             execution_id=f"entry-{case.id}",
             task_id=action_id,
@@ -189,7 +188,7 @@ class _QualityAgent:
             artifact_ref=ResourceRef(
                 resource_id=f"quality-artifact-{run_id}",
                 resource_type="artifact",
-                owner_scope=context.execution_scope.security_scope,
+                owner=context.execution_scope.principal,
             ),
         )
         return ChildAgentRunRecord(

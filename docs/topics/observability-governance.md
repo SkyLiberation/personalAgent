@@ -100,7 +100,7 @@ LangGraph checkpoint 保存可恢复执行现场：
 
 当前已完成 P0/P1 的基础接入：
 
-- `LangSmithConfig` 从环境变量读取项目、endpoint、API key、workspace、采样率和上传策略开关。
+- `LangSmithConfig` 从环境变量读取项目、endpoint、API key、personal knowledge、采样率和上传策略开关。
 - `configure_langsmith_environment()` 将项目配置桥接到 LangSmith 标准环境变量。
 - `execute_entry()` 和 `resume_entry()` 外层会进入 `langsmith_trace_context()`，并通过 LangGraph `config` 设置 `run_name`（`execute_entry` / `resume_entry`）、业务 metadata 和 tags，使整棵节点/LLM/工具子树挂在同一个可检索的顶层 run 下。
 - 顶层 trace metadata 会携带 `run_id / thread_id / user_id / session_id / source_platform / source_type` 等业务字段。
@@ -239,7 +239,7 @@ trace metadata 通道，避免业务代码把敏感上下文旁路写入模型�
 - **规划/ReAct**：`_is_react_tool_blocked` 复用同一引擎，确保预过滤与 gateway 执行期判定一致。
 - **可配置覆盖**：`PolicyConfig`（`Settings.policy`）支持按用户/来源/工具/权限域配置 allow/deny 列表，以及关闭高风险确认门，默认空集合时完全沿用代码内默认规则。
 
-`workspace` 维度在 `PolicyInput` 中已预留字段，但当前未引入业务 workspace 概念，默认 `None`。
+`personal knowledge` 维度在 `PolicyInput` 中已预留字段，但当前未引入业务 personal knowledge 概念，默认 `None`。
 
 ## LangSmith 接入目标
 
@@ -417,7 +417,7 @@ LLM 子 run 建议携带：
 工作项：
 
 - ✅ 定义统一 `PolicyDecision`：`allow / deny / require_confirmation / require_escalation`（含 `audit_required / rule / reason`）。
-- ✅ 定义统一输入 `PolicyInput`：用户、session、入口来源、action、resource、工具名、风险等级、副作用、权限域、确认标志、ReAct 允许集、资源 owner（`workspace` 字段预留，暂不引入业务概念）。
+- ✅ 定义统一输入 `PolicyInput`：用户、session、入口来源、action、resource、工具名、风险等级、副作用、权限域、确认标志、ReAct 允许集、资源 owner（`personal knowledge` 字段预留，暂不引入业务概念）。
 - ✅ 将 `ToolGateway` 的高风险确认、ReAct guard、`permission_scope` 判断接入 `PolicyEngine`。
 - ✅ 普通 MemoryFacade 写入接入 Memory Policy；知识生命周期在独立 Application 边界校验 owner/scope。
 - ✅ 将入口来源（`source_platform`）纳入策略上下文，经 `ToolGatewayContext` 从 `AgentGraphState.entry_input` 透传。

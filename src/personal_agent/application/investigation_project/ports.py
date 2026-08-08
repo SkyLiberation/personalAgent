@@ -23,9 +23,8 @@ from personal_agent.domain.investigation_project import (
 )
 from personal_agent.kernel.contracts.resource import GeneratedArtifactContent, ResourceRef
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 
 
@@ -78,14 +77,14 @@ class InvestigationProjectStorePort(Protocol):
 
     def load(
         self,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         project_id: str,
     ) -> InvestigationProject | None: ...
 
     def append(
         self,
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         project_id: str,
         expected_sequence: int,
         events: tuple[ProjectEvent, ...],
@@ -99,7 +98,7 @@ class InvestigationProjectStorePort(Protocol):
 
 
 class CapabilitySnapshotPort(Protocol):
-    def snapshot(self, security_scope: SecurityScope) -> RuntimeCapabilityInventory: ...
+    def snapshot(self, owner: AuthenticatedPrincipal) -> RuntimeCapabilityInventory: ...
 
     def revision(self, inventory: RuntimeCapabilityInventory) -> str: ...
 
@@ -188,7 +187,7 @@ class DisclosureManifestPort(Protocol):
         self,
         artifact_refs: tuple[ResourceRef, ...],
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         execution_scope: ExecutionScope,
     ) -> DisclosureManifest: ...
 
@@ -238,7 +237,7 @@ class GeneratedArtifactWritePort(Protocol):
     def write_generated(
         self,
         *,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
         execution_scope: ExecutionScope,
         producer_key: str,
         producer_ref: str,
@@ -255,7 +254,7 @@ class GeneratedArtifactWritePort(Protocol):
         resource_ref: ResourceRef,
         *,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
+        owner: AuthenticatedPrincipal,
     ) -> GeneratedArtifactContent: ...
 
 

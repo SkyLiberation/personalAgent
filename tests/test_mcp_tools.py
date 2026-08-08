@@ -233,7 +233,7 @@ def test_notion_mcp_preset_from_env(monkeypatch):
         ("API-retrieve-page-markdown", "notion.retrieve_page_markdown"),
     ]
     assert all(tool.permission_scope == "notion:workspace:read" for tool in server.tools)
-    assert server.tools[0].semantic_domains == ("workspace_knowledge", "docs")
+    assert server.tools[0].semantic_domains == ("personal_knowledge", "docs")
     assert server.tools[0].resource_types == ("page", "data_source")
     assert server.tools[0].operations == ("search",)
     assert server.tools[0].trust_level == "scoped"

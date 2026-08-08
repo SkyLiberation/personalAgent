@@ -77,7 +77,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 | ID | 用户旅程 | 关键正向结果 | 关键反事实 |
 | --- | --- | --- | --- |
 | E01 | Conversation | 直接回答、澄清、多轮继续 | 不伪造 Task/Command/CompletionReport，不跨会话泄漏 |
-| E02 | Grounded Ask | 回答有 citations | Ask 不新增 Claim，不跨 workspace 泄漏 |
+| E02 | Grounded Ask | 回答有 citations | Ask 不新增 Claim；不同 `owner_id` 的随机内容未串读，但 user/personal knowledge 同时变化，不证明 membership 授权 |
 | E03 | Upload Ask | 上传形成 application Artifact 并被引用 | 不绕过 Artifact ownership |
 | E04 | Governed Delete | confirm 后执行一次，可 replay | prepare/reject 零副作用，错误 digest 拒绝 |
 | E05 | ResearchRun | 明确终态和带 source 的 Digest | 不把 running 当成功 |
@@ -88,7 +88,7 @@ uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
 | E12 | Knowledge Maintenance | 冲突/孤立分析和 backlink | projection 必须绑定 source Claim |
 | E13 | Scheduled Intelligence | Run、Digest、Delivery、Feedback 闭环 | Delivery 恰好一次 |
 | E14 | Conversation Governed Save | exact user-authored span 确认后保存 | 控制语义、assistant candidate 不写入 |
-| E20 | Workspace Answer Verification | 冲突 assessment 绑定本次 EvidenceSpan | 回答组装器不把互斥结论标成 supported |
+| E20 | Personal Knowledge Answer Verification | 冲突 assessment 绑定本次 EvidenceSpan | 回答组装器不把互斥结论标成 supported |
 | E22 | Goal-entry Governed Delete | 自然语言定位 canonical item，确认后删除一次 | 确认前零副作用、跨 scope 不泄漏、replay 不重复 |
 | E23 | Goal-entry Durable Investigation | 自然目标创建可查询 ProjectReference | 不要求内部名称、不复制 Project 状态、不把创建算完成 |
 | IP01 | Durable Investigation Report | live worker 交付可读、可追溯报告 | 缺 coverage/evidence 时不完成 |
@@ -320,6 +320,30 @@ Release gate 要求：
 
 ## 11. 当前 E2E 覆盖缺口
 
+### Personal Knowledge 产品需求与 E2E 均未成立
+
+**E02 证明过按 `owner_id` 分区的 Grounded Ask 结果，没有证明 Personal Knowledge 是独立、必要且安全的
+产品边界。**测试 helper 把 `user_id` 直接设为 `owner_id`，所以另一个 personal knowledge 同时也是另一个
+user；E04/E22 的跨 scope 反事实也主要证明 command target/identity 不能被另一 principal 操作。
+
+更前置的缺口不是“还没写同一用户多 Personal Knowledge E2E”，而是**没有证据表明目标用户需要这个结果**。
+当前产品定位和已执行旅程都是个人知识闭环；仓库没有用户访谈、真实请求、产品范围变更或线上错误证明
+用户需要同一账号隔离多个知识空间，或多人共享同一个知识空间。因此 Alice/A/B/Bob 一类情境只能作为
+需求调研问题，不能成为 baseline 或目标 E2E。
+
+当前结论是：
+
+- 不能声称“当前用户只能看到所属 Personal Knowledge”；
+- 不能用 E02、Repository `WHERE owner_id = ...` 或 typed owner 对象存在代替授权证据；
+- 不得先实现 Personal Knowledge Aggregate、membership 或角色体系再寻找用户理由；
+- 只有真实用户请求或已批准业务扩展先定义用户可见结果后，才执行当前最简单正式入口 baseline；
+  baseline 未失败则停止；
+- 在此之前，`owner_id` 只按历史内部分区键对待。是否收敛到 user scope 属于另一项迁移决策，也需
+  盘点调用方并用现有个人知识旅程证明行为不退化。
+
+Personal Knowledge 需求判断和 visibility 分层的面试讲法见
+[03 Context engineering](03-capability-axes.md#personal knowledge-的用户需求尚未成立)；这里是证据状态的唯一 owner。
+
 E14 已定向证明首条自然语言受治理保存链路：
 
 ```text
@@ -330,13 +354,13 @@ Conversation message
   -> 冻结 exact span 与单一 digest
   -> Pending Confirmation
   -> 用户确认
-  -> Workspace canonical write
+  -> Personal Knowledge canonical write
   -> typed Receipt
 ```
 
 该证据覆盖 exact span 与 Claim/Receipt 可追溯、控制语义零写入、确认前零写入、prepare 后
 重启、跨 scope 拒绝和成功 replay，但不覆盖保存 assistant candidate、多实例并发协调、
-Workspace commit 与 journal Receipt 之间的 crash window。B02 已在 archive
+Personal Knowledge commit 与 journal Receipt 之间的 crash window。B02 已在 archive
 `20260729T031804.415533Z-15972-214cb81c` 证明旧错误，修复后 E14 archive
 `20260729T033339.065714Z-22692-16415241` 通过。后续候选场景仍必须分别执行 baseline，只有
 当前路径确实失败才定义目标 E2E 和实现：

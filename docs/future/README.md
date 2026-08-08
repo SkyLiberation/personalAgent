@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 当前框架、文档事实源、架构门禁与 clean release 证据收敛 | G0 已完成；R0 待完成；M0 部分完成 | [可信 Agent Runtime 演进与收敛](trusted-agent-runtime-evolution.md) |
 | 持续研究的来源验证与事件触发 | P1/P2，未实现 | [持续研究 P1/P2](scheduled-intelligence-research.md) |
-| Context 物化的度量、逐出与两阶段能力加载 | P0 可实施（纯观测）；P1/P2 未准入，缺 baseline 测量能力 | [Context 物化度量与逐出](context-materialization-measurement-and-eviction.md) |
+| Context 物化的度量、逐出与两阶段能力加载 | P0 已落地（纯观测）；P2 已测量后不准入；P1 未准入且决定性测量待执行（重跑 E21） | [Context 物化度量与逐出](context-materialization-measurement-and-eviction.md) |
 
 ## 进入与退出规则
 

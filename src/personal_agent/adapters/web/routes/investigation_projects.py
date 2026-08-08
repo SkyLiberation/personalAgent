@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.investigation_project import (
     ApproveInvestigationCommand,
@@ -17,16 +17,17 @@ from personal_agent.application.investigation_project import (
 )
 from personal_agent.domain.investigation_project import ProjectBudgetLimit, UserRequirement
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, SecurityScope
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
-class _CallerScope(BaseModel):
+class _CallerIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tenant_id: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1)
     user_id: str = Field(min_length=1)
 
 
-class CreateInvestigationProjectRequest(_CallerScope):
+class CreateInvestigationProjectRequest(_CallerIdentity):
     title: str = Field(min_length=1)
     goal: str = Field(min_length=1)
     requirements: tuple[UserRequirement, ...] = Field(min_length=1)
@@ -34,7 +35,7 @@ class CreateInvestigationProjectRequest(_CallerScope):
     idempotency_key: str = Field(min_length=1)
 
 
-class SteerInvestigationProjectRequest(_CallerScope):
+class SteerInvestigationProjectRequest(_CallerIdentity):
     expected_plan_version: int = Field(ge=1)
     statement: str = Field(min_length=1)
     waived_requirement_ids: tuple[str, ...] = ()
@@ -42,19 +43,19 @@ class SteerInvestigationProjectRequest(_CallerScope):
     idempotency_key: str = Field(min_length=1)
 
 
-class ApproveInvestigationCommandRequest(_CallerScope):
+class ApproveInvestigationCommandRequest(_CallerIdentity):
     authorization_digest: str = Field(min_length=16)
 
 
-class CancelInvestigationProjectRequest(_CallerScope):
+class CancelInvestigationProjectRequest(_CallerIdentity):
     reason: str = Field(default="user_cancelled", min_length=1)
 
 
-class PauseInvestigationProjectRequest(_CallerScope):
+class PauseInvestigationProjectRequest(_CallerIdentity):
     pass
 
 
-class ResumeInvestigationProjectRequest(_CallerScope):
+class ResumeInvestigationProjectRequest(_CallerIdentity):
     pass
 
 
@@ -72,11 +73,10 @@ def register_investigation_project_routes(
         body: CreateInvestigationProjectRequest,
         request: Request,
     ):
-        principal, security_scope = _resolve_scope(request, settings, body)
+        principal = _resolve_principal(request, settings, body)
         try:
             view = service.create_investigation_project(CreateInvestigationProject(
                 principal=principal,
-                security_scope=security_scope,
                 title=body.title,
                 goal=body.goal,
                 requirements=body.requirements,
@@ -92,21 +92,18 @@ def register_investigation_project_routes(
         project_id: str,
         request: Request,
         tenant_id: str = Query(min_length=1),
-        workspace_id: str = Query(min_length=1),
         user_id: str = Query(min_length=1),
     ):
-        principal, security_scope = _resolve_scope_values(
+        principal = _resolve_principal_values(
             request,
             settings,
             tenant_id=tenant_id,
-            workspace_id=workspace_id,
             user_id=user_id,
         )
         try:
             return _view_payload(service.get_investigation_project(
                 QueryInvestigationProject(
                     principal=principal,
-                    security_scope=security_scope,
                     project_id=project_id,
                 )
             ))
@@ -118,20 +115,17 @@ def register_investigation_project_routes(
         project_id: str,
         request: Request,
         tenant_id: str = Query(min_length=1),
-        workspace_id: str = Query(min_length=1),
         user_id: str = Query(min_length=1),
     ):
-        principal, security_scope = _resolve_scope_values(
+        principal = _resolve_principal_values(
             request,
             settings,
             tenant_id=tenant_id,
-            workspace_id=workspace_id,
             user_id=user_id,
         )
         try:
             report = service.get_investigation_report(GetInvestigationReport(
                 principal=principal,
-                security_scope=security_scope,
                 project_id=project_id,
             ))
         except (KeyError, PermissionError):
@@ -146,11 +140,10 @@ def register_investigation_project_routes(
         body: SteerInvestigationProjectRequest,
         request: Request,
     ):
-        principal, security_scope = _resolve_scope(request, settings, body)
+        principal = _resolve_principal(request, settings, body)
         try:
             view = service.steer_investigation_project(SteerInvestigationProject(
                 principal=principal,
-                security_scope=security_scope,
                 project_id=project_id,
                 expected_plan_version=body.expected_plan_version,
                 statement=body.statement,
@@ -173,11 +166,10 @@ def register_investigation_project_routes(
         body: ApproveInvestigationCommandRequest,
         request: Request,
     ):
-        principal, security_scope = _resolve_scope(request, settings, body)
+        principal = _resolve_principal(request, settings, body)
         try:
             view = service.approve_investigation_command(ApproveInvestigationCommand(
                 principal=principal,
-                security_scope=security_scope,
                 project_id=project_id,
                 command_id=command_id,
                 authorization_digest=body.authorization_digest,
@@ -194,11 +186,10 @@ def register_investigation_project_routes(
         body: CancelInvestigationProjectRequest,
         request: Request,
     ):
-        principal, security_scope = _resolve_scope(request, settings, body)
+        principal = _resolve_principal(request, settings, body)
         try:
             view = service.cancel_investigation_project(CancelInvestigationProject(
                 principal=principal,
-                security_scope=security_scope,
                 project_id=project_id,
                 reason=body.reason,
             ))
@@ -214,12 +205,11 @@ def register_investigation_project_routes(
         body: PauseInvestigationProjectRequest,
         request: Request,
     ):
-        principal, security_scope = _resolve_scope(request, settings, body)
+        principal = _resolve_principal(request, settings, body)
         try:
             return _view_payload(service.pause_investigation_project(
                 PauseInvestigationProject(
                     principal=principal,
-                    security_scope=security_scope,
                     project_id=project_id,
                 )
             ))
@@ -234,12 +224,11 @@ def register_investigation_project_routes(
         body: ResumeInvestigationProjectRequest,
         request: Request,
     ):
-        principal, security_scope = _resolve_scope(request, settings, body)
+        principal = _resolve_principal(request, settings, body)
         try:
             return _view_payload(service.resume_investigation_project(
                 ResumeInvestigationProject(
                     principal=principal,
-                    security_scope=security_scope,
                     project_id=project_id,
                 )
             ))
@@ -249,22 +238,20 @@ def register_investigation_project_routes(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _resolve_scope(request: Request, settings: Settings, body: _CallerScope):
-    return _resolve_scope_values(
+def _resolve_principal(request: Request, settings: Settings, body: _CallerIdentity):
+    return _resolve_principal_values(
         request,
         settings,
         tenant_id=body.tenant_id,
-        workspace_id=body.workspace_id,
         user_id=body.user_id,
     )
 
 
-def _resolve_scope_values(
+def _resolve_principal_values(
     request: Request,
     settings: Settings,
     *,
     tenant_id: str,
-    workspace_id: str,
     user_id: str,
 ):
     authenticated = getattr(request.state, "principal", None)
@@ -276,10 +263,7 @@ def _resolve_scope_values(
         raise HTTPException(status_code=401, detail="Authenticated principal is missing.")
     else:
         principal = AuthenticatedPrincipal(tenant_id=tenant_id, user_id=user_id)
-    return principal, SecurityScope(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-    )
+    return principal
 
 
 def _view_payload(view) -> dict:

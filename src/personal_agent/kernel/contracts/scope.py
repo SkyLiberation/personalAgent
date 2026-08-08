@@ -18,11 +18,6 @@ class AuthenticatedPrincipal(_ScopeModel):
         return f"{self.tenant_id}:{self.user_id}"
 
 
-class SecurityScope(_ScopeModel):
-    tenant_id: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1)
-
-
 class ExecutionScope(_ScopeModel):
     """Association of one execution with its resource scope and parent run.
 
@@ -31,8 +26,7 @@ class ExecutionScope(_ScopeModel):
     association without pretending that the interaction is a Project.
     """
 
-    security_scope: SecurityScope
-    principal_id: str = Field(min_length=1)
+    principal: AuthenticatedPrincipal
     execution_id: str = Field(min_length=1)
     project_id: str | None = None
     plan_version: int | None = Field(default=None, ge=1)
@@ -58,7 +52,6 @@ class ExecutionScope(_ScopeModel):
 def interaction_execution_scope(
     *,
     tenant_id: str,
-    workspace_id: str,
     user_id: str,
     execution_id: str,
     thread_id: str | None = None,
@@ -66,13 +59,8 @@ def interaction_execution_scope(
 ) -> ExecutionScope:
     """Materialize a typed non-Project execution scope at an interface edge."""
 
-    principal = AuthenticatedPrincipal(tenant_id=tenant_id, user_id=user_id)
     return ExecutionScope(
-        security_scope=SecurityScope(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-        ),
-        principal_id=principal.principal_id,
+        principal=AuthenticatedPrincipal(tenant_id=tenant_id, user_id=user_id),
         execution_id=execution_id,
         thread_id=thread_id,
         task_id=task_id,
@@ -82,6 +70,5 @@ def interaction_execution_scope(
 __all__ = [
     "AuthenticatedPrincipal",
     "ExecutionScope",
-    "SecurityScope",
     "interaction_execution_scope",
 ]

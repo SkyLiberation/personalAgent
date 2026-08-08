@@ -23,9 +23,8 @@ from personal_agent.capabilities.contracts.model import (
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.kernel.contracts.scope import (
-    AuthenticatedPrincipal,
     ExecutionScope,
-    SecurityScope,
+    AuthenticatedPrincipal,
 )
 
 from .observation_bounds import (
@@ -51,7 +50,7 @@ from .models import (
     InteractionTrace,
     KnowledgeDeleteConfirmation,
     KnowledgeSaveArguments,
-    ListWorkspaceKnowledgeArguments,
+    ListPersonalKnowledgeArguments,
     LoopBudgetPolicy,
     PrepareKnowledgeDeleteArguments,
     ReadActionOutputArguments,
@@ -63,7 +62,7 @@ from .ports import (
     ConversationKnowledgeLifecyclePort,
     ConversationKnowledgeWriter,
     ConversationProjectPort,
-    ConversationWorkspaceReadPort,
+    ConversationKnowledgeReadPort,
     InteractionAgentPort,
     InteractionArtifactPort,
     InteractionToolPort,
@@ -91,9 +90,14 @@ class ConversationOperationConflict(RuntimeError):
 _KNOWLEDGE_SAVE_CAPABILITY = "prepare_conversation_knowledge_save"
 _VERIFICATION_CAPABILITY = "verify_interaction_draft"
 _READ_ACTION_OUTPUT_CAPABILITY = "read_action_output"
-_LIST_WORKSPACE_KNOWLEDGE_CAPABILITY = "list_workspace_knowledge"
+_LIST_PERSONAL_KNOWLEDGE_CAPABILITY = "list_personal_knowledge"
 _PREPARE_KNOWLEDGE_DELETE_CAPABILITY = "prepare_knowledge_delete"
 _START_DURABLE_INVESTIGATION_CAPABILITY = "start_durable_investigation"
+_RAW_NOTE_READ_CAPABILITIES = frozenset({
+    "find_similar_notes",
+    "get_note",
+    "list_recent_notes",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +165,7 @@ class ConversationService:
         agent_port: InteractionAgentPort | None = None,
         artifact_port: InteractionArtifactPort | None = None,
         knowledge_writer: ConversationKnowledgeWriter | None = None,
-        workspace_reader: ConversationWorkspaceReadPort | None = None,
+        knowledge_reader: ConversationKnowledgeReadPort | None = None,
         knowledge_lifecycle: ConversationKnowledgeLifecyclePort | None = None,
         project_port: ConversationProjectPort | None = None,
         budget_policy: LoopBudgetPolicy | None = None,
@@ -172,7 +176,7 @@ class ConversationService:
         self._agent_port = agent_port
         self._artifact_port = artifact_port
         self._knowledge_writer = knowledge_writer
-        self._workspace_reader = workspace_reader
+        self._knowledge_reader = knowledge_reader
         self._knowledge_lifecycle = knowledge_lifecycle
         self._project_port = project_port
         self._confirmation_lock = RLock()
@@ -187,7 +191,6 @@ class ConversationService:
         conversation_id: str,
         messages: list[ConversationMessage],
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
         source_platform: str = "web",
         interaction_run_ref: str | None = None,
     ) -> ConversationTurnView:
@@ -195,10 +198,7 @@ class ConversationService:
             raise ValueError("conversation must end with a user message")
         if self._model_client is None:
             raise ConversationUnavailable("conversation model is not configured")
-        if (
-            principal.tenant_id != security_scope.tenant_id
-        ):
-            raise PermissionError("conversation principal and security scope mismatch")
+        owner = principal
 
         run_ref = interaction_run_ref or f"irun_{uuid4().hex[:16]}"
         capabilities = self._effective_capabilities()
@@ -302,7 +302,7 @@ class ConversationService:
                         conversation_id=conversation_id,
                         run_ref=run_ref,
                         principal=principal,
-                        security_scope=security_scope,
+                        owner=owner,
                         source_platform=source_platform,
                         usage=usage,
                         attempt=len(execution_order),
@@ -353,7 +353,7 @@ class ConversationService:
                     run_ref=run_ref,
                     messages=messages,
                     principal=principal,
-                    security_scope=security_scope,
+                    owner=owner,
                 )
                 self._commit(
                     run_ref, messages, capabilities, inputs, usage,
@@ -378,7 +378,7 @@ class ConversationService:
                     action,
                     all_actions=decision.actions,
                     principal=principal,
-                    security_scope=security_scope,
+                    owner=owner,
                 )
                 if feedback is not None:
                     inputs.append(feedback)
@@ -390,7 +390,7 @@ class ConversationService:
                     continue
                 try:
                     operation = self._knowledge_lifecycle.prepare_delete(
-                        workspace_id=security_scope.workspace_id,
+                        owner_id=owner.principal_id,
                         user_id=principal.user_id,
                         target_note_id=arguments.target_knowledge_item_id,
                         reason=arguments.reason,
@@ -439,7 +439,7 @@ class ConversationService:
                 try:
                     project_reference = self._project_port.start(
                         principal=principal,
-                        security_scope=security_scope,
+                        owner=owner,
                         request=arguments,
                         idempotency_key=sha256(
                             f"{run_ref}:{action.action_id}".encode("utf-8")
@@ -469,7 +469,7 @@ class ConversationService:
                 conversation_id=conversation_id,
                 run_ref=run_ref,
                 principal=principal,
-                security_scope=security_scope,
+                owner=owner,
                 source_platform=source_platform,
                 usage=usage,
                 committed_action_ids=frozenset(execution_order),
@@ -491,15 +491,13 @@ class ConversationService:
         *,
         interaction_run_ref: str,
         principal: AuthenticatedPrincipal,
-        security_scope: SecurityScope,
         decision: str,
         command_digest: str,
         confirmation_ref: str,
     ) -> ConversationKnowledgeSaveOperation:
         if decision not in {"confirm", "reject"}:
             raise ValueError("decision must be confirm or reject")
-        if principal.tenant_id != security_scope.tenant_id:
-            raise PermissionError("conversation principal and security scope mismatch")
+        owner = principal
         with self._confirmation_lock:
             trace = self._journal.get(interaction_run_ref)
             if trace is None or trace.knowledge_save_operation is None:
@@ -509,7 +507,7 @@ class ConversationService:
             if (
                 command.tenant_id != principal.tenant_id
                 or command.user_id != principal.user_id
-                or command.workspace_id != security_scope.workspace_id
+                or command.owner_id != owner.principal_id
             ):
                 raise PermissionError("knowledge save operation scope mismatch")
             if command.command_digest != command_digest:
@@ -536,7 +534,7 @@ class ConversationService:
                 result = self._knowledge_writer.solidify_conversation(
                     [message.model_dump(mode="json") for message in command.messages],
                     user_id=command.user_id,
-                    workspace_id=command.workspace_id,
+                    owner_id=command.owner_id,
                 )
                 ingest = result.ingest_result
                 receipt = ConversationKnowledgeSaveReceipt(
@@ -631,7 +629,7 @@ class ConversationService:
         run_ref,
         messages,
         principal,
-        security_scope,
+        owner,
     ):
         selected = tuple(
             ConversationMessage(
@@ -649,7 +647,7 @@ class ConversationService:
             "action_id": action.action_id,
             "interaction_run_ref": run_ref,
             "tenant_id": principal.tenant_id,
-            "workspace_id": security_scope.workspace_id,
+            "owner_id": owner.principal_id,
             "user_id": principal.user_id,
             "source_message_indexes": source_message_indexes,
             "messages": [message.model_dump(mode="json") for message in selected],
@@ -699,7 +697,7 @@ class ConversationService:
         *,
         all_actions,
         principal,
-        security_scope,
+        owner,
     ):
         if len(all_actions) != 1:
             return DecisionFeedback(
@@ -712,7 +710,7 @@ class ConversationService:
                     "Propose only prepare_knowledge_delete so its canonical command can be confirmed."
                 ),
             ), None
-        if self._workspace_reader is None or self._knowledge_lifecycle is None:
+        if self._knowledge_reader is None or self._knowledge_lifecycle is None:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="capability_missing",
@@ -725,8 +723,8 @@ class ConversationService:
             arguments = PrepareKnowledgeDeleteArguments.model_validate(action.arguments)
         except ValidationError as error:
             return self._invalid_special_arguments(action, error), None
-        candidates = self._workspace_reader.list_workspace_knowledge(
-            workspace_id=security_scope.workspace_id,
+        candidates = self._knowledge_reader.list_personal_knowledge(
+            owner_id=owner.principal_id,
             user_id=principal.user_id,
             limit=50,
         )
@@ -736,11 +734,11 @@ class ConversationService:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="target_not_observed_in_scope",
-                message="The target knowledge item was not observed in the caller's workspace.",
+                message="The target knowledge item was not observed in the caller's personal knowledge.",
                 repairable_fields=("target_knowledge_item_id",),
                 immutable_fields=("action_id", "reason"),
                 required_repair=(
-                    "Call list_workspace_knowledge, select one returned knowledge_item_id, "
+                    "Call list_personal_knowledge, select one returned knowledge_item_id, "
                     "then prepare the delete as a separate action."
                 ),
             ), None
@@ -964,7 +962,7 @@ class ConversationService:
         conversation_id,
         run_ref,
         principal,
-        security_scope,
+        owner,
         source_platform,
         usage,
         attempt,
@@ -991,7 +989,7 @@ class ConversationService:
                     "success_criteria": list(review_criteria.criteria),
                 },
             ),
-            (conversation_id, run_ref, principal, security_scope, source_platform),
+            (conversation_id, run_ref, principal, owner, source_platform),
         )
         usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
         receipts = observed_receipts(
@@ -1096,23 +1094,23 @@ class ConversationService:
                 read_only=True,
                 safely_retryable=True,
             ))
-        if self._workspace_reader is not None:
+        if self._knowledge_reader is not None:
             tools.append(EffectiveToolCapability(
-                name=_LIST_WORKSPACE_KNOWLEDGE_CAPABILITY,
+                name=_LIST_PERSONAL_KNOWLEDGE_CAPABILITY,
                 description=(
-                    "List the caller's current workspace knowledge items with canonical "
+                    "List the caller's current personal knowledge items with canonical "
                     "knowledge_item_id, title, summary, and state. Use this before answering "
-                    "questions about stored personal/workspace facts or selecting a delete target."
+                    "questions about stored personal facts or selecting a delete target."
                 ),
-                input_schema=ListWorkspaceKnowledgeArguments.model_json_schema(),
+                input_schema=ListPersonalKnowledgeArguments.model_json_schema(),
                 read_only=True,
                 safely_retryable=True,
             ))
-        if self._workspace_reader is not None and self._knowledge_lifecycle is not None:
+        if self._knowledge_reader is not None and self._knowledge_lifecycle is not None:
             tools.append(EffectiveToolCapability(
                 name=_PREPARE_KNOWLEDGE_DELETE_CAPABILITY,
                 description=(
-                    "Prepare the canonical governed deletion command for one observed workspace "
+                    "Prepare the canonical governed deletion command for one observed personal "
                     "knowledge item. This does not delete anything; user confirmation is required."
                 ),
                 input_schema=PrepareKnowledgeDeleteArguments.model_json_schema(),
@@ -1133,6 +1131,11 @@ class ConversationService:
             ))
         if self._tool_port is not None:
             for candidate in self._tool_port.list_interaction_tools():
+                if (
+                    self._knowledge_reader is not None
+                    and candidate.name in _RAW_NOTE_READ_CAPABILITIES
+                ):
+                    continue
                 tools.append(EffectiveToolCapability(
                     name=candidate.name,
                     description=candidate.description,
@@ -1167,7 +1170,7 @@ class ConversationService:
         conversation_id,
         run_ref,
         principal,
-        security_scope,
+        owner,
         source_platform,
         usage,
         committed_action_ids,
@@ -1200,7 +1203,7 @@ class ConversationService:
             conversation_id,
             run_ref,
             principal,
-            security_scope,
+            owner,
             source_platform,
         )
         if concurrent:
@@ -1252,9 +1255,9 @@ class ConversationService:
             return None
         if (
             isinstance(action, ToolCallProposal)
-            and action.tool_name == _LIST_WORKSPACE_KNOWLEDGE_CAPABILITY
+            and action.tool_name == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY
         ):
-            if self._workspace_reader is None:
+            if self._knowledge_reader is None:
                 return DecisionFeedback(
                     action_id=action.action_id,
                     reason_code="capability_missing",
@@ -1264,7 +1267,7 @@ class ConversationService:
                     disposition="fail_closed",
                 )
             try:
-                ListWorkspaceKnowledgeArguments.model_validate(action.arguments)
+                ListPersonalKnowledgeArguments.model_validate(action.arguments)
             except ValidationError as error:
                 return self._invalid_special_arguments(action, error)
             return None
@@ -1364,7 +1367,7 @@ class ConversationService:
 
     def _safe_for_concurrency(self, action):
         if isinstance(action, ToolCallProposal):
-            if action.tool_name == _LIST_WORKSPACE_KNOWLEDGE_CAPABILITY:
+            if action.tool_name == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY:
                 return True
             return bool(
                 self._tool_port
@@ -1382,7 +1385,7 @@ class ConversationService:
         action_id: str,
         capability_id: str,
         run_ref: str,
-        security_scope,
+        owner,
         execution_scope,
     ) -> dict[str, Any]:
         """Fit one observation into the context, offloading whatever did not fit.
@@ -1404,7 +1407,7 @@ class ConversationService:
         full_text = select_offload_text(payload)
         try:
             resource_ref = self._artifact_port.write_generated(
-                security_scope=security_scope,
+                owner=owner,
                 execution_scope=execution_scope,
                 producer_key=f"{run_ref}:{action_id}:observation",
                 producer_ref=capability_id,
@@ -1433,7 +1436,7 @@ class ConversationService:
         fitted["retrieval"] = retrieval
         return fitted
 
-    def _read_action_output(self, action, *, principal, security_scope):
+    def _read_action_output(self, action, *, principal, owner):
         """Serve a window of an offloaded action output back to the model.
 
         This is executed here rather than as a registered tool because the artifact
@@ -1459,7 +1462,7 @@ class ConversationService:
             text = self._artifact_port.read_text(
                 arguments.resource_ref,
                 principal=principal,
-                security_scope=security_scope,
+                owner=owner,
             )
         except Exception as error:
             return _ActionResult(action.action_id, observation(
@@ -1502,10 +1505,9 @@ class ConversationService:
         ))
 
     def _execute_one(self, action, context):
-        conversation_id, run_ref, principal, security_scope, source_platform = context
+        conversation_id, run_ref, principal, owner, source_platform = context
         execution_scope = ExecutionScope(
-            security_scope=security_scope,
-            principal_id=principal.principal_id,
+            principal=principal,
             execution_id=run_ref,
             thread_id=conversation_id,
             task_id=action.action_id,
@@ -1515,15 +1517,15 @@ class ConversationService:
             and action.tool_name == _READ_ACTION_OUTPUT_CAPABILITY
         ):
             return self._read_action_output(
-                action, principal=principal, security_scope=security_scope
+                action, principal=principal, owner=owner
             )
         if (
             isinstance(action, ToolCallProposal)
-            and action.tool_name == _LIST_WORKSPACE_KNOWLEDGE_CAPABILITY
+            and action.tool_name == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY
         ):
-            arguments = ListWorkspaceKnowledgeArguments.model_validate(action.arguments)
-            items = self._workspace_reader.list_workspace_knowledge(
-                workspace_id=security_scope.workspace_id,
+            arguments = ListPersonalKnowledgeArguments.model_validate(action.arguments)
+            items = self._knowledge_reader.list_personal_knowledge(
+                owner_id=owner.principal_id,
                 user_id=principal.user_id,
                 limit=arguments.limit,
             )
@@ -1553,7 +1555,7 @@ class ConversationService:
                     action_id=action.action_id,
                     capability_id=action.tool_name,
                     run_ref=run_ref,
-                    security_scope=security_scope,
+                    owner=owner,
                     execution_scope=execution_scope,
                 ),
             ))
@@ -1600,7 +1602,7 @@ class ConversationService:
                 content = self._artifact_port.read_text(
                     item.artifact_ref,
                     principal=principal,
-                    security_scope=security_scope,
+                    owner=owner,
                 )
                 payload["artifacts"].append({
                     "artifact_ref": item.artifact_ref.model_dump(mode="json"),
@@ -1685,10 +1687,10 @@ class ConversationService:
             "Copy each text_span exactly from its user message and exclude the request to save, confirmation "
             "instructions, and other control text. Never select assistant text or paraphrase the saved payload. "
             "This proposal only prepares immutable confirmation; it does not claim the save happened. "
-            "For a question about facts stored in the user's personal or workspace knowledge, call "
-            "list_workspace_knowledge before saying the fact is absent, unavailable, or needs to be "
+            "For a question about facts stored in the user's personal knowledge, call "
+            "list_personal_knowledge before saying the fact is absent, unavailable, or needs to be "
             "re-supplied. No observation is not evidence of absence. "
-            "For a requested deletion, first observe the target with list_workspace_knowledge, then in "
+            "For a requested deletion, first observe the target with list_personal_knowledge, then in "
             "a separate turn call prepare_knowledge_delete as the only action using exactly one returned "
             "knowledge_item_id. Preparing is not deleting; return the runtime confirmation unchanged. "
             "Use start_durable_investigation only when the user explicitly needs work to continue beyond "

@@ -216,7 +216,7 @@ ToolInvocationEvent：结构化审计，记录风险、副作用、权限、耗�
 
 知识删除是这一边界的反例：固定 target 之后没有工具选择问题，因此由
 `KnowledgeLifecycleService` 直接校验 scope、Command digest 和确认，并在事务
-内写 Workspace facts 与 Receipt。ToolGateway 不应成为所有副作用的强制包装层。
+内写 Personal Knowledge facts 与 Receipt。ToolGateway 不应成为所有副作用的强制包装层。
 
 ### ToolGatewayContext 执行上下文
 
@@ -390,7 +390,7 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 当前 `permission_scope` 已经进入 `ToolGovernance` 契约和审计事件，但主要还是声明与记录。最高收益的下一步是把 Gateway 的 policy validate 接入真实权限后端：
 
 - 用户级权限。
-- workspace / tenant 权限。
+- personal knowledge / tenant 权限。
 - 工具级 allow / deny。
 - 外部网络访问权限。
 - 写入、删除、外发等副作用权限。

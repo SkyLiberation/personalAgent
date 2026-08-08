@@ -24,11 +24,11 @@
 | 当前外部自然场景 | `passed_targeted_engineering_evidence` | E17/E19/L04 在 archive `20260727T162913.553817Z-9428-c723ad92` 中通过；进一步移除 Prompt 内预期答案后，E16/E18 2/2 passed，archive `20260727T165211.554901Z-17344-3e4bc060`。用户只表达数据源或深度研究结果，不指定 MCP Tool、Agent ID、Artifact、答案或执行顺序 |
 | Conversation clarification | `passed_targeted_engineering_evidence` | E01 baseline `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求被旧答案冒充完成；同输入修复后通过，archive `20260729T033304.468248Z-28272-e91b6630` |
 | Conversation governed save | `passed_targeted_engineering_evidence` | B01 证明旧 Conversation 无可恢复操作；B02 archive `20260729T031804.415533Z-15972-214cb81c` 证明控制语义污染；E14 exact-span 修复后 22.00 秒通过，archive `20260729T033339.065714Z-22692-16415241` |
-| Goal-entry workspace recall | `passed_targeted_engineering_evidence` | baseline `20260803T142413.474927Z-4864-39fedcf5` 无 Observation 即误报未找到；补 canonical list capability 后 L01 `20260803T152242.957743Z-388-d0850c85` 通过 |
+| Goal-entry personal knowledge recall | `passed_targeted_engineering_evidence` | baseline `20260803T142413.474927Z-4864-39fedcf5` 无 Observation 即误报未找到；补 canonical list capability 后 L01 `20260803T152242.957743Z-388-d0850c85` 通过 |
 | Goal-entry governed delete | `passed_targeted_engineering_evidence` | baseline `20260803T142932.564456Z-23720-19ba8517` 只能文字确认；E22 `20260803T152242.957743Z-388-d0850c85` 覆盖当前条目选择、确认、scope 与 replay |
 | Goal-entry durable handoff | `passed_targeted_engineering_evidence` | baseline `20260803T143007.354551Z-26256-84d0bf1d` 幻觉不存在的 specialist；E23 `20260803T151935.921382Z-27308-be5eadbf` 创建一个 canonical Project 并返回引用 |
 | Research boundary paired eval | `diagnostic_boundary_evidence` | E24 `20260803T143230.864789Z-6460-dbd005fd` 未证明 ResearchRun 对开放调查优于 Conversation/Project；保持 Scheduled Intelligence 边界 |
-| Workspace answer verification | `passed_targeted_engineering_evidence` | B04 证明互斥结论被回答组装器误标 supported；E20 独立 Verifier 返回 `needs_revision/conflicted`，archive `20260731T064446.108938Z-8804-52b29d3c` |
+| Personal Knowledge answer verification | `passed_targeted_engineering_evidence` | B04 证明互斥结论被回答组装器误标 supported；E20 独立 Verifier 返回 `needs_revision/conflicted`，archive `20260731T064446.108938Z-8804-52b29d3c` |
 | Durable Investigation live closure | `target_passed_release_not_established` | 历史 B03 archive 证明当时 revision 的 verification repair 死锁；IP01 archive `20260729T101501.732689Z-53628-6c5f02f2` 完成 Plan v3、3/3 outcomes、5 条 admitted evidence、可读报告与 Completion Gate。B03 不再对当前实现执行相反断言 |
 | Clean revision 发布资格 | `not_established` | 完整 archive 与目标 worktree 均为 dirty；gate 必须 fail closed |
 

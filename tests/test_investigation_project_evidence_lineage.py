@@ -32,7 +32,6 @@ from personal_agent.domain.investigation_project import (
 )
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
-    SecurityScope,
 )
 
 
@@ -48,10 +47,6 @@ def _project() -> InvestigationProject:
             principal=AuthenticatedPrincipal(
                 tenant_id="tenant-1",
                 user_id="user-1",
-            ),
-            security_scope=SecurityScope(
-                tenant_id="tenant-1",
-                workspace_id="workspace-1",
             ),
             title="Source investigation",
             goal="Use formal sources.",
