@@ -7,31 +7,28 @@
 
 ## 1. 最高铁律
 
-### 1.1 E2E 可执行验证
+### 1.1 用户结果与工程约束的可执行基线
 
-**任何优化必须先由当前最简单生产路径的 baseline E2E 证明当前 Agent 无法满足同一用户目标；没有配套可执行、可重复、可自动断言用户结果的 E2E，任何落地设计都视为未经验证。**
+**产品行为、能力、风险或用户结果的优化，必须先由当前最简单生产路径的 baseline E2E 证明当前 Agent 无法满足同一用户目标。纯内部重构不得编造产品失败：它必须由已执行的工程基线证明可量化约束，并由正式入口 E2E 锁定重构前后用户行为不变。**
 
-- 优化设计前必须从正式入口以用户自然表达实际执行 baseline，自动断言缺失的用户结果或发生的关键错误结果，并保存 trace、event、receipt 或 report 证据。
-- baseline 未失败、失败源于测试/环境缺陷、或现有路径已满足目标时，必须停止优化；代码不可达、架构推断、竞品对比、文档或低层测试不能替代该证据。
-- 只有 baseline 证明不足后才能定义目标 E2E 和最小改动；目标 E2E 可以先失败，但编码前不得缺失。
+**产品 E2E 的职责是证伪当前产品能力，不是演示预设设计能够运行。**必须先确定目标用户、其真实可见信息、自然表达、缺失结果和关键反事实，再选择最简单正式入口；禁止先设计机制，再反向编造恰好需要该机制的场景。
+
+- 产品优化前必须从正式入口以用户自然表达执行 baseline，自动断言缺失结果或关键错误，并保存 trace、event、receipt 或 report；未失败、失败源于环境/测试、或现有路径已满足目标时停止产品优化。
+- 纯内部重构必须声明用户行为不变，并用可重复命令证明具体工程约束，例如生产不可达代码、职责混装、依赖环、变更耦合或复杂度热点；文件行数和主观“不优雅”不能单独准入。其产品 E2E 是回归基线，不得写成失败的能力证据。
+- 只有对应基线成立后才能定义目标 E2E/工程验收和最小改动；代码可达性推断、竞品、文档或未执行测试都不能替代证据。
 - 未实际执行测试时，禁止声称“已验证”“已修复”或“可上线”。
-- Unit 通过、对象存在、状态为 success、数据库新增记录都不能替代 E2E。
-- E2E 必须由目标用户的真实目标和自然表达驱动，同时断言正确结果发生，以及关键错误结果没有发生。
+- Unit 通过、对象存在、状态为 success、数据库新增记录、Tool 被调用或 Trace 命中预期步骤都不能替代用户结果。
 
-合格 E2E 必须：
+合格产品 E2E 必须：
 
 1. 从正式 API、CLI、消息入口或 Application Use Case 进入；
 2. 经过生产主路径，而非测试专用旁路；
 3. 使用真实领域模型、状态迁移、编排和持久化协议；
 4. 自动断言用户可观察结果和关键反事实；
-5. 能以明确命令在本地或 CI 重复执行；
-6. 失败时能由 trace、event、receipt 或 report 定位阶段。
+5. 以明确命令在本地或 CI 重复执行，失败时由 trace、event、receipt 或 report 定位阶段；
+6. 对 baseline 与目标路径使用同一入口、用户输入和身份，除待修复行为外不偷换条件。
 
-E2E 的输入必须符合目标用户实际掌握的信息。除非 Tool、Agent、Workflow、Model、内部 ID
-或执行顺序本身就是该用户可见的产品契约，禁止在 Given/When、Prompt 或测试指令中指定它们，
-替 Agent 完成能力选择、规划或结束判断。生产路径可以在执行后通过 Trace/Receipt 断言，不能
-通过向用户输入泄漏预期实现来制造通过。需要精确指定 Tool、步骤、并发、Checkpoint 或内部
-协议的场景属于 Integration/Runtime Conformance Test，不能单独作为用户 E2E 或产品能力证据。
+除非 Tool、Agent、Workflow、Model、内部 ID 或执行顺序本身就是用户可见产品契约，禁止在 Given/When、Prompt 或测试指令中指定它们，禁止直接构造 Proposal/Command/Checkpoint 替 Agent 完成选择，也禁止让 Fake 替语义决策。生产路径可在执行后通过 Trace/Receipt 断言，不能向用户输入泄漏预期实现来制造通过。需要指定内部对象、Tool、步骤、并发或协议的场景属于 Integration/Runtime Conformance Test，不能单独作为产品能力证据。
 
 Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和故障注入。Fake 必须实现生产 Port 并有 contract test；不得创造生产中不存在的能力，也不得替模型、Policy、Admission 或 Verifier 作决定。
 
@@ -69,22 +66,21 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 
 出现以下任一情况即视为过度设计，禁止合并：
 
-- 没有明确业务扩展、当前用户错误或可量化工程约束；
-- 不满足 1.1：没有同输入 baseline E2E 的已执行失败证据，或失败根因不是当前 Agent 的产品行为；
-- 新机制只有测试、Trace、Prompt、文档或展示消费者，不改变生产行为；
+- 没有明确业务扩展、当前用户错误或已执行失败的可量化工程约束；
+- 产品变更没有同输入失败 E2E，或纯重构没有工程基线与行为保持 E2E；
+- 新机制只有 Model、DTO、Interface、配置、Fake、测试、Trace、Prompt、文档或展示消费者，没有正式入口、生产构造点、调用者或结果消费者；
 - 一个职责被拆成多个 Model、digest、表或层，却没有独立 owner、信任边界、生命周期、事务边界或保留策略；
 - 可确定性派生的状态被持久化，或固定流程被包装成通用 Planner/Task/Event 系统；
 - 只证明对象存在、字段生成、流程 fail closed，未证明用户结果、风险、恢复、成本或延迟得到改善；
-- 新增复杂度不小于被删除复杂度，或旧路径、无消费者投影和临时状态继续保留。
+- 产品变更新增超过已证明用户结果所需的复杂度，或纯重构没有降低已测约束；旧路径、无消费者投影或临时状态仍保留。
 
 任何新增架构机制必须先提交一份 `Complexity Justification`，并依次证明：
 
-1. 业务场景、目标用户结果和关键反事实；
-2. 最简单生产 baseline E2E、同输入执行结果、失败根因及不足；
-3. 所需生产能力盘点，以及“已有、需扩展、不存在”的代码与已执行证据；
-4. 目标 E2E、生产消费者和可观测收益；
-5. 为什么一个 Model/状态/digest/表/流程不够，拆分后的独立职责是什么；
-6. 替代方案、复杂度预算、同步删除项和退出条件。
+1. 变更类型；产品变更给出用户场景、反事实和失败 E2E，纯重构给出工程约束基线与行为保持 E2E；
+2. 所需能力盘点和完整生产路径，标明已有、需扩展、不存在及真实环境交付；
+3. 目标 E2E、生产消费者、可观测收益和正式入口到结果的可达性；
+4. 每个新增 Model/状态/digest/表/流程不可合并的 owner、生命周期或边界；
+5. 替代方案、净复杂度预算、同步删除项和退出条件。
 
 最小充分设计是默认选择：
 
@@ -93,7 +89,7 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 - Command、Event、Receipt、Projection、View 按各自真实职责选择，禁止为“配套完整”成套创建；
 - 已存在但无法补齐上述证据的机制，必须删除、合并，或降为非权威可选投影。
 
-设计新能力或 E2E 前，必须盘点其依赖的模型、Tool、Service、Agent、Provider、Gateway、权限、持久化、恢复和验证能力。依赖能力不存在时，必须在同一设计中定义其业务 owner、canonical contract、唯一入口、生产消费者、实现阶段、失败语义和 E2E/contract test；否则禁止进入实现。接口、DTO、配置、Fake、单项能力存在或未来阶段名称都不能证明能力已落地，多个独立用例也不能拼成组合能力证据。
+能力只有形成 `正式入口 -> Application Capability -> Domain/canonical state -> 真实 Runtime/Provider/Persistence -> Verification/Completion -> 用户结果` 的最小纵向切片才算落地。每个新增生产结构必须能指出正式入口可达链、生产构造点、调用者/消费者和删除后会失败的测试；持久化事实或投影还必须有真实写入者与读取者，注入式协作者必须在 Composition Root 装配。缺一项即删除，不得以阶段名称或未来接入保留。不可控第三方可以使用生产 Port 的 Fake，但必须有 contract test，并在宣称真实交付或上线前通过真实环境 smoke/E2E；多个独立用例不能拼成组合能力证据。
 
 ### 1.6 外部参考的证据分级
 
@@ -114,18 +110,18 @@ Fake/Stub 仅允许替代不可控第三方、付费模型、危险副作用和�
 正确用法：
 
 1. 参考提供机制候选，以及已在生产中付过代价的参数、边界、降级和失败处理；
-2. 需求来源仍是 1.1 的 baseline——先在本工程用同一用户目标执行最简单生产路径，证明当前不足；参考本身不构成需求；
-3. baseline 证明不足后，等级更高的现成机制优先于自创设计；
+2. 需求来源仍是 1.1 的对应基线——产品变更证明用户结果不足，纯重构证明工程约束；参考本身不构成需求；
+3. 对应基线成立后，等级更高的现成机制优先于自创设计；
 4. 采用后必须由目标 E2E 证明本工程的用户结果改善；外部已验证不等于在本工程有效。
 
 **按机制域检索，不按框架名检索。**下表给出本工程相关机制域的起点，不是推荐技术栈、需求来源或采用理由；清单不完备也不排他，出现等级更高的实现时优先采用并在本表补充坐标。坐标随版本漂移，引用时必须在目标分支源码或规范正文重新核对并按上述分级标注：
 
 | 机制域 | 优先检索对象（起点坐标） |
 | --- | --- |
-| Tool/资源协议与权限边界 | Model Context Protocol 规范正文（标注 spec 日期版本）；本工程 `capabilities/contracts/execution.py` 已按其建模 |
-| 编排、checkpoint、HITL 中断与 durable execution | LangGraph 源码与 checkpointer 契约（`pyproject.toml:11`、`langgraph-checkpoint-postgres`）；Temporal / Restate 的 determinism、replay、重试与补偿规则（须定位到 SDK 源码或规范章节） |
-| 知识生命周期与时间性失效 | graphiti-core 边级双时态 `valid_at` / `invalid_at`（`pyproject.toml:9`、`memory/graphiti/llm_strategies.py:167`） |
-| Memory 纠错、supersede 与污染控制 | OpenClaw 的条目级 `status: active／superseded`；Hermes 的破坏性 `replace`（均为 B 级，须在 upstream 仓库正文核对，第三方文档镜像不可用于复核） |
+| Tool/资源协议与权限边界 | Model Context Protocol 规范正文（标注 spec 日期版本）；本工程边界见 `src/personal_agent/capabilities/contracts/execution.py` |
+| 编排、checkpoint、HITL 中断与 durable execution | 本工程锁定版本对应的 LangGraph/checkpointer 源码；Temporal / Restate 的 determinism、replay、重试与补偿规范 |
+| 知识生命周期与时间性失效 | graphiti-core 已发布源码中的 `valid_at` / `invalid_at` 及 provenance；本工程适配见 `src/personal_agent/memory/graphiti/llm_strategies.py` |
+| Memory 纠错与污染控制 | Hermes 等已发布源码的 add/replace/remove、scope 和并发语义；必须核对目标提交，不能用 issue 或文档镜像代替实现 |
 | Agent 循环、工具调用与安全策略 | OpenAI / Anthropic 官方产品与 API 文档（A 级，标注日期与契约原文） |
 | 检索与证据组织 | 官方检索/rerank 实现与评测协议正文；论文仅按 C 级用于提出候选 |
 
@@ -312,12 +308,14 @@ Capability definition 由对应 Application owner 管理；模型可见 capabili
 
 自写自读却经由 dict 的字段是典型缺陷：键名漂移不产生类型错误，被它守护的门禁静默失效，类型检查与测试都不会亮红。
 
-### 5.2 模块职责与 Application Capability 边界
+### 5.2 模块职责、规模与生产可达性
 
-一个模块的职责必须能用一句不含「以及」的话说清。说不清时先检查它是否同时拥有多个 Application Capability 的准入、结果契约或展示投影——这是 God Service 的判据，不是文件行数。
+一个模块的职责必须能用一句不含「以及」的话说清。说不清时先检查它是否同时拥有多个 Application Capability 的准入、结果契约或展示投影——这是 God Service 的判据。文件行数、类长度、圈复杂度和类数量只作为评审触发器，禁止按行数机械拆成更多 Manager/Helper；拆分必须形成更清晰的 owner 与依赖方向，并使净理解成本下降。
 
 - 一个 Service 只拥有一个 Application Capability 的 admission、结果契约与展示投影；多 capability 共用入口时，入口只做语义路由、Context 组装、预算与终止判据，各 capability 的准入与投影归各自 owner；
 - 抽出的准入模块必须可被独立 contract test 覆盖，且不反向依赖编排。
+- 新增或显著增长的文件/类必须报告职责、生产调用方和拆分/不拆分理由；类数量增长必须与同步删除量及新边界对应，禁止以“小类更多就是解耦”为理由。
+- 每个 production class、字段、Repository 方法、Projection 和 Adapter 必须从正式入口可达，并有生产构造点及调用者/消费者；持久化事实和 Projection 还必须有写入者与读取者，注入式 Adapter/Service 必须在 Composition Root 装配。仅被测试、迁移脚本或文档引用的结构不是已落地能力，除非它本身就是明确保留期的测试/迁移设施。
 
 ### 5.3 LangGraph、Router、Planner 与 Workflow
 
@@ -348,31 +346,29 @@ Capability definition 由对应 Application owner 管理；模型可见 capabili
 
 任何功能、修复或重构必须按顺序执行：
 
-1. 定义待验证的业务扩展/当前错误假设、用户结果、反事实和 Out of Scope；
-2. 编写并实际执行当前最简单生产 baseline E2E，保存不足和失败根因证据；baseline 不失败则停止优化；
+1. 分类为产品行为变更或纯内部重构，定义用户结果/行为保持契约、反事实和 Out of Scope；
+2. 产品变更执行同输入失败 E2E；纯重构执行失败的工程约束基线和通过的正式入口行为基线；对应基线不成立则停止；
 3. 基于已证明缺口完成 Decision/Fact Ownership Analysis、Framework/Runtime/Application/Aggregate 分类和所需能力盘点；
 4. 按 1.6 检索已落地的业界机制，标注等级和可复核坐标，说明采纳与不采纳的部分；
-5. 定义目标 E2E、影响边界、复杂度预算和删除路径；
-6. 实现使目标 E2E 通过的最小整体改动；
-7. 补充必要的 Unit、Contract、Integration Test 和语义 Eval；
-8. 删除旧字段、旧入口、旧 converter、无消费者投影和临时 fallback；
-9. 执行 E2E、对照 Eval、相关低层测试及 lint/type check；
+5. 评审目标 E2E 是否仍为同一真实用户目标，或重构 E2E 是否只证明行为保持；定义影响边界、净复杂度预算和删除路径；
+6. 从正式入口实现贯穿真实 Adapter/Persistence/Provider、Verification/Completion 和用户结果的最小纵向切片；
+7. 补充必要的 Unit/Contract/Integration/Golden Set，并在适用时执行真实环境 smoke；
+8. 删除旧路径、临时 fallback 和无生产构造点、调用者或消费者的结构，执行生产可达性与 dead-code audit；
+9. 执行目标 E2E、对照 Eval、相关低层测试及 lint/type check；
 10. 记录命令、结果、净复杂度变化和剩余风险。
 
 ### 6.1 变更分析最小模板
 
 ```markdown
 ## Goal / Current Incorrect Behavior / Expected User-visible Result
-## Business Expansion or Proven Constraint / Out of Scope
-## Simplest Baseline E2E / Executed Result / Root Cause
+## Change Type / Business Expansion or Measured Engineering Constraint / Out of Scope
+## Product Baseline E2E or Refactor Engineering + Behavior Baselines / Result / Root Cause
 ## Target E2E and Counterfactuals
-## Decision Ownership / Fact Owner and Write Path
-## Framework Protocol / Runtime Mechanism / Application Capability / Product Aggregate Classification
-## Referenced Industry Mechanism (grade + verifiable coordinate) / Adopted vs Rejected Parts
+## Architecture Classification / Decision Ownership / Fact Owner and Write Path
+## Referenced Industry Mechanism (grade + coordinate) / Adopted vs Rejected
 ## Required Application Capabilities and Runtime Mechanisms / Missing Delivery
-## Affected Modules and Dependency Direction
-## Complexity Added, Removed and Rejected Alternatives
-## Removed Legacy Path / Risks
+## Production Reachability / Real Environment Evidence / Affected Dependencies
+## Complexity Added and Removed / Rejected Alternatives / Legacy Removal / Risks
 ```
 
 ### 6.2 E2E 最小模板
@@ -382,10 +378,11 @@ Capability definition 由对应 Application owner 管理；模型可见 capabili
 Persona: <目标用户、其真实可见信息和公开产品契约>
 Given: <身份、初始事实和不可由模型预知的测试数据>
 When: <从正式入口以该用户的自然表达执行，不泄漏预期内部能力或步骤>
-Baseline: <相同正式入口和输入下已执行的命令、结果、失败根因与不足；未执行不得进入优化>
+Baseline: <产品变更记录同输入失败；纯重构记录重构前行为结果，另链接失败的工程约束基线>
 Then: <用户可观察结果>
 And not: <禁止发生的副作用或错误结果>
 Path evidence: <执行后由 trace/event/receipt/report 证明的生产组件，不注入用户输入>
+Production reachability: <正式入口、生产构造/装配、调用者/消费者、事实写读和环境>
 Required application capabilities/runtime mechanisms: <已有证据、需扩展项、缺失能力落地章节>
 Allowed fakes: <仅外部边界>
 Command: <本地或 CI 命令>
@@ -413,16 +410,16 @@ Command: <本地或 CI 命令>
 
 ### 6.4 AI Coding Agent 行为
 
-编码前必须输出目标、所有权、影响边界、E2E 和计划删除内容。
+编码前必须输出变更类型、目标、所有权、影响边界、产品/工程基线、生产可达性和计划删除内容。
 
 禁止：
 
 - 因不确定新增 fallback，或为兼容保留新旧双轨；
 - 未搜索调用方就修改公共模型；
 - 用 raw dict 绕过类型边界（判据见 5.1）；
-- 新增抽象却不说明变化来源和生产消费者，或新增结构在生产路径没有构造点与读取点；
+- 新增抽象却不说明变化来源和生产消费者，或新增结构没有正式入口可达链、生产构造/装配点与调用者；
 - 让自写自读的内部字段穿 dict 传递，使结构性不变量失去机械判据；
-- 缺少能力时只写 E2E、Fake、接口或未来阶段，不设计生产落地；
+- 把 Model/DTO/Interface/Fake/测试或未装配 Adapter 的横向半成品描述为能力落地，或未接真实环境就宣称可上线；
 - 引用外部实践却不给等级和可复核坐标，或未核对源码/规范正文就断言业界做法；
 - 未运行测试就声称完成。
 
@@ -478,22 +475,17 @@ ADR 必须包含 1.5 的 `Complexity Justification`、1.6 的参考来源与分�
 
 一项变更只有全部满足下列条件才可合并并视为完成：
 
-- [ ] 用户目标、错误行为、验收结果和 Out of Scope 明确；
-- [ ] 同一用户目标的最简单 baseline E2E 已实际执行，失败来自当前 Agent 产品行为且不足得到证明；
-- [ ] 所需生产能力已盘点，缺失能力有完整落地设计；
-- [ ] Framework Protocol、Runtime Mechanism、Application Capability、Product Aggregate 和 Projection 已分类，未把 Tool/Workflow/Project 并列为用户能力；
+- [ ] 变更类型、目标和 Out of Scope 明确；产品变更有同输入失败 E2E，纯重构有失败工程基线及重构前后通过的行为保持 E2E；
+- [ ] 产品 E2E 没有泄漏内部名称、对象或步骤来迎合设计；重构 E2E 未被冒充为产品能力改善；
+- [ ] 所需能力已盘点，并形成从正式入口、Application/Domain、真实 Adapter/Provider/Persistence 到 Verification/Completion 和用户结果的纵向切片；
+- [ ] 架构分类、Decision/Fact owner、canonical model、唯一写入口和依赖方向明确，Tool/Workflow/Project 未冒充用户能力；
 - [ ] 机制选型已检索业界实现，来源分级和可复核坐标已记录，未采纳部分有理由；
-- [ ] Decision/Fact owner、canonical model 和唯一写入口明确；
-- [ ] 新增 Model、状态、digest、表、层和模式分别具有不可合并职责、生产构造点与读取点；
-- [ ] 每条新增结构性不变量有命名 owner，且能指出破坏它的最小改动会使哪个类型错误或断言失败；
-- [ ] 新增复杂度小于删除复杂度，不存在镜像事实、双写、隐藏 fallback 或无期限兼容；
-- [ ] Proposal、Command、Execution Fact、Verification 和 Completion 边界正确；
-- [ ] 依赖方向正确，Orchestrator、Validator、Adapter 未创造业务语义；
-- [ ] 框架抽取具有两个独立生产消费者或强制外部/安全边界，且不拥有业务 pending 状态、迁移或完成标准；
-- [ ] 旧字段、旧路径、临时状态和无消费者投影已删除或具有期限 ADR；
-- [ ] 正式入口 E2E 已由目标用户自然表达驱动，未以内部名称或步骤替用户决策，并通过用户结果、关键反事实及至少一个失败/拒绝/恢复/replay 场景；
-- [ ] Unit/Contract/Integration/Golden Set 按风险补齐，Trace 和错误分类足以定位问题；
+- [ ] 每个新增 Model/状态/digest/表/层/类具有不可合并职责、生产构造点和调用者/消费者；持久化事实/投影有真实写读者，注入式协作者已装配；结构性不变量有确定性失败判据；
+- [ ] 新增/增长文件与类已报告职责和拆分理由，类数量及净复杂度受控；不存在镜像事实、双写、隐藏 fallback、无期限兼容或仅测试可达的死代码；
+- [ ] Proposal、Command、Execution Fact、Verification、Completion 和框架/Application 边界正确；框架抽取具有两个生产消费者或强制边界；
+- [ ] 旧字段、旧路径、临时状态和无消费者结构已删除或有期限 ADR；真实环境 smoke/E2E 已按交付声明执行，Fake 未被外推为真实接入；
+- [ ] 正式入口 E2E 及适用的 Unit/Contract/Integration/Golden Set 已通过，覆盖至少一个失败、拒绝、恢复或 replay 场景，Trace/错误分类足以定位；
 - [ ] 文档整体更新，无冲突正文、重复 owner、失效链接或未来设计冒充当前事实；章节开头给出结论、关键观点加粗或列表突出、可扫读而非流水帐；
 - [ ] 验证命令、结果、净复杂度变化和未验证风险已如实记录。
 
-**没有 baseline E2E 证明当前 Agent 的不足，就不得优化；没有目标 E2E 证明用户结果改善，就没有可信落地。**
+**产品优化没有失败 baseline 与目标 E2E 就不得落地；纯重构没有工程约束证据与行为保持 E2E 就不得合并。**

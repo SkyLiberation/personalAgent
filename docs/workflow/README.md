@@ -30,7 +30,7 @@ worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph �
    Claim/Grounding/Admission/Conflict 与 ProjectionJob；
 3. [Evidence Engine](evidence-engine.md)：Ask 与 Research 共享的证据归一、装配、引用选择和
    claim grounding；
-4. [知识删除/恢复](delete-knowledge-workflow.md)：明确 Application Use Case、确认、单 digest、
+4. [知识删除/恢复](delete-knowledge-workflow.md)：明确 Application Use Case、确认、服务端单 digest、
    Receipt 和 replay；
 5. [一次性研究](research-once-workflow.md)：`ResearchService` 的来源、事件、digest 与领域终态；
 6. [GPT Researcher A2A](gpt-researcher-a2a-workflow.md)：child lifecycle、Artifact 与父级综合边界。

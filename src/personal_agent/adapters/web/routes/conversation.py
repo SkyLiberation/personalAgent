@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.conversation import (
     ConversationMessage,
@@ -19,16 +19,21 @@ from personal_agent.adapters.web.routes._shared import resolve_requested_princip
 
 
 class ConversationTurnRequest(BaseModel):
-    conversation_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    conversation_id: str = Field(
+        min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
     messages: list[ConversationMessage] = Field(min_length=1, max_length=100)
-    interaction_run_ref: str | None = Field(default=None, pattern=r"^irun_[A-Za-z0-9_-]+$")
+    interaction_run_ref: str | None = Field(
+        default=None, pattern=r"^irun_[A-Za-z0-9_-]+$"
+    )
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ConversationKnowledgeSaveDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
     decision: Literal["confirm", "reject"]
-    command_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     confirmation_ref: str = Field(default="", max_length=500)
 
 
@@ -65,14 +70,25 @@ def register_conversation_routes(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except PermissionError:
+        except (ConversationOperationNotFound, PermissionError):
             raise HTTPException(status_code=404, detail="Resource not found.") from None
         except ConversationUnavailable as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/conversation/runs/{interaction_run_ref}")
-    def conversation_trace(interaction_run_ref: str):
-        trace = service.conversation_trace(interaction_run_ref)
+    def conversation_trace(
+        interaction_run_ref: str,
+        request: Request,
+        user_id: str | None = None,
+    ):
+        try:
+            principal = resolve_requested_principal(request, settings, user_id)
+            trace = service.conversation_trace(
+                interaction_run_ref,
+                principal=principal,
+            )
+        except (ConversationOperationNotFound, PermissionError):
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
         if trace is None:
             raise HTTPException(status_code=404, detail="interaction run not found")
         return trace
@@ -92,7 +108,6 @@ def register_conversation_routes(
                 interaction_run_ref=interaction_run_ref,
                 principal=principal,
                 decision=body.decision,
-                command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,
             )
         except (ConversationOperationNotFound, PermissionError):

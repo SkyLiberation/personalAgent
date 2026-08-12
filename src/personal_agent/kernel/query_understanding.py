@@ -1,22 +1,7 @@
-"""Models for query understanding and retrieval planning (P2).
-
-The QueryUnderstanding layer classifies the user's question to determine
-what retrieval sources are needed and how to optimize the query for recall.
-The RetrievalPlan translates that understanding into an executable routing
-decision.
-"""
+"""Typed filters accepted by knowledge retrieval ports."""
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field, field_validator
-
-RetrievalMode = Literal[
-    "evidence_only",
-    "evidence_dominant",
-    "claim_expand_to_evidence",
-    "claim_state_diagnostic",
-]
 
 
 class RetrievalFilters(BaseModel):
@@ -81,87 +66,3 @@ class RetrievalFilters(BaseModel):
             or self.metadata_contains
             or self.parent_note_id
         )
-
-
-class QueryUnderstanding(BaseModel):
-    """LLM-produced analysis of a user question's retrieval needs."""
-
-    needs_freshness: bool = Field(
-        default=False,
-        description="True when the question asks about latest/current/recent information.",
-    )
-    needs_personal_memory: bool = Field(
-        default=True,
-        description="True when the question references personal notes or prior knowledge.",
-    )
-    needs_graph_reasoning: bool = Field(
-        default=False,
-        description="True when the question requires multi-hop entity relationship reasoning.",
-    )
-    needs_episodic_context: bool = Field(
-        default=False,
-        description="True when the question asks about prior runs, decisions, failures, or what the agent did before.",
-    )
-    claim_sensitive: bool = Field(
-        default=False,
-        description=(
-            "True when the question needs long-term knowledge state such as "
-            "claims, conflicts, supersession, stale facts, preferences, plans, "
-            "scope/time disambiguation, or user facts."
-        ),
-    )
-    retrieval_mode: RetrievalMode = Field(
-        default="evidence_dominant",
-        description=(
-            "How Claim/Knowledge should participate: evidence-only, "
-            "evidence-dominant, claim expansion to evidence, or claim state diagnostics."
-        ),
-    )
-    query_rewrite: str = Field(
-        default="",
-        description="Retrieval-optimized rewrite of the original question.",
-    )
-    sub_queries: list[str] = Field(
-        default_factory=list,
-        description="Decomposed sub-questions for compound/multi-hop queries.",
-    )
-    filters: RetrievalFilters = Field(
-        default_factory=RetrievalFilters,
-        description="Structured metadata filters for local and graph-backed retrieval.",
-    )
-    answer_policy: Literal["must_cite", "allow_web", "refuse_if_insufficient"] = Field(
-        default="must_cite",
-        description="How to handle insufficient evidence.",
-    )
-
-
-class RetrievalPlan(BaseModel):
-    """Executable routing decision derived from QueryUnderstanding."""
-
-    sources: list[Literal["graph", "local", "web"]] = Field(
-        default_factory=lambda: ["graph", "local"],
-    )
-    parallel: bool = Field(
-        default=True,
-        description="Whether graph and local retrieval should run in parallel.",
-    )
-    query: str = Field(
-        default="",
-        description="The effective query to send to retrieval (rewritten or original).",
-    )
-    sub_queries: list[str] = Field(
-        default_factory=list,
-        description="Sub-queries for multi-hop decomposition.",
-    )
-    filters: RetrievalFilters = Field(
-        default_factory=RetrievalFilters,
-        description="Metadata filters to push down into retrieval calls.",
-    )
-    claim_sensitive: bool = Field(
-        default=False,
-        description="Whether Claim/Knowledge may participate in this retrieval run.",
-    )
-    retrieval_mode: RetrievalMode = Field(
-        default="evidence_dominant",
-        description="The selected evidence/claim retrieval mode for this run.",
-    )

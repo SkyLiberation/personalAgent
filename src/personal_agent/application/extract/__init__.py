@@ -6,7 +6,7 @@ core entities / graph_worthy routing signal) from raw documents.
 NOTE: It is no longer wired into the capture pipeline. Capture-time structure
 and chunking are owned by Unstructured (partition + chunk_by_title), and the
 heavy entity-relation-fact extraction stays on graphiti. LangExtract's active
-role in the live system is query understanding (see ``agent/query_planner.py``),
+role in the live system is typed extraction for application-owned decisions,
 not Graphiti pre-extraction. This package is retained for tests/experiments.
 """
 

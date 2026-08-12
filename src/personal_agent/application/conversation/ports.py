@@ -21,7 +21,14 @@ from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
 )
 
-from .models import ProjectReference, StartDurableInvestigationArguments, PersonalKnowledgeCandidate
+from .models import (
+    ConversationProjectSnapshot,
+    PersonalKnowledgeCandidate,
+    PersonalKnowledgeEvidenceSnapshot,
+    ProjectReference,
+    StartDurableInvestigationArguments,
+    SteerInvestigationProjectArguments,
+)
 
 
 class InteractionToolPort(Protocol):
@@ -118,6 +125,15 @@ class ConversationKnowledgeReadPort(Protocol):
         limit: int,
     ) -> tuple[PersonalKnowledgeCandidate, ...]: ...
 
+    def select_personal_evidence(
+        self,
+        *,
+        question: str,
+        owner_id: str,
+        user_id: str,
+        limit: int,
+    ) -> PersonalKnowledgeEvidenceSnapshot: ...
+
 
 class ConversationKnowledgeLifecyclePort(Protocol):
     def prepare_delete(
@@ -147,6 +163,22 @@ class ConversationProjectPort(Protocol):
         request: StartDurableInvestigationArguments,
         idempotency_key: str,
     ) -> ProjectReference: ...
+
+    def get(
+        self,
+        *,
+        principal: AuthenticatedPrincipal,
+        reference: ProjectReference,
+    ) -> ConversationProjectSnapshot: ...
+
+    def steer(
+        self,
+        *,
+        principal: AuthenticatedPrincipal,
+        reference: ProjectReference,
+        request: SteerInvestigationProjectArguments,
+        idempotency_key: str,
+    ) -> ConversationProjectSnapshot: ...
 
 
 __all__ = [

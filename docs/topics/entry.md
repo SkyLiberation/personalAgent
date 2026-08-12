@@ -47,7 +47,6 @@
 当前入口层主要通过这些方法进入运行时：
 
 - `execute_capture()`
-- `execute_ask()`
 - `digest()`
 - `converse()`
 - `list_notes()`

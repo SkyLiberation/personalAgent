@@ -1,270 +1,74 @@
-# 历史设计：运行时与 LangGraph 总编排
+# 当前 Runtime
 
-> 状态：本文主体描述已删除的 `orchestration_graph.py`、orchestration nodes、
-> TaskAnalyzer/GoalGraph/Executive 总主链，不再代表当前 Runtime。当前 `AgentRuntime` 是
-> Composition Root；Conversation、明确 Application Workflow 和 Investigation Project 分别拥有
-> 自己的运行与恢复语义。权威事实见
-> [personalAgent 当前核心架构](../summary/core-architecture-current-state.md)。
+**Runtime 负责装配和执行机械事实，不拥有用户目标、领域状态或最终完成语义。** 当前普通交互是一个基于 typed Observation 的 Conversation loop；固定事务与 durable Project 继续由各自 Application/Aggregate 拥有。
 
-本文汇总当前项目运行时与编排层的职责划分、执行路径、当前能力、已知限制和后续改进方向。
-
-## 设计目标
-
-运行时与编排层负责把入口、Task Analysis、Executive、Action/Procedure、工具、记忆、验证和反馈串成稳定执行链路：
-
-- `AgentService` 保持薄 facade
-- `AgentRuntime` 拥有核心运行时依赖
-- LangGraph 总图承担 analyze/decide/act/observe/verify、局部 ReAct、HITL 和 checkpoint 编排
-- 统一返回 Web、CLI、飞书可消费的结果对象
-
-## 组件分层
-
-### 1. `AgentService`
-
-代码位置：[service.py](../../src/personal_agent/orchestration/service.py)
-
-作用：
-
-- 装配 settings、store、graph store、ask history store 和 capture service
-- 暴露稳定 public API
-- 将具体执行委托给 `AgentRuntime`
-
-### 2. `AgentRuntime`
-
-代码位置：[runtime.py](../../src/personal_agent/orchestration/runtime.py)
-
-作用：
-
-- 持有工具注册表
-- 持有记忆门面
-- 持有 TaskAnalyzer、GoalGraphCompiler、Executive、Resolver、Verifier、ProcedureCatalog 和 Gateway
-- 执行 capture、ask、digest、entry、graph sync 等核心流程
-
-### 3. LangGraph 编排
-
-代码位置：[orchestration_graph.py](../../src/personal_agent/orchestration/orchestration_graph.py)、[orchestration_nodes/](../../src/personal_agent/orchestration/orchestration_nodes/)
-
-作用：
-
-- `build_entry_orchestration_graph()`：组合 Entry、Executive 与最终结果映射
-- `build_entry_graph()`：归一化、Task Analysis 与澄清 interrupt/resume
-- `build_executive_graph()`：持久化 decide/act/observe/verify 循环
-- `build_action_execution_graph()`：执行当前 BoundedAction 或 Procedure nodes
-- `build_react_graph()`：当前动作内部的受限 ReAct
-- `run_capture_flow()`：capture 分支的确定性业务流，不单独 compile LangGraph
-- `GraphCaptureFlow`：capture 后的图谱摄取、graph sync 状态回写、批量同步和质量指标
-- `execute_ask()`：ask 运行时 pipeline，负责 graph/local/web 检索、rerank、生成和校验
-
-## 当前执行路径
-
-### `execute_capture`
+## 依赖与 owner
 
 ```text
-text/source
-  -> run_capture_flow()
-  -> PostgresMemoryStore
-  -> GraphCaptureFlow optional Graphiti sync
-  -> CaptureResult
+HTTP / CLI / Message Adapter
+  -> AgentService
+  -> AgentRuntime (composition root)
+       -> ConversationService
+       -> KnowledgeService / KnowledgeLifecycleService
+       -> InvestigationProjectService / ResearchService
+       -> ToolExecutor / AgentGateway / Model ports
+       -> persistence adapters
 ```
 
-### `execute_ask`
+`AgentRuntime` 只集中创建依赖和 Adapter，不成为第二事实源。Application 只依赖 Port；PostgreSQL、Provider SDK、MCP、A2A 与 Artifact Store 位于外层实现。
+
+## Conversation loop
 
 ```text
-question
-  -> bind session / refresh memory
-  -> graph ask
-  -> local/vector retrieval and evidence pipeline
-  -> verifier
-  -> optional retry
-  -> record turn
-  -> AskResult
+messages + authenticated principal
+  -> scoped context/capability materialization
+  -> Model: FinalMessage | ContinueTurnProposal(actions)
+  -> deterministic Admission / budget / concurrency checks
+  -> governed Tool/Agent/Application action execution
+  -> ActionObservation | DecisionFeedback
+  -> next model turn or FinalMessage
 ```
 
-### `execute_entry`
+模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 
-```text
-EntryInput
-  -> AgentRuntime.execute_entry()
-  -> build_entry_orchestration_graph()
-  -> EntryGraph: normalize_entry -> analyze_task / clarification
-  -> GoalGraphCompiler
-  -> ExecutiveGraph: decide -> validate -> act -> observe -> verify
-     -> ActionExecutionGraph
-        -> Procedure nodes / bounded action / optional ReAct / HITL
-  -> finalize_entry_result
-  -> EntryResult
-```
+## Context materialization
 
-## 当前能力
+每次模型调用按以下顺序构造输入：
 
-- 已以 `AgentRuntime` 作为核心运行时
-- 已将 `AgentService` 收敛为薄 facade
-- 已支持 capture、ask、digest、entry 等统一运行时方法
-- 已支持 LangGraph entry 总编排
-- 已支持 Procedure 投影步骤和开放式 BoundedAction 在同一 orchestration graph 内执行
-- 已支持图谱失败时本地回退
-- 已支持 verifier 校验和低置信度重试
-- 已支持图谱异步/手动同步重试
-- 已支持 Graph HITL 确认和拒绝
-- 已支持 LangGraph checkpoint 历史查询和基于历史 checkpoint 的 fork 回放
-- 已支持 health 和开发环境全量数据 reset
-- 已支持 Goal/Action/Procedure 事件与用户可见 execution trace 分离
+1. visibility/scope 过滤；
+2. 当前问题所需的 personal evidence 与 linked Project projection；
+3. capability/tool schema 投影；
+4. committed Observation/Feedback；
+5. budget materialization。
 
-## 公开运行时边界
+Personal Knowledge 通过 `personal_knowledge_context` 只读 Observation 进入；linked durable investigation 通过 `investigation_project_context` 进入。两者都不复制 canonical facts，也不成为写入口。
 
-为减少 Web 层对 runtime 内部方法的直接访问，新增以下公开 API：
+## Durable execution
 
-### `task_analyzer / procedure_runtime`
+- Conversation journal 保存 committed messages、typed inputs、usage、execution order、final message 及业务 reference；
+- Knowledge save/delete 分别由自己的 Command/operation/Receipt owner 恢复；
+- InvestigationProject journal 保存 definition、accepted plan、subgoal、evidence、verification 与 completion；Conversation 只保存 scoped `ProjectReference`；
+- replay 复用冻结 Command 和已提交副作用，不重新调用模型生成它们。
 
-`task_analyzer` 是入口语义端口，不输出 provider 或步骤。`procedure_runtime` 只物化已经由 Executive 选择并经 Validator 批准的稳定事务；开放式 Goal 由 Executive 物化为 BoundedAction 或 delegate。
+## Model retry
 
-### `list_run_history(run_id: str, limit: int = 100) -> list[dict]`
+模型 Port 只有一个 typed-operation retry owner。它只重试 transport/5xx、malformed transport envelope 和 Provider 空 structured content；一般 schema/语义错误不作为 transient 重试，而由 typed repair、DecisionFeedback 或 fail closed 处理。retry 次数与错误进入模型 trace/usage。
 
-基于 LangGraph `get_state_history()` 返回某次 run 的 checkpoint 时间线摘要，包括 checkpoint id、父 checkpoint id、线程、状态、goal kinds、下一步节点、事件数量、工具结果数量和 pending confirmation。它用于调试和运营后台查看“这次执行是如何走到当前状态的”，不直接暴露完整 checkpoint payload。
+## Grounded answer
 
-这个接口不只是在给 `replay_from_checkpoint()` 提供 `checkpoint_id`，更重要的是帮助人或管理后台**选择应该从哪个历史点回放**。如果只返回一串 checkpoint id，使用者无法判断哪个点是“路由刚完成”、哪个点是“步骤刚投影出来”、哪个点是“删除确认前”、哪个点已经执行过工具。轻量摘要会保留足够的判断信息：
+产品没有平行 Ask runtime。Conversation 是唯一 FinalMessage owner：个人证据由 `KnowledgeService.select_evidence()` 预取，外部事实由受治理只读 Tool 返回，模型在同一 loop 内综合。回答本身不写长期知识；显式保存必须另走确认写路径。
 
-```json
-{
-  "checkpoint_id": "1f0...",
-  "parent_checkpoint_id": "0e9...",
-  "thread_id": "user:dns-session",
-  "run_id": "abc123",
-  "status": "running",
-  "result_contracts": ["external_state"],
-  "next": ["execute_step"],
-  "event_count": 7,
-  "tool_result_count": 1,
-  "pending_confirmation": null
-}
-```
+## 可观测与评测
 
-同时它避免直接暴露完整 checkpoint state。完整 state 里可能包含 `messages`、`tool_messages`、`tool_results`、检索结果、用户原文和工具输入输出；直接返回会过大、敏感且难以稳定序列化。摘要只保留选择回放点所需字段。
+- `InteractionTrace` 记录 typed inputs、usage、context composition、执行顺序和 final message；
+- E2E archive 记录 `MeasurementProfile` 与 `CaseMeasurement`；
+- `metrics_report` 生成同 profile 的完成率、token、调用、延迟与恢复指标；
+- `release_gate` 独立判断 archive 能否用于目标 revision 发布。
 
-### `replay_from_checkpoint(thread_id, checkpoint_id, updates, as_node=None) -> EntryResult`
+## 不变量
 
-基于 LangGraph `update_state()` 从历史 checkpoint fork 出一条新执行线，先应用指定 state updates，再继续 graph invoke。该能力的核心价值是**现网问题复现**：按用户、run、thread 找到某次失败记录，再从失败前后的真实 checkpoint 分叉重放，保留当时的消息、投影步骤、工具归属、工具结果和 errors，而不是只拿用户输入重新跑一遍。带业务副作用的固定状态机不能用 checkpoint replay 代替自身的 Command/Receipt 幂等。
-
-执行过程：
-
-```text
-GET /api/entry/runs/{run_id}/history
-  -> graph.get_state_history({"configurable": {"thread_id": latest.thread_id}})
-  -> 返回轻量 checkpoint 摘要，供人选择 checkpoint_id
-
-POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay
-  body: {"updates": {...}, "as_node": "..."}
-  -> graph.update_state({"thread_id": thread_id, "checkpoint_id": checkpoint_id}, updates, as_node=...)
-  -> 生成 fork_config
-  -> graph.invoke(None, fork_config)
-  -> 如果再次 interrupt，返回 waiting_confirmation；否则返回新的 EntryResult
-```
-
-关键点是：`update_state()` 修改的是 LangGraph checkpoint 中的 `AgentGraphState`，不是业务数据库。它适合修正流程状态后重放，比如 `pending_confirmation`、`step_execution.results`、`answer`、`errors`、`tool_tracking` 等；它不等价于“恢复已删除的知识笔记”。
-
-典型应用场景：只读问答流程复现
-
-```text
-用户：DNS 是什么？
-系统：回答 DNS 概念。
-系统：检索本地证据与公开资料。
-系统：回答缺少预期 citation。
-```
-
-如果这时发现检索或 citation 组装异常，管理员可以：
-
-1. 调 `GET /api/entry/runs/{run_id}/history`，找到回答生成前的 checkpoint。
-2. 调 replay 接口，从该 checkpoint fork。
-3. 先不改或只做最小 `updates`，重放确认是否能复现用户反馈的卡住、误选或状态异常。
-4. 修代码、prompt 或策略后，再用同一个 checkpoint 重放验证修复是否有效。
-5. 必要时在受控管理后台中用白名单 `updates` 清空 transient error，让图从修正后的状态继续执行。
-
-这比“拿用户那句话重新跑一遍”更可靠，因为 Agent 失败常常依赖当时的执行现场：历史 `messages`、router/projector 中间状态、`step_execution.steps`、ReAct 轮次、`tool_tracking`、`tool_results`、`pending_confirmation`、`errors` 和下一步 graph node。checkpoint replay 保留的是这些现场，而不是只保留入口文本。
-
-不适用场景：
-
-- 用户在确认阶段反悔：应走普通 `resume_entry(decision="reject")`，不需要 replay。
-- 删除已经真实执行后想恢复数据：需要删除前快照、软删除、回收站或补偿恢复能力；`replay_from_checkpoint()` 只能回放流程状态，不能自动还原 `knowledge_notes` 表。
-- 普通用户自助功能：replay 是现网复现 / 管理后台能力，不应裸露给用户随意传 `updates`。
-- 生产自动恢复：replay 可能重新经过工具节点，应作为调试 / 管理能力使用；带副作用工具依赖 `tool_idempotency_ledger` 防止重复执行。
-
-对应 Web API：
-
-- `GET /api/entry/runs/{run_id}/history`
-- `POST /api/entry/threads/{thread_id}/checkpoints/{checkpoint_id}/replay`
-
-## 已知限制
-
-### 1. `AgentRuntime` 职责过重
-
-当前 `AgentRuntime` 仍同时承担依赖装配、public API facade、entry graph 调用、capture、ask、digest、tool registry、graph sync、LLM 调用和 admin 操作等职责。虽然 mixin 已经把文件拆小，但对象边界仍然偏“上帝类”：node 已经成为 LangGraph 编排单元，很多业务能力却仍要通过 runtime 方法或 runtime 私有字段间接触达。
-
-这会带来几个问题：
-
-- LangGraph 依赖已拆分为 `RoutingContext / PlanningContext / DirectAnswerContext /
-  SummaryContext / StepExecutionContext / ReactContext`。`GraphContexts` 只在 Graph Builder 装配边界出现，节点仅接收
-  对应阶段的窄 Context。
-- 工具由 `build_capture_text_tool(capture_executor)` 创建，通过注入 callable 调用采集能力，并由 `ToolNode` 执行。
-- Runtime 修改容易影响多个入口和测试面，局部能力难以单独替换或复用。
-- LangGraph 已经表达流程，但业务执行边界还没有完全下沉到 node/service 层。
-
-期望方向是：`AgentRuntime` 逐步收敛为应用级 facade 和依赖装配器，具体能力下沉到明确的 node dependency 或领域 service。
-
-### 2. 普通分支事件粒度仍可增强
-
-开放 Goal 与 Protocol 已进入同一 Executive 总编排；局部 executor 仍有一些领域结果主要通过 answer、citations、matches 返回。后续应继续补充 action/observation 级 `AgentEvent`，避免再形成按 intent 划分的入口分支。
-
-### 3. ReAct 单步策略仍处于受控首版
-
-当前 entry 总编排已在 `execution_mode="react"` 的步骤内执行有限轮 Thought / Action / Observation 循环。运行时由 orchestration nodes 维护 step 状态、进度事件、失败处理、replan 和最终 `EntryResult`，ReAct 只负责单个步骤内部的观察式工具调用。
-
-当前约束：
-
-- 默认只允许 `graph_search / web_search` 等只读检索工具
-- 高风险、写长期知识和需要确认的工具会被阻断
-- `max_iterations` 有固定上限
-- 每轮迭代发出 `react_iteration` 事件
-
-它仍是首版能力，后续需要继续收敛事件 schema 和扩展适用步骤。
-
-## 演进方向
-
-- 将 `AgentRuntime` 收敛为薄 facade / dependency provider，业务执行下沉到 node/service
-- 为普通分支和计划步骤建立统一 `AgentEvent` schema
-- 为 runtime 增加更系统的集成测试和回归评测
-
-## 下一步实现方案：Runtime 职责下沉
-
-### 目标边界
-
-保留在 `AgentRuntime` 的职责：
-
-- 入口级 public API：`entry()`、`capture()`、`ask()` 等兼容方法。
-- 依赖装配：settings、store、graph store、memory、tool registry、checkpointer。
-- LangGraph graph 构建与 run/snapshot/resume 管理。
-- Web/CLI/飞书需要的结果模型兼容转换。
-
-下沉出 `AgentRuntime` 的职责：
-
-- `capture` 执行细节：下沉为 `CaptureNodeDeps` 或 `CaptureServiceFacade`。
-- `ask` 检索、证据组装、回答生成、verifier retry：下沉为 `AskService` / `AskNodeDeps`。
-- direct answer / summarize 的 LLM 调用：下沉为独立 response service。
-- tool 执行依赖：工具不再持有 runtime，改持有明确 service 或 callable。
-- admin/reset/graph sync：保持 mixin 短期兼容，后续迁移为应用 service。
-
-### 分阶段迁移
-
-1. 继续将 `StepExecutionContext` 中复合 use case 拆成更窄的 step handler，避免步骤分发器长期增长。
-2. 抽出 `AskService`：先迁移 `execute_ask()` 的主体逻辑，runtime 只保留转发方法。
-3. 抽出 `CaptureServiceFacade`：把 `execute_capture()` 对 capture flow、store、Graphiti sync 的编排移出 runtime。
-4. 工具对 runtime 的依赖已通过 `build_capture_text_tool(capture_executor)` 的依赖注入消除。
-5. ~~清理旧 entry 兼容方法。~~ **已完成**：已删除旧入口死代码，runtime entry 路径收敛到当前 LangGraph 编排。
-6. 最后压缩 `AgentRuntime.__init__()`：只装配依赖容器和 graph，不再承载具体业务流程。
-
-### 验收标准
-
-- orchestration nodes 不访问 runtime，也不存在 `from_runtime()` service locator；所有 Context 在
-  `AgentRuntime` composition root 中显式构造。
-- 工具不持有 `AgentRuntime` 实例；LangChain 工具工厂接收所需 callable。
-- runtime public 方法仍兼容现有 Web/CLI/飞书调用。
-- 所有核心回归测试通过。
+- Runtime 不从关键词猜 intent、payload 或业务 plan；
+- Proposal、Observation、Receipt、Verification 与 Completion 互不冒充；
+- Tool schema 不是权限，Gateway 才产生受治理执行事实；
+- 一个业务事实只有一个 owner 和写入口；
+- 没有失败 baseline 与生产消费者时，不增加 Planner、Workflow、checkpoint、Registry 或兼容层。

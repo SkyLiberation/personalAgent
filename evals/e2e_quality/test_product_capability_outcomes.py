@@ -22,6 +22,7 @@ from uuid import uuid4
 import pytest
 
 from evals.e2e_quality.trace_archive import TraceArchive
+from evals.e2e_quality.measurements import CaseMeasurement
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
     _get_json,
@@ -164,16 +165,19 @@ def _knowledge_ingest(server: LiveWebProcess, owner_id: str, text: str, **extra:
         {
             "text": text,
             "user_id": owner_id,
-            "owner_id": owner_id,
             **extra,
         },
     )
 
 
-def _knowledge_ask(server: LiveWebProcess, owner_id: str, question: str) -> dict:
+def _conversation_answer(server: LiveWebProcess, owner_id: str, question: str) -> dict:
     return _post_json(
-        f"{server.base_url}/api/knowledge/ask",
-        {"question": question, "owner_id": owner_id, "limit": 8},
+        f"{server.base_url}/api/conversation/turn",
+        {
+            "conversation_id": f"knowledge-{owner_id}-{uuid4().hex}",
+            "user_id": owner_id,
+            "messages": [{"role": "user", "content": question}],
+        },
     )
 
 
@@ -184,12 +188,14 @@ def _record(
     trace: dict[str, object],
     *,
     profile: str,
+    measurement: CaseMeasurement | None = None,
 ) -> None:
     archive.update_environment({"product_release_matrix": True})
     archive.write_trace(
         nodeid=request.node.nodeid,
         case_id=case_id,
         trace={"capability_profile": profile, **trace},
+        measurement=measurement,
     )
 
 
@@ -232,7 +238,6 @@ def _prepare_delete(
         f"{server.base_url}/api/notes/{note_id}/delete-commands",
         {
             "user_id": user_id,
-            "owner_id": user_id,
             "idempotency_key": idempotency_key,
             "reason": reason,
         },
@@ -254,7 +259,6 @@ def _decide_delete(
         {
             "user_id": user_id,
             "decision": decision,
-            "command_digest": command["command_digest"],
             "confirmation_ref": confirmation_ref,
         },
     )
@@ -275,7 +279,6 @@ def _prepare_restore(
         f"{delete_command['command_id']}/restore-commands",
         {
             "user_id": user_id,
-            "owner_id": user_id,
             "idempotency_key": idempotency_key,
             "reason": reason,
         },
@@ -297,7 +300,6 @@ def _decide_restore(
         {
             "user_id": user_id,
             "decision": decision,
-            "command_digest": command["command_digest"],
             "confirmation_ref": confirmation_ref,
         },
     )
@@ -375,151 +377,6 @@ def test_product_e01_conversation_journey(
     )
 
 
-def test_product_e02_grounded_knowledge_ask(
-    live_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    owner_id = f"product-e02-{uuid4().hex}"
-    other_knowledge = f"product-e02-other-{uuid4().hex}"
-    fact = f"Atlas-{uuid4().hex[:8]} 的发布窗口是周四 21:00。"
-    secret = f"other-{uuid4().hex}"
-    ingest = _knowledge_ingest(live_web_process, owner_id, fact, source_type="document")
-    _knowledge_ingest(live_web_process, other_knowledge, secret, source_type="document")
-    before = _get_json(
-        f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
-    )
-    answer = _knowledge_ask(live_web_process, owner_id, "Atlas 的发布窗口是什么时候？")
-    after = _get_json(
-        f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
-    )
-    assert answer["citations"]
-    assert answer["answer_claim_saved_count"] == 0
-    assert len(before) == len(after)
-    assert secret not in json.dumps(answer, ensure_ascii=False)
-    _record(
-        trace_archive,
-        request,
-        "E02.product_http",
-        {"artifact": ingest["artifact"], "answer": answer, "claim_count": len(after)},
-        profile="baseline",
-    )
-
-
-def test_product_e20_knowledge_answer_has_independent_verification(
-    live_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    owner_id = f"product-e20-{uuid4().hex}"
-    subject = f"Northstar-{uuid4().hex[:8]}"
-    _knowledge_ingest(
-        live_web_process,
-        owner_id,
-        f"{subject} 的生产迁移日期是 2026-09-10。",
-        source_type="document",
-    )
-    _knowledge_ingest(
-        live_web_process,
-        owner_id,
-        f"{subject} 的生产迁移日期不是 2026-09-10，而是 2026-10-15。",
-        source_type="document",
-    )
-    before = _get_json(
-        f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
-    )
-    answer = _knowledge_ask(
-        live_web_process,
-        owner_id,
-        (
-            f"核对工作区中关于 {subject} 生产迁移日期的材料。逐项列出候选结论和"
-            "对应原文证据，明确冲突；冲突没有解决时，不要把核对结果标成已得到支持。"
-        ),
-    )
-    after = _get_json(
-        f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
-    )
-    verification = answer["verification"]
-    cited_span_ids = {
-        item["evidence_span_id"] for item in answer["citations"]
-    }
-    conflict_span_ids = {
-        span_id
-        for conflict in verification["conflicts"]
-        for span_id in conflict["evidence_span_ids"]
-    }
-    _record(
-        trace_archive,
-        request,
-        "E20.product_http",
-        {
-            "answer": answer,
-            "claim_count_before": len(before),
-            "claim_count_after": len(after),
-        },
-        profile="baseline",
-    )
-
-    assert verification["verdict"] == "needs_revision"
-    assert verification["conclusion_status"] == "conflicted"
-    assert verification["conflicts"]
-    assert conflict_span_ids
-    assert conflict_span_ids <= cited_span_ids
-    assert len(before) == len(after)
-    assert answer["answer_claim_saved_count"] == 0
-    assert not any(
-        key in answer
-        for key in (
-            "grounding_status",
-            "evidence_coverage",
-            "missing_sections",
-            "answer_claim_grounded_count",
-        )
-    )
-
-
-def test_product_e03_selected_upload_artifact_ask(
-    live_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    user_id = f"product-e03-{uuid4().hex}"
-    fact = f"上传资料中的校验口令是 amber-{uuid4().hex[:8]}。"
-    response = _post_text_attachment(
-        f"{live_web_process.base_url}/api/knowledge/ingest-upload",
-        filename="selected-artifact.txt",
-        content=fact,
-        fields={
-            "user_id": user_id,
-            "owner_id": user_id,
-        },
-    )
-    resource_ref = response["resource_ref"]
-    ingest = response["ingest_result"]
-    artifact = ingest["artifact"]
-    answer = _knowledge_ask(
-        live_web_process,
-        user_id,
-        "只根据选中的附件回答校验口令，并说明来自附件。",
-    )
-    assert str(resource_ref["resource_id"]).startswith("art_")
-    assert artifact["artifact_id"] == resource_ref["resource_id"]
-    assert fact in artifact["text"]
-    assert answer["citations"]
-    assert fact.split("是 ", 1)[-1].rstrip("。") in str(answer["answer"])
-    _record(
-        trace_archive,
-        request,
-        "E03.product_http",
-        {"resource_ref": resource_ref, "artifact": artifact, "answer": answer},
-        profile="baseline",
-    )
-
-
 def test_product_e04_governed_delete_recovery(
     live_web_process: LiveWebProcess,
     trace_archive: TraceArchive,
@@ -562,6 +419,21 @@ def test_product_e04_governed_delete_recovery(
         )
     }
 
+    other_ingested = _knowledge_ingest(
+        live_web_process,
+        user_id,
+        "这条同时待确认的知识不能被另一个 command 的确认删除。",
+        source_type="document",
+    )
+    other_note_id = str(other_ingested["knowledge_items"][0]["knowledge_item_id"])
+    other_prepared = _prepare_delete(
+        live_web_process,
+        user_id=user_id,
+        note_id=other_note_id,
+        idempotency_key=f"delete-{other_note_id}",
+        reason="independent pending command",
+    )
+
     live_web_process.restart()
     recovered = _get_json(
         f"{live_web_process.base_url}/api/knowledge-delete-commands/{command['command_id']}?"
@@ -569,21 +441,12 @@ def test_product_e04_governed_delete_recovery(
     )
     assert recovered["command"] == command
     assert recovered["status"] == "awaiting_confirmation"
-
-    bad_digest_request = Request(
-        f"{live_web_process.base_url}/api/knowledge-delete-commands/{command['command_id']}/decision",
-        data=json.dumps({
-            "user_id": user_id,
-            "decision": "confirm",
-            "command_digest": "0" * 64,
-            "confirmation_ref": "release-user-confirmation",
-        }).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    other_recovered = _get_json(
+        f"{live_web_process.base_url}/api/knowledge-delete-commands/"
+        f"{other_prepared['command']['command_id']}?"
+        + urlencode({"user_id": user_id})
     )
-    with pytest.raises(HTTPError) as digest_denied:
-        urlopen(bad_digest_request, timeout=30)
-    assert digest_denied.value.code == 409
+    assert other_recovered["status"] == "awaiting_confirmation"
 
     confirmed = _decide_delete(
         live_web_process,
@@ -604,6 +467,11 @@ def test_product_e04_governed_delete_recovery(
     assert confirmed["receipt"]["command_digest"] == command["command_digest"]
     assert "events" not in replayed
     assert note_id not in {
+        item["id"] for item in _get_json(
+            f"{live_web_process.base_url}/api/notes?" + urlencode({"user_id": user_id})
+        )
+    }
+    assert other_note_id in {
         item["id"] for item in _get_json(
             f"{live_web_process.base_url}/api/notes?" + urlencode({"user_id": user_id})
         )
@@ -690,22 +558,25 @@ def test_product_e08_ask_then_explicit_save(
     )
     before = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
-    answer = _knowledge_ask(live_web_process, owner_id, "SLO 预算有什么作用？")
+    answer = _conversation_answer(
+        live_web_process,
+        owner_id,
+        "只根据我保存的资料回答：SLO 预算有什么作用？给出原文依据，不要保存回答。",
+    )
     after_ask = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
     assert len(after_ask) == len(before)
     saved = _post_json(
         f"{live_web_process.base_url}/api/knowledge/solidify-conversation",
         {
             "user_id": owner_id,
-            "owner_id": owner_id,
             "messages": [
                 {"role": "user", "content": "请保存结论：SLO 预算需要定期复核。"},
-                {"role": "assistant", "content": answer["answer"]},
+                {"role": "assistant", "content": answer["message"]["content"]},
             ],
         },
     )
@@ -1063,7 +934,7 @@ def test_product_e14_conversation_governed_save(
     user_text = f"请保存结论：{conclusion}。保存前先让我确认。"
     before = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
 
     prepared = _post_json(
@@ -1078,7 +949,7 @@ def test_product_e14_conversation_governed_save(
     command = pending["command"]
     after_prepare = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
     assert prepared["disposition"] == "confirmation_required"
     assert pending["status"] == "awaiting_confirmation"
@@ -1103,9 +974,7 @@ def test_product_e14_conversation_governed_save(
         decision_url,
         data=json.dumps({
             "user_id": f"attacker-{uuid4().hex}",
-            "owner_id": owner_id,
             "decision": "confirm",
-            "command_digest": command["command_digest"],
             "confirmation_ref": "e14-cross-scope",
         }).encode("utf-8"),
         headers={"Content-Type": "application/json"},
@@ -1116,36 +985,32 @@ def test_product_e14_conversation_governed_save(
     assert cross_scope.value.code == 404
     assert len(_get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )) == len(before)
 
     confirmed = _post_json(
         decision_url,
         {
             "user_id": owner_id,
-            "owner_id": owner_id,
             "decision": "confirm",
-            "command_digest": command["command_digest"],
             "confirmation_ref": "e14-user-confirmation",
         },
     )
     after_first_confirm = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
     replayed = _post_json(
         decision_url,
         {
             "user_id": owner_id,
-            "owner_id": owner_id,
             "decision": "confirm",
-            "command_digest": command["command_digest"],
             "confirmation_ref": "e14-user-confirmation",
         },
     )
     after_confirm = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
     before_claim_ids = {claim["claim_id"] for claim in before}
     saved_claims = [
@@ -1159,7 +1024,7 @@ def test_product_e14_conversation_governed_save(
     assert any(
         str(claim["statement"]).strip().rstrip("。") == conclusion
         for claim in saved_claims
-    )
+    ), saved_claims
     assert not any(
         "请求保存" in str(claim["statement"])
         or "保存前" in str(claim["statement"])
@@ -1294,7 +1159,6 @@ def test_product_e09_multi_source_capture(
         f"{live_web_reader_process.base_url}/api/knowledge/solidify-conversation",
         {
             "user_id": user_id,
-            "owner_id": user_id,
             "messages": [{"role": "user", "content": conversation_marker}],
         },
     )
@@ -1305,7 +1169,6 @@ def test_product_e09_multi_source_capture(
         content=upload_marker,
         fields={
             "user_id": user_id,
-            "owner_id": user_id,
         },
     )
     url = os.getenv(
@@ -1314,7 +1177,7 @@ def test_product_e09_multi_source_capture(
     )
     url_result = _post_json(
         f"{live_web_reader_process.base_url}/api/knowledge/ingest-url",
-        {"url": url, "user_id": user_id, "owner_id": user_id},
+        {"url": url, "user_id": user_id},
     )
     captured_text = str(url_result["ingest_result"]["artifact"]["text"]).strip()
     assert len(captured_text) >= 100
@@ -1327,7 +1190,7 @@ def test_product_e09_multi_source_capture(
     notes_by_id = {str(item["id"]): item for item in notes}
     artifacts = _get_json(
         f"{live_web_reader_process.base_url}/api/knowledge/artifacts?"
-        + urlencode({"owner_id": user_id})
+        + urlencode({"user_id": user_id})
     )
     assert isinstance(artifacts, list)
     artifacts_by_id = {str(item["artifact_id"]): item for item in artifacts}
@@ -1425,6 +1288,13 @@ def test_product_e10_knowledge_lifecycle(
     )
     assert corrected["old_claim"]["state"] == "superseded"
     assert corrected["new_claim"]["state"] == "active"
+    corrected_answer = _conversation_answer(
+        live_web_process,
+        owner_id,
+        "只根据我保存的资料回答 Orion 的维护窗口是哪一天，并给出原文依据。",
+    )
+    assert "周四" in corrected_answer["message"]["content"]
+    assert "周三" not in corrected_answer["message"]["content"]
     _knowledge_ingest(
         live_web_process,
         owner_id,
@@ -1433,7 +1303,7 @@ def test_product_e10_knowledge_lifecycle(
     )
     relations = _get_json(
         f"{live_web_process.base_url}/api/knowledge/relations?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
     note_id = str(initial["knowledge_items"][0]["knowledge_item_id"])
     delete_operation = _prepare_delete(
@@ -1477,7 +1347,7 @@ def test_product_e10_knowledge_lifecycle(
     )
     claims = _get_json(
         f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"owner_id": owner_id})
+        + urlencode({"user_id": owner_id})
     )
     assert restored["status"] == "executed"
     assert restored["receipt"] == replayed["receipt"]
@@ -1500,6 +1370,7 @@ def test_product_e10_knowledge_lifecycle(
         "E10.product_http",
         {
             "correction": corrected,
+            "corrected_answer": corrected_answer,
             "relations": relations,
             "delete": deleted,
             "restore_prepare": restore_prepared,
@@ -1555,11 +1426,11 @@ def test_product_e12_knowledge_maintenance_journey(
         _knowledge_ingest(live_web_process, owner_id, text, source_type="document")
     plan = _post_json(
         f"{live_web_process.base_url}/api/knowledge/review-plan",
-        {"owner_id": owner_id, "limit": 20},
+        {"user_id": owner_id, "limit": 20},
     )
     projection = _post_json(
         f"{live_web_process.base_url}/api/knowledge/graph-projections",
-        {"owner_id": owner_id, "limit": 100},
+        {"user_id": owner_id, "limit": 100},
     )
     assert plan["review_items"] or plan["knowledge_gaps"]
     assert projection["backlink_ok"] is True

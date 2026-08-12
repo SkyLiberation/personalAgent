@@ -41,7 +41,6 @@ class PrepareKnowledgeDeleteRequest(_StrictRequest):
 class DecideKnowledgeDeleteRequest(_StrictRequest):
     user_id: str | None = None
     decision: Literal["confirm", "reject"]
-    command_digest: str = Field(min_length=64, max_length=64)
     confirmation_ref: str = Field(default="", max_length=200)
 
 
@@ -54,7 +53,6 @@ class PrepareKnowledgeRestoreRequest(_StrictRequest):
 class DecideKnowledgeRestoreRequest(_StrictRequest):
     user_id: str | None = None
     decision: Literal["confirm", "reject"]
-    command_digest: str = Field(min_length=64, max_length=64)
     confirmation_ref: str = Field(default="", max_length=200)
 
 
@@ -127,7 +125,6 @@ def register_note_routes(
                 command_id=command_id,
                 user_id=principal.user_id,
                 decision=body.decision,
-                command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,
             )
         except KnowledgeDeleteNotFound as exc:
@@ -201,7 +198,6 @@ def register_note_routes(
                 command_id=command_id,
                 user_id=resolved_user,
                 decision=body.decision,
-                command_digest=body.command_digest,
                 confirmation_ref=body.confirmation_ref,
             )
         except KnowledgeDeleteNotFound as exc:

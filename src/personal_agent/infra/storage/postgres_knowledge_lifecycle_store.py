@@ -133,7 +133,6 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeDeleteOperationView:
         self.ensure_schema()
@@ -147,7 +146,6 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                         "delete command not found in caller scope"
                     )
                 command = KnowledgeDeleteCommand.model_validate(row["payload"])
-                self._require_digest(command.command_digest, command_digest)
 
                 terminal = self._terminal_delete_view(cur, row, command, decision)
                 if terminal is not None:
@@ -289,7 +287,6 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeRestoreOperationView:
         self.ensure_schema()
@@ -303,8 +300,6 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                         "restore command not found in caller scope"
                     )
                 command = KnowledgeRestoreCommand.model_validate(row["payload"])
-                self._require_digest(command.command_digest, command_digest)
-
                 terminal = self._terminal_restore_view(cur, row, command, decision)
                 if terminal is not None:
                     return terminal
@@ -739,11 +734,6 @@ class PostgresKnowledgeLifecycleStore(PostgresStoreBase):
                 return self._restore_view(cur, row, command)
             raise KnowledgeDeleteConflict("rejected command cannot be executed")
         return None
-
-    @staticmethod
-    def _require_digest(expected: str, actual: str) -> None:
-        if expected != actual:
-            raise KnowledgeDeleteConflict("command digest does not match command")
 
     @staticmethod
     def _require_same_command(left, right) -> None:

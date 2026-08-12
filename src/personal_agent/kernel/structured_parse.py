@@ -1,7 +1,7 @@
 """Unified structured-output guardrail: parse + repair + validate + telemetry.
 
 One place that turns a raw model string into a validated Pydantic object. Before
-this, query_planner / replanner / rerankers / react helpers / thread-summary each
+this, rerankers / react helpers / thread-summary each
 hand-rolled ``json.loads`` + fence stripping + truncation repair + ``log_llm_parse``
 in slightly different ways, plus three separate "unwrap the model's JSON" helpers
 (``_repair_truncated_json``, ``_extract_json_object``, ``strip_json_fence``).

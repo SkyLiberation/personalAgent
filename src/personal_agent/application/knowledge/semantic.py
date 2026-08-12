@@ -77,7 +77,7 @@ class ClaimGroundingJudgment(BaseModel):
         "unsupported",
         "not_found",
         "user_asserted",
-    ] = "unsupported"
+    ]
     supporting_evidence_ref_ids: list[str] = Field(default_factory=list)
     contradicting_evidence_ref_ids: list[str] = Field(default_factory=list)
     missing_evidence_description: str = ""
@@ -241,7 +241,12 @@ class LLMClaimGroundingJudge:
                 "content": (
                     "Judge whether evidence semantically supports a structured claim. "
                     "Consider subject, predicate, object, scope, condition, time, negation and source role. "
-                    "Return user_asserted only for explicit user assertions from conversation/user_message."
+                    "This is textual entailment, not independent real-world verification: a document "
+                    "supports a claim when its evidence_text explicitly states the same proposition. "
+                    "Do not reject a document claim merely because the document was supplied by the user. "
+                    "When supported, return the exact id values shown under Evidence refs in "
+                    "supporting_evidence_ref_ids. Return user_asserted only for explicit user assertions "
+                    "from conversation/user_message."
                 ),
             },
             {

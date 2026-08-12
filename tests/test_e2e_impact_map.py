@@ -83,13 +83,6 @@ def test_declared_no_impact_selects_nothing() -> None:
     assert len(selection.no_impact_paths) == 2
 
 
-def test_longest_prefix_wins_over_package_rule() -> None:
-    """A specific file rule must override its enclosing package rule."""
-    rule = match_rule("src/personal_agent/application/knowledge/answer_verifier.py")
-    assert rule is not None
-    assert rule.case_ids == frozenset({"E20"})
-
-
 def test_interaction_loop_owner_forces_full_matrix() -> None:
     """The turn loop touches every conversation journey; it must not narrow."""
     selection = select_live_cases(

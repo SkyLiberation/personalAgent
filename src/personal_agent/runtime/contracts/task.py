@@ -270,7 +270,6 @@ class ContextProjection(BaseModel):
     selected_item_ids: tuple[str, ...] = ()
     omitted: tuple[ProjectionExclusion, ...] = ()
     token_estimate: int = Field(default=0, ge=0)
-    compaction_refs: tuple[str, ...] = ()
     selection_reasons: dict[str, str] = Field(default_factory=dict)
     projection_policy_version: str = "v1"
     model_profile: str

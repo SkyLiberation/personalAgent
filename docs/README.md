@@ -57,15 +57,8 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md) |
 | 单次 Observation 的上下文边界与卸载重读 | [adr/0013-bounded-observation-and-offloaded-read.md](adr/0013-bounded-observation-and-offloaded-read.md) |
 
-以下文档仍包含已删除 `TaskAnalyzer/GoalGraph/Executive/LangGraph` 总主链的历史设计，当前不再是
-权威事实源：`topics/task-analysis.md`、`topics/runtime.md`、
-`topics/langchain-langgraph-capability-adoption.md`、`topics/tools.md`、
-`topics/observability-governance.md`、`topics/execution-feedback.md`、
-`workflow/entry-executive-agent-loop.md`、
-`workflow/workflow-framework.md`、`workflow/capture-ask-model-flow.md` 和
-`mermaid/memory-model-layer-dependencies.md`，以及顶层
-`retrieval-strategies.md`、`rag-eval-results.md`。它们只用于迁移
-审计，当前主链以 core current-state 和生产代码为准。
+**当前架构只以上表的 canonical 文档和生产代码为事实源。**其他 topic、workflow、mermaid 与评测
+归档是专题说明或 paired evidence，不得反向定义主链、能力状态和发布资格。
 
 ## 关键业务 Procedure
 
@@ -82,9 +75,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | 主题 | 文档 |
 | --- | --- |
 | Future 范围与退出规则 | [future/README.md](future/README.md) |
-| 当前框架、文档、架构门禁与 clean release 收敛 | [future/trusted-agent-runtime-evolution.md](future/trusted-agent-runtime-evolution.md) |
-| 持续研究 P1/P2 | [future/scheduled-intelligence-research.md](future/scheduled-intelligence-research.md) |
-| Context 物化度量、Observation 逐出与两阶段能力加载 | [future/context-materialization-measurement-and-eviction.md](future/context-materialization-measurement-and-eviction.md) |
+| 全部待优化问题、状态与详细设计入口 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 
 ## 运维与参考
 
@@ -94,6 +85,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | 部署 | [deploy.md](deploy.md) |
 | 环境变量 | [env.md](env.md) |
 | LLM 提示词清单 | [llm-prompts.md](llm-prompts.md) |
+| 评测分层、E2E 与发布证据 | [evals/README.md](evals/README.md) |
 | Golden Set 设计 | [golden-set-design.md](golden-set-design.md) |
 | 生产风险优化计划 | [production-risk-optimization-plan.md](production-risk-optimization-plan.md) |
 | Review digest | [review-digest.md](review-digest.md) |

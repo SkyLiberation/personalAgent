@@ -1,24 +1,22 @@
 # personalAgent 当前核心架构
 
-本文记录截至 2026-08-03 已落地的生产架构事实。尚未落地的设计只进入
+本文记录截至 2026-08-10 已落地的生产架构事实。尚未落地的设计只进入
 [future 索引](../future/README.md)，不能反向定义当前架构；产品能力、E2E 和发布可信度的当前事实由
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md) 拥有。
-[`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 只保存已删除旧架构的历史诊断
-证据，不再描述当前主链。
+[`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 是 paired baseline 的历史证据 owner，
+不定义当前主链。
 
-上一版工程矩阵 E01–E13、C01–C04、L01–L06 共 23/23 passed，archive 为
+归档工程矩阵 E01–E13、C01–C04、L01–L06 共 23/23 passed，archive 为
 `data/e2e_traces/20260726T011631.187395Z-20684-4a62da6a`。L01–L06 与 E16–E19 现已改为
 不泄漏内部 Tool、Agent、Artifact、verdict 或执行顺序的自然用户场景；当前定向证据见
 `phase0-capability-release-baseline.md`。旧完整 archive 不再匹配当前 catalog，当前完整矩阵
 和 clean-revision 发布资格都尚未建立。
 
-Conversation governed save 的 pre-change B01 archive 为
-`data/e2e_traces/20260728T083321.588087Z-48120-2ce6f484`。B02 semantic baseline
-`data/e2e_traces/20260729T031804.415533Z-15972-214cb81c` 证明整条 user message 会把保存/确认
-控制语义写成 Claim；修复后 E14 archive
-`data/e2e_traces/20260729T033339.065714Z-22692-16415241` 证明 exact-span Command、精确结论
-Claim、控制语义反事实、恢复和 replay。它们均来自 dirty worktree，只是定向工程证据，不建立
-发布资格。
+Conversation governed save 的当前 matching E14 archive 为
+`data/e2e_traces/20260810T131706.858565Z-15232-bd519e05`：它证明 exact-span Command、atomic
+statement 不被语义抽取改写、跨 scope 拒绝、精确 Claim、恢复和 replay。paired baseline 由
+[`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 统一保存。当前 archive 来自 dirty
+worktree，只是定向工程证据，不建立发布资格。
 
 目标入口改造使用相同自然输入先后执行 baseline 与 target：读取 baseline
 `20260803T142413.474927Z-4864-39fedcf5`、删除 baseline
@@ -61,7 +59,7 @@ Pydantic、OpenAI-compatible transport、手写 loop 或 LangGraph 都可以替�
    记录和 Verifier 通过分别只证明各自事实；
 5. **一个业务事实只有一个 owner 和写入口**：索引、Graph、Runtime projection 与 View 不成为
    第二写源；
-6. **复杂度由生命周期而不是 Agent 术语准入**：固定事务不交给 Planner，短请求不承担 durable
+6. **复杂度由生命周期而不是 Agent 术语准入**：固定事务不交给 Planner，Conversation 不承担独立后台
    Project 成本，没有失败 E2E 的新机制不进入主链。
 
 ### 0.1 一套目标责任链，按需选择执行语义
@@ -72,7 +70,7 @@ Pydantic、OpenAI-compatible transport、手写 loop 或 LangGraph 都可以替�
 
 | 目标约束 | 下一步 owner | 内部执行语义 | 为什么 |
 | --- | --- | --- | --- |
-| 短、动态、无需跨请求维持交付义务 | 模型逐轮提出下一步 | Conversation Interaction loop | Observation 会改变下一步，但不需要持久化 Plan |
+| 多轮动态、无需独立后台生命周期 | 模型按 Goal 与 Observation 逐轮提出下一步 | Conversation Interaction loop | journal/context 支持多轮与恢复，但不需要独立持久化 Plan |
 | 拓扑和事务不变量固定 | Application / Domain | 具体 Use Case / 领域 Workflow | 模型不能重排确认、写入、Receipt 或补偿顺序 |
 | 路径动态且跨进程、用户轮次或审批边界 | 模型提出 Project 创建参数；Project 内 Planner 提出 Plan | Investigation Project | accepted Plan、ready set、journal 和 Completion obligation 都有生产消费者 |
 
@@ -87,11 +85,11 @@ Application Use Case，但多个协议入口不能制造第二事实 owner。
 | --- | --- | --- |
 | 模糊新请求被旧答案冒充完成 | E01 baseline `20260729T033100.290836Z-35328-02db4988` | 生成文本不等于完成；澄清是显式终态 |
 | 整条保存请求把“请保存、先确认”等控制语义写成 Claim | B02 `20260729T031804.415533Z-15972-214cb81c` | 模型语义选择、用户授权和 canonical write 必须分离 |
-| exact-span 保存需要确认、恢复、scope 拒绝和 replay | E14 `20260729T033339.065714Z-22692-16415241` | Proposal、Command、Receipt 与知识写入口各自拥有事实 |
+| exact-span 保存需要确认、原文绑定、scope 拒绝和 replay | E14 `20260810T131706.858565Z-15232-bd519e05` | Proposal、Command、semantic annotation、Receipt 与知识写入口各自拥有事实 |
 | terra 在顶层 union structured schema 上 retry 超时 | Phase 0 Provider probe/E17 记录 | Provider transport 是可替换能力边界，不能污染业务 contract |
 | 子 Agent 返回 Artifact 后仍被重复委托，或 child terminal 被误当父完成 | E17/C04/L04 定向 archive | child execution fact 与父级综合、完成分离 |
 | live Investigation 有搜索结果却因 repair lineage 不闭合而无法交付报告 | B03 到 IP01 的同输入 archive 链 | Evidence Admission、Plan revision 和 Completion obligation 必须由 durable owner 维护 |
-| Personal Knowledge 回答并列互斥事实却宣称 supported | B04 `20260731T063040.820774Z-16696-c3646c8a` 到 E20 `20260731T064446.108938Z-8804-52b29d3c` | 回答组装与 answer-level Semantic Verification 必须由不同 owner 负责 |
+| Personal-only 与多源 grounded answer 曾有两个最终 owner | ASK-001A/B paired baseline 与目标 E2E | Knowledge 只拥有 evidence/conflict facts，Conversation 统一拥有 FinalMessage |
 
 这些 archive 证明的是对应工作树和输入上的工程事实，不自动建立 clean-revision 发布资格。
 框架的可信度来自“问题—owner—最小改动—目标 E2E”链路，而不是来自“对齐优秀 Agent”的类图。
@@ -138,10 +136,10 @@ View / DTO  读取时组合，不成为新事实 owner
 同一事实只能有一个 canonical owner 和一个合法写入口。可确定性重建的值默认不持久化，
 禁止用 alias、双写、converter 或 fallback 维护新旧事实副本。
 
-包依赖由 `scripts/check_layers.py` 的显式 DAG 检查。2026-07-31 在当前工作树实际执行结果为：
+包依赖由 `scripts/check_layers.py` 的显式 DAG 检查。2026-08-10 在当前工作树实际执行结果为：
 
 ```text
-packages=14 edges=53
+packages=14 edges=50
 unknown_packages=none
 missing_packages=none
 cycles=none
@@ -160,7 +158,7 @@ package discovery 只识别真实 Python package；空迁移目录不再制造�
 - 飞书：消息事件进入 `FeishuService`；
 - 三者最终都调用 `AgentService.converse()`。
 
-产品能力也保留各自明确的 Application/API 入口。例如 Personal Knowledge ingest/ask、Knowledge
+产品能力也保留各自明确的 Application/API 入口。例如 Personal Knowledge ingest、Knowledge
 Lifecycle、Research subscription/run、Review feedback 和 Artifact 操作不必伪装成一次通用
 Conversation Task。固定、稳定的产品流程优先直接调用相应 Use Case。
 
@@ -239,20 +237,24 @@ AgentTurnDecision
 ### 3.2 预算、并发与恢复
 
 `LoopBudgetPolicy` 限制 model turns、Tool calls、Agent calls、token 和并发数。预算耗尽返回
-明确 limitation/failure，不拼接替代业务答案。
+明确 limitation/failure，不拼接替代业务答案。组建同一批 action 时按 proposal 顺序逐项预占剩余
+Tool/Agent call slot；因此并发批次也不能基于同一个旧 usage 快照越过 cap。
 
 同一 turn 只有全部 action 都可机械证明为安全并发时才使用 bounded thread pool；具有共享
 写状态、审批或结果依赖的动作保持串行，并把 Observation 返回下一模型轮。
 
-`InteractionTrace` 保存输入消息、能力 revision、已提交 Observation/Feedback、usage、执行
-顺序、并发批次、逐轮上下文构成（`context_composition`）和最终消息。恢复后模型直接读取
-committed typed inputs；恢复不会重复已提交 action，也不要求生成一个没有生产调度消费者的中间 Plan。
+`InteractionTrace` 由 `ConversationService` 写入，直接保存 owner `AuthenticatedPrincipal`、输入消息、
+已提交 Observation/Feedback、usage、执行顺序、并发批次、逐轮上下文构成
+（`context_composition`）和最终消息。读取或用同一 `interaction_run_ref` 恢复前必须匹配已提交
+principal；不匹配时返回资源不存在，并以同一 run ref 记录 `conversation_run_scope_mismatch`。
+无法可信推导 owner 的旧 snapshot 被隔离，不能默认归给当前用户。恢复后模型直接读取 committed
+typed inputs；恢复不会重复已提交 action，也不要求生成没有生产调度消费者的中间 Plan。
 
 `context_composition` 属于 Observability：记录发生在模型调用之后，不参与可见输入组装，不进入任何
 终止判据或预算判定，可由 committed inputs 确定性重算。语义见
 [Context 工程](../topics/context-engineering.md#上下文构成度量)。
 
-Conversation 当前额外暴露四个粗粒度 Application capability，而不是领域内部步骤：
+Conversation 当前按运行上下文暴露粗粒度 Application-owned action，而不是领域内部步骤：
 
 - `list_personal_knowledge`：只读当前 authenticated principal 拥有的 active/conflicted canonical
   KnowledgeItem 引用；Conversation 和 execution 只关联本次运行，不改变 owner；
@@ -261,13 +263,20 @@ Conversation 当前额外暴露四个粗粒度 Application capability，而不�
   `KnowledgeLifecycleService.prepare_delete`，确认前不删除；
 - `start_durable_investigation`：仅用于用户明确要求跨交互持续、查询进度、暂停或 steering 的目标，
   调用 `InvestigationProjectService.create` 并返回 `ProjectReference`。
+- 已关联 Project 时不再暴露第二次 start；Application 从 Project owner 预取有界
+  `investigation_project_context`，并只暴露 `steer_investigation_project` 写动作。模型不提供 project id、owner 或
+  plan version。
+- 当前问题有个人证据时，Application 先按 scope 调用 `select_evidence()`，物化
+  `personal_knowledge_context`；模型仍决定是否回答或调用其他只读 Tool。
 
 显式保存时，参数只能引用现有 user
 message 索引并逐字复制其中的知识 `text_span`；Admission 机械证明 span 确实存在且来源角色为
-user。Runtime 只冻结 exact span 与 source index 并产生一个 `command_digest`，Interaction journal 保存
+user。Runtime 只冻结 exact span 与 source index 并产生一个服务端 `command_digest`，Interaction journal 保存
 `awaiting_confirmation/rejected/executed` 和 Receipt。确认入口重新校验 principal、
-digest，执行时仍复用 `KnowledgeService.solidify_conversation`，不开放 `capture_text`，确认后
-也不让模型改写 payload。E14 已覆盖 exact span、确认前零写入、prepare 后重启、跨 principal
+digest，执行时仍复用 `KnowledgeService.solidify_conversation`，不开放 `capture_text`。客户端通过
+`interaction_run_ref` 与 authenticated principal 定位 operation，不能回传或覆盖 digest；确认后
+模型可以补充 Claim 的语义结构，但 atomic one-span/one-claim 的 `statement` 与 canonical key 只能来自
+已冻结 EvidenceSpan，不能被语义抽取改写。E14 已覆盖 exact span、确认前零写入、prepare 后重启、跨 principal
 拒绝、精确结论 Claim、控制语义零写入、Receipt 和成功 replay。提交知识与 journal Receipt
 之间的进程终止故障注入仍未覆盖。删除 operation 和 Project 的 canonical 状态不复制到
 Interaction journal；journal 分别只保存 delete command ref 和 `ProjectReference`，恢复时回查
@@ -285,41 +294,46 @@ Context 的上限是 20,000 字符，超限部分卸载为 `ResourceRef` 并回�
 被卸载的正文以 Artifact 持久化，身份是 `ResourceRef`，`producer_key` 保证幂等；「这个远端输出读过
 没有」是对 committed inputs 的纯函数判定，不另存已读集合。
 
-跨轮逐出与两阶段 capability 加载**当前都不做，但依据不同**：两阶段加载由已落地的
-`context_composition` 度量数据判定不准入；跨轮逐出的决定性测量尚未执行（现有记录全是 2 轮收敛，
-没有一条在测跨轮累积），当前由「无已执行 baseline 失败即不准入」这条门禁挡住。两者的数据、准入
-条件与复核路径见
-[Context 物化度量与逐出](../future/context-materialization-measurement-and-eviction.md)。
+## 4. Application Capability、执行资源、MCP 与 A2A
 
-## 4. Capability、Tool、MCP 与 A2A
+### 4.1 Application owner 与 EffectiveCapabilities
 
-### 4.1 EffectiveCapabilities
+Application Capability 由对应 Use Case 拥有语义、准入、写入口和结果契约，不存在全局可写的
+Application Capability Registry。Conversation 每次运行从 Application-owned action contract、实际 Tool
+registry 和 Agent profiles 构造临时 `EffectiveCapabilities`；该对象只说明模型当前可以提出什么，不拥有
+capability definition，不证明远端健康，也不产生发布可信度。
 
-Conversation 每次运行从实际 Tool registry 和 Agent profiles 构造临时
-`EffectiveCapabilities`，并对 canonical JSON 计算 revision。该对象只说明模型当前可以看到
-什么，不证明远端健康，也不产生发布可信度。
+当前模型 wire format 把 Application-owned action 与 registered Tool 都投影为
+`EffectiveToolCapability -> ToolCallProposal`。这是模型可见形状的复用，不改变事实 owner：保存、删除和
+Project 创建仍进入各自 Application，registered Tool 才进入 ToolExecutor/ToolGateway。
 
 管理/API 使用的 `RuntimeCapabilityInventory` 从本地 registry、accepted MCP config 和 A2A
 assembly 投影。它明确区分 configuration、discovery 和 availability observation，不把
 “配置存在”推断为“Provider 当前健康”。
 
-### 4.2 Tool 执行
+### 4.2 Application action 与 Tool 执行
 
 ```text
 ToolCallProposal
-  -> ToolExecutor registry/schema validation
-  -> deterministic admission
-  -> ToolExecutor.invoke_interaction
-  -> ToolGateway policy / idempotency / audit
-  -> typed Tool result
-  -> ActionObservation
+  ├─ Application-owned action
+  │    -> action-specific typed Admission
+  │    -> canonical Application Use Case
+  │    -> pending operation / Command ref / ProjectReference / Observation
+  └─ registered Tool
+       -> ToolExecutor registry/schema validation
+       -> deterministic admission
+       -> ToolExecutor.invoke_interaction
+       -> ToolGateway policy / idempotency / audit
+       -> typed Tool result
+       -> ActionObservation
 ```
 
 普通低风险、只读、可安全重试的 ToolCall 不为形式统一持久化 Command。需要审批、外部副
 作用、不可安全重试或跨恢复边界的调用，必须使用领域 Command、digest、Journal 和 Receipt。
 
-`ToolExecutor` 拥有本地 Tool registry；`ToolGateway` 拥有最终 policy enforcement、调用和审计
-事实。Application 只依赖 `InteractionToolPort`，不直接依赖具体 Tool 或 MCP SDK。
+`ToolExecutor` 拥有本地 Tool registry；`ToolGateway` 拥有 registered Tool 的最终 policy enforcement、
+调用和审计事实。Application 只依赖 `InteractionToolPort`，不直接依赖具体 Tool 或 MCP SDK；Gateway
+不改写 Application Command、Aggregate 或完成状态。
 
 ### 4.3 MCP
 
@@ -356,7 +370,7 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 | Goal-entry durable investigation | `ConversationService` 调用 `InvestigationProjectService` | Project aggregate/store 拥有 definition/Plan/state/Completion；Interaction 只存 ProjectReference |
 | Artifact | `ArtifactService` | application-owned ArtifactRef 和 Artifact Store |
 | Capture | `CaptureService` + Personal Knowledge ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
-| Grounded Ask | `KnowledgeService` | Personal Knowledge/Evidence 只读；Answer 不隐式写 Claim |
+| Grounded answer | `ConversationService` + `KnowledgeService.select_evidence` | Conversation 拥有唯一 FinalMessage；Knowledge 拥有 Personal Evidence/Claim/conflict；回答不隐式写 Claim |
 | Knowledge Lifecycle | `KnowledgeLifecycleService` | immutable delete/restore Command、operation status、Receipt |
 | Personal Knowledge Knowledge | `KnowledgeService` | Artifact、EvidenceBlock/Span、Claim、Relation、KnowledgeItem |
 | Review | `ReviewDigestUseCase` / feedback use case | review content、feedback fact、schedule projection 分离 |
@@ -366,13 +380,14 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 
 Personal Knowledge 的 PostgreSQL Store 是结构化知识事实 owner。Graphiti 和 embedding index 是检索/图
 投影，不是事实权威源；投影失败不能覆盖或删除 Personal Knowledge canonical facts。生产 Graph Provider
-只接受 `graphiti`、`structural` 和 `hybrid`；旧 Microsoft GraphRAG Adapter 因缺少
-source/citation binding 已删除，历史 CLI synthesized answer 不能作为检索事实。
+只接受 `graphiti`、`structural` 和 `hybrid`；缺少 source/citation binding 的 Provider 不在生产
+allowlist，CLI synthesized answer 不能作为检索事实。
 大型正文和上传文件由 Artifact Store 持有，运行状态优先保存 ref 而不是复制内容。
 
 Knowledge delete/restore 不使用通用 Planner 猜测目标。Application 根据明确的
-user/scope/note identity 创建 immutable Command；一个 `command_digest` 绑定
-confirmation、Operation 和 Receipt，错误 digest 或 replay 不重复副作用。只有 Personal Knowledge
+user/scope/note identity 创建 immutable Command；客户端通过 path command id 与 authenticated principal
+选择 operation，一个服务端 `command_digest` 绑定 Command、Operation 和 Receipt。错误 command id、
+跨 scope 或 replay 不产生重复副作用。只有 Personal Knowledge
 Item/Claim 的真实迁移产生状态事件，生命周期本身不复制 Event。
 
 ## 6. Model Port 与 Provider 边界
@@ -446,8 +461,8 @@ state。Tool success、Agent completed、数据库新增记录或模型自述均
 | Background work | `PostgresWorkerQueueStore` | retry/dead/reconcile，不重新创造业务参数 |
 
 `ProcedureRuntime` 只服务具有稳定事务不变量的流程；它不是普通 Interaction 的 Planner，也不
-是所有业务 lifecycle 的父 Aggregate。仓库中仍存在部分 Task/Control contract 供受限
-Procedure 或迁移代码使用，但它们不是正式 Conversation 入口，不应恢复已删除的通用旧主链。
+是所有业务 lifecycle 的父 Aggregate。仓库中的部分 Task/Control contract 仅供明确的 Procedure
+消费者使用；它们不是正式 Conversation 入口，也不能成为通用任务主链。
 
 ## 9. Observability 与发布证据
 
@@ -484,7 +499,7 @@ current complete matrix = not rerun
 release eligibility = not established (dirty revision)
 ```
 
-## 10. 当前生产主链
+## 10. 当前入口与 owner 调用路径
 
 ### 10.1 普通对话
 
@@ -502,16 +517,19 @@ Web / CLI / Feishu
 ### 10.2 固定产品流程
 
 ```text
-Product API / CLI
-  -> AgentService facade
+Conversation Application-owned action / Product API / CLI
+  -> capability-specific Admission（Conversation 入口适用）
   -> explicit Application use case
   -> Domain state transition / Port
   -> persistence adapter
   -> typed user result
 ```
 
-固定 Capture、Ask、Knowledge Lifecycle、Review、Research 和 Scheduled Intelligence 不为
+固定 Capture、Knowledge Lifecycle、Review、Research 和 Scheduled Intelligence 不为
 “更 Agentic”而强制进入 Planner。只有语义下一步无法预定义时才回到模型 Interaction loop。
+
+Conversation 只是其中一个调用入口；保存、删除等业务状态继续由对应 Application/Domain 拥有。专用 UI/API
+直接调用时也必须复用同一个 Use Case，不能形成第二写路径。
 
 ### 10.3 Conversation 内确认后保存
 
@@ -523,6 +541,8 @@ POST /api/conversation/turn
 POST /api/conversation/runs/{run}/knowledge-save-decision
   -> principal/personal knowledge/digest validation
   -> KnowledgeService.solidify_conversation
+     -> frozen atomic EvidenceSpan owns statement/canonical key
+     -> semantic extraction only annotates claim structure
   -> Receipt / replay same Receipt
 ```
 
@@ -536,8 +556,9 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 - 普通只读 ToolCall 与 governed side effect 使用不同执行边界；
 - Tool 和 Agent 必须经过对应 Gateway，Adapter 不决定授权；
 - Agent Artifact、Tool Receipt、Semantic Verification 和 Domain Completion 互不冒充；
-- Ask 不隐式保存模型回答，长期知识只有明确 ingestion/write path；
-- Conversation 保存只冻结已选 user message；确认前、reject 和 scope denied 均不写知识；
+- Conversation grounded answer 不隐式保存模型回答，长期知识只有明确 ingestion/write path；
+- Conversation 保存只冻结已选 user message；确认前、reject 和 scope denied 均不写知识；确认后的语义
+  抽取不得覆盖 atomic confirmed statement；
 - 远程能力没有实际 discovery/availability 时 fail closed；
 - replay 不重新生成或覆盖冻结 Command，不重复副作用；
 - retrieval index 和 graph projection 不是知识事实 owner；
@@ -552,7 +573,7 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 | Conversation models / loop | `application/conversation/models.py`、`application/conversation/service.py` |
 | Conversation Ports | `application/conversation/ports.py`、`capabilities/contracts/interaction.py` |
 | Web conversation entry | `adapters/web/routes/conversation.py` |
-| Personal Knowledge / Grounded Ask | `application/knowledge/`、`adapters/web/routes/knowledge.py` |
+| Personal Knowledge / grounded read | `application/knowledge/`、`application/conversation/` |
 | Knowledge delete/restore | `application/knowledge_lifecycle/`、`adapters/web/routes/notes.py` |
 | Research / Scheduled Intelligence | `application/research/`、`adapters/web/routes/research.py` |
 | Review / Knowledge Gap | `application/review/`、`application/insight/` |
@@ -564,31 +585,16 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 | E2E catalog / gate | `evals/e2e_quality/evidence_catalog.py`、`evals/e2e_quality/release_gate.py` |
 | Architecture DAG gate | `scripts/check_layers.py`、`.github/workflows/architecture.yml` |
 
-## 13. 已移除的旧主链
-
-以下对象和入口不再属于当前正式架构：
-
-- `TaskAnalyzer` / `TaskAnalysisAdmission`；
-- `GoalGraphCompiler` 统一任务编译；
-- 普通请求强制 `TaskContract + TaskRuntimeProjection`；
-- `CoordinationMode` / `AdaptivePlanner`；
-- `ExecutiveController` / `DecisionValidator` 通用控制链；
-- `orchestration_graph.py` 和旧 orchestration nodes；
-- `FinalAnswerProposal` / 通用 CompletionReport；
-- `action/actions`、旧 API 或 converter 兼容双轨。
-
-历史 contract 文件仍存在不代表这些链路可从正式入口到达。需要 durable execution 的新能力
-应首先使用具体领域 Aggregate/Command；不得为了复用残余类型恢复旧通用主链。
-
-## 14. 未闭合风险
+## 13. 未闭合风险
 
 1. 旧 23/23 archive 不匹配新版自然 E2E；提交后必须在 clean revision 重跑当前完整矩阵，才能
    建立发布资格；
-2. 历史 workflow/topic 与评测归档仍会提及已删除 Task/GoalGraph/LangGraph 或 MS GraphRAG；
-   它们必须保持历史状态标记，不能作为当前架构或发布依据；
+2. Supporting workflow/topic 与评测归档不拥有当前主链或发布状态；引用它们时必须回到 canonical
+   current-state 与 catalog 复核；
 3. `conversation_id`、`interaction_run_ref` 等部分 Interface/Application identity 仍以受格式
    约束的字符串传递，尚未全部收敛为 Value Object；
 4. GPT Researcher PDF 中文字体视觉质量尚未形成自动化 E2E；
-5. 仓库中仍有部分旧 Task/Control contract 供 Procedure 等受限消费者使用，需要按实际调用方
-   继续删除或重新
-   标明受限用途，避免再次被误认为生产主链。
+5. 部分 Task/Control contract 只服务受限 Procedure 消费者，需要持续按实际调用方收缩并标明边界，
+   避免被误认为通用生产主链；
+6. Conversation 的 Tool listing 按 exposure 过滤，但 registered-tool Admission 尚未机械绑定“proposal 必须
+   来自本轮可见投影”；当前只有 conformance 诊断，没有正式入口失败 E2E，不能声称该边界已经产品化闭合。

@@ -58,8 +58,7 @@ def _capture_memory_text(
     return _post_json(
         f"{server.base_url}/api/tools/capture_text/execute",
         {
-            "tenant_id": "default",
-            "owner_id": user_id,
+            "tenant_id": "personal-agent",
             "user_id": user_id,
             "kwargs": {
                 "text": text,
@@ -192,7 +191,6 @@ def test_l07_http_conversation_save_is_recalled_in_a_new_conversation(
         text=save_text,
     )
     pending = prepared["pending_confirmation"]
-    command = pending["command"]
     assert prepared["disposition"] == "confirmation_required"
     assert pending["status"] == "awaiting_confirmation"
 
@@ -201,7 +199,6 @@ def test_l07_http_conversation_save_is_recalled_in_a_new_conversation(
         f"{prepared['interaction_run_ref']}/knowledge-save-decision",
         {
             "decision": "confirm",
-            "command_digest": command["command_digest"],
             "confirmation_ref": f"{marker}-confirmation",
         },
     )
@@ -319,8 +316,7 @@ def test_l03_http_process_restart_rebuilds_from_committed_facts(
     assert seeded["ok"] is True
     assert other_seeded["ok"] is True
     text = (
-        f"请从我保存的知识中找出 {project_name} 的完整验收记录，"
-        "告诉我其中的颜色代号。"
+        f"请从我保存的知识中找出 {project_name} 的完整验收记录，告诉我其中的颜色代号。"
     )
     _assert_natural_user_text(
         text,
@@ -356,7 +352,9 @@ def test_l03_http_process_restart_rebuilds_from_committed_facts(
             committed = candidate
             break
         time.sleep(0.1)
-    assert committed is not None, "did not observe an intermediate committed interaction fact"
+    assert committed is not None, (
+        "did not observe an intermediate committed interaction fact"
+    )
     before_order = tuple(committed["execution_order"])
     live_web_process.crash_and_restart()
     thread.join(timeout=10)
@@ -389,7 +387,7 @@ def test_l03_http_process_restart_rebuilds_from_committed_facts(
     assert expected_code in final_message
     assert other_code not in final_message
     assert other_code not in json.dumps(recovered, ensure_ascii=False)
-    assert tuple(recovered["execution_order"][:len(before_order)]) == before_order
+    assert tuple(recovered["execution_order"][: len(before_order)]) == before_order
     assert len(recovered["execution_order"]) == len(set(recovered["execution_order"]))
     assert "working_plans" not in recovered
     assert any(
@@ -527,8 +525,10 @@ def test_l06_http_user_requested_review_returns_receipt_bound_safe_revision(
     )
     trace = _trace(live_web_process, str(result["interaction_run_ref"]))
     verifier_results = [
-        item for item in trace["inputs"]
-        if item["kind"] == "tool_result" and item["capability_id"] == "verify_interaction_draft"
+        item
+        for item in trace["inputs"]
+        if item["kind"] == "tool_result"
+        and item["capability_id"] == "verify_interaction_draft"
     ]
     _record(
         trace_archive,
@@ -545,4 +545,7 @@ def test_l06_http_user_requested_review_returns_receipt_bound_safe_revision(
     final_message = str(result["message"]["content"]).strip()
     assert "已经完成所有写入" not in final_message
     assert final_receipt["verified_draft"] == final_message
-    assert final_receipt["draft_digest"] == sha256(final_message.encode("utf-8")).hexdigest()
+    assert (
+        final_receipt["draft_digest"]
+        == sha256(final_message.encode("utf-8")).hexdigest()
+    )

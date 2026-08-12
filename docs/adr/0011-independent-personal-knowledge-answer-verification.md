@@ -1,5 +1,7 @@
 # ADR 0011: Personal Knowledge 证据选择与回答验证边界
 
+> **状态：Superseded（2026-08-12）。** ASK-001 证明 Conversation 已覆盖 personal-only 与 multi-source grounded answer；独立 `/api/knowledge/ask`、`EvidenceGroundedAnswer` 与专用 answer verifier 已删除。本文仅保留历史决策背景，当前契约见 [Capture 与 Conversation Grounded Answer](../workflow/capture-ask-model-flow.md)。
+
 - 状态：Accepted
 - 日期：2026-07-31
 - 影响范围：`POST /api/knowledge/ask` 的候选回答与验证，以及 Ask 的 Personal Knowledge 证据检索

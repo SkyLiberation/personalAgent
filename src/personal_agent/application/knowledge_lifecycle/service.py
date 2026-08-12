@@ -61,7 +61,6 @@ class KnowledgeLifecycleService:
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeDeleteOperationView:
         if decision == "confirm" and not confirmation_ref.strip():
@@ -70,7 +69,6 @@ class KnowledgeLifecycleService:
             command_id=command_id,
             user_id=user_id,
             decision=decision,
-            command_digest=command_digest,
             confirmation_ref=confirmation_ref.strip(),
         )
 
@@ -123,7 +121,6 @@ class KnowledgeLifecycleService:
         command_id: str,
         user_id: str,
         decision: Literal["confirm", "reject"],
-        command_digest: str,
         confirmation_ref: str,
     ) -> KnowledgeRestoreOperationView:
         if decision == "confirm" and not confirmation_ref.strip():
@@ -132,7 +129,6 @@ class KnowledgeLifecycleService:
             command_id=command_id,
             user_id=user_id,
             decision=decision,
-            command_digest=command_digest,
             confirmation_ref=confirmation_ref.strip(),
         )
 

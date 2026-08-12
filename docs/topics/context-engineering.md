@@ -37,6 +37,12 @@
 获权。原文“visibility 必须先于 retrieval”具体指：**先由前三类权威事实产生 authorized set，再在
 集合内按需求检索；不能先全局召回后过滤。**
 
+**当前实现边界**：资源链已按 Principal 先过滤；Conversation 的 capability projection 只消费
+definition/availability/exposure，没有 Principal/Policy 输入，也没有 capability requirement retrieval。
+因此 `EffectiveCapabilities` 只能称“模型可见集合”，不能称 authorized set。调用时仍必须由
+Admission/Gateway 校验 Authorization；只有失败 E2E 证明全量可见集合造成误选、成本或延迟问题后，才准入
+per-principal filter 或两阶段 capability discovery。
+
 ## 四阶段协议
 
 ```text
@@ -101,11 +107,30 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 | 被卸载文本的形态（原始串而非序列化结果） | `select_offload_text` |
 | 某个窗口的内容（命中行带 before=2 / after=4，1 起计行号） | `excerpt_payload_text` |
 | 「读哪一段」 | 模型，经 `read_action_output` 的 `keyword` / `start_line` |
-| 「未读完能否以非 answer 收尾」 | `ConversationService._unread_offloaded_resource` |
+| 「未读完能否收尾」 | `ConversationService._unread_offloaded_resource`；所有 disposition 均受约束 |
 
 被界定的 Observation 回带 `retrieval.omitted_chars`、`original_chars` 与 `resource_ref`，
 所以「这个远端输出读过没有」是对 committed inputs 的纯函数判定，不需要另存已读集合。
 卸载失败时 `unavailable_reason` 可见，不静默。
+
+### Artifact-backed Observation 的请求级物化
+
+**Journal 保存完整 bounded Observation；模型后续回合不重复接收其中无证明力的截断正文。**当 Observation 已有
+`retrieval.resource_ref` 时，`context_materialization.py` 只向模型物化状态、omission metadata 和重读 ref；
+`read_action_output` 返回的 exact window 则原样保留。该投影是 request-local view，不改写 journal，不增加已读
+状态，也不把 Artifact 复制成第二事实源。
+
+CTX-001 的正式 HTTP E2E 同时读取三份超大冻结资料。改动前第二轮 typed inputs 为 48,815 字符、累计
+37,516 tokens，Runtime 在模型重读前耗尽历史总预算；更早的一次运行还证明模型会直接把截断头尾中的哈希
+误报为证据。另一次复跑还暴露模型连续重调原 MCP、12 次取得相同截断结果直至 Tool 预算耗尽。当前
+Admission 在同 capability 已有未读卸载结果时拒绝这种无进展 refetch，并要求使用已有 `ResourceRef`；
+拒绝不消耗 Tool 预算。最终执行中模型用三个 `read_action_output` 窗口取得随机事实，typed inputs 为
+2,025 / 6,332 字符，三轮累计 18,512 tokens，并返回修正后的阈值。
+
+该证据只准入 Artifact-backed Observation 投影、“未重读不得 answer”和“未读结果不得由同资源 refetch
+冒充重读”。它**没有证明**普通 Conversation messages
+需要 segment index、滚动摘要、向量化历史或 Provider 原生 compaction，因此当前不实现这些机制。若未来同一自然
+用户目标在消息历史增长上失败，必须重新取得独立 baseline。
 
 ### 上下文构成度量
 
@@ -120,9 +145,8 @@ capability 投影、system prompt 其余部分、committed messages、typed inpu
 - 用字符而非 tokenizer：字符由发出的字符串直接派生，tokenizer 会引入第二套 Provider 相关口径；
 - 不进入任何终止判据、预算判定或 Admission 分支。
 
-它可由 committed inputs 确定性重算，不构成第二写入口。**当前测得数据及由此关闭的候选机制见
-[Context 物化度量与逐出](../future/context-materialization-measurement-and-eviction.md)**；
-本文不复制那份数据。
+它可由 committed inputs 确定性重算，不构成第二写入口。逐轮构成属于 Observability 事实，不进入
+Context 选择、预算、Admission 或终止分支。
 
 普通 Conversation 不创建 `TaskContract`、`GoalGraph` 或通用 checkpoint。需要跨进程维护动态
 交付义务的 Investigation Project 使用自己的 aggregate 和 journal，不把 Project state 镜像回
@@ -168,6 +192,7 @@ Question + visible conversation hints
 | Personal Knowledge Claim/EvidenceSpan | 是 | 长期知识事实 |
 | Project journal/ArtifactRef | 是 | durable execution |
 | 被卸载的 Observation 正文 | 是，作为 Artifact | 本次交互内需可重读；`producer_key` 幂等，身份是 `ResourceRef` |
+| Artifact-backed Observation 的紧凑模型投影 | 否 | 可从 committed Observation 确定性重建；只用于本次调用 |
 | `TurnContextComposition` | 是，随 `InteractionTrace` | 与 committed inputs 同生命周期，可由其重算 |
 | Retrieval candidate pool | 默认否 | 可重建的单次运行视图 |
 | LLM Context/Prompt | 默认否 | 临时物化；必要时只保存 digest/ref |

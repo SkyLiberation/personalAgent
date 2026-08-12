@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.adapters.web.routes._shared import (
@@ -13,7 +13,6 @@ from personal_agent.application.knowledge import (
     ConversationMessage,
     ConversationSolidifyResult,
     DecisionCard,
-    EvidenceGroundedAnswer,
     GraphProjectionResult,
     IngestKnowledgeResult,
     KnowledgeGap,
@@ -43,12 +42,6 @@ class IngestTextRequest(_StrictRequest):
     source_ref: str | None = None
     raw_location: str = ""
     metadata: dict[str, str] = Field(default_factory=dict)
-
-
-class AskKnowledgeRequest(_StrictRequest):
-    question: str
-    user_id: str | None = None
-    limit: int = 5
 
 
 class SolidifyConversationRequest(_StrictRequest):
@@ -170,15 +163,6 @@ def register_knowledge_routes(
         )
         return CapturedResourceResult(ingest_result=ingest)
 
-    @app.post("/api/knowledge/ask", response_model=EvidenceGroundedAnswer)
-    def ask_knowledge(body: AskKnowledgeRequest, request: Request) -> EvidenceGroundedAnswer:
-        principal = resolve_requested_principal(request, settings, body.user_id)
-        return knowledge_service.answer_with_evidence(
-            body.question,
-            owner_id=principal.principal_id,
-            limit=body.limit,
-        )
-
     @app.post("/api/knowledge/solidify-conversation", response_model=ConversationSolidifyResult)
     def solidify_conversation(
         body: SolidifyConversationRequest,
@@ -198,11 +182,17 @@ def register_knowledge_routes(
         request: Request,
     ) -> ClaimCorrectionResult:
         principal = resolve_requested_principal(request, settings, body.user_id)
-        return knowledge_service.correct_claim(
-            claim_id,
-            body.corrected_statement,
-            user_id=principal.user_id,
-        )
+        try:
+            return knowledge_service.correct_claim(
+                claim_id,
+                body.corrected_statement,
+                owner_id=principal.principal_id,
+                user_id=principal.user_id,
+            )
+        except (KeyError, PermissionError):
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/knowledge/claims", response_model=list[Claim])
     def list_claims(

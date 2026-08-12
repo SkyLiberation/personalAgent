@@ -23,21 +23,20 @@
 
 layer 是断言焦点，不是独立产品链路，也不能替代完整用户结果。
 
-## 当前矩阵
+## 矩阵与发布门禁
 
-- `product_capability`：E01–E05、E08–E14、E20、E22–E23、IP01，共 16 个应用能力旅程；
-- `complex_loop`：L01–L07，共 7 个用户旅程及其 runtime 反事实；
-- `capability_profile/boundary_evaluation`：E16–E19、E21、E24，共 6 个外部能力或边界专项证据；
-- `durable_investigation`：LT01–LT08、LT10–LT13，共 12 个 in-process runtime diagnostic；
-- release 共 22 个，diagnostic 共 18 个。
-
-当前没有组合能力 release 用例。原 C01–C04 只是串接独立 Use Case，未证明一个不可拆分的用户
-目标，已退出 catalog；B03 是历史失败 archive，不再对当前实现执行相反断言；LT09 没有实际运行
-Conversation paired baseline，也已删除。E06/E07 只是复跑 E16–E19/E17 的 wrapper，同样删除。
+精确用例、数量、test double 和 `release_eligible` 只由 `evidence_catalog.py` 枚举，本 README 不维护
+第二份清单。分类包括 `product_capability`、`complex_loop`、
+`capability_profile/boundary_evaluation` 和 `durable_investigation`。DUR-001 从正式 HTTP 入口验证
+重启后的运行记录 scope 隔离，属于 release-eligible product capability；OBS-001 对同一次失败验证
+operator diagnosis，属于 boundary evaluation。CTX-001、RUN-001、GOV-001 因使用冻结外部 Provider
+属于 diagnostic。
 
 发布能力由 `release_gate.py` 对机器声明、catalog eligibility、clean 同 revision trace、test
 outcome 和 checksum 求交集。终态由测试中的可执行断言拥有，不再维护一个 gate 不读取的
 `expected_terminal` 镜像字段。
+
+文档不记录已退出用例或某次运行状态；历史证据留在对应 archive，当前矩阵始终由 catalog 计算。
 
 ## 运行
 
@@ -57,3 +56,13 @@ uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s
 
 每次执行生成 manifest、逐用例 trace、pytest summary 和 checksum。API key 不写入归档。
 历史 trace、skip、dirty worktree 或不同 revision 的通过结果均不能成为发布证据。
+
+发布信任结果与运行测量保持分离。生成确定性测量报告：
+
+```powershell
+uv run python -m evals.e2e_quality.metrics_report `
+  --trace-root data/e2e_traces --profile current-runtime `
+  --require-complete-profile --output data/e2e_metrics/current-runtime.json
+```
+
+reporter 只读取 checksum 完整、profile 兼容的 archive，并把缺失 usage 标为 unavailable；它不能改变 release gate 的发布判断。

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import timedelta
 
 from personal_agent.application.evidence_engine import evidence_terms, extract_claims
-from personal_agent.application.knowledge.answer_verifier import (
-    KnowledgeAnswerVerifier,
-    unavailable_answer_verification,
-)
 from personal_agent.application.knowledge.models import (
     AnswerCitation,
     ArtifactDeleteImpactResult,
@@ -25,7 +22,6 @@ from personal_agent.application.knowledge.models import (
     DecisionCard,
     EvidenceRef,
     EvidenceBlock,
-    EvidenceGroundedAnswer,
     EvidenceSpan,
     ExtractionRun,
     GraphProjection,
@@ -73,7 +69,6 @@ class KnowledgeService:
     semantic_evidence_extractor: SemanticEvidenceExtractor | None = None
     semantic_claim_extractor: SemanticClaimExtractor | None = None
     claim_grounding_judge: ClaimGroundingJudge | None = None
-    answer_verifier: KnowledgeAnswerVerifier | None = None
 
     def __post_init__(self) -> None:
         self.admission_policy = self.admission_policy or ClaimAdmissionPolicy()
@@ -266,6 +261,7 @@ class KnowledgeService:
             claims = self._claims_from_semantic_extraction(
                 claim_extraction,
                 artifact=artifact,
+                evidence_spans=ingest.evidence_spans,
                 user_id=artifact.user_id,
                 owner_id=owner_id,
                 created_from=artifact.artifact_id,
@@ -287,6 +283,7 @@ class KnowledgeService:
             claims = self._claims_from_semantic_extraction(
                 claim_extraction,
                 artifact=artifact,
+                evidence_spans=ingest.evidence_spans,
                 user_id=artifact.user_id,
                 owner_id=owner_id,
                 created_from=artifact.artifact_id,
@@ -424,15 +421,27 @@ class KnowledgeService:
         normalized = _normalize_text(question)
         if not normalized:
             raise ValueError("question is required")
-        selected = self._select_evidence_spans(normalized, owner_id=owner_id, limit=limit)
-        selected = self._add_claim_evidence_to_selection(normalized, selected, owner_id=owner_id, limit=limit)
+        selected_claims = self._select_answerable_claims(
+            normalized,
+            owner_id=owner_id,
+            limit=limit,
+        )
+        if not selected_claims:
+            return KnowledgeEvidenceSelection(
+                question=question,
+                reason="no_answerable_claim",
+            )
+        selected = self._evidence_for_claims(
+            selected_claims,
+            owner_id=owner_id,
+            limit=limit,
+        )
         if not selected:
             return KnowledgeEvidenceSelection(
                 question=question,
-                reason="no_matching_evidence_span",
+                reason="no_answerable_claim_evidence",
             )
         citations: list[AnswerCitation] = []
-        selected_claims = self._claims_for_spans(selected)
         conflicting_ids = self._conflicting_claim_ids(owner_id, selected_claims)
         potential_conflicting_ids = self._potential_conflicting_claim_ids(owner_id, selected_claims)
         for span in selected:
@@ -455,7 +464,11 @@ class KnowledgeService:
                 quote=span.text_span,
                 locator=block.locator if block is not None else "",
                 evidence_ref=evidence_ref,
-                claim_ids=list(span.claim_ids),
+                claim_ids=[
+                    claim.claim_id
+                    for claim in selected_claims
+                    if span.evidence_span_id in claim.evidence_span_ids
+                ],
             ))
         return KnowledgeEvidenceSelection(
             question=question,
@@ -464,79 +477,6 @@ class KnowledgeService:
             selected_claims=selected_claims,
             conflicted_claim_ids=conflicting_ids,
             potential_conflicted_claim_ids=potential_conflicting_ids,
-        )
-
-    def answer_with_evidence(
-        self,
-        question: str,
-        *,
-        owner_id: str = "default",
-        limit: int = 5,
-    ) -> EvidenceGroundedAnswer:
-        selection = self.select_evidence(
-            question,
-            owner_id=owner_id,
-            limit=limit,
-        )
-        if not selection.selected_spans:
-            return EvidenceGroundedAnswer(
-                question=question,
-                answer="证据不足：当前个人知识库没有足够依据，无法基于当前知识库回答。",
-                citations=[],
-                verification=unavailable_answer_verification(selection.reason),
-                diagnostic_fields={
-                    "selected_evidence_span_ids": [],
-                    "reason": selection.reason,
-                },
-            )
-        selected = selection.selected_spans
-        citations = selection.citations
-        selected_claims = selection.selected_claims
-        conflicting_ids = selection.conflicted_claim_ids
-        potential_conflicting_ids = selection.potential_conflicted_claim_ids
-        answer_parts = [
-            f"[{index}] {citation.quote}"
-            for index, citation in enumerate(citations, 1)
-        ]
-        preferred_claims = [
-            claim for claim in selected_claims
-            if claim.state == "active"
-            and claim.support_status in {"supported", "user_asserted"}
-            and claim.quality_gate.passed
-        ]
-        for claim in preferred_claims[:limit]:
-            if claim.statement not in answer_parts:
-                answer_parts.insert(0, claim.statement)
-        if conflicting_ids:
-            answer_parts.append("注意：相关知识存在冲突，不能静默合并为单一结论。")
-        elif potential_conflicting_ids:
-            answer_parts.append("注意：相关知识存在待确认的潜在冲突，需要语义裁决或用户确认。")
-        answer_text = "基于当前证据：\n" + "\n".join(answer_parts)
-        answer_claims = extract_claims(answer_text, limit=10)
-        verification = self._verify_answer(
-            _normalize_text(question),
-            answer_text,
-            selected,
-            owner_id=owner_id,
-        )
-        return EvidenceGroundedAnswer(
-            question=question,
-            answer=answer_text,
-            citations=citations,
-            verification=verification,
-            answer_claim_count=len(answer_claims),
-            answer_claim_saved_count=0,
-            active_claim_count_delta=0,
-            selected_claim_ids=[claim.claim_id for claim in selected_claims],
-            conflicted_claim_ids=conflicting_ids,
-            claim_summaries=[claim.statement for claim in selected_claims[:5]],
-            diagnostic_fields={
-                "selected_evidence_span_ids": [span.evidence_span_id for span in selected],
-                "selected_evidence_block_ids": [span.evidence_block_id for span in selected],
-                "selected_claim_ids": [claim.claim_id for claim in selected_claims],
-                "conflicted_claim_ids": conflicting_ids,
-                "potential_conflicted_claim_ids": potential_conflicting_ids,
-            },
         )
 
     def solidify_conversation(
@@ -572,15 +512,63 @@ class KnowledgeService:
         claim_id: str,
         corrected_statement: str,
         *,
+        owner_id: str,
         user_id: str = "default",
         actor: str = "user",
     ) -> ClaimCorrectionResult:
         old_claim = self.store.get_claim(claim_id)
         if old_claim is None:
-            raise ValueError(f"Claim not found: {claim_id}")
+            raise KeyError(f"Claim not found: {claim_id}")
+        if old_claim.owner_id != owner_id:
+            raise PermissionError("Claim is outside the authenticated owner scope")
+        if old_claim.state in {"superseded", "deprecated", "deleted"}:
+            raise ValueError(f"Claim in terminal state cannot be corrected: {old_claim.state}")
         statement = _normalize_text(corrected_statement)
         if not statement:
             raise ValueError("corrected_statement is required")
+        correction_artifact = Artifact(
+            owner_id=old_claim.owner_id,
+            user_id=user_id,
+            source_type="user_correction",
+            source_ref=f"claim:{old_claim.claim_id}",
+            content_hash=stable_hash(statement),
+            raw_location=f"claim:{old_claim.claim_id}",
+            text=statement,
+        )
+        correction_run = ExtractionRun(
+            artifact_id=correction_artifact.artifact_id,
+            owner_id=old_claim.owner_id,
+            extractor="user-correction",
+            extractor_version="v1",
+            input_hash=correction_artifact.content_hash,
+        )
+        correction_blocks = self._build_evidence_blocks(
+            correction_artifact,
+            correction_run.extraction_run_id,
+        )
+        correction_spans = self._build_evidence_spans(
+            correction_blocks,
+            owner_id=old_claim.owner_id,
+        )
+        if not correction_spans:
+            raise ValueError("corrected_statement did not produce evidence")
+        correction_artifact.derived_evidence_block_ids = [
+            block.evidence_block_id for block in correction_blocks
+        ]
+        correction_run.evidence_block_ids = [
+            block.evidence_block_id for block in correction_blocks
+        ]
+        correction_run.evidence_span_ids = [
+            span.evidence_span_id for span in correction_spans
+        ]
+        correction_run.parsed_region_count = len(correction_blocks)
+        correction_run.semantic_region_count = len(correction_spans)
+        correction_run.coverage_manifest = self._coverage_manifest(
+            correction_artifact,
+            correction_run,
+            correction_blocks,
+            correction_spans,
+        ).model_dump(mode="json")
         subject, predicate, obj, scope, condition, valid_time = _semantic_claim_parts(statement)
         new_claim = Claim(
             owner_id=old_claim.owner_id,
@@ -601,13 +589,25 @@ class KnowledgeService:
             state="active",
             created_from=old_claim.claim_id,
             created_by="user",
-            evidence_span_ids=list(old_claim.evidence_span_ids),
+            evidence_span_ids=[span.evidence_span_id for span in correction_spans],
             evidence_refs=[
-                ref for span_id in old_claim.evidence_span_ids
-                if (ref := self._evidence_ref_for_span_id(span_id)) is not None
+                self._evidence_ref_for_span(
+                    span,
+                    next(
+                        block for block in correction_blocks
+                        if block.evidence_block_id == span.evidence_block_id
+                    ),
+                    extraction_run_id=correction_run.extraction_run_id,
+                )
+                for span in correction_spans
             ],
             canonical_key=stable_hash(f"user_fact:{_canonical(statement)}")[:20],
         )
+        correction_spans = [
+            span.model_copy(update={"claim_ids": [new_claim.claim_id]})
+            for span in correction_spans
+        ]
+        correction_run.claim_ids = [new_claim.claim_id]
         new_claim.quality_gate = self._claim_quality_gate(new_claim)
         previous_state = old_claim.state
         old_claim.state = "superseded"
@@ -653,18 +653,11 @@ class KnowledgeService:
             user_response="confirmed",
             resolved_at=events[-1].created_at,
         )
-        updated_spans: list[EvidenceSpan] = []
-        for span_id in old_claim.evidence_span_ids:
-            span = self.store.get_evidence_span(span_id)
-            if span is None:
-                continue
-            claim_ids = [existing_id for existing_id in span.claim_ids if existing_id != old_claim.claim_id]
-            if new_claim.claim_id not in claim_ids:
-                claim_ids.append(new_claim.claim_id)
-            updated_spans.append(span.model_copy(update={"claim_ids": claim_ids}))
+        self.store.save_artifact(correction_artifact)
+        self.store.save_extraction_run(correction_run)
+        self.store.save_evidence_blocks(correction_blocks)
+        self.store.save_evidence_spans(correction_spans)
         self.store.save_claims([old_claim, new_claim])
-        if updated_spans:
-            self.store.save_evidence_spans(updated_spans)
         self.store.save_knowledge_relations([relation])
         self.store.save_knowledge_state_events(events)
         self.store.save_decisions([correction_decision])
@@ -1125,17 +1118,30 @@ class KnowledgeService:
         if span is None:
             return None
         block = self.store.get_evidence_block(span.evidence_block_id)
-        artifact_id = block.artifact_id if block is not None else ""
-        locator = span.locator or (block.locator if block is not None else "")
+        if block is None:
+            return None
+        return self._evidence_ref_for_span(
+            span,
+            block,
+            extraction_run_id=extraction_run_id,
+        )
+
+    @staticmethod
+    def _evidence_ref_for_span(
+        span: EvidenceSpan,
+        block: EvidenceBlock,
+        *,
+        extraction_run_id: str = "",
+    ) -> EvidenceRef:
         return EvidenceRef(
             source_kind="evidence_span",
             source_id=span.evidence_span_id,
-            artifact_id=artifact_id,
+            artifact_id=block.artifact_id,
             evidence_block_id=span.evidence_block_id,
             evidence_span_id=span.evidence_span_id,
-            locator=locator,
+            locator=span.locator or block.locator,
             quote_hash=span.quote_hash,
-            health_status="valid" if block is not None else "broken",
+            health_status="valid",
             extraction_run_id=extraction_run_id,
         )
 
@@ -1175,7 +1181,10 @@ class KnowledgeService:
         if not claim.quality_gate.passed:
             return False
         if projection == "ask":
-            return claim.state in {"active", "conflicted", "uncertain", "verified", "grounded"}
+            return (
+                claim.state in {"active", "conflicted"}
+                and claim.support_status in {"supported", "user_asserted"}
+            )
         if projection == "review":
             return (
                 claim.state == "active"
@@ -1209,33 +1218,6 @@ class KnowledgeService:
         ]
         self.store.save_projection_jobs(jobs)
         return jobs
-
-    def _verify_answer(
-        self,
-        question: str,
-        candidate_answer: str,
-        selected: list[EvidenceSpan],
-        *,
-        owner_id: str,
-    ):
-        if self.answer_verifier is None:
-            return unavailable_answer_verification(
-                "knowledge_answer_verifier_unavailable"
-            )
-        all_spans = self.store.list_evidence_spans(owner_id, limit=500)
-        manifests = self._coverage_manifests_for_spans([*selected, *all_spans])
-        try:
-            return self.answer_verifier.verify(
-                question=question,
-                candidate_answer=candidate_answer,
-                selected=selected,
-                available=all_spans,
-                manifests=manifests,
-            )
-        except Exception as exc:
-            return unavailable_answer_verification(
-                f"knowledge_answer_verification_failed:{type(exc).__name__}"
-            )
 
     def _coverage_manifests_for_spans(self, spans: list[EvidenceSpan]) -> list[CoverageManifest]:
         seen_run_ids: set[str] = set()
@@ -1353,6 +1335,7 @@ class KnowledgeService:
         extraction,
         *,
         artifact: Artifact,
+        evidence_spans: list[EvidenceSpan],
         user_id: str,
         owner_id: str,
         created_from: str,
@@ -1364,10 +1347,29 @@ class KnowledgeService:
             ref.source_id: ref for ref in evidence_refs_by_span.values()
             if ref is not None
         }
+        span_text_by_ref_id = {
+            ref.source_id: span.text_span
+            for span in evidence_spans
+            if (ref := evidence_refs_by_span.get(span.evidence_span_id)) is not None
+        }
+        draft_count_by_ref_id = Counter(
+            ref_id
+            for draft in extraction.claims
+            for ref_id in draft.evidence_ref_ids
+        )
         claims: list[Claim] = []
         seen: set[str] = set()
         for draft in extraction.claims:
             statement = _normalize_text(draft.statement)
+            if (
+                created_by == "user"
+                and source_type == "conversation"
+                and len(draft.evidence_ref_ids) == 1
+                and draft_count_by_ref_id[draft.evidence_ref_ids[0]] == 1
+            ):
+                statement = _normalize_text(
+                    span_text_by_ref_id.get(draft.evidence_ref_ids[0], statement)
+                )
             if not statement:
                 continue
             canonical_statement = _canonical(statement)
@@ -1463,29 +1465,11 @@ class KnowledgeService:
             calibration=calibration_from_grounding(judgment),
         )
 
-    def _select_evidence_spans(self, question: str, *, owner_id: str, limit: int) -> list[EvidenceSpan]:
+    def _select_answerable_claims(self, question: str, *, owner_id: str, limit: int) -> list[Claim]:
         q_terms = evidence_terms(question)
         if not q_terms:
             return []
-        scored: list[tuple[int, EvidenceSpan]] = []
-        for span in self.store.list_evidence_spans(owner_id, limit=500):
-            overlap = len(q_terms & evidence_terms(span.text_span))
-            if overlap:
-                scored.append((overlap, span))
-        scored.sort(key=lambda item: (item[0], item[1].created_at), reverse=True)
-        return [span for _, span in scored[:max(1, limit)]]
-
-    def _add_claim_evidence_to_selection(
-        self,
-        question: str,
-        selected: list[EvidenceSpan],
-        *,
-        owner_id: str,
-        limit: int,
-    ) -> list[EvidenceSpan]:
-        selected_by_id = {span.evidence_span_id: span for span in selected}
-        q_terms = evidence_terms(question)
-        scored_claims: list[tuple[int, Claim]] = []
+        scored: list[tuple[int, Claim]] = []
         for claim in self.store.list_claims(owner_id, limit=500):
             if not self._claim_projection_eligible(claim, "ask"):
                 continue
@@ -1499,34 +1483,51 @@ class KnowledgeService:
             ]))
             overlap = len(q_terms & claim_terms)
             if overlap:
-                scored_claims.append((overlap, claim))
-        scored_claims.sort(key=lambda item: (item[0], item[1].confidence), reverse=True)
-        for _, claim in scored_claims:
+                scored.append((overlap, claim))
+        scored.sort(
+            key=lambda item: (item[0], item[1].confidence, item[1].created_at),
+            reverse=True,
+        )
+        return [claim for _, claim in scored[:max(1, limit)]]
+
+    def _evidence_for_claims(
+        self,
+        claims: list[Claim],
+        *,
+        owner_id: str,
+        limit: int,
+    ) -> list[EvidenceSpan]:
+        selected_by_id: dict[str, EvidenceSpan] = {}
+        for claim in claims:
+            refs_by_span_id = {
+                ref.evidence_span_id: ref
+                for ref in claim.evidence_refs
+                if ref.health_status == "valid"
+            }
             for evidence_span_id in claim.evidence_span_ids:
                 if evidence_span_id in selected_by_id:
                     continue
+                ref = refs_by_span_id.get(evidence_span_id)
+                if ref is None or ref.source_id != evidence_span_id:
+                    continue
                 span = self.store.get_evidence_span(evidence_span_id)
-                if span is not None:
-                    selected_by_id[span.evidence_span_id] = span
+                if span is None or span.owner_id != owner_id:
+                    continue
+                block = self.store.get_evidence_block(span.evidence_block_id)
+                if (
+                    block is None
+                    or block.owner_id != owner_id
+                    or ref.evidence_block_id != block.evidence_block_id
+                    or ref.artifact_id != block.artifact_id
+                ):
+                    continue
+                artifact = self.store.get_artifact(block.artifact_id)
+                if artifact is None or artifact.owner_id != owner_id:
+                    continue
+                selected_by_id[span.evidence_span_id] = span
                 if len(selected_by_id) >= limit:
                     return list(selected_by_id.values())
         return list(selected_by_id.values())
-
-    def _claims_for_spans(self, spans: list[EvidenceSpan]) -> list[Claim]:
-        seen: set[str] = set()
-        claims: list[Claim] = []
-        for span in spans:
-            for claim_id in span.claim_ids:
-                if claim_id in seen:
-                    continue
-                claim = self.store.get_claim(claim_id)
-                if claim is None:
-                    continue
-                if not self._claim_projection_eligible(claim, "ask"):
-                    continue
-                seen.add(claim_id)
-                claims.append(claim)
-        return claims
 
     def _conflicting_claim_ids(self, owner_id: str, claims: list[Claim]) -> list[str]:
         return self._related_claim_ids(owner_id, claims, relation_type="conflict", include_claim_state=True)

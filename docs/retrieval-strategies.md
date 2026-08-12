@@ -195,24 +195,11 @@ edges
 - `node_refs / edge_refs / fact_refs`
 - `EvidenceItem(source_type="graph_fact")`
 
-它和 ask 主链路的区别是：工具本身只执行图谱检索并返回工具结果，不负责完整的 fallback、回答 prompt 构造、verifier retry 和历史记录。
+它只执行图谱检索并返回 Observation；最终回答、是否继续检索和 Completion 仍由 Conversation loop 负责。
 
 ## 方案六：web search fallback
 
-实现位置：
-
-- [runtime_ask.py](../src/personal_agent/agent/runtime_ask.py)
-- web search 工具注册与执行逻辑
-
-触发条件：
-
-- 图谱检索不可用或证据不足
-- 本地 note 检索也不足
-- 当前运行时 `_web_search_available=True`
-
-web 结果会转为：
-
-- `Citation(source_type="web", url=...)`
+Web search 是 Conversation 可见的只读 Tool。模型仅在用户要求最新/官方外部来源或预取个人证据不足时提议调用；Admission、scope、预算和 ToolGateway 决定能否执行。返回值作为带 URL 的 Observation 进入同一 Agent loop，不存在平行的 fallback 回答链。
 - `EvidenceItem(source_type="web")`
 
 这个方案不是个人知识库检索的主路径，而是外部信息补充路径。回答 prompt 会要求说明信息来自网络搜索。

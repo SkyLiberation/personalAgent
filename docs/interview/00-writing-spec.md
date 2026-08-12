@@ -1,105 +1,67 @@
-# 面试文档规范
+# 面试文档写作规范
 
-本目录所有文档（含后续新增）必须遵守本规范。它只约束写法与举证口径，不新增架构事实。
+> **每节先给判断，再给 owner、机制和证据边界。** 面试材料只解释当前成立的设计，不按开发时间记录探索过程，也不替 future 文档保存候选方案。
 
-## 1. 优先级与事实源
+## 1. 事实源与唯一职责
 
-1. 生产代码、[E2E catalog](../../evals/e2e_quality/evidence_catalog.py)、同 revision 的执行证据；
-2. [当前核心架构](../summary/core-architecture-current-state.md)、
-   [Phase 0 能力与发布基线](../summary/phase0-capability-release-baseline.md) 等 summary；
-3. 本目录文档。
+**事实核对顺序是：生产代码/机器 catalog/执行证据 → current-state summary → topic/workflow/ADR → interview → future。**
 
-低优先级与高优先级冲突时，改本目录文档，不改结论口径。未来设计只能出现在「下一步」类小节，
-并显式标注未落地。
+本目录的解释 owner 固定如下：
 
-## 2. 每个设计单元必答五问
+- `01`：项目定位与总责任链；
+- `02`：用户请求的生产路径；
+- `03`：跨业务 Agent 机制；
+- `04`：领域事实与生命周期；
+- `05`：证据强度、测量与发布状态；
+- `06`：短答，只链接前五篇，不复制第二套解释。
 
-任何一个「我们这样设计」的段落，必须能回答：
+## 2. 一节只回答一个判断
 
-| # | 问题 | 不合格的样子 |
+**合格小节通常只需三类信息：**
+
+1. **为什么重要**：阻止什么用户错误或工程失控；
+2. **谁负责**：事实 owner、决策 owner 和唯一写入口；
+3. **证明到哪里**：E2E/contract 坐标与不能外推的范围。
+
+禁止无信息过渡、同义收尾、代码目录流水账和“先有设计、后找理由”的叙事。一个表能讲清时，不再用长段重复。
+
+## 3. 术语必须分层
+
+| 术语 | 含义 |
+| --- | --- |
+| Framework Protocol | Proposal/Observation/Feedback 等跨业务权力契约 |
+| Runtime Mechanism | Model、Gateway、Queue、Journal、Trace 等技术执行机制 |
+| Application Capability | 用户可理解、可验收的业务动作及其结果契约 |
+| Product Aggregate | 拥有独立长期业务事实和生命周期的对象 |
+| Interface / Projection | 协议转换或只读展示，不是第二写入口 |
+
+Tool、MCP、Agent 是执行资源；Workflow 是 Capability 内的固定编排；Project 是 Aggregate。相同的 tool-shaped wire format 不代表相同业务 owner。
+
+默认使用“权威事实”“事实 owner”“唯一写入口”。`canonical` 只用于代码/协议原名或 digest 的确定性规范化输入，不作为泛化形容词。
+
+## 4. 证据决定措辞
+
+| 证据 | 可以说 | 不可以说 |
 | --- | --- | --- |
-| D1 | 它解决的第一性问题是什么 | 只说用了什么技术、什么模式 |
-| D2 | 不这样做会出现哪个具体故障 | 「更清晰」「更优雅」「解耦」 |
-| D3 | 实现在哪里（代码位置与判据） | 只有概念名词，无法指认 |
-| D4 | 理念从哪来，与外部实践的异同 | 「业界都这么做」 |
-| D5 | 证据是什么，边界在哪 | 只讲优点 |
+| 正式入口 E2E archive | 该输入下用户结果和反事实成立 | 所有场景成立 |
+| clean matching revision 的完整 release gate | 当前目标 revision 满足发布证据门槛 | 未覆盖需求天然可靠 |
+| Unit/Contract/Integration | 指定不变量或组合协议成立 | 用户目标已满足 |
+| 代码/设计/外部参考 | 存在某实现或候选机制 | 本工程结果已改善 |
 
-D2 是硬门槛：**说不出被阻止的具体故障，就是为了设计而设计。**「解耦」「可扩展」不是故障名，
-「Admission 补参数后语义 owner 变成 if/else，Golden Set 覆盖不到」才是。
+精确数量、archive 和发布结论只在 `05` 展开。未实际执行时使用“代码设计为”“仍需验证”，不得写“已验证”。
 
-D5 是另一个硬门槛：只能讲优点、说不出边界的设计，说明理解仍停在术语层。
+## 5. 发现真实问题时
 
-排版沿用 [03 能力轴](03-capability-axes.md) 的四段结构（问题本质 / 常见做法与失效 / 本项目选择 /
-证据与边界），D4 可并入前两段。段名可按主题调整，五问不可缺。
+- 文档写错或过期：核对权威源后直接整体修正；
+- 产品行为疑似不足：在 future 以 `A0` 记录待执行 baseline，不增加答辩话术；
+- 纯工程约束：记录可量化工程基线和行为保持 E2E，不编造失败产品场景；
+- baseline 不成立或目标已经落地：从 future 移除，按当前事实重写 interview。
 
-## 3. D4 的写法：理念对照，不是权威背书
+## 6. 提交前审计
 
-引用外部实践（Claude Code / Agent SDK、OpenAI Agents、LangGraph、MCP、A2A、Deep Research 类
-harness、各家 structured output 规范）时必须写清三件事：
-
-1. **对照的是哪一层**：控制流所有权、context 策略、工具治理还是传输格式；
-2. **本项目相同点**；
-3. **本项目不同点及原因**——通常来自单用户 / 单进程 / 无 sandbox 这类真实约束。
-
-禁止两种写法：
-
-- **权威背书**：「XX 也这么做，所以正确」。外部实践是同类问题的另一组解，不是判据。
-- **抄袭式对齐**：把没有实现的机制写成本项目理念（例如 compaction、两阶段工具发现、sandbox）。
-  没做就归入边界，并说明为什么当前不做。
-
-反向也要成立：本项目与主流做法**不同**的地方（object-root envelope、Ask 只读、no God Task、
-删掉无消费者的 Plan）必须给出约束层面的理由，不能只说「我们选择了另一条路」。
-
-## 4. 协议层与传输层必须分开
-
-顶层协议（所有权链）与 wire format（JSON schema、envelope 形状）是两层，任何段落不得混讲：
-
-- 顶层协议：`User Goal + Context + Observation -> Model Proposal -> Admission / Policy ->
-  Governed Execution -> Execution Fact -> Verification -> Completion`，规定每类事实的 owner；
-- wire format：当前 `AgentTurnDecision` object-root envelope，是 Provider 适配结果，可替换。
-
-Provider 兼容性取舍（如放弃 root union）只能写在传输层，**不得冒充顶层框架理念**。
-
-## 5. 证据分级与措辞
-
-| 级别 | 含义 | 允许的措辞 |
-| --- | --- | --- |
-| A | 正式入口 E2E，clean matching revision | 「已证明」 |
-| B | 正式入口 E2E，但 dirty revision 或覆盖窄 | 「有 E2E 证据，覆盖限于……」 |
-| C | 诊断运行、单测、对象存在、DB 有记录 | 「有实现与诊断证据，不构成发布资格」 |
-| D | 仅设计或推理 | 「设计如此，未被证据闭合」 |
-
-规则：
-
-- 引用 E2E 用当前 catalog 编号（如 E01、E14、L01、LT01、IP01）与历史 baseline archive，不写「测试都过了」；
-- C 级不得升格为「已验证」；测试通过 ≠ 发布资格，发布资格只能由 clean matching revision 的
-  release archive 派生；
-- 反证与正证同等重要：写清哪条断言证明了「不该发生的事没发生」（确认前零写入、不伪造
-  CompletionReport、预算耗尽不拼替代答案）。
-
-## 6. 不得虚构历史
-
-只能陈述本项目真实发生过的事故与 baseline。行业通病（正则解析控制流、模型自述当完成）若本项目
-没有对应 baseline，必须写成「被拒绝的行业实现路径」，不能说成本项目历史故障。
-
-## 7. 形式约定
-
-- 中文正文；协议名、类名、字段名、disposition 值保留英文原文；
-- 代码位置一律用可点击相对链接：`[models.py:72](../../src/personal_agent/application/conversation/models.py#L72)`；
-- 每篇开头一段说明用途 + 事实源优先级；
-- 新增文档按 `NN-topic.md` 命名，并在 [INDEX.md](INDEX.md) 的阅读顺序中登记要点；
-- 结构图用 ```text 块，不用 ASCII 艺术；
-- 篇内避免重复整段架构描述，改为链接到已有章节。
-
-## 8. 自查清单
-
-提交前逐条过：
-
-- [ ] 每个设计单元答满 D1-D5；
-- [ ] 每个「所以我们这样设计」都能指出被阻止的具体故障（D2）；
-- [ ] 外部实践只作对照，未作背书；未实现的机制未被写成理念；
-- [ ] 顶层协议与 wire format 没有混讲；
-- [ ] 每条证据标注级别，编号与 baseline 可查；
-- [ ] 每个主题都有边界段，且不是套话；
-- [ ] 无虚构历史事故；
-- [ ] 与 summary/生产代码无冲突，INDEX 已更新。
+- 每节第一段是否已经回答结论；
+- 同一机制是否被多个文件完整复述；
+- 是否还引用退出 catalog 的用例、已移除入口或零消费者对象；
+- Capability、Tool、Workflow、Project 是否被错误并列；
+- “通过、恢复、隔离、完成、可发布”是否都有相称证据；
+- 链接、代码路径和 Mermaid 是否仍能解析。

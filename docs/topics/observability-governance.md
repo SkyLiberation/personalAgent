@@ -117,7 +117,6 @@ LangGraph checkpoint 保存可恢复执行现场：
 - ReAct：记录 `prompt_name=react`、模型调用和 `ReactAction` parse 状态。
 - 开放响应：记录 Executive `transform` action、使用的 generation prompt 与 verification outcome。
 - runtime answer generation：非流式回答记录 `prompt_name=answer_generation`；流式回答记录 stream latency 和输出长度。
-- query planner：记录 `prompt_name=query_planner`、结构化 schema 和 `QueryUnderstanding` parse 状态。
 - LLM reranker：记录 `prompt_name=evidence_rerank`、候选数量和 `EvidenceRerank` parse 状态。
 - Graphiti 内部 LLM：记录 `prompt_name=graphiti_extraction`、response model、latency 和 JSON parse 状态。
 - embedding：记录 `embedding.call / embedding.local / embedding.fallback`，可看到外部 embedding 延迟、维度、输入长度和降级原因。
@@ -326,7 +325,7 @@ LLM 子 run 建议携带：
 
 ```json
 {
-  "prompt_name": "task_analyzer | executive | goal_verifier | query_planner | react",
+  "prompt_name": "task_analyzer | executive | goal_verifier | evidence_rerank | react",
   "prompt_version": "v1",
   "model": "...",
   "parse_schema": "...",

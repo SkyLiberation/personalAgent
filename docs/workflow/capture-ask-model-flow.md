@@ -1,545 +1,69 @@
-# Capture / Ask 历史流程
+# Capture 与 Conversation Grounded Answer
 
-> 状态：本文描述迁移前的 `StepExecutionGraph` 投影实现，相关 Task/GoalGraph/LangGraph 总主链
-> 已删除，不能作为当前生产事实。当前架构见
-> [核心架构当前状态](../summary/core-architecture-current-state.md)；如需重建本文，必须从现有
-> `ConversationService`、Capture Application use case 与 Ask 实现重新取证。
+**当前只有一个面向用户的最终回答 owner：Conversation loop。** Capture/Knowledge 负责写入和选择个人证据，web_search 等只读资源负责外部证据；它们都返回 bounded Observation，不生成第二个产品答案。
 
-## 历史结论
+## 主链
 
-`capture_*` 和 `ask` 都属于 step projection workflow：
-
-| Intent | 当前执行方式 | 是否投影为 `ExecutionStep` | 核心路径 |
-| --- | --- | --- | --- |
-| `capture_text` | step projection workflow | 是 | `cap-structure -> capture_text tool -> IngestionPipeline` |
-| `capture_link` | step projection workflow | 是 | `cap-link-fetch -> cap-link-store` |
-| `capture_file` | step projection workflow | 是 | `cap-file-inspect -> cap-file-store` |
-| `ask` | step projection workflow | 是 | `ask-retrieve -> ask-compose -> ask-verify -> ask-repair` |
-
-也就是说，`capture` 与 `ask` 都进入 `StepExecutionGraph`，复用步骤状态、checkpoint、事件、失败处理、ToolGateway 和前端 steps 展示能力。
-
-## Capture Step Workflow
-
-capture 由 `knowledge_ingest` Procedure 投影节点。step executor 只负责编排不同来源的正文提取或 artifact 理解，并把可入库文本交给统一的 capture pipeline。
-
-```text
-step_execution_graph
-  -> capture_text / capture_link / capture_file steps
-  -> ToolGateway
-  -> capture_text tool
-  -> AgentRuntime.execute_capture
-       IngestionPipeline.ingest(...)
-       Personal Knowledge lifecycle ingest/projection
-  -> answer = "已收进知识库：{title}"
-  -> finalize_entry_result
+```mermaid
+flowchart LR
+    U["用户消息"] --> C["ConversationService"]
+    C --> P["按 principal/scope 预取个人证据"]
+    P --> L["模型决策循环"]
+    L -->|"需要外部事实"| T["受治理只读 Tool，例如 web_search"]
+    T --> O["Bounded Observation"]
+    O --> L
+    L --> F["唯一 FinalMessage"]
+    L -->|"用户明确保存"| S["Prepare + Confirmation + Knowledge write"]
 ```
 
-### capture_text
+Ask 不是独立 Workflow、Runtime facade 或 HTTP 路由。产品只有 Conversation answer path；paired 产品 E2E 证明它覆盖 personal-only 与 multi-source 用户目标。
+
+## Capture 写路径
 
 ```text
-entry_input.text
-  -> cap-structure tool_call(capture_text)
-  -> AgentRuntime.execute_capture(...)
+正式 Capture/Knowledge 入口
+  -> Artifact
+  -> EvidenceBlock / EvidenceSpan
+  -> Claim grounding + admission
+  -> KnowledgeItem / lifecycle state
+  -> 可重建 retrieval projection
 ```
 
-适用于用户直接发送文本、片段、想法、资料内容等。
+`KnowledgeService` 是 Claim、EvidenceSpan、conflict 与 scope 的事实 owner。模型回答、trace 和 Observation 不自动写回；显式保存仍走 frozen selection、用户确认和 canonical Knowledge 写入口。
 
-### capture_link
+## Grounded read 路径
 
-```text
-entry_input.text / metadata.url
-  -> prepare_entry_tool_input / _first_url(...)
-  -> cap-link-fetch tool_call(capture_url)
-       CaptureService.capture_text_from_url(url)
-       FirecrawlUrlCaptureProvider
-       or BuiltinUrlCaptureProvider
-  -> handle_step_success 注入 text
-  -> cap-link-store tool_call(capture_text)
-  -> AgentRuntime.execute_capture(...)
+1. Conversation 用认证 principal 调用 `KnowledgeService.select_evidence()`；先 scope/visibility，再按当前问题选择最多 8 条证据。
+2. 结果被投影为 `personal_knowledge_context` Observation，包含原文 citation、claim summary、conflict ids；它是只读上下文，不是答案。
+3. 用户明确禁止上网时，模型从个人证据直接回答，web Tool invocation 必须为零。
+4. 用户要求官方/当前外部资料时，模型必须调用可见的只读搜索 Tool；Observation 与个人证据进入同一个 loop。
+5. Conversation 生成唯一 FinalMessage。没有足够证据时必须给 limitation，不能把 Tool success 当完成。
+
+这种形态与优秀 Agent 的共同点是“一个 manager/loop 组合多个只读资源”；采用它的原因不是框架对齐，而是 ASK-001A/B 的同入口 baseline 与目标 E2E。
+
+## 权力与事实边界
+
+| 对象 | Owner | 不能做什么 |
+| --- | --- | --- |
+| Artifact / Evidence / Claim | Knowledge Application | 不能生成通用 FinalMessage |
+| personal evidence projection | Conversation context materialization | 不能成为第二写入口 |
+| Tool Observation | Gateway / execution system | 不能证明 Goal 完成 |
+| FinalMessage | Conversation semantic loop | 不能无确认写回长期知识 |
+| save/delete Command 与 Receipt | 对应 Knowledge lifecycle Application | 不能由模型伪造执行事实 |
+
+## 可执行证据
+
+- `ASK-001A`：同一 Conversation 只使用 owner 个人资料，逐项引用冲突原文，不调用 web、不泄漏其他 principal、不新增 Claim。
+- `ASK-001B`：同一 Conversation 同时使用个人证据与官方 web evidence，只有一个 FinalMessage，不泄漏、不写知识。
+- `E08`：Conversation 回答本身不写 Claim；显式 solidify 后才进入知识写路径。
+
+运行：
+
+```powershell
+uv run pytest evals/e2e_quality/test_conversation_grounded_answer.py -q -s
 ```
 
-`CaptureService` 只负责把 URL 变成正文；长期存储、chunk、review、graph sync 仍由 `IngestionPipeline` 负责。
+## 仍保留的组件评测
 
-### capture_file
-
-```text
-entry_input.artifacts[0] / metadata.file_path
-  -> cap-file-inspect tool_call(inspect_artifact)
-       ArtifactService.inspect_upload(...)
-  -> handle_step_success 注入 text/source_type
-  -> cap-file-store tool_call(capture_text)
-  -> AgentRuntime.execute_capture(...)
-```
-
-当前文件入口会先把上传 artifact 理解成可回答/可入库的文本化上下文，再进入统一 capture pipeline。`capture_upload` 工具仍存在并可提取上传文件正文；`knowledge_ingest` Procedure 根据 resource type 物化 source acquisition 与 ingest 节点。
-
-## IngestionPipeline
-
-`AgentRuntime.execute_capture()` 是很薄的一层，实际委托给 `IngestionPipeline.ingest()`：
-
-```text
-execute_capture(...)
-  -> IngestionPipeline.ingest(...)
-  -> KnowledgeService.ingest_text(...)
-       ingest_knowledge(...)
-       enhance_claim_lifecycle(...)
-```
-
-`IngestionPipeline` 仍负责原有 `knowledge_notes / chunks / review / graph sync` 能力。Personal Knowledge 是 Claim/Evidence 生命周期的服务边界，负责 Artifact、EvidenceBlock、EvidenceSpan、Claim、Grounding、Admission、Conflict、Decision 和 ProjectionJob。也就是说，Capture 产出笔记与 chunk，Personal Knowledge 产出可追溯证据和知识状态，二者共同构成长期知识主链路。
-
-capture pipeline 当前顺序：
-
-```text
-source fingerprint dedupe
-  -> capture_node
-  -> structural_chunk_node
-  -> chunk_reconcile_node
-  -> enrich_node
-  -> link_node
-  -> schedule_review_node
-  -> _ingest_to_graph
-```
-
-### 1. Source Fingerprint Dedupe
-
-入库前先计算 source fingerprint：
-
-```text
-text + source_type + source_ref
-  -> sha256
-  -> memory.find_note_by_source_fingerprint(user_id, fingerprint)
-```
-
-如果同一用户下已经采集过相同来源，直接返回已有 parent note 和 chunks，不重复写入。
-
-### 2. capture_node
-
-`capture_node` 把 `RawIngestItem` 转成 parent `KnowledgeNote`：
-
-```text
-RawIngestItem
-  -> KnowledgeNote(parent)
-       source.type
-       source.ref
-       source.fingerprint
-       source.metadata
-       body.title
-       body.content
-       body.summary
-       tags
-```
-
-parent note 是整篇内容的展示、来源回溯和文档级聚合锚点。
-
-### 3. structural_chunk_node
-
-`structural_chunk_node` 使用 `partition_to_chunk_drafts()` 做结构化 chunk：
-
-```text
-KnowledgeNote(parent).body.content
-  -> partition_to_chunk_drafts(...)
-  -> ChunkDraft[]
-```
-
-当前 chunk 来源是 Unstructured-backed partition/chunk，而不是简单固定长度切分。chunk draft 可以携带：
-
-- `title_path`
-- `page_number`
-- `element_ids`
-- `source_span`
-- `category`
-- 原始 element metadata
-
-如果只有一个 draft，则不额外生成 child chunks，只把 unstructured metadata 写回 parent。
-
-### 4. chunk_reconcile_node
-
-`chunk_reconcile_node` 把 `ChunkDraft` materialize 成 child `KnowledgeNote`：
-
-```text
-ChunkDraft[]
-  -> KnowledgeNote(chunk 1)
-  -> KnowledgeNote(chunk 2)
-  -> ...
-```
-
-child chunk 是检索和证据单元；parent note 是展示和回溯单元。
-
-### 5. enrich_node / link_node / schedule_review_node
-
-```text
-enrich_node:
-  -> 更新 summary / tags
-
-link_node:
-  -> find_similar_notes(...)
-  -> 写入 parent note
-  -> 写入 chunk notes
-  -> 写入 related_note_ids
-
-schedule_review_node:
-  -> 生成 ReviewCard
-  -> 写入复习计划
-```
-
-### 6. Graph Sync
-
-本地 note/chunk 写入后，`_ingest_to_graph()` 处理图谱同步状态：
-
-```text
-if 有 chunk_notes and graph configured:
-  parent.graph_sync = skipped
-  chunk.graph_sync = pending / skipped by budget
-  queued chunks -> worker_queue_tasks(queue="graph", task_type="graph_sync_note")
-else:
-  graph_store.ingest_note(parent)
-```
-
-当前长文优先把 graph sync 委托给 chunk-level notes，避免整篇 parent 被重复做图谱抽取。pending chunk 会进入 durable worker queue；后台可通过 `drain_worker_queue(queue="graph")` 租约执行 `graph_sync_note`，底层仍复用 `sync_note_to_graph(note_id)`。
-
-## Ask Step Projection Workflow
-
-`ask` 和 capture 一样是 step projection workflow。
-
-在 `workflow.py` 中，它的固定步骤是：
-
-```text
-ask-retrieve
-  -> ask-compose
-  -> ask-verify
-  -> ask-repair
-```
-
-入口执行路径：
-
-```text
-project_workflow_steps
-  -> validate_projected_steps
-  -> prepare_step_execution
-  -> select_next_step
-  -> execute_step(ask-retrieve)
-  -> handle_step_success
-  -> select_next_step
-  -> execute_step(ask-compose)
-  -> handle_step_success
-  -> select_next_step
-  -> execute_step(ask-verify)
-  -> handle_step_success
-  -> select_next_step
-  -> execute_step(ask-repair)
-  -> handle_step_success
-  -> finalize_step_execution
-  -> finalize_entry_result
-```
-
-ask 复用的是 plan/step execution 的运行结构，包括：
-
-- `ExecutionStep`
-- `StepRunState`
-- `StepExecutionState`
-- step status
-- step dependencies
-- `step_execution.results`
-- checkpoint
-- events
-- frontend steps
-- failure handling
-
-Ask 不存在固定 Procedure。Executive 根据当前 Goal、Observation 和 VerificationGap 逐轮选择 acquire、reason、verify 等有界动作；每个动作再投影为 checkpoint-safe ExecutionStep。
-
-## AskRunContext
-
-ask 四个步骤之间共享一个 `AskRunContext`。
-
-```text
-AskRunContext
-  question
-  user_id / session_id
-  working_context
-  structured_context
-  has_dialogue_context
-  QueryUnderstanding
-  RetrievalPlan
-  effective_query
-  evidence_pool
-  combined_matches
-  combined_citations
-  web_tried / contrastive_tried
-  retrieval_health
-  ContextPack
-  selected_matches
-  selected_citations
-  answer
-  verification
-  repair
-  trace_steps
-```
-
-大对象不直接写入 LangGraph checkpoint。`ask-retrieve` 会把 context 序列化为 durable artifact：
-
-```text
-PostgresAskRunContextStore.put(run_id, ctx)
-  -> workflow_artifacts(kind="ask_run_context")
-```
-
-后续 `ask-compose / ask-verify / ask-repair` 通过 `run_id` 取回：
-
-```text
-PostgresAskRunContextStore.get(run_id)
-```
-
-这样 checkpoint 中只保留步骤状态和摘要结果，避免把 evidence pool、ContextPack、完整候选集塞进 LangGraph state；进程重启后 compose / verify / repair 仍可从 artifact 恢复。
-
-## ask-retrieve
-
-`ask-retrieve` 是最重的一步，负责查询理解、多源召回和上下文组装。
-
-对应执行函数：`_execute_retrieve_step()`。
-
-```text
-ask-retrieve
-  -> _entry_conversation_messages(...)
-  -> ask_service.build_run_context(...)
-  -> ask_service.run_retrieval_stage(ctx)
-  -> ask_run_context_store.put(run_id, ctx)
-  -> step result:
-       evidence_count
-       citation_count
-       match_count
-       ask_staged=True
-```
-
-`RetrievalStage` 内部流程：
-
-```text
-question + dialogue context
-  -> plan_retrieval(...)
-       QueryUnderstanding
-       RetrievalPlan
-  -> RetrievalCoordinator.run(ctx)
-       personal knowledge / graph / structural / local / episodic / reflection / web 召回
-  -> EvidenceEngine.assemble_context(...)
-       dedupe
-       RRF fusion
-       candidate_enricher.enrich(...)
-       optional sentence-level compression
-       reranker.rerank(...)
-       selected citations / matches
-  -> ContextPack
-  -> selected_matches / selected_citations
-```
-
-当前 QueryUnderstanding / RetrievalPlan 负责：
-
-- query rewrite
-- freshness 判断
-- personal memory 判断
-- graph reasoning 判断
-- episodic context 判断
-- sub queries
-- metadata filters
-- sources / parallel 策略
-
-`RetrievalCoordinator` 的召回边界是：
-
-- `personal knowledge`：读取 Personal Knowledge EvidenceSpan / Claim，携带 `conflict / potential_conflict` 诊断，转换成统一 `EvidenceItem / Citation / KnowledgeNote`。
-- `graph`：可走 Graphiti、structural 或 hybrid graph provider。
-- `local`：本地 note/chunk 检索。
-- `web`：按 retrieval plan 主动补充外部证据。
-- `sub_queries`：当前用于 graph 子查询扩展。
-- `episodic / reflection`：在需要时补充会话事件和反思类上下文。
-
-多路证据进入同一个 `evidence_pool` 后，会交给 application 层 `EvidenceEngine` 做去重、RRF 融合、候选补全、可选句级压缩、rerank 和 selected citation/match 选择，而不是各来源分别生成答案。
-
-## ask-compose
-
-`ask-compose` 只负责基于 `ask-retrieve` 产出的 `ContextPack` 生成答案，不做第二次检索。
-
-对应执行函数：`_execute_compose_step()`。
-
-```text
-ask-compose
-  -> ctx = AskRunContextStore.get(run_id)
-  -> ask_service.run_generation_stage(ctx)
-  -> state.answer = ctx.answer
-  -> state.citations = ctx.selected_citations
-  -> state.matches = ctx.selected_matches
-  -> step result:
-       answer
-       draft=True
-```
-
-`GenerationStage` 调用：
-
-```text
-_compose_unified_answer(
-  question,
-  context_pack,
-  selected_matches,
-  selected_citations,
-  working_context,
-)
-```
-
-生成阶段的输入边界是 `ContextPack`，不是原始 Personal Knowledge、graph、local 或 web 结果。Personal Knowledge、graph、local、structural、episode、reflection、web 的候选在 retrieve 阶段已经被归一成 `EvidenceItem` 并排序。
-
-## ask-verify
-
-`ask-verify` 负责事实校验和必要时 retry，不补充新证据。
-
-对应执行函数：`_execute_verify_step()`。
-
-```text
-ask-verify
-  -> ctx = AskRunContextStore.get(run_id)
-  -> ask_service.run_verification_stage(ctx)
-  -> state.answer = ctx.answer
-  -> state.citations = ctx.selected_citations
-  -> state.matches = ctx.selected_matches
-```
-
-`VerificationStage` 当前逻辑：
-
-```text
-AnswerVerifier.verify(...)
-  -> if 有 selected evidence:
-       _retry_if_needed(...)
-```
-
-## ask-repair
-
-`ask-repair` 是显式修复步骤，负责反证补充、必要时 web fallback 和最终证据不足标注。
-
-对应执行函数：`_execute_repair_step()`。
-
-```text
-ask-repair
-  -> ctx = AskRunContextStore.get(run_id)
-  -> ask_service.run_repair_stage(ctx)
-  -> state.answer = ctx.answer
-  -> state.citations = ctx.selected_citations
-  -> state.matches = ctx.selected_matches
-```
-
-`RepairStage` 当前逻辑：
-
-```text
-if contrastive_retrieval enabled and claim contradicted/not_found:
-  add_contrastive_evidence(ctx)
-  re-assemble ContextPack
-  re-run generation
-  re-run verification
-if evidence insufficient and web available and not web_tried:
-  add_web_fallback(ctx)
-  re-assemble ContextPack
-  re-run generation
-  re-run verification/retry
-if still insufficient:
-  _annotate_answer(...)
-```
-
-反证补充和 web fallback 都不是独立复制出来的 ask 流程。它们会把新增 evidence 追加到同一个 `AskRunContext`，再复用 context assembly、generation 和 verification。`AskRunContext.repair` 会记录修复动作、最终状态和原因，最终通过 `AskResult.repair_telemetry` 对外暴露。
-
-## AskResult 输出
-
-`AskService.context_to_result(ctx)` 会把最终 context 转成 `AskResult`：
-
-```text
-AskResult
-  answer
-  citations
-  matches
-  match_refs
-  evidence
-  session_id
-  repair_telemetry
-```
-
-在 entry workflow 中，最终 answer、citations、matches 会回填到 `AgentGraphState`，再由 `finalize_entry_result` 写入 assistant message 和事件。
-
-## Capture 与 Ask 的衔接
-
-capture 产出的长期知识是 ask 的检索基础：
-
-```text
-capture
-  -> parent KnowledgeNote
-  -> child chunk KnowledgeNote[]
-  -> source metadata / fingerprint
-  -> local lexical/vector indexes
-  -> optional Graphiti episode / graph facts
-  -> review card
-  -> Personal Knowledge Artifact / EvidenceBlock / EvidenceSpan
-  -> optional Personal Knowledge Claim lifecycle
-  -> ProjectionJob
-
-ask
-  -> personal knowledge / graph / structural / local / episodic / reflection / web retrieval
-  -> EvidenceItem
-  -> ContextPack
-  -> grounded answer
-  -> verifier
-```
-
-两条链路之间的关键共享模型：
-
-- `KnowledgeNote`：长期知识和 chunk 的持久化实体。
-- `Artifact / EvidenceBlock / EvidenceSpan`：Personal Knowledge 的证据生命周期和可回溯证据单元。
-- `Claim / GroundingRun / ClaimAdmissionDecision`：Personal Knowledge 的 Claim 增强、准入和状态推进。
-- `EvidenceRef`：回答引用回到 artifact/block/span 的稳定引用。
-- `Citation`：回答引用。
-- `EvidenceItem`：ask 生成前的统一证据候选。
-- `ContextPack`：最终进入 prompt 的证据包。
-- `MatchRef`：对外展示和 verifier 使用的匹配引用。
-
-## 当前边界
-
-### Capture 边界
-
-当前 capture 已有：
-
-- 来源 fingerprint 去重。
-- text/link/file 三入口最终统一进入 `IngestionPipeline`。
-- parent note + child chunk note。
-- Unstructured-backed chunk drafts。
-- chunk quality score / retrievable 标记。
-- review card。
-- chunk-level graph sync 状态和 durable worker queue 入队。
-- Personal Knowledge 生命周期写入，生成 Artifact / EvidenceBlock / EvidenceSpan / Claim / Grounding / Admission / ProjectionJob 等业务状态。
-
-当前仍有限制：
-
-- 上传文件当前先经 `inspect_artifact` 变成文本化上下文，再进入 capture pipeline；PDF/Word/HTML 的原生页码、坐标、表格结构还没有完整贯穿到最终问答证据层。
-- graph sync 是 capture 后置环节，长文按 chunk budget 标记 pending/skipped 并入队；当前已有同步 drain 入口，但还没有独立 worker daemon。
-- chunk 质量分已进入 chunk note，但版本化更新、复杂版面保真和来源 metadata 自动抽取还不是主链路能力。
-
-### Ask 边界
-
-当前 ask 已有：
-
-- workflow-step 化的 `retrieve / compose / verify / repair`。
-- `AskRunContext` 承载 retrieve / compose / verify / repair 四阶段中间状态。
-- query understanding + retrieval plan。
-- personal knowledge / graph / structural / local / episodic / reflection / web 多源召回。
-- EvidenceEngine 统一 source/evidence assembly。
-- EvidenceItem 归一。
-- RRF fusion。
-- candidate enrichment。
-- heuristic / LLM rerank 可插拔。
-- 可选句级 evidence compression。
-- ContextPack 预算控制。
-- verifier + retry。
-- 显式 ask-repair，负责 optional contrastive retrieval、web fallback 和最终证据不足标注。
-- Personal Knowledge Claim 冲突诊断会以 evidence metadata 进入 Ask；`potential_conflict` 不会直接替代回答或跳过 verifier。
-
-当前仍有限制：
-
-- rerank、MMR、多样性和反证检索仍有提升空间。
-- claim grounding 已统一进入 EvidenceEngine / Personal Knowledge grounding 边界；复杂蕴含仍依赖 verifier 与 structured judge 的质量。
-- Personal Knowledge evidence coverage 已进入回答和 e2e，但 coverage 目前主要依据选中 evidence 与可用 span/block 的覆盖关系，后续还可以进一步结合问题分解后的子问题覆盖率。
-
-## 面试表述
-
-可以这样说：
-
-> Capture 是 Governed Procedure，Ask 是开放 Agent Loop。`knowledge_ingest` 根据文本、链接或文件资源物化 acquisition/ingest 节点，底层统一进入 `IngestionPipeline` 做 fingerprint 去重、parent note、Unstructured chunk、child notes、review 和 worker queue graph sync，同时进入 Personal Knowledge 的 Artifact/Evidence、Claim/Grounding/Admission/Conflict 生命周期。Ask 由 Executive 逐轮产生 retrieve/compose/verify/repair 动作，复用 LangGraph step execution、checkpoint、事件和前端 steps。retrieve 阶段负责 query understanding 和 personal knowledge/graph/local/web 多源召回，并交给 `EvidenceEngine` 做证据归一、RRF、压缩、rerank、ContextPack 和 citation/match；compose 只基于投影上下文生成，verify/repair 通过 VerificationGap 驱动下一轮策略。
+Open RAGBench、MultiHopRAG 等只保留明确的 retrieval/component strategy。历史
+Offline Eval 不包含自行生成 FinalMessage 的平行 runtime strategy；离线 scorer 不能反向定义生产架构，也不能替代 Conversation 产品 E2E。

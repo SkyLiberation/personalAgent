@@ -94,14 +94,15 @@ Item/Claim。
 {
   "user_id": "default",
   "decision": "confirm",
-  "command_digest": "<64-char sha256>",
   "confirmation_ref": "ui-confirmation-123"
 }
 ```
 
 `confirm` 成功后返回 `status=executed` 与唯一 Receipt；相同 command replay
 返回同一 Receipt。`reject` 不要求 `confirmation_ref`，且被拒绝的 command
-不能再次执行。错误身份、scope 或 digest 均 fail closed。
+不能再次执行。客户端用 path 中的 `command_id` 选择待确认操作；服务端按 authenticated principal、
+scope、状态和 `confirmation_ref` fail closed，并从 immutable Command 读取内部 `command_digest`，不接受
+客户端回传或覆盖 digest。
 
 ### `GET /api/knowledge-delete-commands/{command_id}`
 
@@ -376,10 +377,12 @@ Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/
 
 ### Conversation trace 与知识保存确认
 
-- `GET /api/conversation/runs/{interaction_run_ref}` 读取已提交的 Interaction trace；
+- `GET /api/conversation/runs/{interaction_run_ref}` 读取当前 authenticated principal 拥有的已提交
+  Interaction trace；认证关闭的本地环境可用 `user_id` query 模拟该 principal。跨 scope、未知 run
+  或缺少可信 owner 的旧 snapshot 统一返回 `404`，响应不泄露原始消息；
 - `POST /api/conversation/runs/{interaction_run_ref}/knowledge-save-decision` 接受或拒绝已冻结的
-  exact-span 保存 Command，确认必须绑定 `owner_id`、`command_digest` 和
-  `confirmation_ref`。
+  exact-span 保存 Command；path 中的 `interaction_run_ref` 与 authenticated principal 定位唯一
+  operation，confirm 还必须提供 `confirmation_ref`。内部 digest 由服务端从 Command 读取。
 
 旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
 `POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用

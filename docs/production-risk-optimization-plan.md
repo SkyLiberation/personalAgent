@@ -2,7 +2,9 @@
 
 ## 结论
 
-`docs/interview/06-qa-and-tradeoffs.md` 中列出的生产风险与改进方向是当前面试口径。当前项目已经具备 checkpoint、tool audit、Postgres 幂等账本、删除前确认、知识版本链等基础能力，但距离生产可控仍有几个关键缺口。
+本文是生产风险与改进方向的 owner；[面试追问](interview/06-qa-and-tradeoffs.md) 只提供当前取舍的简短讲法，
+不再复制风险清单。当前项目已经具备 checkpoint、tool audit、Postgres 幂等账本、删除前确认、知识版本链等
+基础能力，但距离生产可控仍有几个关键缺口。
 
 其中最大的生产风险曾是：**高风险知识删除缺少可恢复确认、幂等执行和精确恢复依据**。当前 P0 由固定的 `KnowledgeLifecycleService` 主链承担。
 
@@ -10,7 +12,7 @@
 
 - 删除属于不可逆副作用，影响用户长期记忆和信任。
 - prepare 与 confirm 分离，prepare 不产生业务副作用并可跨进程恢复。
-- 一个 canonical `command_digest` 把用户确认绑定到实际 Command payload。
+- 客户端用 path command id 与认证身份选择待确认操作；服务端 `command_digest` 绑定 immutable Command、Operation 与 Receipt。
 - Operation、Personal Knowledge 状态迁移和 Receipt 在事务边界内保持一致。
 - Delete Receipt 保存 Item/Claim previous states，Restore 以它作为唯一恢复依据。
 - 相同 Command replay 返回同一 Receipt，不重复删除或恢复。

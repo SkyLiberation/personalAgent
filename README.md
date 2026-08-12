@@ -156,7 +156,7 @@ README 只保留最短路径：
 
 - `KnowledgeLifecycleService` 是删除与恢复的唯一写入口；Conversation 和直接 API 都只能调用该
   owner，prepare 不执行删除
-- prepare 只创建 durable operation；确认时用一个 `command_digest` 绑定 canonical payload，重启后仍可继续
+- prepare 只创建 durable operation；客户端按 command/run 标识确认，服务端内部 `command_digest` 绑定 immutable Command 与 Receipt，重启后仍可继续
 - confirm 在单事务中更新 Knowledge Item/Claim、记录 Personal Knowledge 状态事件并写 Receipt；replay 返回同一 Receipt
 - restore 引用已执行的 delete command，并按 delete receipt 中的 previous states 精确恢复
 - `solidify_conversation` 已具备草稿生成、`draft_ready` 事件和 `capture_text` 入库工具基础
@@ -206,7 +206,7 @@ README 只保留最短路径：
 - 飞书条目支持 `N1 展开 / 有用 / 不感兴趣 / 收藏 / 入库`
 - 用户反馈会更新订阅内容偏好；“入库”会保存事件摘要、可信度与来源
 
-当前一次性研究流程见 [research_once workflow](docs/workflow/research-once-workflow.md)，订阅、调度和运行配置见 [Research环境配置](docs/env.md#research--定时情报简报)；尚未落地的来源验证与事件触发能力见 [持续研究 P1/P2](docs/future/scheduled-intelligence-research.md)。
+当前一次性研究流程见 [research_once workflow](docs/workflow/research-once-workflow.md)，订阅、调度和运行配置见 [Research环境配置](docs/env.md#research--定时情报简报)。
 
 ### 10. Agent Harness, Capability & Durable Execution
 
@@ -297,8 +297,7 @@ Project journal：历史对话只辅助理解追问与更正，事实结论必�
 - [docs/review-digest.md](docs/review-digest.md) - 知识简报、订阅投递和复习反馈
 - [docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) - 自动整理与知识缺口主动追问
 - [docs/future/README.md](docs/future/README.md) - 仅包含尚未落地且由目标 E2E 驱动的未来设计
-- [docs/future/trusted-agent-runtime-evolution.md](docs/future/trusted-agent-runtime-evolution.md) - 当前文档、架构门禁和 clean release 收敛
-- [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 持续研究尚未落地的来源验证、connector 和事件触发 P1/P2
+- [docs/future/design-optimization-backlog.md](docs/future/design-optimization-backlog.md) - 所有待优化设计的总清单、状态与详细设计入口
 - [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 框架理念、系统分层、目标责任链、知识与运行时当前事实
 
 ## 文档导航

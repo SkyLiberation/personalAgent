@@ -813,6 +813,7 @@ def _is_retryable_model_error(exc: Exception) -> bool:
         "temporarily unavailable",
         "service unavailable",
         "invalid provider response",
+        "provider returned empty structured content",
     )
     return any(token in message for token in retryable_messages)
 

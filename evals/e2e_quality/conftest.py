@@ -4,10 +4,13 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+from hashlib import sha256
+from urllib.parse import urlparse
 
 import pytest
 
 from evals.e2e_quality.trace_archive import TraceArchive
+from evals.e2e_quality.measurements import BudgetProfile, MeasurementProfile
 from evals.e2e_quality.evidence_catalog import (
     EVIDENCE_BY_NODE,
     EvidenceClaimKind,
@@ -24,6 +27,7 @@ from tests.conftest import (  # noqa: F401
     postgres_url,
     temp_dir,
 )
+from personal_agent.kernel.config import Settings
 
 
 _ARCHIVE: TraceArchive | None = None
@@ -69,7 +73,7 @@ def pytest_addoption(parser) -> None:
         "--e2e-require-complete-matrix",
         action="store_true",
         help=(
-            "fail collection unless every native E01-E14, E20 and IP01 claim "
+            "fail collection unless every required product capability claim "
             "has release evidence"
         ),
     )
@@ -174,7 +178,41 @@ def trace_archive() -> TraceArchive:
     output_root = Path(
         os.getenv("PERSONAL_AGENT_E2E_TRACE_DIR", "data/e2e_traces")
     ).resolve()
-    archive = TraceArchive(output_root)
+    settings = Settings.from_env()
+    provider = (
+        urlparse(settings.structured.base_url).hostname
+        if settings.structured.base_url
+        else "openai"
+    )
+    catalog_path = Path(__file__).with_name("evidence_catalog.py")
+    fixtures_dir = Path(__file__).with_name("fixtures")
+    fixture_bytes = b"".join(
+        path.read_bytes()
+        for path in sorted(fixtures_dir.rglob("*"))
+        if path.is_file()
+    )
+    budget = settings.interaction_loop
+    measurement_profile = MeasurementProfile(
+        profile_id=os.getenv(
+            "PERSONAL_AGENT_E2E_MEASUREMENT_PROFILE",
+            "current-runtime",
+        ),
+        runtime_implementation="personal-agent-conversation-loop",
+        structured_provider=provider or "openai-compatible",
+        structured_model=settings.structured.model,
+        prompt_revision=budget.policy_revision,
+        capability_catalog_revision=sha256(catalog_path.read_bytes()).hexdigest()[:16],
+        budget=BudgetProfile(
+            max_model_turns=budget.max_model_turns,
+            max_tool_calls=budget.max_tool_calls,
+            max_agent_calls=budget.max_agent_calls,
+            max_total_tokens=budget.max_total_tokens,
+            max_concurrency=budget.max_concurrency,
+        ),
+        fixture_revision=sha256(fixture_bytes).hexdigest()[:16],
+        repetition=int(os.getenv("PERSONAL_AGENT_E2E_REPETITION", "1")),
+    )
+    archive = TraceArchive(output_root, measurement_profile=measurement_profile)
     _ARCHIVE = archive
     yield archive
 

@@ -18,9 +18,9 @@
 | 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
 | `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
 | 当前 `deepseek-v4-flash` 配置 | `target_completed_release_not_established` | 显式 `json_object` Adapter + 关闭 thinking 后，IP01 最终 archive 已交付报告；完整 clean-revision 矩阵仍未建立 |
-| 当前 catalog/gate 门禁 | `passed_current_engineering_evidence` | 2026-08-03：相关 contract 28 passed；40 个 E2E 可收集，其中 release 22、diagnostic 18 |
+| 当前 catalog/gate 门禁 | `passed_current_engineering_evidence` | 2026-08-11：46 个 E2E 可收集，其中 release 24、diagnostic 22；DUR-001/OBS-001 定向通过，但完整 clean-revision 矩阵未执行 |
 | 上一完整 release E2E | `historical_passed_engineering_evidence` | 旧版 E01–E13/C01–C04/L01–L06 共 23/23 passed，archive `20260726T011631.187395Z-20684-4a62da6a`；L01–L06 语义均已改变，不能证明当前 catalog |
-| 当前自然复杂场景 | `passed_targeted_engineering_evidence`；L06 为 `unstable_diagnostic_evidence` | L01–L05 在同一批次通过。L06 历史：曾因旧“两次 verifier”白盒断言失败（archive `20260727T163802.147366Z-12512-71873e6b`），移除该错误 claim 后定向通过（archive `20260727T164815.081968Z-14456-e1196ad4`）。2026-07-30 改为凭据引用终止（[ADR 0009](../adr/0009-verified-final-message-receipt-reference.md)）后重测 9 次真实模型运行，**5 次通过**，4 次因 verifier 持续 `needs_revision` 而到不了 passed 凭据；因此 L06 当前不作为通过声明 |
+| 当前自然复杂场景 | `passed_targeted_engineering_evidence` | L01–L05 在同一批次通过。L06 先在凭据引用方案下实测 **5/9**；[ADR 0010](../adr/0010-runtime-owned-interaction-verification.md) 将验证时机、判据冻结和发送产物收归 Runtime 后，同一输入重测 **9/9**，当前按 B 级定向证据解释，不建立完整 release 资格 |
 | 当前外部自然场景 | `passed_targeted_engineering_evidence` | E17/E19/L04 在 archive `20260727T162913.553817Z-9428-c723ad92` 中通过；进一步移除 Prompt 内预期答案后，E16/E18 2/2 passed，archive `20260727T165211.554901Z-17344-3e4bc060`。用户只表达数据源或深度研究结果，不指定 MCP Tool、Agent ID、Artifact、答案或执行顺序 |
 | Conversation clarification | `passed_targeted_engineering_evidence` | E01 baseline `20260729T033100.290836Z-35328-02db4988` 证明模糊新请求被旧答案冒充完成；同输入修复后通过，archive `20260729T033304.468248Z-28272-e91b6630` |
 | Conversation governed save | `passed_targeted_engineering_evidence` | B01 证明旧 Conversation 无可恢复操作；B02 archive `20260729T031804.415533Z-15972-214cb81c` 证明控制语义污染；E14 exact-span 修复后 22.00 秒通过，archive `20260729T033339.065714Z-22692-16415241` |
@@ -58,7 +58,7 @@ archive 建立发布声明。
 - Tool 校验、权限和执行统一经过 `ToolExecutor`；Application 通过
   `InteractionToolPort` / `InteractionAgentPort` 依赖执行能力。
 - Knowledge delete/restore 使用 immutable governed command、单一 command digest、receipt 和
-  restart/replay 约束，错误 digest 与重复副作用均由 E04/E10 反事实覆盖。
+  restart/replay 约束，错误 command id/cross-scope 与重复副作用均由 E04/E10 反事实覆盖。
 - A2A Artifact 不再误路由到 upload-only `inspect_artifact`；cancelled status 不抹除已返回
   Artifact；同一 Agent 已返回 Artifact 后的重复委托被拒绝。最终 E17 trace 自动断言
   `agent_calls == 1`，历史问题链路约 4 分钟，修复后目标用例约 2 分钟，完整矩阵中的
@@ -103,13 +103,13 @@ registry、accepted MCP mapping 和 registered Agent profile，返回临时有�
 | 分组 | 当前声明 | 当前证据 |
 | --- | --- | --- |
 | 应用能力 E01–E05、E08–E14、E20、IP01 | 当前完整状态未建立 | 旧 archive 只能作为历史工程证据；当前 14 个产品旅程尚未形成 clean 同 revision archive |
-| 复杂主循环 L01–L06 | 各场景定向通过，非单一完整 archive；L06 不稳定 | L01–L05 同批通过；L06 在 2026-07-30 的 9 次真实模型运行中 5 次通过，不作为通过声明 |
+| 复杂主循环 L01–L06 | 各场景有定向证据，非单一完整 archive | L01–L05 同批通过；L06 的 5/9 baseline 经 ADR 0010 的 Runtime-owned verification 修复后，同一输入 9/9；仍缺 clean matching 完整矩阵 |
 | 外部 Profile | E16–E19 定向通过，E21 已入 catalog 未执行 | Profile 是 diagnostic，不单独产生产品发布声明 |
 
 其中：
 
 - E01 覆盖直接回答、澄清、连续会话，并反证没有无意义 Task/Receipt；
-- E04/E10 覆盖 governed delete/restore、错误 digest 拒绝、重启恢复和不重复副作用；
+- E04/E10 覆盖 governed delete/restore、错误 command id/cross-scope 拒绝、重启恢复和不重复副作用；
 - E14 覆盖自然语言选择 user message 中的 exact knowledge span、Admission 逐字来源校验、确认前
   零写入、Command 重启恢复、scope denied、精确结论 Claim、控制语义零写入、Receipt 和 replay；
 - E05/E13 覆盖 Research 终态、digest/source 和 limitation；E05 现在拒绝 partial/空 digest；

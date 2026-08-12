@@ -20,8 +20,7 @@ periodic full matrix:
 
 1. prompt wording changes whose blast radius is a model behaviour shift rather
    than a code path (a tool ``description`` edit moves the model input
-   distribution and changes ``capability_revision``, but which case regresses
-   is not derivable from the diff);
+   distribution, but which case regresses is not derivable from the diff);
 2. provider-side model changes, where no file changes at all and this map
    correctly returns an empty selection for a link that may already be broken.
 """
@@ -121,8 +120,8 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     # --- capability projection: changes model input for every case ---------
     _full(
         "src/personal_agent/governance/registry.py",
-        "Tool descriptions and schemas enter the prompt each turn and set "
-        "capability_revision; also owns the concurrency-safety predicate.",
+        "Tool descriptions and schemas enter the prompt each turn; the registry "
+        "also owns the concurrency-safety predicate.",
     ),
     _full(
         "src/personal_agent/governance/gateway.py",
@@ -136,7 +135,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/capabilities/contracts/verification.py",
         "Verification port contract for runtime-owned and answer-level verifiers.",
-        "L06", "E20",
+        "L06", "ASK-001A", "ASK-001B",
     ),
     _full(
         "src/personal_agent/capabilities/",
@@ -190,18 +189,13 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/tools/",
         "Individual tool implementations reachable from the model each turn.",
-        "E01", "E02", "E12", "L01", "L02",
+        "E01", "E12", "ASK-001A", "ASK-001B", "L01", "L02",
     ),
     # --- personal knowledge ------------------------------------------------
     _cases(
-        "src/personal_agent/application/knowledge/answer_verifier.py",
-        "Independent answer-level semantic assessment write path.",
-        "E20",
-    ),
-    _cases(
         "src/personal_agent/application/knowledge/",
         "Canonical knowledge fact owner: claims, evidence, supersede/conflict.",
-        "E02", "E08", "E10", "E12", "E20", "L01",
+        "E08", "E10", "E12", "ASK-001A", "ASK-001B", "L01",
     ),
     _cases(
         "src/personal_agent/application/knowledge_lifecycle/",
@@ -211,7 +205,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/capture/",
         "Multi-source ingestion into Artifact/Evidence.",
-        "E03", "E09",
+        "E09",
     ),
     _cases(
         "src/personal_agent/application/research/",
@@ -236,7 +230,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/artifacts/",
         "Artifact write/read path behind ArtifactRef and digest checks.",
-        "E03", "E09", "E20", "IP01",
+        "E09", "ASK-001A", "ASK-001B", "IP01",
     ),
     _cases(
         "src/personal_agent/application/extract/",
@@ -255,14 +249,13 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     ),
     _cases(
         "src/personal_agent/application/",
-        "Remaining Ask/RAG application helpers: chunking, rerank, entailment, "
-        "evidence assembly and answer verification.",
-        "E02", "E03", "E09", "E12",
+        "Shared application helpers for evidence assembly and verification.",
+        "E09", "E12", "ASK-001A", "ASK-001B",
     ),
     _cases(
         "src/personal_agent/planning/",
         "Query planning and memory admission ahead of retrieval.",
-        "E02", "E12", "IP01", "E23",
+        "E12", "IP01", "E23", "PLAN-001",
     ),
     _cases(
         "src/personal_agent/runtime/",
@@ -287,11 +280,10 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/infra/",
         "Remaining outbound adapters and package wiring at the infra boundary.",
     ),
-    # --- legacy ask path: still the Ask/RAG entry -------------------------
     _cases(
         "src/personal_agent/orchestration/",
-        "Legacy orchestration runtime still owns Ask/RAG compose and retrieval.",
-        "E02", "E03", "E12",
+        "Composition root adapters connect Conversation, knowledge reads and durable projects.",
+        "E12", "ASK-001A", "ASK-001B", "PLAN-001",
     ),
     # --- entry boundary: every release case enters over HTTP ---------------
     _full(
@@ -320,11 +312,6 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/kernel/prompt_registry.py",
         "Prompt resolution; decides which wording each call receives.",
     ),
-    _full(
-        "src/personal_agent/orchestration/ask/prompts.py",
-        "Ask-path prompt wording; overrides the orchestration package rule "
-        "because model behaviour drift is not confinable to the Ask cases.",
-    ),
     # --- persistence and config -------------------------------------------
     _full(
         "src/personal_agent/infra/storage/",
@@ -337,7 +324,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/memory/",
         "Retrieval projections and short-term context assembly.",
-        "E02", "E12", "L01",
+        "E12", "ASK-001A", "ASK-001B", "L01",
     ),
     _cases(
         "src/personal_agent/execution/",
@@ -398,9 +385,9 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "evals/e2e_quality/test_product_capability_outcomes.py",
         "Assertions for product and composite journeys.",
-        "E01", "E02", "E03", "E04", "E05",
+        "E01", "E04", "E05",
         "E08", "E09", "E10", "E11", "E12", "E13", "E14",
-        "E20", "E22", "E23", "E24", "IP01",
+        "E22", "E23", "E24", "IP01",
     ),
     _cases(
         "evals/e2e_quality/test_release_user_outcomes.py",

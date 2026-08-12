@@ -26,7 +26,6 @@ from personal_agent.memory.graphiti.search_strategies import STRATEGIES
 
 # Reuse dataset-agnostic Graphiti ingest + manifest plumbing from open_ragbench.
 from evals.open_ragbench.runner import (
-    _attach_graph_episode_ids_to_store,
     _ensure_graphiti_corpus,
     _ranked_note_ids_from_graph_result,
 )
@@ -475,75 +474,12 @@ class GraphitiRetrievalStrategy:
         return rankings
 
 
-@dataclass(frozen=True)
-class RuntimeAskStrategy:
-    """Full production runtime Ask path over the MultiHopRAG corpus."""
-
-    name: str = "current_runtime_ask"
-    description: str = (
-        "Full AgentRuntime.execute_ask path over the eval corpus. "
-        "Runs generation/verifier, so it is slower than retrieval-only strategies."
-    )
-
-    def evaluate(
-        self,
-        queries: list[MHRQuery],
-        docs: dict[str, MHRDoc],
-        *,
-        limit: int,
-        context: BenchmarkContext,
-    ) -> list[tuple[str, list[str]]]:
-        from personal_agent.orchestration.runtime import AgentRuntime
-
-        settings = context.settings
-        eval_user_id = context.graphiti_user_id
-        store, all_notes = _new_eval_store(
-            settings, docs, user_id=eval_user_id, note_mode=context.note_mode
-        )
-        graph_store = GraphitiStore(settings)
-        if settings.ask.graph_provider.strip().lower() in {"graphiti", "hybrid"}:
-            episode_to_note_id = _ensure_eval_graph_mapping(
-                graph_store=graph_store, notes=all_notes, context=context
-            )
-            _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
-        runtime = AgentRuntime(settings, store, graph_store)
-
-        rankings: list[tuple[str, list[str]]] = []
-        for query in queries:
-            result = runtime.execute_ask(
-                query.query_text,
-                user_id=eval_user_id,
-                session_id=f"multihoprag_{query.query_id}",
-            )
-            collapsed: list[str] = []
-            for match in result.matches:
-                pid = match.id.split("_sec_")[0]
-                if pid not in collapsed:
-                    collapsed.append(pid)
-            rankings.append((query.query_id, collapsed[:limit]))
-            _record_eval_snapshot(
-                context,
-                self.name,
-                {
-                    "query_id": query.query_id,
-                    "query_text": query.query_text,
-                    "question_type": query.question_type,
-                    "expected_note_ids": sorted(expected_note_ids(query)),
-                    "ranked_ids": collapsed[:limit],
-                    "citation_note_ids": [c.note_id for c in result.citations[:limit]],
-                    "graph_provider": settings.ask.graph_provider,
-                },
-            )
-        return rankings
-
-
 def list_strategy_names() -> list[str]:
     real_graph_names = [f"graphiti_{name}" for name in sorted(STRATEGIES)]
     return [
         "keyword",
         "citation_reranker",
         "graphrag",
-        "current_runtime_ask",
         *real_graph_names,
     ]
 
@@ -556,8 +492,6 @@ def get_strategy(name: str) -> BenchmarkStrategy:
         return CitationRerankStrategy()
     if normalized == "graphrag":
         return GraphRagStrategy()
-    if normalized == "current_runtime_ask":
-        return RuntimeAskStrategy()
     if normalized.startswith("graphiti_"):
         graph_strategy_name = normalized.removeprefix("graphiti_")
         if graph_strategy_name in STRATEGIES:

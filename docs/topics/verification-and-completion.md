@@ -44,8 +44,7 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |
-| Personal Knowledge Answer | 候选 `EvidenceGroundedAnswer` 组装后 | 回答整体是否支持、冲突、coverage、unsupported claim | `/api/knowledge/ask` 响应 |
-| Ask/RAG | compose 后固定 stage，repair 后重验 | citation、claim grounding、evidence sufficiency | bounded retry / repair |
+| Conversation grounded answer | personal/tool Observations 到达后 | source constraint、citation、conflict 与 required evidence | Conversation revision / FinalMessage |
 | Investigation SubGoal | execution + Evidence Admission 后 | bounded SubGoal 是否被 admitted evidence 满足 | Outcome 或 verification repair |
 | Investigation Final | final Artifact 生成后 | required coverage、claim/evidence、排除条件 | CompletionReport |
 | Conversation Review | 用户显式要求审查文本时 | 最终文本是否满足冻结的用户明示判据 | revision loop / verified bytes |
@@ -53,44 +52,13 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构性案例，但不能作为
 普通知识目标具备 Verify 元能力的证据。
 
-## Personal Knowledge Answer
+## Conversation Grounded Answer
 
-`KnowledgeService.select_evidence()` 是 read-only 检索边界，只返回 typed EvidenceSpan、Citation、
-Claim 支持状态和冲突事实，不生成候选回答，也不触发 Answer Verifier。Ask 的
-`KnowledgeRetriever` 只调用该边界。
+**Personal Knowledge 不再生成独立 Answer assessment；它只返回可验证的选择事实。** `KnowledgeService.select_evidence()` 拥有 selected EvidenceSpan、Claim 状态、conflict 与 scope，Conversation 将其作为 `personal_knowledge_context` Observation 消费，并与其他 Tool Observation 共同生成唯一 FinalMessage。
 
-`KnowledgeService.answer_with_evidence()` 在 evidence selection 之后组装候选回答、Citation 和展示
-projection。
-`KnowledgeAnswerVerifier` 是唯一 answer-level semantic verification 写入口，输入为：
+执行事实、语义验证和完成仍分离：Tool/selection success 只证明读取发生；模型必须根据引用与冲突事实形成回答；缺 required evidence 时不能宣称完成。回答不会自动写回 Claim，显式保存必须另走确认写路径。
 
-- 用户问题；
-- 候选回答；
-- 本次 selected/available EvidenceSpan；
-- CoverageManifest。
-
-输出的 canonical `AnswerVerificationAssessment` 包含：
-
-```text
-verdict: passed | needs_revision | insufficient_evidence
-conclusion_status: supported | conflicted | insufficient_evidence
-evidence_coverage
-conflicts -> evidence_span_ids
-unsupported_claims
-missing_sections
-feedback
-verifier identity/version
-```
-
-`conclusion_status=conflicted` 表示知识结论仍冲突；它不同于 `verdict`。一个明确、忠实呈现冲突的
-报告可以通过验证，而一个只是并列两条互斥陈述却未标出冲突的候选回答必须
-`needs_revision`。
-
-Verifier 返回的 conflict ref 必须由确定性 Admission 证明属于本次 selected EvidenceSpan。
-Assessment 是正式 Personal Knowledge Answer 的当前响应事实，不写回长期 Claim/Relation，也不投影到 Ask
-evidence。Ask 自己的最终回答由 Ask Verifier 判断，避免对被丢弃的内部答案重复验证。
-
-旧 `grounding_status`、`answer_claim_grounded_count`、顶层 `evidence_coverage` 和
-`missing_sections` 已删除。它们由回答组装器根据 selected 数量推导，会形成第二个验证写入口。
+当前不维护第二个 Knowledge answer assessment；产品证据由 `ASK-001A/B` 直接从 Conversation 断言 scope、引用、冲突、source constraint 与零写入。
 
 ## Verification 与 Completion
 
@@ -102,11 +70,6 @@ Verification 通过只说明某个候选结果满足相应语义标准。只有 
 
 ## 执行证据
 
-- B04 baseline：archive `20260731T063040.820774Z-16696-c3646c8a`。正式 HTTP 回答同时包含互斥日期，
-  未标 conflict，却写 `supported` 和“全部 grounded”。
-- E20 target-failure：archive `20260731T063538.487874Z-48204-345f5a84`，缺少独立
-  `verification`。
-- E20 target：archive `20260731T064446.108938Z-8804-52b29d3c`，独立 Verifier 返回
-  `needs_revision/conflicted`，conflict refs 全部绑定本次 citations，Ask 前后 Claim 数不变。
-
-设计、迁移和复杂度证据见 [ADR 0011](../adr/0011-independent-personal-knowledge-answer-verification.md)。
+- `ASK-001A`：Conversation 逐项引用互斥个人资料并明确冲突，禁止 web、跨 principal 泄漏和知识写入；
+- `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；
+- `E08`：普通回答 Claim delta 为零，显式 solidify 后才发生 Knowledge 写入。

@@ -9,8 +9,6 @@ from personal_agent.application.evidence_engine import (
 )
 from personal_agent.application.rerankers import HeuristicEvidenceReranker
 from personal_agent.kernel.evidence import EvidenceItem, SourceDocument
-from personal_agent.orchestration.ask.context import AskRunContext
-from personal_agent.orchestration.ask.retrievers import RetrievalContribution, RetrievalCoordinator
 
 
 def test_assemble_context_selects_evidence_and_traces_steps():
@@ -142,28 +140,6 @@ def test_assemble_context_records_reranker_telemetry():
         and "llm_calls=1" in line
         for line in result.trace
     )
-
-
-def test_retrieval_coordinator_absorb_records_candidate_metadata():
-    ctx = AskRunContext(
-        question="What is hybrid RAG?",
-        user_id="u1",
-        session_id="s1",
-        working_context="",
-    )
-    contribution = RetrievalContribution(
-        source="graph",
-        evidence=[EvidenceItem(source_type="graph_fact", source_id="fact-1", fact="RAG uses retrieval.")],
-        trace=["graph done"],
-    )
-    coordinator = RetrievalCoordinator.__new__(RetrievalCoordinator)
-
-    coordinator._absorb(ctx, contribution)
-
-    metadata = ctx.evidence_pool[0].metadata
-    assert metadata["source_ranks"] == {"graph": 1}
-    assert metadata["candidate"]["source_type"] == "graph"
-    assert ctx.trace_steps == ["graph done"]
 
 
 def test_sources_to_evidence_normalizes_source_documents():

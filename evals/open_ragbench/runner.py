@@ -60,7 +60,6 @@ class BenchmarkContext:
     graphiti_continue_on_ingest_error: bool
     local_probe_limit: int = 100
     eval_snapshots: dict[str, list[dict]] | None = None
-    planner_cache: dict[str, tuple[object, object]] | None = None
     strategy_configs: dict[str, dict[str, object]] = field(default_factory=dict)
     passage_embedding_cache: dict[str, list[float]] = field(default_factory=dict)
 
@@ -141,6 +140,16 @@ DATASET_AGNOSTIC_PROFILE = RetrievalStrategyProfile(
     sentence_selector_enabled=True,
     policy_selector_enabled=True,
 )
+
+
+def _external_embedding_settings(settings: Settings) -> Settings:
+    """Bind component experiments to their declared external embedding profile."""
+    return settings.model_copy(
+        update={
+            "embedding_provider": "openai",
+            "openai": settings.openai.model_copy(update={"embedding_model": "BAAI/bge-m3"}),
+        }
+    )
 
 
 def resolve_retrieval_strategy_profile(
@@ -1583,6 +1592,42 @@ def _record_eval_snapshot(context: BenchmarkContext, strategy_name: str, snapsho
     context.eval_snapshots.setdefault(strategy_name, []).append(_enrich_eval_snapshot(snapshot))
 
 
+def _retrieval_eval_snapshot(store: object) -> dict[str, object]:
+    debug = getattr(store, "last_retrieval_debug", None)
+    if not isinstance(debug, dict):
+        return {}
+
+    def bounded_ids(key: str) -> list[str]:
+        value = debug.get(key, [])
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value[:20]]
+
+    return {
+        "raw_lexical_top20_ids": bounded_ids("raw_lexical_ids"),
+        "raw_vector_top20_ids": bounded_ids("raw_vector_ids"),
+        "merged_top20_ids": bounded_ids("merged_ids"),
+        "expanded_top20_ids": bounded_ids("expanded_ids"),
+        "lexical_candidate_count": debug.get("lexical_candidates"),
+        "vector_candidate_count": debug.get("vector_candidates"),
+        "merged_candidate_count": debug.get("merged_candidates"),
+        "retrieval_result_count": debug.get("result_count"),
+        "retrieval_embedding_used": debug.get("embedding_used"),
+    }
+
+
+def _embedding_eval_snapshot(store: object) -> dict[str, object]:
+    return {
+        "embedding_provider_used": getattr(store, "last_embedding_provider", None),
+        "embedding_model_used": getattr(store, "last_embedding_model", None),
+        "embedding_original_dimensions": getattr(store, "last_embedding_original_dimensions", None),
+        "embedding_output_dimensions": getattr(store, "last_embedding_output_dimensions", None),
+        "embedding_index_dimensions": getattr(store, "last_embedding_index_dimensions", None),
+        "embedding_used_fallback": getattr(store, "last_embedding_used_fallback", None),
+        "embedding_fallback_reason": getattr(store, "last_embedding_fallback_reason", None),
+    }
+
+
 def _strategy_eval_config(strategy: BenchmarkStrategy, settings: Settings) -> dict[str, object]:
     version = _strategy_version(strategy)
     config: dict[str, object] = {
@@ -1725,24 +1770,6 @@ def _strategy_eval_config(strategy: BenchmarkStrategy, settings: Settings) -> di
             "semantic_policy_top_m": strategy.top_m,
             "semantic_policy_confidence_threshold": strategy.confidence_threshold,
             "semantic_policy_preserve_top_k": strategy.preserve_top_k,
-        })
-    elif isinstance(strategy, RuntimeAskRetrievalKnowledgeAblationStrategy):
-        config.update({
-            "embedding_provider": "openai" if strategy.external_embedding else settings.embedding_provider,
-            "embedding_model": "BAAI/bge-m3" if strategy.external_embedding else settings.openai.embedding_model,
-            "embedding_dim": 1024 if strategy.external_embedding else None,
-            "external_embedding": strategy.external_embedding,
-            "ask_reranker": strategy.ask_reranker or (
-                "llm_gated" if strategy.llm_gated else "llm" if strategy.llm_rerank else "heuristic"
-            ),
-            "knowledge_enabled": strategy.include_knowledge,
-            "knowledge_only": strategy.knowledge_only,
-            "force_claim_sensitive": strategy.force_claim_sensitive,
-            "llm_rerank_mode": (
-                "ask_llm_gated"
-                if strategy.llm_gated
-                else "ask_llm" if strategy.llm_rerank else "none"
-            ),
         })
     return config
 
@@ -2798,18 +2825,6 @@ def _section_position_bucket(note_id: str) -> str:
     if index <= 10:
         return "mid_sec6_10"
     return "late_sec11_plus"
-
-
-def _get_eval_plan(query: RAGBenchQuery, settings: Settings, context: BenchmarkContext):
-    from personal_agent.planning.query_planner import plan_retrieval
-
-    if context.planner_cache is None:
-        return plan_retrieval(query.query_text, "", settings), False
-    if query.query_id in context.planner_cache:
-        return context.planner_cache[query.query_id], True
-    result = plan_retrieval(query.query_text, "", settings)
-    context.planner_cache[query.query_id] = result
-    return result, False
 
 
 def _new_eval_store(
@@ -4146,899 +4161,6 @@ _STRUCTURAL_STOPWORDS = {
 }
 
 
-@dataclass(frozen=True)
-class AskPipelineStrategy:
-    """Retrieval-only proxy for the Ask pipeline.
-
-    This intentionally stops before answer generation. It evaluates whether the
-    query planner and retrieval sources put relevant note IDs in the top-k.
-    """
-
-    name: str = "ask_pipeline"
-    description: str = (
-        "Ask retrieval proxy with QueryUnderstanding + RetrievalPlan: "
-        "query rewrite, graph/local retrieval, sub-query decomposition, note-id normalized output."
-    )
-    use_planner: bool = True
-    use_rewrite: bool = True
-    include_graph: bool = True
-    include_subqueries: bool = True
-    local_only: bool = False
-
-    def evaluate(
-        self,
-        queries: list[RAGBenchQuery],
-        docs: dict[str, RAGBenchDoc],
-        *,
-        limit: int,
-        context: BenchmarkContext,
-    ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        settings = context.settings
-        store, all_notes = _new_eval_store(settings, docs)
-        graph_store = GraphitiStore(settings)
-        episode_to_note_id: dict[str, str] = {}
-        if self.include_graph and not self.local_only:
-            episode_to_note_id = _ensure_eval_graph_mapping(
-                graph_store=graph_store,
-                notes=all_notes,
-                context=context,
-            )
-            _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
-
-        from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-
-        rankings: list[tuple[str, list[str]]] = []
-        relevance: dict[str, set[str]] = {}
-
-        for query in queries:
-            planner_cache_hit = False
-            if self.use_planner:
-                (understanding, plan), planner_cache_hit = _get_eval_plan(query, settings, context)
-            else:
-                understanding = QueryUnderstanding(
-                    needs_personal_memory=True,
-                    query_rewrite=query.query_text,
-                    filters=RetrievalFilters(),
-                )
-                plan = RetrievalPlan(
-                    sources=["local"],
-                    parallel=False,
-                    query=query.query_text,
-                    sub_queries=[],
-                    filters=RetrievalFilters(),
-                )
-
-            effective_query = (plan.query or query.query_text) if self.use_rewrite else query.query_text
-            sources = ["local"] if self.local_only else list(plan.sources)
-            if not self.include_graph and "graph" in sources:
-                sources = [source for source in sources if source != "graph"]
-            if "local" not in sources:
-                sources.append("local")
-
-            result_ids: list[str] = []
-            local_ids: list[str] = []
-            graph_ids: list[str] = []
-            subquery_ids: list[str] = []
-
-            if "local" in sources:
-                local_matches = store.find_similar_notes(
-                    "ragbench_eval",
-                    effective_query,
-                    limit=limit,
-                    filters=plan.filters,
-                )
-                for match in local_matches:
-                    local_ids.append(match.id)
-                    if match.id not in result_ids:
-                        result_ids.append(match.id)
-
-            if "graph" in sources and graph_store.configured() and episode_to_note_id:
-                graph_result = graph_store.retrieve(
-                    effective_query,
-                    context.graphiti_user_id,
-                )
-                if graph_result.enabled:
-                    for hit in graph_result.citation_hits:
-                        note_id = episode_to_note_id.get(hit.episode_uuid)
-                        if note_id is None:
-                            continue
-                        graph_ids.append(note_id)
-                        if note_id not in result_ids:
-                            result_ids.append(note_id)
-                    for episode_uuid in graph_result.related_episode_uuids:
-                        note_id = episode_to_note_id.get(episode_uuid)
-                        if note_id is None:
-                            continue
-                        graph_ids.append(note_id)
-                        if note_id not in result_ids:
-                            result_ids.append(note_id)
-
-            sub_queries = plan.sub_queries if self.include_subqueries else []
-            for sub_q in sub_queries:
-                sub_matches = store.find_similar_notes(
-                    "ragbench_eval",
-                    sub_q,
-                    limit=limit,
-                    filters=plan.filters,
-                )
-                for match in sub_matches:
-                    subquery_ids.append(match.id)
-                    if match.id not in result_ids:
-                        result_ids.append(match.id)
-
-            rankings.append((query.query_id, result_ids[:limit]))
-            section_id, parent_id = expected_note_ids(query)
-            relevance[query.query_id] = {section_id, parent_id}
-            _record_eval_snapshot(
-                context,
-                self.name,
-                {
-                    "query_id": query.query_id,
-                    "query_text": query.query_text,
-                    "expected_note_ids": [section_id, parent_id],
-                    "planner": {
-                        "enabled": self.use_planner,
-                        "sources": list(plan.sources),
-                        "effective_sources": sources,
-                        "rewrite": plan.query,
-                        "used_query": effective_query,
-                        "sub_queries": list(sub_queries),
-                        "filters": plan.filters.model_dump(exclude_defaults=True),
-                        "needs_freshness": understanding.needs_freshness,
-                        "needs_graph_reasoning": understanding.needs_graph_reasoning,
-                        "cache_hit": planner_cache_hit,
-                    },
-                    "local_ids": local_ids[:limit],
-                    "graph_note_ids": graph_ids[:limit],
-                    "subquery_ids": subquery_ids[:limit],
-                    "ranked_ids": result_ids[:limit],
-                },
-            )
-
-        return rankings, relevance
-
-
-@dataclass(frozen=True)
-class RuntimeAskStrategy:
-    """Full production runtime Ask path, used as an explicit diagnostic strategy."""
-
-    name: str = "current_runtime_ask"
-    description: str = (
-        "Full AgentRuntime.execute_ask path over the eval corpus. "
-        "Runs generation/verifier, so it is slower than retrieval-only strategies."
-    )
-
-    def evaluate(
-        self,
-        queries: list[RAGBenchQuery],
-        docs: dict[str, RAGBenchDoc],
-        *,
-        limit: int,
-        context: BenchmarkContext,
-    ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        from personal_agent.orchestration.runtime import AgentRuntime
-
-        settings = context.settings
-        eval_user_id = context.graphiti_user_id
-        store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
-        graph_store = GraphitiStore(settings)
-        if settings.ask.graph_provider.strip().lower() in {"graphiti", "hybrid"}:
-            episode_to_note_id = _ensure_eval_graph_mapping(
-                graph_store=graph_store,
-                notes=all_notes,
-                context=context,
-            )
-            _attach_graph_episode_ids_to_store(store, all_notes, episode_to_note_id)
-        runtime = AgentRuntime(settings, store, graph_store)
-
-        rankings: list[tuple[str, list[str]]] = []
-        relevance: dict[str, set[str]] = {}
-        for query in queries:
-            result = runtime.execute_ask(
-                query.query_text,
-                user_id=eval_user_id,
-                session_id=f"ragbench_{query.query_id}",
-            )
-            ranked_ids: list[str] = []
-            for match in result.matches:
-                if match.id not in ranked_ids:
-                    ranked_ids.append(match.id)
-            rankings.append((query.query_id, ranked_ids[:limit]))
-            section_id, parent_id = expected_note_ids(query)
-            relevance[query.query_id] = {section_id, parent_id}
-            _record_eval_snapshot(
-                context,
-                self.name,
-                {
-                    "query_id": query.query_id,
-                    "query_text": query.query_text,
-                    "expected_note_ids": [section_id, parent_id],
-                    "ranked_ids": ranked_ids[:limit],
-                    "citation_note_ids": [citation.note_id for citation in result.citations[:limit]],
-                    "evidence_ids": [item.source_id for item in result.evidence[:limit]],
-                    "graph_provider": settings.ask.graph_provider,
-                },
-            )
-        return rankings, relevance
-
-
-@dataclass(frozen=True)
-class RuntimeAskKnowledgeAblationStrategy:
-    """Full Ask path with graph/web disabled, optionally seeding Knowledge.
-
-    The pair ``current_runtime_ask_no_knowledge`` / ``current_runtime_ask_knowledge``
-    isolates the effect of ``KnowledgeRetriever`` on the final Ask evidence
-    ranking. Both variants use the same local note corpus and the same disabled
-    graph/web settings; the knowledge variant additionally ingests the corpus
-    into ``KnowledgeService`` and maps knowledge citations back to RAGBench note
-    ids through artifact ``source_ref``.
-    """
-
-    include_knowledge: bool = False
-
-    @property
-    def name(self) -> str:
-        return (
-            "current_runtime_ask_knowledge"
-            if self.include_knowledge else "current_runtime_ask_no_knowledge"
-        )
-
-    @property
-    def description(self) -> str:
-        suffix = "with Knowledge corpus seeded" if self.include_knowledge else "without Knowledge corpus"
-        return (
-            "Full AgentRuntime.execute_ask path with graph/web/structured semantic "
-            f"extraction disabled, {suffix}."
-        )
-
-    def evaluate(
-        self,
-        queries: list[RAGBenchQuery],
-        docs: dict[str, RAGBenchDoc],
-        *,
-        limit: int,
-        context: BenchmarkContext,
-    ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        from personal_agent.orchestration.runtime import AgentRuntime
-
-        eval_user_id = context.graphiti_user_id
-        settings = _knowledge_ablation_settings(context.settings)
-        store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
-        graph_store = GraphitiStore(settings)
-        runtime = AgentRuntime(settings, store, graph_store)
-        runtime.knowledge_service = _fixture_knowledge_service(settings)
-
-        source_ref_to_note_id: dict[str, str] = {}
-        if self.include_knowledge:
-            source_ref_to_note_id = _seed_knowledge_from_notes(
-                runtime,
-                all_notes,
-                user_id=eval_user_id,
-            )
-
-        rankings: list[tuple[str, list[str]]] = []
-        relevance: dict[str, set[str]] = {}
-        for query in queries:
-            result = runtime.execute_ask(
-                query.query_text,
-                user_id=eval_user_id,
-                session_id=f"ragbench_{query.query_id}",
-            )
-            ranked_ids = _ranked_note_ids_from_ask_result(
-                result,
-                source_ref_to_note_id=source_ref_to_note_id,
-                limit=limit,
-            )
-            rankings.append((query.query_id, ranked_ids))
-            section_id, parent_id = expected_note_ids(query)
-            relevance[query.query_id] = {section_id, parent_id}
-            _record_eval_snapshot(
-                context,
-                self.name,
-                {
-                    "query_id": query.query_id,
-                    "query_text": query.query_text,
-                    "expected_note_ids": [section_id, parent_id],
-                    "ranked_ids": ranked_ids,
-                    "match_ids": [match.id for match in result.matches[:limit]],
-                    "citation_note_ids": [citation.note_id for citation in result.citations[:limit]],
-                    "evidence_ids": [item.source_id for item in result.evidence[:limit]],
-                    "knowledge_enabled": self.include_knowledge,
-                    "graph_provider": settings.ask.graph_provider,
-                    "web_enabled": settings.web_search_available,
-                    "structured_enabled": bool(settings.structured.api_key),
-                },
-            )
-        return rankings, relevance
-
-
-@dataclass(frozen=True)
-class RuntimeAskRetrievalKnowledgeAblationStrategy:
-    """Ask retrieval stage only, with graph/web/langextract disabled.
-
-    This is the fast ablation for ``KnowledgeRetriever``. It executes the real
-    Ask retrieval stage and context assembly, then projects selected knowledge
-    citations back to Open RAGBench note ids through their artifact ``source_ref``.
-    It intentionally skips answer generation, verifier, and repair.
-    """
-
-    include_knowledge: bool = False
-    force_claim_sensitive: bool = False
-    knowledge_only: bool = False
-    high_accuracy: bool = False
-    llm_rerank: bool = False
-    llm_gated: bool = False
-    external_embedding: bool = False
-    force_default_planner: bool = False
-    ask_reranker: str | None = None
-
-    @property
-    def name(self) -> str:
-        if self.ask_reranker == "support":
-            return "ask_retrieve_support"
-        if self.llm_gated:
-            return "ask_retrieve_llm_gated"
-        if self.llm_rerank and self.external_embedding:
-            return "ask_retrieve_external_llm_rerank"
-        if self.llm_rerank:
-            return "ask_retrieve_llm_rerank"
-        if self.external_embedding:
-            return "ask_retrieve_external_embedding"
-        if self.high_accuracy:
-            return "ask_retrieve_high_accuracy"
-        if self.knowledge_only:
-            return "ask_retrieve_knowledge_evidence_only"
-        if self.force_claim_sensitive:
-            return "ask_retrieve_knowledge_forced_claim_sensitive"
-        return "ask_retrieve_knowledge" if self.include_knowledge else "ask_retrieve_no_knowledge"
-
-    @property
-    def description(self) -> str:
-        if self.knowledge_only:
-            suffix = "with only Knowledge evidence enabled"
-        elif self.llm_gated:
-            suffix = "with gated LLM rerank enabled and default planner forced"
-        elif self.ask_reranker == "support":
-            suffix = "with support reranker enabled and default planner forced"
-        elif self.llm_rerank and self.external_embedding:
-            suffix = "with external embedding and LLM rerank enabled"
-        elif self.llm_rerank:
-            suffix = "with LLM rerank enabled and default planner forced"
-        elif self.external_embedding:
-            suffix = "with configured external embedding profile"
-        elif self.high_accuracy:
-            suffix = "with high-accuracy local recall/context profile"
-        elif self.force_claim_sensitive:
-            suffix = "with Knowledge corpus seeded and claim-sensitive routing forced"
-        else:
-            suffix = "with Knowledge corpus seeded" if self.include_knowledge else "without Knowledge corpus"
-        return (
-            "Real AskService.run_retrieval_stage with graph/web/langextract disabled, "
-            f"{suffix}; skips generation/verifier."
-        )
-
-    def evaluate(
-        self,
-        queries: list[RAGBenchQuery],
-        docs: dict[str, RAGBenchDoc],
-        *,
-        limit: int,
-        context: BenchmarkContext,
-    ) -> tuple[list[tuple[str, list[str]]], dict[str, set[str]]]:
-        from personal_agent.orchestration.runtime import AgentRuntime
-
-        eval_user_id = context.graphiti_user_id
-        settings = _knowledge_ablation_settings(
-            context.settings,
-            preserve_structured=self.llm_rerank or self.llm_gated,
-        )
-        if self.high_accuracy:
-            settings = _high_accuracy_ask_settings(settings)
-        if self.llm_gated:
-            settings = _llm_gated_ask_settings(settings)
-        if self.llm_rerank:
-            settings = _llm_rerank_ask_settings(settings)
-        if self.ask_reranker is not None:
-            settings = _ask_reranker_settings(settings, self.ask_reranker)
-        if self.external_embedding:
-            settings = _external_embedding_settings(settings)
-        store, all_notes = _new_eval_store(settings, docs, user_id=eval_user_id)
-        graph_store = GraphitiStore(settings)
-        runtime = AgentRuntime(settings, store, graph_store)
-        runtime.knowledge_service = _fixture_knowledge_service(settings)
-
-        source_ref_to_note_id: dict[str, str] = {}
-        if self.include_knowledge:
-            source_ref_to_note_id = _seed_knowledge_from_notes(
-                runtime,
-                all_notes,
-                user_id=eval_user_id,
-            )
-
-        ask_service = runtime._ask_service()
-        if self.force_default_planner or self.llm_rerank or self.llm_gated:
-            ask_service._plan_retrieval = _default_eval_planner()  # type: ignore[method-assign]
-        if self.force_claim_sensitive or self.knowledge_only:
-            ask_service._plan_retrieval = _forced_knowledge_eval_planner(  # type: ignore[method-assign]
-                force_knowledge_only=self.knowledge_only,
-            )
-        rankings: list[tuple[str, list[str]]] = []
-        relevance: dict[str, set[str]] = {}
-        for query in queries:
-            ctx = ask_service.build_run_context(
-                query.query_text,
-                user_id=eval_user_id,
-                session_id=f"ragbench_{query.query_id}",
-            )
-            ask_service.run_retrieval_stage(ctx)
-            ranked_ids = _ranked_note_ids_from_ask_context(
-                ctx,
-                source_ref_to_note_id=source_ref_to_note_id,
-                limit=limit,
-            )
-            rankings.append((query.query_id, ranked_ids))
-            section_id, parent_id = expected_note_ids(query)
-            relevance[query.query_id] = {section_id, parent_id}
-            local_probe_ids = _note_ids(store.find_similar_notes(
-                eval_user_id,
-                ctx.effective_query or query.query_text,
-                limit=max(limit, context.local_probe_limit),
-                filters=ctx.retrieval_plan.filters if ctx.retrieval_plan is not None else None,
-            ))
-            evidence = ctx.context_pack.evidence if ctx.context_pack is not None else []
-            knowledge_evidence = [
-                item for item in evidence
-                if item.metadata.get("retrieved_by") == "knowledge"
-                or item.source_ref in source_ref_to_note_id
-            ]
-
-            def resolved_match_note_id(match) -> str:
-                if match.source.type in {"knowledge_claim", "knowledge_evidence"}:
-                    return source_ref_to_note_id.get(str(match.source.ref or ""), "")
-                return str(match.id or "")
-
-            def resolved_citation_note_id(citation) -> str:
-                if citation.source_type == "knowledge":
-                    return source_ref_to_note_id.get(str(citation.source_ref or ""), "")
-                return str(citation.note_id or "")
-
-            def resolved_evidence_note_ids(item) -> list[str]:
-                ids: list[str] = []
-
-                def add(note_id: str | None) -> None:
-                    if note_id and note_id not in ids:
-                        ids.append(note_id)
-
-                source_ref = str(item.source_ref or "")
-                metadata = item.metadata or {}
-                add(source_ref_to_note_id.get(source_ref))
-                add(source_ref_to_note_id.get(str(metadata.get("artifact_id") or "")))
-                source_id = str(item.source_id or "")
-                if source_id.startswith("ragbench_"):
-                    add(source_id)
-                elif str(item.parent_note_id or "").startswith("ragbench_"):
-                    add(str(item.parent_note_id))
-                return ids
-
-            selected_evidence_resolved_note_ids = _unique_ids(
-                *[resolved_evidence_note_ids(item) for item in evidence[:limit]]
-            )
-            diagnostic = _diagnose_retrieval(
-                section_id=section_id,
-                parent_id=parent_id,
-                ranked_ids=ranked_ids,
-                local_probe_ids=local_probe_ids,
-                retrieval_health=ctx.retrieval_health,
-            )
-            _record_eval_snapshot(
-                context,
-                self.name,
-                {
-                    "query_id": query.query_id,
-                    "query_text": query.query_text,
-                    "expected_note_ids": [section_id, parent_id],
-                    "ranked_ids": ranked_ids,
-                    **diagnostic,
-                    "local_probe_limit": max(limit, context.local_probe_limit),
-                    "local_probe_ids": local_probe_ids[:limit],
-                    "local_probe_top20_ids": local_probe_ids[:20],
-                    **_retrieval_eval_snapshot(store),
-                    "trace": list(ctx.trace_steps),
-                    "reranker_telemetry": _reranker_telemetry_from_trace(ctx.trace_steps),
-                    "retrieval_health": dict(ctx.retrieval_health),
-                    "ask_reranker": settings.ask.reranker,
-                    "llm_rerank_model_configured": bool(settings.structured.api_key and settings.structured.base_url),
-                    **_embedding_eval_snapshot(store),
-                    "knowledge_enabled": self.include_knowledge,
-                    "knowledge_evidence_count": len(knowledge_evidence),
-                    "selected_match_ids": [match.id for match in ctx.selected_matches[:limit]],
-                    "selected_match_resolved_note_ids": [
-                        note_id for note_id in (
-                            resolved_match_note_id(match) for match in ctx.selected_matches[:limit]
-                        )
-                        if note_id
-                    ],
-                    "selected_citation_note_ids": [
-                        citation.note_id for citation in ctx.selected_citations[:limit]
-                    ],
-                    "selected_citation_source_refs": [
-                        str(citation.source_ref or "") for citation in ctx.selected_citations[:limit]
-                    ],
-                    "selected_citation_resolved_note_ids": [
-                        note_id for note_id in (
-                            resolved_citation_note_id(citation) for citation in ctx.selected_citations[:limit]
-                        )
-                        if note_id
-                    ],
-                    "selected_evidence_ids": [item.source_id for item in evidence[:limit]],
-                    "selected_evidence_source_refs": [
-                        str(item.source_ref or "") for item in evidence[:limit]
-                    ],
-                    "selected_evidence_resolved_note_ids": selected_evidence_resolved_note_ids,
-                    "context_selected_evidence_lineage": list(
-                        ctx.retrieval_health.get("context_selected_evidence_lineage", [])
-                    ),
-                    "context_dropped_evidence_reasons": list(
-                        ctx.retrieval_health.get("context_dropped_evidence_reasons", [])
-                    ),
-                    "graph_provider": settings.ask.graph_provider,
-                    "web_enabled": settings.web_search_available,
-                    "structured_enabled": bool(settings.structured.api_key),
-                    "langextract_enabled": bool(settings.langextract.api_key),
-                },
-            )
-        return rankings, relevance
-
-
-def _knowledge_ablation_settings(
-    settings: Settings,
-    *,
-    preserve_structured: bool = False,
-) -> Settings:
-    """Disable web, graph, and structured semantic extraction for the ablation."""
-    structured = settings.structured if preserve_structured else settings.structured.model_copy(update={"api_key": None})
-    return settings.model_copy(
-        update={
-            "ask": settings.ask.model_copy(
-                update={
-                    "graph_provider": "graphiti",
-                    "reranker": "heuristic",
-                }
-            ),
-            "graphiti": settings.graphiti.model_copy(update={"enabled": False}),
-            "web_search": settings.web_search.model_copy(update={"api_key": None}),
-            "structured": structured,
-            "langextract": settings.langextract.model_copy(update={"api_key": None}),
-        }
-    )
-
-
-def _high_accuracy_ask_settings(settings: Settings) -> Settings:
-    """Use the best observed high-accuracy Ask profile for benchmark checks."""
-    ask = settings.ask
-    settings = _external_embedding_settings(settings)
-    return settings.model_copy(
-        update={
-            "ask": ask.model_copy(
-                update={
-                    "local_retrieval_limit": max(int(getattr(ask, "local_retrieval_limit", 12)), 12),
-                }
-            )
-        }
-    )
-
-
-def _llm_rerank_ask_settings(settings: Settings) -> Settings:
-    ask = settings.ask
-    return settings.model_copy(
-        update={
-            "ask": ask.model_copy(
-                update={
-                    "reranker": "llm",
-                    "llm_rerank_top_n": max(int(getattr(ask, "llm_rerank_top_n", 20)), 30),
-                    "local_retrieval_limit": max(int(getattr(ask, "local_retrieval_limit", 12)), 20),
-                }
-            )
-        }
-    )
-
-
-def _llm_gated_ask_settings(settings: Settings) -> Settings:
-    ask = settings.ask
-    return settings.model_copy(
-        update={
-            "ask": ask.model_copy(
-                update={
-                    "reranker": "llm_gated",
-                    "llm_rerank_top_n": max(int(getattr(ask, "llm_rerank_top_n", 20)), 20),
-                }
-            )
-        }
-    )
-
-
-def _ask_reranker_settings(settings: Settings, reranker: str) -> Settings:
-    return settings.model_copy(
-        update={
-            "ask": settings.ask.model_copy(update={"reranker": reranker})
-        }
-    )
-
-
-def _external_embedding_settings(settings: Settings) -> Settings:
-    return settings.model_copy(
-        update={
-            "embedding_provider": "openai",
-            "openai": settings.openai.model_copy(update={"embedding_model": "BAAI/bge-m3"}),
-        }
-    )
-
-
-def _embedding_eval_snapshot(store) -> dict[str, object]:
-    return {
-        "embedding_configured_provider": getattr(store, "embedding_provider", ""),
-        "embedding_configured_model": getattr(store, "embedding_model", ""),
-        "embedding_provider": getattr(store, "last_embedding_provider", getattr(store, "embedding_provider", "")),
-        "embedding_model": getattr(store, "last_embedding_model", getattr(store, "embedding_model", "")),
-        "embedding_original_dimensions": getattr(store, "last_embedding_original_dimensions", None),
-        "embedding_output_dimensions": getattr(store, "last_embedding_output_dimensions", None),
-        "embedding_index_dimensions": getattr(store, "last_embedding_index_dimensions", None),
-        "embedding_used_fallback": bool(getattr(store, "last_embedding_used_fallback", False)),
-        "embedding_fallback_reason": getattr(store, "last_embedding_fallback_reason", None),
-        "embedding_api_configured": bool(getattr(store, "embedding_api_key", None)),
-    }
-
-
-def _retrieval_eval_snapshot(store) -> dict[str, object]:
-    debug = getattr(store, "last_retrieval_debug", {}) or {}
-    raw_lexical_ids = [str(item) for item in debug.get("raw_lexical_ids", [])]
-    raw_vector_ids = [str(item) for item in debug.get("raw_vector_ids", [])]
-    merged_ids = [str(item) for item in debug.get("merged_ids", [])]
-    expanded_ids = [str(item) for item in debug.get("expanded_ids", [])]
-    return {
-        "raw_lexical_top20_ids": raw_lexical_ids[:20],
-        "raw_vector_top20_ids": raw_vector_ids[:20],
-        "merged_top20_ids": merged_ids[:20],
-        "expanded_top20_ids": expanded_ids[:20],
-        "raw_lexical_count": int(debug.get("lexical_candidates", 0) or 0),
-        "raw_vector_count": int(debug.get("vector_candidates", 0) or 0),
-        "merged_count": int(debug.get("merged_candidates", 0) or 0),
-        "expanded_count": int(debug.get("result_count", 0) or 0),
-    }
-
-
-def _fixture_knowledge_service(settings: Settings):
-    """Build KnowledgeService with local fixture semantic components only."""
-    from personal_agent.application.knowledge import KnowledgeService
-    from personal_agent.infra.storage.postgres_knowledge_store import PostgresKnowledgeStore
-
-    return KnowledgeService(PostgresKnowledgeStore(settings.postgres_url, settings.data_dir))
-
-
-def _default_eval_planner():
-    from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-
-    def _planner(question: str, structured_context: str):
-        filters = RetrievalFilters()
-        understanding = QueryUnderstanding(
-            needs_personal_memory=True,
-            claim_sensitive=False,
-            retrieval_mode="evidence_dominant",
-            query_rewrite=question,
-            filters=filters,
-        )
-        plan = RetrievalPlan(
-            sources=["graph", "local"],
-            parallel=True,
-            query=question,
-            filters=filters,
-            claim_sensitive=False,
-            retrieval_mode="evidence_dominant",
-        )
-        return understanding, plan
-
-    return _planner
-
-
-def _forced_knowledge_eval_planner(*, force_knowledge_only: bool):
-    from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
-
-    def _planner(question: str, structured_context: str):
-        filters = RetrievalFilters()
-        understanding = QueryUnderstanding(
-            needs_personal_memory=True,
-            claim_sensitive=True,
-            retrieval_mode="claim_expand_to_evidence",
-            query_rewrite=question,
-            filters=filters,
-        )
-        plan = RetrievalPlan(
-            sources=[] if force_knowledge_only else ["local"],
-            parallel=False,
-            query=question,
-            filters=filters,
-            claim_sensitive=True,
-            retrieval_mode="claim_expand_to_evidence",
-        )
-        return understanding, plan
-
-    return _planner
-
-
-def _seed_knowledge_from_notes(runtime, notes: list[KnowledgeNote], *, user_id: str) -> dict[str, str]:
-    from personal_agent.application.knowledge.models import (
-        Artifact,
-        EvidenceBlock,
-        EvidenceSpan,
-        ExtractionRun,
-        stable_hash,
-    )
-
-    source_ref_to_note_id: dict[str, str] = {}
-    store = runtime.knowledge_service.store
-    for note in notes:
-        source_ref = f"open_ragbench://{note.id}"
-        source_ref_to_note_id[source_ref] = note.id
-        content = note.body.content
-        content_hash = stable_hash(content)
-        stable_suffix = re.sub(r"[^A-Za-z0-9_]+", "_", note.id)[:120]
-        artifact = Artifact(
-            artifact_id=source_ref,
-            owner_id=user_id,
-            user_id=user_id,
-            source_type="open_ragbench",
-            source_ref=source_ref,
-            content_hash=content_hash,
-            raw_location=note.id,
-            text=content,
-            metadata={"note_id": note.id},
-        )
-        extraction_run = ExtractionRun(
-            extraction_run_id=f"xrun_{stable_suffix}",
-            artifact_id=artifact.artifact_id,
-            owner_id=user_id,
-            extractor="open-ragbench-fixture",
-            parser_version="open-ragbench-fixture-v1",
-            input_hash=content_hash,
-            evidence_block_ids=[f"eblk_{stable_suffix}"],
-            evidence_span_ids=[f"espn_{stable_suffix}"],
-            parsed_region_count=1,
-            semantic_region_count=0,
-        )
-        block = EvidenceBlock(
-            evidence_block_id=extraction_run.evidence_block_ids[0],
-            artifact_id=artifact.artifact_id,
-            owner_id=user_id,
-            locator=note.id,
-            title_path=[note.body.title],
-            char_range=(0, len(content)),
-            full_context=content,
-            source_type="open_ragbench",
-            extraction_run_id=extraction_run.extraction_run_id,
-        )
-        span = EvidenceSpan(
-            evidence_span_id=extraction_run.evidence_span_ids[0],
-            evidence_block_id=block.evidence_block_id,
-            owner_id=user_id,
-            start_offset=0,
-            end_offset=len(content),
-            text_span=content,
-            normalized_meaning=content[:500],
-            locator=note.id,
-            quote_hash=stable_hash(content),
-        )
-        store.save_artifact(artifact)
-        store.save_extraction_run(extraction_run)
-        store.save_evidence_blocks([block])
-        store.save_evidence_spans([span])
-    return source_ref_to_note_id
-
-
-def _ranked_note_ids_from_ask_result(
-    result,
-    *,
-    source_ref_to_note_id: dict[str, str],
-    limit: int,
-) -> list[str]:
-    ranked: list[str] = []
-
-    def add(note_id: str | None) -> None:
-        if note_id and note_id not in ranked:
-            ranked.append(note_id)
-
-    for match in result.matches:
-        if match.source.type in {"knowledge_claim", "knowledge_evidence"}:
-            add(source_ref_to_note_id.get(str(match.source.ref or "")))
-        else:
-            add(match.id)
-        if len(ranked) >= limit:
-            return ranked[:limit]
-
-    for citation in result.citations:
-        if citation.source_type == "knowledge":
-            add(source_ref_to_note_id.get(str(citation.source_ref or "")))
-        else:
-            add(citation.note_id)
-        if len(ranked) >= limit:
-            return ranked[:limit]
-
-    for item in result.evidence:
-        source_ref = str(item.source_ref or "")
-        metadata = item.metadata or {}
-        add(source_ref_to_note_id.get(source_ref))
-        add(source_ref_to_note_id.get(str(metadata.get("artifact_id") or "")))
-        if item.source_id.startswith("ragbench_"):
-            add(item.source_id)
-        if len(ranked) >= limit:
-            return ranked[:limit]
-
-    return ranked[:limit]
-
-
-def _ranked_note_ids_from_ask_context(
-    ctx,
-    *,
-    source_ref_to_note_id: dict[str, str],
-    limit: int,
-) -> list[str]:
-    ranked: list[str] = []
-
-    def add(note_id: str | None) -> None:
-        if note_id and note_id not in ranked:
-            ranked.append(note_id)
-
-    for match in ctx.selected_matches:
-        if match.source.type in {"knowledge_claim", "knowledge_evidence"}:
-            add(source_ref_to_note_id.get(str(match.source.ref or "")))
-        else:
-            add(match.id)
-        if len(ranked) >= limit:
-            return ranked[:limit]
-
-    for citation in ctx.selected_citations:
-        if citation.source_type == "knowledge":
-            add(source_ref_to_note_id.get(str(citation.source_ref or "")))
-        else:
-            add(citation.note_id)
-        if len(ranked) >= limit:
-            return ranked[:limit]
-
-    evidence = ctx.context_pack.evidence if ctx.context_pack is not None else []
-    for item in evidence:
-        source_ref = str(item.source_ref or "")
-        metadata = item.metadata or {}
-        add(source_ref_to_note_id.get(source_ref))
-        add(source_ref_to_note_id.get(str(metadata.get("artifact_id") or "")))
-        if item.source_id.startswith("ragbench_"):
-            add(item.source_id)
-        if len(ranked) >= limit:
-            return ranked[:limit]
-
-    return ranked[:limit]
-
-
-def _reranker_telemetry_from_trace(trace_steps: list[str]) -> dict[str, object]:
-    telemetry: dict[str, object] = {}
-    for line in trace_steps:
-        if not line.startswith("RerankerTelemetry("):
-            continue
-        match = re.match(r"RerankerTelemetry\((?P<name>[^)]+)\):\s*(?P<body>.*)", line)
-        if not match:
-            continue
-        telemetry["reranker"] = match.group("name")
-        for part in match.group("body").split():
-            if "=" not in part:
-                continue
-            key, raw_value = part.split("=", 1)
-            if raw_value in {"True", "False"}:
-                telemetry[key] = raw_value == "True"
-            elif raw_value.isdigit():
-                telemetry[key] = int(raw_value)
-            else:
-                telemetry[key] = raw_value
-    return telemetry
-
-
 def list_strategy_names() -> list[str]:
     real_graph_names = [f"graphiti_{name}" for name in sorted(STRATEGIES)]
     return [
@@ -5058,12 +4180,6 @@ def list_strategy_names() -> list[str]:
         "doc_first_external_fusion_section_refine",
         "doc_first_external_llm_topm_rerank",
         "doc_first_external_llm_score_rerank",
-        "ask_pipeline",
-        "ask_pipeline_no_rewrite",
-        "ask_pipeline_local_only",
-        "ask_pipeline_no_planner",
-        "ask_retrieve_no_knowledge",
-        "ask_retrieve_support",
         "ask_retrieve_high_accuracy",
         "ask_retrieve_shared_evidence_selector_lexical",
         "ask_retrieve_shared_evidence_selector",
@@ -5077,16 +4193,6 @@ def list_strategy_names() -> list[str]:
         "ask_retrieve_high_accuracy_semantic_selector_all_queries",
         "ask_retrieve_high_accuracy_semantic_selector_triggered_only",
         "ask_retrieve_high_accuracy_semantic_policy_selector",
-        "ask_retrieve_llm_gated",
-        "ask_retrieve_llm_rerank",
-        "ask_retrieve_external_embedding",
-        "ask_retrieve_external_llm_rerank",
-        "ask_retrieve_knowledge",
-        "ask_retrieve_knowledge_forced_claim_sensitive",
-        "ask_retrieve_knowledge_evidence_only",
-        "current_runtime_ask",
-        "current_runtime_ask_no_knowledge",
-        "current_runtime_ask_knowledge",
         *real_graph_names,
     ]
 
@@ -5198,53 +4304,6 @@ def get_strategy(name: str) -> BenchmarkStrategy:
         return DocFirstExternalLlmTopMRerankStrategy()
     if normalized == "doc_first_external_llm_score_rerank":
         return DocFirstExternalLlmScoreRerankStrategy()
-    if normalized == "ask_pipeline":
-        return AskPipelineStrategy()
-    if normalized == "ask_pipeline_no_rewrite":
-        return AskPipelineStrategy(
-            name="ask_pipeline_no_rewrite",
-            description=(
-                "Ask retrieval proxy with planner routing but original query text; "
-                "used to isolate query rewrite impact."
-            ),
-            use_rewrite=False,
-        )
-    if normalized == "ask_pipeline_local_only":
-        return AskPipelineStrategy(
-            name="ask_pipeline_local_only",
-            description=(
-                "Ask retrieval proxy constrained to local Postgres retrieval; "
-                "used to isolate graph contribution and latency."
-            ),
-            include_graph=False,
-            local_only=True,
-        )
-    if normalized == "ask_pipeline_no_planner":
-        return AskPipelineStrategy(
-            name="ask_pipeline_no_planner",
-            description=(
-                "Local retrieval over the original query with no LLM planner; "
-                "used as the current Postgres hybrid baseline."
-            ),
-            use_planner=False,
-            use_rewrite=False,
-            include_graph=False,
-            include_subqueries=False,
-            local_only=True,
-        )
-    if normalized == "current_runtime_ask":
-        return RuntimeAskStrategy()
-    if normalized == "ask_retrieve_no_knowledge":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(
-            include_knowledge=False,
-            force_default_planner=True,
-        )
-    if normalized == "ask_retrieve_support":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(
-            include_knowledge=False,
-            force_default_planner=True,
-            ask_reranker="support",
-        )
     if normalized == "ask_retrieve_shared_evidence_selector_lexical":
         return SharedEvidenceSelectorStrategy(
             name="ask_retrieve_shared_evidence_selector_lexical",
@@ -5375,34 +4434,6 @@ def get_strategy(name: str) -> BenchmarkStrategy:
         )
     if normalized == "ask_retrieve_high_accuracy_semantic_policy_selector":
         return HighAccuracySemanticPolicySelectorStrategy()
-    if normalized == "ask_retrieve_llm_gated":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(llm_gated=True)
-    if normalized == "ask_retrieve_llm_rerank":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(llm_rerank=True)
-    if normalized == "ask_retrieve_external_embedding":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(external_embedding=True)
-    if normalized == "ask_retrieve_external_llm_rerank":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(
-            llm_rerank=True,
-            external_embedding=True,
-        )
-    if normalized == "ask_retrieve_knowledge":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(include_knowledge=True)
-    if normalized == "ask_retrieve_knowledge_forced_claim_sensitive":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(
-            include_knowledge=True,
-            force_claim_sensitive=True,
-        )
-    if normalized == "ask_retrieve_knowledge_evidence_only":
-        return RuntimeAskRetrievalKnowledgeAblationStrategy(
-            include_knowledge=True,
-            force_claim_sensitive=True,
-            knowledge_only=True,
-        )
-    if normalized == "current_runtime_ask_no_knowledge":
-        return RuntimeAskKnowledgeAblationStrategy(include_knowledge=False)
-    if normalized == "current_runtime_ask_knowledge":
-        return RuntimeAskKnowledgeAblationStrategy(include_knowledge=True)
     if normalized.startswith("graphiti_"):
         graph_strategy_name = normalized.removeprefix("graphiti_")
         if graph_strategy_name in STRATEGIES:
@@ -5433,7 +4464,6 @@ def run_open_ragbench(
         corpus_mode=corpus_mode,
     )
     eval_snapshots: dict[str, list[dict]] = {}
-    planner_cache: dict[str, tuple[object, object]] = {}
     context = BenchmarkContext(
         settings=settings or Settings.from_env(),
         graphiti_user_id=graphiti_user_id,
@@ -5443,7 +4473,6 @@ def run_open_ragbench(
         graphiti_continue_on_ingest_error=graphiti_continue_on_ingest_error,
         local_probe_limit=local_probe_limit,
         eval_snapshots=eval_snapshots,
-        planner_cache=planner_cache,
     )
     results: list[BenchmarkRunResult] = []
     for strategy_name in strategy_names:
@@ -5515,7 +4544,7 @@ def _parse_args() -> argparse.Namespace:
         "--graph-search-limit",
         type=int,
         default=None,
-        help="Override Graphiti search_config.limit for real Graphiti/current_runtime_ask evals.",
+        help="Override Graphiti search_config.limit for real Graphiti evals.",
     )
     parser.add_argument(
         "--graph-search-citation-limit",
@@ -5527,13 +4556,13 @@ def _parse_args() -> argparse.Namespace:
         "--ask-graph-provider",
         choices=("graphiti", "structural", "hybrid"),
         default=None,
-        help="Override the production ask graph provider for current_runtime_ask.",
+        help="Override the graph provider for retrieval experiments.",
     )
     parser.add_argument(
         "--ask-reranker",
         choices=("heuristic", "llm", "llm_gated"),
         default=None,
-        help="Override the production ask reranker for current_runtime_ask.",
+        help="Override the reranker for retrieval experiments.",
     )
     parser.add_argument(
         "--ask-candidate-enricher",

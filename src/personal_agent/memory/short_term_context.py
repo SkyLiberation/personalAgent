@@ -1,7 +1,7 @@
 """短期记忆（thread 对话）进 prompt 前的统一裁剪策略。
 
 集中处理 token 预算、单条消息截断、滑动窗口与溢出滚动摘要，替代原先散落在
-``_helpers.py`` / ``runtime_ask.py`` / ``query_planner.py`` 的硬编码常量。
+各调用方的硬编码常量。
 
 设计为纯函数为主，不依赖 runtime/store，便于单元测试。两种入参形态：
 - LangGraph ``BaseMessage``（带 ``.type`` ``human``/``ai``）

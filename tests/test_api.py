@@ -351,7 +351,7 @@ class TestKnowledgeCaptureEndpoints:
 
 
 class TestGovernedKnowledgeDelete:
-    def test_confirmed_command_executes_exactly_once_and_binds_command_digest(
+    def test_confirmed_command_executes_once_and_receipt_binds_server_command(
         self,
         api_client: TestClient,
     ) -> None:
@@ -382,7 +382,7 @@ class TestGovernedKnowledgeDelete:
         ).json())
 
         command = operation["command"]
-        invalid = api_client.post(
+        obsolete_client_digest = api_client.post(
             f"/api/knowledge-delete-commands/{command['command_id']}/decision",
             json={
                 "user_id": user_id,
@@ -391,7 +391,7 @@ class TestGovernedKnowledgeDelete:
                 "confirmation_ref": "user-confirmation-1",
             },
         )
-        assert invalid.status_code == 409
+        assert obsolete_client_digest.status_code == 422
         assert any(item["id"] == note_id for item in api_client.get(
             "/api/notes", params={"user_id": user_id}
         ).json())
@@ -399,7 +399,6 @@ class TestGovernedKnowledgeDelete:
         decision = {
             "user_id": user_id,
             "decision": "confirm",
-            "command_digest": command["command_digest"],
             "confirmation_ref": "user-confirmation-1",
         }
         first = api_client.post(
@@ -457,7 +456,6 @@ class TestGovernedKnowledgeDelete:
             json={
                 "user_id": user_id,
                 "decision": "reject",
-                "command_digest": command["command_digest"],
             },
         )
         assert rejected.status_code == 200
@@ -633,7 +631,6 @@ class TestNotesEndpoint:
             json={
                 "user_id": user_id,
                 "decision": "confirm",
-                "command_digest": delete_command["command_digest"],
                 "confirmation_ref": "delete-confirmation",
             },
         ).json()
@@ -666,7 +663,6 @@ class TestNotesEndpoint:
         decision = {
             "user_id": user_id,
             "decision": "confirm",
-            "command_digest": restore_command["command_digest"],
             "confirmation_ref": "restore-confirmation",
         }
         first = api_client.post(
@@ -848,7 +844,7 @@ class TestRemovedWorkspaceContract:
         assert api_client.post(
             "/api/knowledge/ask",
             json={"question": "legacy", "workspace_id": "legacy"},
-        ).status_code == 422
+        ).status_code == 405
         assert api_client.post(
             "/api/tools/search_knowledge/execute",
             json={

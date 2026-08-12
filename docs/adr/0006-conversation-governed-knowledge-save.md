@@ -55,7 +55,7 @@ E14 从 `/api/conversation/turn` 输入用户自然表达，自动断言：
 
 - 模型：判断用户是否明确请求保存，并选择既有 user message 中承载知识的精确原文 span；
 - Conversation Admission：机械证明 message index 有效且 span 逐字存在于对应 user message；
-- Conversation Service：冻结精确 span 与 source index，创建 Command，执行 scope/digest/状态校验；
+- Conversation Service：冻结精确 span 与 source index，创建 Command；decision 按 run ref、principal、scope 和状态校验，服务端读取内部 digest；
 - Interaction Journal：拥有 Command、确认状态和 Receipt；
 - `KnowledgeService.solidify_conversation`：知识事实唯一 canonical 写入口；
 - Receipt：知识写入的 execution fact；E14 还必须从公开 Claim 读取入口证明精确结论存在且控制

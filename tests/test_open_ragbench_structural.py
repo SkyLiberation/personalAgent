@@ -3,11 +3,9 @@ from __future__ import annotations
 from personal_agent.kernel.config import Settings
 from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from tests.note_factory import make_note
-from personal_agent.kernel.query_understanding import QueryUnderstanding, RetrievalFilters, RetrievalPlan
 
 from evals.open_ragbench.loader import RAGBenchDoc, RAGBenchQuery
 from evals.open_ragbench.runner import (
-    AskPipelineStrategy,
     BenchmarkContext,
     BenchmarkRunResult,
     DATASET_AGNOSTIC_PROFILE,
@@ -18,7 +16,6 @@ from evals.open_ragbench.runner import (
     HighAccuracySemanticPolicySelectorStrategy,
     GALILEO_RAGBENCH_PROFILE,
     OPEN_RAGBENCH_PROFILE,
-    RuntimeAskStrategy,
     SharedEvidenceSelectorStrategy,
     StructuralRetrieverStrategy,
     _EvidenceSelectionPolicy,
@@ -30,7 +27,6 @@ from evals.open_ragbench.runner import (
     _build_structural_index,
     _blend_v2_and_semantic_selector,
     _blend_fusion_and_llm_scores,
-    _high_accuracy_ask_settings,
     _blend_fusion_and_llm_ranks,
     _combined_semantic_selector_score,
     _combined_llm_note_score,
@@ -79,15 +75,9 @@ def test_structural_is_registered():
     assert isinstance(get_strategy("structural"), StructuralRetrieverStrategy)
 
 
-def test_ask_pipeline_eval_variants_are_registered():
+def test_evidence_retrieval_eval_variants_are_registered():
     names = list_strategy_names()
 
-    assert "ask_pipeline" in names
-    assert "ask_pipeline_no_rewrite" in names
-    assert "ask_pipeline_local_only" in names
-    assert "ask_pipeline_no_planner" in names
-    assert "ask_retrieve_no_knowledge" in names
-    assert "ask_retrieve_support" in names
     assert "ask_retrieve_high_accuracy" in names
     assert "ask_retrieve_shared_evidence_selector_lexical" in names
     assert "ask_retrieve_shared_evidence_selector" in names
@@ -101,20 +91,6 @@ def test_ask_pipeline_eval_variants_are_registered():
     assert "ask_retrieve_high_accuracy_semantic_selector_all_queries" in names
     assert "ask_retrieve_high_accuracy_semantic_selector_triggered_only" in names
     assert "ask_retrieve_high_accuracy_semantic_policy_selector" in names
-    assert "ask_retrieve_llm_rerank" in names
-    assert "ask_retrieve_external_embedding" in names
-    assert "ask_retrieve_external_llm_rerank" in names
-    assert "ask_retrieve_knowledge" in names
-    assert "ask_retrieve_knowledge_forced_claim_sensitive" in names
-    assert "ask_retrieve_knowledge_evidence_only" in names
-    assert "current_runtime_ask" in names
-    assert isinstance(get_strategy("ask_pipeline"), AskPipelineStrategy)
-    assert isinstance(get_strategy("ask_pipeline_no_rewrite"), AskPipelineStrategy)
-    assert isinstance(get_strategy("ask_pipeline_local_only"), AskPipelineStrategy)
-    assert isinstance(get_strategy("ask_pipeline_no_planner"), AskPipelineStrategy)
-    assert isinstance(get_strategy("current_runtime_ask"), RuntimeAskStrategy)
-    assert get_strategy("ask_retrieve_support").name == "ask_retrieve_support"
-    assert get_strategy("ask_retrieve_external_llm_rerank").name == "ask_retrieve_external_llm_rerank"
     high_accuracy = get_strategy("ask_retrieve_high_accuracy")
     assert isinstance(high_accuracy, DocFirstFusionStrategy)
     assert high_accuracy.external_embedding is True
@@ -221,18 +197,6 @@ def test_shared_evidence_selector_filters_low_information_headers_with_fallback(
     assert selected.ranked_ids == ["evidence"]
     assert selected.diagnostics["low_information_unit_count"] == 1
     assert fallback.ranked_ids == ["title"]
-
-
-def test_high_accuracy_profile_uses_external_embedding():
-    settings = Settings(
-        openai=Settings().openai.model_copy(update={"embedding_model": "legacy-model"})
-    )
-
-    updated = _high_accuracy_ask_settings(settings)
-
-    assert updated.embedding_provider == "openai"
-    assert updated.openai.embedding_model == "BAAI/bge-m3"
-    assert updated.ask.local_retrieval_limit >= 12
 
 
 def test_doc_first_fusion_strategy_is_registered():
@@ -694,80 +658,6 @@ def test_passage_helpers_are_bounded_and_cosine_is_normalized():
     assert _cosine_similarity([1.0, 0.0], [1.0, 0.0]) == 1.0
     assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
     assert _cosine_similarity([1.0], [1.0, 0.0]) == 0.0
-
-
-def test_ask_pipeline_ablation_reuses_planner_cache(monkeypatch):
-    calls: list[str] = []
-
-    docs = {
-        "paper-a": RAGBenchDoc(
-            doc_id="paper-a",
-            title="Redis cache architecture",
-            abstract="This paper studies cache design.",
-            sections=["Redis stores hot order data and reduces database pressure."],
-        )
-    }
-    queries = [
-        RAGBenchQuery(
-            query_id="q1",
-            query_text="How does Redis reduce database pressure for orders?",
-            query_type="abstractive",
-            relevant_doc_id="paper-a",
-            relevant_section_idx=0,
-            answer="Redis stores hot order data.",
-        )
-    ]
-
-    def fake_load_benchmark(*, num_queries, seed, corpus_mode):
-        return queries, docs
-
-    def fake_plan_retrieval(question, conversation_context, settings):
-        calls.append(question)
-        return (
-            QueryUnderstanding(
-                needs_personal_memory=True,
-                query_rewrite="redis hot order cache",
-                filters=RetrievalFilters(),
-            ),
-            RetrievalPlan(
-                sources=["local"],
-                parallel=False,
-                query="redis hot order cache",
-                sub_queries=[],
-                filters=RetrievalFilters(),
-            ),
-        )
-
-    class FakeStore:
-        def find_similar_notes(self, user_id, query, limit=8, filters=None):
-            return [
-                make_note(
-                    id="ragbench_paper-a_sec_0",
-                    user_id=user_id,
-                    title="Redis",
-                    content="Redis stores hot order data.",
-                    summary="Redis stores hot order data.",
-                    parent_note_id="ragbench_paper-a",
-                )
-            ]
-
-    def fake_new_eval_store(settings, docs, user_id="ragbench_eval"):
-        return FakeStore(), []
-
-    monkeypatch.setattr("evals.open_ragbench.runner.load_benchmark", fake_load_benchmark)
-    monkeypatch.setattr("personal_agent.planning.query_planner.plan_retrieval", fake_plan_retrieval)
-    monkeypatch.setattr("evals.open_ragbench.runner._new_eval_store", fake_new_eval_store)
-
-    results = run_open_ragbench(
-        strategy_names=["ask_pipeline_local_only", "ask_pipeline_no_rewrite"],
-        num_queries=1,
-        settings=Settings(postgres_url="postgresql://unused"),
-        graphiti_manifest_path=None,
-    )
-
-    assert calls == ["How does Redis reduce database pressure for orders?"]
-    assert results[0].diagnostics[0]["planner"]["cache_hit"] is False
-    assert results[1].diagnostics[0]["planner"]["cache_hit"] is True
 
 
 def test_diagnostic_summary_aggregates_raw_ranks():

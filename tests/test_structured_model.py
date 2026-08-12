@@ -789,6 +789,36 @@ def test_retrying_client_retries_malformed_success_transport():
     assert result.retry_attempts == 1
 
 
+def test_retrying_client_retries_empty_structured_provider_content():
+    calls = 0
+
+    class Delegate:
+        def generate(self, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ValueError(
+                    "agent_interaction_turn structured parse failed: "
+                    "provider returned empty structured content"
+                )
+            return StructuredModelResponse(
+                value=ExampleOutput(ok=True),
+                model="model",
+                latency_ms=1.0,
+            )
+
+    client = RetryingStructuredModelClient(
+        Delegate(),
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    result = client.generate(_request())
+
+    assert calls == 2
+    assert result.retry_attempts == 1
+
+
 def test_retrying_client_does_not_retry_non_transient_failures():
     calls = 0
 

@@ -21,7 +21,7 @@ from personal_agent.application.verifier import EntailmentAnswerVerifier
 from personal_agent.kernel.evidence import EvidenceItem
 
 from .dataset import RunOutput, default_cases_path, load_cases
-from .runner import run_output_from_result
+from .runner import run_output_from_fixture
 from .scorer import score_all, score_case
 
 
@@ -61,13 +61,9 @@ def _build_runs() -> dict[str, RunOutput]:
             citations=[], matches=[], evidence=evidence,
         )
 
-        class _Result:
-            pass
-
-        proj = _Result()
-        proj.answer = ref["answer"]
-        proj.evidence = evidence
-        runs[case_id] = run_output_from_result(proj, verification=result)
+        runs[case_id] = run_output_from_fixture(
+            answer=ref["answer"], evidence=evidence, verification=result
+        )
     return runs
 
 

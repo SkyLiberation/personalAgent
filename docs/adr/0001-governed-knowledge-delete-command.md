@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-07-24
-- 修订：2026-07-27
+- 修订：2026-08-11
 
 ## 问题
 
@@ -35,9 +35,10 @@ Event 或两套 digest。
 
 1. prepare 创建 immutable `KnowledgeDeleteCommand` 或
    `KnowledgeRestoreCommand`，状态为 `awaiting_confirmation`，不修改业务事实；
-2. 一个 `command_digest` 对 canonical command payload 做 SHA-256，绑定确认、
-   Operation 和 Receipt；digest 是一致性指纹，不是身份或授权；
-3. decision 校验入口身份、command owner、digest 和 `confirmation_ref`；
+2. 一个服务端 `command_digest` 对 canonical command payload 做 SHA-256，绑定
+   Operation 和 Receipt；digest 是内部一致性与幂等指纹，不是身份、授权或客户端确认凭据；
+3. decision 由 path 中的 `command_id` 选择 immutable Command，校验入口身份、command owner、
+   状态和 `confirmation_ref`；客户端不能回传或覆盖 digest；
 4. confirm 在一个数据库事务中更新 Personal Knowledge canonical facts、写 Personal Knowledge
    `KnowledgeStateEvent` 并写 Receipt；
 5. replay 已执行 command 时直接返回原 Receipt，不再次产生副作用；
@@ -84,15 +85,17 @@ Legacy 六表迁移代码只服务本次滚动升级。所有部署环境完成�
 
 ## 目标 E2E 与反事实
 
-- prepare 返回 command 与 `command_digest`，业务事实不变；
-- 错误 user/personal knowledge、错误 digest、缺失确认或 rejected command 均不执行；
+- prepare 返回 command 与服务端诊断用 `command_digest`，业务事实不变；
+- 错误 user/personal knowledge、错误/不存在的 command id、缺失确认或 rejected command 均不执行；
 - 进程重启后可以确认同一个 command；
 - 同 command replay 返回同一 Receipt，状态事件不增加；
 - restore 在重启后精确恢复 Item/Claim previous states；
 - 响应不存在 lifecycle `events` 投影；
 - 旧 DELETE、snapshot restore、普通 Conversation Tool 路径不可达。
 
-对应测试为 release E04/E10 和 notes API integration。
+对应测试为 release E04/E10 和 notes API integration。GOV-002 baseline 曾证明客户端只携带
+`command_id + authenticated principal + confirmation_ref` 时旧 API 返回 422；目标 E2E 现已通过，
+而内部 digest、Receipt 绑定和 replay 行为保持不变。
 
 ## 复杂度结论
 

@@ -30,12 +30,8 @@ criterion 传入，verifier 拿指令形状的判据评判最小化草稿，一�
 已证明约束：**不能用 prompt 措辞执行结构性不变量。** 与 ADR 0009 的「不能把 LLM 当字节精确
 传输通道」同类——那次是产物传输，这次是控制流与判据来源。
 
-决定性证据在本仓库内部，不在外部框架。同一 codebase 里已有两条 A 类实现，Conversation 是
-唯一例外：
-
-- **Ask 路径**：`run_verification_stage()` 是流水线固定 stage，`_verifier.verify(...)` 无条件
-  调用（`orchestration/runtime_ask.py:154`、`orchestration/ask/stages.py:405`）。模型不知道它存在。
-- **Project 路径**：把这条原则写成了强制规则——`investigation_project/model_ports.py:80-95`
+决定性证据在本仓库内部，不在外部框架。**Project 路径**已经把这条原则写成强制规则：
+`investigation_project/model_ports.py:80-95`
   的 `_exclude_project_verification_work` 与 `investigation_project/admission.py:212-222` 双重
   拒绝任何 `semantic_domain in {verification, semantic_verification}` 的 SubGoal，理由原文是
   「Project semantic verification is owned by the automatic Verifier and cannot be a Plan

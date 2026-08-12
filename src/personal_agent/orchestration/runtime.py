@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
-from personal_agent.kernel.models import Citation, KnowledgeNote, NoteBody, NoteSource, ReviewCard
+from personal_agent.kernel.models import (
+    KnowledgeNote,
+    NoteBody,
+    NoteSource,
+    ReviewCard,
+)
 from personal_agent.kernel.observability import set_policy_decision_sink
 from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.memory.graphiti.store import GraphitiStore
@@ -17,15 +22,25 @@ from personal_agent.governance.guardrails import configure_guardrails
 from personal_agent.governance.policy import PolicyEngine, PolicyRules
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
-from personal_agent.infra.storage.postgres_tool_governance_store import PostgresToolGovernanceStore
-from personal_agent.infra.storage.postgres_worker_queue_store import PostgresWorkerQueueStore
+from personal_agent.infra.storage.postgres_tool_governance_store import (
+    PostgresToolGovernanceStore,
+)
+from personal_agent.infra.storage.postgres_worker_queue_store import (
+    PostgresWorkerQueueStore,
+)
 from personal_agent.infra.storage.postgres_knowledge_store import PostgresKnowledgeStore
 from personal_agent.infra.storage.postgres_knowledge_lifecycle_store import (
     PostgresKnowledgeLifecycleStore,
 )
-from personal_agent.infra.storage.postgres_procedure_definition_store import PostgresProcedureDefinitionStore
-from personal_agent.infra.storage.postgres_agent_trace_store import PostgresAgentTraceStore
-from personal_agent.infra.storage.postgres_execution_replay_store import PostgresExecutionReplayStore
+from personal_agent.infra.storage.postgres_procedure_definition_store import (
+    PostgresProcedureDefinitionStore,
+)
+from personal_agent.infra.storage.postgres_agent_trace_store import (
+    PostgresAgentTraceStore,
+)
+from personal_agent.infra.storage.postgres_execution_replay_store import (
+    PostgresExecutionReplayStore,
+)
 from personal_agent.infra.storage.postgres_investigation_project import (
     PostgresInvestigationProjectStore,
 )
@@ -85,6 +100,8 @@ from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.investigation_project import (
     CreateInvestigationProject,
     InvestigationProjectService,
+    QueryInvestigationProject,
+    SteerInvestigationProject,
     StructuredExecutionProposer,
     StructuredInvestigationPlanner,
     StructuredProjectSynthesis,
@@ -105,14 +122,21 @@ from personal_agent.application.conversation import (
     LoopBudgetPolicy,
 )
 from personal_agent.application.conversation.models import (
+    ConversationProjectSnapshot,
+    InvestigationRequirementProgress,
+    InvestigationSubgoalProgress,
     ProjectReference,
     StartDurableInvestigationArguments,
+    SteerInvestigationProjectArguments,
     PersonalKnowledgeCandidate,
+    PersonalKnowledgeEvidenceCitation,
+    PersonalKnowledgeEvidenceSnapshot,
 )
 from personal_agent.domain.investigation_project import UserRequirement
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
-from personal_agent.orchestration.capability_inventory import build_runtime_capability_inventory
-from personal_agent.orchestration.runtime_ask import AskService
+from personal_agent.orchestration.capability_inventory import (
+    build_runtime_capability_inventory,
+)
 from personal_agent.orchestration.runtime_helpers import (
     _annotate_answer,
     _evidence_content,
@@ -128,14 +152,11 @@ from personal_agent.orchestration.runtime_helpers import (
     _top_sentences,
 )
 from personal_agent.infra.runtime_llm import LlmClient
-from personal_agent.kernel.projections import MatchRef
 from personal_agent.memory.thread_summarizer import ThreadSummarizer
 from personal_agent.application.runtime_results import (
-    AskResult,
     CaptureResult,
     DigestResult,
     ResetResult,
-    RetryResult,
 )
 from personal_agent.application.review import DigestFormatter, ReviewDigestUseCase
 from personal_agent.application.knowledge_lifecycle import KnowledgeLifecycleService
@@ -147,16 +168,19 @@ from personal_agent.application.research import (
 )
 from personal_agent.application.knowledge import (
     IngestKnowledgeResult,
-    LLMKnowledgeAnswerVerifier,
     LLMClaimGroundingJudge,
     LLMClaimRelationJudge,
     LLMSemanticClaimExtractor,
     LLMSemanticEvidenceExtractor,
     KnowledgeService,
 )
-from personal_agent.kernel.evidence import EvidenceItem, evidence_reference
-from personal_agent.application.research.extraction import StructuredResearchEventExtractor
-from personal_agent.infra.storage.postgres_debug_reset_store import PostgresDebugResetStore, clear_upload_files
+from personal_agent.application.research.extraction import (
+    StructuredResearchEventExtractor,
+)
+from personal_agent.infra.storage.postgres_debug_reset_store import (
+    PostgresDebugResetStore,
+    clear_upload_files,
+)
 from personal_agent.application.verifier import create_answer_verifier
 
 if TYPE_CHECKING:
@@ -166,7 +190,9 @@ logger = logging.getLogger(__name__)
 
 
 class _KnowledgeJsonResult:
-    def __init__(self, payload: dict[str, object], *, ok: bool = True, error: str = "") -> None:
+    def __init__(
+        self, payload: dict[str, object], *, ok: bool = True, error: str = ""
+    ) -> None:
         self.ok = ok
         self.error = error
         self._payload = payload
@@ -180,7 +206,9 @@ class _KnowledgeConsolidationAdapter:
         self._runtime = runtime
 
     def execute(self, *, topic: str, user_id: str = "default") -> _KnowledgeJsonResult:
-        return _KnowledgeJsonResult(self._runtime.execute_consolidate(topic=topic, user_id=user_id))
+        return _KnowledgeJsonResult(
+            self._runtime.execute_consolidate(topic=topic, user_id=user_id)
+        )
 
 
 class _KnowledgeGapReport:
@@ -262,6 +290,40 @@ class _ConversationKnowledgeReadAdapter:
         )
         return visible[:limit]
 
+    def select_personal_evidence(
+        self,
+        *,
+        question: str,
+        owner_id: str,
+        user_id: str,
+        limit: int,
+    ) -> PersonalKnowledgeEvidenceSnapshot:
+        selection = self._knowledge_service.select_evidence(
+            question,
+            owner_id=owner_id,
+            limit=limit,
+        )
+        return PersonalKnowledgeEvidenceSnapshot(
+            question=selection.question,
+            citations=tuple(
+                PersonalKnowledgeEvidenceCitation(
+                    evidence_span_id=item.evidence_span_id,
+                    quote=item.quote,
+                    locator=item.locator,
+                    claim_ids=tuple(item.claim_ids),
+                )
+                for item in selection.citations
+            ),
+            claim_summaries=tuple(
+                item.statement for item in selection.selected_claims
+            ),
+            conflicted_claim_ids=tuple(selection.conflicted_claim_ids),
+            potential_conflicted_claim_ids=tuple(
+                selection.potential_conflicted_claim_ids
+            ),
+            reason=selection.reason,
+        )
+
 
 class _ConversationProjectAdapter:
     def __init__(self, project_service: InvestigationProjectService) -> None:
@@ -275,20 +337,22 @@ class _ConversationProjectAdapter:
         request: StartDurableInvestigationArguments,
         idempotency_key: str,
     ) -> ProjectReference:
-        view = self._project_service.create(CreateInvestigationProject(
-            principal=principal,
-            title=request.title,
-            goal=request.goal,
-            requirements=tuple(
-                UserRequirement(
-                    requirement_id=f"req-{index}",
-                    statement=requirement.statement,
-                    acceptance_contract=requirement.acceptance_contract,
-                )
-                for index, requirement in enumerate(request.requirements, start=1)
-            ),
-            idempotency_key=idempotency_key,
-        ))
+        view = self._project_service.create(
+            CreateInvestigationProject(
+                principal=principal,
+                title=request.title,
+                goal=request.goal,
+                requirements=tuple(
+                    UserRequirement(
+                        requirement_id=f"req-{index}",
+                        statement=requirement.statement,
+                        acceptance_contract=requirement.acceptance_contract,
+                    )
+                    for index, requirement in enumerate(request.requirements, start=1)
+                ),
+                idempotency_key=idempotency_key,
+            )
+        )
         return ProjectReference(
             project_id=view.definition.project_id,
             tenant_id=view.definition.principal.tenant_id,
@@ -296,6 +360,85 @@ class _ConversationProjectAdapter:
             state=view.state,
             title=view.definition.title,
             goal=view.definition.goal,
+        )
+
+    def get(self, *, principal, reference) -> ConversationProjectSnapshot:
+        view = self._project_service.get(QueryInvestigationProject(
+            principal=principal,
+            project_id=reference.project_id,
+        ))
+        return self._snapshot(view)
+
+    def steer(
+        self,
+        *,
+        principal,
+        reference,
+        request: SteerInvestigationProjectArguments,
+        idempotency_key: str,
+    ) -> ConversationProjectSnapshot:
+        current = self._project_service.get(QueryInvestigationProject(
+            principal=principal,
+            project_id=reference.project_id,
+        ))
+        if current.accepted_plan is None:
+            raise ValueError("durable investigation has no accepted plan yet")
+        updated = self._project_service.steer(SteerInvestigationProject(
+            principal=principal,
+            project_id=reference.project_id,
+            expected_plan_version=current.accepted_plan.plan_version,
+            statement=request.statement,
+            waived_requirement_ids=request.waived_requirement_ids,
+            added_requirements=tuple(
+                UserRequirement(
+                    requirement_id=(
+                        "req-conversation-"
+                        f"{idempotency_key[:10]}-{index}"
+                    ),
+                    statement=item.statement,
+                    acceptance_contract=item.acceptance_contract,
+                )
+                for index, item in enumerate(request.added_requirements, start=1)
+            ),
+            idempotency_key=idempotency_key,
+        ))
+        return self._snapshot(updated)
+
+    @staticmethod
+    def _snapshot(view) -> ConversationProjectSnapshot:
+        completed = {item.logical_subgoal_id for item in view.outcomes}
+        plan = view.accepted_plan
+        return ConversationProjectSnapshot(
+            project_id=view.definition.project_id,
+            state=view.state,
+            title=view.definition.title,
+            goal=view.definition.goal,
+            plan_version=plan.plan_version if plan is not None else None,
+            requirements=tuple(
+                InvestigationRequirementProgress(
+                    requirement_id=item.requirement_id,
+                    statement=item.statement,
+                    acceptance_contract=item.acceptance_contract,
+                    status=item.status,
+                )
+                for item in view.user_requirements.requirements
+            ),
+            subgoals=tuple(
+                InvestigationSubgoalProgress(
+                    logical_subgoal_id=item.logical_subgoal_id,
+                    objective=item.objective,
+                    status=(
+                        "completed"
+                        if item.logical_subgoal_id in completed
+                        else "pending"
+                    ),
+                )
+                for item in (plan.proposal.subgoals if plan is not None else ())
+            ),
+            waiting_reasons=tuple(
+                f"{item.logical_subgoal_id}:{item.reason}"
+                for item in view.waiting_reasons
+            ),
         )
 
 
@@ -324,7 +467,9 @@ class AgentRuntime:
         capture_service: "CaptureService | None" = None,
     ) -> None:
         if not settings.postgres_url:
-            raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
+            raise ValueError(
+                "PERSONAL_AGENT_POSTGRES_URL is required for business persistence."
+            )
         self.settings = settings
         configure_langsmith_environment(settings.langsmith)
         self.store = store
@@ -334,9 +479,13 @@ class AgentRuntime:
         # (nodes without a context param) share one configured instance.
         self._content_guard = configure_guardrails(settings.guardrails)
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
-        self.procedure_definition_store = PostgresProcedureDefinitionStore(settings.postgres_url)
+        self.procedure_definition_store = PostgresProcedureDefinitionStore(
+            settings.postgres_url
+        )
         self.agent_trace_store = PostgresAgentTraceStore(settings.postgres_url)
-        self.execution_replay_store = PostgresExecutionReplayStore(settings.postgres_url)
+        self.execution_replay_store = PostgresExecutionReplayStore(
+            settings.postgres_url
+        )
         self.worker_queue_store = PostgresWorkerQueueStore(settings.postgres_url)
         self.research_store = PostgresResearchStore(
             settings.postgres_url,
@@ -350,7 +499,9 @@ class AgentRuntime:
         )
         # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
         set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
-        self.memory = MemoryFacade(store, graph_store, policy_engine=self._policy_engine)
+        self.memory = MemoryFacade(
+            store, graph_store, policy_engine=self._policy_engine
+        )
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
         self.artifact_service = ArtifactService(settings, logger)
@@ -366,19 +517,27 @@ class AgentRuntime:
             build_chat_model_client,
             build_streaming_model_client,
         )
+
         self._model_client = build_chat_model_client(
-            settings.openai, settings.langsmith,
+            settings.openai,
+            settings.langsmith,
         )
         if self._structured_client is not None:
-            self.knowledge_service.relation_judge = LLMClaimRelationJudge(self._structured_client)
-            self.knowledge_service.semantic_evidence_extractor = LLMSemanticEvidenceExtractor(self._structured_client)
-            self.knowledge_service.semantic_claim_extractor = LLMSemanticClaimExtractor(self._structured_client)
-            self.knowledge_service.claim_grounding_judge = LLMClaimGroundingJudge(self._structured_client)
-            self.knowledge_service.answer_verifier = LLMKnowledgeAnswerVerifier(
+            self.knowledge_service.relation_judge = LLMClaimRelationJudge(
+                self._structured_client
+            )
+            self.knowledge_service.semantic_evidence_extractor = (
+                LLMSemanticEvidenceExtractor(self._structured_client)
+            )
+            self.knowledge_service.semantic_claim_extractor = LLMSemanticClaimExtractor(
+                self._structured_client
+            )
+            self.knowledge_service.claim_grounding_judge = LLMClaimGroundingJudge(
                 self._structured_client
             )
         self._streaming_client = build_streaming_model_client(
-            settings.openai, settings.langsmith,
+            settings.openai,
+            settings.langsmith,
         )
         self._research_event_client = self._structured_client
         self._planner_client = self._structured_client
@@ -393,10 +552,12 @@ class AgentRuntime:
             store=self.agent_run_store,
         )
         if self.settings.gpt_researcher_a2a.enabled:
-            self._agent_gateway.register(GPTResearcherA2AAdapter(
-                self.settings.gpt_researcher_a2a,
-                self.artifact_service,
-            ))
+            self._agent_gateway.register(
+                GPTResearcherA2AAdapter(
+                    self.settings.gpt_researcher_a2a,
+                    self.artifact_service,
+                )
+            )
         self._llm = LlmClient(
             settings,
             model_client=self._model_client,
@@ -451,19 +612,33 @@ class AgentRuntime:
         self._tool_executor.register(
             build_create_research_subscription_tool(self._research_service)
         )
-        self._tool_executor.register(build_research_prepare_run_tool(self._research_service))
-        self._tool_executor.register(build_research_initialize_state_tool(self._research_service))
-        self._tool_executor.register(build_research_run_loop_tool(self._research_service))
-        self._tool_executor.register(build_research_synthesize_digest_tool(self._research_service))
-        self._tool_executor.register(build_research_verify_digest_tool(self._research_service))
+        self._tool_executor.register(
+            build_research_prepare_run_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_research_initialize_state_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_research_run_loop_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_research_synthesize_digest_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_research_verify_digest_tool(self._research_service)
+        )
         self._register_tools()
         if self._structured_client is not None:
-            investigation_planner = StructuredInvestigationPlanner(self._structured_client)
+            investigation_planner = StructuredInvestigationPlanner(
+                self._structured_client
+            )
             investigation_execution_proposer = StructuredExecutionProposer(
                 self._structured_client
             )
             investigation_verifier = StructuredProjectVerifier(self._structured_client)
-            investigation_synthesis = StructuredProjectSynthesis(self._structured_client)
+            investigation_synthesis = StructuredProjectSynthesis(
+                self._structured_client
+            )
         else:
             unavailable_investigation_model = UnavailableInvestigationModelPorts()
             investigation_planner = unavailable_investigation_model
@@ -501,8 +676,12 @@ class AgentRuntime:
             knowledge_writer=self.knowledge_service,
             knowledge_reader=_ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
-            project_port=_ConversationProjectAdapter(self.investigation_project_service),
-            budget_policy=LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
+            project_port=_ConversationProjectAdapter(
+                self.investigation_project_service
+            ),
+            budget_policy=LoopBudgetPolicy(
+                **self.settings.interaction_loop.model_dump()
+            ),
             journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
         )
         self._sync_procedure_definitions()
@@ -510,7 +689,9 @@ class AgentRuntime:
             ProcedureMaterializer(PROCEDURE_CATALOG),
         )
         self._verifier = create_answer_verifier(settings)
-        self._step_projection_validator = StepProjectionValidator(tool_executor=self._tool_executor)
+        self._step_projection_validator = StepProjectionValidator(
+            tool_executor=self._tool_executor
+        )
         self._summarizer = ThreadSummarizer(self._llm)
 
     @property
@@ -598,12 +779,20 @@ class AgentRuntime:
             self._tool_executor.register(
                 build_verify_interaction_draft_tool(self._structured_client)
             )
-        self._tool_executor.register(build_graph_search_tool(self._active_graph_store()))
-        self._tool_executor.register(build_capture_text_tool(
-            lambda text, source_type="text", user_id="default": self.execute_capture(
-                text=text, source_type=source_type, user_id=user_id,
+        self._tool_executor.register(
+            build_graph_search_tool(self._active_graph_store())
+        )
+        self._tool_executor.register(
+            build_capture_text_tool(
+                lambda text, source_type="text", user_id="default": (
+                    self.execute_capture(
+                        text=text,
+                        source_type=source_type,
+                        user_id=user_id,
+                    )
+                )
             )
-        ))
+        )
         self._tool_executor.register(build_list_recent_notes_tool(self.memory))
         self._tool_executor.register(build_get_note_tool(self.memory))
         self._tool_executor.register(build_find_similar_notes_tool(self.memory))
@@ -614,28 +803,55 @@ class AgentRuntime:
         self._tool_executor.register(
             build_consolidate_knowledge_tool(self._knowledge_consolidation_use_case)
         )
-        self._tool_executor.register(build_review_digest_tool(self._review_digest_use_case))
+        self._tool_executor.register(
+            build_review_digest_tool(self._review_digest_use_case)
+        )
         self._tool_executor.register(
             build_inspect_knowledge_gaps_tool(self._knowledge_gap_use_case)
         )
-        self._tool_executor.register(build_list_research_subscriptions_tool(self._research_service))
-        self._tool_executor.register(build_update_research_subscription_tool(self._research_service))
-        self._tool_executor.register(build_pause_research_subscription_tool(self._research_service))
-        self._tool_executor.register(build_resume_research_subscription_tool(self._research_service))
-        self._tool_executor.register(build_run_research_subscription_now_tool(self._research_service))
-        self._tool_executor.register(build_list_research_runs_tool(self._research_service))
-        self._tool_executor.register(build_get_research_digest_tool(self._research_service))
-        self._tool_executor.register(build_submit_research_feedback_tool(self._research_service))
-        self._tool_executor.register(build_save_research_event_tool(self._research_service))
+        self._tool_executor.register(
+            build_list_research_subscriptions_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_update_research_subscription_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_pause_research_subscription_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_resume_research_subscription_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_run_research_subscription_now_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_list_research_runs_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_get_research_digest_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_submit_research_feedback_tool(self._research_service)
+        )
+        self._tool_executor.register(
+            build_save_research_event_tool(self._research_service)
+        )
         self._tool_executor.register(build_inspect_worker_queue_tool(self))
         self._tool_executor.register(build_retry_worker_task_tool(self))
         if self.settings.web_search_available:
-            from personal_agent.application.capture.providers.web_search import build_web_search_provider
+            from personal_agent.application.capture.providers.web_search import (
+                build_web_search_provider,
+            )
+
             web_provider = build_web_search_provider(self.settings)
-            self._tool_executor.register(build_web_search_tool(self.settings, web_provider, self.capture_service))
+            self._tool_executor.register(
+                build_web_search_tool(self.settings, web_provider, self.capture_service)
+            )
         for mcp_tool in build_mcp_tools(self.settings.mcp):
             self._tool_executor.register(mcp_tool)
-        for raw_wiki_tool in build_raw_wiki_search_tools(self.settings.enterprise_knowledge):
+        for raw_wiki_tool in build_raw_wiki_search_tools(
+            self.settings.enterprise_knowledge
+        ):
             self._tool_executor.register(raw_wiki_tool)
         self._tool_executor.register(
             build_enterprise_knowledge_search_tool(self._tool_executor)
@@ -686,37 +902,12 @@ class AgentRuntime:
         return self.tool_governance_store.query_policy_decisions(**filters)
 
     def trace_tool_call(self, idempotency_key: str, *, reveal: bool = False):
-        return self.tool_governance_store.trace_idempotency(idempotency_key, reveal=reveal)
+        return self.tool_governance_store.trace_idempotency(
+            idempotency_key, reveal=reveal
+        )
 
     def audit_metrics(self, *, window_hours: int = 24):
         return self.tool_governance_store.audit_metrics(window_hours=window_hours)
-
-
-    # ---- delegation to explicit collaborators ----
-
-    def _ask_service(self) -> AskService:
-        """Build an ask service bound to current settings/stores.
-
-        Built per-call (mirroring ``_ingestion()``) so test doubles that swap
-        ``self.settings`` / ``self.graph_store`` after construction take effect.
-        The shared ``LlmClient`` / verifier are reused so cooldown state and
-        test mocks remain visible.
-        """
-        return AskService(
-            settings=self.settings,
-            graph_store=self.graph_store,
-            structural_retriever=self.structural_retriever,
-            memory=self.memory,
-            tool_executor=self._tool_executor,
-            verifier=self._verifier,
-            llm=self._llm,
-            planner_client=self._planner_client,
-            knowledge_service=self.knowledge_service,
-            policy_engine=self._policy_engine,
-        )
-
-    def execute_ask(self, *args, **kwargs) -> "AskResult":
-        return self._ask_service().execute_ask(*args, **kwargs)
 
     def _generate_answer(self, prompt: str) -> str | None:
         return self._llm.generate_answer(prompt)
@@ -778,7 +969,10 @@ class AgentRuntime:
                 created_by="user",
             )
         except Exception:
-            logger.exception("Knowledge projection write failed during capture user=%s", normalized_user)
+            logger.exception(
+                "Knowledge projection write failed during capture user=%s",
+                normalized_user,
+            )
         return result
 
     def execute_consolidate(
@@ -838,22 +1032,25 @@ class AgentRuntime:
                 note_id=item.claim_id,
                 prompt=item.prompt,
                 answer_hint=claims_by_id.get(item.claim_id).statement
-                if item.claim_id in claims_by_id else item.prompt,
+                if item.claim_id in claims_by_id
+                else item.prompt,
                 due_at=item.due_at,
             )
             for item in plan.review_items
         ]
         claim_lines = [f"- {item.summary}" for item in items[:8]]
         gap_lines = [f"- {gap.question}" for gap in plan.knowledge_gaps[:8]]
-        text = "\n".join([
-            "个人知识简报",
-            "",
-            "活跃知识：",
-            *(claim_lines or ["- 暂无 active claim。"]),
-            "",
-            "待处理缺口：",
-            *(gap_lines or ["- 暂无高优先级缺口。"]),
-        ])
+        text = "\n".join(
+            [
+                "个人知识简报",
+                "",
+                "活跃知识：",
+                *(claim_lines or ["- 暂无 active claim。"]),
+                "",
+                "待处理缺口：",
+                *(gap_lines or ["- 暂无高优先级缺口。"]),
+            ]
+        )
         return _KnowledgeDigest(
             text=text,
             recent_notes=recent_notes,
@@ -879,19 +1076,28 @@ class AgentRuntime:
     ) -> CaptureResult:
         artifact = ingest.artifact
         active_claims = [
-            claim for claim in ingest.claims
+            claim
+            for claim in ingest.claims
             if claim.state in {"active", "verified", "grounded", "conflicted"}
         ]
         title = (
             ingest.knowledge_items[0].title
-            if ingest.knowledge_items else (active_claims[0].statement[:48] if active_claims else "Knowledge artifact")
+            if ingest.knowledge_items
+            else (
+                active_claims[0].statement[:48]
+                if active_claims
+                else "Knowledge artifact"
+            )
         )
         summary = (
             ingest.knowledge_items[0].summary
-            if ingest.knowledge_items else (active_claims[0].statement if active_claims else artifact.text[:240])
+            if ingest.knowledge_items
+            else (active_claims[0].statement if active_claims else artifact.text[:240])
         )
         note = KnowledgeNote(
-            id=ingest.knowledge_items[0].knowledge_item_id if ingest.knowledge_items else artifact.artifact_id,
+            id=ingest.knowledge_items[0].knowledge_item_id
+            if ingest.knowledge_items
+            else artifact.artifact_id,
             user_id=artifact.user_id,
             source=NoteSource(
                 type=artifact.source_type,
@@ -903,9 +1109,12 @@ class AgentRuntime:
                     "artifact_id": artifact.artifact_id,
                     "extraction_run_id": ingest.extraction_run.extraction_run_id,
                     "claim_ids": [claim.claim_id for claim in ingest.claims],
-                    "evidence_span_ids": [span.evidence_span_id for span in ingest.evidence_spans],
+                    "evidence_span_ids": [
+                        span.evidence_span_id for span in ingest.evidence_spans
+                    ],
                     "admission_results": [
-                        decision.admission_result for decision in ingest.admission_decisions
+                        decision.admission_result
+                        for decision in ingest.admission_decisions
                     ],
                 },
             ),
@@ -961,83 +1170,6 @@ class AgentRuntime:
             review_card=review_card,
         )
 
-    def _execute_knowledge_ask(
-        self,
-        question: str,
-        user_id: str | None = None,
-        session_id: str | None = None,
-        conversation_messages: list[dict[str, str]] | None = None,
-    ) -> AskResult:
-        normalized_user = user_id or self.settings.default_user
-        answer = self.knowledge_service.answer_with_evidence(
-            question,
-            owner_id=self._owner_id(normalized_user),
-        )
-        citations = [
-            Citation(
-                note_id=citation.artifact_id,
-                title=f"Knowledge evidence {index}",
-                snippet=citation.quote,
-                source_type="personal_knowledge",
-                evidence_id=citation.evidence_span_id,
-                source_ref=citation.artifact_id,
-                source_span=citation.locator,
-                element_ids=list(citation.claim_ids),
-            )
-            for index, citation in enumerate(answer.citations, 1)
-        ]
-        evidence = [
-            EvidenceItem(
-                evidence_id=citation.evidence_span_id,
-                source_type="note",
-                source_id=citation.artifact_id,
-                title=f"Knowledge evidence {index}",
-                snippet=citation.quote,
-                source_span=citation.locator,
-                score=1.0,
-                metadata={
-                    "owner_id": self._owner_id(normalized_user),
-                    "evidence_block_id": citation.evidence_block_id,
-                    "claim_ids": list(citation.claim_ids),
-                },
-            )
-            for index, citation in enumerate(answer.citations, 1)
-        ]
-        matches = [
-            KnowledgeNote(
-                id=claim_id,
-                user_id=normalized_user,
-                source=NoteSource(
-                    type="knowledge_claim",
-                    metadata={
-                        "owner_id": self._owner_id(normalized_user),
-                        "claim_id": claim_id,
-                    },
-                ),
-                body=NoteBody(
-                    title=summary[:48] or claim_id,
-                    content=summary,
-                    summary=summary,
-                ),
-            )
-            for claim_id, summary in zip(answer.selected_claim_ids, answer.claim_summaries)
-        ]
-        return AskResult(
-            answer=answer.answer,
-            citations=citations,
-            matches=matches,
-            match_refs=[MatchRef(id=match.id, title=match.body.title) for match in matches],
-            evidence_refs=[evidence_reference(item) for item in evidence],
-            session_id=session_id or "default",
-            repair_telemetry={
-                "personal_knowledge": True,
-                "verification": answer.verification.model_dump(mode="json"),
-                "selected_claim_ids": list(answer.selected_claim_ids),
-                "conflicted_claim_ids": list(answer.conflicted_claim_ids),
-                "diagnostic_fields": answer.diagnostic_fields,
-            },
-        )
-
     def _rewrite_gap_question(self, gap) -> str | None:
         if not self.settings.openai.api_key or not self.settings.openai.base_url:
             return None
@@ -1052,7 +1184,9 @@ class AgentRuntime:
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self._ingestion().sync_note_to_graph(note_id)
 
-    def enqueue_graph_sync(self, note_id: str, *, user_id: str | None = None) -> str | None:
+    def enqueue_graph_sync(
+        self, note_id: str, *, user_id: str | None = None
+    ) -> str | None:
         note = self.memory.get_note(note_id)
         if note is None:
             return None
@@ -1144,8 +1278,11 @@ class AgentRuntime:
     def converse(self, *args, **kwargs):
         return self._conversation_service.respond(*args, **kwargs)
 
-    def conversation_trace(self, interaction_run_ref: str):
-        return self._conversation_service.trace(interaction_run_ref)
+    def conversation_trace(self, interaction_run_ref: str, *, principal):
+        return self._conversation_service.trace(
+            interaction_run_ref,
+            principal=principal,
+        )
 
     def decide_conversation_knowledge_save(self, **kwargs):
         return self._conversation_service.decide_knowledge_save(**kwargs)
@@ -1220,14 +1357,20 @@ class AgentRuntime:
             )
         )
         if spec is None:
-            return {"valid": False, "issues": ["procedure deployment is disabled"], "steps": []}
+            return {
+                "valid": False,
+                "issues": ["procedure deployment is disabled"],
+                "steps": [],
+            }
         issues = []
         try:
             ProcedureSpecValidator().validate(spec)
         except ValueError as exc:
             issues.append(str(exc))
         steps = spec.project("dry-run")
-        step_validation = self.step_projection_validator.validate(steps) if steps else None
+        step_validation = (
+            self.step_projection_validator.validate(steps) if steps else None
+        )
         return {
             "valid": not issues and (step_validation is None or step_validation.valid),
             "procedure_id": spec.procedure_id,
@@ -1264,7 +1407,9 @@ class AgentRuntime:
     def get_execution_artifact(self, artifact_id: str):
         return self.execution_replay_store.get_artifact(artifact_id)
 
-    def redact_execution_artifact(self, artifact_id: str, *, keys: set[str] | None = None):
+    def redact_execution_artifact(
+        self, artifact_id: str, *, keys: set[str] | None = None
+    ):
         return self.execution_replay_store.redact_artifact(artifact_id, keys=keys)
 
     def purge_expired_execution_artifacts(self, *, limit: int = 1000) -> int:
@@ -1327,11 +1472,9 @@ class AgentRuntime:
 
 __all__ = [
     "AgentRuntime",
-    "AskResult",
     "CaptureResult",
     "DigestResult",
     "ResetResult",
-    "RetryResult",
     "_annotate_answer",
     "_evidence_content",
     "_extract_question_keywords",

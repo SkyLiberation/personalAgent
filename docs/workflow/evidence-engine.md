@@ -1,399 +1,62 @@
 # Evidence Engine
 
-本文总结当前工程里已经落地的 `EvidenceEngine`。它不是一个新的业务 workflow，而是 ask 和 research 共享的 evidence 应用服务边界。
-
-## 定位
-
-`ask` 和 `research` 的业务目标不同：
-
-- `ask` 是明确问题的 grounded QA，追求低延迟、可恢复和可引用。
-- `research` 是开放主题的事件发现、来源聚类、digest synthesis 和 claim verification。
-
-所以二者不合并成一个 workflow。但它们不能各自维护一套证据归一、上下文选择和 claim grounding 逻辑。当前的架构选择是：
-
-```text
-AskWorkflow
-ResearchWorkflow
-  -> EvidenceEngine
-       -> SourceDocument / EvidenceItem
-       -> ContextPack / Citation
-       -> evidence_text_spans / claim grounding
-```
-
-业务 workflow 保持分开，底层证据能力由 `EvidenceEngine` 复用。
+**EvidenceEngine 是证据机械组件，不是业务 Workflow、Router 或最终回答器。** 它被 Research/Investigation 的验证链消费；Conversation 的 Personal Knowledge read 直接使用 `KnowledgeService.select_evidence()`，最终回答仍由 Conversation 单一拥有。
 
 ## 代码边界
 
-核心实现：
+| 模块 | 职责 |
+| --- | --- |
+| `kernel/evidence.py` | `SourceDocument`、`EvidenceItem`、`ContextPack` 与纯转换/选择函数 |
+| `application/evidence_engine.py` | source normalization、evidence assembly、compression、claim grounding |
+| `application/candidate_fusion.py` | 多检索来源候选融合 |
+| `application/rerankers.py` | 显式配置的 component reranker |
+| `application/candidate_enrichers.py` | parent/child 候选补全机制 |
+
+分层的判据是生产消费者与不变量，不是为了凑齐 facade。`EvidenceEngine` 不保存 canonical business facts；输入和输出都是可重建的运行投影。
+
+## 核心流程
 
 ```text
-src/personal_agent/application/evidence_engine.py
-```
-
-关键模型和接口：
-
-```text
-EvidenceEngine
-EvidenceAssemblyPolicy
-EvidenceAssemblyRequest
-EvidenceAssemblyResult
-EvidenceTrace
-EvidenceSpan
-EvidenceClaimCheck
-ClaimGroundingTrace
-```
-
-底层证据模型仍在 kernel：
-
-```text
-src/personal_agent/kernel/evidence.py
-
-SourceDocument
-EvidenceItem
-ContextPack
-Citation derivation
-evidence_text_spans
-source_documents_to_evidence
-research_sources_to_source_documents
-```
-
-分层原则是：`kernel` 放共享模型和纯转换，`application.evidence_engine` 负责跨 workflow 的证据装配和 claim grounding。这样不会让 ask/research 业务流程反向污染基础模型层。
-
-## 内部结构
-
-`EvidenceEngine` 是 facade，内部职责拆成几个组件：
-
-```text
-EvidenceEngine
+SourceDocument / EvidenceItem
   -> SourceNormalizer
   -> EvidenceAssembler
-  -> ClaimGrounder
-  -> CitationSelector
+       -> dedupe / candidate fusion
+       -> optional enrichment / rerank
+       -> budgeted ContextPack
+  -> ClaimGrounder.verify_claims
+  -> typed EvidenceClaimCheck
 ```
 
-外部仍然只调用稳定入口：
+### Source normalization
 
-```text
-sources_to_evidence(...)
-research_sources_to_evidence(...)
-assemble_context(...)
-verify_claims(...)
-```
+不同 Provider 必须保留 `source_id/source_ref/canonical_url/title/snippet/provider`。只有 synthesized answer、没有 source/citation binding 的结果不能进入 evidence pool。
 
-这样既保留了统一 Evidence Engine 边界，又避免把 normalize、assemble、grounding、citation selection 全部堆在一个大函数里。
+### Assembly
 
-## 当前职责
+`EvidenceAssemblyRequest` 显式携带 question、候选、预算、policy 和 caller 提供的 reranker/enricher。结果包含 selected/dropped evidence、ContextPack 与 trace；非空 ContextPack 只说明材料被选择，不证明 Goal 完成。
 
-`EvidenceEngine` 当前负责四类事情。
+### Claim grounding
 
-### 1. Source Normalization
+`verify_claims()` 把候选文本拆为 claim，并返回 `supported/partially_supported/unsupported/contradicted`、supporting evidence ids 与 spans。模型 Judge 只能判断语义蕴含；evidence id、scope 与引用集合由确定性代码约束。
 
-不同来源先投影到统一来源和证据模型：
+## 生产消费者
 
-```text
-SourceDocument
-  -> EvidenceItem
-```
+- Research digest verification：把 `ResearchSource` 投影为 `EvidenceItem`，验证每个 digest claim 与 source binding；
+- Investigation/Conversation review verifier：对冻结的候选文本和 admitted evidence 做 claim-level grounding；
+- 其他明确 Application：只有在 baseline 证明需要同一证据机械语义时才通过 Port 复用。
 
-research 侧也通过同一条语义进入证据层：
-
-```text
-ResearchSource
-  -> SourceDocument
-  -> EvidenceItem
-```
-
-这样 web result、research source、note/chunk、graph fact、episode memory 最终都能进入同一套 `EvidenceItem` 语言。
-
-Personal Knowledge 侧在 Ask 中不是直接调用 `EvidenceEngine.sources_to_evidence()`，而是由 `KnowledgeRetriever` 将 EvidenceSpan / Claim / conflict diagnostics 转成同一组运行时对象：
-
-```text
-Personal Knowledge Artifact / EvidenceBlock / EvidenceSpan / Claim / KnowledgeRelation
-  -> EvidenceItem(source_type="note", metadata.owner_id / artifact_id / evidence_span_id / claim_ids / conflict diagnostics)
-  -> Citation(source_type="personal knowledge", metadata.evidence_ref)
-  -> KnowledgeNote(source.type="knowledge_evidence")
-```
-
-因此 Personal Knowledge 证据和 local note、graph fact、web source 一样进入后续 dedupe、rerank、ContextPack 和 Ask verifier，不会绕过 EvidenceEngine 直接生成最终回答。`KnowledgeRetriever` 调用 `KnowledgeService.select_evidence()`，该边界不生成或验证 Personal Knowledge Answer；只有正式 direct Personal Knowledge Ask 才调用 `answer_with_evidence()` 并返回独立 `verification`。进入通用 Ask 时，Claim 只作为 metadata / element_ids 参与，最终证据 id 对齐 `EvidenceSpan`，避免把 Claim statement 当作原文证据注入。
-
-Graph provider 同样只允许返回 `GraphRetrievalResult` 中的 fact、edge、episode、note 和 citation
-引用。Provider synthesized answer 不属于 Evidence，禁止转换为 `graph_fact`；当前 Microsoft
-GraphRAG Adapter 因缺少 source binding 而 fail closed。
-
-### 2. Context Assembly
-
-ask retrieve 阶段完成多源召回后，不再自己散落执行 dedupe / rerank / selected citation 选择，而是调用：
-
-```text
-EvidenceEngine.assemble_context(EvidenceAssemblyRequest)
-```
-
-`EvidenceAssemblyRequest` 会携带 `EvidenceAssemblyPolicy`。当前 policy 主要用于表达 task 类型、证据目标、上下文预算、压缩模式、引用模式和校验严格度：
-
-```text
-EvidenceAssemblyPolicy
-  task_type
-  source_preference
-  evidence_requirement
-  ranking_objective
-  diversity_requirement
-  freshness_requirement
-  max_evidence_items
-  max_context_chars
-  compression_mode
-  citation_mode
-  verification_strictness
-```
-
-ask 和 research 可以共享同一个 engine，但通过不同 policy 表达不同选择目标。
-
-内部流程是：
-
-```text
-evidence_pool
-  -> dedupe
-  -> RRF fusion
-  -> candidate_enricher.enrich(...)
-  -> optional sentence-level compression
-  -> reranker.rerank(...)
-  -> ContextPack
-  -> selected_matches
-  -> selected_citations
-```
-
-输出是 `EvidenceAssemblyResult`，包含更新后的 evidence、matches、citations、`ContextPack`、入选 matches/citations 和 trace。
-
-`EvidenceAssemblyResult.assembly_trace` 是结构化 trace，记录输入证据数、dedupe/fusion/enrichment/compression 后的数量、最终 selected/dropped/citation/context chars 等信息，便于后续 debug 和 eval。
-
-### 3. Claim Grounding
-
-answer verifier 和 research digest verifier 现在都复用：
-
-```text
-EvidenceEngine.verify_claims(text, evidence)
-```
-
-内部逻辑是：
-
-```text
-text
-  -> extract_claims
-  -> evidence_text_spans
-  -> best span alignment
-  -> term coverage
-  -> entailment judge
-  -> EvidenceClaimCheck
-```
-
-`EvidenceClaimCheck` 会记录：
-
-- `claim`
-- `status`: `supported / partially_supported / unsupported / contradicted / not_found`
-- `supporting_evidence_ids`
-- `evidence_spans`
-- `spans`
-- `overlap`
-- `coverage`
-- `reason`
-- `grounding_trace`
-
-其中 `spans` 是一等 `EvidenceSpan` 对象，包含：
-
-```text
-EvidenceSpan
-  span_id
-  evidence_id
-  source_id
-  source_type
-  text
-  score
-  page_number
-  source_span
-  metadata
-```
-
-这让 claim 可以回溯到具体 evidence span，而不是只知道“某条 citation 支持了它”。
-
-ask 的 `VerificationResult.claim_checks` 和 research 的 `DigestClaim.support_level / source_ids / decision_ids / evidence_spans` 都从这套结果映射。
-
-### 4. Citation / Match Selection
-
-`EvidenceEngine` 根据最终 `ContextPack.evidence` 选择对外展示的 citations 和 matches：
-
-```text
-ContextPack.evidence
-  -> selected_matches
-  -> selected_citations
-```
-
-这样模型实际看到的证据和用户最终看到的引用是一致的，避免“prompt 里用了 A，页面上引用 B”的错位。
-
-## Ask 如何接入
-
-ask 的业务 workflow 仍是：
-
-```text
-ask-retrieve
-  -> ask-compose
-  -> ask-verify
-  -> ask-repair
-```
-
-接入点：
-
-```text
-AskService.evidence_engine = EvidenceEngine()
-RetrievalStage._assemble_context(...)
-  -> EvidenceEngine.assemble_context(...)
-AnswerVerifier._grounding_checks(...)
-  -> EvidenceEngine.verify_claims(...)
-KnowledgeRetriever
-  -> Personal Knowledge EvidenceSpan / Claim
-  -> EvidenceItem / Citation(EvidenceRef) / KnowledgeNote
-WebRetriever
-  -> SourceDocument
-  -> EvidenceEngine.sources_to_evidence(...)
-```
-
-职责边界：
-
-- `RetrievalCoordinator` 负责问答侧的多源召回控制流，包括 personal knowledge、graph、local、episodic、reflection、web。
-- `EvidenceEngine` 负责召回之后的证据装配和选择。
-- `GenerationStage` 只基于 `ContextPack` 生成答案。
-- `VerificationStage` 通过 verifier 间接复用 `EvidenceEngine.verify_claims()`。
-- `RepairStage` 负责反证补充或 web fallback，再复用同一个 evidence assembly。
-- `KnowledgeService` 负责 Artifact/Evidence/Claim 生命周期、准入、冲突和投影任务；EvidenceEngine 只消费它投影出的运行时 evidence。
-
-## Research 如何接入
-
-research 的业务 workflow 仍是：
-
-```text
-research_prepare_run
-  -> research_initialize_state
-  -> research_run_loop
-  -> research_synthesize_digest
-  -> research_verify_digest
-  -> research-compose
-```
-
-接入点：
-
-```text
-ResearchSource
-  -> EvidenceEngine.research_sources_to_evidence(...)
-  -> EvidenceEngine.verify_claims(...)
-  -> DigestClaim support mapping
-```
-
-`research_verify_digest` 不再只检查 digest item 是否有 URL，也不单独维护一套 evidence span 匹配逻辑。它读取 item 对应的 `ResearchEvent.sources`，把来源投影成共享 `EvidenceItem`，再用 `EvidenceEngine.verify_claims()` 做 claim-level grounding。
-
-research 仍保留自己的业务状态机：
-
-- `ResearchDecision`
-- `ResearchSource`
-- `ResearchEvent`
-- `EvidenceGap`
-- `ResearchSatisfaction`
-- `DigestClaim`
-
-这些对象不和 `AskRunContext` 合并，因为 research 的核心是事件发现和 digest synthesis，不是直接回答一个明确问题。
+Personal Knowledge 的 Claim/Evidence/conflict/scope 仍由 `KnowledgeService` 拥有。Conversation 将其选择结果物化为 `personal_knowledge_context`，而不是先运行一个子 RAG answer service。
 
 ## Non-goals
 
-为了防止 `EvidenceEngine` 变成新的大 workflow，它明确不负责这些事情：
+- 不判断用户 intent、Application Capability 或是否需要 research；
+- 不拥有 Artifact、Claim、ResearchEvent 或 Project 生命周期；
+- 不生成 FinalMessage，不决定 Completion；
+- 不根据 benchmark 名称硬编码策略；
+- 不持久化 ContextPack 或可从 canonical facts 重建的候选状态。
 
-- 不负责判断用户意图是 ask 还是 research。
-- 不负责决定 research loop 是否继续。
-- 不负责 event clustering。
-- 不负责 `ResearchDecision / EvidenceGap / ResearchSatisfaction` 的业务状态推进。
-- 不负责工具权限、HITL、幂等和审计。
-- 不负责直接生成最终 answer 或 digest 文风。
-- 不负责决定什么时候触发 web fallback 或 contrastive repair。
+## 验证
 
-这些仍属于对应 workflow、ToolGateway 或 orchestration 层。
-
-## Eval 维度
-
-EvidenceEngine 抽出来后，可以独立评估两类能力。
-
-### Context Assembly Eval
-
-关注：
-
-- 是否选中 gold evidence。
-- `ContextPack` 是否覆盖关键事实。
-- citation 是否来自实际进入 prompt 的 evidence。
-- 是否引入无关证据。
-- 压缩是否丢失关键信息。
-
-可用指标：
-
-```text
-Recall@K
-MRR
-NDCG
-citation precision
-context relevance
-context faithfulness
-```
-
-### Claim Grounding Eval
-
-关注：
-
-- `supported / partially_supported / unsupported / contradicted / not_found` 是否判对。
-- evidence span alignment 是否准确。
-- contradiction recall 是否足够。
-- false supported rate 是否可控。
-
-可用指标：
-
-```text
-claim support accuracy
-contradiction recall
-unsupported precision
-span F1
-false supported rate
-```
-
-### Cross-workflow Consistency Eval
-
-同一批 source 同时进入 ask verifier 和 research digest verifier 时，support 判断应该一致。这是抽出 `EvidenceEngine` 的核心收益之一。
-
-### Personal Knowledge Coverage Eval
-
-Personal Knowledge 相关 e2e 还会检查：
-
-- citation 是否能解析到 artifact/block/span。
-- 无证据回答是否输出 `evidence_coverage=none`。
-- 部分证据回答是否输出 `partial/sparse` 和 `missing_sections`。
-- ProjectionJob 是否没有失败。
-
-这类指标不替代 EvidenceEngine 的 ranking/grounding eval，而是补上业务生命周期视角：证据能否被追踪、缺口能否被看见、投影失败能否被发现。
-
-## 为什么这样设计
-
-这个设计解决的是“底层证据能力复用”，不是“业务 workflow 合并”。
-
-如果 ask 和 research 各自实现一套证据逻辑，会出现几个问题：
-
-- 相同来源在两边有不同的 canonical 语义。
-- ask verifier 和 digest verifier 对 supported / contradicted 的判断不一致。
-- rerank / compression / citation selection 难以统一评测。
-- debug 时无法判断模型看到的 evidence、verifier 使用的 span、用户看到的 citation 是否一致。
-
-抽出 `EvidenceEngine` 后，边界变成：
-
-```text
-Workflow owns control flow.
-EvidenceEngine owns evidence mechanics.
-```
-
-ask/research 只决定什么时候检索、什么时候生成、什么时候修复、什么时候停止；证据如何归一、选择、压缩、grounding 和对外引用，由 `EvidenceEngine` 负责。
-
-## 面试表述
-
-可以这样说：
-
-> 我没有把 ask 和 research 合并成一个 workflow，因为 ask 是明确问题的 grounded QA，research 是开放主题的事件发现和 digest synthesis，二者状态机不同。但我把底层 Evidence Engine 抽出来了。不同来源会先统一成 SourceDocument / EvidenceItem，再由 EvidenceEngine 做 dedupe、RRF、candidate enrichment、compression、rerank、ContextPack、selected citation/match 和 claim grounding。EvidenceEngine 是 facade，内部拆成 SourceNormalizer、EvidenceAssembler、ClaimGrounder 和 CitationSelector。ask 的 answer verification 和 research 的 digest claim verification 都复用 EvidenceEngine.verify_claims，所以业务 workflow 分开，但证据语义和校验逻辑是一套。
+- Unit：normalization、fusion、budget、citation selection、claim grounding；
+- Offline eval：retrieval/rerank/evidence selection 的分布性质量；
+- Product E2E：由实际 Application 正式入口验证最终用户结果，不能由 component score 代替。

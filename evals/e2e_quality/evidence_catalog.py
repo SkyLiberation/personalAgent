@@ -66,7 +66,8 @@ class EvidenceCase:
     @property
     def release_eligible(self) -> bool:
         return (
-            self.claim_kind in {
+            self.claim_kind
+            in {
                 EvidenceClaimKind.PRODUCT_CAPABILITY,
                 EvidenceClaimKind.COMPLEX_LOOP,
             }
@@ -133,16 +134,18 @@ def _profile(
         case_id=case_id,
         module="test_release_user_outcomes.py",
         test_name=test_name,
-        layers=frozenset({
-            EvidenceLayer.AUTHORITY_GATEWAY,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
+        layers=frozenset(
+            {
+                EvidenceLayer.AUTHORITY_GATEWAY,
+                EvidenceLayer.VERIFICATION_COMPLETION,
+            }
+        ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
         claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
         capability_profile=capability_profile,
         limitation=(
             "Connector profile evidence; product release claims are owned by "
-            "E01-E14, E20 and IP01."
+            "the product capability and complex-loop E2E suites."
         ),
     )
 
@@ -177,23 +180,126 @@ def _investigation(
 
 
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
-    _product("E01", "test_product_e01_conversation_journey", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E02", "test_product_e02_grounded_knowledge_ask", EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E03", "test_product_e03_selected_upload_artifact_ask", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E04", "test_product_e04_governed_delete_recovery", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
-    _product("E05", "test_product_e05_research_run_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH),
-    _product("E08", "test_product_e08_ask_then_explicit_save", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E09", "test_product_e09_multi_source_capture", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_READER),
-    _product("E10", "test_product_e10_knowledge_lifecycle", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
-    _product("E11", "test_product_e11_review_feedback_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E12", "test_product_e12_knowledge_maintenance_journey", EvidenceLayer.PLANNING_CONTROL, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION),
-    _product("E13", "test_product_e13_scheduled_intelligence_journey", EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
-    _product("E14", "test_product_e14_conversation_governed_save", EvidenceLayer.UNDERSTANDING, EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.VERIFICATION_COMPLETION, fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
+    EvidenceCase(
+        evidence_id="ASK-001A.product_http",
+        case_id="ASK-001A",
+        module="test_conversation_grounded_answer.py",
+        test_name=(
+            "test_ask_001a_personal_only_answer_observes_quotes_and_conflict_without_web"
+        ),
+        layers=frozenset({
+            EvidenceLayer.UNDERSTANDING,
+            EvidenceLayer.AUTHORITY_GATEWAY,
+            EvidenceLayer.VERIFICATION_COMPLETION,
+        }),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        capability_profile=CapabilityProfile.WEB_SEARCH,
+    ),
+    EvidenceCase(
+        evidence_id="ASK-001B.product_http",
+        case_id="ASK-001B",
+        module="test_conversation_grounded_answer.py",
+        test_name=(
+            "test_ask_001b_one_conversation_combines_personal_and_official_web_evidence"
+        ),
+        layers=frozenset({
+            EvidenceLayer.UNDERSTANDING,
+            EvidenceLayer.AUTHORITY_GATEWAY,
+            EvidenceLayer.VERIFICATION_COMPLETION,
+        }),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        capability_profile=CapabilityProfile.WEB_SEARCH,
+    ),
+    EvidenceCase(
+        evidence_id="PLAN-001.product_http",
+        case_id="PLAN-001",
+        module="test_conversation_project_plan.py",
+        test_name=(
+            "test_plan_001_same_conversation_reads_steers_and_recovers_its_project"
+        ),
+        layers=frozenset({
+            EvidenceLayer.PLANNING_CONTROL,
+            EvidenceLayer.JOURNAL_RECOVERY,
+        }),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        capability_profile=CapabilityProfile.WEB_SEARCH,
+    ),
     _product(
-        "E20",
-        "test_product_e20_knowledge_answer_has_independent_verification",
+        "E01",
+        "test_product_e01_conversation_journey",
         EvidenceLayer.UNDERSTANDING,
         EvidenceLayer.VERIFICATION_COMPLETION,
+    ),
+    _product(
+        "E04",
+        "test_product_e04_governed_delete_recovery",
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.JOURNAL_RECOVERY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+    ),
+    _product(
+        "E05",
+        "test_product_e05_research_run_journey",
+        EvidenceLayer.PLANNING_CONTROL,
+        EvidenceLayer.JOURNAL_RECOVERY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        capability_profile=CapabilityProfile.WEB_SEARCH,
+    ),
+    _product(
+        "E08",
+        "test_product_e08_ask_then_explicit_save",
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+    ),
+    _product(
+        "E09",
+        "test_product_e09_multi_source_capture",
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        capability_profile=CapabilityProfile.WEB_READER,
+    ),
+    _product(
+        "E10",
+        "test_product_e10_knowledge_lifecycle",
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.JOURNAL_RECOVERY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+    ),
+    _product(
+        "E11",
+        "test_product_e11_review_feedback_journey",
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+    ),
+    _product(
+        "E12",
+        "test_product_e12_knowledge_maintenance_journey",
+        EvidenceLayer.PLANNING_CONTROL,
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+    ),
+    _product(
+        "E13",
+        "test_product_e13_scheduled_intelligence_journey",
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.JOURNAL_RECOVERY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        capability_profile=CapabilityProfile.WEB_SEARCH_DELIVERY,
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+    ),
+    _product(
+        "E14",
+        "test_product_e14_conversation_governed_save",
+        EvidenceLayer.UNDERSTANDING,
+        EvidenceLayer.AUTHORITY_GATEWAY,
+        EvidenceLayer.JOURNAL_RECOVERY,
+        EvidenceLayer.VERIFICATION_COMPLETION,
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
     ),
     _product(
         "E22",
@@ -227,14 +333,135 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         "test_l07_http_conversation_save_is_recalled_in_a_new_conversation",
     ),
     _loop("L02", "test_l02_http_independent_reads_use_safe_concurrency"),
-    _loop("L03", "test_l03_http_process_restart_rebuilds_from_committed_facts", fault_mechanism=FaultMechanism.PROCESS_TERMINATION),
-    _loop("L04", "test_l04_http_manager_synthesizes_bounded_specialist_artifact", capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A),
+    _loop(
+        "L03",
+        "test_l03_http_process_restart_rebuilds_from_committed_facts",
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+    ),
+    _loop(
+        "L04",
+        "test_l04_http_manager_synthesizes_bounded_specialist_artifact",
+        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
     _loop("L05", "test_l05_http_budget_exhaustion_fails_closed"),
-    _loop("L06", "test_l06_http_user_requested_review_returns_receipt_bound_safe_revision"),
-    _profile("E16", "test_e16_http_process_reads_github_through_real_mcp_gateway", CapabilityProfile.GITHUB_MCP),
-    _profile("E17", "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result", CapabilityProfile.GPT_RESEARCHER_A2A),
-    _profile("E18", "test_e18_http_process_reads_notion_through_real_mcp_gateway", CapabilityProfile.NOTION_MCP),
-    _profile("E19", "test_e19_http_process_mcp_capability_unavailable_fails_closed", CapabilityProfile.BASELINE),
+    _loop(
+        "L06", "test_l06_http_user_requested_review_returns_receipt_bound_safe_revision"
+    ),
+    EvidenceCase(
+        evidence_id="CTX-001.baseline",
+        case_id="CTX-001",
+        module="test_conversation_context_growth.py",
+        test_name="test_long_conversation_retains_correction_and_early_document_evidence",
+        layers=frozenset(
+            {
+                EvidenceLayer.UNDERSTANDING,
+                EvidenceLayer.PLANNING_CONTROL,
+                EvidenceLayer.AUTHORITY_GATEWAY,
+                EvidenceLayer.VERIFICATION_COMPLETION,
+            }
+        ),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        test_doubles=frozenset({"frozen_external_document_provider"}),
+        claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
+        limitation=(
+            "The real model and production HTTP/MCP/Gateway/Conversation path are used; "
+            "only the external read-only documents are frozen for repeatable facts and size."
+        ),
+    ),
+    EvidenceCase(
+        evidence_id="GOV-001.baseline",
+        case_id="GOV-001",
+        module="test_governance_and_budget.py",
+        test_name="test_gov_001_external_content_cannot_reach_a_hidden_interaction_tool",
+        layers=frozenset(
+            {
+                EvidenceLayer.AUTHORITY_GATEWAY,
+                EvidenceLayer.VERIFICATION_COMPLETION,
+            }
+        ),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        test_doubles=frozenset({"frozen_external_document_provider"}),
+        limitation=(
+            "The real model and production HTTP/MCP/Admission/Gateway path are used; "
+            "only the untrusted external document is frozen and its provider records calls."
+        ),
+        claim_kind=EvidenceClaimKind.BOUNDARY_EVALUATION,
+    ),
+    EvidenceCase(
+        evidence_id="RUN-001.baseline",
+        case_id="RUN-001",
+        module="test_governance_and_budget.py",
+        test_name="test_run_001_batch_never_executes_past_the_tool_call_budget",
+        layers=frozenset(
+            {
+                EvidenceLayer.PLANNING_CONTROL,
+                EvidenceLayer.AUTHORITY_GATEWAY,
+                EvidenceLayer.VERIFICATION_COMPLETION,
+            }
+        ),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        test_doubles=frozenset({"frozen_external_record_provider"}),
+        limitation=(
+            "The real model and production HTTP/MCP/Conversation budget path are used; "
+            "only the external records are frozen and their provider records calls."
+        ),
+        claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
+    ),
+    EvidenceCase(
+        evidence_id="DUR-001.baseline",
+        case_id="DUR-001",
+        module="test_durable_scope_and_diagnosis.py",
+        test_name="test_dur_001_durable_interaction_scope_survives_process_restart",
+        layers=frozenset(
+            {
+                EvidenceLayer.AUTHORITY_GATEWAY,
+                EvidenceLayer.JOURNAL_RECOVERY,
+                EvidenceLayer.VERIFICATION_COMPLETION,
+            }
+        ),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+    ),
+    EvidenceCase(
+        evidence_id="OBS-001.baseline",
+        case_id="OBS-001",
+        module="test_durable_scope_and_diagnosis.py",
+        test_name="test_obs_001_scope_failure_is_diagnosable_from_the_same_run_ref",
+        layers=frozenset(
+            {
+                EvidenceLayer.AUTHORITY_GATEWAY,
+                EvidenceLayer.JOURNAL_RECOVERY,
+            }
+        ),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        claim_kind=EvidenceClaimKind.BOUNDARY_EVALUATION,
+        limitation=(
+            "Operator diagnosis evidence for the same natural authorization failure; "
+            "it does not itself claim improved answer quality."
+        ),
+    ),
+    _profile(
+        "E16",
+        "test_e16_http_process_reads_github_through_real_mcp_gateway",
+        CapabilityProfile.GITHUB_MCP,
+    ),
+    _profile(
+        "E17",
+        "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result",
+        CapabilityProfile.GPT_RESEARCHER_A2A,
+    ),
+    _profile(
+        "E18",
+        "test_e18_http_process_reads_notion_through_real_mcp_gateway",
+        CapabilityProfile.NOTION_MCP,
+    ),
+    _profile(
+        "E19",
+        "test_e19_http_process_mcp_capability_unavailable_fails_closed",
+        CapabilityProfile.BASELINE,
+    ),
     _profile(
         "E21",
         "test_e21_http_process_answers_from_oversized_read_within_budget",
@@ -245,10 +472,12 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         case_id="E24",
         module="test_product_capability_outcomes.py",
         test_name="test_e24_research_boundary_paired_baseline",
-        layers=frozenset({
-            EvidenceLayer.PLANNING_CONTROL,
-            EvidenceLayer.VERIFICATION_COMPLETION,
-        }),
+        layers=frozenset(
+            {
+                EvidenceLayer.PLANNING_CONTROL,
+                EvidenceLayer.VERIFICATION_COMPLETION,
+            }
+        ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
         capability_profile=CapabilityProfile.WEB_SEARCH,
         claim_kind=EvidenceClaimKind.BOUNDARY_EVALUATION,
@@ -338,29 +567,56 @@ def validate_catalog() -> None:
     if len(evidence_ids) != len(set(evidence_ids)):
         raise ValueError("duplicate evidence_id in E2E evidence catalog")
     if len(node_keys) != len(set(node_keys)):
-        raise ValueError("one E2E test node cannot own multiple evidence classifications")
+        raise ValueError(
+            "one E2E test node cannot own multiple evidence classifications"
+        )
     expected = {
         EvidenceClaimKind.PRODUCT_CAPABILITY: {
-            "E01", "E02", "E03", "E04", "E05",
-            "E08", "E09", "E10", "E11", "E12", "E13", "E14",
-            "E20",
-            "E22", "E23",
+            "E01",
+            "E04",
+            "E05",
+            "E08",
+            "E09",
+            "E10",
+            "E11",
+            "E12",
+            "E13",
+            "E14",
+            "E22",
+            "E23",
             "IP01",
+            "DUR-001",
+            "PLAN-001",
+            "ASK-001A",
+            "ASK-001B",
         },
-        EvidenceClaimKind.COMPLEX_LOOP: {f"L{index:02d}" for index in range(1, 8)},
+        EvidenceClaimKind.COMPLEX_LOOP: {
+            *(f"L{index:02d}" for index in range(1, 8)),
+            "CTX-001",
+            "RUN-001",
+        },
         EvidenceClaimKind.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19", "E21"},
         EvidenceClaimKind.DURABLE_INVESTIGATION: {
             *(f"LT{index:02d}" for index in range(1, 9)),
-            "LT10", "LT11", "LT12", "LT13",
+            "LT10",
+            "LT11",
+            "LT12",
+            "LT13",
         },
-        EvidenceClaimKind.BOUNDARY_EVALUATION: {"E24"},
+        EvidenceClaimKind.BOUNDARY_EVALUATION: {"E24", "GOV-001", "OBS-001"},
     }
     for kind, case_ids in expected.items():
         actual = {case.case_id for case in EVIDENCE_CASES if case.claim_kind is kind}
         if actual != case_ids:
-            raise ValueError(f"{kind.value} E2E catalog coverage mismatch: {sorted(actual ^ case_ids)}")
-    if any(case.claim_kind is EvidenceClaimKind.ARCHITECTURE for case in EVIDENCE_CASES):
-        raise ValueError("legacy architecture cases are not allowed in the release catalog")
+            raise ValueError(
+                f"{kind.value} E2E catalog coverage mismatch: {sorted(actual ^ case_ids)}"
+            )
+    if any(
+        case.claim_kind is EvidenceClaimKind.ARCHITECTURE for case in EVIDENCE_CASES
+    ):
+        raise ValueError(
+            "legacy architecture cases are not allowed in the release catalog"
+        )
 
 
 validate_catalog()

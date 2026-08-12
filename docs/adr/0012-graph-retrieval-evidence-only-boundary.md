@@ -1,5 +1,7 @@
 # ADR 0012: Graph Retrieval 只返回可追溯证据
 
+> **状态：部分 Superseded（2026-08-12）。** “Graph/provider 结果必须带可追溯 evidence binding”仍有效；其中以 `AskService.execute_ask()` 为产品入口的描述已失效。当前最终回答 owner 是 Conversation，历史 eval-only Ask chain 已删除。
+
 - 状态：Accepted
 - 日期：2026-07-31
 - 影响范围：Ask GraphRetriever、Graphiti、graph_search Tool、Graph Provider 配置

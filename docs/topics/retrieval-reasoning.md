@@ -58,25 +58,16 @@ fact/edge/hit 映射。
 
 ## Evidence 与回答
 
-Evidence Engine 负责候选归一、去重、融合、rerank、压缩和预算，不负责生成最终答案或判断 Goal
-完成。Compose 只读取 ContextPack；Ask Verifier 判断 claim grounding、citation 和 evidence
-sufficiency。Tool success、retrieval hit 或非空 ContextPack 都不能直接完成用户目标。
-
-Personal Knowledge 有两个不同消费者：
+Retriever/Evidence Engine 负责候选归一、去重、融合、rerank、压缩和预算，不负责生成最终答案或判断 Goal 完成。当前产品链只有一个回答 owner：
 
 ```text
-/api/knowledge/ask
-  -> select evidence
-  -> compose Personal Knowledge answer
-  -> KnowledgeAnswerVerifier
-
-Ask KnowledgeRetriever
-  -> select evidence only
-  -> shared EvidenceItem pool
-  -> Ask compose / Ask verifier
+Conversation
+  -> KnowledgeService.select_evidence() -> personal_knowledge_context
+  -> optional governed read-only Tool Observations
+  -> one FinalMessage
 ```
 
-这避免了子 RAG 先运行一套回答与验证、外层 Ask 再重复运行另一套主循环。
+`KnowledgeService` 保留 Claim/Evidence/conflict/scope 所有权；Tool success、retrieval hit 或非空 ContextPack 都不能直接完成用户目标。离线 retrieval strategy 只验证候选机制，不是产品入口。
 
 ## 失败语义
 

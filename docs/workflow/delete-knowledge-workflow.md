@@ -11,7 +11,8 @@ POST /api/notes/{note_id}/delete-commands
   -> knowledge_lifecycle_operations(awaiting_confirmation)
 
 POST /api/knowledge-delete-commands/{command_id}/decision
-  -> identity/scope + command_digest + confirmation_ref 校验
+  -> path command_id + identity/scope + confirmation_ref 校验
+  -> 服务端读取 immutable Command 与内部 command_digest
   -> one transaction:
        KnowledgeItem/Claim state transition
        Personal Knowledge KnowledgeStateEvent
@@ -39,8 +40,9 @@ Event 体系。
 ## 安全边界
 
 - HTTP 入口解析 authenticated user；body 中的 user 不能扩大 scope；
-- 一个 `command_digest` 绑定 canonical command payload，不能代替身份或 Policy；
-- command owner、personal knowledge、digest 或 confirmation 不匹配时 fail closed；
+- 一个服务端 `command_digest` 绑定 canonical Command、Operation 与 Receipt，不能代替身份或 Policy，
+  也不由客户端回传；
+- command owner、personal knowledge、状态或 confirmation 不匹配时 fail closed；
 - reject 后不能 confirm；
 - delete receipt 是恢复 previous states 的唯一依据；
 - Personal Knowledge aggregate 拥有 Item/Claim 状态，Lifecycle Service 不能复制事实；
@@ -58,7 +60,7 @@ interrupt、ToolGateway 包装和 lifecycle Event 都不会改善确认、重启
 Release E04/E10 和 notes API integration 覆盖：
 
 - prepare 零副作用；
-- scope、digest、确认和 reject 反事实；
+- scope、错误 command id、缺失确认和 reject 反事实；
 - prepare/confirm 与 delete/restore 之间的进程重启；
 - exactly-once Receipt 和不重复状态事件；
 - Item/Claim previous states 精确恢复；

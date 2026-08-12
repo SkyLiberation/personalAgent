@@ -6,8 +6,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from personal_agent.application.knowledge_lifecycle.models import KnowledgeDeleteOperationView
+from personal_agent.application.knowledge_lifecycle.models import (
+    KnowledgeDeleteOperationView,
+)
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
 class _StrictModel(BaseModel):
@@ -23,14 +26,18 @@ class ConversationMessage(_StrictModel):
 
 class ToolCallProposal(_StrictModel):
     kind: Literal["tool_call"] = "tool_call"
-    action_id: str = Field(default_factory=lambda: f"act_{uuid4().hex[:16]}", min_length=1)
+    action_id: str = Field(
+        default_factory=lambda: f"act_{uuid4().hex[:16]}", min_length=1
+    )
     tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentDelegationProposal(_StrictModel):
     kind: Literal["agent_delegation"] = "agent_delegation"
-    action_id: str = Field(default_factory=lambda: f"act_{uuid4().hex[:16]}", min_length=1)
+    action_id: str = Field(
+        default_factory=lambda: f"act_{uuid4().hex[:16]}", min_length=1
+    )
     agent_id: str = Field(min_length=1)
     bounded_sub_goal: str = Field(min_length=1, max_length=4_000)
     context_projection_refs: tuple[str, ...] = ()
@@ -78,6 +85,24 @@ class ListPersonalKnowledgeArguments(_StrictModel):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+class PersonalKnowledgeEvidenceCitation(_StrictModel):
+    evidence_span_id: str = Field(min_length=1)
+    quote: str = Field(min_length=1)
+    locator: str = ""
+    claim_ids: tuple[str, ...] = ()
+
+
+class PersonalKnowledgeEvidenceSnapshot(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    question: str = Field(min_length=1)
+    citations: tuple[PersonalKnowledgeEvidenceCitation, ...]
+    claim_summaries: tuple[str, ...]
+    conflicted_claim_ids: tuple[str, ...]
+    potential_conflicted_claim_ids: tuple[str, ...]
+    reason: str = ""
+
+
 class PrepareKnowledgeDeleteArguments(_StrictModel):
     target_knowledge_item_id: str = Field(min_length=1)
     reason: str = Field(min_length=1, max_length=1_000)
@@ -97,14 +122,47 @@ class StartDurableInvestigationArguments(_StrictModel):
     )
 
 
+class SteerInvestigationProjectArguments(_StrictModel):
+    statement: str = Field(min_length=1, max_length=4_000)
+    waived_requirement_ids: tuple[str, ...] = ()
+    added_requirements: tuple[InvestigationRequirementInput, ...] = Field(
+        default=(),
+        max_length=12,
+    )
+
+
+class InvestigationSubgoalProgress(_StrictModel):
+    logical_subgoal_id: str = Field(min_length=1)
+    objective: str = Field(min_length=1)
+    status: Literal["pending", "completed"]
+
+
+class InvestigationRequirementProgress(_StrictModel):
+    requirement_id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    acceptance_contract: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+
+
+class ConversationProjectSnapshot(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    project_id: str = Field(min_length=1)
+    state: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+    plan_version: int | None = Field(default=None, ge=1)
+    requirements: tuple[InvestigationRequirementProgress, ...]
+    subgoals: tuple[InvestigationSubgoalProgress, ...]
+    waiting_reasons: tuple[str, ...]
+
+
 ActionProposal = ToolCallProposal | AgentDelegationProposal
 
 
 class FinalMessage(_StrictModel):
     kind: Literal["final_message"] = "final_message"
-    disposition: Literal[
-        "answer", "clarification_required", "limitation", "failed"
-    ]
+    disposition: Literal["answer", "clarification_required", "limitation", "failed"]
     message: str = Field(min_length=1)
 
 
@@ -145,7 +203,6 @@ class EffectiveAgentCapability(_StrictModel):
 class EffectiveCapabilities(_StrictModel):
     """Transient projection from registries and current availability."""
 
-    revision: str
     tools: tuple[EffectiveToolCapability, ...] = ()
     agents: tuple[EffectiveAgentCapability, ...] = ()
 
@@ -182,7 +239,12 @@ class DecisionFeedback(_StrictModel):
 
 
 class ActionObservation(_StrictModel):
-    kind: Literal["tool_result", "agent_status", "agent_artifact"]
+    kind: Literal[
+        "context_evidence",
+        "tool_result",
+        "agent_status",
+        "agent_artifact",
+    ]
     action_id: str
     capability_id: str
     status: Literal["succeeded", "failed", "running", "cancelled"]
@@ -326,7 +388,8 @@ class TurnContextComposition(_StrictModel):
 class InteractionTrace(_StrictModel):
     revision: int = Field(default=1, ge=1)
     interaction_run_ref: str
-    capability_revision: str
+    conversation_id: str = Field(min_length=1)
+    principal: AuthenticatedPrincipal
     messages: tuple[ConversationMessage, ...]
     inputs: tuple[InteractionInput, ...] = ()
     usage: CommittedUsage = Field(default_factory=CommittedUsage)
@@ -344,23 +407,55 @@ class ConversationTurnView(_StrictModel):
     interaction_run_ref: str = ""
     conversation_id: str
     disposition: Literal[
-        "answer", "clarification_required", "confirmation_required", "background_started",
-        "limitation", "failed"
+        "answer",
+        "clarification_required",
+        "confirmation_required",
+        "background_started",
+        "limitation",
+        "failed",
     ]
     message: ConversationMessage
-    pending_confirmation: ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | None = None
+    pending_confirmation: (
+        ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | None
+    ) = None
     project_reference: ProjectReference | None = None
 
 
 __all__ = [
-    "ActionObservation", "ActionProposal", "AgentDelegationProposal", "AgentTurnDecision",
-    "CommittedUsage", "ContinueTurnProposal", "ConversationMessage", "ConversationTurnView",
-    "ConversationKnowledgeSaveCommand", "ConversationKnowledgeSaveOperation",
+    "ActionObservation",
+    "ActionProposal",
+    "AgentDelegationProposal",
+    "AgentTurnDecision",
+    "CommittedUsage",
+    "ContinueTurnProposal",
+    "ConversationMessage",
+    "ConversationTurnView",
+    "ConversationKnowledgeSaveCommand",
+    "ConversationKnowledgeSaveOperation",
     "ConversationKnowledgeSaveReceipt",
-    "DecisionFeedback", "EffectiveAgentCapability", "EffectiveCapabilities",
-    "EffectiveToolCapability", "FinalMessage", "InteractionTrace", "LoopBudgetPolicy",
-    "InvestigationRequirementInput", "KnowledgeDeleteConfirmation", "KnowledgeSaveArguments",
-    "KnowledgeSaveSelection", "ListPersonalKnowledgeArguments", "PrepareKnowledgeDeleteArguments",
-    "ProjectReference", "ReviewCriteria", "StartDurableInvestigationArguments",
-    "ToolCallProposal", "TurnContextComposition", "PersonalKnowledgeCandidate",
+    "DecisionFeedback",
+    "EffectiveAgentCapability",
+    "EffectiveCapabilities",
+    "EffectiveToolCapability",
+    "FinalMessage",
+    "InteractionTrace",
+    "LoopBudgetPolicy",
+    "InvestigationRequirementInput",
+    "KnowledgeDeleteConfirmation",
+    "KnowledgeSaveArguments",
+    "KnowledgeSaveSelection",
+    "ListPersonalKnowledgeArguments",
+    "PersonalKnowledgeEvidenceCitation",
+    "PersonalKnowledgeEvidenceSnapshot",
+    "PrepareKnowledgeDeleteArguments",
+    "ProjectReference",
+    "SteerInvestigationProjectArguments",
+    "ConversationProjectSnapshot",
+    "InvestigationSubgoalProgress",
+    "InvestigationRequirementProgress",
+    "ReviewCriteria",
+    "StartDurableInvestigationArguments",
+    "ToolCallProposal",
+    "TurnContextComposition",
+    "PersonalKnowledgeCandidate",
 ]

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from personal_agent.application.ask_pipeline_factory import AskPipelineFactory
-from personal_agent.application.candidate_enrichers import ParentChildCandidateEnricher
+from personal_agent.application.candidate_enrichers import (
+    ParentChildCandidateEnricher,
+    create_candidate_enricher,
+)
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.evidence import (
     Candidate,
@@ -15,7 +17,10 @@ from personal_agent.kernel.evidence import (
     rank_evidence_items,
     select_ranked_evidence,
 )
-from personal_agent.application.rerankers import LlmEvidenceReranker
+from personal_agent.application.rerankers import (
+    LlmEvidenceReranker,
+    create_evidence_reranker,
+)
 from personal_agent.kernel.models import Citation
 from tests.note_factory import make_note
 
@@ -190,28 +195,24 @@ class TestContextPack:
 
 
 class TestEvidenceRerankers:
-    def test_factory_builds_support_reranker_by_default(self):
-        components = AskPipelineFactory(Settings()).create()
+    def test_settings_build_support_reranker_and_parent_child_enricher(self):
+        settings = Settings()
 
-        assert components.reranker.name == "support"
-        assert components.candidate_enricher.name == "parent_child"
-        assert components.context_max_items == 12
+        assert create_evidence_reranker(settings).name == "support"
+        assert create_candidate_enricher(settings).name == "parent_child"
+        assert settings.ask.context_max_items == 12
 
     def test_factory_can_build_heuristic_reranker_explicitly(self):
         settings = Settings(
             ask=Settings().ask.model_copy(update={"reranker": "heuristic"}),
         )
-        components = AskPipelineFactory(settings).create()
-
-        assert components.reranker.name == "heuristic"
+        assert create_evidence_reranker(settings).name == "heuristic"
 
     def test_factory_builds_gated_llm_reranker(self):
         settings = Settings(
             ask=Settings().ask.model_copy(update={"reranker": "llm_gated"}),
         )
-        components = AskPipelineFactory(settings, planner_client=object()).create()
-
-        assert components.reranker.name == "llm_gated"
+        assert create_evidence_reranker(settings, model_client=object()).name == "llm_gated"
 
     def test_llm_reranker_reorders_candidates(self, monkeypatch):
         settings = Settings(
@@ -303,7 +304,7 @@ class TestEvidenceRerankers:
             ),
         ]
 
-        pack = AskPipelineFactory(settings, planner_client=FakeClient()).create().reranker.rerank(
+        pack = create_evidence_reranker(settings, model_client=FakeClient()).rerank(
             "服务降级是什么",
             evidence,
             max_items=2,
@@ -312,7 +313,7 @@ class TestEvidenceRerankers:
 
         assert calls == []
         assert [item.evidence.source_id for item in pack.selected] == ["top", "weak"]
-        reranker = AskPipelineFactory(settings, planner_client=FakeClient()).create().reranker
+        reranker = create_evidence_reranker(settings, model_client=FakeClient())
         reranker.rerank("服务降级是什么", evidence, max_items=2, char_budget=1000)
         assert reranker.last_telemetry["triggered"] is False
         assert reranker.last_telemetry["llm_call_count"] == 0
@@ -352,7 +353,7 @@ class TestEvidenceRerankers:
             ),
         ]
 
-        reranker = AskPipelineFactory(settings, planner_client=FakeClient()).create().reranker
+        reranker = create_evidence_reranker(settings, model_client=FakeClient())
         pack = reranker.rerank(
             "cache",
             evidence,
@@ -397,7 +398,7 @@ class TestEvidenceRerankers:
             ),
         ]
 
-        reranker = AskPipelineFactory(settings).create().reranker
+        reranker = create_evidence_reranker(settings)
         pack = reranker.rerank(
             "How does service degradation protect the core service path?",
             evidence,
@@ -462,7 +463,7 @@ class TestEvidenceRerankers:
             ),
         ]
 
-        reranker = AskPipelineFactory(settings, planner_client=FakeClient()).create().reranker
+        reranker = create_evidence_reranker(settings, model_client=FakeClient())
         pack = reranker.rerank(
             "How does service degradation protect the core service path?",
             evidence,

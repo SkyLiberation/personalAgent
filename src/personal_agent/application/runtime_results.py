@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from personal_agent.kernel.evidence import EvidenceReference
-from personal_agent.kernel.models import Citation, KnowledgeNote, ReviewCard
-from personal_agent.kernel.projections import MatchRef
-from personal_agent.application.verifier import VerificationResult
+from personal_agent.kernel.models import KnowledgeNote, ReviewCard
 
 
 class CaptureResult(BaseModel):
@@ -13,16 +10,6 @@ class CaptureResult(BaseModel):
     chunk_notes: list[KnowledgeNote] = Field(default_factory=list)
     related_notes: list[KnowledgeNote] = Field(default_factory=list)
     review_card: ReviewCard | None = None
-
-
-class AskResult(BaseModel):
-    answer: str
-    citations: list[Citation] = Field(default_factory=list)
-    matches: list[KnowledgeNote] = Field(default_factory=list)
-    match_refs: list[MatchRef] = Field(default_factory=list)
-    evidence_refs: list[EvidenceReference] = Field(default_factory=list)
-    session_id: str = "default"
-    repair_telemetry: dict[str, object] = Field(default_factory=dict)
 
 
 class DigestResult(BaseModel):
@@ -36,7 +23,6 @@ class EntryResult(BaseModel):
     reason: str
     reply_text: str
     capture_result: CaptureResult | None = None
-    ask_result: AskResult | None = None
     plan: dict[str, object] | None = None
     steps: list[dict[str, object]] = Field(default_factory=list)
     execution_trace: list[str] = Field(default_factory=list)
@@ -46,13 +32,6 @@ class EntryResult(BaseModel):
     pending_confirmation: dict[str, object] | None = None
     run_status: str | None = None
     events: list[object] = Field(default_factory=list)
-
-
-class RetryResult(BaseModel):
-    """Result of a verification retry loop, carrying the final answer and verification."""
-    answer: str
-    verification: VerificationResult
-    attempts: int = 0
 
 
 class ResetResult(BaseModel):

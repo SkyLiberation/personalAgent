@@ -12,8 +12,10 @@ import subprocess
 from typing import Any
 from uuid import uuid4
 
+from evals.e2e_quality.measurements import CaseMeasurement, MeasurementProfile
 
-TRACE_SCHEMA_VERSION = 2
+
+TRACE_SCHEMA_VERSION = 3
 
 
 def _utc_now() -> datetime:
@@ -51,6 +53,7 @@ class TraceArchive:
         *,
         run_id: str | None = None,
         manifest_metadata: dict[str, Any] | None = None,
+        measurement_profile: MeasurementProfile | None = None,
     ) -> None:
         started_at = _utc_now()
         self.run_id = run_id or (
@@ -75,6 +78,11 @@ class TraceArchive:
                 "platform": platform.platform(),
             },
             "environment": manifest_metadata or {},
+            "measurement_profile": (
+                measurement_profile.model_dump(mode="json")
+                if measurement_profile is not None
+                else None
+            ),
         }
         self._write_json(self.run_dir / "manifest.json", self._manifest)
 
@@ -91,6 +99,7 @@ class TraceArchive:
         nodeid: str,
         case_id: str,
         trace: dict[str, Any],
+        measurement: CaseMeasurement | None = None,
     ) -> Path:
         paths = self._trace_files_by_nodeid.setdefault(nodeid, [])
         sequence = len(paths) + 1
@@ -102,6 +111,11 @@ class TraceArchive:
             "case_id": case_id,
             "captured_at": _iso(),
             "test_outcome": "pending",
+            "measurement": (
+                measurement.model_dump(mode="json")
+                if measurement is not None
+                else None
+            ),
             "trace": trace,
         }
         self._write_json(path, envelope)
@@ -186,4 +200,31 @@ class TraceArchive:
         temporary.replace(path)
 
 
-__all__ = ["TRACE_SCHEMA_VERSION", "TraceArchive"]
+def archive_checksums_valid(run_dir: Path) -> bool:
+    """Return whether every archived JSON file matches the sealed checksum set."""
+
+    checksum_path = run_dir / "checksums.sha256"
+    try:
+        lines = checksum_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    expected: dict[str, str] = {}
+    for line in lines:
+        parts = line.split("  ", maxsplit=1)
+        if len(parts) != 2:
+            return False
+        expected[parts[1]] = parts[0]
+    json_files = tuple(sorted(run_dir.glob("*.json")))
+    if {path.name for path in json_files} != set(expected):
+        return False
+    return all(
+        sha256(path.read_bytes()).hexdigest() == expected[path.name]
+        for path in json_files
+    )
+
+
+__all__ = [
+    "TRACE_SCHEMA_VERSION",
+    "TraceArchive",
+    "archive_checksums_valid",
+]

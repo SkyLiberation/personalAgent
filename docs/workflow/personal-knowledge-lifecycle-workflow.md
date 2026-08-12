@@ -85,49 +85,16 @@ EvidenceSpan
 
 `flags` 用于承载可见诊断，例如 `claims_pending`。
 
-## Ask 接入
+## Conversation Grounded Answer 接入
 
-Personal Knowledge 在 Ask 中有两层接入：
+**Personal Knowledge 只提供 canonical evidence selection，不再拥有独立最终回答。**
 
-1. `KnowledgeService.answer_with_evidence()` 可以直接基于 Personal Knowledge 证据回答，返回 `EvidenceGroundedAnswer`。
-2. `KnowledgeRetriever` 把 Personal Knowledge EvidenceSpan / Claim / conflict diagnostics 投影为统一 `EvidenceItem / Citation / KnowledgeNote`，进入 AskService 的 retrieve / compose / verify / repair 主链路。
+1. `KnowledgeService.select_evidence()` 按 authenticated principal 和问题返回 EvidenceSpan、AnswerCitation、selected Claim 与 conflict facts；
+2. Conversation 将结果物化为有界 `personal_knowledge_context` Observation；
+3. 模型可结合其他已准入只读 Tool Observation 生成唯一 FinalMessage；
+4. Ask 前后 Claim/Artifact 写入 delta 必须为零，只有显式 save/solidify 才进入写路径。
 
-回答侧关键输出：
-
-```text
-AnswerCitation
-  artifact_id
-  evidence_block_id
-  evidence_span_id
-  evidence_ref
-
-EvidenceGroundedAnswer
-  answer
-  citations
-  verification
-    verdict: passed | needs_revision | insufficient_evidence
-    conclusion_status: supported | conflicted | insufficient_evidence
-    evidence_coverage: complete | partial | sparse | none
-    conflicts -> evidence_span_ids
-    unsupported_claims
-    missing_sections
-  answer_claim_count
-```
-
-`verification` 由独立 `KnowledgeAnswerVerifier` 写入；回答组装器不能按 selected 数量推导
-supported。完整所有权与失败语义见
-[Verification 与 Completion](../topics/verification-and-completion.md)。
-
-其中 `evidence_coverage` 不是装饰字段，而是 verifier assessment 的组成部分：
-
-- `complete`：入选证据覆盖当前 Personal Knowledge 可用证据。
-- `partial`：有证据，但还有未覆盖 block/span。
-- `sparse`：只有极少证据支撑，不能当作完整回答。
-- `none`：没有匹配证据，必须保守回答。
-
-`missing_sections` 可以指向缺失的 EvidenceBlock，也可以在同一 block 内指向未覆盖
-EvidenceSpan，避免“只引用了一个句子却把整段都当覆盖”的问题。冲突 ref 必须属于本次
-citations；assessment 不写回长期 Claim/Relation。
+产品不存在独立 `/api/knowledge/ask` 或第二个 answer DTO/verifier；Knowledge 与 Conversation 不会同时拥有 answer/citation/completion 语义。Claim support、conflict 与 scope 仍由 Knowledge owner 决定，融合层不能覆盖。
 
 ## ProjectionJob
 

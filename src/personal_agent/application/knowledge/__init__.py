@@ -2,8 +2,6 @@ from personal_agent.application.knowledge.consolidation import ConsolidationResu
 
 __all__ = ["ConsolidationResult", "KnowledgeConsolidationUseCase"]
 from personal_agent.application.knowledge.models import (
-    AnswerVerificationAssessment,
-    AnswerVerificationConflict,
     Artifact,
     ArtifactDeleteImpactResult,
     Claim,
@@ -19,7 +17,6 @@ from personal_agent.application.knowledge.models import (
     EvidenceBlock,
     EvidenceRefHealth,
     EvidenceRef,
-    EvidenceGroundedAnswer,
     EvidenceSpan,
     ExtractionRun,
     GraphProjection,
@@ -38,11 +35,6 @@ from personal_agent.application.knowledge.models import (
     ReviewPlanResult,
     SemanticReplayDiffResult,
     KnowledgeEvidenceSelection,
-)
-from personal_agent.application.knowledge.answer_verifier import (
-    FixtureKnowledgeAnswerVerifier,
-    LLMKnowledgeAnswerVerifier,
-    KnowledgeAnswerVerifier,
 )
 from personal_agent.application.knowledge.policy import (
     ClaimAdmissionPolicy,
@@ -74,8 +66,6 @@ from personal_agent.application.knowledge.service import KnowledgeService
 from personal_agent.application.knowledge.store import InMemoryKnowledgeStore
 
 __all__ += [
-    "AnswerVerificationAssessment",
-    "AnswerVerificationConflict",
     "Artifact",
     "ArtifactDeleteImpactResult",
     "Claim",
@@ -91,7 +81,6 @@ __all__ += [
     "EvidenceBlock",
     "EvidenceRefHealth",
     "EvidenceRef",
-    "EvidenceGroundedAnswer",
     "EvidenceSpan",
     "ExtractionRun",
     "GraphProjection",
@@ -122,8 +111,6 @@ __all__ += [
     "CandidateClaimExtraction",
     "ClaimGroundingJudge",
     "ClaimGroundingJudgment",
-    "FixtureKnowledgeAnswerVerifier",
-    "LLMKnowledgeAnswerVerifier",
     "LLMClaimGroundingJudge",
     "LLMSemanticClaimExtractor",
     "LLMSemanticEvidenceExtractor",
@@ -133,6 +120,5 @@ __all__ += [
     "SemanticClaimExtractor",
     "SemanticEvidenceExtraction",
     "SemanticEvidenceExtractor",
-    "KnowledgeAnswerVerifier",
     "KnowledgeService",
 ]

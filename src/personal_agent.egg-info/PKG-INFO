@@ -185,7 +185,7 @@ README 只保留最短路径：
 ### 5. Knowledge Lifecycle
 
 - `KnowledgeLifecycleService` 是删除与恢复的唯一写入口，普通 Conversation Tool 和直接 DELETE API 不可执行删除
-- prepare 只创建 durable operation；确认时用一个 `command_digest` 绑定 canonical payload，重启后仍可继续
+- prepare 只创建 durable operation；客户端按 command/run 标识确认，服务端内部 `command_digest` 绑定 immutable Command 与 Receipt，重启后仍可继续
 - confirm 在单事务中更新 Knowledge Item/Claim、记录 Knowledge 状态事件并写 Receipt；replay 返回同一 Receipt
 - restore 引用已执行的 delete command，并按 delete receipt 中的 previous states 精确恢复
 - `solidify_conversation` 已具备草稿生成、`draft_ready` 事件和 `capture_text` 入库工具基础

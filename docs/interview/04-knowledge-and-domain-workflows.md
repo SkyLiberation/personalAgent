@@ -1,320 +1,123 @@
-# 知识、领域 Workflow 与 Durable Project
+# 领域设计：知识、研究与动态调查
 
-本文是知识域与领域 Workflow 的细节参考，供面试官深挖时使用；理念与举证在
-[能力轴 5/8/9/10](03-capability-axes.md)。写法遵守 [面试文档规范](00-writing-spec.md)。
+> **领域边界按“谁拥有长期事实和生命周期”划分，而不是按存储技术、Tool 名或任务时长划分。** Knowledge、ResearchRun 和 InvestigationProject 不能被一个通用 Task 抹平，向量库、MCP 和 Agent 也不能成为业务事实源。
 
-## 1. 知识模型为什么不只是 Document + Embedding
-
-Document + Embedding 两层模型失效在一个具体地方：**它没有可寻址的陈述单元，state 无处附着**。
-存储单元是 document/chunk，检索单元是相似度排序后的 chunk，于是用户纠正一条旧事实时只有三个
-选项：覆盖（旧事实不再存在）、删除重插（同样丢历史，且没有 actor）、两条并存（矛盾退化为排序
-意外，而被取代的旧措辞在向量空间里往往比纠正后的说法更接近原问题）。真正的前提是「可寻址条目 +
-状态标签」——OpenClaw 在纯 Markdown 形态下也满足了这个前提，所以问题不在于用不用向量库。
-
-系统需要回答三个问题：
-
-1. 原始内容是什么、来自哪里；
-2. 回答中的事实由哪段证据支持；
-3. 事实被修正、冲突或删除后，生命周期如何演进。
-
-因此当前事实链是：
+## 1. 知识事实链不是 Document + Embedding
 
 ```text
-Source
-  -> Artifact
-  -> EvidenceBlock / EvidenceSpan
-  -> Claim
-  -> Relation / KnowledgeItem
-  -> Retrieval Index / Graph Projection
+Source -> Artifact -> EvidenceBlock / EvidenceSpan -> Claim -> Relation / KnowledgeItem
+                                                        |
+                                                        -> Retrieval / Graph projection
 ```
 
-### Artifact
-
-保存原始或规范化资源，例如上传文件、网页正文、文本和会话。大文本由 Artifact Store 持有，运行状态优先保存引用。
-
-### EvidenceBlock / EvidenceSpan
-
-标识可以支持 Claim 或回答的具体证据范围，解决 citation 和 provenance 问题。
-
-### Claim
-
-结构化、可维护的知识陈述，具有 active、superseded、deleted 等生命周期。Claim 不是模型任意一句输出；必须经过唯一 ingestion/write path。
-
-### KnowledgeItem / Relation
-
-用于产品读取、维护和关联分析。Relation 可以表达冲突、支持或 supersede 等关系。
-
-### Retrieval/Graph Projection
-
-embedding index 和 Graphiti 是检索投影，不是事实权威源。它们可以从 PostgreSQL canonical
-facts 重建，投影失败不能覆盖 Claim。
-
-反过来说，把向量库或图库当事实源的具体后果是：**一次索引更新失败就可能覆盖或删除业务事实，
-而没有任何地方可以查证原本是什么。**
-
-## 2. Fact Owner
-
-| 事实 | Owner / 唯一写入口 |
-| --- | --- |
-| 原始 Artifact | ArtifactService + Artifact Store |
-| Personal Knowledge Evidence/Claim | KnowledgeService ingestion transaction |
-| Conversation Interaction | ConversationService + Interaction journal |
-| Delete/Restore Command/Event/Receipt | KnowledgeLifecycleService + lifecycle store |
-| ResearchRun/Digest/Delivery | ResearchService + research store |
-| Investigation definition/Plan/SubGoal/Completion | InvestigationProject aggregate + InvestigationProjectService |
-| Review feedback | Review feedback use case/store |
-| Tool audit/idempotency | ToolGateway + governance store |
-| Child Agent lifecycle/Artifact | AgentGateway |
-
-Repository 只持久化 Application/Domain 认可的事实，不能隐式创建业务对象，也不能返回 UI View 作为新的 canonical fact。
-
-## 3. Context 与长期知识的区别
-
-### LLM Context
-
-只表示当前模型调用实际看到的内容，可以被压缩或丢弃。
-
-### Interaction Journal
-
-保存恢复普通 Interaction 所需的 committed inputs、usage 和执行顺序。
-
-### Artifact Store
-
-保存上传、网页、研究产物等大内容。
-
-### Long-term Knowledge
-
-保存跨会话使用的 Artifact、Evidence、Claim 和 lifecycle facts。
-
-### Retrieval Index
-
-用于查找候选内容，不是事实真源。
-
-把这些对象分开，可以避免把模型上下文、恢复快照和长期事实混在一个 God State 中。
-
-## 4. Grounded Ask
-
-典型路径：
-
-```text
-authenticated principal + authorized internal knowledge scope + question
-  -> Visibility filtering
-  -> Requirement retrieval
-  -> Evidence selection
-  -> Answer generation
-  -> coverage/grounding verification
-  -> answer + citations
-```
-
-关键不变量：
-
-- 先从 authenticated principal 与 canonical ownership/policy 得到 authorized set，再做语义检索；
-  当前 `owner_id` 只证明分区，membership/role 边界尚未落地，见
-  [Visibility 分层](03-capability-axes.md#先定义-visibility再谈-retrieval)；
-- Citation 必须回到实际 Evidence；
-- Ask 是读取行为，不增加 Claim；
-- authorized set 外的用户/资源内容不能进入 Context；当前不同 `owner_id` 的不串读只属于分区证据，
-  不是 Personal Knowledge membership 证据；
-- 检索结果为空时不能使用不可见数据补答案。
-
-## 5. Ask 与 Save 为什么分离
-
-模型回答可能包含：
-
-- 对证据的解释；
-- 临时推断；
-- 不确定假设；
-- 为表达完整而生成的背景知识。
-
-如果每次 Ask 都自动写回，会形成“模型输出成为下一轮事实”的污染循环。
-
-所以当前规则是：
-
-```text
-Ask
-  -> read-only
-  -> Claim count unchanged
-
-Explicit Solidify
-  -> 用户明确表达保存意图
-  -> 只接受 user-authored claim
-  -> reject assistant candidates
-  -> ingestion transaction
-```
-
-这也是 E08 的核心反事实。
-
-## 6. Knowledge correction
-
-用户纠正旧事实时，不直接覆盖历史 Claim：
-
-```text
-old Claim(active)
-  -> correction
-  -> old Claim(superseded)
-  -> new Claim(active)
-  -> Relation(supersedes/conflicts)
-```
-
-这样可以保留：
-
-- 旧事实曾经存在；
-- 谁在何时修正；
-- 新旧事实的关系；
-- 检索时只选择 active 事实；
-- 审计和恢复所需历史。
-
-## 7. Delete/Restore Durable Workflow
-
-### 7.1 Prepare
-
-Application 根据明确的 user/scope/note identity 创建 immutable Command：
-
-```text
-DeleteCommand
-  - command_id
-  - user/personal knowledge scope
-  - target identity
-  - reason
-  - command digest
-  - lifecycle status
-```
-
-prepare 只产生待确认事实，不删除知识。
-
-### 7.2 Confirm/Reject
-
-确认必须绑定正确 digest。错误 digest、错误用户或跨 scope 请求被拒绝。Reject 进入明确终态且零副作用。
-
-### 7.3 Execute
-
-执行产生：
-
-- Personal Knowledge KnowledgeStateEvent；
-- Receipt。
-
-同一 digest 再次执行时返回已有 Receipt。
-
-### 7.4 Restore
-
-Restore 不是把 DeleteCommand 的 status 改回去，而是创建新的 RestoreCommand，执行后产生 Restore Receipt 与 Personal Knowledge 状态事件。原删除 Operation/Receipt 仍保留。
-
-## 8. Review 与 Knowledge Maintenance
-
-### Review
-
-```text
-Knowledge facts
-  -> Review plan
-  -> due ReviewCard
-  -> user feedback(remembered/forgotten/...)
-  -> feedback fact
-  -> schedule projection update
-```
-
-Review content、feedback fact 和下一次 schedule projection 分开保存。重启后已经 answered 的卡片不会再次 due；forgotten 可以使其重新进入 due。
-
-### Knowledge Maintenance
-
-系统可以分析：
-
-- 冲突 Claim；
-- 缺少 Evidence 的 Claim；
-- 孤立事实；
-- 需要复核的 KnowledgeItem；
-- Graph projection backlink。
-
-维护结果不是新的知识事实写入口。每个 projection 必须能回到 source Claim。
-
-## 9. ResearchRun
-
-一次 ResearchRun 的状态和产物由 ResearchService 拥有：
-
-```text
-prepare run
-  -> initialize
-  -> search/explore/verify loop
-  -> synthesize Digest
-  -> verify terminal result
-  -> completed / partial / limitation / failed
-```
-
-模型负责：
-
-- 研究问题的语义分解；
-- 查询内容；
-- 对搜索 Observation 的判断；
-- Digest 内容组织。
-
-确定性代码负责：
-
-- Run identity；
-- 状态迁移；
-- 搜索和模型预算；
-- source URL 要求；
-- Worker retry；
-- terminal state；
-- Delivery exactly-once。
-
-`running` 只是中间状态，不能作为用户成功结果。
-
-## 10. Scheduled Intelligence
-
-事实对象分开：
-
-```text
-Subscription Definition
-  != ResearchRun
-  != Digest
-  != Delivery
-  != Feedback
-```
-
-Subscription 描述周期、主题、限制和投递目标；每次运行创建独立 ResearchRun；Digest 是该 Run 的内容产物；Delivery 是外发执行事实；Feedback 绑定具体 Run/Subscription。
-
-Worker queue 负责：
-
-- 入队；
-- 领取；
-- retry/dead；
-- reconcile；
-- 不重新生成已经冻结的业务参数。
-
-## 11. MCP 与 A2A 为什么不成为事实 Owner
-
-MCP、Web Search 和 GPT Researcher 返回的是外部 Observation 或 Artifact，不是 Personal Knowledge Claim。
-
-如果用户明确保存，仍需经过 Personal Knowledge ingestion/write path。Adapter 不能因为远端结果“看起来可信”就直接写入长期知识。
-
-同理，A2A Artifact 只能支撑父 Agent 综合；它不能替代父级 FinalMessage、Verification 或 Domain Completion。
-
-## 12. ResearchRun 与 Investigation Project 为什么分开
-
-ResearchRun 是固定产品 Workflow：Run identity、搜索阶段、预算、Digest、terminal state 和 Delivery 契约已由 Research 领域定义。模型可以决定查询和内容组织，但不能重写 ResearchRun 的生命周期。
-
-Investigation Project 则用于“路径动态且必须 durable”的长任务。它的 accepted Plan 会驱动 ready set、并行 child join、coverage、steering、审批和 Completion Gate。两者不能合并成一个通用 DurableTask：
-
-```text
-ResearchRun
-  = 固定领域生命周期 + 内部语义决策
-
-Investigation Project
-  = 动态 accepted Plan + durable completion obligation
-```
-
-Project 只保存 ArtifactRef；Artifact 正文仍由 ArtifactService 持有。Tool 执行事实仍属于 ToolGateway，child lifecycle 仍属于 AgentGateway，Project 不通过复制这些事实成为第二 owner。
-
-## 13. 持久化边界
-
-| 边界 | 当前实现 | 恢复语义 |
+| 对象 | 权威事实 | 不拥有 |
 | --- | --- | --- |
-| 普通 Interaction | FileInteractionJournal | 从 committed inputs 重建 transient context |
-| Personal Knowledge/Knowledge | PostgresKnowledgeStore | 从 Artifact/Evidence/Claim 恢复 |
-| Delete/Restore | PostgresKnowledgeLifecycleStore | Command/Event/Receipt digest replay |
-| Research | PostgresResearchStore + worker queue | Run/Subscription/Delivery lifecycle |
-| Investigation Project | PostgresInvestigationProjectStore + investigation queue | 从 definition/append-only journal 重建 Plan、ready set、verification 和 completion |
-| Tool governance | PostgresToolGovernanceStore | Policy、idempotency、audit |
-| Child Agent | AgentGateway store + trace | child lifecycle 与父结果分离 |
-| 大型内容 | Artifact Store | 通过 artifact ref 读取 |
+| Artifact | 原始/规范化资源及引用 | 内容一定为真 |
+| EvidenceBlock/Span | 支撑位置与 provenance | Claim 生命周期 |
+| Claim | 可维护陈述与 active/superseded/deleted 状态 | 检索排名 |
+| Relation/KnowledgeItem | 支持、冲突、取代和产品读取结构 | 原始资源正文 |
+| Retrieval/Graph projection | 可重建召回视图 | 业务事实和写入口 |
 
-没有一个覆盖所有请求的通用 Task/GoalGraph/RunCheckpoint Aggregate。每种事实按自己的恢复、审计和生命周期需要持久化。
+一次索引失败只能影响召回，不能覆盖 Claim。引用必须回到实际 Evidence，而不是只返回相似 chunk id。
+
+## 2. 一个事实一个 owner
+
+| 事实 | owner / 唯一写入口 |
+| --- | --- |
+| Artifact | ArtifactService + Artifact Store |
+| Evidence / Claim | KnowledgeService ingestion transaction |
+| Conversation committed inputs / ProjectReference | ConversationService + Interaction journal |
+| Delete/Restore Command、Event、Receipt | KnowledgeLifecycleService |
+| Subscription、ResearchRun、Digest、Delivery | ResearchService |
+| Project definition、Plan、SubGoal、Completion | InvestigationProject aggregate + service |
+| Tool policy、idempotency、audit | ToolGateway governance store |
+| Child run 与 AgentArtifact | AgentGateway |
+
+UI View、Trace、Capability projection、向量索引和 Graph 都是读取投影，不得成为第二写入口。
+
+## 3. Context、Journal、Artifact 和 Memory 不能合并
+
+| 存储 | 目的 | 失效/恢复边界 |
+| --- | --- | --- |
+| LLM Context | 当前模型调用可见输入 | 可裁剪、压缩和重建 |
+| Interaction Journal | 恢复 Conversation committed facts | 不重复已提交 action |
+| Artifact Store | 保存大内容与中间产物 | 通过 scoped ResourceRef 读取 |
+| Long-term Knowledge | 跨会话可维护事实 | 只能走 Knowledge 写入口 |
+| Retrieval Index | 高效生成候选 | 可从权威事实重建 |
+
+结构相似不代表生命周期相同。把它们合成 God State 会让 Context 摘要、运行恢复和长期事实互相污染。
+
+## 4. Grounded answer 是只读证据链
+
+```text
+authenticated principal + question
+  -> visible knowledge
+  -> bounded personal evidence Observation
+  -> optional Tool/MCP observations
+  -> answer generation
+  -> grounding/conflict verification
+  -> one Conversation FinalMessage
+```
+
+**最终回答由 Conversation 拥有，Knowledge 拥有 evidence/claim 语义。** `ASK-001A` 覆盖 personal-only 冲突证据，`ASK-001B` 覆盖 personal + official web；两者都断言不写 Claim、不跨 principal。当前只证明 principal ownership，不外推 workspace/membership/role Aggregate。
+
+## 5. 写入首要目标是防污染
+
+**保存、纠错和删除分别使用与其来源、生命周期和恢复边界匹配的写入口，不从模型回答直接派生长期事实。**
+
+### 显式保存
+
+Ask 默认零写入。Save 需要明确意图、user-authored exact span、来源索引和必要确认；assistant candidate 包含推断与生成措辞，当前不是已准入长期知识来源。
+
+### 纠错
+
+```text
+old Claim(active) -> old Claim(superseded)
+new Claim(active) -> Relation(supersedes/conflicts) -> old Claim
+```
+
+不覆盖旧 Claim，才能保留“原来是什么、谁在何时更正、为什么新旧冲突”的 provenance，同时让默认检索只选择 active facts。
+
+### 删除与恢复
+
+DeleteCommand 和 RestoreCommand 是两个 immutable 动作；prepare 零副作用，Confirmation 绑定服务端冻结 payload，相同 digest replay 返回已有 Receipt。只有确认、幂等和跨请求恢复消费者存在，才值得创建 Command/Receipt。
+
+## 6. Review 与 Maintenance 只消费知识事实
+
+- Review 生成 ReviewCard、记录用户反馈并更新 schedule projection；
+- Maintenance 产生 conflict/orphan/backlink 候选并引用 source Claim；
+- 二者都不能绕过 KnowledgeService 直接改写 Claim。
+
+它们共享 Knowledge 读取模型，不拥有第二套知识权威事实。
+
+## 7. ResearchRun 适合固定结果契约
+
+```text
+Subscription -> Scheduler -> ResearchRun -> Digest -> Delivery -> Feedback
+```
+
+Subscription 定义计划，ResearchRun 保存单次执行状态，Delivery 保存幂等投递事实。模型和 Web Provider 可以参与检索总结，但领域状态迁移、来源要求、partial/limitation 和 exactly-once delivery 由 Research Application 决定。修改订阅不能篡改历史 Run，Feedback 必须关联同一 Subscription/Run。
+
+## 8. InvestigationProject 适合动态 durable facts
+
+| 维度 | ResearchRun | InvestigationProject |
+| --- | --- | --- |
+| 目标 | 稳定研究/摘要契约 | 显式 required result 的开放调查 |
+| 编排 | 固定 pipeline/state machine | Observation 驱动 accepted Plan/ready set |
+| 用户控制 | Run/Subscription 操作 | steering、pause/cancel、progress |
+| 恢复 | run state、Digest、Delivery | Plan、journal、submission key、evidence |
+| 完成 | Digest/Delivery 领域终态 | Verification + CompletionReport |
+
+Project 的区分标准不是“运行很久”，而是动态依赖和独立长期业务事实。Conversation 只保存 ProjectReference；读取 projection 不推进状态，steering 走 Project 唯一写入口。普通请求已有路径能满足时，不能因为框架支持 durable graph 就迁入 Project。
+
+## 9. MCP 与 A2A 只拥有执行事实
+
+- MCP discovery/schema 不定义 Claim、Subscription 或 Project 状态；
+- A2A completed 只表示 child run 终止，不表示父 Goal 完成；
+- Adapter 只转换协议，不补业务 payload、不绕过 Policy、不把远端状态写成领域终态。
+
+## 10. 只持久化不能安全重建的事实
+
+**持久化的判据是存在恢复、审计或幂等消费者，而不是对象看起来重要。** immutable Command、Receipt、accepted Plan、Delivery fact 和 Claim 需要保存；Context projection、ready set、检索排名和模型可见 capability projection 能从权威事实重建，不应成为第二事实源。
+
+通用 Context、HITL、预算和恢复机制见[能力设计](03-capability-axes.md)，证据边界见[证据与发布](05-evidence-and-release.md)。

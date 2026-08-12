@@ -13,6 +13,7 @@ from personal_agent.application.conversation import (
     AgentTurnDecision,
     ContinueTurnProposal,
     ConversationMessage,
+    ConversationOperationNotFound,
     ConversationService,
     FileInteractionJournal,
     FinalMessage,
@@ -24,11 +25,15 @@ from personal_agent.application.conversation import (
 from personal_agent.application.conversation.models import (
     ActionObservation,
     CommittedUsage,
+    ConversationProjectSnapshot,
     DecisionFeedback,
     EffectiveCapabilities,
     ProjectReference,
     ReviewCriteria,
     PersonalKnowledgeCandidate,
+    PersonalKnowledgeEvidenceSnapshot,
+    InvestigationRequirementProgress,
+    InvestigationSubgoalProgress,
 )
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
@@ -47,7 +52,10 @@ from personal_agent.capabilities.contracts.model import (
 )
 from personal_agent.governance import ToolExecutor
 from personal_agent.governance.policy import PolicyEngine
-from personal_agent.application.knowledge import InMemoryKnowledgeStore, KnowledgeService
+from personal_agent.application.knowledge import (
+    InMemoryKnowledgeStore,
+    KnowledgeService,
+)
 from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     AgentGatewayContext,
@@ -74,6 +82,9 @@ from personal_agent.kernel.contracts.scope import (
 from personal_agent.application.conversation.observation_bounds import (
     MAX_OBSERVATION_PAYLOAD_CHARS,
     serialized_length,
+)
+from personal_agent.application.conversation.context_materialization import (
+    materialize_interaction_inputs,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
@@ -124,7 +135,9 @@ def test_agent_turn_decision_uses_supported_object_root_schema():
 
     def contains_one_of(node) -> bool:
         if isinstance(node, dict):
-            return "oneOf" in node or any(contains_one_of(value) for value in node.values())
+            return "oneOf" in node or any(
+                contains_one_of(value) for value in node.values()
+            )
         if isinstance(node, list):
             return any(contains_one_of(value) for value in node)
         return False
@@ -134,12 +147,16 @@ def test_agent_turn_decision_uses_supported_object_root_schema():
 
 def test_interaction_prompt_matches_the_object_root_wire_contract():
     prompt = ConversationService(None)._system_prompt(
-        EffectiveCapabilities(revision="test"),
+        EffectiveCapabilities(),
         CommittedUsage(),
     )
 
+    assert "revision" not in EffectiveCapabilities.model_fields
+    assert '"revision":' not in prompt
     assert '{"decision": <FinalMessage | ContinueTurnProposal>}' in prompt
-    assert "Never place kind, type, actions, disposition, or message at the root" in prompt
+    assert (
+        "Never place kind, type, actions, disposition, or message at the root" in prompt
+    )
     assert '"disposition": "answer|clarification_required|limitation|failed"' in prompt
     assert '"kind": "continue_turn"' in prompt
 
@@ -152,7 +169,7 @@ def test_prompt_never_asks_the_model_to_run_or_reference_verification():
     Its absence is asserted so it cannot drift back in as a "helpful" hint.
     """
     prompt = ConversationService(None)._system_prompt(
-        EffectiveCapabilities(revision="test"),
+        EffectiveCapabilities(),
         CommittedUsage(),
         ReviewCriteria(criteria=("no unverifiable occurrence claims",)),
     )
@@ -198,23 +215,42 @@ def _conversation_scope():
     }
 
 
+def _trace(service: ConversationService, interaction_run_ref: str):
+    return service.trace(
+        interaction_run_ref,
+        principal=_conversation_scope()["principal"],
+    )
+
+
 def test_l01_observation_drives_next_react_decision_and_user_result():
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="read-1", tool_name="read_fact", arguments={"query": "Orion"})),
-        FinalMessage(disposition="answer", message="Orion fact is grounded in the observation."),
+        _continue(
+            ToolCallProposal(
+                action_id="read-1", tool_name="read_fact", arguments={"query": "Orion"}
+            )
+        ),
+        FinalMessage(
+            disposition="answer", message="Orion fact is grounded in the observation."
+        ),
     )
-    service = ConversationService(model, tool_port=_executor(_tool("read_fact", read_fact)))
+    service = ConversationService(
+        model, tool_port=_executor(_tool("read_fact", read_fact))
+    )
 
     result = service.respond(
         **_conversation_scope(),
         conversation_id="conversation-l01",
         interaction_run_ref="irun_l01",
-        messages=[ConversationMessage(role="user", content="Read the Orion fact, then answer.")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Read the Orion fact, then answer."
+            )
+        ],
     )
-    trace = service.trace("irun_l01")
+    trace = _trace(service, "irun_l01")
 
     assert result.disposition == "answer"
     assert trace is not None
@@ -228,6 +264,94 @@ def test_l01_observation_drives_next_react_decision_and_user_result():
     assert trace.final_message is not None
 
 
+def test_interaction_trace_read_and_resume_require_the_committed_principal(caplog):
+    service = ConversationService(
+        _Decisions(FinalMessage(disposition="answer", message="owner-only result"))
+    )
+    messages = [ConversationMessage(role="user", content="Return my private result.")]
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-scope",
+        interaction_run_ref="irun_scope",
+        messages=messages,
+    )
+    other = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="other")
+
+    with pytest.raises(PermissionError, match="scope mismatch"):
+        service.trace("irun_scope", principal=other)
+    with pytest.raises(PermissionError, match="scope mismatch"):
+        service.respond(
+            principal=other,
+            conversation_id="conversation-scope",
+            interaction_run_ref="irun_scope",
+            messages=messages,
+        )
+
+    assert "conversation_run_scope_mismatch" in caplog.text
+    assert "owner-only result" not in caplog.text
+
+
+def test_unscoped_legacy_interaction_snapshot_is_quarantined(temp_dir):
+    journal_root = temp_dir / "unscoped-interaction"
+    service = ConversationService(
+        _Decisions(FinalMessage(disposition="answer", message="legacy result")),
+        journal=FileInteractionJournal(journal_root),
+    )
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-legacy",
+        interaction_run_ref="irun_legacy",
+        messages=[
+            ConversationMessage(role="user", content="Return the legacy result.")
+        ],
+    )
+    snapshot_path = sorted((journal_root / "irun_legacy").glob("*.json"))[-1]
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    payload.pop("principal")
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restarted = ConversationService(
+        None,
+        journal=FileInteractionJournal(journal_root),
+    )
+    with pytest.raises(ConversationOperationNotFound, match="no trustworthy owner"):
+        _trace(restarted, "irun_legacy")
+
+
+def test_context_materialization_keeps_reread_ref_without_repeating_lossy_excerpt():
+    resource_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
+        revision=1,
+    )
+    observation = ActionObservation(
+        kind="tool_result",
+        action_id="read-big",
+        capability_id="read_big",
+        status="succeeded",
+        payload={
+            "ok": True,
+            "content": "lossy excerpt" * 1_000,
+            "retrieval": {
+                "omitted_chars": 50_000,
+                "original_chars": 70_000,
+                "resource_ref": resource_ref.model_dump(mode="json"),
+                "read_more": "Call read_action_output.",
+            },
+        },
+    )
+
+    materialized = materialize_interaction_inputs((observation,))
+
+    assert observation.payload["content"].startswith("lossy excerpt")
+    assert "content" not in materialized[0].payload
+    assert materialized[0].payload["observation_excerpt_removed"] is True
+    assert materialized[0].payload["retrieval"][
+        "resource_ref"
+    ] == resource_ref.model_dump(mode="json")
+
+
 def test_recorded_context_segments_account_for_the_input_that_was_sent():
     """The four segments must add up to the request, not to a re-derivation.
 
@@ -235,22 +359,35 @@ def test_recorded_context_segments_account_for_the_input_that_was_sent():
     algorithm for the same input, free to drift from what the model actually saw.
     Summing per turn against the recorded request is what keeps it a measurement.
     """
+
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="read-1", tool_name="read_fact", arguments={"query": "Orion"})),
-        FinalMessage(disposition="answer", message="Orion fact is grounded in the observation."),
+        _continue(
+            ToolCallProposal(
+                action_id="read-1", tool_name="read_fact", arguments={"query": "Orion"}
+            )
+        ),
+        FinalMessage(
+            disposition="answer", message="Orion fact is grounded in the observation."
+        ),
     )
-    service = ConversationService(model, tool_port=_executor(_tool("read_fact", read_fact)))
+    service = ConversationService(
+        model, tool_port=_executor(_tool("read_fact", read_fact))
+    )
 
     service.respond(
         **_conversation_scope(),
         conversation_id="conversation-composition",
         interaction_run_ref="irun_composition",
-        messages=[ConversationMessage(role="user", content="Read the Orion fact, then answer.")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Read the Orion fact, then answer."
+            )
+        ],
     )
-    trace = service.trace("irun_composition")
+    trace = _trace(service, "irun_composition")
 
     assert trace is not None
     assert len(trace.context_composition) == len(model.decision_requests) == 2
@@ -287,12 +424,13 @@ def test_measuring_the_context_does_not_change_the_sealed_input():
 
     request = model.decision_requests[0]
     assert request.context_projection_ref == sealed_context_projection_ref(
-        purpose="agent_interaction_turn", messages=request.messages,
+        purpose="agent_interaction_turn",
+        messages=request.messages,
     )
     # Measuring yielded a record without yielding a message: the turn sent the
     # minimum visible set, so nothing was appended for the benefit of the trace.
     assert [message["role"] for message in request.messages] == ["system", "user"]
-    trace = service.trace("irun_seal")
+    trace = _trace(service, "irun_seal")
     assert trace is not None
     assert len(trace.context_composition) == 1
 
@@ -311,17 +449,25 @@ def test_oversized_tool_observation_is_bounded_and_offloaded_for_re_read():
         revision=1,
     )
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "MAINTAINERS"})),
+        _continue(
+            ToolCallProposal(
+                action_id="read-big",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
         # The model supplies only the ref and the keyword; no identity argument
         # exists for it to assert.
-        _continue(ToolCallProposal(
-            action_id="reread",
-            tool_name="read_action_output",
-            arguments={
-                "resource_ref": offloaded_ref.model_dump(mode="json"),
-                "keyword": "xfs",
-            },
-        )),
+        _continue(
+            ToolCallProposal(
+                action_id="reread",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "keyword": "xfs",
+                },
+            )
+        ),
         FinalMessage(disposition="answer", message=f"The address is {late_fact}."),
     )
     artifacts = _ArtifactTexts()
@@ -335,9 +481,13 @@ def test_oversized_tool_observation_is_bounded_and_offloaded_for_re_read():
         **_conversation_scope(),
         conversation_id="conversation-oversized",
         interaction_run_ref="irun-oversized",
-        messages=[ConversationMessage(role="user", content="Tell me the XFS list address in that file.")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Tell me the XFS list address in that file."
+            )
+        ],
     )
-    trace = service.trace("irun-oversized")
+    trace = _trace(service, "irun-oversized")
 
     observation = trace.inputs[0]
     assert observation.kind == "tool_result"
@@ -357,12 +507,77 @@ def test_oversized_tool_observation_is_bounded_and_offloaded_for_re_read():
     assert reread.payload["keyword_match_count"] >= 1
 
 
+def test_refetching_a_tool_with_unread_offloaded_output_is_rejected_without_spending_budget():
+    late_fact = "linux-xfs@vger.kernel.org"
+
+    def read_big(path: str):
+        filler = "\n".join(f"line {index}" for index in range(200_000))
+        return tool_response(tool_success({"content": f"{filler}\n{late_fact}\n"}))
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="read-big",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="read-big-again",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="reread",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "keyword": "xfs",
+                },
+            )
+        ),
+        FinalMessage(disposition="answer", message=f"The address is {late_fact}."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=_ArtifactTexts(),
+    )
+
+    view = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-refetch",
+        interaction_run_ref="irun-refetch",
+        messages=[ConversationMessage(role="user", content="Read the XFS address.")],
+    )
+    trace = _trace(service, "irun-refetch")
+
+    assert view.disposition == "answer"
+    feedback = [item for item in trace.inputs if isinstance(item, DecisionFeedback)]
+    assert [item.reason_code for item in feedback] == ["offloaded_output_refetch"]
+    assert "gen_0" in feedback[0].required_repair
+    assert trace.usage.tool_calls == 2
+
+
 def test_offload_failure_is_reported_in_the_observation_not_swallowed():
     def read_big(path: str):
         return tool_response(tool_success({"content": "q" * 500_000}))
 
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "f"})),
+        _continue(
+            ToolCallProposal(
+                action_id="read-big", tool_name="read_big", arguments={"path": "f"}
+            )
+        ),
         FinalMessage(disposition="answer", message="Bounded without the remainder."),
     )
     service = ConversationService(
@@ -375,9 +590,11 @@ def test_offload_failure_is_reported_in_the_observation_not_swallowed():
         **_conversation_scope(),
         conversation_id="conversation-offload-fail",
         interaction_run_ref="irun-offload-fail",
-        messages=[ConversationMessage(role="user", content="Read that file and answer.")],
+        messages=[
+            ConversationMessage(role="user", content="Read that file and answer.")
+        ],
     )
-    trace = service.trace("irun-offload-fail")
+    trace = _trace(service, "irun-offload-fail")
 
     retrieval = trace.inputs[0].payload["retrieval"]
     assert "resource_ref" not in retrieval
@@ -409,12 +626,19 @@ def test_re_reading_another_principals_offloaded_output_is_denied():
         evidence_refs=(),
     )
     model = _Decisions(
-        _continue(ToolCallProposal(
-            action_id="steal",
-            tool_name="read_action_output",
-            arguments={"resource_ref": foreign_ref.model_dump(mode="json"), "keyword": "private"},
-        )),
-        FinalMessage(disposition="limitation", message="That output is not available to me."),
+        _continue(
+            ToolCallProposal(
+                action_id="steal",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": foreign_ref.model_dump(mode="json"),
+                    "keyword": "private",
+                },
+            )
+        ),
+        FinalMessage(
+            disposition="limitation", message="That output is not available to me."
+        ),
     )
     service = ConversationService(model, tool_port=_executor(), artifact_port=artifacts)
 
@@ -422,9 +646,11 @@ def test_re_reading_another_principals_offloaded_output_is_denied():
         **_conversation_scope(),
         conversation_id="conversation-foreign",
         interaction_run_ref="irun-foreign-read",
-        messages=[ConversationMessage(role="user", content="Show me that earlier output.")],
+        messages=[
+            ConversationMessage(role="user", content="Show me that earlier output.")
+        ],
     )
-    trace = service.trace("irun-foreign-read")
+    trace = _trace(service, "irun-foreign-read")
 
     observation = trace.inputs[0]
     assert observation.status == "failed"
@@ -454,16 +680,27 @@ def test_asking_the_user_about_an_output_this_run_offloaded_is_rejected():
         revision=1,
     )
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "MAINTAINERS"})),
+        _continue(
+            ToolCallProposal(
+                action_id="read-big",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
         FinalMessage(
             disposition="clarification_required",
             message="Which branch of MAINTAINERS did you mean?",
         ),
-        _continue(ToolCallProposal(
-            action_id="reread",
-            tool_name="read_action_output",
-            arguments={"resource_ref": offloaded_ref.model_dump(mode="json"), "keyword": "xfs"},
-        )),
+        _continue(
+            ToolCallProposal(
+                action_id="reread",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "keyword": "xfs",
+                },
+            )
+        ),
         FinalMessage(disposition="answer", message=f"The address is {late_fact}."),
     )
     artifacts = _ArtifactTexts()
@@ -475,9 +712,13 @@ def test_asking_the_user_about_an_output_this_run_offloaded_is_rejected():
         **_conversation_scope(),
         conversation_id="conversation-unread",
         interaction_run_ref="irun-unread",
-        messages=[ConversationMessage(role="user", content="Tell me the XFS list address in that file.")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Tell me the XFS list address in that file."
+            )
+        ],
     )
-    trace = service.trace("irun-unread")
+    trace = _trace(service, "irun-unread")
 
     assert view.disposition == "answer"
     assert late_fact in view.message.content
@@ -489,15 +730,10 @@ def test_asking_the_user_about_an_output_this_run_offloaded_is_rejected():
     assert reread.payload["resource_id"] == "gen_0"
 
 
-def test_a_limitation_stands_once_the_offloaded_remainder_has_been_read():
-    """Reading it is the requirement, not concluding anything about it.
-
-    The remainder here genuinely lacks what was asked for, so the same rule that
-    rejected the unread exit must let this one through.
-    """
-
+def test_answer_about_an_unread_offloaded_output_is_rejected_until_reread():
     def read_big(path: str):
-        return tool_response(tool_success({"content": "\n".join(f"line {i}" for i in range(200_000))}))
+        filler = "\n".join(f"line {index}" for index in range(200_000))
+        return tool_response(tool_success({"content": filler}))
 
     offloaded_ref = ResourceRef(
         resource_id="gen_0",
@@ -506,12 +742,80 @@ def test_a_limitation_stands_once_the_offloaded_remainder_has_been_read():
         revision=1,
     )
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="read-big", tool_name="read_big", arguments={"path": "f"})),
-        _continue(ToolCallProposal(
-            action_id="reread",
-            tool_name="read_action_output",
-            arguments={"resource_ref": offloaded_ref.model_dump(mode="json"), "keyword": "xfs"},
-        )),
+        _continue(
+            ToolCallProposal(
+                action_id="read-big",
+                tool_name="read_big",
+                arguments={"path": "f"},
+            )
+        ),
+        FinalMessage(disposition="answer", message="The answer is line 100000."),
+        _continue(
+            ToolCallProposal(
+                action_id="reread",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "start_line": 100000,
+                },
+            )
+        ),
+        FinalMessage(disposition="answer", message="The answer is line 100000."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=_ArtifactTexts(),
+    )
+
+    view = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-unread-answer",
+        interaction_run_ref="irun-unread-answer",
+        messages=[ConversationMessage(role="user", content="Read line 100000.")],
+    )
+    trace = _trace(service, "irun-unread-answer")
+
+    assert view.disposition == "answer"
+    feedback = [item for item in trace.inputs if isinstance(item, DecisionFeedback)]
+    assert [item.reason_code for item in feedback] == ["offloaded_output_unread"]
+    assert trace.inputs[-1].capability_id == "read_action_output"
+
+
+def test_a_limitation_stands_once_the_offloaded_remainder_has_been_read():
+    """Reading it is the requirement, not concluding anything about it.
+
+    The remainder here genuinely lacks what was asked for, so the same rule that
+    rejected the unread exit must let this one through.
+    """
+
+    def read_big(path: str):
+        return tool_response(
+            tool_success({"content": "\n".join(f"line {i}" for i in range(200_000))})
+        )
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="read-big", tool_name="read_big", arguments={"path": "f"}
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="reread",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "keyword": "xfs",
+                },
+            )
+        ),
         FinalMessage(disposition="limitation", message="That file has no XFS entry."),
     )
     service = ConversationService(
@@ -524,9 +828,13 @@ def test_a_limitation_stands_once_the_offloaded_remainder_has_been_read():
         **_conversation_scope(),
         conversation_id="conversation-read-limit",
         interaction_run_ref="irun-read-limit",
-        messages=[ConversationMessage(role="user", content="Is there an XFS entry in that file?")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Is there an XFS entry in that file?"
+            )
+        ],
     )
-    trace = service.trace("irun-read-limit")
+    trace = _trace(service, "irun-read-limit")
 
     assert view.disposition == "limitation"
     assert not [item for item in trace.inputs if isinstance(item, DecisionFeedback)]
@@ -550,7 +858,9 @@ def test_initial_action_executes_without_a_synthetic_working_plan_contract():
         ContinueTurnProposal(actions=(action,)),
         FinalMessage(disposition="answer", message="Observed Orion."),
     )
-    service = ConversationService(model, tool_port=_executor(_tool("read_fact", read_fact)))
+    service = ConversationService(
+        model, tool_port=_executor(_tool("read_fact", read_fact))
+    )
 
     service.respond(
         **_conversation_scope(),
@@ -558,7 +868,7 @@ def test_initial_action_executes_without_a_synthetic_working_plan_contract():
         interaction_run_ref="irun-plan-admission",
         messages=[ConversationMessage(role="user", content="Read Orion, then answer.")],
     )
-    trace = service.trace("irun-plan-admission")
+    trace = _trace(service, "irun-plan-admission")
 
     assert calls == 1
     assert trace is not None
@@ -578,30 +888,41 @@ def test_l02_only_mechanically_safe_actions_run_concurrently():
 
     model = _Decisions(
         _continue(
-            ToolCallProposal(action_id="left", tool_name="read_left", arguments={"value": "L"}),
-            ToolCallProposal(action_id="right", tool_name="read_right", arguments={"value": "R"}),
+            ToolCallProposal(
+                action_id="left", tool_name="read_left", arguments={"value": "L"}
+            ),
+            ToolCallProposal(
+                action_id="right", tool_name="read_right", arguments={"value": "R"}
+            ),
         ),
         FinalMessage(disposition="answer", message="Both independent reads completed."),
     )
-    service = ConversationService(model, tool_port=_executor(
-        _tool("read_left", read_left),
-        _tool("read_right", read_right),
-    ))
+    service = ConversationService(
+        model,
+        tool_port=_executor(
+            _tool("read_left", read_left),
+            _tool("read_right", read_right),
+        ),
+    )
 
     service.respond(
         **_conversation_scope(),
         conversation_id="conversation-l02",
         interaction_run_ref="irun_l02",
-        messages=[ConversationMessage(role="user", content="Read both independent sources.")],
+        messages=[
+            ConversationMessage(role="user", content="Read both independent sources.")
+        ],
     )
-    trace = service.trace("irun_l02")
+    trace = _trace(service, "irun_l02")
 
     assert trace is not None
     assert trace.concurrent_batches == (("left", "right"),)
     assert trace.execution_order == ("left", "right")
 
 
-def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(temp_dir):
+def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(
+    temp_dir,
+):
     calls = 0
 
     def read_once(value: str):
@@ -609,10 +930,16 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
         calls += 1
         return tool_response(tool_success({"value": value}))
 
-    messages = [ConversationMessage(role="user", content="Read once and recover after a crash.")]
+    messages = [
+        ConversationMessage(role="user", content="Read once and recover after a crash.")
+    ]
     first = ConversationService(
         _Decisions(
-            _continue(ToolCallProposal(action_id="once", tool_name="read_once", arguments={"value": "fact"})),
+            _continue(
+                ToolCallProposal(
+                    action_id="once", tool_name="read_once", arguments={"value": "fact"}
+                )
+            ),
             RuntimeError("simulated process termination"),
         ),
         tool_port=_executor(_tool("read_once", read_once)),
@@ -627,7 +954,9 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
         )
 
     resumed_model = _Decisions(
-        FinalMessage(disposition="answer", message="Recovered from the committed fact."),
+        FinalMessage(
+            disposition="answer", message="Recovered from the committed fact."
+        ),
     )
     resumed = ConversationService(
         resumed_model,
@@ -647,7 +976,7 @@ def test_l03_restart_rebuilds_plan_from_durable_facts_without_reexecuting_tool(t
         message["content"] for message in resumed_model.decision_requests[0].messages
     )
     assert "Typed execution inputs" in resumed_context
-    trace = resumed.trace("irun_l03")
+    trace = _trace(resumed, "irun_l03")
     assert [item.kind for item in trace.inputs] == ["tool_result"]
 
 
@@ -658,10 +987,12 @@ def test_independent_user_results_instruction_does_not_require_named_capabilitie
     service.respond(
         **_conversation_scope(),
         conversation_id="conversation-explicit-reads",
-        messages=[ConversationMessage(
-            role="user",
-            content="Summarize my recent notes and identify any knowledge gaps.",
-        )],
+        messages=[
+            ConversationMessage(
+                role="user",
+                content="Summarize my recent notes and identify any knowledge gaps.",
+            )
+        ],
     )
 
     system_prompt = model.decision_requests[0].messages[0]["content"]
@@ -681,19 +1012,21 @@ def test_interaction_delegation_budget_cannot_exceed_synchronous_policy_limit():
 
 
 def test_l04_parent_synthesizes_async_specialist_artifact_without_child_completion_shortcut():
-    gateway = AgentGateway(
-        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
-    )
+    gateway = AgentGateway(policy_engine=PolicyEngine(), store=InMemoryAgentRunStore())
     specialist = _AsyncSpecialist()
     gateway.register(specialist)
     model = _Decisions(
-        _continue(AgentDelegationProposal(
-            action_id="specialist-1",
-            agent_id="specialist",
-            bounded_sub_goal="Research only the bounded Orion question.",
-            expected_artifact_types=("report",),
-        )),
-        FinalMessage(disposition="answer", message="Parent synthesis of the specialist report."),
+        _continue(
+            AgentDelegationProposal(
+                action_id="specialist-1",
+                agent_id="specialist",
+                bounded_sub_goal="Research only the bounded Orion question.",
+                expected_artifact_types=("report",),
+            )
+        ),
+        FinalMessage(
+            disposition="answer", message="Parent synthesis of the specialist report."
+        ),
     )
     service = ConversationService(
         model,
@@ -705,9 +1038,13 @@ def test_l04_parent_synthesizes_async_specialist_artifact_without_child_completi
         **_conversation_scope(),
         conversation_id="conversation-l04",
         interaction_run_ref="irun_l04",
-        messages=[ConversationMessage(role="user", content="Delegate the bounded research and synthesize it.")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Delegate the bounded research and synthesize it."
+            )
+        ],
     )
-    trace = service.trace("irun_l04")
+    trace = _trace(service, "irun_l04")
 
     assert result.message.content.startswith("Parent synthesis")
     assert trace.inputs[0].kind == "agent_artifact"
@@ -722,25 +1059,31 @@ def test_l04_parent_synthesizes_async_specialist_artifact_without_child_completi
 
 
 def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
-    gateway = AgentGateway(
-        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
-    )
+    gateway = AgentGateway(policy_engine=PolicyEngine(), store=InMemoryAgentRunStore())
     specialist = _AsyncSpecialist()
     gateway.register(specialist)
     model = _Decisions(
-        _continue(AgentDelegationProposal(
-            action_id="specialist-1",
-            agent_id="specialist",
-            bounded_sub_goal="Research the bounded question once.",
-            expected_artifact_types=("report",),
-        )),
-        ContinueTurnProposal(actions=(AgentDelegationProposal(
-            action_id="specialist-2",
-            agent_id="specialist",
-            bounded_sub_goal="Research the same requested result again.",
-            expected_artifact_types=("report",),
-        ),)),
-        FinalMessage(disposition="answer", message="Parent synthesis from the first artifact."),
+        _continue(
+            AgentDelegationProposal(
+                action_id="specialist-1",
+                agent_id="specialist",
+                bounded_sub_goal="Research the bounded question once.",
+                expected_artifact_types=("report",),
+            )
+        ),
+        ContinueTurnProposal(
+            actions=(
+                AgentDelegationProposal(
+                    action_id="specialist-2",
+                    agent_id="specialist",
+                    bounded_sub_goal="Research the same requested result again.",
+                    expected_artifact_types=("report",),
+                ),
+            )
+        ),
+        FinalMessage(
+            disposition="answer", message="Parent synthesis from the first artifact."
+        ),
     )
     service = ConversationService(
         model,
@@ -752,9 +1095,11 @@ def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
         **_conversation_scope(),
         conversation_id="conversation-repeat-delegation",
         interaction_run_ref="irun-repeat-delegation",
-        messages=[ConversationMessage(role="user", content="Delegate once, then synthesize.")],
+        messages=[
+            ConversationMessage(role="user", content="Delegate once, then synthesize.")
+        ],
     )
-    trace = service.trace("irun-repeat-delegation")
+    trace = _trace(service, "irun-repeat-delegation")
 
     assert result.disposition == "answer"
     assert specialist.submit_calls == 1
@@ -789,9 +1134,7 @@ def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegati
         ) -> ChildAgentRunRecord | None:
             return None
 
-    gateway = AgentGateway(
-        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
-    )
+    gateway = AgentGateway(policy_engine=PolicyEngine(), store=InMemoryAgentRunStore())
     specialist = _CancelledSpecialist()
     gateway.register(specialist)
     first = AgentDelegationProposal(
@@ -804,7 +1147,9 @@ def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegati
     model = _Decisions(
         _continue(first),
         ContinueTurnProposal(actions=(repeated,)),
-        FinalMessage(disposition="answer", message="Parent assessed the returned artifact."),
+        FinalMessage(
+            disposition="answer", message="Parent assessed the returned artifact."
+        ),
     )
     service = ConversationService(
         model,
@@ -816,9 +1161,13 @@ def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegati
         **_conversation_scope(),
         conversation_id="conversation-cancelled-artifact",
         interaction_run_ref="irun-cancelled-artifact",
-        messages=[ConversationMessage(role="user", content="Assess returned evidence without retrying." )],
+        messages=[
+            ConversationMessage(
+                role="user", content="Assess returned evidence without retrying."
+            )
+        ],
     )
-    trace = service.trace("irun-cancelled-artifact")
+    trace = _trace(service, "irun-cancelled-artifact")
 
     artifact = next(item for item in trace.inputs if item.kind == "agent_artifact")
     assert result.disposition == "answer"
@@ -837,7 +1186,15 @@ def test_l05_budget_exhaustion_fails_closed_after_committed_result():
         return tool_response(tool_success({"value": value}))
 
     service = ConversationService(
-        _Decisions(_continue(ToolCallProposal(action_id="inspect", tool_name="inspect", arguments={"value": "fact"}))),
+        _Decisions(
+            _continue(
+                ToolCallProposal(
+                    action_id="inspect",
+                    tool_name="inspect",
+                    arguments={"value": "fact"},
+                )
+            )
+        ),
         tool_port=_executor(_tool("inspect", inspect)),
         budget_policy=LoopBudgetPolicy(max_model_turns=1),
     )
@@ -846,12 +1203,62 @@ def test_l05_budget_exhaustion_fails_closed_after_committed_result():
         **_conversation_scope(),
         conversation_id="conversation-l05",
         interaction_run_ref="irun_l05",
-        messages=[ConversationMessage(role="user", content="Keep working past the configured budget.")],
+        messages=[
+            ConversationMessage(
+                role="user", content="Keep working past the configured budget."
+            )
+        ],
     )
 
     assert result.disposition == "limitation"
     assert "未生成替代答案" in result.message.content
-    assert service.trace("irun_l05").inputs[0].status == "succeeded"
+    assert _trace(service, "irun_l05").inputs[0].status == "succeeded"
+
+
+def test_a_single_batch_cannot_spend_more_tool_calls_than_remain():
+    calls: list[str] = []
+
+    def inspect(value: str):
+        calls.append(value)
+        return tool_response(tool_success({"value": value}))
+
+    service = ConversationService(
+        _Decisions(
+            ContinueTurnProposal(
+                actions=tuple(
+                    ToolCallProposal(
+                        action_id=f"inspect-{value}",
+                        tool_name="inspect",
+                        arguments={"value": value},
+                    )
+                    for value in ("A", "B", "C")
+                )
+            ),
+            FinalMessage(disposition="limitation", message="Only A and B were read."),
+        ),
+        tool_port=_executor(_tool("inspect", inspect)),
+        budget_policy=LoopBudgetPolicy(max_tool_calls=2),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-batch-budget",
+        interaction_run_ref="irun_batch_budget",
+        messages=[ConversationMessage(role="user", content="Read A, B, and C.")],
+    )
+    trace = _trace(service, "irun_batch_budget")
+
+    assert len(calls) == 2
+    assert set(calls) == {"A", "B"}
+    assert trace.usage.tool_calls == 2
+    assert trace.execution_order == ("inspect-A", "inspect-B", "inspect-C")
+    assert any(
+        item.kind == "decision_feedback"
+        and item.action_id == "inspect-C"
+        and item.reason_code == "budget_exhausted"
+        for item in trace.inputs
+    )
+    assert result.disposition == "limitation"
 
 
 def test_l06_observation_drives_revision_without_rewriting_execution_fact():
@@ -860,25 +1267,39 @@ def test_l06_observation_drives_revision_without_rewriting_execution_fact():
     def verify(draft: str):
         nonlocal calls
         calls += 1
-        return tool_response(tool_success({
-            "verification_ref": "verify-1",
-            "status": "failed",
-            "feedback": "cite the observed limitation",
-            "draft": draft,
-        }))
+        return tool_response(
+            tool_success(
+                {
+                    "verification_ref": "verify-1",
+                    "status": "failed",
+                    "feedback": "cite the observed limitation",
+                    "draft": draft,
+                }
+            )
+        )
 
     model = _Decisions(
-        _continue(ToolCallProposal(action_id="verify", tool_name="verify", arguments={"draft": "unsupported"})),
-        FinalMessage(disposition="answer", message="Revised answer that states the limitation."),
+        _continue(
+            ToolCallProposal(
+                action_id="verify",
+                tool_name="verify",
+                arguments={"draft": "unsupported"},
+            )
+        ),
+        FinalMessage(
+            disposition="answer", message="Revised answer that states the limitation."
+        ),
     )
     service = ConversationService(model, tool_port=_executor(_tool("verify", verify)))
     result = service.respond(
         **_conversation_scope(),
         conversation_id="conversation-l06",
         interaction_run_ref="irun_l06",
-        messages=[ConversationMessage(role="user", content="Check the draft, then answer.")],
+        messages=[
+            ConversationMessage(role="user", content="Check the draft, then answer.")
+        ],
     )
-    trace = service.trace("irun_l06")
+    trace = _trace(service, "irun_l06")
 
     assert calls == 1
     assert result.message.content.startswith("Revised answer")
@@ -891,11 +1312,13 @@ def _receipt_payload(draft, *, verdict, criterion="grounded", criteria_digest="0
     digest = sha256(normalized.encode("utf-8")).hexdigest()
     return {
         "verdict": verdict,
-        "criterion_results": [{
-            "criterion": criterion,
-            "status": "satisfied" if verdict == "passed" else "not_satisfied",
-            "feedback": "" if verdict == "passed" else "revise",
-        }],
+        "criterion_results": [
+            {
+                "criterion": criterion,
+                "status": "satisfied" if verdict == "passed" else "not_satisfied",
+                "feedback": "" if verdict == "passed" else "revise",
+            }
+        ],
         "revision_feedback": "" if verdict == "passed" else "revise",
         "receipt_id": f"svr_{digest[:20]}",
         "verified_draft": normalized,
@@ -915,7 +1338,10 @@ def _receipt_observation(draft, *, verdict, action_id="verify", **kwargs):
         action_id=action_id,
         capability_id="verify_interaction_draft",
         status="succeeded",
-        payload={"ok": True, "data": _receipt_payload(draft, verdict=verdict, **kwargs)},
+        payload={
+            "ok": True,
+            "data": _receipt_payload(draft, verdict=verdict, **kwargs),
+        },
     )
 
 
@@ -947,11 +1373,15 @@ def _verifier_tool(recorder, *, verdicts):
         evidence_refs: tuple[str, ...] = (),
     ):
         recorder.append((draft, tuple(success_criteria)))
-        return tool_response(tool_success(_receipt_payload(
-            draft,
-            verdict=verdicts[min(len(recorder) - 1, len(verdicts) - 1)],
-            criterion=success_criteria[0],
-        )))
+        return tool_response(
+            tool_success(
+                _receipt_payload(
+                    draft,
+                    verdict=verdicts[min(len(recorder) - 1, len(verdicts) - 1)],
+                    criterion=success_criteria[0],
+                )
+            )
+        )
 
     return _tool(
         "verify_interaction_draft",
@@ -1020,7 +1450,9 @@ def test_criteria_are_never_taken_from_an_assistant_message():
 def test_an_ordinary_request_is_answered_without_any_verification():
     """Non-review requests must not pay for verification, or trigger it at all."""
     recorder: list[tuple[str, tuple[str, ...]]] = []
-    model = _Decisions(FinalMessage(disposition="answer", message="Orion is a constellation."))
+    model = _Decisions(
+        FinalMessage(disposition="answer", message="Orion is a constellation.")
+    )
     service = ConversationService(
         model,
         tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
@@ -1032,7 +1464,7 @@ def test_an_ordinary_request_is_answered_without_any_verification():
         interaction_run_ref="irun-no-review",
         messages=[ConversationMessage(role="user", content="What is Orion?")],
     )
-    trace = service.trace("irun-no-review")
+    trace = _trace(service, "irun-no-review")
 
     assert result.message.content == "Orion is a constellation."
     assert recorder == []
@@ -1041,11 +1473,11 @@ def test_an_ordinary_request_is_answered_without_any_verification():
 
 
 def test_the_real_verifier_is_not_a_capability_the_model_can_see():
-    """The model cannot skip a step it does not know exists.
+    """The runtime-owned verifier stays out of the model-visible projection.
 
-    Exposure is what makes "verification will happen" structural: the capability
-    list is the model's only route to a tool, and the production verifier is
-    absent from it while remaining callable by the runtime.
+    This is a visibility assertion, not an authorization proof: the runtime can
+    still resolve the internal tool for its mandatory verification step. The
+    ordinary-user prompt-injection boundary is covered separately by GOV-001.
     """
     verifier = build_verify_interaction_draft_tool(_Decisions())
     executor = _executor(verifier)
@@ -1059,7 +1491,8 @@ def test_the_real_verifier_is_not_a_capability_the_model_can_see():
         executor.validate_interaction_call(
             "verify_interaction_draft",
             {"draft": "d", "success_criteria": ["c"]},
-        ).status == "accepted"
+        ).status
+        == "accepted"
     )
 
 
@@ -1092,7 +1525,7 @@ def test_a_review_answer_is_verified_before_it_can_be_sent():
         interaction_run_ref="irun-runtime-verified",
         messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
     )
-    trace = service.trace("irun-runtime-verified")
+    trace = _trace(service, "irun-runtime-verified")
 
     assert [draft for draft, _ in recorder] == ["系统已经完成所有写入。", safe]
     assert result.disposition == "answer"
@@ -1100,7 +1533,8 @@ def test_a_review_answer_is_verified_before_it_can_be_sent():
     assert trace.final_message.message == safe
     assert trace.execution_order == ("runtime-verify-0", "runtime-verify-1")
     assert [item.capability_id for item in trace.inputs] == [
-        "verify_interaction_draft", "verify_interaction_draft",
+        "verify_interaction_draft",
+        "verify_interaction_draft",
     ]
 
 
@@ -1135,14 +1569,13 @@ def test_a_review_request_cannot_be_ended_without_a_verified_answer():
         interaction_run_ref="irun-review-disposition",
         messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
     )
-    trace = service.trace("irun-review-disposition")
+    trace = _trace(service, "irun-review-disposition")
 
     assert [draft for draft, _ in recorder] == [safe]
     assert result.disposition == "answer"
     assert result.message.content == safe
     assert [
-        item.reason_code for item in trace.inputs
-        if isinstance(item, DecisionFeedback)
+        item.reason_code for item in trace.inputs if isinstance(item, DecisionFeedback)
     ] == ["review_requires_sendable_answer"]
 
 
@@ -1173,13 +1606,16 @@ def test_the_frozen_criteria_are_reused_for_every_verification_in_the_turn():
         interaction_run_ref="irun-frozen-criteria",
         messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
     )
-    trace = service.trace("irun-frozen-criteria")
+    trace = _trace(service, "irun-frozen-criteria")
 
     criteria_per_call = {criteria for _, criteria in recorder}
     assert criteria_per_call == {("must not claim writes occurred",)}
     assert trace.review_criteria.criteria == ("must not claim writes occurred",)
     assert (
-        sum(request.operation == "interaction_review_criteria" for request in model.requests)
+        sum(
+            request.operation == "interaction_review_criteria"
+            for request in model.requests
+        )
         == 1
     )
 
@@ -1200,7 +1636,7 @@ def test_a_review_request_fails_closed_when_verification_is_unavailable():
         interaction_run_ref="irun-verifier-missing",
         messages=[ConversationMessage(role="user", content=_REVIEW_REQUEST)],
     )
-    trace = service.trace("irun-verifier-missing")
+    trace = _trace(service, "irun-verifier-missing")
 
     assert result.disposition == "answer"
     assert trace.review_criteria == ReviewCriteria()
@@ -1211,6 +1647,7 @@ def test_a_review_request_fails_closed_when_verification_is_unavailable():
 
 def test_a_failed_criteria_derivation_answers_without_claiming_review():
     """A broken derivation must not become a runtime-invented standard."""
+
     class _FailingDerivation(_Decisions):
         def generate(self, request):
             if request.operation == "interaction_review_criteria":
@@ -1235,7 +1672,7 @@ def test_a_failed_criteria_derivation_answers_without_claiming_review():
 
     assert result.disposition == "answer"
     assert recorder == []
-    assert service.trace("irun-derivation-failed").review_criteria == ReviewCriteria()
+    assert _trace(service, "irun-derivation-failed").review_criteria == ReviewCriteria()
 
 
 def test_receipts_are_read_from_observations_by_contract_not_by_position():
@@ -1252,7 +1689,8 @@ def test_receipts_are_read_from_observations_by_contract_not_by_position():
     ]
 
     receipts = observed_receipts(
-        inputs, capability_names=frozenset({"verify_interaction_draft"}),
+        inputs,
+        capability_names=frozenset({"verify_interaction_draft"}),
     )
 
     assert [receipt.verdict for receipt in receipts] == ["needs_revision", "passed"]
@@ -1265,19 +1703,29 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
     store = InMemoryKnowledgeStore()
     writer = KnowledgeService(store)
     journal_root = temp_dir / "conversation-knowledge-save"
-    messages = [ConversationMessage(
-        role="user",
-        content="Save this conclusion after confirmation: SLO budgets need weekly review.",
-    )]
+    messages = [
+        ConversationMessage(
+            role="user",
+            content="Save this conclusion after confirmation: SLO budgets need weekly review.",
+        )
+    ]
     first = ConversationService(
-        _Decisions(_continue(ToolCallProposal(
-            action_id="save-1",
-            tool_name="prepare_conversation_knowledge_save",
-            arguments={"selections": [{
-                "source_message_index": 0,
-                "text_span": "SLO budgets need weekly review.",
-            }]},
-        ))),
+        _Decisions(
+            _continue(
+                ToolCallProposal(
+                    action_id="save-1",
+                    tool_name="prepare_conversation_knowledge_save",
+                    arguments={
+                        "selections": [
+                            {
+                                "source_message_index": 0,
+                                "text_span": "SLO budgets need weekly review.",
+                            }
+                        ]
+                    },
+                )
+            )
+        ),
         knowledge_writer=writer,
         journal=FileInteractionJournal(journal_root),
     )
@@ -1307,7 +1755,7 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
         knowledge_writer=writer,
         journal=FileInteractionJournal(journal_root),
     )
-    recovered = resumed.trace("irun_knowledge_save")
+    recovered = _trace(resumed, "irun_knowledge_save")
     assert recovered is not None
     assert recovered.knowledge_save_operation is not None
     assert recovered.knowledge_save_operation.command == command
@@ -1316,7 +1764,6 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
         **_conversation_scope(),
         interaction_run_ref="irun_knowledge_save",
         decision="confirm",
-        command_digest=command.command_digest,
         confirmation_ref="unit-user-confirmation",
     )
     claim_count = len(store.list_claims("tenant-1:default"))
@@ -1324,7 +1771,6 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
         **_conversation_scope(),
         interaction_run_ref="irun_knowledge_save",
         decision="confirm",
-        command_digest=command.command_digest,
         confirmation_ref="unit-user-confirmation",
     )
 
@@ -1332,11 +1778,14 @@ def test_governed_knowledge_save_recovers_confirms_and_replays_without_duplicate
     assert executed.receipt is not None
     assert replayed.receipt == executed.receipt
     assert len(store.list_claims("tenant-1:default")) == claim_count
-    after_restart = ConversationService(
-        None,
-        knowledge_writer=writer,
-        journal=FileInteractionJournal(journal_root),
-    ).trace("irun_knowledge_save")
+    after_restart = _trace(
+        ConversationService(
+            None,
+            knowledge_writer=writer,
+            journal=FileInteractionJournal(journal_root),
+        ),
+        "irun_knowledge_save",
+    )
     assert after_restart is not None
     assert after_restart.knowledge_save_operation == executed
 
@@ -1345,36 +1794,43 @@ def test_governed_knowledge_save_rejects_without_writing(temp_dir):
     store = InMemoryKnowledgeStore()
     writer = KnowledgeService(store)
     service = ConversationService(
-        _Decisions(_continue(ToolCallProposal(
-            action_id="save-reject",
-            tool_name="prepare_conversation_knowledge_save",
-            arguments={"selections": [{
-                "source_message_index": 0,
-                "text_span": "SLO budgets need weekly review.",
-            }]},
-        ))),
+        _Decisions(
+            _continue(
+                ToolCallProposal(
+                    action_id="save-reject",
+                    tool_name="prepare_conversation_knowledge_save",
+                    arguments={
+                        "selections": [
+                            {
+                                "source_message_index": 0,
+                                "text_span": "SLO budgets need weekly review.",
+                            }
+                        ]
+                    },
+                )
+            )
+        ),
         knowledge_writer=writer,
         journal=FileInteractionJournal(temp_dir / "conversation-knowledge-save-reject"),
     )
-    prepared = service.respond(
+    service.respond(
         **_conversation_scope(),
         conversation_id="conversation-1",
         interaction_run_ref="irun_knowledge_save_reject",
-        messages=[ConversationMessage(
-            role="user",
-            content=(
-                "Conclusion: SLO budgets need weekly review. "
-                "Save this only if I confirm."
-            ),
-        )],
+        messages=[
+            ConversationMessage(
+                role="user",
+                content=(
+                    "Conclusion: SLO budgets need weekly review. "
+                    "Save this only if I confirm."
+                ),
+            )
+        ],
     )
-    command = prepared.pending_confirmation.command
-
     rejected = service.decide_knowledge_save(
         **_conversation_scope(),
         interaction_run_ref="irun_knowledge_save_reject",
         decision="reject",
-        command_digest=command.command_digest,
         confirmation_ref="",
     )
 
@@ -1388,14 +1844,20 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
     writer = KnowledgeService(store)
     service = ConversationService(
         _Decisions(
-            _continue(ToolCallProposal(
-                action_id="save-fabricated",
-                tool_name="prepare_conversation_knowledge_save",
-                arguments={"selections": [{
-                    "source_message_index": 0,
-                    "text_span": "A conclusion the user never wrote.",
-                }]},
-            )),
+            _continue(
+                ToolCallProposal(
+                    action_id="save-fabricated",
+                    tool_name="prepare_conversation_knowledge_save",
+                    arguments={
+                        "selections": [
+                            {
+                                "source_message_index": 0,
+                                "text_span": "A conclusion the user never wrote.",
+                            }
+                        ]
+                    },
+                )
+            ),
             FinalMessage(
                 disposition="failed",
                 message="The requested knowledge span could not be selected.",
@@ -1408,12 +1870,14 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
         **_conversation_scope(),
         conversation_id="conversation-1",
         interaction_run_ref="irun_knowledge_save_fabricated",
-        messages=[ConversationMessage(
-            role="user",
-            content="Save my SLO conclusion after confirmation.",
-        )],
+        messages=[
+            ConversationMessage(
+                role="user",
+                content="Save my SLO conclusion after confirmation.",
+            )
+        ],
     )
-    trace = service.trace("irun_knowledge_save_fabricated")
+    trace = _trace(service, "irun_knowledge_save_fabricated")
 
     assert result.disposition == "failed"
     assert trace is not None
@@ -1425,6 +1889,17 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
 
 
 class _KnowledgeKnowledgeReader:
+    def select_personal_evidence(self, *, question, owner_id, user_id, limit):
+        assert owner_id == "tenant-1:default"
+        assert user_id == "default"
+        return PersonalKnowledgeEvidenceSnapshot(
+            question=question,
+            citations=(),
+            claim_summaries=(),
+            conflicted_claim_ids=(),
+            potential_conflicted_claim_ids=(),
+        )
+
     def list_personal_knowledge(self, *, owner_id, user_id, limit):
         assert owner_id == "tenant-1:default"
         assert user_id == "default"
@@ -1444,7 +1919,13 @@ class _KnowledgeDeleteLifecycle:
         self.operations = {}
 
     def prepare_delete(
-        self, *, owner_id, user_id, target_note_id, reason, idempotency_key,
+        self,
+        *,
+        owner_id,
+        user_id,
+        target_note_id,
+        reason,
+        idempotency_key,
     ):
         operation = KnowledgeDeleteOperationView(
             command=KnowledgeDeleteCommand(
@@ -1469,6 +1950,8 @@ class _KnowledgeDeleteLifecycle:
 class _ProjectStarter:
     def __init__(self):
         self.calls = 0
+        self.reads = 0
+        self.steers = 0
 
     def start(self, *, principal, owner, request, idempotency_key):
         self.calls += 1
@@ -1484,24 +1967,66 @@ class _ProjectStarter:
             goal=request.goal,
         )
 
+    def get(self, *, principal, reference):
+        self.reads += 1
+        assert reference.project_id == "iprj_target"
+        return self._snapshot(plan_version=1)
+
+    def steer(self, *, principal, reference, request, idempotency_key):
+        self.steers += 1
+        assert reference.project_id == "iprj_target"
+        assert request.statement == "Add deployment compatibility."
+        assert idempotency_key
+        return self._snapshot(plan_version=2)
+
+    @staticmethod
+    def _snapshot(*, plan_version):
+        return ConversationProjectSnapshot(
+            project_id="iprj_target",
+            state="active",
+            title="Protocol changes",
+            goal="Investigate protocol changes and deliver a sourced report.",
+            plan_version=plan_version,
+            requirements=(
+                InvestigationRequirementProgress(
+                    requirement_id="req-1",
+                    statement="Use official sources.",
+                    acceptance_contract="Every material claim has an official source.",
+                    status="active",
+                ),
+            ),
+            subgoals=(
+                InvestigationSubgoalProgress(
+                    logical_subgoal_id="sg-1",
+                    objective="Collect official changes.",
+                    status="pending",
+                ),
+            ),
+            waiting_reasons=(),
+        )
+
 
 def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_command():
     lifecycle = _KnowledgeDeleteLifecycle()
     service = ConversationService(
         _Decisions(
-            _continue(ToolCallProposal(
-                action_id="list-knowledge",
-                tool_name="list_personal_knowledge",
-                arguments={"limit": 20},
-            )),
-            _continue(ToolCallProposal(
-                action_id="prepare-delete",
-                tool_name="prepare_knowledge_delete",
-                arguments={
-                    "target_knowledge_item_id": "kitm_target",
-                    "reason": "The user identified this entry as incorrect.",
-                },
-            )),
+            _continue(
+                ToolCallProposal(
+                    action_id="list-knowledge",
+                    tool_name="list_personal_knowledge",
+                    arguments={"limit": 20},
+                )
+            ),
+            _continue(
+                ToolCallProposal(
+                    action_id="prepare-delete",
+                    tool_name="prepare_knowledge_delete",
+                    arguments={
+                        "target_knowledge_item_id": "kitm_target",
+                        "reason": "The user identified this entry as incorrect.",
+                    },
+                )
+            ),
         ),
         knowledge_reader=_KnowledgeKnowledgeReader(),
         knowledge_lifecycle=lifecycle,
@@ -1511,16 +2036,20 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
         **_conversation_scope(),
         conversation_id="conversation-1",
         interaction_run_ref="irun_delete_from_goal",
-        messages=[ConversationMessage(
-            role="user",
-            content="Delete the incorrect launch-window knowledge, but confirm first.",
-        )],
+        messages=[
+            ConversationMessage(
+                role="user",
+                content="Delete the incorrect launch-window knowledge, but confirm first.",
+            )
+        ],
     )
-    trace = service.trace("irun_delete_from_goal")
+    trace = _trace(service, "irun_delete_from_goal")
 
     assert prepared.disposition == "confirmation_required"
     assert prepared.pending_confirmation.kind == "knowledge_delete"
-    assert prepared.pending_confirmation.operation.command.target_note_id == "kitm_target"
+    assert (
+        prepared.pending_confirmation.operation.command.target_note_id == "kitm_target"
+    )
     assert trace.knowledge_delete_command_ref == "kdel_target"
     assert trace.project_reference is None
     assert [item.capability_id for item in trace.inputs] == ["list_personal_knowledge"]
@@ -1529,33 +2058,41 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
 def test_goal_entry_starts_one_existing_project_and_replay_returns_same_reference():
     project_port = _ProjectStarter()
     service = ConversationService(
-        _Decisions(_continue(ToolCallProposal(
-            action_id="start-project",
-            tool_name="start_durable_investigation",
-            arguments={
-                "title": "Protocol changes",
-                "goal": "Investigate protocol changes and deliver a sourced report.",
-                "requirements": [{
-                    "statement": "Use official sources.",
-                    "acceptance_contract": "Every material claim has an official source.",
-                }],
-            },
-        ))),
+        _Decisions(
+            _continue(
+                ToolCallProposal(
+                    action_id="start-project",
+                    tool_name="start_durable_investigation",
+                    arguments={
+                        "title": "Protocol changes",
+                        "goal": "Investigate protocol changes and deliver a sourced report.",
+                        "requirements": [
+                            {
+                                "statement": "Use official sources.",
+                                "acceptance_contract": "Every material claim has an official source.",
+                            }
+                        ],
+                    },
+                )
+            )
+        ),
         project_port=project_port,
     )
     kwargs = {
         **_conversation_scope(),
         "conversation_id": "conversation-1",
         "interaction_run_ref": "irun_project_from_goal",
-        "messages": [ConversationMessage(
-            role="user",
-            content="Investigate this in the background so I can pause or steer it later.",
-        )],
+        "messages": [
+            ConversationMessage(
+                role="user",
+                content="Investigate this in the background so I can pause or steer it later.",
+            )
+        ],
     }
 
     started = service.respond(**kwargs)
     replayed = service.respond(**kwargs)
-    trace = service.trace("irun_project_from_goal")
+    trace = _trace(service, "irun_project_from_goal")
 
     assert started.disposition == "background_started"
     assert replayed.project_reference == started.project_reference
@@ -1564,14 +2101,85 @@ def test_goal_entry_starts_one_existing_project_and_replay_returns_same_referenc
     assert trace.knowledge_delete_command_ref is None
 
 
+def test_later_turn_reads_and_steers_only_the_project_linked_to_its_conversation():
+    project_port = _ProjectStarter()
+    service = ConversationService(
+        _Decisions(
+            _continue(
+                ToolCallProposal(
+                    action_id="start-project",
+                    tool_name="start_durable_investigation",
+                    arguments={
+                        "title": "Protocol changes",
+                        "goal": "Investigate protocol changes and deliver a sourced report.",
+                        "requirements": [{
+                            "statement": "Use official sources.",
+                            "acceptance_contract": "Every material claim has an official source.",
+                        }],
+                    },
+                )
+            ),
+            _continue(ToolCallProposal(
+                action_id="steer-project",
+                tool_name="steer_investigation_project",
+                arguments={
+                    "statement": "Add deployment compatibility.",
+                    "added_requirements": [{
+                        "statement": "Cover deployment compatibility.",
+                        "acceptance_contract": "The report contains a compatibility section.",
+                    }],
+                },
+            )),
+            FinalMessage(
+                disposition="answer",
+                message="Plan version 2 is active.",
+            ),
+        ),
+        project_port=project_port,
+    )
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-linked-project",
+        interaction_run_ref="irun_project_start",
+        messages=[ConversationMessage(
+            role="user",
+            content="Investigate this in the background so I can steer it later.",
+        )],
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-linked-project",
+        interaction_run_ref="irun_project_steer",
+        messages=[ConversationMessage(
+            role="user",
+            content="Show progress, then add deployment compatibility to unfinished work.",
+        )],
+    )
+    trace = _trace(service, "irun_project_steer")
+
+    assert result.disposition == "answer"
+    assert result.project_reference.project_id == "iprj_target"
+    assert project_port.calls == 1
+    assert project_port.reads == 1
+    assert project_port.steers == 1
+    assert trace.project_reference.project_id == "iprj_target"
+    assert [item.capability_id for item in trace.inputs] == [
+        "investigation_project_context",
+        "steer_investigation_project",
+    ]
+
+
 def test_explanation_only_request_does_not_create_a_project_or_delete_command():
     project_port = _ProjectStarter()
     lifecycle = _KnowledgeDeleteLifecycle()
     service = ConversationService(
-        _Decisions(FinalMessage(
-            disposition="answer",
-            message="Here is how the deletion policy works; no operation was prepared.",
-        )),
+        _Decisions(
+            FinalMessage(
+                disposition="answer",
+                message="Here is how the deletion policy works; no operation was prepared.",
+            )
+        ),
         knowledge_reader=_KnowledgeKnowledgeReader(),
         knowledge_lifecycle=lifecycle,
         project_port=project_port,
@@ -1581,12 +2189,14 @@ def test_explanation_only_request_does_not_create_a_project_or_delete_command():
         **_conversation_scope(),
         conversation_id="conversation-1",
         interaction_run_ref="irun_explain_only",
-        messages=[ConversationMessage(
-            role="user",
-            content="Only explain how deletion works. Do not execute or start anything.",
-        )],
+        messages=[
+            ConversationMessage(
+                role="user",
+                content="Only explain how deletion works. Do not execute or start anything.",
+            )
+        ],
     )
-    trace = service.trace("irun_explain_only")
+    trace = _trace(service, "irun_explain_only")
 
     assert result.disposition == "answer"
     assert project_port.calls == 0
@@ -1609,7 +2219,9 @@ class _AsyncSpecialist:
         self.submit_calls = 0
         self.poll_calls = 0
 
-    def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
+    def invoke(
+        self, task: AgentTask, context: AgentGatewayContext
+    ) -> ChildAgentRunOutcome:
         raise AssertionError("interaction delegation must use submit/poll")
 
     def submit(
@@ -1630,7 +2242,9 @@ class _AsyncSpecialist:
     ) -> ChildAgentRunRecord | None:
         return None
 
-    def poll(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
+    def poll(
+        self, run: ChildAgentRunRecord, context: AgentGatewayContext
+    ) -> ChildAgentRunRecord:
         self.poll_calls += 1
         status = "completed" if self.poll_calls >= 2 else "running"
         return self._run(
@@ -1640,8 +2254,15 @@ class _AsyncSpecialist:
             agent_run_id=run.definition.agent_run_id,
         )
 
-    def cancel(self, run: ChildAgentRunRecord, context: AgentGatewayContext) -> ChildAgentRunRecord:
-        return self._run(run.definition.task, context, status="cancelled", agent_run_id=run.definition.agent_run_id)
+    def cancel(
+        self, run: ChildAgentRunRecord, context: AgentGatewayContext
+    ) -> ChildAgentRunRecord:
+        return self._run(
+            run.definition.task,
+            context,
+            status="cancelled",
+            agent_run_id=run.definition.agent_run_id,
+        )
 
     def stream(self, run: ChildAgentRunRecord, context: AgentGatewayContext):
         yield ChildAgentRunEvent(
@@ -1653,15 +2274,21 @@ class _AsyncSpecialist:
 
     def _run(self, task, context, *, status, agent_run_id=None):
         run_id = agent_run_id or new_agent_run_id()
-        artifacts = () if status == "running" else (AgentArtifact(
-            agent_run_id=run_id,
-            kind="report",
-            artifact_ref=ResourceRef(
-                resource_id=f"artifact-{run_id}",
-                resource_type="artifact",
-                owner=context.execution_scope.principal,
-            ),
-        ),)
+        artifacts = (
+            ()
+            if status == "running"
+            else (
+                AgentArtifact(
+                    agent_run_id=run_id,
+                    kind="report",
+                    artifact_ref=ResourceRef(
+                        resource_id=f"artifact-{run_id}",
+                        resource_type="artifact",
+                        owner=context.execution_scope.principal,
+                    ),
+                ),
+            )
+        )
         return ChildAgentRunRecord(
             definition=ChildAgentRunDefinition(
                 agent_run_id=run_id,
@@ -1674,7 +2301,9 @@ class _AsyncSpecialist:
                 status=status,
                 external_task_id="external-specialist-1",
             ),
-            artifact_index=ChildAgentArtifactIndex(agent_run_id=run_id, artifacts=artifacts),
+            artifact_index=ChildAgentArtifactIndex(
+                agent_run_id=run_id, artifacts=artifacts
+            ),
         )
 
 
@@ -1722,12 +2351,14 @@ class _ArtifactTexts:
             owner=owner,
             revision=1,
         )
-        self.written.append({
-            "producer_key": producer_key,
-            "producer_ref": producer_ref,
-            "kind": kind,
-            "content": content,
-            "resource_ref": resource_ref,
-            "created_by_principal_id": execution_scope.principal.principal_id,
-        })
+        self.written.append(
+            {
+                "producer_key": producer_key,
+                "producer_ref": producer_ref,
+                "kind": kind,
+                "content": content,
+                "resource_ref": resource_ref,
+                "created_by_principal_id": execution_scope.principal.principal_id,
+            }
+        )
         return resource_ref

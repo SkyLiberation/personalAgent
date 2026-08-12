@@ -215,7 +215,8 @@ ToolInvocationEvent：结构化审计，记录风险、副作用、权限、耗�
 ```
 
 知识删除是这一边界的反例：固定 target 之后没有工具选择问题，因此由
-`KnowledgeLifecycleService` 直接校验 scope、Command digest 和确认，并在事务
+`KnowledgeLifecycleService` 按 path command id 读取 immutable Command，校验 scope、状态和确认；
+服务端 digest 只绑定 Command/Operation/Receipt，并在事务
 内写 Personal Knowledge facts 与 Receipt。ToolGateway 不应成为所有副作用的强制包装层。
 
 ### ToolGatewayContext 执行上下文

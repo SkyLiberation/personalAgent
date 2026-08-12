@@ -7,7 +7,6 @@ archives. It does not mutate runtime capability state or persist its result.
 from __future__ import annotations
 
 import argparse
-from hashlib import sha256
 import json
 from pathlib import Path
 import subprocess
@@ -20,6 +19,7 @@ from evals.e2e_quality.evidence_catalog import (
     EvidenceCase,
     EvidenceClaimKind,
 )
+from evals.e2e_quality.trace_archive import archive_checksums_valid
 
 
 class _GateModel(BaseModel):
@@ -81,7 +81,7 @@ class ReleaseCapabilityReport(_GateModel):
 NATIVE_CAPABILITIES: tuple[NativeCapabilityDefinition, ...] = (
     NativeCapabilityDefinition(
         capability_id="conversation",
-        required_evidence_ids=("E01",),
+        required_evidence_ids=("E01", "DUR-001"),
     ),
     NativeCapabilityDefinition(
         capability_id="capture",
@@ -89,7 +89,7 @@ NATIVE_CAPABILITIES: tuple[NativeCapabilityDefinition, ...] = (
     ),
     NativeCapabilityDefinition(
         capability_id="grounded_ask",
-        required_evidence_ids=("E02", "E03", "E08", "E20"),
+        required_evidence_ids=("ASK-001A", "ASK-001B", "E08"),
     ),
     NativeCapabilityDefinition(
         capability_id="knowledge_lifecycle",
@@ -127,6 +127,10 @@ NATIVE_CAPABILITIES: tuple[NativeCapabilityDefinition, ...] = (
         capability_id="durable_investigation_handoff",
         required_evidence_ids=("E23",),
     ),
+    NativeCapabilityDefinition(
+        capability_id="conversation_investigation_continuation",
+        required_evidence_ids=("PLAN-001",),
+    ),
 )
 
 LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
@@ -134,19 +138,41 @@ LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
         capability_id="observed_personal_knowledge_recall",
         required_evidence_id="L01",
     ),
-    LoopCapabilityDefinition(capability_id="safe_action_concurrency", required_evidence_id="L02"),
-    LoopCapabilityDefinition(capability_id="canonical_fact_recovery", required_evidence_id="L03"),
-    LoopCapabilityDefinition(capability_id="manager_specialists", required_evidence_id="L04"),
-    LoopCapabilityDefinition(capability_id="budget_fail_closed", required_evidence_id="L05"),
-    LoopCapabilityDefinition(capability_id="receipt_bound_semantic_revision", required_evidence_id="L06"),
+    LoopCapabilityDefinition(
+        capability_id="safe_action_concurrency", required_evidence_id="L02"
+    ),
+    LoopCapabilityDefinition(
+        capability_id="canonical_fact_recovery", required_evidence_id="L03"
+    ),
+    LoopCapabilityDefinition(
+        capability_id="manager_specialists", required_evidence_id="L04"
+    ),
+    LoopCapabilityDefinition(
+        capability_id="budget_fail_closed", required_evidence_id="L05"
+    ),
+    LoopCapabilityDefinition(
+        capability_id="receipt_bound_semantic_revision", required_evidence_id="L06"
+    ),
 )
 
 REQUIRED_NATIVE_EVIDENCE_IDS = (
-    "E01", "E02", "E03", "E04", "E05",
-    "E08", "E09", "E10", "E11", "E12", "E13", "E14",
-    "E20",
-    "E22", "E23",
+    "E01",
+    "E04",
+    "E05",
+    "E08",
+    "E09",
+    "E10",
+    "E11",
+    "E12",
+    "E13",
+    "E14",
+    "E22",
+    "E23",
     "IP01",
+    "DUR-001",
+    "PLAN-001",
+    "ASK-001A",
+    "ASK-001B",
 )
 REQUIRED_LOOP_EVIDENCE_IDS = tuple(f"L{index:02d}" for index in range(1, 7))
 
@@ -194,17 +220,14 @@ def evaluate_release_capabilities(
         for evidence_id in REQUIRED_LOOP_EVIDENCE_IDS
     )
     evidence_by_id = {
-        result.evidence_id: result
-        for result in (*native_evidence, *loop_evidence)
+        result.evidence_id: result for result in (*native_evidence, *loop_evidence)
     }
 
     native_capabilities = tuple(
-        _native_result(definition, evidence_by_id)
-        for definition in NATIVE_CAPABILITIES
+        _native_result(definition, evidence_by_id) for definition in NATIVE_CAPABILITIES
     )
     loop_capabilities = tuple(
-        _loop_result(definition, evidence_by_id)
-        for definition in LOOP_CAPABILITIES
+        _loop_result(definition, evidence_by_id) for definition in LOOP_CAPABILITIES
     )
     return ReleaseCapabilityReport(
         revision=revision,
@@ -225,7 +248,8 @@ def _evaluate_evidence(
     target_dirty: bool,
 ) -> EvidenceGateResult:
     candidates = tuple(
-        case for case in catalog
+        case
+        for case in catalog
         if case.case_id == evidence_id and case.claim_kind is claim_kind
     )
     reasons: list[str] = []
@@ -273,7 +297,9 @@ def _loop_result(
         capability_id=definition.capability_id,
         status="trusted" if trusted else "unverified",
         required_evidence_ids=(definition.required_evidence_id,),
-        reasons=() if trusted else (f"untrusted_evidence:{definition.required_evidence_id}",),
+        reasons=()
+        if trusted
+        else (f"untrusted_evidence:{definition.required_evidence_id}",),
     )
 
 
@@ -320,9 +346,13 @@ def _load_valid_archive(
     manifest_path = run_dir / "manifest.json"
     summary_path = run_dir / "summary.json"
     checksum_path = run_dir / "checksums.sha256"
-    if not manifest_path.is_file() or not summary_path.is_file() or not checksum_path.is_file():
+    if (
+        not manifest_path.is_file()
+        or not summary_path.is_file()
+        or not checksum_path.is_file()
+    ):
         return None
-    if not _checksums_valid(run_dir, checksum_path):
+    if not archive_checksums_valid(run_dir):
         return None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -341,26 +371,6 @@ def _load_valid_archive(
     if manifest.get("archive_run_id") != summary.get("archive_run_id"):
         return None
     return manifest, summary
-
-
-def _checksums_valid(run_dir: Path, checksum_path: Path) -> bool:
-    try:
-        lines = checksum_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    expected: dict[str, str] = {}
-    for line in lines:
-        parts = line.split("  ", maxsplit=1)
-        if len(parts) != 2:
-            return False
-        expected[parts[1]] = parts[0]
-    json_files = tuple(sorted(run_dir.glob("*.json")))
-    if {path.name for path in json_files} != set(expected):
-        return False
-    return all(
-        sha256(path.read_bytes()).hexdigest() == expected[path.name]
-        for path in json_files
-    )
 
 
 def _trace_files_passed(
@@ -398,7 +408,9 @@ def _git_value(*args: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="derive the trusted release capability baseline")
+    parser = argparse.ArgumentParser(
+        description="derive the trusted release capability baseline"
+    )
     parser.add_argument("--trace-root", type=Path, default=Path("data/e2e_traces"))
     parser.add_argument("--revision")
     args = parser.parse_args()
@@ -410,10 +422,14 @@ def main() -> int:
         trace_root=args.trace_root,
     )
     print(report.model_dump_json(indent=2))
-    return 0 if (
-        len(report.trusted_native_capability_ids) == len(NATIVE_CAPABILITIES)
-        and len(report.trusted_loop_capability_ids) == len(LOOP_CAPABILITIES)
-    ) else 1
+    return (
+        0
+        if (
+            len(report.trusted_native_capability_ids) == len(NATIVE_CAPABILITIES)
+            and len(report.trusted_loop_capability_ids) == len(LOOP_CAPABILITIES)
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":

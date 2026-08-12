@@ -211,9 +211,6 @@ class AgentService:
     def reconcile_graph_sync(self, *args, **kwargs):
         return self.runtime.reconcile_graph_sync(*args, **kwargs)
 
-    def execute_ask(self, *args, **kwargs):
-        return self.runtime.execute_ask(*args, **kwargs)
-
     def summarize_chat(self, messages_text: str, user_id: str = "default") -> str:
         return self.runtime.summarize_chat(messages_text, user_id)
 

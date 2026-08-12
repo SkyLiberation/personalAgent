@@ -41,6 +41,28 @@ Knowledge delete/restore 由 `KnowledgeLifecycleService` 的 immutable Command�
 `command_digest`、Operation 和 Receipt 管理。Graph/index 的删除只是随 canonical 状态变化更新
 投影，不能反向删除或覆盖 Personal Knowledge facts。
 
+### 纠错与默认回答
+
+用户纠错不覆盖旧来源，也不把旧 EvidenceSpan 改绑给新 Claim：
+
+```text
+exact corrected statement
+  -> new Artifact(source_type=user_correction)
+  -> new EvidenceBlock / EvidenceSpan
+  -> new active + user_asserted Claim
+  -> supersede Relation -> old superseded Claim（旧 evidence/backlink 不变）
+```
+
+默认 `KnowledgeService.select_evidence()` 是 Claim-first read boundary：先按 owner、query relevance、lifecycle、support status
+和 quality gate 选可回答 Claim，再沿该 Claim 的 valid EvidenceRef 读取 citation。`superseded`、`deleted`、
+`rejected`、`uncertain` 以及没有可回答 Claim 的 raw EvidenceSpan 都不能独立进入答案；`conflicted` 只用于同时
+展示未解决的双方。citation 的 `claim_ids` 只列出本次实际入选的 Claim，不复制 span 的历史 backlink 全集。
+纠正入口按 authenticated owner 限定目标；它允许用户用新权威证据替换被自动判为 `rejected` 的候选 Claim，
+但拒绝修改已 `superseded`、`deprecated` 或 `deleted` 的历史对象。
+
+纠错入口同时校验 authenticated owner；跨 owner、缺失或 terminal Claim fail closed。E10 从正式 HTTP 入口
+证明纠错“周三→周四”后 Conversation 只返回“周四”，且旧 evidence 仍可用于历史审计。
+
 ## 读取与上下文
 
 读取严格按以下阶段执行：
@@ -60,33 +82,21 @@ Visibility
 Conversation 历史只帮助解析追问、用户选择和当前义务。历史 assistant answer 不是事实证据；
 如果它与本轮 canonical evidence 冲突，以本轮证据和领域状态为准。
 
-## Graph 与 RAG 的位置
+## Graph 与 grounded read 的位置
 
-Graphiti 和 embedding search 是 Personal Knowledge/Note 的检索投影：
+Graph 与 Retrieval Index 是可重建读投影，不是长期事实 owner。Personal Knowledge 的 Claim、EvidenceSpan、conflict 和 scope 仍由 `KnowledgeService` 管理。
 
-- Graph capture 返回 `GraphCaptureResult`，记录 episode、entity、edge 和 fact ref；
-- Graph retrieve 返回严格的 `GraphRetrievalResult`，不包含 provider candidate answer；
-- `graph_result_to_evidence()` 是 Graph retrieval fact 到 `EvidenceItem` 的唯一转换入口；
-- provider 只有 synthesized answer、没有 source/citation binding 时，不能进入证据池；
-- 当前生产 Graph Provider 只有 `graphiti`、`structural` 和 `hybrid`。
-
-RAG 不拥有隐藏的 Router、Planner 或 Completion：
+面向用户的 grounded answer 只有一条链：
 
 ```text
-Ask Application
-  -> Retrieval Stage
-       -> personal knowledge / local / graph / web candidates
-       -> canonical EvidenceItem pool
-  -> Compose Stage
-  -> Ask Verifier
-  -> bounded repair
-  -> Ask result
+Conversation turn
+  -> visibility/scope-filtered personal evidence prefetch
+  -> model may call admitted read-only tools such as web_search
+  -> bounded Observations
+  -> one Conversation FinalMessage
 ```
 
-Retriever 只返回候选、证据和环境错误。它不生成最终回答、不判断 Goal 完成，也不在内部运行一个
-与主 Agent 同构的循环。Personal Knowledge 的独立 `/api/knowledge/ask` 才拥有自己的回答组装和
-`KnowledgeAnswerVerifier`；当 Personal Knowledge 作为 Ask 的子能力时，只调用
-`KnowledgeService.select_evidence()`，不会生成或验证一个随后被丢弃的内部答案。
+当前不存在平行的 runtime answer chain 或独立 knowledge Ask HTTP 入口。离线 retrieval benchmark 只评估候选与排序机制，不是隐藏 Router、Planner、Answer owner 或产品发布证据。
 
 ## 恢复边界
 
